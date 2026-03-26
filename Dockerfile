@@ -27,7 +27,12 @@ LABEL org.opencontainers.image.title="OpenTWS" \
       org.opencontainers.image.description="Open-Source Multiprotocol Server for Building Automation" \
       org.opencontainers.image.licenses="MIT"
 
-# Non-root user for security
+# su-exec: lightweight gosu alternative for privilege dropping (Debian package)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        su-exec \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user — created before VOLUME so ownership can be pre-set
 RUN addgroup --system opentws && adduser --system --ingroup opentws opentws
 
 # Copy installed packages from builder
@@ -37,16 +42,25 @@ COPY --from=builder /install /usr/local
 WORKDIR /app
 COPY opentws/ ./opentws/
 
-# Data volume — DB files, ringbuffer disk, config.yaml
+# Entrypoint script — runs as root, fixes /data permissions, then drops to opentws
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Pre-create /data with correct ownership.
+# When a named volume is first mounted, Docker copies the image directory,
+# preserving this ownership. On subsequent mounts the volume is used as-is,
+# but the entrypoint re-chowns on every start to handle pre-existing volumes.
+RUN mkdir -p /data && chown opentws:opentws /data
+
+# Data volume — DB files, ringbuffer disk, optional config.yaml
 VOLUME ["/data"]
 
-# Runtime config via env or mounted config.yaml
+# Runtime defaults — overridable via env or mounted /data/config.yaml
 ENV OPENTWS_DATABASE__PATH=/data/opentws.db \
     OPENTWS_CONFIG=/data/config.yaml
 
-# Switch to non-root
-USER opentws
-
 EXPOSE 8080
 
-ENTRYPOINT ["python", "-m", "opentws"]
+# Entrypoint runs as root to fix /data ownership, then su-exec drops to opentws
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["python", "-m", "opentws"]

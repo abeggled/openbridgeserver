@@ -36,3 +36,6 @@ data/
 ARCHITECTURE.md
 PROJECT_SPEC.md
 docs/
+
+# Explicitly keep entrypoint (safety: ensure it's not excluded by wildcard)
+!docker-entrypoint.sh
