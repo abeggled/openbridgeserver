@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py -3 -c \":*)",
+      "Bash(py -3 -m py_compile opentws/config.py opentws/core/converter.py opentws/db/database.py opentws/models/types.py opentws/models/datapoint.py opentws/models/binding.py opentws/main.py)",
+      "Bash(py -3 -m py_compile opentws/core/event_bus.py opentws/core/mqtt_client.py opentws/core/registry.py opentws/adapters/base.py opentws/adapters/registry.py opentws/main.py)",
+      "Bash(py -3 -m venv .venv)",
+      "Bash(.venv/Scripts/pip install:*)",
+      "Bash(.venv/Scripts/python -m py_compile opentws/adapters/base.py opentws/adapters/registry.py opentws/adapters/modbus_base.py opentws/adapters/knx/dpt_registry.py opentws/adapters/knx/adapter.py opentws/adapters/modbus_tcp/adapter.py opentws/adapters/modbus_rtu/adapter.py opentws/adapters/onewire/adapter.py opentws/main.py)",
+      "Bash(.venv/Scripts/python -m py_compile opentws/api/auth.py opentws/api/router.py opentws/api/v1/datapoints.py opentws/api/v1/bindings.py opentws/api/v1/search.py opentws/api/v1/adapters.py opentws/api/v1/system.py opentws/api/v1/websocket.py opentws/core/write_router.py opentws/main.py)",
+      "Bash(.venv/Scripts/python -c \":*)",
+      "Bash(.venv/Scripts/python -m py_compile opentws/ringbuffer/ringbuffer.py opentws/history/base.py opentws/history/sqlite_plugin.py opentws/api/v1/ringbuffer.py opentws/api/v1/history.py opentws/api/v1/config.py opentws/api/router.py opentws/main.py)",
+      "Bash(timeout 30 .venv/Scripts/python -c \":*)",
+      "Bash(timeout 45 .venv/Scripts/python -c \":*)",
+      "Bash(git -C \"C:/Users/DanielAbegglen/OneDrive/Hausbau/Elektro/KNX/OpenTWS\" status)",
+      "Bash(powershell -Command \"cd ''C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\OpenTWS''; git status 2>&1\")",
+      "Bash(cmd /c \"echo hello\")",
+      "Bash(gh auth:*)"
+    ]
+  }
+}

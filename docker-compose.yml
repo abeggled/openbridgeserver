@@ -1,0 +1,67 @@
+# OpenTWS — Docker Compose Stack
+# Services: opentws + mosquitto (MQTT broker)
+#
+# Quick start:
+#   cp config.example.yaml data/config.yaml   # adjust jwt_secret!
+#   docker compose up -d
+#
+# Override any setting via environment variables:
+#   OPENTWS_SECURITY__JWT_SECRET=<random>
+#   OPENTWS_MQTT__USERNAME=user
+#   OPENTWS_MQTT__PASSWORD=pass
+
+services:
+
+  # ── MQTT Broker ──────────────────────────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    ports:
+      - "1883:1883"     # MQTT plain
+      - "9001:9001"     # MQTT over WebSocket (optional GUI use)
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── OpenTWS Server ───────────────────────────────────────────────────────
+  opentws:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    volumes:
+      - opentws_data:/data
+      # Optional: mount a host config.yaml (overrides the one inside /data)
+      # - ./config.yaml:/data/config.yaml:ro
+    ports:
+      - "8080:8080"
+    environment:
+      # Point to the mosquitto service by container name
+      OPENTWS_MQTT__HOST: mosquitto
+      OPENTWS_MQTT__PORT: "1883"
+      # Override for production — do not leave as 'changeme'!
+      OPENTWS_SECURITY__JWT_SECRET: ${OPENTWS_JWT_SECRET:-changeme}
+      # Log level: DEBUG | INFO | WARNING | ERROR
+      OPENTWS_SERVER__LOG_LEVEL: ${OPENTWS_LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v1/system/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+
+volumes:
+  opentws_data:
+  mosquitto_data:
+  mosquitto_log:

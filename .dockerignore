@@ -1,0 +1,38 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Development / testing
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config & data (mounted at runtime via volume)
+config.yaml
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Docs & spec
+ARCHITECTURE.md
+PROJECT_SPEC.md
+docs/

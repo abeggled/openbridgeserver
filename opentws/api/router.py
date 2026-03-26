@@ -1,0 +1,32 @@
+"""
+FastAPI Router Aggregator — Phase 4/5
+
+Mounts all v1 sub-routers under /api/v1.
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from opentws.api.auth import router as auth_router
+from opentws.api.v1.datapoints import router as dp_router
+from opentws.api.v1.bindings import router as bindings_router
+from opentws.api.v1.search import router as search_router
+from opentws.api.v1.adapters import router as adapters_router
+from opentws.api.v1.system import router as system_router
+from opentws.api.v1.websocket import router as ws_router
+from opentws.api.v1.ringbuffer import router as rb_router
+from opentws.api.v1.history import router as history_router
+from opentws.api.v1.config import router as config_router
+
+router = APIRouter()
+
+router.include_router(auth_router)
+router.include_router(dp_router,       prefix="/datapoints")
+router.include_router(bindings_router, prefix="/datapoints")
+router.include_router(search_router,   prefix="/search")
+router.include_router(adapters_router, prefix="/adapters")
+router.include_router(system_router,   prefix="/system")
+router.include_router(ws_router)
+router.include_router(rb_router,       prefix="/ringbuffer")
+router.include_router(history_router,  prefix="/history")
+router.include_router(config_router,   prefix="/config")

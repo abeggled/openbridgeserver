@@ -1,0 +1,408 @@
+"""
+Authentication — Phase 4
+
+Dual-Auth:
+  JWT Bearer   → Authorization: Bearer {token}   (Web GUI, interactive)
+  API Key      → X-API-Key: {key}                (automation, scripts)
+
+JWT:
+  Algorithm: HS256
+  Access token:  configurable expiry (default 24 h)
+  Refresh token: 30 days
+
+API Keys:
+  Format: opentws_<64 hex chars>
+  Stored: SHA-256 hash in api_keys table
+
+First startup: if no users exist → create admin/admin (logged with warning).
+"""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import logging
+import os
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, APIKeyHeader
+from jose import JWTError, jwt
+from pydantic import BaseModel
+
+from opentws.config import get_settings
+from opentws.db.database import get_db, Database
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Crypto helpers
+# ---------------------------------------------------------------------------
+# Password hashing: PBKDF2-HMAC-SHA256 (stdlib, no external dependency).
+# Format: "pbkdf2$<iterations>$<salt_hex>$<hash_hex>"
+
+import binascii
+
+_ITERATIONS = 260_000
+_HASH_NAME = "sha256"
+
+
+def hash_password(plain: str) -> str:
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac(_HASH_NAME, plain.encode(), salt, _ITERATIONS)
+    return f"pbkdf2${_ITERATIONS}${salt.hex()}${dk.hex()}"
+
+
+def verify_password(plain: str, stored: str) -> bool:
+    try:
+        _, iterations, salt_hex, hash_hex = stored.split("$")
+        dk = hashlib.pbkdf2_hmac(
+            _HASH_NAME,
+            plain.encode(),
+            bytes.fromhex(salt_hex),
+            int(iterations),
+        )
+        return hmac.compare_digest(dk.hex(), hash_hex)
+    except Exception:
+        return False
+
+def hash_api_key(key: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()
+
+def generate_api_key() -> str:
+    return "opentws_" + os.urandom(32).hex()
+
+# ---------------------------------------------------------------------------
+# JWT
+# ---------------------------------------------------------------------------
+
+_ALGORITHM = "HS256"
+_REFRESH_DAYS = 30
+
+
+def _secret() -> str:
+    return get_settings().security.jwt_secret
+
+
+def create_access_token(sub: str) -> str:
+    minutes = get_settings().security.jwt_expire_minutes
+    exp = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    return jwt.encode({"sub": sub, "exp": exp, "type": "access"}, _secret(), algorithm=_ALGORITHM)
+
+
+def create_refresh_token(sub: str) -> str:
+    exp = datetime.now(timezone.utc) + timedelta(days=_REFRESH_DAYS)
+    return jwt.encode({"sub": sub, "exp": exp, "type": "refresh"}, _secret(), algorithm=_ALGORITHM)
+
+
+def decode_token(token: str, expected_type: str = "access") -> str:
+    """Return subject (username) or raise HTTPException 401."""
+    try:
+        payload = jwt.decode(token, _secret(), algorithms=[_ALGORITHM])
+        if payload.get("type") != expected_type:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong token type")
+        sub = payload.get("sub")
+        if not sub:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
+        return sub
+    except JWTError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Token invalid: {exc}") from exc
+
+# ---------------------------------------------------------------------------
+# FastAPI security schemes
+# ---------------------------------------------------------------------------
+
+_bearer = HTTPBearer(auto_error=False)
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    api_key: str | None = Depends(_api_key_header),
+    db: Database = Depends(lambda: get_db()),
+) -> str:
+    """FastAPI dependency — returns username or raises 401."""
+    if credentials:
+        return decode_token(credentials.credentials)
+
+    if api_key:
+        key_hash = hash_api_key(api_key)
+        row = await db.fetchone(
+            "SELECT name FROM api_keys WHERE key_hash=?", (key_hash,)
+        )
+        if not row:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API key")
+        # Update last_used_at
+        now = datetime.now(timezone.utc).isoformat()
+        await db.execute_and_commit(
+            "UPDATE api_keys SET last_used_at=? WHERE key_hash=?", (now, key_hash)
+        )
+        return row["name"]
+
+    raise HTTPException(
+        status.HTTP_401_UNAUTHORIZED,
+        "Provide Authorization: Bearer {token} or X-API-Key: {key}",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def get_admin_user(
+    current_user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> str:
+    """FastAPI dependency — returns username or raises 403 if not admin."""
+    row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (current_user,))
+    if not row or not row["is_admin"]:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
+    return current_user
+
+# ---------------------------------------------------------------------------
+# Startup helper
+# ---------------------------------------------------------------------------
+
+async def ensure_default_user(db: Database) -> None:
+    """Create admin/admin if no users exist. Called once at startup."""
+    row = await db.fetchone("SELECT COUNT(*) AS c FROM users")
+    if row and row["c"] == 0:
+        uid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        await db.execute_and_commit(
+            "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (?,?,?,?,?)",
+            (uid, "admin", hash_password("admin"), 1, now),
+        )
+        logger.warning(
+            "⚠️  Default user created: admin / admin  "
+            "— Change the password immediately! POST /api/v1/auth/login"
+        )
+
+# ---------------------------------------------------------------------------
+# Request / Response models
+# ---------------------------------------------------------------------------
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+class ApiKeyCreate(BaseModel):
+    name: str
+
+class ApiKeyResponse(BaseModel):
+    id: str
+    name: str
+    key: str           # Only returned on creation
+    created_at: str
+
+class UserResponse(BaseModel):
+    id: str
+    username: str
+    is_admin: bool
+    created_at: str
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    is_admin: bool = False
+
+class UserUpdate(BaseModel):
+    username: str | None = None
+    is_admin: bool | None = None
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+# ---------------------------------------------------------------------------
+# Router
+# ---------------------------------------------------------------------------
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.post("/login", response_model=TokenResponse)
+async def login(
+    body: LoginRequest,
+    db: Database = Depends(lambda: get_db()),
+) -> TokenResponse:
+    row = await db.fetchone(
+        "SELECT password_hash FROM users WHERE username=?", (body.username,)
+    )
+    if not row or not verify_password(body.password, row["password_hash"]):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+
+    return TokenResponse(
+        access_token=create_access_token(body.username),
+        refresh_token=create_refresh_token(body.username),
+    )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(body: RefreshRequest) -> TokenResponse:
+    sub = decode_token(body.refresh_token, expected_type="refresh")
+    return TokenResponse(
+        access_token=create_access_token(sub),
+        refresh_token=create_refresh_token(sub),
+    )
+
+
+@router.post("/apikeys", response_model=ApiKeyResponse, status_code=201)
+async def create_api_key(
+    body: ApiKeyCreate,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> ApiKeyResponse:
+    key = generate_api_key()
+    key_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute_and_commit(
+        "INSERT INTO api_keys (id, name, key_hash, created_at) VALUES (?,?,?,?)",
+        (key_id, body.name, hash_api_key(key), now),
+    )
+    return ApiKeyResponse(id=key_id, name=body.name, key=key, created_at=now)
+
+
+@router.delete("/apikeys/{key_id}", status_code=204)
+async def delete_api_key(
+    key_id: str,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> None:
+    await db.execute_and_commit("DELETE FROM api_keys WHERE id=?", (key_id,))
+
+
+# ---------------------------------------------------------------------------
+# User management  (admin-only, except /me endpoints)
+# ---------------------------------------------------------------------------
+
+@router.get("/users", response_model=list[UserResponse])
+async def list_users(
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> list[UserResponse]:
+    rows = await db.fetchall("SELECT id, username, is_admin, created_at FROM users ORDER BY created_at")
+    return [UserResponse(id=r["id"], username=r["username"],
+                         is_admin=bool(r["is_admin"]), created_at=r["created_at"])
+            for r in rows]
+
+
+@router.post("/users", response_model=UserResponse, status_code=201)
+async def create_user(
+    body: UserCreate,
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> UserResponse:
+    existing = await db.fetchone("SELECT id FROM users WHERE username=?", (body.username,))
+    if existing:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Username '{body.username}' already exists")
+    uid = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute_and_commit(
+        "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (?,?,?,?,?)",
+        (uid, body.username, hash_password(body.password), int(body.is_admin), now),
+    )
+    return UserResponse(id=uid, username=body.username, is_admin=body.is_admin, created_at=now)
+
+
+@router.get("/users/{username}", response_model=UserResponse)
+async def get_user(
+    username: str,
+    current_user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> UserResponse:
+    # Admin can see anyone; non-admin only themselves
+    row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (current_user,))
+    if not row:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
+    if not row["is_admin"] and current_user != username:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
+    target = await db.fetchone(
+        "SELECT id, username, is_admin, created_at FROM users WHERE username=?", (username,)
+    )
+    if not target:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"User '{username}' not found")
+    return UserResponse(id=target["id"], username=target["username"],
+                        is_admin=bool(target["is_admin"]), created_at=target["created_at"])
+
+
+@router.patch("/users/{username}", response_model=UserResponse)
+async def update_user(
+    username: str,
+    body: UserUpdate,
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> UserResponse:
+    target = await db.fetchone(
+        "SELECT id, username, is_admin, created_at FROM users WHERE username=?", (username,)
+    )
+    if not target:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"User '{username}' not found")
+
+    new_username = body.username if body.username is not None else target["username"]
+    new_is_admin = int(body.is_admin) if body.is_admin is not None else target["is_admin"]
+
+    if body.username and body.username != username:
+        conflict = await db.fetchone("SELECT id FROM users WHERE username=?", (body.username,))
+        if conflict:
+            raise HTTPException(status.HTTP_409_CONFLICT, f"Username '{body.username}' already exists")
+
+    await db.execute_and_commit(
+        "UPDATE users SET username=?, is_admin=? WHERE id=?",
+        (new_username, new_is_admin, target["id"]),
+    )
+    return UserResponse(id=target["id"], username=new_username,
+                        is_admin=bool(new_is_admin), created_at=target["created_at"])
+
+
+@router.delete("/users/{username}", status_code=204)
+async def delete_user(
+    username: str,
+    admin_user: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> None:
+    if username == admin_user:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot delete your own account")
+    result = await db.fetchone("SELECT id FROM users WHERE username=?", (username,))
+    if not result:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"User '{username}' not found")
+    await db.execute_and_commit("DELETE FROM users WHERE username=?", (username,))
+
+
+# ---------------------------------------------------------------------------
+# /me endpoints  (any authenticated user)
+# ---------------------------------------------------------------------------
+
+@router.get("/me", response_model=UserResponse)
+async def get_me(
+    current_user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> UserResponse:
+    row = await db.fetchone(
+        "SELECT id, username, is_admin, created_at FROM users WHERE username=?", (current_user,)
+    )
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    return UserResponse(id=row["id"], username=row["username"],
+                        is_admin=bool(row["is_admin"]), created_at=row["created_at"])
+
+
+@router.post("/me/change-password", status_code=204)
+async def change_password(
+    body: ChangePasswordRequest,
+    current_user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> None:
+    row = await db.fetchone("SELECT password_hash FROM users WHERE username=?", (current_user,))
+    if not row or not verify_password(body.current_password, row["password_hash"]):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
+    await db.execute_and_commit(
+        "UPDATE users SET password_hash=? WHERE username=?",
+        (hash_password(body.new_password), current_user),
+    )

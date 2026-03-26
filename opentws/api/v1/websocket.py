@@ -1,0 +1,194 @@
+"""
+WebSocket API — Phase 4
+
+WS /api/v1/ws?token={jwt}
+
+Client → Server:
+  {"action": "subscribe",   "ids": ["uuid1", "uuid2"]}
+  {"action": "unsubscribe", "ids": ["uuid1"]}
+  {"action": "ping"}
+
+Server → Client (on value change):
+  {"id": "uuid1", "v": 21.4, "u": "°C", "t": "2025-03-26T10:23:41.123Z", "q": "good", "old_v": 21.1}
+
+Server → Client (pong):
+  {"action": "pong"}
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from typing import Any
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["websocket"])
+
+
+# ---------------------------------------------------------------------------
+# WebSocketManager
+# ---------------------------------------------------------------------------
+
+class WebSocketManager:
+    """Tracks all connected WebSocket clients and their DataPoint subscriptions."""
+
+    def __init__(self) -> None:
+        # conn_id → (websocket, subscribed_dp_ids)
+        self._connections: dict[str, tuple[WebSocket, set[str]]] = {}
+
+    async def connect(self, ws: WebSocket) -> str:
+        await ws.accept()
+        conn_id = str(uuid.uuid4())
+        self._connections[conn_id] = (ws, set())
+        logger.debug("WS client connected: %s  (total: %d)", conn_id[:8], len(self._connections))
+        return conn_id
+
+    async def disconnect(self, conn_id: str) -> None:
+        ws, _ = self._connections.pop(conn_id, (None, None))
+        if ws:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        logger.debug("WS client disconnected: %s  (total: %d)", conn_id[:8], len(self._connections))
+
+    def subscribe(self, conn_id: str, dp_ids: list[str]) -> None:
+        if conn_id in self._connections:
+            self._connections[conn_id][1].update(dp_ids)
+
+    def unsubscribe(self, conn_id: str, dp_ids: list[str]) -> None:
+        if conn_id in self._connections:
+            self._connections[conn_id][1].difference_update(dp_ids)
+
+    async def handle_value_event(self, event: Any) -> None:
+        """Called by EventBus when a DataValueEvent arrives."""
+        from opentws.core.registry import get_registry
+
+        dp_id_str = str(event.datapoint_id)
+        matching = [
+            (cid, ws)
+            for cid, (ws, subs) in self._connections.items()
+            if dp_id_str in subs
+        ]
+        if not matching:
+            return
+
+        try:
+            reg = get_registry()
+        except RuntimeError:
+            return
+
+        dp = reg.get(event.datapoint_id)
+        state = reg.get_value(event.datapoint_id)
+
+        msg = {
+            "id": dp_id_str,
+            "v": event.value,
+            "u": dp.unit if dp else None,
+            "t": event.ts.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+            "q": event.quality,
+            "old_v": state.old_value if state else None,
+        }
+
+        dead: list[str] = []
+        for conn_id, ws in matching:
+            try:
+                await ws.send_json(msg)
+            except Exception:
+                dead.append(conn_id)
+
+        for conn_id in dead:
+            self._connections.pop(conn_id, None)
+
+    @property
+    def connection_count(self) -> int:
+        return len(self._connections)
+
+
+# ---------------------------------------------------------------------------
+# Singleton
+# ---------------------------------------------------------------------------
+
+_manager: WebSocketManager | None = None
+
+
+def get_ws_manager() -> WebSocketManager:
+    if _manager is None:
+        raise RuntimeError("WebSocketManager not initialized")
+    return _manager
+
+
+def init_ws_manager() -> WebSocketManager:
+    global _manager
+    _manager = WebSocketManager()
+    return _manager
+
+
+# ---------------------------------------------------------------------------
+# Route
+# ---------------------------------------------------------------------------
+
+@router.websocket("/ws")
+async def websocket_endpoint(
+    ws: WebSocket,
+    token: str | None = Query(None, description="JWT access token"),
+) -> None:
+    # Auth: validate token before accepting
+    if token:
+        try:
+            from opentws.api.auth import decode_token
+            decode_token(token)
+        except Exception:
+            await ws.close(code=4001, reason="Invalid token")
+            return
+    else:
+        # Also accept bearer from header (some WS clients send it)
+        auth_header = ws.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            try:
+                from opentws.api.auth import decode_token
+                decode_token(auth_header[7:])
+            except Exception:
+                await ws.close(code=4001, reason="Invalid token")
+                return
+        else:
+            await ws.close(code=4001, reason="Authentication required")
+            return
+
+    manager = get_ws_manager()
+    conn_id = await manager.connect(ws)
+
+    try:
+        while True:
+            try:
+                data = await asyncio.wait_for(ws.receive_json(), timeout=60.0)
+            except asyncio.TimeoutError:
+                # Send keepalive
+                await ws.send_json({"action": "ping"})
+                continue
+
+            action = data.get("action", "")
+
+            if action == "subscribe":
+                ids = [str(i) for i in data.get("ids", [])]
+                manager.subscribe(conn_id, ids)
+                await ws.send_json({"action": "subscribed", "ids": ids})
+
+            elif action == "unsubscribe":
+                ids = [str(i) for i in data.get("ids", [])]
+                manager.unsubscribe(conn_id, ids)
+                await ws.send_json({"action": "unsubscribed", "ids": ids})
+
+            elif action == "ping":
+                await ws.send_json({"action": "pong"})
+
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.exception("WebSocket error for connection %s", conn_id[:8])
+    finally:
+        await manager.disconnect(conn_id)

@@ -1,0 +1,29 @@
+# OpenTWS Dependencies
+# Python 3.11+
+
+# Web Framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# Data Validation & Settings
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+
+# Database
+aiosqlite>=0.20.0
+
+# MQTT
+aiomqtt>=2.0.0
+
+# Protocols
+xknx>=2.13.0
+pymodbus>=3.7.0
+w1thermsensor>=2.3.0
+
+# Authentication
+python-jose[cryptography]>=3.3.0
+# passlib removed — password hashing via stdlib hashlib.pbkdf2_hmac
+
+# Config
+pyyaml>=6.0.1
+python-multipart>=0.0.9
