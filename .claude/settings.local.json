@@ -15,7 +15,11 @@
       "Bash(git -C \"C:/Users/DanielAbegglen/OneDrive/Hausbau/Elektro/KNX/OpenTWS\" status)",
       "Bash(powershell -Command \"cd ''C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\OpenTWS''; git status 2>&1\")",
       "Bash(cmd /c \"echo hello\")",
-      "Bash(gh auth:*)"
+      "Bash(gh auth:*)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(echo \"exit=$?\")",
+      "Read(//tmp/**)",
+      "Bash(printf '%s\\\\n' \"hello from shell\")"
     ]
   }
 }
