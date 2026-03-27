@@ -146,13 +146,13 @@ class MqttClient:
         """Enqueue a value publish. Non-blocking; delivered by publisher loop."""
         payload = build_payload(value, unit, quality, ts)
         raw = str(value)
-        await self._publish_queue.put((topic_value(datapoint_id), payload))
-        await self._publish_queue.put((topic_value_raw(datapoint_id), raw))
+        await self._publish_queue.put((topic_value(datapoint_id), payload, True))
+        await self._publish_queue.put((topic_value_raw(datapoint_id), raw, True))
         if mqtt_alias_topic:
-            await self._publish_queue.put((mqtt_alias_topic, payload))
+            await self._publish_queue.put((mqtt_alias_topic, payload, True))
 
     async def publish_status(self, datapoint_id: uuid.UUID, status: str) -> None:
-        await self._publish_queue.put((topic_status(datapoint_id), status))
+        await self._publish_queue.put((topic_status(datapoint_id), status, True))
 
     # ------------------------------------------------------------------
     # Publisher loop — own connection, drains the publish queue
@@ -170,9 +170,9 @@ class MqttClient:
                 ) as client:
                     logger.info("MQTT publisher connected to %s:%d", self._host, self._port)
                     while True:
-                        topic, payload = await self._publish_queue.get()
-                        await client.publish(topic, payload)
-                        logger.debug("MQTT → %s", topic)
+                        topic, payload, retain = await self._publish_queue.get()
+                        await client.publish(topic, payload, retain=retain)
+                        logger.debug("MQTT → %s (retain=%s)", topic, retain)
             except asyncio.CancelledError:
                 raise
             except Exception:
