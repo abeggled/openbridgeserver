@@ -83,7 +83,8 @@ class MqttClient:
         self._port = port
         self._username = username
         self._password = password
-        self._client: Any = None          # aiomqtt.Client instance
+        self._client: Any = None           # aiomqtt.Client instance (config only)
+        self._connected: Any = None        # live client inside the async-with context
         self._task: asyncio.Task | None = None
         self._write_handlers: list[Any] = []  # callbacks for dp/+/set messages
 
@@ -136,23 +137,22 @@ class MqttClient:
         ts: datetime | None = None,
     ) -> None:
         """Publish full JSON payload + raw topic. Optionally publishes alias."""
-        if self._client is None:
+        if self._connected is None:
+            logger.warning("MQTT not connected — dropping publish for %s", datapoint_id)
             return
 
         payload = build_payload(value, unit, quality, ts)
         raw = str(value)
 
-        async with self._client as client:
-            await client.publish(topic_value(datapoint_id), payload)
-            await client.publish(topic_value_raw(datapoint_id), raw)
-            if mqtt_alias_topic:
-                await client.publish(mqtt_alias_topic, payload)
+        await self._connected.publish(topic_value(datapoint_id), payload)
+        await self._connected.publish(topic_value_raw(datapoint_id), raw)
+        if mqtt_alias_topic:
+            await self._connected.publish(mqtt_alias_topic, payload)
 
     async def publish_status(self, datapoint_id: uuid.UUID, status: str) -> None:
-        if self._client is None:
+        if self._connected is None:
             return
-        async with self._client as client:
-            await client.publish(topic_status(datapoint_id), status)
+        await self._connected.publish(topic_status(datapoint_id), status)
 
     # ------------------------------------------------------------------
     # Subscribe / listener loop
@@ -167,6 +167,8 @@ class MqttClient:
 
         try:
             async with self._client as client:
+                self._connected = client
+                logger.info("MQTT connected to %s:%d", self._host, self._port)
                 await client.subscribe("dp/+/set")
                 logger.debug("MQTT subscribed to dp/+/set")
                 async for message in client.messages:
@@ -175,6 +177,8 @@ class MqttClient:
             raise
         except Exception:
             logger.exception("MQTT listener loop crashed")
+        finally:
+            self._connected = None
 
     async def _handle_set_message(self, topic: str, payload: bytes) -> None:
         # topic format: dp/{uuid}/set
