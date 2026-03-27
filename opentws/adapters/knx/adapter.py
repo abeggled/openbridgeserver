@@ -290,11 +290,6 @@ def _build_sniffer(xknx_instance: Any, ga_source_map: dict, adapter: KnxAdapter)
         def unit_of_measurement(self) -> str | None:
             return None
 
-        # xknx 3.x may require this; return empty list if not needed
-        @property
-        def passive_group_addresses(self) -> list:
-            return []
-
     # One RemoteValue per source GA, using group_address_state (read-only sensor)
     remote_values = [
         _PassthroughRV(
