@@ -111,12 +111,20 @@ class KnxAdapter(AdapterBase):
         adapter_ref = self
 
         class _TelegramSniffer(XknxDevice):
-            """Minimal xknx Device that receives all registered GAs."""
+            """Minimal xknx Device that receives all incoming KNX telegrams."""
 
             def has_group_address(self, group_address: Any) -> bool:
-                return str(group_address) in adapter_ref._ga_source_map
+                # Accept ALL group telegrams; _on_telegram filters by source map.
+                # Returning True only for registered GAs caused issues because
+                # xknx may represent the GA differently (GroupAddressType.FREE).
+                return True
 
             async def process(self, telegram: Any) -> bool:
+                ga_str = str(telegram.destination_address)
+                if ga_str in adapter_ref._ga_source_map:
+                    logger.info("KNX sniffer.process: GA=%s (matched)", ga_str)
+                else:
+                    logger.debug("KNX sniffer.process: GA=%s (no binding)", ga_str)
                 await adapter_ref._on_telegram(telegram)
                 return True
 
