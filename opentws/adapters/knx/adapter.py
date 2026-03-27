@@ -112,15 +112,19 @@ class KnxAdapter(AdapterBase):
             logger.exception("KNX connect failed")
             return
 
-        # Register callback AFTER start() to ensure the telegram processing
-        # background task is already running before we hook in.
+        # Register callback AFTER start() so the background task is already running.
         self._xknx.telegram_queue.register_telegram_received_cb(self._on_telegram)
         n = len(self._xknx.telegram_queue.telegram_received_cbs)
-        logger.error("KNX: callback registered after start(), total callbacks: %d", n)
+        logger.error("KNX: callback registered, total cbs: %d", n)
 
-        # Log available TelegramQueue attributes for diagnostics
-        tq_methods = [m for m in dir(self._xknx.telegram_queue) if not m.startswith("__")]
-        logger.error("KNX TelegramQueue attrs: %s", tq_methods)
+        # Patch process_telegram_incoming to verify xknx routes incoming telegrams through it.
+        _original_pti = self._xknx.telegram_queue.process_telegram_incoming
+
+        async def _patched_pti(telegram: Any) -> None:
+            logger.error("KNX process_telegram_incoming CALLED: %s", telegram)
+            await _original_pti(telegram)
+
+        self._xknx.telegram_queue.process_telegram_incoming = _patched_pti
 
     async def disconnect(self) -> None:
         if self._xknx:
