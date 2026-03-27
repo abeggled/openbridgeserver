@@ -262,18 +262,19 @@ class KnxAdapter(AdapterBase):
             from xknx.telegram import Telegram
             from xknx.telegram.address import GroupAddress
             from xknx.telegram.apci import GroupValueWrite as _GVW
-            from xknx.core.value_reader import DPTBinary, DPTArray
+            from xknx.dpt import DPTArray, DPTBinary  # xknx ≥ 3.x
 
             bc = KnxBindingConfig(**binding.config)
             dpt = DPTRegistry.get(bc.dpt_id)
             raw = dpt.encoder(value)
 
-            payload_value = DPTBinary(raw[0]) if (len(raw) == 1 and raw[0] <= 0x3F) else DPTArray(list(raw))
+            payload_value = DPTBinary(raw[0]) if len(raw) == 1 else DPTArray(list(raw))
             telegram = Telegram(
                 destination_address=GroupAddress(bc.group_address),
                 payload=_GVW(payload_value),
             )
             await self._xknx.telegrams.put(telegram)
+            logger.info("KNX write: GA=%s value=%s raw=%s", bc.group_address, value, raw.hex())
         except Exception:
             logger.exception("KNX write failed for binding %s", binding.id)
 
