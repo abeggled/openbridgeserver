@@ -1,6 +1,10 @@
 # Python
 .venv/
 __pycache__/
+
+# GUI build artefacts (built inside Docker, not needed from host)
+gui/node_modules/
+gui_dist/
 *.py[cod]
 *.pyo
 *.pyd

@@ -1,0 +1,116 @@
+/**
+ * OpenTWS API Client
+ * All calls go through /api/v1 — in dev proxied via Vite, in prod served by FastAPI.
+ */
+import axios from 'axios'
+
+const api = axios.create({
+  baseURL: '/api/v1',
+  timeout: 15000,
+})
+
+// ── Request: inject JWT ───────────────────────────────────────────────────
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('access_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+// ── Response: auto-refresh or redirect on 401 ────────────────────────────
+api.interceptors.response.use(
+  res => res,
+  async err => {
+    const original = err.config
+    if (err.response?.status === 401 && !original._retry) {
+      original._retry = true
+      const refreshToken = localStorage.getItem('refresh_token')
+      if (refreshToken) {
+        try {
+          const { data } = await axios.post('/api/v1/auth/refresh', { refresh_token: refreshToken })
+          localStorage.setItem('access_token', data.access_token)
+          localStorage.setItem('refresh_token', data.refresh_token)
+          original.headers.Authorization = `Bearer ${data.access_token}`
+          return api(original)
+        } catch {
+          // Refresh failed — clear storage and redirect
+        }
+      }
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('refresh_token')
+      window.location.href = '/login'
+    }
+    return Promise.reject(err)
+  }
+)
+
+export default api
+
+// ── Auth ─────────────────────────────────────────────────────────────────
+export const authApi = {
+  login:          (username, password) => api.post('/auth/login', { username, password }),
+  me:             ()                   => api.get('/auth/me'),
+  changePassword: (current_password, new_password) =>
+                    api.post('/auth/me/change-password', { current_password, new_password }),
+  listUsers:      ()                   => api.get('/auth/users'),
+  createUser:     (data)               => api.post('/auth/users', data),
+  updateUser:     (username, data)     => api.patch(`/auth/users/${username}`, data),
+  deleteUser:     (username)           => api.delete(`/auth/users/${username}`),
+  listApiKeys:    ()                   => api.get('/auth/apikeys'),
+  createApiKey:   (name)               => api.post('/auth/apikeys', { name }),
+  deleteApiKey:   (id)                 => api.delete(`/auth/apikeys/${id}`),
+}
+
+// ── DataPoints ────────────────────────────────────────────────────────────
+export const dpApi = {
+  list:          (page = 0, size = 50)          => api.get('/datapoints', { params: { page, size } }),
+  get:           (id)                           => api.get(`/datapoints/${id}`),
+  create:        (data)                         => api.post('/datapoints', data),
+  update:        (id, data)                     => api.patch(`/datapoints/${id}`, data),
+  delete:        (id)                           => api.delete(`/datapoints/${id}`),
+  value:         (id)                           => api.get(`/datapoints/${id}/value`),
+  listBindings:  (id)                           => api.get(`/datapoints/${id}/bindings`),
+  createBinding: (id, data)                     => api.post(`/datapoints/${id}/bindings`, data),
+  updateBinding: (id, bindingId, data)          => api.patch(`/datapoints/${id}/bindings/${bindingId}`, data),
+  deleteBinding: (id, bindingId)                => api.delete(`/datapoints/${id}/bindings/${bindingId}`),
+}
+
+// ── Search ────────────────────────────────────────────────────────────────
+export const searchApi = {
+  search: (params) => api.get('/search', { params }),
+}
+
+// ── Adapters ──────────────────────────────────────────────────────────────
+export const adapterApi = {
+  list:         ()                         => api.get('/adapters'),
+  schema:       (type)                     => api.get(`/adapters/${type}/schema`),
+  bindingSchema:(type)                     => api.get(`/adapters/${type}/binding-schema`),
+  test:         (type, config)             => api.post(`/adapters/${type}/test`, { config }),
+  getConfig:    (type)                     => api.get(`/adapters/${type}/config`),
+  updateConfig: (type, config, enabled=true) => api.patch(`/adapters/${type}/config`, { config, enabled }),
+}
+
+// ── System ────────────────────────────────────────────────────────────────
+export const systemApi = {
+  health:    () => axios.get('/api/v1/system/health'),  // no auth
+  adapters:  () => api.get('/system/adapters'),
+  datatypes: () => api.get('/system/datatypes'),
+}
+
+// ── History ───────────────────────────────────────────────────────────────
+export const historyApi = {
+  query:     (id, params) => api.get(`/history/${id}`, { params }),
+  aggregate: (id, params) => api.get(`/history/${id}/aggregate`, { params }),
+}
+
+// ── RingBuffer ────────────────────────────────────────────────────────────
+export const ringbufferApi = {
+  query:  (params)                  => api.get('/ringbuffer', { params }),
+  stats:  ()                        => api.get('/ringbuffer/stats'),
+  config: (storage, max_entries)    => api.post('/ringbuffer/config', { storage, max_entries }),
+}
+
+// ── Config Import/Export ──────────────────────────────────────────────────
+export const configApi = {
+  export: ()     => api.get('/config/export'),
+  import: (data) => api.post('/config/import', data),
+}

@@ -19,7 +19,9 @@
       "Bash(echo \"EXIT:$?\")",
       "Bash(echo \"exit=$?\")",
       "Read(//tmp/**)",
-      "Bash(printf '%s\\\\n' \"hello from shell\")"
+      "Bash(printf '%s\\\\n' \"hello from shell\")",
+      "Bash(git -C \"/c/Users/DanielAbegglen/OneDrive/Hausbau/Elektro/KNX/OpenTWS\" status)",
+      "Bash(git -C \"C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\OpenTWS\" status)"
     ]
   }
 }

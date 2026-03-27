@@ -110,6 +110,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
+    from pathlib import Path
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
     from opentws.api.router import router
 
     app = FastAPI(
@@ -120,6 +123,24 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(router, prefix="/api/v1")
+
+    # ── Serve Vue GUI (built files in /app/gui_dist) ───────────────────────
+    _gui_dist = Path(__file__).parent.parent / "gui_dist"
+    if _gui_dist.is_dir():
+        # Static assets (JS/CSS/images) under /assets
+        _assets = _gui_dist / "assets"
+        if _assets.is_dir():
+            app.mount("/assets", StaticFiles(directory=_assets), name="assets")
+
+        @app.get("/favicon.svg", include_in_schema=False)
+        async def favicon():
+            return FileResponse(_gui_dist / "favicon.svg")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa_fallback(full_path: str):
+            """Serve index.html for all non-API routes (Vue Router history mode)."""
+            return FileResponse(_gui_dist / "index.html")
+
     return app
 
 
