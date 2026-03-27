@@ -49,7 +49,7 @@ def _dpt_from_xknxproject(dpt: dict | None) -> str | None:
     return defaults.get(main, f"DPT{main}.001")
 
 
-async def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupAddressRecord]:
+def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupAddressRecord]:
     """
     .knxproj Datei parsen und alle Gruppenadressen zurückgeben.
 
@@ -78,7 +78,7 @@ async def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[
             tmp_path = tmp.name
 
         knxproject = XKNXProj(tmp_path, password=password)
-        await knxproject.parse()
+        project = knxproject.parse()
 
     except Exception as e:
         msg = str(e)
@@ -89,8 +89,10 @@ async def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
+    group_addresses = getattr(project, "group_addresses", {}) or {}
+
     records: list[GroupAddressRecord] = []
-    for addr_str, ga in knxproject.group_addresses.items():
+    for addr_str, ga in group_addresses.items():
         records.append(GroupAddressRecord(
             address=     addr_str,
             name=        getattr(ga, "name", "") or "",

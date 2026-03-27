@@ -68,7 +68,7 @@ async def import_knxproj_file(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Datei ist leer")
 
     try:
-        records = await parse_knxproj(content, password or None)
+        records = parse_knxproj(content, password or None)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     except Exception as e:
