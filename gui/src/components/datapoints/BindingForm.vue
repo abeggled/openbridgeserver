@@ -450,7 +450,10 @@ function onGaSelect(item) {
 
 function onPresetSelect(e) {
   const val = e.target.value
-  if (val && val !== '__custom__') {
+  if (!val) {
+    form.value_formula  = ''
+    form.formula_preset = ''
+  } else if (val !== '__custom__') {
     form.value_formula  = val
     form.formula_preset = val
   }
