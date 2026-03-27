@@ -1,5 +1,5 @@
 <template>
-  <form @submit.prevent="submit" class="flex flex-col h-full">
+  <form @submit.prevent="submit" class="flex flex-col gap-0">
 
     <!-- Tab-Leiste -->
     <div class="flex border-b border-slate-700 mb-4 shrink-0">
@@ -15,8 +15,8 @@
       </button>
     </div>
 
-    <!-- Tab-Inhalt (scrollbar) -->
-    <div class="flex-1 overflow-y-auto min-h-0 flex flex-col gap-4 pr-1">
+    <!-- Tab-Inhalt -->
+    <div class="flex flex-col gap-4 py-1">
 
       <!-- ── TAB: Verbindung ── -->
       <template v-if="activeTab === 'conn'">

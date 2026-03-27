@@ -13,7 +13,7 @@
           enter-from-class="opacity-0 scale-95" enter-active-class="transition-all duration-200"
           leave-to-class="opacity-0 scale-95"   leave-active-class="transition-all duration-150"
         >
-          <div v-if="modelValue" :class="['relative card shadow-2xl w-full', maxWidthClass]">
+          <div v-if="modelValue" :class="['relative card shadow-2xl w-full max-h-[90vh] flex flex-col', maxWidthClass]">
             <!-- Header -->
             <div v-if="title" class="card-header">
               <h3 class="text-base font-semibold text-slate-100">{{ title }}</h3>
@@ -25,7 +25,7 @@
             </div>
 
             <!-- Body -->
-            <div class="card-body">
+            <div class="card-body flex-1 overflow-y-auto">
               <slot />
             </div>
 
