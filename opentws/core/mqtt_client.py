@@ -10,6 +10,12 @@ Wraps aiomqtt. Implements the MQTT topic strategy from ARCHITECTURE.md §6:
   alias/{tag}/{name}/value  — Human-browsable alias (published only on value change)
 
 Subscribes to dp/+/set and routes write requests back via the EventBus.
+
+Architecture note (aiomqtt ≥ 2.0):
+  aiomqtt's Client context manager is reusable but NOT reentrant — you cannot
+  enter it twice on the same object. We therefore use two separate Client
+  instances: one persistent subscriber loop and one persistent publisher loop
+  fed by an asyncio.Queue.
 """
 from __future__ import annotations
 
@@ -65,11 +71,15 @@ class MqttClient:
     """
     Async MQTT publish/subscribe wrapper.
 
+    Uses two separate aiomqtt.Client connections:
+      - subscriber loop: receives dp/+/set messages
+      - publisher loop:  drains an asyncio.Queue of outgoing messages
+
     Lifecycle:
         client = MqttClient(host, port, username, password)
-        await client.start()          # connects and starts listener loop
+        await client.start()          # launches both loops as background tasks
         await client.publish_value(dp, value, unit, quality)
-        await client.stop()           # graceful disconnect
+        await client.stop()           # cancels both tasks
     """
 
     def __init__(
@@ -83,9 +93,9 @@ class MqttClient:
         self._port = port
         self._username = username
         self._password = password
-        self._client: Any = None           # aiomqtt.Client instance (config only)
-        self._connected: Any = None        # live client inside the async-with context
-        self._task: asyncio.Task | None = None
+        self._pub_task: asyncio.Task | None = None
+        self._sub_task: asyncio.Task | None = None
+        self._publish_queue: asyncio.Queue = asyncio.Queue()
         self._write_handlers: list[Any] = []  # callbacks for dp/+/set messages
 
     def on_write_request(self, handler) -> None:
@@ -96,35 +106,32 @@ class MqttClient:
         self._write_handlers.append(handler)
 
     async def start(self) -> None:
-        """Connect to Mosquitto and start the subscriber task."""
+        """Launch publisher and subscriber background tasks."""
         try:
-            import aiomqtt  # noqa: PLC0415
+            import aiomqtt  # noqa: F401
         except ImportError:
             logger.warning("aiomqtt not installed — MQTT disabled")
             return
 
-        self._client = aiomqtt.Client(
-            hostname=self._host,
-            port=self._port,
-            username=self._username,
-            password=self._password,
-        )
-        self._task = asyncio.create_task(self._listen_loop(), name="mqtt-listener")
+        self._pub_task = asyncio.create_task(self._publisher_loop(), name="mqtt-publisher")
+        self._sub_task = asyncio.create_task(self._subscriber_loop(), name="mqtt-subscriber")
         logger.info("MQTT client started → %s:%d", self._host, self._port)
 
     async def stop(self) -> None:
-        """Cancel listener and disconnect."""
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        self._client = None
+        """Cancel both loops."""
+        for task in (self._pub_task, self._sub_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._pub_task = None
+        self._sub_task = None
         logger.info("MQTT client stopped")
 
     # ------------------------------------------------------------------
-    # Publish
+    # Publish (enqueue — processed by _publisher_loop)
     # ------------------------------------------------------------------
 
     async def publish_value(
@@ -136,49 +143,65 @@ class MqttClient:
         mqtt_alias_topic: str | None = None,
         ts: datetime | None = None,
     ) -> None:
-        """Publish full JSON payload + raw topic. Optionally publishes alias."""
-        if self._connected is None:
-            logger.warning("MQTT not connected — dropping publish for %s", datapoint_id)
-            return
-
+        """Enqueue a value publish. Non-blocking; delivered by publisher loop."""
         payload = build_payload(value, unit, quality, ts)
         raw = str(value)
-
-        await self._connected.publish(topic_value(datapoint_id), payload)
-        await self._connected.publish(topic_value_raw(datapoint_id), raw)
+        await self._publish_queue.put((topic_value(datapoint_id), payload))
+        await self._publish_queue.put((topic_value_raw(datapoint_id), raw))
         if mqtt_alias_topic:
-            await self._connected.publish(mqtt_alias_topic, payload)
+            await self._publish_queue.put((mqtt_alias_topic, payload))
 
     async def publish_status(self, datapoint_id: uuid.UUID, status: str) -> None:
-        if self._connected is None:
-            return
-        await self._connected.publish(topic_status(datapoint_id), status)
+        await self._publish_queue.put((topic_status(datapoint_id), status))
 
     # ------------------------------------------------------------------
-    # Subscribe / listener loop
+    # Publisher loop — own connection, drains the publish queue
     # ------------------------------------------------------------------
 
-    async def _listen_loop(self) -> None:
-        """Subscribe to dp/+/set and route to registered write handlers."""
-        try:
-            import aiomqtt  # noqa: PLC0415
-        except ImportError:
-            return
+    async def _publisher_loop(self) -> None:
+        import aiomqtt
+        while True:
+            try:
+                async with aiomqtt.Client(
+                    hostname=self._host,
+                    port=self._port,
+                    username=self._username,
+                    password=self._password,
+                ) as client:
+                    logger.info("MQTT publisher connected to %s:%d", self._host, self._port)
+                    while True:
+                        topic, payload = await self._publish_queue.get()
+                        await client.publish(topic, payload)
+                        logger.debug("MQTT → %s", topic)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("MQTT publisher error, reconnecting in 5 s")
+                await asyncio.sleep(5)
 
-        try:
-            async with self._client as client:
-                self._connected = client
-                logger.info("MQTT connected to %s:%d", self._host, self._port)
-                await client.subscribe("dp/+/set")
-                logger.debug("MQTT subscribed to dp/+/set")
-                async for message in client.messages:
-                    await self._handle_set_message(str(message.topic), message.payload)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("MQTT listener loop crashed")
-        finally:
-            self._connected = None
+    # ------------------------------------------------------------------
+    # Subscriber loop — own connection, listens for dp/+/set
+    # ------------------------------------------------------------------
+
+    async def _subscriber_loop(self) -> None:
+        import aiomqtt
+        while True:
+            try:
+                async with aiomqtt.Client(
+                    hostname=self._host,
+                    port=self._port,
+                    username=self._username,
+                    password=self._password,
+                ) as client:
+                    logger.info("MQTT subscriber connected, listening dp/+/set")
+                    await client.subscribe("dp/+/set")
+                    async for message in client.messages:
+                        await self._handle_set_message(str(message.topic), message.payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("MQTT subscriber error, reconnecting in 5 s")
+                await asyncio.sleep(5)
 
     async def _handle_set_message(self, topic: str, payload: bytes) -> None:
         # topic format: dp/{uuid}/set
