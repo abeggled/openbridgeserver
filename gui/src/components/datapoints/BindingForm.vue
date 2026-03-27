@@ -30,30 +30,31 @@
     <!-- ── KNX Felder ── -->
     <template v-if="selectedAdapterType === 'KNX'">
       <div class="section-header">KNX Binding</div>
-      <div class="grid grid-cols-2 gap-4">
-        <div class="form-group">
-          <label class="label">Gruppenadresse *</label>
-          <GaCombobox
-            v-model="cfg.group_address"
-            placeholder="z.B. 1/2/3 oder Name suchen …"
-            @select="onGaSelect"
-          />
-        </div>
-        <div class="form-group">
-          <label class="label">DPT *</label>
-          <select v-model="cfg.dpt_id" class="input" required>
-            <option value="">DPT wählen …</option>
-            <optgroup v-for="group in groupedDpts" :key="group.family" :label="group.label">
-              <option v-for="dpt in group.dpts" :key="dpt.dpt_id" :value="dpt.dpt_id">
-                {{ dpt.dpt_id }} — {{ dpt.name }}<template v-if="dpt.unit"> [{{ dpt.unit }}]</template>
-              </option>
-            </optgroup>
-          </select>
-        </div>
+      <div class="form-group">
+        <label class="label">Gruppenadresse *</label>
+        <GaCombobox
+          v-model="cfg.group_address"
+          placeholder="z.B. 1/2/3 oder Name suchen …"
+          @select="onGaSelect"
+        />
+      </div>
+      <div class="form-group">
+        <label class="label">DPT *</label>
+        <select v-model="cfg.dpt_id" class="input" required>
+          <option value="">DPT wählen …</option>
+          <optgroup v-for="group in groupedDpts" :key="group.family" :label="group.label">
+            <option v-for="dpt in group.dpts" :key="dpt.dpt_id" :value="dpt.dpt_id">
+              {{ dpt.dpt_id }} — {{ dpt.name }}<template v-if="dpt.unit"> [{{ dpt.unit }}]</template>
+            </option>
+          </optgroup>
+        </select>
       </div>
       <div class="form-group">
         <label class="label">Status-Gruppenadresse <span class="optional">(optional)</span></label>
-        <input v-model="cfg.state_group_address" class="input" placeholder="z.B. 1/2/4 — nur für DEST-Bindings" />
+        <GaCombobox
+          v-model="cfg.state_group_address"
+          placeholder="z.B. 1/2/4 oder Name suchen …"
+        />
         <p class="hint">Rückmelde-GA für den Ist-Wert (DEST / BOTH)</p>
       </div>
     </template>
