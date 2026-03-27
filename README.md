@@ -2,7 +2,6 @@
 
 **Open-Source Multiprotocol Server for Building Automation**
 
-OpenTWS is a MIT-licensed replacement for the proprietary Timberwolf Server (TWS).
 It connects KNX, Modbus RTU/TCP, 1-Wire and external MQTT brokers through a unified object model and publishes all values via MQTT. The entire system is configured through a REST API — there is no proprietary configuration file format.
 
 ---
