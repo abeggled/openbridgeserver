@@ -172,6 +172,17 @@ async def _migration_v5(conn: aiosqlite.Connection) -> None:
     )
 
 
+_MIGRATION_V6 = """
+CREATE TABLE IF NOT EXISTS knx_group_addresses (
+    address     TEXT PRIMARY KEY,
+    name        TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    dpt         TEXT,
+    imported_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ga_name ON knx_group_addresses(name);
+"""
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -179,6 +190,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (3, _MIGRATION_V3),
     (4, _MIGRATION_V4),
     (5, _migration_v5),
+    (6, _MIGRATION_V6),
 ]
 
 

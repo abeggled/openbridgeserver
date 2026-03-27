@@ -100,6 +100,13 @@ export const adapterApi = {
   restartInstance: (id)         => api.post(`/adapters/instances/${id}/restart`),
 }
 
+// ── KNX Project Import ────────────────────────────────────────────────────
+export const knxprojApi = {
+  import:  (formData) => api.post('/knxproj/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  listGA:  (params)   => api.get('/knxproj/group-addresses', { params }),
+  clearGA: ()         => api.delete('/knxproj/group-addresses'),
+}
+
 // ── System ────────────────────────────────────────────────────────────────
 export const systemApi = {
   health:    () => axios.get('/api/v1/system/health'),  // no auth

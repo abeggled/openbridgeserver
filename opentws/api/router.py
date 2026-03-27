@@ -17,6 +17,7 @@ from opentws.api.v1.websocket import router as ws_router
 from opentws.api.v1.ringbuffer import router as rb_router
 from opentws.api.v1.history import router as history_router
 from opentws.api.v1.config import router as config_router
+from opentws.api.v1.knxproj import router as knxproj_router
 
 router = APIRouter()
 
@@ -30,3 +31,4 @@ router.include_router(ws_router)
 router.include_router(rb_router,       prefix="/ringbuffer")
 router.include_router(history_router,  prefix="/history")
 router.include_router(config_router,   prefix="/config")
+router.include_router(knxproj_router,  prefix="/knxproj")

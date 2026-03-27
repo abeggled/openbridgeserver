@@ -33,7 +33,11 @@
       <div class="grid grid-cols-2 gap-4">
         <div class="form-group">
           <label class="label">Gruppenadresse *</label>
-          <input v-model="cfg.group_address" class="input" placeholder="z.B. 1/2/3" required />
+          <GaCombobox
+            v-model="cfg.group_address"
+            placeholder="z.B. 1/2/3 oder Name suchen …"
+            @select="onGaSelect"
+          />
         </div>
         <div class="form-group">
           <label class="label">DPT *</label>
@@ -200,7 +204,8 @@
 <script setup>
 import { ref, reactive, watch, computed, onMounted } from 'vue'
 import { dpApi, adapterApi } from '@/api/client'
-import Spinner from '@/components/ui/Spinner.vue'
+import Spinner     from '@/components/ui/Spinner.vue'
+import GaCombobox  from '@/components/ui/GaCombobox.vue'
 
 const props = defineProps({
   dpId:    { type: String, required: true },
@@ -318,6 +323,13 @@ onMounted(async () => {
     allDpts.value      = dptRes.data
   } catch {}
 })
+
+// GA aus Combobox gewählt → DPT als Vorschlag übernehmen
+function onGaSelect(item) {
+  if (item.dpt && item.dpt !== cfg.dpt_id) {
+    cfg.dpt_id = item.dpt
+  }
+}
 
 // Config-Objekt aus aktuellen cfg-Feldern zusammenbauen (nur relevante Felder)
 function buildConfig() {

@@ -105,6 +105,38 @@
         <input type="file" accept=".json" @change="onImportFile" class="text-sm text-slate-400 file:btn-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:text-xs file:border-0 file:cursor-pointer" />
         <div v-if="importResult" :class="['p-3 rounded-lg text-sm', importResult.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">{{ importResult.text }}</div>
       </div>
+
+      <!-- KNX Projekt Import -->
+      <div class="card p-5 flex flex-col gap-3">
+        <div class="flex items-center gap-2">
+          <h3 class="font-semibold text-sm text-slate-100">KNX Projekt importieren</h3>
+          <span class="text-xs text-slate-500 bg-slate-700/50 px-2 py-0.5 rounded">.knxproj</span>
+        </div>
+        <p class="text-sm text-slate-400">
+          ETS-Projektdatei importieren. Alle Gruppenadressen (GA, Name, DPT) werden gespeichert
+          und stehen im Binding-Formular als Suchvorschläge zur Verfügung.
+        </p>
+        <div class="flex flex-col gap-2">
+          <input type="file" accept=".knxproj" @change="onKnxprojFile"
+            class="text-sm text-slate-400 file:btn-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:text-xs file:border-0 file:cursor-pointer" />
+          <div class="form-group">
+            <label class="label">Projektpasswort <span class="text-slate-600 font-normal">(optional)</span></label>
+            <input v-model="knxPassword" type="password" class="input text-sm" placeholder="Nur bei passwortgeschützten Projekten" autocomplete="off" />
+          </div>
+          <div class="flex items-center gap-3">
+            <button @click="doKnxImport" class="btn-primary btn-sm" :disabled="!knxFile || knxImporting">
+              <Spinner v-if="knxImporting" size="sm" color="white" />
+              Importieren
+            </button>
+            <button v-if="knxGaCount > 0" @click="doClearKnxGA" class="btn-secondary btn-sm text-red-400 hover:text-red-300">
+              {{ knxGaCount }} GAs löschen
+            </button>
+          </div>
+        </div>
+        <div v-if="knxResult" :class="['p-3 rounded-lg text-sm', knxResult.ok ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30']">
+          {{ knxResult.text }}
+        </div>
+      </div>
     </div>
 
     <!-- Modals -->
@@ -150,7 +182,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { authApi, configApi } from '@/api/client'
+import { authApi, configApi, knxprojApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import Badge          from '@/components/ui/Badge.vue'
 import Spinner        from '@/components/ui/Spinner.vue'
@@ -256,8 +288,56 @@ async function onImportFile(e) {
   }
 }
 
+// ── KNX Projekt Import ──────────────────────────────────────────────────────
+const knxFile      = ref(null)
+const knxPassword  = ref('')
+const knxImporting = ref(false)
+const knxResult    = ref(null)
+const knxGaCount   = ref(0)
+
+async function loadKnxGaCount() {
+  try {
+    const { data } = await knxprojApi.listGA({ size: 1 })
+    knxGaCount.value = data.total || 0
+  } catch { knxGaCount.value = 0 }
+}
+
+function onKnxprojFile(e) {
+  knxFile.value  = e.target.files[0] || null
+  knxResult.value = null
+}
+
+async function doKnxImport() {
+  if (!knxFile.value) return
+  knxImporting.value = true
+  knxResult.value    = null
+  try {
+    const fd = new FormData()
+    fd.append('file', knxFile.value)
+    if (knxPassword.value) fd.append('password', knxPassword.value)
+    const { data } = await knxprojApi.import(fd)
+    knxResult.value = { ok: true, text: data.message }
+    await loadKnxGaCount()
+  } catch (err) {
+    knxResult.value = { ok: false, text: err.response?.data?.detail ?? 'Import fehlgeschlagen' }
+  } finally {
+    knxImporting.value = false
+  }
+}
+
+async function doClearKnxGA() {
+  try {
+    await knxprojApi.clearGA()
+    knxGaCount.value = 0
+    knxResult.value  = { ok: true, text: 'Alle Gruppenadressen gelöscht' }
+  } catch {
+    knxResult.value  = { ok: false, text: 'Fehler beim Löschen' }
+  }
+}
+
 onMounted(async () => {
   if (auth.isAdmin) await loadUsers()
   await loadKeys()
+  await loadKnxGaCount()
 })
 </script>
