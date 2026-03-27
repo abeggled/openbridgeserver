@@ -152,6 +152,52 @@ async def list_group_addresses(
     )
 
 
+@router.post("/diagnose")
+async def diagnose_knxproj(
+    file:     UploadFile = File(...),
+    password: str | None = Form(None),
+    _user:    str        = Depends(get_current_user),
+) -> dict:
+    """Diagnose: ZIP-Inhalt und XML-Wurzelelemente anzeigen (kein Import)."""
+    import zipfile, io, xml.etree.ElementTree as ET
+    content = await file.read()
+    try:
+        import pyzipper
+        zf = pyzipper.AESZipFile(io.BytesIO(content))
+    except Exception:
+        zf = zipfile.ZipFile(io.BytesIO(content))
+
+    pwd = password.encode() if password else None
+    result = {}
+    with zf:
+        for name in zf.namelist():
+            if not name.endswith(".xml"):
+                continue
+            try:
+                xml_bytes = zf.read(name, pwd=pwd) if pwd else zf.read(name)
+                root = ET.fromstring(xml_bytes)
+                local = root.tag.split("}")[-1] if "}" in root.tag else root.tag
+                ns = root.tag.split("}")[0].lstrip("{") if "}" in root.tag else ""
+                children = [
+                    (e.tag.split("}")[-1] if "}" in e.tag else e.tag)
+                    for e in list(root)[:5]
+                ]
+                # Suche nach GroupAddress Elementen (alle Tags)
+                ga_count = sum(
+                    1 for e in root.iter()
+                    if (e.tag.split("}")[-1] if "}" in e.tag else e.tag) == "GroupAddress"
+                )
+                result[name] = {
+                    "root": local, "ns": ns,
+                    "children": children,
+                    "ga_count": ga_count,
+                    "size": len(xml_bytes),
+                }
+            except Exception as e:
+                result[name] = {"error": str(e)}
+    return result
+
+
 @router.delete("/group-addresses", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_group_addresses(
     _user: str      = Depends(get_current_user),
