@@ -138,7 +138,13 @@ def create_app() -> FastAPI:
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def spa_fallback(full_path: str):
-            """Serve index.html for all non-API routes (Vue Router history mode)."""
+            """Serve index.html for all non-API routes (Vue Router history mode).
+            Explicitly exclude /api paths so FastAPI returns 404 for unknown endpoints
+            instead of silently returning index.html which breaks JSON parsing.
+            """
+            if full_path.startswith("api/"):
+                from fastapi import HTTPException
+                raise HTTPException(status_code=404, detail="Not found")
             return FileResponse(_gui_dist / "index.html")
 
     return app

@@ -54,7 +54,7 @@
             <tr v-for="u in users" :key="u.id">
               <td class="font-medium">{{ u.username }}</td>
               <td><Badge :variant="u.is_admin ? 'warning' : 'muted'" size="xs">{{ u.is_admin ? 'Admin' : 'User' }}</Badge></td>
-              <td class="text-xs text-slate-500">{{ new Date(u.created_at).toLocaleDateString('de-CH') }}</td>
+              <td class="text-xs text-slate-500">{{ fmtDate(u.created_at) }}</td>
               <td>
                 <button v-if="u.username !== auth.username" @click="confirmDeleteUser(u)" class="btn-icon text-red-400">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
@@ -79,7 +79,7 @@
           <tbody>
             <tr v-for="k in apiKeys" :key="k.id">
               <td class="font-medium">{{ k.name }}</td>
-              <td class="text-xs text-slate-500">{{ new Date(k.created_at).toLocaleDateString('de-CH') }}</td>
+              <td class="text-xs text-slate-500">{{ fmtDate(k.created_at) }}</td>
               <td><button @click="deleteApiKey(k.id)" class="btn-icon text-red-400"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button></td>
             </tr>
           </tbody>
@@ -159,6 +159,12 @@ import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 
 const auth = useAuthStore()
 const activeTab = ref('password')
+
+function fmtDate(s) {
+  if (!s) return '—'
+  const d = new Date(s)
+  return isNaN(d.getTime()) ? s : d.toLocaleDateString('de-CH')
+}
 
 const tabs = [
   { id: 'password',     label: 'Passwort' },

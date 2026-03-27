@@ -201,6 +201,12 @@ class ApiKeyResponse(BaseModel):
     key: str           # Only returned on creation
     created_at: str
 
+class ApiKeyListItem(BaseModel):
+    id: str
+    name: str
+    created_at: str | None
+    last_used_at: str | None
+
 class UserResponse(BaseModel):
     id: str
     username: str
@@ -251,6 +257,21 @@ async def refresh(body: RefreshRequest) -> TokenResponse:
         access_token=create_access_token(sub),
         refresh_token=create_refresh_token(sub),
     )
+
+
+@router.get("/apikeys", response_model=list[ApiKeyListItem])
+async def list_api_keys(
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> list[ApiKeyListItem]:
+    rows = await db.fetchall(
+        "SELECT id, name, created_at, last_used_at FROM api_keys ORDER BY created_at"
+    )
+    return [
+        ApiKeyListItem(id=r["id"], name=r["name"],
+                       created_at=r["created_at"], last_used_at=r["last_used_at"])
+        for r in rows
+    ]
 
 
 @router.post("/apikeys", response_model=ApiKeyResponse, status_code=201)
