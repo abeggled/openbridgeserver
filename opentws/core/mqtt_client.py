@@ -196,6 +196,7 @@ class MqttClient:
                     logger.info("MQTT subscriber connected, listening dp/+/set")
                     await client.subscribe("dp/+/set")
                     async for message in client.messages:
+                        logger.info("MQTT set received: topic=%s payload=%r", message.topic, message.payload)
                         await self._handle_set_message(str(message.topic), message.payload)
             except asyncio.CancelledError:
                 raise

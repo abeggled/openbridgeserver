@@ -33,9 +33,10 @@ class WriteRouter:
         from opentws.adapters import registry as adapter_registry
         from opentws.adapters.registry import _row_to_binding
 
+        logger.info("WriteRouter.handle: dp_id=%s payload=%r", dp_id, raw_payload)
         dp = self._registry.get(dp_id)
         if dp is None:
-            logger.debug("Write request for unknown DataPoint %s — ignored", dp_id)
+            logger.warning("Write request for unknown DataPoint %s — ignored", dp_id)
             return
 
         # Deserialize value
@@ -48,7 +49,7 @@ class WriteRouter:
                 value = json.loads(raw_payload)
             except Exception:
                 value = raw_payload
-        logger.debug("Write %s = %r (type=%s)", dp.name, value, dp.data_type)
+        logger.info("WriteRouter: dp=%s value=%r (type=%s)", dp.name, value, dp.data_type)
 
         # Get all active DEST/BOTH bindings
         rows = await self._db.fetchall(
@@ -57,8 +58,9 @@ class WriteRouter:
             (str(dp_id),),
         )
         if not rows:
-            logger.debug("No writable bindings for DataPoint %s", dp_id)
+            logger.warning("No writable bindings for DataPoint %s", dp_id)
             return
+        logger.info("WriteRouter: %d writable binding(s) found", len(rows))
 
         for row in rows:
             binding = _row_to_binding(row)
