@@ -168,14 +168,30 @@ class KnxAdapter(AdapterBase):
             return
 
         # Create new sniffer with current GAs baked into _iter_remote_values().
-        # In xknx ≥ 3.x, Device.__init__ calls xknx.devices.async_add(self)
-        # which reads _iter_remote_values() to build the GA→device map.
-        # We must populate _remote_values BEFORE super().__init__().
+        # In xknx 3.x, Device.__init__ may or may not auto-register via
+        # xknx.devices.async_add(self). We check the count and register manually
+        # if needed.
         try:
+            devices_before = len(list(self._xknx.devices))
             self._sniffer = _build_sniffer(self._xknx, self._ga_source_map, self)
+            devices_after = len(list(self._xknx.devices))
+            logger.info(
+                "KNX: sniffer created, devices count: %d → %d",
+                devices_before, devices_after,
+            )
+
+            if devices_after == devices_before:
+                # Device.__init__ didn't auto-register → do it explicitly
+                logger.info("KNX: auto-registration skipped, calling async_add explicitly")
+                self._xknx.devices.async_add(self._sniffer)
+                logger.info(
+                    "KNX: after explicit async_add, devices count: %d",
+                    len(list(self._xknx.devices)),
+                )
+
             logger.info("KNX: sniffer registered for GAs: %s", list(self._ga_source_map.keys()))
         except Exception:
-            logger.exception("KNX: failed to create sniffer device")
+            logger.exception("KNX: failed to create/register sniffer device")
 
     # ------------------------------------------------------------------
     # Inbound telegram handler (called by sniffer.process)
