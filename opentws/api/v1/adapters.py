@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from opentws.api.auth import get_current_user
 from opentws.adapters import registry as adapter_registry
+from opentws.adapters.knx.dpt_registry import DPTRegistry
 from opentws.db.database import get_db, Database
 
 router = APIRouter(tags=["adapters"])
@@ -341,6 +342,22 @@ async def list_adapters(
     return [
         AdapterStatusOut(adapter_type=k, **v)
         for k, v in status_map.items()
+    ]
+
+
+@router.get("/knx/dpts")
+async def list_knx_dpts(
+    _user: str = Depends(get_current_user),
+) -> list[dict]:
+    """Alle registrierten KNX DPTs — gruppiert nach Familie (DPT1, DPT9, …)."""
+    return [
+        {
+            "dpt_id":    d.dpt_id,
+            "name":      d.name,
+            "data_type": d.data_type,
+            "unit":      d.unit,
+        }
+        for d in sorted(DPTRegistry.all().values(), key=lambda x: x.dpt_id)
     ]
 
 

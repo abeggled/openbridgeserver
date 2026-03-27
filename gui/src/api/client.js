@@ -85,6 +85,7 @@ export const adapterApi = {
   list:         ()                           => api.get('/adapters'),
   schema:       (type)                       => api.get(`/adapters/${type}/schema`),
   bindingSchema:(type)                       => api.get(`/adapters/${type}/binding-schema`),
+  knxDpts:      ()                           => api.get('/adapters/knx/dpts'),
   test:         (type, config)               => api.post(`/adapters/${type}/test`, { config }),
   getConfig:    (type)                       => api.get(`/adapters/${type}/config`),
   updateConfig: (type, config, enabled=true) => api.patch(`/adapters/${type}/config`, { config, enabled }),

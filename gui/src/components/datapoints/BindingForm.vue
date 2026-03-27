@@ -36,9 +36,15 @@
           <input v-model="cfg.group_address" class="input" placeholder="z.B. 1/2/3" required />
         </div>
         <div class="form-group">
-          <label class="label">DPT</label>
-          <input v-model="cfg.dpt_id" class="input" placeholder="z.B. DPT9.001" />
-          <p class="hint">Standard: DPT9.001</p>
+          <label class="label">DPT *</label>
+          <select v-model="cfg.dpt_id" class="input" required>
+            <option value="">DPT wählen …</option>
+            <optgroup v-for="group in groupedDpts" :key="group.family" :label="group.label">
+              <option v-for="dpt in group.dpts" :key="dpt.dpt_id" :value="dpt.dpt_id">
+                {{ dpt.dpt_id }} — {{ dpt.name }}<template v-if="dpt.unit"> [{{ dpt.unit }}]</template>
+              </option>
+            </optgroup>
+          </select>
         </div>
       </div>
       <div class="form-group">
@@ -205,6 +211,34 @@ const emit = defineEmits(['save', 'cancel'])
 const saving       = ref(false)
 const error        = ref(null)
 const allInstances = ref([])
+const allDpts      = ref([])
+
+// DPTs nach Familie gruppiert (DPT1, DPT5, DPT9, …)
+const groupedDpts = computed(() => {
+  const families = {}
+  const familyLabels = {
+    DPT1:  'DPT 1.x — 1-Bit (Boolean)',
+    DPT5:  'DPT 5.x — 8-Bit unsigned',
+    DPT6:  'DPT 6.x — 8-Bit signed',
+    DPT7:  'DPT 7.x — 16-Bit unsigned',
+    DPT8:  'DPT 8.x — 16-Bit signed',
+    DPT9:  'DPT 9.x — 16-Bit Float (Temperatur, Feuchte …)',
+    DPT12: 'DPT 12.x — 32-Bit unsigned',
+    DPT13: 'DPT 13.x — 32-Bit signed',
+    DPT14: 'DPT 14.x — 32-Bit IEEE Float (Leistung, Spannung …)',
+    DPT16: 'DPT 16.x — 14-Byte String',
+  }
+  for (const dpt of allDpts.value) {
+    const family = dpt.dpt_id.replace(/\.\d+$/, '')   // "DPT9.001" → "DPT9"
+    if (!families[family]) families[family] = []
+    families[family].push(dpt)
+  }
+  return Object.entries(families).map(([family, dpts]) => ({
+    family,
+    label: familyLabels[family] ?? family,
+    dpts,
+  }))
+})
 
 const form = reactive({
   adapter_instance_id: '',
@@ -276,8 +310,12 @@ watch(() => props.initial, val => {
 
 onMounted(async () => {
   try {
-    const { data } = await adapterApi.listInstances()
-    allInstances.value = data
+    const [instRes, dptRes] = await Promise.all([
+      adapterApi.listInstances(),
+      adapterApi.knxDpts(),
+    ])
+    allInstances.value = instRes.data
+    allDpts.value      = dptRes.data
   } catch {}
 })
 
