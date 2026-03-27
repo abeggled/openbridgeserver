@@ -237,16 +237,41 @@ def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupA
         names = zf.namelist()
         logger.debug("knxproj Inhalt: %s", names)
 
-        # Installationsdateien suchen: */0.xml oder 0.xml
+        # Projektordner erkennen: P-XXXX/ Verzeichnisse
+        project_folders = sorted({
+            n.split("/")[0] for n in names
+            if n.startswith("P-") and "/" in n
+        })
+        if project_folders:
+            logger.info("knxproj: Projektordner gefunden: %s", project_folders)
+        else:
+            logger.warning(
+                "knxproj: Keine Projektordner (P-XXXX/) gefunden. "
+                "Vorhandene Top-Level-Ordner: %s — "
+                "Bitte das ETS-Projekt exportieren (Datei > Speichern unter / Projekt exportieren), "
+                "nicht die Produktdatenbank.",
+                sorted({n.split("/")[0] for n in names if "/" in n})[:10],
+            )
+
+        # Installationsdateien suchen: P-*/0.xml, */0.xml oder 0.xml (Priorität)
         install_files = [
             n for n in names
             if n.endswith("/0.xml") or n == "0.xml"
         ]
 
         if not install_files:
-            # Fallback: alle XML-Dateien versuchen
-            install_files = [n for n in names if n.endswith(".xml")]
-            logger.warning("Keine 0.xml gefunden, versuche alle XMLs: %s", install_files)
+            # Fallback: alle XML-Dateien ausser reinen Katalog-/Hardware-Dateien
+            install_files = [
+                n for n in names
+                if n.endswith(".xml")
+                and not any(x in n for x in ("Catalog.xml", "Hardware.xml", "Baggages.xml", "knx_master.xml"))
+            ]
+            if install_files:
+                logger.warning("Keine 0.xml gefunden, versuche: %s", install_files)
+            else:
+                # Letzter Fallback: alles
+                install_files = [n for n in names if n.endswith(".xml")]
+                logger.warning("Keine Projekt-XMLs gefunden, versuche alle XMLs (%d Dateien)", len(install_files))
 
         all_records: list[GroupAddressRecord] = []
         pwd_bytes = password.encode("utf-8") if password else None

@@ -80,7 +80,10 @@ async def import_knxproj_file(
     if not records:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Keine Gruppenadressen in der Datei gefunden",
+            "Keine Gruppenadressen gefunden. "
+            "Bitte prüfe ob du das richtige ETS-Projekt exportiert hast: "
+            "In ETS unter 'Datei → Speichern unter' oder 'Projekt exportieren'. "
+            "Eine Produktdatenbank (nur M-XXXX/ Ordner) enthält keine Gruppenadressen.",
         )
 
     now = datetime.now(timezone.utc).isoformat()
