@@ -125,9 +125,16 @@ def create_app() -> FastAPI:
     app.include_router(router, prefix="/api/v1")
 
     # ── Serve Vue GUI (built files in /app/gui_dist) ───────────────────────
+    # NOTE: We deliberately avoid a catch-all @app.get("/{path:path}") route
+    # because it causes 405 Method Not Allowed for POST/PATCH requests to API
+    # endpoints — FastAPI finds a path match (the catch-all) but no method match.
+    # Instead we use a 404 exception handler that only intercepts truly unknown
+    # paths and serves index.html for non-API routes (Vue Router history mode).
     _gui_dist = Path(__file__).parent.parent / "gui_dist"
     if _gui_dist.is_dir():
-        # Static assets (JS/CSS/images) under /assets
+        from fastapi import Request
+        from fastapi.responses import JSONResponse
+
         _assets = _gui_dist / "assets"
         if _assets.is_dir():
             app.mount("/assets", StaticFiles(directory=_assets), name="assets")
@@ -136,16 +143,17 @@ def create_app() -> FastAPI:
         async def favicon():
             return FileResponse(_gui_dist / "favicon.svg")
 
-        @app.get("/{full_path:path}", include_in_schema=False)
-        async def spa_fallback(full_path: str):
-            """Serve index.html for all non-API routes (Vue Router history mode).
-            Explicitly exclude /api paths so FastAPI returns 404 for unknown endpoints
-            instead of silently returning index.html which breaks JSON parsing.
+        @app.exception_handler(404)
+        async def spa_404_handler(request: Request, exc):
+            """Return index.html for unknown non-API paths (SPA history routing).
+            Return JSON 404 for unknown /api/... paths.
             """
-            if full_path.startswith("api/"):
-                from fastapi import HTTPException
-                raise HTTPException(status_code=404, detail="Not found")
-            return FileResponse(_gui_dist / "index.html")
+            if request.url.path.startswith("/api/"):
+                return JSONResponse({"detail": "Not found"}, status_code=404)
+            index = _gui_dist / "index.html"
+            if index.exists():
+                return FileResponse(str(index))
+            return JSONResponse({"detail": "Not found"}, status_code=404)
 
     return app
 
