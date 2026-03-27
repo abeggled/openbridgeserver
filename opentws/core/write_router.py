@@ -78,8 +78,22 @@ class WriteRouter:
             "WriteRouter.handle_value_event: dp=%s value=%r source_binding=%s",
             event.datapoint_id, event.value, event.binding_id,
         )
+        # SOURCE-Formel: Wert des empfangenden Bindings transformieren
+        value = event.value
+        if event.binding_id:
+            src_row = await self._db.fetchone(
+                "SELECT value_formula FROM adapter_bindings WHERE id=?",
+                (str(event.binding_id),),
+            )
+            if src_row and src_row["value_formula"]:
+                from opentws.core.formula import apply_formula
+                value = apply_formula(src_row["value_formula"], value)
+                logger.debug(
+                    "WriteRouter: SOURCE formula '%s' applied: %r → %r",
+                    src_row["value_formula"], event.value, value,
+                )
         await self._write_to_dest_bindings(
-            event.datapoint_id, event.value, skip_binding_id=event.binding_id
+            event.datapoint_id, value, skip_binding_id=event.binding_id
         )
 
     # ------------------------------------------------------------------
@@ -177,10 +191,20 @@ class WriteRouter:
                     except (TypeError, ValueError):
                         pass  # Nicht-numerische Werte: Delta-Filter ignorieren
 
+            # --- DEST-Formel: Wert vor dem Schreiben transformieren ---
+            write_value = value
+            if binding.value_formula:
+                from opentws.core.formula import apply_formula
+                write_value = apply_formula(binding.value_formula, value)
+                logger.debug(
+                    "WriteRouter: DEST formula '%s' applied: %r → %r",
+                    binding.value_formula, value, write_value,
+                )
+
             try:
-                await instance.write(binding, value)
+                await instance.write(binding, write_value)
                 self._last_sent[binding.id]  = time.monotonic()
-                self._last_value[binding.id] = value
+                self._last_value[binding.id] = value  # Original für Delta/OnChange
                 logger.info(
                     "WriteRouter: wrote to adapter=%s instance=%s binding=%s value=%r",
                     binding.adapter_type, binding.adapter_instance_id, binding.id, value,

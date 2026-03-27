@@ -44,6 +44,7 @@ class BindingOut(BaseModel):
     send_on_change: bool = False
     send_min_delta: float | None = None
     send_min_delta_pct: float | None = None
+    value_formula: str | None = None
     created_at: str
     updated_at: str
 
@@ -99,6 +100,7 @@ def _row_out(row: Any, name_map: dict[str, str] | None = None) -> BindingOut:
         send_on_change=bool(row["send_on_change"]),
         send_min_delta=float(min_delta) if min_delta is not None else None,
         send_min_delta_pct=float(min_delta_p) if min_delta_p is not None else None,
+        value_formula=row["value_formula"] or None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -156,6 +158,13 @@ async def create_binding(
                 f"Ungültige Binding-Config: {exc}",
             ) from exc
 
+    # Formel validieren
+    if body.value_formula:
+        from opentws.core.formula import validate_formula
+        err = validate_formula(body.value_formula)
+        if err:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Ungültige Formel: {err}")
+
     binding_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
 
@@ -163,14 +172,15 @@ async def create_binding(
         """INSERT INTO adapter_bindings
            (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled,
             send_throttle_ms, send_on_change, send_min_delta, send_min_delta_pct,
-            created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            value_formula, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             binding_id, str(dp_id), adapter_type,
             str(body.adapter_instance_id), body.direction,
             json.dumps(body.config), int(body.enabled),
             body.send_throttle_ms, int(body.send_on_change),
             body.send_min_delta, body.send_min_delta_pct,
+            body.value_formula or None,
             now, now,
         ),
     )
@@ -206,16 +216,24 @@ async def update_binding(
     on_change       = int(updates.get("send_on_change", bool(row["send_on_change"])))
     min_delta       = updates.get("send_min_delta", row["send_min_delta"])
     min_delta_pct   = updates.get("send_min_delta_pct", row["send_min_delta_pct"])
+    formula         = updates.get("value_formula", row["value_formula"]) or None
+
+    # Formel validieren
+    if formula:
+        from opentws.core.formula import validate_formula
+        err = validate_formula(formula)
+        if err:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Ungültige Formel: {err}")
 
     await db.execute_and_commit(
         """UPDATE adapter_bindings
            SET direction=?, config=?, enabled=?,
                send_throttle_ms=?, send_on_change=?, send_min_delta=?, send_min_delta_pct=?,
-               updated_at=?
+               value_formula=?, updated_at=?
            WHERE id=?""",
         (direction, config_val, enabled,
          throttle_ms, on_change, min_delta, min_delta_pct,
-         now, str(binding_id)),
+         formula, now, str(binding_id)),
     )
 
     instance_id = row["adapter_instance_id"]

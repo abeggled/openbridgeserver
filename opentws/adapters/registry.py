@@ -274,6 +274,7 @@ def _row_to_binding(row: Any) -> Any:
         send_on_change=bool(row["send_on_change"]),
         send_min_delta=float(min_delta) if min_delta is not None else None,
         send_min_delta_pct=float(min_delta_p) if min_delta_p is not None else None,
+        value_formula=row["value_formula"] or None,
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )

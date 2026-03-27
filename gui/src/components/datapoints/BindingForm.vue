@@ -184,6 +184,51 @@
       Bitte zuerst eine Adapter-Instanz wählen
     </div>
 
+    <!-- Wert-Transformation (alle Richtungen) -->
+    <template v-if="selectedAdapterType">
+      <div class="section-header">Wert-Transformation</div>
+      <div class="form-group">
+        <label class="label">Formel <span class="text-slate-500 font-normal">(Variable: <code class="text-blue-400">x</code>)</span></label>
+        <div class="flex gap-2">
+          <select class="input w-52 shrink-0" @change="onPresetSelect" v-model="form.formula_preset">
+            <option value="">— Preset wählen —</option>
+            <optgroup label="Multiplizieren">
+              <option value="x * 86400">× 86.400 (Tage → Sekunden)</option>
+              <option value="x * 3600">× 3.600 (Stunden → Sekunden)</option>
+              <option value="x * 1440">× 1.440 (Tage → Minuten)</option>
+              <option value="x * 1000">× 1.000</option>
+              <option value="x * 100">× 100</option>
+              <option value="x * 60">× 60 (Minuten → Sekunden)</option>
+              <option value="x * 10">× 10</option>
+            </optgroup>
+            <optgroup label="Dividieren">
+              <option value="x / 10">÷ 10 (Festkomma)</option>
+              <option value="x / 60">÷ 60 (Sekunden → Minuten)</option>
+              <option value="x / 100">÷ 100 (Festkomma)</option>
+              <option value="x / 1000">÷ 1.000 (Festkomma)</option>
+              <option value="x / 1440">÷ 1.440 (Minuten → Tage)</option>
+              <option value="x / 3600">÷ 3.600 (Sekunden → Stunden)</option>
+              <option value="x / 86400">÷ 86.400 (Sekunden → Tage)</option>
+            </optgroup>
+            <optgroup label="Benutzerdefiniert">
+              <option value="__custom__">Eigene Formel eingeben …</option>
+            </optgroup>
+          </select>
+          <input
+            v-model="form.value_formula"
+            type="text"
+            placeholder="z.B. x * 0.1 + 20"
+            class="input flex-1 font-mono text-sm"
+            @input="form.formula_preset = '__custom__'"
+          />
+        </div>
+        <p class="text-xs text-slate-500 mt-1">
+          Verfügbar: <code class="text-blue-400">abs round min max sqrt floor ceil</code> und alle <code class="text-blue-400">math.*</code>-Funktionen.
+          Leer lassen = keine Transformation.
+        </p>
+      </div>
+    </template>
+
     <!-- Send-Filter (nur bei DEST / BOTH) -->
     <template v-if="form.direction === 'DEST' || form.direction === 'BOTH'">
       <div class="section-header">Send-Filter</div>
@@ -319,6 +364,10 @@ const form = reactive({
   adapter_instance_id: '',
   direction:           'SOURCE',
   enabled:             true,
+  // Transformation
+  value_formula:       '',
+  formula_preset:      '',
+  // Send-Filter
   throttle_value:      0,
   throttle_unit:       's',
   send_on_change:      false,
@@ -407,6 +456,10 @@ watch(() => props.initial, val => {
   form.send_on_change     = val.send_on_change     ?? false
   form.send_min_delta     = val.send_min_delta     ?? null
   form.send_min_delta_pct = val.send_min_delta_pct ?? null
+  // Formel laden
+  const f = val.value_formula ?? ''
+  form.value_formula  = f
+  form.formula_preset = f ? '__custom__' : ''
 }, { immediate: true })
 
 onMounted(async () => {
@@ -424,6 +477,15 @@ onMounted(async () => {
 function onGaSelect(item) {
   if (item.dpt && item.dpt !== cfg.dpt_id) {
     cfg.dpt_id = item.dpt
+  }
+}
+
+// Preset gewählt → Formel-Feld befüllen
+function onPresetSelect(e) {
+  const val = e.target.value
+  if (val && val !== '__custom__') {
+    form.value_formula  = val
+    form.formula_preset = val
   }
 }
 
@@ -468,6 +530,7 @@ async function submit() {
       ? Math.round(form.throttle_value * THROTTLE_FACTORS[form.throttle_unit])
       : null
     const filterPayload = {
+      value_formula:       form.value_formula?.trim() || null,
       send_throttle_ms:    throttleMs,
       send_on_change:      form.send_on_change,
       send_min_delta:      form.send_min_delta     > 0 ? form.send_min_delta     : null,

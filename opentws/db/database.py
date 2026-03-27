@@ -193,6 +193,10 @@ ALTER TABLE adapter_bindings ADD COLUMN send_min_delta      REAL;
 ALTER TABLE adapter_bindings ADD COLUMN send_min_delta_pct  REAL;
 """
 
+_MIGRATION_V9 = """
+ALTER TABLE adapter_bindings ADD COLUMN value_formula TEXT;
+"""
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -203,6 +207,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (6, _MIGRATION_V6),
     (7, _MIGRATION_V7),
     (8, _MIGRATION_V8),
+    (9, _MIGRATION_V9),
 ]
 
 
