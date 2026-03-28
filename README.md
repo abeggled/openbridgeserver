@@ -335,6 +335,38 @@ DELETE /api/v1/datapoints/{id}/bindings/{binding_id}
 | `direction` | string | `SOURCE` (read), `DEST` (write), `BOTH` |
 | `config` | object | Adapter-specific config (see [Adapter Configuration](#adapter-configuration)) |
 | `enabled` | bool | Enable/disable without deleting |
+| `value_formula` | string \| null | Math transformation applied to the value (see below) |
+| `send_throttle_ms` | int \| null | Minimum interval between two sends in milliseconds (DEST/BOTH only) |
+| `send_on_change` | bool | Only send if value differs from last sent value (default: `false`) |
+| `send_min_delta` | float \| null | Only send if absolute deviation from last value ≥ threshold |
+| `send_min_delta_pct` | float \| null | Only send if relative deviation from last value ≥ threshold (%) |
+
+**Value transformation (`value_formula`):**
+
+An optional formula string applied to the value before it enters (SOURCE) or leaves (DEST/BOTH) the system. The variable is always `x`.
+
+```json
+{ "value_formula": "x / 10" }
+```
+
+| Example formula | Effect |
+|---|---|
+| `x * 3600` | Hours → seconds |
+| `x / 3600` | Seconds → hours |
+| `x / 10` | Fixed-point ÷ 10 |
+| `x * 0.1 + 20` | Scale + offset |
+| `round(x, 2)` | Round to 2 decimal places |
+| `max(0, min(100, x))` | Clamp to 0–100 |
+
+Available functions: `abs`, `round`, `min`, `max` and all `math.*` functions (`sqrt`, `floor`, `ceil`, `log`, …). Division by zero and `nan`/`inf` results are caught — the original value is kept.
+
+**Send filters** (applied in order, DEST/BOTH only):
+
+1. **Throttle** — if `send_throttle_ms` is set and the last send was less than that many ms ago, the value is discarded.
+2. **On-change** — if `send_on_change` is `true` and the new value equals the last sent value, it is discarded.
+3. **Delta** — if `send_min_delta` or `send_min_delta_pct` is set and the deviation is below the threshold, the value is discarded. Both conditions must be met if both are configured. Non-numeric values bypass delta checks.
+
+> All filters compare against the **untransformed** value. The formula is applied afterwards.
 
 **Cross-protocol bridging:**
 When a SOURCE binding receives a value, the WriteRouter automatically propagates it to **all** DEST/BOTH bindings of the same DataPoint — regardless of adapter type. A KNX temperature value is written to a Modbus register without any additional configuration.
@@ -581,29 +613,36 @@ Each adapter type can be instantiated multiple times. All instances are managed 
 
 **Supported DPTs:**
 
-| DPT | Bits | Typical use |
-|---|---|---|
-| `DPT1.001` | 1 bit | Switch on/off |
-| `DPT1.008` | 1 bit | Up/Down |
-| `DPT1.009` | 1 bit | Open/Close |
-| `DPT5.001` | 8 bit unsigned | Dimming 0–100 % |
-| `DPT5.003` | 8 bit unsigned | Angle 0–360° |
-| `DPT6.001` | 8 bit signed | Relative value −128…127 |
-| `DPT7.001` | 16 bit unsigned | Pulse count |
-| `DPT8.001` | 16 bit signed | Relative value ±32767 |
-| `DPT9.001` | 2-byte float | Temperature (°C) |
-| `DPT9.002` | 2-byte float | Illuminance (lx) |
-| `DPT9.004` | 2-byte float | Speed (m/s) |
-| `DPT9.007` | 2-byte float | Humidity (%) |
-| `DPT9.010` | 2-byte float | Power (W) |
-| `DPT12.001` | 32 bit unsigned | Energy counter |
-| `DPT13.001` | 32 bit signed | Counter value |
-| `DPT14.019` | IEEE 754 float | Electrical current |
-| `DPT14.027` | IEEE 754 float | Energy (J) |
-| `DPT16.000` | 14-byte string | ASCII text |
-| Unknown DPT | — | Falls back to `UNKNOWN` type (no crash) |
+| DPT | Size | Value type | Typical use |
+|---|---|---|---|
+| `DPT1.001` | 1 bit | bool | Switch on/off |
+| `DPT1.008` | 1 bit | bool | Up/Down |
+| `DPT1.009` | 1 bit | bool | Open/Close |
+| `DPT5.001` | 8 bit | int (0–255) | Dimming 0–100 % |
+| `DPT5.003` | 8 bit | int (0–255) | Angle 0–360° |
+| `DPT6.001` | 8 bit | int (−128…127) | Relative value |
+| `DPT7.001` | 16 bit | int (0–65535) | Pulse count |
+| `DPT8.001` | 16 bit | int (±32767) | Relative value |
+| `DPT9.001` | 2 byte float | float | Temperature (°C) |
+| `DPT9.002` | 2 byte float | float | Illuminance (lx) |
+| `DPT9.004` | 2 byte float | float | Speed (m/s) |
+| `DPT9.007` | 2 byte float | float | Humidity (%) |
+| `DPT9.010` | 2 byte float | float | Power (W) |
+| `DPT10.001` | 3 byte | string `"HH:MM:SS"` | Time of day |
+| `DPT11.001` | 3 byte | string `"YYYY-MM-DD"` | Date |
+| `DPT12.001` | 32 bit | int (0–4 294 967 295) | Energy counter |
+| `DPT13.001` | 32 bit | int (±2 147 483 647) | Counter value |
+| `DPT14.019` | 32 bit float | float | Electrical current |
+| `DPT14.027` | 32 bit float | float | Energy (J) |
+| `DPT16.000` | 14 byte | string | ASCII text |
+| `DPT16.001` | 14 byte | string | ISO 8859-1 text |
+| `DPT18.001` | 1 byte | int | Scene Control (negative = learn mode) |
+| `DPT19.001` | 8 byte | string ISO 8601 | Date and Time |
+| `DPT219.001` | 2 byte | int (0–65535) | AlarmInfo (mode + status bits) |
+| Unknown DPT | — | — | Falls back to `UNKNOWN` type (no crash) |
 
 DPT9 uses the KNX EIS5 format: `SEEEEMMM MMMMMMMM`, `value = 0.01 × M × 2^E`.
+DPT10/11 encode/decode as ISO strings; `x` in formulas is the numeric timestamp if combined with `value_formula`.
 
 ---
 
