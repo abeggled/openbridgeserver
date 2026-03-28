@@ -1,39 +1,37 @@
 <template>
   <div class="gn-wrap" @mouseenter="hovered = true" @mouseleave="hovered = false">
 
-    <!-- Input handles (write node) -->
     <template v-if="isWrite">
-      <Handle type="target" id="value"   :position="Position.Left" class="gn-handle" :style="{ top: '55%' }" />
-      <Handle type="target" id="trigger" :position="Position.Left" class="gn-handle" :style="{ top: '72%' }" />
+      <Handle type="target" id="value"   :position="Position.Left" :style="{ top: '45%' }" />
+      <Handle type="target" id="trigger" :position="Position.Left" :style="{ top: '68%' }" />
     </template>
 
-    <div class="gn-card" style="min-width:160px;">
+    <div class="gn-card">
       <div class="gn-header">
         <span class="gn-label">{{ isWrite ? 'DP Schreiben' : 'DP Lesen' }}</span>
-        <button v-show="hovered" class="gn-delete" @click.stop="remove" title="Block löschen">✕</button>
+        <button v-show="hovered" class="gn-delete nodrag" @click.stop="remove" title="Block löschen">✕</button>
       </div>
-      <div style="padding: 6px 10px 4px;">
-        <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">DataPoint</div>
+      <div class="gn-body">
+        <div class="gn-sublabel">DataPoint</div>
         <div class="dp-name" :class="data.datapoint_name ? 'active' : 'empty'">
           {{ data.datapoint_name || '— nicht gewählt —' }}
         </div>
       </div>
-      <div style="padding: 0 10px 6px; display:flex; justify-content: space-between;">
-        <div v-if="isWrite" style="display:flex;flex-direction:column;gap:2px;">
-          <span class="port-lbl">Wert</span>
-          <span class="port-lbl">Trigger</span>
+      <div class="gn-ports">
+        <div v-if="isWrite" class="gn-port-col">
+          <span class="gn-port-label">Wert</span>
+          <span class="gn-port-label">Trigger</span>
         </div>
-        <div v-else style="display:flex;flex-direction:column;gap:2px;margin-left:auto;">
-          <span class="port-lbl" style="text-align:right;">Wert</span>
-          <span class="port-lbl" style="text-align:right;">Geändert</span>
+        <div v-else class="gn-port-col" style="margin-left:auto;align-items:flex-end;">
+          <span class="gn-port-label">Wert</span>
+          <span class="gn-port-label">Geändert</span>
         </div>
       </div>
     </div>
 
-    <!-- Output handles (read node) -->
     <template v-if="!isWrite">
-      <Handle type="source" id="value"   :position="Position.Right" class="gn-handle gn-handle-out" :style="{ top: '55%' }" />
-      <Handle type="source" id="changed" :position="Position.Right" class="gn-handle gn-handle-out" :style="{ top: '72%' }" />
+      <Handle type="source" id="value"   :position="Position.Right" class="gn-handle-out" :style="{ top: '45%' }" />
+      <Handle type="source" id="changed" :position="Position.Right" class="gn-handle-out" :style="{ top: '68%' }" />
     </template>
 
   </div>
@@ -56,16 +54,50 @@ function remove() { removeNodes([props.id]) }
 </script>
 
 <style scoped>
-.gn-wrap  { position: relative; }
-.gn-card  { background:#1e293b; border:1px solid #334155; border-top:3px solid #0f766e; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,.4); }
-.gn-header{ display:flex; align-items:center; justify-content:space-between; padding:5px 10px; background:rgba(15,118,110,.15); }
-.gn-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#f1f5f9; }
-.gn-delete{ font-size:11px; color:#64748b; background:none; border:none; cursor:pointer; padding:0 2px; line-height:1; transition:color .15s; }
+.gn-wrap { position: relative; }
+
+.gn-wrap :deep(.vue-flow__handle) {
+  z-index: 20;
+  width: 12px;
+  height: 12px;
+  background: #94a3b8;
+  border: 2px solid #0f172a;
+  border-radius: 50%;
+  cursor: crosshair;
+}
+.gn-wrap :deep(.vue-flow__handle.gn-handle-out) {
+  background: #60a5fa;
+}
+.gn-wrap :deep(.vue-flow__handle:hover) {
+  background: #38bdf8;
+  transform: translate(-50%, -50%) scale(1.3);
+}
+
+.gn-card {
+  min-width: 160px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-top: 3px solid #0f766e;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.4);
+  position: relative;
+  z-index: 1;
+}
+.gn-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 10px;
+  background: rgba(15,118,110,.18);
+  border-radius: 5px 5px 0 0;
+}
+.gn-label  { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#f1f5f9; }
+.gn-delete { font-size:11px; color:#64748b; background:none; border:none; cursor:pointer; padding:0 2px; line-height:1; transition:color .15s; }
 .gn-delete:hover { color:#f87171; }
-.dp-name  { font-size:11px; font-weight:500; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gn-body   { padding: 6px 10px 2px; }
+.gn-sublabel { font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:.05em; margin-bottom:2px; }
+.dp-name   { font-size:11px; font-weight:500; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dp-name.active { color:#5eead4; }
 .dp-name.empty  { color:#334155; font-style:italic; }
-.port-lbl { font-size:9px; color:#64748b; }
-.gn-handle     { width:10px!important; height:10px!important; background:#94a3b8!important; border:2px solid #1e293b!important; border-radius:50%; }
-.gn-handle-out { background:#60a5fa!important; }
+.gn-ports  { padding: 2px 10px 6px; display:flex; }
+.gn-port-col { display:flex; flex-direction:column; gap:2px; }
+.gn-port-label { font-size:9px; color:#64748b; }
 </style>
