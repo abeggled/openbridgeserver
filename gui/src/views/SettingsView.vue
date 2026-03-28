@@ -49,11 +49,22 @@
       <div class="card overflow-hidden">
         <div v-if="usersLoading" class="flex justify-center py-8"><Spinner /></div>
         <table v-else class="table">
-          <thead><tr><th>Benutzername</th><th>Admin</th><th>Erstellt</th><th class="w-20"></th></tr></thead>
+          <thead><tr><th>Benutzername</th><th>Admin</th><th>MQTT</th><th>Erstellt</th><th class="w-20"></th></tr></thead>
           <tbody>
             <tr v-for="u in users" :key="u.id">
               <td class="font-medium">{{ u.username }}</td>
               <td><Badge :variant="u.is_admin ? 'warning' : 'muted'" size="xs">{{ u.is_admin ? 'Admin' : 'User' }}</Badge></td>
+              <td>
+                <div class="flex items-center gap-1">
+                  <Badge :variant="u.mqtt_enabled ? 'success' : 'muted'" size="xs">{{ u.mqtt_enabled ? 'Aktiv' : 'Aus' }}</Badge>
+                  <button @click="openMqttPassword(u)" class="btn-icon text-slate-400 hover:text-blue-400" title="MQTT-Passwort setzen">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z"/></svg>
+                  </button>
+                  <button v-if="u.mqtt_enabled" @click="doDeleteMqttPassword(u)" class="btn-icon text-red-400 hover:text-red-300" title="MQTT deaktivieren">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                  </button>
+                </div>
+              </td>
               <td class="text-xs text-slate-500">{{ fmtDate(u.created_at) }}</td>
               <td>
                 <button v-if="u.username !== auth.username" @click="confirmDeleteUser(u)" class="btn-icon text-red-400">
@@ -148,15 +159,41 @@
         </div>
         <div class="form-group">
           <label class="label">Passwort</label>
-          <input v-model="userForm.password" type="password" class="input" required />
+          <input v-model="userForm.password" type="password" class="input" required autocomplete="new-password" />
         </div>
         <div class="flex items-center gap-2">
           <input type="checkbox" id="isAdmin" v-model="userForm.is_admin" class="w-4 h-4 rounded" />
           <label for="isAdmin" class="text-sm text-slate-300">Admin-Rechte</label>
         </div>
+        <div class="flex items-center gap-2">
+          <input type="checkbox" id="mqttEnabled" v-model="userForm.mqtt_enabled" class="w-4 h-4 rounded" />
+          <label for="mqttEnabled" class="text-sm text-slate-300">MQTT aktivieren</label>
+        </div>
+        <div v-if="userForm.mqtt_enabled" class="form-group">
+          <label class="label">MQTT-Passwort</label>
+          <input v-model="userForm.mqtt_password" type="password" class="input" autocomplete="new-password" placeholder="Leer = kein MQTT-Passwort" />
+        </div>
         <div class="flex justify-end gap-3">
           <button type="button" @click="showCreateUser = false" class="btn-secondary">Abbrechen</button>
           <button type="submit" class="btn-primary">Erstellen</button>
+        </div>
+      </form>
+    </Modal>
+
+    <Modal v-model="showMqttPassword" title="MQTT-Passwort setzen" max-width="sm">
+      <form @submit.prevent="doSetMqttPassword" class="flex flex-col gap-4">
+        <p class="text-sm text-slate-400">Benutzer: <span class="text-slate-200 font-medium">{{ mqttTarget?.username }}</span></p>
+        <div class="form-group">
+          <label class="label">Neues MQTT-Passwort</label>
+          <input v-model="mqttPasswordInput" type="password" class="input" required autocomplete="new-password" />
+        </div>
+        <div v-if="mqttMsg" :class="['p-3 rounded-lg text-sm', mqttMsg.ok ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30']">{{ mqttMsg.text }}</div>
+        <div class="flex justify-end gap-3">
+          <button type="button" @click="showMqttPassword = false" class="btn-secondary">Abbrechen</button>
+          <button type="submit" class="btn-primary" :disabled="mqttSaving">
+            <Spinner v-if="mqttSaving" size="sm" color="white" />
+            Speichern
+          </button>
         </div>
       </form>
     </Modal>
@@ -230,20 +267,58 @@ const usersLoading = ref(false)
 const showCreateUser = ref(false)
 const showUserConfirm = ref(false)
 const deleteUserTarget = ref(null)
-const userForm    = reactive({ username: '', password: '', is_admin: false })
+const userForm    = reactive({ username: '', password: '', is_admin: false, mqtt_enabled: false, mqtt_password: '' })
 
 async function loadUsers() {
   usersLoading.value = true
   try { const { data } = await authApi.listUsers(); users.value = data }
   finally { usersLoading.value = false }
 }
-function openCreateUser() { userForm.username = ''; userForm.password = ''; userForm.is_admin = false; showCreateUser.value = true }
+function openCreateUser() {
+  userForm.username = ''; userForm.password = ''; userForm.is_admin = false
+  userForm.mqtt_enabled = false; userForm.mqtt_password = ''
+  showCreateUser.value = true
+}
 async function doCreateUser() {
-  await authApi.createUser({ username: userForm.username, password: userForm.password, is_admin: userForm.is_admin })
+  const payload = { username: userForm.username, password: userForm.password, is_admin: userForm.is_admin }
+  if (userForm.mqtt_enabled && userForm.mqtt_password) {
+    payload.mqtt_enabled = true
+    payload.mqtt_password = userForm.mqtt_password
+  }
+  await authApi.createUser(payload)
   showCreateUser.value = false; await loadUsers()
 }
 function confirmDeleteUser(u) { deleteUserTarget.value = u; showUserConfirm.value = true }
 async function doDeleteUser() { await authApi.deleteUser(deleteUserTarget.value.username); await loadUsers() }
+
+// ── MQTT Password ──────────────────────────────────────────────────────────
+const showMqttPassword = ref(false)
+const mqttTarget       = ref(null)
+const mqttPasswordInput = ref('')
+const mqttSaving       = ref(false)
+const mqttMsg          = ref(null)
+
+function openMqttPassword(u) {
+  mqttTarget.value = u; mqttPasswordInput.value = ''; mqttMsg.value = null
+  showMqttPassword.value = true
+}
+async function doSetMqttPassword() {
+  mqttSaving.value = true; mqttMsg.value = null
+  try {
+    await authApi.setMqttPassword(mqttTarget.value.username, mqttPasswordInput.value)
+    mqttMsg.value = { ok: true, text: 'MQTT-Passwort gesetzt' }
+    await loadUsers()
+    setTimeout(() => { showMqttPassword.value = false }, 800)
+  } catch (e) {
+    mqttMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler' }
+  } finally {
+    mqttSaving.value = false
+  }
+}
+async function doDeleteMqttPassword(u) {
+  await authApi.deleteMqttPassword(u.username)
+  await loadUsers()
+}
 
 // ── API Keys ───────────────────────────────────────────────────────────────
 const apiKeys       = ref([])
