@@ -57,7 +57,7 @@ It connects KNX, Modbus RTU/TCP, 1-Wire and external MQTT brokers through a unif
 
 ```bash
 # 1. Clone
-git clone https://github.com/opentws/opentws
+git clone https://github.com/abeggled/opentws
 cd opentws
 
 # 2. Configure secrets
@@ -91,7 +91,7 @@ curl http://localhost:8080/api/v1/system/health
 
 ```bash
 # 1. Clone + venv
-git clone https://github.com/opentws/opentws
+git clone https://github.com/abeggled/opentws
 cd opentws
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
