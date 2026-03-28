@@ -5,6 +5,83 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [Unreleased — visu branch] — 2026-03-28
+
+### Added
+
+**Logic Engine (Phase 7 — visu branch)**
+
+- `opentws/logic/` — vollständiges Backend-Modul:
+  - `models.py`: Pydantic-Modelle `FlowData`, `LogicNode`, `LogicEdge`, `LogicGraphCreate/Update/Out`, `NodeTypeDef`, `NodeTypePort`
+  - `node_types.py`: 15 eingebaute Blocktyp-Definitionen in 6 Kategorien:
+    - **Konstante:** `const_value` (Festwert: Zahl / Bool / Text)
+    - **Logik:** `and`, `or`, `not`, `xor`, `compare` (Vergleich mit Operator-Config), `hysteresis` (Schwellwert-Schalter mit persistentem Zustand)
+    - **DataPoint:** `datapoint_read`, `datapoint_write` (mit Filter & Transformation)
+    - **Mathematik:** `math_formula` (Formel mit Variablen a, b), `math_map` (lineares Skalieren)
+    - **Timer:** `timer_delay` (Verzögerung), `timer_pulse` (Impuls), `timer_cron` (Zeitplan)
+    - **Skript:** `python_script` (eingeschränkte Python-Sandbox)
+    - **MCP:** `mcp_tool`
+  - `executor.py`: `GraphExecutor` — topologische Sortierung (Kahn), alle Node-Evaluatoren, `_safe_eval` für Formeln, `_run_script` für Python-Sandbox
+    - `_to_num()`: universelle Koercion zu `float` (bool→1/0, str→float, None→0.0)
+    - `_to_bool()`: universelle Koercion zu `bool` ("false"/"off"/"0"→False)
+    - `_safe_eval()`: alle `math.*`-Funktionen + `abs`, `round`, `min`, `max` als Builtins
+  - `manager.py`: `LogicManager` — EventBus-Integration, automatische Graph-Ausführung bei `DataValueEvent`
+    - Read-seitige Filter: `trigger_on_change`, `min_delta`, `min_delta_pct`, `throttle_value`+`throttle_unit`
+    - Write-seitige Filter: `only_on_change`, `min_delta`, `throttle_value`+`throttle_unit`
+    - State-Tracking pro Graph/Node für Throttle und Delta-Filter
+    - Manuelle Ausführung liest aktuelle Registry-Werte für alle DP-LESEN-Nodes
+    - DP-SCHREIBEN publiziert `DataValueEvent` → Registry, Ring-Buffer, MQTT, WebSocket
+  - `__init__.py`: `LogicManager`, `get_logic_manager`, `init_logic_manager`
+
+- `opentws/api/v1/logic.py`: vollständige REST-API:
+  - `GET /api/v1/logic/node-types` — alle Blocktyp-Definitionen
+  - `GET/POST /api/v1/logic/graphs` — Liste + Erstellen
+  - `GET/PUT/PATCH/DELETE /api/v1/logic/graphs/{id}` — CRUD
+  - `POST /api/v1/logic/graphs/{id}/run` — manuelle Ausführung, Response enthält alle Node-Ausgangswerte
+
+- `opentws/db/database.py`: Migration V12 — `logic_graphs`-Tabelle:
+  ```sql
+  CREATE TABLE logic_graphs (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    flow_data TEXT NOT NULL DEFAULT '{"nodes":[],"edges":[]}',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  ```
+
+- GUI (`gui/src/`) — Vue Flow Canvas:
+  - `@vue-flow/core`, `@vue-flow/background`, `@vue-flow/controls`, `@vue-flow/minimap` als Dependencies
+  - `stores/logic.js`: Pinia-Store für Graphen und Blocktypen
+  - `api/client.js`: `logicApi` mit allen Endpunkten
+  - `views/LogicView.vue`: Haupt-Canvas mit Toolbar (Speichern, Ausführen, Debug, Graph-Auswahl), Drag-and-drop, `@connect`-Handler mit `addEdge()`
+  - `components/logic/NodePalette.vue`: Drag-and-drop Block-Palette, gruppiert nach Kategorie
+  - `components/logic/NodeConfigPanel.vue`: Konfigurations-Panel mit 3 Tabs für DataPoint-Blöcke:
+    - **Verbindung**: DataPoint-Auswahl mit Live-Suche
+    - **Transformation •**: Preset-Dropdown (×/÷ Presets) + Formel-Eingabe, Variable `x`
+    - **Filter •**: Drosselung mit Einheit-Dropdown (ms/s/min/h), Checkbox, Absolut + Relativ (%)
+  - `components/logic/nodes/GenericNode.vue`: universeller Block für 13 Typen, berechnete Kartenhöhe für exakte Handle-Ausrichtung, Debug-Werteband
+  - `components/logic/nodes/DatapointNode.vue`: spezialisierter Block mit amber ⊘-Badge bei aktivem Filter
+  - `components/logic/nodes/PythonScriptNode.vue`: Block mit Code-Vorschau
+
+**Import / Export — Erweiterungen**
+
+- `opentws/api/v1/config.py`:
+  - Bindings: `value_formula`, `send_throttle_ms`, `send_on_change`, `send_min_delta`, `send_min_delta_pct` werden jetzt korrekt exportiert und importiert (waren zuvor fehlend)
+  - KNX Group Addresses werden exportiert und bei Wiederherstellung per Upsert eingefügt
+  - Export-Version `"3"`, `ImportResult` enthält `knx_group_addresses_upserted`
+- GUI: Tab umbenannt in „Sicherung/Wiederherstellung", Dateiname `opentws-backup.json`
+
+**Bug Fixes**
+
+- `AdaptersView.vue`: Löschen-Dialog war unsichtbar (`v-if` ohne `v-model` → Modal nie gerendert). Fix: `v-model="showDeleteConfirm"`-Pattern
+- `logic/manager.py`: `registry.update_value()` existiert nicht → ersetzt durch `EventBus.publish(DataValueEvent)` (damit werden jetzt alle Subscriber korrekt benachrichtigt)
+- `logic/executor._safe_eval()`: `abs`, `round`, `min`, `max` waren nicht verfügbar (nur `math.*`). Jetzt explizit als Builtins hinzugefügt
+- `logic/executor`: Variable `value`/`v` → **`x`** (konsistent mit Binding-Formeln)
+- `logic/manager`: `throttle_ms` (rohes ms-Feld) → `throttle_value` + `throttle_unit` (Zahl + Einheit getrennt gespeichert, bei Laufzeit konvertiert)
+
+---
+
 ## [0.1.0] — 2026-03-26
 
 ### Added

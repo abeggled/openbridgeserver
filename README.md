@@ -15,6 +15,7 @@ It connects KNX, Modbus RTU/TCP, 1-Wire and external MQTT brokers through a unif
 | **Protocols** | KNX/IP (Tunneling + Routing), Modbus TCP, Modbus RTU, 1-Wire, external MQTT |
 | **Multi-Instance** | Any number of adapter instances per type (e.g. 2× KNX, 3× MQTT, 2× Modbus TCP) |
 | **Cross-Protocol** | SOURCE → DEST propagation: a KNX value automatically writes to a Modbus register and vice versa |
+| **Logic Engine** | Visual canvas (Vue Flow) — 15 built-in block types: logic gates, comparators, formulas, timers, Python scripts, MCP; automatic type coercion; per-block filter & transformation |
 | **MQTT** | Hybrid topic strategy: stable UUID topics + human-readable alias topics; retain support |
 | **API** | FastAPI REST + WebSocket, JWT Bearer + API Key auth |
 | **Storage** | SQLite (WAL mode), zero external dependencies |
@@ -43,15 +44,23 @@ It connects KNX, Modbus RTU/TCP, 1-Wire and external MQTT brokers through a unif
    - [Import / Export](#import--export)
    - [System](#system)
    - [WebSocket](#websocket)
-6. [Adapter Configuration](#adapter-configuration)
+6. [Logic Engine](#logic-engine)
+   - [Übersicht](#übersicht)
+   - [Blocktypen](#blocktypen)
+   - [DataPoint-Blöcke: Filter & Transformation](#datapoint-blöcke-filter--transformation)
+   - [Formel-Referenz](#formel-referenz)
+   - [Typ-Koercion](#typ-koercion)
+   - [Debug-Modus](#debug-modus)
+   - [API](#logic-engine-api)
+7. [Adapter Configuration](#adapter-configuration)
    - [KNX](#knx-adapter)
    - [Modbus TCP](#modbus-tcp-adapter)
    - [Modbus RTU](#modbus-rtu-adapter)
    - [1-Wire](#1-wire-adapter)
    - [MQTT (external broker)](#mqtt-adapter-external-broker)
-7. [MQTT Topics](#mqtt-topics)
-8. [Data Types](#data-types)
-9. [Development](#development)
+8. [MQTT Topics](#mqtt-topics)
+9. [Data Types](#data-types)
+10. [Development](#development)
 
 ---
 
@@ -64,7 +73,10 @@ cd opentws
 
 # 2. Configure secrets
 cp .env.example .env
-# Edit .env: set OPENTWS_JWT_SECRET to a random string (min. 32 chars)
+# Edit .env — at minimum set:
+#   OPENTWS_JWT_SECRET        → random string, min. 32 chars
+#   OPENTWS_MQTT_USERNAME     → service account username (default: opentws)
+#   OPENTWS_MQTT_PASSWORD     → service account password — CHANGE THIS!
 
 # 3. Start
 docker compose up -d
@@ -76,6 +88,8 @@ curl http://localhost:8080/api/v1/system/health
 
 **Default credentials:** `admin` / `admin`
 ⚠️ Change the password immediately after first login (see [User Management](#user-management)).
+
+> **MQTT security:** Mosquitto starts with `allow_anonymous false`. Only the openTWS service account (from `.env`) and users with an MQTT password set can connect. See [MQTT Access per User](#mqtt-access-per-user).
 
 **Services:**
 
@@ -153,41 +167,50 @@ security:
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                            openTWS Process                              │
-│                                                                         │
-│  ┌──────────────────────────┐  DataValueEvent  ┌────────────────────┐  │
-│  │    Adapter Instances     │ ───────────────▶ │     EventBus       │  │
-│  │                          │                  │    (fan-out)       │  │
-│  │  KNX "IP Router"         │ ◀── write() ──── │                    │  │
-│  │  KNX "IP Interface"      │                  └──┬─────────┬───────┘  │
-│  │  Modbus TCP "SPS"        │                     │         │          │
-│  │  MQTT "HomeAssistant"    │              ┌──────▼───┐ ┌───▼──────┐  │
-│  │  1-Wire "Keller"  …      │              │ Registry │ │ RingBuf  │  │
-│  └──────────────────────────┘              │ (in-mem) │ │ History  │  │
-│                                            │          │ │ WebSocket│  │
-│  ┌──────────────────┐  dp/+/set            └────┬─────┘ └──────────┘  │
-│  │  Internal MQTT   │ ─────────────▶            │                     │
-│  │  Client          │ ◀── publish ──  ┌──────────▼──────────────┐     │
-│  └──────────────────┘                 │       WriteRouter        │     │
-│                                       │  value_formula  filters  │     │
-│                                       │  MQTT set → write()      │     │
-│                                       │  SOURCE → DEST bridge    │     │
-│                                       └─────────────────────────┘     │
-│                                                                         │
-│  ┌───────────────────────────────────────────────────────────────────┐ │
-│  │                       FastAPI  /api/v1                            │ │
-│  │  auth · datapoints · bindings · adapters · history               │ │
-│  │  ringbuffer · search · system · config · websocket               │ │
-│  └───────────────────────────────────────────────────────────────────┘ │
-│                                                                         │
-│  ┌───────────────────────────────────────────────────────────────────┐ │
-│  │                     SQLite  (WAL mode)                            │ │
-│  │  datapoints · adapter_bindings · adapter_instances               │ │
-│  │  adapter_configs · users · api_keys · history_values             │ │
-│  │  schema_version                                                   │ │
-│  └───────────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                             openTWS Process                              │
+│                                                                          │
+│  ┌──────────────────────────┐  DataValueEvent  ┌─────────────────────┐  │
+│  │    Adapter Instances     │ ───────────────▶ │      EventBus       │  │
+│  │                          │                  │     (fan-out)       │  │
+│  │  KNX "IP Router"         │ ◀── write() ──── │                     │  │
+│  │  KNX "IP Interface"      │                  └──┬──────┬──────┬────┘  │
+│  │  Modbus TCP "SPS"        │                     │      │      │       │
+│  │  MQTT "HomeAssistant"    │           ┌─────────▼─┐ ┌──▼───┐ │       │
+│  │  1-Wire "Keller"  …      │           │ Registry  │ │ Ring │ │       │
+│  └──────────────────────────┘           │ (in-mem)  │ │ Buf  │ │       │
+│                                         │ ValueState│ │ Hist │ │       │
+│  ┌──────────────────┐  dp/+/set         └─────┬─────┘ │ WS   │ │       │
+│  │  Internal MQTT   │ ──────────▶             │       └──────┘ │       │
+│  │  Client          │ ◀─ publish ─  ┌─────────▼──────────┐    │       │
+│  └──────────────────┘               │    WriteRouter      │    │       │
+│                                     │ formula · filters   │    │       │
+│                                     │ MQTT set→write()    │    │       │
+│                                     │ SOURCE→DEST bridge  │    │       │
+│                                     └────────────────────┘    │       │
+│                                                                 │       │
+│                                                    ┌────────────▼────┐  │
+│                                                    │  LogicManager   │  │
+│                                                    │ ─────────────── │  │
+│                                                    │ DataValueEvent  │  │
+│                                                    │  → graph exec.  │  │
+│                                                    │ filter/throttle │  │
+│                                                    │ → DataValueEvent│  │
+│                                                    └─────────────────┘  │
+│                                                                          │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │                        FastAPI  /api/v1                            │ │
+│  │  auth · datapoints · bindings · adapters · history                │ │
+│  │  ringbuffer · search · system · config · websocket · logic        │ │
+│  └────────────────────────────────────────────────────────────────────┘ │
+│                                                                          │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │                      SQLite  (WAL mode)                            │ │
+│  │  datapoints · adapter_bindings · adapter_instances                │ │
+│  │  adapter_configs · users · api_keys · history_values              │ │
+│  │  logic_graphs · schema_version                                    │ │
+│  └────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Key design principles:**
@@ -252,14 +275,17 @@ Keys are stored as SHA-256 hashes only — the plaintext key is returned exactly
 All `/users` endpoints except `/me` require `is_admin = true`.
 
 ```
-GET    /api/v1/auth/users                      # list all users (admin)
-POST   /api/v1/auth/users                      # create user (admin)
-GET    /api/v1/auth/users/{username}           # get user (admin or self)
-PATCH  /api/v1/auth/users/{username}           # update username / is_admin (admin)
-DELETE /api/v1/auth/users/{username}           # delete user (admin, not self)
+GET    /api/v1/auth/users                          # list all users (admin)
+POST   /api/v1/auth/users                          # create user (admin)
+GET    /api/v1/auth/users/{username}               # get user (admin or self)
+PATCH  /api/v1/auth/users/{username}               # update username / is_admin / mqtt_enabled (admin)
+DELETE /api/v1/auth/users/{username}               # delete user (admin, not self)
 
-GET    /api/v1/auth/me                         # own profile
-POST   /api/v1/auth/me/change-password         # change own password
+POST   /api/v1/auth/users/{username}/mqtt-password # set MQTT password (admin or self)
+DELETE /api/v1/auth/users/{username}/mqtt-password # revoke MQTT access (admin)
+
+GET    /api/v1/auth/me                             # own profile
+POST   /api/v1/auth/me/change-password             # change own password
 ```
 
 ```bash
@@ -275,6 +301,51 @@ curl -X POST http://localhost:8080/api/v1/auth/me/change-password \
   -H "Content-Type: application/json" \
   -d '{"current_password": "admin", "new_password": "newS3cret!"}'
 ```
+
+#### MQTT Access per User
+
+The internal Mosquitto broker is password-protected. Access is controlled per user via the `mqtt_enabled` flag and a **separate** MQTT password (independent of the login password).
+
+| Field | Description |
+|---|---|
+| `mqtt_enabled` | Whether the user can connect to Mosquitto |
+| `mqtt_password_set` | `true` if an MQTT password is configured (hash never exposed) |
+
+**Workflow:**
+
+```bash
+# 1. Grant MQTT access to a user (set password → automatically enables mqtt_enabled)
+curl -X POST http://localhost:8080/api/v1/auth/users/operator/mqtt-password \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/json" \
+  -d '{"password": "mqttS3cret!"}'
+
+# 2. User can now connect directly to Mosquitto:
+mosquitto_sub -h localhost -p 1883 -u operator -P mqttS3cret! -t dp/#
+
+# 3. Revoke access (removes password + sets mqtt_enabled=false)
+curl -X DELETE http://localhost:8080/api/v1/auth/users/operator/mqtt-password \
+  -H "Authorization: Bearer {token}"
+
+# 4. Users can rotate their own MQTT password:
+curl -X POST http://localhost:8080/api/v1/auth/users/operator/mqtt-password \
+  -H "Authorization: Bearer {operator-token}" \
+  -H "Content-Type: application/json" \
+  -d '{"password": "newMqttPass!"}'
+```
+
+**How it works internally:**
+
+1. openTWS stores the MQTT password as a Mosquitto-compatible PBKDF2-SHA512 hash (not the same as the login hash).
+2. On every change, openTWS rewrites `/mosquitto/passwd/passwd` and sends `SIGHUP` to Mosquitto.
+3. Mosquitto reloads the file **without dropping existing connections**.
+4. The `opentws` service account is always included and cannot be removed via the API.
+
+**MQTT password vs. login password:**
+- Login password: used for the openTWS REST API / GUI.
+- MQTT password: used to connect directly to the Mosquitto broker (port 1883 / 9001).
+- They are independent — changing one does not affect the other.
+- MQTT password can be rotated by the user themselves or by an admin.
 
 ---
 
@@ -569,6 +640,290 @@ WS /api/v1/ws?token={jwt}
   "source_adapter": "KNX"
 }
 ```
+
+---
+
+## Logic Engine
+
+### Übersicht
+
+Die Logic Engine ermöglicht das Erstellen von Automatisierungslogiken auf einer visuellen Tapete (Canvas) ohne Programmierung. Logik-Graphen werden als **Blöcke** (Nodes) und **Verbindungen** (Edges) dargestellt.
+
+**Wie es funktioniert:**
+
+1. Jeder Graph wird in der Datenbank als JSON gespeichert (`logic_graphs`-Tabelle).
+2. Der **LogicManager** abonniert alle `DataValueEvent`-Ereignisse am EventBus.
+3. Ändert sich ein DataPoint, der von einem **DP LESEN**-Block beobachtet wird, führt der Manager den zugehörigen Graph automatisch aus.
+4. Der **GraphExecutor** verarbeitet alle Blöcke in topologischer Reihenfolge (Kahn-Algorithmus).
+5. **DP SCHREIBEN**-Blöcke publizieren das Ergebnis als `DataValueEvent` — damit werden Registry, Ring-Buffer, MQTT und WebSocket automatisch benachrichtigt.
+
+Der Graph wird **auch manuell** über den „▶ Ausführen"-Button oder die API ausgelöst. In diesem Fall liest der Manager die aktuellen Werte aller DP-LESEN-Blöcke aus der Registry.
+
+---
+
+### Blocktypen
+
+#### Kategorie: Konstante
+
+| Block | Eingänge | Ausgänge | Beschreibung |
+|---|---|---|---|
+| **Festwert** | — | Wert | Gibt einen festen Wert aus (Zahl, Bool oder Text). Nützlich als Schwellwert oder Referenz. Config: `Wert` + `Datentyp` (number / bool / string). |
+
+#### Kategorie: Logik
+
+| Block | Eingänge | Ausgänge | Beschreibung |
+|---|---|---|---|
+| **AND** | A, B | Out | Wahr wenn **alle** Eingänge wahr sind. |
+| **OR** | A, B | Out | Wahr wenn **mindestens ein** Eingang wahr ist. |
+| **NOT** | In | Out | Invertiert den Eingang. |
+| **XOR** | A, B | Out | Wahr wenn **genau ein** Eingang wahr ist. |
+| **Vergleich** | A, B | Ergebnis (Bool) | Vergleicht zwei Werte. Config: Operator `>` `<` `=` `>=` `<=` `!=`. |
+| **Hysterese** | Wert | Out (Bool) | Schaltet bei Überschreitung von `Schwelle ON` ein, erst bei Unterschreitung von `Schwelle OFF` wieder aus. Zustand wird graph-seitig gespeichert. |
+
+#### Kategorie: DataPoint
+
+| Block | Eingänge | Ausgänge | Beschreibung |
+|---|---|---|---|
+| **DP Lesen** | — | Wert, Geändert | Liest einen DataPoint. Löst den Graph bei jeder Wertänderung automatisch aus. Optionale Filter & Transformation (siehe unten). |
+| **DP Schreiben** | Wert, Trigger | — | Schreibt einen Wert in einen DataPoint. Publiziert `DataValueEvent` → Ring-Buffer, MQTT, WebSocket werden benachrichtigt. Optionale Filter & Transformation. |
+
+#### Kategorie: Mathematik
+
+| Block | Eingänge | Ausgänge | Beschreibung |
+|---|---|---|---|
+| **Formel** | a, b | Ergebnis | Berechnet einen Ausdruck. Variablen `a` und `b` entsprechen den Eingängen. Beispiel: `a * 2 + b`. Alle Formelfunktionen sind verfügbar (siehe [Formel-Referenz](#formel-referenz)). |
+| **Skalieren** | Wert | Ergebnis | Lineares Mapping: `[in_min … in_max]` → `[out_min … out_max]`. |
+
+#### Kategorie: Timer
+
+| Block | Eingänge | Ausgänge | Beschreibung |
+|---|---|---|---|
+| **Verzögerung** | Trigger | Trigger | Verzögert ein Signal um N Sekunden (async, wird vom LogicManager verwaltet). |
+| **Impuls** | Trigger | Out | Gibt `true` für N Sekunden aus, dann `false` (async). |
+| **Zeitplan** | — | Trigger | Löst nach einem Cron-Ausdruck aus, z. B. `0 7 * * *` = täglich 07:00. |
+
+#### Kategorie: Skript
+
+| Block | Eingänge | Ausgänge | Beschreibung |
+|---|---|---|---|
+| **Python Script** | a, b, c | Ergebnis | Führt Python-Code aus. `inputs['a']`, `inputs['b']`, `inputs['c']` enthalten die Eingangswerte. `result = ...` definiert den Ausgangswert. Eingeschränkte Sandbox (`abs`, `min`, `max`, `round`, `math`, kein IO/Import). |
+
+#### Kategorie: MCP
+
+| Block | Eingänge | Ausgänge | Beschreibung |
+|---|---|---|---|
+| **MCP Tool** | Trigger, Input | Ergebnis, Fertig | Ruft ein MCP-Tool auf einem externen MCP-Server auf. Config: `server_url`, `tool_name`. |
+
+---
+
+### DataPoint-Blöcke: Filter & Transformation
+
+Beide DataPoint-Blöcke besitzen drei Konfigurations-Tabs: **Verbindung**, **Transformation** und **Filter**.
+
+#### Transformation (Tab: Transformation •)
+
+Das Ergebnis-Tab zeigt einen Punkt (•) sobald eine Formel aktiv ist.
+
+| Feld | Beschreibung |
+|---|---|
+| **Formel** | Mathematischer Ausdruck, der auf den Wert angewendet wird. Variable: **`x`** (konsistent mit Binding-Formeln). |
+
+Vordefinierte Presets:
+
+| Preset | Formel |
+|---|---|
+| × 86.400 (Tage → Sekunden) | `x * 86400` |
+| × 3.600 (Stunden → Sekunden) | `x * 3600` |
+| × 1.440 (Tage → Minuten) | `x * 1440` |
+| × 1.000 | `x * 1000` |
+| × 100 | `x * 100` |
+| × 60 (Minuten → Sekunden) | `x * 60` |
+| × 10 | `x * 10` |
+| ÷ 10 (Festkomma) | `round(x / 10, 1)` |
+| ÷ 60 (Sekunden → Minuten) | `x / 60` |
+| ÷ 100 (Festkomma) | `round(x / 100, 2)` |
+| ÷ 1.000 (Festkomma) | `round(x / 1000, 3)` |
+| ÷ 1.440 (Minuten → Tage) | `x / 1440` |
+| ÷ 3.600 (Sekunden → Stunden) | `x / 3600` |
+| ÷ 86.400 (Sekunden → Tage) | `x / 86400` |
+
+Die Formel wird **bei DP LESEN** auf den Rohwert angewendet, bevor er in den Graph einfließt. **Bei DP SCHREIBEN** wird sie auf den Eingangswert angewendet, bevor er in den DataPoint geschrieben wird.
+
+#### Filter (Tab: Filter •)
+
+Das Filter-Tab zeigt einen Punkt (•) sobald ein Filter aktiv ist.
+
+**DP Lesen — verfügbare Filter:**
+
+| Feld | Beschreibung |
+|---|---|
+| **Min. Zeitabstand** | Mindestabstand zwischen zwei Graph-Auslösungen. Einheit: `ms` / `s` / `min` / `h`. Auslösungen innerhalb des Intervalls werden verworfen. |
+| **Nur bei Wertänderung** | Graph nur auslösen wenn der neue Wert vom zuletzt gesendeten abweicht (Duplikat-Filter). |
+| **Mindeständerung (absolut)** | Graph nur auslösen wenn `|neu − alt| ≥ Schwelle`. Nur für numerische Werte. |
+| **Mindeständerung (%)** | Graph nur auslösen wenn die relative Abweichung `≥ Schwelle %`. Nur für numerische Werte. |
+
+> Beide Delta-Filter müssen erfüllt sein wenn beide konfiguriert sind.
+
+**DP Schreiben — verfügbare Filter:**
+
+| Feld | Beschreibung |
+|---|---|
+| **Min. Zeitabstand** | Mindestabstand zwischen zwei Schreibvorgängen. Einheit: `ms` / `s` / `min` / `h`. |
+| **Nur bei Wertänderung** | Nicht schreiben wenn der Wert identisch mit dem zuletzt geschriebenen ist. |
+| **Mindeständerung (absolut)** | Nur schreiben wenn `|neu − letzter Schreibwert| ≥ Schwelle`. |
+
+**Blockbadge:** Wenn Filter oder Formel konfiguriert sind, erscheint ein amber ⊘-Symbol im Block-Header.
+
+---
+
+### Formel-Referenz
+
+In **allen** Formelfeldern (DP Lesen, DP Schreiben, Formel-Block, Binding `value_formula`) gilt:
+
+- **Variable:** `x` (Eingangswert, immer als `float` übergeben)
+- **Keine Imports nötig** — alle Funktionen sind direkt verfügbar
+
+#### Verfügbare Funktionen
+
+| Funktion | Beispiel | Beschreibung |
+|---|---|---|
+| `abs(x)` | `abs(x - 50)` | Absolutbetrag |
+| `round(x, n)` | `round(x, 2)` | Runden auf n Dezimalstellen |
+| `min(x, y)` | `min(x, 100)` | Minimum zweier Werte |
+| `max(x, y)` | `max(x, 0)` | Maximum zweier Werte |
+| `sqrt(x)` | `sqrt(x)` | Quadratwurzel |
+| `floor(x)` | `floor(x)` | Abrunden auf ganze Zahl |
+| `ceil(x)` | `ceil(x)` | Aufrunden auf ganze Zahl |
+| `math.log(x)` | `math.log(x)` | Natürlicher Logarithmus |
+| `math.log10(x)` | `math.log10(x)` | Zehner-Logarithmus |
+| `math.log(x, b)` | `math.log(x, 2)` | Logarithmus zur Basis b |
+| `math.sin(x)` | `math.sin(x)` | Sinus (Bogenmass) |
+| `math.cos(x)` | `math.cos(x)` | Kosinus |
+| `math.pow(x, n)` | `math.pow(x, 2)` | Potenz (x^n) |
+| `math.exp(x)` | `math.exp(x)` | e^x |
+| `math.pi` | `x * math.pi / 180` | Kreiszahl π ≈ 3.14159 |
+| `math.e` | `math.e ** x` | Euler'sche Zahl e ≈ 2.71828 |
+
+> **Alle weiteren `math.*`-Funktionen** aus dem Python-Standardmodul sind ebenfalls verfügbar (`math.atan`, `math.degrees`, `math.radians`, `math.hypot`, etc.).
+
+#### Beispiele
+
+| Zweck | Formel |
+|---|---|
+| Bereich begrenzen (Clamp) | `max(0, min(100, x))` |
+| Fahrenheit → Celsius | `(x - 32) * 5 / 9` |
+| Celsius → Fahrenheit | `x * 9 / 5 + 32` |
+| Wh → kWh | `x / 1000` |
+| Auf halbe Stufen runden | `round(x * 2) / 2` |
+| Prozent aus Rohwert 0–4095 | `x / 4095 * 100` |
+| Negativen Wert verwerfen | `max(0, x)` |
+| Absolutwert einer Abweichung | `abs(x - 230)` |
+
+#### Formel-Block (Eingänge a, b)
+
+Der **Formel**-Block hat zwei Eingänge `a` und `b` (keine `x`-Variable):
+
+```
+a * 2 + b        # Eingang a verdoppeln, b addieren
+max(a, b)        # Größeren der beiden Werte nehmen
+round((a + b) / 2, 1)   # Mittelwert, 1 Dezimalstelle
+abs(a - b)       # Absolute Differenz
+```
+
+---
+
+### Typ-Koercion
+
+Die Logic Engine konvertiert Werte automatisch wenn Eingang und Ausgang verschiedene Typen haben:
+
+| Von | Nach | Regel |
+|---|---|---|
+| `bool` | `float` | `True → 1.0`, `False → 0.0` |
+| `float` / `int` | `bool` | `0 → False`, alle anderen → `True` |
+| `str "123"` | `float` | `float("123") = 123.0` |
+| `str "true"` / `"on"` / `"1"` | `bool` | `True` |
+| `str "false"` / `"off"` / `"0"` / `""` | `bool` | `False` |
+| `None` | `float` | `0.0` (Default) |
+| `None` | `bool` | `False` |
+
+Verbindungen zwischen unterschiedlichen Blocktypen funktionieren damit **immer**. Nur bei völlig inkompatiblen Typen (Freitext-String in numerischen Vergleich) fällt der Block auf String-Vergleich zurück.
+
+---
+
+### Debug-Modus
+
+Der Debug-Modus zeigt nach einer Graph-Ausführung die berechneten Zwischenwerte direkt auf den Blöcken an.
+
+**Bedienung:**
+1. Graph öffnen
+2. **🔍 Debug**-Button in der Toolbar klicken → Button leuchtet amber
+3. **▶ Ausführen** klicken
+4. Jeder Block zeigt unten ein gelbes Werteband mit seinen Ausgangswerten
+
+**Anzeigeformat:**
+
+| Typ | Darstellung |
+|---|---|
+| Boolean `true` | `out=✓` |
+| Boolean `false` | `out=✗` |
+| Zahl | `value=230.45` (max. 5 signifikante Stellen) |
+| Text | `value=Hallo` (max. 18 Zeichen) |
+| Kein Wert | `value=—` |
+
+Debug deaktivieren → alle Wertebänder verschwinden.
+
+> **Hinweis:** Manuelle Ausführung liest die aktuellen Registry-Werte für alle DP-LESEN-Blöcke. Automatische Ausführung (durch DataValueEvent) verwendet den tatsächlichen Ereigniswert.
+
+---
+
+### Logic Engine API
+
+```
+GET    /api/v1/logic/node-types              # alle Blocktyp-Definitionen
+GET    /api/v1/logic/graphs                  # alle Logic-Graphen auflisten
+POST   /api/v1/logic/graphs                  # neuen Graphen erstellen
+GET    /api/v1/logic/graphs/{id}             # Graphen laden (inkl. flow_data)
+PUT    /api/v1/logic/graphs/{id}             # Graphen speichern (Canvas-Stand)
+PATCH  /api/v1/logic/graphs/{id}             # Teilupdate (name / enabled)
+DELETE /api/v1/logic/graphs/{id}             # Graphen löschen
+POST   /api/v1/logic/graphs/{id}/run         # manuell ausführen
+```
+
+**Graph-Objekt:**
+
+```json
+{
+  "id": "uuid",
+  "name": "Lüftungssteuerung",
+  "description": "Schaltet Lüftung bei CO2 > 1000 ppm ein",
+  "enabled": true,
+  "flow_data": {
+    "nodes": [ ... ],
+    "edges": [ ... ]
+  },
+  "created_at": "2026-03-28T10:00:00Z",
+  "updated_at": "2026-03-28T10:00:00Z"
+}
+```
+
+**Manuell ausführen:**
+
+```bash
+curl -X POST http://localhost:8080/api/v1/logic/graphs/{id}/run \
+  -H "Authorization: Bearer {token}"
+
+# Response:
+{
+  "status": "ok",
+  "outputs": {
+    "node-uuid-1": {"value": 230.5, "changed": false},
+    "node-uuid-2": {"result": 461.0},
+    "node-uuid-3": {"out": true}
+  }
+}
+```
+
+Der `outputs`-Response enthält die Ausgangswerte aller Nodes — dieselben Werte, die der Debug-Modus in der GUI anzeigt.
 
 ---
 
