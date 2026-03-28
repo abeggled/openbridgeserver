@@ -181,6 +181,28 @@ class LogicManager:
             logger.error("Graph %s (%s) execution error: %s", graph_id, name, exc)
             return {}
 
+        # Broadcast execution results to all WS clients (live debug mode)
+        try:
+            from opentws.api.v1.websocket import get_ws_manager
+
+            def _safe(v: Any) -> Any:
+                if v is None or isinstance(v, (bool, int, float, str)):
+                    return v
+                return str(v)
+
+            safe_outputs = {
+                nid: {k: _safe(val) for k, val in node_out.items()}
+                for nid, node_out in outputs.items()
+                if isinstance(node_out, dict)
+            }
+            await get_ws_manager().broadcast({
+                "action":   "logic_run",
+                "graph_id": graph_id,
+                "outputs":  safe_outputs,
+            })
+        except Exception:
+            pass  # WS not ready or no clients — non-critical
+
         # Process datapoint_write outputs — apply write-side filters, then
         # publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
         from opentws.core.event_bus import DataValueEvent

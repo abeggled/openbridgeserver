@@ -65,6 +65,17 @@ class WebSocketManager:
         if conn_id in self._connections:
             self._connections[conn_id][1].difference_update(dp_ids)
 
+    async def broadcast(self, msg: dict) -> None:
+        """Send a message to ALL connected clients (no subscription filter)."""
+        dead: list[str] = []
+        for conn_id, (ws, _) in list(self._connections.items()):
+            try:
+                await ws.send_json(msg)
+            except Exception:
+                dead.append(conn_id)
+        for conn_id in dead:
+            self._connections.pop(conn_id, None)
+
     async def handle_value_event(self, event: Any) -> None:
         """Called by EventBus when a DataValueEvent arrives."""
         from opentws.core.registry import get_registry

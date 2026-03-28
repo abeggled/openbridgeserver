@@ -106,7 +106,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, markRaw } from 'vue'
+import { ref, onMounted, onUnmounted, markRaw } from 'vue'
 import { VueFlow, useVueFlow, addEdge } from '@vue-flow/core'
 import { Background }           from '@vue-flow/background'
 import { Controls }             from '@vue-flow/controls'
@@ -338,10 +338,55 @@ function onNodeDataUpdate(newData) {
   selectedNode.value = { ...selectedNode.value, data: { ...selectedNode.value.data, ...newData } }
 }
 
+// ── WebSocket — live debug updates ────────────────────────────────────────
+let _ws = null
+let _wsTimer = null
+
+function _wsConnect() {
+  const token = localStorage.getItem('access_token')
+  if (!token) return
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  const url   = `${proto}://${window.location.host}/api/v1/ws?token=${encodeURIComponent(token)}`
+  try {
+    _ws = new WebSocket(url)
+  } catch { return }
+
+  _ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data)
+      if (
+        msg.action   === 'logic_run'    &&
+        msg.graph_id === activeGraphId.value &&
+        debugMode.value
+      ) {
+        applyDebugValues(msg.outputs || {})
+      }
+    } catch { /* ignore parse errors */ }
+  }
+
+  _ws.onclose = () => {
+    _ws = null
+    _wsTimer = setTimeout(_wsConnect, 4000)   // auto-reconnect
+  }
+  _ws.onerror = () => { try { _ws?.close() } catch { /* ignore */ } }
+}
+
+function _wsDisconnect() {
+  clearTimeout(_wsTimer)
+  _wsTimer = null
+  try { _ws?.close() } catch { /* ignore */ }
+  _ws = null
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────
 onMounted(async () => {
   await store.fetchNodeTypes()
   await store.fetchGraphs()
+  _wsConnect()
+})
+
+onUnmounted(() => {
+  _wsDisconnect()
 })
 </script>
 
