@@ -34,3 +34,6 @@ python-multipart>=0.0.9
 # KNX Project File Import
 pyzipper>=0.3.6
 xknxproject>=1.0.0
+
+# Logic Engine — cron scheduling
+croniter>=1.4.0

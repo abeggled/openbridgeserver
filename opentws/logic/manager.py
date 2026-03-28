@@ -4,9 +4,11 @@ LogicManager — manages all logic graphs and integrates with the EventBus.
 - Subscribes to DataValueEvents
 - Triggers graphs whose datapoint_read nodes watch the changed DataPoint
 - Executes the graph and writes outputs back via the registry
+- Schedules timer_cron nodes via asyncio tasks (requires croniter)
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -47,21 +49,96 @@ class LogicManager:
         # per-node runtime state for filter/throttle
         # {graph_id: {node_id: {last_value, last_ts, last_write_val, last_write_ts}}}
         self._node_state: dict[str, dict[str, dict[str, Any]]] = {}
+        # cron tasks: (graph_id, node_id) → asyncio.Task
+        self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
 
     async def start(self) -> None:
-        """Subscribe to EventBus and load all graphs into cache."""
+        """Subscribe to EventBus, load all graphs and start cron schedulers."""
         await self._load_graphs()
         from opentws.core.event_bus import DataValueEvent
         self._event_bus.subscribe(DataValueEvent, self._on_value_event)
+        self._start_cron_tasks()
         logger.info("LogicManager started — %d graphs loaded", len(self._graphs))
 
     async def stop(self) -> None:
         from opentws.core.event_bus import DataValueEvent
         self._event_bus.unsubscribe(DataValueEvent, self._on_value_event)
+        for task in self._cron_tasks.values():
+            task.cancel()
+        self._cron_tasks.clear()
 
     async def reload(self) -> None:
-        """Reload graph cache from DB (after a graph was saved)."""
+        """Reload graph cache from DB and restart cron schedulers."""
+        for task in self._cron_tasks.values():
+            task.cancel()
+        self._cron_tasks.clear()
         await self._load_graphs()
+        self._start_cron_tasks()
+
+    # ── Cron Scheduler ────────────────────────────────────────────────────
+
+    def _start_cron_tasks(self) -> None:
+        """Start asyncio tasks for all timer_cron nodes in enabled graphs."""
+        try:
+            import croniter as _croniter_check  # noqa: F401
+        except ImportError:
+            logger.warning(
+                "croniter not installed — timer_cron nodes will not auto-execute. "
+                "Install with: pip install croniter"
+            )
+            return
+
+        for graph_id, (name, enabled, flow) in self._graphs.items():
+            if not enabled:
+                continue
+            for node in flow.nodes:
+                if node.type != "timer_cron":
+                    continue
+                key = (graph_id, node.id)
+                if key in self._cron_tasks and not self._cron_tasks[key].done():
+                    continue  # already running
+                cron_expr = node.data.get("cron", "0 7 * * *")
+                task = asyncio.create_task(
+                    self._cron_loop(graph_id, node.id, cron_expr),
+                    name=f"cron-{graph_id[:8]}-{node.id[:8]}",
+                )
+                self._cron_tasks[key] = task
+                logger.info(
+                    "Cron scheduled: graph=%s (%s) node=%s expr=%r",
+                    graph_id[:8], name, node.id[:8], cron_expr,
+                )
+
+    async def _cron_loop(self, graph_id: str, node_id: str, cron_expr: str) -> None:
+        """Fires a timer_cron graph node on its cron schedule — runs indefinitely."""
+        from croniter import croniter
+
+        while True:
+            try:
+                now     = datetime.now(timezone.utc)
+                it      = croniter(cron_expr, now)
+                next_dt = it.get_next(datetime)
+                wait_s  = max(0.0, (next_dt - now).total_seconds())
+                logger.debug(
+                    "Cron graph %s: sleeping %.0fs until %s",
+                    graph_id[:8], wait_s, next_dt.isoformat(),
+                )
+                await asyncio.sleep(wait_s)
+
+                entry = self._graphs.get(graph_id)
+                if entry and entry[1]:  # still exists and enabled
+                    g_name, _, flow = entry
+                    overrides = {node_id: {"trigger": True}}
+                    await self._execute_graph(graph_id, g_name, flow, overrides)
+                    logger.info(
+                        "Cron graph %s (%s) fired at %s",
+                        graph_id[:8], g_name, next_dt.isoformat(),
+                    )
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("Cron loop error graph=%s: %s", graph_id[:8], exc)
+                await asyncio.sleep(60)  # back-off on unexpected errors
 
     # ── Event Handler ─────────────────────────────────────────────────────
 
@@ -203,17 +280,31 @@ class LogicManager:
         except Exception:
             pass  # WS not ready or no clients — non-critical
 
-        # Process datapoint_write outputs — apply write-side filters, then
-        # publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
+        # Process datapoint_write outputs — apply trigger gating + write-side filters,
+        # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
         from opentws.core.event_bus import DataValueEvent
         graph_state = self._node_state.setdefault(graph_id, {})
         write_now   = datetime.now(timezone.utc)
+
+        # Build set of node+handle pairs that have an incoming edge (= are wired)
+        wired_inputs: set[tuple[str, str]] = {
+            (e.target, e.targetHandle or "in")
+            for e in flow.edges
+        }
 
         for node in flow.nodes:
             if node.type != "datapoint_write":
                 continue
             node_out  = outputs.get(node.id, {})
             write_val = node_out.get("_write_value")
+
+            # ── Trigger gating ───────────────────────────────────────────
+            # If the trigger handle is wired, only write when trigger is truthy.
+            if (node.id, "trigger") in wired_inputs:
+                triggered = node_out.get("_triggered")
+                if not GraphExecutor._to_bool(triggered):
+                    continue
+
             if write_val is None:
                 continue
             dp_id_str = node.data.get("datapoint_id")
@@ -289,3 +380,8 @@ class LogicManager:
         self._graphs.pop(graph_id, None)
         self._hysteresis.pop(graph_id, None)
         self._node_state.pop(graph_id, None)
+        # Cancel cron tasks for this specific graph
+        to_remove = [k for k in self._cron_tasks if k[0] == graph_id]
+        for k in to_remove:
+            self._cron_tasks[k].cancel()
+            del self._cron_tasks[k]
