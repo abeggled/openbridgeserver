@@ -462,7 +462,7 @@ curl -X POST http://localhost:8080/api/v1/adapters/instances \
     "name": "KNX Erdgeschoss",
     "config": {
       "connection_type": "tunneling",
-      "host": "10.38.114.44",
+      "host": "192.168.114.44",
       "port": 3674,
       "individual_address": "1.1.210"
     }
@@ -477,7 +477,7 @@ curl -X POST http://localhost:8080/api/v1/adapters/instances \
     "name": "KNX Obergeschoss",
     "config": {
       "connection_type": "tunneling",
-      "host": "10.38.114.45",
+      "host": "192.168.114.45",
       "port": 3674,
       "individual_address": "1.1.211"
     }
@@ -580,7 +580,7 @@ Each adapter type can be instantiated multiple times. All instances are managed 
 ```json
 {
   "connection_type": "tunneling",
-  "host": "10.38.114.44",
+  "host": "192.168.114.44",
   "port": 3674,
   "individual_address": "1.1.210",
   "local_ip": null
@@ -652,7 +652,7 @@ DPT10/11 encode/decode as ISO strings; `x` in formulas is the numeric timestamp 
 
 ```json
 {
-  "host": "10.38.115.31",
+  "host": "192.168.115.31",
   "port": 1502,
   "timeout": 3.0
 }
@@ -726,7 +726,7 @@ Connects to an **external** MQTT broker (distinct from the internal OpenTWS Mosq
 
 ```json
 {
-  "host": "10.38.114.44",
+  "host": "192.168.114.44",
   "port": 1883,
   "username": "username",
   "password": "password"
@@ -766,7 +766,7 @@ curl -X POST http://localhost:8080/api/v1/adapters/instances \
   -d '{
     "adapter_type": "MQTT",
     "name": "Home Assistant",
-    "config": {"host": "10.38.114.44", "port": 1883, "username": "twsmqtt", "password": "twsmqtt"}
+    "config": {"host": "192.168.114.44", "port": 1883, "username": "twsmqtt", "password": "twsmqtt"}
   }'
 
 # 2. Add SOURCE binding on the DataPoint (subscribe to HA topic)
