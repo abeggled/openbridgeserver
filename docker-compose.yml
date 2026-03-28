@@ -13,13 +13,20 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2
     restart: unless-stopped
-    # Init: always (re)create passwd file with current service credentials, then run Mosquitto.
-    # This ensures a changed service password takes effect even when the volume already exists.
+    # Run as root so the init script can set up directory/file permissions.
+    # Mosquitto itself drops privileges to the 'mosquitto' user after startup.
+    user: root
+    # Init: fix directory permissions, (re)create passwd file, then run Mosquitto.
+    # chmod 777 on the directory lets openTWS (different UID) write the passwd file later.
+    # chmod 644 on the file lets the mosquitto user (dropped from root) read it.
     # "exec" replaces the shell → Mosquitto becomes PID 1 (needed for SIGHUP reload).
     command: >
       sh -c "
+      mkdir -p /mosquitto/passwd &&
+      chmod 777 /mosquitto/passwd &&
       rm -f /mosquitto/passwd/passwd &&
       mosquitto_passwd -c -b /mosquitto/passwd/passwd $$MQTT_SVC_USER $$MQTT_SVC_PASS &&
+      chmod 644 /mosquitto/passwd/passwd &&
       exec mosquitto -c /mosquitto/config/mosquitto.conf
       "
     environment:
