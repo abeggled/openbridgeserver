@@ -200,6 +200,9 @@ class GraphExecutor:
                 a = self._to_num(inputs.get("a"))
                 b = self._to_num(inputs.get("b"))
                 result = self._safe_eval(formula, {"a": a, "b": b})
+                output_formula = (d.get("output_formula") or "").strip()
+                if output_formula:
+                    result = self._safe_eval(output_formula, {"x": result})
                 return {"result": result}
 
             case "math_map":
