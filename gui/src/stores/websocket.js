@@ -18,6 +18,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const liveValues   = ref({})   // { [datapoint_id]: { value, quality, ts } }
   const _ws          = shallowRef(null)
   const _handlers    = []        // [{ id, fn }] — external value listeners
+  const _rbHandlers  = []        // ringbuffer entry listeners
   let   _pingInterval = null
 
   function connect() {
@@ -41,6 +42,16 @@ export const useWebSocketStore = defineStore('websocket', () => {
     ws.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data)
+        // Per-subscription DP value event
+        if (msg.id && msg.v !== undefined && !msg.action) {
+          const dpId = msg.id
+          liveValues.value = {
+            ...liveValues.value,
+            [dpId]: { value: msg.v, quality: msg.q, ts: msg.t }
+          }
+          _handlers.forEach(h => h.fn(dpId, msg.v, msg.q, msg.t))
+        }
+        // Legacy format (type: "value")
         if (msg.type === 'value') {
           const { datapoint_id, value, quality, ts } = msg
           liveValues.value = {
@@ -48,6 +59,10 @@ export const useWebSocketStore = defineStore('websocket', () => {
             [datapoint_id]: { value, quality, ts }
           }
           _handlers.forEach(h => h.fn(datapoint_id, value, quality, ts))
+        }
+        // RingBuffer live push
+        if (msg.action === 'ringbuffer_entry') {
+          _rbHandlers.forEach(h => h.fn(msg.entry))
         }
       } catch { /* ignore malformed */ }
     }
@@ -89,5 +104,15 @@ export const useWebSocketStore = defineStore('websocket', () => {
     }
   }
 
-  return { connected, liveValues, connect, disconnect, subscribe, unsubscribe, onValue }
+  /** Register a handler to be called on every ringbuffer_entry push. Returns unregister fn. */
+  function onRingbufferEntry(fn) {
+    const entry = { id: Math.random(), fn }
+    _rbHandlers.push(entry)
+    return () => {
+      const idx = _rbHandlers.indexOf(entry)
+      if (idx !== -1) _rbHandlers.splice(idx, 1)
+    }
+  }
+
+  return { connected, liveValues, connect, disconnect, subscribe, unsubscribe, onValue, onRingbufferEntry }
 })

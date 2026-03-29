@@ -78,43 +78,54 @@ class WebSocketManager:
 
     async def handle_value_event(self, event: Any) -> None:
         """Called by EventBus when a DataValueEvent arrives."""
-        from opentws.core.registry import get_registry
-
-        dp_id_str = str(event.datapoint_id)
-        matching = [
-            (cid, ws)
-            for cid, (ws, subs) in self._connections.items()
-            if dp_id_str in subs
-        ]
-        if not matching:
+        if not self._connections:
             return
 
+        from opentws.core.registry import get_registry
         try:
             reg = get_registry()
         except RuntimeError:
             return
 
-        dp = reg.get(event.datapoint_id)
-        state = reg.get_value(event.datapoint_id)
+        dp_id_str = str(event.datapoint_id)
+        dp        = reg.get(event.datapoint_id)
+        state     = reg.get_value(event.datapoint_id)
+        ts_str    = event.ts.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
-        msg = {
-            "id": dp_id_str,
-            "v": event.value,
-            "u": dp.unit if dp else None,
-            "t": event.ts.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-            "q": event.quality,
+        # ── 1. Per-subscription DP value events ──────────────────────────
+        dp_msg = {
+            "id":    dp_id_str,
+            "v":     event.value,
+            "u":     dp.unit if dp else None,
+            "t":     ts_str,
+            "q":     event.quality,
             "old_v": state.old_value if state else None,
         }
-
         dead: list[str] = []
-        for conn_id, ws in matching:
+        for conn_id, (ws, subs) in list(self._connections.items()):
+            if dp_id_str not in subs:
+                continue
             try:
-                await ws.send_json(msg)
+                await ws.send_json(dp_msg)
             except Exception:
                 dead.append(conn_id)
-
         for conn_id in dead:
             self._connections.pop(conn_id, None)
+
+        # ── 2. RingBuffer live-push — broadcast to ALL clients ────────────
+        rb_msg = {
+            "action": "ringbuffer_entry",
+            "entry": {
+                "ts":             ts_str,
+                "datapoint_id":   dp_id_str,
+                "name":           dp.name if dp else None,
+                "new_value":      event.value,
+                "old_value":      state.old_value if state else None,
+                "quality":        event.quality,
+                "source_adapter": event.source_adapter,
+            },
+        }
+        await self.broadcast(rb_msg)
 
     @property
     def connection_count(self) -> int:

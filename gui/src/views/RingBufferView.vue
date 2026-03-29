@@ -7,11 +7,11 @@
       </div>
       <button @click="showConfig = true" class="btn-secondary btn-sm">⚙ Konfigurieren</button>
       <button @click="load" class="btn-secondary btn-sm">↻ Aktualisieren</button>
-      <button @click="toggleAutoRefresh"
-        :class="['btn-sm', autoRefresh ? 'btn-primary' : 'btn-secondary']"
-        :title="autoRefresh ? 'Auto-Refresh aktiv (alle 30 s) — klicken zum Deaktivieren' : 'Auto-Refresh inaktiv — klicken zum Aktivieren'">
-        {{ autoRefresh ? '⏱ Auto' : '⏸ Manuell' }}
-      </button>
+      <span :class="['inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium',
+        wsConnected ? 'bg-teal-500/15 text-teal-400' : 'bg-slate-700/50 text-slate-500']">
+        <span :class="['w-1.5 h-1.5 rounded-full', wsConnected ? 'bg-teal-400 animate-pulse' : 'bg-slate-600']" />
+        {{ wsConnected ? 'Live' : 'Offline' }}
+      </span>
     </div>
 
     <!-- Stats bar -->
@@ -103,46 +103,46 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ringbufferApi } from '@/api/client'
 import { useTz } from '@/composables/useTz'
+import { useWebSocketStore } from '@/stores/websocket'
 import Badge   from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Modal   from '@/components/ui/Modal.vue'
 
 const { fmtDateTime } = useTz()
+const wsStore = useWebSocketStore()
 
-const entries    = ref([])
-const stats      = ref(null)
-const loading    = ref(false)
-const showConfig = ref(false)
+const entries      = ref([])
+const stats        = ref(null)
+const loading      = ref(false)
+const showConfig   = ref(false)
 const configSaving = ref(false)
-const configMsg  = ref(null)
-const autoRefresh = ref(true)
+const configMsg    = ref(null)
 
-const filters = reactive({ q: '', adapter: '', limit: '500' })
+const filters    = reactive({ q: '', adapter: '', limit: '500' })
 const configForm = reactive({ storage: 'memory', max_entries: 10000 })
 
-let debounceTimer = null
-let refreshTimer  = null
+// Computed: WS connection status
+const wsConnected = computed(() => wsStore.connected)
 
-const AUTO_REFRESH_MS = 30_000
+let debounceTimer   = null
+let unregisterRb    = null  // WS ringbuffer handler unsubscribe fn
 
 function debouncedLoad() {
   clearTimeout(debounceTimer)
   debounceTimer = setTimeout(load, 350)
 }
 
-function startAutoRefresh() {
-  stopAutoRefresh()
-  refreshTimer = setInterval(load, AUTO_REFRESH_MS)
-}
-function stopAutoRefresh() {
-  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
-}
-function toggleAutoRefresh() {
-  autoRefresh.value = !autoRefresh.value
-  autoRefresh.value ? startAutoRefresh() : stopAutoRefresh()
+/** Called by WS on every live DataValueEvent — prepend to list respecting filters */
+function onLiveEntry(entry) {
+  // Apply client-side filter to avoid showing irrelevant entries
+  const q = filters.q.toLowerCase()
+  if (q && !(entry.name?.toLowerCase().includes(q) || entry.datapoint_id?.toLowerCase().includes(q))) return
+  if (filters.adapter && entry.source_adapter !== filters.adapter) return
+
+  entries.value = [entry, ...entries.value].slice(0, parseInt(filters.limit) || 500)
 }
 
 onMounted(async () => {
@@ -151,11 +151,12 @@ onMounted(async () => {
     configForm.storage     = stats.value.storage
     configForm.max_entries = stats.value.max_entries
   }
-  startAutoRefresh()
+  // Subscribe to live ringbuffer pushes via existing WS connection
+  unregisterRb = wsStore.onRingbufferEntry(onLiveEntry)
 })
 
 onUnmounted(() => {
-  stopAutoRefresh()
+  unregisterRb?.()
   clearTimeout(debounceTimer)
 })
 
