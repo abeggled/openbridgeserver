@@ -77,6 +77,14 @@ class ExportedAdapterConfig(BaseModel):
     enabled: bool
 
 
+class ExportedLogicGraph(BaseModel):
+    id: str
+    name: str
+    description: str
+    enabled: bool
+    flow_data: dict
+
+
 class ConfigExport(BaseModel):
     opentws_version: str
     exported_at: str
@@ -84,6 +92,7 @@ class ConfigExport(BaseModel):
     bindings: list[ExportedBinding]
     adapter_instances: list[ExportedAdapterInstance] = []
     knx_group_addresses: list[ExportedKnxGroupAddress] = []
+    logic_graphs: list[ExportedLogicGraph] = []
     # Legacy field (v1) — ignoriert beim Import wenn adapter_instances vorhanden
     adapter_configs: list[ExportedAdapterConfig] = []
 
@@ -95,6 +104,8 @@ class ImportResult(BaseModel):
     bindings_updated: int
     adapter_instances_upserted: int
     knx_group_addresses_upserted: int
+    logic_graphs_created: int
+    logic_graphs_updated: int
     adapters_restarted: int
     errors: list[str]
 
@@ -169,6 +180,18 @@ async def export_config(
         for r in ga_rows
     ]
 
+    graph_rows = await db.fetchall("SELECT * FROM logic_graphs ORDER BY name")
+    logic_graphs = [
+        ExportedLogicGraph(
+            id=r["id"],
+            name=r["name"],
+            description=r["description"] or "",
+            enabled=bool(r["enabled"]),
+            flow_data=json.loads(r["flow_data"]) if r["flow_data"] else {"nodes": [], "edges": []},
+        )
+        for r in graph_rows
+    ]
+
     return ConfigExport(
         opentws_version=_EXPORT_VERSION,
         exported_at=datetime.now(timezone.utc).isoformat(),
@@ -176,6 +199,7 @@ async def export_config(
         bindings=bindings,
         adapter_instances=adapter_instances,
         knx_group_addresses=knx_group_addresses,
+        logic_graphs=logic_graphs,
     )
 
 
@@ -192,6 +216,8 @@ async def import_config(
         bindings_updated=0,
         adapter_instances_upserted=0,
         knx_group_addresses_upserted=0,
+        logic_graphs_created=0,
+        logic_graphs_updated=0,
         adapters_restarted=0,
         errors=[],
     )
@@ -320,6 +346,37 @@ async def import_config(
             result.knx_group_addresses_upserted += 1
         except Exception as exc:
             result.errors.append(f"KNX GA {ga.address}: {exc}")
+
+    # --- Logic Graphs ---
+    for lg in body.logic_graphs:
+        try:
+            row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (lg.id,))
+            flow_json = json.dumps(lg.flow_data)
+            if row:
+                await db.execute_and_commit(
+                    """UPDATE logic_graphs
+                       SET name=?, description=?, enabled=?, flow_data=?, updated_at=?
+                       WHERE id=?""",
+                    (lg.name, lg.description, int(lg.enabled), flow_json, now, lg.id),
+                )
+                result.logic_graphs_updated += 1
+            else:
+                await db.execute_and_commit(
+                    """INSERT INTO logic_graphs
+                       (id, name, description, enabled, flow_data, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (lg.id, lg.name, lg.description, int(lg.enabled), flow_json, now, now),
+                )
+                result.logic_graphs_created += 1
+        except Exception as exc:
+            result.errors.append(f"LogicGraph {lg.id}: {exc}")
+
+    if body.logic_graphs:
+        try:
+            from opentws.logic.manager import get_logic_manager
+            await get_logic_manager().reload()
+        except Exception as exc:
+            result.errors.append(f"Logic manager reload: {exc}")
 
     # Restart all adapter instances so they pick up new configs and bindings
     try:

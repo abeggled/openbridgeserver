@@ -190,7 +190,7 @@
     <div v-if="activeTab === 'importexport'" class="flex flex-col gap-4 max-w-lg">
       <div class="card p-5 flex flex-col gap-3">
         <h3 class="font-semibold text-sm text-slate-100">Sicherung erstellen</h3>
-        <p class="text-sm text-slate-400">Alle DataPoints, Bindings, Adapter-Instanzen und KNX-Gruppenadressen als JSON-Datei sichern.</p>
+        <p class="text-sm text-slate-400">Alle DataPoints, Bindings, Adapter-Instanzen, KNX-Gruppenadressen und Logikblätter als JSON-Datei sichern.</p>
         <button @click="doExport" class="btn-secondary">Sicherung herunterladen</button>
       </div>
       <div class="card p-5 flex flex-col gap-3">
@@ -492,8 +492,10 @@ async function onImportFile(e) {
   try {
     const payload = JSON.parse(text)
     const { data } = await configApi.import(payload)
-    const gaInfo = data.knx_group_addresses_upserted > 0 ? `, ${data.knx_group_addresses_upserted} KNX-GAs` : ''
-    importResult.value = { ok: true, text: `Wiederherstellung OK: ${data.datapoints_created + data.datapoints_updated} DataPoints, ${data.bindings_created + data.bindings_updated} Bindings${gaInfo}` }
+    const gaInfo    = data.knx_group_addresses_upserted > 0 ? `, ${data.knx_group_addresses_upserted} KNX-GAs` : ''
+    const lgTotal   = (data.logic_graphs_created ?? 0) + (data.logic_graphs_updated ?? 0)
+    const lgInfo    = lgTotal > 0 ? `, ${lgTotal} Logikblätter` : ''
+    importResult.value = { ok: true, text: `Wiederherstellung OK: ${data.datapoints_created + data.datapoints_updated} DataPoints, ${data.bindings_created + data.bindings_updated} Bindings${gaInfo}${lgInfo}` }
   } catch (err) {
     importResult.value = { ok: false, text: err.response?.data?.detail ?? 'Import fehlgeschlagen' }
   }
