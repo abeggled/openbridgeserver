@@ -116,6 +116,12 @@ export const systemApi = {
   datatypes: () => api.get('/system/datatypes'),
 }
 
+// ── App Settings ──────────────────────────────────────────────────────────
+export const settingsApi = {
+  get:    ()     => api.get('/system/settings'),
+  update: (data) => api.put('/system/settings', data),
+}
+
 // ── History ───────────────────────────────────────────────────────────────
 export const historyApi = {
   query:     (id, params) => api.get(`/history/${id}`, { params }),

@@ -4,6 +4,8 @@ System API — Phase 4 / Phase 5 (Multi-Instance)
 GET /api/v1/system/health      liveness check (no auth required)
 GET /api/v1/system/adapters    detailed adapter instances + binding stats
 GET /api/v1/system/datatypes   all registered DataTypes
+GET /api/v1/system/settings    read app settings (timezone, …)
+PUT /api/v1/system/settings    update app settings
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ from pydantic import BaseModel
 
 from opentws.api.auth import get_current_user
 from opentws.adapters import registry as adapter_registry
+from opentws.db.database import get_db, Database
 from opentws.models.types import DataTypeRegistry
 
 router = APIRouter(tags=["system"])
@@ -44,6 +47,14 @@ class DataTypeOut(BaseModel):
     name: str
     python_type: str
     description: str
+
+
+class AppSettingsOut(BaseModel):
+    timezone: str
+
+
+class AppSettingsIn(BaseModel):
+    timezone: str
 
 
 # ---------------------------------------------------------------------------
@@ -102,3 +113,44 @@ async def datatypes(
         )
         for name, d in DataTypeRegistry.all().items()
     ]
+
+
+@router.get("/settings", response_model=AppSettingsOut)
+async def get_app_settings(
+    db: Database = Depends(get_db),
+    _user: str = Depends(get_current_user),
+) -> AppSettingsOut:
+    """Read current application settings."""
+    row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'timezone'")
+    return AppSettingsOut(timezone=row["value"] if row else "Europe/Zurich")
+
+
+@router.put("/settings", response_model=AppSettingsOut)
+async def update_app_settings(
+    body: AppSettingsIn,
+    db: Database = Depends(get_db),
+    _user: str = Depends(get_current_user),
+) -> AppSettingsOut:
+    """Update application settings. Changes are applied immediately."""
+    # Validate timezone using zoneinfo
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(body.timezone)
+    except Exception:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=f"Unknown timezone: {body.timezone!r}")
+
+    await db.execute_and_commit(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('timezone', ?)",
+        (body.timezone,),
+    )
+
+    # Hot-reload LogicManager so astro_sun picks up new timezone immediately
+    try:
+        from opentws.logic.manager import get_logic_manager
+        get_logic_manager().update_app_config({"timezone": body.timezone})
+    except Exception:
+        pass  # Manager may not be running — non-critical
+
+    return AppSettingsOut(timezone=body.timezone)

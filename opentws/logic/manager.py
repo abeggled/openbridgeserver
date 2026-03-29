@@ -51,9 +51,12 @@ class LogicManager:
         self._node_state: dict[str, dict[str, dict[str, Any]]] = {}
         # cron tasks: (graph_id, node_id) → asyncio.Task
         self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
+        # application-level config (e.g. timezone) — loaded from app_settings table
+        self._app_config: dict[str, Any] = {"timezone": "Europe/Zurich"}
 
     async def start(self) -> None:
         """Subscribe to EventBus, load all graphs and start cron schedulers."""
+        await self._load_app_config()
         await self._load_graphs()
         from opentws.core.event_bus import DataValueEvent
         self._event_bus.subscribe(DataValueEvent, self._on_value_event)
@@ -74,6 +77,23 @@ class LogicManager:
         self._cron_tasks.clear()
         await self._load_graphs()
         self._start_cron_tasks()
+
+    # ── App Config ────────────────────────────────────────────────────────
+
+    async def _load_app_config(self) -> None:
+        """Load app-level settings (e.g. timezone) from the database."""
+        try:
+            rows = await self._db.fetchall("SELECT key, value FROM app_settings")
+            for row in rows:
+                self._app_config[row["key"]] = row["value"]
+            logger.debug("LogicManager: app_config loaded: %s", self._app_config)
+        except Exception as exc:
+            logger.warning("LogicManager: could not load app_settings: %s", exc)
+
+    def update_app_config(self, config: dict[str, Any]) -> None:
+        """Hot-update app config (called by settings API on PUT /system/settings)."""
+        self._app_config.update(config)
+        logger.info("LogicManager: app_config updated: %s", config)
 
     # ── Cron Scheduler ────────────────────────────────────────────────────
 
@@ -264,7 +284,7 @@ class LogicManager:
                 aug_overrides[node.id] = {**aug_overrides.get(node.id, {}), "_computed_hours": round(acc, 6)}
 
         hyst = self._hysteresis.setdefault(graph_id, {})
-        executor = GraphExecutor(flow, hyst)
+        executor = GraphExecutor(flow, hyst, self._app_config)
         try:
             outputs = executor.execute(aug_overrides)
         except Exception as exc:

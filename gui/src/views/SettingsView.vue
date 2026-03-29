@@ -14,6 +14,34 @@
       </button>
     </div>
 
+    <!-- ── Allgemein ── -->
+    <div v-if="activeTab === 'general'" class="card max-w-md">
+      <div class="card-header"><h3 class="font-semibold text-sm text-slate-100">Allgemeine Einstellungen</h3></div>
+      <div class="card-body flex flex-col gap-4">
+        <div class="form-group">
+          <label class="label">Zeitzone</label>
+          <p class="text-xs text-slate-500 mb-2">Alle Zeitangaben im System werden in dieser Zeitzone dargestellt.</p>
+          <!-- Search input -->
+          <input
+            v-model="tzSearch"
+            type="text"
+            class="input text-sm mb-1"
+            placeholder="Zeitzone suchen … z.B. Zurich, Berlin, UTC"
+          />
+          <!-- Filtered dropdown -->
+          <select v-model="tzSelected" class="input text-sm" size="6" style="height:auto">
+            <option v-for="tz in filteredTimezones" :key="tz" :value="tz">{{ tz }}</option>
+          </select>
+          <p class="text-xs text-slate-500 mt-1">Gewählt: <span class="text-slate-200 font-mono">{{ tzSelected }}</span></p>
+        </div>
+        <div v-if="tzMsg" :class="['p-3 rounded-lg text-sm', tzMsg.ok ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30']">{{ tzMsg.text }}</div>
+        <button @click="saveTz" class="btn-primary" :disabled="tzSaving">
+          <Spinner v-if="tzSaving" size="sm" color="white" />
+          Speichern
+        </button>
+      </div>
+    </div>
+
     <!-- ── Passwort ── -->
     <div v-if="activeTab === 'password'" class="card max-w-md">
       <div class="card-header"><h3 class="font-semibold text-sm text-slate-100">Passwort ändern</h3></div>
@@ -218,24 +246,75 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { authApi, configApi, knxprojApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import { useSettingsStore } from '@/stores/settings'
+import { useTz } from '@/composables/useTz'
 import Badge          from '@/components/ui/Badge.vue'
 import Spinner        from '@/components/ui/Spinner.vue'
 import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 
-const auth = useAuthStore()
-const activeTab = ref('password')
+const auth     = useAuthStore()
+const settings = useSettingsStore()
+const { fmtDate } = useTz()
+const activeTab = ref('general')
 
-function fmtDate(s) {
-  if (!s) return '—'
-  const d = new Date(s)
-  return isNaN(d.getTime()) ? s : d.toLocaleDateString('de-CH')
+// ── Timezone ──────────────────────────────────────────────────────────────
+// Build full IANA timezone list from browser API (modern browsers support this)
+const ALL_TIMEZONES = (() => {
+  try {
+    return Intl.supportedValuesOf('timeZone')
+  } catch {
+    // Fallback for older browsers
+    return [
+      'UTC', 'Europe/Zurich', 'Europe/Berlin', 'Europe/Vienna', 'Europe/London',
+      'Europe/Paris', 'Europe/Rome', 'Europe/Amsterdam', 'Europe/Brussels',
+      'Europe/Stockholm', 'Europe/Oslo', 'Europe/Copenhagen', 'Europe/Helsinki',
+      'Europe/Warsaw', 'Europe/Prague', 'Europe/Budapest', 'Europe/Bucharest',
+      'Europe/Athens', 'Europe/Istanbul', 'Europe/Moscow',
+      'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+      'America/Anchorage', 'America/Honolulu', 'America/Toronto', 'America/Vancouver',
+      'America/Sao_Paulo', 'America/Argentina/Buenos_Aires', 'America/Mexico_City',
+      'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Seoul', 'Asia/Singapore', 'Asia/Dubai',
+      'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Jakarta', 'Asia/Hong_Kong',
+      'Australia/Sydney', 'Australia/Melbourne', 'Australia/Perth',
+      'Pacific/Auckland', 'Pacific/Fiji', 'Africa/Johannesburg', 'Africa/Cairo',
+    ]
+  }
+})()
+
+const tzSearch   = ref('')
+const tzSelected = ref(settings.timezone)
+const tzSaving   = ref(false)
+const tzMsg      = ref(null)
+
+const filteredTimezones = computed(() => {
+  const q = tzSearch.value.toLowerCase()
+  if (!q) return ALL_TIMEZONES
+  return ALL_TIMEZONES.filter(tz => tz.toLowerCase().includes(q))
+})
+
+onMounted(async () => {
+  if (!settings.loaded) await settings.load()
+  tzSelected.value = settings.timezone
+})
+
+async function saveTz() {
+  tzSaving.value = true; tzMsg.value = null
+  try {
+    await settings.save(tzSelected.value)
+    tzMsg.value = { ok: true, text: `Zeitzone auf «${tzSelected.value}» gesetzt` }
+  } catch (e) {
+    tzMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Speichern' }
+  } finally {
+    tzSaving.value = false
+  }
 }
 
 const tabs = [
+  { id: 'general',      label: 'Allgemein' },
   { id: 'password',     label: 'Passwort' },
   ...(auth.isAdmin ? [{ id: 'users', label: 'Benutzer' }] : []),
   { id: 'apikeys',      label: 'API Keys' },

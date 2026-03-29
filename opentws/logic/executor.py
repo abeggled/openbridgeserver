@@ -39,12 +39,18 @@ class GraphExecutor:
     Returns: {node_id: {handle_id: value}}
     """
 
-    def __init__(self, flow: FlowData, hysteresis_state: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        flow: FlowData,
+        hysteresis_state: dict[str, Any] | None = None,
+        app_config: dict[str, Any] | None = None,
+    ):
         self.flow = flow
         # NOTE: use `is not None` instead of `or {}` — an empty dict {} is falsy,
         # so `hysteresis_state or {}` would silently create a *new* dict instead of
         # using the passed-in reference, breaking state persistence between runs.
         self.hysteresis_state = hysteresis_state if hysteresis_state is not None else {}
+        self.app_config = app_config or {}
 
     def execute(self, input_overrides: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
         """Run the graph. Returns output values for every node."""
@@ -266,16 +272,19 @@ class GraphExecutor:
 
             case "astro_sun":
                 try:
-                    from astral import LocationInfo          # noqa: PLC0415
+                    from astral import LocationInfo             # noqa: PLC0415
                     from astral.sun import sun as _astral_sun  # noqa: PLC0415
-                    import datetime as _dt                   # noqa: PLC0415
-                    lat = float(d.get("latitude",  47.37))
-                    lon = float(d.get("longitude",  8.54))
-                    loc = LocationInfo(latitude=lat, longitude=lon)
-                    s   = _astral_sun(loc.observer, date=_dt.date.today())
-                    tz  = s["sunrise"].tzinfo
-                    now_dt = _dt.datetime.now(tz)
-                    is_day = s["sunrise"] <= now_dt <= s["sunset"]
+                    from zoneinfo import ZoneInfo               # noqa: PLC0415
+                    import datetime as _dt                      # noqa: PLC0415
+                    lat     = float(d.get("latitude",  47.37))
+                    lon     = float(d.get("longitude",  8.54))
+                    tz_name = self.app_config.get("timezone", "Europe/Zurich")
+                    tz      = ZoneInfo(tz_name)
+                    loc     = LocationInfo(latitude=lat, longitude=lon, timezone=tz_name)
+                    today   = _dt.datetime.now(tz).date()
+                    s       = _astral_sun(loc.observer, date=today, tzinfo=tz)
+                    now_dt  = _dt.datetime.now(tz)
+                    is_day  = s["sunrise"] <= now_dt <= s["sunset"]
                     return {
                         "sunrise": s["sunrise"].strftime("%H:%M"),
                         "sunset":  s["sunset"].strftime("%H:%M"),

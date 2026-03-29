@@ -54,7 +54,7 @@
           </thead>
           <tbody>
             <tr v-for="(e, i) in entries" :key="i">
-              <td class="font-mono text-xs text-slate-400 whitespace-nowrap">{{ new Date(e.ts).toLocaleString('de-CH') }}</td>
+              <td class="font-mono text-xs text-slate-400 whitespace-nowrap">{{ fmtDateTime(e.ts) }}</td>
               <td class="text-sm">
                 <RouterLink :to="`/datapoints/${e.datapoint_id}`" class="text-blue-400 hover:underline font-mono text-xs">
                   {{ e.name ?? e.datapoint_id?.slice(0, 8) }}
@@ -100,9 +100,12 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ringbufferApi } from '@/api/client'
+import { useTz } from '@/composables/useTz'
 import Badge   from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Modal   from '@/components/ui/Modal.vue'
+
+const { fmtDateTime } = useTz()
 
 const entries    = ref([])
 const stats      = ref(null)

@@ -218,6 +218,14 @@ CREATE TABLE IF NOT EXISTS logic_graphs (
 );
 """
 
+_MIGRATION_V13 = """
+CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
+INSERT OR IGNORE INTO app_settings (key, value) VALUES ('timezone', 'Europe/Zurich');
+"""
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -232,6 +240,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (10, _MIGRATION_V10),
     (11, _MIGRATION_V11),
     (12, _MIGRATION_V12),
+    (13, _MIGRATION_V13),
 ]
 
 

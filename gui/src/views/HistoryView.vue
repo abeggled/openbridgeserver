@@ -74,7 +74,7 @@
           <thead><tr><th>Zeitstempel</th><th>Wert</th><th>Quality</th><th>Adapter</th></tr></thead>
           <tbody>
             <tr v-for="(p, i) in points" :key="i">
-              <td class="font-mono text-xs text-slate-400">{{ new Date(p.ts).toLocaleString('de-CH') }}</td>
+              <td class="font-mono text-xs text-slate-400">{{ fmtDateTime(p.ts) }}</td>
               <td class="font-mono text-blue-300">{{ p.value }}</td>
               <td><Badge :variant="p.quality === 'good' ? 'success' : 'warning'" size="xs">{{ p.quality }}</Badge></td>
               <td class="text-slate-500 text-xs">{{ p.adapter_type ?? '—' }}</td>
@@ -91,10 +91,13 @@ import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { historyApi } from '@/api/client'
 import { useDatapointStore } from '@/stores/datapoints'
+import { useTz } from '@/composables/useTz'
 import Badge   from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import { Chart, LineController, LineElement, PointElement, LinearScale, TimeScale, Tooltip, Legend } from 'chart.js'
 import 'chart.js/auto'
+
+const { fmtDateTime, fmtChartLabel } = useTz()
 
 const route   = useRoute()
 const dpStore = useDatapointStore()
@@ -157,7 +160,7 @@ function renderChart() {
   if (!chartCanvas.value || !points.value.length) return
   chartInstance?.destroy()
 
-  const labels = points.value.map(p => new Date(p.ts).toLocaleString('de-CH', { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' }))
+  const labels = points.value.map(p => fmtChartLabel(p.ts))
   const values = points.value.map(p => p.value)
 
   chartInstance = new Chart(chartCanvas.value, {
