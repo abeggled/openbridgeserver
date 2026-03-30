@@ -35,7 +35,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
     ws.onopen = () => {
       connected.value = true
       _pingInterval = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }))
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'ping' }))
       }, 30_000)
     }
 
@@ -64,6 +64,10 @@ export const useWebSocketStore = defineStore('websocket', () => {
         if (msg.action === 'ringbuffer_entry') {
           _rbHandlers.forEach(h => h.fn(msg.entry))
         }
+        // Server keepalive ping — reply with pong
+        if (msg.action === 'ping') {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'pong' }))
+        }
       } catch { /* ignore malformed */ }
     }
 
@@ -86,12 +90,12 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
   function subscribe(ids) {
     if (_ws.value?.readyState === WebSocket.OPEN)
-      _ws.value.send(JSON.stringify({ type: 'subscribe', ids }))
+      _ws.value.send(JSON.stringify({ action: 'subscribe', ids }))
   }
 
   function unsubscribe(ids) {
     if (_ws.value?.readyState === WebSocket.OPEN)
-      _ws.value.send(JSON.stringify({ type: 'unsubscribe', ids }))
+      _ws.value.send(JSON.stringify({ action: 'unsubscribe', ids }))
   }
 
   /** Register a handler to be called on every value event. Returns an unregister fn. */

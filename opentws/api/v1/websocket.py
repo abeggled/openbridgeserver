@@ -38,19 +38,22 @@ class WebSocketManager:
     """Tracks all connected WebSocket clients and their DataPoint subscriptions."""
 
     def __init__(self) -> None:
-        # conn_id → (websocket, subscribed_dp_ids)
-        self._connections: dict[str, tuple[WebSocket, set[str]]] = {}
+        # conn_id → (websocket, subscribed_dp_ids, send_lock)
+        # send_lock serialises concurrent sends on the same WebSocket;
+        # concurrent asyncio.gather calls in EventBus would otherwise race.
+        self._connections: dict[str, tuple[WebSocket, set[str], asyncio.Lock]] = {}
 
     async def connect(self, ws: WebSocket) -> str:
         await ws.accept()
         conn_id = str(uuid.uuid4())
-        self._connections[conn_id] = (ws, set())
+        self._connections[conn_id] = (ws, set(), asyncio.Lock())
         logger.debug("WS client connected: %s  (total: %d)", conn_id[:8], len(self._connections))
         return conn_id
 
     async def disconnect(self, conn_id: str) -> None:
-        ws, _ = self._connections.pop(conn_id, (None, None))
-        if ws:
+        entry = self._connections.pop(conn_id, None)
+        if entry:
+            ws = entry[0]
             try:
                 await ws.close()
             except Exception:
@@ -65,16 +68,31 @@ class WebSocketManager:
         if conn_id in self._connections:
             self._connections[conn_id][1].difference_update(dp_ids)
 
+    async def _send(self, conn_id: str, msg: dict) -> bool:
+        """Send *msg* to one connection, serialised via its per-connection lock.
+
+        Returns True on success, False if the send failed (caller should
+        disconnect the client so it can reconnect cleanly).
+        """
+        entry = self._connections.get(conn_id)
+        if entry is None:
+            return False
+        ws, _, lock = entry
+        async with lock:
+            try:
+                await ws.send_json(msg)
+                return True
+            except Exception:
+                return False
+
     async def broadcast(self, msg: dict) -> None:
         """Send a message to ALL connected clients (no subscription filter)."""
         dead: list[str] = []
-        for conn_id, (ws, _) in list(self._connections.items()):
-            try:
-                await ws.send_json(msg)
-            except Exception:
+        for conn_id in list(self._connections):
+            if not await self._send(conn_id, msg):
                 dead.append(conn_id)
         for conn_id in dead:
-            self._connections.pop(conn_id, None)
+            await self.disconnect(conn_id)
 
     async def handle_value_event(self, event: Any) -> None:
         """Called by EventBus when a DataValueEvent arrives."""
@@ -102,15 +120,13 @@ class WebSocketManager:
             "old_v": state.old_value if state else None,
         }
         dead: list[str] = []
-        for conn_id, (ws, subs) in list(self._connections.items()):
+        for conn_id, (_, subs, _lock) in list(self._connections.items()):
             if dp_id_str not in subs:
                 continue
-            try:
-                await ws.send_json(dp_msg)
-            except Exception:
+            if not await self._send(conn_id, dp_msg):
                 dead.append(conn_id)
         for conn_id in dead:
-            self._connections.pop(conn_id, None)
+            await self.disconnect(conn_id)
 
         # ── 2. RingBuffer live-push — broadcast to ALL clients ────────────
         rb_msg = {
