@@ -126,15 +126,18 @@ watch(() => store.items, (items) => {
 }, { immediate: true })
 
 function onSearch() {
+  console.log('[onSearch] triggered, filters:', JSON.stringify(filters.value))
   clearTimeout(searchTimeout)
   searchTimeout = setTimeout(() => {
     const { q, tag, type } = filters.value
+    console.log('[onSearch] debounce fired, filters:', JSON.stringify(filters.value))
     if (q || tag || type) store.search({ q, tag, type })
     else store.fetchPage(0)
   }, 350)
 }
 
 function goPage(p) {
+  console.log('[goPage] p=', p, 'store.page=', store.page, 'store.pages=', store.pages, 'filters:', JSON.stringify(filters.value))
   const { q, tag, type } = filters.value
   store.search({ q, tag, type, page: p })
 }
