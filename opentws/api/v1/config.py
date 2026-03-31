@@ -499,6 +499,9 @@ async def clear_datapoints(
     """Delete all DataPoints and their Bindings. Admin only."""
     result = ClearResult(deleted=0, bindings_deleted=0)
     try:
+        from opentws.adapters import registry as adapter_registry
+        from opentws.core.event_bus import get_event_bus
+        await adapter_registry.stop_all()
         row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_bindings")
         result.bindings_deleted = row["n"] if row else 0
         await db.execute_and_commit("DELETE FROM adapter_bindings")
@@ -508,6 +511,7 @@ async def clear_datapoints(
         reg = get_registry()
         reg._points.clear()
         reg._values.clear()
+        await adapter_registry.start_all(get_event_bus(), db)
     except Exception as exc:
         result.errors.append(f"DataPoints clear failed: {exc}")
     return result
