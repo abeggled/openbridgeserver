@@ -182,10 +182,14 @@ class MqttAdapter(AdapterBase):
             value = raw
 
         for binding in entries:
-            logger.info("MQTT adapter received: topic=%s → dp=%s value=%r", topic, binding.datapoint_id, value)
+            pub_value = value
+            if binding.value_formula and pub_value is not None:
+                from opentws.core.formula import apply_formula
+                pub_value = apply_formula(binding.value_formula, pub_value)
+            logger.info("MQTT adapter received: topic=%s → dp=%s value=%r", topic, binding.datapoint_id, pub_value)
             await self._bus.publish(DataValueEvent(
                 datapoint_id=binding.datapoint_id,
-                value=value,
+                value=pub_value,
                 quality="good",
                 source_adapter=self.adapter_type,
                 binding_id=binding.id,

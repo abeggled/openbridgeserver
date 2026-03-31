@@ -239,6 +239,9 @@ class KnxAdapter(AdapterBase):
                     value = raw.hex() if isinstance(raw, (bytes, bytearray)) else raw
                     quality = "uncertain"
 
+                if binding.value_formula and quality == "good":
+                    from opentws.core.formula import apply_formula
+                    value = apply_formula(binding.value_formula, value)
                 logger.info("KNX value: GA=%s → dp=%s value=%s", ga, binding.datapoint_id, value)
                 await self._bus.publish(DataValueEvent(
                     datapoint_id=binding.datapoint_id,
