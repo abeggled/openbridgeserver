@@ -167,18 +167,21 @@ async def _bulk_import_datapoints(
         )
     await db.commit()
 
-    # --- In-Memory Registry mit neuen DataPoints aktualisieren ---
-    if new_dp_ids:
+    # --- In-Memory Registry aktualisieren (neue + aktualisierte DataPoints) ---
+    updated_dp_ids = [t[4] for t in dp_updates]  # tuple: (name, data_type, unit, ts, id)
+    all_registry_ids = new_dp_ids + updated_dp_ids
+    if all_registry_ids:
         try:
             reg = get_registry()
             rows = await db.fetchall(
-                f"SELECT * FROM datapoints WHERE id IN ({','.join('?'*len(new_dp_ids))})",
-                new_dp_ids,
+                f"SELECT * FROM datapoints WHERE id IN ({','.join('?'*len(all_registry_ids))})",
+                all_registry_ids,
             )
             for row in rows:
                 dp = _row_to_datapoint(row)
                 reg._points[dp.id] = dp
-                reg._values[dp.id] = ValueState()
+                if dp.id not in reg._values:
+                    reg._values[dp.id] = ValueState()
         except Exception:
             pass  # Registry nicht verfügbar (z.B. in Tests) — kein Fehler
 
