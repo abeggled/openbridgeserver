@@ -13,7 +13,7 @@
     />
     <!-- Clear button -->
     <button v-if="query" type="button" @click="clear"
-      class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+      class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
       </svg>
@@ -21,7 +21,7 @@
 
     <!-- Dropdown -->
     <div v-if="open && (suggestions.length || loading || noResults)"
-      class="absolute z-50 mt-1 w-full bg-surface-800 border border-slate-700 rounded-lg shadow-xl max-h-64 overflow-y-auto">
+      class="absolute z-50 mt-1 w-full bg-white dark:bg-surface-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl max-h-64 overflow-y-auto">
 
       <!-- Loading -->
       <div v-if="loading" class="px-3 py-2 text-xs text-slate-500 flex items-center gap-2">
@@ -44,7 +44,7 @@
           @click="select(item)"
           @mouseenter="activeIndex = i"
           :class="['px-3 py-2 cursor-pointer flex items-start gap-2 text-sm transition-colors',
-            i === activeIndex ? 'bg-blue-600/20 text-slate-100' : 'text-slate-300 hover:bg-slate-700/50']">
+            i === activeIndex ? 'bg-blue-600/20 text-slate-800 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100/80 dark:hover:bg-slate-700/50']">
           <span class="font-mono text-xs text-blue-400 mt-0.5 shrink-0 w-14">{{ item.address }}</span>
           <span class="flex-1 min-w-0">
             <span class="truncate block">{{ item.name }}</span>

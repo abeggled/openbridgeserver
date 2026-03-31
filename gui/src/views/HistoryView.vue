@@ -1,7 +1,7 @@
 <template>
   <div class="flex flex-col gap-5">
     <div>
-      <h2 class="text-xl font-bold text-slate-100">History</h2>
+      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">History</h2>
       <p class="text-sm text-slate-500 mt-0.5">Historische Werte und Aggregationen</p>
     </div>
 
@@ -55,7 +55,7 @@
     <!-- Chart -->
     <div class="card">
       <div class="card-header">
-        <span class="text-sm font-semibold text-slate-100">{{ chartTitle }}</span>
+        <span class="text-sm font-semibold text-slate-800 dark:text-slate-100">{{ chartTitle }}</span>
         <span class="text-xs text-slate-500">{{ points.length }} Punkte</span>
       </div>
       <div class="card-body">
@@ -68,14 +68,14 @@
 
     <!-- Raw table (raw mode only) -->
     <div v-if="mode === 'raw' && points.length" class="card overflow-hidden">
-      <div class="card-header"><span class="text-sm font-semibold text-slate-100">Rohdaten</span></div>
+      <div class="card-header"><span class="text-sm font-semibold text-slate-800 dark:text-slate-100">Rohdaten</span></div>
       <div class="table-wrap max-h-64 overflow-y-auto">
         <table class="table">
           <thead><tr><th>Zeitstempel</th><th>Wert</th><th>Quality</th><th>Adapter</th></tr></thead>
           <tbody>
             <tr v-for="(p, i) in points" :key="i">
               <td class="font-mono text-xs text-slate-400">{{ fmtDateTime(p.ts) }}</td>
-              <td class="font-mono text-blue-300">{{ p.value }}</td>
+              <td class="font-mono text-blue-500 dark:text-blue-300">{{ p.value }}</td>
               <td><Badge :variant="p.quality === 'good' ? 'success' : 'warning'" size="xs">{{ p.quality }}</Badge></td>
               <td class="text-slate-500 text-xs">{{ p.adapter_type ?? '—' }}</td>
             </tr>
@@ -161,6 +161,14 @@ function renderChart() {
   const labels = points.value.map(p => fmtChartLabel(p.ts))
   const values = points.value.map(p => p.value)
 
+  const dark = document.documentElement.classList.contains('dark')
+  const tickColor   = dark ? '#64748b' : '#94a3b8'
+  const gridColor   = dark ? '#1e2435' : '#f1f5f9'
+  const tooltipBg   = dark ? '#1e2435' : '#ffffff'
+  const tooltipBody = dark ? '#e2e8f0' : '#1e293b'
+  const tooltipTitle = dark ? '#94a3b8' : '#475569'
+  const tooltipBorder = dark ? '#334155' : '#e2e8f0'
+
   chartInstance = new Chart(chartCanvas.value, {
     type: 'line',
     data: {
@@ -182,11 +190,11 @@ function renderChart() {
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { display: false },
-        tooltip: { backgroundColor: '#1e2435', titleColor: '#94a3b8', bodyColor: '#e2e8f0', borderColor: '#334155', borderWidth: 1 },
+        tooltip: { backgroundColor: tooltipBg, titleColor: tooltipTitle, bodyColor: tooltipBody, borderColor: tooltipBorder, borderWidth: 1 },
       },
       scales: {
-        x: { ticks: { color: '#64748b', maxTicksLimit: 10 }, grid: { color: '#1e2435' } },
-        y: { ticks: { color: '#64748b' }, grid: { color: '#1e293b' } },
+        x: { ticks: { color: tickColor, maxTicksLimit: 10 }, grid: { color: gridColor } },
+        y: { ticks: { color: tickColor }, grid: { color: gridColor } },
       }
     }
   })

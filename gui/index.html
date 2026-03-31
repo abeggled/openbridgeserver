@@ -1,14 +1,23 @@
 <!DOCTYPE html>
-<html lang="de" class="dark">
+<html lang="de">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>openTWS</title>
+  <!-- Apply saved theme before first paint to avoid flash -->
+  <script>
+    (function () {
+      var t = localStorage.getItem('theme') || 'system'
+      if (t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark')
+      }
+    })()
+  </script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" />
 </head>
-<body class="bg-surface-900 text-slate-100 antialiased">
+<body class="antialiased">
   <div id="app"></div>
   <script type="module" src="/src/main.js"></script>
 </body>

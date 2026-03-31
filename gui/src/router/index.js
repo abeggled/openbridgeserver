@@ -9,8 +9,8 @@ const routes = [
   { path: '/history',              name: 'History',    component: () => import('@/views/HistoryView.vue')    },
   { path: '/ringbuffer',           name: 'RingBuffer', component: () => import('@/views/RingBufferView.vue') },
   { path: '/settings',             name: 'Settings',   component: () => import('@/views/SettingsView.vue')   },
-  { path: '/logic',                name: 'Logic',      component: () => import('@/views/LogicView.vue'),     meta: { requiresAuth: true } },
-  { path: '/:pathMatch(.*)*',      redirect: '/' },
+  { path: '/logic',                name: 'Logic',      component: () => import('@/views/LogicView.vue')      },
+{ path: '/:pathMatch(.*)*',      redirect: '/' },
 ]
 
 const router = createRouter({

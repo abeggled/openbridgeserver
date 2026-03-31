@@ -1,15 +1,15 @@
 <template>
   <div class="flex flex-col gap-5">
     <div>
-      <h2 class="text-xl font-bold text-slate-100">Einstellungen</h2>
+      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Einstellungen</h2>
       <p class="text-sm text-slate-500 mt-0.5">Benutzer, API Keys, Passwort, Sicherung</p>
     </div>
 
     <!-- Tabs -->
-    <div class="flex gap-1 border-b border-slate-700/60">
+    <div class="flex gap-1 border-b border-slate-200 dark:border-slate-700/60">
       <button v-for="t in tabs" :key="t.id" @click="activeTab = t.id"
         :class="['px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px',
-          activeTab === t.id ? 'text-blue-400 border-blue-500' : 'text-slate-400 border-transparent hover:text-slate-200']">
+          activeTab === t.id ? 'text-blue-500 dark:text-blue-400 border-blue-500' : 'text-slate-500 dark:text-slate-400 border-transparent hover:text-slate-700 dark:hover:text-slate-200']">
         {{ t.label }}
       </button>
     </div>
@@ -19,7 +19,7 @@
 
       <!-- Zeitzone -->
       <div class="card">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-100">Allgemeine Einstellungen</h3></div>
+        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Allgemeine Einstellungen</h3></div>
         <div class="card-body flex flex-col gap-4">
           <div class="form-group">
             <label class="label">Zeitzone</label>
@@ -28,7 +28,7 @@
             <div class="relative" ref="tzDropdownRef">
               <button type="button" @click="tzDropdownOpen = !tzDropdownOpen"
                 class="input text-sm w-full text-left flex items-center justify-between gap-2">
-                <span class="font-mono text-slate-200 truncate">{{ tzSelected }}</span>
+                <span class="font-mono text-slate-700 dark:text-slate-200 truncate">{{ tzSelected }}</span>
                 <svg class="w-4 h-4 text-slate-400 shrink-0 transition-transform" :class="tzDropdownOpen ? 'rotate-180' : ''"
                   fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
@@ -36,8 +36,8 @@
               </button>
               <!-- Dropdown panel -->
               <div v-if="tzDropdownOpen"
-                class="absolute z-50 left-0 right-0 mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl overflow-hidden">
-                <div class="p-2 border-b border-slate-700">
+                class="absolute z-50 left-0 right-0 mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 rounded-lg shadow-xl overflow-hidden">
+                <div class="p-2 border-b border-slate-200 dark:border-slate-700">
                   <input ref="tzSearchInputRef" v-model="tzSearch" type="text"
                     class="input text-sm w-full"
                     placeholder="Suchen … z.B. Zurich, Berlin, UTC"
@@ -47,8 +47,8 @@
                 <div class="max-h-52 overflow-y-auto">
                   <button v-for="tz in filteredTimezones" :key="tz" type="button"
                     @click="selectTz(tz)"
-                    :class="['w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-slate-700 transition-colors',
-                      tz === tzSelected ? 'text-teal-400 bg-slate-700/50' : 'text-slate-300']">
+                    :class="['w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors',
+                      tz === tzSelected ? 'text-teal-600 dark:text-teal-400 bg-slate-100/80 dark:bg-slate-700/50' : 'text-slate-600 dark:text-slate-300']">
                     {{ tz }}
                   </button>
                   <div v-if="!filteredTimezones.length" class="px-3 py-3 text-xs text-slate-500 text-center">Keine Treffer</div>
@@ -67,7 +67,7 @@
       <!-- KNX Projekt Import -->
       <div class="card p-5 flex flex-col gap-3">
         <div class="flex items-center gap-2">
-          <h3 class="font-semibold text-sm text-slate-100">KNX Projekt importieren</h3>
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">KNX Projekt importieren</h3>
           <span class="text-xs text-slate-500 bg-slate-700/50 px-2 py-0.5 rounded">.knxproj</span>
         </div>
         <p class="text-sm text-slate-400">
@@ -97,9 +97,36 @@
       </div>
     </div>
 
+    <!-- ── Theme ── -->
+    <div v-if="activeTab === 'theme'" class="max-w-md">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Erscheinungsbild</h3>
+        </div>
+        <div class="card-body flex flex-col gap-3">
+          <p class="text-sm text-slate-500">Wähle, wie die Benutzeroberfläche dargestellt werden soll.</p>
+          <div class="flex flex-col gap-2">
+            <label v-for="opt in themeOptions" :key="opt.value"
+              :class="[
+                'flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
+                selectedTheme === opt.value
+                  ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10'
+                  : 'border-slate-200 dark:border-slate-700/60 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+              ]">
+              <input type="radio" :value="opt.value" v-model="selectedTheme" class="accent-blue-500 shrink-0" />
+              <div>
+                <div class="text-sm font-medium text-slate-800 dark:text-slate-200">{{ opt.label }}</div>
+                <div class="text-xs text-slate-500">{{ opt.desc }}</div>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Passwort ── -->
     <div v-if="activeTab === 'password'" class="card max-w-md">
-      <div class="card-header"><h3 class="font-semibold text-sm text-slate-100">Passwort ändern</h3></div>
+      <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Passwort ändern</h3></div>
       <div class="card-body">
         <form @submit.prevent="changePassword" class="flex flex-col gap-4">
           <div class="form-group">
@@ -182,19 +209,19 @@
       <!-- New key secret display -->
       <div v-if="newKeySecret" class="p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
         <p class="text-sm text-green-400 font-medium mb-2">⚠ Key nur jetzt sichtbar — jetzt kopieren!</p>
-        <code class="font-mono text-xs text-green-300 break-all select-all">{{ newKeySecret }}</code>
+        <code class="font-mono text-xs text-green-700 dark:text-green-300 break-all select-all">{{ newKeySecret }}</code>
       </div>
     </div>
 
     <!-- ── Sicherung / Wiederherstellung ── -->
     <div v-if="activeTab === 'importexport'" class="flex flex-col gap-4 max-w-lg">
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-100">Sicherung erstellen</h3>
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Sicherung erstellen</h3>
         <p class="text-sm text-slate-400">Alle DataPoints, Bindings, Adapter-Instanzen, KNX-Gruppenadressen und Logikblätter als JSON-Datei sichern.</p>
         <button @click="doExport" class="btn-secondary">Sicherung herunterladen</button>
       </div>
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-100">Sicherung wiederherstellen</h3>
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Sicherung wiederherstellen</h3>
         <p class="text-sm text-slate-400">Sicherungsdatei einspielen. Bestehende Einträge werden aktualisiert, fehlende neu angelegt.</p>
         <input type="file" accept=".json" @change="onImportFile" class="text-sm text-slate-400 file:btn-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:text-xs file:border-0 file:cursor-pointer" />
         <div v-if="importResult" :class="['p-3 rounded-lg text-sm', importResult.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">{{ importResult.text }}</div>
@@ -214,11 +241,11 @@
         </div>
         <div class="flex items-center gap-2">
           <input type="checkbox" id="isAdmin" v-model="userForm.is_admin" class="w-4 h-4 rounded" />
-          <label for="isAdmin" class="text-sm text-slate-300">Admin-Rechte</label>
+          <label for="isAdmin" class="text-sm text-slate-600 dark:text-slate-300">Admin-Rechte</label>
         </div>
         <div class="flex items-center gap-2">
           <input type="checkbox" id="mqttEnabled" v-model="userForm.mqtt_enabled" class="w-4 h-4 rounded" />
-          <label for="mqttEnabled" class="text-sm text-slate-300">MQTT aktivieren</label>
+          <label for="mqttEnabled" class="text-sm text-slate-600 dark:text-slate-300">MQTT aktivieren</label>
         </div>
         <div v-if="userForm.mqtt_enabled" class="form-group">
           <label class="label">MQTT-Passwort</label>
@@ -233,7 +260,7 @@
 
     <Modal v-model="showMqttPassword" title="MQTT-Passwort setzen" max-width="sm">
       <form @submit.prevent="doSetMqttPassword" class="flex flex-col gap-4">
-        <p class="text-sm text-slate-400">Benutzer: <span class="text-slate-200 font-medium">{{ mqttTarget?.username }}</span></p>
+        <p class="text-sm text-slate-400">Benutzer: <span class="text-slate-700 dark:text-slate-200 font-medium">{{ mqttTarget?.username }}</span></p>
         <div class="form-group">
           <label class="label">Neues MQTT-Passwort</label>
           <input v-model="mqttPasswordInput" type="password" class="input" required autocomplete="new-password" />
@@ -371,11 +398,23 @@ async function saveTz() {
 
 const tabs = [
   { id: 'general',      label: 'Allgemein' },
+  { id: 'theme',        label: 'Theme' },
   { id: 'password',     label: 'Passwort' },
   ...(auth.isAdmin ? [{ id: 'users', label: 'Benutzer' }] : []),
   { id: 'apikeys',      label: 'API Keys' },
   { id: 'importexport', label: 'Sicherung' },
 ]
+
+// ── Theme ──────────────────────────────────────────────────────────────────
+const themeOptions = [
+  { value: 'system', label: 'System',  desc: 'Folgt der Betriebssystem-Einstellung' },
+  { value: 'light',  label: 'Hell',    desc: 'Helles Erscheinungsbild' },
+  { value: 'dark',   label: 'Dunkel',  desc: 'Dunkles Erscheinungsbild' },
+]
+const selectedTheme = computed({
+  get: () => settings.theme,
+  set: (v) => settings.setTheme(v),
+})
 
 // ── Password ──────────────────────────────────────────────────────────────
 const pwForm  = reactive({ current: '', new1: '', new2: '' })

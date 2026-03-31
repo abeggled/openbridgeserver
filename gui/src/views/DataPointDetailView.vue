@@ -5,7 +5,7 @@
       <RouterLink to="/datapoints" class="text-sm text-blue-400 hover:underline">← DataPoints</RouterLink>
       <div class="flex flex-wrap items-start gap-3 mt-2">
         <div class="flex-1">
-          <h2 class="text-xl font-bold text-slate-100">{{ dp.name }}</h2>
+          <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ dp.name }}</h2>
           <p class="text-sm text-slate-500 font-mono mt-0.5">{{ dp.id }}</p>
         </div>
         <Badge variant="info">{{ dp.data_type }}</Badge>
@@ -19,7 +19,7 @@
       <!-- Current value card -->
       <div class="card p-5 flex flex-col gap-3">
         <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Aktueller Wert</div>
-        <div class="text-4xl font-bold font-mono text-blue-300">
+        <div class="text-4xl font-bold font-mono text-blue-600 dark:text-blue-300">
           {{ displayVal }}
         </div>
         <div class="text-xs text-slate-500">
@@ -33,9 +33,9 @@
       <div class="card p-5 col-span-2">
         <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">Eigenschaften</div>
         <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
-          <dt class="text-slate-500">Name</dt>       <dd class="text-slate-200">{{ dp.name }}</dd>
+          <dt class="text-slate-500">Name</dt>       <dd class="text-slate-700 dark:text-slate-200">{{ dp.name }}</dd>
           <dt class="text-slate-500">Datentyp</dt>   <dd><Badge variant="info" size="xs">{{ dp.data_type }}</Badge></dd>
-          <dt class="text-slate-500">Einheit</dt>    <dd class="text-slate-200">{{ dp.unit ?? '—' }}</dd>
+          <dt class="text-slate-500">Einheit</dt>    <dd class="text-slate-700 dark:text-slate-200">{{ dp.unit ?? '—' }}</dd>
           <dt class="text-slate-500">Tags</dt>
           <dd class="flex flex-wrap gap-1">
             <Badge v-for="t in dp.tags" :key="t" variant="default" size="xs">{{ t }}</Badge>
@@ -54,7 +54,7 @@
     <!-- Bindings -->
     <div class="card">
       <div class="card-header">
-        <h3 class="font-semibold text-slate-100 text-sm">Adapter Bindings</h3>
+        <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">Adapter Bindings</h3>
         <button @click="showBindingForm = true" class="btn-primary btn-sm">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
           Binding
@@ -67,7 +67,7 @@
           <div v-for="b in bindings" :key="b.id" class="flex items-center gap-3 p-3 bg-surface-700 rounded-lg">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
-                <span class="text-sm font-medium text-slate-200">{{ b.adapter_type }}</span>
+                <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ b.adapter_type }}</span>
                 <Badge :variant="b.direction === 'SOURCE' ? 'info' : b.direction === 'DEST' ? 'warning' : 'success'" size="xs">{{ b.direction }}</Badge>
                 <Badge v-if="!b.enabled" variant="danger" size="xs">Deaktiviert</Badge>
               </div>

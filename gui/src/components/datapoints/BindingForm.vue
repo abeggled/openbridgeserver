@@ -2,7 +2,7 @@
   <form @submit.prevent="submit" class="flex flex-col gap-4">
 
     <!-- Tab-Leiste -->
-    <div class="flex gap-0 border-b border-slate-700 -mt-1">
+    <div class="flex gap-0 border-b border-slate-200 dark:border-slate-700 -mt-1">
       <button
         v-for="tab in visibleTabs" :key="tab.id"
         type="button"
@@ -21,7 +21,7 @@
       <div class="grid grid-cols-2 gap-4">
         <div class="form-group">
           <label class="label">Adapter-Instanz *</label>
-          <div v-if="props.initial" class="input bg-slate-800/50 text-slate-400 cursor-not-allowed">
+          <div v-if="props.initial" class="input bg-slate-100 dark:bg-slate-800/50 text-slate-400 cursor-not-allowed">
             {{ currentInstanceName }}
           </div>
           <select v-else v-model="form.adapter_instance_id" class="input" required>
@@ -161,7 +161,7 @@
           <div class="form-group flex flex-col justify-end">
             <div class="flex items-center gap-2 mt-6">
               <input type="checkbox" id="mqtt_retain" v-model="cfg.retain" class="w-4 h-4 rounded" />
-              <label for="mqtt_retain" class="text-sm text-slate-300">Retain</label>
+              <label for="mqtt_retain" class="text-sm text-slate-600 dark:text-slate-300">Retain</label>
             </div>
             <p class="hint">Broker speichert letzten Wert</p>
           </div>
@@ -184,7 +184,7 @@
         </div>
       </template>
 
-      <div v-if="!selectedAdapterType && !props.initial" class="p-3 bg-slate-800/40 rounded-lg text-sm text-slate-500 text-center">
+      <div v-if="!selectedAdapterType && !props.initial" class="p-3 bg-slate-100/80 dark:bg-slate-800/40 rounded-lg text-sm text-slate-500 text-center">
         Bitte zuerst eine Adapter-Instanz wählen
       </div>
 
@@ -258,7 +258,7 @@
       <div class="section-header">Wert-Filter</div>
       <div class="flex items-center gap-2">
         <input type="checkbox" id="send_on_change" v-model="form.send_on_change" class="w-4 h-4 rounded" />
-        <label for="send_on_change" class="text-sm text-slate-300">Nur senden wenn Wert sich geändert hat (kein Duplikat)</label>
+        <label for="send_on_change" class="text-sm text-slate-600 dark:text-slate-300">Nur senden wenn Wert sich geändert hat (kein Duplikat)</label>
       </div>
       <div class="form-group">
         <label class="label">Nur senden bei Mindest-Abweichung</label>
@@ -277,9 +277,9 @@
     </div><!-- /TAB Filter -->
 
     <!-- Aktiviert -->
-    <div class="flex items-center gap-2 border-t border-slate-700/60 pt-3">
+    <div class="flex items-center gap-2 border-t border-slate-200 dark:border-slate-700/60 pt-3">
       <input type="checkbox" id="enabled" v-model="form.enabled" class="w-4 h-4 rounded" />
-      <label for="enabled" class="text-sm text-slate-300">Aktiviert</label>
+      <label for="enabled" class="text-sm text-slate-600 dark:text-slate-300">Aktiviert</label>
     </div>
 
     <div v-if="error" class="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400">{{ error }}</div>
@@ -522,17 +522,17 @@ async function submit() {
 
 <style scoped>
 .tab-btn {
-  @apply flex items-center px-4 py-2 text-sm text-slate-400 border-b-2 border-transparent
-         hover:text-slate-200 hover:border-slate-500 transition-colors cursor-pointer;
+  @apply flex items-center px-4 py-2 text-sm text-slate-500 dark:text-slate-400 border-b-2 border-transparent
+         hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-400 dark:hover:border-slate-500 transition-colors cursor-pointer;
 }
 .tab-active {
-  @apply text-blue-400 border-blue-400 font-medium;
+  @apply text-blue-500 dark:text-blue-400 border-blue-500 dark:border-blue-400 font-medium;
 }
 .section-header {
-  @apply text-xs font-semibold uppercase tracking-wider text-blue-400 border-b border-slate-700 pb-1;
+  @apply text-xs font-semibold uppercase tracking-wider text-blue-500 dark:text-blue-400 border-b border-slate-200 dark:border-slate-700 pb-1;
 }
 .optional-divider {
-  @apply text-xs text-slate-500 border-b border-slate-700/50 pb-1 mt-1;
+  @apply text-xs text-slate-500 border-b border-slate-200/80 dark:border-slate-700/50 pb-1 mt-1;
 }
 .optional { @apply text-slate-500 font-normal text-xs ml-1; }
 .hint     { @apply text-xs text-slate-500 mt-0.5; }

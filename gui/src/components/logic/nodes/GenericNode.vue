@@ -130,13 +130,15 @@ function hStyle(index, _total) {
   const bodyStart = HEADER_H + summaryPx.value
   const posY      = bodyStart + index * PORT_H + PORT_H / 2
   const topPct    = (posY / cardH.value * 100).toFixed(1)
+  const root = document.documentElement
+  const s    = getComputedStyle(root)
   return {
     top:     topPct + '%',
     zIndex:  '100',
     width:   '12px',
     height:  '12px',
-    background: '#94a3b8',
-    border:  '2px solid #0f172a',
+    background:   s.getPropertyValue('--handle-in-bg').trim()  || '#94a3b8',
+    border:  '2px solid ' + (s.getPropertyValue('--handle-border').trim() || '#0f172a'),
     borderRadius: '50%',
     cursor:  'crosshair',
   }
@@ -153,11 +155,11 @@ function remove() { removeNodes([props.id]) }
 
 .gn-card  {
   min-width: 130px;
-  border: 1px solid #334155;
+  border: 1px solid var(--node-card-border);
   border-top: 3px solid #475569;
   border-radius: 8px;
-  box-shadow: 0 4px 14px rgba(0,0,0,.5);
-  background: #1e293b;
+  box-shadow: 0 4px 14px rgba(0,0,0,.3);
+  background: var(--node-card-bg);
   overflow: visible;
 }
 
@@ -168,18 +170,18 @@ function remove() { removeNodes([props.id]) }
   padding: 4px 10px;
   border-radius: 5px 5px 0 0;
 }
-.gn-title { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#f1f5f9; }
-.gn-del   { font-size:11px; color:#64748b; background:none; border:none; cursor:pointer; padding:0 2px; line-height:1; transition:color .15s; }
+.gn-title { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--node-title-color); }
+.gn-del   { font-size:11px; color:var(--node-del-color); background:none; border:none; cursor:pointer; padding:0 2px; line-height:1; transition:color .15s; }
 .gn-del:hover { color:#f87171; }
 
 .gn-body  { padding: 0; }
 
 .gn-summary {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--node-summary-color);
   padding: 2px 10px;
   font-family: ui-monospace, monospace;
-  border-bottom: 1px solid #263347;
+  border-bottom: 1px solid var(--node-card-border);
 }
 
 .gn-ports-rows { padding: 0 10px; }
@@ -189,16 +191,16 @@ function remove() { removeNodes([props.id]) }
   align-items: center;
   justify-content: space-between;
 }
-.gn-port-left  { font-size: 9px; color: #64748b; }
-.gn-port-right { font-size: 9px; color: #64748b; }
+.gn-port-left  { font-size: 9px; color: var(--node-port-label); }
+.gn-port-right { font-size: 9px; color: var(--node-port-label); }
 
 .gn-debug {
   font-size: 9px;
-  color: #fbbf24;
+  color: var(--node-debug-color);
   font-family: ui-monospace, monospace;
   padding: 2px 10px 4px;
-  border-top: 1px solid #1e3a2f;
-  background: rgba(16, 185, 129, 0.08);
+  border-top: 1px solid var(--node-card-border);
+  background: var(--node-debug-bg);
   border-radius: 0 0 6px 6px;
   letter-spacing: .02em;
   white-space: nowrap;
@@ -206,9 +208,13 @@ function remove() { removeNodes([props.id]) }
   text-overflow: ellipsis;
 }
 
-/* Output handles are blue — applied via class on Handle */
+/* Handles */
+.gn-root :deep(.vue-flow__handle) {
+  background: var(--handle-in-bg) !important;
+  border-color: var(--handle-border) !important;
+}
 .gn-root :deep(.vue-flow__handle.gn-out) {
-  background: #60a5fa !important;
+  background: var(--handle-out-bg) !important;
 }
 .gn-root :deep(.vue-flow__handle:hover) {
   background: #38bdf8 !important;

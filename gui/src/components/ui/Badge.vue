@@ -15,12 +15,12 @@ const props = defineProps({
 })
 
 const map = {
-  default: 'bg-slate-700/60 text-slate-300 border-slate-600/50',
-  success: 'bg-green-500/15 text-green-400 border-green-500/30',
-  warning: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
-  danger:  'bg-red-500/15 text-red-400 border-red-500/30',
-  info:    'bg-blue-500/15 text-blue-400 border-blue-500/30',
-  muted:   'bg-slate-800 text-slate-500 border-slate-700/40',
+  default: 'bg-slate-200/60 text-slate-600 border-slate-300/50 dark:bg-slate-700/60 dark:text-slate-300 dark:border-slate-600/50',
+  success: 'bg-green-500/15 text-green-600 border-green-500/30 dark:text-green-400',
+  warning: 'bg-amber-500/15 text-amber-600 border-amber-500/30 dark:text-amber-400',
+  danger:  'bg-red-500/15 text-red-600 border-red-500/30 dark:text-red-400',
+  info:    'bg-blue-500/15 text-blue-600 border-blue-500/30 dark:text-blue-400',
+  muted:   'bg-slate-100 text-slate-500 border-slate-200/40 dark:bg-slate-800 dark:text-slate-500 dark:border-slate-700/40',
 }
 const dotMap = {
   default: 'bg-slate-400',

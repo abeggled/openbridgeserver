@@ -2,13 +2,13 @@
   <div class="flex flex-col gap-5">
     <div class="flex flex-wrap items-start gap-3">
       <div class="flex-1">
-        <h2 class="text-xl font-bold text-slate-100">RingBuffer</h2>
+        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">RingBuffer</h2>
         <p class="text-sm text-slate-500 mt-0.5">Debug-Log — letzte Wertänderungen</p>
       </div>
       <button @click="showConfig = true" class="btn-secondary btn-sm">⚙ Konfigurieren</button>
       <button @click="load" class="btn-secondary btn-sm">↻ Aktualisieren</button>
       <span :class="['inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium',
-        wsConnected ? 'bg-teal-500/15 text-teal-400' : 'bg-slate-700/50 text-slate-500']">
+        wsConnected ? 'bg-teal-500/15 text-teal-600 dark:text-teal-400' : 'bg-slate-200/50 dark:bg-slate-700/50 text-slate-500']">
         <span :class="['w-1.5 h-1.5 rounded-full', wsConnected ? 'bg-teal-400 animate-pulse' : 'bg-slate-600']" />
         {{ wsConnected ? 'Live' : 'Offline' }}
       </span>
@@ -17,11 +17,11 @@
     <!-- Stats bar -->
     <div v-if="stats" class="grid grid-cols-3 gap-3">
       <div class="card p-4 text-center">
-        <div class="text-2xl font-bold text-slate-100">{{ stats.total }}</div>
+        <div class="text-2xl font-bold text-slate-800 dark:text-slate-100">{{ stats.total }}</div>
         <div class="text-xs text-slate-500 mt-1">Einträge</div>
       </div>
       <div class="card p-4 text-center">
-        <div class="text-2xl font-bold text-slate-100">{{ stats.max_entries }}</div>
+        <div class="text-2xl font-bold text-slate-800 dark:text-slate-100">{{ stats.max_entries }}</div>
         <div class="text-xs text-slate-500 mt-1">Max. Kapazität</div>
       </div>
       <div class="card p-4 text-center">
@@ -65,7 +65,7 @@
                   {{ e.name ?? e.datapoint_id?.slice(0, 8) }}
                 </RouterLink>
               </td>
-              <td class="font-mono text-sm text-blue-300">{{ e.new_value }}</td>
+              <td class="font-mono text-sm text-blue-500 dark:text-blue-300">{{ e.new_value }}</td>
               <td class="font-mono text-sm text-slate-500">{{ e.old_value ?? '—' }}</td>
               <td><Badge :variant="e.quality === 'good' ? 'success' : 'warning'" size="xs" dot>{{ e.quality }}</Badge></td>
               <td class="text-xs text-slate-500">{{ e.source_adapter ?? '—' }}</td>

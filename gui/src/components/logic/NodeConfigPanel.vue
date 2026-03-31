@@ -1,9 +1,9 @@
 <template>
-  <div v-if="node" class="h-full flex flex-col bg-slate-900 border-l border-slate-700/60 w-72">
+  <div v-if="node" class="h-full flex flex-col bg-surface-800 border-l border-slate-200 dark:border-slate-700/60 w-72">
 
     <!-- Header -->
-    <div class="px-4 py-3 border-b border-slate-700/60 flex items-center justify-between">
-      <h3 class="text-sm font-semibold text-slate-200">{{ nodeDef?.label ?? node.type }}</h3>
+    <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700/60 flex items-center justify-between">
+      <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">{{ nodeDef?.label ?? node.type }}</h3>
       <button @click="$emit('close')" class="btn-icon text-slate-500">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -15,7 +15,7 @@
     <template v-if="isDatapointNode">
 
       <!-- Tab bar -->
-      <div class="flex border-b border-slate-700/60">
+      <div class="flex border-b border-slate-200 dark:border-slate-700/60">
         <button v-for="tab in tabs" :key="tab.id"
           @click="activeTab = tab.id"
           :class="['tab-btn', activeTab === tab.id && 'tab-btn--active']">
@@ -33,10 +33,10 @@
             <label class="label">DataPoint</label>
             <input v-model="dpSearch" type="text" class="input text-sm" placeholder="Suchen…" @input="searchDps" />
             <div v-if="dpResults.length"
-              class="mt-1 bg-slate-800 border border-slate-700 rounded-lg overflow-hidden max-h-40 overflow-y-auto">
+              class="mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden max-h-40 overflow-y-auto">
               <button v-for="dp in dpResults" :key="dp.id"
                 @click="selectDp(dp)"
-                class="w-full text-left px-3 py-1.5 text-xs hover:bg-slate-700 text-slate-200">
+                class="w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200">
                 {{ dp.name }}
                 <span class="text-slate-500 ml-1">{{ dp.data_type }}</span>
               </button>
@@ -114,7 +114,7 @@
                 :checked="boolVal(isWrite ? 'only_on_change' : 'trigger_on_change')"
                 @change="e => { setBool(isWrite ? 'only_on_change' : 'trigger_on_change', e.target.checked); emitUpdate() }"
                 class="mt-0.5 accent-teal-500" />
-              <span class="text-xs text-slate-300 leading-snug">
+              <span class="text-xs text-slate-600 dark:text-slate-300 leading-snug">
                 {{ isWrite
                   ? 'Nur schreiben wenn Wert sich geändert hat (kein Duplikat)'
                   : 'Nur auslösen wenn Wert sich geändert hat (kein Duplikat)' }}
@@ -295,7 +295,7 @@
     </template>
 
     <!-- Footer -->
-    <div class="p-3 border-t border-slate-700/60">
+    <div class="p-3 border-t border-slate-200 dark:border-slate-700/60">
       <button @click="emitUpdate" class="btn-primary w-full btn-sm">Übernehmen</button>
     </div>
 
@@ -562,7 +562,7 @@ function emitUpdate() {
   padding: 8px 4px 6px;
   font-size: 11px;
   font-weight: 500;
-  color: #64748b;
+  color: #475569;
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -574,20 +574,28 @@ function emitUpdate() {
   justify-content: center;
   gap: 3px;
 }
-.tab-btn:hover   { color: #94a3b8; }
-.tab-btn--active { color: #e2e8f0; border-bottom-color: #14b8a6; }
-.tab-dot { color: #14b8a6; font-size: 14px; line-height: 1; }
+.tab-btn:hover   { color: #334155; }
+.tab-btn--active { color: #0f172a; border-bottom-color: #0d9488; }
+.tab-dot { color: #0d9488; font-size: 14px; line-height: 1; }
+
+:global(.dark) .tab-btn          { color: #64748b; }
+:global(.dark) .tab-btn:hover    { color: #94a3b8; }
+:global(.dark) .tab-btn--active  { color: #e2e8f0; border-bottom-color: #14b8a6; }
+:global(.dark) .tab-dot          { color: #14b8a6; }
 
 .section-label {
   font-size: 9px;
   font-weight: 700;
   letter-spacing: .09em;
   text-transform: uppercase;
-  color: #14b8a6;
+  color: #0d9488;
   margin-bottom: 4px;
 }
+:global(.dark) .section-label { color: #14b8a6; }
+
 .form-group { display: flex; flex-direction: column; gap: 4px; }
-.label      { font-size: 11px; font-weight: 500; color: #94a3b8; }
+.label      { font-size: 11px; font-weight: 500; color: #475569; }
+:global(.dark) .label { color: #94a3b8; }
 
 /* ── Cron builder ─────────────────────────────────────────────────────── */
 .cron-grid {
@@ -612,22 +620,29 @@ function emitUpdate() {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .05em;
-  color: #64748b;
+  color: #475569;
 }
+:global(.dark) .cron-field-label { color: #64748b; }
+
 .cron-field-hint {
   font-size: 8px;
-  color: #475569;
+  color: #64748b;
   white-space: nowrap;
 }
+:global(.dark) .cron-field-hint { color: #475569; }
+
 .cron-legend {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   font-size: 9px;
-  color: #475569;
+  color: #64748b;
 }
+:global(.dark) .cron-legend { color: #475569; }
+
 .cron-legend code {
-  color: #94a3b8;
+  color: #475569;
   font-size: 9px;
 }
+:global(.dark) .cron-legend code { color: #94a3b8; }
 </style>

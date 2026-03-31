@@ -16,7 +16,7 @@
           <div v-if="modelValue" :class="['relative card shadow-2xl w-full', maxWidthClass]">
             <!-- Header -->
             <div v-if="title" class="card-header">
-              <h3 class="text-base font-semibold text-slate-100">{{ title }}</h3>
+              <h3 class="text-base font-semibold text-slate-800 dark:text-slate-100">{{ title }}</h3>
               <button @click="$emit('update:modelValue', false)" class="btn-icon">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -30,7 +30,7 @@
             </div>
 
             <!-- Footer -->
-            <div v-if="$slots.footer" class="px-5 py-4 border-t border-slate-700/60 flex justify-end gap-3">
+            <div v-if="$slots.footer" class="px-5 py-4 border-t border-slate-200 dark:border-slate-700/60 flex justify-end gap-3">
               <slot name="footer" />
             </div>
           </div>

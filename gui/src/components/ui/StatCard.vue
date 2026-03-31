@@ -5,7 +5,7 @@
     </div>
     <div class="min-w-0">
       <div class="text-xs text-slate-500 font-medium uppercase tracking-wide">{{ label }}</div>
-      <div class="text-xl font-bold text-slate-100 mt-0.5">{{ value }}</div>
+      <div class="text-xl font-bold text-slate-900 dark:text-slate-100 mt-0.5">{{ value }}</div>
     </div>
   </div>
 </template>

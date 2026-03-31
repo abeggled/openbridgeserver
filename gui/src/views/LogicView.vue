@@ -1,8 +1,8 @@
 <template>
   <div class="flex flex-col h-full" style="height: calc(100vh - 4rem)">
     <!-- Toolbar -->
-    <div class="flex items-center gap-3 px-4 py-2 bg-slate-900 border-b border-slate-700/60 flex-shrink-0">
-      <h2 class="text-sm font-bold text-slate-100">Logic Engine</h2>
+    <div class="flex items-center gap-3 px-4 py-2 bg-surface-800 border-b border-slate-200 dark:border-slate-700/60 flex-shrink-0">
+      <h2 class="text-sm font-bold text-slate-800 dark:text-slate-100">Logic Engine</h2>
       <div class="flex-1" />
       <!-- Graph selector -->
       <select v-model="activeGraphId" @change="loadGraph"
@@ -56,7 +56,7 @@
           @connect="onConnect"
           @node-click="onNodeClick"
         >
-          <Background pattern-color="#334155" :gap="20" />
+          <Background :pattern-color="bgPatternColor" :gap="20" />
           <Controls class="logic-controls" />
           <MiniMap class="logic-minimap" node-color="#475569" />
         </VueFlow>
@@ -106,7 +106,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, markRaw } from 'vue'
+import { ref, computed, onMounted, onUnmounted, markRaw } from 'vue'
 import { VueFlow, useVueFlow, addEdge } from '@vue-flow/core'
 import { Background }           from '@vue-flow/background'
 import { Controls }             from '@vue-flow/controls'
@@ -116,7 +116,8 @@ import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 
-import { useLogicStore }   from '@/stores/logic'
+import { useLogicStore }    from '@/stores/logic'
+import { useSettingsStore } from '@/stores/settings'
 import { logicApi }        from '@/api/client'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
@@ -130,7 +131,13 @@ import DatapointNode    from '@/components/logic/nodes/DatapointNode.vue'
 import PythonScriptNode from '@/components/logic/nodes/PythonScriptNode.vue'
 
 // ── Store ──────────────────────────────────────────────────────────────────
-const store = useLogicStore()
+const store    = useLogicStore()
+const settings = useSettingsStore()
+// Reactive background pattern colour — recomputes when theme changes
+const bgPatternColor = computed(() => {
+  void settings.theme   // track reactively
+  return document.documentElement.classList.contains('dark') ? '#334155' : '#94a3b8'
+})
 
 // ── Vue Flow state ─────────────────────────────────────────────────────────
 const nodes = ref([])
@@ -401,11 +408,11 @@ onUnmounted(() => {
 </script>
 
 <style>
-.logic-canvas { background: #0f172a; }
+.logic-canvas { background: var(--logic-canvas-bg); }
 .logic-canvas .vue-flow__edge-path { stroke: #475569; }
 .logic-canvas .vue-flow__handle { width: 10px; height: 10px; border-radius: 50%; }
 .logic-controls { bottom: 1rem; left: 1rem; }
-.logic-minimap { bottom: 1rem; right: 1rem; background: #1e293b; border: 1px solid #334155; border-radius: 6px; }
+.logic-minimap { bottom: 1rem; right: 1rem; background: var(--logic-minimap-bg); border: 1px solid var(--node-card-border); border-radius: 6px; }
 
 /* Edge interaction — breite unsichtbare Klickfläche */
 .logic-canvas .vue-flow__edge .vue-flow__edge-interaction {

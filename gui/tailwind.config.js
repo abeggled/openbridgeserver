@@ -4,15 +4,16 @@ export default {
     './index.html',
     './src/**/*.{vue,js,ts}'
   ],
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {
-        // Custom surface palette for dark dashboard
+        // Surface palette driven by CSS variables (adapts to light/dark theme)
         surface: {
-          950: '#090b11',
-          900: '#0f1117',
-          800: '#161b27',
-          700: '#1e2435',
+          950: 'var(--surface-950)',
+          900: 'var(--surface-900)',
+          800: 'var(--surface-800)',
+          700: 'var(--surface-700)',
         }
       },
       fontFamily: {

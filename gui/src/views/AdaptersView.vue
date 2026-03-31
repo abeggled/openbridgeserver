@@ -3,7 +3,7 @@
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div>
-        <h2 class="text-xl font-bold text-slate-100">Adapter Instanzen</h2>
+        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Adapter Instanzen</h2>
         <p class="text-sm text-slate-500 mt-0.5">Protokoll-Adapter konfigurieren und verwalten</p>
       </div>
       <button @click="openCreate" class="btn-primary btn-sm">
@@ -18,7 +18,7 @@
       <!-- Neue Instanz erstellen -->
       <div v-if="creating" class="card border border-blue-500/40">
         <div class="card-header">
-          <h3 class="font-semibold text-slate-100">Neue Instanz erstellen</h3>
+          <h3 class="font-semibold text-slate-800 dark:text-slate-100">Neue Instanz erstellen</h3>
           <button @click="cancelCreate" class="btn-icon">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -67,7 +67,7 @@
         <div class="card-header">
           <div class="flex items-center gap-3 min-w-0">
             <span :class="['w-3 h-3 rounded-full shrink-0', a.connected ? 'bg-green-400' : a.running ? 'bg-amber-400 animate-pulse' : 'bg-slate-600']" />
-            <h3 class="font-semibold text-slate-100 truncate">{{ a.name }}</h3>
+            <h3 class="font-semibold text-slate-800 dark:text-slate-100 truncate">{{ a.name }}</h3>
             <Badge variant="info" size="xs">{{ a.adapter_type }}</Badge>
             <Badge :variant="a.connected ? 'success' : a.running ? 'warning' : 'muted'" size="xs">
               {{ a.connected ? 'Verbunden' : a.running ? 'Läuft' : 'Inaktiv' }}
@@ -84,12 +84,12 @@
 
         <!-- Kurzinfo -->
         <div class="px-5 py-2 flex gap-4 text-sm text-slate-500">
-          <span>Bindings: <span class="text-slate-300 font-medium">{{ a.bindings }}</span></span>
+          <span>Bindings: <span class="text-slate-600 dark:text-slate-300 font-medium">{{ a.bindings }}</span></span>
           <span v-if="!a.registered" class="text-amber-400">⚠ Typ nicht registriert</span>
         </div>
 
         <!-- Expanded Config Panel -->
-        <div v-if="expanded[a.id]" class="border-t border-slate-700/60 p-5 flex flex-col gap-4">
+        <div v-if="expanded[a.id]" class="border-t border-slate-200 dark:border-slate-700/60 p-5 flex flex-col gap-4">
           <div class="form-group">
             <label class="label">Name</label>
             <input v-model="drafts[a.id].name" type="text" class="input" />
@@ -100,7 +100,7 @@
           </div>
           <div class="flex items-center gap-2">
             <input type="checkbox" :id="'enabled-' + a.id" v-model="drafts[a.id].enabled" class="w-4 h-4 rounded" />
-            <label :for="'enabled-' + a.id" class="text-sm text-slate-300">Aktiviert</label>
+            <label :for="'enabled-' + a.id" class="text-sm text-slate-600 dark:text-slate-300">Aktiviert</label>
           </div>
 
           <!-- Feedback -->

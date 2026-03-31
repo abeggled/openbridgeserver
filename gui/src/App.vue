@@ -5,7 +5,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useWebSocketStore } from '@/stores/websocket'
@@ -27,4 +27,12 @@ onMounted(async () => {
     ws.connect()
   }
 })
+
+// Keep system theme in sync when OS preference changes
+const mql = window.matchMedia('(prefers-color-scheme: dark)')
+function onSystemThemeChange() {
+  if (settings.theme === 'system') settings.applyTheme()
+}
+mql.addEventListener('change', onSystemThemeChange)
+onUnmounted(() => mql.removeEventListener('change', onSystemThemeChange))
 </script>

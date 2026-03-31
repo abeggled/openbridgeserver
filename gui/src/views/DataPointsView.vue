@@ -3,7 +3,7 @@
     <!-- Header -->
     <div class="flex flex-wrap items-center gap-3">
       <div class="flex-1">
-        <h2 class="text-xl font-bold text-slate-100">DataPoints</h2>
+        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">DataPoints</h2>
         <p class="text-sm text-slate-500 mt-0.5">{{ store.total }} Einträge</p>
       </div>
       <button @click="openCreate" class="btn-primary">
@@ -50,7 +50,7 @@
                   <Badge v-for="t in dp.tags" :key="t" variant="default" size="xs">{{ t }}</Badge>
                 </div>
               </td>
-              <td class="font-mono text-sm text-blue-300">{{ liveValue(dp) }}</td>
+              <td class="font-mono text-sm text-blue-500 dark:text-blue-300">{{ liveValue(dp) }}</td>
               <td><Badge :variant="qualityVariant(liveQuality(dp))" dot size="xs">{{ liveQuality(dp) ?? '—' }}</Badge></td>
               <td class="font-mono text-xs text-slate-500 max-w-xs truncate">{{ dp.mqtt_topic }}</td>
               <td>

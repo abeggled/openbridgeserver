@@ -2,40 +2,86 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Theme tokens ─────────────────────────────────────────────────────────── */
+:root {
+  --surface-950: #dde1eb;
+  --surface-900: #f0f2f7;
+  --surface-800: #ffffff;
+  --surface-700: #f1f5f9;
+
+  /* Logic Engine */
+  --logic-canvas-bg:  #e2e8f0;
+  --logic-minimap-bg: #f8fafc;
+  --node-card-bg:     #ffffff;
+  --node-card-border: #cbd5e1;
+  --node-title-color: #0f172a;
+  --node-port-label:  #64748b;
+  --node-summary-color: #64748b;
+  --node-debug-bg:    rgba(16, 185, 129, 0.05);
+  --node-debug-color: #b45309;
+  --handle-in-bg:     #94a3b8;
+  --handle-out-bg:    #3b82f6;
+  --handle-border:    #e2e8f0;
+  --node-del-color:   #94a3b8;
+  --node-dp-active:   #0f766e;
+}
+.dark {
+  --surface-950: #090b11;
+  --surface-900: #0f1117;
+  --surface-800: #161b27;
+  --surface-700: #1e2435;
+
+  /* Logic Engine */
+  --logic-canvas-bg:  #0f172a;
+  --logic-minimap-bg: #1e293b;
+  --node-card-bg:     #1e293b;
+  --node-card-border: #334155;
+  --node-title-color: #f1f5f9;
+  --node-port-label:  #64748b;
+  --node-summary-color: #94a3b8;
+  --node-debug-bg:    rgba(16, 185, 129, 0.08);
+  --node-debug-color: #fbbf24;
+  --handle-in-bg:     #94a3b8;
+  --handle-out-bg:    #60a5fa;
+  --handle-border:    #0f172a;
+  --node-del-color:   #64748b;
+  --node-dp-active:   #5eead4;
+}
+
 @layer base {
   * { box-sizing: border-box; }
-  body { @apply bg-surface-900 text-slate-100; }
+  body { @apply bg-surface-900 text-slate-900 dark:text-slate-100; }
   ::-webkit-scrollbar { @apply w-1.5 h-1.5; }
   ::-webkit-scrollbar-track { @apply bg-surface-800; }
-  ::-webkit-scrollbar-thumb { @apply bg-slate-600 rounded-full; }
-  ::-webkit-scrollbar-thumb:hover { @apply bg-slate-500; }
+  ::-webkit-scrollbar-thumb { @apply bg-slate-300 dark:bg-slate-600 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-slate-400 dark:bg-slate-500; }
 }
 
 @layer components {
   /* Buttons */
   .btn { @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed; }
   .btn-primary   { @apply btn bg-blue-600 hover:bg-blue-500 text-white; }
-  .btn-secondary { @apply btn bg-slate-700 hover:bg-slate-600 text-slate-100 border border-slate-600; }
-  .btn-danger    { @apply btn bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30; }
-  .btn-ghost     { @apply btn hover:bg-slate-800 text-slate-300; }
+  .btn-secondary { @apply btn bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-slate-100 dark:border-slate-600; }
+  .btn-danger    { @apply btn bg-red-600/20 hover:bg-red-600/40 text-red-500 border border-red-600/30 dark:text-red-400; }
+  .btn-ghost     { @apply btn hover:bg-slate-100 text-slate-600 dark:hover:bg-slate-800 dark:text-slate-300; }
   .btn-sm        { @apply px-3 py-1.5 text-xs; }
-  .btn-icon      { @apply p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-100 transition-colors; }
+  .btn-icon      { @apply p-2 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors dark:hover:bg-slate-800 dark:text-slate-400 dark:hover:text-slate-100; }
 
   /* Inputs */
-  .input  { @apply w-full px-3 py-2 bg-surface-800 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all; }
-  .label  { @apply block text-sm font-medium text-slate-300 mb-1.5; }
+  .input  { @apply w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all dark:bg-surface-800 dark:border-slate-700 dark:text-slate-100 dark:placeholder-slate-500; }
+  .label  { @apply block text-sm font-medium text-slate-700 mb-1.5 dark:text-slate-300; }
   .form-group { @apply flex flex-col gap-1; }
 
   /* Cards */
-  .card   { @apply bg-surface-800 border border-slate-700/60 rounded-xl; }
-  .card-header { @apply px-5 py-4 border-b border-slate-700/60 flex items-center justify-between; }
+  .card   { @apply bg-surface-800 border border-slate-200 dark:border-slate-700/60 rounded-xl; }
+  .card-header { @apply px-5 py-4 border-b border-slate-200 dark:border-slate-700/60 flex items-center justify-between; }
   .card-body   { @apply p-5; }
 
   /* Table */
   .table-wrap  { @apply overflow-x-auto; }
   .table       { @apply w-full text-sm; }
-  .table th    { @apply px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider bg-surface-700 first:rounded-tl-lg last:rounded-tr-lg; }
-  .table td    { @apply px-4 py-3 text-slate-200 border-b border-slate-700/40; }
+  .table th    { @apply px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider bg-surface-700 first:rounded-tl-lg last:rounded-tr-lg; }
+  .table td    { @apply px-4 py-3 text-slate-700 dark:text-slate-200 border-b border-slate-200/60 dark:border-slate-700/40; }
   .table tr:last-child td { @apply border-b-0; }
-  .table tr:hover td { @apply bg-slate-800/50; }
+  .table tr:hover td { @apply bg-slate-100/80 dark:bg-slate-800/50; }
 }

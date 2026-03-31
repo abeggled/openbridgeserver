@@ -1,12 +1,12 @@
 <template>
   <aside
     :class="[
-      'flex flex-col bg-surface-800 border-r border-slate-700/60 transition-all duration-300 shrink-0',
+      'flex flex-col bg-surface-800 border-r border-slate-200 dark:border-slate-700/60 transition-all duration-300 shrink-0',
       collapsed ? 'w-16' : 'w-56'
     ]"
   >
     <!-- Logo -->
-    <div class="flex items-center gap-3 px-4 py-5 border-b border-slate-700/60">
+    <div class="flex items-center gap-3 px-4 py-5 border-b border-slate-200 dark:border-slate-700/60">
       <!-- openTWS icon (inline SVG) -->
       <svg class="shrink-0 w-8 h-8 rounded-lg" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
         <rect width="400" height="400" fill="#0F1320"/>
@@ -36,7 +36,7 @@
         <line x1="281" y1="117" x2="230" y2="168" stroke="#5B9CF6" stroke-width="1.8" opacity="0.7"/>
         <line x1="200" y1="290" x2="200" y2="245" stroke="#F5A623" stroke-width="1.8" opacity="0.7"/>
       </svg>
-      <span v-if="!collapsed" class="font-bold text-slate-100 tracking-tight">openTWS</span>
+      <span v-if="!collapsed" class="font-bold text-slate-800 dark:text-slate-100 tracking-tight">openTWS</span>
     </div>
 
     <!-- Nav -->
@@ -48,8 +48,8 @@
         :class="[
           'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
           isActive(item.to)
-            ? 'bg-blue-600/20 text-blue-400'
-            : 'text-slate-400 hover:bg-slate-700/60 hover:text-slate-100'
+            ? 'bg-blue-600/20 text-blue-600 dark:text-blue-400'
+            : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-800 dark:hover:text-slate-100'
         ]"
       >
         <span class="shrink-0 text-lg w-5 text-center" v-html="item.icon" />
@@ -58,16 +58,16 @@
     </nav>
 
     <!-- Bottom: WS status + collapse toggle -->
-    <div class="px-2 py-3 border-t border-slate-700/60 flex flex-col gap-2">
+    <div class="px-2 py-3 border-t border-slate-200 dark:border-slate-700/60 flex flex-col gap-2">
       <!-- WebSocket indicator -->
       <div :class="['flex items-center gap-2 px-3 py-2 rounded-lg text-xs', collapsed ? 'justify-center' : '']" :title="ws.connected ? 'Live verbunden' : 'Getrennt'">
         <span :class="['w-2 h-2 rounded-full shrink-0', ws.connected ? 'bg-green-400 animate-pulse' : 'bg-red-500']" />
-        <span v-if="!collapsed" :class="ws.connected ? 'text-green-400' : 'text-red-400'">
+        <span v-if="!collapsed" :class="ws.connected ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'">
           {{ ws.connected ? 'Live' : 'Offline' }}
         </span>
       </div>
       <!-- Collapse button -->
-      <button @click="$emit('toggle')" class="btn-ghost w-full justify-center text-slate-500 hover:text-slate-300 py-2">
+      <button @click="$emit('toggle')" class="btn-ghost w-full justify-center text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 py-2">
         <svg class="w-4 h-4 transition-transform" :class="collapsed ? 'rotate-180' : ''" viewBox="0 0 20 20" fill="currentColor">
           <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"/>
         </svg>
