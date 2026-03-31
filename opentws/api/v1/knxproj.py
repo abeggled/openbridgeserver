@@ -207,7 +207,7 @@ async def import_knxproj_file(
     file:         UploadFile = File(...),
     password:     str | None = Form(None),
     adapter_name: str | None = Query(None, description="Adapter-Instanzname — wenn angegeben, werden DataPoints und Bindings angelegt"),
-    direction:    str        = Query("BOTH", pattern="^(SOURCE|DEST|BOTH)$", description="Verknüpfungsrichtung"),
+    direction:    str        = Query("SOURCE", pattern="^(SOURCE|DEST|BOTH)$", description="Verknüpfungsrichtung"),
     _user:        str        = Depends(get_current_user),
     db:           Database   = Depends(get_db),
 ) -> ImportResult:

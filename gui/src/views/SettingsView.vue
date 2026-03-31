@@ -653,7 +653,7 @@ const knxResult           = ref(null)
 const knxGaCount          = ref(0)
 const knxCreateDps        = ref(false)
 const knxAdapterName      = ref('')
-const knxDirection        = ref('BOTH')
+const knxDirection        = ref('SOURCE')
 const knxAdapterInstances = ref([])
 
 async function loadKnxGaCount() {
