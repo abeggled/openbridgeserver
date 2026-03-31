@@ -163,7 +163,10 @@ def create_app() -> FastAPI:
 
     app.include_router(router, prefix="/api/v1")
 
-    # ── Serve Vue GUI (built files in /app/gui_dist) ───────────────────────
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+
+    # ── Serve Vue Admin-GUI (gui_dist → /) ────────────────────────────────
     # NOTE: We deliberately avoid a catch-all @app.get("/{path:path}") route
     # because it causes 405 Method Not Allowed for POST/PATCH requests to API
     # endpoints — FastAPI finds a path match (the catch-all) but no method match.
@@ -171,9 +174,6 @@ def create_app() -> FastAPI:
     # paths and serves index.html for non-API routes (Vue Router history mode).
     _gui_dist = Path(__file__).parent.parent / "gui_dist"
     if _gui_dist.is_dir():
-        from fastapi import Request
-        from fastapi.responses import JSONResponse
-
         _assets = _gui_dist / "assets"
         if _assets.is_dir():
             app.mount("/assets", StaticFiles(directory=_assets), name="assets")
@@ -182,17 +182,37 @@ def create_app() -> FastAPI:
         async def favicon():
             return FileResponse(_gui_dist / "favicon.svg")
 
-        @app.exception_handler(404)
-        async def spa_404_handler(request: Request, exc):
-            """Return index.html for unknown non-API paths (SPA history routing).
-            Return JSON 404 for unknown /api/... paths.
-            """
-            if request.url.path.startswith("/api/"):
-                return JSONResponse({"detail": "Not found"}, status_code=404)
+    # ── Serve Visu SPA (frontend_dist → /visu) ────────────────────────────
+    _visu_dist = Path(__file__).parent.parent / "frontend_dist"
+    if _visu_dist.is_dir():
+        _visu_assets = _visu_dist / "assets"
+        if _visu_assets.is_dir():
+            app.mount("/visu/assets", StaticFiles(directory=_visu_assets), name="visu_assets")
+
+        @app.get("/visu/{path:path}", include_in_schema=False)
+        async def visu_spa(path: str):  # noqa: ARG001
+            """Alle /visu/... Pfade → index.html (Vue Router history mode)."""
+            index = _visu_dist / "index.html"
+            if index.exists():
+                return FileResponse(str(index))
+            return JSONResponse({"detail": "Visu nicht gebaut"}, status_code=404)
+
+    # ── 404-Handler für alles andere ──────────────────────────────────────
+    @app.exception_handler(404)
+    async def spa_404_handler(request: Request, exc):
+        """Return index.html for unknown non-API, non-visu paths (Admin-GUI routing).
+        Return JSON 404 for unknown /api/... paths.
+        """
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        if request.url.path.startswith("/visu/"):
+            # Bereits durch visu_spa abgedeckt — sollte nicht hier landen
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        if _gui_dist.is_dir():
             index = _gui_dist / "index.html"
             if index.exists():
                 return FileResponse(str(index))
-            return JSONResponse({"detail": "Not found"}, status_code=404)
+        return JSONResponse({"detail": "Not found"}, status_code=404)
 
     return app
 

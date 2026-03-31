@@ -241,6 +241,24 @@ CREATE TABLE IF NOT EXISTS datapoint_last_values (
 );
 """
 
+_MIGRATION_V16 = """
+CREATE TABLE IF NOT EXISTS visu_nodes (
+    id           TEXT PRIMARY KEY,
+    parent_id    TEXT REFERENCES visu_nodes(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    type         TEXT NOT NULL DEFAULT 'PAGE' CHECK (type IN ('LOCATION', 'PAGE')),
+    node_order   INTEGER NOT NULL DEFAULT 0,
+    icon         TEXT,
+    access       TEXT CHECK (access IN ('public', 'protected', 'private')),
+    access_pin   TEXT,
+    page_config  TEXT NOT NULL DEFAULT '{"grid_cols":12,"grid_row_height":80,"background":null,"widgets":[]}',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_visu_nodes_parent ON visu_nodes(parent_id);
+"""
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -258,6 +276,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (13, _MIGRATION_V13),
     (14, _MIGRATION_V14),
     (15, _MIGRATION_V15),
+    (16, _MIGRATION_V16),
 ]
 
 

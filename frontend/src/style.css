@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --surface-950: #030712;
+  --surface-900: #111827;
+  --surface-800: #1f2937;
+  --surface-700: #374151;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Gridstack-Überschreibungen */
+.grid-stack {
+  background: transparent;
+}
+
+.grid-stack-item-content {
+  border-radius: 12px;
+  overflow: hidden;
+  background: #1f2937;
+  border: 1px solid #374151;
+}

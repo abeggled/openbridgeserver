@@ -19,6 +19,7 @@ from opentws.api.v1.history import router as history_router
 from opentws.api.v1.config import router as config_router
 from opentws.api.v1.knxproj import router as knxproj_router
 from opentws.api.v1.logic import router as logic_router
+from opentws.api.v1.visu import router as visu_router
 
 router = APIRouter()
 
@@ -34,3 +35,4 @@ router.include_router(history_router,  prefix="/history")
 router.include_router(config_router,   prefix="/config")
 router.include_router(knxproj_router,  prefix="/knxproj")
 router.include_router(logic_router,    prefix="/logic")
+router.include_router(visu_router,     prefix="/visu")
