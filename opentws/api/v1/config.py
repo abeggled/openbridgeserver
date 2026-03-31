@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from opentws.api.auth import get_current_user
+from opentws.api.auth import get_current_user, get_admin_user
 from opentws.core.registry import get_registry
 from opentws.db.database import get_db, Database
 from opentws.models.datapoint import DataPoint, DataPointCreate
@@ -108,6 +108,21 @@ class ImportResult(BaseModel):
     logic_graphs_updated: int
     adapters_restarted: int
     errors: list[str]
+
+
+class ResetResult(BaseModel):
+    datapoints_deleted: int
+    bindings_deleted: int
+    adapter_instances_deleted: int
+    knx_group_addresses_deleted: int
+    logic_graphs_deleted: int
+    errors: list[str]
+
+
+class ClearResult(BaseModel):
+    deleted: int
+    bindings_deleted: int = 0
+    errors: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -389,4 +404,153 @@ async def import_config(
     except Exception as exc:
         result.errors.append(f"Adapter restart failed: {exc}")
 
+    return result
+
+
+@router.delete("/reset", response_model=ResetResult, status_code=status.HTTP_200_OK)
+async def factory_reset(
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> ResetResult:
+    """Factory reset — deletes ALL data. Admin only."""
+    result = ResetResult(
+        datapoints_deleted=0,
+        bindings_deleted=0,
+        adapter_instances_deleted=0,
+        knx_group_addresses_deleted=0,
+        logic_graphs_deleted=0,
+        errors=[],
+    )
+
+    try:
+        from opentws.adapters import registry as adapter_registry
+        await adapter_registry.stop_all()
+    except Exception as exc:
+        result.errors.append(f"Adapter stop failed: {exc}")
+
+    try:
+        row = await db.fetchone("SELECT COUNT(*) as n FROM logic_graphs")
+        result.logic_graphs_deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM logic_graphs")
+        from opentws.logic.manager import get_logic_manager
+        await get_logic_manager().reload()
+    except Exception as exc:
+        result.errors.append(f"Logic graphs reset failed: {exc}")
+
+    try:
+        row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_bindings")
+        result.bindings_deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM adapter_bindings")
+    except Exception as exc:
+        result.errors.append(f"Bindings reset failed: {exc}")
+
+    try:
+        row = await db.fetchone("SELECT COUNT(*) as n FROM datapoints")
+        result.datapoints_deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM datapoints")
+        reg = get_registry()
+        reg._points.clear()
+        reg._values.clear()
+    except Exception as exc:
+        result.errors.append(f"DataPoints reset failed: {exc}")
+
+    try:
+        row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_instances")
+        result.adapter_instances_deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM adapter_instances")
+    except Exception as exc:
+        result.errors.append(f"Adapter instances reset failed: {exc}")
+
+    try:
+        row = await db.fetchone("SELECT COUNT(*) as n FROM knx_group_addresses")
+        result.knx_group_addresses_deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM knx_group_addresses")
+    except Exception as exc:
+        result.errors.append(f"KNX group addresses reset failed: {exc}")
+
+    return result
+
+
+@router.delete("/reset/bindings", response_model=ClearResult, status_code=status.HTTP_200_OK)
+async def clear_bindings(
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> ClearResult:
+    """Delete all Bindings and restart adapters so they pick up empty binding list. Admin only."""
+    result = ClearResult(deleted=0)
+    try:
+        from opentws.adapters import registry as adapter_registry
+        from opentws.core.event_bus import get_event_bus
+        await adapter_registry.stop_all()
+        row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_bindings")
+        result.deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM adapter_bindings")
+        await adapter_registry.start_all(get_event_bus(), db)
+    except Exception as exc:
+        result.errors.append(f"Bindings clear failed: {exc}")
+    return result
+
+
+@router.delete("/reset/datapoints", response_model=ClearResult, status_code=status.HTTP_200_OK)
+async def clear_datapoints(
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> ClearResult:
+    """Delete all DataPoints and their Bindings. Admin only."""
+    result = ClearResult(deleted=0, bindings_deleted=0)
+    try:
+        from opentws.adapters import registry as adapter_registry
+        from opentws.core.event_bus import get_event_bus
+        await adapter_registry.stop_all()
+        row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_bindings")
+        result.bindings_deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM adapter_bindings")
+        row = await db.fetchone("SELECT COUNT(*) as n FROM datapoints")
+        result.deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM datapoints")
+        reg = get_registry()
+        reg._points.clear()
+        reg._values.clear()
+        await adapter_registry.start_all(get_event_bus(), db)
+    except Exception as exc:
+        result.errors.append(f"DataPoints clear failed: {exc}")
+    return result
+
+
+@router.delete("/reset/logic", response_model=ClearResult, status_code=status.HTTP_200_OK)
+async def clear_logic(
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> ClearResult:
+    """Delete all Logic Graphs. Admin only."""
+    result = ClearResult(deleted=0)
+    try:
+        row = await db.fetchone("SELECT COUNT(*) as n FROM logic_graphs")
+        result.deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM logic_graphs")
+        from opentws.logic.manager import get_logic_manager
+        await get_logic_manager().reload()
+    except Exception as exc:
+        result.errors.append(f"Logic graphs clear failed: {exc}")
+    return result
+
+
+@router.delete("/reset/adapters", response_model=ClearResult, status_code=status.HTTP_200_OK)
+async def clear_adapters(
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> ClearResult:
+    """Stop and delete all Adapter Instances and their Bindings. Admin only."""
+    result = ClearResult(deleted=0, bindings_deleted=0)
+    try:
+        from opentws.adapters import registry as adapter_registry
+        await adapter_registry.stop_all()
+        row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_bindings")
+        result.bindings_deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM adapter_bindings")
+        row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_instances")
+        result.deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM adapter_instances")
+    except Exception as exc:
+        result.errors.append(f"Adapters clear failed: {exc}")
     return result

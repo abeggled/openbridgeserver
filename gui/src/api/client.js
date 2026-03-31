@@ -137,8 +137,13 @@ export const ringbufferApi = {
 
 // ── Config Import/Export ──────────────────────────────────────────────────
 export const configApi = {
-  export: ()     => api.get('/config/export'),
-  import: (data) => api.post('/config/import', data),
+  export:          ()     => api.get('/config/export'),
+  import:          (data) => api.post('/config/import', data),
+  reset:           ()     => api.delete('/config/reset'),
+  resetBindings:   ()     => api.delete('/config/reset/bindings'),
+  resetDatapoints: ()     => api.delete('/config/reset/datapoints'),
+  resetLogic:      ()     => api.delete('/config/reset/logic'),
+  resetAdapters:   ()     => api.delete('/config/reset/adapters'),
 }
 
 // ── Logic Engine ──────────────────────────────────────────────────────────

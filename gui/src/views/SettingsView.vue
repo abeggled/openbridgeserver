@@ -9,7 +9,10 @@
     <div class="flex gap-1 border-b border-slate-200 dark:border-slate-700/60">
       <button v-for="t in tabs" :key="t.id" @click="activeTab = t.id"
         :class="['px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px',
-          activeTab === t.id ? 'text-blue-500 dark:text-blue-400 border-blue-500' : 'text-slate-500 dark:text-slate-400 border-transparent hover:text-slate-700 dark:hover:text-slate-200']">
+          activeTab === t.id && t.id === 'dangerzone' ? 'text-red-500 dark:text-red-400 border-red-500' :
+          activeTab === t.id ? 'text-blue-500 dark:text-blue-400 border-blue-500' :
+          t.id === 'dangerzone' ? 'text-red-400/70 dark:text-red-400/60 border-transparent hover:text-red-400' :
+          'text-slate-500 dark:text-slate-400 border-transparent hover:text-slate-700 dark:hover:text-slate-200']">
         {{ t.label }}
       </button>
     </div>
@@ -85,9 +88,6 @@
             <button @click="doKnxImport" class="btn-primary btn-sm" :disabled="!knxFile || knxImporting">
               <Spinner v-if="knxImporting" size="sm" color="white" />
               Importieren
-            </button>
-            <button v-if="knxGaCount > 0" @click="doClearKnxGA" class="btn-secondary btn-sm text-red-400 hover:text-red-300">
-              {{ knxGaCount }} GAs löschen
             </button>
           </div>
         </div>
@@ -228,6 +228,81 @@
       </div>
     </div>
 
+    <!-- ── Danger Zone ── -->
+    <div v-if="activeTab === 'dangerzone' && auth.isAdmin" class="flex flex-col gap-4 max-w-lg">
+      <div class="rounded-lg border border-red-500/40 bg-red-500/5 overflow-hidden">
+        <div class="px-5 py-3 border-b border-red-500/30 flex items-center gap-2">
+          <svg class="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+          </svg>
+          <h3 class="font-semibold text-sm text-red-400">Danger Zone</h3>
+        </div>
+        <div class="divide-y divide-red-500/20">
+
+          <!-- Bindings -->
+          <div class="p-5 flex items-start justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle Bindings löschen</p>
+              <p class="text-xs text-slate-500 mt-1">Löscht alle Bindings. DataPoints und Adapter-Instanzen bleiben erhalten.</p>
+            </div>
+            <button @click="showConfirm('bindings')" class="btn-danger btn-sm shrink-0">Löschen</button>
+          </div>
+
+          <!-- DataPoints -->
+          <div class="p-5 flex items-start justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle DataPoints löschen</p>
+              <p class="text-xs text-slate-500 mt-1">Löscht alle DataPoints und deren Bindings unwiderruflich.</p>
+            </div>
+            <button @click="showConfirm('datapoints')" class="btn-danger btn-sm shrink-0">Löschen</button>
+          </div>
+
+          <!-- Logic -->
+          <div class="p-5 flex items-start justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle Logikblätter löschen</p>
+              <p class="text-xs text-slate-500 mt-1">Löscht alle Logikblätter und stoppt die Logik-Engine.</p>
+            </div>
+            <button @click="showConfirm('logic')" class="btn-danger btn-sm shrink-0">Löschen</button>
+          </div>
+
+          <!-- Adapters -->
+          <div class="p-5 flex items-start justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle Adapter löschen</p>
+              <p class="text-xs text-slate-500 mt-1">Stoppt und löscht alle Adapter-Instanzen und deren Bindings.</p>
+            </div>
+            <button @click="showConfirm('adapters')" class="btn-danger btn-sm shrink-0">Löschen</button>
+          </div>
+
+          <!-- KNX Group Addresses -->
+          <div class="p-5 flex items-start justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">KNX-Gruppenadressen löschen</p>
+              <p class="text-xs text-slate-500 mt-1">Löscht alle importierten KNX-Gruppenadressen ({{ knxGaCount }} GAs).</p>
+            </div>
+            <button @click="showConfirm('knxga')" :disabled="knxGaCount === 0" class="btn-danger btn-sm shrink-0">Löschen</button>
+          </div>
+
+          <!-- Factory Reset -->
+          <div class="p-5 flex items-start justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Zurücksetzen auf Werkseinstellungen</p>
+              <p class="text-xs text-slate-500 mt-1">Löscht alles — DataPoints, Bindings, Adapter, KNX-GAs und Logikblätter. Benutzerkonten bleiben erhalten.</p>
+            </div>
+            <button @click="showConfirm('all')" class="btn-danger btn-sm shrink-0">Alles löschen</button>
+          </div>
+
+          <!-- Feedback -->
+          <div v-if="resetResult" class="px-5 py-3">
+            <div :class="['p-3 rounded-lg text-sm', resetResult.ok ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30']">
+              {{ resetResult.text }}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Modals -->
     <Modal v-model="showCreateUser" title="Neuer Benutzer" max-width="sm">
       <form @submit.prevent="doCreateUser" class="flex flex-col gap-4">
@@ -292,6 +367,9 @@
     <ConfirmDialog v-model="showUserConfirm" title="Benutzer löschen"
       :message="`Benutzer '${deleteUserTarget?.username}' wirklich löschen?`"
       confirm-label="Löschen" @confirm="doDeleteUser" />
+
+    <ConfirmDialog v-model="showDzConfirm" :title="dzConfirmTitle"
+      :message="dzConfirmMessage" :confirm-label="dzConfirmLabel" @confirm="doDzAction" />
   </div>
 </template>
 
@@ -403,6 +481,7 @@ const tabs = [
   ...(auth.isAdmin ? [{ id: 'users', label: 'Benutzer' }] : []),
   { id: 'apikeys',      label: 'API Keys' },
   { id: 'importexport', label: 'Sicherung' },
+  ...(auth.isAdmin ? [{ id: 'dangerzone', label: 'Danger Zone' }] : []),
 ]
 
 // ── Theme ──────────────────────────────────────────────────────────────────
@@ -577,15 +656,6 @@ async function doKnxImport() {
   }
 }
 
-async function doClearKnxGA() {
-  try {
-    await knxprojApi.clearGA()
-    knxGaCount.value = 0
-    knxResult.value  = { ok: true, text: 'Alle Gruppenadressen gelöscht' }
-  } catch {
-    knxResult.value  = { ok: false, text: 'Fehler beim Löschen' }
-  }
-}
 
 onMounted(async () => {
   if (auth.isAdmin) await loadUsers()
@@ -593,4 +663,94 @@ onMounted(async () => {
   await loadKnxGaCount()
 })
 // Note: timezone onMounted is defined above (merged there)
+
+// ── Danger Zone ────────────────────────────────────────────────────────────
+const showDzConfirm   = ref(false)
+const dzTarget        = ref(null)
+const resetResult     = ref(null)
+
+const DZ_CONFIG = {
+  bindings: {
+    title:   'Alle Bindings löschen',
+    message: 'Alle Bindings werden unwiderruflich gelöscht. DataPoints und Adapter-Instanzen bleiben erhalten. Fortfahren?',
+    label:   'Löschen',
+    action:  async () => {
+      const { data } = await configApi.resetBindings()
+      return `${data.deleted} Bindings gelöscht.`
+    },
+    after: () => {},
+  },
+  datapoints: {
+    title:   'Alle DataPoints löschen',
+    message: 'Alle DataPoints und deren Bindings werden unwiderruflich gelöscht. Fortfahren?',
+    label:   'Löschen',
+    action:  async () => {
+      const { data } = await configApi.resetDatapoints()
+      return `${data.deleted} DataPoints und ${data.bindings_deleted} Bindings gelöscht.`
+    },
+    after: () => {},
+  },
+  logic: {
+    title:   'Alle Logikblätter löschen',
+    message: 'Alle Logikblätter werden unwiderruflich gelöscht. Fortfahren?',
+    label:   'Löschen',
+    action:  async () => {
+      const { data } = await configApi.resetLogic()
+      return `${data.deleted} Logikblätter gelöscht.`
+    },
+    after: () => {},
+  },
+  adapters: {
+    title:   'Alle Adapter löschen',
+    message: 'Alle Adapter-Instanzen und deren Bindings werden unwiderruflich gelöscht. Fortfahren?',
+    label:   'Löschen',
+    action:  async () => {
+      const { data } = await configApi.resetAdapters()
+      return `${data.deleted} Adapter-Instanzen und ${data.bindings_deleted} Bindings gelöscht.`
+    },
+    after: () => {},
+  },
+  knxga: {
+    title:   'KNX-Gruppenadressen löschen',
+    message: 'Alle importierten KNX-Gruppenadressen werden gelöscht. Fortfahren?',
+    label:   'Löschen',
+    action:  async () => {
+      await knxprojApi.clearGA()
+      return 'Alle KNX-Gruppenadressen gelöscht.'
+    },
+    after: () => { knxGaCount.value = 0 },
+  },
+  all: {
+    title:   'Zurücksetzen auf Werkseinstellungen',
+    message: 'Alle DataPoints, Bindings, Adapter-Instanzen, KNX-Gruppenadressen und Logikblätter werden unwiderruflich gelöscht. Fortfahren?',
+    label:   'Alles löschen',
+    action:  async () => {
+      const { data } = await configApi.reset()
+      return `Zurückgesetzt: ${data.datapoints_deleted} DataPoints, ${data.bindings_deleted} Bindings, ${data.adapter_instances_deleted} Adapter, ${data.knx_group_addresses_deleted} KNX-GAs, ${data.logic_graphs_deleted} Logikblätter gelöscht.`
+    },
+    after: () => { knxGaCount.value = 0 },
+  },
+}
+
+const dzConfirmTitle   = computed(() => DZ_CONFIG[dzTarget.value]?.title ?? '')
+const dzConfirmMessage = computed(() => DZ_CONFIG[dzTarget.value]?.message ?? '')
+const dzConfirmLabel   = computed(() => DZ_CONFIG[dzTarget.value]?.label ?? 'Löschen')
+
+function showConfirm(target) {
+  dzTarget.value = target
+  resetResult.value = null
+  showDzConfirm.value = true
+}
+
+async function doDzAction() {
+  const cfg = DZ_CONFIG[dzTarget.value]
+  if (!cfg) return
+  try {
+    const text = await cfg.action()
+    cfg.after()
+    resetResult.value = { ok: true, text }
+  } catch (err) {
+    resetResult.value = { ok: false, text: err.response?.data?.detail ?? 'Fehler beim Löschen' }
+  }
+}
 </script>
