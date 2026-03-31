@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     import opentws.adapters.modbus_rtu.adapter  # noqa: F401
     import opentws.adapters.onewire.adapter     # noqa: F401
     import opentws.adapters.mqtt.adapter        # noqa: F401
-    await adapter_registry.start_all(bus, db)
+    await adapter_registry.start_all(bus, db, value_getter=registry.get_value)
 
     # 9. Logic Engine
     from opentws.logic.manager import init_logic_manager

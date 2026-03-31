@@ -97,7 +97,7 @@
 
     <!-- Binding form Modal -->
     <Modal v-model="showBindingForm" :title="editBinding ? 'Binding bearbeiten' : 'Neues Binding'" max-width="xl">
-      <BindingForm :dp-id="id" :initial="editBinding" @save="onBindingSave" @cancel="showBindingForm = false" />
+      <BindingForm :dp-id="id" :initial="editBinding" :dp-persist-value="dp?.persist_value ?? false" @save="onBindingSave" @cancel="showBindingForm = false" />
     </Modal>
 
     <!-- Delete binding confirm -->

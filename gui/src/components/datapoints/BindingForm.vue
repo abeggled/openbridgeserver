@@ -64,6 +64,26 @@
           <GaCombobox v-model="cfg.state_group_address" placeholder="z.B. 1/2/4 oder Name suchen …" />
           <p class="hint">Rückmelde-GA für den Ist-Wert (DEST / BOTH)</p>
         </div>
+        <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="flex items-start gap-2">
+          <input
+            type="checkbox"
+            id="respond_to_read"
+            v-model="cfg.respond_to_read"
+            :disabled="!props.dpPersistValue"
+            class="w-4 h-4 rounded mt-0.5"
+          />
+          <div>
+            <label
+              for="respond_to_read"
+              class="text-sm"
+              :class="props.dpPersistValue ? 'text-slate-600 dark:text-slate-300' : 'text-slate-400 dark:text-slate-500 cursor-not-allowed'"
+            >Antworte auf Leseanfragen</label>
+            <p class="hint">
+              Sendet den aktuellen Wert als GroupValueResponse wenn eine Leseanfrage eingeht.
+              <template v-if="!props.dpPersistValue"> Erfordert aktiviertes „Letzten Wert speichern" am DataPoint.</template>
+            </p>
+          </div>
+        </div>
       </template>
 
       <!-- Modbus -->
@@ -302,8 +322,9 @@ import Spinner    from '@/components/ui/Spinner.vue'
 import GaCombobox from '@/components/ui/GaCombobox.vue'
 
 const props = defineProps({
-  dpId:    { type: String, required: true },
-  initial: { type: Object, default: null },
+  dpId:           { type: String,  required: true },
+  initial:        { type: Object,  default: null },
+  dpPersistValue: { type: Boolean, default: false },
 })
 const emit = defineEmits(['save', 'cancel'])
 
@@ -333,7 +354,7 @@ const form = reactive({
 })
 
 const cfg = reactive({
-  group_address: '', dpt_id: 'DPT9.001', state_group_address: '',
+  group_address: '', dpt_id: 'DPT9.001', state_group_address: '', respond_to_read: false,
   address: 0, register_type: 'holding', data_format: 'uint16',
   unit_id: 1, count: 1, scale_factor: 1.0, poll_interval: 1.0,
   byte_order: 'big', word_order: 'big',
@@ -418,6 +439,7 @@ watch(() => props.initial, val => {
   Object.assign(cfg, val.config ?? {})
   if (cfg.state_group_address == null) cfg.state_group_address = ''
   if (cfg.publish_topic       == null) cfg.publish_topic = ''
+  if (cfg.respond_to_read     == null) cfg.respond_to_read = false
   const ms = val.send_throttle_ms ?? 0
   if      (ms === 0)               { form.throttle_value = 0;            form.throttle_unit = 's'   }
   else if (ms % 3_600_000 === 0)   { form.throttle_value = ms/3_600_000; form.throttle_unit = 'h'   }
@@ -464,6 +486,7 @@ function buildConfig() {
   if (type === 'KNX') {
     const c = { group_address: cfg.group_address, dpt_id: cfg.dpt_id || 'DPT9.001' }
     if (cfg.state_group_address?.trim()) c.state_group_address = cfg.state_group_address.trim()
+    if (cfg.respond_to_read) c.respond_to_read = true
     return c
   }
   if (type === 'MODBUS_TCP' || type === 'MODBUS_RTU') {

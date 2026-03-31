@@ -34,11 +34,12 @@ from opentws.core.event_bus import DataValueEvent
 
 # Import APCI classes at module level so missing symbols fail loudly at startup
 try:
-    from xknx.telegram.apci import GroupValueWrite, GroupValueResponse
+    from xknx.telegram.apci import GroupValueWrite, GroupValueResponse, GroupValueRead
     _APCI_IMPORTED = True
 except ImportError:
     GroupValueWrite = None  # type: ignore[assignment,misc]
     GroupValueResponse = None  # type: ignore[assignment,misc]
+    GroupValueRead = None  # type: ignore[assignment,misc]
     _APCI_IMPORTED = False
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ class KnxBindingConfig(BaseModel):
     group_address: str                          # z.B. "1/2/3"
     dpt_id: str = "DPT1.001"
     state_group_address: str | None = None      # DEST-Bindings Rückmelde-GA
+    respond_to_read: bool = False               # SOURCE: antworte auf GroupValueRead mit aktuellem Wert
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +79,12 @@ class KnxAdapter(AdapterBase):
         self._xknx: Any = None
         self._sniffer: Any = None
         self._ga_source_map: dict[str, list[tuple[Any, Any]]] = {}
+        self._ga_respond_map: dict[str, list[tuple[Any, Any]]] = {}
+        self._value_getter: Any = None
+
+    def set_value_getter(self, getter: Any) -> None:
+        """Set a callable that returns ValueState | None for a datapoint UUID."""
+        self._value_getter = getter
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -132,6 +140,7 @@ class KnxAdapter(AdapterBase):
     async def _on_bindings_reloaded(self) -> None:
         """Rebuild GA→binding map and re-register the sniffer Device."""
         self._ga_source_map.clear()
+        self._ga_respond_map.clear()
         for binding in self._bindings:
             if binding.direction not in ("SOURCE", "BOTH"):
                 continue
@@ -146,6 +155,9 @@ class KnxAdapter(AdapterBase):
             self._ga_source_map.setdefault(bc.group_address, []).append(entry)
             if bc.state_group_address:
                 self._ga_source_map.setdefault(bc.state_group_address, []).append(entry)
+
+            if bc.respond_to_read:
+                self._ga_respond_map.setdefault(bc.group_address, []).append(entry)
 
         logger.info(
             "KNX: %d source GAs from %d bindings: %s",
@@ -203,10 +215,16 @@ class KnxAdapter(AdapterBase):
                 logger.error("KNX: xknx.telegram.apci not importable")
                 return
 
+            ga = str(telegram.destination_address)
+
+            # Handle incoming read requests: respond with current persisted value
+            if isinstance(telegram.payload, GroupValueRead):
+                await self._handle_read_request(ga)
+                return
+
             if not isinstance(telegram.payload, (GroupValueWrite, GroupValueResponse)):
                 return
 
-            ga = str(telegram.destination_address)
             entries = self._ga_source_map.get(ga)
             if not entries:
                 return
@@ -231,6 +249,37 @@ class KnxAdapter(AdapterBase):
                 ))
         except Exception:
             logger.exception("KNX _on_telegram unhandled exception")
+
+    async def _handle_read_request(self, ga: str) -> None:
+        """Respond to a GroupValueRead with the current datapoint value if quality is 'good'."""
+        entries = self._ga_respond_map.get(ga)
+        if not entries or not self._value_getter or not self._xknx:
+            return
+        for binding, dpt in entries:
+            try:
+                state = self._value_getter(binding.datapoint_id)
+                if state is None or state.quality != "good" or state.value is None:
+                    logger.debug(
+                        "KNX read request for GA=%s: no good value for dp=%s — not responding",
+                        ga, binding.datapoint_id,
+                    )
+                    continue
+                from xknx.telegram import Telegram
+                from xknx.telegram.address import GroupAddress
+                from xknx.dpt import DPTArray, DPTBinary
+                raw = dpt.encoder(state.value)
+                payload_value = DPTBinary(raw[0]) if len(raw) == 1 else DPTArray(list(raw))
+                telegram = Telegram(
+                    destination_address=GroupAddress(ga),
+                    payload=GroupValueResponse(payload_value),
+                )
+                await self._xknx.telegrams.put(telegram)
+                logger.info(
+                    "KNX read response: GA=%s dp=%s value=%s raw=%s",
+                    ga, binding.datapoint_id, state.value, raw.hex(),
+                )
+            except Exception:
+                logger.exception("KNX _handle_read_request failed for GA=%s binding=%s", ga, binding.id)
 
     # ------------------------------------------------------------------
     # Read / Write

@@ -52,7 +52,7 @@ def all_classes() -> dict[str, type]:
 # Instance management (runtime)
 # ---------------------------------------------------------------------------
 
-async def start_all(event_bus: Any, db: Any) -> None:
+async def start_all(event_bus: Any, db: Any, value_getter: Any = None) -> None:
     """
     Alle aktivierten Adapter-Instanzen aus adapter_instances laden,
     verbinden und Bindings laden.
@@ -83,6 +83,8 @@ async def start_all(event_bus: Any, db: Any) -> None:
                 instance_id=uuid.UUID(instance_id),
                 name=row["name"],
             )
+            if value_getter and hasattr(instance, "set_value_getter"):
+                instance.set_value_getter(value_getter)
             await instance.connect()
             _instances[instance_id] = instance
 
@@ -160,7 +162,7 @@ def get_status() -> dict[str, dict]:
 # Hot-Reload einer einzelnen Instanz (für API: PATCH /instances/{id})
 # ---------------------------------------------------------------------------
 
-async def restart_instance(instance_id: str, event_bus: Any, db: Any) -> Any | None:
+async def restart_instance(instance_id: str, event_bus: Any, db: Any, value_getter: Any = None) -> Any | None:
     """
     Laufende Instanz stoppen, neu aus DB laden und starten.
     Gibt die neue Instanz zurück, oder None bei Fehler.
@@ -194,6 +196,8 @@ async def restart_instance(instance_id: str, event_bus: Any, db: Any) -> Any | N
             instance_id=uuid.UUID(instance_id),
             name=row["name"],
         )
+        if value_getter and hasattr(instance, "set_value_getter"):
+            instance.set_value_getter(value_getter)
         await instance.connect()
         _instances[instance_id] = instance
 
