@@ -84,6 +84,7 @@ $deg  = [char]176        # °
 $ohm  = [char]0x03A9    # Ω
 $sup2 = [char]178       # ²
 $sup3 = [char]179       # ³
+$arr  = [char]0x2192    # →
 
 $DptMap = @{
     # DPT 1 — 1-Bit Boolean (vollständig nach KNX-Spec)
@@ -381,7 +382,7 @@ Write-Host ""
 if (-not (Test-Path $File)) { throw "Datei nicht gefunden: $File" }
 if ($Encoding -eq "Auto") {
     $Encoding = Detect-Encoding -Path $File
-    Write-Host "  Kodierung: Auto → $Encoding erkannt" -ForegroundColor Gray
+    Write-Host "  Kodierung: Auto $arr $Encoding erkannt" -ForegroundColor Gray
 }
 $delim   = Detect-Delimiter -Path $File -Enc $Encoding
 $rows    = Import-Csv -Path $File -Delimiter $delim -Encoding $Encoding
@@ -389,7 +390,7 @@ $rows    = Import-Csv -Path $File -Delimiter $delim -Encoding $Encoding
 # Adapter-ID ermitteln
 Write-Host "Suche Adapter-Instanz '$Adapter'..." -ForegroundColor Yellow
 $adapterId = Find-AdapterByName -Name $Adapter
-Write-Host "  → ID: $adapterId" -ForegroundColor Green
+Write-Host "  $arr ID: $adapterId" -ForegroundColor Green
 
 # Statistik
 $ok      = 0
