@@ -332,7 +332,7 @@ class GraphExecutor:
                 # Fired by manager via input_overrides; pass trigger signal downstream
                 return {"trigger": inputs.get("trigger", False)}
 
-            case "timer_delay" | "timer_pulse" | "mcp_tool":
+            case "timer_delay" | "timer_pulse":
                 # Async nodes — handled by manager, not executor
                 return {}
 

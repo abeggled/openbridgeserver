@@ -69,7 +69,7 @@ class NodeTypePort(BaseModel):
 class NodeTypeDef(BaseModel):
     type: str                    # unique identifier
     label: str                   # display name
-    category: str                # "logic" | "datapoint" | "timer" | "math" | "script" | "mcp"
+    category: str                # "logic" | "datapoint" | "timer" | "math" | "script" | "ai"
     description: str = ""
     inputs: list[NodeTypePort] = []
     outputs: list[NodeTypePort] = []

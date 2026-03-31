@@ -158,8 +158,8 @@ const nodeTypeComponents = {
   math_formula: _generic, math_map: _generic,
   // Timer
   timer_delay: _generic, timer_pulse: _generic, timer_cron: _generic,
-  // MCP
-  mcp_tool: _generic,
+  // AI
+  ai_logic: _generic,
   // Astro
   astro_sun: _generic,
   // Math extended

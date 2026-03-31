@@ -37,7 +37,7 @@ const CATEGORY_ORDER = [
   { id: 'notification', label: 'Benachrichtigung' },
   { id: 'integration',  label: 'Integration'     },
   { id: 'script',       label: 'Skripte'         },
-  { id: 'mcp',          label: 'MCP'             },
+  { id: 'ai',           label: 'AI'              },
 ]
 
 const categories = computed(() =>
