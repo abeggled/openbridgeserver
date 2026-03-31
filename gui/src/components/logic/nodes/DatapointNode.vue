@@ -1,12 +1,12 @@
 <template>
-  <div class="gn-wrap" ref="wrapRef" @mouseenter="hovered = true" @mouseleave="hovered = false">
+  <div class="gn-wrap" @mouseenter="hovered = true" @mouseleave="hovered = false">
 
     <template v-if="isWrite">
       <Handle type="target" id="value"   :position="Position.Left" :style="{ top: port1Top }" />
       <Handle type="target" id="trigger" :position="Position.Left" :style="{ top: port2Top }" />
     </template>
 
-    <div class="gn-card">
+    <div class="gn-card" ref="cardRef">
       <div class="gn-header">
         <span class="gn-label">{{ isWrite ? 'DP Schreiben' : 'DP Lesen' }}</span>
         <span v-if="hasFilter" class="gn-filter-badge" title="Filter / Transformation aktiv">⊘</span>
@@ -55,7 +55,9 @@ const { removeNodes } = useVueFlow()
 function remove() { removeNodes([props.id]) }
 
 // ── Handle positioning: align with port labels ────────────────────────────
-const wrapRef  = ref(null)
+// Use offsetTop (relative to offsetParent) instead of getBoundingClientRect()
+// to avoid viewport-dependent values that break when VueFlow re-renders nodes.
+const cardRef  = ref(null)
 const portRef1 = ref(null)
 const portRef2 = ref(null)
 const port1Top = ref('50%')
@@ -63,13 +65,10 @@ const port2Top = ref('75%')
 
 function updateHandlePositions() {
   nextTick(() => {
-    if (!wrapRef.value || !portRef1.value || !portRef2.value) return
-    const wrapRect = wrapRef.value.getBoundingClientRect()
-    if (!wrapRect.height) return
-    const r1 = portRef1.value.getBoundingClientRect()
-    const r2 = portRef2.value.getBoundingClientRect()
-    port1Top.value = `${r1.top + r1.height / 2 - wrapRect.top}px`
-    port2Top.value = `${r2.top + r2.height / 2 - wrapRect.top}px`
+    if (!cardRef.value || !portRef1.value || !portRef2.value) return
+    const cardTop = cardRef.value.offsetTop
+    port1Top.value = `${cardTop + portRef1.value.offsetTop + portRef1.value.offsetHeight / 2}px`
+    port2Top.value = `${cardTop + portRef2.value.offsetTop + portRef2.value.offsetHeight / 2}px`
   })
 }
 
