@@ -30,6 +30,7 @@ class AdapterBase(ABC):
     adapter_type: str                              # e.g. "KNX"
     config_schema: type[BaseModel]                 # API: /adapters/{type}/schema
     binding_config_schema: type[BaseModel]         # API: /adapters/{type}/binding-schema
+    hidden: bool = False                           # True = not shown in "create instance" UI
 
     def __init__(
         self,

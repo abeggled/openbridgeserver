@@ -71,6 +71,7 @@ class AdapterStatusOut(BaseModel):
     registered: bool
     running: bool
     connected: bool
+    hidden: bool = False
 
 
 class AdapterConfigOut(BaseModel):

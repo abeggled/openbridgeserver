@@ -53,6 +53,7 @@ class OneWireBindingConfig(BaseModel):
 @register
 class OneWireAdapter(AdapterBase):
     adapter_type = "ONEWIRE"
+    hidden = True
     config_schema = OneWireAdapterConfig
     binding_config_schema = OneWireBindingConfig
 

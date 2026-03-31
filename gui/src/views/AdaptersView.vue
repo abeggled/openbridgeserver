@@ -116,19 +116,23 @@
           </div>
 
           <div class="flex gap-3 flex-wrap">
-            <button @click="testConnection(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'test'">
+            <button @click="testConnection(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'test'"
+              title="Prüft die Verbindung mit der aktuellen Konfiguration ohne zu speichern">
               <Spinner v-if="busy[a.id] === 'test'" size="xs" color="slate" />
               Verbindung testen
             </button>
-            <button @click="saveInstance(a)" class="btn-primary btn-sm" :disabled="busy[a.id] === 'save'">
+            <button @click="saveInstance(a)" class="btn-primary btn-sm" :disabled="busy[a.id] === 'save'"
+              title="Speichert Änderungen und verbindet den Adapter neu">
               <Spinner v-if="busy[a.id] === 'save'" size="xs" color="white" />
               Speichern
             </button>
-            <button @click="restartInstance(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'restart'">
+            <button @click="restartInstance(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'restart'"
+              title="Verbindet den Adapter neu ohne die Konfiguration zu ändern">
               <Spinner v-if="busy[a.id] === 'restart'" size="xs" color="slate" />
               Neu verbinden
             </button>
-            <button @click="confirmDelete(a)" class="ml-auto btn-danger btn-sm" :disabled="busy[a.id] === 'delete'">
+            <button @click="confirmDelete(a)" class="ml-auto btn-danger btn-sm" :disabled="busy[a.id] === 'delete'"
+              title="Löscht diese Instanz und alle zugehörigen Bindings unwiderruflich">
               <Spinner v-if="busy[a.id] === 'delete'" size="xs" color="white" />
               Löschen
             </button>

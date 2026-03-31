@@ -145,12 +145,13 @@ def get_all_instances() -> dict[str, Any]:
 def get_status() -> dict[str, dict]:
     """Status aller registrierten Adapter-Typen (für /system/adapters)."""
     result = {}
-    for adapter_type in _adapters:
+    for adapter_type, cls in _adapters.items():
         instance = get_instance(adapter_type)
         result[adapter_type] = {
             "registered": True,
             "running": instance is not None,
             "connected": instance.connected if instance else False,
+            "hidden": getattr(cls, "hidden", False),
         }
     return result
 

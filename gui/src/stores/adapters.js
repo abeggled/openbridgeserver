@@ -52,9 +52,10 @@ export const useAdapterStore = defineStore('adapters', () => {
   }
 
   // Alle registrierten Adapter-Typen (für "Neue Instanz" Dropdown)
+  // Versteckte Typen (hidden=true) werden nicht angezeigt
   async function fetchTypes() {
     const { data } = await adapterApi.list()
-    return data.map(a => a.adapter_type)
+    return data.filter(a => !a.hidden).map(a => a.adapter_type)
   }
 
   // Legacy-Kompatibilität

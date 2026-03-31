@@ -52,6 +52,7 @@ class ModbusRtuAdapterConfig(BaseModel):
 @register
 class ModbusRtuAdapter(AdapterBase):
     adapter_type = "MODBUS_RTU"
+    hidden = True
     config_schema = ModbusRtuAdapterConfig
     binding_config_schema = ModbusBindingConfig
 
