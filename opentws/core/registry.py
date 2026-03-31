@@ -86,6 +86,32 @@ class DataPointRegistry:
             self._points[dp.id] = dp
             self._values[dp.id] = ValueState()
         logger.info("DataPointRegistry: loaded %d datapoints from DB", len(self._points))
+
+        # Restore persisted last values (quality = "good" per spec)
+        persisted = await self._db.fetchall("SELECT * FROM datapoint_last_values")
+        restored = 0
+        for row in persisted:
+            dp_id = uuid.UUID(row["datapoint_id"])
+            state = self._values.get(dp_id)
+            dp = self._points.get(dp_id)
+            if state is None or dp is None or not dp.persist_value:
+                continue
+            try:
+                import json as _json
+                value = _json.loads(row["value"])
+            except Exception:
+                value = row["value"]
+            state.value = value
+            state.quality = "good"
+            from datetime import datetime, timezone
+            try:
+                state.ts = datetime.fromisoformat(row["ts"])
+            except Exception:
+                state.ts = datetime.now(timezone.utc)
+            restored += 1
+        if restored:
+            logger.info("DataPointRegistry: restored %d persisted values", restored)
+
         return len(self._points)
 
     # ------------------------------------------------------------------
@@ -142,11 +168,12 @@ class DataPointRegistry:
         dp = DataPoint(**payload.model_dump())
         await self._db.execute_and_commit(
             """INSERT INTO datapoints
-               (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 str(dp.id), dp.name, dp.data_type, dp.unit,
                 json.dumps(dp.tags), dp.mqtt_topic, dp.mqtt_alias,
+                int(dp.persist_value),
                 dp.created_at.isoformat(), dp.updated_at.isoformat(),
             ),
         )
@@ -166,14 +193,21 @@ class DataPointRegistry:
 
         await self._db.execute_and_commit(
             """UPDATE datapoints
-               SET name=?, data_type=?, unit=?, tags=?, mqtt_alias=?, updated_at=?
+               SET name=?, data_type=?, unit=?, tags=?, mqtt_alias=?, persist_value=?, updated_at=?
                WHERE id=?""",
             (
                 dp.name, dp.data_type, dp.unit,
                 json.dumps(dp.tags), dp.mqtt_alias,
+                int(dp.persist_value),
                 now.isoformat(), str(dp_id),
             ),
         )
+        # If persistence was just disabled, remove any stored last value
+        if not dp.persist_value:
+            await self._db.execute_and_commit(
+                "DELETE FROM datapoint_last_values WHERE datapoint_id=?", (str(dp_id),)
+            )
+
         self._points[dp_id] = dp
         logger.debug("DataPoint updated: %s (%s)", dp.name, dp_id)
         return dp
@@ -203,6 +237,23 @@ class DataPointRegistry:
         state = self._values[event.datapoint_id]
         changed = state.update(event.value, event.quality)
 
+        # Persist last value to DB if enabled
+        if dp.persist_value and event.quality == "good":
+            await self._db.execute_and_commit(
+                """INSERT INTO datapoint_last_values (datapoint_id, value, unit, ts)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(datapoint_id) DO UPDATE SET
+                       value=excluded.value,
+                       unit=excluded.unit,
+                       ts=excluded.ts""",
+                (
+                    str(dp.id),
+                    json.dumps(event.value),
+                    dp.unit,
+                    event.ts.isoformat(),
+                ),
+            )
+
         # Publish to MQTT on every event (alias only on value change)
         alias_topic = dp.mqtt_alias if changed else None
         await self._mqtt.publish_value(
@@ -225,6 +276,7 @@ def _row_to_datapoint(row: Any) -> DataPoint:
         tags=json.loads(row["tags"]),
         mqtt_topic=row["mqtt_topic"],
         mqtt_alias=row["mqtt_alias"],
+        persist_value=bool(row["persist_value"]) if row["persist_value"] is not None else True,
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )

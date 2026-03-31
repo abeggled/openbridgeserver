@@ -41,6 +41,10 @@
             <Badge v-for="t in dp.tags" :key="t" variant="default" size="xs">{{ t }}</Badge>
             <span v-if="!dp.tags?.length" class="text-slate-500">—</span>
           </dd>
+          <dt class="text-slate-500">Wert speichern</dt>
+          <dd>
+            <Badge :variant="dp.persist_value ? 'success' : 'muted'" size="xs">{{ dp.persist_value ? 'Ja' : 'Nein' }}</Badge>
+          </dd>
           <dt class="text-slate-500">Erstellt</dt>   <dd class="text-slate-400 text-xs">{{ new Date(dp.created_at).toLocaleString('de-CH') }}</dd>
           <dt class="text-slate-500">Geändert</dt>   <dd class="text-slate-400 text-xs">{{ new Date(dp.updated_at).toLocaleString('de-CH') }}</dd>
         </dl>

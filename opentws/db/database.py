@@ -230,6 +230,17 @@ _MIGRATION_V14 = """
 ALTER TABLE logic_graphs ADD COLUMN node_state TEXT NOT NULL DEFAULT '{}';
 """
 
+_MIGRATION_V15 = """
+ALTER TABLE datapoints ADD COLUMN persist_value INTEGER NOT NULL DEFAULT 1;
+
+CREATE TABLE IF NOT EXISTS datapoint_last_values (
+    datapoint_id  TEXT PRIMARY KEY REFERENCES datapoints(id) ON DELETE CASCADE,
+    value         TEXT NOT NULL,
+    unit          TEXT,
+    ts            TEXT NOT NULL
+);
+"""
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -246,6 +257,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (12, _MIGRATION_V12),
     (13, _MIGRATION_V13),
     (14, _MIGRATION_V14),
+    (15, _MIGRATION_V15),
 ]
 
 
