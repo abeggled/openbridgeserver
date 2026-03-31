@@ -12,7 +12,7 @@
  * - Keine externe Grid-Bibliothek (pure Vue + CSS)
  */
 import {
-  computed, onMounted, onUnmounted, ref, watch, nextTick,
+  computed, onMounted, onUnmounted, ref, nextTick,
 } from 'vue'
 import { useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
