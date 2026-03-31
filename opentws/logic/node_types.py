@@ -253,19 +253,16 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         color="#be185d",
     ),
 
-    # ── MCP ───────────────────────────────────────────────────────────────
+    # ── AI ────────────────────────────────────────────────────────────────
     NodeTypeDef(
-        type="mcp_tool",
-        label="MCP Tool",
-        category="mcp",
-        description="Ruft ein MCP-Tool auf",
-        inputs=[_port("trigger", "Trigger", "trigger"), _port("input", "Input")],
-        outputs=[_port("result", "Ergebnis"), _port("done", "Fertig", "trigger")],
-        config_schema={
-            "server_url": {"type": "string", "default": ""},
-            "tool_name":  {"type": "string", "default": ""},
-        },
-        color="#0e7490",
+        type="ai_logic",
+        label="AI Logic",
+        category="ai",
+        description="",
+        inputs=[],
+        outputs=[],
+        config_schema={},
+        color="#7c3aed",
     ),
 
     # ── Astro ─────────────────────────────────────────────────────────────
