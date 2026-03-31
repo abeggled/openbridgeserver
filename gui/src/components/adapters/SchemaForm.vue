@@ -55,6 +55,16 @@
           @change="setNumber(key, $event.target.value, false)"
         />
 
+        <!-- Password string -->
+        <input
+          v-else-if="prop.format === 'password'"
+          type="password"
+          :value="local[key] ?? ''"
+          class="input"
+          :placeholder="isOptional(prop) ? '(leer = nicht gesetzt)' : defaultPlaceholder(prop)"
+          @input="setString(key, $event.target.value, isOptional(prop))"
+        />
+
         <!-- String (including optional string | null) -->
         <input
           v-else

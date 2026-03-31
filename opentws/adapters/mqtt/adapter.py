@@ -26,7 +26,7 @@ import json
 import logging
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from opentws.adapters.base import AdapterBase
 from opentws.adapters.registry import register
@@ -43,7 +43,7 @@ class MqttAdapterConfig(BaseModel):
     host: str = "localhost"
     port: int = 1883
     username: str | None = None
-    password: str | None = None
+    password: str | None = Field(default=None, json_schema_extra={"format": "password"})
 
 
 class MqttBindingConfig(BaseModel):
