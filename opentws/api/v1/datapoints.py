@@ -93,17 +93,27 @@ def _enrich(dp: Any) -> DataPointOut:
 # Routes
 # ---------------------------------------------------------------------------
 
+_SORT_KEYS = {
+    "name":       lambda dp: dp.name.lower(),
+    "data_type":  lambda dp: dp.data_type.lower(),
+    "created_at": lambda dp: dp.created_at.isoformat(),
+    "updated_at": lambda dp: dp.updated_at.isoformat(),
+}
+
+
 @router.get("/", response_model=DataPointPage)
 async def list_datapoints(
-    page: int = Query(0, ge=0),
-    size: int = Query(50, ge=1, le=500),
+    page:  int = Query(0, ge=0),
+    size:  int = Query(50, ge=1, le=500),
+    sort:  str = Query("created_at", pattern="^(name|data_type|created_at|updated_at)$"),
+    order: str = Query("asc",        pattern="^(asc|desc)$"),
     _user: str = Depends(get_current_user),
 ) -> DataPointPage:
-    reg = get_registry()
-    all_dps = reg.all()
-    total = len(all_dps)
-    offset = page * size
-    items = [_enrich(dp) for dp in all_dps[offset : offset + size]]
+    reg     = get_registry()
+    all_dps = sorted(reg.all(), key=_SORT_KEYS[sort], reverse=(order == "desc"))
+    total   = len(all_dps)
+    offset  = page * size
+    items   = [_enrich(dp) for dp in all_dps[offset : offset + size]]
     return DataPointPage(
         items=items,
         total=total,

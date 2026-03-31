@@ -30,8 +30,12 @@
         <table class="table">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Typ</th>
+              <th @click="store.setSort('name')" class="cursor-pointer select-none hover:text-blue-500 transition-colors">
+                Name <SortIcon col="name" :active="store.sortCol" :dir="store.sortDir" />
+              </th>
+              <th @click="store.setSort('data_type')" class="cursor-pointer select-none hover:text-blue-500 transition-colors">
+                Typ <SortIcon col="data_type" :active="store.sortCol" :dir="store.sortDir" />
+              </th>
               <th>Tags</th>
               <th>Wert</th>
               <th>Quality</th>
@@ -102,6 +106,16 @@ import Spinner        from '@/components/ui/Spinner.vue'
 import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import DataPointForm  from '@/components/datapoints/DataPointForm.vue'
+
+// Inline sort-indicator component
+const SortIcon = {
+  props: ['col', 'active', 'dir'],
+  template: `<span class="inline-block ml-0.5 opacity-40" :class="{ 'opacity-100 text-blue-500': active === col }">
+    <svg v-if="active !== col" class="inline w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>
+    <svg v-else-if="dir === 'asc'"  class="inline w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+    <svg v-else                     class="inline w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+  </span>`,
+}
 
 const store = useDatapointStore()
 const ws    = useWebSocketStore()

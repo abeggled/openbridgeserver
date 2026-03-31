@@ -10,11 +10,13 @@ export const useDatapointStore = defineStore('datapoints', () => {
   const pages    = ref(1)
   const loading  = ref(false)
   const datatypes = ref([])  // [{ name, python_type, description }]
+  const sortCol  = ref('created_at')
+  const sortDir  = ref('asc')
 
   async function fetchPage(p = 0, s = 50) {
     loading.value = true
     try {
-      const { data } = await dpApi.list(p, s)
+      const { data } = await dpApi.list(p, s, sortCol.value, sortDir.value)
       items.value = data.items
       total.value = data.total
       page.value  = data.page
@@ -23,6 +25,16 @@ export const useDatapointStore = defineStore('datapoints', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  function setSort(col) {
+    if (sortCol.value === col) {
+      sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+    } else {
+      sortCol.value = col
+      sortDir.value = 'asc'
+    }
+    fetchPage(0, size.value)
   }
 
   async function search(params) {
@@ -72,7 +84,7 @@ export const useDatapointStore = defineStore('datapoints', () => {
   }
 
   return {
-    items, total, page, size, pages, loading, datatypes,
-    fetchPage, search, create, update, remove, loadDatatypes, patchValue,
+    items, total, page, size, pages, loading, datatypes, sortCol, sortDir,
+    fetchPage, search, setSort, create, update, remove, loadDatatypes, patchValue,
   }
 })
