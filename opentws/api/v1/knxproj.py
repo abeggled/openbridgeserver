@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import uuid as uuid_mod
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -103,7 +103,9 @@ async def _bulk_import_datapoints(
     binding_updates:  list[tuple] = []
     new_dp_ids:       list[str]   = []   # für Registry-Update
 
-    for record in records:
+    base_time = datetime.fromisoformat(now)
+
+    for row_idx, record in enumerate(records):
         # DPT → data_type + unit aus Registry
         dpt_def = DPTRegistry.get(record.dpt) if record.dpt else None
         if dpt_def and dpt_def.dpt_id != "UNKNOWN":
@@ -118,14 +120,17 @@ async def _bulk_import_datapoints(
             config_dict["dpt_id"] = record.dpt
         config_json = json.dumps(config_dict)
 
+        # Jede Zeile bekommt einen eindeutigen Timestamp → CSV-Reihenfolge bleibt erhalten
+        row_ts = (base_time + timedelta(microseconds=row_idx)).isoformat()
+
         if record.address in existing_map:
             existing = existing_map[record.address]
-            dp_updates.append((record.name, data_type, unit, now, existing["dp_id"]))
-            binding_updates.append((config_json, direction, now, existing["binding_id"]))
+            dp_updates.append((record.name, data_type, unit, row_ts, existing["dp_id"]))
+            binding_updates.append((config_json, direction, row_ts, existing["binding_id"]))
         else:
             dp_id      = str(uuid_mod.uuid4())
             mqtt_topic = f"dp/{dp_id}/value"
-            dp_inserts.append((dp_id, record.name, data_type, unit, "[]", mqtt_topic, None, now, now))
+            dp_inserts.append((dp_id, record.name, data_type, unit, "[]", mqtt_topic, None, row_ts, row_ts))
 
             binding_id = str(uuid_mod.uuid4())
             binding_inserts.append((

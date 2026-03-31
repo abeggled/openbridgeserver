@@ -80,7 +80,7 @@ class DataPointRegistry:
 
     async def load_from_db(self) -> int:
         """Load all DataPoints from DB into memory. Returns count loaded."""
-        rows = await self._db.fetchall("SELECT * FROM datapoints")
+        rows = await self._db.fetchall("SELECT * FROM datapoints ORDER BY created_at, id")
         for row in rows:
             dp = _row_to_datapoint(row)
             self._points[dp.id] = dp
