@@ -190,14 +190,13 @@ function showStatus(ok, text, ms = 3000) {
 async function loadGraph() {
   if (!activeGraphId.value) { nodes.value = []; edges.value = []; return }
   const { data } = await logicApi.getGraph(activeGraphId.value)
-  nodes.value = (data.flow_data.nodes || []).map(n => ({
-    ...n,
-    position: n.position || { x: 100, y: 100 },
-  }))
+  nodes.value = (data.flow_data.nodes || []).map(n => {
+    // eslint-disable-next-line no-unused-vars
+    const { _dbg, ...nodeData } = n.data ?? {}
+    return { ...n, position: n.position || { x: 100, y: 100 }, data: nodeData }
+  })
   edges.value = data.flow_data.edges || []
   selectedNode.value = null
-  // Clear any leftover debug values when switching graphs
-  if (debugMode.value) clearDebugValues()
 }
 
 async function saveGraph() {
@@ -206,9 +205,11 @@ async function saveGraph() {
   try {
     const graph = store.graphs.find(g => g.id === activeGraphId.value)
     await store.saveGraph(activeGraphId.value, graph.name, graph.description, graph.enabled, {
-      nodes: nodes.value.map(n => ({
-        id: n.id, type: n.type, position: n.position, data: n.data
-      })),
+      nodes: nodes.value.map(n => {
+        // eslint-disable-next-line no-unused-vars
+        const { _dbg, ...nodeData } = n.data ?? {}
+        return { id: n.id, type: n.type, position: n.position, data: nodeData }
+      }),
       edges: edges.value.map(e => ({
         id: e.id, source: e.source, target: e.target,
         sourceHandle: e.sourceHandle, targetHandle: e.targetHandle
