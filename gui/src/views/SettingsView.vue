@@ -239,6 +239,15 @@
         </div>
         <div class="divide-y divide-red-500/20">
 
+          <!-- Bindings -->
+          <div class="p-5 flex items-start justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle Bindings löschen</p>
+              <p class="text-xs text-slate-500 mt-1">Löscht alle Bindings. DataPoints und Adapter-Instanzen bleiben erhalten.</p>
+            </div>
+            <button @click="showConfirm('bindings')" class="btn-danger btn-sm shrink-0">Löschen</button>
+          </div>
+
           <!-- DataPoints -->
           <div class="p-5 flex items-start justify-between gap-4">
             <div>
@@ -661,6 +670,16 @@ const dzTarget        = ref(null)
 const resetResult     = ref(null)
 
 const DZ_CONFIG = {
+  bindings: {
+    title:   'Alle Bindings löschen',
+    message: 'Alle Bindings werden unwiderruflich gelöscht. DataPoints und Adapter-Instanzen bleiben erhalten. Fortfahren?',
+    label:   'Löschen',
+    action:  async () => {
+      const { data } = await configApi.resetBindings()
+      return `${data.deleted} Bindings gelöscht.`
+    },
+    after: () => {},
+  },
   datapoints: {
     title:   'Alle DataPoints löschen',
     message: 'Alle DataPoints und deren Bindings werden unwiderruflich gelöscht. Fortfahren?',

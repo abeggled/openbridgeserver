@@ -471,6 +471,22 @@ async def factory_reset(
     return result
 
 
+@router.delete("/reset/bindings", response_model=ClearResult, status_code=status.HTTP_200_OK)
+async def clear_bindings(
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> ClearResult:
+    """Delete all Bindings. Admin only."""
+    result = ClearResult(deleted=0)
+    try:
+        row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_bindings")
+        result.deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM adapter_bindings")
+    except Exception as exc:
+        result.errors.append(f"Bindings clear failed: {exc}")
+    return result
+
+
 @router.delete("/reset/datapoints", response_model=ClearResult, status_code=status.HTTP_200_OK)
 async def clear_datapoints(
     _admin: str = Depends(get_admin_user),
