@@ -130,8 +130,7 @@ async def _bulk_import_datapoints(
         else:
             dp_id      = str(uuid_mod.uuid4())
             mqtt_topic = f"dp/{dp_id}/value"
-            # persist_value=0 (False) by default — user must enable explicitly
-            dp_inserts.append((dp_id, record.name, data_type, unit, "[]", mqtt_topic, None, 0, row_ts, row_ts))
+            dp_inserts.append((dp_id, record.name, data_type, unit, "[]", mqtt_topic, None, 1, row_ts, row_ts))
 
             binding_id = str(uuid_mod.uuid4())
             binding_inserts.append((
