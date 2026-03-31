@@ -22,6 +22,7 @@ w1thermsensor>=2.3.0
 
 # Authentication
 python-jose[cryptography]>=3.3.0
+bcrypt>=4.0.0
 # passlib removed — password hashing via stdlib hashlib.pbkdf2_hmac
 
 # Rate limiting
