@@ -90,11 +90,10 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
 export const auth = {
   login(username: string, password: string) {
-    const form = new URLSearchParams({ username, password, grant_type: 'password' })
     return fetch(`${BASE}/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: form,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
     }).then(async (res) => {
       if (!res.ok) {
         const body = await res.json().catch(() => null)
