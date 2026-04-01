@@ -14,6 +14,17 @@
 import {
   computed, onMounted, onUnmounted, ref, nextTick,
 } from 'vue'
+
+/** UUID-Generator mit Fallback für non-HTTPS Umgebungen */
+function newId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16)
+  })
+}
 import { useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
 import { WidgetRegistry } from '@/widgets/registry'
@@ -206,7 +217,7 @@ function insertWidget(type: string) {
   }
 
   const w: WidgetInstance = {
-    id: crypto.randomUUID(),
+    id: newId(),
     type,
     datapoint_id: null,
     x: px, y: py,
