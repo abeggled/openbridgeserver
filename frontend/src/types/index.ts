@@ -21,6 +21,8 @@ export interface VisuNode {
 export interface PageConfig {
   grid_cols: number
   grid_row_height: number
+  /** Feste Zellbreite in Pixeln — identisch in Editor und Viewer (WYSIWYG) */
+  grid_cell_width: number
   background: string | null
   widgets: WidgetInstance[]
 }

@@ -96,15 +96,16 @@ async function load() {
 onMounted(load)
 watch(() => props.id, load)
 
-// Grid-Geometrie (ohne gap → 1:1 mit Editor)
-const COLS = computed(() => visuStore.pageConfig?.grid_cols ?? 12)
-const ROW_H = computed(() => visuStore.pageConfig?.grid_row_height ?? 80)
+// Grid-Geometrie — feste Pixel-Werte → 1:1 identisch mit Editor (WYSIWYG)
+const COLS   = computed(() => visuStore.pageConfig?.grid_cols       ?? 12)
+const ROW_H  = computed(() => visuStore.pageConfig?.grid_row_height ?? 80)
+const CELL_W = computed(() => visuStore.pageConfig?.grid_cell_width ?? 80)
 
 function gridStyle(w: WidgetInstance) {
   return {
     gridColumn: `${w.x + 1} / span ${w.w}`,
-    gridRow: `${w.y + 1} / span ${w.h}`,
-    height: `${w.h * ROW_H.value}px`,
+    gridRow:    `${w.y + 1} / span ${w.h}`,
+    height:     `${w.h * ROW_H.value}px`,
   }
 }
 </script>
@@ -149,13 +150,14 @@ function gridStyle(w: WidgetInstance) {
       <NodeOverview :node-id="id" />
     </main>
 
-    <!-- PAGE → Widget-Grid (kein gap → identisch mit Editor) -->
+    <!-- PAGE → Widget-Grid (feste Pixelbreite = Editor WYSIWYG) -->
     <main v-else class="flex-1 p-4 overflow-auto">
       <div
         class="grid"
         :style="{
-          gridTemplateColumns: `repeat(${COLS}, minmax(0, 1fr))`,
+          gridTemplateColumns: `repeat(${COLS}, ${CELL_W}px)`,
           gridAutoRows: `${ROW_H}px`,
+          width: `${COLS * CELL_W}px`,
         }"
       >
         <div

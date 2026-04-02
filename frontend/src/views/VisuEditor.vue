@@ -52,7 +52,7 @@ const saving  = ref(false)
 const error   = ref('')
 
 const config = ref<PageConfig>({
-  grid_cols: 12, grid_row_height: 80, background: null, widgets: [],
+  grid_cols: 12, grid_row_height: 80, grid_cell_width: 80, background: null, widgets: [],
 })
 
 const selectedId = ref<string | null>(null)
@@ -65,11 +65,14 @@ const selectedDef = computed(() =>
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
 const canvasEl = ref<HTMLElement | null>(null)
-const canvasWidth = ref(800)
 
-const COLS = computed(() => config.value.grid_cols)
+const COLS   = computed(() => config.value.grid_cols)
 const CELL_H = computed(() => config.value.grid_row_height)
-const CELL_W = computed(() => canvasWidth.value / COLS.value)
+// Feste Zellbreite in Pixeln — identisch mit Viewer (WYSIWYG)
+const CELL_W = computed(() => config.value.grid_cell_width ?? 80)
+
+// Canvas-Breite = COLS × CELL_W (feste Pixelgrösse, kein relativer Stretch)
+const canvasGridWidth = computed(() => COLS.value * CELL_W.value)
 
 // Canvas-Höhe: höchstes Widget + 8 leere Zeilen
 const canvasHeight = computed(() => {
@@ -79,7 +82,7 @@ const canvasHeight = computed(() => {
 
 // Grid-Linien als CSS-Hintergrund
 const gridBg = computed(() => {
-  const cw = CELL_W.value.toFixed(2)
+  const cw = CELL_W.value
   const ch = CELL_H.value
   const lineColor = theme.isDark ? '#1f2937' : '#e5e7eb'
   return `
@@ -87,19 +90,6 @@ const gridBg = computed(() => {
     repeating-linear-gradient(to bottom, ${lineColor} 0, ${lineColor} 1px, transparent 1px, transparent ${ch}px)
   `
 })
-
-// ResizeObserver für Canvas-Breite
-let ro: ResizeObserver | null = null
-onMounted(() => {
-  if (canvasEl.value) {
-    ro = new ResizeObserver(entries => {
-      canvasWidth.value = entries[0].contentRect.width
-    })
-    ro.observe(canvasEl.value)
-    canvasWidth.value = canvasEl.value.clientWidth
-  }
-})
-onUnmounted(() => ro?.disconnect())
 
 // ── Widget-Positionen ─────────────────────────────────────────────────────────
 function widgetStyle(w: WidgetInstance) {
@@ -189,7 +179,8 @@ onMounted(async () => {
     await store.loadBreadcrumb(props.id)
     await store.loadPage(props.id)
     if (store.pageConfig) config.value = JSON.parse(JSON.stringify(store.pageConfig))
-    // status_datapoint_id nachrüsten falls nicht vorhanden (Rückwärtskompatibilität)
+    // Rückwärtskompatibilität: fehlende Felder nachrüsten
+    if (!config.value.grid_cell_width) config.value.grid_cell_width = 80
     for (const w of config.value.widgets) {
       if (!('status_datapoint_id' in w)) {
         (w as WidgetInstance).status_datapoint_id = null
@@ -321,18 +312,25 @@ const showSettings = ref(false)
     </header>
 
     <!-- Grid-Einstellungen Panel -->
-    <div v-if="showSettings" class="border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 px-4 py-3 flex items-center gap-6 text-sm">
+    <div v-if="showSettings" class="border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 px-4 py-3 flex items-center gap-6 text-sm flex-wrap">
       <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
         Spalten
-        <input v-model.number="config.grid_cols" type="number" min="4" max="24"
+        <input v-model.number="config.grid_cols" type="number" min="4" max="48"
           class="w-16 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
       <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-        Zeilenhöhe (px)
-        <input v-model.number="config.grid_row_height" type="number" min="40" max="200" step="10"
+        Zellbreite (px)
+        <input v-model.number="config.grid_cell_width" type="number" min="40" max="300" step="5"
           class="w-20 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
-      <span class="text-xs text-gray-400 dark:text-gray-600">Zelle: {{ CELL_W.toFixed(0) }}×{{ CELL_H }}px</span>
+      <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
+        Zeilenhöhe (px)
+        <input v-model.number="config.grid_row_height" type="number" min="40" max="300" step="5"
+          class="w-20 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
+      </label>
+      <span class="text-xs text-gray-400 dark:text-gray-600">
+        Zelle: {{ CELL_W }}×{{ CELL_H }}px · Grid: {{ canvasGridWidth }}px breit
+      </span>
     </div>
 
     <div v-if="loading" class="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">Lade …</div>
@@ -366,8 +364,10 @@ const showSettings = ref(false)
       <div class="flex-1 overflow-auto bg-white dark:bg-gray-950">
         <div
           ref="canvasEl"
-          class="relative w-full"
+          class="relative"
           :style="{
+            width: canvasGridWidth + 'px',
+            minWidth: '100%',
             height: canvasHeight + 'px',
             backgroundImage: gridBg,
             backgroundSize: `${CELL_W}px ${CELL_H}px`,
