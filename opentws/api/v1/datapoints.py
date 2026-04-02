@@ -212,7 +212,7 @@ async def get_value(
 async def write_value(
     dp_id: uuid.UUID,
     body: WriteValueIn,
-    _user: str = Depends(get_current_user),
+    _user: str | None = Depends(optional_current_user),
 ) -> None:
     """Write a value to a DataPoint via the internal EventBus.
 
