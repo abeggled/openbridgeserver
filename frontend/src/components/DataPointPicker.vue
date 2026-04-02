@@ -110,7 +110,11 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
       class="flex items-center gap-2 w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 cursor-pointer hover:border-gray-400 dark:hover:border-gray-500 transition-colors"
       @click="openSearch"
     >
-      <span class="flex-1 text-sm truncate" :class="selectedName ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500'">
+      <span
+        class="flex-1 text-sm truncate"
+        :class="selectedName ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500'"
+        :title="selectedName || undefined"
+      >
         {{ selectedName || 'DataPoint wählen …' }}
       </span>
       <button
@@ -142,6 +146,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
           v-for="dp in results"
           :key="dp.id"
           class="w-full flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-left"
+          :title="dp.name"
           @click="select(dp)"
         >
           <span class="flex-1 min-w-0">
