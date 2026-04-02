@@ -134,7 +134,7 @@ export const visu = {
       body: JSON.stringify({ target_parent_id: targetParentId, new_name: newName }),
     }),
 
-  moveNode: (id: string, newParentId: string, order: number) =>
+  moveNode: (id: string, newParentId: string | null, order: number) =>
     request<VisuNode>(`/visu/nodes/${id}/move`, {
       method: 'PUT',
       body: JSON.stringify({ new_parent_id: newParentId, order }),

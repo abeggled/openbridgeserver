@@ -35,6 +35,12 @@ const router = createRouter({
       props: true,
     },
     {
+      path: '/manage',
+      name: 'manage',
+      component: () => import('@/views/TreeManager.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/editor/:id',
       name: 'editor',
       component: () => import('@/views/VisuEditor.vue'),

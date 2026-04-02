@@ -99,7 +99,7 @@ export const useVisuStore = defineStore('visu', () => {
     return node
   }
 
-  async function moveNode(id: string, newParentId: string, order: number): Promise<void> {
+  async function moveNode(id: string, newParentId: string | null, order: number): Promise<void> {
     const node = await visuApi.moveNode(id, newParentId, order)
     const idx = nodes.value.findIndex((n) => n.id === id)
     if (idx !== -1) nodes.value[idx] = node
