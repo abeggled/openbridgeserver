@@ -71,14 +71,16 @@ export const useDatapointsStore = defineStore('datapoints', () => {
     await Promise.allSettled(
       ids.map(async (id) => {
         try {
+          // Backend gibt { value, unit, quality, ts } zurück (nicht v/u/q/t)
           const v = await datapointsApi.getValue(id)
-          if (v.q === 'good' || v.q === undefined) {
+          const quality = (v.quality as DataPointValue['q']) ?? 'good'
+          if (quality === 'good' || quality === 'uncertain') {
             values.value[id] = {
               id,
-              v: v.v,
-              u: v.u,
-              t: v.t,
-              q: (v.q as DataPointValue['q']) ?? 'good',
+              v: v.value,
+              u: v.unit,
+              t: v.ts ?? new Date().toISOString(),
+              q: quality,
             }
           }
         } catch {

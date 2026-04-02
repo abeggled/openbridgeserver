@@ -497,6 +497,7 @@ const showSettings = ref(false)
               </p>
               <DataPointPicker
                 :model-value="selectedWidget.datapoint_id"
+                :compatible-types="selectedDef.compatibleTypes"
                 @update:model-value="setDataPoint"
               />
               <p class="text-xs text-gray-400 dark:text-gray-600 mt-1">
@@ -514,6 +515,7 @@ const showSettings = ref(false)
               </p>
               <DataPointPicker
                 :model-value="selectedWidget.status_datapoint_id"
+                :compatible-types="selectedDef.compatibleTypes"
                 @update:model-value="setStatusDataPoint"
               />
             </div>

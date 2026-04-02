@@ -7,6 +7,7 @@ GET    /api/v1/datapoints/{id}       get one (+ current value)
 PATCH  /api/v1/datapoints/{id}       update
 DELETE /api/v1/datapoints/{id}       delete
 GET    /api/v1/datapoints/{id}/value current value only
+POST   /api/v1/datapoints/{id}/value write value (fires DataValueEvent)
 """
 from __future__ import annotations
 
@@ -65,6 +66,10 @@ class ValueOut(BaseModel):
     unit: str | None
     quality: str
     ts: str | None
+
+
+class WriteValueIn(BaseModel):
+    value: Any
 
 
 # ---------------------------------------------------------------------------
@@ -201,3 +206,29 @@ async def get_value(
         quality=state.quality if state else "uncertain",
         ts=state.ts.isoformat() if state else None,
     )
+
+
+@router.post("/{dp_id}/value", status_code=status.HTTP_204_NO_CONTENT)
+async def write_value(
+    dp_id: uuid.UUID,
+    body: WriteValueIn,
+    _user: str = Depends(get_current_user),
+) -> None:
+    """Write a value to a DataPoint via the internal EventBus.
+
+    Fires a DataValueEvent which updates the registry, pushes to MQTT and
+    routes to all DEST/BOTH bindings (e.g. KNX, Modbus) via the WriteRouter.
+    """
+    from opentws.core.event_bus import get_event_bus, DataValueEvent
+
+    reg = get_registry()
+    if reg.get(dp_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+
+    event = DataValueEvent(
+        datapoint_id=dp_id,
+        value=body.value,
+        quality="good",
+        source_adapter="api",
+    )
+    await get_event_bus().publish(event)

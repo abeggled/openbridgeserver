@@ -3,13 +3,15 @@
  * DataPointPicker — Suchfeld mit Dropdown für DataPoints
  * Ruft /api/v1/search auf und gibt die gewählte ID zurück.
  */
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, computed, onMounted, onUnmounted } from 'vue'
 import { datapoints } from '@/api/client'
 import type { DataPoint } from '@/types'
 
 const props = defineProps<{
   modelValue: string | null   // DataPoint-UUID
   label?: string
+  /** Kompatible Datentypen — leeres Array oder ['*'] zeigt alle */
+  compatibleTypes?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -37,6 +39,18 @@ onMounted(async () => {
   }
 })
 
+// Ob alle Typen erlaubt sind
+const allTypesAllowed = computed(() =>
+  !props.compatibleTypes || props.compatibleTypes.length === 0 || props.compatibleTypes.includes('*')
+)
+
+// Einzelner Typ für Backend-Filter (nur wenn exakt ein Typ ohne Wildcard)
+const singleTypeFilter = computed(() => {
+  if (allTypesAllowed.value) return ''
+  if (props.compatibleTypes!.length === 1) return props.compatibleTypes![0]
+  return ''
+})
+
 let debounce: ReturnType<typeof setTimeout> | null = null
 
 watch(query, (val) => {
@@ -45,8 +59,11 @@ watch(query, (val) => {
   loading.value = true
   debounce = setTimeout(async () => {
     try {
-      const res = await datapoints.search(val)
-      results.value = res.items
+      const res = await datapoints.search(val, 0, 50, singleTypeFilter.value)
+      // Bei mehreren kompatiblen Typen: client-seitig filtern
+      results.value = allTypesAllowed.value
+        ? res.items
+        : res.items.filter(dp => props.compatibleTypes!.includes(dp.data_type))
     } finally {
       loading.value = false
     }

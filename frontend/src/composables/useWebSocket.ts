@@ -3,6 +3,8 @@
  *
  * Singleton: eine einzige WS-Verbindung für die gesamte App.
  * Automatischer Reconnect mit exponentiellem Backoff.
+ * Subscription-Buffering: Abonnements werden beim Verbindungsaufbau
+ * automatisch erneut gesendet.
  */
 
 import { ref, readonly } from 'vue'
@@ -26,7 +28,16 @@ const MAX_DELAY = 30_000
 const connected = ref(false)
 const handlers = new Set<MessageHandler>()
 
+// Puffert alle aktuell abonnierten IDs → wird beim (Re-)Connect gesendet
+const subscribedIds = new Set<string>()
+
 // ── Interne Funktionen ────────────────────────────────────────────────────────
+
+function send(data: unknown) {
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(data))
+  }
+}
 
 function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
@@ -47,6 +58,10 @@ function connect() {
     if (reconnectTimer) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
+    }
+    // Gepufferte Subscriptions nach (Re-)Connect sofort senden
+    if (subscribedIds.size > 0) {
+      send({ action: 'subscribe', ids: Array.from(subscribedIds) })
     }
   }
 
@@ -79,12 +94,6 @@ function scheduleReconnect() {
   }, reconnectDelay)
 }
 
-function send(data: unknown) {
-  if (socket?.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(data))
-  }
-}
-
 // ── Composable ────────────────────────────────────────────────────────────────
 
 export function useWebSocket() {
@@ -96,6 +105,7 @@ export function useWebSocket() {
 
     /** Verbindung trennen und Reconnect verhindern */
     disconnect() {
+      subscribedIds.clear()
       if (reconnectTimer) {
         clearTimeout(reconnectTimer)
         reconnectTimer = null
@@ -105,13 +115,16 @@ export function useWebSocket() {
       connected.value = false
     },
 
-    /** DataPoint-IDs abonnieren */
+    /** DataPoint-IDs abonnieren — puffert und sendet bei Verbindungsaufbau */
     subscribe(ids: string[]) {
+      ids.forEach(id => subscribedIds.add(id))
+      // Sofort senden wenn Socket offen, sonst automatisch bei onopen
       send({ action: 'subscribe', ids })
     },
 
     /** DataPoint-IDs abbestellen */
     unsubscribe(ids: string[]) {
+      ids.forEach(id => subscribedIds.delete(id))
       send({ action: 'unsubscribe', ids })
     },
 

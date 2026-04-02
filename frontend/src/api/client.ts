@@ -161,15 +161,16 @@ export const visu = {
 import type { DataPoint, PaginatedResponse } from '@/types'
 
 export const datapoints = {
-  search: (q: string, page = 0, size = 50) =>
-    request<PaginatedResponse<DataPoint>>(
-      `/search?q=${encodeURIComponent(q)}&page=${page}&size=${size}`
-    ),
+  search: (q: string, page = 0, size = 50, type = '') => {
+    const params = new URLSearchParams({ q, page: String(page), size: String(size) })
+    if (type) params.set('type', type)
+    return request<PaginatedResponse<DataPoint>>(`/search?${params}`)
+  },
 
   get: (id: string) => request<DataPoint>(`/datapoints/${id}`),
 
   getValue: (id: string) =>
-    request<{ v: unknown; u: string | null; t: string; q: string }>(
+    request<{ value: unknown; unit: string | null; ts: string | null; quality: string }>(
       `/datapoints/${id}/value`
     ),
 
