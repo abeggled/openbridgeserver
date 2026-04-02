@@ -11,6 +11,9 @@ export interface VisuNode {
   order: number
   icon: string | null
   access: AccessLevel | null   // null = von Elternknoten erben
+  /** Nur beim Schreiben (PATCH/POST): Klartext-PIN, wird backend-seitig gehasht.
+   *  Wird vom Backend niemals zurückgegeben. */
+  access_pin?: string | null
   page_config: PageConfig | null
   created_at: string
   updated_at: string
