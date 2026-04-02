@@ -45,11 +45,6 @@ function connect() {
   }
 
   const url = WS_URL()
-  if (!url.includes('token=')) {
-    // Kein JWT → nicht verbinden (public-only Seite)
-    return
-  }
-
   socket = new WebSocket(url)
 
   socket.onopen = () => {

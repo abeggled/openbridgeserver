@@ -8,6 +8,7 @@ import { useThemeStore } from '@/stores/theme'
 import { WidgetRegistry } from '@/widgets/registry'
 import Breadcrumb from '@/components/Breadcrumb.vue'
 import NodeOverview from '@/components/NodeOverview.vue'
+import AuthButton from '@/components/AuthButton.vue'
 import { getJwt } from '@/api/client'
 import type { WidgetInstance } from '@/types'
 
@@ -132,9 +133,8 @@ function gridStyle(w: WidgetInstance) {
           class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 transition-colors px-2 py-1 rounded"
           :title="theme.isDark ? 'Heller Modus' : 'Dunkler Modus'"
           @click="theme.toggle()"
-        >
-          {{ theme.isDark ? '☀️' : '🌙' }}
-        </button>
+        >{{ theme.isDark ? '☀️' : '🌙' }}</button>
+        <AuthButton />
       </div>
     </header>
 

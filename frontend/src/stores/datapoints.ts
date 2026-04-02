@@ -72,7 +72,7 @@ export const useDatapointsStore = defineStore('datapoints', () => {
       ids.map(async (id) => {
         try {
           // Backend gibt { value, unit, quality, ts } zurück (nicht v/u/q/t)
-          const v = await datapointsApi.getValue(id)
+          const v = await datapointsApi.getValue(id, true)
           const quality = (v.quality as DataPointValue['q']) ?? 'good'
           if (quality === 'good' || quality === 'uncertain') {
             values.value[id] = {

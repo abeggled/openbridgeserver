@@ -32,6 +32,7 @@ import { useThemeStore } from '@/stores/theme'
 import { WidgetRegistry } from '@/widgets/registry'
 import DataPointPicker from '@/components/DataPointPicker.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
+import AuthButton from '@/components/AuthButton.vue'
 import type { PageConfig, WidgetInstance } from '@/types'
 
 import '@/widgets/ValueDisplay/index'
@@ -292,6 +293,7 @@ const showSettings = ref(false)
         :title="theme.isDark ? 'Heller Modus' : 'Dunkler Modus'"
         @click="theme.toggle()"
       >{{ theme.isDark ? '☀️' : '🌙' }}</button>
+      <AuthButton />
 
       <!-- Grid-Einstellungen -->
       <button

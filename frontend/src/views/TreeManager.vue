@@ -15,6 +15,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
 import { useThemeStore } from '@/stores/theme'
+import AuthButton from '@/components/AuthButton.vue'
 import type { VisuNode, NodeType, AccessLevel } from '@/types'
 
 const router = useRouter()
@@ -293,6 +294,7 @@ onMounted(async () => {
         :title="theme.isDark ? 'Heller Modus' : 'Dunkler Modus'"
         @click="theme.toggle()"
       >{{ theme.isDark ? '☀️' : '🌙' }}</button>
+      <AuthButton />
       <button
         class="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 border border-gray-300 dark:border-gray-700 px-3 py-1.5 rounded transition-colors"
         @click="router.push({ name: 'tree' })"

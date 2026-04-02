@@ -184,8 +184,8 @@ async def websocket_endpoint(
     ws: WebSocket,
     token: str | None = Query(None, description="JWT access token (legacy — prefer Authorization header)"),
 ) -> None:
-    # Auth: Authorization header takes priority; query param is legacy fallback
-    # (tokens in query params are logged by proxies and appear in browser history)
+    # Auth: optional — authenticated users get a user context, anonymous users
+    # can still subscribe to public datapoints (read-only push channel).
     from opentws.api.auth import decode_token
     auth_header = ws.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
@@ -194,14 +194,14 @@ async def websocket_endpoint(
         logger.debug("WS auth via query param — prefer Authorization header in production")
         resolved_token = token
     else:
-        await ws.close(code=4001, reason="Authentication required")
-        return
+        resolved_token = None
 
-    try:
-        decode_token(resolved_token)
-    except Exception:
-        await ws.close(code=4001, reason="Invalid token")
-        return
+    if resolved_token is not None:
+        try:
+            decode_token(resolved_token)
+        except Exception:
+            await ws.close(code=4001, reason="Invalid token")
+            return
 
     manager = get_ws_manager()
     conn_id = await manager.connect(ws)

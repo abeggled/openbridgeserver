@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, field_serializer
 
-from opentws.api.auth import get_current_user
+from opentws.api.auth import get_current_user, optional_current_user
 from opentws.core.registry import get_registry
 from opentws.models.datapoint import DataPointCreate, DataPointUpdate
 
@@ -192,7 +192,7 @@ async def delete_datapoint(
 @router.get("/{dp_id}/value", response_model=ValueOut)
 async def get_value(
     dp_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: str | None = Depends(optional_current_user),
 ) -> ValueOut:
     reg = get_registry()
     dp = reg.get(dp_id)

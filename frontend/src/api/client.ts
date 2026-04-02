@@ -51,6 +51,8 @@ type RequestOptions = Omit<RequestInit, 'headers'> & {
   headers?: Record<string, string>
   /** Falls gesetzt, wird dieser Session-Token als X-Session-Token mitgeschickt */
   sessionToken?: string
+  /** 401 still throws but does NOT dispatch visu:unauthorized (no global redirect) */
+  silent401?: boolean
 }
 
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
@@ -69,9 +71,11 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   })
 
   if (res.status === 401) {
-    clearJwt()
-    // Redirect zur Login-Seite — der Router fängt das auf
-    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+    if (!opts.silent401) {
+      clearJwt()
+      // Redirect zur Login-Seite — der Router fängt das auf
+      window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+    }
     throw new Error('Unauthorized')
   }
 
@@ -169,9 +173,9 @@ export const datapoints = {
 
   get: (id: string) => request<DataPoint>(`/datapoints/${id}`),
 
-  getValue: (id: string) =>
+  getValue: (id: string, silent401 = false) =>
     request<{ value: unknown; unit: string | null; ts: string | null; quality: string }>(
-      `/datapoints/${id}/value`
+      `/datapoints/${id}/value`, { silent401 }
     ),
 
   write: (id: string, value: unknown) =>
