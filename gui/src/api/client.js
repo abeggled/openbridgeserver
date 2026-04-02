@@ -122,6 +122,13 @@ export const settingsApi = {
   update: (data) => api.put('/system/settings', data),
 }
 
+// ── History Settings ───────────────────────────────────────────────────────
+export const historySettingsApi = {
+  get:    ()     => api.get('/system/history/settings'),
+  update: (data) => api.put('/system/history/settings', data),
+  test:   (data) => api.post('/system/history/test', data),
+}
+
 // ── History ───────────────────────────────────────────────────────────────
 export const historyApi = {
   query:     (id, params) => api.get(`/history/${id}`, { params }),

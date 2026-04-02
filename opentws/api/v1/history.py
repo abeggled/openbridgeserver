@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from opentws.api.auth import get_current_user
 from opentws.core.registry import get_registry
-from opentws.history.sqlite_plugin import get_history_plugin
+from opentws.history.factory import get_history_plugin
 
 router = APIRouter(tags=["history"])
 

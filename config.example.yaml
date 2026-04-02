@@ -11,7 +11,23 @@ mqtt:
 
 database:
   path: /data/opentws.db
-  history_plugin: sqlite   # sqlite | influxdb | timescaledb | questdb
+
+# History backend is configured through the Admin UI (Settings → History Backend).
+# The active plugin and its credentials are stored in the database (app_settings table).
+# Defaults to the built-in SQLite backend when no history settings exist.
+#
+# InfluxDB example (configure in UI or set app_settings keys manually):
+#   history.plugin          = influxdb
+#   history.influx_url      = http://influxdb:8086
+#   history.influx_version  = 2            # 1 | 2 | 3
+#   history.influx_token    = my-api-token
+#   history.influx_org      = my-org
+#   history.influx_bucket   = opentws
+#
+# TimescaleDB example:
+#   history.plugin          = timescaledb
+#   history.timescale_dsn   = postgresql://user:pass@timescaledb:5432/opentws
+#   (requires: pip install asyncpg)
 
 ringbuffer:
   storage: memory           # memory | disk
