@@ -38,11 +38,26 @@ export function clearJwt(): void {
 
 /** Session-Token für einen bestimmten Knoten (PIN-Auth), nur für diese Browser-Session */
 export function getSessionToken(nodeId: string): string | null {
-  return sessionStorage.getItem(`session_${nodeId}`)
+  const raw = sessionStorage.getItem(`session_${nodeId}`)
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && 'token' in parsed) {
+      if (Date.now() > parsed.expiresAt) {
+        sessionStorage.removeItem(`session_${nodeId}`)
+        return null
+      }
+      return parsed.token as string
+    }
+  } catch { /* altes Format: plain string, unten zurückgeben */ }
+  return raw
 }
 
-export function setSessionToken(nodeId: string, token: string): void {
-  sessionStorage.setItem(`session_${nodeId}`, token)
+export function setSessionToken(nodeId: string, token: string, expiresIn = 3600): void {
+  sessionStorage.setItem(`session_${nodeId}`, JSON.stringify({
+    token,
+    expiresAt: Date.now() + expiresIn * 1000,
+  }))
 }
 
 // ── Request-Helper ────────────────────────────────────────────────────────────

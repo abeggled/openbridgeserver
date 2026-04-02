@@ -54,20 +54,24 @@ export const useVisuStore = defineStore('visu', () => {
   }
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-  const isLoggedIn = computed(() => !!getJwt())
+  // Reaktiver Spiegel des localStorage-JWT — wird bei login/logout aktualisiert
+  const _jwt = ref<string | null>(getJwt())
+  const isLoggedIn = computed(() => !!_jwt.value)
 
   function login(token: string) {
     setJwt(token)
+    _jwt.value = token
   }
 
   function logout() {
     clearJwt()
+    _jwt.value = null
   }
 
   /** PIN-Auth für einen protected Knoten */
   async function authenticatePin(nodeId: string, pin: string): Promise<void> {
-    const { session_token } = await visuApi.pinAuth(nodeId, pin)
-    setSessionToken(nodeId, session_token)
+    const { session_token, expires_in } = await visuApi.pinAuth(nodeId, pin)
+    setSessionToken(nodeId, session_token, expires_in ?? 3600)
   }
 
   function hasSessionToken(nodeId: string): boolean {
