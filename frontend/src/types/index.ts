@@ -29,6 +29,7 @@ export interface PageConfig {
 
 export interface WidgetInstance {
   id: string
+  name: string
   type: string
   datapoint_id: string | null
   /** Optionaler separater Status-Datenpunkt (für Widgets die schreiben und lesen) */

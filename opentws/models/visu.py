@@ -23,6 +23,7 @@ AccessLevel = Literal["public", "protected", "private"]
 
 class WidgetInstance(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ""                           # frei wählbarer Widget-Name
     type: str
     datapoint_id: str | None = None
     status_datapoint_id: str | None = None   # optionaler Rückmelde-DP

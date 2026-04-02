@@ -182,9 +182,8 @@ onMounted(async () => {
     // Rückwärtskompatibilität: fehlende Felder nachrüsten
     if (!config.value.grid_cell_width) config.value.grid_cell_width = 80
     for (const w of config.value.widgets) {
-      if (!('status_datapoint_id' in w)) {
-        (w as WidgetInstance).status_datapoint_id = null
-      }
+      if (!('status_datapoint_id' in w)) w.status_datapoint_id = null
+      if (!('name' in w)) w.name = ''
     }
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'Fehler beim Laden'
@@ -217,6 +216,7 @@ function insertWidget(type: string) {
 
   const w: WidgetInstance = {
     id: newId(),
+    name: '',
     type,
     datapoint_id: null,
     status_datapoint_id: null,
@@ -413,7 +413,7 @@ const showSettings = ref(false)
               :class="{ '!opacity-100': selectedId === w.id }"
             >
               <span class="text-xs text-gray-700 dark:text-gray-300 font-medium">
-                {{ WidgetRegistry.get(w.type)?.label ?? w.type }}
+                {{ w.name || WidgetRegistry.get(w.type)?.label ?? w.type }}
               </span>
               <button
                 class="text-xs text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 transition-colors ml-2"
@@ -462,6 +462,17 @@ const showSettings = ref(false)
           </div>
 
           <div class="p-4 space-y-5 flex-1">
+            <!-- Widget-Name -->
+            <div>
+              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Name</p>
+              <input
+                v-model="selectedWidget.name"
+                type="text"
+                placeholder="z.B. Wohnzimmer Dimmer"
+                class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
             <!-- Position & Größe -->
             <div>
               <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Position & Größe</p>
