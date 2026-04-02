@@ -77,9 +77,13 @@ function navigate(node: VisuNode) {
             {{ node.name }}
           </span>
           <span
-            v-if="node.access === 'protected'"
+            v-if="node.access === 'readonly'"
+            class="text-xs text-blue-500 dark:text-blue-400 flex items-center gap-1"
+          >👁 Nur ansehen</span>
+          <span
+            v-else-if="node.access === 'protected'"
             class="text-xs text-yellow-600 dark:text-yellow-500 flex items-center gap-1"
-          >🔒 PIN</span>
+          >🔐 PIN</span>
           <span
             v-else-if="node.access === 'private'"
             class="text-xs text-red-500 dark:text-red-400 flex items-center gap-1"

@@ -1,7 +1,7 @@
 // ── VisuNode ──────────────────────────────────────────────────────────────────
 
 export type NodeType = 'LOCATION' | 'PAGE'
-export type AccessLevel = 'public' | 'protected' | 'private'
+export type AccessLevel = 'readonly' | 'public' | 'protected' | 'private'
 
 export interface VisuNode {
   id: string
@@ -74,6 +74,7 @@ export interface WidgetProps {
   value: DataPointValue | null
   statusValue: DataPointValue | null
   editorMode: boolean
+  readonly?: boolean
 }
 
 // ── API ───────────────────────────────────────────────────────────────────────

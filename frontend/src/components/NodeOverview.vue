@@ -44,6 +44,7 @@ function navigate(node: VisuNode) {
 
 function accessBadge(node: VisuNode): { icon: string; label: string; cls: string } | null {
   const access = effectiveAccess(node)
+  if (access === 'readonly')  return { icon: '👁', label: 'Nur ansehen', cls: 'bg-blue-500/20 text-blue-600 dark:text-blue-400' }
   if (access === 'protected') return { icon: '🔐', label: 'PIN', cls: 'bg-amber-500/20 text-amber-600 dark:text-amber-400' }
   if (access === 'private')   return { icon: '🔒', label: 'Privat', cls: 'bg-red-500/20 text-red-500 dark:text-red-400' }
   return null

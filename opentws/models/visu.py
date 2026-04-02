@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 # ── Typen ─────────────────────────────────────────────────────────────────────
 
 NodeType   = Literal["LOCATION", "PAGE"]
-AccessLevel = Literal["public", "protected", "private"]
+AccessLevel = Literal["readonly", "public", "protected", "private"]
 
 
 # ── WidgetInstance ────────────────────────────────────────────────────────────

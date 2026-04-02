@@ -9,6 +9,7 @@ const props = defineProps<{
   value: DataPointValue | null
   statusValue: DataPointValue | null
   editorMode: boolean
+  readonly?: boolean
 }>()
 
 const label = computed(() => (props.config.label as string | undefined) ?? '—')
@@ -95,7 +96,7 @@ function onChange(e: Event) {
 }
 
 async function sendValue() {
-  if (props.editorMode || !props.datapointId) return
+  if (props.editorMode || props.readonly || !props.datapointId) return
   try {
     await datapoints.write(props.datapointId, localValue.value)
   } catch {
@@ -117,7 +118,7 @@ async function sendValue() {
       :max="max"
       :step="step"
       :value="shownValue"
-      :disabled="editorMode"
+      :disabled="editorMode || readonly"
       class="w-full accent-blue-500 cursor-pointer disabled:cursor-default disabled:opacity-50"
       @input="onInput"
       @change="onChange"

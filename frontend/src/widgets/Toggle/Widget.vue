@@ -9,6 +9,7 @@ const props = defineProps<{
   value: DataPointValue | null
   statusValue: DataPointValue | null
   editorMode: boolean
+  readonly?: boolean
 }>()
 
 const label = computed(() => (props.config.label as string | undefined) ?? '—')
@@ -41,7 +42,7 @@ const isOn = computed(() => {
 const pending = ref(false)
 
 async function toggle() {
-  if (props.editorMode || !props.datapointId || pending.value) return
+  if (props.editorMode || props.readonly || !props.datapointId || pending.value) return
   const next = !isOn.value
   optimisticValue.value = next
   pending.value = true
@@ -58,8 +59,8 @@ async function toggle() {
 
 <template>
   <div
-    class="flex flex-col items-center justify-center h-full p-3 gap-2 select-none cursor-pointer"
-    :class="{ 'opacity-60': editorMode }"
+    class="flex flex-col items-center justify-center h-full p-3 gap-2 select-none"
+    :class="[editorMode || readonly ? 'opacity-60 cursor-default' : 'cursor-pointer']"
     @click="toggle"
   >
     <span class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center">{{ label }}</span>
@@ -67,7 +68,7 @@ async function toggle() {
     <button
       class="relative w-14 h-7 rounded-full transition-colors duration-200 focus:outline-none"
       :class="isOn ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'"
-      :disabled="editorMode || pending"
+      :disabled="editorMode || readonly || pending"
       :aria-checked="isOn"
       role="switch"
     >

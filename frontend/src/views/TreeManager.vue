@@ -248,14 +248,16 @@ async function doDelete() {
 
 // ── Zugangs-Optionen ──────────────────────────────────────────────────────────
 const ACCESS_OPTIONS = [
-  { value: null        as AccessLevel | null, label: 'Erben',      desc: 'Vom übergeordneten Knoten',  icon: '↑' },
-  { value: 'public'    as AccessLevel,        label: 'Öffentlich', desc: 'Ohne Anmeldung sichtbar',    icon: '🌐' },
-  { value: 'protected' as AccessLevel,        label: 'PIN',        desc: 'PIN-Eingabe erforderlich',   icon: '🔐' },
-  { value: 'private'   as AccessLevel,        label: 'Privat',     desc: 'Nur Admins (JWT)',           icon: '🔒' },
+  { value: null        as AccessLevel | null, label: 'Erben',       desc: 'Vom übergeordneten Knoten',      icon: '↑'  },
+  { value: 'readonly'  as AccessLevel,        label: 'Nur ansehen', desc: 'Öffentlich, keine Interaktion',  icon: '👁' },
+  { value: 'public'    as AccessLevel,        label: 'Öffentlich',  desc: 'Ohne Anmeldung, interaktiv',     icon: '🌐' },
+  { value: 'protected' as AccessLevel,        label: 'PIN',         desc: 'PIN-Eingabe erforderlich',       icon: '🔐' },
+  { value: 'private'   as AccessLevel,        label: 'Privat',      desc: 'Nur Admins (JWT)',               icon: '🔒' },
 ]
 
 function accessBadge(access: AccessLevel | null) {
   switch (access) {
+    case 'readonly':  return 'bg-blue-500/10  text-blue-600  dark:text-blue-400  border border-blue-500/30'
     case 'public':    return 'bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/30'
     case 'protected': return 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30'
     case 'private':   return 'bg-red-500/10   text-red-600   dark:text-red-400   border border-red-500/30'

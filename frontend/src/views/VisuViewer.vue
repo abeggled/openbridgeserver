@@ -32,6 +32,19 @@ const error = ref('')
 
 const node = computed(() => visuStore.getNode(props.id))
 const isPage = computed(() => node.value?.type === 'PAGE')
+
+/** Effektiven Zugangslevel ermitteln (Vererbung berücksichtigen) */
+function resolveAccess(nodeId: string): string {
+  let cur = visuStore.getNode(nodeId)
+  while (cur) {
+    if (cur.access !== null) return cur.access
+    cur = cur.parent_id ? visuStore.getNode(cur.parent_id) : undefined
+  }
+  return 'public'
+}
+
+/** Nur-Lesen-Modus: Seite hat access='readonly' (effektiv) */
+const isReadOnly = computed(() => resolveAccess(props.id) === 'readonly')
 const widgets = computed<WidgetInstance[]>(() => visuStore.pageConfig?.widgets ?? [])
 
 // Haupt-Datenpunkt-IDs
@@ -178,6 +191,7 @@ function gridStyle(w: WidgetInstance) {
             :value="w.datapoint_id ? dpStore.getValue(w.datapoint_id) : null"
             :status-value="w.status_datapoint_id ? dpStore.getValue(w.status_datapoint_id) : null"
             :editor-mode="false"
+            :readonly="isReadOnly"
           />
           <div v-else class="flex items-center justify-center h-full text-gray-400 dark:text-gray-600 text-xs">
             Unbekannter Widget-Typ: {{ w.type }}
