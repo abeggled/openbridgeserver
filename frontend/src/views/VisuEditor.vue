@@ -446,7 +446,7 @@ const showSettings = ref(false)
 
       <!-- ── Config-Panel (rechts) ───────────────────────────────────────── -->
       <aside class="w-72 flex-shrink-0 bg-gray-50 dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 overflow-y-auto flex flex-col">
-        <template v-if="selectedWidget && selectedDef" :key="selectedWidget.id">
+        <template v-if="selectedWidget && selectedDef">
           <!-- Header -->
           <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-100/50 dark:bg-gray-800/50">
             <div class="flex items-center gap-2">
@@ -525,6 +525,7 @@ const showSettings = ref(false)
               <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Konfiguration</p>
               <component
                 :is="selectedDef.configComponent"
+                :key="selectedWidget.id"
                 :model-value="selectedWidget.config"
                 @update:model-value="updateConfig"
               />

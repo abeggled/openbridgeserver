@@ -27,17 +27,19 @@ const selectedName = ref('')
 const inputEl = ref<HTMLInputElement | null>(null)
 const dropdownEl = ref<HTMLElement | null>(null)
 
-// Beim Mount: aktuellen DP-Namen laden
-onMounted(async () => {
-  if (props.modelValue) {
-    try {
-      const dp = await datapoints.get(props.modelValue)
-      selectedName.value = dp.name
-    } catch {
-      selectedName.value = props.modelValue
-    }
+// DP-Namen laden: beim Mount und bei jeder Änderung von modelValue
+async function loadName(id: string | null) {
+  if (!id) { selectedName.value = ''; return }
+  try {
+    const dp = await datapoints.get(id)
+    selectedName.value = dp.name
+  } catch {
+    selectedName.value = id
   }
-})
+}
+
+onMounted(() => loadName(props.modelValue))
+watch(() => props.modelValue, (id) => loadName(id))
 
 // Ob alle Typen erlaubt sind
 const allTypesAllowed = computed(() =>
