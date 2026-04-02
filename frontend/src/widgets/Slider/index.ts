@@ -12,4 +12,5 @@ WidgetRegistry.register({
   configComponent: Config,
   defaultConfig: { label: '', min: 0, max: 100, step: 1 },
   compatibleTypes: ['FLOAT', 'INTEGER'],
+  supportsStatusDatapoint: true,
 })

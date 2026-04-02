@@ -8,6 +8,7 @@
  * - Resize Handle unten-rechts (Snap to Grid)
  * - Click to select, Delete-Taste zum Löschen
  * - DataPoint-Suche im Config-Panel
+ * - Optionaler Status-Datenpunkt für schreibende Widgets
  * - Grid-Linien als visuelle Orientierung
  * - Keine externe Grid-Bibliothek (pure Vue + CSS)
  */
@@ -27,6 +28,7 @@ function newId(): string {
 }
 import { useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
+import { useThemeStore } from '@/stores/theme'
 import { WidgetRegistry } from '@/widgets/registry'
 import DataPointPicker from '@/components/DataPointPicker.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
@@ -42,6 +44,7 @@ import '@/widgets/Link/index'
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const store = useVisuStore()
+const theme = useThemeStore()
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const loading = ref(true)
@@ -78,9 +81,10 @@ const canvasHeight = computed(() => {
 const gridBg = computed(() => {
   const cw = CELL_W.value.toFixed(2)
   const ch = CELL_H.value
+  const lineColor = theme.isDark ? '#1f2937' : '#e5e7eb'
   return `
-    repeating-linear-gradient(to right,  #1f2937 0, #1f2937 1px, transparent 1px, transparent ${cw}px),
-    repeating-linear-gradient(to bottom, #1f2937 0, #1f2937 1px, transparent 1px, transparent ${ch}px)
+    repeating-linear-gradient(to right,  ${lineColor} 0, ${lineColor} 1px, transparent 1px, transparent ${cw}px),
+    repeating-linear-gradient(to bottom, ${lineColor} 0, ${lineColor} 1px, transparent 1px, transparent ${ch}px)
   `
 })
 
@@ -168,7 +172,6 @@ function onMouseUp() {
 function onKeyDown(e: KeyboardEvent) {
   if (!selectedId.value) return
   if (e.key === 'Delete' || e.key === 'Backspace') {
-    // Nicht auslösen wenn ein Input-Feld fokussiert ist
     if ((e.target as HTMLElement).tagName === 'INPUT' ||
         (e.target as HTMLElement).tagName === 'TEXTAREA') return
     removeSelected()
@@ -186,6 +189,12 @@ onMounted(async () => {
     await store.loadBreadcrumb(props.id)
     await store.loadPage(props.id)
     if (store.pageConfig) config.value = JSON.parse(JSON.stringify(store.pageConfig))
+    // status_datapoint_id nachrüsten falls nicht vorhanden (Rückwärtskompatibilität)
+    for (const w of config.value.widgets) {
+      if (!('status_datapoint_id' in w)) {
+        (w as WidgetInstance).status_datapoint_id = null
+      }
+    }
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'Fehler beim Laden'
   } finally {
@@ -198,7 +207,6 @@ function insertWidget(type: string) {
   const def = WidgetRegistry.get(type)
   if (!def) return
 
-  // Freie Position finden (erste Zeile die Platz hat)
   const existingXY = new Set(
     config.value.widgets.flatMap(w =>
       Array.from({ length: w.w * w.h }, (_, i) =>
@@ -220,6 +228,7 @@ function insertWidget(type: string) {
     id: newId(),
     type,
     datapoint_id: null,
+    status_datapoint_id: null,
     x: px, y: py,
     w: def.defaultW, h: def.defaultH,
     config: { ...def.defaultConfig },
@@ -227,7 +236,6 @@ function insertWidget(type: string) {
   config.value.widgets.push(w)
   selectedId.value = w.id
 
-  // Canvas nach unten scrollen wenn nötig
   nextTick(() => {
     canvasEl.value?.parentElement?.scrollTo({ top: py * CELL_H.value - 100, behavior: 'smooth' })
   })
@@ -250,6 +258,11 @@ function setDataPoint(id: string | null) {
   selectedWidget.value.datapoint_id = id
 }
 
+function setStatusDataPoint(id: string | null) {
+  if (!selectedWidget.value) return
+  selectedWidget.value.status_datapoint_id = id
+}
+
 // ── Speichern ─────────────────────────────────────────────────────────────────
 async function save() {
   saving.value = true
@@ -270,26 +283,33 @@ const showSettings = ref(false)
 
 <template>
   <div
-    class="h-screen flex flex-col bg-gray-950 text-gray-100 overflow-hidden"
+    class="h-screen flex flex-col bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 overflow-hidden"
     @mousemove="onMouseMove"
     @mouseup="onMouseUp"
     @mouseleave="onMouseUp"
   >
     <!-- ── Toolbar ──────────────────────────────────────────────────────────── -->
-    <header class="border-b border-gray-800 px-4 py-2 flex items-center gap-3 flex-shrink-0 bg-gray-900">
+    <header class="border-b border-gray-200 dark:border-gray-800 px-4 py-2 flex items-center gap-3 flex-shrink-0 bg-gray-50 dark:bg-gray-900">
       <Breadcrumb />
-      <span class="text-xs font-medium text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded">Editor</span>
+      <span class="text-xs font-medium text-blue-500 dark:text-blue-400 bg-blue-500/10 dark:bg-blue-400/10 px-2 py-0.5 rounded">Editor</span>
       <div class="flex-1" />
+
+      <!-- Hell/Dunkel -->
+      <button
+        class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded transition-colors"
+        :title="theme.isDark ? 'Heller Modus' : 'Dunkler Modus'"
+        @click="theme.toggle()"
+      >{{ theme.isDark ? '☀️' : '🌙' }}</button>
 
       <!-- Grid-Einstellungen -->
       <button
-        class="text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded transition-colors"
+        class="text-xs text-gray-400 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded transition-colors"
         @click="showSettings = !showSettings"
         title="Grid-Einstellungen"
       >⚙️</button>
 
       <button
-        class="text-sm text-gray-400 hover:text-gray-200 transition-colors px-3 py-1.5 rounded border border-gray-700"
+        class="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700"
         @click="router.push({ name: 'viewer', params: { id } })"
       >Abbrechen</button>
 
@@ -301,49 +321,49 @@ const showSettings = ref(false)
     </header>
 
     <!-- Grid-Einstellungen Panel -->
-    <div v-if="showSettings" class="border-b border-gray-800 bg-gray-900 px-4 py-3 flex items-center gap-6 text-sm">
-      <label class="flex items-center gap-2 text-gray-400">
+    <div v-if="showSettings" class="border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 px-4 py-3 flex items-center gap-6 text-sm">
+      <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
         Spalten
         <input v-model.number="config.grid_cols" type="number" min="4" max="24"
-          class="w-16 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
+          class="w-16 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
-      <label class="flex items-center gap-2 text-gray-400">
+      <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
         Zeilenhöhe (px)
         <input v-model.number="config.grid_row_height" type="number" min="40" max="200" step="10"
-          class="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
+          class="w-20 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
-      <span class="text-xs text-gray-600">Zelle: {{ CELL_W.toFixed(0) }}×{{ CELL_H }}px</span>
+      <span class="text-xs text-gray-400 dark:text-gray-600">Zelle: {{ CELL_W.toFixed(0) }}×{{ CELL_H }}px</span>
     </div>
 
-    <div v-if="loading" class="flex-1 flex items-center justify-center text-gray-500">Lade …</div>
-    <div v-else-if="error" class="flex-1 flex items-center justify-center text-red-400">{{ error }}</div>
+    <div v-if="loading" class="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">Lade …</div>
+    <div v-else-if="error" class="flex-1 flex items-center justify-center text-red-500 dark:text-red-400">{{ error }}</div>
 
     <div v-else class="flex-1 flex min-h-0">
 
       <!-- ── Widget-Palette (links) ───────────────────────────────────────── -->
-      <aside class="w-48 flex-shrink-0 bg-gray-900 border-r border-gray-700 overflow-y-auto">
-        <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 pt-3 pb-2">Widgets</p>
+      <aside class="w-48 flex-shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 overflow-y-auto">
+        <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider px-3 pt-3 pb-2">Widgets</p>
         <div class="space-y-0.5 px-2 pb-3">
           <button
             v-for="w in WidgetRegistry.all()"
             :key="w.type"
-            class="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors text-left"
+            class="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white transition-colors text-left"
             @click="insertWidget(w.type)"
           >
             <span class="text-lg leading-none w-6 text-center">{{ w.icon }}</span>
             <span class="text-sm">{{ w.label }}</span>
           </button>
         </div>
-        <div class="px-3 pt-2 pb-3 border-t border-gray-700">
-          <p class="text-xs text-gray-600">Klick → einfügen</p>
-          <p class="text-xs text-gray-600">Ziehen → verschieben</p>
-          <p class="text-xs text-gray-600">↘ Handle → Größe ändern</p>
-          <p class="text-xs text-gray-600">Entf → Widget löschen</p>
+        <div class="px-3 pt-2 pb-3 border-t border-gray-200 dark:border-gray-700">
+          <p class="text-xs text-gray-400 dark:text-gray-600">Klick → einfügen</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">Ziehen → verschieben</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">↘ Handle → Größe ändern</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">Entf → Widget löschen</p>
         </div>
       </aside>
 
       <!-- ── Grid-Canvas (Mitte) ─────────────────────────────────────────── -->
-      <div class="flex-1 overflow-auto bg-gray-950">
+      <div class="flex-1 overflow-auto bg-white dark:bg-gray-950">
         <div
           ref="canvasEl"
           class="relative w-full"
@@ -364,7 +384,7 @@ const showSettings = ref(false)
             :class="[
               selectedId === w.id
                 ? 'border-blue-500 shadow-lg shadow-blue-500/30 z-10'
-                : 'border-gray-700 hover:border-gray-500 z-0',
+                : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 z-0',
               drag?.widgetId === w.id && drag?.type === 'move' ? 'opacity-90' : '',
             ]"
             :style="widgetStyle(w)"
@@ -372,30 +392,31 @@ const showSettings = ref(false)
             @click.stop="selectedId = w.id"
           >
             <!-- Widget-Vorschau (echte Komponente, editorMode=true) -->
-            <div class="w-full h-full bg-gray-800 pointer-events-none">
+            <div class="w-full h-full bg-gray-100 dark:bg-gray-800 pointer-events-none">
               <component
                 :is="WidgetRegistry.get(w.type)?.component"
                 v-if="WidgetRegistry.get(w.type)"
                 :config="w.config"
                 :datapoint-id="w.datapoint_id"
                 :value="null"
+                :status-value="null"
                 :editor-mode="true"
               />
-              <div v-else class="flex items-center justify-center h-full text-gray-600 text-xs">
+              <div v-else class="flex items-center justify-center h-full text-gray-400 dark:text-gray-600 text-xs">
                 {{ w.type }}
               </div>
             </div>
 
             <!-- Widget-Label (nur sichtbar wenn selektiert oder hover) -->
             <div
-              class="absolute top-0 left-0 right-0 flex items-center justify-between px-2 py-1 bg-gray-900/80 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity"
+              class="absolute top-0 left-0 right-0 flex items-center justify-between px-2 py-1 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity"
               :class="{ '!opacity-100': selectedId === w.id }"
             >
-              <span class="text-xs text-gray-300 font-medium">
+              <span class="text-xs text-gray-700 dark:text-gray-300 font-medium">
                 {{ WidgetRegistry.get(w.type)?.label ?? w.type }}
               </span>
               <button
-                class="text-xs text-gray-500 hover:text-red-400 transition-colors ml-2"
+                class="text-xs text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 transition-colors ml-2"
                 @click.stop="() => { selectedId = w.id; removeSelected() }"
               >✕</button>
             </div>
@@ -415,7 +436,7 @@ const showSettings = ref(false)
           <!-- Leerer Zustand -->
           <div
             v-if="config.widgets.length === 0"
-            class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-gray-600 pointer-events-none"
+            class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-gray-400 dark:text-gray-600 pointer-events-none"
           >
             <span class="text-5xl">📐</span>
             <span class="text-sm">Widget aus der Palette links einfügen</span>
@@ -424,16 +445,16 @@ const showSettings = ref(false)
       </div>
 
       <!-- ── Config-Panel (rechts) ───────────────────────────────────────── -->
-      <aside class="w-72 flex-shrink-0 bg-gray-900 border-l border-gray-700 overflow-y-auto flex flex-col">
+      <aside class="w-72 flex-shrink-0 bg-gray-50 dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 overflow-y-auto flex flex-col">
         <template v-if="selectedWidget && selectedDef">
           <!-- Header -->
-          <div class="flex items-center justify-between px-4 py-3 border-b border-gray-700 bg-gray-800/50">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-100/50 dark:bg-gray-800/50">
             <div class="flex items-center gap-2">
               <span class="text-lg">{{ selectedDef.icon }}</span>
-              <span class="text-sm font-semibold text-gray-100">{{ selectedDef.label }}</span>
+              <span class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ selectedDef.label }}</span>
             </div>
             <button
-              class="text-xs text-red-400 hover:text-red-300 transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-red-400/10"
+              class="text-xs text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
               @click="removeSelected"
             >
               🗑 Entfernen
@@ -443,47 +464,63 @@ const showSettings = ref(false)
           <div class="p-4 space-y-5 flex-1">
             <!-- Position & Größe -->
             <div>
-              <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Position & Größe</p>
+              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Position & Größe</p>
               <div class="grid grid-cols-4 gap-1.5 text-xs">
                 <div>
-                  <label class="block text-gray-500 mb-0.5">X</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">X</label>
                   <input v-model.number="selectedWidget.x" type="number" min="0"
                     :max="COLS - selectedWidget.w"
-                    class="w-full bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-gray-100 focus:outline-none focus:border-blue-500" />
+                    class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label class="block text-gray-500 mb-0.5">Y</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">Y</label>
                   <input v-model.number="selectedWidget.y" type="number" min="0"
-                    class="w-full bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-gray-100 focus:outline-none focus:border-blue-500" />
+                    class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label class="block text-gray-500 mb-0.5">B</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">B</label>
                   <input v-model.number="selectedWidget.w" type="number" :min="selectedDef.minW" :max="COLS"
-                    class="w-full bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-gray-100 focus:outline-none focus:border-blue-500" />
+                    class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label class="block text-gray-500 mb-0.5">H</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">H</label>
                   <input v-model.number="selectedWidget.h" type="number" :min="selectedDef.minH"
-                    class="w-full bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-gray-100 focus:outline-none focus:border-blue-500" />
+                    class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
               </div>
             </div>
 
-            <!-- DataPoint -->
+            <!-- DataPoint (Schreib-/Lese-DP) -->
             <div v-if="selectedDef.compatibleTypes[0] !== '*' || selectedDef.type !== 'Link'">
-              <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">DataPoint</p>
+              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
+                {{ selectedDef.supportsStatusDatapoint ? 'Schreib-Datenpunkt' : 'DataPoint' }}
+              </p>
               <DataPointPicker
                 :model-value="selectedWidget.datapoint_id"
                 @update:model-value="setDataPoint"
               />
-              <p class="text-xs text-gray-600 mt-1">
+              <p class="text-xs text-gray-400 dark:text-gray-600 mt-1">
                 Kompatibel: {{ selectedDef.compatibleTypes.join(', ') }}
               </p>
             </div>
 
+            <!-- Status-Datenpunkt (nur für schreibende Widgets) -->
+            <div v-if="selectedDef.supportsStatusDatapoint">
+              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">
+                Status-Datenpunkt
+              </p>
+              <p class="text-xs text-gray-400 dark:text-gray-600 mb-2">
+                Optional: separater Rückmelde-DP. Falls leer, wird der Schreib-DP für die Anzeige verwendet.
+              </p>
+              <DataPointPicker
+                :model-value="selectedWidget.status_datapoint_id"
+                @update:model-value="setStatusDataPoint"
+              />
+            </div>
+
             <!-- Widget-Config -->
             <div>
-              <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Konfiguration</p>
+              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Konfiguration</p>
               <component
                 :is="selectedDef.configComponent"
                 :model-value="selectedWidget.config"
@@ -495,9 +532,9 @@ const showSettings = ref(false)
 
         <!-- Kein Widget gewählt -->
         <div v-else class="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6">
-          <span class="text-4xl text-gray-700">👆</span>
-          <p class="text-sm text-gray-500">Widget auf dem Canvas anklicken<br />oder aus der Palette einfügen</p>
-          <p class="text-xs text-gray-600 mt-2">
+          <span class="text-4xl text-gray-300 dark:text-gray-700">👆</span>
+          <p class="text-sm text-gray-400 dark:text-gray-500">Widget auf dem Canvas anklicken<br />oder aus der Palette einfügen</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600 mt-2">
             {{ config.widgets.length }} Widget{{ config.widgets.length !== 1 ? 's' : '' }} auf dieser Seite
           </p>
         </div>

@@ -33,13 +33,13 @@ const thresholds = computed<Threshold[]>(
 )
 
 const colorClass = computed(() => {
-  if (props.value === null || typeof props.value.v !== 'number') return 'text-gray-100'
+  if (props.value === null || typeof props.value.v !== 'number') return 'text-gray-900 dark:text-gray-100'
   const v = props.value.v as number
   const active = [...thresholds.value]
     .reverse()
     .find((t) => v >= t.value)
-  if (!active) return 'text-gray-100'
-  return active.color === 'danger' ? 'text-red-400' : 'text-yellow-400'
+  if (!active) return 'text-gray-900 dark:text-gray-100'
+  return active.color === 'danger' ? 'text-red-500 dark:text-red-400' : 'text-yellow-600 dark:text-yellow-400'
 })
 
 const quality = computed(() => props.value?.q ?? null)
@@ -47,12 +47,12 @@ const quality = computed(() => props.value?.q ?? null)
 
 <template>
   <div class="flex flex-col justify-between h-full p-3 select-none">
-    <span class="text-xs text-gray-400 truncate">{{ label }}</span>
+    <span class="text-xs text-gray-500 dark:text-gray-400 truncate">{{ label }}</span>
     <div class="flex items-baseline gap-1 mt-1">
       <span class="text-2xl font-semibold tabular-nums leading-none" :class="colorClass">
         {{ displayValue }}
       </span>
-      <span v-if="unit" class="text-sm text-gray-400">{{ unit }}</span>
+      <span v-if="unit" class="text-sm text-gray-400 dark:text-gray-400">{{ unit }}</span>
     </div>
     <!-- Quality-Indikator -->
     <div class="flex justify-end mt-1">

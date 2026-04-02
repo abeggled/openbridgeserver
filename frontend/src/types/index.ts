@@ -29,6 +29,8 @@ export interface WidgetInstance {
   id: string
   type: string
   datapoint_id: string | null
+  /** Optionaler separater Status-Datenpunkt (für Widgets die schreiben und lesen) */
+  status_datapoint_id: string | null
   x: number
   y: number
   w: number
@@ -64,6 +66,7 @@ export interface WidgetProps {
   config: Record<string, unknown>
   datapointId: string | null
   value: DataPointValue | null
+  statusValue: DataPointValue | null
   editorMode: boolean
 }
 

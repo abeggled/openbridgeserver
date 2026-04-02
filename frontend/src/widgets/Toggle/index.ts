@@ -12,4 +12,5 @@ WidgetRegistry.register({
   configComponent: Config,
   defaultConfig: { label: '' },
   compatibleTypes: ['BOOLEAN'],
+  supportsStatusDatapoint: true,
 })

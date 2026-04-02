@@ -30,6 +30,8 @@ export interface WidgetDefinition {
   defaultConfig: Record<string, unknown>
   /** Kompatible DataPoint-Typen. ["*"] = alle */
   compatibleTypes: string[]
+  /** Unterstützt separaten Status-Datenpunkt (z.B. Toggle, Slider) */
+  supportsStatusDatapoint?: boolean
 }
 
 class Registry {

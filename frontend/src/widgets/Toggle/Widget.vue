@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { datapoints } from '@/api/client'
 import type { DataPointValue } from '@/types'
 
@@ -7,25 +7,49 @@ const props = defineProps<{
   config: Record<string, unknown>
   datapointId: string | null
   value: DataPointValue | null
+  statusValue: DataPointValue | null
   editorMode: boolean
 }>()
 
 const label = computed(() => (props.config.label as string | undefined) ?? '—')
-const isOn = computed(() => {
-  if (props.value === null) return false
-  const v = props.value.v
-  if (typeof v === 'boolean') return v
-  if (typeof v === 'number') return v !== 0
+
+// Status-Datenpunkt hat Vorrang für die Anzeige; sonst Haupt-Datenpunkt
+const displayValue = computed(() => props.statusValue ?? props.value)
+
+function resolveIsOn(v: DataPointValue | null): boolean {
+  if (v === null) return false
+  const raw = v.v
+  if (typeof raw === 'boolean') return raw
+  if (typeof raw === 'number') return raw !== 0
   return false
+}
+
+// Optimistischer lokaler Status: wird nach dem Schreiben sofort aktualisiert,
+// bis ein neuer Wert vom Server eintrifft.
+const optimisticValue = ref<boolean | null>(null)
+
+// Sobald ein echter Wert ankommt, optimistischen Wert verwerfen
+watch(displayValue, () => {
+  optimisticValue.value = null
+})
+
+const isOn = computed(() => {
+  if (optimisticValue.value !== null) return optimisticValue.value
+  return resolveIsOn(displayValue.value)
 })
 
 const pending = ref(false)
 
 async function toggle() {
   if (props.editorMode || !props.datapointId || pending.value) return
+  const next = !isOn.value
+  optimisticValue.value = next
   pending.value = true
   try {
-    await datapoints.write(props.datapointId, !isOn.value)
+    await datapoints.write(props.datapointId, next)
+  } catch {
+    // Optimistischen Wert bei Fehler zurücksetzen
+    optimisticValue.value = null
   } finally {
     pending.value = false
   }
@@ -38,11 +62,11 @@ async function toggle() {
     :class="{ 'opacity-60': editorMode }"
     @click="toggle"
   >
-    <span class="text-xs text-gray-400 truncate w-full text-center">{{ label }}</span>
+    <span class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center">{{ label }}</span>
     <!-- Toggle-Schalter -->
     <button
       class="relative w-14 h-7 rounded-full transition-colors duration-200 focus:outline-none"
-      :class="isOn ? 'bg-blue-500' : 'bg-gray-600'"
+      :class="isOn ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'"
       :disabled="editorMode || pending"
       :aria-checked="isOn"
       role="switch"
@@ -52,7 +76,7 @@ async function toggle() {
         :class="{ 'translate-x-7': isOn }"
       />
     </button>
-    <span class="text-xs font-medium" :class="isOn ? 'text-blue-400' : 'text-gray-500'">
+    <span class="text-xs font-medium" :class="isOn ? 'text-blue-500 dark:text-blue-400' : 'text-gray-400 dark:text-gray-500'">
       {{ isOn ? 'EIN' : 'AUS' }}
     </span>
   </div>

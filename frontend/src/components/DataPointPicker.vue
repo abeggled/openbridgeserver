@@ -90,46 +90,46 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
     <!-- Anzeige: aktuell gewählter DP -->
     <div
       v-if="!open"
-      class="flex items-center gap-2 w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 cursor-pointer hover:border-gray-500 transition-colors"
+      class="flex items-center gap-2 w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 cursor-pointer hover:border-gray-400 dark:hover:border-gray-500 transition-colors"
       @click="openSearch"
     >
-      <span class="flex-1 text-sm truncate" :class="selectedName ? 'text-gray-100' : 'text-gray-500'">
+      <span class="flex-1 text-sm truncate" :class="selectedName ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500'">
         {{ selectedName || 'DataPoint wählen …' }}
       </span>
       <button
         v-if="selectedName"
-        class="text-gray-500 hover:text-gray-300 text-xs shrink-0"
+        class="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xs shrink-0"
         @click.stop="clear"
       >✕</button>
-      <span class="text-gray-500 text-xs shrink-0">▾</span>
+      <span class="text-gray-400 dark:text-gray-500 text-xs shrink-0">▾</span>
     </div>
 
     <!-- Suchfeld (wenn offen) -->
-    <div v-else class="flex flex-col border border-blue-500 rounded bg-gray-800 overflow-hidden">
+    <div v-else class="flex flex-col border border-blue-500 rounded bg-white dark:bg-gray-800 overflow-hidden">
       <input
         ref="inputEl"
         v-model="query"
         type="text"
         placeholder="Name, Tag oder Typ …"
-        class="w-full bg-transparent px-2 py-1.5 text-sm text-gray-100 focus:outline-none"
+        class="w-full bg-transparent px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none"
         @keydown.escape="open = false"
       />
 
       <!-- Ergebnisse -->
-      <div class="max-h-52 overflow-y-auto border-t border-gray-700">
-        <div v-if="loading" class="text-xs text-gray-500 px-3 py-2">Suche …</div>
-        <div v-else-if="query && results.length === 0" class="text-xs text-gray-500 px-3 py-2">
+      <div class="max-h-52 overflow-y-auto border-t border-gray-200 dark:border-gray-700">
+        <div v-if="loading" class="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">Suche …</div>
+        <div v-else-if="query && results.length === 0" class="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">
           Keine Treffer
         </div>
         <button
           v-for="dp in results"
           :key="dp.id"
-          class="w-full flex items-center gap-2 px-3 py-2 hover:bg-gray-700 transition-colors text-left"
+          class="w-full flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-left"
           @click="select(dp)"
         >
           <span class="flex-1 min-w-0">
-            <span class="block text-sm text-gray-100 truncate">{{ dp.name }}</span>
-            <span class="block text-xs text-gray-500">{{ dp.data_type }}{{ dp.unit ? ' · ' + dp.unit : '' }}</span>
+            <span class="block text-sm text-gray-900 dark:text-gray-100 truncate">{{ dp.name }}</span>
+            <span class="block text-xs text-gray-400 dark:text-gray-500">{{ dp.data_type }}{{ dp.unit ? ' · ' + dp.unit : '' }}</span>
           </span>
         </button>
       </div>
