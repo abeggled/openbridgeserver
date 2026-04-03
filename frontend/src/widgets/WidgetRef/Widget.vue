@@ -37,8 +37,8 @@ async function loadReference() {
   loading.value = true
   errorMsg.value = ''
   try {
-    const pc = await visu.getPage(sourcePageId.value)
-    const found = pc.widgets.find(w => w.name === sourceWidgetName.value) ?? null
+    const widgets = await visu.getWidgetRef(sourcePageId.value)
+    const found = widgets.find(w => w.name === sourceWidgetName.value) ?? null
 
     // Alte Subscriptions ablösen
     if (subscribedIds.length) { dpStore.unsubscribe(subscribedIds); subscribedIds = [] }

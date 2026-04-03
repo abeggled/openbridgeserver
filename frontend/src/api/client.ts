@@ -194,6 +194,10 @@ export const visu = {
   getPage: (id: string, sessionToken?: string) =>
     request<PageConfig>(`/visu/pages/${id}`, { sessionToken }),
 
+  /** Lädt alle Widget-Instanzen einer Seite ohne Zugriffsprüfung — für WidgetRef. */
+  getWidgetRef: (pageId: string) =>
+    request<import('@/types').WidgetInstance[]>(`/visu/widget-ref/${pageId}`, { silent401: true }),
+
   savePage: (id: string, config: PageConfig) =>
     request<void>(`/visu/pages/${id}`, {
       method: 'PUT',

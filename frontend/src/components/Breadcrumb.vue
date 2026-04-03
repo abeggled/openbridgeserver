@@ -6,17 +6,17 @@ import { useRouter } from 'vue-router'
 import type { VisuNode } from '@/types'
 
 const store = useVisuStore()
-const { breadcrumb, isAdmin } = storeToRefs(store)
+const { breadcrumb, isLoggedIn } = storeToRefs(store)
 const router = useRouter()
 
 // Letzter Knoten im Breadcrumb
 const lastNode = computed(() => breadcrumb.value[breadcrumb.value.length - 1] ?? null)
 
-// Kinder des letzten Knotens (gefiltert: user-geschützte nur für eingeloggte Benutzer)
+// Kinder des letzten Knotens (gefiltert: user-geschützte nur für angemeldete Benutzer)
 const children = computed<VisuNode[]>(() => {
   if (!lastNode.value) return []
   return store.getChildren(lastNode.value.id).filter(n => {
-    if (n.access === 'user') return isAdmin.value
+    if (n.access === 'user') return isLoggedIn.value
     return true
   })
 })

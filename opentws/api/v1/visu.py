@@ -34,6 +34,7 @@ from opentws.models.visu import (
     VisuNodeUpdate,
     VisuNodeUsersUpdate,
     PageConfig,
+    WidgetInstance,
     PinAuthRequest,
     PinAuthResponse,
     CopyNodeRequest,
@@ -366,6 +367,19 @@ async def get_page(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
     return node.page_config or PageConfig()
+
+
+@router.get("/widget-ref/{page_id}", response_model=list[WidgetInstance])
+async def get_widget_ref(page_id: str, db: Database = Depends(get_db)):
+    """Gibt alle Widget-Instanzen einer Seite zurück — ohne Zugriffsprüfung.
+    Wird ausschließlich von WidgetRef-Widgets verwendet, die einzelne Widgets
+    aus einer anderen Seite einbetten. Die Zugriffskontrolle erfolgt auf Ebene
+    der einbettenden Seite."""
+    node = await _get_node_or_404(db, page_id)
+    if node.type != "PAGE":
+        raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
+    pc = node.page_config or PageConfig()
+    return pc.widgets
 
 
 @router.put("/pages/{node_id}", status_code=status.HTTP_204_NO_CONTENT)

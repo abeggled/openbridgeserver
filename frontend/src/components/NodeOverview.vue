@@ -11,7 +11,7 @@ const props = defineProps<{ nodeId: string }>()
 const router = useRouter()
 const store  = useVisuStore()
 
-const isAdmin = computed(() => store.isAdmin)
+const isLoggedIn = computed(() => store.isLoggedIn)
 
 /**
  * Effektiven Zugang eines Knotens bestimmen (Vererbung berücksichtigen).
@@ -31,8 +31,8 @@ const children = computed(() => {
   const all = store.getChildren(props.nodeId)
   return all.filter(n => {
     const access = effectiveAccess(n)
-    // user-gesicherte Seiten nur für eingeloggte Benutzer sichtbar
-    if (access === 'user') return isAdmin.value
+    // user-gesicherte Seiten nur für angemeldete Benutzer sichtbar (Zugangsprüfung erfolgt im Viewer)
+    if (access === 'user') return isLoggedIn.value
     return true
   })
 })
