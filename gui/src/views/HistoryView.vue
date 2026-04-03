@@ -99,7 +99,7 @@ import DpCombobox  from '@/components/ui/DpCombobox.vue'
 import { Chart, LineController, LineElement, PointElement, LinearScale, TimeScale, Tooltip, Legend } from 'chart.js'
 import 'chart.js/auto'
 
-const { fmtDateTime, fmtChartLabel, toDatetimeLocal, fromDatetimeLocal } = useTz()
+const { fmtDateTime, fmtChartLabel, toDatetimeLocal, fromDatetimeLocal, toUtcDate } = useTz()
 
 const route = useRoute()
 
@@ -180,28 +180,33 @@ function renderChart() {
   if (!chartCanvas.value || !points.value.length) return
   chartInstance?.destroy()
 
-  const labels = points.value.map(p => fmtChartLabel(p.ts ?? p.bucket))
-  const values = points.value.map(p => p.v)
+  // Convert every point to {x: Unix-ms, y: value} so Chart.js never has to
+  // guess the scale type from label strings (which caused it to auto-activate
+  // the TimeScale without an adapter and display raw ms).
+  const chartData = points.value.map(p => {
+    const isoStr = p.ts ?? p.bucket ?? null
+    const ms = isoStr ? (toUtcDate(isoStr)?.getTime() ?? 0) : 0
+    return { x: ms, y: p.v }
+  })
 
   const dark = document.documentElement.classList.contains('dark')
-  const tickColor   = dark ? '#64748b' : '#94a3b8'
-  const gridColor   = dark ? '#1e2435' : '#f1f5f9'
-  const tooltipBg   = dark ? '#1e2435' : '#ffffff'
-  const tooltipBody = dark ? '#e2e8f0' : '#1e293b'
+  const tickColor    = dark ? '#64748b' : '#94a3b8'
+  const gridColor    = dark ? '#1e2435' : '#f1f5f9'
+  const tooltipBg    = dark ? '#1e2435' : '#ffffff'
+  const tooltipBody  = dark ? '#e2e8f0' : '#1e293b'
   const tooltipTitle = dark ? '#94a3b8' : '#475569'
   const tooltipBorder = dark ? '#334155' : '#e2e8f0'
 
   chartInstance = new Chart(chartCanvas.value, {
     type: 'line',
     data: {
-      labels,
       datasets: [{
         label: chartTitle.value,
-        data: values,
+        data: chartData,
         borderColor: '#3b82f6',
         backgroundColor: 'rgba(59,130,246,0.08)',
         borderWidth: 2,
-        pointRadius: points.value.length > 200 ? 0 : 3,
+        pointRadius: chartData.length > 200 ? 0 : 3,
         pointHoverRadius: 5,
         fill: true,
         tension: 0.3,
@@ -216,6 +221,8 @@ function renderChart() {
           backgroundColor: tooltipBg, titleColor: tooltipTitle,
           bodyColor: tooltipBody, borderColor: tooltipBorder, borderWidth: 1,
           callbacks: {
+            // x-axis label in tooltip: format ms as local time
+            title: (items) => fmtChartLabel(new Date(items[0].parsed.x).toISOString()),
             label: (ctx) => {
               const v = ctx.parsed.y
               const unit = mode.value === 'raw'
@@ -227,7 +234,17 @@ function renderChart() {
         },
       },
       scales: {
-        x: { ticks: { color: tickColor, maxTicksLimit: 10 }, grid: { color: gridColor } },
+        // linear scale on Unix-ms with a formatting callback — no date adapter needed
+        x: {
+          type: 'linear',
+          ticks: {
+            color: tickColor,
+            maxTicksLimit: 8,
+            maxRotation: 0,
+            callback: (ms) => fmtChartLabel(new Date(ms).toISOString()),
+          },
+          grid: { color: gridColor },
+        },
         y: { ticks: { color: tickColor }, grid: { color: gridColor } },
       }
     }

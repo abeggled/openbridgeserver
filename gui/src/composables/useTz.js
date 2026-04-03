@@ -3,13 +3,16 @@ import { useSettingsStore } from '@/stores/settings'
 export function useTz() {
   const settings = useSettingsStore()
 
-  // Strings without timezone offset (e.g. SQLite aggregate buckets "2024-01-01T14:00:00")
-  // are ambiguous — browsers may parse them as local time instead of UTC.
-  // Appending "Z" forces UTC interpretation.
+  // Normalize a timestamp to a valid UTC Date:
+  //   - numbers / numeric strings  → treat as Unix ms
+  //   - ISO strings without tz     → append "Z" to force UTC (SQLite aggregate buckets)
+  //   - ISO strings with tz        → parse as-is
   function toUtcDate(iso) {
-    if (!iso) return null
+    if (iso == null || iso === '') return null
+    if (typeof iso === 'number' || (typeof iso === 'string' && /^\d+$/.test(iso))) {
+      return new Date(Number(iso))
+    }
     const s = String(iso)
-    // Already has timezone info (Z, +HH:MM, -HH:MM)
     if (/[Zz]$/.test(s) || /[+-]\d{2}:\d{2}$/.test(s)) return new Date(s)
     return new Date(s + 'Z')
   }
@@ -56,5 +59,5 @@ export function useTz() {
     return new Date(str).toISOString()
   }
 
-  return { fmtDate, fmtDateTime, fmtChartLabel, toDatetimeLocal, fromDatetimeLocal }
+  return { fmtDate, fmtDateTime, fmtChartLabel, toDatetimeLocal, fromDatetimeLocal, toUtcDate }
 }
