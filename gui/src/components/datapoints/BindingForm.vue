@@ -32,11 +32,11 @@
           </select>
         </div>
         <div class="form-group">
-          <label class="label">Direction *</label>
+          <label class="label">Richtung *</label>
           <select v-model="form.direction" class="input">
-            <option value="SOURCE">SOURCE — Adapter → System</option>
-            <option value="DEST">DEST — System → Adapter</option>
-            <option value="BOTH">BOTH — beidseitig</option>
+            <option value="SOURCE">Lesen (von Adapter)</option>
+            <option value="DEST">Schreiben (auf Adapter)</option>
+            <option value="BOTH">Lesen/Schreiben (von/auf Adapter)</option>
           </select>
         </div>
       </div>
@@ -58,11 +58,6 @@
               </option>
             </optgroup>
           </select>
-        </div>
-        <div class="form-group">
-          <label class="label">Status-Gruppenadresse <span class="optional">(optional)</span></label>
-          <GaCombobox v-model="cfg.state_group_address" placeholder="z.B. 1/2/4 oder Name suchen …" />
-          <p class="hint">Rückmelde-GA für den Ist-Wert (DEST / BOTH)</p>
         </div>
         <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="flex items-start gap-2">
           <input
@@ -166,24 +161,188 @@
       <!-- MQTT -->
       <template v-if="selectedAdapterType === 'MQTT'">
         <div class="section-header">MQTT Binding</div>
+
+        <!-- Topic with browser -->
         <div class="form-group">
           <label class="label">Topic *</label>
-          <input v-model="cfg.topic" class="input" placeholder="z.B. haus/wohnzimmer/temperatur" required />
-          <p class="hint">SOURCE/BOTH: abonniertes Topic; DEST: Publish-Topic</p>
+          <div class="flex gap-2">
+            <input v-model="cfg.topic" class="input flex-1" placeholder="z.B. haus/wohnzimmer/temperatur" required />
+            <button
+              type="button"
+              class="btn-secondary px-3 text-sm whitespace-nowrap"
+              :disabled="!form.adapter_instance_id || mqttBrowseLoading"
+              @click="mqttBrowse"
+            >
+              <span v-if="mqttBrowseLoading" class="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1"></span>
+              {{ mqttBrowseLoading ? 'Scannen …' : 'Browse' }}
+            </button>
+          </div>
+          <p class="hint">Lesen/Lesen+Schreiben: abonniertes Topic; Schreiben: Publish-Topic</p>
+
+          <!-- Browse results -->
+          <div
+            v-if="mqttBrowseTopics.length > 0"
+            class="mt-1 max-h-44 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800"
+          >
+            <button
+              v-for="t in mqttBrowseTopics"
+              :key="t"
+              type="button"
+              class="w-full text-left px-3 py-1.5 text-sm font-mono hover:bg-slate-50 dark:hover:bg-slate-700/50 truncate"
+              @click="selectMqttTopic(t)"
+            >{{ t }}</button>
+          </div>
+          <p v-if="mqttBrowseError" class="text-xs text-red-400 mt-1">{{ mqttBrowseError }}</p>
         </div>
+
         <div class="optional-divider">Optionale Einstellungen</div>
         <div class="grid grid-cols-2 gap-4">
-          <div class="form-group">
+          <!-- Publish-Topic: nur bei Lesen/Schreiben (BOTH) sichtbar -->
+          <div v-if="form.direction === 'BOTH'" class="form-group">
             <label class="label">Publish-Topic <span class="optional">(optional)</span></label>
             <input v-model="cfg.publish_topic" class="input" placeholder="z.B. …/set" />
-            <p class="hint">Separates Topic für DEST/BOTH</p>
+            <p class="hint">Topic für Schreiben — leer = Topic wird verwendet</p>
           </div>
-          <div class="form-group flex flex-col justify-end">
+          <!-- Retain: nur bei Schreiben (DEST) oder Lesen/Schreiben (BOTH) -->
+          <div v-if="form.direction === 'DEST' || form.direction === 'BOTH'" class="form-group flex flex-col justify-end">
             <div class="flex items-center gap-2 mt-6">
               <input type="checkbox" id="mqtt_retain" v-model="cfg.retain" class="w-4 h-4 rounded" />
               <label for="mqtt_retain" class="text-sm text-slate-600 dark:text-slate-300">Retain</label>
             </div>
             <p class="hint">Broker speichert letzten Wert</p>
+          </div>
+        </div>
+
+        <!-- Payload Template — only for DEST / BOTH -->
+        <div v-if="form.direction === 'DEST' || form.direction === 'BOTH'" class="form-group">
+          <label class="label">Payload-Template <span class="optional">(optional)</span></label>
+          <input
+            v-model="cfg.payload_template"
+            class="input font-mono text-sm"
+            placeholder='z.B. {"value": "###DP###", "unit": "°C"}'
+          />
+          <p class="hint"><code class="text-blue-400">###DP###</code> wird durch den Datenpunktwert ersetzt. Leer = Wert direkt als Payload.</p>
+        </div>
+
+        <!-- Source Data Type — SOURCE / BOTH only -->
+        <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="form-group">
+          <label class="label">Quell-Datentyp <span class="optional">(optional)</span></label>
+          <div class="flex gap-2 items-start">
+            <select v-model="cfg.source_data_type" class="input flex-1">
+              <option v-for="t in MQTT_SOURCE_TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>
+            </select>
+            <span v-if="mqttTypeCompat" class="mt-1.5 shrink-0 text-xs px-2 py-1 rounded-full font-medium" :class="mqttTypeCompat.cls">
+              {{ mqttTypeCompat.label }}
+            </span>
+          </div>
+          <p class="hint">
+            Wie der eingehende Payload interpretiert wird.
+            DataPoint-Typ: <code class="text-blue-400">{{ props.dpDataType }}</code>
+          </p>
+
+          <!-- JSON key extraction panel -->
+          <div v-if="cfg.source_data_type === 'json'" class="mt-3 flex flex-col gap-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50">
+            <div class="form-group">
+              <div class="flex justify-between items-center mb-1">
+                <label class="text-xs font-medium text-slate-500">Sample Payload</label>
+                <button
+                  type="button"
+                  class="text-xs text-blue-500 hover:text-blue-400 disabled:opacity-40"
+                  :disabled="!cfg.topic || mqttSampleLoading"
+                  @click="loadMqttSample"
+                >{{ mqttSampleLoading ? 'Lädt…' : '↺ Vom Topic laden' }}</button>
+              </div>
+              <textarea
+                v-model="mqttJsonSample"
+                class="input font-mono text-xs h-20 resize-y"
+                placeholder='{"temperature": 22.5, "humidity": 65}'
+                @input="onMqttJsonSampleInput"
+              />
+              <p v-if="mqttJsonParseError" class="text-xs text-red-400 mt-0.5">{{ mqttJsonParseError }}</p>
+            </div>
+            <div class="form-group">
+              <label class="text-xs font-medium text-slate-500 mb-1 block">JSON-Schlüssel *</label>
+              <div class="flex gap-2">
+                <input
+                  v-model="cfg.json_key"
+                  class="input flex-1 font-mono text-sm"
+                  placeholder="z.B. temperature"
+                />
+                <select
+                  v-if="mqttJsonKeys.length"
+                  v-model="cfg.json_key"
+                  class="input w-52 shrink-0"
+                >
+                  <option value="">— aus Sample —</option>
+                  <option v-for="k in mqttJsonKeys" :key="k.key" :value="k.key">
+                    {{ k.key }}<template v-if="k.text"> = {{ k.text }}</template>
+                  </option>
+                </select>
+              </div>
+              <p class="hint">Schlüssel im JSON-Objekt, dessen Wert übernommen wird.</p>
+            </div>
+          </div>
+
+          <!-- XML element-path extraction panel -->
+          <div v-if="cfg.source_data_type === 'xml'" class="mt-3 flex flex-col gap-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50">
+            <div class="form-group">
+              <div class="flex justify-between items-center mb-1">
+                <label class="text-xs font-medium text-slate-500">Sample Payload</label>
+                <button
+                  type="button"
+                  class="text-xs text-blue-500 hover:text-blue-400 disabled:opacity-40"
+                  :disabled="!cfg.topic || mqttSampleLoading"
+                  @click="loadMqttSample"
+                >{{ mqttSampleLoading ? 'Lädt…' : '↺ Vom Topic laden' }}</button>
+              </div>
+              <textarea
+                v-model="mqttXmlSample"
+                class="input font-mono text-xs h-20 resize-y"
+                placeholder='<sensor><temperature>22.5</temperature><humidity>65</humidity></sensor>'
+                @input="onMqttXmlSampleInput"
+              />
+              <p v-if="mqttXmlParseError" class="text-xs text-red-400 mt-0.5">{{ mqttXmlParseError }}</p>
+            </div>
+            <div class="form-group">
+              <label class="text-xs font-medium text-slate-500 mb-1 block">Element-Pfad *</label>
+              <div class="flex gap-2">
+                <input
+                  v-model="cfg.xml_path"
+                  class="input flex-1 font-mono text-sm"
+                  placeholder="z.B. temperature oder data/sensors/temperature"
+                />
+                <select
+                  v-if="mqttXmlElements.length"
+                  v-model="cfg.xml_path"
+                  class="input w-52 shrink-0"
+                >
+                  <option value="">— aus Sample —</option>
+                  <option v-for="el in mqttXmlElements" :key="el.path" :value="el.path">
+                    {{ el.path }}<template v-if="el.text"> = {{ el.text }}</template>
+                  </option>
+                </select>
+              </div>
+              <p class="hint">
+                Pfad relativ zum Root-Element (ET-XPath, z.B. <code class="text-blue-400">data/temperature</code>).
+                Numerische Textwerte werden automatisch konvertiert.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Value Mapping -->
+        <div class="form-group">
+          <label class="label">Wertzuordnung <span class="optional">(optional)</span></label>
+          <select v-model="cfg.value_map_preset" class="input" @change="onValueMapPresetChange">
+            <option v-for="p in VALUE_MAP_PRESETS" :key="p.key" :value="p.key">{{ p.label }}</option>
+          </select>
+          <div v-if="cfg.value_map_preset === 'custom'" class="mt-2">
+            <textarea
+              v-model="cfg.value_map_custom"
+              class="input font-mono text-sm h-20 resize-y"
+              placeholder='{"0": "off", "1": "on"}'
+            />
+            <p class="hint">JSON-Objekt mit String-Schlüsseln und -Werten.</p>
           </div>
         </div>
       </template>
@@ -325,6 +484,7 @@ const props = defineProps({
   dpId:           { type: String,  required: true },
   initial:        { type: Object,  default: null },
   dpPersistValue: { type: Boolean, default: false },
+  dpDataType:     { type: String,  default: 'UNKNOWN' },  // DataPoint.data_type for compat check
 })
 const emit = defineEmits(['save', 'cancel'])
 
@@ -353,14 +513,66 @@ const form = reactive({
   send_min_delta_pct:  null,
 })
 
+const VALUE_MAP_PRESETS = [
+  { key: '',            label: '— keine Wertzuordnung —',            map: null },
+  { key: 'num_invert',  label: '0 ↔ 1 (numerisch invertieren)',       map: { '0': '1', '1': '0' } },
+  { key: 'bool_onoff',  label: 'true/false → on/off',                 map: { 'true': 'on', 'false': 'off' } },
+  { key: 'onoff_bool',  label: 'on/off → true/false',                 map: { 'on': 'true', 'off': 'false' } },
+  { key: 'num_onoff',   label: '0/1 → off/on',                        map: { '0': 'off', '1': 'on' } },
+  { key: 'onoff_num',   label: 'off/on → 0/1',                        map: { 'off': '0', 'on': '1' } },
+  { key: 'custom',      label: 'Benutzerdefiniert (JSON) …',           map: null },
+]
+
 const cfg = reactive({
   group_address: '', dpt_id: 'DPT9.001', state_group_address: '', respond_to_read: false,
   address: 0, register_type: 'holding', data_format: 'uint16',
   unit_id: 1, count: 1, scale_factor: 1.0, poll_interval: 1.0,
   byte_order: 'big', word_order: 'big',
-  topic: '', publish_topic: '', retain: false,
+  topic: '', publish_topic: '', retain: false, payload_template: '',
+  value_map: null, value_map_preset: '', value_map_custom: '',
+  source_data_type: '', json_key: '', xml_path: '',
   sensor_id: '', sensor_type: 'DS18B20',
 })
+
+// MQTT source data type constants + compatibility map
+const MQTT_SOURCE_TYPES = [
+  { value: '',       label: '— kein Typ erzwingen (Standard) —' },
+  { value: 'string', label: 'string' },
+  { value: 'int',    label: 'int' },
+  { value: 'float',  label: 'float' },
+  { value: 'bool',   label: 'bool' },
+  { value: 'json',   label: 'JSON — Schlüssel extrahieren' },
+  { value: 'xml',    label: 'XML — Element-Pfad extrahieren' },
+]
+
+// DataPoint type → which MQTT source types are ok / warn / bad
+const MQTT_TYPE_COMPAT = {
+  BOOLEAN:  { ok: ['bool', 'auto'], warn: ['int', 'string'], bad: ['float', 'json', 'xml'] },
+  INTEGER:  { ok: ['int', 'auto'],  warn: ['float'],          bad: ['bool', 'string', 'json', 'xml'] },
+  FLOAT:    { ok: ['float', 'int', 'auto'], warn: [],          bad: ['bool', 'string', 'json', 'xml'] },
+  STRING:   { ok: ['string', 'auto'], warn: ['int', 'float', 'bool'], bad: ['json', 'xml'] },
+  DATE:     { ok: ['string', 'auto'], warn: [],  bad: ['int', 'float', 'bool', 'json', 'xml'] },
+  TIME:     { ok: ['string', 'auto'], warn: [],  bad: ['int', 'float', 'bool', 'json', 'xml'] },
+  DATETIME: { ok: ['string', 'auto'], warn: [],  bad: ['int', 'float', 'bool', 'json', 'xml'] },
+}
+
+// JSON sample state (UI-only — not persisted)
+const mqttJsonSample     = ref('')
+const mqttJsonKeys       = ref([])   // [{ key: 'temperature', type: 'number' }, …]
+const mqttJsonParseError = ref(null)
+
+// XML sample state (UI-only — not persisted)
+const mqttXmlSample      = ref('')
+const mqttXmlElements    = ref([])   // [{ path: 'data/temperature', text: '22.5' }, …]
+const mqttXmlParseError  = ref(null)
+
+// Shared loading state for sample fetch
+const mqttSampleLoading  = ref(false)
+
+// MQTT topic browser state
+const mqttBrowseTopics = ref([])
+const mqttBrowseLoading = ref(false)
+const mqttBrowseError  = ref(null)
 
 // ---------------------------------------------------------------------------
 // Computed
@@ -427,6 +639,20 @@ const groupedInstances = computed(() => {
   return Object.entries(groups).map(([type, items]) => ({ type, items }))
 })
 
+// Compatibility badge for MQTT source_data_type vs DataPoint data_type
+const mqttTypeCompat = computed(() => {
+  const sdt = cfg.source_data_type ?? 'auto'
+  if (!sdt || sdt === 'json' || sdt === 'xml') return null  // no badge — depends on extracted value
+  const dpType = (props.dpDataType ?? 'UNKNOWN').toUpperCase()
+  const compat = MQTT_TYPE_COMPAT[dpType]
+  if (!compat) return null                             // UNKNOWN → no badge
+  if (compat.ok.includes(sdt))
+    return { cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400', label: 'kompatibel' }
+  if (compat.warn.includes(sdt))
+    return { cls: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400', label: 'Konvertierung nötig' }
+  return { cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400', label: 'inkompatibel' }
+})
+
 // ---------------------------------------------------------------------------
 // Init beim Bearbeiten
 // ---------------------------------------------------------------------------
@@ -440,6 +666,20 @@ watch(() => props.initial, val => {
   if (cfg.state_group_address == null) cfg.state_group_address = ''
   if (cfg.publish_topic       == null) cfg.publish_topic = ''
   if (cfg.respond_to_read     == null) cfg.respond_to_read = false
+  if (cfg.payload_template    == null) cfg.payload_template = ''
+  if (cfg.source_data_type   == null) cfg.source_data_type = ''
+  if (cfg.json_key           == null) cfg.json_key = ''
+  if (cfg.xml_path           == null) cfg.xml_path = ''
+  // Restore value_map UI state from loaded config
+  if (cfg.value_map && typeof cfg.value_map === 'object') {
+    const mapStr = JSON.stringify(cfg.value_map)
+    const preset = VALUE_MAP_PRESETS.find(p => p.map && JSON.stringify(p.map) === mapStr)
+    cfg.value_map_preset = preset?.key ?? 'custom'
+    cfg.value_map_custom = preset ? '' : JSON.stringify(cfg.value_map, null, 2)
+  } else {
+    cfg.value_map_preset = ''
+    cfg.value_map_custom = ''
+  }
   const ms = val.send_throttle_ms ?? 0
   if      (ms === 0)               { form.throttle_value = 0;            form.throttle_unit = 's'   }
   else if (ms % 3_600_000 === 0)   { form.throttle_value = ms/3_600_000; form.throttle_unit = 'h'   }
@@ -465,6 +705,135 @@ onMounted(async () => {
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
+
+async function mqttBrowse() {
+  mqttBrowseLoading.value = true
+  mqttBrowseError.value   = null
+  mqttBrowseTopics.value  = []
+  try {
+    const res = await adapterApi.mqttBrowseTopics(form.adapter_instance_id)
+    mqttBrowseTopics.value = res.data
+    if (res.data.length === 0) mqttBrowseError.value = 'Keine Topics empfangen – Broker erreichbar?'
+  } catch (e) {
+    mqttBrowseError.value = e.response?.data?.detail ?? 'Fehler beim Abrufen der Topics'
+  } finally {
+    mqttBrowseLoading.value = false
+  }
+}
+
+function selectMqttTopic(topic) {
+  cfg.topic = topic
+  mqttBrowseTopics.value = []
+  mqttBrowseError.value  = null
+}
+
+function onValueMapPresetChange() {
+  if (cfg.value_map_preset !== 'custom') cfg.value_map_custom = ''
+}
+
+async function loadMqttSample() {
+  const instanceId = form.adapter_instance_id || props.initial?.adapter_instance_id
+  const topic = cfg.topic?.trim()
+  if (!instanceId || !topic) return
+  mqttSampleLoading.value = true
+  // Clear previous errors so the user sees the loading state
+  mqttJsonParseError.value = null
+  mqttXmlParseError.value  = null
+  try {
+    const { data } = await adapterApi.mqttSamplePayload(instanceId, topic)
+    if (cfg.source_data_type === 'json') {
+      mqttJsonSample.value = data.payload
+      onMqttJsonSampleInput()
+    } else if (cfg.source_data_type === 'xml') {
+      mqttXmlSample.value = data.payload
+      onMqttXmlSampleInput()
+    }
+  } catch (e) {
+    const msg = e.response?.data?.detail ?? 'Kein Payload empfangen'
+    if (cfg.source_data_type === 'json') mqttJsonParseError.value = msg
+    if (cfg.source_data_type === 'xml')  mqttXmlParseError.value  = msg
+  } finally {
+    mqttSampleLoading.value = false
+  }
+}
+
+// Auto-load payload when switching to JSON/XML mode (if topic already set)
+watch(() => cfg.source_data_type, sdt => {
+  if (sdt === 'json' || sdt === 'xml') loadMqttSample()
+})
+
+function collectXmlLeafPaths(el, prefix) {
+  const result = []
+
+  // Group children by tag name so we can detect repeated elements
+  const byTag = {}
+  for (const child of el.children) {
+    ;(byTag[child.tagName] ??= []).push(child)
+  }
+
+  for (const [tag, siblings] of Object.entries(byTag)) {
+    for (let i = 0; i < siblings.length; i++) {
+      const child = siblings[i]
+
+      // Build path segment — include attribute predicate when helpful
+      let segment = tag
+      if (siblings.length > 1 || child.attributes.length > 0) {
+        // Prefer a named attribute (e.g. id) over positional index
+        const attr = child.attributes[0]
+        segment = attr
+          ? `${tag}[@${attr.name}='${attr.value}']`
+          : `${tag}[${i + 1}]`
+      }
+
+      const path = prefix ? `${prefix}/${segment}` : segment
+
+      if (child.children.length === 0) {
+        result.push({ path, text: child.textContent.trim() })
+      } else {
+        result.push(...collectXmlLeafPaths(child, path))
+      }
+    }
+  }
+  return result
+}
+
+function onMqttXmlSampleInput() {
+  mqttXmlParseError.value = null
+  mqttXmlElements.value = []
+  const s = mqttXmlSample.value.trim()
+  if (!s) return
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(s, 'application/xml')
+  const parseErr = doc.querySelector('parsererror')
+  if (parseErr) {
+    mqttXmlParseError.value = `Kein gültiges XML: ${parseErr.textContent.split('\n')[0].trim()}`
+    return
+  }
+  mqttXmlElements.value = collectXmlLeafPaths(doc.documentElement, '')
+  if (mqttXmlElements.value.length === 0)
+    mqttXmlParseError.value = 'Keine Kind-Elemente gefunden'
+}
+
+function onMqttJsonSampleInput() {
+  mqttJsonParseError.value = null
+  mqttJsonKeys.value = []
+  const s = mqttJsonSample.value.trim()
+  if (!s) return
+  try {
+    const obj = JSON.parse(s)
+    if (obj !== null && typeof obj === 'object' && !Array.isArray(obj)) {
+      mqttJsonKeys.value = Object.entries(obj).map(([k, v]) => ({
+        key: k,
+        type: v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v,
+        text: v === null ? 'null' : Array.isArray(v) || typeof v === 'object' ? JSON.stringify(v) : String(v),
+      }))
+    } else {
+      mqttJsonParseError.value = 'Sample muss ein JSON-Objekt sein (kein Array / Primitivwert)'
+    }
+  } catch (e) {
+    mqttJsonParseError.value = `Kein gültiges JSON: ${e.message}`
+  }
+}
 
 function onGaSelect(item) {
   if (item.dpt && item.dpt !== cfg.dpt_id) cfg.dpt_id = item.dpt
@@ -498,7 +867,24 @@ function buildConfig() {
   }
   if (type === 'MQTT') {
     const c = { topic: cfg.topic, retain: cfg.retain }
-    if (cfg.publish_topic?.trim()) c.publish_topic = cfg.publish_topic.trim()
+    if (cfg.publish_topic?.trim())    c.publish_topic    = cfg.publish_topic.trim()
+    if (cfg.payload_template?.trim()) c.payload_template = cfg.payload_template.trim()
+    // source_data_type + json_key
+    if (cfg.source_data_type) {
+      c.source_data_type = cfg.source_data_type
+      if (cfg.source_data_type === 'json' && cfg.json_key?.trim())
+        c.json_key = cfg.json_key.trim()
+      if (cfg.source_data_type === 'xml' && cfg.xml_path?.trim())
+        c.xml_path = cfg.xml_path.trim()
+    }
+    // Resolve value_map from preset or custom JSON
+    let valueMap = null
+    if (cfg.value_map_preset === 'custom') {
+      try { valueMap = JSON.parse(cfg.value_map_custom) } catch { /* invalid JSON — ignore */ }
+    } else if (cfg.value_map_preset) {
+      valueMap = VALUE_MAP_PRESETS.find(p => p.key === cfg.value_map_preset)?.map ?? null
+    }
+    if (valueMap) c.value_map = valueMap
     return c
   }
   if (type === 'ONEWIRE') {

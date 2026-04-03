@@ -98,8 +98,10 @@ export const adapterApi = {
   getInstance:     (id)         => api.get(`/adapters/instances/${id}`),
   updateInstance:  (id, data)   => api.patch(`/adapters/instances/${id}`, data),
   deleteInstance:  (id)         => api.delete(`/adapters/instances/${id}`),
-  testInstance:    (id, config) => api.post(`/adapters/instances/${id}/test`, { config }),
-  restartInstance: (id)         => api.post(`/adapters/instances/${id}/restart`),
+  testInstance:       (id, config)      => api.post(`/adapters/instances/${id}/test`, { config }),
+  restartInstance:    (id)              => api.post(`/adapters/instances/${id}/restart`),
+  mqttBrowseTopics:   (id, timeout = 5) => api.get(`/adapters/instances/${id}/mqtt/browse`, { params: { timeout }, timeout: (timeout + 3) * 1000 }),
+  mqttSamplePayload:  (id, topic, timeout = 5) => api.get(`/adapters/instances/${id}/mqtt/sample`, { params: { topic, timeout }, timeout: (timeout + 3) * 1000 }),
 }
 
 // ── KNX Project Import ────────────────────────────────────────────────────

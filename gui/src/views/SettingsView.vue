@@ -234,9 +234,9 @@
             <div class="form-group">
               <label class="label">Richtung</label>
               <select v-model="knxDirection" class="input text-sm">
-                <option value="BOTH">BOTH — lesen &amp; schreiben</option>
-                <option value="SOURCE">SOURCE — nur lesen (KNX → DataPoint)</option>
-                <option value="DEST">DEST — nur schreiben (DataPoint → KNX)</option>
+                <option value="BOTH">Lesen/Schreiben (von/auf Adapter)</option>
+                <option value="SOURCE">Lesen (von Adapter)</option>
+                <option value="DEST">Schreiben (auf Adapter)</option>
               </select>
             </div>
           </div>

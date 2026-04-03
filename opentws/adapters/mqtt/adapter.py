@@ -10,14 +10,47 @@ Adapter-Konfiguration (adapter_configs.config in DB):
   password: str?  — optional
 
 Binding-Konfiguration (pro AdapterBinding.config):
-  topic:         str   — Topic zum Subscriben (SOURCE/BOTH) bzw. Publishen (DEST/BOTH)
-  publish_topic: str?  — Für DEST/BOTH: separates Publish-Topic (falls abweichend von topic)
-  retain:        bool  — Retain-Flag beim Publishen (default: False)
+  topic:            str        — Topic zum Subscriben (SOURCE/BOTH) bzw. Publishen (DEST/BOTH)
+  publish_topic:    str?       — Für DEST/BOTH: separates Publish-Topic (falls abweichend von topic)
+  retain:           bool       — Retain-Flag beim Publishen (default: False)
+  payload_template: str?       — Für DEST/BOTH: Payload-Template mit ###DP### als Platzhalter
+  value_map:        dict[str,str]? — Wertzuordnung: z.B. {"0": "off", "1": "on"}
+  source_data_type: str?       — SOURCE/BOTH: "string"|"int"|"float"|"bool"|"json"|"xml"|None(=auto)
+  json_key:         str?       — Schlüssel zum Extrahieren aus JSON-Payload (source_data_type=="json")
+  xml_path:         str?       — Element-Pfad (ET-XPath) zum Extrahieren aus XML-Payload (source_data_type=="xml")
 
 Richtungs-Semantik:
   SOURCE  → Adapter subscribet auf topic, liefert Werte ins System
   DEST    → Adapter publisht auf publish_topic (oder topic) wenn write() aufgerufen wird
   BOTH    → Beides: subscriben auf topic, publishen auf publish_topic (oder topic)
+
+source_data_type:
+  Steuert, wie der eingehende Payload interpretiert wird (SOURCE/BOTH):
+    None/"auto": json.loads-Erkennung (Standardverhalten)
+    "string":    Wert direkt als String
+    "int":       Konvertierung nach int (via float für Strings wie "22.0")
+    "float":     Konvertierung nach float
+    "bool":      true/false, on/off, 1/0 → Python bool
+    "json":      Payload als JSON-Objekt parsen, dann json_key extrahieren
+
+json_key:
+  Wenn source_data_type=="json": Schlüssel im geparsten JSON-Objekt, dessen Wert als
+  DataPoint-Wert übernommen wird. Leer = gesamtes Objekt.
+
+xml_path:
+  Wenn source_data_type=="xml": ElementTree-kompatibler XPath-Ausdruck relativ zum
+  Root-Element (z.B. "temperature", "data/sensors/temperature").
+  Leer = text-Inhalt des Root-Elements.
+  Zahlenwerte werden automatisch nach int/float konvertiert, sonst String.
+
+value_map:
+  Wird auf eingehende (SOURCE, nach source_data_type-Parsing) und ausgehende (DEST) Werte
+  angewendet. Schlüssel und Werte sind Strings; der Istwert wird via str() für den Lookup.
+
+payload_template:
+  Enthält den Platzhalter ###DP###, der durch den (ggf. per value_map transformierten) Wert
+  ersetzt wird. Nicht-String-Werte werden als JSON serialisiert (z.B. true statt True).
+  Leer = Wert wird direkt als Payload gesendet.
 """
 from __future__ import annotations
 
@@ -47,9 +80,14 @@ class MqttAdapterConfig(BaseModel):
 
 
 class MqttBindingConfig(BaseModel):
-    topic: str                        # subscribe (SOURCE/BOTH) or publish (DEST)
-    publish_topic: str | None = None  # DEST/BOTH: publish here if set, else use topic
-    retain: bool = False              # retain flag when publishing
+    topic: str                                        # subscribe (SOURCE/BOTH) or publish (DEST)
+    publish_topic: str | None = None                  # DEST/BOTH: publish here if set, else use topic
+    retain: bool = False                              # retain flag when publishing
+    payload_template: str | None = None              # DEST/BOTH: template with ###DP### placeholder
+    value_map: dict[str, str] | None = None          # value substitution map (str keys + values)
+    source_data_type: str | None = None              # SOURCE/BOTH: "string"|"int"|"float"|"bool"|"json"|"xml"|None
+    json_key: str | None = None                      # key to extract when source_data_type=="json"
+    xml_path: str | None = None                      # ET-XPath path when source_data_type=="xml"
 
 
 # ---------------------------------------------------------------------------
@@ -176,13 +214,76 @@ class MqttAdapter(AdapterBase):
             return
 
         raw = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else str(payload)
+        # Auto-parse baseline (used as fallback and for "json" source type)
         try:
-            value = json.loads(raw)
+            auto_value = json.loads(raw)
         except Exception:
-            value = raw
+            auto_value = raw
 
         for binding in entries:
-            pub_value = value
+            pub_value = auto_value
+            try:
+                bc = MqttBindingConfig(**binding.config)
+                sdt = bc.source_data_type
+
+                # --- source_data_type coercion / extraction ---
+                if sdt == "json":
+                    obj = auto_value if isinstance(auto_value, dict) else json.loads(raw)
+                    if bc.json_key:
+                        pub_value = obj.get(bc.json_key, pub_value) if isinstance(obj, dict) else pub_value
+                    else:
+                        pub_value = obj
+                elif sdt == "xml":
+                    try:
+                        import xml.etree.ElementTree as ET
+                        root = ET.fromstring(raw)
+                        if bc.xml_path:
+                            el = root.find(bc.xml_path)
+                            if el is not None:
+                                text = (el.text or "").strip()
+                                try:
+                                    pub_value = int(text)
+                                except ValueError:
+                                    try:
+                                        pub_value = float(text)
+                                    except ValueError:
+                                        pub_value = text
+                            else:
+                                logger.warning(
+                                    "MQTT XML: path %r not found in payload for binding %s",
+                                    bc.xml_path, binding.id,
+                                )
+                        else:
+                            pub_value = (root.text or "").strip()
+                    except Exception as xml_exc:
+                        logger.warning("MQTT XML: parse error for binding %s: %s", binding.id, xml_exc)
+                elif sdt == "int":
+                    try:
+                        pub_value = int(float(pub_value)) if isinstance(pub_value, str) else int(pub_value)
+                    except (ValueError, TypeError):
+                        logger.warning("MQTT: cannot coerce %r to int for binding %s", pub_value, binding.id)
+                elif sdt == "float":
+                    try:
+                        pub_value = float(pub_value)
+                    except (ValueError, TypeError):
+                        logger.warning("MQTT: cannot coerce %r to float for binding %s", pub_value, binding.id)
+                elif sdt == "bool":
+                    if isinstance(pub_value, bool):
+                        pass  # already bool
+                    elif isinstance(pub_value, str):
+                        pub_value = pub_value.lower() in ("true", "1", "on", "yes")
+                    else:
+                        pub_value = bool(pub_value)
+                elif sdt == "string":
+                    pub_value = str(pub_value)
+                # else None/"auto": use auto_value as-is
+
+                # --- value_map substitution ---
+                if bc.value_map:
+                    pub_value = bc.value_map.get(str(pub_value), pub_value)
+            except Exception:
+                logger.exception("MQTT: error processing binding %s", binding.id)
+
             if binding.value_formula and pub_value is not None:
                 from opentws.core.formula import apply_formula
                 pub_value = apply_formula(binding.value_formula, pub_value)
@@ -237,8 +338,18 @@ class MqttAdapter(AdapterBase):
         try:
             bc = MqttBindingConfig(**binding.config)
             topic = bc.publish_topic or bc.topic
-            payload = json.dumps(value) if not isinstance(value, str) else value
+
+            # Apply value_map substitution
+            mapped = bc.value_map.get(str(value), value) if bc.value_map else value
+
+            # Build payload
+            if bc.payload_template:
+                val_str = mapped if isinstance(mapped, str) else json.dumps(mapped)
+                payload = bc.payload_template.replace("###DP###", val_str)
+            else:
+                payload = mapped if isinstance(mapped, str) else json.dumps(mapped)
+
             await self._publish_queue.put((topic, payload, bc.retain))
-            logger.info("MQTT adapter write queued: topic=%s value=%r retain=%s", topic, value, bc.retain)
+            logger.info("MQTT adapter write queued: topic=%s value=%r retain=%s", topic, mapped, bc.retain)
         except Exception:
             logger.exception("MQTT adapter write failed for binding %s", binding.id)
