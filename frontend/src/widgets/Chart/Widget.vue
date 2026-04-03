@@ -18,6 +18,7 @@ const hours = computed(() => (props.config.hours as number | undefined) ?? 24)
 
 const canvas = ref<HTMLCanvasElement | null>(null)
 let chart: Chart | null = null
+let currentUnit = ''
 
 /** Format Unix-ms as short local date+time label for chart ticks */
 function fmtMs(ms: number): string {
@@ -34,14 +35,14 @@ async function loadData() {
   const data = await history.query(props.datapointId, from, now.toISOString())
 
   const points = data.map((d) => ({ x: new Date(d.ts).getTime(), y: Number(d.v) }))
-  const unit: string = data[0]?.u ?? ''
+  currentUnit = data[0]?.u ?? ''
 
   if (chart) {
     chart.data.datasets[0].data = points
     // Update Y-axis title with unit if available
     const yAxis = chart.options.scales?.y as any
     if (yAxis) {
-      yAxis.title = { display: !!unit, text: unit, color: '#6b7280', font: { size: 11 } }
+      yAxis.title = { display: !!currentUnit, text: currentUnit, color: '#6b7280', font: { size: 11 } }
     }
     chart.update()
   }
@@ -75,6 +76,10 @@ onMounted(() => {
           intersect: false,
           callbacks: {
             title: (items) => items[0]?.parsed.x != null ? fmtMs(items[0].parsed.x) : '',
+            label: (ctx) => {
+              const v = ctx.parsed.y
+              return currentUnit ? `${v} ${currentUnit}` : String(v)
+            },
           },
         },
       },
