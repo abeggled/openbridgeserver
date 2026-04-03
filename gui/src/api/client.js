@@ -147,6 +147,7 @@ export const ringbufferApi = {
 // ── Config Import/Export ──────────────────────────────────────────────────
 export const configApi = {
   export:          ()     => api.get('/config/export'),
+  exportDb:        ()     => api.get('/config/export/db', { responseType: 'blob' }),
   import:          (data) => api.post('/config/import', data),
   reset:           ()     => api.delete('/config/reset'),
   resetBindings:   ()     => api.delete('/config/reset/bindings'),

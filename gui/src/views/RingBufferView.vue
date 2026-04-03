@@ -2,8 +2,8 @@
   <div class="flex flex-col gap-5">
     <div class="flex flex-wrap items-start gap-3">
       <div class="flex-1">
-        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">RingBuffer</h2>
-        <p class="text-sm text-slate-500 mt-0.5">Debug-Log — letzte Wertänderungen</p>
+        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Monitor</h2>
+        <p class="text-sm text-slate-500 mt-0.5">Live Log</p>
       </div>
       <button @click="showConfig = true" class="btn-secondary btn-sm">⚙ Konfigurieren</button>
       <button @click="load" class="btn-secondary btn-sm">↻ Aktualisieren</button>
@@ -44,16 +44,16 @@
     <!-- Log table -->
     <div class="card overflow-hidden">
       <div v-if="loading" class="flex justify-center py-12"><Spinner size="lg" /></div>
-      <div v-else-if="!entries.length" class="text-center text-slate-500 text-sm py-12">Keine Einträge im RingBuffer</div>
+      <div v-else-if="!entries.length" class="text-center text-slate-500 text-sm py-12">Keine Einträge im Monitor</div>
       <div v-else class="table-wrap max-h-[60vh] overflow-y-auto">
         <table class="table">
           <thead class="sticky top-0">
             <tr>
               <th>Zeitstempel</th>
-              <th>DataPoint</th>
+              <th>Objekt</th>
               <th>Wert</th>
               <th>Vorheriger Wert</th>
-              <th>Quality</th>
+              <th>Qualität</th>
               <th>Adapter</th>
             </tr>
           </thead>
@@ -67,7 +67,7 @@
               </td>
               <td class="font-mono text-sm text-blue-500 dark:text-blue-300">{{ e.new_value }}</td>
               <td class="font-mono text-sm text-slate-500">{{ e.old_value ?? '—' }}</td>
-              <td><Badge :variant="e.quality === 'good' ? 'success' : 'warning'" size="xs" dot>{{ e.quality }}</Badge></td>
+              <td><Badge :variant="e.quality === 'good' ? 'success' : 'warning'" size="xs" dot>{{ qualityLabel(e.quality) }}</Badge></td>
               <td class="text-xs text-slate-500">{{ e.source_adapter ?? '—' }}</td>
             </tr>
           </tbody>
@@ -76,7 +76,7 @@
     </div>
 
     <!-- Config modal -->
-    <Modal v-model="showConfig" title="RingBuffer konfigurieren" max-width="sm">
+    <Modal v-model="showConfig" title="Monitor konfigurieren" max-width="sm">
       <form @submit.prevent="saveConfig" class="flex flex-col gap-4">
         <div class="form-group">
           <label class="label">Speicher</label>
@@ -176,6 +176,10 @@ async function load() {
 
 async function loadStats() {
   try { const { data } = await ringbufferApi.stats(); stats.value = data } catch {}
+}
+
+function qualityLabel(q) {
+  return q === 'good' ? 'gut' : q === 'bad' ? 'schlecht' : q === 'uncertain' ? 'undefiniert' : q
 }
 
 async function saveConfig() {

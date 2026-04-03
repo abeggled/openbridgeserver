@@ -2,14 +2,14 @@
   <div class="flex flex-col gap-6">
     <!-- Header -->
     <div>
-      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Dashboard</h2>
+      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Übersicht</h2>
       <p class="text-sm text-slate-500 mt-0.5">Systemübersicht · Live-Status</p>
     </div>
 
     <!-- Stat cards -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <StatCard label="DataPoints" :value="health.datapoints" icon="📋" color="blue" />
-      <StatCard label="Adapter aktiv" :value="health.adapters_running" icon="🔌" color="green" />
+      <StatCard label="Objekte" :value="health.datapoints" icon="📋" color="blue" />
+      <StatCard label="Aktive Adapter Instanzen" :value="health.adapters_running" icon="🔌" color="green" />
       <StatCard label="WS-Status" :value="ws.connected ? 'Live' : 'Offline'" icon="⚡" :color="ws.connected ? 'green' : 'red'" />
       <StatCard label="Server" :value="health.status === 'ok' ? 'Online' : 'Fehler'" icon="🖥️" :color="health.status === 'ok' ? 'green' : 'red'" />
     </div>
@@ -32,7 +32,7 @@
             <Badge :variant="a.connected ? 'success' : a.running ? 'warning' : 'muted'" size="xs">
               {{ a.connected ? 'Verbunden' : a.running ? 'Läuft' : 'Inaktiv' }}
             </Badge>
-            <span class="text-xs text-slate-500">{{ a.bindings }} Bindings</span>
+            <span class="text-xs text-slate-500">{{ a.bindings }} Verknüpfungen</span>
           </div>
         </div>
       </div>

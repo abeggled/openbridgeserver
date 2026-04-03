@@ -60,12 +60,13 @@ const menuRef   = ref(null)
 const version   = ref('0.1.0')
 
 const titles = {
-  'Dashboard':       'Dashboard',
-  'DataPoints':      'DataPoints',
-  'DataPointDetail': 'DataPoint Detail',
+  'Dashboard':       'Übersicht',
+  'DataPoints':      'Objekte',
+  'DataPointDetail': 'Objekt Detail',
   'Adapters':        'Adapter',
-  'History':         'History',
-  'RingBuffer':      'RingBuffer',
+  'History':         'Historie',
+  'RingBuffer':      'Monitor',
+  'Logic':           'Logikmodul',
   'Settings':        'Einstellungen',
 }
 const pageTitle = computed(() => titles[route.name] ?? 'openTWS')

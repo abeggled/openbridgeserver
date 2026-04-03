@@ -101,7 +101,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
     # ── DataPoint ─────────────────────────────────────────────────────────
     NodeTypeDef(
         type="datapoint_read",
-        label="DataPoint lesen",
+        label="Objekt lesen",
         category="datapoint",
         description="Gibt den aktuellen Wert eines DataPoints aus. Triggert bei Wertänderung.",
         inputs=[],
@@ -122,7 +122,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
     ),
     NodeTypeDef(
         type="datapoint_write",
-        label="DataPoint schreiben",
+        label="Objekt schreiben",
         category="datapoint",
         description="Schreibt einen Wert in einen DataPoint",
         inputs=[_port("value", "Wert"), _port("trigger", "Trigger", "trigger")],

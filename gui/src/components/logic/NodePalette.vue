@@ -30,7 +30,7 @@ const emit = defineEmits(['drag-start'])
 
 const CATEGORY_ORDER = [
   { id: 'logic',        label: 'Logik'          },
-  { id: 'datapoint',    label: 'DataPoints'      },
+  { id: 'datapoint',    label: 'Objekte'         },
   { id: 'math',         label: 'Mathematik'      },
   { id: 'timer',        label: 'Timer'           },
   { id: 'astro',        label: 'Astronomie'      },

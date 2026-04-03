@@ -9,11 +9,15 @@ Rückwärtskompatibel: Alter Export mit adapter_configs wird beim Import erkannt
 from __future__ import annotations
 
 import json
+import os
+import sqlite3
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from opentws.api.auth import get_current_user, get_admin_user
@@ -215,6 +219,38 @@ async def export_config(
         adapter_instances=adapter_instances,
         knx_group_addresses=knx_group_addresses,
         logic_graphs=logic_graphs,
+    )
+
+
+@router.get("/export/db")
+async def export_db(
+    background_tasks: BackgroundTasks,
+    _user: str = Depends(get_admin_user),
+) -> FileResponse:
+    """Erstellt eine konsistente SQLite-Sicherung via sqlite3.backup() und gibt sie als Datei zurück."""
+    from opentws.config import get_settings
+    src_path = get_settings().database.path
+
+    if not os.path.exists(src_path):
+        raise HTTPException(status_code=404, detail="Datenbankdatei nicht gefunden.")
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+    tmp.close()
+    try:
+        src = sqlite3.connect(src_path)
+        dst = sqlite3.connect(tmp.name)
+        src.backup(dst)
+        dst.close()
+        src.close()
+    except Exception as exc:
+        os.unlink(tmp.name)
+        raise HTTPException(status_code=500, detail=f"Backup fehlgeschlagen: {exc}") from exc
+
+    background_tasks.add_task(os.unlink, tmp.name)
+    return FileResponse(
+        path=tmp.name,
+        media_type="application/octet-stream",
+        filename="opentws.sqlite",
     )
 
 

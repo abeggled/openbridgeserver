@@ -89,7 +89,7 @@
 
         <!-- Kurzinfo -->
         <div class="px-5 py-2 flex gap-4 text-sm text-slate-500">
-          <span>Bindings: <span class="text-slate-600 dark:text-slate-300 font-medium">{{ a.bindings }}</span></span>
+          <span>Verknüpfungen: <span class="text-slate-600 dark:text-slate-300 font-medium">{{ a.bindings }}</span></span>
           <span v-if="!a.registered" class="text-amber-400">⚠ Typ nicht registriert</span>
         </div>
 
@@ -143,7 +143,7 @@
               Neu verbinden
             </button>
             <button @click="confirmDelete(a)" class="ml-auto btn-danger btn-sm" :disabled="busy[a.id] === 'delete'"
-              title="Löscht diese Instanz und alle zugehörigen Bindings unwiderruflich">
+              title="Löscht diese Instanz und alle zugehörigen Verknüpfungen unwiderruflich">
               <Spinner v-if="busy[a.id] === 'delete'" size="xs" color="white" />
               Löschen
             </button>
@@ -156,7 +156,7 @@
     <ConfirmDialog
       v-model="showDeleteConfirm"
       :title="deleteTarget ? `Instanz '${deleteTarget.name}' löschen?` : ''"
-      message="Alle Bindings dieser Instanz werden ebenfalls gelöscht. Diese Aktion kann nicht rückgängig gemacht werden."
+      message="Alle Verknüpfungen dieser Instanz werden ebenfalls gelöscht. Diese Aktion kann nicht rückgängig gemacht werden."
       confirm-label="Löschen"
       @confirm="executeDelete"
     />

@@ -2,7 +2,7 @@
   <div class="flex flex-col h-full" style="height: calc(100vh - 4rem)">
     <!-- Toolbar -->
     <div class="flex items-center gap-3 px-4 py-2 bg-surface-800 border-b border-slate-200 dark:border-slate-700/60 flex-shrink-0">
-      <h2 class="text-sm font-bold text-slate-800 dark:text-slate-100">Logic Engine</h2>
+      <h2 class="text-sm font-bold text-slate-800 dark:text-slate-100">Logikmodul</h2>
       <div class="flex-1" />
       <!-- Graph selector -->
       <select v-model="activeGraphId" @change="loadGraph"

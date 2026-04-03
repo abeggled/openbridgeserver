@@ -8,12 +8,12 @@
 
     <div class="gn-card" ref="cardRef">
       <div class="gn-header">
-        <span class="gn-label">{{ isWrite ? 'DP Schreiben' : 'DP Lesen' }}</span>
+        <span class="gn-label">{{ isWrite ? 'Objekt schreiben' : 'Objekt lesen' }}</span>
         <span v-if="hasFilter" class="gn-filter-badge" title="Filter / Transformation aktiv">⊘</span>
         <button v-show="hovered" class="gn-delete nodrag" @click.stop="remove" title="Block löschen">✕</button>
       </div>
       <div class="gn-body">
-        <div class="gn-sublabel">DataPoint</div>
+        <div class="gn-sublabel">Objekt</div>
         <div class="dp-name" :class="data.datapoint_name ? 'active' : 'empty'">
           {{ data.datapoint_name || '— nicht gewählt —' }}
         </div>

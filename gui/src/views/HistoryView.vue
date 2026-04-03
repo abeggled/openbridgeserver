@@ -1,7 +1,7 @@
 <template>
   <div class="flex flex-col gap-5">
     <div>
-      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">History</h2>
+      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Historie</h2>
       <p class="text-sm text-slate-500 mt-0.5">Historische Werte und Aggregationen</p>
     </div>
 
@@ -9,12 +9,12 @@
     <div class="card p-4">
       <div class="flex flex-wrap gap-3 items-end">
         <div class="form-group min-w-64 flex-1">
-          <label class="label">DataPoint</label>
+          <label class="label">Objekt</label>
           <DpCombobox
             v-model="selectedDp"
             :display-name="selectedDpName"
             @select="onDpSelect"
-            placeholder="DataPoint suchen …"
+            placeholder="Objekt suchen …"
           />
         </div>
         <div class="form-group">
@@ -63,7 +63,7 @@
       <div class="card-body">
         <div v-if="loading" class="flex justify-center py-16"><Spinner size="lg" /></div>
         <div v-else-if="!points.length && selectedDp" class="text-center text-slate-500 text-sm py-16">Keine Daten im gewählten Zeitraum</div>
-        <div v-else-if="!selectedDp" class="text-center text-slate-500 text-sm py-16">DataPoint wählen und «Laden» klicken</div>
+        <div v-else-if="!selectedDp" class="text-center text-slate-500 text-sm py-16">Objekt wählen und «Laden» klicken</div>
         <canvas v-else ref="chartCanvas" class="max-h-80" />
       </div>
     </div>
@@ -73,12 +73,12 @@
       <div class="card-header"><span class="text-sm font-semibold text-slate-800 dark:text-slate-100">Rohdaten</span></div>
       <div class="table-wrap max-h-64 overflow-y-auto">
         <table class="table">
-          <thead><tr><th>Zeitstempel</th><th>Wert</th><th>Quality</th><th>Adapter</th></tr></thead>
+          <thead><tr><th>Zeitstempel</th><th>Wert</th><th>Qualität</th><th>Adapter</th></tr></thead>
           <tbody>
             <tr v-for="(p, i) in points" :key="i">
               <td class="font-mono text-xs text-slate-400">{{ fmtDateTime(p.ts) }}</td>
               <td class="font-mono text-blue-500 dark:text-blue-300">{{ p.v ?? '—' }}<span v-if="p.u" class="text-slate-500 ml-1 text-xs">{{ p.u }}</span></td>
-              <td><Badge :variant="p.q === 'good' ? 'success' : 'warning'" size="xs">{{ p.q }}</Badge></td>
+              <td><Badge :variant="p.q === 'good' ? 'success' : 'warning'" size="xs">{{ qualityLabel(p.q) }}</Badge></td>
               <td class="text-slate-500 text-xs">{{ p.a ?? '—' }}</td>
             </tr>
           </tbody>
@@ -174,6 +174,10 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+function qualityLabel(q) {
+  return q === 'good' ? 'gut' : q === 'bad' ? 'schlecht' : q === 'uncertain' ? 'undefiniert' : q
 }
 
 function renderChart() {

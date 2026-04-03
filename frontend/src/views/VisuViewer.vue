@@ -147,7 +147,7 @@ function gridStyle(w: WidgetInstance) {
           v-if="visuStore.isAdmin"
           class="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-500 dark:hover:text-blue-400 transition-colors px-2 py-1 rounded"
           @click="router.push({ name: 'manage' })"
-        >🗂 Visu-Manager</button>
+        >🗂 Visu Verwaltung</button>
         <!-- Hell/Dunkel-Umschalter -->
         <button
           class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 transition-colors px-2 py-1 rounded"

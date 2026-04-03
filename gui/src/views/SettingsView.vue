@@ -185,9 +185,14 @@
     <!-- ── Datenmanagement ── -->
     <div v-if="activeTab === 'importexport'" class="flex flex-col gap-4 max-w-lg">
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Sicherung erstellen</h3>
-        <p class="text-sm text-slate-400">Alle DataPoints, Bindings, Adapter-Instanzen, KNX-Gruppenadressen und Logikblätter als JSON-Datei sichern.</p>
-        <button @click="doExport" class="btn-secondary">Sicherung herunterladen</button>
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Konfiguration sichern</h3>
+        <p class="text-sm text-slate-400">Alle Objekte, Verknüpfungen, Adapter-Instanzen, KNX-Gruppenadressen und Logikblätter als JSON-Datei sichern.</p>
+        <button @click="doExport" class="btn-secondary">JSON herunterladen</button>
+      </div>
+      <div class="card p-5 flex flex-col gap-3">
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Datenbank sichern</h3>
+        <p class="text-sm text-slate-400">Vollständige SQLite-Datenbank (inkl. Historiendaten) als Datei sichern.</p>
+        <button @click="doExportDb" class="btn-secondary">SQLite herunterladen</button>
       </div>
       <div class="card p-5 flex flex-col gap-3">
         <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Sicherung wiederherstellen</h3>
@@ -259,7 +264,7 @@
     <div v-if="activeTab === 'history'" class="flex flex-col gap-4 max-w-lg">
       <div class="card">
         <div class="card-header">
-          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">History Backend</h3>
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Historie DB</h3>
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">
@@ -269,7 +274,7 @@
 
           <!-- Plugin selector -->
           <div class="form-group">
-            <label class="label">Backend</label>
+            <label class="label">Datenbank</label>
             <select v-model="histForm.plugin" class="input text-sm">
               <option value="sqlite">SQLite (intern, Standard)</option>
               <option value="influxdb">InfluxDB (v1 / v2 / v3)</option>
@@ -385,11 +390,11 @@
         </div>
         <div class="divide-y divide-red-500/20">
 
-          <!-- Bindings -->
+          <!-- Verknüpfungen -->
           <div class="p-5 flex items-start justify-between gap-4">
             <div>
-              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle Bindings löschen</p>
-              <p class="text-xs text-slate-500 mt-1">Löscht alle Bindings. DataPoints und Adapter-Instanzen bleiben erhalten.</p>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle Verknüpfungen löschen</p>
+              <p class="text-xs text-slate-500 mt-1">Löscht alle Verknüpfungen. Objekte und Adapter-Instanzen bleiben erhalten.</p>
             </div>
             <button @click="showConfirm('bindings')" class="btn-danger btn-sm shrink-0">Löschen</button>
           </div>
@@ -397,8 +402,8 @@
           <!-- DataPoints -->
           <div class="p-5 flex items-start justify-between gap-4">
             <div>
-              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle DataPoints löschen</p>
-              <p class="text-xs text-slate-500 mt-1">Löscht alle DataPoints und deren Bindings unwiderruflich.</p>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle Objekte löschen</p>
+              <p class="text-xs text-slate-500 mt-1">Löscht alle Objekte und deren Verknüpfungen unwiderruflich.</p>
             </div>
             <button @click="showConfirm('datapoints')" class="btn-danger btn-sm shrink-0">Löschen</button>
           </div>
@@ -416,7 +421,7 @@
           <div class="p-5 flex items-start justify-between gap-4">
             <div>
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle Adapter löschen</p>
-              <p class="text-xs text-slate-500 mt-1">Stoppt und löscht alle Adapter-Instanzen und deren Bindings.</p>
+              <p class="text-xs text-slate-500 mt-1">Stoppt und löscht alle Adapter-Instanzen und deren Verknüpfungen.</p>
             </div>
             <button @click="showConfirm('adapters')" class="btn-danger btn-sm shrink-0">Löschen</button>
           </div>
@@ -434,7 +439,7 @@
           <div class="p-5 flex items-start justify-between gap-4">
             <div>
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Zurücksetzen auf Werkseinstellungen</p>
-              <p class="text-xs text-slate-500 mt-1">Löscht alles — DataPoints, Bindings, Adapter, KNX-GAs und Logikblätter. Benutzerkonten bleiben erhalten.</p>
+              <p class="text-xs text-slate-500 mt-1">Löscht alles — Objekte, Verknüpfungen, Adapter, KNX-GAs und Logikblätter. Benutzerkonten bleiben erhalten.</p>
             </div>
             <button @click="showConfirm('all')" class="btn-danger btn-sm shrink-0">Alles löschen</button>
           </div>
@@ -631,7 +636,7 @@ const tabs = [
   ...(auth.isAdmin ? [{ id: 'users', label: 'Benutzer' }] : []),
   { id: 'apikeys',      label: 'API Keys' },
   { id: 'importexport', label: 'Datenmanagement' },
-  ...(auth.isAdmin ? [{ id: 'history', label: 'History Backend' }] : []),
+  ...(auth.isAdmin ? [{ id: 'history', label: 'Historie DB' }] : []),
   ...(auth.isAdmin ? [{ id: 'dangerzone', label: 'Danger Zone' }] : []),
 ]
 
@@ -664,7 +669,7 @@ async function saveHistorySettings() {
   histSaving.value = true; histSaveMsg.value = null
   try {
     await historySettingsApi.update({ ...histForm })
-    histSaveMsg.value = { ok: true, text: 'History Backend gespeichert und aktiviert.' }
+    histSaveMsg.value = { ok: true, text: 'Historie DB gespeichert und aktiviert.' }
   } catch (e) {
     histSaveMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Speichern' }
   } finally {
@@ -797,11 +802,24 @@ async function deleteApiKey(id) { await authApi.deleteApiKey(id); await loadKeys
 // ── Sicherung / Wiederherstellung ──────────────────────────────────────────
 const importResult = ref(null)
 
+function _ts() {
+  const now = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`
+}
+
 async function doExport() {
   const { data } = await configApi.export()
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
   const url  = URL.createObjectURL(blob)
-  const a    = document.createElement('a'); a.href = url; a.download = 'opentws-backup.json'; a.click()
+  const a = document.createElement('a'); a.href = url; a.download = `openTWS_Backup_${_ts()}.json`; a.click()
+  URL.revokeObjectURL(url)
+}
+
+async function doExportDb() {
+  const { data: blob } = await configApi.exportDb()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = `openTWS_DB_${_ts()}.sqlite`; a.click()
   URL.revokeObjectURL(url)
 }
 async function onImportFile(e) {
@@ -813,7 +831,7 @@ async function onImportFile(e) {
     const gaInfo    = data.knx_group_addresses_upserted > 0 ? `, ${data.knx_group_addresses_upserted} KNX-GAs` : ''
     const lgTotal   = (data.logic_graphs_created ?? 0) + (data.logic_graphs_updated ?? 0)
     const lgInfo    = lgTotal > 0 ? `, ${lgTotal} Logikblätter` : ''
-    importResult.value = { ok: true, text: `Wiederherstellung OK: ${data.datapoints_created + data.datapoints_updated} DataPoints, ${data.bindings_created + data.bindings_updated} Bindings${gaInfo}${lgInfo}` }
+    importResult.value = { ok: true, text: `Wiederherstellung OK: ${data.datapoints_created + data.datapoints_updated} Objekte, ${data.bindings_created + data.bindings_updated} Verknüpfungen${gaInfo}${lgInfo}` }
   } catch (err) {
     importResult.value = { ok: false, text: err.response?.data?.detail ?? 'Import fehlgeschlagen' }
   }
@@ -891,22 +909,22 @@ const resetResult     = ref(null)
 
 const DZ_CONFIG = {
   bindings: {
-    title:   'Alle Bindings löschen',
-    message: 'Alle Bindings werden unwiderruflich gelöscht. DataPoints und Adapter-Instanzen bleiben erhalten. Fortfahren?',
+    title:   'Alle Verknüpfungen löschen',
+    message: 'Alle Verknüpfungen werden unwiderruflich gelöscht. Objekte und Adapter-Instanzen bleiben erhalten. Fortfahren?',
     label:   'Löschen',
     action:  async () => {
       const { data } = await configApi.resetBindings()
-      return `${data.deleted} Bindings gelöscht.`
+      return `${data.deleted} Verknüpfungen gelöscht.`
     },
     after: () => {},
   },
   datapoints: {
-    title:   'Alle DataPoints löschen',
-    message: 'Alle DataPoints und deren Bindings werden unwiderruflich gelöscht. Fortfahren?',
+    title:   'Alle Objekte löschen',
+    message: 'Alle Objekte und deren Verknüpfungen werden unwiderruflich gelöscht. Fortfahren?',
     label:   'Löschen',
     action:  async () => {
       const { data } = await configApi.resetDatapoints()
-      return `${data.deleted} DataPoints und ${data.bindings_deleted} Bindings gelöscht.`
+      return `${data.deleted} Objekte und ${data.bindings_deleted} Verknüpfungen gelöscht.`
     },
     after: () => {},
   },
@@ -922,11 +940,11 @@ const DZ_CONFIG = {
   },
   adapters: {
     title:   'Alle Adapter löschen',
-    message: 'Alle Adapter-Instanzen und deren Bindings werden unwiderruflich gelöscht. Fortfahren?',
+    message: 'Alle Adapter-Instanzen und deren Verknüpfungen werden unwiderruflich gelöscht. Fortfahren?',
     label:   'Löschen',
     action:  async () => {
       const { data } = await configApi.resetAdapters()
-      return `${data.deleted} Adapter-Instanzen und ${data.bindings_deleted} Bindings gelöscht.`
+      return `${data.deleted} Adapter-Instanzen und ${data.bindings_deleted} Verknüpfungen gelöscht.`
     },
     after: () => {},
   },
@@ -942,11 +960,11 @@ const DZ_CONFIG = {
   },
   all: {
     title:   'Zurücksetzen auf Werkseinstellungen',
-    message: 'Alle DataPoints, Bindings, Adapter-Instanzen, KNX-Gruppenadressen und Logikblätter werden unwiderruflich gelöscht. Fortfahren?',
+    message: 'Alle Objekte, Verknüpfungen, Adapter-Instanzen, KNX-Gruppenadressen und Logikblätter werden unwiderruflich gelöscht. Fortfahren?',
     label:   'Alles löschen',
     action:  async () => {
       const { data } = await configApi.reset()
-      return `Zurückgesetzt: ${data.datapoints_deleted} DataPoints, ${data.bindings_deleted} Bindings, ${data.adapter_instances_deleted} Adapter, ${data.knx_group_addresses_deleted} KNX-GAs, ${data.logic_graphs_deleted} Logikblätter gelöscht.`
+      return `Zurückgesetzt: ${data.datapoints_deleted} Objekte, ${data.bindings_deleted} Verknüpfungen, ${data.adapter_instances_deleted} Adapter, ${data.knx_group_addresses_deleted} KNX-GAs, ${data.logic_graphs_deleted} Logikblätter gelöscht.`
     },
     after: () => { knxGaCount.value = 0 },
   },
