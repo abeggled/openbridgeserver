@@ -33,18 +33,18 @@ const error = ref('')
 const node = computed(() => visuStore.getNode(props.id))
 const isPage = computed(() => node.value?.type === 'PAGE')
 
-/** Effektiven Zugangslevel ermitteln (Vererbung berücksichtigen) */
-function resolveAccess(nodeId: string): string {
+/** Effektiven Zugangslevel ermitteln und den definierenden Knoten zurückgeben */
+function resolveAccessNode(nodeId: string): { access: string; definingId: string } {
   let cur = visuStore.getNode(nodeId)
   while (cur) {
-    if (cur.access !== null) return cur.access
+    if (cur.access !== null) return { access: cur.access, definingId: cur.id }
     cur = cur.parent_id ? visuStore.getNode(cur.parent_id) : undefined
   }
-  return 'public'
+  return { access: 'public', definingId: nodeId }
 }
 
 /** Nur-Lesen-Modus: Seite hat access='readonly' (effektiv) */
-const isReadOnly = computed(() => resolveAccess(props.id) === 'readonly')
+const isReadOnly = computed(() => resolveAccessNode(props.id).access === 'readonly')
 const widgets = computed<WidgetInstance[]>(() => visuStore.pageConfig?.widgets ?? [])
 
 // Haupt-Datenpunkt-IDs
@@ -81,15 +81,16 @@ async function load() {
     await visuStore.loadBreadcrumb(props.id)
 
     const currentNode = visuStore.getNode(props.id)
+    const { access: effectiveAccess, definingId } = resolveAccessNode(props.id)
 
-    // Access-Check: protected → PIN-Auth
-    if (currentNode?.access === 'protected' && !visuStore.hasSessionToken(props.id)) {
-      router.push({ name: 'pin-auth', params: { id: props.id } })
+    // Access-Check: protected → PIN-Auth (Vererbung berücksichtigen)
+    if (effectiveAccess === 'protected' && !visuStore.hasSessionToken(definingId)) {
+      router.push({ name: 'pin-auth', params: { id: definingId } })
       return
     }
 
     // Access-Check: user → JWT-Login erforderlich
-    if (currentNode?.access === 'user' && !getJwt()) {
+    if (effectiveAccess === 'user' && !getJwt()) {
       router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
       return
     }
@@ -99,7 +100,7 @@ async function load() {
       // Write-Kontext für Backend-Autorisierung setzen (pageId + ggf. Session-Token)
       setWriteContext({
         pageId:       props.id,
-        sessionToken: getSessionToken(props.id) ?? undefined,
+        sessionToken: getSessionToken(definingId) ?? undefined,
       })
       ws.connect()
       dpStore.subscribe(allDpIds.value)

@@ -70,8 +70,12 @@ router.beforeEach((to) => {
 })
 
 // Globaler 401-Handler (ausgelöst vom API-Client)
+// Nur weiterleiten wenn die aktuelle Route tatsächlich Authentifizierung erfordert
 window.addEventListener('visu:unauthorized', () => {
-  router.push({ name: 'tree' })
+  const current = router.currentRoute.value
+  if (current.meta.requiresAuth) {
+    router.push({ name: 'login', query: { redirect: current.fullPath } })
+  }
 })
 
 export default router
