@@ -8,12 +8,14 @@
     <!-- Controls -->
     <div class="card p-4">
       <div class="flex flex-wrap gap-3 items-end">
-        <div class="form-group min-w-52 flex-1">
+        <div class="form-group min-w-64 flex-1">
           <label class="label">DataPoint</label>
-          <select v-model="selectedDp" class="input">
-            <option value="">DataPoint wählen …</option>
-            <option v-for="dp in dpStore.items" :key="dp.id" :value="dp.id">{{ dp.name }}</option>
-          </select>
+          <DpCombobox
+            v-model="selectedDp"
+            :display-name="selectedDpName"
+            @select="onDpSelect"
+            placeholder="DataPoint suchen …"
+          />
         </div>
         <div class="form-group">
           <label class="label">Von</label>
@@ -75,9 +77,9 @@
           <tbody>
             <tr v-for="(p, i) in points" :key="i">
               <td class="font-mono text-xs text-slate-400">{{ fmtDateTime(p.ts) }}</td>
-              <td class="font-mono text-blue-500 dark:text-blue-300">{{ p.value }}</td>
-              <td><Badge :variant="p.quality === 'good' ? 'success' : 'warning'" size="xs">{{ p.quality }}</Badge></td>
-              <td class="text-slate-500 text-xs">{{ p.adapter_type ?? '—' }}</td>
+              <td class="font-mono text-blue-500 dark:text-blue-300">{{ p.v ?? '—' }}<span v-if="p.u" class="text-slate-500 ml-1 text-xs">{{ p.u }}</span></td>
+              <td><Badge :variant="p.q === 'good' ? 'success' : 'warning'" size="xs">{{ p.q }}</Badge></td>
+              <td class="text-slate-500 text-xs">{{ p.a ?? '—' }}</td>
             </tr>
           </tbody>
         </table>
@@ -89,20 +91,33 @@
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { historyApi } from '@/api/client'
-import { useDatapointStore } from '@/stores/datapoints'
+import { historyApi, dpApi } from '@/api/client'
 import { useTz } from '@/composables/useTz'
-import Badge   from '@/components/ui/Badge.vue'
-import Spinner from '@/components/ui/Spinner.vue'
+import Badge       from '@/components/ui/Badge.vue'
+import Spinner     from '@/components/ui/Spinner.vue'
+import DpCombobox  from '@/components/ui/DpCombobox.vue'
 import { Chart, LineController, LineElement, PointElement, LinearScale, TimeScale, Tooltip, Legend } from 'chart.js'
 import 'chart.js/auto'
 
-const { fmtDateTime, fmtChartLabel, toDatetimeLocal, fromDatetimeLocal } = useTz()
+const { fmtDateTime, fmtChartLabel, toDatetimeLocal, fromDatetimeLocal, toUtcDate } = useTz()
 
-const route   = useRoute()
-const dpStore = useDatapointStore()
+const route = useRoute()
 
-const selectedDp  = ref(route.query.dp ?? '')
+const selectedDp     = ref(route.query.dp ?? '')
+const selectedDpName = ref('')
+const selectedDpUnit = ref('')
+
+function onDpSelect(dp) {
+  if (dp) {
+    selectedDp.value     = dp.id
+    selectedDpName.value = dp.name
+    selectedDpUnit.value = dp.unit ?? ''
+  } else {
+    selectedDp.value     = ''
+    selectedDpName.value = ''
+    selectedDpUnit.value = ''
+  }
+}
 const fromTs      = ref(toDatetimeLocal(new Date(Date.now() - 24 * 3600 * 1000)))
 const toTs        = ref(toDatetimeLocal(new Date()))
 const mode        = ref('aggregate')
@@ -121,15 +136,22 @@ const intervals = [
 
 const chartTitle = computed(() => {
   if (!selectedDp.value) return 'Verlauf'
-  const dp = dpStore.items.find(d => d.id === selectedDp.value)
-  return dp ? `${dp.name} ${mode.value === 'aggregate' ? `(${aggFn.value} / ${aggInterval.value})` : '(raw)'}` : 'Verlauf'
+  const name = selectedDpName.value || selectedDp.value
+  return `${name} ${mode.value === 'aggregate' ? `(${aggFn.value} / ${aggInterval.value})` : '(raw)'}`
 })
 
 // defaultFrom is no longer needed — fromTs is initialized via toDatetimeLocal()
 
 onMounted(async () => {
-  if (!dpStore.items.length) await dpStore.fetchPage(0, 200)
-  if (selectedDp.value) await load()
+  // If opened with ?dp=<uuid>, resolve the name so the combobox shows it
+  if (selectedDp.value) {
+    try {
+      const { data } = await dpApi.get(selectedDp.value)
+      selectedDpName.value = data.name
+      selectedDpUnit.value = data.unit ?? ''
+    } catch { /* ignore */ }
+    await load()
+  }
 })
 
 async function load() {
@@ -158,28 +180,33 @@ function renderChart() {
   if (!chartCanvas.value || !points.value.length) return
   chartInstance?.destroy()
 
-  const labels = points.value.map(p => fmtChartLabel(p.ts))
-  const values = points.value.map(p => p.value)
+  // Convert every point to {x: Unix-ms, y: value} so Chart.js never has to
+  // guess the scale type from label strings (which caused it to auto-activate
+  // the TimeScale without an adapter and display raw ms).
+  const chartData = points.value.map(p => {
+    const isoStr = p.ts ?? p.bucket ?? null
+    const ms = isoStr ? (toUtcDate(isoStr)?.getTime() ?? 0) : 0
+    return { x: ms, y: p.v }
+  })
 
   const dark = document.documentElement.classList.contains('dark')
-  const tickColor   = dark ? '#64748b' : '#94a3b8'
-  const gridColor   = dark ? '#1e2435' : '#f1f5f9'
-  const tooltipBg   = dark ? '#1e2435' : '#ffffff'
-  const tooltipBody = dark ? '#e2e8f0' : '#1e293b'
+  const tickColor    = dark ? '#64748b' : '#94a3b8'
+  const gridColor    = dark ? '#1e2435' : '#f1f5f9'
+  const tooltipBg    = dark ? '#1e2435' : '#ffffff'
+  const tooltipBody  = dark ? '#e2e8f0' : '#1e293b'
   const tooltipTitle = dark ? '#94a3b8' : '#475569'
   const tooltipBorder = dark ? '#334155' : '#e2e8f0'
 
   chartInstance = new Chart(chartCanvas.value, {
     type: 'line',
     data: {
-      labels,
       datasets: [{
         label: chartTitle.value,
-        data: values,
+        data: chartData,
         borderColor: '#3b82f6',
         backgroundColor: 'rgba(59,130,246,0.08)',
         borderWidth: 2,
-        pointRadius: points.value.length > 200 ? 0 : 3,
+        pointRadius: chartData.length > 200 ? 0 : 3,
         pointHoverRadius: 5,
         fill: true,
         tension: 0.3,
@@ -190,10 +217,34 @@ function renderChart() {
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { display: false },
-        tooltip: { backgroundColor: tooltipBg, titleColor: tooltipTitle, bodyColor: tooltipBody, borderColor: tooltipBorder, borderWidth: 1 },
+        tooltip: {
+          backgroundColor: tooltipBg, titleColor: tooltipTitle,
+          bodyColor: tooltipBody, borderColor: tooltipBorder, borderWidth: 1,
+          callbacks: {
+            // x-axis label in tooltip: format ms as local time
+            title: (items) => fmtChartLabel(new Date(items[0].parsed.x).toISOString()),
+            label: (ctx) => {
+              const v = ctx.parsed.y
+              const unit = mode.value === 'raw'
+                ? (points.value[ctx.dataIndex]?.u ?? selectedDpUnit.value)
+                : selectedDpUnit.value
+              return unit ? `${v} ${unit}` : String(v)
+            },
+          },
+        },
       },
       scales: {
-        x: { ticks: { color: tickColor, maxTicksLimit: 10 }, grid: { color: gridColor } },
+        // linear scale on Unix-ms with a formatting callback — no date adapter needed
+        x: {
+          type: 'linear',
+          ticks: {
+            color: tickColor,
+            maxTicksLimit: 8,
+            maxRotation: 0,
+            callback: (ms) => fmtChartLabel(new Date(ms).toISOString()),
+          },
+          grid: { color: gridColor },
+        },
         y: { ticks: { color: tickColor }, grid: { color: gridColor } },
       }
     }

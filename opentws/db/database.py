@@ -259,6 +259,10 @@ CREATE TABLE IF NOT EXISTS visu_nodes (
 CREATE INDEX IF NOT EXISTS idx_visu_nodes_parent ON visu_nodes(parent_id);
 """
 
+_MIGRATION_V17 = """
+ALTER TABLE history_values ADD COLUMN source_adapter TEXT;
+"""
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -277,6 +281,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (14, _MIGRATION_V14),
     (15, _MIGRATION_V15),
     (16, _MIGRATION_V16),
+    (17, _MIGRATION_V17),
 ]
 
 

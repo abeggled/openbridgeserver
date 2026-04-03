@@ -255,6 +255,128 @@
       </div>
     </div>
 
+    <!-- ── History Backend ── -->
+    <div v-if="activeTab === 'history'" class="flex flex-col gap-4 max-w-lg">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">History Backend</h3>
+        </div>
+        <div class="card-body flex flex-col gap-4">
+          <p class="text-sm text-slate-500">
+            Wähle, wo historische Werte gespeichert werden sollen.
+            Änderungen werden sofort übernommen (kein Neustart nötig).
+          </p>
+
+          <!-- Plugin selector -->
+          <div class="form-group">
+            <label class="label">Backend</label>
+            <select v-model="histForm.plugin" class="input text-sm">
+              <option value="sqlite">SQLite (intern, Standard)</option>
+              <option value="influxdb">InfluxDB (v1 / v2 / v3)</option>
+              <option value="timescaledb">PostgreSQL / TimescaleDB</option>
+            </select>
+          </div>
+
+          <!-- InfluxDB settings -->
+          <template v-if="histForm.plugin === 'influxdb'">
+            <div class="form-group">
+              <label class="label">Version</label>
+              <select v-model.number="histForm.influx_version" class="input text-sm">
+                <option :value="1">InfluxDB 1.x</option>
+                <option :value="2">InfluxDB 2.x</option>
+                <option :value="3">InfluxDB 3.x</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="label">URL</label>
+              <input v-model="histForm.influx_url" type="text" class="input text-sm font-mono"
+                placeholder="http://localhost:8086" />
+            </div>
+
+            <!-- v1: username + password + database -->
+            <template v-if="histForm.influx_version === 1">
+              <div class="grid grid-cols-2 gap-3">
+                <div class="form-group">
+                  <label class="label">Benutzername</label>
+                  <input v-model="histForm.influx_username" type="text" class="input text-sm" autocomplete="off" />
+                </div>
+                <div class="form-group">
+                  <label class="label">Passwort</label>
+                  <input v-model="histForm.influx_password" type="password" class="input text-sm" autocomplete="new-password" />
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="label">Datenbank</label>
+                <input v-model="histForm.influx_database" type="text" class="input text-sm font-mono" placeholder="opentws" />
+              </div>
+            </template>
+
+            <!-- v2: token + org + bucket -->
+            <template v-if="histForm.influx_version === 2">
+              <div class="form-group">
+                <label class="label">API Token</label>
+                <input v-model="histForm.influx_token" type="password" class="input text-sm font-mono" autocomplete="new-password" />
+              </div>
+              <div class="grid grid-cols-2 gap-3">
+                <div class="form-group">
+                  <label class="label">Organisation</label>
+                  <input v-model="histForm.influx_org" type="text" class="input text-sm font-mono" placeholder="my-org" />
+                </div>
+                <div class="form-group">
+                  <label class="label">Bucket</label>
+                  <input v-model="histForm.influx_bucket" type="text" class="input text-sm font-mono" placeholder="opentws" />
+                </div>
+              </div>
+            </template>
+
+            <!-- v3: token + database -->
+            <template v-if="histForm.influx_version === 3">
+              <div class="form-group">
+                <label class="label">API Token</label>
+                <input v-model="histForm.influx_token" type="password" class="input text-sm font-mono" autocomplete="new-password" />
+              </div>
+              <div class="form-group">
+                <label class="label">Datenbank</label>
+                <input v-model="histForm.influx_database" type="text" class="input text-sm font-mono" placeholder="opentws" />
+              </div>
+            </template>
+          </template>
+
+          <!-- TimescaleDB settings -->
+          <template v-if="histForm.plugin === 'timescaledb'">
+            <div class="form-group">
+              <label class="label">Connection DSN</label>
+              <input v-model="histForm.timescale_dsn" type="text" class="input text-sm font-mono"
+                placeholder="postgresql://user:pass@localhost:5432/opentws" autocomplete="off" />
+              <p class="text-xs text-slate-500 mt-1">
+                asyncpg muss installiert sein:
+                <code class="bg-slate-100 dark:bg-slate-700/60 px-1 rounded text-xs">pip install asyncpg</code>
+              </p>
+            </div>
+          </template>
+
+          <!-- Test + feedback -->
+          <div v-if="histTestResult" :class="['p-3 rounded-lg text-sm border', histTestResult.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
+            {{ histTestResult.message }}
+          </div>
+          <div v-if="histSaveMsg" :class="['p-3 rounded-lg text-sm border', histSaveMsg.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
+            {{ histSaveMsg.text }}
+          </div>
+
+          <div class="flex items-center gap-3">
+            <button @click="testHistoryConnection" class="btn-secondary" :disabled="histTesting">
+              <Spinner v-if="histTesting" size="sm" />
+              Verbindung testen
+            </button>
+            <button @click="saveHistorySettings" class="btn-primary" :disabled="histSaving">
+              <Spinner v-if="histSaving" size="sm" color="white" />
+              Speichern &amp; aktivieren
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Danger Zone ── -->
     <div v-if="activeTab === 'dangerzone' && auth.isAdmin" class="flex flex-col gap-4 max-w-lg">
       <div class="rounded-lg border border-red-500/40 bg-red-500/5 overflow-hidden">
@@ -402,7 +524,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { authApi, adapterApi, configApi, knxprojApi } from '@/api/client'
+import { authApi, adapterApi, configApi, knxprojApi, historySettingsApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
 import { useTz } from '@/composables/useTz'
@@ -483,6 +605,11 @@ onMounted(async () => {
   if (!settings.loaded) await settings.load()
   tzSelected.value = settings.timezone
   document.addEventListener('mousedown', onOutsideClick)
+  if (auth.isAdmin) loadHistorySettings()
+})
+
+watch(activeTab, (tab) => {
+  if (tab === 'history' && auth.isAdmin) loadHistorySettings()
 })
 
 onUnmounted(() => {
@@ -507,8 +634,58 @@ const tabs = [
   ...(auth.isAdmin ? [{ id: 'users', label: 'Benutzer' }] : []),
   { id: 'apikeys',      label: 'API Keys' },
   { id: 'importexport', label: 'Datenmanagement' },
+  ...(auth.isAdmin ? [{ id: 'history', label: 'History Backend' }] : []),
   ...(auth.isAdmin ? [{ id: 'dangerzone', label: 'Danger Zone' }] : []),
 ]
+
+// ── History Backend ────────────────────────────────────────────────────────
+const histForm = reactive({
+  plugin: 'sqlite',
+  influx_url: 'http://localhost:8086',
+  influx_version: 2,
+  influx_token: '',
+  influx_org: '',
+  influx_bucket: 'opentws',
+  influx_database: 'opentws',
+  influx_username: '',
+  influx_password: '',
+  timescale_dsn: '',
+})
+const histSaving     = ref(false)
+const histTesting    = ref(false)
+const histSaveMsg    = ref(null)
+const histTestResult = ref(null)
+
+async function loadHistorySettings() {
+  try {
+    const { data } = await historySettingsApi.get()
+    Object.assign(histForm, data)
+  } catch (_) { /* non-critical */ }
+}
+
+async function saveHistorySettings() {
+  histSaving.value = true; histSaveMsg.value = null
+  try {
+    await historySettingsApi.update({ ...histForm })
+    histSaveMsg.value = { ok: true, text: 'History Backend gespeichert und aktiviert.' }
+  } catch (e) {
+    histSaveMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Speichern' }
+  } finally {
+    histSaving.value = false
+  }
+}
+
+async function testHistoryConnection() {
+  histTesting.value = true; histTestResult.value = null
+  try {
+    const { data } = await historySettingsApi.test({ ...histForm })
+    histTestResult.value = data
+  } catch (e) {
+    histTestResult.value = { ok: false, message: e.response?.data?.detail ?? 'Fehler beim Testen' }
+  } finally {
+    histTesting.value = false
+  }
+}
 
 // ── Theme ──────────────────────────────────────────────────────────────────
 const themeOptions = [

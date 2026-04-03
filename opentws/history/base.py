@@ -23,6 +23,7 @@ class HistoryPlugin(ABC):
         unit: str | None,
         quality: str,
         ts: datetime | None = None,
+        source_adapter: str | None = None,
     ) -> None:
         """Persist a single value."""
         ...

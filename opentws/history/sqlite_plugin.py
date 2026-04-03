@@ -50,12 +50,13 @@ class SQLiteHistoryPlugin(HistoryPlugin):
         unit: str | None,
         quality: str,
         ts: datetime | None = None,
+        source_adapter: str | None = None,
     ) -> None:
         ts_str = (ts or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         await self._db.execute_and_commit(
-            """INSERT INTO history_values (datapoint_id, value, unit, quality, ts)
-               VALUES (?,?,?,?,?)""",
-            (str(datapoint_id), json.dumps(value), unit, quality, ts_str),
+            """INSERT INTO history_values (datapoint_id, value, unit, quality, ts, source_adapter)
+               VALUES (?,?,?,?,?,?)""",
+            (str(datapoint_id), json.dumps(value), unit, quality, ts_str, source_adapter),
         )
 
     # ------------------------------------------------------------------
@@ -70,7 +71,7 @@ class SQLiteHistoryPlugin(HistoryPlugin):
         limit: int = 1000,
     ) -> list[dict]:
         rows = await self._db.fetchall(
-            """SELECT ts, value, unit, quality
+            """SELECT ts, value, unit, quality, source_adapter
                FROM history_values
                WHERE datapoint_id=? AND ts >= ? AND ts <= ?
                ORDER BY ts DESC
@@ -83,7 +84,7 @@ class SQLiteHistoryPlugin(HistoryPlugin):
             ),
         )
         return [
-            {"ts": r["ts"], "v": _safe_loads(r["value"]), "u": r["unit"], "q": r["quality"]}
+            {"ts": r["ts"], "v": _safe_loads(r["value"]), "u": r["unit"], "q": r["quality"], "a": r["source_adapter"]}
             for r in rows
         ]
 

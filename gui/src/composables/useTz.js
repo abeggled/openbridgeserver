@@ -3,17 +3,33 @@ import { useSettingsStore } from '@/stores/settings'
 export function useTz() {
   const settings = useSettingsStore()
 
+  // Normalize a timestamp to a valid UTC Date:
+  //   - numbers / numeric strings  → treat as Unix ms
+  //   - ISO strings without tz     → append "Z" to force UTC (SQLite aggregate buckets)
+  //   - ISO strings with tz        → parse as-is
+  function toUtcDate(iso) {
+    if (iso == null || iso === '') return null
+    if (typeof iso === 'number' || (typeof iso === 'string' && /^\d+$/.test(iso))) {
+      return new Date(Number(iso))
+    }
+    const s = String(iso)
+    if (/[Zz]$/.test(s) || /[+-]\d{2}:\d{2}$/.test(s)) return new Date(s)
+    return new Date(s + 'Z')
+  }
+
   function fmtDate(iso) {
-    if (!iso) return '—'
-    return new Date(iso).toLocaleDateString('de-CH', {
+    const d = toUtcDate(iso)
+    if (!d) return '—'
+    return d.toLocaleDateString('de-CH', {
       timeZone: settings.timezone,
       year: 'numeric', month: '2-digit', day: '2-digit',
     })
   }
 
   function fmtDateTime(iso) {
-    if (!iso) return '—'
-    return new Date(iso).toLocaleString('de-CH', {
+    const d = toUtcDate(iso)
+    if (!d) return '—'
+    return d.toLocaleString('de-CH', {
       timeZone: settings.timezone,
       year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
@@ -21,8 +37,9 @@ export function useTz() {
   }
 
   function fmtChartLabel(iso) {
-    if (!iso) return ''
-    return new Date(iso).toLocaleString('de-CH', {
+    const d = toUtcDate(iso)
+    if (!d) return ''
+    return d.toLocaleString('de-CH', {
       timeZone: settings.timezone,
       month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit',
@@ -42,5 +59,5 @@ export function useTz() {
     return new Date(str).toISOString()
   }
 
-  return { fmtDate, fmtDateTime, fmtChartLabel, toDatetimeLocal, fromDatetimeLocal }
+  return { fmtDate, fmtDateTime, fmtChartLabel, toDatetimeLocal, fromDatetimeLocal, toUtcDate }
 }
