@@ -348,10 +348,7 @@
               <label class="label">Connection DSN</label>
               <input v-model="histForm.timescale_dsn" type="text" class="input text-sm font-mono"
                 placeholder="postgresql://user:pass@localhost:5432/opentws" autocomplete="off" />
-              <p class="text-xs text-slate-500 mt-1">
-                asyncpg muss installiert sein:
-                <code class="bg-slate-100 dark:bg-slate-700/60 px-1 rounded text-xs">pip install asyncpg</code>
-              </p>
+
             </div>
           </template>
 

@@ -42,4 +42,4 @@ astral>=3.0
 httpx>=0.27.0
 
 # History plugins — optional, install only the backend(s) you use:
-# asyncpg>=0.29.0       # TimescaleDB / PostgreSQL history plugin
+asyncpg>=0.29.0         # TimescaleDB / PostgreSQL history plugin
