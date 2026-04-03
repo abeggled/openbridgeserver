@@ -246,9 +246,15 @@
           <!-- JSON key extraction panel -->
           <div v-if="cfg.source_data_type === 'json'" class="mt-3 flex flex-col gap-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50">
             <div class="form-group">
-              <label class="text-xs font-medium text-slate-500 mb-1 block">
-                Sample Payload <span class="font-normal text-slate-400">(optional — für Schlüssel-Vorschau)</span>
-              </label>
+              <div class="flex justify-between items-center mb-1">
+                <label class="text-xs font-medium text-slate-500">Sample Payload</label>
+                <button
+                  type="button"
+                  class="text-xs text-blue-500 hover:text-blue-400 disabled:opacity-40"
+                  :disabled="!cfg.topic || mqttSampleLoading"
+                  @click="loadMqttSample"
+                >{{ mqttSampleLoading ? 'Lädt…' : '↺ Vom Topic laden' }}</button>
+              </div>
               <textarea
                 v-model="mqttJsonSample"
                 class="input font-mono text-xs h-20 resize-y"
@@ -283,9 +289,15 @@
           <!-- XML element-path extraction panel -->
           <div v-if="cfg.source_data_type === 'xml'" class="mt-3 flex flex-col gap-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50">
             <div class="form-group">
-              <label class="text-xs font-medium text-slate-500 mb-1 block">
-                Sample Payload <span class="font-normal text-slate-400">(optional — für Element-Vorschau)</span>
-              </label>
+              <div class="flex justify-between items-center mb-1">
+                <label class="text-xs font-medium text-slate-500">Sample Payload</label>
+                <button
+                  type="button"
+                  class="text-xs text-blue-500 hover:text-blue-400 disabled:opacity-40"
+                  :disabled="!cfg.topic || mqttSampleLoading"
+                  @click="loadMqttSample"
+                >{{ mqttSampleLoading ? 'Lädt…' : '↺ Vom Topic laden' }}</button>
+              </div>
               <textarea
                 v-model="mqttXmlSample"
                 class="input font-mono text-xs h-20 resize-y"
@@ -521,13 +533,13 @@ const cfg = reactive({
   byte_order: 'big', word_order: 'big',
   topic: '', publish_topic: '', retain: false, payload_template: '',
   value_map: null, value_map_preset: '', value_map_custom: '',
-  source_data_type: 'auto', json_key: '', xml_path: '',
+  source_data_type: '', json_key: '', xml_path: '',
   sensor_id: '', sensor_type: 'DS18B20',
 })
 
 // MQTT source data type constants + compatibility map
 const MQTT_SOURCE_TYPES = [
-  { value: 'auto',   label: 'auto — JSON-Erkennung (Standard)' },
+  { value: '',       label: '— kein Typ erzwingen (Standard) —' },
   { value: 'string', label: 'string' },
   { value: 'int',    label: 'int' },
   { value: 'float',  label: 'float' },
@@ -556,6 +568,9 @@ const mqttJsonParseError = ref(null)
 const mqttXmlSample      = ref('')
 const mqttXmlElements    = ref([])   // [{ path: 'data/temperature', text: '22.5' }, …]
 const mqttXmlParseError  = ref(null)
+
+// Shared loading state for sample fetch
+const mqttSampleLoading  = ref(false)
 
 // MQTT topic browser state
 const mqttBrowseTopics = ref([])
@@ -630,7 +645,7 @@ const groupedInstances = computed(() => {
 // Compatibility badge for MQTT source_data_type vs DataPoint data_type
 const mqttTypeCompat = computed(() => {
   const sdt = cfg.source_data_type ?? 'auto'
-  if (sdt === 'auto' || sdt === 'json' || sdt === 'xml') return null  // no badge — depends on extracted value
+  if (!sdt || sdt === 'json' || sdt === 'xml') return null  // no badge — depends on extracted value
   const dpType = (props.dpDataType ?? 'UNKNOWN').toUpperCase()
   const compat = MQTT_TYPE_COMPAT[dpType]
   if (!compat) return null                             // UNKNOWN → no badge
@@ -655,7 +670,7 @@ watch(() => props.initial, val => {
   if (cfg.publish_topic       == null) cfg.publish_topic = ''
   if (cfg.respond_to_read     == null) cfg.respond_to_read = false
   if (cfg.payload_template    == null) cfg.payload_template = ''
-  if (cfg.source_data_type   == null) cfg.source_data_type = 'auto'
+  if (cfg.source_data_type   == null) cfg.source_data_type = ''
   if (cfg.json_key           == null) cfg.json_key = ''
   if (cfg.xml_path           == null) cfg.xml_path = ''
   // Restore value_map UI state from loaded config
@@ -718,6 +733,37 @@ function selectMqttTopic(topic) {
 function onValueMapPresetChange() {
   if (cfg.value_map_preset !== 'custom') cfg.value_map_custom = ''
 }
+
+async function loadMqttSample() {
+  const instanceId = form.adapter_instance_id || props.initial?.adapter_instance_id
+  const topic = cfg.topic?.trim()
+  if (!instanceId || !topic) return
+  mqttSampleLoading.value = true
+  // Clear previous errors so the user sees the loading state
+  mqttJsonParseError.value = null
+  mqttXmlParseError.value  = null
+  try {
+    const { data } = await adapterApi.mqttSamplePayload(instanceId, topic)
+    if (cfg.source_data_type === 'json') {
+      mqttJsonSample.value = data.payload
+      onMqttJsonSampleInput()
+    } else if (cfg.source_data_type === 'xml') {
+      mqttXmlSample.value = data.payload
+      onMqttXmlSampleInput()
+    }
+  } catch (e) {
+    const msg = e.response?.data?.detail ?? 'Kein Payload empfangen'
+    if (cfg.source_data_type === 'json') mqttJsonParseError.value = msg
+    if (cfg.source_data_type === 'xml')  mqttXmlParseError.value  = msg
+  } finally {
+    mqttSampleLoading.value = false
+  }
+}
+
+// Auto-load payload when switching to JSON/XML mode (if topic already set)
+watch(() => cfg.source_data_type, sdt => {
+  if (sdt === 'json' || sdt === 'xml') loadMqttSample()
+})
 
 function collectXmlLeafPaths(el, prefix) {
   const result = []
@@ -826,7 +872,7 @@ function buildConfig() {
     if (cfg.publish_topic?.trim())    c.publish_topic    = cfg.publish_topic.trim()
     if (cfg.payload_template?.trim()) c.payload_template = cfg.payload_template.trim()
     // source_data_type + json_key
-    if (cfg.source_data_type && cfg.source_data_type !== 'auto') {
+    if (cfg.source_data_type) {
       c.source_data_type = cfg.source_data_type
       if (cfg.source_data_type === 'json' && cfg.json_key?.trim())
         c.json_key = cfg.json_key.trim()

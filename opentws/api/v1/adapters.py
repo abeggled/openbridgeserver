@@ -388,6 +388,67 @@ async def mqtt_browse_topics(
     return sorted(topics)
 
 
+@router.get("/instances/{instance_id}/mqtt/sample")
+async def mqtt_sample_payload(
+    instance_id: uuid.UUID,
+    topic: str,
+    timeout: int = 5,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> dict:
+    """Subscribe to a specific topic and return the first received payload (useful for retained messages)."""
+    row = await db.fetchone(
+        "SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),)
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "MQTT":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für MQTT-Instanzen verfügbar")
+
+    raw_config = row["config"] or "{}"
+    config_dict = json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+
+    from opentws.adapters.mqtt.adapter import MqttAdapterConfig
+    try:
+        cfg = MqttAdapterConfig(**config_dict)
+    except Exception as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Config-Fehler: {exc}") from exc
+
+    try:
+        import aiomqtt
+    except ImportError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "aiomqtt nicht installiert")
+
+    scan_secs = min(max(timeout, 1), 10)
+    try:
+        async with aiomqtt.Client(
+            hostname=cfg.host,
+            port=cfg.port,
+            username=cfg.username,
+            password=cfg.password,
+        ) as client:
+            await client.subscribe(topic)
+            try:
+                async with asyncio.timeout(scan_secs):
+                    async for message in client.messages:
+                        return {
+                            "topic": str(message.topic),
+                            "payload": message.payload.decode("utf-8", errors="replace"),
+                        }
+            except asyncio.TimeoutError:
+                pass
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"MQTT-Verbindung fehlgeschlagen: {exc}",
+        )
+
+    raise HTTPException(
+        status.HTTP_404_NOT_FOUND,
+        f"Kein Payload auf Topic '{topic}' innerhalb von {scan_secs} s empfangen",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Typ-Routen (unverändert — Schema-Abfragen + Legacy-Config)
 # ---------------------------------------------------------------------------
