@@ -13,9 +13,9 @@
           enter-from-class="opacity-0 scale-95" enter-active-class="transition-all duration-200"
           leave-to-class="opacity-0 scale-95"   leave-active-class="transition-all duration-150"
         >
-          <div v-if="modelValue" :class="['relative card shadow-2xl w-full', maxWidthClass]">
+          <div v-if="modelValue" :class="['relative card shadow-2xl w-full flex flex-col max-h-[90vh]', maxWidthClass]">
             <!-- Header -->
-            <div v-if="title" class="card-header">
+            <div v-if="title" class="card-header shrink-0">
               <h3 class="text-base font-semibold text-slate-800 dark:text-slate-100">{{ title }}</h3>
               <button @click="$emit('update:modelValue', false)" class="btn-icon">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -25,7 +25,7 @@
             </div>
 
             <!-- Body -->
-            <div class="card-body">
+            <div class="card-body flex-1 min-h-0 overflow-y-auto">
               <slot />
             </div>
 

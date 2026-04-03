@@ -796,7 +796,7 @@ const currentInstanceName = computed(() => {
 
 const visibleTabs = computed(() => {
   const tabs = [{ id: 'conn', label: 'Verbindung', badge: false }]
-  if (selectedAdapterType.value) {
+  if (selectedAdapterType.value && selectedAdapterType.value !== 'ZEITSCHALTUHR') {
     const hasFormula = !!form.value_formula?.trim()
     tabs.push({ id: 'transform', label: 'Transformation', badge: hasFormula })
     if (form.direction === 'DEST' || form.direction === 'BOTH') {
