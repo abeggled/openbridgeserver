@@ -172,6 +172,7 @@ export const visu = {
     request<PinAuthResponse>(`/visu/nodes/${id}/auth`, {
       method: 'POST',
       body: JSON.stringify({ pin }),
+      silent401: true,
     }),
 
   getPage: (id: string, sessionToken?: string) =>
