@@ -43,6 +43,7 @@ import '@/widgets/Link/index'
 import '@/widgets/WidgetRef/index'
 import '@/widgets/Info/index'
 import '@/widgets/Text/index'
+import '@/widgets/Zeitschaltuhr/index'
 
 // ── Props / Router / Store ────────────────────────────────────────────────────
 const props = defineProps<{ id: string }>()

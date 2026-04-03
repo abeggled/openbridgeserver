@@ -55,6 +55,14 @@ class AdapterInstanceOut(BaseModel):
     updated_at: str
 
 
+class InstanceBindingEntry(BaseModel):
+    binding_id: uuid.UUID
+    datapoint_id: uuid.UUID
+    datapoint_name: str
+    enabled: bool
+    config: dict
+
+
 class AdapterInstanceCreate(BaseModel):
     adapter_type: str
     name: str
@@ -331,6 +339,33 @@ async def restart_instance_route(
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     instance = adapter_registry.get_instance_by_id(str(instance_id))
     return _instance_out(row, instance)
+
+
+@router.get("/instances/{instance_id}/bindings", response_model=list[InstanceBindingEntry])
+async def list_instance_bindings(
+    instance_id: uuid.UUID,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> list[InstanceBindingEntry]:
+    """Alle Bindings einer Adapter-Instanz, angereichert mit Datenpunkt-Namen."""
+    rows = await db.fetchall(
+        """SELECT ab.id, ab.datapoint_id, dp.name AS dp_name, ab.enabled, ab.config
+           FROM adapter_bindings ab
+           JOIN datapoints dp ON dp.id = ab.datapoint_id
+           WHERE ab.adapter_instance_id = ?
+           ORDER BY dp.name, ab.created_at""",
+        (str(instance_id),),
+    )
+    return [
+        InstanceBindingEntry(
+            binding_id=uuid.UUID(row["id"]),
+            datapoint_id=uuid.UUID(row["datapoint_id"]),
+            datapoint_name=row["dp_name"],
+            enabled=bool(row["enabled"]),
+            config=json.loads(row["config"]) if row["config"] else {},
+        )
+        for row in rows
+    ]
 
 
 @router.get("/instances/{instance_id}/mqtt/browse", response_model=list[str])
