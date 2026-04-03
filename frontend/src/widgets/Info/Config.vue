@@ -106,22 +106,20 @@ watch(
             placeholder="Beschriftung"
             class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
           />
-          <div class="flex gap-2">
-            <input
-              v-model="extra.unit"
-              type="text"
-              placeholder="Einheit"
-              class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
-            />
-            <input
-              v-model.number="extra.decimals"
-              type="number"
-              min="0"
-              max="6"
-              placeholder="Dez."
-              class="w-16 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
-            />
-          </div>
+          <input
+            v-model="extra.unit"
+            type="text"
+            placeholder="Einheit"
+            class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+          />
+          <input
+            v-model.number="extra.decimals"
+            type="number"
+            min="0"
+            max="6"
+            placeholder="Dezimalstellen"
+            class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+          />
         </div>
       </div>
     </div>
