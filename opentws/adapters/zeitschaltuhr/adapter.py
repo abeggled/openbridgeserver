@@ -1,6 +1,9 @@
 """
 Zeitschaltuhr Adapter — Tages- und Jahresschaltuhr
 
+Nur SOURCE-Bindings sind gültig (Zeitschaltuhr ist eine reine Quelle).
+DEST- und BOTH-Bindings werden beim Laden ignoriert (mit Warnung).
+
 Adapter-Konfiguration:
   latitude:             float  — Breitengrad für Sonnenauf/-untergang (default: 47.5)
   longitude:            float  — Längengrad (default: 8.0)
@@ -10,7 +13,8 @@ Adapter-Konfiguration:
   holiday_subdivision:  str    — Kanton/Bundesland (z.B. ZH, BY) — leer = Bundesfeiertage
   vacation_1_start ... vacation_6_end:  str — Ferienperioden als JJJJ-MM-TT
 
-Binding-Konfiguration:
+Binding-Konfiguration (1 Binding = 1 Schaltpunkt):
+  ─── Typ ────────────────────────────────────────────────────────────────────
   timer_type:   "daily" | "annual" | "meta"
     "daily"  — Tagesschaltuhr: täglich/wöchentlich
     "annual" — Jahresschaltuhr: monatlich/jährlich
@@ -21,18 +25,24 @@ Binding-Konfiguration:
     "holiday_name_today" | "holiday_name_tomorrow" |
     "vacation_1" .. "vacation_6"
 
+  ─── Wochentag / Datum ───────────────────────────────────────────────────────
   weekdays:       Liste aktiver Wochentage [0=Mo .. 6=So] (default: alle)
   months:         Liste aktiver Monate [1-12] (leer = alle; nur für annual)
   day_of_month:   Tag im Monat 0-31 (0 = alle; nur für annual)
 
-  time_ref:       "absolute" | "sunrise" | "sunset" | "solar_noon"
-  hour:           0-23 (für absolute Zeit)
-  minute:         0-59
-  offset_minutes: Offset in Minuten ± relativ zur Zeitreferenz
+  ─── Zeitreferenz ────────────────────────────────────────────────────────────
+  time_ref:             "absolute" | "sunrise" | "sunset" | "solar_noon" | "solar_altitude"
+  hour:                 0-23  (nur bei time_ref=absolute)
+  minute:               0-59
+  offset_minutes:       Offset in Minuten (positiv/negativ) relativ zur Zeitreferenz
+  solar_altitude_deg:   Sonnenhöhenwinkel in Grad (−18 … 90; nur bei time_ref=solar_altitude)
+  sun_direction:        "rising" | "setting"  (nur bei time_ref=solar_altitude)
 
+  ─── Takt ────────────────────────────────────────────────────────────────────
   every_hour:     bool — jede Stunde zur angegebenen Minute schalten
   every_minute:   bool — jede Minute schalten
 
+  ─── Feiertag / Ferien ───────────────────────────────────────────────────────
   holiday_mode:   "ignore" | "skip" | "only" | "as_sunday"
   vacation_mode:  "ignore" | "skip" | "only" | "as_sunday"
     ignore    — Feiertage/Ferien wie Normaltage behandeln
@@ -40,7 +50,10 @@ Binding-Konfiguration:
     only      — Nur an Feiertagen/Ferientagen schalten
     as_sunday — Feiertage/Ferientage wie Sonntag behandeln
 
+  ─── Ausgabe ─────────────────────────────────────────────────────────────────
   value:  Ausgabewert beim Schalten (default: "1")
+          Gültige Werte: "0"/"1", "true"/"false", "on"/"off", "ein"/"aus",
+          Ganzzahl, Dezimalzahl oder beliebiger String
 """
 from __future__ import annotations
 
@@ -73,6 +86,12 @@ class TimeRef(str, Enum):
     SUNRISE = "sunrise"
     SUNSET = "sunset"
     SOLAR_NOON = "solar_noon"
+    SOLAR_ALTITUDE = "solar_altitude"
+
+
+class SunDirection(str, Enum):
+    RISING = "rising"
+    SETTING = "setting"
 
 
 class HolidayMode(str, Enum):
@@ -97,7 +116,7 @@ class MetaType(str, Enum):
 
 
 # ---------------------------------------------------------------------------
-# Config schemas (auto-generate GUI form from Pydantic schema)
+# Config schemas
 # ---------------------------------------------------------------------------
 
 class ZeitschaltuhrConfig(BaseModel):
@@ -125,12 +144,14 @@ class ZeitschaltuhrConfig(BaseModel):
 
 
 class ZeitschaltuhrBindingConfig(BaseModel):
+    # ── Typ ──────────────────────────────────────────────────────────────────
     timer_type: TimerType = Field(TimerType.DAILY, description="Schaltuhrentyp")
     meta_type: MetaType = Field(
         MetaType.NONE,
         description="Metadaten-Typ (nur bei timer_type=meta)",
     )
 
+    # ── Wochentag / Datum ─────────────────────────────────────────────────────
     weekdays: list[int] = Field(
         default=[0, 1, 2, 3, 4, 5, 6],
         description="Aktive Wochentage (0=Mo, 1=Di, 2=Mi, 3=Do, 4=Fr, 5=Sa, 6=So)",
@@ -140,27 +161,51 @@ class ZeitschaltuhrBindingConfig(BaseModel):
         description="Aktive Monate 1-12 (leer = alle; nur Jahresschaltuhr)",
     )
     day_of_month: int = Field(
-        0,
-        ge=0,
-        le=31,
+        0, ge=0, le=31,
         description="Tag im Monat (0 = alle; nur Jahresschaltuhr)",
     )
 
+    # ── Zeitreferenz ──────────────────────────────────────────────────────────
     time_ref: TimeRef = Field(TimeRef.ABSOLUTE, description="Zeitreferenz")
-    hour: int = Field(0, ge=0, le=23, description="Stunde (nur bei absoluter Zeitreferenz)")
+    hour: int = Field(0, ge=0, le=23, description="Stunde (nur bei time_ref=absolute)")
     minute: int = Field(0, ge=0, le=59, description="Minute")
     offset_minutes: int = Field(
         0,
         description="Offset in Minuten (positiv/negativ) relativ zur Zeitreferenz",
     )
+    solar_altitude_deg: float = Field(
+        0.0,
+        ge=-18.0,
+        le=90.0,
+        description=(
+            "Sonnenhöhenwinkel in Grad (−18 … 90) — nur bei time_ref=solar_altitude. "
+            "Beispiele: 0° = Horizont, −6° = bürgerliche Dämmerung, 30° = mittlerer Vormittag"
+        ),
+    )
+    sun_direction: SunDirection = Field(
+        SunDirection.RISING,
+        description=(
+            "Richtung der Sonnenbewegung — nur bei time_ref=solar_altitude. "
+            "rising = Sonne steigt (morgens), setting = Sonne sinkt (nachmittags/abends)"
+        ),
+    )
 
+    # ── Takt ──────────────────────────────────────────────────────────────────
     every_hour: bool = Field(False, description="Jede Stunde zur angegebenen Minute schalten")
     every_minute: bool = Field(False, description="Jede Minute schalten")
 
-    holiday_mode: HolidayMode = Field(HolidayMode.IGNORE, description="Feriertagsbehandlung")
+    # ── Feiertag / Ferien ─────────────────────────────────────────────────────
+    holiday_mode: HolidayMode = Field(HolidayMode.IGNORE, description="Feiertagsbehandlung")
     vacation_mode: HolidayMode = Field(HolidayMode.IGNORE, description="Ferienbehandlung")
 
-    value: str = Field("1", description="Ausgabewert beim Schalten")
+    # ── Ausgabe ───────────────────────────────────────────────────────────────
+    value: str = Field(
+        "1",
+        description=(
+            "Ausgabewert beim Schalten. "
+            "Erlaubt: 0/1, true/false, on/off, ein/aus, Ganzzahl, Dezimalzahl oder String"
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -170,12 +215,18 @@ class ZeitschaltuhrBindingConfig(BaseModel):
 @register
 class ZeitschaltuhrAdapter(AdapterBase):
     """
-    Zeitschaltuhr (Timer) Adapter.
+    Zeitschaltuhr (Timer) Adapter — virtuelle Schaltuhr ohne physische Verbindung.
 
-    Virtuelle Schaltuhr ohne physische Verbindung.
-    Schaltet DataPoints zu konfigurierten Zeiten — mit Unterstützung für
-    Wochentage, Feiertage, Ferien und astronomische Zeitpunkte
-    (Sonnenaufgang/-untergang via astral).
+    Nur SOURCE-Bindings sind gültig. DEST- und BOTH-Bindings werden beim
+    Laden ignoriert (mit Warnung im Log).
+
+    Unterstützt:
+    - Tagesschaltuhr (daily): täglich / nach Wochentagen
+    - Jahresschaltuhr (annual): monatlich / nach Monat+Tag
+    - Metadaten (meta): Feiertag- / Ferienstatus automatisch publizieren
+    - Zeitreferenzen: absolute Zeit, Sonnenaufgang, -untergang, Sonnenhöhenwinkel
+    - Feiertag- und Ferienbehandlung: ignorieren / überspringen / nur / als Sonntag
+    - Zyklen: jede Minute / jede Stunde
     """
 
     adapter_type = "ZEITSCHALTUHR"
@@ -191,9 +242,9 @@ class ZeitschaltuhrAdapter(AdapterBase):
     ) -> None:
         super().__init__(event_bus, config, instance_id, name)
         self._cfg = ZeitschaltuhrConfig(**(config or {}))
-        self._tz: Any = timezone.utc   # resolved zoneinfo.ZoneInfo in connect()
+        self._tz: Any = timezone.utc
         self._task: asyncio.Task | None = None
-        self._hol: Any = {}            # holidays dict-like (date → name)
+        self._hol: Any = {}
         self._last_date: date | None = None
 
     # ------------------------------------------------------------------
@@ -210,10 +261,11 @@ class ZeitschaltuhrAdapter(AdapterBase):
             name=f"zeitschaltuhr_{self._instance_id}",
         )
         logger.info(
-            "Zeitschaltuhr '%s' gestartet (TZ=%s, Land=%s)",
+            "Zeitschaltuhr '%s' gestartet (TZ=%s, Land=%s%s)",
             self._instance_name,
             self._tz,
             self._cfg.holiday_country,
+            f"/{self._cfg.holiday_subdivision}" if self._cfg.holiday_subdivision else "",
         )
 
     async def disconnect(self) -> None:
@@ -227,13 +279,27 @@ class ZeitschaltuhrAdapter(AdapterBase):
         self._connected = False
         await self._publish_status(False, "Zeitschaltuhr gestoppt")
 
+    async def reload_bindings(self, bindings: list[Any]) -> None:
+        """Überschreibt Base-Methode: filtert ungültige Richtungen vor dem Speichern."""
+        valid = []
+        for b in bindings:
+            if b.direction != "SOURCE":
+                logger.warning(
+                    "Zeitschaltuhr '%s': Binding %s hat Richtung '%s' — "
+                    "nur SOURCE ist erlaubt, Binding wird ignoriert.",
+                    self._instance_name, b.id, b.direction,
+                )
+            else:
+                valid.append(b)
+        await super().reload_bindings(valid)
+
     async def _on_bindings_reloaded(self) -> None:
         if self._connected:
             now_local = datetime.now(self._tz)
             await self._publish_meta_bindings(now_local)
 
     # ------------------------------------------------------------------
-    # Data exchange (push-only timer — no reads/writes from outside)
+    # Data exchange (push-only — writes are rejected silently)
     # ------------------------------------------------------------------
 
     async def read(self, binding: Any) -> Any:
@@ -247,16 +313,16 @@ class ZeitschaltuhrAdapter(AdapterBase):
     # ------------------------------------------------------------------
 
     async def _timer_loop(self) -> None:
-        """Wacht sich auf Minutengrenzen und prüft/feuert alle Schaltpunkte."""
+        """Wacht auf Minutengrenzen und prüft/feuert alle Schaltpunkte."""
         now_local = datetime.now(self._tz)
         await self._publish_meta_bindings(now_local)
         self._last_date = now_local.date()
 
         while True:
             try:
-                # Sleep to the next full minute
+                # Sleep to next full minute (+0.1 s overshoot to avoid same-second re-fire)
                 now_local = datetime.now(self._tz)
-                sleep_secs = 60 - now_local.second + 0.1   # tiny overshoot avoids same-second re-fire
+                sleep_secs = 60 - now_local.second + 0.1
                 await asyncio.sleep(sleep_secs)
 
                 now_local = datetime.now(self._tz)
@@ -268,7 +334,6 @@ class ZeitschaltuhrAdapter(AdapterBase):
                     await self._publish_meta_bindings(now_local)
                     self._last_date = today
 
-                # Check each binding
                 for binding in list(self._bindings):
                     try:
                         cfg = ZeitschaltuhrBindingConfig(**binding.config)
@@ -292,7 +357,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
         is_holiday = self._is_holiday(today)
         is_vacation = self._is_vacation(today)
 
-        # Determine effective weekday (as_sunday promotion)
+        # Effective weekday — may be promoted to Sunday by as_sunday mode
         effective_weekday = now.weekday()
         if is_holiday and cfg.holiday_mode == HolidayMode.AS_SUNDAY:
             effective_weekday = 6
@@ -303,7 +368,6 @@ class ZeitschaltuhrAdapter(AdapterBase):
         if is_holiday:
             if cfg.holiday_mode == HolidayMode.SKIP:
                 return False
-            # ONLY → stays in flow (it is a holiday)
         else:
             if cfg.holiday_mode == HolidayMode.ONLY:
                 return False
@@ -327,13 +391,13 @@ class ZeitschaltuhrAdapter(AdapterBase):
             if cfg.day_of_month and now.day != cfg.day_of_month:
                 return False
 
-        # Cycling shortcuts
+        # Cycling shortcuts (weekday/month filters still apply above)
         if cfg.every_minute:
             return True
         if cfg.every_hour:
             return now.minute == cfg.minute
 
-        # Absolute / astronomical target time
+        # Compute target time and compare
         target = self._calculate_target_time(cfg, today)
         if target is None:
             return False
@@ -343,18 +407,23 @@ class ZeitschaltuhrAdapter(AdapterBase):
         self, cfg: ZeitschaltuhrBindingConfig, for_date: date
     ) -> datetime | None:
         if cfg.time_ref == TimeRef.ABSOLUTE:
-            base = datetime(
+            base: datetime | None = datetime(
                 for_date.year, for_date.month, for_date.day,
                 cfg.hour, cfg.minute, tzinfo=self._tz,
             )
+        elif cfg.time_ref == TimeRef.SOLAR_ALTITUDE:
+            base = self._get_solar_altitude_time(
+                cfg.solar_altitude_deg, cfg.sun_direction, for_date
+            )
         else:
             base = self._get_sun_event(cfg.time_ref, for_date)
-            if base is None:
-                return None
 
+        if base is None:
+            return None
         return base + timedelta(minutes=cfg.offset_minutes)
 
     def _get_sun_event(self, ref: TimeRef, for_date: date) -> datetime | None:
+        """Sonnenaufgang, -untergang oder Sonnenmittag via astral."""
         try:
             from astral import LocationInfo
             from astral.sun import sun
@@ -367,19 +436,58 @@ class ZeitschaltuhrAdapter(AdapterBase):
                 longitude=self._cfg.longitude,
             )
             s = sun(location.observer, date=for_date, tzinfo=self._tz)
-            if ref == TimeRef.SUNRISE:
-                return s["sunrise"]
-            if ref == TimeRef.SUNSET:
-                return s["sunset"]
-            if ref == TimeRef.SOLAR_NOON:
-                return s["noon"]
+            return s.get(
+                {"sunrise": "sunrise", "sunset": "sunset", "solar_noon": "noon"}[ref.value]
+            )
         except ImportError:
             logger.warning(
-                "astral nicht installiert — Sonnenzeit-Berechnungen nicht verfügbar. "
-                "Installation: pip install astral"
+                "astral nicht installiert — Sonnenzeit-Berechnungen nicht verfügbar "
+                "(pip install astral)"
             )
         except Exception as exc:
             logger.warning("Sonnenzeit-Berechnung für %s fehlgeschlagen: %s", for_date, exc)
+        return None
+
+    def _get_solar_altitude_time(
+        self,
+        altitude_deg: float,
+        direction: SunDirection,
+        for_date: date,
+    ) -> datetime | None:
+        """Zeitpunkt, zu dem die Sonne den angegebenen Höhenwinkel erreicht."""
+        try:
+            from astral import LocationInfo
+            from astral.sun import time_at_elevation
+            from astral import SunDirection as AstralDir
+
+            location = LocationInfo(
+                name="OpenTWS",
+                region="",
+                timezone=str(self._tz),
+                latitude=self._cfg.latitude,
+                longitude=self._cfg.longitude,
+            )
+            astral_dir = (
+                AstralDir.RISING if direction == SunDirection.RISING else AstralDir.SETTING
+            )
+            result = time_at_elevation(
+                location.observer,
+                elevation=altitude_deg,
+                date=for_date,
+                direction=astral_dir,
+                tzinfo=self._tz,
+            )
+            return result
+        except ImportError:
+            logger.warning(
+                "astral nicht installiert — Sonnenhöhenwinkel-Berechnung nicht verfügbar "
+                "(pip install astral)"
+            )
+        except Exception as exc:
+            logger.warning(
+                "Sonnenhöhenwinkel-Berechnung für %s°/%s am %s fehlgeschlagen: %s",
+                altitude_deg, direction.value, for_date, exc,
+            )
         return None
 
     # ------------------------------------------------------------------
@@ -423,7 +531,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
     # ------------------------------------------------------------------
 
     async def _publish_meta_bindings(self, now: datetime) -> None:
-        """Publiziert Feiertag-/Ferienstatusauf alle META-Bindings."""
+        """Publiziert Feiertag-/Ferienstatus auf alle META-Bindings."""
         today = now.date()
         tomorrow = today + timedelta(days=1)
 
@@ -487,8 +595,6 @@ class ZeitschaltuhrAdapter(AdapterBase):
         return d in self._hol
 
     def _holiday_name(self, d: date) -> str:
-        if isinstance(self._hol, dict):
-            return self._hol.get(d, "")
         try:
             return self._hol.get(d, "")
         except Exception:
