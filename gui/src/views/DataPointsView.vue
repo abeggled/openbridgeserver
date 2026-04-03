@@ -3,7 +3,7 @@
     <!-- Header -->
     <div class="flex flex-wrap items-center gap-3">
       <div class="flex-1">
-        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">DataPoints</h2>
+        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Objekte</h2>
         <p class="text-sm text-slate-500 mt-0.5">{{ store.total }} Einträge</p>
       </div>
       <button @click="openCreate" class="btn-primary">
@@ -34,7 +34,7 @@
     <!-- Table -->
     <div class="card overflow-hidden">
       <div v-if="store.loading" class="flex justify-center py-12"><Spinner size="lg" /></div>
-      <div v-else-if="!store.items.length" class="text-center text-slate-500 py-12 text-sm">Keine DataPoints gefunden</div>
+      <div v-else-if="!store.items.length" class="text-center text-slate-500 py-12 text-sm">Keine Objekte gefunden</div>
       <div v-else class="table-wrap">
         <table class="table">
           <thead>
@@ -47,7 +47,7 @@
               </th>
               <th>Tags</th>
               <th>Wert</th>
-              <th>Quality</th>
+              <th>Qualität</th>
               <th>MQTT Topic</th>
               <th class="w-24"></th>
             </tr>
@@ -64,7 +64,7 @@
                 </div>
               </td>
               <td class="font-mono text-sm text-blue-500 dark:text-blue-300">{{ liveValue(dp) }}</td>
-              <td><Badge :variant="qualityVariant(liveQuality(dp))" dot size="xs">{{ liveQuality(dp) ?? '—' }}</Badge></td>
+              <td><Badge :variant="qualityVariant(liveQuality(dp))" dot size="xs">{{ qualityLabel(liveQuality(dp)) ?? '—' }}</Badge></td>
               <td class="font-mono text-xs text-slate-500 max-w-xs truncate">{{ dp.mqtt_topic }}</td>
               <td>
                 <div class="flex items-center gap-1">
@@ -95,12 +95,12 @@
     </div>
 
     <!-- Create / Edit Modal -->
-    <Modal v-model="showForm" :title="editTarget ? 'DataPoint bearbeiten' : 'Neuer DataPoint'">
+    <Modal v-model="showForm" :title="editTarget ? 'Objekt bearbeiten' : 'Neues Objekt'">
       <DataPointForm :initial="editTarget" :datatypes="store.datatypes" :save-handler="onSave" @cancel="showForm = false" />
     </Modal>
 
     <!-- Delete confirm -->
-    <ConfirmDialog v-model="showConfirm" title="DataPoint löschen"
+    <ConfirmDialog v-model="showConfirm" title="Objekt löschen"
       :message="`'${deleteTarget?.name}' und alle Verknüpfungen löschen?`"
       confirm-label="Löschen" @confirm="doDelete" />
   </div>
@@ -183,5 +183,8 @@ function liveValue(dp) {
 function liveQuality(dp) { return ws.liveValues[dp.id]?.quality ?? dp.quality }
 function qualityVariant(q) {
   return q === 'good' ? 'success' : q === 'bad' ? 'danger' : q === 'uncertain' ? 'warning' : 'muted'
+}
+function qualityLabel(q) {
+  return q === 'good' ? 'gut' : q === 'bad' ? 'schlecht' : q === 'uncertain' ? 'undefiniert' : q
 }
 </script>

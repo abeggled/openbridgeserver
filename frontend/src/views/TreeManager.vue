@@ -526,7 +526,7 @@ onMounted(async () => {
 
           <!-- ── Zugangsberechtigung ────────────────────────────────────────── -->
           <section class="space-y-3">
-            <h2 class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Zugangsberechtigung</h2>
+            <h2 class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Berechtigung</h2>
 
             <div class="space-y-2">
               <label

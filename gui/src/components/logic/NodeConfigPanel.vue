@@ -30,7 +30,7 @@
         <div v-show="activeTab === 'connection'" class="p-4 flex flex-col gap-3">
           <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
           <div class="form-group">
-            <label class="label">DataPoint</label>
+            <label class="label">Objekt</label>
             <input v-model="dpSearch" type="text" class="input text-sm" placeholder="Suchen…" @input="searchDps" />
             <div v-if="dpResults.length"
               class="mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden max-h-40 overflow-y-auto">

@@ -259,7 +259,7 @@
     <div v-if="activeTab === 'history'" class="flex flex-col gap-4 max-w-lg">
       <div class="card">
         <div class="card-header">
-          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">History Backend</h3>
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Historie DB</h3>
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">
@@ -269,7 +269,7 @@
 
           <!-- Plugin selector -->
           <div class="form-group">
-            <label class="label">Backend</label>
+            <label class="label">Datenbank</label>
             <select v-model="histForm.plugin" class="input text-sm">
               <option value="sqlite">SQLite (intern, Standard)</option>
               <option value="influxdb">InfluxDB (v1 / v2 / v3)</option>
@@ -631,7 +631,7 @@ const tabs = [
   ...(auth.isAdmin ? [{ id: 'users', label: 'Benutzer' }] : []),
   { id: 'apikeys',      label: 'API Keys' },
   { id: 'importexport', label: 'Datenmanagement' },
-  ...(auth.isAdmin ? [{ id: 'history', label: 'History Backend' }] : []),
+  ...(auth.isAdmin ? [{ id: 'history', label: 'Historie DB' }] : []),
   ...(auth.isAdmin ? [{ id: 'dangerzone', label: 'Danger Zone' }] : []),
 ]
 
@@ -664,7 +664,7 @@ async function saveHistorySettings() {
   histSaving.value = true; histSaveMsg.value = null
   try {
     await historySettingsApi.update({ ...histForm })
-    histSaveMsg.value = { ok: true, text: 'History Backend gespeichert und aktiviert.' }
+    histSaveMsg.value = { ok: true, text: 'Historie DB gespeichert und aktiviert.' }
   } catch (e) {
     histSaveMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Speichern' }
   } finally {

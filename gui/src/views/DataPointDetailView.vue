@@ -2,7 +2,7 @@
   <div class="flex flex-col gap-5" v-if="dp">
     <!-- Breadcrumb + header -->
     <div>
-      <RouterLink to="/datapoints" class="text-sm text-blue-400 hover:underline">← DataPoints</RouterLink>
+      <RouterLink to="/datapoints" class="text-sm text-blue-400 hover:underline">← Objekte</RouterLink>
       <div class="flex flex-wrap items-start gap-3 mt-2">
         <div class="flex-1">
           <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ dp.name }}</h2>
@@ -10,7 +10,7 @@
         </div>
         <Badge variant="info">{{ dp.data_type }}</Badge>
         <Badge :variant="qualityVariant(liveState?.quality ?? dp.quality)" dot>
-          {{ liveState?.quality ?? dp.quality ?? '—' }}
+          {{ qualityLabel(liveState?.quality ?? dp.quality) ?? '—' }}
         </Badge>
       </div>
     </div>
@@ -50,7 +50,7 @@
         </dl>
         <div class="flex gap-3 mt-5">
           <button @click="showEdit = true" class="btn-secondary btn-sm">Bearbeiten</button>
-          <RouterLink :to="`/history?dp=${dp.id}`" class="btn-secondary btn-sm">History →</RouterLink>
+          <RouterLink :to="`/history?dp=${dp.id}`" class="btn-secondary btn-sm">Historie →</RouterLink>
         </div>
       </div>
     </div>
@@ -92,8 +92,8 @@
       </div>
     </div>
 
-    <!-- Edit DataPoint Modal -->
-    <Modal v-model="showEdit" title="DataPoint bearbeiten">
+    <!-- Edit Objekt Modal -->
+    <Modal v-model="showEdit" title="Objekt bearbeiten">
       <DataPointForm :initial="dp" :datatypes="dpStore.datatypes" :save-handler="onEditSave" @cancel="showEdit = false" />
     </Modal>
 
@@ -179,5 +179,8 @@ async function doDeleteBinding() {
 
 function qualityVariant(q) {
   return q === 'good' ? 'success' : q === 'bad' ? 'danger' : q === 'uncertain' ? 'warning' : 'muted'
+}
+function qualityLabel(q) {
+  return q === 'good' ? 'gut' : q === 'bad' ? 'schlecht' : q === 'uncertain' ? 'undefiniert' : q
 }
 </script>

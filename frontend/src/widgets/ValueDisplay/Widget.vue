@@ -64,7 +64,7 @@ const quality = computed(() => props.value?.q ?? null)
       <span
         v-else-if="quality === 'uncertain'"
         class="w-2 h-2 rounded-full bg-yellow-400"
-        title="Qualität: unsicher"
+        title="Qualität: undefiniert"
       />
     </div>
   </div>
