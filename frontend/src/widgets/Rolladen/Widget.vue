@@ -445,7 +445,7 @@ onUnmounted(() => {
                    bg-gray-200 dark:bg-gray-700
                    hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-40"
             :disabled="editorMode || readonly"
-            title="Sperre umschalten"
+            title="Sperre"
             @click="toggleLock"
           >
             <span
