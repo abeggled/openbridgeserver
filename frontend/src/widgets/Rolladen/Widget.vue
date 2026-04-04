@@ -189,6 +189,19 @@ async function onPositionChange(e: Event) {
   await write(dpPosition.value, sendVal)
 }
 
+// ── Lamellenregler (Slider) ──────────────────────────────────────────────────
+function onSlatInput(e: Event) {
+  localSlat.value = Number((e.target as HTMLInputElement).value)
+}
+
+async function onSlatChange(e: Event) {
+  const val = Number((e.target as HTMLInputElement).value)
+  localSlat.value = val
+  if (slatTimer) clearTimeout(slatTimer)
+  slatTimer = setTimeout(() => { localSlat.value = null }, 5000)
+  await write(dpSlat.value, val)
+}
+
 // ── Lamellen-Schrittfunktionen ───────────────────────────────────────────────
 async function slatStep(dir: 'open' | 'close') {
   if (props.editorMode || props.readonly) return
@@ -200,26 +213,27 @@ async function slatStep(dir: 'open' | 'close') {
   await write(dpSlat.value, next)
 }
 
-// ── SVG Lamellenansicht (Queransicht) ─────────────────────────────────────────
+// ── SVG Lamellenansicht – Queransicht (aus Führungsschiene) ──────────────────
 /**
- * Berechnet die Höhe eines Lamellenquerschnitts in SVG-Einheiten.
- * 0 % = waagerecht (nur Stärke sichtbar) → minHeight = 2
- * 100 % = senkrecht (volle Breite) → maxHeight ≈ slatWidth (24)
+ * Jede Lamelle wird als senkrechtes Rechteck gezeichnet (Blick von der Seite,
+ * entlang der Lamellenachse). Die Breite wächst mit dem Neigungswinkel:
+ *   0 % (waagerecht, offen)  → schmaler Strich (nur Kante sichtbar)
+ *   100 % (senkrecht, zu)    → breites Rechteck (volle Fläche sichtbar)
  */
-const SLAT_COUNT  = 5
-const SLAT_WIDTH  = 24   // SVG-Einheiten, Breite jeder Lamelle
-const SLAT_GAP    = 12   // Abstand Mitte-Mitte
-const SVG_W       = 32
-const SVG_H       = SLAT_COUNT * SLAT_GAP + 4
+const SLAT_COUNT_V  = 4
+const SVG_VW        = 32
+const SVG_VH        = 80
+const SLAT_SPACING  = SVG_VW / SLAT_COUNT_V   // 8 px pro Slot
+const SLAT_MAX_W    = 7                         // Breite bei 90 ° (Slot = 8, 1 px Lücke)
 
 const slatRects = computed(() => {
-  const angle = (shownSlat.value / 100) * 90          // 0–90 Grad
-  const h     = Math.max(2, SLAT_WIDTH * Math.sin(angle * Math.PI / 180))
-  return Array.from({ length: SLAT_COUNT }, (_, i) => ({
-    x:  (SVG_W - SLAT_WIDTH) / 2,
-    y:  i * SLAT_GAP + 2 - h / 2,
-    w:  SLAT_WIDTH,
-    h,
+  const angle = (shownSlat.value / 100) * 90
+  const w = Math.max(1.5, SLAT_MAX_W * Math.sin(angle * Math.PI / 180))
+  return Array.from({ length: SLAT_COUNT_V }, (_, i) => ({
+    x: i * SLAT_SPACING + (SLAT_SPACING - w) / 2,
+    y: 2,
+    w,
+    h: SVG_VH - 4,
   }))
 })
 
@@ -326,7 +340,7 @@ onUnmounted(() => {
 
       </div>
 
-      <!-- Rechte Spalte: Schieberegler -->
+      <!-- Mittlere Spalte: Schieberegler -->
       <div class="flex flex-col flex-1 justify-center gap-3">
 
         <!-- Positionsregler -->
@@ -350,60 +364,72 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- Lamellenansicht Queransicht (nur Jalousie) -->
-        <div v-if="mode === 'jalousie'" class="flex flex-col gap-1">
-          <!-- Label + Wert -->
-          <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400">
+        <!-- Lamellenregler (nur Jalousie) -->
+        <div v-if="mode === 'jalousie'">
+          <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
             <span>Lamellen</span>
             <span class="tabular-nums font-medium text-gray-700 dark:text-gray-300">
               {{ rawSlat !== null ? Math.round(shownSlat) + ' %' : '—' }}
             </span>
           </div>
-          <!-- SVG Queransicht + Stufentasten -->
-          <div class="flex items-center justify-between gap-1">
-            <!-- Lamellen öffnen (◁) -->
-            <button
-              class="w-6 h-6 rounded flex items-center justify-center text-xs font-bold transition-colors shrink-0
-                     bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300
-                     hover:bg-amber-100 dark:hover:bg-amber-900 disabled:opacity-40"
-              :disabled="editorMode || readonly"
-              title="Lamellen einen Schritt öffnen"
-              @click="slatStep('open')"
-            >◁</button>
-
-            <!-- SVG Seitenansicht -->
-            <svg
-              :viewBox="`0 0 ${SVG_W} ${SVG_H}`"
-              class="flex-1 h-16 rounded border border-gray-300 dark:border-gray-600 bg-sky-50 dark:bg-sky-950"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <rect
-                v-for="(r, i) in slatRects"
-                :key="i"
-                :x="r.x" :y="r.y" :width="r.w" :height="r.h"
-                rx="1"
-                class="fill-amber-400 dark:fill-amber-600 stroke-amber-600 dark:stroke-amber-400"
-                stroke-width="0.5"
-              />
-            </svg>
-
-            <!-- Lamellen schliessen (▷) -->
-            <button
-              class="w-6 h-6 rounded flex items-center justify-center text-xs font-bold transition-colors shrink-0
-                     bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300
-                     hover:bg-amber-100 dark:hover:bg-amber-900 disabled:opacity-40"
-              :disabled="editorMode || readonly"
-              title="Lamellen einen Schritt schliessen"
-              @click="slatStep('close')"
-            >▷</button>
-          </div>
-          <!-- Beschriftung -->
-          <div class="flex justify-between text-xs text-gray-400 dark:text-gray-600">
+          <input
+            type="range" min="0" max="100" step="1"
+            :value="shownSlat"
+            :disabled="editorMode || readonly"
+            class="w-full accent-amber-500 cursor-pointer disabled:cursor-default disabled:opacity-40"
+            @input="onSlatInput"
+            @change="onSlatChange"
+          />
+          <div class="flex justify-between text-xs text-gray-400 dark:text-gray-600 mt-0.5">
             <span>offen</span><span>zu</span>
           </div>
         </div>
 
       </div>
+
+      <!-- Rechte Spalte: Lamellenansicht Queransicht (nur Jalousie) -->
+      <div
+        v-if="mode === 'jalousie'"
+        class="flex flex-col items-center gap-1 w-10 shrink-0"
+      >
+        <!-- Sonne = Lamellen öffnen (hell) -->
+        <button
+          class="w-7 h-7 rounded flex items-center justify-center text-sm transition-colors shrink-0
+                 bg-gray-200 dark:bg-gray-700 text-yellow-500
+                 hover:bg-amber-100 dark:hover:bg-amber-900 disabled:opacity-40"
+          :disabled="editorMode || readonly"
+          title="Lamellen öffnen (hell)"
+          @click="slatStep('open')"
+        >☀</button>
+
+        <!-- SVG Queransicht: senkrechte Lamellen, Breite = Neigungswinkel -->
+        <svg
+          :viewBox="`0 0 ${SVG_VW} ${SVG_VH}`"
+          class="w-full flex-1 min-h-0 rounded border border-gray-300 dark:border-gray-600 bg-sky-50 dark:bg-sky-950"
+          xmlns="http://www.w3.org/2000/svg"
+          preserveAspectRatio="xMidYMid meet"
+        >
+          <rect
+            v-for="(r, i) in slatRects"
+            :key="i"
+            :x="r.x" :y="r.y" :width="r.w" :height="r.h"
+            rx="0.5"
+            class="fill-amber-400 dark:fill-amber-600 stroke-amber-600 dark:stroke-amber-400"
+            stroke-width="0.5"
+          />
+        </svg>
+
+        <!-- Mond = Lamellen schliessen (dunkel) -->
+        <button
+          class="w-7 h-7 rounded flex items-center justify-center text-sm transition-colors shrink-0
+                 bg-gray-200 dark:bg-gray-700 text-blue-400
+                 hover:bg-blue-100 dark:hover:bg-blue-900 disabled:opacity-40"
+          :disabled="editorMode || readonly"
+          title="Lamellen schliessen (dunkel)"
+          @click="slatStep('close')"
+        >🌙</button>
+      </div>
+
     </div>
   </div>
 </template>
