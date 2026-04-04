@@ -213,27 +213,32 @@ async function slatStep(dir: 'open' | 'close') {
   await write(dpSlat.value, next)
 }
 
-// ── SVG Lamellenansicht – Queransicht (aus Führungsschiene) ──────────────────
+// ── SVG Lamellenansicht – Queransicht (entlang Rotationsachse) ───────────────
 /**
  * Blickrichtung: entlang der Rotationsachse (gestrichelte Mittellinie).
- * Jede Lamelle erscheint als waagrechter Balken, der die Achse kreuzt.
- * Die Breite ist fix; die Höhe wächst mit dem Neigungswinkel:
- *   0 % (waagerecht, offen)  → dünner Strich (h ≈ 1.5)
- *   100 % (senkrecht, zu)    → hoher Balken (füllt den Slot)
+ * Jede Lamelle erscheint als rotierende Linie:
+ *   0 %  → waagerecht (Lamelle offen, flach)
+ *   50 % → 45° diagonal (links-unten nach rechts-oben)
+ *   100 %→ senkrecht (Lamelle geschlossen)
  */
 const SLAT_COUNT_V    = 5
 const SVG_VW          = 32
 const SVG_VH          = 80
 const SLAT_SPACING_V  = SVG_VH / (SLAT_COUNT_V + 1)   // ≈ 13.3 px
-const SLAT_FULL_W     = SVG_VW - 6                      // 26 px (3 px Rand je Seite)
-const SLAT_MAX_H      = SLAT_SPACING_V - 1              // ≈ 12.3 px (1 px Lücke)
+const SLAT_LINE_L     = SVG_VW - 8                      // 24 px Linienlänge
 
-const slatRects = computed(() => {
-  const angle = (shownSlat.value / 100) * 90
-  const h = Math.max(1.5, SLAT_MAX_H * Math.sin(angle * Math.PI / 180))
+const slatLines = computed(() => {
+  const rad = (shownSlat.value / 100) * 90 * (Math.PI / 180)
+  const cx  = SVG_VW / 2
+  const half = SLAT_LINE_L / 2
   return Array.from({ length: SLAT_COUNT_V }, (_, i) => {
     const cy = (i + 1) * SLAT_SPACING_V
-    return { x: 3, y: cy - h / 2, w: SLAT_FULL_W, h }
+    return {
+      x1: cx - half * Math.cos(rad),
+      y1: cy + half * Math.sin(rad),  // links-unten bei 45°
+      x2: cx + half * Math.cos(rad),
+      y2: cy - half * Math.sin(rad),  // rechts-oben bei 45°
+    }
   })
 })
 
@@ -417,14 +422,15 @@ onUnmounted(() => {
             stroke-dasharray="3,2"
             class="stroke-gray-400 dark:stroke-gray-500"
           />
-          <!-- Lamellen (über der Achse gezeichnet) -->
-          <rect
-            v-for="(r, i) in slatRects"
+          <!-- Lamellen als rotierende Linien -->
+          <line
+            v-for="(s, i) in slatLines"
             :key="i"
-            :x="r.x" :y="r.y" :width="r.w" :height="r.h"
-            rx="1"
-            class="fill-amber-400 dark:fill-amber-600 stroke-amber-600 dark:stroke-amber-400"
-            stroke-width="0.5"
+            :x1="s.x1" :y1="s.y1"
+            :x2="s.x2" :y2="s.y2"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            class="stroke-amber-500 dark:stroke-amber-400"
           />
         </svg>
 
