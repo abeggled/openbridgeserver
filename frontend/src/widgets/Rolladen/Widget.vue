@@ -117,12 +117,13 @@ async function sendStop() {
 async function onMoveUpStart() {
   if (props.editorMode || props.readonly) return
   upState.value = 'pressing'
-  // Timer SOFORT starten — misst ab dem Moment des Drückens, nicht nach dem Write
-  upTimer = setTimeout(() => {
+  // Richtungsbefehl erst nach LONG_PRESS_MS senden — erst dann ist Langdruck bestätigt.
+  // Beim Kurzklick wird kein Richtungsbefehl gesendet → kein ungewollter Impuls beim Stop.
+  upTimer = setTimeout(async () => {
     upState.value = 'moving'
     upTimer = null
+    await write(dpMoveUp.value, activeVal(invertUp.value))
   }, LONG_PRESS_MS)
-  await write(dpMoveUp.value, activeVal(invertUp.value))
 }
 
 async function onMoveUpEnd() {
@@ -143,12 +144,11 @@ async function onMoveUpEnd() {
 async function onMoveDownStart() {
   if (props.editorMode || props.readonly) return
   downState.value = 'pressing'
-  // Timer SOFORT starten — misst ab dem Moment des Drückens, nicht nach dem Write
-  downTimer = setTimeout(() => {
+  downTimer = setTimeout(async () => {
     downState.value = 'moving'
     downTimer = null
+    await write(dpMoveDown.value, activeVal(invertDown.value))
   }, LONG_PRESS_MS)
-  await write(dpMoveDown.value, activeVal(invertDown.value))
 }
 
 async function onMoveDownEnd() {
@@ -199,15 +199,8 @@ async function onSlatChange(e: Event) {
 }
 
 // ── Tooltip-Texte ────────────────────────────────────────────────────────────
-const tooltipUp = computed(() => {
-  const short = mode.value === 'jalousie' ? 'Lamellen öffnen (Schritt)' : 'Schritt hoch / Stopp'
-  return `Kurz: ${short}\nLang: Auffahren bis Endlage`
-})
-
-const tooltipDown = computed(() => {
-  const short = mode.value === 'jalousie' ? 'Lamellen schliessen (Schritt)' : 'Schritt runter / Stopp'
-  return `Kurz: ${short}\nLang: Abfahren bis Endlage`
-})
+const tooltipUp   = 'Kurz: Stopp\nLang: Auffahren bis Endlage'
+const tooltipDown = 'Kurz: Stopp\nLang: Abfahren bis Endlage'
 
 const tooltipStop = 'Sofort stoppen'
 
