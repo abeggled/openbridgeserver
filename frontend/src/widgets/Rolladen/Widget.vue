@@ -84,8 +84,7 @@ let downTimer: ReturnType<typeof setTimeout> | null = null
  * Aktiv = Befehl ist eingeschaltet (Taste gedrückt).
  * Inaktiv = Befehl zurückgesetzt (Taste losgelassen / Kurzklick-Ende).
  */
-function activeVal(inv: boolean):   boolean { return !inv }
-function inactiveVal(inv: boolean): boolean { return  inv }
+function activeVal(inv: boolean): boolean { return !inv }
 
 async function write(id: string | null, value: unknown) {
   if (!id || props.editorMode || props.readonly) return
