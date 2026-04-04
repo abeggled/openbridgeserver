@@ -131,21 +131,21 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Beschriftung -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Beschriftung</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Beschriftung</label>
       <input
         v-model="cfg.label"
         type="text"
         placeholder="z.B. Licht EG Nacht"
-        class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+        class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
       />
     </div>
 
     <!-- Dropdown 1: Zeitschaltuhr-Instanz -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Zeitschaltuhr</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Zeitschaltuhr</label>
       <select
         v-model="cfg.instance_id"
-        class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+        class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
         @change="onInstanceChange"
       >
         <option value="">
@@ -159,10 +159,10 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Dropdown 2: Objekt (Datenpunkt) -->
     <div v-if="cfg.instance_id">
-      <label class="block text-xs text-gray-400 mb-1">Objekt</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Objekt</label>
       <select
         v-model="cfg.datapoint_id"
-        class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+        class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 disabled:opacity-50"
         :disabled="loadingBindings"
         @change="onDatapointChange"
       >
@@ -177,10 +177,10 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Dropdown 3: Verknüpfung -->
     <div v-if="cfg.datapoint_id">
-      <label class="block text-xs text-gray-400 mb-1">Verknüpfung</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Verknüpfung</label>
       <select
         v-model="cfg.binding_id"
-        class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+        class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
         @change="onBindingChange"
       >
         <option value="">— Verknüpfung wählen —</option>

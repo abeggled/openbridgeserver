@@ -117,7 +117,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
         :class="selectedName ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500'"
         :title="selectedName || undefined"
       >
-        {{ selectedName || 'DataPoint wählen …' }}
+        {{ selectedName || 'Objekt wählen …' }}
       </span>
       <button
         v-if="selectedName"

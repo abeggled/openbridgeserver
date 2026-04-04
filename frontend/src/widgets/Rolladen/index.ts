@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'Rolladen',
-  label: 'Rolladen / Jalousie',
+  label: 'Rollladen / Jalousie',
   icon: '🪟',
   minW: 3, minH: 3,
   defaultW: 4, defaultH: 4,

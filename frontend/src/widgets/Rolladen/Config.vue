@@ -55,7 +55,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
         v-model="cfg.mode"
         class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
       >
-        <option value="rolladen">Rolladen</option>
+        <option value="rolladen">Rollladen</option>
         <option value="jalousie">Jalousie (mit Lamellen)</option>
       </select>
     </div>

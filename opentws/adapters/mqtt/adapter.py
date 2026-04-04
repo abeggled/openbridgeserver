@@ -64,6 +64,7 @@ from pydantic import BaseModel, Field
 from opentws.adapters.base import AdapterBase
 from opentws.adapters.registry import register
 from opentws.core.event_bus import DataValueEvent
+from opentws.core.transformation import apply_source_type, apply_value_map
 
 logger = logging.getLogger(__name__)
 
@@ -224,63 +225,16 @@ class MqttAdapter(AdapterBase):
             pub_value = auto_value
             try:
                 bc = MqttBindingConfig(**binding.config)
-                sdt = bc.source_data_type
 
                 # --- source_data_type coercion / extraction ---
-                if sdt == "json":
-                    obj = auto_value if isinstance(auto_value, dict) else json.loads(raw)
-                    if bc.json_key:
-                        pub_value = obj.get(bc.json_key, pub_value) if isinstance(obj, dict) else pub_value
-                    else:
-                        pub_value = obj
-                elif sdt == "xml":
-                    try:
-                        import xml.etree.ElementTree as ET
-                        root = ET.fromstring(raw)
-                        if bc.xml_path:
-                            el = root.find(bc.xml_path)
-                            if el is not None:
-                                text = (el.text or "").strip()
-                                try:
-                                    pub_value = int(text)
-                                except ValueError:
-                                    try:
-                                        pub_value = float(text)
-                                    except ValueError:
-                                        pub_value = text
-                            else:
-                                logger.warning(
-                                    "MQTT XML: path %r not found in payload for binding %s",
-                                    bc.xml_path, binding.id,
-                                )
-                        else:
-                            pub_value = (root.text or "").strip()
-                    except Exception as xml_exc:
-                        logger.warning("MQTT XML: parse error for binding %s: %s", binding.id, xml_exc)
-                elif sdt == "int":
-                    try:
-                        pub_value = int(float(pub_value)) if isinstance(pub_value, str) else int(pub_value)
-                    except (ValueError, TypeError):
-                        logger.warning("MQTT: cannot coerce %r to int for binding %s", pub_value, binding.id)
-                elif sdt == "float":
-                    try:
-                        pub_value = float(pub_value)
-                    except (ValueError, TypeError):
-                        logger.warning("MQTT: cannot coerce %r to float for binding %s", pub_value, binding.id)
-                elif sdt == "bool":
-                    if isinstance(pub_value, bool):
-                        pass  # already bool
-                    elif isinstance(pub_value, str):
-                        pub_value = pub_value.lower() in ("true", "1", "on", "yes")
-                    else:
-                        pub_value = bool(pub_value)
-                elif sdt == "string":
-                    pub_value = str(pub_value)
-                # else None/"auto": use auto_value as-is
+                pub_value = apply_source_type(
+                    raw, auto_value,
+                    bc.source_data_type, bc.json_key, bc.xml_path,
+                    binding.id,
+                )
 
                 # --- value_map substitution ---
-                if bc.value_map:
-                    pub_value = bc.value_map.get(str(pub_value), pub_value)
+                pub_value = apply_value_map(pub_value, bc.value_map)
             except Exception:
                 logger.exception("MQTT: error processing binding %s", binding.id)
 
@@ -340,7 +294,7 @@ class MqttAdapter(AdapterBase):
             topic = bc.publish_topic or bc.topic
 
             # Apply value_map substitution
-            mapped = bc.value_map.get(str(value), value) if bc.value_map else value
+            mapped = apply_value_map(value, bc.value_map)
 
             # Build payload
             if bc.payload_template:
