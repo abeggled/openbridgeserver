@@ -233,7 +233,7 @@ class MqttAdapter(AdapterBase):
                 )
 
                 # --- value_map substitution ---
-                pub_value = apply_value_map(pub_value, bc.value_map)
+                pub_value = apply_value_map(pub_value, binding.value_map)
             except Exception:
                 logger.exception("MQTT: error processing binding %s", binding.id)
 
