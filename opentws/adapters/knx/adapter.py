@@ -242,6 +242,9 @@ class KnxAdapter(AdapterBase):
                 if binding.value_formula and quality == "good":
                     from opentws.core.formula import apply_formula
                     value = apply_formula(binding.value_formula, value)
+                if binding.value_map:
+                    from opentws.core.transformation import apply_value_map
+                    value = apply_value_map(value, binding.value_map)
                 logger.info("KNX value: GA=%s → dp=%s value=%s", ga, binding.datapoint_id, value)
                 await self._bus.publish(DataValueEvent(
                     datapoint_id=binding.datapoint_id,

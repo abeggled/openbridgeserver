@@ -130,4 +130,6 @@ def apply_value_map(value: Any, value_map: dict[str, str] | None) -> Any:
     """
     if not value_map:
         return value
-    return value_map.get(str(value), value)
+    # Booleans: str(True) → "True" but JSON keys are "true"/"false" — normalise to lowercase.
+    key = str(value).lower() if isinstance(value, bool) else str(value)
+    return value_map.get(key, value)
