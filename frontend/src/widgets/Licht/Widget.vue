@@ -30,6 +30,8 @@ const dpDim          = computed(() => (props.config.dp_dim           as string) 
 const dpDimStatus    = computed(() => (props.config.dp_dim_status    as string) || null)
 const dpTw           = computed(() => (props.config.dp_tw            as string) || null)
 const dpTwStatus     = computed(() => (props.config.dp_tw_status     as string) || null)
+const twWarmK        = computed(() => (props.config.tw_warm_k        as number) ?? 2700)
+const twColdK        = computed(() => (props.config.tw_cold_k        as number) ?? 6500)
 const dpR            = computed(() => (props.config.dp_r             as string) || null)
 const dpG            = computed(() => (props.config.dp_g             as string) || null)
 const dpB            = computed(() => (props.config.dp_b             as string) || null)
@@ -102,7 +104,7 @@ const twStore = computed(() => getNumber(dpTwStatus.value ?? dpTw.value))
 const localTw = ref<number | null>(null)
 let twTimer: ReturnType<typeof setTimeout> | null = null
 watch(twStore, () => { localTw.value = null })
-const shownTw = computed(() => localTw.value ?? twStore.value ?? 0)
+const shownTw = computed(() => localTw.value ?? twStore.value ?? twWarmK.value)
 
 function onTwInput(e: Event) {
   localTw.value = Number((e.target as HTMLInputElement).value)
@@ -413,13 +415,15 @@ onUnmounted(() => {
         <span class="text-xs font-medium" :class="isOn ? 'text-blue-500' : 'text-gray-400'">
           {{ isOn ? 'EIN' : 'AUS' }}
         </span>
-        <span v-if="hasDim" class="ml-auto text-xs tabular-nums text-gray-600 dark:text-gray-400 shrink-0">
-          {{ Math.round(shownDim) }}&thinsp;%
-        </span>
       </div>
 
       <!-- Brightness slider -->
       <div class="shrink-0">
+        <div class="flex justify-between items-center text-xs mb-1">
+          <span class="text-gray-400 dark:text-gray-500">☀</span>
+          <span class="tabular-nums text-gray-600 dark:text-gray-400">{{ Math.round(shownDim) }}&thinsp;%</span>
+          <span class="text-yellow-400">☀</span>
+        </div>
         <input
           type="range" min="0" max="100" step="1"
           :value="shownDim"
@@ -428,20 +432,18 @@ onUnmounted(() => {
           @input="onDimInput"
           @change="onDimChange"
         />
-        <div class="flex justify-between text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-          <span>🌑</span><span>☀</span>
-        </div>
       </div>
 
-      <!-- Tunable White slider -->
+      <!-- Tunable White slider (Kelvin) -->
       <div v-if="hasTw" class="shrink-0">
-        <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
-          <span>Warm</span>
-          <span class="tabular-nums">{{ Math.round(shownTw) }}&thinsp;%</span>
-          <span>Kalt</span>
+        <div class="flex justify-between items-center text-xs mb-1">
+          <span class="text-orange-400">{{ twWarmK }}&thinsp;K</span>
+          <span class="tabular-nums text-gray-600 dark:text-gray-400">{{ Math.round(shownTw) }}&thinsp;K</span>
+          <span class="text-blue-300">{{ twColdK }}&thinsp;K</span>
         </div>
         <input
-          type="range" min="0" max="100" step="1"
+          type="range"
+          :min="twWarmK" :max="twColdK" step="100"
           :value="shownTw"
           :disabled="editorMode || readonly || !dpTw"
           class="w-full h-2 rounded-full cursor-pointer disabled:cursor-default disabled:opacity-40 slider-tw"

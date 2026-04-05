@@ -19,6 +19,8 @@ WidgetRegistry.register({
     dp_dim_status: '',
     dp_tw: '',
     dp_tw_status: '',
+    tw_warm_k: 2700,
+    tw_cold_k: 6500,
     dp_r: '', dp_g: '', dp_b: '',
     dp_r_status: '', dp_g_status: '', dp_b_status: '',
     dp_w: '',

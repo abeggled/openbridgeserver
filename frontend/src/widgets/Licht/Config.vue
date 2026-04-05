@@ -14,6 +14,8 @@ const cfg = reactive({
   dp_dim_status:    (props.modelValue.dp_dim_status    as string) ?? '',
   dp_tw:            (props.modelValue.dp_tw            as string) ?? '',
   dp_tw_status:     (props.modelValue.dp_tw_status     as string) ?? '',
+  tw_warm_k:        (props.modelValue.tw_warm_k        as number) ?? 2700,
+  tw_cold_k:        (props.modelValue.tw_cold_k        as number) ?? 6500,
   dp_r:             (props.modelValue.dp_r             as string) ?? '',
   dp_g:             (props.modelValue.dp_g             as string) ?? '',
   dp_b:             (props.modelValue.dp_b             as string) ?? '',
@@ -97,11 +99,32 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     <!-- Tunable White -->
     <template v-if="hasTw">
       <hr class="border-gray-200 dark:border-gray-700" />
-      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">Farbtemperatur / Tunable White (0 = warm, 100 = kalt)</p>
+      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">Farbtemperatur / Tunable White (Kelvin)</p>
+
+      <div class="flex gap-2">
+        <div class="flex-1">
+          <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Warm (K)</label>
+          <input
+            v-model.number="cfg.tw_warm_k"
+            type="number" min="1000" max="10000" step="100"
+            placeholder="2700"
+            class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
+          />
+        </div>
+        <div class="flex-1">
+          <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Kalt (K)</label>
+          <input
+            v-model.number="cfg.tw_cold_k"
+            type="number" min="1000" max="10000" step="100"
+            placeholder="6500"
+            class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
+          />
+        </div>
+      </div>
 
       <DataPointPicker
         v-model="cfg.dp_tw"
-        label="Farbtemperatur schreiben"
+        label="Farbtemperatur schreiben (DPT 7.600 = Kelvin)"
         :compatible-types="['FLOAT', 'INTEGER']"
       />
       <DataPointPicker
