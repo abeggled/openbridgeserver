@@ -17,6 +17,11 @@ Value generation modes (per signal):
     ramp       — linear ramp from min to max, then wraps (optional: period [s])
     sequence   — cycles through a list (requires: values: [...])
     toggle     — alternates True/False
+
+KNX mode:
+    Acts as a KNX/IP tunneling SERVER (gateway simulator).
+    openTWS KNX adapter connects to this server with connection_type: tunneling.
+    No physical KNX bus or external gateway required.
 """
 from __future__ import annotations
 
@@ -25,8 +30,10 @@ import json
 import logging
 import math
 import random
+import struct
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -63,98 +70,340 @@ class ValueGenerator:
 
         if self.mode == "fixed":
             return self.fixed_val
-
         if self.mode == "sine":
             ratio = (math.sin(2 * math.pi * elapsed / self.period) + 1) / 2
             return self.min_val + ratio * (self.max_val - self.min_val)
-
         if self.mode == "random":
             return random.uniform(self.min_val, self.max_val)
-
         if self.mode == "ramp":
             ratio = (elapsed % self.period) / self.period
             return self.min_val + ratio * (self.max_val - self.min_val)
-
         if self.mode == "sequence":
             if not self.seq_values:
                 return self.min_val
             val = self.seq_values[self._seq_idx % len(self.seq_values)]
             self._seq_idx += 1
             return val
-
         if self.mode == "toggle":
             self._toggle = not self._toggle
             return self._toggle
-
         return self.fixed_val
 
 
 # ---------------------------------------------------------------------------
-# KNX generator (tunneling/routing client — sends GroupValueWrite)
+# KNX/IP Tunneling Server (gateway simulator)
+#
+# Implements the minimal KNXnet/IP Core (0205–020A) and Tunneling (0420/0421)
+# service types needed to accept incoming tunneling connections and push
+# GroupValueWrite telegrams to all connected clients (openTWS instances).
+#
+# References: KNX Standard vol. 3 part 8 (KNXnet/IP)
+# ---------------------------------------------------------------------------
+
+# Service type identifiers
+_SVC_CONNECT_REQUEST     = 0x0205
+_SVC_CONNECT_RESPONSE    = 0x0206
+_SVC_CONNSTATE_REQUEST   = 0x0207
+_SVC_CONNSTATE_RESPONSE  = 0x0208
+_SVC_DISCONNECT_REQUEST  = 0x0209
+_SVC_DISCONNECT_RESPONSE = 0x020A
+_SVC_TUNNELING_REQUEST   = 0x0420
+_SVC_TUNNELING_ACK       = 0x0421
+
+# Error codes
+_E_NO_ERROR            = 0x00
+_E_CONNECTION_ID       = 0x21
+_E_NO_MORE_CONNECTIONS = 0x24
+
+# Individual address used as telegram source (15.15.255 — typical tool address)
+_SERVER_IA = 0xFF00
+
+
+def _knxip_frame(svc_type: int, body: bytes) -> bytes:
+    """Wrap body in a KNXnet/IP header."""
+    return struct.pack(">BBHH", 0x06, 0x10, svc_type, 6 + len(body)) + body
+
+
+def _hpai_ipv4(ip: str, port: int) -> bytes:
+    """Build a Host Protocol Address Information block (IPv4/UDP)."""
+    parts = [int(x) for x in ip.split(".")]
+    return struct.pack(">BB4BH", 0x08, 0x01, *parts, port)
+
+
+def _ga_to_int(ga: str) -> int:
+    """Convert group address string "M/S/D" to 16-bit integer."""
+    main, sub, device = ga.split("/")
+    return (int(main) << 11) | (int(sub) << 8) | int(device)
+
+
+def _build_cemi(src_ia: int, ga: int, raw: bytes, is_boolean: bool) -> bytes:
+    """
+    Build a cEMI L_DATA.ind frame for a GroupValueWrite.
+
+    Short format (is_boolean=True, 1-bit value):
+        NPDU_LEN=1, APDU=[0x00, 0x80 | value]
+
+    Standard format (multi-byte payload):
+        NPDU_LEN=1+len(raw), APDU=[0x00, 0x80] + raw
+    """
+    mc    = 0x29   # L_DATA.ind
+    ctrl1 = 0xBC   # standard frame, broadcast, normal priority, no repeat
+    ctrl2 = 0xE0   # group address, hop count 6
+
+    src_h, src_l = (src_ia >> 8) & 0xFF, src_ia & 0xFF
+    dst_h, dst_l = (ga >> 8) & 0xFF, ga & 0xFF
+
+    if is_boolean:
+        npdu_len = 1
+        apdu = bytes([0x00, 0x80 | (raw[0] & 0x3F)])
+    else:
+        npdu_len = 1 + len(raw)
+        apdu = bytes([0x00, 0x80]) + raw
+
+    return bytes([mc, 0x00, ctrl1, ctrl2, src_h, src_l, dst_h, dst_l, npdu_len]) + apdu
+
+
+@dataclass
+class _TunnelClient:
+    channel_id: int
+    data_addr: tuple[str, int]   # where to send TUNNELING_REQUEST
+    seq_send: int = 0
+
+
+class _KnxServerProtocol(asyncio.DatagramProtocol):
+    """asyncio UDP protocol that delegates incoming datagrams to KnxTunnelingServer."""
+
+    def __init__(self, server: KnxTunnelingServer) -> None:
+        self._server = server
+
+    def datagram_received(self, data: bytes, addr: tuple) -> None:
+        self._server._on_datagram(data, (addr[0], addr[1]))
+
+    def error_received(self, exc: Exception) -> None:
+        logger.warning("KNX/IP UDP error: %s", exc)
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        if exc:
+            logger.warning("KNX/IP transport lost: %s", exc)
+
+
+class KnxTunnelingServer:
+    """
+    Minimal KNX/IP tunneling server (gateway simulator).
+
+    Accepts up to 4 simultaneous tunneling connections.
+    Pushes GroupValueWrite telegrams to every connected client via
+    send_telegram(). Responds to connection-state heartbeats and
+    acknowledges any TUNNELING_REQUEST sent by clients (write from openTWS).
+    """
+
+    MAX_CONNECTIONS = 4
+
+    def __init__(self, host: str, port: int) -> None:
+        self._host = host
+        self._port = port
+        self._transport: asyncio.DatagramTransport | None = None
+        self._clients: dict[int, _TunnelClient] = {}
+        self._next_channel: int = 1
+
+    @property
+    def client_count(self) -> int:
+        return len(self._clients)
+
+    async def start(self) -> None:
+        loop = asyncio.get_running_loop()
+        self._transport, _ = await loop.create_datagram_endpoint(
+            lambda: _KnxServerProtocol(self),
+            local_addr=(self._host, self._port),
+        )
+        logger.info("KNX/IP tunneling server listening on %s:%d", self._host, self._port)
+
+    def stop(self) -> None:
+        if self._transport:
+            self._transport.close()
+            self._transport = None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def send_telegram(self, ga_str: str, raw: bytes, is_boolean: bool) -> None:
+        """Send a GroupValueWrite telegram to every connected tunneling client."""
+        if not self._clients or not self._transport:
+            return
+        ga_int = _ga_to_int(ga_str)
+        cemi = _build_cemi(_SERVER_IA, ga_int, raw, is_boolean)
+        for client in list(self._clients.values()):
+            body = struct.pack(
+                ">BBBB", 0x04, client.channel_id, client.seq_send & 0xFF, 0x00
+            ) + cemi
+            frame = _knxip_frame(_SVC_TUNNELING_REQUEST, body)
+            try:
+                self._transport.sendto(frame, client.data_addr)
+                client.seq_send = (client.seq_send + 1) & 0xFF
+            except Exception:
+                logger.warning("KNX: sendto %s failed", client.data_addr)
+
+    # ------------------------------------------------------------------
+    # Incoming datagram dispatcher
+    # ------------------------------------------------------------------
+
+    def _on_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
+        if len(data) < 6:
+            return
+        hdr_len, version, svc_type, total_len = struct.unpack_from(">BBHH", data, 0)
+        if hdr_len != 6 or version != 0x10:
+            return
+        body = data[6:]
+
+        if svc_type == _SVC_CONNECT_REQUEST:
+            self._handle_connect(body, addr)
+        elif svc_type == _SVC_CONNSTATE_REQUEST:
+            self._handle_connstate(body, addr)
+        elif svc_type == _SVC_DISCONNECT_REQUEST:
+            self._handle_disconnect(body, addr)
+        elif svc_type == _SVC_TUNNELING_REQUEST:
+            self._handle_tunneling_request(body, addr)
+        elif svc_type == _SVC_TUNNELING_ACK:
+            pass  # We don't retry, so ACKs can be ignored
+
+    # ------------------------------------------------------------------
+    # CONNECT_REQUEST → CONNECT_RESPONSE
+    # ------------------------------------------------------------------
+
+    def _handle_connect(self, body: bytes, addr: tuple[str, int]) -> None:
+        if len(self._clients) >= self.MAX_CONNECTIONS:
+            resp = _knxip_frame(
+                _SVC_CONNECT_RESPONSE,
+                bytes([0x00, _E_NO_MORE_CONNECTIONS]) + _hpai_ipv4("0.0.0.0", 0) + bytes(4),
+            )
+            if self._transport:
+                self._transport.sendto(resp, addr)
+            logger.warning("KNX: connection refused — max %d clients reached", self.MAX_CONNECTIONS)
+            return
+
+        # Parse data endpoint HPAI from CONNECT_REQUEST body (offset 8..15)
+        data_addr = addr   # default: use UDP source
+        if len(body) >= 16:
+            hpai = body[8:16]
+            if hpai[0] == 0x08 and hpai[1] == 0x01:
+                hpai_port = struct.unpack(">H", hpai[6:8])[0]
+                hpai_ip = f"{hpai[2]}.{hpai[3]}.{hpai[4]}.{hpai[5]}"
+                # Use source IP (handles NAT / 0.0.0.0 clients) but HPAI port if valid
+                ip = addr[0] if hpai_ip in ("0.0.0.0", "127.0.0.1") else hpai_ip
+                port = hpai_port if hpai_port != 0 else addr[1]
+                data_addr = (ip, port)
+
+        channel_id = self._next_channel
+        self._next_channel = max(1, (self._next_channel % 255) + 1)
+        self._clients[channel_id] = _TunnelClient(channel_id=channel_id, data_addr=data_addr)
+
+        # CRD: 04 04 [IA_H] [IA_L] — individual address assigned to client
+        ia = _SERVER_IA + channel_id
+        crd = bytes([0x04, 0x04, (ia >> 8) & 0xFF, ia & 0xFF])
+
+        # Use bind IP or loopback in the HPAI
+        bind_ip = self._host if self._host not in ("0.0.0.0", "") else "127.0.0.1"
+        resp_body = bytes([channel_id, _E_NO_ERROR]) + _hpai_ipv4(bind_ip, self._port) + crd
+        resp = _knxip_frame(_SVC_CONNECT_RESPONSE, resp_body)
+        if self._transport:
+            self._transport.sendto(resp, addr)
+        logger.info(
+            "KNX: client connected from %s → data=%s  channel=%d  (total=%d)",
+            addr, data_addr, channel_id, len(self._clients),
+        )
+
+    # ------------------------------------------------------------------
+    # CONNECTIONSTATE_REQUEST → CONNECTIONSTATE_RESPONSE (heartbeat)
+    # ------------------------------------------------------------------
+
+    def _handle_connstate(self, body: bytes, addr: tuple[str, int]) -> None:
+        if len(body) < 1:
+            return
+        channel_id = body[0]
+        status = _E_NO_ERROR if channel_id in self._clients else _E_CONNECTION_ID
+        resp = _knxip_frame(_SVC_CONNSTATE_RESPONSE, bytes([channel_id, status]))
+        if self._transport:
+            self._transport.sendto(resp, addr)
+
+    # ------------------------------------------------------------------
+    # DISCONNECT_REQUEST → DISCONNECT_RESPONSE
+    # ------------------------------------------------------------------
+
+    def _handle_disconnect(self, body: bytes, addr: tuple[str, int]) -> None:
+        if len(body) < 1:
+            return
+        channel_id = body[0]
+        self._clients.pop(channel_id, None)
+        resp = _knxip_frame(_SVC_DISCONNECT_RESPONSE, bytes([channel_id, _E_NO_ERROR]))
+        if self._transport:
+            self._transport.sendto(resp, addr)
+        logger.info(
+            "KNX: client disconnected channel=%d  (remaining=%d)",
+            channel_id, len(self._clients),
+        )
+
+    # ------------------------------------------------------------------
+    # TUNNELING_REQUEST from client (openTWS writing to KNX GA)
+    # ------------------------------------------------------------------
+
+    def _handle_tunneling_request(self, body: bytes, addr: tuple[str, int]) -> None:
+        """ACK every incoming tunneling request (write from openTWS)."""
+        if len(body) < 4:
+            return
+        channel_id = body[1]
+        seq_counter = body[2]
+        ack_body = bytes([0x04, channel_id, seq_counter, _E_NO_ERROR])
+        ack = _knxip_frame(_SVC_TUNNELING_ACK, ack_body)
+        if self._transport:
+            self._transport.sendto(ack, addr)
+
+
+# ---------------------------------------------------------------------------
+# KNX generator — starts the tunneling server and sends configured telegrams
 # ---------------------------------------------------------------------------
 
 async def knx_generator(cfg: dict) -> None:
-    try:
-        from xknx import XKNX
-        from xknx.io import ConnectionConfig, ConnectionType
-        from xknx.telegram import Telegram
-        from xknx.telegram.address import GroupAddress
-        from xknx.telegram.apci import GroupValueWrite
-        from xknx.dpt import DPTArray, DPTBinary
-    except ImportError:
-        logger.error("xknx not installed — KNX generator disabled")
-        return
+    _root = Path(__file__).resolve().parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
 
     try:
-        _root = Path(__file__).resolve().parent.parent
-        if str(_root) not in sys.path:
-            sys.path.insert(0, str(_root))
         from opentws.adapters.knx.dpt_registry import DPTRegistry
     except ImportError:
         logger.error("Cannot import DPTRegistry — run this script from the project root")
         return
 
-    conn_type = (
-        ConnectionType.ROUTING
-        if cfg.get("connection_type") == "routing"
-        else ConnectionType.TUNNELING
-    )
-    conn_cfg = ConnectionConfig(
-        connection_type=conn_type,
-        gateway_ip=cfg["host"],
-        gateway_port=int(cfg.get("port", 3671)),
-        local_ip=cfg.get("local_ip"),
-    )
-    xknx = XKNX(connection_config=conn_cfg)
+    host = cfg.get("host", "0.0.0.0")
+    port = int(cfg.get("port", 3671))
 
+    server = KnxTunnelingServer(host, port)
     try:
-        await xknx.start()
-        logger.info("KNX connected → %s:%d (%s)", cfg["host"], cfg.get("port", 3671), cfg.get("connection_type", "tunneling"))
+        await server.start()
     except Exception:
-        logger.exception("KNX connection failed")
+        logger.exception("KNX/IP server failed to start")
         return
 
     async def send_loop(tel_cfg: dict) -> None:
-        ga = tel_cfg["group_address"]
+        ga_str = tel_cfg["group_address"]
         dpt_id = tel_cfg.get("dpt_id", "DPT9.001")
         interval = float(tel_cfg.get("interval", 5.0))
         dpt = DPTRegistry.get(dpt_id)
+        is_boolean = dpt.data_type == "BOOLEAN"
         gen = ValueGenerator(tel_cfg)
 
         while True:
+            await asyncio.sleep(interval)
             value = gen.next()
             try:
                 raw = dpt.encoder(value)
-                payload_value = DPTBinary(raw[0]) if dpt.data_type == "BOOLEAN" else DPTArray(list(raw))
-                telegram = Telegram(
-                    destination_address=GroupAddress(ga),
-                    payload=GroupValueWrite(payload_value),
+                server.send_telegram(ga_str, raw, is_boolean)
+                logger.info(
+                    "KNX  GA=%-10s DPT=%-12s value=%-10s  clients=%d",
+                    ga_str, dpt_id, value, server.client_count,
                 )
-                await xknx.telegrams.put(telegram)
-                logger.info("KNX  GA=%-10s DPT=%-12s value=%s", ga, dpt_id, value)
             except Exception:
-                logger.exception("KNX send failed GA=%s", ga)
-            await asyncio.sleep(interval)
+                logger.exception("KNX send failed GA=%s", ga_str)
 
     tasks = [
         asyncio.create_task(send_loop(tc), name=f"knx-{tc['group_address']}")
@@ -166,7 +415,7 @@ async def knx_generator(cfg: dict) -> None:
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        await xknx.stop()
+        server.stop()
         raise
 
 
@@ -186,10 +435,11 @@ async def modbus_generator(cfg: dict) -> None:
         logger.error("pymodbus not installed — Modbus generator disabled")
         return
 
+    _root = Path(__file__).resolve().parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+
     try:
-        _root = Path(__file__).resolve().parent.parent
-        if str(_root) not in sys.path:
-            sys.path.insert(0, str(_root))
         from opentws.adapters.modbus_base import encode_value
     except ImportError:
         logger.warning("Cannot import encode_value — using basic uint16 encoding")
@@ -203,7 +453,6 @@ async def modbus_generator(cfg: dict) -> None:
         ) -> list[int]:
             return [int(float(value) / scale_factor) & 0xFFFF]
 
-    # Each slave gets 1000 registers/coils pre-allocated
     co = ModbusSequentialDataBlock(0, [0] * 1000)
     di = ModbusSequentialDataBlock(0, [0] * 1000)
     hr = ModbusSequentialDataBlock(0, [0] * 1000)
@@ -216,7 +465,6 @@ async def modbus_generator(cfg: dict) -> None:
     host = cfg.get("host", "0.0.0.0")
     port = int(cfg.get("port", 502))
 
-    # Pymodbus function codes: 1=coils, 2=discrete_inputs, 3=holding, 4=input
     _FC = {"coil": 1, "discrete_input": 2, "holding": 3, "input": 4}
 
     async def update_loop() -> None:
@@ -367,8 +615,7 @@ async def _main(config_path: str) -> None:
         logger.warning("No protocols configured — nothing to do. Check your config file.")
         return
 
-    active = [t.get_name() for t in tasks]
-    logger.info("Starting generators: %s", ", ".join(active))
+    logger.info("Starting generators: %s", ", ".join(t.get_name() for t in tasks))
     logger.info("Press Ctrl+C to stop.")
 
     try:
@@ -384,7 +631,6 @@ async def _main(config_path: str) -> None:
 if __name__ == "__main__":
     _default_cfg = Path(__file__).parent / "testdata_generator_example.yaml"
     _cfg_path = sys.argv[1] if len(sys.argv) > 1 else str(_default_cfg)
-
     try:
         asyncio.run(_main(_cfg_path))
     except KeyboardInterrupt:

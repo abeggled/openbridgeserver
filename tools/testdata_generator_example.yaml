@@ -12,13 +12,17 @@
 #   toggle     alternates true/false
 
 # ---------------------------------------------------------------------------
-# KNX — connects as tunneling client and sends GroupValueWrite telegrams
+# KNX — runs as a KNX/IP tunneling SERVER (gateway simulator).
+# No physical KNX bus or external gateway needed.
+#
+# Configure the openTWS KNX adapter with:
+#   connection_type: tunneling
+#   host: 127.0.0.1      (or the IP of the machine running this generator)
+#   port: 3671
 # ---------------------------------------------------------------------------
 knx:
-  connection_type: tunneling   # tunneling | routing
-  host: 192.168.1.100
-  port: 3671
-  # local_ip: 192.168.1.50    # only needed for routing/multicast
+  host: 0.0.0.0          # listen on all interfaces (127.0.0.1 for loopback only)
+  port: 3671             # standard KNX/IP port; use 3672+ if 3671 is taken
 
   telegrams:
     # Temperature (DPT 9.001 = 2-byte float, °C)
