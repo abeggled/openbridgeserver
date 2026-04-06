@@ -9,7 +9,7 @@ export default defineConfig({
     alias: { '@': resolve(__dirname, 'src') }
   },
 
-  // Dev server: proxy all /api calls to the openTWS backend
+  // Dev server: proxy all /api calls to the open bridge server backend
   server: {
     port: 5173,
     proxy: {

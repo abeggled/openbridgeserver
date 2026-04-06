@@ -1,6 +1,6 @@
 # open bridge multiprotocol ai server
 
-![openTWS Logo](logo/opentws_logo.svg)
+![open bridge server Logo](logo/obs_logo_light.svg)
 
 **Offene Gebäudeautomations-Plattform — verbindet KNX, Modbus, MQTT und mehr**
 
@@ -32,7 +32,7 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 1. [Schnellstart — Docker](#schnellstart--docker)
 2. [Schnellstart — Direkt](#schnellstart--direkt)
 3. [Konfiguration](#konfiguration)
-4. [Wie funktioniert openTWS?](#wie-funktioniert-opentws)
+4. [Wie funktioniert open bridge?](#wie-funktioniert-open-bridge)
 5. [Datenpunkte](#datenpunkte)
 6. [Verknüpfungen (Bindings)](#verknüpfungen-bindings)
 7. [Suche](#suche)
@@ -56,14 +56,14 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 
 ```bash
 # 1. Herunterladen
-git clone https://github.com/abeggled/opentws
-cd opentws
+git clone https://github.com/abeggled/openbridgeserver
+cd openbridgeserver
 
 # 2. Zugangsdaten einrichten
 cp .env.example .env
 # .env öffnen und mindestens setzen:
-#   OPENTWS_JWT_SECRET        → zufällige Zeichenkette, min. 32 Zeichen
-#   OPENTWS_MQTT_PASSWORD     → Passwort für den internen MQTT-Dienst — BITTE ÄNDERN!
+#   OBS_JWT_SECRET        → zufällige Zeichenkette, min. 32 Zeichen
+#   OBS_MQTT_PASSWORD     → Passwort für den internen MQTT-Dienst — BITTE ÄNDERN!
 
 # 3. Starten
 docker compose up -d
@@ -80,7 +80,7 @@ curl http://localhost:8080/api/v1/system/health
 
 | Dienst | Adresse | Protokoll |
 |---|---|---|
-| openTWS Weboberfläche + API | http://localhost:8080 | HTTP |
+| open bridge server Weboberfläche + API | http://localhost:8080 | HTTP |
 | Mosquitto MQTT (intern) | localhost:1883 | MQTT |
 | Mosquitto MQTT über WebSocket | localhost:9001 | MQTT/WS |
 
@@ -92,8 +92,8 @@ curl http://localhost:8080/api/v1/system/health
 
 ```bash
 # 1. Herunterladen + virtuelle Umgebung anlegen
-git clone https://github.com/abeggled/opentws
-cd opentws
+git clone https://github.com/abeggled/openbridgeserver
+cd openbridgeserver
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
@@ -105,7 +105,7 @@ cp config.example.yaml config.yaml
 # config.yaml anpassen: mqtt.host und security.jwt_secret setzen
 
 # 4. Starten
-python -m opentws
+python -m obs
 ```
 
 ---
@@ -114,8 +114,8 @@ python -m opentws
 
 Die Konfiguration wird in dieser Reihenfolge geladen (höher = Vorrang):
 
-1. Umgebungsvariablen (`OPENTWS_<ABSCHNITT>__<SCHLÜSSEL>`)
-2. `config.yaml` (Pfad über `OPENTWS_CONFIG`, Standard: `./config.yaml`)
+1. Umgebungsvariablen (`OBS_<ABSCHNITT>__<SCHLÜSSEL>`)
+2. `config.yaml` (Pfad über `OBS_CONFIG`, Standard: `./config.yaml`)
 3. Eingebaute Standardwerte
 
 ```yaml
@@ -131,7 +131,7 @@ mqtt:
   password: null
 
 database:
-  path: /data/opentws.db      # Datenbankdatei
+  path: /data/obs.db      # Datenbankdatei
 
 ringbuffer:
   storage: disk               # Änderungsprotokoll: memory (RAM) oder disk (Datei)
@@ -146,11 +146,11 @@ security:
 
 ---
 
-## Wie funktioniert openTWS?
+## Wie funktioniert open bridge?
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                        openTWS                               │
+│                        open bridge server                               │
 │                                                              │
 │  ┌─────────────────────┐  Wertänderung  ┌─────────────────┐ │
 │  │   Adapter-Instanzen │ ─────────────▶ │   Ereignisbus   │ │
@@ -180,13 +180,13 @@ security:
 - **Adapter** lesen Werte aus dem Gebäude (KNX-Telegramm, Modbus-Register, MQTT-Nachricht, …) und melden sie an den Ereignisbus.
 - Der **Ereignisbus** verteilt jeden Wert gleichzeitig an: Werteabbild (aktueller Stand), Verlauf, Änderungsprotokoll, MQTT-Broker, WebSocket-Clients und den Logik-Editor.
 - Der **Logik-Editor** reagiert auf Wertänderungen, führt Automatisierungslogiken aus und schreibt Ergebnisse zurück in DataPoints.
-- **Protokoll-Brücke:** Wenn ein Wert über ein Protokoll empfangen wird, schreibt openTWS ihn automatisch über alle anderen verknüpften Protokolle weiter — ohne zusätzliche Konfiguration.
+- **Protokoll-Brücke:** Wenn ein Wert über ein Protokoll empfangen wird, schreibt open bridge server ihn automatisch über alle anderen verknüpften Protokolle weiter — ohne zusätzliche Konfiguration.
 
 ---
 
 ## Datenpunkte
 
-Ein Datenpunkt ist das zentrale Objekt in openTWS. Jeder physische oder virtuelle Wert im System — eine Temperatur, ein Schaltzustand, ein Energiezähler — ist ein Datenpunkt.
+Ein Datenpunkt ist das zentrale Objekt in open bridge server. Jeder physische oder virtuelle Wert im System — eine Temperatur, ein Schaltzustand, ein Energiezähler — ist ein Datenpunkt.
 
 ```
 GET    /api/v1/datapoints?page=0&size=50       # Liste (seitenweise)
@@ -239,8 +239,8 @@ DELETE /api/v1/datapoints/{id}/bindings/{binding_id}
 
 | Richtung | Bedeutung |
 |---|---|
-| `SOURCE` | Lesen: Adapter empfängt Werte und leitet sie an openTWS weiter |
-| `DEST` | Schreiben: openTWS sendet Werte an den Adapter |
+| `SOURCE` | Lesen: Adapter empfängt Werte und leitet sie an open bridge server weiter |
+| `DEST` | Schreiben: open bridge server sendet Werte an den Adapter |
 | `BOTH` | Beides gleichzeitig |
 
 **Wert-Transformation (`value_formula`):**
@@ -335,12 +335,12 @@ GET    /api/v1/adapters/{type}/binding-schema  # JSON-Schema der Verknüpfungs-K
 
 ### Anmeldung und Zugangsverwaltung
 
-openTWS unterstützt zwei Anmeldemethoden:
+open bridge server unterstützt zwei Anmeldemethoden:
 
 | Methode | Verwendung |
 |---|---|
 | Benutzername + Passwort → JWT-Token | Weboberfläche, Browser |
-| API-Schlüssel (`X-API-Key: opentws_…`) | Skripte, Automatisierungen |
+| API-Schlüssel (`X-API-Key: obs_…`) | Skripte, Automatisierungen |
 
 ```
 POST   /api/v1/auth/login                              # Anmelden → Token erhalten
@@ -488,7 +488,7 @@ Der Logik-Editor ermöglicht das visuelle Erstellen von Automatisierungsregeln �
 
 **Ablauf:**
 1. Ein **DP Lesen**-Block beobachtet einen Datenpunkt.
-2. Ändert sich der Wert, führt openTWS den gesamten Graphen aus.
+2. Ändert sich der Wert, führt open bridge server den gesamten Graphen aus.
 3. Die Blöcke werden der Reihe nach berechnet.
 4. Ein **DP Schreiben**-Block schreibt das Ergebnis zurück — das löst automatisch alle Adapter, MQTT, den Verlauf und den RingBuffer aus.
 5. Der **Trigger**-Block löst den Graphen nach einem Zeitplan aus (z. B. täglich um 07:00 Uhr).
@@ -742,11 +742,11 @@ Zeigt berechnete Zwischenwerte direkt auf den Blöcken an — live und automatis
 | `group_address` | KNX-Gruppenadresse (dreiteilig, z. B. `27/6/6`) |
 | `dpt_id` | DPT-Kennung — Tabelle unten |
 | `state_group_address` | Optionale Rückmelde-Adresse für DEST-Verknüpfungen |
-| `respond_to_read` | `true`: openTWS beantwortet KNX-Leseanfragen (GroupValueRead) mit dem aktuellen Wert. Standard: `false` |
+| `respond_to_read` | `true`: open bridge server beantwortet KNX-Leseanfragen (GroupValueRead) mit dem aktuellen Wert. Standard: `false` |
 
 **Unterstützte DPTs:**
 
-openTWS unterstützt über 85 KNX-Datentypen. Die vollständige Liste ist über `GET /api/v1/adapters/knx/dpts` abrufbar.
+open bridge server unterstützt über 85 KNX-Datentypen. Die vollständige Liste ist über `GET /api/v1/adapters/knx/dpts` abrufbar.
 
 **DPT 1 — 1-Bit Boolean**
 
@@ -1039,7 +1039,7 @@ Verbindet sich mit einem **externen** MQTT-Broker (getrennt vom internen Mosquit
 
 ## MQTT-Topics
 
-openTWS verwendet zwei parallele Topic-Strategien:
+open bridge server verwendet zwei parallele Topic-Strategien:
 
 | Topic | Beschreibung |
 |---|---|
@@ -1111,16 +1111,16 @@ Das Skript `scripts/Import-EtsGaCsv.ps1` liest einen ETS-GA-CSV-Export und legt 
 automatisch einen DataPoint mit passendem Typ und Einheit an. Anschliessend wird eine
 Verknüpfung zur angegebenen KNX-Adapter-Instanz erstellt.
 
-**Voraussetzungen:** PowerShell 5.1 oder neuer, erreichbare openTWS-Instanz, gültiger API-Schlüssel.
+**Voraussetzungen:** PowerShell 5.1 oder neuer, erreichbare open bridge server-Instanz, gültiger API-Schlüssel.
 
 **Parameter:**
 
 | Parameter | Pflicht | Beschreibung |
 |---|---|---|
-| `-Url` | ja | Basis-URL der openTWS-Instanz, z.B. `http://localhost:8080` |
-| `-ApiKey` | ja | API-Schlüssel (`opentws_…`) |
+| `-Url` | ja | Basis-URL der open bridge server-Instanz, z.B. `http://localhost:8080` |
+| `-ApiKey` | ja | API-Schlüssel (`obs_…`) |
 | `-File` | ja | Pfad zur ETS-GA-CSV-Datei |
-| `-Adapter` | ja | Name der KNX-Adapter-Instanz in openTWS |
+| `-Adapter` | ja | Name der KNX-Adapter-Instanz in open bridge server |
 | `-LogFile` | nein | Pfad für Fehlerprotokoll; ohne Angabe werden Fehler auf der Konsole ausgegeben |
 | `-Direction` | nein | Verknüpfungsrichtung: `SOURCE` (Standard), `DEST` oder `BOTH` |
 | `-Encoding` | nein | Zeichenkodierung der CSV-Datei: `UTF8` (Standard) oder `Default` (ANSI/Windows-1252). ETS 5 exportiert i.d.R. ANSI, ETS 6 UTF-8. |
@@ -1138,7 +1138,7 @@ Komma-Trennzeichen sowie deutschsprachige und englischsprachige Spaltenköpfe au
 ```
 
 DPT-Angaben im Format `DPST-X-Y` (Haupt- und Subtyp) oder `DPT-X` (nur Haupttyp) werden
-automatisch in das openTWS-Format (`DPT9.001`) umgewandelt und der passende Datentyp (`FLOAT`,
+automatisch in das open bridge server-Format (`DPT9.001`) umgewandelt und der passende Datentyp (`FLOAT`,
 `INTEGER`, `BOOLEAN`, `STRING`) sowie die Einheit werden gesetzt. Fehlt der DPT, wird `FLOAT`
 ohne Einheit verwendet.
 
@@ -1147,7 +1147,7 @@ ohne Einheit verwendet.
 ```powershell
 .\scripts\Import-EtsGaCsv.ps1 `
     -Url    http://localhost:8080 `
-    -ApiKey opentws_abc123 `
+    -ApiKey obs_abc123 `
     -File   C:\Projekte\GA_Export.csv `
     -Adapter "KNX/IP"
 ```
@@ -1157,7 +1157,7 @@ ETS 5 (ANSI-Kodierung):
 ```powershell
 .\scripts\Import-EtsGaCsv.ps1 `
     -Url      http://localhost:8080 `
-    -ApiKey   opentws_abc123 `
+    -ApiKey   obs_abc123 `
     -File     C:\Projekte\GA_Export.csv `
     -Adapter  "KNX/IP" `
     -Encoding Default
@@ -1168,7 +1168,7 @@ Mit Fehlerprotokoll:
 ```powershell
 .\scripts\Import-EtsGaCsv.ps1 `
     -Url     http://localhost:8080 `
-    -ApiKey  opentws_abc123 `
+    -ApiKey  obs_abc123 `
     -File    C:\Projekte\GA_Export.csv `
     -Adapter "KNX/IP" `
     -LogFile C:\Projekte\import_errors.log
@@ -1191,7 +1191,7 @@ docker run -d -p 1883:1883 eclipse-mosquitto:2
 cp config.example.yaml config.yaml
 
 # Server mit automatischem Neustart bei Codeänderungen
-uvicorn opentws.main:create_app --factory --reload --host 0.0.0.0 --port 8080
+uvicorn obs.main:create_app --factory --reload --host 0.0.0.0 --port 8080
 ```
 
 ### Datenbankstruktur

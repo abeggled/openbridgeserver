@@ -1,4 +1,4 @@
-# OpenTWS Test Data Generator — Example Configuration
+# open bridge server Test Data Generator — Example Configuration
 # Run with: python tools/testdata_generator.py tools/testdata_generator_example.yaml
 #
 # Remove any top-level section (knx / modbus / mqtt) to disable that protocol.
@@ -15,7 +15,7 @@
 # KNX — runs as a KNX/IP tunneling SERVER (gateway simulator).
 # No physical KNX bus or external gateway needed.
 #
-# Configure the openTWS KNX adapter with:
+# Configure the open bridge server KNX adapter with:
 #   connection_type: tunneling
 #   host: 127.0.0.1      (or the IP of the machine running this generator)
 #   port: 3671
@@ -65,11 +65,11 @@ knx:
 
 # ---------------------------------------------------------------------------
 # Modbus TCP — runs as a slave/server on the configured port.
-# openTWS Modbus TCP adapter connects TO this server and polls the registers.
+# open bridge server Modbus TCP adapter connects TO this server and polls the registers.
 # ---------------------------------------------------------------------------
 modbus:
   host: 0.0.0.0               # listen on all interfaces
-  port: 5001                  # use 5001 to avoid needing root; openTWS connects here
+  port: 5001                  # use 5001 to avoid needing root; open bridge server connects here
   unit_id: 1
 
   registers:
@@ -77,7 +77,7 @@ modbus:
     - register_type: holding
       address: 0
       data_format: uint16
-      scale_factor: 0.1       # raw × 0.1 = °C  →  configure same scale_factor in openTWS binding
+      scale_factor: 0.1       # raw × 0.1 = °C  →  configure same scale_factor in open bridge server binding
       mode: sine
       min: 180                # raw value (= 18.0 °C after ×0.1 in adapter)
       max: 250
@@ -124,7 +124,7 @@ modbus:
 
 # ---------------------------------------------------------------------------
 # MQTT — publishes to an existing broker.
-# openTWS MQTT adapter subscribes to these topics.
+# open bridge server MQTT adapter subscribes to these topics.
 # ---------------------------------------------------------------------------
 mqtt:
   host: localhost
@@ -154,7 +154,7 @@ mqtt:
       mode: toggle
       retain: true
 
-    # JSON payload with nested value (configure json_key: "value" in openTWS binding)
+    # JSON payload with nested value (configure json_key: "value" in open bridge server binding)
     - topic: _testdata/sensor/json
       interval: 4.0
       mode: ramp

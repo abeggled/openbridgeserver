@@ -312,7 +312,7 @@
               </div>
               <div class="form-group">
                 <label class="label">Datenbank</label>
-                <input v-model="histForm.influx_database" type="text" class="input text-sm font-mono" placeholder="opentws" />
+                <input v-model="histForm.influx_database" type="text" class="input text-sm font-mono" placeholder="obs" />
               </div>
             </template>
 
@@ -329,7 +329,7 @@
                 </div>
                 <div class="form-group">
                   <label class="label">Bucket</label>
-                  <input v-model="histForm.influx_bucket" type="text" class="input text-sm font-mono" placeholder="opentws" />
+                  <input v-model="histForm.influx_bucket" type="text" class="input text-sm font-mono" placeholder="obs" />
                 </div>
               </div>
             </template>
@@ -342,7 +342,7 @@
               </div>
               <div class="form-group">
                 <label class="label">Datenbank</label>
-                <input v-model="histForm.influx_database" type="text" class="input text-sm font-mono" placeholder="opentws" />
+                <input v-model="histForm.influx_database" type="text" class="input text-sm font-mono" placeholder="obs" />
               </div>
             </template>
           </template>
@@ -352,7 +352,7 @@
             <div class="form-group">
               <label class="label">Connection DSN</label>
               <input v-model="histForm.timescale_dsn" type="text" class="input text-sm font-mono"
-                placeholder="postgresql://user:pass@localhost:5432/opentws" autocomplete="off" />
+                placeholder="postgresql://user:pass@localhost:5432/obs" autocomplete="off" />
 
             </div>
           </template>
@@ -647,8 +647,8 @@ const histForm = reactive({
   influx_version: 2,
   influx_token: '',
   influx_org: '',
-  influx_bucket: 'opentws',
-  influx_database: 'opentws',
+  influx_bucket: 'obs',
+  influx_database: 'obs',
   influx_username: '',
   influx_password: '',
   timescale_dsn: '',
@@ -812,14 +812,14 @@ async function doExport() {
   const { data } = await configApi.export()
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
   const url  = URL.createObjectURL(blob)
-  const a = document.createElement('a'); a.href = url; a.download = `openTWS_Backup_${_ts()}.json`; a.click()
+  const a = document.createElement('a'); a.href = url; a.download = `obs_Backup_${_ts()}.json`; a.click()
   URL.revokeObjectURL(url)
 }
 
 async function doExportDb() {
   const { data: blob } = await configApi.exportDb()
   const url = URL.createObjectURL(blob)
-  const a = document.createElement('a'); a.href = url; a.download = `openTWS_DB_${_ts()}.sqlite`; a.click()
+  const a = document.createElement('a'); a.href = url; a.download = `obs_DB_${_ts()}.sqlite`; a.click()
   URL.revokeObjectURL(url)
 }
 async function onImportFile(e) {

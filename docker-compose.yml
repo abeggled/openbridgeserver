@@ -1,5 +1,5 @@
-# openTWS — Docker Compose Stack
-# Services: opentws + mosquitto (MQTT broker)
+# open bridge server — Docker Compose Stack
+# Services: obs + mosquitto (MQTT broker)
 #
 # Quick start:
 #   cp .env.example .env          # adjust secrets!
@@ -17,7 +17,7 @@ services:
     # Mosquitto itself drops privileges to the 'mosquitto' user after startup.
     user: root
     # Init: fix directory permissions, (re)create passwd file, then run Mosquitto.
-    # chmod 777 on the directory lets openTWS (different UID) write the passwd file later.
+    # chmod 777 on the directory lets open bridge server (different UID) write the passwd file later.
     # chmod 644 on the file lets the mosquitto user (dropped from root) read it.
     # "exec" replaces the shell → Mosquitto becomes PID 1 (needed for SIGHUP reload).
     command: >
@@ -30,12 +30,12 @@ services:
       exec mosquitto -c /mosquitto/config/mosquitto.conf
       "
     environment:
-      # Must match OPENTWS_MQTT__USERNAME / PASSWORD below
-      MQTT_SVC_USER: ${OPENTWS_MQTT_USERNAME:-opentws}
-      MQTT_SVC_PASS: ${OPENTWS_MQTT_PASSWORD:-changeme}
+      # Must match OBS_MQTT__USERNAME / PASSWORD below
+      MQTT_SVC_USER: ${OBS_MQTT_USERNAME:-obs}
+      MQTT_SVC_PASS: ${OBS_MQTT_PASSWORD:-changeme}
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - mosquitto_passwd:/mosquitto/passwd   # shared with opentws for passwd file
+      - mosquitto_passwd:/mosquitto/passwd   # shared with obs for passwd file
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
     ports:
@@ -43,25 +43,25 @@ services:
       - "9001:9001"     # MQTT over WebSocket
     healthcheck:
       test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck",
-             "-u", "${OPENTWS_MQTT_USERNAME:-opentws}", "-P", "${OPENTWS_MQTT_PASSWORD:-changeme}",
+             "-u", "${OBS_MQTT_USERNAME:-obs}", "-P", "${OBS_MQTT_PASSWORD:-changeme}",
              "-W", "3"]
       interval: 10s
       timeout: 5s
       retries: 3
 
-  # ── openTWS Server ───────────────────────────────────────────────────────
-  opentws:
+  # ── open bridge server ───────────────────────────────────────────────────
+  obs:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    # Share Mosquitto's PID namespace → openTWS can send SIGHUP to PID 1 (Mosquitto).
+    # Share Mosquitto's PID namespace → open bridge server can send SIGHUP to PID 1 (Mosquitto).
     pid: "service:mosquitto"
     depends_on:
       mosquitto:
         condition: service_healthy
     volumes:
-      - opentws_data:/data
+      - obs_data:/data
       - mosquitto_passwd:/mosquitto/passwd   # same shared volume → write passwd file
       # Optional: mount a host config.yaml (overrides the one inside /data)
       # - ./config.yaml:/data/config.yaml:ro
@@ -69,23 +69,23 @@ services:
       - "8080:8080"
     environment:
       # ── MQTT service account (must match MQTT_SVC_USER/PASS above) ──────
-      OPENTWS_MQTT__HOST: mosquitto
-      OPENTWS_MQTT__PORT: "1883"
-      OPENTWS_MQTT__USERNAME: ${OPENTWS_MQTT_USERNAME:-opentws}
-      OPENTWS_MQTT__PASSWORD: ${OPENTWS_MQTT_PASSWORD:-changeme}
+      OBS_MQTT__HOST: mosquitto
+      OBS_MQTT__PORT: "1883"
+      OBS_MQTT__USERNAME: ${OBS_MQTT_USERNAME:-obs}
+      OBS_MQTT__PASSWORD: ${OBS_MQTT_PASSWORD:-changeme}
 
       # ── Mosquitto passwd management ─────────────────────────────────────
-      OPENTWS_MOSQUITTO__PASSWD_FILE: /mosquitto/passwd/passwd
-      OPENTWS_MOSQUITTO__SERVICE_USERNAME: ${OPENTWS_MQTT_USERNAME:-opentws}
-      OPENTWS_MOSQUITTO__SERVICE_PASSWORD: ${OPENTWS_MQTT_PASSWORD:-changeme}
+      OBS_MOSQUITTO__PASSWD_FILE: /mosquitto/passwd/passwd
+      OBS_MOSQUITTO__SERVICE_USERNAME: ${OBS_MQTT_USERNAME:-obs}
+      OBS_MOSQUITTO__SERVICE_PASSWORD: ${OBS_MQTT_PASSWORD:-changeme}
       # PID 1 = Mosquitto (shared PID namespace) → send SIGHUP to reload passwd
-      OPENTWS_MOSQUITTO__RELOAD_PID: "1"
+      OBS_MOSQUITTO__RELOAD_PID: "1"
 
       # ── Security ────────────────────────────────────────────────────────
-      OPENTWS_SECURITY__JWT_SECRET: ${OPENTWS_JWT_SECRET:-changeme}
+      OBS_SECURITY__JWT_SECRET: ${OBS_JWT_SECRET:-changeme}
 
       # ── Logging ─────────────────────────────────────────────────────────
-      OPENTWS_SERVER__LOG_LEVEL: ${OPENTWS_LOG_LEVEL:-INFO}
+      OBS_SERVER__LOG_LEVEL: ${OBS_LOG_LEVEL:-INFO}
 
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -97,7 +97,7 @@ services:
 
 
 volumes:
-  opentws_data:
-  mosquitto_passwd:    # shared between mosquitto + opentws for passwd file management
+  obs_data:
+  mosquitto_passwd:    # shared between mosquitto + obs for passwd file management
   mosquitto_data:      # Mosquitto persistence (retained messages, QoS queues)
   mosquitto_log:

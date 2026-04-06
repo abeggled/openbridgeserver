@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OpenTWS Test Data Generator — Issue #110
+open bridge server Test Data Generator — Issue #110
 
 Generates configurable test traffic for KNX, Modbus TCP, and MQTT adapters.
 Each protocol runs as an independent async task; all three can run in parallel.
@@ -20,7 +20,7 @@ Value generation modes (per signal):
 
 KNX mode:
     Acts as a KNX/IP tunneling SERVER (gateway simulator).
-    openTWS KNX adapter connects to this server with connection_type: tunneling.
+    open bridge server KNX adapter connects to this server with connection_type: tunneling.
     No physical KNX bus or external gateway required.
 """
 from __future__ import annotations
@@ -95,7 +95,7 @@ class ValueGenerator:
 #
 # Implements the minimal KNXnet/IP Core (0205–020A) and Tunneling (0420/0421)
 # service types needed to accept incoming tunneling connections and push
-# GroupValueWrite telegrams to all connected clients (openTWS instances).
+# GroupValueWrite telegrams to all connected clients (open bridge server instances).
 #
 # References: KNX Standard vol. 3 part 8 (KNXnet/IP)
 # ---------------------------------------------------------------------------
@@ -194,7 +194,7 @@ class KnxTunnelingServer:
     Accepts up to 4 simultaneous tunneling connections.
     Pushes GroupValueWrite telegrams to every connected client via
     send_telegram(). Responds to connection-state heartbeats and
-    acknowledges any TUNNELING_REQUEST sent by clients (write from openTWS).
+    acknowledges any TUNNELING_REQUEST sent by clients (write from open bridge server).
     """
 
     MAX_CONNECTIONS = 4
@@ -344,11 +344,11 @@ class KnxTunnelingServer:
         )
 
     # ------------------------------------------------------------------
-    # TUNNELING_REQUEST from client (openTWS writing to KNX GA)
+    # TUNNELING_REQUEST from client (open bridge server writing to KNX GA)
     # ------------------------------------------------------------------
 
     def _handle_tunneling_request(self, body: bytes, addr: tuple[str, int]) -> None:
-        """ACK every incoming tunneling request (write from openTWS)."""
+        """ACK every incoming tunneling request (write from open bridge server)."""
         if len(body) < 4:
             return
         channel_id = body[1]
@@ -369,7 +369,7 @@ async def knx_generator(cfg: dict) -> None:
         sys.path.insert(0, str(_root))
 
     try:
-        from opentws.adapters.knx.dpt_registry import DPTRegistry
+        from obs.adapters.knx.dpt_registry import DPTRegistry
     except ImportError:
         logger.error("Cannot import DPTRegistry — run this script from the project root")
         return
@@ -420,7 +420,7 @@ async def knx_generator(cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Modbus TCP generator (acts as a server/slave — openTWS polls it)
+# Modbus TCP generator (acts as a server/slave — open bridge server polls it)
 # ---------------------------------------------------------------------------
 
 async def modbus_generator(cfg: dict) -> None:
@@ -440,7 +440,7 @@ async def modbus_generator(cfg: dict) -> None:
         sys.path.insert(0, str(_root))
 
     try:
-        from opentws.adapters.modbus_base import encode_value
+        from obs.adapters.modbus_base import encode_value
     except ImportError:
         logger.warning("Cannot import encode_value — using basic uint16 encoding")
 
@@ -520,7 +520,7 @@ async def modbus_generator(cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# MQTT generator (publisher — openTWS subscribes to these topics)
+# MQTT generator (publisher — open bridge server subscribes to these topics)
 # ---------------------------------------------------------------------------
 
 async def mqtt_generator(cfg: dict) -> None:

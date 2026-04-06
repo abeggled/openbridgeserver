@@ -105,7 +105,7 @@ const summary = computed(() => {
   if (props.type === 'clamp')           return `[${d.min ?? 0} … ${d.max ?? 100}]`
   if (props.type === 'statistics')      return null
   if (props.type === 'operating_hours') return null
-  if (props.type === 'notify_pushover') return d.title || 'openTWS'
+  if (props.type === 'notify_pushover') return d.title || 'open bridge server'
   if (props.type === 'notify_sms')      return d.to || '—'
   if (props.type === 'api_client')      return `${d.method ?? 'GET'}  ${(d.url || '—').slice(0, 20)}`
   return null

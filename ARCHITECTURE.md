@@ -1,4 +1,4 @@
-# OpenTWS — Architecture Documentation
+# open bridge server — Architecture Documentation
 
 **Version:** 0.1 (pre-implementation)  
 **Lizenz:** MIT  
@@ -9,7 +9,7 @@
 
 ## 1. Projektziel
 
-OpenTWS ist ein Open-Source Multiprotokoll-Server als MIT-lizenzierter Ersatz für den proprietären Timberwolf Server (TWS). Ziel ist eine modulare, erweiterbare Datendrehscheibe für Gebäude- und Industrieautomation, die KNX, Modbus RTU, Modbus TCP und 1-Wire sowie zukünftige Protokolle verbindet.
+open bridge server ist ein Open-Source Multiprotokoll-Server als MIT-lizenzierter Ersatz für den proprietären Timberwolf Server (TWS). Ziel ist eine modulare, erweiterbare Datendrehscheibe für Gebäude- und Industrieautomation, die KNX, Modbus RTU, Modbus TCP und 1-Wire sowie zukünftige Protokolle verbindet.
 
 ---
 
@@ -79,7 +79,7 @@ OpenTWS ist ein Open-Source Multiprotokoll-Server als MIT-lizenzierter Ersatz f�
 ## 4. Modulstruktur
 
 ```
-opentws/
+obs/
 ├── main.py                    # Einstiegspunkt, Startup/Shutdown
 ├── config.py                  # Server-Konfiguration (config.yaml + Env-Vars)
 │
@@ -343,7 +343,7 @@ mqtt:
   password: null
 
 database:
-  path: /data/opentws.db
+  path: /data/obs.db
   history_plugin: sqlite   # sqlite | influxdb | timescaledb | questdb
 
 ringbuffer:
@@ -357,9 +357,9 @@ security:
 
 Umgebungsvariablen überschreiben config.yaml:
 ```
-OPENTWS_MQTT_HOST=192.168.1.10
-OPENTWS_DB_PATH=/mnt/data/opentws.db
-OPENTWS_SECURITY_JWT_SECRET=...
+OBS_MQTT_HOST=192.168.1.10
+OBS_DB_PATH=/mnt/data/obs.db
+OBS_SECURITY_JWT_SECRET=...
 ```
 
 ### Ebene 2 — SQLite Datenbank (Laufzeit)
@@ -452,12 +452,12 @@ services:
     ports: ["1883:1883"]
     volumes: ["./mosquitto:/mosquitto/config"]
 
-  opentws:
+  obs:
     build: .
     ports: ["8080:8080"]
     volumes: ["./data:/data"]
     environment:
-      - OPENTWS_MQTT_HOST=mosquitto
+      - OBS_MQTT_HOST=mosquitto
     depends_on: [mosquitto]
 ```
 
@@ -466,7 +466,7 @@ services:
 ## 14. TWS Migration
 
 ```
-tws_export.xml  →  tools/tws2opentws.py  →  opentws_config.json  →  POST /api/v1/config/import
+tws_export.xml  →  tools/tws2opentws.py  →  obs_config.json  →  POST /api/v1/config/import
 ```
 
 `tws2opentws.py` ist ein separates CLI-Tool (community-pflegbar), kein Core-Bestandteil. Ziel: 80% der typischen TWS-Konfigurationen automatisch migrieren.

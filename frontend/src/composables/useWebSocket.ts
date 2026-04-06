@@ -1,5 +1,5 @@
 /**
- * useWebSocket — WebSocket-Verbindung zum openTWS Backend
+ * useWebSocket — WebSocket-Verbindung zum open bridge server Backend
  *
  * Singleton: eine einzige WS-Verbindung für die gesamte App.
  * Automatischer Reconnect mit exponentiellem Backoff.

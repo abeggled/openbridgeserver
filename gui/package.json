@@ -1,7 +1,7 @@
 {
-  "name": "opentws-gui",
+  "name": "obs-gui",
   "version": "0.1.0",
-  "description": "openTWS Web GUI",
+  "description": "open bridge server Web GUI",
   "type": "module",
   "scripts": {
     "dev": "vite",

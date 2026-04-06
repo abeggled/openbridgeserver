@@ -69,7 +69,7 @@ const titles = {
   'Logic':           'Logikmodul',
   'Settings':        'Einstellungen',
 }
-const pageTitle = computed(() => titles[route.name] ?? 'openTWS')
+const pageTitle = computed(() => titles[route.name] ?? 'open bridge server')
 
 function logout() {
   ws.disconnect()

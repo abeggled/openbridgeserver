@@ -10,7 +10,7 @@ mqtt:
   password: null
 
 database:
-  path: /data/opentws.db
+  path: /data/obs.db
 
 # History backend is configured through the Admin UI (Settings → History Backend).
 # The active plugin and its credentials are stored in the database (app_settings table).
@@ -22,11 +22,11 @@ database:
 #   history.influx_version  = 2            # 1 | 2 | 3
 #   history.influx_token    = my-api-token
 #   history.influx_org      = my-org
-#   history.influx_bucket   = opentws
+#   history.influx_bucket   = obs
 #
 # TimescaleDB example:
 #   history.plugin          = timescaledb
-#   history.timescale_dsn   = postgresql://user:pass@timescaledb:5432/opentws
+#   history.timescale_dsn   = postgresql://user:pass@timescaledb:5432/obs
 #   (requires: pip install asyncpg)
 
 ringbuffer:
@@ -34,5 +34,5 @@ ringbuffer:
   max_entries: 10000
 
 security:
-  jwt_secret: changeme      # In Produktion: aus Env-Var OPENTWS_SECURITY__JWT_SECRET
+  jwt_secret: changeme      # In Produktion: aus Env-Var OBS_SECURITY__JWT_SECRET
   jwt_expire_minutes: 1440

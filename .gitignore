@@ -27,7 +27,7 @@ env/
 Thumbs.db
 desktop.ini
 
-# OpenTWS runtime data
+# open bridge server runtime data
 config.yaml
 data/
 *.db

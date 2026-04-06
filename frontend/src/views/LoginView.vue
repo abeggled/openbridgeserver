@@ -40,7 +40,7 @@ async function login() {
     <div class="w-80 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl p-8 shadow-2xl">
       <!-- Logo -->
       <div class="text-center mb-8">
-        <div class="text-3xl font-bold text-blue-500 dark:text-blue-400 mb-1">openTWS</div>
+        <div class="text-3xl font-bold text-blue-500 dark:text-blue-400 mb-1">open bridge server</div>
         <div class="text-sm text-gray-400 dark:text-gray-500">Visualisierung · Anmeldung</div>
       </div>
 

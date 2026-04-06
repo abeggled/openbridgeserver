@@ -1,5 +1,5 @@
 /**
- * API-Client für openTWS Visu
+ * API-Client für open bridge server Visu
  *
  * - JWT aus localStorage (admin-Login)
  * - Session-Tokens aus sessionStorage (PIN-Auth pro Knoten)

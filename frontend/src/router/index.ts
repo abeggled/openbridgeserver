@@ -1,5 +1,5 @@
 /**
- * Vue Router — openTWS Visu
+ * Vue Router — open bridge server Visu
  *
  * Routen:
  *   /visu/tree          → Baumübersicht aller sichtbaren Knoten
