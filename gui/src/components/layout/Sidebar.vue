@@ -8,33 +8,19 @@
     <!-- Logo -->
     <div class="flex items-center gap-3 px-4 py-5 border-b border-slate-200 dark:border-slate-700/60">
       <!-- open bridge server icon (inline SVG) -->
-      <svg class="shrink-0 w-8 h-8 rounded-lg" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
-        <rect width="400" height="400" fill="#0F1320"/>
-        <rect x="20" y="20" width="360" height="360" rx="48" fill="#1A1F2E"/>
-        <line x1="20"  y1="110" x2="380" y2="110" stroke="#2E3650" stroke-width="0.5" opacity="0.4"/>
-        <line x1="20"  y1="200" x2="380" y2="200" stroke="#2E3650" stroke-width="0.5" opacity="0.4"/>
-        <line x1="20"  y1="290" x2="380" y2="290" stroke="#2E3650" stroke-width="0.5" opacity="0.4"/>
-        <line x1="110" y1="20"  x2="110" y2="380" stroke="#2E3650" stroke-width="0.5" opacity="0.4"/>
-        <line x1="200" y1="20"  x2="200" y2="380" stroke="#2E3650" stroke-width="0.5" opacity="0.4"/>
-        <line x1="290" y1="20"  x2="290" y2="380" stroke="#2E3650" stroke-width="0.5" opacity="0.4"/>
-        <rect x="20" y="20" width="360" height="360" rx="48" fill="none" stroke="#2E3650" stroke-width="2.5"/>
-        <path d="M46 20 L20 20 L20 46"    fill="none" stroke="#1DCFAB" stroke-width="4" stroke-linecap="round"/>
-        <path d="M354 20 L380 20 L380 46"  fill="none" stroke="#1DCFAB" stroke-width="4" stroke-linecap="round"/>
-        <path d="M46 380 L20 380 L20 354"  fill="none" stroke="#1DCFAB" stroke-width="4" stroke-linecap="round"/>
-        <path d="M354 380 L380 380 L380 354" fill="none" stroke="#1DCFAB" stroke-width="4" stroke-linecap="round"/>
-        <circle cx="200" cy="200" r="44" fill="#1A1F2E" stroke="#1DCFAB" stroke-width="2"/>
-        <circle cx="200" cy="200" r="34" fill="#1DCFAB" opacity="0.08"/>
-        <circle cx="200" cy="200" r="20" fill="none" stroke="#1DCFAB" stroke-width="2" opacity="0.5"/>
-        <circle cx="200" cy="200" r="11" fill="#1DCFAB" opacity="0.95"/>
-        <circle cx="100" cy="100" r="26" fill="#1A1F2E" stroke="#F5A623" stroke-width="2"/>
-        <circle cx="100" cy="100" r="13" fill="#F5A623" opacity="0.95"/>
-        <circle cx="300" cy="100" r="26" fill="#1A1F2E" stroke="#5B9CF6" stroke-width="2"/>
-        <circle cx="300" cy="100" r="13" fill="#5B9CF6" opacity="0.95"/>
-        <circle cx="200" cy="316" r="26" fill="#1A1F2E" stroke="#F5A623" stroke-width="2" stroke-dasharray="4 3"/>
-        <circle cx="200" cy="316" r="13" fill="#F5A623" opacity="0.65"/>
-        <line x1="119" y1="117" x2="170" y2="168" stroke="#F5A623" stroke-width="1.8" opacity="0.7"/>
-        <line x1="281" y1="117" x2="230" y2="168" stroke="#5B9CF6" stroke-width="1.8" opacity="0.7"/>
-        <line x1="200" y1="290" x2="200" y2="245" stroke="#F5A623" stroke-width="1.8" opacity="0.7"/>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" class="shrink-0 w-8 h-8 rounded-lg">
+        <rect width="64" height="64" rx="14" fill="#085041"/>
+        <rect x="6" y="42" width="52" height="4" rx="2" fill="#9FE1CB"/>
+        <rect x="14" y="14" width="4" height="30" rx="2" fill="#9FE1CB"/>
+        <rect x="46" y="14" width="4" height="30" rx="2" fill="#9FE1CB"/>
+        <line x1="16" y1="14" x2="6"  y2="44" stroke="#9FE1CB" stroke-width="2.2" stroke-linecap="round"/>
+        <line x1="16" y1="14" x2="32" y2="44" stroke="#9FE1CB" stroke-width="2.2" stroke-linecap="round"/>
+        <line x1="48" y1="14" x2="32" y2="44" stroke="#9FE1CB" stroke-width="2.2" stroke-linecap="round"/>
+        <line x1="48" y1="14" x2="58" y2="44" stroke="#9FE1CB" stroke-width="2.2" stroke-linecap="round"/>
+        <line x1="22" y1="22" x2="22" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+        <line x1="28" y1="16" x2="28" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+        <line x1="36" y1="16" x2="36" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+        <line x1="42" y1="22" x2="42" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
       </svg>
       <span v-if="!collapsed" class="font-bold text-slate-800 dark:text-slate-100 tracking-tight">open bridge server</span>
     </div>
