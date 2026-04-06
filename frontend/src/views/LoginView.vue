@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { auth, setJwt } from '@/api/client'
 import { useVisuStore } from '@/stores/visu'
 import { useWebSocket } from '@/composables/useWebSocket'
+import { useThemeStore } from '@/stores/theme'
 
 const router = useRouter()
 const route  = useRoute()
 const store  = useVisuStore()
 const ws     = useWebSocket()
+const theme  = useThemeStore()
+const logoSrc = computed(() =>
+  import.meta.env.BASE_URL + (theme.isDark ? 'obs_logo_dark.svg' : 'obs_logo_light.svg')
+)
 
 const username = ref('')
 const password = ref('')
@@ -40,33 +45,7 @@ async function login() {
     <div class="w-80 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl p-8 shadow-2xl">
       <!-- Logo -->
       <div class="text-center mb-8">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 64" class="obs-logo mx-auto rounded-lg mb-1">
-          <!-- Hängebrücke Mark -->
-          <rect x="0" y="38" width="62" height="3.5" rx="1.75" fill="var(--obs-bridge)"/>
-          <rect x="10" y="10" width="3.5" height="32" rx="1.75" fill="var(--obs-bridge)"/>
-          <rect x="48.5" y="10" width="3.5" height="32" rx="1.75" fill="var(--obs-bridge)"/>
-          <line x1="11.75" y1="10" x2="0"    y2="40" stroke="var(--obs-bridge)" stroke-width="2" stroke-linecap="round"/>
-          <line x1="11.75" y1="10" x2="31"   y2="40" stroke="var(--obs-bridge)" stroke-width="2" stroke-linecap="round"/>
-          <line x1="50.25" y1="10" x2="31"   y2="40" stroke="var(--obs-bridge)" stroke-width="2" stroke-linecap="round"/>
-          <line x1="50.25" y1="10" x2="62"   y2="40" stroke="var(--obs-bridge)" stroke-width="2" stroke-linecap="round"/>
-          <line x1="18"  y1="19" x2="18"  y2="38" stroke="var(--obs-bridge)" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
-          <line x1="25"  y1="13" x2="25"  y2="38" stroke="var(--obs-bridge)" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
-          <line x1="37"  y1="13" x2="37"  y2="38" stroke="var(--obs-bridge)" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
-          <line x1="44"  y1="19" x2="44"  y2="38" stroke="var(--obs-bridge)" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
-          <!-- Wordmark -->
-          <text x="80" y="30"
-            font-family="'DM Mono', monospace"
-            font-size="28"
-            font-weight="500"
-            letter-spacing="-0.4"
-            fill="var(--obs-text-main)">open bridge</text>
-          <text x="81" y="48"
-            font-family="'DM Mono', monospace"
-            font-size="9.5"
-            font-weight="300"
-            letter-spacing="2.8"
-            fill="var(--obs-text-sub)">MULTIPROTOCOL · AI SERVER</text>
-        </svg>
+        <img :src="logoSrc" alt="open bridge server" class="w-full mb-1 rounded-lg" />
         <div class="text-sm text-gray-400 dark:text-gray-500">Visualisierung · Anmeldung</div>
       </div>
 
@@ -111,20 +90,3 @@ async function login() {
     </div>
   </div>
 </template>
-
-<style scoped>
-.obs-logo {
-  --obs-bridge:    #0F6E56;
-  --obs-text-main: #1a1a18;
-  --obs-text-sub:  #5F5E5A;
-  width: 100%;
-  height: auto;
-}
-:global(.dark) .obs-logo {
-  --obs-bridge:    #5DCAA5;
-  --obs-text-main: #f0eeea;
-  --obs-text-sub:  #888780;
-  background: #111111;
-  border-radius: 0.5rem;
-}
-</style>
