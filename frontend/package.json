@@ -1,7 +1,7 @@
 {
-  "name": "opentws-visu",
+  "name": "obs-visu",
   "version": "0.1.0",
-  "description": "openTWS Visualisierungs-Dashboard",
+  "description": "open bridge server Visualisierungs-Dashboard",
   "type": "module",
   "scripts": {
     "dev": "vite",

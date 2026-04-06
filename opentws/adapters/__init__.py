@@ -1,1 +1,0 @@
-"""OpenTWS Protocol Adapters."""

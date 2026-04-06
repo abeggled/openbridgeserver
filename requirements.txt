@@ -1,4 +1,4 @@
-# OpenTWS Dependencies
+# open bridge server Dependencies
 # Python 3.11+
 
 # Web Framework

@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-    Importiert KNX-Gruppenadressen aus einem ETS-GA-CSV-Export als DataPoints in openTWS.
+    Importiert KNX-Gruppenadressen aus einem ETS-GA-CSV-Export als DataPoints in open bridge server.
 
 .DESCRIPTION
-    Laedt die CSV-Datei direkt auf den openTWS-Server hoch. DPT-Erkennung,
+    Laedt die CSV-Datei direkt auf den open bridge server hoch. DPT-Erkennung,
     Encoding-Erkennung und DataPoint/Binding-Anlage erfolgen serverseitig
     in einer einzigen Transaktion.
 
 .PARAMETER Url
-    Basis-URL der openTWS-Instanz, z.B. http://localhost:8080
+    Basis-URL der open bridge server-Instanz, z.B. http://localhost:8080
 
 .PARAMETER ApiKey
     API-Schluessel (wird als X-API-Key-Header uebertragen).
@@ -17,7 +17,7 @@
     Pfad zur ETS-GA-CSV-Datei.
 
 .PARAMETER Adapter
-    Name der KNX-Adapter-Instanz in openTWS (z.B. "KNX/IP").
+    Name der KNX-Adapter-Instanz in open bridge server (z.B. "KNX/IP").
 
 .PARAMETER Direction
     Verknuepfungsrichtung: SOURCE (Standard), DEST oder BOTH.
@@ -28,14 +28,14 @@
 .EXAMPLE
     .\Import-EtsGaCsv.ps1 `
         -Url http://localhost:8080 `
-        -ApiKey opentws_abc123 `
+        -ApiKey obs_abc123 `
         -File C:\Export\GA_Export.csv `
         -Adapter "KNX/IP"
 
 .EXAMPLE
     .\Import-EtsGaCsv.ps1 `
         -Url http://192.168.1.10:8080 `
-        -ApiKey opentws_abc123 `
+        -ApiKey obs_abc123 `
         -File .\GA_Export.csv `
         -Adapter "KNX TWS" `
         -Direction SOURCE
@@ -62,7 +62,7 @@ $fileName = [System.IO.Path]::GetFileName($File)
 $enc      = [Uri]::EscapeDataString($Adapter)
 $uri      = "$($Url.TrimEnd('/'))/api/v1/knxproj/import-csv?adapter_name=$enc&direction=$Direction"
 
-Write-Host "openTWS ETS-GA-Import" -ForegroundColor Cyan
+Write-Host "open bridge server ETS-GA-Import" -ForegroundColor Cyan
 Write-Host "  Datei   : $File"
 Write-Host "  Server  : $uri"
 Write-Host "  Adapter : $Adapter"

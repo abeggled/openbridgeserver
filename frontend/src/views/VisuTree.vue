@@ -33,7 +33,7 @@ function navigate(node: VisuNode) {
     <!-- Header -->
     <header class="border-b border-gray-200 dark:border-gray-800 px-6 py-4 flex items-center justify-between bg-gray-50 dark:bg-gray-900">
       <div class="flex items-center gap-3">
-        <span class="text-xl font-bold text-blue-500 dark:text-blue-400">openTWS</span>
+        <span class="text-xl font-bold text-blue-500 dark:text-blue-400">open bridge server</span>
         <span class="text-gray-300 dark:text-gray-600">|</span>
         <span class="text-gray-600 dark:text-gray-300">Visualisierung</span>
       </div>

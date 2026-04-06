@@ -7,7 +7,7 @@
   >
     <!-- Logo -->
     <div class="flex items-center gap-3 px-4 py-5 border-b border-slate-200 dark:border-slate-700/60">
-      <!-- openTWS icon (inline SVG) -->
+      <!-- open bridge server icon (inline SVG) -->
       <svg class="shrink-0 w-8 h-8 rounded-lg" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
         <rect width="400" height="400" fill="#0F1320"/>
         <rect x="20" y="20" width="360" height="360" rx="48" fill="#1A1F2E"/>
@@ -36,7 +36,7 @@
         <line x1="281" y1="117" x2="230" y2="168" stroke="#5B9CF6" stroke-width="1.8" opacity="0.7"/>
         <line x1="200" y1="290" x2="200" y2="245" stroke="#F5A623" stroke-width="1.8" opacity="0.7"/>
       </svg>
-      <span v-if="!collapsed" class="font-bold text-slate-800 dark:text-slate-100 tracking-tight">openTWS</span>
+      <span v-if="!collapsed" class="font-bold text-slate-800 dark:text-slate-100 tracking-tight">open bridge server</span>
     </div>
 
     <!-- Nav -->

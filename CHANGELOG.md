@@ -1,6 +1,6 @@
 # Änderungsprotokoll
 
-Alle wesentlichen Änderungen an openTWS werden hier festgehalten.
+Alle wesentlichen Änderungen an open bridge server werden hier festgehalten.
 
 ---
 
@@ -124,7 +124,7 @@ Alle wesentlichen Änderungen an openTWS werden hier festgehalten.
 
 **Bereitstellung (Phase 6)**
 - Docker: mehrstufige Erstellung, schlankes Image, kein Root-Benutzer
-- Docker Compose: openTWS + Mosquitto mit Statusprüfungen
+- Docker Compose: open bridge server + Mosquitto mit Statusprüfungen
 - Konfigurationsbeispiele für alle Einstiegspunkte
 
 **Logik-Editor (Phase 7)**

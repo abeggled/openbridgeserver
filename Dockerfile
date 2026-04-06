@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# OpenTWS — Multi-Stage Dockerfile (3 stages)
+# open bridge server — Multi-Stage Dockerfile (3 stages)
 # Stage 1 (node-builder):   npm install + vite build → gui_dist/ + frontend_dist/
 # Stage 2 (py-builder):     pip install Python deps
 # Stage 3 (runtime):        python:3.11-slim, copies all artefacts
@@ -45,7 +45,7 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # ── Stage 3: runtime image ──────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
-LABEL org.opencontainers.image.title="OpenTWS" \
+LABEL org.opencontainers.image.title="open bridge server" \
       org.opencontainers.image.description="Open-Source Multiprotocol Server for Building Automation" \
       org.opencontainers.image.licenses="MIT"
 
@@ -54,7 +54,7 @@ COPY --from=py-builder /install /usr/local
 
 # Application source
 WORKDIR /app
-COPY opentws/ ./opentws/
+COPY obs/ ./obs/
 
 # Built Admin-GUI (served by FastAPI from /app/gui_dist)
 COPY --from=node-builder /gui_dist ./gui_dist/
@@ -69,9 +69,9 @@ RUN mkdir -p /data
 VOLUME ["/data"]
 
 # Runtime defaults — overridable via env or mounted /data/config.yaml
-ENV OPENTWS_DATABASE__PATH=/data/opentws.db \
-    OPENTWS_CONFIG=/data/config.yaml
+ENV OBS_DATABASE__PATH=/data/obs.db \
+    OBS_CONFIG=/data/config.yaml
 
 EXPOSE 8080
 
-CMD ["python", "-m", "opentws"]
+CMD ["python", "-m", "obs"]

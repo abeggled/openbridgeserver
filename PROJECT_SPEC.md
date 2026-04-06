@@ -1,4 +1,4 @@
-# OpenTWS — Project Specification
+# open bridge server — Project Specification
 
 **Version:** 0.1  
 **Lizenz:** MIT  
@@ -8,7 +8,7 @@
 
 ## Projektzusammenfassung
 
-OpenTWS ist ein Open-Source Multiprotokoll-Server für Gebäude- und Industrieautomation. Er verbindet KNX, Modbus RTU, Modbus TCP und 1-Wire über ein zentrales, modulares Objektsystem und stellt alle Daten via MQTT bereit. Vollständige Konfiguration über REST API; Web GUI nutzt dieselbe API.
+open bridge server ist ein Open-Source Multiprotokoll-Server für Gebäude- und Industrieautomation. Er verbindet KNX, Modbus RTU, Modbus TCP und 1-Wire über ein zentrales, modulares Objektsystem und stellt alle Daten via MQTT bereit. Vollständige Konfiguration über REST API; Web GUI nutzt dieselbe API.
 
 Zielgruppe: Bestehende Timberwolf Server (TWS) Anwender und Neueinsteiger in der Gebäudeautomation.
 
@@ -186,9 +186,9 @@ WS     /api/v1/ws?token={jwt}
 
 ---
 
-## Bekannte TWS-Schwächen — OpenTWS Lösungsansätze
+## Bekannte TWS-Schwächen — open bridge server Lösungsansätze
 
-| TWS-Problem | OpenTWS-Lösung |
+| TWS-Problem | open bridge server Lösung |
 |---|---|
 | Nicht alle KNX DPTs eingebaut | DPT Registry erweiterbar, unbekannte DPTs → UNKNOWN (kein Crash) |
 | Langsames GUI beim Verknüpfen | Serverseitige Pagination + Suche, nie Full-Load |
@@ -201,7 +201,7 @@ WS     /api/v1/ws?token={jwt}
 ## Offene Punkte (für spätere Phasen)
 
 - Web GUI Technologie (React / Vue / HTMX — noch nicht entschieden)
-- Visualisierungs-Modul (separates Projekt, baut auf OpenTWS API auf)
+- Visualisierungs-Modul (separates Projekt, baut auf open bridge server API auf)
 - Benutzerrollen und Berechtigungen (aktuell: single-user + API Keys)
 - BACnet Adapter (zukünftig, community)
 - OPC-UA Adapter (zukünftig, community)
@@ -213,8 +213,8 @@ WS     /api/v1/ws?token={jwt}
 
 ```bash
 # Repository
-git clone https://github.com/opentws/opentws
-cd opentws
+git clone https://github.com/abeggled/openbridgeserver
+cd openbridgeserver
 
 # Python Environment
 python -m venv .venv
@@ -228,7 +228,7 @@ docker run -d -p 1883:1883 eclipse-mosquitto:2
 cp config.example.yaml config.yaml
 
 # Starten
-python -m opentws
+python -m obs
 ```
 
 ---

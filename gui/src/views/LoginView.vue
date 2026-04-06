@@ -39,7 +39,7 @@
         <text x="122" y="78"  text-anchor="middle" class="pt" fill="#F5A623">KNX</text>
         <text x="278" y="78"  text-anchor="middle" class="pt" fill="#5B9CF6">MOD</text>
         <text x="200" y="155" text-anchor="middle" class="pt" fill="#1DCFAB">MQTT</text>
-        <text x="200" y="308" text-anchor="middle" class="lm">openTWS</text>
+        <text x="200" y="308" text-anchor="middle" class="lm">open bridge server</text>
         <text x="200" y="332" text-anchor="middle" class="ls">MULTIPROTOCOL SERVER</text>
         <rect x="108" y="350" width="50" height="18" rx="5" fill="rgba(245,166,35,0.12)" stroke="#F5A623" stroke-width="0.8"/>
         <text x="133" y="363" text-anchor="middle" class="pt" fill="#F5A623">KNX</text>
@@ -79,7 +79,7 @@
       </div>
     </div>
 
-    <p class="text-center text-xs text-slate-600 mt-6">openTWS v0.1.0 · MIT License</p>
+    <p class="text-center text-xs text-slate-600 mt-6">open bridge server v0.1.0 · MIT License</p>
   </div>
 </template>
 
