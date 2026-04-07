@@ -141,7 +141,7 @@ class TestDataPointCreate:
 
     def test_no_id_field(self):
         # DataPointCreate must not expose an id field (server assigns it)
-        assert not hasattr(DataPointCreate, "__fields__") or "id" not in DataPointCreate.model_fields
+        assert "id" not in DataPointCreate.model_fields
 
 
 class TestDataPointUpdate:
