@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>open bridge server — Testkonzept</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #ffffff;
+    --bg2:      #f5f4f0;
+    --border:   rgba(0,0,0,0.12);
+    --text:     #1a1a18;
+    --text2:    #5f5e5a;
+    --radius:   12px;
+    --font:     system-ui, -apple-system, sans-serif;
+    --mono:     ui-monospace, "Cascadia Code", monospace;
+
+    --teal-50:  #E1F5EE; --teal-600: #0F6E56; --teal-800: #085041;
+    --blue-50:  #E6F1FB; --blue-600: #185FA5; --blue-800: #0C447C;
+    --purple-50:#EEEDFE; --purple-600:#534AB7; --purple-800:#3C3489;
+    --amber-50: #FAEEDA; --amber-600: #854F0B; --amber-800: #633806;
+    --coral-50: #FAECE7; --coral-600: #993C1D; --coral-800: #712B13;
+    --pink-50:  #FBEAF0; --pink-600:  #993556; --pink-800:  #72243E;
+    --gray-50:  #F1EFE8; --gray-600:  #5F5E5A; --gray-800:  #444441;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:    #1c1c1a;
+      --bg2:   #252523;
+      --border:rgba(255,255,255,0.1);
+      --text:  #e8e6de;
+      --text2: #9c9a92;
+
+      --teal-50:  #085041; --teal-600: #5DCAA5; --teal-800: #9FE1CB;
+      --blue-50:  #0C447C; --blue-600: #85B7EB; --blue-800: #B5D4F4;
+      --purple-50:#3C3489; --purple-600:#AFA9EC; --purple-800:#CECBF6;
+      --amber-50: #633806; --amber-600: #EF9F27; --amber-800: #FAC775;
+      --coral-50: #712B13; --coral-600: #F0997B; --coral-800: #F5C4B3;
+      --pink-50:  #72243E; --pink-600:  #ED93B1; --pink-800:  #F4C0D1;
+      --gray-50:  #444441; --gray-600:  #B4B2A9; --gray-800:  #D3D1C7;
+    }
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.6;
+    padding: 32px 24px 48px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  h1 {
+    font-size: 22px;
+    font-weight: 500;
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    font-size: 13px;
+    color: var(--text2);
+    margin-bottom: 32px;
+  }
+
+  .table-wrap {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  thead tr {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  thead th {
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 500;
+    font-size: 12px;
+    color: var(--text2);
+    letter-spacing: 0.03em;
+  }
+
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+  }
+  tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  td {
+    padding: 12px 14px;
+    vertical-align: top;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .teal   { background: var(--teal-50);   color: var(--teal-800);   border-color: var(--teal-600); }
+  .teal   .dot { background: var(--teal-600); }
+  .blue   { background: var(--blue-50);   color: var(--blue-800);   border-color: var(--blue-600); }
+  .blue   .dot { background: var(--blue-600); }
+  .purple { background: var(--purple-50); color: var(--purple-800); border-color: var(--purple-600); }
+  .purple .dot { background: var(--purple-600); }
+  .amber  { background: var(--amber-50);  color: var(--amber-800);  border-color: var(--amber-600); }
+  .amber  .dot { background: var(--amber-600); }
+  .coral  { background: var(--coral-50);  color: var(--coral-800);  border-color: var(--coral-600); }
+  .coral  .dot { background: var(--coral-600); }
+  .pink   { background: var(--pink-50);   color: var(--pink-800);   border-color: var(--pink-600); }
+  .pink   .dot { background: var(--pink-600); }
+  .gray   { background: var(--gray-50);   color: var(--gray-800);   border-color: var(--gray-600); }
+  .gray   .dot { background: var(--gray-600); }
+
+  .tool {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 2px 7px;
+    color: var(--text2);
+    white-space: nowrap;
+  }
+
+  .desc {
+    color: var(--text2);
+    font-size: 12px;
+    margin-top: 3px;
+  }
+
+  .modules {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+  }
+
+  .module {
+    font-size: 11px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: var(--text2);
+  }
+
+  .duration {
+    font-size: 12px;
+    color: var(--text2);
+  }
+
+  .duration strong {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .ci-row td {
+    background: var(--bg2);
+  }
+
+  .footer {
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--text2);
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    padding: 14px 0 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .footer-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+</style>
+</head>
+<body>
+
+<h1>open bridge server — Testkonzept</h1>
+<p class="subtitle">Automatisierte Tests nach jeder Codeänderung / Pull Request</p>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th style="width:200px">Ebene</th>
+        <th>Was wird getestet</th>
+        <th style="width:150px">Werkzeug</th>
+        <th style="width:100px">Dauer</th>
+      </tr>
+    </thead>
+    <tbody>
+
+      <tr>
+        <td>
+          <span class="badge teal"><span class="dot"></span>Unit Tests</span>
+          <div class="desc">Schnell · isoliert · viele</div>
+        </td>
+        <td>
+          TypeConverter, DPT-Dekodierung, ConversionResult, Formelauswertung
+          <div class="modules">
+            <span class="module">converter.py</span>
+            <span class="module">dpt_registry.py</span>
+            <span class="module">executor.py</span>
+            <span class="module">models/</span>
+          </div>
+        </td>
+        <td><span class="tool">pytest</span></td>
+        <td class="duration"><strong>~30 s</strong></td>
+      </tr>
+
+      <tr>
+        <td>
+          <span class="badge blue"><span class="dot"></span>Integration Tests</span>
+          <div class="desc">DB, MQTT, API zusammen</div>
+        </td>
+        <td>
+          REST API Endpoints (alle CRUD-Ops), DataPoint Registry + Event Bus, Auth-Flow, WebSocket
+          <div class="modules">
+            <span class="module">httpx</span>
+            <span class="module">SQLite :memory:</span>
+            <span class="module">Mosquitto</span>
+          </div>
+        </td>
+        <td><span class="tool">pytest + httpx</span></td>
+        <td class="duration"><strong>~60 s</strong></td>
+      </tr>
+
+      <tr>
+        <td>
+          <span class="badge purple"><span class="dot"></span>Adapter Tests</span>
+          <div class="desc">Protokoll-Simulation</div>
+        </td>
+        <td>
+          KNX (xknx-Mock), Modbus (Server-Simulator), 1-Wire (Dateisystem-Mock)
+          <div class="modules">
+            <span class="module">pytest-mock</span>
+            <span class="module">pymodbus simulator</span>
+            <span class="module">tmp_path</span>
+          </div>
+        </td>
+        <td><span class="tool">pytest + mock</span></td>
+        <td class="duration"><strong>~45 s</strong></td>
+      </tr>
+
+      <tr>
+        <td>
+          <span class="badge amber"><span class="dot"></span>E2E Backend</span>
+          <div class="desc">Vollständiger Datenpfad</div>
+        </td>
+        <td>
+          KNX → Registry → MQTT → History, Protokoll-Bridge (KNX → Modbus), RingBuffer-Befüllung
+          <div class="modules">
+            <span class="module">Docker Compose</span>
+            <span class="module">echte Dienste</span>
+          </div>
+        </td>
+        <td><span class="tool">pytest + Docker</span></td>
+        <td class="duration"><strong>~2 min</strong></td>
+      </tr>
+
+      <tr>
+        <td>
+          <span class="badge coral"><span class="dot"></span>Admin GUI Tests</span>
+          <div class="desc">Browser-Automatisierung</div>
+        </td>
+        <td>
+          DataPoint CRUD, Adapter-Konfiguration, RingBuffer Live-Update, Auth-Flow
+          <div class="modules">
+            <span class="module">data-testid</span>
+            <span class="module">Chromium headless</span>
+          </div>
+        </td>
+        <td><span class="tool">Playwright</span></td>
+        <td class="duration"><strong>~2 min</strong></td>
+      </tr>
+
+      <tr>
+        <td>
+          <span class="badge pink"><span class="dot"></span>Visu Tests</span>
+          <div class="desc">Live-Updates, Logik-Editor</div>
+        </td>
+        <td>
+          WebSocket-Echtzeit, Logik-Graphen, Debug-Bänder, Visualisierungskomponenten
+          <div class="modules">
+            <span class="module">WS interception</span>
+            <span class="module">page.expect_event</span>
+          </div>
+        </td>
+        <td><span class="tool">Playwright + WS</span></td>
+        <td class="duration"><strong>~2 min</strong></td>
+      </tr>
+
+      <tr class="ci-row">
+        <td>
+          <span class="badge gray"><span class="dot"></span>CI/CD Pipeline</span>
+        </td>
+        <td colspan="2">
+          GitHub Actions — bei jedem PR und Push auf <span class="tool">main</span>. Jobs laufen parallel; Unit + Integration blockieren den Merge.
+        </td>
+        <td class="duration"><strong>~5 min</strong><div class="desc">total (parallel)</div></td>
+      </tr>
+
+    </tbody>
+  </table>
+</div>
+
+<div class="footer">
+  <span class="footer-item"><span class="badge teal" style="font-size:11px"><span class="dot"></span>Woche 1–2</span> Unit Tests — kein Setup nötig, höchster ROI</span>
+  <span class="footer-item"><span class="badge blue" style="font-size:11px"><span class="dot"></span>Woche 3–4</span> Integration Tests — REST API Abdeckung</span>
+  <span class="footer-item"><span class="badge coral" style="font-size:11px"><span class="dot"></span>Ab Monat 2</span> Playwright — häufigste User Journeys zuerst</span>
+</div>
+
+</body>
+</html>
