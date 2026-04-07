@@ -1,0 +1,34 @@
+[Unit]
+Description=open bridge server — Test Data Generator
+Documentation=https://github.com/abeggled/openbridgeserver
+After=network.target
+
+[Service]
+Type=simple
+# --- Anpassen: Benutzer unter dem der Prozess läuft ---
+User=obs
+Group=obs
+
+# --- Anpassen: Installationspfad des Projekts ---
+WorkingDirectory=/opt/openbridgeserver
+
+# --- Anpassen: Pfad zum venv-Python und zur Konfigurationsdatei ---
+ExecStart=/opt/openbridgeserver/venv/bin/python \
+    /opt/openbridgeserver/tools/testdata_generator.py \
+    /opt/openbridgeserver/tools/testdata_generator_example.yaml
+
+# Sauber stoppen: SIGTERM → asyncio shutdown
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# Bei Absturz neu starten, aber NICHT bei sauberem Exit (z.B. Ctrl+C / systemctl stop)
+Restart=on-failure
+RestartSec=5
+
+# Logging geht direkt zu journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=obs-testdata
+
+[Install]
+WantedBy=multi-user.target
