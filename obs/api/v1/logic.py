@@ -70,6 +70,12 @@ async def create_graph(
          body.flow_data.model_dump_json(), now, now),
     )
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (gid,))
+    # Load into executor cache so the graph is immediately runnable
+    try:
+        from obs.logic.manager import get_logic_manager
+        await get_logic_manager().reload()
+    except Exception:
+        pass
     return _row_to_out(row)
 
 
