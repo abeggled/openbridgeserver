@@ -33,6 +33,7 @@
                 <option value="">Typ wählen …</option>
                 <option v-for="t in availableTypes" :key="t" :value="t">{{ t }}</option>
               </select>
+              <p v-if="availableTypesErr" class="text-xs text-red-400 mt-1">Adapter-Typen konnten nicht geladen werden.</p>
             </div>
             <div class="form-group">
               <label class="label">Name *</label>
@@ -180,12 +181,13 @@ const busy           = reactive({})   // id → 'test' | 'save' | 'restart' | nu
 const schemas        = reactive({})   // adapter_type → JSON Schema
 
 // Neue Instanz erstellen
-const creating       = ref(false)     // false | true | 'saving'
-const availableTypes = ref([])
-const newForm        = reactive({ adapter_type: '', name: '', config: {} })
-const newSchema      = ref(null)
-const schemaLoading  = ref(false)
-const createError    = ref(null)
+const creating          = ref(false)     // false | true | 'saving'
+const availableTypes    = ref([])
+const availableTypesErr = ref(false)
+const newForm           = reactive({ adapter_type: '', name: '', config: {} })
+const newSchema         = ref(null)
+const schemaLoading     = ref(false)
+const createError       = ref(null)
 
 // Löschen
 const deleteTarget      = ref(null)
@@ -198,7 +200,9 @@ onMounted(async () => {
   initDrafts()
   try {
     availableTypes.value = await store.fetchTypes()
-  } catch {}
+  } catch {
+    availableTypesErr.value = true
+  }
 })
 
 function initDrafts() {

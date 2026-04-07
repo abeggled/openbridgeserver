@@ -84,7 +84,7 @@ export const searchApi = {
 // ── Adapters ──────────────────────────────────────────────────────────────
 export const adapterApi = {
   // Typ-Routen (Schema-Abfragen)
-  list:         ()                           => api.get('/adapters'),
+  list:         ()                           => api.get('/adapters/'),
   schema:       (type)                       => api.get(`/adapters/${type}/schema`),
   bindingSchema:(type)                       => api.get(`/adapters/${type}/binding-schema`),
   knxDpts:      ()                           => api.get('/adapters/knx/dpts'),
