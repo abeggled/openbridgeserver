@@ -32,6 +32,5 @@ export default defineConfig({
     emptyOutDir: true,
     assetsDir: 'assets',
     sourcemap: false,
-    cssMinify: 'esbuild',   // lightningcss rejects ::file-selector-button:disabled
   }
 })
