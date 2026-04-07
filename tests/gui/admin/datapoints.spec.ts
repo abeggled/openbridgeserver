@@ -52,7 +52,7 @@ test('DataPoint löschen über ConfirmDialog', async ({ page }) => {
   const dpId = created.id
 
   try {
-    await page.goto('/gui/datapoints')
+    await page.goto('/datapoints')
     await expect(page.locator(`[data-testid="dp-row-${dpId}"]`)).toBeVisible({ timeout: 5_000 })
 
     // Click delete button inside the row

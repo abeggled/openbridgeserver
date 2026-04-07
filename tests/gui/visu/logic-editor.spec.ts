@@ -32,7 +32,7 @@ test('Logic-Editor Debug-Modus zeigt Wert nach Ausführen', async ({ page }) => 
 
   try {
     // 2. Navigate to the Logic view
-    await page.goto('/gui/logic')
+    await page.goto('/logic')
     await page.waitForLoadState('networkidle')
 
     // 3. Select the graph from the dropdown

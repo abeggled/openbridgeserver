@@ -11,7 +11,7 @@ test('RingBuffer Live-Eintrag ohne Reload', async ({ page }) => {
   const dpId = created.id
 
   try {
-    await page.goto('/gui/ringbuffer')
+    await page.goto('/ringbuffer')
 
     // Status badge must say "Live"
     await expect(page.locator('[data-testid="status-badge"]')).toContainText('Live', { timeout: 5_000 })
