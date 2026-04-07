@@ -33,7 +33,21 @@ function navigate(node: VisuNode) {
     <!-- Header -->
     <header class="border-b border-gray-200 dark:border-gray-800 px-6 py-4 flex items-center justify-between bg-gray-50 dark:bg-gray-900">
       <div class="flex items-center gap-3">
-        <span class="text-xl font-bold text-blue-500 dark:text-blue-400">open bridge server</span>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" class="w-8 h-8 rounded-lg shrink-0">
+          <rect width="64" height="64" rx="14" fill="#085041"/>
+          <rect x="6" y="42" width="52" height="4" rx="2" fill="#9FE1CB"/>
+          <rect x="14" y="14" width="4" height="30" rx="2" fill="#9FE1CB"/>
+          <rect x="46" y="14" width="4" height="30" rx="2" fill="#9FE1CB"/>
+          <line x1="16" y1="14" x2="6"  y2="44" stroke="#9FE1CB" stroke-width="2.2" stroke-linecap="round"/>
+          <line x1="16" y1="14" x2="32" y2="44" stroke="#9FE1CB" stroke-width="2.2" stroke-linecap="round"/>
+          <line x1="48" y1="14" x2="32" y2="44" stroke="#9FE1CB" stroke-width="2.2" stroke-linecap="round"/>
+          <line x1="48" y1="14" x2="58" y2="44" stroke="#9FE1CB" stroke-width="2.2" stroke-linecap="round"/>
+          <line x1="22" y1="22" x2="22" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+          <line x1="28" y1="16" x2="28" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+          <line x1="36" y1="16" x2="36" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+          <line x1="42" y1="22" x2="42" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+        </svg>
+        <span class="font-semibold text-gray-800 dark:text-gray-100">open bridge server</span>
         <span class="text-gray-300 dark:text-gray-600">|</span>
         <span class="text-gray-600 dark:text-gray-300">Visualisierung</span>
       </div>

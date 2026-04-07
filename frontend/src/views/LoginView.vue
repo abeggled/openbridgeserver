@@ -4,11 +4,13 @@ import { useRouter, useRoute } from 'vue-router'
 import { auth, setJwt } from '@/api/client'
 import { useVisuStore } from '@/stores/visu'
 import { useWebSocket } from '@/composables/useWebSocket'
+import { useThemeStore } from '@/stores/theme'
 
 const router = useRouter()
 const route  = useRoute()
 const store  = useVisuStore()
 const ws     = useWebSocket()
+const theme  = useThemeStore()
 
 const username = ref('')
 const password = ref('')
@@ -40,7 +42,38 @@ async function login() {
     <div class="w-80 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl p-8 shadow-2xl">
       <!-- Logo -->
       <div class="text-center mb-8">
-        <div class="text-3xl font-bold text-blue-500 dark:text-blue-400 mb-1">open bridge server</div>
+        <!-- Dark logo -->
+        <svg v-if="theme.isDark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 64" class="w-full mb-1 rounded-lg" style="background:#111111">
+          <rect x="0" y="38" width="62" height="3.5" rx="1.75" fill="#5DCAA5"/>
+          <rect x="10" y="10" width="3.5" height="32" rx="1.75" fill="#5DCAA5"/>
+          <rect x="48.5" y="10" width="3.5" height="32" rx="1.75" fill="#5DCAA5"/>
+          <line x1="11.75" y1="10" x2="0"  y2="40" stroke="#5DCAA5" stroke-width="2" stroke-linecap="round"/>
+          <line x1="11.75" y1="10" x2="31" y2="40" stroke="#5DCAA5" stroke-width="2" stroke-linecap="round"/>
+          <line x1="50.25" y1="10" x2="31" y2="40" stroke="#5DCAA5" stroke-width="2" stroke-linecap="round"/>
+          <line x1="50.25" y1="10" x2="62" y2="40" stroke="#5DCAA5" stroke-width="2" stroke-linecap="round"/>
+          <line x1="18" y1="19" x2="18" y2="38" stroke="#5DCAA5" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+          <line x1="25" y1="13" x2="25" y2="38" stroke="#5DCAA5" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+          <line x1="37" y1="13" x2="37" y2="38" stroke="#5DCAA5" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+          <line x1="44" y1="19" x2="44" y2="38" stroke="#5DCAA5" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+          <text x="80" y="30" font-family="'DM Mono', monospace" font-size="28" font-weight="500" letter-spacing="-0.4" fill="#f0eeea">open bridge</text>
+          <text x="81" y="48" font-family="'DM Mono', monospace" font-size="9.5" font-weight="300" letter-spacing="2.8" fill="#888780">MULTIPROTOCOL · AI SERVER</text>
+        </svg>
+        <!-- Light logo -->
+        <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 64" class="w-full mb-1">
+          <rect x="0" y="38" width="62" height="3.5" rx="1.75" fill="#0F6E56"/>
+          <rect x="10" y="10" width="3.5" height="32" rx="1.75" fill="#0F6E56"/>
+          <rect x="48.5" y="10" width="3.5" height="32" rx="1.75" fill="#0F6E56"/>
+          <line x1="11.75" y1="10" x2="0"  y2="40" stroke="#0F6E56" stroke-width="2" stroke-linecap="round"/>
+          <line x1="11.75" y1="10" x2="31" y2="40" stroke="#0F6E56" stroke-width="2" stroke-linecap="round"/>
+          <line x1="50.25" y1="10" x2="31" y2="40" stroke="#0F6E56" stroke-width="2" stroke-linecap="round"/>
+          <line x1="50.25" y1="10" x2="62" y2="40" stroke="#0F6E56" stroke-width="2" stroke-linecap="round"/>
+          <line x1="18" y1="19" x2="18" y2="38" stroke="#0F6E56" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+          <line x1="25" y1="13" x2="25" y2="38" stroke="#0F6E56" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+          <line x1="37" y1="13" x2="37" y2="38" stroke="#0F6E56" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+          <line x1="44" y1="19" x2="44" y2="38" stroke="#0F6E56" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+          <text x="80" y="30" font-family="'DM Mono', monospace" font-size="28" font-weight="500" letter-spacing="-0.4" fill="#1a1a18">open bridge</text>
+          <text x="81" y="48" font-family="'DM Mono', monospace" font-size="9.5" font-weight="300" letter-spacing="2.8" fill="#5F5E5A">MULTIPROTOCOL · AI SERVER</text>
+        </svg>
         <div class="text-sm text-gray-400 dark:text-gray-500">Visualisierung · Anmeldung</div>
       </div>
 

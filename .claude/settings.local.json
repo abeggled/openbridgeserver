@@ -157,7 +157,12 @@
       "Bash(tee \"C:/Users/DanielAbegglen/AppData/Local/Temp/diffstat51.txt\")",
       "Bash(tee \"C:/Users/DanielAbegglen/AppData/Local/Temp/addout.txt\")",
       "Bash(git mv:*)",
-      "Bash(python3 -c \":*)"
+      "Bash(python3 -c \":*)",
+      "Bash(find /c/Users/DanielAbegglen/OneDrive/Hausbau/Elektro/KNX/openbridgeserver -name README* -o -name *.html -o -name *.md)",
+      "Bash(grep -E \"\\\\.\\(svg|png|jpg|jpeg|gif\\)$\")",
+      "Bash(find C:/Users/DanielAbegglen/OneDrive/Hausbau/Elektro/KNX/openbridgeserver -type f \\\\\\(-name *.svg -o -name *.png -o -name *.jpg -o -name *.jpeg -o -name *.gif -o -name *.ico \\\\\\))",
+      "Bash(find C:/Users/DanielAbegglen/OneDrive/Hausbau/Elektro/KNX/openbridgeserver -type f -name *.svg)",
+      "Bash(/dev/null -type f)"
     ]
   }
 }

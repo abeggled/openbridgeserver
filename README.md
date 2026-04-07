@@ -1,6 +1,6 @@
 # open bridge multiprotocol ai server
 
-![open bridge server Logo](logo/obs_logo_light.svg)
+![open bridge server Logo](logo/obs_logo_dark.svg)
 
 **Offene Gebäudeautomations-Plattform — verbindet KNX, Modbus, MQTT und mehr**
 
