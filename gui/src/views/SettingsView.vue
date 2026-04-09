@@ -426,7 +426,7 @@
             :checked="iconsSelected.has(icon.name)"
             @change="iconsToggle(icon.name)" />
           <!-- SVG rendered in black, fill overridden via CSS -->
-          <div class="w-10 h-10 flex items-center justify-center [&_svg]:w-full [&_svg]:h-full [&_*]:fill-slate-800 dark:[&_*]:fill-slate-100 [&_*]:stroke-none"
+          <div class="w-10 h-10 flex items-center justify-center [&_svg]:w-full [&_svg]:h-full brightness-0 dark:invert"
             v-html="icon.content" />
           <span class="text-xs text-slate-500 dark:text-slate-400 truncate w-full text-center">{{ icon.name }}</span>
           <div v-if="iconsSelected.has(icon.name)"
