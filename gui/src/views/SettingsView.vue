@@ -479,9 +479,20 @@
         <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">FontAwesome importieren</h3></div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-400">
-            Icons direkt von FontAwesome importieren. Ohne API Key werden kostenlose Icons (Free-Tier) verwendet.
-            Mit API Key stehen PRO-Icons zur Verfügung.
+            Icons direkt von FontAwesome 7 Free importieren. Ohne API Key werden kostenlose Icons verwendet,
+            mit API Key stehen PRO-Icons zur Verfügung.
           </p>
+          <div class="flex items-start gap-2 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-xs text-blue-400">
+            <svg class="w-3.5 h-3.5 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 3a9 9 0 110 18A9 9 0 0112 3z"/></svg>
+            <span>
+              <strong>FontAwesome 7 Namen verwenden</strong> — seit FA&nbsp;6 wurden viele Icons umbenannt
+              (z.&nbsp;B. <code class="font-mono bg-blue-500/10 px-1 rounded">question-circle</code> →
+              <code class="font-mono bg-blue-500/10 px-1 rounded">circle-question</code>).
+              Gängige FA&nbsp;5-Namen werden automatisch erkannt und umgewandelt.
+              <a href="https://fontawesome.com/icons" target="_blank" rel="noopener"
+                class="underline ml-1 hover:text-blue-300">Icons suchen ↗</a>
+            </span>
+          </div>
           <div class="form-group">
             <label class="label">Icon-Namen (kommagetrennt)</label>
             <input v-model="faIconNames" type="text" class="input text-sm font-mono"

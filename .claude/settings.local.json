@@ -180,7 +180,12 @@
       "Bash(python -c \"import subprocess; r = subprocess.run\\([''where'', ''python''], capture_output=True, text=True\\); open\\(''C:/Temp/obs_out.txt'', ''w''\\).write\\(r.stdout + r.stderr\\)\")",
       "Bash(npm run:*)",
       "Bash(powershell -Command \"Set-Location ''C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\openbridgeserver\\\\gui''; npm run build 2>&1 | Out-String\")",
-      "Bash(powershell -Command \"Get-ChildItem ''C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\openbridgeserver\\\\gui_dist'' | Sort-Object LastWriteTime -Descending | Select-Object -First 5 | Format-Table Name, LastWriteTime\")"
+      "Bash(powershell -Command \"Get-ChildItem ''C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\openbridgeserver\\\\gui_dist'' | Sort-Object LastWriteTime -Descending | Select-Object -First 5 | Format-Table Name, LastWriteTime\")",
+      "WebSearch",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:unpkg.com)",
+      "WebFetch(domain:app.unpkg.com)",
+      "WebFetch(domain:docs.fontawesome.com)"
     ]
   }
 }

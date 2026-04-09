@@ -27,6 +27,50 @@ router = APIRouter(tags=["icons"])
 
 _SVG_RE = re.compile(rb"<svg[\s>]", re.IGNORECASE)
 
+# ---------------------------------------------------------------------------
+# FontAwesome 5 → FontAwesome 6 icon name aliases
+# Many FA5 icons were renamed in FA6 (word order reversed for shape-based names).
+# The backend tries the user-supplied name first, then falls back to these aliases.
+# ---------------------------------------------------------------------------
+_FA5_TO_FA6: dict[str, str] = {
+    "question-circle":       "circle-question",
+    "check-circle":          "circle-check",
+    "times-circle":          "circle-xmark",
+    "exclamation-circle":    "circle-exclamation",
+    "info-circle":           "circle-info",
+    "plus-circle":           "circle-plus",
+    "minus-circle":          "circle-minus",
+    "dot-circle":            "circle-dot",
+    "play-circle":           "circle-play",
+    "pause-circle":          "circle-pause",
+    "stop-circle":           "circle-stop",
+    "arrow-circle-left":     "circle-arrow-left",
+    "arrow-circle-right":    "circle-arrow-right",
+    "arrow-circle-up":       "circle-arrow-up",
+    "arrow-circle-down":     "circle-arrow-down",
+    "arrow-alt-circle-left":  "circle-left",
+    "arrow-alt-circle-right": "circle-right",
+    "arrow-alt-circle-up":    "circle-up",
+    "arrow-alt-circle-down":  "circle-down",
+    "cog":                   "gear",
+    "cogs":                  "gears",
+    "home":                  "house",
+    "times":                 "xmark",
+    "trash-alt":             "trash-can",
+    "edit":                  "pen-to-square",
+    "external-link-alt":     "arrow-up-right-from-square",
+    "sign-out-alt":          "right-from-bracket",
+    "sign-in-alt":           "right-to-bracket",
+    "save":                  "floppy-disk",
+    "search":                "magnifying-glass",
+    "phone-alt":             "phone-flip",
+    "calendar-alt":          "calendar-days",
+    "map-marker-alt":        "location-dot",
+    "thumbtack":             "thumbtack",  # unchanged — explicit for clarity
+    "sort-up":               "sort-up",    # unchanged
+    "sort-down":             "sort-down",  # unchanged
+}
+
 
 # ---------------------------------------------------------------------------
 # Storage helpers
@@ -314,20 +358,28 @@ async def import_fontawesome(
                 except Exception:
                     pass
             else:
-                # --- Free CDN (FontAwesome 6 Free) ---
+                # --- Free CDN: unpkg (@fortawesome/fontawesome-free) ---
                 style_path = {"solid": "solid", "regular": "regular", "brands": "brands"}.get(
                     style, "solid"
                 )
-                url = (
-                    f"https://site-assets.fontawesome.com/releases/v6.5.1"
-                    f"/svgs/{style_path}/{icon_name}.svg"
-                )
-                try:
-                    resp = await http.get(url)
-                    if resp.status_code == 200 and _is_svg(resp.content):
-                        svg_bytes = resp.content
-                except Exception:
-                    pass
+                _CDN = "https://unpkg.com/@fortawesome/fontawesome-free@7.2.0/svgs"
+
+                async def _fetch_fa_svg(name: str) -> bytes | None:
+                    url = f"{_CDN}/{style_path}/{name}.svg"
+                    try:
+                        r = await http.get(url)
+                        if r.status_code == 200 and _is_svg(r.content):
+                            return r.content
+                    except Exception:
+                        pass
+                    return None
+
+                # 1st attempt: exact name as supplied
+                svg_bytes = await _fetch_fa_svg(icon_name)
+
+                # 2nd attempt: FA5 → FA6 alias fallback
+                if svg_bytes is None and icon_name in _FA5_TO_FA6:
+                    svg_bytes = await _fetch_fa_svg(_FA5_TO_FA6[icon_name])
 
             if svg_bytes and _is_svg(svg_bytes):
                 (icons_dir / f"{safe}.svg").write_bytes(svg_bytes)
