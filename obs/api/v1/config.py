@@ -130,6 +130,7 @@ class ResetResult(BaseModel):
     adapter_instances_deleted: int
     knx_group_addresses_deleted: int
     logic_graphs_deleted: int
+    icons_deleted: int = 0
     errors: list[str]
 
 
@@ -565,6 +566,24 @@ async def factory_reset(
         await db.execute_and_commit("DELETE FROM knx_group_addresses")
     except Exception as exc:
         result.errors.append(f"KNX group addresses reset failed: {exc}")
+
+    # Icons (SVG-Dateien) löschen
+    try:
+        from obs.api.v1.icons import _icons_dir
+        icons_dir = _icons_dir()
+        for svg_file in list(icons_dir.glob("*.svg")):
+            svg_file.unlink()
+            result.icons_deleted += 1
+    except Exception as exc:
+        result.errors.append(f"Icons reset failed: {exc}")
+
+    # FontAwesome API Key löschen
+    try:
+        await db.execute_and_commit(
+            "DELETE FROM app_settings WHERE key = 'icons.fontawesome_api_key'"
+        )
+    except Exception as exc:
+        result.errors.append(f"FA API Key reset failed: {exc}")
 
     return result
 

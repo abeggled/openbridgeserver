@@ -606,7 +606,7 @@
           <div class="p-5 flex items-start justify-between gap-4">
             <div>
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Zurücksetzen auf Werkseinstellungen</p>
-              <p class="text-xs text-slate-500 mt-1">Löscht alles — Objekte, Verknüpfungen, Adapter, KNX-GAs und Logikblätter. Benutzerkonten bleiben erhalten.</p>
+              <p class="text-xs text-slate-500 mt-1">Löscht alles — Objekte, Verknüpfungen, Adapter, KNX-GAs, Logikblätter, Icons und den FontAwesome API Key. Benutzerkonten bleiben erhalten.</p>
             </div>
             <button @click="showConfirm('all')" class="btn-danger btn-sm shrink-0">Alles löschen</button>
           </div>
@@ -1134,13 +1134,14 @@ const DZ_CONFIG = {
   },
   all: {
     title:   'Zurücksetzen auf Werkseinstellungen',
-    message: 'Alle Objekte, Verknüpfungen, Adapter-Instanzen, KNX-Gruppenadressen und Logikblätter werden unwiderruflich gelöscht. Fortfahren?',
+    message: 'Alle Objekte, Verknüpfungen, Adapter-Instanzen, KNX-Gruppenadressen, Logikblätter, Icons und der FontAwesome API Key werden unwiderruflich gelöscht. Benutzerkonten bleiben erhalten. Fortfahren?',
     label:   'Alles löschen',
     action:  async () => {
       const { data } = await configApi.reset()
-      return `Zurückgesetzt: ${data.datapoints_deleted} Objekte, ${data.bindings_deleted} Verknüpfungen, ${data.adapter_instances_deleted} Adapter, ${data.knx_group_addresses_deleted} KNX-GAs, ${data.logic_graphs_deleted} Logikblätter gelöscht.`
+      const iconInfo = (data.icons_deleted ?? 0) > 0 ? `, ${data.icons_deleted} Icons` : ''
+      return `Zurückgesetzt: ${data.datapoints_deleted} Objekte, ${data.bindings_deleted} Verknüpfungen, ${data.adapter_instances_deleted} Adapter, ${data.knx_group_addresses_deleted} KNX-GAs, ${data.logic_graphs_deleted} Logikblätter${iconInfo} gelöscht.`
     },
-    after: () => { knxGaCount.value = 0 },
+    after: () => { knxGaCount.value = 0; faSavedKey.value = null; icons.value = [] },
   },
 }
 
