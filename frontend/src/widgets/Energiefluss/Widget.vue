@@ -64,7 +64,7 @@ watch(
       if (svgDataUrls.value[name]) continue
       const svg = await getSvg(name)
       if (svg) {
-        svgDataUrls.value[name] = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`
+        svgDataUrls.value[name] = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
       }
     }
   },

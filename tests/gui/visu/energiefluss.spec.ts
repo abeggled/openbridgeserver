@@ -274,7 +274,7 @@ test('Energiefluss: importiertes SVG-Icon wird als <image> im SVG-Canvas gerende
     // SVG icon must be rendered as an <image> element, not a <text>
     const svgImage = widget.locator('[data-testid="ef-svgicon-0"]')
     await expect(svgImage).toBeVisible({ timeout: 3_000 })
-    await expect(svgImage).toHaveAttribute('href', /^data:image\/svg\+xml;base64,/)
+    await expect(svgImage).toHaveAttribute('href', /^data:image\/svg\+xml;charset=utf-8,/)
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
     await apiDelete(`/api/v1/datapoints/${dp.id}`)

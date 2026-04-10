@@ -300,18 +300,19 @@ export const adapters = {
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
-export const icons = {
-  list: () => request<string[]>('/icons/'),
+export interface IconOut {
+  name: string
+  size: number
+  content: string  // inline SVG UTF-8
+}
 
-  getSvg(name: string): Promise<string> {
-    const jwt = getJwt()
-    const headers: Record<string, string> = {}
-    if (jwt) headers['Authorization'] = `Bearer ${jwt}`
-    return fetch(`${BASE}/icons/${name}`, { headers }).then((r) => {
-      if (!r.ok) throw new Error(r.statusText)
-      return r.text()
-    })
-  },
+export interface IconListOut {
+  total: number
+  icons: IconOut[]
+}
+
+export const icons = {
+  list: () => request<IconListOut>('/icons/'),
 }
 
 // ── History ───────────────────────────────────────────────────────────────────
