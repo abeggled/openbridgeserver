@@ -19,7 +19,6 @@ import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
-from werkzeug.utils import secure_filename
 
 from obs.api.auth import get_current_user
 from obs.config import get_settings
@@ -28,6 +27,18 @@ from obs.db.database import Database, get_db
 router = APIRouter(tags=["icons"])
 
 _SVG_RE = re.compile(rb"<svg[\s>]", re.IGNORECASE)
+
+
+def _secure_filename(filename: str) -> str:
+    """
+    Minimal werkzeug-free secure_filename:
+    strips path separators, keeps only alphanumeric, hyphens, underscores, dots,
+    and strips leading dots/underscores. Returns '' for empty/unsafe input.
+    """
+    filename = filename.strip().replace("/", "_").replace("\\", "_").replace("\x00", "")
+    filename = re.sub(r"[^\w.\-]", "_", filename, flags=re.ASCII)
+    filename = filename.lstrip("._")
+    return filename
 
 # ---------------------------------------------------------------------------
 # FontAwesome 5 → FontAwesome 6 icon name aliases
@@ -310,7 +321,7 @@ async def delete_icons(
                 status.HTTP_400_BAD_REQUEST,
                 f"Ungültiger Icon-Name: {name!r}",
             )
-        safe_name = secure_filename(name)
+        safe_name = _secure_filename(name)
         if not safe_name or safe_name != name:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
@@ -386,7 +397,7 @@ async def get_icon(
             "Ungültiger Icon-Name",
         )
 
-    safe_name = secure_filename(name)
+    safe_name = _secure_filename(name)
     if not safe_name or safe_name != name:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -647,7 +658,7 @@ async def import_fontawesome(
             if svg_bytes and _is_svg(svg_bytes):
                 # Dateiname enthält Style → kein gegenseitiges Überschreiben
                 raw_filename = f"{safe}-{style}.svg"
-                filename = secure_filename(raw_filename)
+                filename = _secure_filename(raw_filename)
                 if not filename or not filename.endswith(".svg"):
                     skipped += 1
                     continue
