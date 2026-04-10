@@ -189,7 +189,8 @@
       "Bash(Remove-Item -Recurse -Force 'C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\openbridgeserver\\\\gui\\\\tests' -ErrorAction SilentlyContinue)",
       "Bash(Remove-Item -Force 'C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\openbridgeserver\\\\gui\\\\vitest.config.js' -ErrorAction SilentlyContinue)",
       "Bash(Write-Host 'done')",
-      "WebFetch(domain:fontawesome.com)"
+      "WebFetch(domain:fontawesome.com)",
+      "Bash(grep -c \"def test_\" \"C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\openbridgeserver/tests/unit\"/*.py)"
     ]
   }
 }

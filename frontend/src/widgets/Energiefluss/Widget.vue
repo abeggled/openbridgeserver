@@ -226,6 +226,7 @@ function animDur(power: number): string {
         v-for="(d, i) in displays"
         v-show="d.active"
         :key="`ef-dot-${i}`"
+        :data-testid="`ef-dot-${i}`"
         r="3.5"
         :fill="d.color"
       >
@@ -296,6 +297,7 @@ function animDur(power: number): string {
           dominant-baseline="auto"
           font-size="8"
           :fill="d.active ? d.color : '#6b7280'"
+          :data-testid="`ef-value-${i}`"
         >{{ d.displayValue }}</text>
       </g>
     </svg>
