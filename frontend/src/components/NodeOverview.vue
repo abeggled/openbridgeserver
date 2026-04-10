@@ -6,6 +6,7 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
 import type { VisuNode, AccessLevel } from '@/types'
+import VisuIcon from '@/components/VisuIcon.vue'
 
 const props = defineProps<{ nodeId: string }>()
 const router = useRouter()
@@ -69,7 +70,7 @@ function accessBadge(node: VisuNode): { icon: string; label: string; cls: string
         :title="accessBadge(child)!.label"
       >{{ accessBadge(child)!.icon }}</span>
 
-      <span class="text-4xl">{{ child.icon ?? (child.type === 'PAGE' ? '📄' : '📁') }}</span>
+      <span class="text-4xl"><VisuIcon :icon="child.icon ?? (child.type === 'PAGE' ? '📄' : '📁')" /></span>
       <span class="text-sm font-medium text-gray-700 dark:text-gray-200 text-center leading-tight group-hover:text-gray-900 dark:group-hover:text-white">
         {{ child.name }}
       </span>

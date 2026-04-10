@@ -4,6 +4,7 @@ import { useVisuStore } from '@/stores/visu'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import type { VisuNode } from '@/types'
+import VisuIcon from '@/components/VisuIcon.vue'
 
 const store = useVisuStore()
 const { breadcrumb, isLoggedIn } = storeToRefs(store)
@@ -103,7 +104,7 @@ function accessIcon(node: VisuNode): string {
               class="w-full text-left flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-gray-700 dark:text-gray-300"
               @click="navigate(child)"
             >
-              <span>{{ child.icon ?? (child.type === 'PAGE' ? '📄' : '📁') }}</span>
+              <span><VisuIcon :icon="child.icon ?? (child.type === 'PAGE' ? '📄' : '📁')" /></span>
               <span class="truncate flex-1">{{ child.name }}</span>
               <span v-if="accessIcon(child)" class="text-xs opacity-60">{{ accessIcon(child) }}</span>
             </button>

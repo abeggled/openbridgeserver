@@ -6,6 +6,7 @@ import { useThemeStore } from '@/stores/theme'
 import type { VisuNode } from '@/types'
 import { storeToRefs } from 'pinia'
 import AuthButton from '@/components/AuthButton.vue'
+import VisuIcon from '@/components/VisuIcon.vue'
 
 const store = useVisuStore()
 const { rootNodes, isAdmin } = storeToRefs(store)
@@ -86,7 +87,7 @@ function navigate(node: VisuNode) {
           class="flex flex-col items-center justify-center gap-3 p-6 rounded-xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:border-blue-500 transition-all group"
           @click="navigate(node)"
         >
-          <span class="text-4xl">{{ node.icon ?? (node.type === 'PAGE' ? '📄' : '🏠') }}</span>
+          <span class="text-4xl"><VisuIcon :icon="node.icon ?? (node.type === 'PAGE' ? '📄' : '🏠')" /></span>
           <span class="text-sm font-medium text-gray-700 dark:text-gray-200 text-center leading-tight group-hover:text-gray-900 dark:group-hover:text-white">
             {{ node.name }}
           </span>
