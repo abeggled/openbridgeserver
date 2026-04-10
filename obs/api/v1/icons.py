@@ -326,16 +326,127 @@ async def get_icon(
     return Response(content=svg_file.read_bytes(), media_type="image/svg+xml")
 
 
+_FA_GRAPHQL_URL = "https://api.fontawesome.com"
+_FA_CDN = "https://unpkg.com/@fortawesome/fontawesome-free@7.2.0/svgs"
+
+
+async def _fa_exchange_token(http: httpx.AsyncClient, api_key: str) -> str | None:
+    """
+    Tauscht einen FontAwesome API-Key gegen einen kurzlebigen Access-Token.
+    POST https://api.fontawesome.com/token  (OAuth2 Bearer)
+    Gibt None zurück wenn der Austausch scheitert.
+    """
+    try:
+        resp = await http.post(
+            f"{_FA_GRAPHQL_URL}/token",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        if resp.status_code == 200:
+            return resp.json().get("access_token")
+    except Exception:
+        pass
+    return None
+
+
+async def _fa_graphql_svg(
+    http: httpx.AsyncClient,
+    access_token: str,
+    icon_name: str,
+    style: str,
+) -> bytes | None:
+    """
+    Ruft das fertige SVG-HTML eines Icons über die FontAwesome GraphQL API ab.
+    Gibt None zurück wenn das Icon nicht gefunden wurde oder der Scope fehlt.
+
+    Die `html`-Field liefert ein komplettes <svg>…</svg>-Element.
+    Ohne ausreichende Scopes (svg_icons_free / svg_icons_pro) gibt FA null zurück.
+    """
+    # familyStyle: z.B. {"family": "classic", "style": "solid"}
+    family_style_map = {
+        "solid":   {"family": "CLASSIC", "style": "SOLID"},
+        "regular": {"family": "CLASSIC", "style": "REGULAR"},
+        "brands":  {"family": "BRANDS",  "style": "BRANDS"},
+        "light":   {"family": "CLASSIC", "style": "LIGHT"},
+        "thin":    {"family": "CLASSIC", "style": "THIN"},
+        "duotone": {"family": "DUOTONE", "style": "SOLID"},
+    }
+    fs = family_style_map.get(style, {"family": "CLASSIC", "style": "SOLID"})
+
+    query = """
+    query GetIcon($id: String!, $family: String!, $style: String!) {
+      release {
+        icon(id: $id) {
+          svgs(familyStyle: {family: $family, style: $style}) {
+            html
+          }
+        }
+      }
+    }
+    """
+    try:
+        resp = await http.post(
+            f"{_FA_GRAPHQL_URL}/graphql",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json={"query": query, "variables": {"id": icon_name, **fs}},
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        svgs = (
+            data.get("data", {})
+            .get("release", {})
+            .get("icon", {})
+            .get("svgs", [])
+        )
+        if svgs and svgs[0].get("html"):
+            return svgs[0]["html"].encode()
+    except Exception:
+        pass
+    return None
+
+
+async def _fa_cdn_svg(
+    http: httpx.AsyncClient,
+    icon_name: str,
+    style: str,
+) -> bytes | None:
+    """
+    Lädt ein Icon vom öffentlichen unpkg-CDN (FontAwesome Free).
+    Versucht automatisch den FA5→FA6-Alias wenn der erste Aufruf fehlschlägt.
+    """
+    style_path = {"solid": "solid", "regular": "regular", "brands": "brands"}.get(style, "solid")
+
+    async def _fetch(name: str) -> bytes | None:
+        try:
+            r = await http.get(f"{_FA_CDN}/{style_path}/{name}.svg")
+            if r.status_code == 200 and _is_svg(r.content):
+                return r.content
+        except Exception:
+            pass
+        return None
+
+    svg = await _fetch(icon_name)
+    if svg is None and icon_name in _FA5_TO_FA6:
+        svg = await _fetch(_FA5_TO_FA6[icon_name])
+    return svg
+
+
 @router.post("/fontawesome", response_model=ImportResult)
 async def import_fontawesome(
     body: FontAwesomeRequest,
     _user: str = Depends(get_current_user),
 ) -> ImportResult:
     """
-    Import icons from FontAwesome.
+    Icons von FontAwesome importieren.
 
-    Free mode (no api_key): fetches from the public FontAwesome CDN.
-    PRO mode (api_key provided): uses the FontAwesome Pro API.
+    Ohne api_key: Free-CDN (unpkg, FontAwesome 7 Free).
+    Mit api_key:  1. Token-Exchange gegen api.fontawesome.com/token
+                  2. GraphQL-Abfrage für das Icon (PRO + Free je nach Scope)
+                  3. Fallback auf Free-CDN wenn GraphQL kein Ergebnis liefert
+                     (z.B. api_key hat nur svg_icons_free-Scope)
     """
     if not body.icons:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Keine Icons angegeben")
@@ -347,6 +458,11 @@ async def import_fontawesome(
     style = body.style if body.style in valid_styles else "solid"
 
     async with httpx.AsyncClient(timeout=15.0) as http:
+        # PRO: einmalig Token tauschen (nicht pro Icon)
+        access_token: str | None = None
+        if body.api_key:
+            access_token = await _fa_exchange_token(http, body.api_key)
+
         for icon_name in body.icons:
             safe = _safe_name(icon_name)
             if not safe:
@@ -355,50 +471,16 @@ async def import_fontawesome(
 
             svg_bytes: bytes | None = None
 
-            if body.api_key:
-                # --- PRO API ---
-                headers = {
-                    "Authorization": f"Bearer {body.api_key}",
-                    "Accept": "application/json",
-                }
-                url = f"https://api.fontawesome.com/icons/{icon_name}"
-                try:
-                    resp = await http.get(url, headers=headers, params={"style": style})
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        icon_data = data.get("icon", {})
-                        svg_path_data = icon_data.get("svgPathData", "")
-                        viewbox = icon_data.get("viewBox", "0 0 512 512")
-                        if svg_path_data:
-                            svg_bytes = (
-                                f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{viewbox}">'
-                                f'<path d="{svg_path_data}"/></svg>'
-                            ).encode()
-                except Exception:
-                    pass
-            else:
-                # --- Free CDN: unpkg (@fortawesome/fontawesome-free) ---
-                style_path = {"solid": "solid", "regular": "regular", "brands": "brands"}.get(
-                    style, "solid"
-                )
-                _CDN = "https://unpkg.com/@fortawesome/fontawesome-free@7.2.0/svgs"
-
-                async def _fetch_fa_svg(name: str) -> bytes | None:
-                    url = f"{_CDN}/{style_path}/{name}.svg"
-                    try:
-                        r = await http.get(url)
-                        if r.status_code == 200 and _is_svg(r.content):
-                            return r.content
-                    except Exception:
-                        pass
-                    return None
-
-                # 1st attempt: exact name as supplied
-                svg_bytes = await _fetch_fa_svg(icon_name)
-
-                # 2nd attempt: FA5 → FA6 alias fallback
+            # 1. Versuch: GraphQL (wenn Access-Token vorhanden)
+            if access_token:
+                svg_bytes = await _fa_graphql_svg(http, access_token, icon_name, style)
+                # FA5-Alias-Fallback für GraphQL
                 if svg_bytes is None and icon_name in _FA5_TO_FA6:
-                    svg_bytes = await _fetch_fa_svg(_FA5_TO_FA6[icon_name])
+                    svg_bytes = await _fa_graphql_svg(http, access_token, _FA5_TO_FA6[icon_name], style)
+
+            # 2. Versuch: Free-CDN (immer, auch wenn api_key gesetzt aber GraphQL erfolglos)
+            if svg_bytes is None:
+                svg_bytes = await _fa_cdn_svg(http, icon_name, style)
 
             if svg_bytes and _is_svg(svg_bytes):
                 (icons_dir / f"{safe}.svg").write_bytes(svg_bytes)
