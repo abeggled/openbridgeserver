@@ -391,13 +391,14 @@ async def _fa_exchange_token(
             f"{_FA_GRAPHQL_URL}/token",
             headers={"Authorization": f"Bearer {api_key}"},
         )
-        dbg.append(f"[token-exchange] HTTP {resp.status_code}: {resp.text[:500]}")
+        # dbg.append(f"[token-exchange] HTTP {resp.status_code}: {resp.text[:500]}")
         if resp.status_code == 200:
             token = resp.json().get("access_token")
-            dbg.append(f"[token-exchange] access_token erhalten: {'ja' if token else 'NEIN (Feld fehlt)'}")
+            # dbg.append(f"[token-exchange] access_token erhalten: {'ja' if token else 'NEIN (Feld fehlt)'}")
             return token
     except Exception as exc:
-        dbg.append(f"[token-exchange] Exception: {exc}")
+        # dbg.append(f"[token-exchange] Exception: {exc}")
+        pass
     return None
 
 
@@ -417,21 +418,22 @@ async def _fa_get_version(
             headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
             json={"query": query},
         )
-        dbg.append(f"[version-discovery] HTTP {resp.status_code}: {resp.text[:400]}")
+        # dbg.append(f"[version-discovery] HTTP {resp.status_code}: {resp.text[:400]}")
         if resp.status_code == 200:
             releases = resp.json().get("data", {}).get("releases") or []
             # isLatest == True bevorzugen, sonst neueste
             for r in releases:
                 if r.get("isLatest"):
-                    dbg.append(f"[version-discovery] isLatest → {r['version']}")
+                    # dbg.append(f"[version-discovery] isLatest → {r['version']}")
                     return r["version"]
             if releases:
                 v = releases[0]["version"]
-                dbg.append(f"[version-discovery] erstes Release → {v}")
+                # dbg.append(f"[version-discovery] erstes Release → {v}")
                 return v
     except Exception as exc:
-        dbg.append(f"[version-discovery] Exception: {exc}")
-    dbg.append("[version-discovery] Fallback → 7.2.0")
+        # dbg.append(f"[version-discovery] Exception: {exc}")
+        pass
+    # dbg.append("[version-discovery] Fallback → 7.2.0")
     return "7.2.0"
 
 
@@ -472,7 +474,7 @@ async def _fa_graphql_svg(
             },
             json={"query": query, "variables": {"version": version, "name": icon_name}},
         )
-        dbg.append(f"[graphql:{icon_name}] HTTP {resp.status_code}: {resp.text[:800]}")
+        # dbg.append(f"[graphql:{icon_name}] HTTP {resp.status_code}: {resp.text[:800]}")
         if resp.status_code != 200:
             return None
         data = resp.json()
@@ -482,10 +484,10 @@ async def _fa_graphql_svg(
             .get("icon")
         )
         if not icon_data:
-            dbg.append(f"[graphql:{icon_name}] icon=null (kein Icon unter dieser ID/Version)")
+            # dbg.append(f"[graphql:{icon_name}] icon=null (kein Icon unter dieser ID/Version)")
             return None
         svgs: list = icon_data.get("svgs") or []
-        dbg.append(f"[graphql:{icon_name}] {len(svgs)} SVG(s): {[s.get('familyStyle') for s in svgs]}")
+        # dbg.append(f"[graphql:{icon_name}] {len(svgs)} SVG(s): {[s.get('familyStyle') for s in svgs]}")
 
         # 1. Exakter Style-Match (case-insensitive)
         target = style.lower()
@@ -497,11 +499,12 @@ async def _fa_graphql_svg(
         # 2. Fallback: erstes verfügbares SVG des Icons
         for item in svgs:
             if item.get("html"):
-                dbg.append(f"[graphql:{icon_name}] kein '{style}' → Fallback auf {item.get('familyStyle')}")
+                # dbg.append(f"[graphql:{icon_name}] kein '{style}' → Fallback auf {item.get('familyStyle')}")
                 return item["html"].encode()
 
     except Exception as exc:
-        dbg.append(f"[graphql:{icon_name}] Exception: {exc}")
+        # dbg.append(f"[graphql:{icon_name}] Exception: {exc}")
+        pass
     return None
 
 
@@ -565,25 +568,25 @@ async def import_fontawesome(
         )
         if row:
             effective_key = row["value"]
-            dbg.append(f"[config] api_key aus DB geladen (Länge {len(effective_key)})")
+            # dbg.append(f"[config] api_key aus DB geladen (Länge {len(effective_key)})")
 
     async with httpx.AsyncClient(timeout=15.0) as http:
         # PRO: einmalig Token tauschen (nicht pro Icon)
         access_token: str | None = None
         fa_version: str = "7.2.0"
         if effective_key:
-            dbg.append(f"[config] api_key gesetzt (Länge {len(effective_key)}), starte Token-Exchange …")
+            # dbg.append(f"[config] api_key gesetzt (Länge {len(effective_key)}), starte Token-Exchange …")
             access_token = await _fa_exchange_token(http, effective_key, dbg)
             if access_token:
                 fa_version = await _fa_get_version(http, access_token, dbg)
         else:
-            dbg.append("[config] kein api_key → nur Free-CDN")
+            pass  # dbg.append("[config] kein api_key → nur Free-CDN")
 
         for icon_name in body.icons:
             safe = _safe_name(icon_name)
             if not safe:
                 skipped += 1
-                dbg.append(f"[icon:{icon_name}] ungültiger Name → übersprungen")
+                # dbg.append(f"[icon:{icon_name}] ungültiger Name → übersprungen")
                 continue
 
             svg_bytes: bytes | None = None
@@ -598,7 +601,7 @@ async def import_fontawesome(
             # 2. Versuch: Free-CDN (immer, auch wenn api_key gesetzt aber GraphQL erfolglos)
             if svg_bytes is None:
                 cdn_result = await _fa_cdn_svg(http, icon_name, style)
-                dbg.append(f"[cdn:{icon_name}] {'gefunden' if cdn_result else 'NICHT gefunden'}")
+                # dbg.append(f"[cdn:{icon_name}] {'gefunden' if cdn_result else 'NICHT gefunden'}")
                 svg_bytes = cdn_result
 
             if svg_bytes and _is_svg(svg_bytes):
@@ -613,7 +616,7 @@ async def import_fontawesome(
         imported=len(imported),
         skipped=skipped,
         names=imported,
-        debug=dbg,
+        debug=[],  # debug=dbg  ← Debug-Ausgabe bei Bedarf wieder aktivieren
         message=(
             f"{len(imported)} FontAwesome Icon(s) importiert"
             + (f", {skipped} nicht gefunden/übersprungen" if skipped else "")
