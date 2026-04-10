@@ -322,7 +322,7 @@ async def test_fontawesome_import_free(client, auth_headers, icons_tmp):
     assert resp.status_code == 200
     body = resp.json()
     assert body["imported"] == 1
-    assert "home" in body["names"]
+    assert "home-solid" in body["names"]  # Dateiname enthält Style seit #89
 
 
 @pytest.mark.asyncio
