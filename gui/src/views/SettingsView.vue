@@ -192,7 +192,7 @@
     <div v-if="activeTab === 'importexport' && !isDemo" class="flex flex-col gap-4 max-w-lg">
       <div class="card p-5 flex flex-col gap-3">
         <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Konfiguration sichern</h3>
-        <p class="text-sm text-slate-400">Alle Objekte, Verknüpfungen, Adapter-Instanzen, KNX-Gruppenadressen und Logikblätter als JSON-Datei sichern.</p>
+        <p class="text-sm text-slate-400">Alle Objekte, Verknüpfungen, Adapter-Instanzen, KNX-Gruppenadressen, Logikblätter, <strong class="text-slate-300">Icons</strong> und den <strong class="text-slate-300">FontAwesome API Key</strong> als JSON-Datei sichern.</p>
         <button @click="doExport" class="btn-secondary">JSON herunterladen</button>
       </div>
       <div class="card p-5 flex flex-col gap-3">
@@ -202,7 +202,7 @@
       </div>
       <div class="card p-5 flex flex-col gap-3">
         <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Sicherung wiederherstellen</h3>
-        <p class="text-sm text-slate-400">Sicherungsdatei einspielen. Bestehende Einträge werden aktualisiert, fehlende neu angelegt.</p>
+        <p class="text-sm text-slate-400">Sicherungsdatei einspielen. Bestehende Einträge werden aktualisiert, fehlende neu angelegt. Icons und FontAwesome API Key werden ebenfalls wiederhergestellt.</p>
         <input type="file" accept=".json" @change="onImportFile" class="text-sm text-slate-400 file:btn-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:text-xs file:border-0 file:cursor-pointer" />
         <div v-if="importResult" :class="['p-3 rounded-lg text-sm', importResult.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">{{ importResult.text }}</div>
       </div>
@@ -1001,7 +1001,11 @@ async function onImportFile(e) {
     const gaInfo    = data.knx_group_addresses_upserted > 0 ? `, ${data.knx_group_addresses_upserted} KNX-GAs` : ''
     const lgTotal   = (data.logic_graphs_created ?? 0) + (data.logic_graphs_updated ?? 0)
     const lgInfo    = lgTotal > 0 ? `, ${lgTotal} Logikblätter` : ''
-    importResult.value = { ok: true, text: `Wiederherstellung OK: ${data.datapoints_created + data.datapoints_updated} Objekte, ${data.bindings_created + data.bindings_updated} Verknüpfungen${gaInfo}${lgInfo}` }
+    const iconInfo  = (data.icons_imported ?? 0) > 0 ? `, ${data.icons_imported} Icons` : ''
+    importResult.value = { ok: true, text: `Wiederherstellung OK: ${data.datapoints_created + data.datapoints_updated} Objekte, ${data.bindings_created + data.bindings_updated} Verknüpfungen${gaInfo}${lgInfo}${iconInfo}` }
+    // FA API Key und Icons nach Wiederherstellung neu laden
+    await loadFaSettings()
+    if ((data.icons_imported ?? 0) > 0) await loadIcons()
   } catch (err) {
     importResult.value = { ok: false, text: err.response?.data?.detail ?? 'Import fehlgeschlagen' }
   }
