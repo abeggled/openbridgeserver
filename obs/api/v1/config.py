@@ -8,6 +8,7 @@ Rückwärtskompatibel: Alter Export mit adapter_configs wird beim Import erkannt
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sqlite3
@@ -28,7 +29,7 @@ from obs.models.binding import AdapterBinding
 
 router = APIRouter(tags=["config"])
 
-_EXPORT_VERSION = "3"
+_EXPORT_VERSION = "4"
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +90,11 @@ class ExportedLogicGraph(BaseModel):
     flow_data: dict
 
 
+class ExportedIcon(BaseModel):
+    name: str           # Stem ohne .svg, z.B. "abacus-solid"
+    content_b64: str    # base64-kodierter SVG-Inhalt
+
+
 class ConfigExport(BaseModel):
     obs_version: str
     exported_at: str
@@ -99,6 +105,9 @@ class ConfigExport(BaseModel):
     logic_graphs: list[ExportedLogicGraph] = []
     # Legacy field (v1) — ignoriert beim Import wenn adapter_instances vorhanden
     adapter_configs: list[ExportedAdapterConfig] = []
+    # Icons & FA-Key (ab Version 4)
+    icons: list[ExportedIcon] = []
+    fa_api_key: str | None = None
 
 
 class ImportResult(BaseModel):
@@ -111,6 +120,7 @@ class ImportResult(BaseModel):
     logic_graphs_created: int
     logic_graphs_updated: int
     adapters_restarted: int
+    icons_imported: int = 0
     errors: list[str]
 
 
@@ -120,6 +130,7 @@ class ResetResult(BaseModel):
     adapter_instances_deleted: int
     knx_group_addresses_deleted: int
     logic_graphs_deleted: int
+    icons_deleted: int = 0
     errors: list[str]
 
 
@@ -211,6 +222,27 @@ async def export_config(
         for r in graph_rows
     ]
 
+    # Icons — alle SVG-Dateien als base64
+    from obs.api.v1.icons import _icons_dir
+    icons: list[ExportedIcon] = []
+    try:
+        for svg_file in sorted(_icons_dir().glob("*.svg")):
+            try:
+                icons.append(ExportedIcon(
+                    name=svg_file.stem,
+                    content_b64=base64.b64encode(svg_file.read_bytes()).decode(),
+                ))
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+    # FontAwesome API Key
+    fa_key_row = await db.fetchone(
+        "SELECT value FROM app_settings WHERE key = 'icons.fontawesome_api_key'"
+    )
+    fa_api_key = fa_key_row["value"] if fa_key_row else None
+
     return ConfigExport(
         obs_version=_EXPORT_VERSION,
         exported_at=datetime.now(timezone.utc).isoformat(),
@@ -219,6 +251,8 @@ async def export_config(
         adapter_instances=adapter_instances,
         knx_group_addresses=knx_group_addresses,
         logic_graphs=logic_graphs,
+        icons=icons,
+        fa_api_key=fa_api_key,
     )
 
 
@@ -440,6 +474,35 @@ async def import_config(
     except Exception as exc:
         result.errors.append(f"Adapter restart failed: {exc}")
 
+    # --- FontAwesome API Key ---
+    if body.fa_api_key:
+        try:
+            await db.execute_and_commit(
+                "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                ("icons.fontawesome_api_key", body.fa_api_key),
+            )
+        except Exception as exc:
+            result.errors.append(f"FA API Key import failed: {exc}")
+
+    # --- Icons ---
+    if body.icons:
+        from obs.api.v1.icons import _icons_dir, _is_svg, _safe_name
+        icons_dir = _icons_dir()
+        for icon in body.icons:
+            try:
+                raw = base64.b64decode(icon.content_b64)
+                if not _is_svg(raw):
+                    result.errors.append(f"Icon '{icon.name}': kein gültiges SVG, übersprungen")
+                    continue
+                safe = _safe_name(f"{icon.name}.svg")
+                if not safe:
+                    result.errors.append(f"Icon '{icon.name}': ungültiger Name, übersprungen")
+                    continue
+                (icons_dir / f"{safe}.svg").write_bytes(raw)
+                result.icons_imported += 1
+            except Exception as exc:
+                result.errors.append(f"Icon '{icon.name}': {exc}")
+
     return result
 
 
@@ -503,6 +566,24 @@ async def factory_reset(
         await db.execute_and_commit("DELETE FROM knx_group_addresses")
     except Exception as exc:
         result.errors.append(f"KNX group addresses reset failed: {exc}")
+
+    # Icons (SVG-Dateien) löschen
+    try:
+        from obs.api.v1.icons import _icons_dir
+        icons_dir = _icons_dir()
+        for svg_file in list(icons_dir.glob("*.svg")):
+            svg_file.unlink()
+            result.icons_deleted += 1
+    except Exception as exc:
+        result.errors.append(f"Icons reset failed: {exc}")
+
+    # FontAwesome API Key löschen
+    try:
+        await db.execute_and_commit(
+            "DELETE FROM app_settings WHERE key = 'icons.fontawesome_api_key'"
+        )
+    except Exception as exc:
+        result.errors.append(f"FA API Key reset failed: {exc}")
 
     return result
 

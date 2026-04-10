@@ -156,6 +156,18 @@ export const configApi = {
   resetAdapters:   ()     => api.delete('/config/reset/adapters'),
 }
 
+// ── Icons Library ─────────────────────────────────────────────────────────
+export const iconsApi = {
+  list:           ()                       => api.get('/icons/'),
+  import:         (formData)               => api.post('/icons/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  get:            (name)                   => api.get(`/icons/${name}`, { responseType: 'text' }),
+  delete:         (names)                  => api.delete('/icons/', { data: { names } }),
+  export:         (names = [])             => api.post('/icons/export', { names }, { responseType: 'blob' }),
+  importFa:       (data)                   => api.post('/icons/fontawesome', data),
+  getSettings:    ()                       => api.get('/icons/settings'),
+  saveSettings:   (data)                   => api.put('/icons/settings', data),
+}
+
 // ── Logic Engine ──────────────────────────────────────────────────────────
 export const logicApi = {
   nodeTypes:   ()           => api.get('/logic/node-types'),

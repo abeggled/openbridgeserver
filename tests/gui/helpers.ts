@@ -38,7 +38,7 @@ function _readTokenFromStorageState(): string | null {
   return null
 }
 
-async function getToken(): Promise<string> {
+export async function getToken(): Promise<string> {
   if (_cachedToken) return _cachedToken
   // Prefer the token saved by auth.setup.ts (no network call, no rate-limit risk)
   _cachedToken = _readTokenFromStorageState()
@@ -111,4 +111,22 @@ export async function apiDelete(path: string): Promise<void> {
   if (!res.ok && res.status !== 404) {
     throw new Error(`DELETE ${path} failed: ${res.status}`)
   }
+}
+
+export async function apiDeleteWithBody(path: string, body: unknown): Promise<unknown> {
+  const token = await getToken()
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok && res.status !== 404) {
+    const text = await res.text()
+    throw new Error(`DELETE ${path} failed: ${res.status} — ${text}`)
+  }
+  if (res.status === 204) return null
+  return res.json()
 }
