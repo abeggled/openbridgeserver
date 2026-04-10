@@ -480,11 +480,14 @@
 
       <!-- FontAwesome Import -->
       <div class="card">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">FontAwesome importieren</h3></div>
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">FontAwesome importieren</h3>
+        </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-400">
             Icons direkt von FontAwesome 7 Free importieren. Ohne API Key werden kostenlose Icons verwendet,
-            mit API Key stehen PRO-Icons zur Verfügung.
+            mit API Key stehen PRO-Icons und zusätzliche Styles zur Verfügung.
+            Der Dateiname enthält automatisch den Style (z.&nbsp;B. <code class="font-mono bg-blue-500/10 px-1 rounded">abacus-solid.svg</code>).
           </p>
           <div class="flex items-start gap-2 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-xs text-blue-400">
             <svg class="w-3.5 h-3.5 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 3a9 9 0 110 18A9 9 0 0112 3z"/></svg>
@@ -497,26 +500,50 @@
                 class="underline ml-1 hover:text-blue-300">Icons suchen ↗</a>
             </span>
           </div>
+
+          <!-- API Key speichern -->
+          <div class="form-group">
+            <label class="label flex items-center gap-2">
+              FontAwesome API Key (PRO)
+              <span v-if="faSavedKey" class="text-xs font-normal px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 border border-green-500/30">Gespeichert</span>
+            </label>
+            <div class="flex gap-2">
+              <input v-model="faApiKey" type="password" class="input text-sm font-mono flex-1"
+                :placeholder="faSavedKey ? '••••••••••••••••••••••••••••••••••••' : 'Leer = Free Tier'"
+                autocomplete="new-password" data-testid="input-fa-apikey" />
+              <button @click="doSaveFaKey" class="btn-secondary btn-sm whitespace-nowrap"
+                :disabled="!faApiKey.trim()" title="API Key speichern">
+                Speichern
+              </button>
+              <button v-if="faSavedKey" @click="doDeleteFaKey" class="btn-danger btn-sm whitespace-nowrap"
+                title="Gespeicherten API Key löschen">
+                Löschen
+              </button>
+            </div>
+            <p class="text-xs text-slate-500 mt-1">Der Key wird persistent gespeichert und bei jedem Import automatisch verwendet.</p>
+          </div>
+
+          <!-- Icon-Namen + Stil -->
           <div class="form-group">
             <label class="label">Icon-Namen (kommagetrennt)</label>
             <input v-model="faIconNames" type="text" class="input text-sm font-mono"
               placeholder="home, star, user, arrow-right" data-testid="input-fa-names" />
           </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="form-group">
-              <label class="label">Stil</label>
-              <select v-model="faStyle" class="input text-sm" data-testid="select-fa-style">
-                <option value="solid">Solid</option>
-                <option value="regular">Regular</option>
-                <option value="brands">Brands</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="label">API Key (optional, für PRO)</label>
-              <input v-model="faApiKey" type="password" class="input text-sm font-mono"
-                placeholder="Leer = Free Tier" autocomplete="new-password" />
-            </div>
+          <div class="form-group">
+            <label class="label">Stil</label>
+            <select v-model="faStyle" class="input text-sm" data-testid="select-fa-style">
+              <option value="solid">Solid</option>
+              <option value="regular">Regular</option>
+              <option value="brands">Brands</option>
+              <template v-if="faSavedKey || faApiKey.trim()">
+                <option disabled class="text-slate-500">── PRO ──</option>
+                <option value="light">Light</option>
+                <option value="thin">Thin</option>
+                <option value="duotone">Duotone</option>
+              </template>
+            </select>
           </div>
+
           <div v-if="faMsg" :class="['p-3 rounded-lg text-sm border', faMsg.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
             {{ faMsg.text }}
             <pre v-if="faMsg.debug?.length" class="mt-2 text-xs opacity-80 whitespace-pre-wrap font-mono bg-black/20 rounded p-2 max-h-64 overflow-auto">{{ faMsg.debug.join('\n') }}</pre>
@@ -763,7 +790,7 @@ onMounted(async () => {
 
 watch(activeTab, (tab) => {
   if (tab === 'history' && auth.isAdmin) loadHistorySettings()
-  if (tab === 'icons') loadIcons()
+  if (tab === 'icons') { loadIcons(); loadFaSettings() }
 })
 
 onUnmounted(() => {
@@ -1157,9 +1184,41 @@ const iconsDragOver = ref(false)
 // FontAwesome form
 const faIconNames = ref('')
 const faStyle     = ref('solid')
-const faApiKey    = ref('')
+const faApiKey    = ref('')       // Eingabefeld (neu eingeben)
+const faSavedKey  = ref(null)     // gespeicherter Key aus DB (null = keiner)
 const faImporting = ref(false)
 const faMsg       = ref(null)
+
+async function loadFaSettings() {
+  try {
+    const { data } = await iconsApi.getSettings()
+    faSavedKey.value = data.fa_api_key || null
+  } catch { /* ignorieren */ }
+}
+
+async function doSaveFaKey() {
+  const key = faApiKey.value.trim()
+  if (!key) return
+  try {
+    await iconsApi.saveSettings({ fa_api_key: key })
+    faSavedKey.value = key
+    faApiKey.value = ''
+    faMsg.value = { ok: true, text: 'API Key gespeichert.', debug: [] }
+  } catch (e) {
+    faMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Speichern', debug: [] }
+  }
+}
+
+async function doDeleteFaKey() {
+  try {
+    await iconsApi.saveSettings({ fa_api_key: null })
+    faSavedKey.value = null
+    faApiKey.value = ''
+    faMsg.value = { ok: true, text: 'API Key gelöscht.', debug: [] }
+  } catch (e) {
+    faMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Löschen', debug: [] }
+  }
+}
 
 const iconsFiltered = computed(() => {
   const q = iconsSearch.value.toLowerCase()

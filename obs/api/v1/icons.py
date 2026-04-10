@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from obs.api.auth import get_current_user
 from obs.config import get_settings
+from obs.db.database import Database, get_db
 
 router = APIRouter(tags=["icons"])
 
@@ -311,6 +312,50 @@ async def delete_icons(
     return {"deleted": len(deleted), "names": deleted, "not_found": not_found}
 
 
+_FA_KEY_SETTING = "icons.fontawesome_api_key"
+
+
+class IconsSettingsOut(BaseModel):
+    fa_api_key: str | None = None       # None = kein Key gespeichert
+
+
+class IconsSettingsIn(BaseModel):
+    fa_api_key: str | None = None       # None / leer = Key löschen
+
+
+@router.get("/settings", response_model=IconsSettingsOut)
+async def get_icons_settings(
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> IconsSettingsOut:
+    """Gibt die gespeicherten Icons-Einstellungen zurück (FA API Key)."""
+    row = await db.fetchone(
+        "SELECT value FROM app_settings WHERE key = ?", (_FA_KEY_SETTING,)
+    )
+    return IconsSettingsOut(fa_api_key=row["value"] if row else None)
+
+
+@router.put("/settings", response_model=IconsSettingsOut)
+async def update_icons_settings(
+    body: IconsSettingsIn,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> IconsSettingsOut:
+    """Speichert oder löscht den FontAwesome API Key."""
+    key = (body.fa_api_key or "").strip()
+    if key:
+        await db.execute_and_commit(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+            (_FA_KEY_SETTING, key),
+        )
+        return IconsSettingsOut(fa_api_key=key)
+    else:
+        await db.execute_and_commit(
+            "DELETE FROM app_settings WHERE key = ?", (_FA_KEY_SETTING,)
+        )
+        return IconsSettingsOut(fa_api_key=None)
+
+
 @router.get("/{name}")
 async def get_icon(
     name: str,
@@ -490,6 +535,7 @@ async def _fa_cdn_svg(
 async def import_fontawesome(
     body: FontAwesomeRequest,
     _user: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
 ) -> ImportResult:
     """
     Icons von FontAwesome importieren.
@@ -511,13 +557,23 @@ async def import_fontawesome(
 
     dbg: list[str] = []
 
+    # API Key: explizit übergeben > gespeichert in DB > keiner
+    effective_key = (body.api_key or "").strip()
+    if not effective_key:
+        row = await db.fetchone(
+            "SELECT value FROM app_settings WHERE key = ?", (_FA_KEY_SETTING,)
+        )
+        if row:
+            effective_key = row["value"]
+            dbg.append(f"[config] api_key aus DB geladen (Länge {len(effective_key)})")
+
     async with httpx.AsyncClient(timeout=15.0) as http:
         # PRO: einmalig Token tauschen (nicht pro Icon)
         access_token: str | None = None
         fa_version: str = "7.2.0"
-        if body.api_key:
-            dbg.append(f"[config] api_key gesetzt (Länge {len(body.api_key)}), starte Token-Exchange …")
-            access_token = await _fa_exchange_token(http, body.api_key, dbg)
+        if effective_key:
+            dbg.append(f"[config] api_key gesetzt (Länge {len(effective_key)}), starte Token-Exchange …")
+            access_token = await _fa_exchange_token(http, effective_key, dbg)
             if access_token:
                 fa_version = await _fa_get_version(http, access_token, dbg)
         else:
@@ -546,8 +602,10 @@ async def import_fontawesome(
                 svg_bytes = cdn_result
 
             if svg_bytes and _is_svg(svg_bytes):
-                (icons_dir / f"{safe}.svg").write_bytes(svg_bytes)
-                imported.append(safe)
+                # Dateiname enthält Style → kein gegenseitiges Überschreiben
+                filename = f"{safe}-{style}.svg"
+                (icons_dir / filename).write_bytes(svg_bytes)
+                imported.append(Path(filename).stem)  # z.B. "abacus-solid"
             else:
                 skipped += 1
 
