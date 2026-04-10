@@ -170,10 +170,9 @@ const openPct = computed(() => {
         <!-- Outer frame -->
         <rect x="2" y="2" width="52" height="60" rx="1" stroke-width="2.5" stroke="currentColor"/>
 
-        <!-- Closed: inner pane + handle -->
+        <!-- Closed: inner pane -->
         <template v-if="stateMain === 'closed'">
           <rect x="7" y="7" width="42" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.5"/>
-          <rect x="24" y="28" width="8" height="10" rx="2" fill="currentColor" opacity="0.5"/>
         </template>
 
         <!-- Tilted (Kipp): V from top-center to bottom corners -->
@@ -276,8 +275,6 @@ const openPct = computed(() => {
         <!-- Closed: door panel -->
         <template v-if="stateMain === 'closed'">
           <rect x="6" y="5" width="44" height="64" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.5"/>
-          <!-- handle -->
-          <circle cx="42" cy="38" r="2.5" fill="currentColor" opacity="0.7"/>
         </template>
 
         <!-- Open: door swung open (arc + panel line) -->
@@ -318,16 +315,11 @@ const openPct = computed(() => {
         <!-- Closed: panel fills the opening -->
         <template v-if="stateMain === 'closed'">
           <rect x="6" y="8" width="60" height="48" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.5"/>
-          <!-- handle in center -->
-          <line x1="36" y1="26" x2="36" y2="38" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
         </template>
 
         <!-- Open: panel shifted to the left side -->
         <template v-else-if="stateMain === 'open'">
-          <!-- Shifted panel (left side) -->
           <rect x="6" y="8" width="28" height="48" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.7"/>
-          <!-- handle -->
-          <line x1="22" y1="26" x2="22" y2="38" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
           <!-- Opening gap (dashed) -->
           <rect x="38" y="8" width="28" height="48" stroke="currentColor" stroke-width="1" stroke-dasharray="3,3" fill="none" opacity="0.3"/>
         </template>
@@ -352,7 +344,6 @@ const openPct = computed(() => {
         <!-- Closed: pane fills the frame -->
         <template v-if="roofState === 'closed'">
           <rect x="7" y="7" width="58" height="42" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.5"/>
-          <circle cx="36" cy="28" r="3" fill="currentColor" opacity="0.5"/>
         </template>
 
         <!-- Open / partial: pane hinged at bottom, top gap -->
@@ -397,7 +388,5 @@ const openPct = computed(() => {
 
     </div>
 
-    <!-- State text -->
-    <span class="text-xs font-medium truncate leading-none text-center">{{ stateText }}</span>
   </div>
 </template>
