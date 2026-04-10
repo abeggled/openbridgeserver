@@ -379,8 +379,16 @@ async def get_icon(
             "Ungültiger Icon-Name",
         )
 
-    icons_dir = _icons_dir()
-    svg_file = icons_dir / f"{name}.svg"
+    icons_dir = _icons_dir().resolve()
+    svg_file = (icons_dir / f"{name}.svg").resolve()
+    try:
+        svg_file.relative_to(icons_dir)
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Ungültiger Icon-Pfad",
+        )
+
     if not svg_file.exists():
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
