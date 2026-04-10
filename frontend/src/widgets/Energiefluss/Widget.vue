@@ -289,29 +289,26 @@ function animDur(power: number): string {
         stroke-width="1.5"
         stroke-opacity="0.6"
       />
-      <!-- Icon: mittig wenn kein Hausverbrauch, sonst leicht nach oben -->
+      <!-- Icon: immer zentriert im Kreis -->
       <text
         v-if="!isSvgIcon(houseIcon)"
-        :x="CX"
-        :y="houseDisplay ? CY - 5 : CY"
+        :x="CX" :y="CY"
         text-anchor="middle"
         dominant-baseline="central"
-        :font-size="houseDisplay ? 20 : 26"
+        font-size="20"
         style="user-select: none;"
       >{{ houseIcon }}</text>
       <image
         v-else-if="svgDataUrls[svgIconName(houseIcon)]"
         :href="svgDataUrls[svgIconName(houseIcon)]"
-        :x="CX - (houseDisplay ? 10 : 13)"
-        :y="houseDisplay ? CY - 17 : CY - 13"
-        :width="houseDisplay ? 20 : 26"
-        :height="houseDisplay ? 20 : 26"
+        :x="CX - 10" :y="CY - 10"
+        width="20" height="20"
         class="brightness-0 dark:invert"
       />
-      <!-- Hausverbrauch unter dem Icon -->
+      <!-- Hausverbrauch unterhalb des Kreises -->
       <text
         v-if="houseDisplay"
-        :x="CX" :y="CY + 12"
+        :x="CX" :y="CY + 28"
         text-anchor="middle"
         dominant-baseline="central"
         font-size="7"
