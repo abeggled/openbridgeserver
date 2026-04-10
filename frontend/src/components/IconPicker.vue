@@ -62,10 +62,6 @@ onMounted(loadList)
 // When `dark` prop is true the component forces dark styles (always-dark panels
 // like Energiefluss Config). Otherwise standard Tailwind dark: prefix is used.
 
-function cls(...pairs: [string, string][]): string {
-  return pairs.map(([d, l]) => (props.dark ? d : l)).join(' ')
-}
-
 const tabBase = 'rounded px-2 py-0.5 text-xs font-medium transition-colors'
 const tabActive = computed(() =>
   props.dark
