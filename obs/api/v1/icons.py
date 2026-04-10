@@ -303,6 +303,11 @@ async def delete_icons(
     deleted: list[str] = []
     not_found: list[str] = []
     for name in body.names:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Ungültiger Icon-Name: {name!r}",
+            )
         svg_file = icons_dir / f"{name}.svg"
         if svg_file.exists():
             svg_file.unlink()
