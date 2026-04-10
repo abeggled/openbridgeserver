@@ -328,7 +328,7 @@ function animDur(power: number): string {
           font-size="17"
           style="user-select: none;"
         >{{ d.icon }}</text>
-        <!-- Entity icon: imported SVG -->
+        <!-- Entity icon: imported SVG — black in light mode, white in dark mode -->
         <image
           v-else-if="svgDataUrls[svgIconName(d.icon)]"
           :href="svgDataUrls[svgIconName(d.icon)]"
@@ -336,6 +336,7 @@ function animDur(power: number): string {
           :y="positions[i].y - 8"
           width="16"
           height="16"
+          class="brightness-0 dark:invert"
           :data-testid="`ef-svgicon-${i}`"
         />
 
