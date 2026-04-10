@@ -646,7 +646,11 @@ async def import_fontawesome(
 
             if svg_bytes and _is_svg(svg_bytes):
                 # Dateiname enthält Style → kein gegenseitiges Überschreiben
-                filename = f"{safe}-{style}.svg"
+                raw_filename = f"{safe}-{style}.svg"
+                filename = secure_filename(raw_filename)
+                if not filename or not filename.endswith(".svg"):
+                    skipped += 1
+                    continue
                 target_path = (icons_dir / filename).resolve()
                 try:
                     target_path.relative_to(icons_dir_resolved)
