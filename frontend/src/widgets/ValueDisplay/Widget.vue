@@ -90,6 +90,13 @@ watch(
   { immediate: true },
 )
 
+// Replace explicit fill/stroke with currentColor so CSS `color` tints the icon
+const coloredSvg = computed(() =>
+  svgContent.value
+    .replace(/\bfill="(?!none)[^"]*"/g, 'fill="currentColor"')
+    .replace(/\bstroke="(?!none)[^"]*"/g, 'stroke="currentColor"')
+)
+
 // ── Display value ──────────────────────────────────────────────────────────────
 
 function applyCalc(v: number, calc: string): number {
@@ -234,38 +241,33 @@ const quality = computed(() => props.value?.q ?? null)
 </script>
 
 <template>
-  <!-- ── VALUE MODE (large icon + value below, wie Nur-Icon-Layout) ─────────── -->
+  <!-- ── VALUE MODE ────────────────────────────────────────────────────────── -->
   <div v-if="mode === 'value'" class="flex flex-col items-center h-full p-2 select-none">
     <span v-if="widgetLabel" class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center shrink-0 mb-1">{{ widgetLabel }}</span>
 
-    <!-- Icon: fills remaining height, square -->
-    <div class="flex-1 min-h-0 flex items-center justify-center w-full">
-      <div
-        v-if="activeIcon"
-        class="h-full max-w-full rounded-full border-2 flex items-center justify-center"
+    <!-- Icon: fills remaining height, square, no circle -->
+    <div class="flex-1 min-h-0 flex items-center justify-center w-full" style="aspect-ratio: 1; max-width: 100%">
+      <span
+        v-if="activeIcon && !isSvgIcon(activeIcon)"
+        class="leading-none select-none h-full flex items-center"
+        style="font-size: min(100%, 4rem)"
+        :style="{ color: activeColor }"
+      >{{ activeIcon }}</span>
+      <span
+        v-else-if="coloredSvg"
+        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
         style="aspect-ratio: 1"
-        :style="{ borderColor: activeColor }"
-      >
-        <span v-if="!isSvgIcon(activeIcon)" class="text-4xl leading-none select-none">{{ activeIcon }}</span>
-        <span
-          v-else-if="svgContent"
-          class="flex items-center justify-center brightness-0 dark:invert [&>svg]:w-full [&>svg]:h-full"
-          style="width: 55%; height: 55%"
-          v-html="svgContent"
-        />
-      </div>
+        :style="{ color: activeColor }"
+        v-html="coloredSvg"
+      />
     </div>
 
-    <!-- Value below icon -->
+    <!-- Value: fixed theme colors -->
     <div class="shrink-0 text-center mt-1">
       <div class="flex items-baseline justify-center gap-1 flex-wrap">
-        <span v-if="mainDisplay.prefix" class="text-xs text-gray-400 dark:text-gray-500">{{ mainDisplay.prefix }}</span>
-        <span
-          class="text-xl font-semibold tabular-nums leading-none"
-          :style="activeRule ? { color: activeColor } : {}"
-          data-testid="widget-value"
-        >{{ mainDisplay.value }}</span>
-        <span v-if="mainDisplay.postfix" class="text-sm text-gray-400">{{ mainDisplay.postfix }}</span>
+        <span v-if="mainDisplay.prefix" class="text-xs text-gray-500 dark:text-gray-400">{{ mainDisplay.prefix }}</span>
+        <span class="text-xl font-semibold tabular-nums leading-none text-gray-900 dark:text-gray-100" data-testid="widget-value">{{ mainDisplay.value }}</span>
+        <span v-if="mainDisplay.postfix" class="text-sm text-gray-500 dark:text-gray-400">{{ mainDisplay.postfix }}</span>
       </div>
       <span v-if="secondaryDisplay" class="text-xs text-gray-400 dark:text-gray-500 tabular-nums">{{ secondaryDisplay }}</span>
     </div>
@@ -278,38 +280,34 @@ const quality = computed(() => props.value?.q ?? null)
   </div>
 
   <!-- ── HISTORY MODE ───────────────────────────────────────────────────────── -->
-  <!-- Icon: 4 flex parts, chart: 1 flex part (= 1/4 of icon height) -->
   <div v-else-if="mode === 'history'" class="flex flex-col items-center h-full p-2 select-none">
     <span v-if="widgetLabel" class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center shrink-0 mb-1">{{ widgetLabel }}</span>
 
-    <!-- Icon area: 4 shares -->
-    <div class="min-h-0 flex items-center justify-center w-full" style="flex: 4">
-      <div
-        v-if="activeIcon"
-        class="h-full max-w-full rounded-full border-2 flex items-center justify-center"
-        style="aspect-ratio: 1"
-        :style="{ borderColor: activeColor }"
-      >
-        <span v-if="!isSvgIcon(activeIcon)" class="text-4xl leading-none select-none">{{ activeIcon }}</span>
-        <span
-          v-else-if="svgContent"
-          class="flex items-center justify-center brightness-0 dark:invert [&>svg]:w-full [&>svg]:h-full"
-          style="width: 55%; height: 55%"
-          v-html="svgContent"
-        />
-      </div>
-    </div>
-
-    <!-- Value below icon -->
-    <div class="shrink-0 text-center my-0.5">
+    <!-- Icon: 4 flex shares, no circle -->
+    <div class="min-h-0 flex items-center justify-center w-full" style="flex: 4; aspect-ratio: 1; max-width: 100%">
       <span
-        class="text-base font-semibold tabular-nums"
-        :style="activeRule ? { color: activeColor } : {}"
-        data-testid="widget-value"
-      ><template v-if="mainDisplay.prefix">{{ mainDisplay.prefix }}&thinsp;</template>{{ mainDisplay.value }}<template v-if="mainDisplay.postfix">&thinsp;{{ mainDisplay.postfix }}</template></span>
+        v-if="activeIcon && !isSvgIcon(activeIcon)"
+        class="leading-none select-none h-full flex items-center"
+        style="font-size: min(100%, 4rem)"
+        :style="{ color: activeColor }"
+      >{{ activeIcon }}</span>
+      <span
+        v-else-if="coloredSvg"
+        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
+        style="aspect-ratio: 1"
+        :style="{ color: activeColor }"
+        v-html="coloredSvg"
+      />
     </div>
 
-    <!-- Chart: 1 share (= max 1/4 of icon height), clickable -->
+    <!-- Value: fixed theme colors -->
+    <div class="shrink-0 text-center my-0.5">
+      <span class="text-base font-semibold tabular-nums text-gray-900 dark:text-gray-100" data-testid="widget-value">
+        <template v-if="mainDisplay.prefix">{{ mainDisplay.prefix }}&thinsp;</template>{{ mainDisplay.value }}<template v-if="mainDisplay.postfix">&thinsp;{{ mainDisplay.postfix }}</template>
+      </span>
+    </div>
+
+    <!-- Chart: 1 share = max 1/4 icon height, clickable -->
     <div
       class="w-full min-h-0 cursor-pointer rounded overflow-hidden"
       style="flex: 1"
@@ -321,28 +319,26 @@ const quality = computed(() => props.value?.q ?? null)
     </div>
   </div>
 
-  <!-- ── ICON ONLY MODE (nur Icon + Beschriftung, kein Wert) ───────────────── -->
+  <!-- ── ICON ONLY (nur Icon + Beschriftung) ───────────────────────────────── -->
   <div v-else class="flex flex-col items-center h-full p-2 select-none">
     <span v-if="widgetLabel" class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center shrink-0 mb-1">{{ widgetLabel }}</span>
 
-    <!-- Icon fills remaining space -->
-    <div class="flex-1 min-h-0 flex items-center justify-center w-full">
-      <div
-        v-if="activeIcon"
-        class="h-full max-w-full rounded-full border-2 flex items-center justify-center"
+    <!-- Icon fills all remaining space, no circle -->
+    <div class="flex-1 min-h-0 flex items-center justify-center w-full" style="aspect-ratio: 1; max-width: 100%">
+      <span
+        v-if="activeIcon && !isSvgIcon(activeIcon)"
+        class="leading-none select-none h-full flex items-center"
+        style="font-size: min(100%, 4rem)"
+        :style="{ color: activeColor }"
+      >{{ activeIcon }}</span>
+      <span
+        v-else-if="coloredSvg"
+        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
         style="aspect-ratio: 1"
-        :style="{ borderColor: activeColor }"
-      >
-        <span v-if="!isSvgIcon(activeIcon)" class="text-4xl leading-none select-none">{{ activeIcon }}</span>
-        <span
-          v-else-if="svgContent"
-          class="flex items-center justify-center brightness-0 dark:invert [&>svg]:w-full [&>svg]:h-full"
-          style="width: 55%; height: 55%"
-          v-html="svgContent"
-        />
-      </div>
+        :style="{ color: activeColor }"
+        v-html="coloredSvg"
+      />
     </div>
-    <!-- hidden but keeps data-testid accessible for tests -->
     <span class="sr-only" data-testid="widget-value">{{ mainDisplay.value }}</span>
   </div>
 
@@ -356,18 +352,17 @@ const quality = computed(() => props.value?.q ?? null)
       <div class="bg-white dark:bg-gray-900 rounded-xl shadow-2xl p-4 w-[90vw] max-w-2xl h-[60vh] flex flex-col">
         <div class="flex items-center justify-between mb-3 shrink-0">
           <div class="flex items-center gap-2">
-            <div
-              v-if="activeIcon"
-              class="w-7 h-7 rounded-full border-2 flex items-center justify-center shrink-0"
-              :style="{ borderColor: activeColor }"
-            >
-              <span v-if="!isSvgIcon(activeIcon)" class="text-base leading-none select-none">{{ activeIcon }}</span>
-              <span
-                v-else-if="svgContent"
-                class="w-4 h-4 flex items-center justify-center brightness-0 dark:invert [&>svg]:w-full [&>svg]:h-full"
-                v-html="svgContent"
-              />
-            </div>
+            <span
+              v-if="activeIcon && !isSvgIcon(activeIcon)"
+              class="text-2xl leading-none select-none"
+              :style="{ color: activeColor }"
+            >{{ activeIcon }}</span>
+            <span
+              v-else-if="coloredSvg"
+              class="w-6 h-6 [&>svg]:w-full [&>svg]:h-full shrink-0"
+              :style="{ color: activeColor }"
+              v-html="coloredSvg"
+            />
             <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ widgetLabel || 'Verlauf' }}</span>
           </div>
           <button
