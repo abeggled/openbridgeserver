@@ -19,6 +19,9 @@ WidgetRegistry.register({
   noDatapoint: true,
   getExtraDatapointIds: (config) => {
     const entities = config.entities as EntityConfig[] | undefined
-    return (entities ?? []).map((e) => e.id).filter(Boolean)
+    const ids = (entities ?? []).map((e) => e.id).filter(Boolean)
+    const houseDp = config.house_dp as string | undefined
+    if (houseDp) ids.push(houseDp)
+    return ids
   },
 })

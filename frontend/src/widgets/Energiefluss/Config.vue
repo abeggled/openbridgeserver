@@ -4,6 +4,12 @@ import DataPointPicker from '@/components/DataPointPicker.vue'
 
 type FlowDirection = 'to_house' | 'from_house' | 'bidirectional'
 
+interface HouseConfig {
+  dp: string
+  unit: string
+  decimals: number
+}
+
 interface EntityConfig {
   id: string
   label: string
@@ -58,7 +64,10 @@ function makeEntity(src?: Partial<EntityConfig>): EntityConfig {
 const existingEntities = (props.modelValue.entities as EntityConfig[] | undefined) ?? []
 
 const cfg = reactive({
-  label: (props.modelValue.label as string) ?? '',
+  label:           (props.modelValue.label           as string) ?? '',
+  house_dp:        (props.modelValue.house_dp        as string) ?? '',
+  house_unit:      (props.modelValue.house_unit      as string) ?? '',
+  house_decimals:  (props.modelValue.house_decimals  as number) ?? 1,
   entities: Array.from({ length: MAX_ENTITIES }, (_, i) => makeEntity(existingEntities[i])),
 })
 
@@ -66,7 +75,10 @@ watch(
   cfg,
   () => {
     emit('update:modelValue', {
-      label: cfg.label,
+      label:          cfg.label,
+      house_dp:       cfg.house_dp       || undefined,
+      house_unit:     cfg.house_unit     || undefined,
+      house_decimals: cfg.house_decimals,
       entities: cfg.entities.filter((e) => !!e.id),
     })
   },
@@ -93,6 +105,41 @@ watch(
       Bei «Bidirektional» bestimmt das Vorzeichen die Richtung (positiv → Haus, negativ → weg).
       «Vorzeichen umkehren» dreht diese Logik um.
     </p>
+
+    <!-- Hausverbrauch (Zentrum) -->
+    <div class="border border-gray-700 rounded p-2 space-y-2">
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+        🏠 Hausverbrauch (Zentrum, optional)
+      </p>
+      <DataPointPicker
+        :model-value="cfg.house_dp || null"
+        :compatible-types="['FLOAT', 'INTEGER']"
+        @update:model-value="(id) => (cfg.house_dp = id ?? '')"
+      />
+      <template v-if="cfg.house_dp">
+        <div class="flex gap-2">
+          <div class="flex-1">
+            <label class="block text-xs text-gray-400 mb-1">Einheit (leer = vom Objekt)</label>
+            <input
+              v-model="cfg.house_unit"
+              type="text"
+              placeholder="W"
+              class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          <div class="w-20">
+            <label class="block text-xs text-gray-400 mb-1">Dezimalst.</label>
+            <input
+              v-model.number="cfg.house_decimals"
+              type="number"
+              min="0"
+              max="4"
+              class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+        </div>
+      </template>
+    </div>
 
     <!-- Energieknoten -->
     <div class="pt-1">

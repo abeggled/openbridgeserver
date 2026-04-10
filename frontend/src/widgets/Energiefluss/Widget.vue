@@ -30,7 +30,10 @@ const dpStore = useDatapointsStore()
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const widgetLabel = computed(() => (props.config.label as string | undefined) ?? '')
+const widgetLabel  = computed(() => (props.config.label    as string | undefined) ?? '')
+const houseDpId    = computed(() => (props.config.house_dp as string | undefined) ?? '')
+const houseUnit    = computed(() => (props.config.house_unit as string | undefined) ?? 'W')
+const houseDec     = computed(() => (props.config.house_decimals as number | undefined) ?? 1)
 
 const entities = computed<EntityConfig[]>(() => {
   const raw = (props.config.entities as Partial<EntityConfig>[] | undefined) ?? []
@@ -171,6 +174,18 @@ function getTextLayout(pos: Point): TextLayout {
   }
 }
 
+// ── Hausverbrauch ─────────────────────────────────────────────────────────────
+
+const houseDisplay = computed<string>(() => {
+  if (props.editorMode) return '—'
+  if (!houseDpId.value) return ''
+  const dp = dpStore.getValue(houseDpId.value)
+  if (dp === null) return '…'
+  const raw = typeof dp.v === 'number' ? dp.v : parseFloat(String(dp.v))
+  if (isNaN(raw)) return '—'
+  return formatPower(raw, dp.u ?? houseUnit.value, houseDec.value)
+})
+
 // Animation speed: faster at higher power
 function animDur(power: number): string {
   const s = Math.max(0.6, Math.min(5, 4000 / Math.max(50, Math.abs(power))))
@@ -249,13 +264,25 @@ function animDur(power: number): string {
         stroke-width="1.5"
         stroke-opacity="0.6"
       />
+      <!-- Icon: mittig wenn kein Hausverbrauch, sonst leicht nach oben -->
       <text
-        :x="CX" :y="CY"
+        :x="CX"
+        :y="houseDisplay ? CY - 5 : CY"
         text-anchor="middle"
         dominant-baseline="central"
-        font-size="26"
+        :font-size="houseDisplay ? 20 : 26"
         style="user-select: none;"
       >🏠</text>
+      <!-- Hausverbrauch unter dem Icon -->
+      <text
+        v-if="houseDisplay"
+        :x="CX" :y="CY + 12"
+        text-anchor="middle"
+        dominant-baseline="central"
+        font-size="7"
+        fill="#d1d5db"
+        data-testid="ef-house-value"
+      >{{ houseDisplay }}</text>
 
       <!-- Entity nodes -->
       <g v-for="(d, i) in displays" :key="`ef-entity-${i}`">
