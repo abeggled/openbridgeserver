@@ -303,11 +303,27 @@
               v-model="localData[key]" class="input text-sm" @change="emitUpdate">
               <option v-for="opt in schema.enum" :key="opt" :value="opt">{{ opt }}</option>
             </select>
+            <input v-else-if="schema.type === 'boolean'"
+              type="checkbox" v-model="localData[key]"
+              class="text-sm" @change="emitUpdate" />
             <input v-else
               v-model="localData[key]"
               :type="schema.type === 'number' ? 'number' : 'text'"
               class="input text-sm" @change="emitUpdate" />
           </div>
+
+          <!-- Dynamic per-input negation fields for AND / OR / XOR with input_count > 2 -->
+          <template v-if="isGateNode && gateExtraInputCount > 0">
+            <div class="label mt-1 text-xs text-slate-400">Weitere Eingänge negieren</div>
+            <div v-for="i in gateExtraInputCount" :key="'negate-in' + (i + 1)"
+                 class="form-group flex items-center gap-2">
+              <input type="checkbox"
+                     :checked="!!localData[`negate_in${i + 1}`]"
+                     @change="e => { localData[`negate_in${i + 1}`] = e.target.checked; emitUpdate() }"
+              />
+              <label class="label mb-0">Eingang In{{ i + 2 }} negieren</label>
+            </div>
+          </template>
         </template>
       </div>
     </template>
@@ -481,6 +497,17 @@ const isDatapointNode = computed(() =>
 const isWrite          = computed(() => props.node?.type === 'datapoint_write')
 const isCronNode       = computed(() => props.node?.type === 'timer_cron')
 const isMathFormulaNode = computed(() => props.node?.type === 'math_formula')
+
+const isGateNode = computed(() =>
+  props.node?.type === 'and' || props.node?.type === 'or' || props.node?.type === 'xor'
+)
+
+// Number of extra dynamic inputs beyond "a" and "b" (i.e. in2, in3, …)
+const gateExtraInputCount = computed(() => {
+  if (!isGateNode.value) return 0
+  const count = Math.max(2, Math.min(30, Number(localData.value?.input_count) || 2))
+  return count - 2  // "a" and "b" are handled by static negate_a / negate_b fields
+})
 
 const configFields = computed(() => {
   const schema = nodeDef.value?.config_schema ?? {}

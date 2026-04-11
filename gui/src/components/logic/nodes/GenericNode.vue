@@ -74,20 +74,46 @@ const NODE_DEFS = {
   timer_cron:   { label: 'Trigger',     color: '#b45309', inputs: [],                                                outputs: [{id:'trigger',label:'Trigger'}]  },
   mcp_tool:     { label: 'MCP Tool',    color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'input',label:'Input'}], outputs: [{id:'result',label:'Erg.'},{id:'done',label:'Fertig'}] },
   // Astro
-  astro_sun:       { label: 'Astro Sonne',    color: '#d97706', inputs: [],                                                                    outputs: [{id:'sunrise',label:'Aufgang'},{id:'sunset',label:'Untergang'},{id:'is_day',label:'Tagsüber'}] },
+  astro_sun:          { label: 'Astro Sonne',    color: '#d97706', inputs: [],                                                                         outputs: [{id:'sunrise',label:'Aufgang'},{id:'sunset',label:'Untergang'},{id:'is_day',label:'Tagsüber'}] },
   // Math (extended)
-  clamp:           { label: 'Begrenzer',      color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                                           outputs: [{id:'result',label:'Erg.'}]      },
-  statistics:      { label: 'Statistik',      color: '#7c3aed', inputs: [{id:'value',label:'Wert'},{id:'reset',label:'Reset'}],                 outputs: [{id:'min',label:'Min'},{id:'max',label:'Max'},{id:'avg',label:'∅'},{id:'count',label:'N'}] },
+  clamp:              { label: 'Begrenzer',      color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                                                outputs: [{id:'result',label:'Erg.'}]      },
+  statistics:         { label: 'Statistik',      color: '#7c3aed', inputs: [{id:'value',label:'Wert'},{id:'reset',label:'Reset'}],                      outputs: [{id:'min',label:'Min'},{id:'max',label:'Max'},{id:'avg',label:'∅'},{id:'count',label:'N'}] },
+  heating_circuit:    { label: 'Heizkreis',      color: '#7c3aed', inputs: [{id:'t1',label:'T1 07h'},{id:'t2',label:'T2 14h'},{id:'t3',label:'T3 22h'}], outputs: [{id:'heating_mode',label:'Heizmodus'},{id:'daily_avg',label:'Tagesmittel'},{id:'monthly_avg',label:'Monatsmittel'}] },
+  min_max_tracker:    { label: 'Min/Max',        color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                                                outputs: [{id:'min_daily',label:'Min/d'},{id:'max_daily',label:'Max/d'},{id:'min_weekly',label:'Min/w'},{id:'max_weekly',label:'Max/w'},{id:'min_monthly',label:'Min/m'},{id:'max_monthly',label:'Max/m'},{id:'min_yearly',label:'Min/y'},{id:'max_yearly',label:'Max/y'},{id:'min_abs',label:'Min∞'},{id:'max_abs',label:'Max∞'}] },
+  consumption_counter:{ label: 'Verbrauch',      color: '#7c3aed', inputs: [{id:'value',label:'Zähler'}],                                              outputs: [{id:'daily',label:'Tag'},{id:'weekly',label:'Woche'},{id:'monthly',label:'Monat'},{id:'yearly',label:'Jahr'},{id:'prev_daily',label:'Vortag'},{id:'prev_weekly',label:'Vorwoche'},{id:'prev_monthly',label:'Vormonat'},{id:'prev_yearly',label:'Vorjahr'}] },
   // Timer (extended)
-  operating_hours: { label: 'Betriebsstd.',   color: '#b45309', inputs: [{id:'active',label:'Aktiv'},{id:'reset',label:'Reset'}],              outputs: [{id:'hours',label:'Std.'}]       },
+  operating_hours:    { label: 'Betriebsstd.',   color: '#b45309', inputs: [{id:'active',label:'Aktiv'},{id:'reset',label:'Reset'}],                   outputs: [{id:'hours',label:'Std.'}]       },
   // Notification
-  notify_pushover: { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],     outputs: [{id:'sent',label:'Gesendet'}]    },
-  notify_sms:      { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],     outputs: [{id:'sent',label:'Gesendet'}]    },
+  notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],          outputs: [{id:'sent',label:'Gesendet'}]    },
+  notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],          outputs: [{id:'sent',label:'Gesendet'}]    },
   // Integration
-  api_client:      { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'body',label:'Body'}],             outputs: [{id:'response',label:'Antwort'},{id:'status',label:'Status'},{id:'success',label:'OK'}] },
+  api_client:         { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'body',label:'Body'}],                  outputs: [{id:'response',label:'Antwort'},{id:'status',label:'Status'},{id:'success',label:'OK'}] },
 }
 
-const def = computed(() => NODE_DEFS[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] })
+// ── Gate input port names: first two are "a"/"b", then "in2", "in3", …
+function gatePortId(i)    { return i === 0 ? 'a' : i === 1 ? 'b' : `in${i}` }
+function gatePortLabel(i, d) {
+  const id    = gatePortId(i)
+  const raw   = i === 0 ? 'A' : i === 1 ? 'B' : `In${i + 1}`
+  const negate = d?.[`negate_${id}`]
+  return negate ? `¬${raw}` : raw
+}
+
+// ── Computed def — expands gate inputs dynamically from data.input_count
+const def = computed(() => {
+  const base = NODE_DEFS[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] }
+  if (props.type === 'and' || props.type === 'or' || props.type === 'xor') {
+    const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
+    const inputs = Array.from({ length: count }, (_, i) => ({
+      id:    gatePortId(i),
+      label: gatePortLabel(i, props.data),
+    }))
+    // Show negation marker on output label when negate_out is set
+    const outLabel = props.data?.negate_out ? '¬Out' : 'Out'
+    return { ...base, inputs, outputs: [{ id: 'out', label: outLabel }] }
+  }
+  return base
+})
 
 // ── Config summary ─────────────────────────────────────────────────────────
 const summary = computed(() => {
@@ -105,9 +131,16 @@ const summary = computed(() => {
   if (props.type === 'clamp')           return `[${d.min ?? 0} … ${d.max ?? 100}]`
   if (props.type === 'statistics')      return null
   if (props.type === 'operating_hours') return null
-  if (props.type === 'notify_pushover') return d.title || 'open bridge server'
-  if (props.type === 'notify_sms')      return d.to || '—'
-  if (props.type === 'api_client')      return `${d.method ?? 'GET'}  ${(d.url || '—').slice(0, 20)}`
+  if (props.type === 'notify_pushover')     return d.title || 'open bridge server'
+  if (props.type === 'notify_sms')          return d.to || '—'
+  if (props.type === 'api_client')          return `${d.method ?? 'GET'}  ${(d.url || '—').slice(0, 20)}`
+  if (props.type === 'heating_circuit')     return `Heizgrenze ${d.heating_limit ?? 15} °C`
+  if (props.type === 'min_max_tracker')     return null
+  if (props.type === 'consumption_counter') return null
+  if (props.type === 'and' || props.type === 'or' || props.type === 'xor') {
+    const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
+    return count > 2 ? `${count} Eingänge` : null
+  }
   return null
 })
 
