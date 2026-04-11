@@ -106,28 +106,28 @@ test('HA-Instanz via GUI anlegen', async ({ page }) => {
 
     // Open "New Instance" form
     await page.click('[data-testid="btn-new-instance"]')
+    await expect(page.locator('[data-testid="select-adapter-type"]')).toBeVisible({ timeout: 5_000 })
 
-    // Select adapter type
+    // Select adapter type — triggers schema load
     await page.selectOption('[data-testid="select-adapter-type"]', 'HOME_ASSISTANT')
+
+    // Wait for SchemaForm fields to appear (schema is loaded async)
+    await expect(page.locator('[data-testid="config-field-host"]')).toBeVisible({ timeout: 5_000 })
 
     // Fill adapter name
     await page.fill('[data-testid="input-instance-name"]', name)
 
-    // Fill connection config
+    // Fill connection config via SchemaForm fields
     await page.fill('[data-testid="config-field-host"]', '192.168.1.200')
-    await page.fill('[data-testid="config-field-port"]', '8123')
-    await page.fill('[data-testid="config-field-token"]', 'my-secret-token')
-
-    // Disable so it won't try to connect in test environment
-    const enabledCheckbox = page.locator('[data-testid="checkbox-enabled"]')
-    if (await enabledCheckbox.isChecked()) {
-      await enabledCheckbox.uncheck()
-    }
+    // port is integer → use .fill on the number input
+    await page.locator('[data-testid="config-field-port"]').fill('8123')
+    await page.fill('[data-testid="config-field-token"]', 'test-only-token')
+    // ssl is a checkbox — leave unchecked (default false)
 
     // Save
     await page.click('[data-testid="btn-save-instance"]')
 
-    // New instance must appear in the list
+    // New instance card must appear in the list
     await expect(page.getByText(name)).toBeVisible({ timeout: 8_000 })
 
     // Find the created instance ID for cleanup
@@ -161,20 +161,25 @@ test('HA-Instanz via GUI löschen', async ({ page }) => {
     await page.goto('/adapters')
     await page.waitForLoadState('networkidle')
 
-    // Locate the instance row
+    // Locate the instance row (data-testid added to AdaptersView)
     const row = page.locator(`[data-testid="adapter-row-${instanceId}"]`)
     await expect(row).toBeVisible({ timeout: 8_000 })
 
-    // Click delete button in the row
-    await row.locator('[data-testid="btn-delete-instance"]').click()
+    // The delete button is only visible when the card is expanded → expand first
+    await row.locator(`[data-testid="btn-expand-${instanceId}"]`).click()
 
-    // Confirm dialog
+    // Wait for the delete button to appear
+    const deleteBtn = row.locator('[data-testid="btn-delete-instance"]')
+    await expect(deleteBtn).toBeVisible({ timeout: 3_000 })
+    await deleteBtn.click()
+
+    // ConfirmDialog (data-testid="btn-confirm" exists in ConfirmDialog.vue)
     await page.click('[data-testid="btn-confirm"]')
 
-    // Row must disappear
+    // Row must disappear after deletion
     await expect(row).not.toBeVisible({ timeout: 5_000 })
   } finally {
-    // Best-effort cleanup
+    // Best-effort cleanup (no-op if already deleted via GUI)
     await apiDelete(`/api/v1/adapters/instances/${instanceId}`)
   }
 })

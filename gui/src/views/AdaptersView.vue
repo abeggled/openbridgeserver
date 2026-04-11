@@ -12,7 +12,7 @@
         <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Adapter Instanzen</h2>
         <p class="text-sm text-slate-500 mt-0.5">Protokoll-Adapter konfigurieren und verwalten</p>
       </div>
-      <button v-if="!isDemo" @click="openCreate" class="btn-primary btn-sm">
+      <button v-if="!isDemo" @click="openCreate" class="btn-primary btn-sm" data-testid="btn-new-instance">
         + Neue Instanz
       </button>
     </div>
@@ -35,7 +35,7 @@
           <div class="grid grid-cols-2 gap-4">
             <div class="form-group">
               <label class="label">Adapter-Typ *</label>
-              <select v-model="newForm.adapter_type" class="input" required @change="onTypeChange">
+              <select v-model="newForm.adapter_type" class="input" required @change="onTypeChange" data-testid="select-adapter-type">
                 <option value="">Typ wählen …</option>
                 <option v-for="t in availableTypes" :key="t" :value="t">{{ t }}</option>
               </select>
@@ -43,7 +43,7 @@
             </div>
             <div class="form-group">
               <label class="label">Name *</label>
-              <input v-model="newForm.name" type="text" class="input" placeholder="z.B. KNX Erdgeschoss" />
+              <input v-model="newForm.name" type="text" class="input" placeholder="z.B. KNX Erdgeschoss" data-testid="input-instance-name" />
             </div>
           </div>
 
@@ -61,7 +61,7 @@
           </div>
           <div class="flex gap-3">
             <button @click="cancelCreate" class="btn-secondary btn-sm">Abbrechen</button>
-            <button @click="submitCreate" class="btn-primary btn-sm" :disabled="creating === 'saving'">
+            <button @click="submitCreate" class="btn-primary btn-sm" :disabled="creating === 'saving'" data-testid="btn-save-instance">
               <Spinner v-if="creating === 'saving'" size="xs" color="white" />
               Erstellen
             </button>
@@ -74,7 +74,7 @@
         Keine Adapter-Instanzen konfiguriert. Klicke auf „+ Neue Instanz" um zu beginnen.
       </div>
 
-      <div v-for="a in store.instances" :key="a.id" class="card">
+      <div v-for="a in store.instances" :key="a.id" class="card" :data-testid="`adapter-row-${a.id}`">
         <!-- Card Header -->
         <div class="card-header">
           <div class="flex items-center gap-3 min-w-0">
@@ -86,7 +86,7 @@
             </Badge>
           </div>
           <div class="flex items-center gap-2 shrink-0">
-            <button @click="toggleExpand(a)" class="btn-icon">
+            <button @click="toggleExpand(a)" class="btn-icon" :data-testid="`btn-expand-${a.id}`">
               <svg class="w-4 h-4 transition-transform" :class="expanded[a.id] ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
               </svg>
@@ -152,7 +152,8 @@
               Neu verbinden
             </button>
             <button @click="confirmDelete(a)" class="ml-auto btn-danger btn-sm" :disabled="busy[a.id] === 'delete'"
-              title="Löscht diese Instanz und alle zugehörigen Verknüpfungen unwiderruflich">
+              title="Löscht diese Instanz und alle zugehörigen Verknüpfungen unwiderruflich"
+              data-testid="btn-delete-instance">
               <Spinner v-if="busy[a.id] === 'delete'" size="xs" color="white" />
               Löschen
             </button>

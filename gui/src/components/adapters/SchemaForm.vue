@@ -9,6 +9,7 @@
           :id="`sf-${key}`"
           :checked="local[key]"
           class="w-4 h-4 rounded"
+          :data-testid="`config-field-${key}`"
           @change="setBool(key, $event.target.checked)"
         />
         <label :for="`sf-${key}`" class="text-sm text-slate-600 dark:text-slate-300">
@@ -28,6 +29,7 @@
           v-if="prop.enum"
           v-model="local[key]"
           class="input"
+          :data-testid="`config-field-${key}`"
           @change="emitUpdate"
         >
           <option v-for="opt in prop.enum" :key="String(opt)" :value="opt">{{ opt }}</option>
@@ -40,6 +42,7 @@
           step="1"
           :value="local[key]"
           class="input"
+          :data-testid="`config-field-${key}`"
           :placeholder="defaultPlaceholder(prop)"
           @change="setNumber(key, $event.target.value, true)"
         />
@@ -51,6 +54,7 @@
           step="any"
           :value="local[key]"
           class="input"
+          :data-testid="`config-field-${key}`"
           :placeholder="defaultPlaceholder(prop)"
           @change="setNumber(key, $event.target.value, false)"
         />
@@ -61,6 +65,7 @@
           type="password"
           :value="local[key] ?? ''"
           class="input"
+          :data-testid="`config-field-${key}`"
           :placeholder="isOptional(prop) ? '(leer = nicht gesetzt)' : defaultPlaceholder(prop)"
           @input="setString(key, $event.target.value, isOptional(prop))"
         />
@@ -71,6 +76,7 @@
           type="text"
           :value="local[key] ?? ''"
           class="input"
+          :data-testid="`config-field-${key}`"
           :placeholder="isOptional(prop) ? '(leer = nicht gesetzt)' : defaultPlaceholder(prop)"
           @input="setString(key, $event.target.value, isOptional(prop))"
         />
