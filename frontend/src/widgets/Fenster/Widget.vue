@@ -441,8 +441,7 @@ const openPct = computed(() => {
           <!-- handle on free (right) edge at ~100cm from floor, always points LEFT (Anschlag links) -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="81" cy="100" r="2"/>
-            <line x1="81" y1="100" x2="66" y2="100" stroke-width="3" stroke-linecap="butt"/>
-            <line x1="66" y1="96"  x2="66" y2="104" stroke-width="3" stroke-linecap="round"/>
+            <line x1="81" y1="100" x2="66" y2="100" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else-if="stateMain === 'open'">
@@ -451,8 +450,7 @@ const openPct = computed(() => {
           <!-- handle on free edge of open panel, same direction (LEFT) — ändert sich nicht -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="65" cy="107" r="2"/>
-            <line x1="65" y1="107" x2="50" y2="107" stroke-width="3" stroke-linecap="butt"/>
-            <line x1="50" y1="103" x2="50" y2="111" stroke-width="3" stroke-linecap="round"/>
+            <line x1="65" y1="107" x2="50" y2="107" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
@@ -479,8 +477,7 @@ const openPct = computed(() => {
           <!-- handle on free (left) edge, always points RIGHT (Anschlag rechts) -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="9"  cy="100" r="2"/>
-            <line x1="9"  y1="100" x2="24" y2="100" stroke-width="3" stroke-linecap="butt"/>
-            <line x1="24" y1="96"  x2="24" y2="104" stroke-width="3" stroke-linecap="round"/>
+            <line x1="9"  y1="100" x2="24" y2="100" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else-if="stateMain === 'open'">
@@ -489,8 +486,7 @@ const openPct = computed(() => {
           <!-- handle on free edge of open panel, same direction (RIGHT) -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="25" cy="107" r="2"/>
-            <line x1="25" y1="107" x2="40" y2="107" stroke-width="3" stroke-linecap="butt"/>
-            <line x1="40" y1="103" x2="40" y2="111" stroke-width="3" stroke-linecap="round"/>
+            <line x1="25" y1="107" x2="40" y2="107" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
