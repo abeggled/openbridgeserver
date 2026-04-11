@@ -393,7 +393,8 @@ const openPct = computed(() => {
         <line x1="2"  y1="4"  x2="2"  y2="60" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
         <line x1="70" y1="4"  x2="70" y2="60" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
         <line x1="2"  y1="4"  x2="70" y2="4"  stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
-        <line x1="2"  y1="60" x2="70" y2="60" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+        <!-- Floor line: same style as Türe (thin, semi-transparent) -->
+        <line x1="2"  y1="60" x2="70" y2="60" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
 
         <!-- Closed: full gray panel -->
         <template v-if="stateMain === 'closed'">
