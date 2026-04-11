@@ -10,42 +10,36 @@ const props = defineProps<{
   editorMode: boolean
 }>()
 
-const label        = computed(() => (props.config.label        as string) ?? '')
-const url          = computed(() => (props.config.url          as string) ?? '')
-const streamType   = computed(() => (props.config.streamType   as string) ?? 'mjpeg')
-const authType     = computed(() => (props.config.authType     as string) ?? 'none')
-const username     = computed(() => (props.config.username     as string) ?? '')
-const password     = computed(() => (props.config.password     as string) ?? '')
-const apiKeyParam  = computed(() => (props.config.apiKeyParam  as string) ?? 'token')
-const apiKeyValue  = computed(() => (props.config.apiKeyValue  as string) ?? '')
+const label           = computed(() => (props.config.label           as string) ?? '')
+const url             = computed(() => (props.config.url             as string) ?? '')
+const streamType      = computed(() => (props.config.streamType      as string) ?? 'mjpeg')
+const authType        = computed(() => (props.config.authType        as string) ?? 'none')
+const username        = computed(() => (props.config.username        as string) ?? '')
+const password        = computed(() => (props.config.password        as string) ?? '')
+const apiKeyParam     = computed(() => (props.config.apiKeyParam     as string) ?? 'token')
+const apiKeyValue     = computed(() => (props.config.apiKeyValue     as string) ?? '')
 const refreshInterval = computed(() => (props.config.refreshInterval as number) ?? 5)
-const aspectRatio  = computed(() => (props.config.aspectRatio  as string) ?? '16/9')
-const objectFit    = computed(() => (props.config.objectFit    as string) ?? 'contain')
+const aspectRatio     = computed(() => (props.config.aspectRatio     as string) ?? '16/9')
+const objectFit       = computed(() => (props.config.objectFit       as string) ?? 'contain')
 
 /** Baut die finale Stream-URL inkl. Authentifizierung */
 const streamUrl = computed(() => {
   if (!url.value) return ''
-
   let base = url.value.trim()
 
   if (authType.value === 'basic' && username.value) {
-    // Credentials in URL einbetten: http://user:pass@host/path
     try {
       const u = new URL(base)
       u.username = encodeURIComponent(username.value)
       u.password = encodeURIComponent(password.value)
       base = u.toString()
-    } catch {
-      // Ungültige URL – unverändert weitergeben
-    }
+    } catch { /* ungültige URL – unverändert */ }
   } else if (authType.value === 'apikey' && apiKeyParam.value && apiKeyValue.value) {
     try {
       const u = new URL(base)
       u.searchParams.set(apiKeyParam.value, apiKeyValue.value)
       base = u.toString()
-    } catch {
-      // Ungültige URL – unverändert weitergeben
-    }
+    } catch { /* ungültige URL – unverändert */ }
   }
 
   return base
@@ -63,10 +57,7 @@ function startRefresh() {
 }
 
 function stopRefresh() {
-  if (refreshTimer !== null) {
-    clearInterval(refreshTimer)
-    refreshTimer = null
-  }
+  if (refreshTimer !== null) { clearInterval(refreshTimer); refreshTimer = null }
 }
 
 const snapshotUrl = computed(() => {
@@ -76,7 +67,8 @@ const snapshotUrl = computed(() => {
     u.searchParams.set('_t', String(cacheBuster.value))
     return u.toString()
   } catch {
-    return streamUrl.value + (streamUrl.value.includes('?') ? '&' : '?') + '_t=' + cacheBuster.value
+    const sep = streamUrl.value.includes('?') ? '&' : '?'
+    return streamUrl.value + sep + '_t=' + cacheBuster.value
   }
 })
 
@@ -84,13 +76,37 @@ onMounted(startRefresh)
 onUnmounted(stopRefresh)
 watch([streamType, refreshInterval], startRefresh)
 
-// ── Error-Handling ──────────────────────────────────────────────────────────
-const hasError = ref(false)
+// ── Reload-Mechanismus ──────────────────────────────────────────────────────
+// Statt den Stream zu ersetzen wird nur ein nicht-blockierendes Overlay gezeigt.
+// Bei Fehler: nach 10 s automatisch neu laden (MJPEG-Streams können kurz unterbrechen).
+const hasError  = ref(false)
+const reloadKey = ref(0)  // Ändert sich → img/video neu gerendert
+let retryTimer: ReturnType<typeof setTimeout> | null = null
 
-function onImgError() { hasError.value = true }
-function onImgLoad()  { hasError.value = false }
+function clearRetry() {
+  if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null }
+}
 
-watch(streamUrl, () => { hasError.value = false })
+function onStreamError() {
+  hasError.value = true
+  clearRetry()
+  retryTimer = setTimeout(() => reload(), 10_000)
+}
+
+function onStreamLoad() {
+  hasError.value = false
+  clearRetry()
+}
+
+function reload() {
+  clearRetry()
+  hasError.value = false
+  cacheBuster.value = Date.now()
+  reloadKey.value++
+}
+
+onUnmounted(clearRetry)
+watch(streamUrl, () => { hasError.value = false; clearRetry(); reloadKey.value++ })
 
 // ── Seitenverhältnis ────────────────────────────────────────────────────────
 const containerStyle = computed((): Record<string, string> => {
@@ -98,19 +114,25 @@ const containerStyle = computed((): Record<string, string> => {
   if (aspectRatio.value === 'free') return { objectFit: fit }
   return { aspectRatio: aspectRatio.value, objectFit: fit }
 })
+
+// Aktuell verwendete Src
+const imgSrc = computed(() =>
+  streamType.value === 'snapshot' ? snapshotUrl.value : streamUrl.value
+)
 </script>
 
 <template>
-  <div class="h-full w-full flex flex-col overflow-hidden bg-black rounded">
+  <div class="h-full w-full flex flex-col overflow-hidden bg-black rounded relative">
+
     <!-- Label -->
     <div
       v-if="label"
-      class="shrink-0 px-2 py-1 text-xs text-gray-300 bg-gray-900/80 truncate"
+      class="shrink-0 px-2 py-1 text-xs text-gray-300 bg-gray-900/80 truncate z-10"
     >
       {{ label }}
     </div>
 
-    <!-- Editor-Platzhalter -->
+    <!-- Editor-Platzhalter (kein URL konfiguriert) -->
     <div
       v-if="editorMode && !url"
       class="flex-1 flex flex-col items-center justify-center text-gray-500 gap-2"
@@ -119,13 +141,12 @@ const containerStyle = computed((): Record<string, string> => {
       <span class="text-xs">Kamera-URL konfigurieren</span>
     </div>
 
-    <!-- Fehler -->
+    <!-- Kein URL im Live-Modus -->
     <div
-      v-else-if="hasError"
-      class="flex-1 flex flex-col items-center justify-center text-red-400 gap-2"
+      v-else-if="!url"
+      class="flex-1 flex items-center justify-center text-gray-600 text-xs"
     >
-      <span class="text-3xl">⚠️</span>
-      <span class="text-xs text-center px-2">Stream nicht erreichbar</span>
+      Keine URL konfiguriert
     </div>
 
     <!-- MJPEG / Snapshot -->
@@ -134,12 +155,13 @@ const containerStyle = computed((): Record<string, string> => {
       class="flex-1 flex items-center justify-center overflow-hidden"
     >
       <img
-        :src="streamType === 'snapshot' ? snapshotUrl : streamUrl"
+        :key="reloadKey"
+        :src="imgSrc"
         :style="containerStyle"
         class="max-h-full max-w-full"
         alt="Kamera"
-        @error="onImgError"
-        @load="onImgLoad"
+        @error="onStreamError"
+        @load="onStreamLoad"
       />
     </div>
 
@@ -149,23 +171,33 @@ const containerStyle = computed((): Record<string, string> => {
       class="flex-1 flex items-center justify-center overflow-hidden"
     >
       <video
+        :key="reloadKey"
         :src="streamUrl"
         :style="containerStyle"
         class="max-h-full max-w-full"
         autoplay
         muted
         playsinline
-        @error="onImgError"
-        @loadeddata="onImgLoad"
+        @error="onStreamError"
+        @loadeddata="onStreamLoad"
       />
     </div>
 
-    <!-- Kein URL -->
+    <!-- Fehler-Overlay (nicht-blockierend: liegt über dem Stream, ersetzt ihn nicht) -->
     <div
-      v-else
-      class="flex-1 flex items-center justify-center text-gray-600 text-xs"
+      v-if="hasError && url"
+      class="absolute inset-0 flex flex-col items-center justify-center bg-black/70 gap-2 z-20"
     >
-      Keine URL
+      <span class="text-2xl">⚠️</span>
+      <span class="text-xs text-red-400 text-center px-4">Stream nicht erreichbar</span>
+      <span class="text-xs text-gray-500 text-center px-4">Automatischer Neuversuch in 10 s</span>
+      <button
+        class="mt-1 px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-xs text-gray-200 transition-colors"
+        @click="reload"
+      >
+        Jetzt neu laden
+      </button>
     </div>
+
   </div>
 </template>
