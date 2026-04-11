@@ -10,17 +10,18 @@ const emit = defineEmits<{
 }>()
 
 const cfg = reactive({
-  label:           (props.modelValue.label          as string) ?? '',
-  url:             (props.modelValue.url             as string) ?? '',
-  streamType:      (props.modelValue.streamType      as string) ?? 'mjpeg',
-  authType:        (props.modelValue.authType        as string) ?? 'none',
-  username:        (props.modelValue.username        as string) ?? '',
-  password:        (props.modelValue.password        as string) ?? '',
-  apiKeyParam:     (props.modelValue.apiKeyParam     as string) ?? 'token',
-  apiKeyValue:     (props.modelValue.apiKeyValue     as string) ?? '',
-  refreshInterval: (props.modelValue.refreshInterval as number) ?? 5,
-  aspectRatio:     (props.modelValue.aspectRatio     as string) ?? '16/9',
-  objectFit:       (props.modelValue.objectFit       as string) ?? 'contain',
+  label:           (props.modelValue.label          as string)  ?? '',
+  url:             (props.modelValue.url             as string)  ?? '',
+  streamType:      (props.modelValue.streamType      as string)  ?? 'mjpeg',
+  authType:        (props.modelValue.authType        as string)  ?? 'none',
+  username:        (props.modelValue.username        as string)  ?? '',
+  password:        (props.modelValue.password        as string)  ?? '',
+  apiKeyParam:     (props.modelValue.apiKeyParam     as string)  ?? 'token',
+  apiKeyValue:     (props.modelValue.apiKeyValue     as string)  ?? '',
+  refreshInterval: (props.modelValue.refreshInterval as number)  ?? 5,
+  aspectRatio:     (props.modelValue.aspectRatio     as string)  ?? '16/9',
+  objectFit:       (props.modelValue.objectFit       as string)  ?? 'contain',
+  useProxy:        (props.modelValue.useProxy        as boolean) ?? false,
 })
 
 watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
@@ -146,6 +147,20 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
         </div>
       </div>
     </template>
+
+    <!-- Proxy -->
+    <div class="flex items-center gap-2">
+      <input
+        id="cam-proxy"
+        v-model="cfg.useProxy"
+        type="checkbox"
+        class="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500"
+      />
+      <label for="cam-proxy" class="text-xs text-gray-300 cursor-pointer">
+        Via Server-Proxy laden
+        <span class="text-gray-500 font-normal ml-1">(Mixed-Content / HTTPS → HTTP)</span>
+      </label>
+    </div>
 
     <!-- Darstellung -->
     <div class="grid grid-cols-2 gap-2">

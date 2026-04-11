@@ -21,28 +21,43 @@ const apiKeyValue     = computed(() => (props.config.apiKeyValue     as string) 
 const refreshInterval = computed(() => (props.config.refreshInterval as number) ?? 5)
 const aspectRatio     = computed(() => (props.config.aspectRatio     as string) ?? '16/9')
 const objectFit       = computed(() => (props.config.objectFit       as string) ?? 'contain')
+const useProxy        = computed(() => (props.config.useProxy        as boolean) ?? false)
 
-/** Baut die finale Stream-URL inkl. Authentifizierung */
+/** Baut die finale Stream-URL — direkt oder über den Backend-Proxy */
 const streamUrl = computed(() => {
   if (!url.value) return ''
-  let base = url.value.trim()
+  const base = url.value.trim()
 
+  if (useProxy.value) {
+    // Proxy-URL: /api/v1/camera/proxy?url=...&username=...&password=...
+    const p = new URLSearchParams({ url: base })
+    if (authType.value === 'basic' && username.value) {
+      p.set('username', username.value)
+      p.set('password', password.value)
+    } else if (authType.value === 'apikey' && apiKeyParam.value && apiKeyValue.value) {
+      p.set('apikey_param', apiKeyParam.value)
+      p.set('apikey_value', apiKeyValue.value)
+    }
+    return `/api/v1/camera/proxy?${p.toString()}`
+  }
+
+  // Direkt: Credentials in URL einbetten
+  let direct = base
   if (authType.value === 'basic' && username.value) {
     try {
-      const u = new URL(base)
+      const u = new URL(direct)
       u.username = encodeURIComponent(username.value)
       u.password = encodeURIComponent(password.value)
-      base = u.toString()
+      direct = u.toString()
     } catch { /* ungültige URL – unverändert */ }
   } else if (authType.value === 'apikey' && apiKeyParam.value && apiKeyValue.value) {
     try {
-      const u = new URL(base)
+      const u = new URL(direct)
       u.searchParams.set(apiKeyParam.value, apiKeyValue.value)
-      base = u.toString()
+      direct = u.toString()
     } catch { /* ungültige URL – unverändert */ }
   }
-
-  return base
+  return direct
 })
 
 // ── Snapshot-Refresh ────────────────────────────────────────────────────────

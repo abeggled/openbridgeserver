@@ -22,6 +22,7 @@ WidgetRegistry.register({
     refreshInterval: 5,
     aspectRatio: '16/9',
     objectFit: 'contain',
+    useProxy: false,
   },
   compatibleTypes: ['*'],
   noDatapoint: true,
