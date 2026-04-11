@@ -14,7 +14,7 @@
 
       <div class="gn-header" :style="{ background: def.color + '28' }">
         <span class="gn-title">{{ data.label || def.label }}</span>
-        <button v-show="hovered" class="gn-del nodrag" @click.stop="remove">✕</button>
+        <button class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
       </div>
 
       <div class="gn-body">
