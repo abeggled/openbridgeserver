@@ -355,8 +355,7 @@ const openPct = computed(() => {
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="81" cy="100" r="2"/>
-            <line x1="81" y1="100" x2="66" y2="100" stroke-width="3" stroke-linecap="butt"/>
-            <line x1="66" y1="96"  x2="66" y2="104" stroke-width="3" stroke-linecap="round"/>
+            <line x1="81" y1="100" x2="66" y2="100" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else-if="stateLeft === 'open'">
@@ -364,8 +363,7 @@ const openPct = computed(() => {
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="65" cy="107" r="2"/>
-            <line x1="65" y1="107" x2="50" y2="107" stroke-width="3" stroke-linecap="butt"/>
-            <line x1="50" y1="103" x2="50" y2="111" stroke-width="3" stroke-linecap="round"/>
+            <line x1="65" y1="107" x2="50" y2="107" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
@@ -378,8 +376,7 @@ const openPct = computed(() => {
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="99"  cy="100" r="2"/>
-            <line x1="99"  y1="100" x2="114" y2="100" stroke-width="3" stroke-linecap="butt"/>
-            <line x1="114" y1="96"  x2="114" y2="104" stroke-width="3" stroke-linecap="round"/>
+            <line x1="99"  y1="100" x2="114" y2="100" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else-if="stateRight === 'open'">
@@ -387,8 +384,7 @@ const openPct = computed(() => {
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="115" cy="107" r="2"/>
-            <line x1="115" y1="107" x2="130" y2="107" stroke-width="3" stroke-linecap="butt"/>
-            <line x1="130" y1="103" x2="130" y2="111" stroke-width="3" stroke-linecap="round"/>
+            <line x1="115" y1="107" x2="130" y2="107" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
