@@ -587,3 +587,308 @@ class TestMultiNodeGraph:
         # Override 'a' input of formula node to 100
         out = exc.execute({"f": {"a": 100, "b": 0}})
         assert out["f"]["result"] == pytest.approx(100.0)
+
+
+# ===========================================================================
+# Enhanced AND / OR / XOR  (variable inputs 2–30, per-input/output negation)
+# ===========================================================================
+
+class TestEnhancedGateInputs:
+    """Variable-input count and negation for AND, OR, XOR."""
+
+    # ── AND multi-input ───────────────────────────────────────────────────
+
+    def test_and_3_inputs_all_true(self):
+        out = run_single("and", {"input_count": 3}, {"a": True, "b": True, "in2": True})
+        assert out["out"] is True
+
+    def test_and_3_inputs_one_false(self):
+        out = run_single("and", {"input_count": 3}, {"a": True, "b": True, "in2": False})
+        assert out["out"] is False
+
+    def test_and_negate_single_input(self):
+        # negate_a: AND(¬False, True) = AND(True, True) = True
+        out = run_single("and", {"negate_a": True}, {"a": False, "b": True})
+        assert out["out"] is True
+
+    def test_and_negate_output(self):
+        # AND(True, True) = True; negate_out → False
+        out = run_single("and", {"negate_out": True}, {"a": True, "b": True})
+        assert out["out"] is False
+
+    def test_and_negate_input_and_output(self):
+        # negate_b: AND(True, ¬False) = True; negate_out → False
+        out = run_single("and", {"negate_b": True, "negate_out": True}, {"a": True, "b": False})
+        assert out["out"] is False
+
+    def test_and_5_inputs_all_true(self):
+        inputs = {"a": True, "b": True, "in2": True, "in3": True, "in4": True}
+        out = run_single("and", {"input_count": 5}, inputs)
+        assert out["out"] is True
+
+    def test_and_5_inputs_last_false(self):
+        inputs = {"a": True, "b": True, "in2": True, "in3": True, "in4": False}
+        out = run_single("and", {"input_count": 5}, inputs)
+        assert out["out"] is False
+
+    # ── OR multi-input ────────────────────────────────────────────────────
+
+    def test_or_3_inputs_all_false(self):
+        out = run_single("or", {"input_count": 3}, {"a": False, "b": False, "in2": False})
+        assert out["out"] is False
+
+    def test_or_3_inputs_one_true(self):
+        out = run_single("or", {"input_count": 3}, {"a": False, "b": False, "in2": True})
+        assert out["out"] is True
+
+    def test_or_negate_input(self):
+        # negate_a: OR(¬False, False) = OR(True, False) = True
+        out = run_single("or", {"negate_a": True}, {"a": False, "b": False})
+        assert out["out"] is True
+
+    def test_or_negate_output(self):
+        # OR(False, False) = False; negate_out → True
+        out = run_single("or", {"negate_out": True}, {"a": False, "b": False})
+        assert out["out"] is True
+
+    # ── XOR multi-input ───────────────────────────────────────────────────
+
+    def test_xor_3_inputs_exactly_one_true(self):
+        out = run_single("xor", {"input_count": 3}, {"a": True, "b": False, "in2": False})
+        assert out["out"] is True
+
+    def test_xor_3_inputs_two_true(self):
+        # Two inputs true → XOR false (not exactly one)
+        out = run_single("xor", {"input_count": 3}, {"a": True, "b": True, "in2": False})
+        assert out["out"] is False
+
+    def test_xor_3_inputs_all_false(self):
+        out = run_single("xor", {"input_count": 3}, {"a": False, "b": False, "in2": False})
+        assert out["out"] is False
+
+    def test_xor_negate_output(self):
+        # XOR(True, False) = True; negate_out → False
+        out = run_single("xor", {"negate_out": True}, {"a": True, "b": False})
+        assert out["out"] is False
+
+    # ── Backward compatibility (existing 2-input behaviour unchanged) ─────
+
+    def test_and_2_input_backward_compat(self):
+        out = run_single("and", {}, {"a": True, "b": True})
+        assert out["out"] is True
+
+    def test_or_2_input_backward_compat(self):
+        out = run_single("or", {}, {"a": False, "b": True})
+        assert out["out"] is True
+
+    def test_xor_2_input_backward_compat(self):
+        out = run_single("xor", {}, {"a": True, "b": True})
+        assert out["out"] is False
+
+    def test_input_count_clamped_to_max_30(self):
+        # Even with absurd value, must not raise
+        inputs = {f"in{i}": True for i in range(2, 10)}
+        inputs.update({"a": True, "b": True})
+        out = run_single("and", {"input_count": 999}, inputs)
+        assert isinstance(out["out"], bool)
+
+
+# ===========================================================================
+# heating_circuit  (Winter/Sommer-Umschaltung, DIN-Norm)
+# ===========================================================================
+
+class TestHeatingCircuit:
+    def _run(self, t1, t2, t3, limit=15.0, state=None):
+        if state is None:
+            state = {}
+        n1 = node("h", "heating_circuit", {"heating_limit": limit})
+        exc = make_executor([n1], hysteresis_state=state)
+        return exc.execute({"h": {"t1": t1, "t2": t2, "t3": t3}})["h"], state
+
+    def test_din_formula_daily_avg(self):
+        # T_avg = (10 + 12 + 2*8) / 4 = 38/4 = 9.5
+        out, _ = self._run(10, 12, 8)
+        assert out["daily_avg"] == pytest.approx(9.5)
+
+    def test_heating_mode_on_when_below_limit(self):
+        out, _ = self._run(5, 6, 4, limit=15.0)  # daily_avg = (5+6+2*4)/4 = 4.75 < 15
+        assert out["heating_mode"] == 1
+
+    def test_heating_mode_off_when_above_limit(self):
+        out, _ = self._run(18, 22, 20, limit=15.0)  # daily_avg = (18+22+2*20)/4 = 20 > 15
+        assert out["heating_mode"] == 0
+
+    def test_monthly_avg_after_multiple_days(self):
+        state = {}
+        n1 = node("h", "heating_circuit", {"heating_limit": 15.0})
+        # Day 1: T_avg = (4+6+2*2)/4 = 14/4 = 3.5
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"h": {"t1": 4, "t2": 6, "t3": 2}})
+        # Day 2: T_avg = (8+10+2*6)/4 = 30/4 = 7.5
+        exc2 = make_executor([n1], hysteresis_state=state)
+        out = exc2.execute({"h": {"t1": 8, "t2": 10, "t3": 6}})["h"]
+        # monthly_avg = (3.5 + 7.5) / 2 = 5.5
+        assert out["monthly_avg"] == pytest.approx(5.5)
+
+    def test_heating_mode_uses_monthly_avg(self):
+        """When monthly_avg is available it determines heating_mode, not daily_avg."""
+        state = {}
+        n1 = node("h", "heating_circuit", {"heating_limit": 15.0})
+        # Build up a warm monthly average (>15°)
+        for _ in range(3):
+            exc = make_executor([n1], hysteresis_state=state)
+            exc.execute({"h": {"t1": 20, "t2": 22, "t3": 20}})  # daily_avg = 20.5
+        # Now send a cold day — daily_avg would be cold but monthly_avg is warm
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"h": {"t1": 5, "t2": 6, "t3": 4}})["h"]
+        # monthly_avg still > 15 → no heating
+        assert out["heating_mode"] == 0
+
+    def test_no_inputs_returns_zero_heating_mode(self):
+        state = {}
+        n1 = node("h", "heating_circuit", {"heating_limit": 15.0})
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"h": {}})["h"]
+        assert out["heating_mode"] == 0
+        assert out["daily_avg"] is None
+
+    def test_monthly_buffer_capped_at_31_days(self):
+        state = {}
+        n1 = node("h", "heating_circuit", {"heating_limit": 15.0})
+        for _ in range(40):  # push 40 days
+            exc = make_executor([n1], hysteresis_state=state)
+            exc.execute({"h": {"t1": 10, "t2": 12, "t3": 8}})
+        assert len(state[n1["id"]]["daily_temps"]) <= 31
+
+
+# ===========================================================================
+# min_max_tracker
+# ===========================================================================
+
+class TestMinMaxTracker:
+    def _run(self, value, state=None):
+        if state is None:
+            state = {}
+        n1 = node("m", "min_max_tracker", {})
+        exc = make_executor([n1], hysteresis_state=state)
+        return exc.execute({"m": {"value": value}})["m"], state
+
+    def test_first_value_sets_min_and_max(self):
+        out, _ = self._run(42.0)
+        assert out["min_abs"] == pytest.approx(42.0)
+        assert out["max_abs"] == pytest.approx(42.0)
+        assert out["min_daily"] == pytest.approx(42.0)
+        assert out["max_daily"] == pytest.approx(42.0)
+
+    def test_lower_value_updates_min(self):
+        state = {}
+        out, state = self._run(10.0, state)
+        out, state = self._run(5.0, state)
+        assert out["min_abs"] == pytest.approx(5.0)
+        assert out["max_abs"] == pytest.approx(10.0)
+
+    def test_higher_value_updates_max(self):
+        state = {}
+        out, state = self._run(10.0, state)
+        out, state = self._run(20.0, state)
+        assert out["max_abs"] == pytest.approx(20.0)
+        assert out["min_abs"] == pytest.approx(10.0)
+
+    def test_all_periods_track_simultaneously(self):
+        out, _ = self._run(7.5)
+        for key in ("min_daily", "max_daily", "min_weekly", "max_weekly",
+                    "min_monthly", "max_monthly", "min_yearly", "max_yearly",
+                    "min_abs", "max_abs"):
+            assert out[key] == pytest.approx(7.5), f"{key} should be 7.5"
+
+    def test_no_value_returns_current_state(self):
+        state = {}
+        out, state = self._run(5.0, state)
+        # Execute without a new value — state must persist
+        n1 = node("m", "min_max_tracker", {})
+        exc = make_executor([n1], hysteresis_state=state)
+        out2 = exc.execute({"m": {}})["m"]
+        assert out2["min_abs"] == pytest.approx(5.0)
+
+    def test_period_reset_on_new_day(self):
+        state = {}
+        out, state = self._run(100.0, state)
+        # Simulate next day by clearing last_day key
+        state["m"]["last_day"] = "1970-01-01"
+        out, state = self._run(5.0, state)
+        # Daily min/max reset; absolute stays
+        assert out["min_daily"] == pytest.approx(5.0)
+        assert out["max_daily"] == pytest.approx(5.0)
+        assert out["min_abs"] == pytest.approx(5.0)   # 5 < 100
+        assert out["max_abs"] == pytest.approx(100.0)
+
+
+# ===========================================================================
+# consumption_counter
+# ===========================================================================
+
+class TestConsumptionCounter:
+    def _run(self, value, state=None):
+        if state is None:
+            state = {}
+        n1 = node("c", "consumption_counter", {})
+        exc = make_executor([n1], hysteresis_state=state)
+        return exc.execute({"c": {"value": value}})["c"], state
+
+    def test_first_value_sets_no_consumption(self):
+        # First reading — no previous value, so delta = 0
+        out, _ = self._run(1000.0)
+        assert out["daily"] == pytest.approx(0.0)
+        assert out["yearly"] == pytest.approx(0.0)
+
+    def test_second_value_computes_delta(self):
+        state = {}
+        out, state = self._run(1000.0, state)
+        out, state = self._run(1010.0, state)
+        assert out["daily"] == pytest.approx(10.0)
+        assert out["weekly"] == pytest.approx(10.0)
+        assert out["monthly"] == pytest.approx(10.0)
+        assert out["yearly"] == pytest.approx(10.0)
+
+    def test_multiple_deltas_accumulate(self):
+        state = {}
+        self._run(0.0, state)
+        self._run(5.0, state)
+        out, _ = self._run(12.0, state)
+        assert out["daily"] == pytest.approx(12.0)
+
+    def test_counter_rollover_ignored(self):
+        """A lower value than previous (e.g. meter rollover) must not subtract."""
+        state = {}
+        self._run(9990.0, state)
+        out, _ = self._run(5.0, state)  # rollover: 5 < 9990
+        assert out["daily"] == pytest.approx(0.0)
+
+    def test_period_reset_saves_previous_period(self):
+        state = {}
+        self._run(0.0, state)
+        self._run(50.0, state)  # daily = 50
+        # Simulate new day
+        state["c"]["last_day"] = "1970-01-01"
+        # First call in new day: triggers reset (prev_daily = 50, daily = 0), then adds delta 60-50=10
+        out, _ = self._run(60.0, state)
+        assert out["prev_daily"] == pytest.approx(50.0)
+        assert out["daily"] == pytest.approx(10.0)
+
+    def test_no_value_returns_current_state(self):
+        state = {}
+        self._run(100.0, state)
+        self._run(120.0, state)
+        n1 = node("c", "consumption_counter", {})
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"c": {}})["c"]
+        assert out["daily"] == pytest.approx(20.0)
+
+    def test_all_periods_accumulate_independently(self):
+        state = {}
+        self._run(0.0, state)
+        out, _ = self._run(100.0, state)
+        assert out["daily"]   == pytest.approx(100.0)
+        assert out["weekly"]  == pytest.approx(100.0)
+        assert out["monthly"] == pytest.approx(100.0)
+        assert out["yearly"]  == pytest.approx(100.0)

@@ -160,13 +160,25 @@ class GraphExecutor:
                 return {"value": val}
 
             case "and":
-                return {"out": self._to_bool(inputs.get("a")) and self._to_bool(inputs.get("b"))}
+                vals = self._collect_gate_inputs(inputs, d)
+                result = all(vals)
+                if d.get("negate_out"):
+                    result = not result
+                return {"out": result}
             case "or":
-                return {"out": self._to_bool(inputs.get("a")) or self._to_bool(inputs.get("b"))}
+                vals = self._collect_gate_inputs(inputs, d)
+                result = any(vals)
+                if d.get("negate_out"):
+                    result = not result
+                return {"out": result}
             case "not":
                 return {"out": not self._to_bool(inputs.get("in"))}
             case "xor":
-                return {"out": self._to_bool(inputs.get("a")) ^ self._to_bool(inputs.get("b"))}
+                vals = self._collect_gate_inputs(inputs, d)
+                result = sum(vals) == 1  # exactly one input is True
+                if d.get("negate_out"):
+                    result = not result
+                return {"out": result}
 
             case "compare":
                 op  = _COMPARE_OPS.get(d.get("operator", ">"), operator.gt)
@@ -344,9 +356,149 @@ class GraphExecutor:
                 # Async nodes — handled by manager, not executor
                 return {}
 
+            case "heating_circuit":
+                # DIN-Norm Winter/Sommer-Umschaltung
+                # T_avg = (T1 + T2 + 2*T3) / 4  (T3 doppelt gewichtet: 22:00 Uhr)
+                state = self.hysteresis_state.setdefault(node.id, {
+                    "daily_temps": [], "daily_avg": None, "monthly_avg": None,
+                })
+                t1 = inputs.get("t1")
+                t2 = inputs.get("t2")
+                t3 = inputs.get("t3")
+                heating_limit = float(d.get("heating_limit", 15.0))
+                if t1 is not None and t2 is not None and t3 is not None:
+                    daily_avg = (self._to_num(t1) + self._to_num(t2) + 2 * self._to_num(t3)) / 4
+                    state["daily_avg"] = daily_avg
+                    state["daily_temps"].append(daily_avg)
+                    # Keep at most 31 days for monthly average
+                    state["daily_temps"] = state["daily_temps"][-31:]
+                    state["monthly_avg"] = sum(state["daily_temps"]) / len(state["daily_temps"])
+                # Use monthly average when available, else daily average
+                ref_temp = state["monthly_avg"] if state["monthly_avg"] is not None else state["daily_avg"]
+                heating_mode = (1 if ref_temp < heating_limit else 0) if ref_temp is not None else 0
+                return {
+                    "heating_mode": heating_mode,
+                    "daily_avg": state["daily_avg"],
+                    "monthly_avg": state["monthly_avg"],
+                }
+
+            case "min_max_tracker":
+                state = self.hysteresis_state.setdefault(node.id, {
+                    "abs_min": None, "abs_max": None,
+                    "day_min": None, "day_max": None, "last_day": None,
+                    "week_min": None, "week_max": None, "last_week": None,
+                    "month_min": None, "month_max": None, "last_month": None,
+                    "year_min": None, "year_max": None, "last_year": None,
+                })
+                today = _date.today()
+                day_key   = today.isoformat()
+                week_key  = f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}"
+                month_key = f"{today.year}-{today.month:02d}"
+                year_key  = str(today.year)
+                # Period resets
+                if state["last_day"] != day_key:
+                    state["day_min"] = state["day_max"] = None
+                    state["last_day"] = day_key
+                if state["last_week"] != week_key:
+                    state["week_min"] = state["week_max"] = None
+                    state["last_week"] = week_key
+                if state["last_month"] != month_key:
+                    state["month_min"] = state["month_max"] = None
+                    state["last_month"] = month_key
+                if state["last_year"] != year_key:
+                    state["year_min"] = state["year_max"] = None
+                    state["last_year"] = year_key
+                val = inputs.get("value")
+                if val is not None:
+                    fval = self._to_num(val)
+                    for mn_key, mx_key in [
+                        ("abs_min", "abs_max"), ("day_min", "day_max"),
+                        ("week_min", "week_max"), ("month_min", "month_max"),
+                        ("year_min", "year_max"),
+                    ]:
+                        state[mn_key] = fval if state[mn_key] is None else min(state[mn_key], fval)
+                        state[mx_key] = fval if state[mx_key] is None else max(state[mx_key], fval)
+                return {
+                    "min_daily": state["day_min"],   "max_daily": state["day_max"],
+                    "min_weekly": state["week_min"],  "max_weekly": state["week_max"],
+                    "min_monthly": state["month_min"],"max_monthly": state["month_max"],
+                    "min_yearly": state["year_min"],  "max_yearly": state["year_max"],
+                    "min_abs": state["abs_min"],      "max_abs": state["abs_max"],
+                }
+
+            case "consumption_counter":
+                state = self.hysteresis_state.setdefault(node.id, {
+                    "last_value": None,
+                    "daily": 0.0,   "prev_daily": 0.0,   "last_day": None,
+                    "weekly": 0.0,  "prev_weekly": 0.0,  "last_week": None,
+                    "monthly": 0.0, "prev_monthly": 0.0, "last_month": None,
+                    "yearly": 0.0,  "prev_yearly": 0.0,  "last_year": None,
+                })
+                today = _date.today()
+                day_key   = today.isoformat()
+                week_key  = f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}"
+                month_key = f"{today.year}-{today.month:02d}"
+                year_key  = str(today.year)
+                val = inputs.get("value")
+                if val is not None:
+                    fval = self._to_num(val)
+                    # Period resets (save previous period total before clearing)
+                    if state["last_day"] != day_key:
+                        state["prev_daily"] = state["daily"]
+                        state["daily"] = 0.0
+                        state["last_day"] = day_key
+                    if state["last_week"] != week_key:
+                        state["prev_weekly"] = state["weekly"]
+                        state["weekly"] = 0.0
+                        state["last_week"] = week_key
+                    if state["last_month"] != month_key:
+                        state["prev_monthly"] = state["monthly"]
+                        state["monthly"] = 0.0
+                        state["last_month"] = month_key
+                    if state["last_year"] != year_key:
+                        state["prev_yearly"] = state["yearly"]
+                        state["yearly"] = 0.0
+                        state["last_year"] = year_key
+                    # Add delta (counter increments only; ignores rollovers)
+                    prev = state["last_value"]
+                    if prev is not None and fval >= prev:
+                        delta = fval - prev
+                        state["daily"]   += delta
+                        state["weekly"]  += delta
+                        state["monthly"] += delta
+                        state["yearly"]  += delta
+                    state["last_value"] = fval
+                return {
+                    "daily":        state["daily"],
+                    "weekly":       state["weekly"],
+                    "monthly":      state["monthly"],
+                    "yearly":       state["yearly"],
+                    "prev_daily":   state["prev_daily"],
+                    "prev_weekly":  state["prev_weekly"],
+                    "prev_monthly": state["prev_monthly"],
+                    "prev_yearly":  state["prev_yearly"],
+                }
+
             case _:
                 logger.debug("Unknown node type: %s", t)
                 return {}
+
+    def _collect_gate_inputs(self, inputs: dict[str, Any], d: dict[str, Any]) -> list[bool]:
+        """Collect all active gate inputs with per-input negation applied.
+
+        Port naming: first two ports are "a" and "b" (backward compat);
+        additional ports are "in2", "in3", ... up to input_count - 1.
+        Negation config: "negate_a", "negate_b", "negate_in2", …
+        """
+        count = max(2, min(30, int(d.get("input_count", 2))))
+        port_names = ["a", "b"] + [f"in{i}" for i in range(2, count)]
+        vals: list[bool] = []
+        for name in port_names[:count]:
+            v = self._to_bool(inputs.get(name))
+            if d.get(f"negate_{name}"):
+                v = not v
+            vals.append(v)
+        return vals
 
     @staticmethod
     def _round_half_up(x: Any, ndigits: int = 0) -> Any:

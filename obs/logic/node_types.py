@@ -38,18 +38,30 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="and",
         label="AND",
         category="logic",
-        description="Ausgang ist true wenn ALLE Eingänge true sind",
+        description="Ausgang ist true wenn ALLE Eingänge true sind. Eingänge (2–30) und Ausgang einzeln negierbar.",
         inputs=[_port("a", "A"), _port("b", "B")],
         outputs=[_port("out", "Out")],
+        config_schema={
+            "input_count": {"type": "number", "default": 2, "min": 2, "max": 30, "label": "Anzahl Eingänge"},
+            "negate_a":    {"type": "boolean", "default": False, "label": "Eingang A negieren"},
+            "negate_b":    {"type": "boolean", "default": False, "label": "Eingang B negieren"},
+            "negate_out":  {"type": "boolean", "default": False, "label": "Ausgang negieren"},
+        },
         color="#1d4ed8",
     ),
     NodeTypeDef(
         type="or",
         label="OR",
         category="logic",
-        description="Ausgang ist true wenn MINDESTENS EIN Eingang true ist",
+        description="Ausgang ist true wenn MINDESTENS EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
         inputs=[_port("a", "A"), _port("b", "B")],
         outputs=[_port("out", "Out")],
+        config_schema={
+            "input_count": {"type": "number", "default": 2, "min": 2, "max": 30, "label": "Anzahl Eingänge"},
+            "negate_a":    {"type": "boolean", "default": False, "label": "Eingang A negieren"},
+            "negate_b":    {"type": "boolean", "default": False, "label": "Eingang B negieren"},
+            "negate_out":  {"type": "boolean", "default": False, "label": "Ausgang negieren"},
+        },
         color="#1d4ed8",
     ),
     NodeTypeDef(
@@ -65,9 +77,15 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="xor",
         label="XOR",
         category="logic",
-        description="Ausgang ist true wenn GENAU EIN Eingang true ist",
+        description="Ausgang ist true wenn GENAU EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
         inputs=[_port("a", "A"), _port("b", "B")],
         outputs=[_port("out", "Out")],
+        config_schema={
+            "input_count": {"type": "number", "default": 2, "min": 2, "max": 30, "label": "Anzahl Eingänge"},
+            "negate_a":    {"type": "boolean", "default": False, "label": "Eingang A negieren"},
+            "negate_b":    {"type": "boolean", "default": False, "label": "Eingang B negieren"},
+            "negate_out":  {"type": "boolean", "default": False, "label": "Ausgang negieren"},
+        },
         color="#1d4ed8",
     ),
 
@@ -194,6 +212,84 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             _port("max",   "Max"),
             _port("avg",   "Mittelwert"),
             _port("count", "Anzahl"),
+        ],
+        config_schema={},
+        color="#7c3aed",
+    ),
+
+    # ── Heating Circuit ───────────────────────────────────────────────────
+    NodeTypeDef(
+        type="heating_circuit",
+        label="Heizkreis (DIN)",
+        category="math",
+        description=(
+            "Winter/Sommer-Umschaltung nach DIN. Berechnet Tagesmittel aus drei Messzeitpunkten "
+            "(7:00, 14:00, 22:00 Uhr): T_avg = (T1 + T2 + 2×T3) / 4. "
+            "Heizmodus aktiv wenn gleitendes Monatsmittel < Heizgrenze."
+        ),
+        inputs=[
+            _port("t1", "T1 (07:00)"),
+            _port("t2", "T2 (14:00)"),
+            _port("t3", "T3 (22:00)"),
+        ],
+        outputs=[
+            _port("heating_mode", "Heizmodus (0/1)"),
+            _port("daily_avg",    "Tagesmittel °C"),
+            _port("monthly_avg",  "Monatsmittel °C"),
+        ],
+        config_schema={
+            "heating_limit": {"type": "number", "default": 15.0, "label": "Heizgrenze °C"},
+        },
+        color="#7c3aed",
+    ),
+
+    # ── Min/Max Tracker ───────────────────────────────────────────────────
+    NodeTypeDef(
+        type="min_max_tracker",
+        label="Min/Max Tracker",
+        category="math",
+        description=(
+            "Verfolgt Minimum und Maximum über Zeitperioden "
+            "(täglich, wöchentlich, monatlich, jährlich, absolut). "
+            "Periodenwerte werden automatisch am Tages-/Wochen-/Monats-/Jahreswechsel zurückgesetzt."
+        ),
+        inputs=[_port("value", "Wert")],
+        outputs=[
+            _port("min_daily",   "Min täglich"),
+            _port("max_daily",   "Max täglich"),
+            _port("min_weekly",  "Min wöchentlich"),
+            _port("max_weekly",  "Max wöchentlich"),
+            _port("min_monthly", "Min monatlich"),
+            _port("max_monthly", "Max monatlich"),
+            _port("min_yearly",  "Min jährlich"),
+            _port("max_yearly",  "Max jährlich"),
+            _port("min_abs",     "Min absolut"),
+            _port("max_abs",     "Max absolut"),
+        ],
+        config_schema={},
+        color="#7c3aed",
+    ),
+
+    # ── Consumption Counter ───────────────────────────────────────────────
+    NodeTypeDef(
+        type="consumption_counter",
+        label="Verbrauchszähler",
+        category="math",
+        description=(
+            "Berechnet Verbrauchswerte (täglich, wöchentlich, monatlich, jährlich) "
+            "aus einem fortlaufenden Zählerwert. "
+            "Speichert zusätzlich den Verbrauch der Vorperiode für Vergleiche."
+        ),
+        inputs=[_port("value", "Zählerwert")],
+        outputs=[
+            _port("daily",        "Täglich"),
+            _port("weekly",       "Wöchentlich"),
+            _port("monthly",      "Monatlich"),
+            _port("yearly",       "Jährlich"),
+            _port("prev_daily",   "Vorgestern"),
+            _port("prev_weekly",  "Vorwoche"),
+            _port("prev_monthly", "Vormonat"),
+            _port("prev_yearly",  "Vorjahr"),
         ],
         config_schema={},
         color="#7c3aed",
