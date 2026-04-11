@@ -15,6 +15,11 @@ import asyncio
 import ipaddress
 import socket
 from collections.abc import AsyncGenerator
+<<<<<<< HEAD
+=======
+import ipaddress
+import socket
+>>>>>>> db8d740ec4e103c35768d22e88763cd56d3a86b4
 from urllib.parse import urlparse
 
 import httpx
@@ -97,6 +102,46 @@ async def _check_ssrf(url: str) -> None:
 
 # ── Authentifizierung ──────────────────────────────────────────────────────────
 
+def _validate_camera_url(raw_url: str) -> str:
+    parsed = urlparse(raw_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nur HTTP/HTTPS-URLs erlaubt",
+        )
+    if not parsed.hostname:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ungültige Kamera-URL",
+        )
+
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Kamera-Host kann nicht aufgelöst werden",
+        ) from exc
+
+    for info in infos:
+        ip_text = info[4][0]
+        ip_obj = ipaddress.ip_address(ip_text)
+        if (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_reserved
+            or ip_obj.is_multicast
+            or ip_obj.is_unspecified
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Ziel-Host ist nicht erlaubt",
+            )
+
+    return raw_url
+
+
 async def _camera_auth(
     request: Request,
     _token: str = Query("", alias="_token", description="JWT als Query-Parameter"),
@@ -132,6 +177,7 @@ async def proxy_camera(
     Proxyt den Kamera-Stream vom Backend aus.
     Ermöglicht HTTPS-Browser → Server → HTTP-Kamera (Mixed-Content-Bypass).
     """
+<<<<<<< HEAD
     # 1. Schema-Validierung
     if not url.startswith(("http://", "https://")):
         raise HTTPException(
@@ -144,6 +190,9 @@ async def proxy_camera(
 
     # 3. API-Key anhängen
     target = url
+=======
+    target = _validate_camera_url(url)
+>>>>>>> db8d740ec4e103c35768d22e88763cd56d3a86b4
     if apikey_param and apikey_value:
         sep = "&" if "?" in target else "?"
         target = f"{target}{sep}{apikey_param}={apikey_value}"
@@ -153,10 +202,14 @@ async def proxy_camera(
     # 4. HEAD-Request: Erreichbarkeit prüfen + Content-Type holen
     content_type = "application/octet-stream"
     try:
+<<<<<<< HEAD
         async with httpx.AsyncClient(
             timeout=5.0,
             follow_redirects=False,  # Redirects nicht folgen (SSRF via Redirect)
         ) as hc:
+=======
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as hc:
+>>>>>>> db8d740ec4e103c35768d22e88763cd56d3a86b4
             head = await hc.head(target, auth=auth)
 
         if head.status_code in (301, 302, 307, 308):
@@ -190,10 +243,14 @@ async def proxy_camera(
 
     # 5. Streaming-Generator (kein follow_redirects)
     async def _stream() -> AsyncGenerator[bytes, None]:
+<<<<<<< HEAD
         async with httpx.AsyncClient(
             timeout=None,
             follow_redirects=False,
         ) as hc:
+=======
+        async with httpx.AsyncClient(timeout=None, follow_redirects=False) as hc:
+>>>>>>> db8d740ec4e103c35768d22e88763cd56d3a86b4
             try:
                 async with hc.stream("GET", target, auth=auth) as resp:
                     async for chunk in resp.aiter_bytes(chunk_size=8192):
