@@ -196,7 +196,10 @@
       "Bash(powershell -Command \"Expand-Archive -Path fenster.zip -DestinationPath fenster_extracted -Force; Get-ChildItem fenster_extracted -Recurse | Select-Object FullName\")",
       "Bash(powershell -Command \"Expand-Archive -Path 'C:\\\\Users\\\\DanielAbegglen\\\\Downloads\\\\fenster.zip' -DestinationPath 'C:\\\\Users\\\\DanielAbegglen\\\\Downloads\\\\fenster_extracted' -Force; Get-ChildItem 'C:\\\\Users\\\\DanielAbegglen\\\\Downloads\\\\fenster_extracted' -Recurse | Select-Object -ExpandProperty FullName\")",
       "Bash(powershell -NoProfile -Command \"Expand-Archive -Path 'C:\\\\Users\\\\DanielAbegglen\\\\Downloads\\\\fenster.zip' -DestinationPath 'C:\\\\Users\\\\DanielAbegglen\\\\Downloads\\\\fenster_extracted' -Force\")",
-      "Bash(dir \"C:\\\\Users\\\\DanielAbegglen\\\\Downloads\\\\fenster_extracted\")"
+      "Bash(dir \"C:\\\\Users\\\\DanielAbegglen\\\\Downloads\\\\fenster_extracted\")",
+      "Bash(dir \"C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\openbridgeserver\" /b)",
+      "Bash(powershell -Command \"Get-ChildItem 'C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\openbridgeserver' | Select-Object Name\")",
+      "Bash(powershell -Command \"echo test\")"
     ]
   }
 }
