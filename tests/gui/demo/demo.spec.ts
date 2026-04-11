@@ -4,8 +4,7 @@
  * Testet:
  *  1. Demo-User kann das Dashboard sehen
  *  2. Demo-User kann Adapter-Ansicht sehen (schreibgeschützt)
- *  3. Demo-User wird von gesperrten Routen zum Dashboard umgeleitet
- *  4. Sidebar zeigt Demo-User nur erlaubte Navigationspunkte
+ *  3. Demo-User kann alle weiteren Bereiche normal aufrufen
  */
 
 import { test, expect } from '@playwright/test'
@@ -28,32 +27,38 @@ test('Demo-User sieht keinen "Neue Instanz" Button in Adapter-Ansicht', async ({
   await expect(page.locator('[data-testid="btn-new-instance"]')).not.toBeVisible()
 })
 
-test('Demo-User wird von /datapoints zum Dashboard umgeleitet', async ({ page }) => {
+test('Demo-User kann Objekte aufrufen', async ({ page }) => {
   await page.goto('/datapoints')
-  await page.waitForURL('/', { timeout: 8_000 })
-  await expect(page).toHaveURL('/')
+  await page.waitForLoadState('networkidle')
+  await expect(page).toHaveURL('/datapoints')
 })
 
-test('Demo-User wird von /history zum Dashboard umgeleitet', async ({ page }) => {
+test('Demo-User kann Historie aufrufen', async ({ page }) => {
   await page.goto('/history')
-  await page.waitForURL('/', { timeout: 8_000 })
-  await expect(page).toHaveURL('/')
+  await page.waitForLoadState('networkidle')
+  await expect(page).toHaveURL('/history')
 })
 
-test('Demo-User wird von /logic zum Dashboard umgeleitet', async ({ page }) => {
+test('Demo-User kann Monitor aufrufen', async ({ page }) => {
+  await page.goto('/ringbuffer')
+  await page.waitForLoadState('networkidle')
+  await expect(page).toHaveURL('/ringbuffer')
+})
+
+test('Demo-User kann Logikmodul aufrufen', async ({ page }) => {
   await page.goto('/logic')
-  await page.waitForURL('/', { timeout: 8_000 })
-  await expect(page).toHaveURL('/')
+  await page.waitForLoadState('networkidle')
+  await expect(page).toHaveURL('/logic')
 })
 
-test('Sidebar zeigt Demo-User nur Übersicht, Adapter und Einstellungen', async ({ page }) => {
+test('Sidebar zeigt Demo-User alle Navigationspunkte', async ({ page }) => {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   await expect(page.locator('[data-testid="nav-home"]')).toBeVisible()
   await expect(page.locator('[data-testid="nav-adapters"]')).toBeVisible()
+  await expect(page.locator('[data-testid="nav-datapoints"]')).toBeVisible()
+  await expect(page.locator('[data-testid="nav-history"]')).toBeVisible()
+  await expect(page.locator('[data-testid="nav-ringbuffer"]')).toBeVisible()
+  await expect(page.locator('[data-testid="nav-logic"]')).toBeVisible()
   await expect(page.locator('[data-testid="nav-settings"]')).toBeVisible()
-  await expect(page.locator('[data-testid="nav-datapoints"]')).not.toBeVisible()
-  await expect(page.locator('[data-testid="nav-history"]')).not.toBeVisible()
-  await expect(page.locator('[data-testid="nav-logic"]')).not.toBeVisible()
-  await expect(page.locator('[data-testid="nav-ringbuffer"]')).not.toBeVisible()
 })

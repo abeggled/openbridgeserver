@@ -18,26 +18,11 @@ const router = createRouter({
   routes,
 })
 
-// Routes accessible to the demo user (read-only mode)
-const DEMO_ALLOWED = new Set(['Dashboard', 'Adapters', 'Settings', 'Login'])
-
-function usernameFromToken() {
-  const token = localStorage.getItem('access_token')
-  if (!token) return null
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
-    return payload.sub ?? null
-  } catch { return null }
-}
-
 // Auth guard
 router.beforeEach((to) => {
   const token = localStorage.getItem('access_token')
   if (!to.meta.public && !token) return { name: 'Login' }
   if (to.name === 'Login' && token)  return { name: 'Dashboard' }
-  if (token && usernameFromToken() === 'demo' && !DEMO_ALLOWED.has(to.name)) {
-    return { name: 'Dashboard' }
-  }
 })
 
 export default router
