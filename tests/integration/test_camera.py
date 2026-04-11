@@ -53,14 +53,14 @@ class _MockCameraServer:
         class Handler(BaseHTTPRequestHandler):
             def do_HEAD(self):
                 outer.last_path = self.path
-                outer.last_headers = dict(self.headers)
+                outer.last_headers = {k.lower(): v for k, v in self.headers.items()}
                 self.send_response(outer.head_status)
                 self.send_header("Content-Type", outer.content_type)
                 self.end_headers()
 
             def do_GET(self):
                 outer.last_path = self.path
-                outer.last_headers = dict(self.headers)
+                outer.last_headers = {k.lower(): v for k, v in self.headers.items()}
                 self.send_response(outer.status)
                 self.send_header("Content-Type", outer.content_type)
                 self.end_headers()
