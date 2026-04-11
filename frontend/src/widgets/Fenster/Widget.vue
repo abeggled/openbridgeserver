@@ -159,28 +159,28 @@ const openPct = computed(() => {
         <template v-if="stateMain === 'closed'">
           <rect x="5" y="5" width="50" height="50" stroke-width="1.5"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle pivot on free (right) edge — arm DOWN = closed -->
+          <!-- handle pivot on free (right) edge — arm DOWN = closed (length 10) -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="53" cy="30" r="1.5"/>
-            <line x1="53" y1="30" x2="53" y2="45" stroke-width="2" stroke-linecap="round"/>
+            <line x1="53" y1="30" x2="53" y2="40" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else-if="stateMain === 'tilted'">
           <polygon points="-3,5 47,5 55,55 5,55" stroke-width="1.5"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle arm UP = kipp -->
+          <!-- handle arm UP = kipp (length 10) -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="51" cy="30" r="1.5"/>
-            <line x1="51" y1="30" x2="51" y2="15" stroke-width="2" stroke-linecap="round"/>
+            <line x1="51" y1="30" x2="51" y2="20" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else-if="stateMain === 'open'">
           <polygon points="5,5 45,11 45,61 5,55" stroke-width="1.5" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle arm LEFT toward hinge (Anschlag links) = open -->
+          <!-- handle arm LEFT toward hinge (Anschlag links) = open (length 10) -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="43" cy="36" r="1.5"/>
-            <line x1="43" y1="36" x2="28" y2="36" stroke-width="2" stroke-linecap="round"/>
+            <line x1="43" y1="36" x2="33" y2="36" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
@@ -202,28 +202,28 @@ const openPct = computed(() => {
         <template v-if="stateMain === 'closed'">
           <rect x="5" y="5" width="50" height="50" stroke-width="1.5"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle pivot on free (left) edge — arm DOWN = closed -->
+          <!-- handle pivot on free (left) edge — arm DOWN = closed (length 10) -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="7" cy="30" r="1.5"/>
-            <line x1="7" y1="30" x2="7" y2="45" stroke-width="2" stroke-linecap="round"/>
+            <line x1="7" y1="30" x2="7" y2="40" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else-if="stateMain === 'tilted'">
           <polygon points="-3,5 47,5 55,55 5,55" stroke-width="1.5"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle arm UP = kipp -->
+          <!-- handle arm UP = kipp (length 10) -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="9" cy="30" r="1.5"/>
-            <line x1="9" y1="30" x2="9" y2="15" stroke-width="2" stroke-linecap="round"/>
+            <line x1="9" y1="30" x2="9" y2="20" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else-if="stateMain === 'open'">
           <polygon points="55,5 15,11 15,61 55,55" stroke-width="1.5" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle arm RIGHT toward hinge (Anschlag rechts) = open -->
+          <!-- handle arm RIGHT toward hinge (Anschlag rechts) = open (length 10) -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="17" cy="36" r="1.5"/>
-            <line x1="17" y1="36" x2="32" y2="36" stroke-width="2" stroke-linecap="round"/>
+            <line x1="17" y1="36" x2="27" y2="36" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
