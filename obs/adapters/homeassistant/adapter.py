@@ -205,9 +205,49 @@ class HomeAssistantAdapter(AdapterBase):
             self._ws_task = None
 
         if self._entity_map:
+            # Initial read: publish current state for all SOURCE/BOTH bindings immediately
+            asyncio.create_task(self._initial_read_all(), name="ha-adapter-init-read")
             self._ws_task = asyncio.create_task(
                 self._ws_loop(), name="ha-adapter-ws"
             )
+
+    async def _initial_read_all(self) -> None:
+        """Read and publish current state for all SOURCE/BOTH bindings via REST on startup."""
+        if self._http_client is None:
+            return
+        for bindings in self._entity_map.values():
+            for binding in bindings:
+                try:
+                    bc = HaBindingConfig(**binding.config)
+                    resp = await self._http_client.get(f"/api/states/{bc.entity_id}")
+                    resp.raise_for_status()
+                    state_obj: dict = resp.json()
+
+                    if bc.attribute:
+                        attrs = state_obj.get("attributes") or {}
+                        raw_val = attrs.get(bc.attribute)
+                    else:
+                        raw_str = state_obj.get("state", "unavailable")
+                        raw_val = _coerce_state(raw_str) if raw_str not in ("unavailable", "unknown") else None
+
+                    pub_value = apply_value_map(raw_val, binding.value_map)
+                    if binding.value_formula and pub_value is not None:
+                        from obs.core.formula import apply_formula
+                        pub_value = apply_formula(binding.value_formula, pub_value)
+
+                    logger.info(
+                        "HA adapter initial read: entity=%s attr=%s → dp=%s value=%r",
+                        bc.entity_id, bc.attribute or "state", binding.datapoint_id, pub_value,
+                    )
+                    await self._bus.publish(DataValueEvent(
+                        datapoint_id=binding.datapoint_id,
+                        value=pub_value,
+                        quality="good",
+                        source_adapter=self.adapter_type,
+                        binding_id=binding.id,
+                    ))
+                except Exception:
+                    logger.exception("HA adapter initial read failed for binding %s", binding.id)
 
     # ------------------------------------------------------------------
     # WebSocket loop
@@ -268,7 +308,14 @@ class HomeAssistantAdapter(AdapterBase):
                         if msg.get("type") == "event" and msg.get("id") == sub_id:
                             event = msg.get("event", {})
                             if event.get("event_type") == "state_changed":
-                                await self._on_state_changed(event.get("data", {}))
+                                data = event.get("data", {})
+                                eid = data.get("entity_id", "?")
+                                logger.debug("HA WS event: entity=%s", eid)
+                                if eid in self._entity_map:
+                                    logger.info("HA WS event (subscribed): entity=%s new_state=%s",
+                                                eid,
+                                                (data.get("new_state") or {}).get("state", "?"))
+                                await self._on_state_changed(data)
 
             except asyncio.CancelledError:
                 raise
@@ -311,9 +358,9 @@ class HomeAssistantAdapter(AdapterBase):
                 logger.exception("HA adapter: error processing binding %s", binding.id)
                 continue
 
-            logger.debug(
-                "HA adapter state_changed: entity=%s → dp=%s value=%r",
-                entity_id, binding.datapoint_id, pub_value,
+            logger.info(
+                "HA adapter state_changed: entity=%s attr=%s → dp=%s value=%r",
+                entity_id, bc.attribute or "state", binding.datapoint_id, pub_value,
             )
             await self._bus.publish(DataValueEvent(
                 datapoint_id=binding.datapoint_id,
