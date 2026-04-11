@@ -349,18 +349,29 @@ const openPct = computed(() => {
         <!-- Floor line (thin, semi-transparent) -->
         <line x1="2" y1="196" x2="178" y2="196" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
 
-        <!-- Left wing pane (L-hinged, identical to tuere) -->
+        <!-- Left wing pane (L-hinged) -->
         <template v-if="stateLeft === 'closed'">
           <rect x="7" y="7" width="76" height="183" stroke-width="2"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- handle: closed → DOWN -->
           <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="81" cy="100" r="2"/>
-            <line x1="81" y1="100" x2="66" y2="100" stroke-width="3" stroke-linecap="round"/>
+            <line x1="81" y1="100" x2="81" y2="115" stroke-width="3" stroke-linecap="round"/>
+          </g>
+        </template>
+        <template v-else-if="stateLeft === 'tilted'">
+          <rect x="7" y="7" width="76" height="183" stroke-width="2"
+                class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- handle: kipp → UP -->
+          <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="81" cy="100" r="2"/>
+            <line x1="81" y1="100" x2="81" y2="85" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else-if="stateLeft === 'open'">
           <polygon points="7,7 67,16 67,199 7,190" stroke-width="2" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- handle: open → LEFT (toward hinge) -->
           <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="65" cy="107" r="2"/>
             <line x1="65" y1="107" x2="50" y2="107" stroke-width="3" stroke-linecap="round"/>
@@ -374,14 +385,25 @@ const openPct = computed(() => {
         <template v-if="stateRight === 'closed'">
           <rect x="97" y="7" width="76" height="183" stroke-width="2"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- handle: closed → DOWN -->
           <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
-            <circle cx="99"  cy="100" r="2"/>
-            <line x1="99"  y1="100" x2="114" y2="100" stroke-width="3" stroke-linecap="round"/>
+            <circle cx="99" cy="100" r="2"/>
+            <line x1="99" y1="100" x2="99" y2="115" stroke-width="3" stroke-linecap="round"/>
+          </g>
+        </template>
+        <template v-else-if="stateRight === 'tilted'">
+          <rect x="97" y="7" width="76" height="183" stroke-width="2"
+                class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- handle: kipp → UP -->
+          <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="99" cy="100" r="2"/>
+            <line x1="99" y1="100" x2="99" y2="85" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else-if="stateRight === 'open'">
           <polygon points="173,7 113,16 113,199 173,190" stroke-width="2" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- handle: open → RIGHT (toward hinge) -->
           <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="115" cy="107" r="2"/>
             <line x1="115" y1="107" x2="130" y2="107" stroke-width="3" stroke-linecap="round"/>
