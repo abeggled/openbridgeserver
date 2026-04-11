@@ -303,11 +303,15 @@
               v-model="localData[key]" class="input text-sm" @change="emitUpdate">
               <option v-for="opt in schema.enum" :key="opt" :value="opt">{{ opt }}</option>
             </select>
+            <input v-else-if="schema.type === 'boolean'"
+              type="checkbox" v-model="localData[key]"
+              class="text-sm" @change="emitUpdate" />
             <input v-else
               v-model="localData[key]"
               :type="schema.type === 'number' ? 'number' : 'text'"
               class="input text-sm" @change="emitUpdate" />
           </div>
+
         </template>
       </div>
     </template>
@@ -481,6 +485,7 @@ const isDatapointNode = computed(() =>
 const isWrite          = computed(() => props.node?.type === 'datapoint_write')
 const isCronNode       = computed(() => props.node?.type === 'timer_cron')
 const isMathFormulaNode = computed(() => props.node?.type === 'math_formula')
+
 
 const configFields = computed(() => {
   const schema = nodeDef.value?.config_schema ?? {}

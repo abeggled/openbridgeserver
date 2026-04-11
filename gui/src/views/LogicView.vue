@@ -164,6 +164,7 @@ const nodeTypeComponents = {
   astro_sun: _generic,
   // Math extended
   clamp: _generic, statistics: _generic,
+  heating_circuit: _generic, min_max_tracker: _generic, consumption_counter: _generic,
   // Timer extended
   operating_hours: _generic,
   // Notification

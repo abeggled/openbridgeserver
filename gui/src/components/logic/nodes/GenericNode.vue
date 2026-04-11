@@ -14,7 +14,7 @@
 
       <div class="gn-header" :style="{ background: def.color + '28' }">
         <span class="gn-title">{{ data.label || def.label }}</span>
-        <button v-show="hovered" class="gn-del nodrag" @click.stop="remove">✕</button>
+        <button class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
       </div>
 
       <div class="gn-body">
@@ -27,8 +27,25 @@
             class="gn-port-row"
             :style="{ height: PORT_H + 'px' }"
           >
-            <span class="gn-port-left">{{ def.inputs[r]?.label }}</span>
-            <span class="gn-port-right">{{ def.outputs[r]?.label }}</span>
+            <!-- Input label — clickable negation toggle for gate nodes -->
+            <button
+              v-if="isGateNode && def.inputs[r]"
+              class="gn-port-negate nodrag"
+              :class="{ 'gn-port-negate--active': !!data[`negate_${def.inputs[r].id}`] }"
+              :title="`${def.inputs[r].id} negieren`"
+              @click.stop="toggleNegate(def.inputs[r].id)"
+            >{{ data[`negate_${def.inputs[r].id}`] ? `¬${def.inputs[r].label}` : def.inputs[r].label }}</button>
+            <span v-else class="gn-port-left">{{ def.inputs[r]?.label }}</span>
+
+            <!-- Output label — clickable negation toggle for gate nodes (only on last row) -->
+            <button
+              v-if="isGateNode && def.outputs[r]"
+              class="gn-port-negate gn-port-negate--right nodrag"
+              :class="{ 'gn-port-negate--active': !!data.negate_out }"
+              title="Ausgang negieren"
+              @click.stop="toggleNegate('out')"
+            >{{ data.negate_out ? `¬${def.outputs[r].label}` : def.outputs[r].label }}</button>
+            <span v-else class="gn-port-right">{{ def.outputs[r]?.label }}</span>
           </div>
         </div>
       </div>
@@ -52,6 +69,8 @@
 import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 
+const { updateNodeData } = useVueFlow()
+
 const props = defineProps({
   id:   { type: String, required: true },
   type: { type: String, required: true },
@@ -61,33 +80,60 @@ const props = defineProps({
 // ── Node definitions ───────────────────────────────────────────────────────
 const NODE_DEFS = {
   const_value:  { label: 'Festwert',    color: '#475569', inputs: [],                                                outputs: [{id:'value', label:'Wert'}]       },
-  and:          { label: 'AND',         color: '#1d4ed8', inputs: [{id:'a',label:'A'},{id:'b',label:'B'}],           outputs: [{id:'out',   label:'Out'}]       },
-  or:           { label: 'OR',          color: '#1d4ed8', inputs: [{id:'a',label:'A'},{id:'b',label:'B'}],           outputs: [{id:'out',   label:'Out'}]       },
-  not:          { label: 'NOT',         color: '#1d4ed8', inputs: [{id:'in',label:'In'}],                            outputs: [{id:'out',   label:'Out'}]       },
-  xor:          { label: 'XOR',         color: '#1d4ed8', inputs: [{id:'a',label:'A'},{id:'b',label:'B'}],           outputs: [{id:'out',   label:'Out'}]       },
-  compare:      { label: 'Vergleich',   color: '#1d4ed8', inputs: [{id:'a',label:'A'},{id:'b',label:'B'}],           outputs: [{id:'out',   label:'Erg.'}]      },
+  and:          { label: 'AND',         color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}], outputs: [{id:'out',   label:'Out'}]       },
+  or:           { label: 'OR',          color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}], outputs: [{id:'out',   label:'Out'}]       },
+  not:          { label: 'NOT',         color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'}],                         outputs: [{id:'out',   label:'Out'}]       },
+  xor:          { label: 'XOR',         color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}], outputs: [{id:'out',   label:'Out'}]       },
+  compare:      { label: 'Vergleich',   color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}], outputs: [{id:'out',   label:'Erg.'}]      },
   hysteresis:   { label: 'Hysterese',   color: '#1d4ed8', inputs: [{id:'value',label:'Wert'}],                       outputs: [{id:'out',   label:'Out'}]       },
-  math_formula: { label: 'Formel',      color: '#7c3aed', inputs: [{id:'a',label:'a'},{id:'b',label:'b'}],           outputs: [{id:'result',label:'Erg.'}]      },
+  math_formula: { label: 'Formel',      color: '#7c3aed', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}],  outputs: [{id:'result',label:'Erg.'}]      },
   math_map:     { label: 'Skalieren',   color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                       outputs: [{id:'result',label:'Erg.'}]      },
   timer_delay:  { label: 'Verzögerung', color: '#b45309', inputs: [{id:'trigger',label:'Trigger'}],                  outputs: [{id:'trigger',label:'Trigger'}]  },
   timer_pulse:  { label: 'Impuls',      color: '#b45309', inputs: [{id:'trigger',label:'Trigger'}],                  outputs: [{id:'out',   label:'Out'}]       },
   timer_cron:   { label: 'Trigger',     color: '#b45309', inputs: [],                                                outputs: [{id:'trigger',label:'Trigger'}]  },
-  mcp_tool:     { label: 'MCP Tool',    color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'input',label:'Input'}], outputs: [{id:'result',label:'Erg.'},{id:'done',label:'Fertig'}] },
+  mcp_tool:     { label: 'MCP Tool',    color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'input', label:'Input'}], outputs: [{id:'result',label:'Erg.'},{id:'done',label:'Fertig'}] },
+  python_script:{ label: 'Python',      color: '#be185d', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'},{id:'in3',label:'IN 3'}], outputs: [{id:'result',label:'Erg.'}] },
   // Astro
-  astro_sun:       { label: 'Astro Sonne',    color: '#d97706', inputs: [],                                                                    outputs: [{id:'sunrise',label:'Aufgang'},{id:'sunset',label:'Untergang'},{id:'is_day',label:'Tagsüber'}] },
+  astro_sun:          { label: 'Astro Sonne',    color: '#d97706', inputs: [],                                                                         outputs: [{id:'sunrise',label:'Aufgang'},{id:'sunset',label:'Untergang'},{id:'is_day',label:'Tagsüber'}] },
   // Math (extended)
-  clamp:           { label: 'Begrenzer',      color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                                           outputs: [{id:'result',label:'Erg.'}]      },
-  statistics:      { label: 'Statistik',      color: '#7c3aed', inputs: [{id:'value',label:'Wert'},{id:'reset',label:'Reset'}],                 outputs: [{id:'min',label:'Min'},{id:'max',label:'Max'},{id:'avg',label:'∅'},{id:'count',label:'N'}] },
+  clamp:              { label: 'Begrenzer',      color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                                                outputs: [{id:'result',label:'Erg.'}]      },
+  statistics:         { label: 'Statistik',      color: '#7c3aed', inputs: [{id:'value',label:'Wert'},{id:'reset',label:'Reset'}],                      outputs: [{id:'min',label:'Min'},{id:'max',label:'Max'},{id:'avg',label:'∅'},{id:'count',label:'N'}] },
+  heating_circuit:    { label: 'Sommer/Winter', color: '#7c3aed', inputs: [{id:'value',label:'Temp °C'}], outputs: [{id:'heating_mode',label:'Heizmodus'},{id:'daily_avg',label:'Tagesmittel'},{id:'monthly_avg',label:'Monatsmittel'},{id:'t1',label:'T1 (dbg)'},{id:'t2',label:'T2 (dbg)'},{id:'t3',label:'T3 (dbg)'}] },
+  min_max_tracker:    { label: 'Min/Max',        color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                                                outputs: [{id:'min_daily',label:'Min/d'},{id:'max_daily',label:'Max/d'},{id:'min_weekly',label:'Min/w'},{id:'max_weekly',label:'Max/w'},{id:'min_monthly',label:'Min/m'},{id:'max_monthly',label:'Max/m'},{id:'min_yearly',label:'Min/y'},{id:'max_yearly',label:'Max/y'},{id:'min_abs',label:'Min∞'},{id:'max_abs',label:'Max∞'}] },
+  consumption_counter:{ label: 'Verbrauch',      color: '#7c3aed', inputs: [{id:'value',label:'Zähler'}],                                              outputs: [{id:'daily',label:'Tag'},{id:'weekly',label:'Woche'},{id:'monthly',label:'Monat'},{id:'yearly',label:'Jahr'},{id:'prev_daily',label:'Vortag'},{id:'prev_weekly',label:'Vorwoche'},{id:'prev_monthly',label:'Vormonat'},{id:'prev_yearly',label:'Vorjahr'}] },
   // Timer (extended)
-  operating_hours: { label: 'Betriebsstd.',   color: '#b45309', inputs: [{id:'active',label:'Aktiv'},{id:'reset',label:'Reset'}],              outputs: [{id:'hours',label:'Std.'}]       },
+  operating_hours:    { label: 'Betriebsstd.',   color: '#b45309', inputs: [{id:'active',label:'Aktiv'},{id:'reset',label:'Reset'}],                   outputs: [{id:'hours',label:'Std.'}]       },
   // Notification
-  notify_pushover: { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],     outputs: [{id:'sent',label:'Gesendet'}]    },
-  notify_sms:      { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],     outputs: [{id:'sent',label:'Gesendet'}]    },
+  notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],          outputs: [{id:'sent',label:'Gesendet'}]    },
+  notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],          outputs: [{id:'sent',label:'Gesendet'}]    },
   // Integration
-  api_client:      { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'body',label:'Body'}],             outputs: [{id:'response',label:'Antwort'},{id:'status',label:'Status'},{id:'success',label:'OK'}] },
+  api_client:         { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'body',label:'Body'}],                  outputs: [{id:'response',label:'Antwort'},{id:'status',label:'Status'},{id:'success',label:'OK'}] },
 }
 
-const def = computed(() => NODE_DEFS[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] })
+// ── Gate helpers ───────────────────────────────────────────────────────────
+const isGateNode = computed(() =>
+  props.type === 'and' || props.type === 'or' || props.type === 'xor'
+)
+
+// ── Computed def — expands gate inputs dynamically from data.input_count
+const def = computed(() => {
+  const base = NODE_DEFS[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] }
+  if (isGateNode.value) {
+    const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
+    const inputs = Array.from({ length: count }, (_, i) => ({
+      id:    `in${i + 1}`,
+      label: `IN ${i + 1}`,
+    }))
+    return { ...base, inputs, outputs: [{ id: 'out', label: 'Out' }] }
+  }
+  return base
+})
+
+// ── Inline negation toggle (AND / OR / XOR) ────────────────────────────────
+function toggleNegate(portId) {
+  const key = `negate_${portId}`
+  updateNodeData(props.id, { [key]: !props.data[key] })
+}
 
 // ── Config summary ─────────────────────────────────────────────────────────
 const summary = computed(() => {
@@ -105,9 +151,16 @@ const summary = computed(() => {
   if (props.type === 'clamp')           return `[${d.min ?? 0} … ${d.max ?? 100}]`
   if (props.type === 'statistics')      return null
   if (props.type === 'operating_hours') return null
-  if (props.type === 'notify_pushover') return d.title || 'open bridge server'
-  if (props.type === 'notify_sms')      return d.to || '—'
-  if (props.type === 'api_client')      return `${d.method ?? 'GET'}  ${(d.url || '—').slice(0, 20)}`
+  if (props.type === 'notify_pushover')     return d.title || 'open bridge server'
+  if (props.type === 'notify_sms')          return d.to || '—'
+  if (props.type === 'api_client')          return `${d.method ?? 'GET'}  ${(d.url || '—').slice(0, 20)}`
+  if (props.type === 'heating_circuit')     return `W≤${d.temp_winter ?? 15} °C  S≥${d.temp_summer ?? 20} °C`
+  if (props.type === 'min_max_tracker')     return null
+  if (props.type === 'consumption_counter') return null
+  if (props.type === 'and' || props.type === 'or' || props.type === 'xor') {
+    const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
+    return count > 2 ? `${count} Eingänge` : null
+  }
   return null
 })
 
@@ -193,6 +246,22 @@ function remove() { removeNodes([props.id]) }
 }
 .gn-port-left  { font-size: 9px; color: var(--node-port-label); }
 .gn-port-right { font-size: 9px; color: var(--node-port-label); }
+
+/* Inline negation toggle */
+.gn-port-negate {
+  font-size: 9px;
+  color: var(--node-port-label);
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1;
+  transition: background .12s, color .12s;
+}
+.gn-port-negate:hover          { background: rgba(255,255,255,.10); color: #7dd3fc; }
+.gn-port-negate--active        { color: #f87171; font-weight: 700; }
+.gn-port-negate--right         { margin-left: auto; }
 
 .gn-debug {
   font-size: 9px;

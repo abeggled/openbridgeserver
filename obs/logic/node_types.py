@@ -38,18 +38,24 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="and",
         label="AND",
         category="logic",
-        description="Ausgang ist true wenn ALLE Eingänge true sind",
-        inputs=[_port("a", "A"), _port("b", "B")],
+        description="Ausgang ist true wenn ALLE Eingänge true sind. Eingänge (2–30) und Ausgang einzeln negierbar.",
+        inputs=[_port("in1", "IN 1"), _port("in2", "IN 2")],
         outputs=[_port("out", "Out")],
+        config_schema={
+            "input_count": {"type": "number", "default": 2, "min": 2, "max": 30, "label": "Anzahl Eingänge"},
+        },
         color="#1d4ed8",
     ),
     NodeTypeDef(
         type="or",
         label="OR",
         category="logic",
-        description="Ausgang ist true wenn MINDESTENS EIN Eingang true ist",
-        inputs=[_port("a", "A"), _port("b", "B")],
+        description="Ausgang ist true wenn MINDESTENS EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
+        inputs=[_port("in1", "IN 1"), _port("in2", "IN 2")],
         outputs=[_port("out", "Out")],
+        config_schema={
+            "input_count": {"type": "number", "default": 2, "min": 2, "max": 30, "label": "Anzahl Eingänge"},
+        },
         color="#1d4ed8",
     ),
     NodeTypeDef(
@@ -57,7 +63,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         label="NOT",
         category="logic",
         description="Invertiert den Eingang",
-        inputs=[_port("in", "In")],
+        inputs=[_port("in1", "IN 1")],
         outputs=[_port("out", "Out")],
         color="#1d4ed8",
     ),
@@ -65,9 +71,12 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="xor",
         label="XOR",
         category="logic",
-        description="Ausgang ist true wenn GENAU EIN Eingang true ist",
-        inputs=[_port("a", "A"), _port("b", "B")],
+        description="Ausgang ist true wenn GENAU EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
+        inputs=[_port("in1", "IN 1"), _port("in2", "IN 2")],
         outputs=[_port("out", "Out")],
+        config_schema={
+            "input_count": {"type": "number", "default": 2, "min": 2, "max": 30, "label": "Anzahl Eingänge"},
+        },
         color="#1d4ed8",
     ),
 
@@ -77,7 +86,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         label="Vergleich",
         category="logic",
         description="Vergleicht zwei Werte (>, <, =, >=, <=, !=)",
-        inputs=[_port("a", "A"), _port("b", "B")],
+        inputs=[_port("in1", "IN 1"), _port("in2", "IN 2")],
         outputs=[_port("out", "Ergebnis")],
         config_schema={
             "operator": {"type": "string", "enum": [">", "<", "=", ">=", "<=", "!="], "default": ">"}
@@ -146,8 +155,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="math_formula",
         label="Formel",
         category="math",
-        description="Berechnet einen Ausdruck. Variablen: a, b",
-        inputs=[_port("a", "A"), _port("b", "B")],
+        description="Berechnet einen Ausdruck. Variablen: a (= IN 1), b (= IN 2)",
+        inputs=[_port("in1", "IN 1"), _port("in2", "IN 2")],
         outputs=[_port("result", "Ergebnis")],
         config_schema={
             "formula":        {"type": "string", "default": "a + b"},
@@ -199,6 +208,102 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         color="#7c3aed",
     ),
 
+    # ── Heating Circuit ───────────────────────────────────────────────────
+    NodeTypeDef(
+        type="heating_circuit",
+        label="Sommer/Winter (DIN)",
+        category="math",
+        description=(
+            "Sommer/Winter-Umschaltung nach DIN. Eingang: Aussentemperatur. "
+            "Der Wert wird je nach Tageszeit automatisch T1 (≈07:00), T2 (≈14:00) oder T3 (≈22:00) zugeordnet. "
+            "Tagesmittel: T_avg = (T1 + T2 + 2×T3) / 4. "
+            "Heizmodus ON wenn Mittelwert < Temp. Winter, bleibt ON bis Mittelwert > Temp. Sommer (Hysterese)."
+        ),
+        inputs=[
+            _port("value", "Temp °C"),
+        ],
+        outputs=[
+            _port("heating_mode", "Heizmodus"),
+            _port("daily_avg",    "Tagesmittel"),
+            _port("monthly_avg",  "Monatsmittel"),
+            _port("t1",           "T1 (debug)"),
+            _port("t2",           "T2 (debug)"),
+            _port("t3",           "T3 (debug)"),
+        ],
+        config_schema={
+            "temp_winter": {"type": "number", "default": 15.0, "label": "Temp. Winter °C (Heizen EIN)"},
+            "temp_summer": {"type": "number", "default": 20.0, "label": "Temp. Sommer °C (Heizen AUS)"},
+        },
+        color="#7c3aed",
+    ),
+
+    # ── Min/Max Tracker ───────────────────────────────────────────────────
+    NodeTypeDef(
+        type="min_max_tracker",
+        label="Min/Max Tracker",
+        category="math",
+        description=(
+            "Verfolgt Minimum und Maximum über Zeitperioden "
+            "(täglich, wöchentlich, monatlich, jährlich, absolut). "
+            "Periodenwerte werden automatisch am Tages-/Wochen-/Monats-/Jahreswechsel zurückgesetzt."
+        ),
+        inputs=[_port("value", "Wert")],
+        outputs=[
+            _port("min_daily",   "Min täglich"),
+            _port("max_daily",   "Max täglich"),
+            _port("min_weekly",  "Min wöchentlich"),
+            _port("max_weekly",  "Max wöchentlich"),
+            _port("min_monthly", "Min monatlich"),
+            _port("max_monthly", "Max monatlich"),
+            _port("min_yearly",  "Min jährlich"),
+            _port("max_yearly",  "Max jährlich"),
+            _port("min_abs",     "Min absolut"),
+            _port("max_abs",     "Max absolut"),
+        ],
+        config_schema={
+            "init_abs_min":   {"type": "number", "default": None, "label": "Startwert Min absolut"},
+            "init_abs_max":   {"type": "number", "default": None, "label": "Startwert Max absolut"},
+            "init_day_min":   {"type": "number", "default": None, "label": "Startwert Min täglich"},
+            "init_day_max":   {"type": "number", "default": None, "label": "Startwert Max täglich"},
+            "init_month_min": {"type": "number", "default": None, "label": "Startwert Min monatlich"},
+            "init_month_max": {"type": "number", "default": None, "label": "Startwert Max monatlich"},
+            "init_year_min":  {"type": "number", "default": None, "label": "Startwert Min jährlich"},
+            "init_year_max":  {"type": "number", "default": None, "label": "Startwert Max jährlich"},
+        },
+        color="#7c3aed",
+    ),
+
+    # ── Consumption Counter ───────────────────────────────────────────────
+    NodeTypeDef(
+        type="consumption_counter",
+        label="Verbrauchszähler",
+        category="math",
+        description=(
+            "Berechnet Verbrauchswerte (täglich, wöchentlich, monatlich, jährlich) "
+            "aus einem fortlaufenden Zählerwert. "
+            "Speichert zusätzlich den Verbrauch der Vorperiode für Vergleiche."
+        ),
+        inputs=[_port("value", "Zählerwert")],
+        outputs=[
+            _port("daily",        "Täglich"),
+            _port("weekly",       "Wöchentlich"),
+            _port("monthly",      "Monatlich"),
+            _port("yearly",       "Jährlich"),
+            _port("prev_daily",   "Vorgestern"),
+            _port("prev_weekly",  "Vorwoche"),
+            _port("prev_monthly", "Vormonat"),
+            _port("prev_yearly",  "Vorjahr"),
+        ],
+        config_schema={
+            "init_meter":   {"type": "number", "default": None, "label": "Startwert Zählerstand"},
+            "init_daily":   {"type": "number", "default": None, "label": "Startwert täglich"},
+            "init_weekly":  {"type": "number", "default": None, "label": "Startwert wöchentlich"},
+            "init_monthly": {"type": "number", "default": None, "label": "Startwert monatlich"},
+            "init_yearly":  {"type": "number", "default": None, "label": "Startwert jährlich"},
+        },
+        color="#7c3aed",
+    ),
+
     # ── Timer ─────────────────────────────────────────────────────────────
     NodeTypeDef(
         type="timer_delay",
@@ -247,9 +352,9 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         label="Python Script",
         category="script",
         description="Führt ein Python-Skript aus. Verfügbar: inputs dict → return value",
-        inputs=[_port("a", "A"), _port("b", "B"), _port("c", "C")],
+        inputs=[_port("in1", "IN 1"), _port("in2", "IN 2"), _port("in3", "IN 3")],
         outputs=[_port("result", "Ergebnis")],
-        config_schema={"script": {"type": "string", "default": "# inputs['a'], inputs['b']\nresult = inputs.get('a', 0)"}},
+        config_schema={"script": {"type": "string", "default": "# inputs['in1'], inputs['in2']\nresult = inputs.get('in1', 0)"}},
         color="#be185d",
     ),
 
