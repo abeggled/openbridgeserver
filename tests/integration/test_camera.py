@@ -4,17 +4,23 @@ Integration Tests — Kamera-Proxy
 GET /api/v1/camera/proxy
 
 Abgedeckt:
-  1. Kein Token → 401
-  2. Ungültiger Token → 401
-  3. Ungültiges URL-Schema (ftp://) → 400
-  4. Kamera erreichbar → 200, Stream + Content-Type weitergeleitet
-  5. Kamera nicht erreichbar (kein offener Port) → 502
-  6. Kamera antwortet 401 → 502
-  7. Kamera antwortet 404 → 502
-  8. Auth via ?_token= Query-Param (statt Authorization-Header)
-  9. Basic-Auth-Credentials werden an Kamera weitergeleitet
- 10. API-Key wird als Query-Parameter an Kamera-URL angehängt
- 11. HEAD antwortet 405 (nicht unterstützt) → Proxy fährt trotzdem fort
+  1.  Kein Token → 401
+  2.  Ungültiger Token → 401
+  3.  Ungültiges URL-Schema (ftp://) → 400
+  4.  Kamera erreichbar → 200, Stream + Content-Type weitergeleitet
+  5.  Kamera nicht erreichbar (kein offener Port) → 502
+  6.  Kamera antwortet 401 → 502
+  7.  Kamera antwortet 404 → 502
+  8.  Auth via ?_token= Query-Param (statt Authorization-Header)
+  9.  Basic-Auth-Credentials werden an Kamera weitergeleitet
+  10. API-Key wird als Query-Parameter an Kamera-URL angehängt
+  11. HEAD antwortet 405 (nicht unterstützt) → Proxy fährt trotzdem fort
+
+SSRF-Schutz:
+  12. Loopback IPv4 (127.0.0.1) → 400
+  13. Loopback via localhost-Hostname → 400
+  14. Link-local / Cloud-Metadata (169.254.169.254) → 400
+  15. Loopback IPv6 (::1) → 400
 """
 from __future__ import annotations
 
@@ -222,3 +228,45 @@ async def test_proxy_head_405_proceeds(client, auth_headers):
         assert resp.status_code == 200
     finally:
         cam.shutdown()
+
+
+# ── SSRF-Schutz ────────────────────────────────────────────────────────────────
+
+# 12. Loopback IPv4 direkt als IP-Literal
+async def test_proxy_ssrf_loopback_ipv4_blocked(client, auth_headers):
+    resp = await client.get(
+        "/api/v1/camera/proxy?url=http://127.0.0.1:8080/secret",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert "gesperrt" in resp.json().get("detail", "").lower()
+
+
+# 13. Loopback via localhost-Hostname
+async def test_proxy_ssrf_localhost_blocked(client, auth_headers):
+    resp = await client.get(
+        "/api/v1/camera/proxy?url=http://localhost/secret",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert "gesperrt" in resp.json().get("detail", "").lower()
+
+
+# 14. Link-local / Cloud-Metadata-Endpunkt (AWS IMDSv1)
+async def test_proxy_ssrf_metadata_ip_blocked(client, auth_headers):
+    resp = await client.get(
+        "/api/v1/camera/proxy?url=http://169.254.169.254/latest/meta-data/",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert "gesperrt" in resp.json().get("detail", "").lower()
+
+
+# 15. Loopback IPv6
+async def test_proxy_ssrf_loopback_ipv6_blocked(client, auth_headers):
+    resp = await client.get(
+        "/api/v1/camera/proxy?url=http://[::1]/secret",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert "gesperrt" in resp.json().get("detail", "").lower()
