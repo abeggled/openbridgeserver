@@ -159,19 +159,32 @@ const openPct = computed(() => {
         <template v-if="stateMain === 'closed'">
           <rect x="5" y="5" width="50" height="50" stroke-width="1.5"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="53" cy="30" r="2" class="fill-gray-500 dark:fill-gray-400"/>
+          <!-- handle pivot on free (right) edge — arm DOWN = closed -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="53" cy="30" r="1.5"/>
+            <line x1="53" y1="30" x2="53" y2="45" stroke-width="2" stroke-linecap="butt"/>
+            <line x1="50" y1="45" x2="56" y2="45" stroke-width="2" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else-if="stateMain === 'tilted'">
-          <!-- kipp: bottom (5→55,55) fixed, top shifted left 8.5px → (-3→47,5) -->
           <polygon points="-3,5 47,5 55,55 5,55" stroke-width="1.5"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="51" cy="30" r="2" class="fill-gray-500 dark:fill-gray-400"/>
+          <!-- handle arm UP = kipp -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="51" cy="30" r="1.5"/>
+            <line x1="51" y1="30" x2="51" y2="15" stroke-width="2" stroke-linecap="butt"/>
+            <line x1="48" y1="15" x2="54" y2="15" stroke-width="2" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else-if="stateMain === 'open'">
-          <!-- open: hinge x=5, free x=45 (79% of 50), falls +6px; bottom-right y=61 clips -->
           <polygon points="5,5 45,11 45,61 5,55" stroke-width="1.5" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="43" cy="36" r="2" class="fill-gray-500 dark:fill-gray-400"/>
+          <!-- handle arm LEFT toward hinge (Anschlag links) = open -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="43" cy="36" r="1.5"/>
+            <line x1="43" y1="36" x2="28" y2="36" stroke-width="2" stroke-linecap="butt"/>
+            <line x1="28" y1="33" x2="28" y2="39" stroke-width="2" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else>
           <text x="30" y="30" text-anchor="middle" dominant-baseline="middle" font-size="20" fill="currentColor" opacity="0.4">?</text>
@@ -192,19 +205,32 @@ const openPct = computed(() => {
         <template v-if="stateMain === 'closed'">
           <rect x="5" y="5" width="50" height="50" stroke-width="1.5"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="7" cy="30" r="2" class="fill-gray-500 dark:fill-gray-400"/>
+          <!-- handle pivot on free (left) edge — arm DOWN = closed -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="7" cy="30" r="1.5"/>
+            <line x1="7" y1="30" x2="7" y2="45" stroke-width="2" stroke-linecap="butt"/>
+            <line x1="4" y1="45" x2="10" y2="45" stroke-width="2" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else-if="stateMain === 'tilted'">
-          <!-- same kipp polygon (bottom pivot, direction-agnostic) -->
           <polygon points="-3,5 47,5 55,55 5,55" stroke-width="1.5"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="9" cy="30" r="2" class="fill-gray-500 dark:fill-gray-400"/>
+          <!-- handle arm UP = kipp -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="9" cy="30" r="1.5"/>
+            <line x1="9" y1="30" x2="9" y2="15" stroke-width="2" stroke-linecap="butt"/>
+            <line x1="6" y1="15" x2="12" y2="15" stroke-width="2" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else-if="stateMain === 'open'">
-          <!-- open: hinge x=55, free x=15 (55-40), falls +6px -->
           <polygon points="55,5 15,11 15,61 55,55" stroke-width="1.5" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="17" cy="36" r="2" class="fill-gray-500 dark:fill-gray-400"/>
+          <!-- handle arm RIGHT toward hinge (Anschlag rechts) = open -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="17" cy="36" r="1.5"/>
+            <line x1="17" y1="36" x2="32" y2="36" stroke-width="2" stroke-linecap="butt"/>
+            <line x1="32" y1="33" x2="32" y2="39" stroke-width="2" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else>
           <text x="30" y="30" text-anchor="middle" dominant-baseline="middle" font-size="20" fill="currentColor" opacity="0.4">?</text>
@@ -239,43 +265,68 @@ const openPct = computed(() => {
         <!-- Center divider (summaryState) -->
         <line x1="60" y1="1.5" x2="60" y2="58.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
 
-        <!-- Left wing pane (identical coordinates to single fenster) -->
+        <!-- Left wing pane — identical to single fenster (L-hinged) -->
         <template v-if="stateLeft === 'closed'">
           <rect x="5" y="5" width="50" height="50" stroke-width="1.5"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="53" cy="30" r="2" class="fill-gray-500 dark:fill-gray-400"/>
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="53" cy="30" r="1.5"/>
+            <line x1="53" y1="30" x2="53" y2="45" stroke-width="2" stroke-linecap="butt"/>
+            <line x1="50" y1="45" x2="56" y2="45" stroke-width="2" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else-if="stateLeft === 'tilted'">
           <polygon points="-3,5 47,5 55,55 5,55" stroke-width="1.5"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="51" cy="30" r="2" class="fill-gray-500 dark:fill-gray-400"/>
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="51" cy="30" r="1.5"/>
+            <line x1="51" y1="30" x2="51" y2="15" stroke-width="2" stroke-linecap="butt"/>
+            <line x1="48" y1="15" x2="54" y2="15" stroke-width="2" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else-if="stateLeft === 'open'">
           <polygon points="5,5 45,11 45,61 5,55" stroke-width="1.5" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="43" cy="36" r="2" class="fill-gray-500 dark:fill-gray-400"/>
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="43" cy="36" r="1.5"/>
+            <line x1="43" y1="36" x2="28" y2="36" stroke-width="2" stroke-linecap="butt"/>
+            <line x1="28" y1="33" x2="28" y2="39" stroke-width="2" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else>
           <text x="30" y="30" text-anchor="middle" dominant-baseline="middle" font-size="20" fill="currentColor" opacity="0.4">?</text>
         </template>
 
-        <!-- Right wing pane (offset +60, same shapes mirrored) -->
+        <!-- Right wing pane — R-hinged, offset +60, mirror of left -->
         <template v-if="stateRight === 'closed'">
           <rect x="65" y="5" width="50" height="50" stroke-width="1.5"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="67" cy="30" r="2" class="fill-gray-500 dark:fill-gray-400"/>
+          <!-- handle on free (left) edge, arm DOWN -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="67" cy="30" r="1.5"/>
+            <line x1="67" y1="30" x2="67" y2="45" stroke-width="2" stroke-linecap="butt"/>
+            <line x1="64" y1="45" x2="70" y2="45" stroke-width="2" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else-if="stateRight === 'tilted'">
-          <!-- kipp: bottom (65→115,55) fixed, top shifted left 8.5px → (57→107,5) -->
           <polygon points="57,5 107,5 115,55 65,55" stroke-width="1.5"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="63" cy="30" r="2" class="fill-gray-500 dark:fill-gray-400"/>
+          <!-- arm UP = kipp -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="69" cy="30" r="1.5"/>
+            <line x1="69" y1="30" x2="69" y2="15" stroke-width="2" stroke-linecap="butt"/>
+            <line x1="66" y1="15" x2="72" y2="15" stroke-width="2" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else-if="stateRight === 'open'">
-          <!-- open: hinge x=115, free x=75 (115-40), falls +6px -->
           <polygon points="115,5 75,11 75,61 115,55" stroke-width="1.5" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="77" cy="36" r="2" class="fill-gray-500 dark:fill-gray-400"/>
+          <!-- arm RIGHT toward hinge (Anschlag rechts) = open -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="77" cy="36" r="1.5"/>
+            <line x1="77" y1="36" x2="92" y2="36" stroke-width="2" stroke-linecap="butt"/>
+            <line x1="92" y1="33" x2="92" y2="39" stroke-width="2" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else>
           <text x="90" y="30" text-anchor="middle" dominant-baseline="middle" font-size="20" fill="currentColor" opacity="0.4">?</text>
@@ -304,12 +355,22 @@ const openPct = computed(() => {
         <template v-if="stateMain === 'closed'">
           <rect x="7" y="7" width="76" height="183" stroke-width="2"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- handle on free (right) edge at ~100cm from floor, always points LEFT (Anschlag links) -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="81" cy="100" r="2"/>
+            <line x1="81" y1="100" x2="66" y2="100" stroke-width="3" stroke-linecap="butt"/>
+            <line x1="66" y1="96"  x2="66" y2="104" stroke-width="3" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else-if="stateMain === 'open'">
-          <!-- hinge x=7, free x=67 (7+60), fall +9; bottom-right y=199 -->
           <polygon points="7,7 67,16 67,199 7,190" stroke-width="2" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="65" cy="107" r="3" class="fill-gray-500 dark:fill-gray-400"/>
+          <!-- handle on free edge of open panel, same direction (LEFT) — ändert sich nicht -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="65" cy="107" r="2"/>
+            <line x1="65" y1="107" x2="50" y2="107" stroke-width="3" stroke-linecap="butt"/>
+            <line x1="50" y1="103" x2="50" y2="111" stroke-width="3" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else>
           <text x="45" y="100" text-anchor="middle" dominant-baseline="middle" font-size="28" fill="currentColor" opacity="0.4">?</text>
@@ -317,7 +378,6 @@ const openPct = computed(() => {
       </svg>
 
       <!-- ── Door RIGHT-hinged (tuere_r) ──────────────────────────────── -->
-      <!-- Real: 90×200cm → viewBox 90×200. Mirror of tuere. -->
       <svg
         v-else-if="mode === 'tuere_r'"
         viewBox="0 0 90 200"
@@ -333,12 +393,22 @@ const openPct = computed(() => {
         <template v-if="stateMain === 'closed'">
           <rect x="7" y="7" width="76" height="183" stroke-width="2"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- handle on free (left) edge, always points RIGHT (Anschlag rechts) -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="9"  cy="100" r="2"/>
+            <line x1="9"  y1="100" x2="24" y2="100" stroke-width="3" stroke-linecap="butt"/>
+            <line x1="24" y1="96"  x2="24" y2="104" stroke-width="3" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else-if="stateMain === 'open'">
-          <!-- hinge x=83 (7+76), free x=23 (83-60), fall +9 -->
           <polygon points="83,7 23,16 23,199 83,190" stroke-width="2" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <circle cx="25" cy="107" r="3" class="fill-gray-500 dark:fill-gray-400"/>
+          <!-- handle on free edge of open panel, same direction (RIGHT) -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="25" cy="107" r="2"/>
+            <line x1="25" y1="107" x2="40" y2="107" stroke-width="3" stroke-linecap="butt"/>
+            <line x1="40" y1="103" x2="40" y2="111" stroke-width="3" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else>
           <text x="45" y="100" text-anchor="middle" dominant-baseline="middle" font-size="28" fill="currentColor" opacity="0.4">?</text>
@@ -367,6 +437,17 @@ const openPct = computed(() => {
         <template v-if="stateMain === 'closed'">
           <rect x="7" y="7" width="186" height="82" stroke-width="2"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- handle: schiebetuer closed → UP (right portion); schiebetuer_r closed → UP (left portion) -->
+          <g v-if="mode === 'schiebetuer'" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="147" cy="48" r="2"/>
+            <line x1="147" y1="48" x2="147" y2="25" stroke-width="3" stroke-linecap="butt"/>
+            <line x1="141" y1="25" x2="153" y2="25" stroke-width="3" stroke-linecap="round"/>
+          </g>
+          <g v-else class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="54" cy="48" r="2"/>
+            <line x1="54" y1="48" x2="54" y2="25" stroke-width="3" stroke-linecap="butt"/>
+            <line x1="48" y1="25" x2="60" y2="25" stroke-width="3" stroke-linecap="round"/>
+          </g>
         </template>
         <!-- Open, fixer Teil LINKS: panel slid left (solid), gap right (ghost) -->
         <template v-else-if="stateMain === 'open' && mode === 'schiebetuer'">
@@ -374,6 +455,12 @@ const openPct = computed(() => {
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <rect x="100" y="7" width="93" height="82" stroke-width="1.5" stroke-dasharray="8,5"
                 class="fill-gray-200 dark:fill-gray-700 stroke-gray-300 dark:stroke-gray-600" opacity="0.5"/>
+          <!-- handle: open → DOWN on solid (left) panel -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="54" cy="48" r="2"/>
+            <line x1="54" y1="48" x2="54" y2="71" stroke-width="3" stroke-linecap="butt"/>
+            <line x1="48" y1="71" x2="60" y2="71" stroke-width="3" stroke-linecap="round"/>
+          </g>
         </template>
         <!-- Open, fixer Teil RECHTS: gap left (ghost), panel slid right (solid) -->
         <template v-else-if="stateMain === 'open' && mode === 'schiebetuer_r'">
@@ -381,6 +468,12 @@ const openPct = computed(() => {
                 class="fill-gray-200 dark:fill-gray-700 stroke-gray-300 dark:stroke-gray-600" opacity="0.5"/>
           <rect x="100" y="7" width="93" height="82" stroke-width="2"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- handle: open → DOWN on solid (right) panel -->
+          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+            <circle cx="147" cy="48" r="2"/>
+            <line x1="147" y1="48" x2="147" y2="71" stroke-width="3" stroke-linecap="butt"/>
+            <line x1="141" y1="71" x2="153" y2="71" stroke-width="3" stroke-linecap="round"/>
+          </g>
         </template>
         <template v-else>
           <text x="100" y="50" text-anchor="middle" dominant-baseline="middle" font-size="30" fill="currentColor" opacity="0.4">?</text>
