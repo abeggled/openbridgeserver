@@ -876,6 +876,42 @@ class TestMinMaxTracker:
         assert out["min_abs"] == pytest.approx(5.0)   # 5 < 100
         assert out["max_abs"] == pytest.approx(100.0)
 
+    def test_seed_abs_min_max_applied_once(self):
+        """Startwerte für abs_min/abs_max werden einmalig übernommen."""
+        cfg = {"init_abs_min": -10.0, "init_abs_max": 999.0}
+        state = {}
+        n1 = node("m", "min_max_tracker", cfg)
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"m": {"value": 50.0}})["m"]
+        assert out["min_abs"] == pytest.approx(-10.0)   # seed beats first value
+        assert out["max_abs"] == pytest.approx(999.0)
+
+    def test_seed_not_reapplied_after_first_run(self):
+        """Nach dem ersten Lauf überschreibt der Seed die laufenden Werte nicht."""
+        cfg = {"init_abs_min": 100.0, "init_abs_max": 200.0}
+        state = {}
+        n1 = node("m", "min_max_tracker", cfg)
+        # First run — seed applied
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"m": {"value": 150.0}})
+        # Second run with a value below seed — abs_min must be updated
+        exc2 = make_executor([n1], hysteresis_state=state)
+        out = exc2.execute({"m": {"value": 50.0}})["m"]
+        assert out["min_abs"] == pytest.approx(50.0)   # new minimum, seed not re-applied
+
+    def test_seed_period_values(self):
+        """Startwerte für Tages- und Monats-Min/Max werden korrekt gesetzt."""
+        cfg = {"init_day_min": 5.0, "init_day_max": 25.0,
+               "init_year_min": -5.0, "init_year_max": 40.0}
+        state = {}
+        n1 = node("m", "min_max_tracker", cfg)
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"m": {"value": 15.0}})["m"]
+        assert out["min_daily"]  == pytest.approx(5.0)
+        assert out["max_daily"]  == pytest.approx(25.0)
+        assert out["min_yearly"] == pytest.approx(-5.0)
+        assert out["max_yearly"] == pytest.approx(40.0)
+
 
 # ===========================================================================
 # consumption_counter
@@ -946,3 +982,35 @@ class TestConsumptionCounter:
         assert out["weekly"]  == pytest.approx(100.0)
         assert out["monthly"] == pytest.approx(100.0)
         assert out["yearly"]  == pytest.approx(100.0)
+
+    def test_seed_meter_used_as_first_value(self):
+        """init_meter setzt den Startzählerstand; erster Delta rechnet korrekt."""
+        cfg = {"init_meter": 1000.0}
+        state = {}
+        n1 = node("c", "consumption_counter", cfg)
+        exc = make_executor([n1], hysteresis_state=state)
+        # Without seed, first value would set last_value=1050, delta=0.
+        # With seed, last_value=1000 → delta = 1050-1000 = 50.
+        out = exc.execute({"c": {"value": 1050.0}})["c"]
+        assert out["daily"] == pytest.approx(50.0)
+
+    def test_seed_period_totals_applied_once(self):
+        """Startwerte für Perioden werden übernommen und korrekt weitergeführt."""
+        cfg = {"init_meter": 500.0, "init_monthly": 300.0, "init_yearly": 1200.0}
+        state = {}
+        n1 = node("c", "consumption_counter", cfg)
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"c": {"value": 510.0}})["c"]
+        assert out["monthly"] == pytest.approx(310.0)   # 300 seed + 10 delta
+        assert out["yearly"]  == pytest.approx(1210.0)  # 1200 seed + 10 delta
+
+    def test_seed_not_reapplied_after_first_run(self):
+        """Seed wird nur einmal angewendet, nicht bei jedem Executor-Aufruf."""
+        cfg = {"init_meter": 0.0, "init_daily": 50.0}
+        state = {}
+        n1 = node("c", "consumption_counter", cfg)
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"c": {"value": 10.0}})    # daily = 50 + 10 = 60
+        exc2 = make_executor([n1], hysteresis_state=state)
+        out = exc2.execute({"c": {"value": 20.0}})["c"]  # daily = 60 + 10 = 70
+        assert out["daily"] == pytest.approx(70.0)       # seed NOT added again

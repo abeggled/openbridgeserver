@@ -427,7 +427,20 @@ class GraphExecutor:
                     "week_min": None, "week_max": None, "last_week": None,
                     "month_min": None, "month_max": None, "last_month": None,
                     "year_min": None, "year_max": None, "last_year": None,
+                    "initialized": False,
                 })
+                # Apply seed values once (e.g. migrated from a predecessor system)
+                if not state["initialized"]:
+                    for key, cfg_key in [
+                        ("abs_min", "init_abs_min"), ("abs_max", "init_abs_max"),
+                        ("day_min", "init_day_min"), ("day_max", "init_day_max"),
+                        ("month_min", "init_month_min"), ("month_max", "init_month_max"),
+                        ("year_min", "init_year_min"), ("year_max", "init_year_max"),
+                    ]:
+                        v = d.get(cfg_key)
+                        if v not in (None, ""):
+                            state[key] = float(v)
+                    state["initialized"] = True
                 today = _date.today()
                 day_key   = today.isoformat()
                 week_key  = f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}"
@@ -471,7 +484,23 @@ class GraphExecutor:
                     "weekly": 0.0,  "prev_weekly": 0.0,  "last_week": None,
                     "monthly": 0.0, "prev_monthly": 0.0, "last_month": None,
                     "yearly": 0.0,  "prev_yearly": 0.0,  "last_year": None,
+                    "initialized": False,
                 })
+                # Apply seed values once (e.g. migrated from a predecessor system)
+                if not state["initialized"]:
+                    v_meter = d.get("init_meter")
+                    if v_meter not in (None, ""):
+                        state["last_value"] = float(v_meter)
+                    for key, cfg_key in [
+                        ("daily",   "init_daily"),
+                        ("weekly",  "init_weekly"),
+                        ("monthly", "init_monthly"),
+                        ("yearly",  "init_yearly"),
+                    ]:
+                        v = d.get(cfg_key)
+                        if v not in (None, ""):
+                            state[key] = float(v)
+                    state["initialized"] = True
                 today = _date.today()
                 day_key   = today.isoformat()
                 week_key  = f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}"

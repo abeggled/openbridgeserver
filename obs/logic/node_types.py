@@ -260,7 +260,16 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             _port("min_abs",     "Min absolut"),
             _port("max_abs",     "Max absolut"),
         ],
-        config_schema={},
+        config_schema={
+            "init_abs_min":   {"type": "number", "default": None, "label": "Startwert Min absolut"},
+            "init_abs_max":   {"type": "number", "default": None, "label": "Startwert Max absolut"},
+            "init_day_min":   {"type": "number", "default": None, "label": "Startwert Min täglich"},
+            "init_day_max":   {"type": "number", "default": None, "label": "Startwert Max täglich"},
+            "init_month_min": {"type": "number", "default": None, "label": "Startwert Min monatlich"},
+            "init_month_max": {"type": "number", "default": None, "label": "Startwert Max monatlich"},
+            "init_year_min":  {"type": "number", "default": None, "label": "Startwert Min jährlich"},
+            "init_year_max":  {"type": "number", "default": None, "label": "Startwert Max jährlich"},
+        },
         color="#7c3aed",
     ),
 
@@ -285,7 +294,13 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             _port("prev_monthly", "Vormonat"),
             _port("prev_yearly",  "Vorjahr"),
         ],
-        config_schema={},
+        config_schema={
+            "init_meter":   {"type": "number", "default": None, "label": "Startwert Zählerstand"},
+            "init_daily":   {"type": "number", "default": None, "label": "Startwert täglich"},
+            "init_weekly":  {"type": "number", "default": None, "label": "Startwert wöchentlich"},
+            "init_monthly": {"type": "number", "default": None, "label": "Startwert monatlich"},
+            "init_yearly":  {"type": "number", "default": None, "label": "Startwert jährlich"},
+        },
         color="#7c3aed",
     ),
 
