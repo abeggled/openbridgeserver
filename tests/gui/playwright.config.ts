@@ -14,6 +14,10 @@ export default defineConfig({
       testMatch: '**/auth.setup.ts',
     },
     {
+      name: 'demo-setup',
+      testMatch: '**/demo.setup.ts',
+    },
+    {
       name: 'admin',
       testMatch: '**/admin/**/*.spec.ts',
       dependencies: ['admin-setup'],
@@ -24,6 +28,12 @@ export default defineConfig({
       testMatch: '**/visu/**/*.spec.ts',
       dependencies: ['admin-setup'],
       use: { storageState: '.auth/admin.json' },
+    },
+    {
+      name: 'demo',
+      testMatch: '**/demo/**/*.spec.ts',
+      dependencies: ['demo-setup'],
+      use: { storageState: '.auth/demo.json' },
     },
   ],
 })

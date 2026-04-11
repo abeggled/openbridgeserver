@@ -193,6 +193,19 @@ async def ensure_default_user(db: Database) -> None:
             "— Change the password immediately! POST /api/v1/auth/login"
         )
 
+
+async def ensure_demo_user(db: Database) -> None:
+    """Create demo/demo if not present. Used for read-only demo access."""
+    row = await db.fetchone("SELECT id FROM users WHERE username=?", ("demo",))
+    if not row:
+        uid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        await db.execute_and_commit(
+            "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (?,?,?,?,?)",
+            (uid, "demo", hash_password("demo"), 0, now),
+        )
+        logger.info("Demo user created: demo / demo")
+
 # ---------------------------------------------------------------------------
 # Request / Response models
 # ---------------------------------------------------------------------------

@@ -28,7 +28,7 @@
     <!-- Nav -->
     <nav class="flex-1 py-3 px-2 flex flex-col gap-0.5">
       <RouterLink
-        v-for="item in navItems" :key="item.to"
+        v-for="item in visibleNavItems" :key="item.to"
         :to="item.to"
         :title="collapsed ? item.label : ''"
         :data-testid="'nav-' + (item.to === '/' ? 'home' : item.to.replace('/', ''))"
@@ -78,14 +78,21 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useWebSocketStore } from '@/stores/websocket'
+import { useAuthStore } from '@/stores/auth'
 
 defineProps({ collapsed: Boolean })
 defineEmits(['toggle'])
 
 const route = useRoute()
 const ws    = useWebSocketStore()
+const auth  = useAuthStore()
+
+const isDemo = computed(() => auth.username === 'demo')
+
+const DEMO_NAV = new Set(['/', '/adapters', '/settings'])
 
 const navItems = [
   { to: '/',           label: 'Übersicht',     icon: '&#9783;' },
@@ -96,6 +103,10 @@ const navItems = [
   { to: '/logic',      label: 'Logikmodul',     icon: '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18" style="display:inline-block;vertical-align:middle"><circle cx="4" cy="7" r="2"/><circle cx="4" cy="13" r="2"/><circle cx="16" cy="10" r="2.5"/><line x1="6" y1="7.5" x2="13.5" y2="9.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="6" y1="12.5" x2="13.5" y2="10.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' },
   { to: '/settings',   label: 'Einstellungen',  icon: '&#9881;' },
 ]
+
+const visibleNavItems = computed(() =>
+  isDemo.value ? navItems.filter(i => DEMO_NAV.has(i.to)) : navItems
+)
 
 function isActive(to) {
   if (to === '/') return route.path === '/'

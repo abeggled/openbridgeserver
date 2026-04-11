@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from obs.core.mqtt_client import init_mqtt_client
     from obs.core.registry import init_registry
     from obs.core.write_router import init_write_router
-    from obs.api.auth import ensure_default_user
+    from obs.api.auth import ensure_default_user, ensure_demo_user
     from obs.api.v1.websocket import init_ws_manager
     from obs.adapters import registry as adapter_registry
     from obs.ringbuffer.ringbuffer import init_ringbuffer
@@ -52,6 +52,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 1. Database
     db = await init_db(settings.database.path)
     await ensure_default_user(db)
+    await ensure_demo_user(db)
 
     # Rebuild Mosquitto passwd file from DB on every startup (keeps it in sync).
     # SIGHUP is sent after MQTT connects (see below) so Mosquitto reloads cleanly.
