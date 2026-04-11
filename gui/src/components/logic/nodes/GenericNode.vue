@@ -154,7 +154,7 @@ const summary = computed(() => {
   if (props.type === 'notify_pushover')     return d.title || 'open bridge server'
   if (props.type === 'notify_sms')          return d.to || '—'
   if (props.type === 'api_client')          return `${d.method ?? 'GET'}  ${(d.url || '—').slice(0, 20)}`
-  if (props.type === 'heating_circuit')     return `Heizgrenze ${d.heating_limit ?? 15} °C`
+  if (props.type === 'heating_circuit')     return `W≤${d.temp_winter ?? 15} °C  S≥${d.temp_summer ?? 20} °C`
   if (props.type === 'min_max_tracker')     return null
   if (props.type === 'consumption_counter') return null
   if (props.type === 'and' || props.type === 'or' || props.type === 'xor') {

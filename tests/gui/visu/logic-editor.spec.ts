@@ -146,7 +146,7 @@ test('heating_circuit-Node läuft durch und gibt heating_mode aus', async ({ pag
     flow_data: {
       nodes: [
         { id: 'cv', type: 'const_value', position: { x: 0,   y: 0 }, data: { value: '10', data_type: 'number' } },
-        { id: 'hc', type: 'heating_circuit', position: { x: 300, y: 0 }, data: { heating_limit: 15.0 } },
+        { id: 'hc', type: 'heating_circuit', position: { x: 300, y: 0 }, data: { temp_winter: 15.0, temp_summer: 20.0 } },
       ],
       edges: [
         { id: 'e1', source: 'cv', target: 'hc', sourceHandle: 'value', targetHandle: 'value' },

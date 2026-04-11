@@ -217,7 +217,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             "Sommer/Winter-Umschaltung nach DIN. Eingang: Aussentemperatur. "
             "Der Wert wird je nach Tageszeit automatisch T1 (≈07:00), T2 (≈14:00) oder T3 (≈22:00) zugeordnet. "
             "Tagesmittel: T_avg = (T1 + T2 + 2×T3) / 4. "
-            "Heizmodus aktiv wenn gleitendes Monatsmittel < Heizgrenze."
+            "Heizmodus ON wenn Mittelwert < Temp. Winter, bleibt ON bis Mittelwert > Temp. Sommer (Hysterese)."
         ),
         inputs=[
             _port("value", "Temp °C"),
@@ -231,7 +231,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             _port("t3",           "T3 (debug)"),
         ],
         config_schema={
-            "heating_limit": {"type": "number", "default": 15.0, "label": "Heizgrenze °C"},
+            "temp_winter": {"type": "number", "default": 15.0, "label": "Temp. Winter °C (Heizen EIN)"},
+            "temp_summer": {"type": "number", "default": 20.0, "label": "Temp. Sommer °C (Heizen AUS)"},
         },
         color="#7c3aed",
     ),

@@ -702,14 +702,19 @@ class TestHeatingCircuit:
     New API: single 'value' input; time slot assigned via '_slot' override
     (t1 / t2 / t3).  All three slots in the same date must be received
     before a daily_avg is computed.
+    Hysteresis: heating ON when ref_temp < temp_winter, OFF when > temp_summer,
+    stays unchanged between thresholds.
     """
+
+    # Default: heating ON below 15 °C, OFF above 20 °C
+    _CFG = {"temp_winter": 15.0, "temp_summer": 20.0}
 
     def _run_slot(self, slot, value, config=None, state=None):
         """Feed a single temperature reading at the given time slot."""
         if state is None:
             state = {}
         if config is None:
-            config = {"heating_limit": 15.0}
+            config = self._CFG
         n1 = node("h", "heating_circuit", config)
         exc = make_executor([n1], hysteresis_state=state)
         return exc.execute({"h": {"value": value, "_slot": slot}})["h"], state
@@ -719,7 +724,7 @@ class TestHeatingCircuit:
         if state is None:
             state = {}
         if config is None:
-            config = {"heating_limit": 15.0}
+            config = self._CFG
         n1 = node("h", "heating_circuit", config)
         out = None
         for slot, val in [("t1", t1), ("t2", t2), ("t3", t3)]:
@@ -732,14 +737,39 @@ class TestHeatingCircuit:
         out, _ = self._run_full_day(10, 12, 8)
         assert out["daily_avg"] == pytest.approx(9.5)
 
-    def test_heating_mode_on_when_below_limit(self):
-        # daily_avg = (5+6+2*4)/4 = 4.75 < 15
-        out, _ = self._run_full_day(5, 6, 4, config={"heating_limit": 15.0})
+    def test_heating_on_below_temp_winter(self):
+        # daily_avg = (5+6+2*4)/4 = 4.75 < temp_winter=15 → ON
+        out, _ = self._run_full_day(5, 6, 4)
         assert out["heating_mode"] == 1
 
-    def test_heating_mode_off_when_above_limit(self):
-        # daily_avg = (18+22+2*20)/4 = 20.0 > 15
-        out, _ = self._run_full_day(18, 22, 20, config={"heating_limit": 15.0})
+    def test_heating_off_above_temp_summer(self):
+        # daily_avg = (22+24+2*22)/4 = 22.5 > temp_summer=20 → OFF
+        out, _ = self._run_full_day(22, 24, 22)
+        assert out["heating_mode"] == 0
+
+    def test_hysteresis_stays_on_between_thresholds(self):
+        """Once ON, heating stays ON when temp is between winter and summer."""
+        state = {}
+        # Cold day → heating ON
+        self._run_full_day(5, 6, 4, state=state)
+        # Mild day (17 °C avg) — between 15 and 20 → must stay ON
+        out, _ = self._run_full_day(17, 18, 17, state=state)
+        assert out["heating_mode"] == 1
+
+    def test_hysteresis_stays_off_between_thresholds(self):
+        """Once OFF, heating stays OFF when temp is between thresholds."""
+        state = {}
+        # Warm day → heating OFF
+        self._run_full_day(22, 24, 22, state=state)
+        # Mild day (17 °C avg) — between 15 and 20 → must stay OFF
+        out, _ = self._run_full_day(17, 18, 17, state=state)
+        assert out["heating_mode"] == 0
+
+    def test_hysteresis_turns_off_above_temp_summer(self):
+        """Heating turns OFF once temp rises above temp_summer."""
+        state = {}
+        self._run_full_day(5, 6, 4, state=state)   # → ON
+        out, _ = self._run_full_day(22, 24, 22, state=state)  # → OFF
         assert out["heating_mode"] == 0
 
     def test_debug_outputs_visible_before_day_complete(self):
@@ -763,17 +793,16 @@ class TestHeatingCircuit:
     def test_heating_mode_uses_monthly_avg(self):
         """When monthly_avg is available it determines heating_mode, not daily_avg."""
         state = {}
-        # Build up a warm monthly average (>15°)
+        # Build up warm monthly average (>20 °C → above temp_summer → OFF)
         for _ in range(3):
-            self._run_full_day(20, 22, 20, state=state)  # daily_avg ≈ 20.5
-        # Now send a cold day — daily_avg would be cold but monthly_avg is warm
+            self._run_full_day(22, 24, 22, state=state)  # daily_avg ≈ 22.5
+        # Now send a cold day — monthly_avg is still warm → heating stays OFF
         out, _ = self._run_full_day(5, 6, 4, state=state)
-        # monthly_avg still > 15 → no heating
         assert out["heating_mode"] == 0
 
-    def test_no_input_returns_zero_heating_mode(self):
+    def test_no_input_returns_default_heating_mode(self):
         state = {}
-        n1 = node("h", "heating_circuit", {"heating_limit": 15.0})
+        n1 = node("h", "heating_circuit", self._CFG)
         exc = make_executor([n1], hysteresis_state=state)
         out = exc.execute({"h": {}})["h"]
         assert out["heating_mode"] == 0

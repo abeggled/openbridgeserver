@@ -358,19 +358,22 @@ class GraphExecutor:
                 return {}
 
             case "heating_circuit":
-                # DIN-Norm Sommer/Winter-Umschaltung
+                # DIN-Norm Sommer/Winter-Umschaltung mit Hysterese
                 # Eingang: Temperaturwert (wird je nach Tageszeit T1/T2/T3 zugeordnet)
                 # T1 ≈ 07:00, T2 ≈ 14:00, T3 ≈ 22:00 (doppelt gewichtet)
                 # T_avg = (T1 + T2 + 2×T3) / 4
+                # heating_mode=1 wenn ref_temp < temp_winter, bleibt 1 bis ref_temp > temp_summer
                 import datetime as _dt
                 state = self.hysteresis_state.setdefault(node.id, {
                     "t1": None, "t1_date": None,
                     "t2": None, "t2_date": None,
                     "t3": None, "t3_date": None,
                     "daily_temps": [], "daily_avg": None, "monthly_avg": None,
+                    "heating_mode": 0,
                 })
                 val = inputs.get("value")
-                heating_limit = float(d.get("heating_limit", 15.0))
+                temp_winter = float(d.get("temp_winter", 15.0))
+                temp_summer = float(d.get("temp_summer", 20.0))
                 if val is not None:
                     fval = self._to_num(val)
                     today = _dt.date.today().isoformat()
@@ -400,10 +403,16 @@ class GraphExecutor:
                         # Reset slots for next day
                         for k in ("t1", "t2", "t3", "t1_date", "t2_date", "t3_date"):
                             state[k] = None
+                # Hysteresis: switch ON below temp_winter, OFF above temp_summer
                 ref_temp = state["monthly_avg"] if state["monthly_avg"] is not None else state["daily_avg"]
-                heating_mode = (1 if ref_temp < heating_limit else 0) if ref_temp is not None else 0
+                if ref_temp is not None:
+                    if ref_temp < temp_winter:
+                        state["heating_mode"] = 1
+                    elif ref_temp > temp_summer:
+                        state["heating_mode"] = 0
+                    # between thresholds: keep last state (hysteresis)
                 return {
-                    "heating_mode": heating_mode,
+                    "heating_mode": state["heating_mode"],
                     "daily_avg":    state["daily_avg"],
                     "monthly_avg":  state["monthly_avg"],
                     "t1":           state["t1"],
