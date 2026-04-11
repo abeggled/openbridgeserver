@@ -140,6 +140,14 @@ const openPct = computed(() => {
     <div class="flex-1 flex items-center justify-center min-h-0 min-w-0">
 
       <!-- ── Single-wing window LEFT-hinged (fenster) ──────────────────── -->
+      <!--
+        viewBox 56×64  |  outer frame: rect(2,2,52,60)
+        inner pane area: x 7→49 (w=42), y 7→57 (h=50)
+        KNX reference analysis (361px viewBox):
+          kipp : bottom fixed (103→266), top shifted LEFT ~17% of width → top: 75→233
+          open : hinge left x≈101, free right x≈233 (79% of frame w),
+                 free side falls ~5px lower (perspective), bottom-right exits frame
+      -->
       <svg
         v-if="mode === 'fenster'"
         viewBox="0 0 56 64"
@@ -150,22 +158,29 @@ const openPct = computed(() => {
         <!-- Outer frame -->
         <rect x="2" y="2" width="52" height="60" rx="1" stroke-width="2.5" stroke="currentColor"/>
 
-        <!-- Closed: inner pane -->
+        <!-- Closed: inner pane + handle dot right-centre -->
         <template v-if="stateMain === 'closed'">
-          <rect x="7" y="7" width="42" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.5"/>
+          <rect x="7" y="7" width="42" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.6"/>
+          <circle cx="47" cy="32" r="2" fill="currentColor" opacity="0.8"/>
         </template>
 
-        <!-- Tilted (Kipp): parallelogram, bottom edge fixed, top edge shifted left -->
+        <!-- Tilted (Kipp): parallelogram — bottom fixed, top shifted left ~7px (≈17% of 42)
+             top-left reaches outer frame edge (x=0), matching KNX reference where top exits frame -->
         <template v-else-if="stateMain === 'tilted'">
-          <polygon points="2,7 44,7 49,57 7,57" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.7"/>
+          <polygon points="0,7 42,7 49,57 7,57" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.7"/>
+          <!-- handle on right side of kipp panel, midpoint of (42,7)→(49,57) -->
+          <circle cx="44" cy="32" r="2" fill="currentColor" opacity="0.8"/>
         </template>
 
-        <!-- Open: foreshortened panel, hinge left x=7, free side at x=30 -->
+        <!-- Open: perspective parallelogram — hinge left x=7, free side x=40 (79% of 42)
+             free side falls 5px lower than hinge (perspective); bottom-right at y=62 = outer frame edge -->
         <template v-else-if="stateMain === 'open'">
-          <line x1="7" y1="7" x2="7" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          <line x1="7" y1="7" x2="30" y2="11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          <line x1="7" y1="57" x2="30" y2="53" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          <line x1="30" y1="11" x2="30" y2="53" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="7"  y1="7"  x2="7"  y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="7"  y1="7"  x2="40" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="7"  y1="57" x2="40" y2="62" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="40" y1="12" x2="40" y2="62" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <!-- handle near free edge, vertical centre -->
+          <circle cx="38" cy="37" r="2" fill="currentColor" opacity="0.8"/>
         </template>
 
         <!-- Unknown -->
@@ -175,6 +190,11 @@ const openPct = computed(() => {
       </svg>
 
       <!-- ── Single-wing window RIGHT-hinged (fenster_r) ──────────────── -->
+      <!--
+        Mirror of fenster: hinge right x=49, free side x=16 (49-33)
+        Kipp: same parallelogram (kipp is bottom-pivoted, direction-agnostic in KNX standard)
+        Open: perspective falls identically — free side 5px lower, free top (16,12), free bottom (16,62)
+      -->
       <svg
         v-else-if="mode === 'fenster_r'"
         viewBox="0 0 56 64"
@@ -185,22 +205,25 @@ const openPct = computed(() => {
         <!-- Outer frame -->
         <rect x="2" y="2" width="52" height="60" rx="1" stroke-width="2.5" stroke="currentColor"/>
 
-        <!-- Closed: inner pane -->
+        <!-- Closed: inner pane + handle dot left-centre -->
         <template v-if="stateMain === 'closed'">
-          <rect x="7" y="7" width="42" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.5"/>
+          <rect x="7" y="7" width="42" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.6"/>
+          <circle cx="9" cy="32" r="2" fill="currentColor" opacity="0.8"/>
         </template>
 
-        <!-- Tilted (Kipp): parallelogram, bottom edge fixed, top edge shifted left -->
+        <!-- Tilted (Kipp): same parallelogram as left-hinged (KNX kipp convention is symmetric) -->
         <template v-else-if="stateMain === 'tilted'">
-          <polygon points="2,7 44,7 49,57 7,57" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.7"/>
+          <polygon points="0,7 42,7 49,57 7,57" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.7"/>
+          <circle cx="12" cy="32" r="2" fill="currentColor" opacity="0.8"/>
         </template>
 
-        <!-- Open: foreshortened panel, hinge right x=49, free side at x=26 -->
+        <!-- Open: hinge right x=49, free side x=16, free side falls 5px lower -->
         <template v-else-if="stateMain === 'open'">
-          <line x1="49" y1="7" x2="49" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          <line x1="49" y1="7" x2="26" y2="11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          <line x1="49" y1="57" x2="26" y2="53" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          <line x1="26" y1="11" x2="26" y2="53" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="49" y1="7"  x2="49" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="49" y1="7"  x2="16" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="49" y1="57" x2="16" y2="62" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="16" y1="12" x2="16" y2="62" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="18" cy="37" r="2" fill="currentColor" opacity="0.8"/>
         </template>
 
         <!-- Unknown -->
