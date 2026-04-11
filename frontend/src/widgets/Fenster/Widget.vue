@@ -155,21 +155,17 @@ const openPct = computed(() => {
           <rect x="7" y="7" width="42" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.5"/>
         </template>
 
-        <!-- Tilted (Kipp): V-shape, bottom edge fixed, apex at bottom-center -->
+        <!-- Tilted (Kipp): parallelogram, bottom edge fixed, top edge shifted left -->
         <template v-else-if="stateMain === 'tilted'">
-          <rect x="7" y="7" width="42" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.3"/>
-          <line x1="8"  y1="8" x2="28" y2="57" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <line x1="48" y1="8" x2="28" y2="57" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <line x1="8"  y1="8" x2="48" y2="8"  stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <polygon points="2,7 44,7 49,57 7,57" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.7"/>
         </template>
 
-        <!-- Open: inward, left hinge -->
-        <!-- Diagonal from free top-right to hinge bottom-left, arc shows sweep -->
+        <!-- Open: foreshortened panel, hinge left x=7, free side at x=30 -->
         <template v-else-if="stateMain === 'open'">
-          <line x1="8"  y1="7" x2="8"  y2="57" stroke="currentColor" stroke-width="1.5" opacity="0.3" stroke-linecap="round"/>
-          <line x1="49" y1="7" x2="8"  y2="57" stroke="currentColor" stroke-width="2"   stroke-linecap="round"/>
-          <!-- Quarter-circle arc: center=(8,7), r=41, CW from (49,7) to (8,48) -->
-          <path d="M 49 7 A 41 41 0 0 1 8 48" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3,3" fill="none"/>
+          <line x1="7" y1="7" x2="7" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="7" y1="7" x2="30" y2="11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="7" y1="57" x2="30" y2="53" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="30" y1="11" x2="30" y2="53" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         </template>
 
         <!-- Unknown -->
@@ -194,21 +190,17 @@ const openPct = computed(() => {
           <rect x="7" y="7" width="42" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.5"/>
         </template>
 
-        <!-- Tilted (Kipp): V-shape, bottom edge fixed, apex at bottom-center -->
+        <!-- Tilted (Kipp): parallelogram, bottom edge fixed, top edge shifted left -->
         <template v-else-if="stateMain === 'tilted'">
-          <rect x="7" y="7" width="42" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.3"/>
-          <line x1="8"  y1="8" x2="28" y2="57" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <line x1="48" y1="8" x2="28" y2="57" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <line x1="8"  y1="8" x2="48" y2="8"  stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <polygon points="2,7 44,7 49,57 7,57" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.7"/>
         </template>
 
-        <!-- Open: inward, right hinge -->
-        <!-- Diagonal from free top-left to hinge bottom-right, arc shows sweep -->
+        <!-- Open: foreshortened panel, hinge right x=49, free side at x=26 -->
         <template v-else-if="stateMain === 'open'">
-          <line x1="48" y1="7" x2="48" y2="57" stroke="currentColor" stroke-width="1.5" opacity="0.3" stroke-linecap="round"/>
-          <line x1="7"  y1="7" x2="48" y2="57" stroke="currentColor" stroke-width="2"   stroke-linecap="round"/>
-          <!-- Quarter-circle arc: center=(48,7), r=41, CCW from (7,7) to (48,48) -->
-          <path d="M 7 7 A 41 41 0 0 0 48 48" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3,3" fill="none"/>
+          <line x1="49" y1="7" x2="49" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="49" y1="7" x2="26" y2="11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="49" y1="57" x2="26" y2="53" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="26" y1="11" x2="26" y2="53" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         </template>
 
         <!-- Unknown -->
@@ -230,46 +222,38 @@ const openPct = computed(() => {
         <!-- Center divider -->
         <line x1="36" y1="2" x2="36" y2="62" stroke-width="2.5" stroke="currentColor"/>
 
-        <!-- Left wing (hinged at center-right, free side at outer left) -->
+        <!-- Left wing (hinge at left outer frame x=7, free side at center x=31) -->
         <g :class="stateColorClass(stateLeft)">
           <template v-if="stateLeft === 'closed'">
             <rect x="7" y="7" width="24" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.5"/>
           </template>
           <template v-else-if="stateLeft === 'tilted'">
-            <!-- V apex at bottom-center of left wing (x≈19) -->
-            <rect x="7" y="7" width="24" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.3"/>
-            <line x1="8"  y1="8" x2="19" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <line x1="30" y1="8" x2="19" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <line x1="8"  y1="8" x2="30" y2="8"  stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <polygon points="4,7 28,7 31,57 7,57" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.7"/>
           </template>
           <template v-else-if="stateLeft === 'open'">
-            <!-- Inward: diagonal from free top-left (8,8) to hinge bottom-right (34,57) -->
-            <line x1="8" y1="8" x2="34" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <!-- Arc: center=(34,8), r=26, CCW from (8,8) to (34,34) -->
-            <path d="M 8 8 A 26 26 0 0 0 34 34" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3,3" fill="none"/>
+            <line x1="7" y1="8" x2="7" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="7" y1="8" x2="21" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="7" y1="57" x2="21" y2="55" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="21" y1="10" x2="21" y2="55" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </template>
           <template v-else>
             <text x="19" y="37" text-anchor="middle" dominant-baseline="middle" font-size="14" fill="currentColor" opacity="0.4">?</text>
           </template>
         </g>
 
-        <!-- Right wing (hinged at center-left, free side at outer right) -->
+        <!-- Right wing (hinge at right outer frame x=65, free side at center x=41) -->
         <g :class="stateColorClass(stateRight)">
           <template v-if="stateRight === 'closed'">
             <rect x="41" y="7" width="24" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.5"/>
           </template>
           <template v-else-if="stateRight === 'tilted'">
-            <!-- V apex at bottom-center of right wing (x≈53) -->
-            <rect x="41" y="7" width="24" height="50" stroke-width="1.5" stroke="currentColor" fill="none" opacity="0.3"/>
-            <line x1="42" y1="8" x2="53" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <line x1="64" y1="8" x2="53" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <line x1="42" y1="8" x2="64" y2="8"  stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <polygon points="38,7 62,7 65,57 41,57" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.7"/>
           </template>
           <template v-else-if="stateRight === 'open'">
-            <!-- Inward: diagonal from free top-right (64,8) to hinge bottom-left (38,57) -->
-            <line x1="64" y1="8" x2="38" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <!-- Arc: center=(38,8), r=26, CW from (64,8) to (38,34) -->
-            <path d="M 64 8 A 26 26 0 0 1 38 34" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3,3" fill="none"/>
+            <line x1="65" y1="8" x2="65" y2="57" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="65" y1="8" x2="51" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="65" y1="57" x2="51" y2="55" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="51" y1="10" x2="51" y2="55" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </template>
           <template v-else>
             <text x="53" y="37" text-anchor="middle" dominant-baseline="middle" font-size="14" fill="currentColor" opacity="0.4">?</text>
@@ -297,13 +281,12 @@ const openPct = computed(() => {
           <rect x="6" y="5" width="44" height="64" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.5"/>
         </template>
 
-        <!-- Open: inward, left hinge -->
-        <!-- Diagonal from free top-right to hinge bottom-left, arc shows sweep -->
+        <!-- Open: foreshortened panel, hinge left x=6, free side at x=28 -->
         <template v-else-if="stateMain === 'open'">
-          <line x1="6"  y1="5" x2="6"  y2="69" stroke="currentColor" stroke-width="1.5" opacity="0.3" stroke-linecap="round"/>
-          <line x1="50" y1="5" x2="6"  y2="69" stroke="currentColor" stroke-width="2"   stroke-linecap="round"/>
-          <!-- Quarter-circle arc: center=(6,5), r=44, CW from (50,5) to (6,49) -->
-          <path d="M 50 5 A 44 44 0 0 1 6 49" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3,3" fill="none"/>
+          <line x1="6"  y1="5"  x2="6"  y2="69" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="6"  y1="5"  x2="28" y2="8"  stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="6"  y1="69" x2="28" y2="66" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="28" y1="8"  x2="28" y2="66" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         </template>
 
         <!-- Unknown -->
@@ -332,13 +315,12 @@ const openPct = computed(() => {
           <rect x="6" y="5" width="44" height="64" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.5"/>
         </template>
 
-        <!-- Open: inward, right hinge -->
-        <!-- Diagonal from free top-left to hinge bottom-right, arc shows sweep -->
+        <!-- Open: foreshortened panel, hinge right x=50, free side at x=28 -->
         <template v-else-if="stateMain === 'open'">
-          <line x1="50" y1="5" x2="50" y2="69" stroke="currentColor" stroke-width="1.5" opacity="0.3" stroke-linecap="round"/>
-          <line x1="6"  y1="5" x2="50" y2="69" stroke="currentColor" stroke-width="2"   stroke-linecap="round"/>
-          <!-- Quarter-circle arc: center=(50,5), r=44, CCW from (6,5) to (50,49) -->
-          <path d="M 6 5 A 44 44 0 0 0 50 49" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3,3" fill="none"/>
+          <line x1="50" y1="5"  x2="50" y2="69" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="50" y1="5"  x2="28" y2="8"  stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="50" y1="69" x2="28" y2="66" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="28" y1="8"  x2="28" y2="66" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         </template>
 
         <!-- Unknown -->
