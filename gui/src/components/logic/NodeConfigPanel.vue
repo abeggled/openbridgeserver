@@ -312,16 +312,16 @@
               class="input text-sm" @change="emitUpdate" />
           </div>
 
-          <!-- Dynamic per-input negation fields for AND / OR / XOR with input_count > 2 -->
+          <!-- Dynamic per-input negation for IN 3 … IN N (IN 1 / IN 2 are in static config_schema) -->
           <template v-if="isGateNode && gateExtraInputCount > 0">
             <div class="label mt-1 text-xs text-slate-400">Weitere Eingänge negieren</div>
-            <div v-for="i in gateExtraInputCount" :key="'negate-in' + (i + 1)"
+            <div v-for="i in gateExtraInputCount" :key="'negate-in' + (i + 2)"
                  class="form-group flex items-center gap-2">
               <input type="checkbox"
-                     :checked="!!localData[`negate_in${i + 1}`]"
-                     @change="e => { localData[`negate_in${i + 1}`] = e.target.checked; emitUpdate() }"
+                     :checked="!!localData[`negate_in${i + 2}`]"
+                     @change="e => { localData[`negate_in${i + 2}`] = e.target.checked; emitUpdate() }"
               />
-              <label class="label mb-0">Eingang In{{ i + 2 }} negieren</label>
+              <label class="label mb-0">IN {{ i + 2 }} negieren</label>
             </div>
           </template>
         </template>

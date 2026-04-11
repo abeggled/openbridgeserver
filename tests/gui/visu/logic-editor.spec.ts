@@ -78,9 +78,9 @@ test('AND-Gate mit 3 Eingängen (input_count=3) zeigt true wenn alle Eingänge t
         { id: 'g',  type: 'and',         position: { x: 300, y: 100 }, data: { input_count: 3 } },
       ],
       edges: [
-        { id: 'e1', source: 'c1', target: 'g', sourceHandle: 'value', targetHandle: 'a' },
-        { id: 'e2', source: 'c2', target: 'g', sourceHandle: 'value', targetHandle: 'b' },
-        { id: 'e3', source: 'c3', target: 'g', sourceHandle: 'value', targetHandle: 'in2' },
+        { id: 'e1', source: 'c1', target: 'g', sourceHandle: 'value', targetHandle: 'in1' },
+        { id: 'e2', source: 'c2', target: 'g', sourceHandle: 'value', targetHandle: 'in2' },
+        { id: 'e3', source: 'c3', target: 'g', sourceHandle: 'value', targetHandle: 'in3' },
       ],
     },
   }) as { id: string }
@@ -118,8 +118,8 @@ test('AND-Gate mit negate_out zeigt false wenn beide Eingänge true', async ({ p
         { id: 'g',  type: 'and',         position: { x: 300, y: 50  }, data: { negate_out: true } },
       ],
       edges: [
-        { id: 'e1', source: 'c1', target: 'g', sourceHandle: 'value', targetHandle: 'a' },
-        { id: 'e2', source: 'c2', target: 'g', sourceHandle: 'value', targetHandle: 'b' },
+        { id: 'e1', source: 'c1', target: 'g', sourceHandle: 'value', targetHandle: 'in1' },
+        { id: 'e2', source: 'c2', target: 'g', sourceHandle: 'value', targetHandle: 'in2' },
       ],
     },
   }) as { id: string }

@@ -172,7 +172,7 @@ class GraphExecutor:
                     result = not result
                 return {"out": result}
             case "not":
-                return {"out": not self._to_bool(inputs.get("in"))}
+                return {"out": not self._to_bool(inputs.get("in1"))}
             case "xor":
                 vals = self._collect_gate_inputs(inputs, d)
                 result = sum(vals) == 1  # exactly one input is True
@@ -182,7 +182,7 @@ class GraphExecutor:
 
             case "compare":
                 op  = _COMPARE_OPS.get(d.get("operator", ">"), operator.gt)
-                a, b = inputs.get("a"), inputs.get("b")
+                a, b = inputs.get("in1"), inputs.get("in2")
                 if a is None or b is None:
                     return {"out": False}
                 # Auto-coerce to number when both values look numeric
@@ -210,8 +210,9 @@ class GraphExecutor:
 
             case "math_formula":
                 formula = d.get("formula", "a + b")
-                a = self._to_num(inputs.get("a"))
-                b = self._to_num(inputs.get("b"))
+                # Ports are in1/in2; formula variables remain a/b for user convenience
+                a = self._to_num(inputs.get("in1"))
+                b = self._to_num(inputs.get("in2"))
                 result = self._safe_eval(formula, {"a": a, "b": b})
                 output_formula = (d.get("output_formula") or "").strip()
                 if output_formula:
@@ -486,16 +487,15 @@ class GraphExecutor:
     def _collect_gate_inputs(self, inputs: dict[str, Any], d: dict[str, Any]) -> list[bool]:
         """Collect all active gate inputs with per-input negation applied.
 
-        Port naming: first two ports are "a" and "b" (backward compat);
-        additional ports are "in2", "in3", ... up to input_count - 1.
-        Negation config: "negate_a", "negate_b", "negate_in2", …
+        Port naming: in1, in2, in3, … up to input_count.
+        Negation config: "negate_in1", "negate_in2", …
         """
         count = max(2, min(30, int(d.get("input_count", 2))))
-        port_names = ["a", "b"] + [f"in{i}" for i in range(2, count)]
         vals: list[bool] = []
-        for name in port_names[:count]:
-            v = self._to_bool(inputs.get(name))
-            if d.get(f"negate_{name}"):
+        for i in range(1, count + 1):
+            port_id = f"in{i}"
+            v = self._to_bool(inputs.get(port_id))
+            if d.get(f"negate_{port_id}"):
                 v = not v
             vals.append(v)
         return vals

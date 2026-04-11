@@ -27,8 +27,25 @@
             class="gn-port-row"
             :style="{ height: PORT_H + 'px' }"
           >
-            <span class="gn-port-left">{{ def.inputs[r]?.label }}</span>
-            <span class="gn-port-right">{{ def.outputs[r]?.label }}</span>
+            <!-- Input label — clickable negation toggle for gate nodes -->
+            <button
+              v-if="isGateNode && def.inputs[r]"
+              class="gn-port-negate nodrag"
+              :class="{ 'gn-port-negate--active': !!data[`negate_${def.inputs[r].id}`] }"
+              :title="`${def.inputs[r].id} negieren`"
+              @click.stop="toggleNegate(def.inputs[r].id)"
+            >{{ data[`negate_${def.inputs[r].id}`] ? '¬' : def.inputs[r].label }}</button>
+            <span v-else class="gn-port-left">{{ def.inputs[r]?.label }}</span>
+
+            <!-- Output label — clickable negation toggle for gate nodes (only on last row) -->
+            <button
+              v-if="isGateNode && def.outputs[r]"
+              class="gn-port-negate gn-port-negate--right nodrag"
+              :class="{ 'gn-port-negate--active': !!data.negate_out }"
+              title="Ausgang negieren"
+              @click.stop="toggleNegate('out')"
+            >{{ data.negate_out ? '¬Out' : def.outputs[r].label }}</button>
+            <span v-else class="gn-port-right">{{ def.outputs[r]?.label }}</span>
           </div>
         </div>
       </div>
@@ -52,6 +69,8 @@
 import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 
+const { updateNodeData } = useVueFlow()
+
 const props = defineProps({
   id:   { type: String, required: true },
   type: { type: String, required: true },
@@ -61,18 +80,19 @@ const props = defineProps({
 // ── Node definitions ───────────────────────────────────────────────────────
 const NODE_DEFS = {
   const_value:  { label: 'Festwert',    color: '#475569', inputs: [],                                                outputs: [{id:'value', label:'Wert'}]       },
-  and:          { label: 'AND',         color: '#1d4ed8', inputs: [{id:'a',label:'A'},{id:'b',label:'B'}],           outputs: [{id:'out',   label:'Out'}]       },
-  or:           { label: 'OR',          color: '#1d4ed8', inputs: [{id:'a',label:'A'},{id:'b',label:'B'}],           outputs: [{id:'out',   label:'Out'}]       },
-  not:          { label: 'NOT',         color: '#1d4ed8', inputs: [{id:'in',label:'In'}],                            outputs: [{id:'out',   label:'Out'}]       },
-  xor:          { label: 'XOR',         color: '#1d4ed8', inputs: [{id:'a',label:'A'},{id:'b',label:'B'}],           outputs: [{id:'out',   label:'Out'}]       },
-  compare:      { label: 'Vergleich',   color: '#1d4ed8', inputs: [{id:'a',label:'A'},{id:'b',label:'B'}],           outputs: [{id:'out',   label:'Erg.'}]      },
+  and:          { label: 'AND',         color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}], outputs: [{id:'out',   label:'Out'}]       },
+  or:           { label: 'OR',          color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}], outputs: [{id:'out',   label:'Out'}]       },
+  not:          { label: 'NOT',         color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'}],                         outputs: [{id:'out',   label:'Out'}]       },
+  xor:          { label: 'XOR',         color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}], outputs: [{id:'out',   label:'Out'}]       },
+  compare:      { label: 'Vergleich',   color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}], outputs: [{id:'out',   label:'Erg.'}]      },
   hysteresis:   { label: 'Hysterese',   color: '#1d4ed8', inputs: [{id:'value',label:'Wert'}],                       outputs: [{id:'out',   label:'Out'}]       },
-  math_formula: { label: 'Formel',      color: '#7c3aed', inputs: [{id:'a',label:'a'},{id:'b',label:'b'}],           outputs: [{id:'result',label:'Erg.'}]      },
+  math_formula: { label: 'Formel',      color: '#7c3aed', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}],  outputs: [{id:'result',label:'Erg.'}]      },
   math_map:     { label: 'Skalieren',   color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                       outputs: [{id:'result',label:'Erg.'}]      },
   timer_delay:  { label: 'Verzögerung', color: '#b45309', inputs: [{id:'trigger',label:'Trigger'}],                  outputs: [{id:'trigger',label:'Trigger'}]  },
   timer_pulse:  { label: 'Impuls',      color: '#b45309', inputs: [{id:'trigger',label:'Trigger'}],                  outputs: [{id:'out',   label:'Out'}]       },
   timer_cron:   { label: 'Trigger',     color: '#b45309', inputs: [],                                                outputs: [{id:'trigger',label:'Trigger'}]  },
-  mcp_tool:     { label: 'MCP Tool',    color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'input',label:'Input'}], outputs: [{id:'result',label:'Erg.'},{id:'done',label:'Fertig'}] },
+  mcp_tool:     { label: 'MCP Tool',    color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'input', label:'Input'}], outputs: [{id:'result',label:'Erg.'},{id:'done',label:'Fertig'}] },
+  python_script:{ label: 'Python',      color: '#be185d', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'},{id:'in3',label:'IN 3'}], outputs: [{id:'result',label:'Erg.'}] },
   // Astro
   astro_sun:          { label: 'Astro Sonne',    color: '#d97706', inputs: [],                                                                         outputs: [{id:'sunrise',label:'Aufgang'},{id:'sunset',label:'Untergang'},{id:'is_day',label:'Tagsüber'}] },
   // Math (extended)
@@ -90,30 +110,30 @@ const NODE_DEFS = {
   api_client:         { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'body',label:'Body'}],                  outputs: [{id:'response',label:'Antwort'},{id:'status',label:'Status'},{id:'success',label:'OK'}] },
 }
 
-// ── Gate input port names: first two are "a"/"b", then "in2", "in3", …
-function gatePortId(i)    { return i === 0 ? 'a' : i === 1 ? 'b' : `in${i}` }
-function gatePortLabel(i, d) {
-  const id    = gatePortId(i)
-  const raw   = i === 0 ? 'A' : i === 1 ? 'B' : `In${i + 1}`
-  const negate = d?.[`negate_${id}`]
-  return negate ? `¬${raw}` : raw
-}
+// ── Gate helpers ───────────────────────────────────────────────────────────
+const isGateNode = computed(() =>
+  props.type === 'and' || props.type === 'or' || props.type === 'xor'
+)
 
 // ── Computed def — expands gate inputs dynamically from data.input_count
 const def = computed(() => {
   const base = NODE_DEFS[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] }
-  if (props.type === 'and' || props.type === 'or' || props.type === 'xor') {
+  if (isGateNode.value) {
     const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     const inputs = Array.from({ length: count }, (_, i) => ({
-      id:    gatePortId(i),
-      label: gatePortLabel(i, props.data),
+      id:    `in${i + 1}`,
+      label: `IN ${i + 1}`,
     }))
-    // Show negation marker on output label when negate_out is set
-    const outLabel = props.data?.negate_out ? '¬Out' : 'Out'
-    return { ...base, inputs, outputs: [{ id: 'out', label: outLabel }] }
+    return { ...base, inputs, outputs: [{ id: 'out', label: 'Out' }] }
   }
   return base
 })
+
+// ── Inline negation toggle (AND / OR / XOR) ────────────────────────────────
+function toggleNegate(portId) {
+  const key = `negate_${portId}`
+  updateNodeData(props.id, { [key]: !props.data[key] })
+}
 
 // ── Config summary ─────────────────────────────────────────────────────────
 const summary = computed(() => {
@@ -226,6 +246,22 @@ function remove() { removeNodes([props.id]) }
 }
 .gn-port-left  { font-size: 9px; color: var(--node-port-label); }
 .gn-port-right { font-size: 9px; color: var(--node-port-label); }
+
+/* Inline negation toggle */
+.gn-port-negate {
+  font-size: 9px;
+  color: var(--node-port-label);
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1;
+  transition: background .12s, color .12s;
+}
+.gn-port-negate:hover          { background: rgba(255,255,255,.10); color: #7dd3fc; }
+.gn-port-negate--active        { color: #f87171; font-weight: 700; }
+.gn-port-negate--right         { margin-left: auto; }
 
 .gn-debug {
   font-size: 9px;

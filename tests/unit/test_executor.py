@@ -168,7 +168,7 @@ class TestLogicNodes:
         (False, False, False),
     ])
     def test_and(self, a, b, expected):
-        out = run_single("and", {}, {"a": a, "b": b})
+        out = run_single("and", {}, {"in1": a, "in2": b})
         assert out["out"] is expected
 
     @pytest.mark.parametrize("a, b, expected", [
@@ -178,14 +178,14 @@ class TestLogicNodes:
         (False, False, False),
     ])
     def test_or(self, a, b, expected):
-        out = run_single("or", {}, {"a": a, "b": b})
+        out = run_single("or", {}, {"in1": a, "in2": b})
         assert out["out"] is expected
 
     @pytest.mark.parametrize("inp, expected", [
         (True, False), (False, True), (1, False), (0, True),
     ])
     def test_not(self, inp, expected):
-        out = run_single("not", {}, {"in": inp})
+        out = run_single("not", {}, {"in1": inp})
         assert out["out"] is expected
 
     @pytest.mark.parametrize("a, b, expected", [
@@ -195,11 +195,11 @@ class TestLogicNodes:
         (False, False, False),
     ])
     def test_xor(self, a, b, expected):
-        out = run_single("xor", {}, {"a": a, "b": b})
+        out = run_single("xor", {}, {"in1": a, "in2": b})
         assert out["out"] is expected
 
     def test_and_with_none_input_is_false(self):
-        out = run_single("and", {}, {"a": True, "b": None})
+        out = run_single("and", {}, {"in1": True, "in2": None})
         assert out["out"] is False
 
 
@@ -220,15 +220,15 @@ class TestCompareNode:
         ("!=", 5, 5, False),
     ])
     def test_numeric_operators(self, op, a, b, expected):
-        out = run_single("compare", {"operator": op}, {"a": a, "b": b})
+        out = run_single("compare", {"operator": op}, {"in1": a, "in2": b})
         assert out["out"] is expected
 
     def test_none_input_returns_false(self):
-        out = run_single("compare", {"operator": ">"}, {"a": None, "b": 5})
+        out = run_single("compare", {"operator": ">"}, {"in1": None, "in2": 5})
         assert out["out"] is False
 
     def test_default_operator_is_greater_than(self):
-        out = run_single("compare", {}, {"a": 10, "b": 5})
+        out = run_single("compare", {}, {"in1": 10, "in2": 5})
         assert out["out"] is True
 
 
@@ -298,11 +298,11 @@ class TestHysteresisNode:
 
 class TestMathFormulaNode:
     def test_simple_addition(self):
-        out = run_single("math_formula", {"formula": "a + b"}, {"a": 3, "b": 4})
+        out = run_single("math_formula", {"formula": "a + b"}, {"in1": 3, "in2": 4})
         assert out["result"] == 7
 
     def test_multiplication(self):
-        out = run_single("math_formula", {"formula": "a * b"}, {"a": 6, "b": 7})
+        out = run_single("math_formula", {"formula": "a * b"}, {"in1": 6, "in2": 7})
         assert out["result"] == 42
 
     def test_none_inputs_default_to_zero(self):
@@ -312,25 +312,25 @@ class TestMathFormulaNode:
     def test_output_formula_transforms_result(self):
         out = run_single("math_formula",
                          {"formula": "a + b", "output_formula": "x * 2"},
-                         {"a": 5, "b": 5})
+                         {"in1": 5, "in2": 5})
         assert out["result"] == 20   # (5+5)*2
 
     def test_output_formula_round(self):
         out = run_single("math_formula",
                          {"formula": "a / b", "output_formula": "round(x, 1)"},
-                         {"a": 10, "b": 3})
+                         {"in1": 10, "in2": 3})
         assert out["result"] == pytest.approx(3.3)
 
     def test_output_formula_empty_string_ignored(self):
         out = run_single("math_formula",
                          {"formula": "a + b", "output_formula": ""},
-                         {"a": 2, "b": 3})
+                         {"in1": 2, "in2": 3})
         assert out["result"] == 5
 
     def test_formula_uses_mathematical_rounding(self):
         out = run_single("math_formula",
                          {"formula": "a", "output_formula": "round(x, 1)"},
-                         {"a": 21.15})
+                         {"in1": 21.15})
         assert out["result"] == pytest.approx(21.2)
 
 
@@ -538,10 +538,10 @@ class TestMultiNodeGraph:
             node("c", "const_value", {"value": "10", "data_type": "number"}),
             node("f", "math_formula", {"formula": "a + b"}),
         ]
-        edges = [edge("c", "f", source_handle="value", target_handle="a")]
+        edges = [edge("c", "f", source_handle="value", target_handle="in1")]
         exc = make_executor(nodes, edges)
         out = exc.execute()
-        assert out["f"]["result"] == pytest.approx(10.0)  # b defaults to 0
+        assert out["f"]["result"] == pytest.approx(10.0)  # in2/b defaults to 0
 
     def test_three_node_pipeline(self):
         """const → formula → clamp"""
@@ -551,7 +551,7 @@ class TestMultiNodeGraph:
             node("cl", "clamp", {"min": 0, "max": 100}),
         ]
         edges = [
-            edge("c", "f",  source_handle="value", target_handle="a"),
+            edge("c", "f",  source_handle="value", target_handle="in1"),
             edge("f", "cl", source_handle="result", target_handle="value"),
         ]
         exc = make_executor(nodes, edges)
@@ -567,9 +567,9 @@ class TestMultiNodeGraph:
             node("n", "not", {}),
         ]
         edges = [
-            edge("t", "a", source_handle="value", target_handle="a"),
-            edge("f", "a", source_handle="value", target_handle="b"),
-            edge("a", "n", source_handle="out",   target_handle="in"),
+            edge("t", "a", source_handle="value", target_handle="in1"),
+            edge("f", "a", source_handle="value", target_handle="in2"),
+            edge("a", "n", source_handle="out",   target_handle="in1"),
         ]
         exc = make_executor(nodes, edges)
         out = exc.execute()
@@ -582,10 +582,10 @@ class TestMultiNodeGraph:
             node("c", "const_value", {"value": "5", "data_type": "number"}),
             node("f", "math_formula", {"formula": "a + b"}),
         ]
-        edges = [edge("c", "f", source_handle="value", target_handle="a")]
+        edges = [edge("c", "f", source_handle="value", target_handle="in1")]
         exc = make_executor(nodes, edges)
-        # Override 'a' input of formula node to 100
-        out = exc.execute({"f": {"a": 100, "b": 0}})
+        # Override in1 input of formula node to 100
+        out = exc.execute({"f": {"in1": 100, "in2": 0}})
         assert out["f"]["result"] == pytest.approx(100.0)
 
 
@@ -599,96 +599,95 @@ class TestEnhancedGateInputs:
     # ── AND multi-input ───────────────────────────────────────────────────
 
     def test_and_3_inputs_all_true(self):
-        out = run_single("and", {"input_count": 3}, {"a": True, "b": True, "in2": True})
+        out = run_single("and", {"input_count": 3}, {"in1": True, "in2": True, "in3": True})
         assert out["out"] is True
 
     def test_and_3_inputs_one_false(self):
-        out = run_single("and", {"input_count": 3}, {"a": True, "b": True, "in2": False})
+        out = run_single("and", {"input_count": 3}, {"in1": True, "in2": True, "in3": False})
         assert out["out"] is False
 
     def test_and_negate_single_input(self):
-        # negate_a: AND(¬False, True) = AND(True, True) = True
-        out = run_single("and", {"negate_a": True}, {"a": False, "b": True})
+        # negate_in1: AND(¬False, True) = AND(True, True) = True
+        out = run_single("and", {"negate_in1": True}, {"in1": False, "in2": True})
         assert out["out"] is True
 
     def test_and_negate_output(self):
         # AND(True, True) = True; negate_out → False
-        out = run_single("and", {"negate_out": True}, {"a": True, "b": True})
+        out = run_single("and", {"negate_out": True}, {"in1": True, "in2": True})
         assert out["out"] is False
 
     def test_and_negate_input_and_output(self):
-        # negate_b: AND(True, ¬False) = True; negate_out → False
-        out = run_single("and", {"negate_b": True, "negate_out": True}, {"a": True, "b": False})
+        # negate_in2: AND(True, ¬False) = True; negate_out → False
+        out = run_single("and", {"negate_in2": True, "negate_out": True}, {"in1": True, "in2": False})
         assert out["out"] is False
 
     def test_and_5_inputs_all_true(self):
-        inputs = {"a": True, "b": True, "in2": True, "in3": True, "in4": True}
+        inputs = {"in1": True, "in2": True, "in3": True, "in4": True, "in5": True}
         out = run_single("and", {"input_count": 5}, inputs)
         assert out["out"] is True
 
     def test_and_5_inputs_last_false(self):
-        inputs = {"a": True, "b": True, "in2": True, "in3": True, "in4": False}
+        inputs = {"in1": True, "in2": True, "in3": True, "in4": True, "in5": False}
         out = run_single("and", {"input_count": 5}, inputs)
         assert out["out"] is False
 
     # ── OR multi-input ────────────────────────────────────────────────────
 
     def test_or_3_inputs_all_false(self):
-        out = run_single("or", {"input_count": 3}, {"a": False, "b": False, "in2": False})
+        out = run_single("or", {"input_count": 3}, {"in1": False, "in2": False, "in3": False})
         assert out["out"] is False
 
     def test_or_3_inputs_one_true(self):
-        out = run_single("or", {"input_count": 3}, {"a": False, "b": False, "in2": True})
+        out = run_single("or", {"input_count": 3}, {"in1": False, "in2": False, "in3": True})
         assert out["out"] is True
 
     def test_or_negate_input(self):
-        # negate_a: OR(¬False, False) = OR(True, False) = True
-        out = run_single("or", {"negate_a": True}, {"a": False, "b": False})
+        # negate_in1: OR(¬False, False) = OR(True, False) = True
+        out = run_single("or", {"negate_in1": True}, {"in1": False, "in2": False})
         assert out["out"] is True
 
     def test_or_negate_output(self):
         # OR(False, False) = False; negate_out → True
-        out = run_single("or", {"negate_out": True}, {"a": False, "b": False})
+        out = run_single("or", {"negate_out": True}, {"in1": False, "in2": False})
         assert out["out"] is True
 
     # ── XOR multi-input ───────────────────────────────────────────────────
 
     def test_xor_3_inputs_exactly_one_true(self):
-        out = run_single("xor", {"input_count": 3}, {"a": True, "b": False, "in2": False})
+        out = run_single("xor", {"input_count": 3}, {"in1": True, "in2": False, "in3": False})
         assert out["out"] is True
 
     def test_xor_3_inputs_two_true(self):
         # Two inputs true → XOR false (not exactly one)
-        out = run_single("xor", {"input_count": 3}, {"a": True, "b": True, "in2": False})
+        out = run_single("xor", {"input_count": 3}, {"in1": True, "in2": True, "in3": False})
         assert out["out"] is False
 
     def test_xor_3_inputs_all_false(self):
-        out = run_single("xor", {"input_count": 3}, {"a": False, "b": False, "in2": False})
+        out = run_single("xor", {"input_count": 3}, {"in1": False, "in2": False, "in3": False})
         assert out["out"] is False
 
     def test_xor_negate_output(self):
         # XOR(True, False) = True; negate_out → False
-        out = run_single("xor", {"negate_out": True}, {"a": True, "b": False})
+        out = run_single("xor", {"negate_out": True}, {"in1": True, "in2": False})
         assert out["out"] is False
 
-    # ── Backward compatibility (existing 2-input behaviour unchanged) ─────
+    # ── 2-input default behaviour ─────────────────────────────────────────
 
-    def test_and_2_input_backward_compat(self):
-        out = run_single("and", {}, {"a": True, "b": True})
+    def test_and_2_inputs_default(self):
+        out = run_single("and", {}, {"in1": True, "in2": True})
         assert out["out"] is True
 
-    def test_or_2_input_backward_compat(self):
-        out = run_single("or", {}, {"a": False, "b": True})
+    def test_or_2_inputs_default(self):
+        out = run_single("or", {}, {"in1": False, "in2": True})
         assert out["out"] is True
 
-    def test_xor_2_input_backward_compat(self):
-        out = run_single("xor", {}, {"a": True, "b": True})
+    def test_xor_2_inputs_default(self):
+        out = run_single("xor", {}, {"in1": True, "in2": True})
         assert out["out"] is False
 
     def test_input_count_clamped_to_max_30(self):
         # Even with absurd value, must not raise
-        inputs = {f"in{i}": True for i in range(2, 10)}
-        inputs.update({"a": True, "b": True})
+        inputs = {f"in{i}": True for i in range(1, 11)}
         out = run_single("and", {"input_count": 999}, inputs)
         assert isinstance(out["out"], bool)
 
