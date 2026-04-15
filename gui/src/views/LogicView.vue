@@ -238,6 +238,15 @@ function fmtDebugVal(nodeOut) {
     return String(v).slice(0, 18)
   }
 
+  // notify nodes — show message content + sent status (before generic key loop)
+  if ('_message' in nodeOut) {
+    const msg  = nodeOut._message !== null && nodeOut._message !== undefined
+      ? `"${String(nodeOut._message).slice(0, 24)}"`
+      : '—'
+    const sent = 'sent' in nodeOut ? `  sent=${fv(nodeOut.sent)}` : ''
+    return msg + sent
+  }
+
   // Public keys (no leading _)
   const pairs = Object.entries(nodeOut)
     .filter(([k]) => !k.startsWith('_'))
@@ -247,15 +256,6 @@ function fmtDebugVal(nodeOut) {
   // datapoint_write outputs are all _private — show write value with → prefix
   if ('_write_value' in nodeOut) {
     return `→ ${fv(nodeOut._write_value)}`
-  }
-
-  // notify nodes — show message content + sent status
-  if ('_message' in nodeOut) {
-    const msg  = nodeOut._message !== null && nodeOut._message !== undefined
-      ? `"${String(nodeOut._message).slice(0, 24)}"`
-      : '—'
-    const sent = 'sent' in nodeOut ? `  sent=${fv(nodeOut.sent)}` : ''
-    return msg + sent
   }
 
   return null
