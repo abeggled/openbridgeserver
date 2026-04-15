@@ -10,7 +10,12 @@ WidgetRegistry.register({
   defaultW: 2, defaultH: 3,
   component: Widget,
   configComponent: Config,
-  defaultConfig: { label: '' },
+  defaultConfig: {
+    label: '',
+    mode: 'switch',
+    on:  { icon: '', color: '#3b82f6', text: 'EIN' },
+    off: { icon: '', color: '#6b7280', text: 'AUS' },
+  },
   compatibleTypes: ['BOOLEAN'],
   supportsStatusDatapoint: true,
 })
