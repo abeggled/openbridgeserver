@@ -123,9 +123,15 @@ test('Quality-Filter good zeigt nur DataPoints mit Wert', async ({ page }) => {
     await apiPost(`/api/v1/datapoints/${dpId}/value`, { value: 21.5 })
 
     await page.goto('/datapoints')
-    await page.waitForSelector('[data-testid="select-quality"]', { timeout: 10_000 })
+    await page.waitForSelector('[data-testid="input-search"]', { timeout: 10_000 })
 
-    // Filter to good-quality only
+    // Narrow results to this DP by name so it's always on page 1, regardless
+    // of how many other DPs exist in the environment.
+    await page.fill('[data-testid="input-search"]', name)
+    await page.waitForTimeout(500)
+    await expect(page.locator(`[data-testid="dp-row-${dpId}"]`)).toBeVisible({ timeout: 5_000 })
+
+    // Filter to good-quality only — our DP must stay visible
     await page.selectOption('[data-testid="select-quality"]', 'good')
     await page.waitForTimeout(500)
     await expect(page.locator(`[data-testid="dp-row-${dpId}"]`)).toBeVisible({ timeout: 5_000 })
@@ -214,9 +220,12 @@ test('Infinite Scroll lädt weitere Einträge nach', async ({ page }) => {
     expect(initialCount).toBeLessThanOrEqual(50)
     expect(initialCount).toBeGreaterThan(0)
 
-    // Scroll to bottom to trigger the infinite scroll sentinel
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-    await page.waitForTimeout(1_000)   // wait for the next page to load
+    // The app layout scrolls <main>, not window. Scroll it to the bottom.
+    await page.evaluate(() => {
+      const main = document.querySelector('main')
+      if (main) main.scrollTop = main.scrollHeight
+    })
+    await page.waitForTimeout(1_500)   // wait for IntersectionObserver + network
 
     // Now more rows should be visible
     const afterScrollCount = await page.locator('[data-testid^="dp-row-"]').count()

@@ -227,16 +227,23 @@ watch(() => store.items, (items) => {
 // Infinite scroll
 // --------------------------------------------------------------------------
 
-function _setupObserver() {
-  if (!sentinelEl.value) return
-  observer = new IntersectionObserver(
+function _makeObserver() {
+  // The app layout scrolls <main>, not the window.
+  // Use that element as the root so IntersectionObserver fires correctly.
+  const root = document.querySelector('main') ?? null
+  return new IntersectionObserver(
     ([entry]) => {
       if (entry.isIntersecting && store.hasMore && !store.loading) {
         store.loadMore()
       }
     },
-    { rootMargin: '300px' }
+    { root, rootMargin: '300px' }
   )
+}
+
+function _setupObserver() {
+  if (!sentinelEl.value) return
+  observer = _makeObserver()
   observer.observe(sentinelEl.value)
 }
 
@@ -244,14 +251,7 @@ function _setupObserver() {
 watch(sentinelEl, (el) => {
   observer?.disconnect()
   if (el) {
-    observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting && store.hasMore && !store.loading) {
-          store.loadMore()
-        }
-      },
-      { rootMargin: '300px' }
-    )
+    observer = _makeObserver()
     observer.observe(el)
   }
 })
