@@ -1,32 +1,70 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { dpApi, searchApi, systemApi } from '@/api/client'
+
+const SCROLL_STATE_KEY = 'obs.dp.scroll'
 
 export const useDatapointStore = defineStore('datapoints', () => {
   const items    = ref([])
   const total    = ref(0)
-  const page     = ref(0)
-  const size     = ref(50)
-  const pages    = ref(1)
   const loading  = ref(false)
   const datatypes = ref([])  // [{ name, python_type, description }]
-  const sortCol  = ref('created_at')
+  const sortCol  = ref('name')
   const sortDir  = ref('asc')
+  const hasMore  = ref(false)
 
-  async function fetchPage(p = 0, s = 50) {
+  // Internal cursor — tracks the next page to load in infinite-scroll mode.
+  const _nextPage    = ref(0)
+  const _lastParams  = ref({})
+
+  // --------------------------------------------------------------------------
+  // Core search (replaces the old fetchPage + search pair)
+  //
+  // params: { q, tag, quality, type }
+  // append: false → replace items (new search / filter change / sort change)
+  //         true  → append items (scroll triggered "load more")
+  // --------------------------------------------------------------------------
+  async function search(params = {}, append = false) {
+    if (loading.value && append) return   // debounce concurrent scroll triggers
+
     loading.value = true
+
+    const page = append ? _nextPage.value : 0
+    if (!append) {
+      _lastParams.value  = { ...params }
+      _nextPage.value    = 0
+    }
+
     try {
-      const { data } = await dpApi.list(p, s, sortCol.value, sortDir.value)
-      items.value = data.items
-      total.value = data.total
-      page.value  = data.page
-      size.value  = data.size
-      pages.value = data.pages
+      const { data } = await searchApi.search({
+        ...params,
+        sort:  sortCol.value,
+        order: sortDir.value,
+        page,
+        size:  50,
+      })
+
+      if (append) {
+        items.value = [...items.value, ...data.items]
+      } else {
+        items.value = data.items
+      }
+
+      total.value     = data.total
+      _nextPage.value = page + 1
+      hasMore.value   = _nextPage.value < data.pages
     } finally {
       loading.value = false
     }
   }
 
+  // Load the next page in infinite-scroll mode.
+  async function loadMore() {
+    if (!hasMore.value || loading.value) return
+    await search(_lastParams.value, true)
+  }
+
+  // Sort a column — resets to page 0.
   function setSort(col) {
     if (sortCol.value === col) {
       sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
@@ -34,23 +72,12 @@ export const useDatapointStore = defineStore('datapoints', () => {
       sortCol.value = col
       sortDir.value = 'asc'
     }
-    fetchPage(0, size.value)
+    search(_lastParams.value, false)
   }
 
-  async function search(params) {
-    loading.value = true
-    try {
-      const { data } = await searchApi.search({ ...params, size: params.size ?? 50, page: params.page ?? 0 })
-      items.value = data.items
-      total.value = data.total
-      page.value  = data.page
-      size.value  = data.size
-      pages.value = data.pages
-    } finally {
-      loading.value = false
-    }
-  }
-
+  // --------------------------------------------------------------------------
+  // CRUD
+  // --------------------------------------------------------------------------
   async function create(payload) {
     const { data } = await dpApi.create(payload)
     items.value.unshift(data)
@@ -77,14 +104,41 @@ export const useDatapointStore = defineStore('datapoints', () => {
     datatypes.value = data
   }
 
-  // Update a single item's live value from WebSocket
+  // Update a single item's live value from WebSocket.
   function patchValue(id, value, quality) {
     const dp = items.value.find(d => d.id === id)
     if (dp) { dp.value = value; dp.quality = quality }
   }
 
+  // --------------------------------------------------------------------------
+  // Scroll-state persistence (sessionStorage)
+  // Used to restore position when navigating back from a detail view.
+  // --------------------------------------------------------------------------
+  function saveScrollState(scrollY, filters) {
+    try {
+      sessionStorage.setItem(SCROLL_STATE_KEY, JSON.stringify({
+        scrollY,
+        filters,
+        count: items.value.length,
+      }))
+    } catch { /* quota errors are non-fatal */ }
+  }
+
+  function restoreScrollState() {
+    try {
+      const raw = sessionStorage.getItem(SCROLL_STATE_KEY)
+      return raw ? JSON.parse(raw) : null
+    } catch { return null }
+  }
+
+  function clearScrollState() {
+    sessionStorage.removeItem(SCROLL_STATE_KEY)
+  }
+
   return {
-    items, total, page, size, pages, loading, datatypes, sortCol, sortDir,
-    fetchPage, search, setSort, create, update, remove, loadDatatypes, patchValue,
+    items, total, loading, datatypes, sortCol, sortDir, hasMore,
+    search, loadMore, setSort,
+    create, update, remove, loadDatatypes, patchValue,
+    saveScrollState, restoreScrollState, clearScrollState,
   }
 })

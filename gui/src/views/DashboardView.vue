@@ -92,7 +92,7 @@ onMounted(async () => {
   try { const { data } = await systemApi.health(); health.value = data } catch {}
 
   // DataPoints
-  if (!dpStore.items.length) await dpStore.fetchPage(0, 50)
+  if (!dpStore.items.length) await dpStore.search({}, false)
 
   // Adapters
   adaptersLoading.value = true

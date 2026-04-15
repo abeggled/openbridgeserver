@@ -199,7 +199,14 @@
       "Bash(dir \"C:\\\\Users\\\\DanielAbegglen\\\\Downloads\\\\fenster_extracted\")",
       "Bash(dir \"C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\openbridgeserver\" /b)",
       "Bash(powershell -Command \"Get-ChildItem 'C:\\\\Users\\\\DanielAbegglen\\\\OneDrive\\\\Hausbau\\\\Elektro\\\\KNX\\\\openbridgeserver' | Select-Object Name\")",
-      "Bash(powershell -Command \"echo test\")"
+      "Bash(powershell -Command \"echo test\")",
+      "Bash(python -m pytest tests/unit/test_executor.py::TestHeatingCircuit -v)",
+      "Bash(python -m pytest \"C:/Users/DanielAbegglen/OneDrive/Hausbau/Elektro/KNX/openbridgeserver/tests/unit/test_executor.py::TestHeatingCircuit\" -v)",
+      "Bash(python -c \"from obs.logic.node_types import get_all_node_types; types = get_all_node_types\\(\\); print\\([t.type for t in types if 'extractor' in t.type or t.category == 'integration']\\)\")",
+      "Bash(python -c \"from obs.logic.node_types import get_all_node_types; types = get_all_node_types\\(\\); [print\\(t.type\\) for t in types if t.category == 'integration']\")",
+      "Bash(ls -d */)",
+      "Bash(git log:*)",
+      "Bash(npx vue-tsc:*)"
     ]
   }
 }

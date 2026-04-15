@@ -12,29 +12,55 @@
       </button>
     </div>
 
-    <!-- Search bar -->
+    <!-- Filter bar -->
     <div class="flex flex-wrap gap-3">
-      <input v-model="filters.q" @input="onSearch" type="text" class="input flex-1 min-w-48" placeholder="Suche nach Name …" data-testid="input-search" />
-      <input v-model="filters.tag" @input="onSearch" type="text" class="input w-36" placeholder="Tag" />
-      <select v-model="filters.type" @change="onSearch" class="input w-36">
+      <input
+        v-model="filters.q"
+        @input="onSearch"
+        type="text"
+        class="input flex-1 min-w-48"
+        placeholder="Suche nach Name, UUID, Konfiguration …"
+        data-testid="input-search"
+      />
+      <select
+        v-model="filters.tag"
+        @change="onSearch"
+        class="input w-44"
+        data-testid="select-tag"
+      >
+        <option value="">Alle Tags</option>
+        <option v-for="t in availableTags" :key="t" :value="t">{{ t }}</option>
+      </select>
+      <select
+        v-model="filters.type"
+        @change="onSearch"
+        class="input w-36"
+        data-testid="select-type"
+      >
         <option value="">Alle Typen</option>
         <option v-for="dt in store.datatypes" :key="dt.name" :value="dt.name">{{ dt.name }}</option>
       </select>
-    </div>
-
-    <!-- Pagination oben -->
-    <div v-if="store.pages > 1" class="flex items-center justify-between">
-      <span class="text-sm text-slate-500">Seite {{ store.page + 1 }} von {{ store.pages }}</span>
-      <div class="flex gap-2">
-        <button @click="goPage(store.page - 1)" :disabled="store.page === 0" class="btn-secondary btn-sm">‹</button>
-        <button @click="goPage(store.page + 1)" :disabled="store.page >= store.pages - 1" class="btn-secondary btn-sm">›</button>
-      </div>
+      <select
+        v-model="filters.quality"
+        @change="onSearch"
+        class="input w-36"
+        data-testid="select-quality"
+      >
+        <option value="">Alle Qualitäten</option>
+        <option value="good">Gut</option>
+        <option value="uncertain">Unbekannt</option>
+        <option value="bad">Schlecht</option>
+      </select>
     </div>
 
     <!-- Table -->
     <div class="card overflow-hidden">
-      <div v-if="store.loading" class="flex justify-center py-12"><Spinner size="lg" /></div>
-      <div v-else-if="!store.items.length" class="text-center text-slate-500 py-12 text-sm">Keine Objekte gefunden</div>
+      <div v-if="store.loading && !store.items.length" class="flex justify-center py-12">
+        <Spinner size="lg" />
+      </div>
+      <div v-else-if="!store.items.length" class="text-center text-slate-500 py-12 text-sm">
+        Keine Objekte gefunden
+      </div>
       <div v-else class="table-wrap">
         <table class="table" data-testid="datapoint-list">
           <thead>
@@ -48,8 +74,7 @@
               <th>Tags</th>
               <th>Wert</th>
               <th>Qualität</th>
-              <th>MQTT Topic</th>
-              <th class="w-24"></th>
+              <th class="w-20"></th>
             </tr>
           </thead>
           <tbody>
@@ -65,12 +90,8 @@
               </td>
               <td class="font-mono text-sm text-blue-500 dark:text-blue-300">{{ liveValue(dp) }}</td>
               <td><Badge :variant="qualityVariant(liveQuality(dp))" dot size="xs">{{ qualityLabel(liveQuality(dp)) ?? '—' }}</Badge></td>
-              <td class="font-mono text-xs text-slate-500 max-w-xs truncate">{{ dp.mqtt_topic }}</td>
               <td>
                 <div class="flex items-center gap-1">
-                  <RouterLink :to="`/datapoints/${dp.id}`" class="btn-icon" title="Detail">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                  </RouterLink>
                   <button @click="openEdit(dp)" class="btn-icon" title="Bearbeiten">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                   </button>
@@ -82,16 +103,20 @@
             </tr>
           </tbody>
         </table>
+
+        <!-- Infinite scroll sentinel -->
+        <div ref="sentinelEl" class="h-1" />
       </div>
     </div>
 
-    <!-- Pagination -->
-    <div v-if="store.pages > 1" class="flex items-center justify-between">
-      <span class="text-sm text-slate-500">Seite {{ store.page + 1 }} von {{ store.pages }}</span>
-      <div class="flex gap-2">
-        <button @click="goPage(store.page - 1)" :disabled="store.page === 0" class="btn-secondary btn-sm">‹</button>
-        <button @click="goPage(store.page + 1)" :disabled="store.page >= store.pages - 1" class="btn-secondary btn-sm">›</button>
-      </div>
+    <!-- Loading more indicator -->
+    <div v-if="store.loading && store.items.length" class="flex justify-center py-4">
+      <Spinner size="sm" />
+    </div>
+
+    <!-- End of list -->
+    <div v-if="!store.hasMore && store.items.length > 0 && !store.loading" class="text-center text-slate-400 text-xs py-2">
+      Alle {{ store.total }} Einträge geladen
     </div>
 
     <!-- Create / Edit Modal -->
@@ -107,14 +132,15 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
-import Badge          from '@/components/ui/Badge.vue'
-import Spinner        from '@/components/ui/Spinner.vue'
-import Modal          from '@/components/ui/Modal.vue'
-import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
-import DataPointForm  from '@/components/datapoints/DataPointForm.vue'
+import Badge         from '@/components/ui/Badge.vue'
+import Spinner       from '@/components/ui/Spinner.vue'
+import Modal         from '@/components/ui/Modal.vue'
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
+import DataPointForm from '@/components/datapoints/DataPointForm.vue'
 
 // Inline sort-indicator component
 const SortIcon = {
@@ -129,38 +155,121 @@ const SortIcon = {
 const store = useDatapointStore()
 const ws    = useWebSocketStore()
 
-const filters     = ref({ q: '', tag: '', type: '' })
-const showForm    = ref(false)
-const showConfirm = ref(false)
-const editTarget  = ref(null)
+const filters      = ref({ q: '', tag: '', quality: '', type: '' })
+const showForm     = ref(false)
+const showConfirm  = ref(false)
+const editTarget   = ref(null)
 const deleteTarget = ref(null)
+const sentinelEl   = ref(null)
+
 let searchTimeout = null
-let unsubWs = null
+let observer      = null
+let unsubWs       = null
+
+// Distinct tags from the currently loaded result set — populates the tag dropdown.
+const availableTags = computed(() =>
+  [...new Set(store.items.flatMap(dp => dp.tags))].sort()
+)
+
+// --------------------------------------------------------------------------
+// Lifecycle
+// --------------------------------------------------------------------------
 
 onMounted(async () => {
   await store.loadDatatypes()
-  await store.fetchPage(0)
-  unsubWs = ws.onValue((id, value, quality) => store.patchValue(id, value, quality))
-})
-onUnmounted(() => unsubWs?.())
 
+  const saved = store.restoreScrollState()
+  if (saved) {
+    // Restore filters first so the search uses them.
+    Object.assign(filters.value, saved.filters)
+    store.clearScrollState()
+    // Load enough items to roughly match the saved scroll position.
+    // One request with size=saved.count covers it without multiple round trips.
+    await store.search(
+      { ...filters.value },
+      false,
+    )
+    // If the previous session had loaded multiple pages, keep loading until
+    // we reach the saved count (cap at 5 pages to avoid runaway fetches).
+    let pages = 0
+    while (store.items.length < saved.count && store.hasMore && pages < 4) {
+      await store.loadMore()
+      pages++
+    }
+    await nextTick()
+    window.scrollTo({ top: saved.scrollY, behavior: 'instant' })
+  } else {
+    await store.search(filters.value, false)
+  }
+
+  unsubWs = ws.onValue((id, value, quality) => store.patchValue(id, value, quality))
+  _setupObserver()
+})
+
+onUnmounted(() => {
+  unsubWs?.()
+  observer?.disconnect()
+})
+
+// Save scroll state when navigating to a detail view.
+onBeforeRouteLeave((to) => {
+  if (to.name === 'DataPointDetail') {
+    store.saveScrollState(window.scrollY, { ...filters.value })
+  }
+})
+
+// Re-subscribe WebSocket whenever the loaded items list changes.
 watch(() => store.items, (items) => {
   ws.subscribe(items.map(d => d.id))
 }, { immediate: true })
 
+// --------------------------------------------------------------------------
+// Infinite scroll
+// --------------------------------------------------------------------------
+
+function _setupObserver() {
+  if (!sentinelEl.value) return
+  observer = new IntersectionObserver(
+    ([entry]) => {
+      if (entry.isIntersecting && store.hasMore && !store.loading) {
+        store.loadMore()
+      }
+    },
+    { rootMargin: '300px' }
+  )
+  observer.observe(sentinelEl.value)
+}
+
+// Reattach observer once the sentinel is actually in the DOM.
+watch(sentinelEl, (el) => {
+  observer?.disconnect()
+  if (el) {
+    observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && store.hasMore && !store.loading) {
+          store.loadMore()
+        }
+      },
+      { rootMargin: '300px' }
+    )
+    observer.observe(el)
+  }
+})
+
+// --------------------------------------------------------------------------
+// Search / filter
+// --------------------------------------------------------------------------
+
 function onSearch() {
   clearTimeout(searchTimeout)
   searchTimeout = setTimeout(() => {
-    const { q, tag, type } = filters.value
-    if (q || tag || type) store.search({ q, tag, type })
-    else store.fetchPage(0)
+    store.search({ ...filters.value }, false)
   }, 350)
 }
 
-function goPage(p) {
-  const { q, tag, type } = filters.value
-  store.search({ q, tag, type, page: p })
-}
+// --------------------------------------------------------------------------
+// CRUD handlers
+// --------------------------------------------------------------------------
 
 function openCreate() { editTarget.value = null; showForm.value = true }
 function openEdit(dp) { editTarget.value = dp;   showForm.value = true }
@@ -168,11 +277,15 @@ function openEdit(dp) { editTarget.value = dp;   showForm.value = true }
 async function onSave(payload) {
   if (editTarget.value) await store.update(editTarget.value.id, payload)
   else await store.create(payload)
-  showForm.value = false   // only reached if no error thrown
+  showForm.value = false
 }
 
 function confirmDelete(dp) { deleteTarget.value = dp; showConfirm.value = true }
 async function doDelete()  { await store.remove(deleteTarget.value.id) }
+
+// --------------------------------------------------------------------------
+// Live value helpers
+// --------------------------------------------------------------------------
 
 function liveValue(dp) {
   const live = ws.liveValues[dp.id]
@@ -185,6 +298,6 @@ function qualityVariant(q) {
   return q === 'good' ? 'success' : q === 'bad' ? 'danger' : q === 'uncertain' ? 'warning' : 'muted'
 }
 function qualityLabel(q) {
-  return q === 'good' ? 'gut' : q === 'bad' ? 'schlecht' : q === 'uncertain' ? 'undefiniert' : q
+  return q === 'good' ? 'Gut' : q === 'bad' ? 'Schlecht' : q === 'uncertain' ? 'Unbekannt' : q
 }
 </script>
