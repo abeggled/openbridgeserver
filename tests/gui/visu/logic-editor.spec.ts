@@ -521,3 +521,163 @@ test('api_client Erfolg-Ausgang löst nachgelagerten Node aus bei HTTP 200', asy
     await apiDelete(`/api/v1/logic/graphs/${graphId}`)
   }
 })
+
+// ---------------------------------------------------------------------------
+// json_extractor: registry contains node type with correct schema
+// ---------------------------------------------------------------------------
+test('json_extractor ist in der Node-Type-Registry mit json_path-Schema', async ({ page }) => {
+  const types = await apiGet('/api/v1/logic/node-types') as Array<{
+    type: string
+    config_schema: Record<string, { type: string }>
+  }>
+  const jx = types.find(t => t.type === 'json_extractor')
+  expect(jx).toBeDefined()
+  expect(jx!.config_schema).toHaveProperty('json_path')
+})
+
+// ---------------------------------------------------------------------------
+// xml_extractor: registry contains node type with correct schema
+// ---------------------------------------------------------------------------
+test('xml_extractor ist in der Node-Type-Registry mit xml_path-Schema', async ({ page }) => {
+  const types = await apiGet('/api/v1/logic/node-types') as Array<{
+    type: string
+    config_schema: Record<string, { type: string }>
+  }>
+  const xx = types.find(t => t.type === 'xml_extractor')
+  expect(xx).toBeDefined()
+  expect(xx!.config_schema).toHaveProperty('xml_path')
+})
+
+// ---------------------------------------------------------------------------
+// json_extractor: runs via API and extracts correct value
+// ---------------------------------------------------------------------------
+test('json_extractor extrahiert Wert aus JSON-String', async ({ page }) => {
+  const payload = JSON.stringify({ sensor: { temperature: 21.5 } })
+
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-JSON-Extractor-${Date.now()}`,
+    description: 'Playwright: json_extractor',
+    enabled: true,
+    flow_data: {
+      nodes: [
+        {
+          id: 'cv',
+          type: 'const_value',
+          position: { x: 0, y: 0 },
+          data: { value: payload, data_type: 'string' },
+        },
+        {
+          id: 'jx',
+          type: 'json_extractor',
+          position: { x: 300, y: 0 },
+          data: { json_path: 'sensor.temperature' },
+        },
+      ],
+      edges: [
+        { id: 'e1', source: 'cv', target: 'jx', sourceHandle: 'value', targetHandle: 'data' },
+      ],
+    },
+  }) as { id: string }
+  const graphId = graph.id
+
+  try {
+    const result = await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {}) as {
+      outputs: Record<string, Record<string, unknown>>
+    }
+    expect(result.outputs['jx']).toBeDefined()
+    expect(result.outputs['jx']['value']).toBe(21.5)
+    // _preview must contain the original payload
+    expect(result.outputs['jx']['_preview']).toContain('temperature')
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// xml_extractor: runs via API and extracts correct value
+// ---------------------------------------------------------------------------
+test('xml_extractor extrahiert Wert aus XML-String', async ({ page }) => {
+  const xmlPayload = '<root><temperature>21.5</temperature></root>'
+
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-XML-Extractor-${Date.now()}`,
+    description: 'Playwright: xml_extractor',
+    enabled: true,
+    flow_data: {
+      nodes: [
+        {
+          id: 'cv',
+          type: 'const_value',
+          position: { x: 0, y: 0 },
+          data: { value: xmlPayload, data_type: 'string' },
+        },
+        {
+          id: 'xx',
+          type: 'xml_extractor',
+          position: { x: 300, y: 0 },
+          data: { xml_path: './/temperature' },
+        },
+      ],
+      edges: [
+        { id: 'e1', source: 'cv', target: 'xx', sourceHandle: 'value', targetHandle: 'data' },
+      ],
+    },
+  }) as { id: string }
+  const graphId = graph.id
+
+  try {
+    const result = await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {}) as {
+      outputs: Record<string, Record<string, unknown>>
+    }
+    expect(result.outputs['xx']).toBeDefined()
+    expect(result.outputs['xx']['value']).toBe('21.5')
+    expect(result.outputs['xx']['_preview']).toContain('temperature')
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// json_extractor: config panel shows preview area and path picker
+// ---------------------------------------------------------------------------
+test('json_extractor Config-Panel zeigt Preview-Bereich und Pfad-Eingabe', async ({ page }) => {
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-JSON-Config-${Date.now()}`,
+    description: 'Playwright: json_extractor config UI',
+    enabled: true,
+    flow_data: {
+      nodes: [
+        {
+          id: 'jx',
+          type: 'json_extractor',
+          position: { x: 100, y: 100 },
+          data: { json_path: 'temperature' },
+        },
+      ],
+      edges: [],
+    },
+  }) as { id: string }
+  const graphId = graph.id
+
+  try {
+    await page.goto('/logic')
+    await page.waitForLoadState('networkidle')
+    await page.selectOption('[data-testid="select-graph"]', graphId)
+    await page.waitForTimeout(1_500)
+
+    // Click on the node to open the config panel
+    await page.locator('.vue-flow__node').first().click()
+    await page.waitForTimeout(500)
+
+    // Preview textarea must be present
+    const preview = page.locator('[data-testid="extractor-preview"]')
+    await expect(preview).toBeVisible({ timeout: 5_000 })
+
+    // Path input must be present and contain the configured path
+    const pathInput = page.locator('[data-testid="extractor-path-input"]')
+    await expect(pathInput).toBeVisible({ timeout: 3_000 })
+    await expect(pathInput).toHaveValue('temperature')
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})

@@ -368,6 +368,52 @@
       </div>
     </template>
 
+    <!-- ── json_extractor / xml_extractor ───────────────────────────────── -->
+    <template v-else-if="isExtractorNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
+
+        <!-- Preview: last received raw data -->
+        <div class="form-group">
+          <div class="section-label">Empfangene Daten</div>
+          <textarea
+            :value="extractorPreview"
+            readonly
+            rows="7"
+            class="input text-xs font-mono resize-y"
+            style="background:#0f172a;color:#94a3b8"
+            placeholder="Noch keine Daten empfangen. Graph ausführen um Daten zu laden."
+            data-testid="extractor-preview"
+          />
+        </div>
+
+        <!-- Path picker dropdown (only when we have parsed paths) -->
+        <div v-if="extractorPaths.length" class="form-group">
+          <label class="label">Pfad aus Daten wählen</label>
+          <select @change="onExtractorPathSelect" class="input text-sm"
+            data-testid="extractor-path-select">
+            <option value="">— Pfad wählen —</option>
+            <option v-for="p in extractorPaths" :key="p" :value="p">{{ p }}</option>
+          </select>
+        </div>
+
+        <!-- Manual path input -->
+        <div class="form-group">
+          <label class="label">{{ node.type === 'json_extractor' ? 'JSON-Pfad' : 'XPath' }}</label>
+          <input
+            v-model="localData[node.type === 'json_extractor' ? 'json_path' : 'xml_path']"
+            @change="emitUpdate"
+            class="input text-sm font-mono"
+            :placeholder="node.type === 'json_extractor' ? 'z.B. data.temperature' : 'z.B. .//temperature'"
+            data-testid="extractor-path-input"
+          />
+          <p v-if="extractorPreviewValue !== null" class="text-xs text-teal-400 mt-1">
+            ↳ {{ String(extractorPreviewValue) }}
+          </p>
+        </div>
+      </div>
+    </template>
+
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -408,8 +454,9 @@ import { ref, computed, watch } from 'vue'
 import { dpApi, searchApi } from '@/api/client'
 
 const props = defineProps({
-  node:      { type: Object, default: null },
-  nodeTypes: { type: Array,  default: () => [] },
+  node:        { type: Object, default: null },
+  nodeTypes:   { type: Array,  default: () => [] },
+  nodeOutputs: { type: Object, default: () => ({}) },
 })
 const emit = defineEmits(['update', 'close'])
 
@@ -565,7 +612,101 @@ const isWrite          = computed(() => props.node?.type === 'datapoint_write')
 const isCronNode       = computed(() => props.node?.type === 'timer_cron')
 const isMathFormulaNode = computed(() => props.node?.type === 'math_formula')
 const isApiClientNode  = computed(() => props.node?.type === 'api_client')
+const isExtractorNode  = computed(() =>
+  props.node?.type === 'json_extractor' || props.node?.type === 'xml_extractor'
+)
 
+// ── Extractor: preview + path helpers ─────────────────────────────────────
+const extractorPreview = computed(() => {
+  if (!props.node) return ''
+  return props.nodeOutputs[props.node.id]?._preview ?? ''
+})
+
+// Flatten all dot-notation paths from a JSON object (max depth 6)
+function _flattenJsonPaths(obj, prefix = '', depth = 0) {
+  if (depth > 6 || obj === null || typeof obj !== 'object') {
+    return prefix ? [prefix] : []
+  }
+  const paths = []
+  if (Array.isArray(obj)) {
+    obj.forEach((item, i) => {
+      const key = `${prefix}[${i}]`
+      if (item !== null && typeof item === 'object') {
+        paths.push(..._flattenJsonPaths(item, key, depth + 1))
+      } else {
+        paths.push(key)
+      }
+    })
+  } else {
+    for (const [k, v] of Object.entries(obj)) {
+      const key = prefix ? `${prefix}.${k}` : k
+      if (v !== null && typeof v === 'object') {
+        paths.push(..._flattenJsonPaths(v, key, depth + 1))
+      } else {
+        paths.push(key)
+      }
+    }
+  }
+  return paths
+}
+
+// Collect unique .//tagname XPath expressions from XML
+function _collectXmlPaths(element, seen = new Set()) {
+  const xp = `.//${element.tagName}`
+  if (!seen.has(xp)) seen.add(xp)
+  for (const child of Array.from(element.children)) {
+    _collectXmlPaths(child, seen)
+  }
+  return [...seen]
+}
+
+const extractorPaths = computed(() => {
+  const preview = extractorPreview.value
+  if (!preview) return []
+  if (props.node?.type === 'json_extractor') {
+    try {
+      const obj = JSON.parse(preview)
+      return _flattenJsonPaths(obj)
+    } catch { return [] }
+  } else {
+    try {
+      const doc = new DOMParser().parseFromString(preview, 'text/xml')
+      if (doc.querySelector('parsererror')) return []
+      return _collectXmlPaths(doc.documentElement)
+    } catch { return [] }
+  }
+})
+
+// Live-evaluate current path against preview to show resolved value
+const extractorPreviewValue = computed(() => {
+  const preview = extractorPreview.value
+  if (!preview) return null
+  if (props.node?.type === 'json_extractor') {
+    const path = (localData.value.json_path || '').trim()
+    if (!path) return null
+    try {
+      const obj = JSON.parse(preview)
+      // Traverse dotted path (same logic as backend _json_extract)
+      const normPath = path.replace(/\[(\d+)\]/g, '.$1')
+      const parts = normPath.split('.').filter(Boolean)
+      let cur = obj
+      for (const p of parts) {
+        if (cur === null || typeof cur !== 'object') return null
+        cur = Array.isArray(cur) ? cur[Number(p)] : cur[p]
+      }
+      return cur !== undefined ? cur : null
+    } catch { return null }
+  } else {
+    const path = (localData.value.xml_path || '').trim()
+    if (!path) return null
+    try {
+      const doc = new DOMParser().parseFromString(preview, 'text/xml')
+      if (doc.querySelector('parsererror')) return null
+      const el = doc.evaluate(path, doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue
+      return el ? el.textContent?.trim() ?? null : null
+    } catch { return null }
+  }
+})
 
 const configFields = computed(() => {
   const schema = nodeDef.value?.config_schema ?? {}
@@ -665,6 +806,14 @@ function onValueMapPresetChange() {
   if (valueMapPreset.value !== 'custom') valueMapCustom.value = ''
   const preset = VALUE_MAP_PRESETS.find(p => p.key === valueMapPreset.value)
   localData.value.value_map = preset?.map ?? null
+  emitUpdate()
+}
+
+function onExtractorPathSelect(e) {
+  const path = e.target.value
+  if (!path || !props.node) return
+  const key = props.node.type === 'json_extractor' ? 'json_path' : 'xml_path'
+  localData.value[key] = path
   emitUpdate()
 }
 

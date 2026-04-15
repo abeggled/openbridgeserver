@@ -108,6 +108,8 @@ const NODE_DEFS = {
   notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],          outputs: [{id:'sent',label:'Gesendet'}]    },
   // Integration
   api_client:         { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'body',label:'Body'}],                  outputs: [{id:'response',label:'Antwort'},{id:'status',label:'Status'},{id:'success',label:'OK'}] },
+  json_extractor:     { label: 'JSON Extraktor', color: '#0369a1', inputs: [{id:'data',label:'Daten'}],                                                outputs: [{id:'value',label:'Wert'}] },
+  xml_extractor:      { label: 'XML Extraktor',  color: '#0369a1', inputs: [{id:'data',label:'Daten'}],                                                outputs: [{id:'value',label:'Wert'}] },
 }
 
 // ── Gate helpers ───────────────────────────────────────────────────────────
@@ -154,6 +156,8 @@ const summary = computed(() => {
   if (props.type === 'notify_pushover')     return d.title || 'open bridge server'
   if (props.type === 'notify_sms')          return d.to || '—'
   if (props.type === 'api_client')          return `${d.method ?? 'GET'}  ${(d.url || '—').slice(0, 20)}`
+  if (props.type === 'json_extractor')      return d.json_path || '—'
+  if (props.type === 'xml_extractor')       return d.xml_path  || '—'
   if (props.type === 'heating_circuit')     return `W≤${d.temp_winter ?? 15} °C  S≥${d.temp_summer ?? 20} °C`
   if (props.type === 'min_max_tracker')     return null
   if (props.type === 'consumption_counter') return null
