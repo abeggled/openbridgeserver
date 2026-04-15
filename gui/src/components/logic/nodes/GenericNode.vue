@@ -104,8 +104,8 @@ const NODE_DEFS = {
   // Timer (extended)
   operating_hours:    { label: 'Betriebsstd.',   color: '#b45309', inputs: [{id:'active',label:'Aktiv'},{id:'reset',label:'Reset'}],                   outputs: [{id:'hours',label:'Std.'}]       },
   // Notification
-  notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'message',label:'Nachricht'},{id:'url',label:'URL'},{id:'url_title',label:'URL-Titel'},{id:'image_url',label:'Bild-URL'}], outputs: [{id:'sent',label:'Gesendet'}] },
-  notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'message',label:'Nachricht'}],                                          outputs: [{id:'sent',label:'Gesendet'}]    },
+  notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'},{id:'url',label:'URL'},{id:'url_title',label:'URL-Titel'},{id:'image_url',label:'Bild-URL'}], outputs: [{id:'sent',label:'Gesendet'}] },
+  notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],           outputs: [{id:'sent',label:'Gesendet'}]    },
   // String
   string_concat:      { label: 'String Verketten', color: '#0891b2', inputs: [{id:'in_1',label:'1'},{id:'in_2',label:'2'}], outputs: [{id:'result',label:'Ergebnis'}] },
   // Integration
