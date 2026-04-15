@@ -309,8 +309,8 @@ const quality = computed(() => props.value?.q ?? null)
   <div v-else-if="mode === 'history'" class="flex flex-col items-center h-full p-2 select-none">
     <span v-if="widgetLabel" class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center shrink-0 mb-1">{{ widgetLabel }}</span>
 
-    <!-- Icon: 4 flex shares, no circle -->
-    <div class="min-h-0 flex items-center justify-center w-full" style="flex: 4; aspect-ratio: 1; max-width: 100%">
+    <!-- Icon: 3 flex shares, no circle -->
+    <div class="min-h-0 flex items-center justify-center w-full" style="flex: 3; aspect-ratio: 1; max-width: 100%">
       <span
         v-if="activeIcon && !isSvgIcon(activeIcon)"
         class="leading-none select-none h-full flex items-center"
@@ -328,15 +328,15 @@ const quality = computed(() => props.value?.q ?? null)
 
     <!-- Value: fixed theme colors -->
     <div class="shrink-0 text-center my-0.5">
-      <span class="text-base font-semibold tabular-nums text-gray-900 dark:text-gray-100" data-testid="widget-value">
+      <span class="text-lg font-semibold tabular-nums text-gray-900 dark:text-gray-100" data-testid="widget-value">
         <template v-if="mainDisplay.prefix">{{ mainDisplay.prefix }}&thinsp;</template>{{ mainDisplay.value }}<template v-if="mainDisplay.postfix">&thinsp;{{ mainDisplay.postfix }}</template>
       </span>
     </div>
 
-    <!-- Chart: 1 share = max 1/4 icon height, clickable -->
+    <!-- Chart: 2 flex shares, clickable -->
     <div
       class="w-full min-h-0 cursor-pointer rounded overflow-hidden"
-      style="flex: 1"
+      style="flex: 2"
       :title="editorMode ? '' : 'Klicken für Vollansicht'"
       @click="!editorMode && (modalOpen = true)"
     >
@@ -349,8 +349,8 @@ const quality = computed(() => props.value?.q ?? null)
   <div v-else class="flex flex-col items-center h-full p-2 select-none">
     <span v-if="widgetLabel" class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center shrink-0 mb-1">{{ widgetLabel }}</span>
 
-    <!-- Icon fills all remaining space, no circle -->
-    <div class="flex-1 min-h-0 flex items-center justify-center w-full" style="aspect-ratio: 1; max-width: 100%">
+    <!-- Icon: 3 flex shares (same proportion as VALUE and HISTORY modes) -->
+    <div class="min-h-0 flex items-center justify-center w-full" style="flex: 3; aspect-ratio: 1; max-width: 100%">
       <span
         v-if="activeIcon && !isSvgIcon(activeIcon)"
         class="leading-none select-none h-full flex items-center"
@@ -365,6 +365,8 @@ const quality = computed(() => props.value?.q ?? null)
         v-html="coloredSvg"
       />
     </div>
+    <!-- Spacer: mirrors VALUE mode's value section so icon stays the same size -->
+    <div style="flex: 2" />
     <span class="sr-only" data-testid="widget-value">{{ mainDisplay.value }}</span>
   </div>
 
