@@ -289,6 +289,85 @@
       </div>
     </template>
 
+    <!-- ── api_client: special rendering with conditional auth fields ──── -->
+    <template v-else-if="isApiClientNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
+
+        <!-- Standard request fields -->
+        <div class="form-group">
+          <label class="label">URL</label>
+          <input v-model="localData.url" type="text" class="input text-sm" @change="emitUpdate"
+            data-testid="api-client-url" />
+        </div>
+        <div class="form-group">
+          <label class="label">Methode</label>
+          <select v-model="localData.method" class="input text-sm" @change="emitUpdate"
+            data-testid="api-client-method">
+            <option v-for="m in ['GET','POST','PUT','PATCH','DELETE']" :key="m" :value="m">{{ m }}</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="label">Request Content-Type</label>
+          <select v-model="localData.content_type" class="input text-sm" @change="emitUpdate">
+            <option v-for="ct in ['application/json','text/plain','application/x-www-form-urlencoded']" :key="ct" :value="ct">{{ ct }}</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="label">Response-Content-Typ</label>
+          <select v-model="localData.response_type" class="input text-sm" @change="emitUpdate">
+            <option value="json">json</option>
+            <option value="text">text</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="label">Header (JSON-Objekt, optional)</label>
+          <input v-model="localData.headers" type="text" class="input text-sm font-mono" @change="emitUpdate"
+            placeholder='{"X-Api-Key": "abc"}' />
+        </div>
+        <div class="form-group">
+          <label class="label">Timeout (s)</label>
+          <input v-model="localData.timeout_s" type="number" class="input text-sm" @change="emitUpdate" />
+        </div>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" v-model="localData.verify_ssl" @change="emitUpdate" class="accent-teal-500" />
+          <span class="text-xs text-slate-600 dark:text-slate-300">SSL-Zertifikat prüfen</span>
+        </label>
+
+        <!-- Auth section -->
+        <div class="section-label mt-1">Authentifizierung</div>
+        <div class="form-group">
+          <label class="label">Typ</label>
+          <select v-model="localData.auth_type" class="input text-sm" @change="emitUpdate"
+            data-testid="api-client-auth-type">
+            <option value="none">Keine</option>
+            <option value="basic">Basic Auth</option>
+            <option value="digest">Digest Auth</option>
+            <option value="bearer">Bearer Token</option>
+          </select>
+        </div>
+        <template v-if="localData.auth_type === 'basic' || localData.auth_type === 'digest'">
+          <div class="form-group" data-testid="api-client-auth-basic">
+            <label class="label">Benutzername</label>
+            <input v-model="localData.auth_username" type="text" class="input text-sm"
+              autocomplete="off" @change="emitUpdate" />
+          </div>
+          <div class="form-group">
+            <label class="label">Passwort</label>
+            <input v-model="localData.auth_password" type="password" class="input text-sm"
+              autocomplete="new-password" @change="emitUpdate" />
+          </div>
+        </template>
+        <template v-if="localData.auth_type === 'bearer'">
+          <div class="form-group" data-testid="api-client-auth-bearer">
+            <label class="label">Bearer Token</label>
+            <input v-model="localData.auth_token" type="password" class="input text-sm"
+              autocomplete="new-password" @change="emitUpdate" />
+          </div>
+        </template>
+      </div>
+    </template>
+
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -308,7 +387,7 @@
               class="text-sm" @change="emitUpdate" />
             <input v-else
               v-model="localData[key]"
-              :type="schema.type === 'number' ? 'number' : 'text'"
+              :type="schema.subtype === 'password' ? 'password' : schema.type === 'number' ? 'number' : 'text'"
               class="input text-sm" @change="emitUpdate" />
           </div>
 
@@ -485,6 +564,7 @@ const isDatapointNode = computed(() =>
 const isWrite          = computed(() => props.node?.type === 'datapoint_write')
 const isCronNode       = computed(() => props.node?.type === 'timer_cron')
 const isMathFormulaNode = computed(() => props.node?.type === 'math_formula')
+const isApiClientNode  = computed(() => props.node?.type === 'api_client')
 
 
 const configFields = computed(() => {
@@ -542,6 +622,9 @@ watch(() => props.node, (n) => {
     activeTab.value = 'connection'
     if (n.type === 'timer_cron') {
       parseCronToFields(n.data.cron || '0 7 * * *')
+    }
+    if (n.type === 'api_client' && !localData.value.auth_type) {
+      localData.value.auth_type = 'none'
     }
     if (n.type === 'datapoint_read' || n.type === 'datapoint_write') {
       searchDps()

@@ -296,28 +296,6 @@ class LogicManager:
             logger.error("Graph %s (%s) execution error: %s", graph_id, name, exc)
             return {}
 
-        # Broadcast execution results to all WS clients (live debug mode)
-        try:
-            from obs.api.v1.websocket import get_ws_manager
-
-            def _safe(v: Any) -> Any:
-                if v is None or isinstance(v, (bool, int, float, str)):
-                    return v
-                return str(v)
-
-            safe_outputs = {
-                nid: {k: _safe(val) for k, val in node_out.items()}
-                for nid, node_out in outputs.items()
-                if isinstance(node_out, dict)
-            }
-            await get_ws_manager().broadcast({
-                "action":   "logic_run",
-                "graph_id": graph_id,
-                "outputs":  safe_outputs,
-            })
-        except Exception:
-            pass  # WS not ready or no clients — non-critical
-
         # ── Update operating_hours state ─────────────────────────────────
         for node in flow.nodes:
             if node.type != "operating_hours":
@@ -395,6 +373,11 @@ class LogicManager:
                 logger.warning("Graph %s: seven.io SMS failed: %s", graph_id[:8], exc)
 
         # ── Handle api_client ─────────────────────────────────────────────
+        # Track which api_client nodes completed an HTTP call so we can
+        # re-propagate their real outputs to downstream nodes afterwards.
+        triggered_api_clients: set[str] = set()
+        import json as _json  # noqa: PLC0415
+        import httpx           # noqa: PLC0415
         for node in flow.nodes:
             if node.type != "api_client":
                 continue
@@ -411,7 +394,6 @@ class LogicManager:
             if isinstance(verify_ssl, str):
                 verify_ssl = verify_ssl.lower() not in ("false", "0", "no")
             timeout_s = float(node.data.get("timeout_s", 10) or 10)
-            import json as _json  # noqa: PLC0415
             extra_headers: dict[str, str] = {}
             hdr_str = (node.data.get("headers") or "").strip()
             if hdr_str:
@@ -420,8 +402,20 @@ class LogicManager:
                 except Exception:
                     pass
             body = out.get("_body")
+            # ── Authentication ──────────────────────────────────────────
+            auth_type = (node.data.get("auth_type") or "none").lower()
+            auth: Any = None
+            if auth_type in ("basic", "digest"):
+                username = (node.data.get("auth_username") or "").strip()
+                password = (node.data.get("auth_password") or "").strip()
+                if username:
+                    auth = httpx.BasicAuth(username, password) if auth_type == "basic" \
+                        else httpx.DigestAuth(username, password)
+            elif auth_type == "bearer":
+                token = (node.data.get("auth_token") or "").strip()
+                if token:
+                    extra_headers = {**extra_headers, "Authorization": f"Bearer {token}"}
             try:
-                import httpx  # noqa: PLC0415
                 req_kwargs: dict[str, Any] = {"headers": extra_headers, "timeout": timeout_s}
                 if method in ("POST", "PUT", "PATCH"):
                     if content_type == "application/json":
@@ -432,7 +426,7 @@ class LogicManager:
                     else:
                         req_kwargs["content"] = str(body or "")
                         req_kwargs["headers"] = {**extra_headers, "Content-Type": "text/plain"}
-                async with httpx.AsyncClient(verify=verify_ssl) as client:
+                async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
                     resp = await client.request(method, url, **req_kwargs)
                     if resp_type == "json":
                         try:
@@ -447,9 +441,32 @@ class LogicManager:
                         "success":  200 <= resp.status_code < 300,
                     })
                     logger.info("Graph %s: API %s %s → %d", graph_id[:8], method, url, resp.status_code)
+                    triggered_api_clients.add(node.id)
             except Exception as exc:
                 logger.warning("Graph %s: api_client failed: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+
+        # ── Re-propagate api_client outputs to downstream nodes ───────────
+        # The first executor pass computed downstream nodes with the placeholder
+        # success=False. Now that we have the real HTTP results, we re-run the
+        # executor for those downstream nodes using input overrides so their
+        # outputs (and downstream datapoint writes, etc.) reflect the real values.
+        if triggered_api_clients:
+            downstream_overrides: dict[str, dict[str, Any]] = {}
+            for e in flow.edges:
+                if e.source in triggered_api_clients:
+                    src_handle = e.sourceHandle or "out"
+                    tgt_handle = e.targetHandle or "in"
+                    downstream_overrides.setdefault(e.target, {})[tgt_handle] = (
+                        outputs[e.source].get(src_handle)
+                    )
+            if downstream_overrides:
+                second_executor = GraphExecutor(flow, hyst, self._app_config)
+                second_outputs  = second_executor.execute(downstream_overrides)
+                api_client_ids  = {n.id for n in flow.nodes if n.type == "api_client"}
+                for nid, vals in second_outputs.items():
+                    if nid not in api_client_ids:
+                        outputs[nid] = vals
 
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
@@ -539,6 +556,31 @@ class LogicManager:
                 )
             except Exception as exc:
                 logger.warning("Graph %s: failed to persist node_state: %s", graph_id[:8], exc)
+
+        # ── Broadcast final execution results to all WS clients ──────────
+        # Broadcast happens here — after all async ops (api_client HTTP calls,
+        # second-pass re-execution, etc.) — so the debug view shows the real
+        # success/response values and not the executor's initial placeholders.
+        try:
+            from obs.api.v1.websocket import get_ws_manager
+
+            def _safe(v: Any) -> Any:
+                if v is None or isinstance(v, (bool, int, float, str)):
+                    return v
+                return str(v)
+
+            safe_outputs = {
+                nid: {k: _safe(val) for k, val in node_out.items()}
+                for nid, node_out in outputs.items()
+                if isinstance(node_out, dict)
+            }
+            await get_ws_manager().broadcast({
+                "action":   "logic_run",
+                "graph_id": graph_id,
+                "outputs":  safe_outputs,
+            })
+        except Exception:
+            pass  # WS not ready or no clients — non-critical
 
         return outputs
 
