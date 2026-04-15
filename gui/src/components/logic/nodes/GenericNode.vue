@@ -104,8 +104,8 @@ const NODE_DEFS = {
   // Timer (extended)
   operating_hours:    { label: 'Betriebsstd.',   color: '#b45309', inputs: [{id:'active',label:'Aktiv'},{id:'reset',label:'Reset'}],                   outputs: [{id:'hours',label:'Std.'}]       },
   // Notification
-  notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],          outputs: [{id:'sent',label:'Gesendet'}]    },
-  notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],          outputs: [{id:'sent',label:'Gesendet'}]    },
+  notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'message',label:'Nachricht'}],                                          outputs: [{id:'sent',label:'Gesendet'}]    },
+  notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'message',label:'Nachricht'}],                                          outputs: [{id:'sent',label:'Gesendet'}]    },
   // Integration
   api_client:         { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'body',label:'Body'}],                  outputs: [{id:'response',label:'Antwort'},{id:'status',label:'Status'},{id:'success',label:'OK'}] },
   json_extractor:     { label: 'JSON Extraktor', color: '#0369a1', inputs: [{id:'data',label:'Daten'}],                                                outputs: [{id:'value',label:'Wert'}] },

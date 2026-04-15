@@ -394,8 +394,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="notify_pushover",
         label="Pushover",
         category="notification",
-        description="Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net).",
-        inputs=[_port("trigger", "Trigger", "trigger"), _port("message", "Nachricht")],
+        description="Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
+        inputs=[_port("message", "Nachricht")],
         outputs=[_port("sent", "Gesendet", "trigger")],
         config_schema={
             "app_token": {"type": "string", "default": "", "label": "App-Token"},
@@ -415,8 +415,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="notify_sms",
         label="SMS (seven.io)",
         category="notification",
-        description="Sendet eine SMS via seven.io Gateway (gateway.seven.io).",
-        inputs=[_port("trigger", "Trigger", "trigger"), _port("message", "Nachricht")],
+        description="Sendet eine SMS via seven.io Gateway (gateway.seven.io). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
+        inputs=[_port("message", "Nachricht")],
         outputs=[_port("sent", "Gesendet", "trigger")],
         config_schema={
             "api_key": {"type": "string", "default": "", "label": "API-Key"},

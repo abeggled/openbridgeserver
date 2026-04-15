@@ -332,10 +332,12 @@ class GraphExecutor:
                 }
 
             case "notify_pushover" | "notify_sms":
-                # Async — fully handled by LogicManager after executor run
+                # Async — fully handled by LogicManager after executor run.
+                # Fires automatically when a message arrives (no separate trigger needed).
+                msg = inputs.get("message")
                 return {
-                    "_trigger": inputs.get("trigger"),
-                    "_message": inputs.get("message"),
+                    "_trigger": msg is not None,
+                    "_message": msg,
                     "sent":     False,
                 }
 
