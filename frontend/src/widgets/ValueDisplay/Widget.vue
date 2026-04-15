@@ -349,6 +349,8 @@ const quality = computed(() => props.value?.q ?? null)
   <div v-else class="flex flex-col items-center h-full p-2 select-none">
     <span v-if="widgetLabel" class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center shrink-0 mb-1">{{ widgetLabel }}</span>
 
+    <!-- Spacer top: 1 share → zentriert das Icon vertikal -->
+    <div style="flex: 1" />
     <!-- Icon: 3 flex shares (same proportion as VALUE and HISTORY modes) -->
     <div class="min-h-0 flex items-center justify-center w-full" style="flex: 3; aspect-ratio: 1; max-width: 100%">
       <span
@@ -365,8 +367,8 @@ const quality = computed(() => props.value?.q ?? null)
         v-html="coloredSvg"
       />
     </div>
-    <!-- Spacer: mirrors VALUE mode's value section so icon stays the same size -->
-    <div style="flex: 2" />
+    <!-- Spacer bottom: 1 share -->
+    <div style="flex: 1" />
     <span class="sr-only" data-testid="widget-value">{{ mainDisplay.value }}</span>
   </div>
 
