@@ -482,6 +482,17 @@ class LogicManager:
                         data={"to": to, "from": str(sender), "text": msg},
                     )
                     r.raise_for_status()
+                    # seven.io returns the number of sent messages as body (e.g. "1").
+                    # A value of "0" means failure (no credits, invalid number, etc.)
+                    # even though the HTTP status is 200.
+                    body = r.text.strip()
+                    logger.info("Graph %s: seven.io response status=%d body=%r", graph_id[:8], r.status_code, body[:80])
+                    try:
+                        sent_count = int(body)
+                    except (ValueError, TypeError):
+                        sent_count = 1  # non-numeric body → assume sent (older API versions)
+                    if sent_count <= 0:
+                        raise ValueError(f"seven.io reported 0 messages sent (body={body!r})")
                     outputs[node.id]["sent"] = True
                     logger.info("Graph %s: seven.io SMS sent to %s (msg=%r)", graph_id[:8], to, msg[:40])
             except Exception as exc:
