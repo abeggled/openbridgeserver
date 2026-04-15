@@ -68,9 +68,15 @@ async def search(
         matched_ids = {r["datapoint_id"] for r in rows}
         results = [dp for dp in results if str(dp.id) in matched_ids]
 
-    # 4. q filter: name substring, UUID, or binding config text (one DB query)
+    # 4. q filter: all-token match on name, UUID, or binding config text (one DB query)
+    #
+    # The query is split into whitespace-separated tokens.  A DataPoint matches
+    # if every token appears in the name  — OR  every token appears in the UUID
+    # — OR every token appears in the concatenated binding config text.
+    # This lets "u04 temperatur" find "U04 Präsenzmelder 01 Temperatur" even
+    # though the words are not adjacent.
     if q:
-        ql = q.lower()
+        tokens = q.lower().split()
 
         # Pre-fetch all binding configs in one query to avoid N+1 DB hits.
         config_rows = await db.fetchall(
@@ -82,12 +88,17 @@ async def search(
             dp_id_str = row["datapoint_id"]
             binding_texts[dp_id_str] = binding_texts.get(dp_id_str, "") + " " + (row["config"] or "").lower()
 
-        results = [
-            dp for dp in results
-            if ql in dp.name.lower()
-            or ql in str(dp.id).lower()
-            or ql in binding_texts.get(str(dp.id), "")
-        ]
+        def _matches(dp) -> bool:
+            name_text   = dp.name.lower()
+            uuid_text   = str(dp.id).lower()
+            config_text = binding_texts.get(str(dp.id), "")
+            return (
+                all(t in name_text   for t in tokens)
+                or all(t in uuid_text   for t in tokens)
+                or all(t in config_text for t in tokens)
+            )
+
+        results = [dp for dp in results if _matches(dp)]
 
     # 5. quality filter (runtime, must come after cheaper filters)
     if quality:

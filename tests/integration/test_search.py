@@ -108,6 +108,17 @@ async def test_search_by_name_substring(client, auth_headers):
         await _delete(client, auth_headers, dp["id"])
 
 
+async def test_search_by_name_multi_token(client, auth_headers):
+    """'u04 temperatur' muss 'U04 Präsenzmelder 01 Temperatur' finden (nicht-adjazente Tokens)."""
+    suffix = uuid.uuid4().hex[:6]
+    dp = await _create(client, auth_headers, f"U04-{suffix} Präsenzmelder 01 Temperatur")
+    try:
+        body = await _search(client, auth_headers, q=f"u04-{suffix} temperatur")
+        assert dp["id"] in _ids(body), "Multi-Token-Suche über nicht-adjazente Wörter muss funktionieren"
+    finally:
+        await _delete(client, auth_headers, dp["id"])
+
+
 async def test_search_by_name_case_insensitive(client, auth_headers):
     suffix = uuid.uuid4().hex[:8]
     name = f"SRH-Case-{suffix}"
