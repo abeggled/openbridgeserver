@@ -940,13 +940,19 @@ const histFilterLoading = ref(false)
 
 const histFilteredDps = computed(() => {
   const q = histFilterSearch.value.toLowerCase().trim()
-  if (!q) return histAllDps.value
-  return histAllDps.value.filter(dp =>
-    dp.name.toLowerCase().includes(q) ||
-    dp.id.toLowerCase().includes(q) ||
-    dp.data_type.toLowerCase().includes(q) ||
-    (dp.unit ?? '').toLowerCase().includes(q)
-  )
+  const filtered = q
+    ? histAllDps.value.filter(dp =>
+        dp.name.toLowerCase().includes(q) ||
+        dp.id.toLowerCase().includes(q) ||
+        dp.data_type.toLowerCase().includes(q) ||
+        (dp.unit ?? '').toLowerCase().includes(q)
+      )
+    : histAllDps.value
+  // Ausgeschlossene Objekte (record_history=false) zuerst
+  return [...filtered].sort((a, b) => {
+    if (a.record_history === b.record_history) return 0
+    return a.record_history ? 1 : -1
+  })
 })
 
 const histFilterExcludedCount = computed(() =>
