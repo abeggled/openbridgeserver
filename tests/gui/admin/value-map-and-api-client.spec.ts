@@ -1,15 +1,15 @@
 import { test, expect } from '@playwright/test'
-import { apiPost, apiDelete } from '../helpers'
+import { apiGet, apiPost, apiDelete } from '../helpers'
 
 /**
  * E2E tests for issue #208:
- *   1. Logic-Editor: api_client node — Response Content-Typ label + new option values
- *   2. Logic-Editor: datapoint_read node — N-value custom Wertzuordnung (value_map)
- *   3. Binding-Form: custom Wertzuordnung with N values + JSON parse error feedback
+ *   1. API-check: api_client node schema has "Response Content-Typ" + application/json enum
+ *   2. Logic-Editor: datapoint_read N-value Wertzuordnung is loaded and shown correctly
+ *   3. Logic-Editor: invalid JSON in custom Wertzuordnung shows error message
  */
 
 // ---------------------------------------------------------------------------
-// Helper: create a minimal graph with one node and open it in the editor
+// Helper: create a graph with one node and navigate to the Logic editor
 // ---------------------------------------------------------------------------
 async function createAndOpenGraph(
   page: import('@playwright/test').Page,
@@ -39,44 +39,43 @@ async function createAndOpenGraph(
   return graph.id
 }
 
+// ---------------------------------------------------------------------------
+// Helper: click a VueFlow node to open the config panel
+// ---------------------------------------------------------------------------
+async function openNodePanel(page: import('@playwright/test').Page) {
+  // VueFlow nodes can contain multiple child elements; click the inner node wrapper
+  const node = page.locator('.vue-flow__node').first()
+  await node.click({ force: true })
+  await page.waitForTimeout(600)
+}
+
 
 // ===========================================================================
-// 1. api_client: Response Content-Typ label + option values
+// 1. api_client: node-types API returns correct response_type schema
+//    (no UI navigation — directly tests the backend change from issue #208)
 // ===========================================================================
 
-test('api_client: Response Content-Typ Label und application/json Option sichtbar', async ({ page }) => {
-  const graphId = await createAndOpenGraph(page, 'api_client', {
-    url:           'http://example.com/api',
-    method:        'GET',
-    response_type: 'application/json',
-  })
+test('api_client: response_type Schema enthält application/json und kein legacy json (API)', async () => {
+  const nodeTypes = await apiGet('/api/v1/logic/node-types') as any[]
+  const apiClient = nodeTypes.find((nt: any) => nt.type === 'api_client')
 
-  try {
-    // Open the node config panel by clicking the node on the canvas
-    await page.locator('.vue-flow__node').first().click()
-    await page.waitForTimeout(500)
+  expect(apiClient, 'api_client node type muss registriert sein').toBeDefined()
 
-    // The label must be "Response Content-Typ" (without hyphen before "Content")
-    await expect(page.getByText('Response Content-Typ')).toBeVisible({ timeout: 5_000 })
+  const schema = apiClient.config_schema?.response_type
+  expect(schema, 'config_schema.response_type muss existieren').toBeDefined()
 
-    // The dropdown must contain "application/json"
-    const select = page.locator('select').filter({ hasText: 'application/json' })
-    await expect(select).toBeVisible({ timeout: 5_000 })
-
-    // "text/plain" must also be present
-    await expect(select.locator('option[value="text/plain"]')).toHaveCount(1)
-
-    // The old values "json" and "text" must NOT appear as option values
-    await expect(select.locator('option[value="json"]')).toHaveCount(0)
-    await expect(select.locator('option[value="text"]')).toHaveCount(0)
-  } finally {
-    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
-  }
+  expect(schema.label).toBe('Response Content-Typ')
+  expect(schema.default).toBe('application/json')
+  expect(schema.enum).toContain('application/json')
+  expect(schema.enum).toContain('text/plain')
+  // Legacy values must not appear as valid enum entries
+  expect(schema.enum).not.toContain('json')
+  expect(schema.enum).not.toContain('text')
 })
 
 
 // ===========================================================================
-// 2. datapoint_read: N-value custom Wertzuordnung in NodeConfigPanel
+// 2. datapoint_read: N-value Wertzuordnung wird in NodeConfigPanel angezeigt
 // ===========================================================================
 
 test('datapoint_read: N-value Wertzuordnung wird korrekt geladen und angezeigt', async ({ page }) => {
@@ -88,7 +87,6 @@ test('datapoint_read: N-value Wertzuordnung wird korrekt geladen und angezeigt',
     '10': 'Standby',
   }
 
-  // Create a datapoint to link to
   const dp = await apiPost('/api/v1/datapoints', {
     name:      `E2E-DP-ValueMap-${Date.now()}`,
     data_type: 'INTEGER',
@@ -102,15 +100,14 @@ test('datapoint_read: N-value Wertzuordnung wird korrekt geladen und angezeigt',
   })
 
   try {
-    await page.locator('.vue-flow__node').first().click()
-    await page.waitForTimeout(500)
+    await openNodePanel(page)
 
     // Switch to the Transformation tab
     await page.getByRole('button', { name: 'Transformation' }).click()
-    await page.waitForTimeout(300)
+    await page.waitForTimeout(400)
 
-    // The custom textarea must show the N-value map
-    const textarea = page.locator('textarea[placeholder*="Aus"]')
+    // The custom textarea must be visible (because value_map is set → preset = 'custom')
+    const textarea = page.locator('[data-testid="value-map-custom"]')
     await expect(textarea).toBeVisible({ timeout: 5_000 })
 
     const content = await textarea.inputValue()
@@ -126,7 +123,7 @@ test('datapoint_read: N-value Wertzuordnung wird korrekt geladen und angezeigt',
 
 
 // ===========================================================================
-// 3. datapoint_read NodeConfigPanel: Ungültiges JSON zeigt Fehlermeldung
+// 3. NodeConfigPanel: ungültiges JSON in Wertzuordnung zeigt Fehlermeldung
 // ===========================================================================
 
 test('NodeConfigPanel: Ungültiges JSON in Wertzuordnung zeigt Fehlermeldung', async ({ page }) => {
@@ -142,21 +139,23 @@ test('NodeConfigPanel: Ungültiges JSON in Wertzuordnung zeigt Fehlermeldung', a
   })
 
   try {
-    await page.locator('.vue-flow__node').first().click()
-    await page.waitForTimeout(500)
+    await openNodePanel(page)
 
+    // Switch to the Transformation tab
     await page.getByRole('button', { name: 'Transformation' }).click()
-    await page.waitForTimeout(300)
+    await page.waitForTimeout(400)
 
-    // Choose "Benutzerdefiniert" preset
-    await page.locator('select').filter({ hasText: 'Wertzuordnung' }).selectOption('custom')
-    await page.waitForTimeout(200)
+    // Select "Benutzerdefiniert" preset via data-testid
+    await page.locator('[data-testid="value-map-preset"]').selectOption('custom')
 
-    // Enter invalid JSON
-    const textarea = page.locator('textarea[placeholder*="Aus"]')
+    // Wait for Vue to render the textarea
+    const textarea = page.locator('[data-testid="value-map-custom"]')
+    await expect(textarea).toBeVisible({ timeout: 5_000 })
+
+    // Enter invalid JSON and trigger change
     await textarea.fill('{not valid json')
     await textarea.dispatchEvent('change')
-    await page.waitForTimeout(200)
+    await page.waitForTimeout(300)
 
     // Error message must appear
     await expect(page.getByText(/Ungültiges JSON/i)).toBeVisible({ timeout: 3_000 })

@@ -82,7 +82,8 @@
           <div class="section-label mt-1">Wertzuordnung</div>
           <div class="form-group">
             <label class="label">Wertzuordnung <span class="text-slate-500 font-normal text-xs">(optional)</span></label>
-            <select v-model="valueMapPreset" @change="onValueMapPresetChange" class="input text-xs">
+            <select v-model="valueMapPreset" @change="onValueMapPresetChange" class="input text-xs"
+              data-testid="value-map-preset">
               <option v-for="p in VALUE_MAP_PRESETS" :key="p.key" :value="p.key">{{ p.label }}</option>
             </select>
             <div v-if="valueMapPreset === 'custom'" class="mt-1">
@@ -91,6 +92,7 @@
                 @change="onValueMapCustomChange"
                 class="input text-xs font-mono h-24 resize-y"
                 placeholder='{"0": "Aus", "1": "Init", "2": "Aktiv", "3": "Fehler"}'
+                data-testid="value-map-custom"
               />
               <p v-if="valueMapCustomError" class="text-xs text-red-400 mt-0.5">{{ valueMapCustomError }}</p>
               <p class="text-xs text-slate-500 mt-0.5">JSON-Objekt — beliebig viele Einträge möglich.</p>
@@ -316,7 +318,8 @@
         </div>
         <div class="form-group">
           <label class="label">Response Content-Typ</label>
-          <select v-model="localData.response_type" class="input text-sm" @change="emitUpdate">
+          <select v-model="localData.response_type" class="input text-sm" @change="emitUpdate"
+            data-testid="api-client-response-type">
             <option value="application/json">application/json</option>
             <option value="text/plain">text/plain</option>
           </select>
