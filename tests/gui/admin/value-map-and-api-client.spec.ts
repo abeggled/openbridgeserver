@@ -133,9 +133,12 @@ test('NodeConfigPanel: Ungültiges JSON in Wertzuordnung zeigt Fehlermeldung', a
     tags:      [],
   }) as { id: string }
 
+  // Start with a valid value_map so the textarea is already visible (preset = 'custom')
+  // — avoids a selectOption interaction that may not trigger Vue's v-model reliably
   const graphId = await createAndOpenGraph(page, 'datapoint_read', {
     datapoint_id:   dp.id,
     datapoint_name: 'TestDP',
+    value_map:      { '0': 'Aus', '1': 'An' },
   })
 
   try {
@@ -145,14 +148,11 @@ test('NodeConfigPanel: Ungültiges JSON in Wertzuordnung zeigt Fehlermeldung', a
     await page.getByRole('button', { name: 'Transformation' }).click()
     await page.waitForTimeout(400)
 
-    // Select "Benutzerdefiniert" preset via data-testid
-    await page.locator('[data-testid="value-map-preset"]').selectOption('custom')
-
-    // Wait for Vue to render the textarea
+    // Textarea must be visible because value_map is set → preset resolved to 'custom'
     const textarea = page.locator('[data-testid="value-map-custom"]')
     await expect(textarea).toBeVisible({ timeout: 5_000 })
 
-    // Enter invalid JSON and trigger change
+    // Replace with invalid JSON and trigger the change handler
     await textarea.fill('{not valid json')
     await textarea.dispatchEvent('change')
     await page.waitForTimeout(300)
