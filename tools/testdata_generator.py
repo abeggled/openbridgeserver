@@ -478,10 +478,10 @@ async def modbus_generator(cfg: dict) -> None:
         ) -> list[int]:
             return [int(float(value) / scale_factor) & 0xFFFF]
 
-    co = ModbusSequentialDataBlock(0, [0] * 1000)
-    di = ModbusSequentialDataBlock(0, [0] * 1000)
-    hr = ModbusSequentialDataBlock(0, [0] * 1000)
-    ir = ModbusSequentialDataBlock(0, [0] * 1000)
+    co = ModbusSequentialDataBlock(1, [0] * 1000)
+    di = ModbusSequentialDataBlock(1, [0] * 1000)
+    hr = ModbusSequentialDataBlock(1, [0] * 1000)
+    ir = ModbusSequentialDataBlock(1, [0] * 1000)
 
     unit_id = int(cfg.get("unit_id", 1))
     slave_ctx = ModbusDeviceContext(di=di, co=co, hr=hr, ir=ir)
