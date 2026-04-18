@@ -195,7 +195,7 @@ class ModbusTcpAdapter(AdapterBase):
         Tries every combination of slave kwarg name and whether positional args
         need to become keyword args (pymodbus 3.12+ made count keyword-only).
         """
-        slave_variants = [{"slave": unit_id}, {"unit": unit_id}, {}]
+        slave_variants = [{"device_id": unit_id}, {"slave": unit_id}, {"unit": unit_id}, {}]
 
         # First: try all args positional (works for 2.x and 3.0-3.11)
         for sk in slave_variants:
