@@ -453,7 +453,7 @@ async def modbus_generator(cfg: dict) -> None:
         from pymodbus.server import StartAsyncTcpServer
         from pymodbus.datastore import (
             ModbusSequentialDataBlock,
-            ModbusSlaveContext,
+            ModbusDeviceContext,
             ModbusServerContext,
         )
     except ImportError:
@@ -484,7 +484,7 @@ async def modbus_generator(cfg: dict) -> None:
     ir = ModbusSequentialDataBlock(0, [0] * 1000)
 
     unit_id = int(cfg.get("unit_id", 1))
-    slave_ctx = ModbusSlaveContext(di=di, co=co, hr=hr, ir=ir)
+    slave_ctx = ModbusDeviceContext(di=di, co=co, hr=hr, ir=ir)
     server_ctx = ModbusServerContext(slaves={unit_id: slave_ctx}, single=False)
 
     host = cfg.get("host", "0.0.0.0")
