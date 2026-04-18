@@ -191,7 +191,7 @@ class ModbusRtuAdapter(AdapterBase):
 
     async def _modbus_call(self, fn, *pos_args, unit_id: int, **extra_kwargs) -> Any:
         """Version-safe pymodbus call across 2.x / 3.x / 3.12+."""
-        slave_variants = [{"slave": unit_id}, {"unit": unit_id}, {}]
+        slave_variants = [{"device_id": unit_id}, {"slave": unit_id}, {"unit": unit_id}, {}]
 
         for sk in slave_variants:
             try:

@@ -524,9 +524,8 @@ async def modbus_generator(cfg: dict) -> None:
                         logger.info("Modbus %-16s[%d] = %s", reg_type, address, bool(value))
                     else:
                         regs = encode_value(value, data_format, scale_factor=scale_factor)
-                        result = await ctx.async_setValues(unit_id, fc, address, regs)
-                        verify = await ctx.async_getValues(unit_id, fc, address, len(regs))
-                        logger.info("Modbus %-16s[%d] = %s  raw=%s  set_result=%s  readback=%s", reg_type, address, value, regs, result, verify)
+                        await ctx.async_setValues(unit_id, fc, address, regs)
+                        logger.info("Modbus %-16s[%d] = %s  raw=%s", reg_type, address, value, regs)
                 except Exception:
                     logger.exception("Modbus update failed register=%d", address)
                 await asyncio.sleep(interval)
