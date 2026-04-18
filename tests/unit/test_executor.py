@@ -490,6 +490,47 @@ class TestDatapointNodes:
         out = run_single("datapoint_write", {"value_formula": "x * 2"}, {})
         assert out["_write_value"] is None
 
+    # ── value_map on datapoint_read ─────────────────────────────────────────
+
+    def test_read_applies_value_map(self):
+        m = {"0": "Aus", "1": "An"}
+        out = run_single("datapoint_read", {"value_map": m}, {"value": 1})
+        assert out["value"] == "An"
+
+    def test_read_value_map_n_values(self):
+        m = {"0": "Aus", "1": "Init", "2": "Aktiv", "3": "Fehler", "10": "Standby"}
+        out = run_single("datapoint_read", {"value_map": m}, {"value": 10})
+        assert out["value"] == "Standby"
+
+    def test_read_value_map_float_key(self):
+        # Modbus delivers integer-valued floats — must still match
+        m = {"5": "Betrieb"}
+        out = run_single("datapoint_read", {"value_map": m}, {"value": 5.0})
+        assert out["value"] == "Betrieb"
+
+    def test_read_value_map_no_match_returns_original(self):
+        m = {"0": "Aus", "1": "An"}
+        out = run_single("datapoint_read", {"value_map": m}, {"value": 99})
+        assert out["value"] == 99
+
+    def test_read_formula_then_value_map(self):
+        # Formula runs first: x*2 → 2; then map: "2" → "Zwei"
+        m = {"2": "Zwei"}
+        out = run_single("datapoint_read", {"value_formula": "x * 2", "value_map": m}, {"value": 1})
+        assert out["value"] == "Zwei"
+
+    # ── value_map on datapoint_write ────────────────────────────────────────
+
+    def test_write_applies_value_map(self):
+        m = {"true": "on", "false": "off"}
+        out = run_single("datapoint_write", {"value_map": m}, {"value": True})
+        assert out["_write_value"] == "on"
+
+    def test_write_value_map_float_key(self):
+        m = {"3": "Aktiv"}
+        out = run_single("datapoint_write", {"value_map": m}, {"value": 3.0})
+        assert out["_write_value"] == "Aktiv"
+
 
 # ===========================================================================
 # python_script node

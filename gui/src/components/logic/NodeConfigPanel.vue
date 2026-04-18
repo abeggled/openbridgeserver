@@ -82,17 +82,21 @@
           <div class="section-label mt-1">Wertzuordnung</div>
           <div class="form-group">
             <label class="label">Wertzuordnung <span class="text-slate-500 font-normal text-xs">(optional)</span></label>
-            <select v-model="valueMapPreset" @change="onValueMapPresetChange" class="input text-xs">
+            <select v-model="valueMapPreset" @change="onValueMapPresetChange" class="input text-xs"
+              data-testid="value-map-preset">
               <option v-for="p in VALUE_MAP_PRESETS" :key="p.key" :value="p.key">{{ p.label }}</option>
             </select>
             <div v-if="valueMapPreset === 'custom'" class="mt-1">
               <textarea
                 v-model="valueMapCustom"
+                @input="onValueMapCustomInput"
                 @change="onValueMapCustomChange"
-                class="input text-xs font-mono h-16 resize-y"
-                placeholder='{"0": "off", "1": "on"}'
+                class="input text-xs font-mono h-24 resize-y"
+                placeholder='{"0": "Aus", "1": "Init", "2": "Aktiv", "3": "Fehler"}'
+                data-testid="value-map-custom"
               />
-              <p class="text-xs text-slate-500 mt-0.5">JSON-Objekt mit String-Schlüsseln und -Werten.</p>
+              <p v-if="valueMapCustomError" class="text-xs text-red-400 mt-0.5">{{ valueMapCustomError }}</p>
+              <p class="text-xs text-slate-500 mt-0.5">JSON-Objekt — beliebig viele Einträge möglich.</p>
             </div>
             <p class="text-xs text-slate-500 mt-1">Wird nach der Formel angewendet.</p>
           </div>
@@ -314,10 +318,11 @@
           </select>
         </div>
         <div class="form-group">
-          <label class="label">Response-Content-Typ</label>
-          <select v-model="localData.response_type" class="input text-sm" @change="emitUpdate">
-            <option value="json">json</option>
-            <option value="text">text</option>
+          <label class="label">Response Content-Typ</label>
+          <select v-model="localData.response_type" class="input text-sm" @change="emitUpdate"
+            data-testid="api-client-response-type">
+            <option value="application/json">application/json</option>
+            <option value="text/plain">text/plain</option>
           </select>
         </div>
         <div class="form-group">
@@ -506,12 +511,13 @@ const props = defineProps({
 const emit = defineEmits(['update', 'close'])
 
 // ── State ──────────────────────────────────────────────────────────────────
-const localData      = ref({})
-const dpSearch       = ref('')
-const dpResults      = ref([])
-const activeTab      = ref('connection')
-const valueMapPreset = ref('')
-const valueMapCustom = ref('')
+const localData          = ref({})
+const dpSearch           = ref('')
+const dpResults          = ref([])
+const activeTab          = ref('connection')
+const valueMapPreset     = ref('')
+const valueMapCustom     = ref('')
+const valueMapCustomError = ref('')
 
 // ── Value Map Presets ──────────────────────────────────────────────────────
 const VALUE_MAP_PRESETS = [
@@ -825,14 +831,15 @@ watch(() => props.node, (n) => {
     }
     if (n.type === 'datapoint_read' || n.type === 'datapoint_write') {
       searchDps()
-      // Restore value_map UI state
+      // Restore value_map UI state — but don't overwrite if user just picked 'custom'
       const vm = n.data.value_map
       if (vm && typeof vm === 'object') {
         const mapStr = JSON.stringify(vm)
         const preset = VALUE_MAP_PRESETS.find(p => p.map && JSON.stringify(p.map) === mapStr)
         valueMapPreset.value = preset?.key ?? 'custom'
         valueMapCustom.value = preset ? '' : JSON.stringify(vm, null, 2)
-      } else {
+      } else if (valueMapPreset.value !== 'custom') {
+        // Only reset to empty if the user hasn't actively chosen 'custom'
         valueMapPreset.value = ''
         valueMapCustom.value = ''
       }
@@ -859,7 +866,13 @@ function onOutputPresetChange(e) {
 }
 
 function onValueMapPresetChange() {
-  if (valueMapPreset.value !== 'custom') valueMapCustom.value = ''
+  valueMapCustomError.value = ''
+  if (valueMapPreset.value === 'custom') {
+    // Nur Textarea anzeigen, noch nichts speichern — value_map bleibt wie sie ist
+    valueMapCustom.value = ''
+    return
+  }
+  valueMapCustom.value = ''
   const preset = VALUE_MAP_PRESETS.find(p => p.key === valueMapPreset.value)
   localData.value.value_map = preset?.map ?? null
   emitUpdate()
@@ -873,10 +886,25 @@ function onExtractorPathSelect(e) {
   emitUpdate()
 }
 
+function onValueMapCustomInput(e) {
+  const val = e.target.value.trim()
+  if (!val) { valueMapCustomError.value = ''; return }
+  try {
+    JSON.parse(val)
+    valueMapCustomError.value = ''
+  } catch (err) {
+    valueMapCustomError.value = `Ungültiges JSON: ${err.message}`
+  }
+}
+
 function onValueMapCustomChange() {
+  valueMapCustomError.value = ''
   try {
     localData.value.value_map = JSON.parse(valueMapCustom.value)
-  } catch { localData.value.value_map = null }
+  } catch (e) {
+    valueMapCustomError.value = `Ungültiges JSON: ${e.message}`
+    localData.value.value_map = null
+  }
   emitUpdate()
 }
 

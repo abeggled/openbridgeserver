@@ -50,3 +50,5 @@ docs/_build/
 
 # Not Public Data
 privatedata
+.claude
+

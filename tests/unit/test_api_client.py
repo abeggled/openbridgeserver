@@ -496,3 +496,56 @@ class TestApiClientWsBroadcast:
         # success must be the real value (True), not the placeholder (False)
         assert ac_out["success"] is True
         assert ac_out["status"] == 200
+
+
+# ===========================================================================
+# Manager: response_type values (issue #208)
+# ===========================================================================
+
+class TestApiClientResponseType:
+    """response_type 'application/json' and 'text/plain' (new MIME-style values)
+    must behave identically to the legacy 'json' / 'text' values."""
+
+    def _run_with_response_type(self, response_type: str, mock_resp) -> dict:
+        manager = _make_manager()
+        n = node("ac", "api_client", {
+            "url": "http://example.com/api",
+            "method": "GET",
+            "response_type": response_type,
+        })
+        flow = _flow([n])
+        graph_id = "g"
+        manager._graphs[graph_id] = ("t", True, flow)
+        manager._node_state[graph_id] = {}
+
+        with patch("obs.logic.manager.httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.request = AsyncMock(return_value=mock_resp)
+            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+                return asyncio.run(
+                    manager._execute_graph(graph_id, "t", flow, {"ac": {"trigger": True}})
+                )
+
+    def test_application_json_parses_json(self):
+        resp = _mock_response(200, {"key": "value"})
+        outputs = self._run_with_response_type("application/json", resp)
+        assert outputs["ac"]["response"] == {"key": "value"}
+
+    def test_text_plain_returns_text(self):
+        resp = _mock_response(200, text="hello world")
+        outputs = self._run_with_response_type("text/plain", resp)
+        assert outputs["ac"]["response"] == "hello world"
+
+    def test_legacy_json_still_works(self):
+        """Backward compat: old nodes with response_type='json' must still parse JSON."""
+        resp = _mock_response(200, {"legacy": True})
+        outputs = self._run_with_response_type("json", resp)
+        assert outputs["ac"]["response"] == {"legacy": True}
+
+    def test_legacy_text_still_works(self):
+        """Backward compat: old nodes with response_type='text' must return plain text."""
+        resp = _mock_response(200, text="plain text")
+        outputs = self._run_with_response_type("text", resp)
+        assert outputs["ac"]["response"] == "plain text"

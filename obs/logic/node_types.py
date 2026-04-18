@@ -491,7 +491,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             "url":           {"type": "string", "default": "",    "label": "URL"},
             "method":        {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"], "default": "GET", "label": "Methode"},
             "content_type":  {"type": "string", "enum": ["application/json", "text/plain", "application/x-www-form-urlencoded"], "default": "application/json", "label": "Request Content-Type"},
-            "response_type": {"type": "string", "enum": ["json", "text"], "default": "json", "label": "Response-Content-Typ"},
+            "response_type": {"type": "string", "enum": ["application/json", "text/plain"], "default": "application/json", "label": "Response Content-Typ"},
             "verify_ssl":    {"type": "boolean", "default": True,  "label": "SSL-Zertifikat prüfen"},
             "headers":       {"type": "string",  "default": "",    "label": "Header (JSON-Objekt, optional)"},
             "timeout_s":     {"type": "number",  "default": 10,    "label": "Timeout (s)"},

@@ -112,24 +112,36 @@ def apply_source_type(
     return pub_value
 
 
-def apply_value_map(value: Any, value_map: dict[str, str] | None) -> Any:
+def apply_value_map(value: Any, value_map: dict[str, Any] | None) -> Any:
     """
     Apply a string-keyed substitution map.
 
     The incoming *value* is converted to str for the lookup; if no entry
     is found the original *value* is returned unchanged.
 
+    Key normalisation rules (applied in order):
+    - bool  → lowercase "true"/"false"  (JSON convention)
+    - float with no fractional part (e.g. 5.0) → int string "5"
+    - all other types → str(value)
+
+    This allows N-entry maps like {"0": "Aus", "1": "Init", …, "10": "Standby"}
+    to work even when values arrive as floats from Modbus or similar adapters.
+
     Parameters
     ----------
     value:     The current value (any type).
-    value_map: Dict mapping str(value) → replacement str, or None.
+    value_map: Dict mapping str(value) → replacement, or None.
 
     Returns
     -------
-    Mapped value (str) or original *value* if no match / no map.
+    Mapped value or original *value* if no match / no map.
     """
     if not value_map:
         return value
-    # Booleans: str(True) → "True" but JSON keys are "true"/"false" — normalise to lowercase.
-    key = str(value).lower() if isinstance(value, bool) else str(value)
+    if isinstance(value, bool):
+        key = str(value).lower()
+    elif isinstance(value, float) and value.is_integer():
+        key = str(int(value))
+    else:
+        key = str(value)
     return value_map.get(key, value)
