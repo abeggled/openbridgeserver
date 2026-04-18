@@ -485,14 +485,15 @@ async def modbus_generator(cfg: dict) -> None:
     hr_values: list[int] = [0] * _SIZE
     ir_values: list[int] = [0] * _SIZE
 
+    # tuple: (coils, discrete_inputs, holding_registers, input_registers)
     device = SimDevice(
         id=unit_id,
-        simdata=[
-            SimData(address=0, values=co_values, datatype=DataType.BITS),
-            SimData(address=0, values=di_values, datatype=DataType.BITS),
-            SimData(address=0, values=hr_values, datatype=DataType.REGISTERS),
-            SimData(address=0, values=ir_values, datatype=DataType.REGISTERS),
-        ],
+        simdata=(
+            [SimData(address=0, values=co_values, datatype=DataType.BITS)],
+            [SimData(address=0, values=di_values, datatype=DataType.BITS)],
+            [SimData(address=0, values=hr_values, datatype=DataType.REGISTERS)],
+            [SimData(address=0, values=ir_values, datatype=DataType.REGISTERS)],
+        ),
     )
 
     _FC = {"coil": 1, "discrete_input": 2, "holding": 3, "input": 4}
