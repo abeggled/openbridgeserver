@@ -485,16 +485,25 @@ async def modbus_generator(cfg: dict) -> None:
     hr_values: list[int] = [0] * _SIZE
     ir_values: list[int] = [0] * _SIZE
 
-    # tuple: (coils, discrete_inputs, holding_registers, input_registers)
-    device = SimDevice(
-        id=unit_id,
-        simdata=(
-            [SimData(address=0, values=co_values, datatype=DataType.BITS)],
-            [SimData(address=0, values=di_values, datatype=DataType.BITS)],
-            [SimData(address=0, values=hr_values, datatype=DataType.REGISTERS)],
-            [SimData(address=0, values=ir_values, datatype=DataType.REGISTERS)],
-        ),
-    )
+    def _make_device(dev_id: int) -> SimDevice:
+        # tuple: (coils, discrete_inputs, holding_registers, input_registers)
+        return SimDevice(
+            id=dev_id,
+            simdata=(
+                [SimData(address=0, values=co_values, datatype=DataType.BITS)],
+                [SimData(address=0, values=di_values, datatype=DataType.BITS)],
+                [SimData(address=0, values=hr_values, datatype=DataType.REGISTERS)],
+                [SimData(address=0, values=ir_values, datatype=DataType.REGISTERS)],
+            ),
+        )
+
+    class _DeviceContext:
+        """Minimal context wrapper so ModbusTcpServer gets a .simdevices list."""
+        def __init__(self, devices: list) -> None:
+            self.simdevices = devices
+
+    # Register unit_id AND 0 (SimCore fallback) — both share the same data buffers
+    context = _DeviceContext([_make_device(0), _make_device(unit_id)])
 
     _FC = {"coil": 1, "discrete_input": 2, "holding": 3, "input": 4}
     _BUFFERS = {1: co_values, 2: di_values, 3: hr_values, 4: ir_values}
@@ -539,7 +548,7 @@ async def modbus_generator(cfg: dict) -> None:
             raise
 
     logger.info("Modbus TCP server starting on %s:%d (unit_id=%d)", host, port, unit_id)
-    server = ModbusTcpServer(device, address=(host, port))
+    server = ModbusTcpServer(context, address=(host, port))
     server_task = asyncio.create_task(server.serve_forever(), name="modbus-server")
     update_task = asyncio.create_task(update_loop(), name="modbus-updater")
 
