@@ -2,7 +2,7 @@
 
 ![open bridge server Logo](logo/obs_logo_dark.svg)
 
-**Offene Gebäudeautomations-Plattform — verbindet KNX, Modbus, MQTT und mehr**
+**Offene Gebäudeautomations-Plattform — verbindet KNX, Modbus, MQTT, Home Assistant und mehr**
 
 open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitlichen System. Alle Werte lassen sich über eine Weboberfläche überwachen, per Logik verknüpfen und über MQTT weitergeben — ohne proprietäre Konfigurationsdateien.
 
@@ -12,14 +12,14 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 
 | Funktion | Beschreibung |
 |---|---|
-| **Protokolle** | KNX/IP (Tunneling + Routing), Modbus TCP, Modbus RTU, 1-Wire, externes MQTT |
+| **Protokolle** | KNX/IP (Tunneling + Routing), Modbus TCP, Modbus RTU, 1-Wire, externes MQTT, Home Assistant, Zeitschaltuhr |
 | **Mehrere Instanzen** | Beliebig viele Instanzen pro Protokoll (z. B. 2× KNX, 3× Modbus TCP) |
 | **Protokoll-Brücke** | Ein KNX-Wert wird automatisch in ein Modbus-Register geschrieben — und umgekehrt |
-| **Logik-Editor** | Visuelle Automatisierungslogik ohne Programmierung: 28 Blocktypen, Zeitpläne, Formeln, Python-Skripte, Benachrichtigungen, HTTP-Anfragen, Sonnenstand |
+| **Logik-Editor** | Visuelle Automatisierungslogik ohne Programmierung: 35+ Blocktypen, Zeitpläne, Formeln, Python-Skripte, Benachrichtigungen, HTTP-Anfragen, Sonnenstand |
 | **MQTT** | Stabiler UUID-Topic + lesbarer Alias-Topic; Retain-Unterstützung |
 | **Weboberfläche** | Vollständige Bedienung über den Browser — kein separates Programm nötig |
 | **Datenbank** | SQLite — keine externe Datenbank erforderlich |
-| **Verlauf** | Werteverlauf mit Diagramm, Aggregation nach Zeit (Std / Tag / Woche …) |
+| **Verlauf** | Werteverlauf mit Diagramm, Aggregation nach Zeit (Std / Tag / Woche …); pro Datenpunkt konfigurierbar |
 | **Änderungsprotokoll** | Letzten N Wertänderungen einsehbar (RingBuffer) — aktualisiert sich live |
 | **Alles sofort** | Änderungen greifen ohne Neustart |
 | **Installation** | Docker Compose oder direkt als Python-Programm |
@@ -203,9 +203,10 @@ GET    /api/v1/datapoints/{id}/value           # Nur den aktuellen Wert
 |---|---|
 | `name` | Lesbarer Name, z. B. „Wohnzimmer Temperatur" |
 | `data_type` | Datentyp: `BOOLEAN`, `INTEGER`, `FLOAT`, `STRING`, `DATE`, `TIME`, `DATETIME` |
-| `unit` | Einheit, z. B. `°C`, `%rH`, `kWh`, `lx` |
+| `unit` | Einheit, z. B. `°C`, `%rH`, `kWh`, `lx`, `mm/h`, `nSv/h` |
 | `tags` | Schlagwörter zum Gruppieren und Filtern |
 | `persist_value` | Letzten Wert beim Neustart wiederherstellen (Standard: `true`) |
+| `record_history` | Werteverlauf in der Datenbank speichern (Standard: `true`). Auf `false` setzen um einen Datenpunkt von der History auszuschliessen. |
 | `mqtt_topic` | Automatisch vergeben: `dp/{uuid}/value` |
 | `mqtt_alias` | Lesbares Alias-Topic, z. B. `alias/klima/wohnzimmer/value` |
 
@@ -261,6 +262,16 @@ Optional: eine Formel, die auf den Wert angewendet wird, bevor er ins System ein
 Verfügbare Funktionen: `abs`, `round`, `min`, `max` und alle `math.*`-Funktionen. Division durch null und ungültige Ergebnisse werden abgefangen — der ursprüngliche Wert bleibt erhalten.
 
 > **Hinweis:** `round()` verwendet mathematisches Runden (0.5 → aufrunden), nicht das in der Programmierung übliche „Bankers Rounding".
+
+**Wert-Zuordnung (`value_map`):**
+
+Optional: eine Tabelle, die Rohwerte auf andere Werte abbildet — nützlich z. B. bei Enumerationen oder Zustandstexten.
+
+```json
+{ "value_map": { "0": "Aus", "1": "Ein", "2": "Standby" } }
+```
+
+Der Schlüssel ist immer ein String (der Rohwert wird intern umgewandelt). Gibt es keinen passenden Eintrag, wird der Originalwert unverändert weitergegeben. `value_map` wird nach `value_formula` angewendet.
 
 **Sendefilter** (nur für DEST/BOTH, werden der Reihe nach geprüft):
 
@@ -376,6 +387,8 @@ GET /api/v1/history/{id}/aggregate?fn=avg&interval=1h&from=&to=
 **Zeitintervalle:** `1m`, `5m`, `15m`, `30m`, `1h`, `6h`, `12h`, `1d`
 
 Alle Zeitangaben richten sich nach der in den Einstellungen konfigurierten Zeitzone.
+
+**Aufzeichnung steuern:** Das Feld `record_history` am Datenpunkt kontrolliert, ob Werte in den Verlauf geschrieben werden. Datenpunkte mit `record_history: false` werden vom History-Modul ignoriert. Die Verwaltung erfolgt unter Einstellungen → Verlauf.
 
 ---
 
@@ -495,7 +508,7 @@ Der Logik-Editor ermöglicht das visuelle Erstellen von Automatisierungsregeln �
 
 Der Graph kann auch manuell über den **▶ Ausführen**-Button gestartet werden.
 
-**Zustände** (Hysterese, Statistik, Betriebsstunden) werden in der Datenbank gespeichert und überleben einen Neustart.
+**Zustände** (Hysterese, Statistik, Betriebsstunden, Min/Max-Tracker, Verbrauchszähler) werden in der Datenbank gespeichert und überleben einen Neustart.
 
 ---
 
@@ -531,8 +544,17 @@ Der Graph kann auch manuell über den **▶ Ausführen**-Button gestartet werden
 |---|---|---|---|
 | **Formel** | a, b | Ergebnis | Berechnet einen Ausdruck aus den Eingängen `a` und `b`. Optional: eine zweite Formel zur Transformation des Ergebnisses (Variable `x`). |
 | **Skalieren** | Wert | Ergebnis | Rechnet einen Wert von einem Bereich in einen anderen um, z. B. 0–255 → 0–100 %. |
-| **Begrenzer** | Wert | Ergebnis | Begrenzt den Wert auf einen Bereich. Werte darunter oder darüber werden auf den Grenzwert gesetzt. |
+| **Begrenzer** | Wert | Ergebnis | Begrenzt den Wert auf einen Bereich [Min, Max]. Werte darunter oder darüber werden auf den Grenzwert gesetzt. |
 | **Statistik** | Wert, Zurücksetzen | Min, Max, Mittelwert, Anzahl | Führt eine laufende Statistik über alle empfangenen Werte. Reset setzt alles zurück. Ergebnisse werden gespeichert und überleben einen Neustart. |
+| **Min/Max-Tracker** | Wert | Min tägl., Max tägl., Min wöch., Max wöch., Min monatl., Max monatl., Min jährl., Max jährl., Min abs., Max abs. | Verfolgt Minimal- und Maximalwerte über verschiedene Zeiträume (täglich, wöchentlich, monatlich, jährlich, absolut). Setzt sich automatisch bei Periodengrenze zurück. |
+| **Verbrauchszähler** | Wert (Zählerstand) | Täglich, Wöchentlich, Monatlich, Jährlich, Vorheriger Tag, Vorherige Woche, Vorheriger Monat, Vorheriges Jahr | Berechnet Verbrauch aus einem kumulierten Zählerstand. Speichert Vorperiodenwerte für Vergleiche. |
+| **Sommer/Winter (DIN)** | Wert (Aussentemperatur) | Heizungsmodus, Tagesdurchschnitt, Monatsdurchschnitt | Steuert die Heizungsumschaltung nach DIN-Norm anhand von drei Tageswerten (T1 ≈ 07:00, T2 ≈ 14:00, T3 ≈ 22:00). Tagesdurchschnitt = (T1 + T2 + 2×T3) / 4. |
+
+#### Text
+
+| Block | Eingänge | Ausgänge | Beschreibung |
+|---|---|---|---|
+| **Text verbinden** | 2–20 Eingänge (konfigurierbar) | Ergebnis | Verbindet mehrere Texte zu einem. Optionales Trennzeichen (z. B. `,` oder ` `). |
 
 #### Timer
 
@@ -579,6 +601,8 @@ Der Graph kann auch manuell über den **▶ Ausführen**-Button gestartet werden
 | Block | Eingänge | Ausgänge | Beschreibung |
 |---|---|---|---|
 | **API-Abfrage** | Trigger, Inhalt | Antwort, Statuscode, Erfolg | Sendet eine HTTP-Anfrage an eine externe Adresse. Methode wählbar (GET/POST/PUT/PATCH/DELETE). Antwortformat: JSON oder Text. SSL-Prüfung konfigurierbar. |
+| **JSON-Extraktor** | Daten (JSON-Text) | Wert | Parst einen JSON-String und extrahiert einen Wert anhand eines Pfads mit Punktnotation, z. B. `sensors.temperature`. |
+| **XML-Extraktor** | Daten (XML-Text) | Wert | Parst einen XML-String und extrahiert einen Wert per XPath-Ausdruck, z. B. `./sensor/temperature`. |
 
 ---
 
@@ -709,7 +733,7 @@ Zeigt berechnete Zwischenwerte direkt auf den Blöcken an — live und automatis
 1. Graph öffnen
 2. **🔍 Debug**-Button in der Werkzeugleiste klicken
 3. Jeder Block zeigt ein gelbes Band mit seinen aktuellen Ausgangswerten
-4. Die Anzeige aktualisiert sich automatisch nach jeder Ausführung
+4. Die Anzeige aktualisiert sich automatisch nach jeder Ausführung (Wertänderung, Zeitplan, manueller Start)
 
 | Typ | Darstellung |
 |---|---|
@@ -853,8 +877,8 @@ open bridge server unterstützt über 85 KNX-Datentypen. Die vollständige Liste
 | `DPT9.025` | Volumenfluss (l/h) |
 | `DPT9.026` | Niederschlag (l/m²) |
 | `DPT9.027` | Luftdruck (Pa) |
-| `DPT9.028` | Luftdruck (Pa) |
-| `DPT9.029` | Luftdruck (Pa) |
+| `DPT9.028` | Windgeschwindigkeit (km/h) |
+| `DPT9.029` | Absolute Luftfeuchtigkeit (g/m³) |
 | `DPT9.030` | Einstrahlungsdichte (W/m²) |
 
 **DPT 10, 11 — Uhrzeit und Datum**
@@ -1037,6 +1061,81 @@ Verbindet sich mit einem **externen** MQTT-Broker (getrennt vom internen Mosquit
 
 ---
 
+### Home-Assistant-Adapter
+
+Verbindet open bridge server bidirektional mit einer Home-Assistant-Instanz. Empfängt Zustandsänderungen in Echtzeit über WebSocket (`state_changed`-Ereignisse) und schreibt Werte über die HA-REST-API (Dienst-Aufrufe).
+
+**Instanz-Konfiguration:**
+
+| Feld | Standard | Beschreibung |
+|---|---|---|
+| `host` | `homeassistant.local` | Hostname oder IP-Adresse der HA-Instanz |
+| `port` | `8123` | Port der HA-Weboberfläche |
+| `token` | — | Long-Lived Access Token (Passwort-Feld) |
+| `ssl` | `false` | HTTPS/WSS verwenden |
+
+**Verknüpfungs-Konfiguration:**
+
+| Feld | Beschreibung |
+|---|---|
+| `entity_id` | Home-Assistant-Entity-ID, z. B. `sensor.wohnzimmer_temperatur` |
+| `attribute` | Optionales Attribut statt dem Hauptzustand, z. B. `unit_of_measurement` |
+| `service_domain` | Dienst-Domain für Schreibbefehle, wird automatisch aus der Entity abgeleitet wenn leer |
+| `service_name` | Dienst-Name: Standard `turn_on`/`turn_off` für Boolean, `set_value` sonst |
+| `service_data_key` | Schlüssel für den Wert im Dienst-Aufruf, z. B. `brightness` oder `value` |
+
+Textzustände wie `"on"`/`"off"`, `"true"`/`"false"` werden automatisch in Boolean-Werte umgewandelt. Numerische Texte werden als Zahl übergeben.
+
+---
+
+### Zeitschaltuhr-Adapter
+
+Erzeugt zeitgesteuerte Ereignisse ohne externe Hardware — für tageszeit- oder sonnenstandsbasierte Automatisierungen, Feiertags- und Ferienlogik.
+
+**Instanz-Konfiguration:**
+
+| Feld | Standard | Beschreibung |
+|---|---|---|
+| `latitude` | `47.5` | Breitengrad für Sonnenstandsberechnung |
+| `longitude` | `8.0` | Längengrad für Sonnenstandsberechnung |
+| `altitude` | `400.0` | Höhe über NN in Metern |
+| `timezone` | (App-Zeitzone) | IANA-Zeitzone; leer = Systemzeitzone von open bridge server verwenden |
+| `holiday_country` | `CH` | ISO-3166-Ländercode für Feiertagskalender |
+| `holiday_subdivision` | — | Kanton/Bundesland, z. B. `ZH` oder `BY` |
+| `holiday_language` | `de` | Sprache für Feiertagsnamen |
+| `vacation_1_start` … `vacation_6_end` | — | Bis zu 6 Ferienperioden im Format `JJJJ-MM-TT` |
+
+**Verknüpfungs-Konfiguration:**
+
+| Feld | Werte | Beschreibung |
+|---|---|---|
+| `timer_type` | `daily`, `annual`, `meta` | `daily` = täglich wiederkehrend; `annual` = einmaliges Datum; `meta` = Metadaten-Ausgang (Feiertag, Ferien) |
+| `meta_type` | `holiday_today`, `holiday_tomorrow`, `holiday_name_today`, `holiday_name_tomorrow`, `vacation_1`…`vacation_6` | Für `timer_type = meta`: welcher Metadatenwert ausgegeben wird |
+| `time_ref` | `absolute`, `sunrise`, `sunset`, `solar_noon`, `solar_altitude` | Zeitreferenz |
+| `hour` / `minute` | `0`–`23` / `0`–`59` | Absolute Uhrzeit oder Offset zur Zeitreferenz |
+| `offset_minutes` | Ganzzahl | Versatz zur Zeitreferenz in Minuten (positiv = später) |
+| `solar_altitude_deg` | `-18`–`90` | Sonnenstand-Schwellwert in Grad (nur `solar_altitude`) |
+| `sun_direction` | `rising`, `setting` | Aufsteigende oder absteigende Sonnenbahn (nur `solar_altitude`) |
+| `weekdays` | Liste `[0–6]` | Wochentage (0 = Montag). Leer = alle. |
+| `months` | Liste `[1–12]` | Monate. Leer = alle. |
+| `day_of_month` | `0`–`31` | Tag im Monat; `0` = alle. |
+| `every_hour` | `true`/`false` | Jede Stunde zur konfigurierten Minute auslösen |
+| `every_minute` | `true`/`false` | Jede Minute auslösen |
+| `holiday_mode` | `ignore`, `skip`, `only`, `as_sunday` | Verhalten an Feiertagen |
+| `vacation_mode` | `ignore`, `skip`, `only`, `as_sunday` | Verhalten in Ferienperioden |
+| `value` | Text | Wert der beim Auslösen geschrieben wird (Standard: `"1"`) |
+
+**Feiertagsmodi:**
+
+| Modus | Verhalten |
+|---|---|
+| `ignore` | Feiertage/Ferien werden wie normale Tage behandelt |
+| `skip` | An diesen Tagen wird nicht ausgelöst |
+| `only` | Auslösen nur an Feiertagen/Ferien |
+| `as_sunday` | Feiertag/Ferientag wird für die Wochentagsprüfung als Sonntag (6) behandelt |
+
+---
+
 ## MQTT-Topics
 
 open bridge server verwendet zwei parallele Topic-Strategien:
@@ -1092,6 +1191,8 @@ Die Einstellungen sind über die Weboberfläche erreichbar (⚙ in der Seitenlei
 **Allgemein:**
 - **Zeitzone** — alle Zeitangaben in der Oberfläche werden in dieser Zeitzone dargestellt (Verlauf, RingBuffer, History-Suche, Astro-Block)
 - **KNX-Projektdatei importieren** — ETS-Projektdatei (`.knxproj`) hochladen, um Gruppenadressen als Suchvorschläge im Verknüpfungs-Formular zu nutzen
+
+**Verlauf:** Übersicht aller Datenpunkte mit History-Aufzeichnung. Datenpunkte mit deaktivierter Aufzeichnung (`record_history: false`) werden zuerst angezeigt. Aufzeichnung per Datenpunkt ein- und ausschalten.
 
 **Passwort:** Eigenes Anmeldepasswort ändern
 
@@ -1196,16 +1297,16 @@ uvicorn obs.main:create_app --factory --reload --host 0.0.0.0 --port 8080
 
 ### Datenbankstruktur
 
-Die Datenbank wird automatisch aktualisiert — jede neue Version fügt fehlende Tabellen und Spalten hinzu, ohne bestehende Daten zu verlieren. Aktuelle Version: **V15**.
+Die Datenbank wird automatisch aktualisiert — jede neue Version fügt fehlende Tabellen und Spalten hinzu, ohne bestehende Daten zu verlieren. Aktuelle Version: **V21**.
 
 | Tabelle | Inhalt |
 |---|---|
-| `datapoints` | Alle Datenpunkte (inkl. `persist_value`-Flag) |
-| `adapter_bindings` | Verknüpfungen zwischen Datenpunkten und Adaptern |
+| `datapoints` | Alle Datenpunkte (inkl. `persist_value`- und `record_history`-Flag) |
+| `adapter_bindings` | Verknüpfungen zwischen Datenpunkten und Adaptern (inkl. `value_map`) |
 | `adapter_instances` | Adapter-Instanzen |
 | `users` | Benutzerkonten |
 | `api_keys` | API-Schlüssel (nur als Hashwert gespeichert) |
-| `history_values` | Werteverlauf |
+| `history_values` | Werteverlauf (inkl. `source_adapter`) |
 | `logic_graphs` | Logik-Graphen (inkl. gespeichertem Block-Zustand) |
 | `app_settings` | Systemeinstellungen (z. B. Zeitzone) |
 | `datapoint_last_values` | Letzter bekannter Wert je Datenpunkt — wird beim Start wiederhergestellt |
