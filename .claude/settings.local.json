@@ -212,7 +212,8 @@
       "Bash(python -c \"from obs.models.datapoint import DataPoint, DataPointCreate, DataPointUpdate; dp = DataPoint\\(name='test'\\); print\\('record_history default:', dp.record_history\\)\")",
       "Bash(python -c \"import sys; sys.path.insert\\(0, 'C:/Users/DanielAbegglen/OneDrive/Hausbau/Elektro/KNX/openbridgeserver'\\); from obs.models.datapoint import DataPoint; dp = DataPoint\\(name='test'\\); print\\('record_history:', dp.record_history\\)\")",
       "Bash(python -m pytest tests/unit/test_transformation.py tests/unit/test_executor.py tests/unit/test_api_client.py -v --tb=short)",
-      "Bash(python -m pytest tests/unit/test_transformation.py -v)"
+      "Bash(python -m pytest tests/unit/test_transformation.py -v)",
+      "Bash(find \"/c/Users/DanielAbegglen/OneDrive/Hausbau/Elektro/KNX/openbridgeserver\" -name \"*.py\" -exec grep -l \"__version__\" {} \\\\;)"
     ]
   }
 }
