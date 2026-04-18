@@ -831,14 +831,15 @@ watch(() => props.node, (n) => {
     }
     if (n.type === 'datapoint_read' || n.type === 'datapoint_write') {
       searchDps()
-      // Restore value_map UI state
+      // Restore value_map UI state — but don't overwrite if user just picked 'custom'
       const vm = n.data.value_map
       if (vm && typeof vm === 'object') {
         const mapStr = JSON.stringify(vm)
         const preset = VALUE_MAP_PRESETS.find(p => p.map && JSON.stringify(p.map) === mapStr)
         valueMapPreset.value = preset?.key ?? 'custom'
         valueMapCustom.value = preset ? '' : JSON.stringify(vm, null, 2)
-      } else {
+      } else if (valueMapPreset.value !== 'custom') {
+        // Only reset to empty if the user hasn't actively chosen 'custom'
         valueMapPreset.value = ''
         valueMapCustom.value = ''
       }
@@ -865,10 +866,13 @@ function onOutputPresetChange(e) {
 }
 
 function onValueMapPresetChange() {
-  if (valueMapPreset.value !== 'custom') {
+  valueMapCustomError.value = ''
+  if (valueMapPreset.value === 'custom') {
+    // Nur Textarea anzeigen, noch nichts speichern — value_map bleibt wie sie ist
     valueMapCustom.value = ''
-    valueMapCustomError.value = ''
+    return
   }
+  valueMapCustom.value = ''
   const preset = VALUE_MAP_PRESETS.find(p => p.key === valueMapPreset.value)
   localData.value.value_map = preset?.map ?? null
   emitUpdate()
