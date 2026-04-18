@@ -663,12 +663,14 @@
         <div v-if="form.value_map_preset === 'custom'" class="mt-2">
           <textarea
             v-model="form.value_map_custom"
-            class="input font-mono text-sm h-20 resize-y"
-            placeholder='{"0": "off", "1": "on"}'
+            @input="onValueMapCustomInput"
+            class="input font-mono text-sm h-28 resize-y"
+            placeholder='{"0": "Aus", "1": "Init", "2": "Aktiv", "3": "Fehler"}'
           />
-          <p class="hint">JSON-Objekt mit String-Schlüsseln und -Werten.</p>
+          <p v-if="form.value_map_custom_error" class="text-xs text-red-400 mt-0.5">{{ form.value_map_custom_error }}</p>
+          <p class="hint">JSON-Objekt — beliebig viele Einträge möglich.</p>
         </div>
-        <p class="hint mt-1">Wird nach der Formel angewendet. Schlüssel und Werte als Strings, z.B. <code class="text-blue-400">{"0": "off", "1": "on"}</code></p>
+        <p class="hint mt-1">Wird nach der Formel angewendet. Schlüssel als Strings, z.B. <code class="text-blue-400">{"0": "Aus", "1": "Init", "2": "Aktiv"}</code></p>
       </div>
     </div><!-- /TAB Transformation -->
 
@@ -756,18 +758,19 @@ const activeTab    = ref('conn')
 const THROTTLE_FACTORS = { ms: 1, s: 1000, min: 60_000, h: 3_600_000 }
 
 const form = reactive({
-  adapter_instance_id: '',
-  direction:           'SOURCE',
-  enabled:             true,
-  value_formula:       '',
-  formula_preset:      '',
-  value_map_preset:    '',
-  value_map_custom:    '',
-  throttle_value:      0,
-  throttle_unit:       's',
-  send_on_change:      false,
-  send_min_delta:      null,
-  send_min_delta_pct:  null,
+  adapter_instance_id:  '',
+  direction:            'SOURCE',
+  enabled:              true,
+  value_formula:        '',
+  formula_preset:       '',
+  value_map_preset:     '',
+  value_map_custom:     '',
+  value_map_custom_error: '',
+  throttle_value:       0,
+  throttle_unit:        's',
+  send_on_change:       false,
+  send_min_delta:       null,
+  send_min_delta_pct:   null,
 })
 
 const VALUE_MAP_PRESETS = [
@@ -1017,7 +1020,20 @@ function selectMqttTopic(topic) {
 }
 
 function onValueMapPresetChange() {
-  if (form.value_map_preset !== 'custom') form.value_map_custom = ''
+  if (form.value_map_preset !== 'custom') {
+    form.value_map_custom = ''
+    form.value_map_custom_error = ''
+  }
+}
+
+function onValueMapCustomInput() {
+  form.value_map_custom_error = ''
+  if (!form.value_map_custom.trim()) return
+  try {
+    JSON.parse(form.value_map_custom)
+  } catch (e) {
+    form.value_map_custom_error = `Ungültiges JSON: ${e.message}`
+  }
 }
 
 async function loadMqttSample() {

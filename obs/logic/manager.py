@@ -346,7 +346,7 @@ class LogicManager:
                 continue
             method       = (node.data.get("method", "GET") or "GET").upper()
             content_type = node.data.get("content_type", "application/json")
-            resp_type    = node.data.get("response_type", "json")
+            resp_type    = node.data.get("response_type", "application/json")
             verify_ssl   = node.data.get("verify_ssl", True)
             if isinstance(verify_ssl, str):
                 verify_ssl = verify_ssl.lower() not in ("false", "0", "no")
@@ -385,7 +385,7 @@ class LogicManager:
                         req_kwargs["headers"] = {**extra_headers, "Content-Type": "text/plain"}
                 async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
                     resp = await client.request(method, url, **req_kwargs)
-                    if resp_type == "json":
+                    if resp_type in ("json", "application/json"):
                         try:
                             resp_data: Any = resp.json()
                         except Exception:

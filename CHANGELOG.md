@@ -62,6 +62,17 @@ Alle wesentlichen Änderungen an open bridge server werden hier festgehalten.
 
 ### Fehlerbehebungen
 
+**Wertzuordnung — N-Werte und Modbus-Fliesskommazahlen (#208)**
+- Die Wertzuordnung (value_map) unterstützt jetzt beliebig viele Einträge — z.B. `{"0": "Aus", "1": "Init", "2": "Aktiv", ..., "10": "Standby"}` (bisher war nur 2-Wert-Logik dokumentiert)
+- Fehler behoben: Modbus und ähnliche Adapter liefern ganzzahlige Werte als Fliesskomma (z.B. `5.0` statt `5`). Die Suche im Wörterbuch schlug daher fehl, weil `"5.0" != "5"`. Ganzzahlige Fliesskommazahlen werden jetzt vor der Suche normalisiert (`5.0 → "5"`)
+- Gilt für alle Stellen, die `apply_value_map` nutzen: Adapter-Bindings (MQTT, Modbus, …), Logik-Editor (DP Lesen, DP Schreiben)
+- Benutzerdefiniertes JSON-Feld vergrössert und mit sofortiger Fehleranzeige bei ungültigem JSON versehen
+
+**API-Client-Block — Response Content-Typ (#208)**
+- Bezeichnung korrigiert: „Response-Content-Typ" → „Response Content-Typ"
+- Auswahlwerte auf MIME-Typen umgestellt: `json` → `application/json`, `text` → `text/plain`
+- Bestehende Blöcke mit den alten Werten (`json`, `text`) funktionieren weiterhin (Rückwärtskompatibilität)
+
 **Statistik — Zustand ging bei jeder Ausführung verloren**
 - Ursache: Python-Fallstrick — ein leeres Wörterbuch `{}` gilt als „falsch". Der Ausdruck `zustand or {}` erstellte bei leerem Zustand immer ein neues, weggeworfenes Objekt statt das übergebene zu verwenden. Alle Änderungen gingen verloren.
 - Lösung: `zustand if zustand is not None else {}`

@@ -89,10 +89,11 @@
               <textarea
                 v-model="valueMapCustom"
                 @change="onValueMapCustomChange"
-                class="input text-xs font-mono h-16 resize-y"
-                placeholder='{"0": "off", "1": "on"}'
+                class="input text-xs font-mono h-24 resize-y"
+                placeholder='{"0": "Aus", "1": "Init", "2": "Aktiv", "3": "Fehler"}'
               />
-              <p class="text-xs text-slate-500 mt-0.5">JSON-Objekt mit String-Schlüsseln und -Werten.</p>
+              <p v-if="valueMapCustomError" class="text-xs text-red-400 mt-0.5">{{ valueMapCustomError }}</p>
+              <p class="text-xs text-slate-500 mt-0.5">JSON-Objekt — beliebig viele Einträge möglich.</p>
             </div>
             <p class="text-xs text-slate-500 mt-1">Wird nach der Formel angewendet.</p>
           </div>
@@ -314,10 +315,10 @@
           </select>
         </div>
         <div class="form-group">
-          <label class="label">Response-Content-Typ</label>
+          <label class="label">Response Content-Typ</label>
           <select v-model="localData.response_type" class="input text-sm" @change="emitUpdate">
-            <option value="json">json</option>
-            <option value="text">text</option>
+            <option value="application/json">application/json</option>
+            <option value="text/plain">text/plain</option>
           </select>
         </div>
         <div class="form-group">
@@ -506,12 +507,13 @@ const props = defineProps({
 const emit = defineEmits(['update', 'close'])
 
 // ── State ──────────────────────────────────────────────────────────────────
-const localData      = ref({})
-const dpSearch       = ref('')
-const dpResults      = ref([])
-const activeTab      = ref('connection')
-const valueMapPreset = ref('')
-const valueMapCustom = ref('')
+const localData          = ref({})
+const dpSearch           = ref('')
+const dpResults          = ref([])
+const activeTab          = ref('connection')
+const valueMapPreset     = ref('')
+const valueMapCustom     = ref('')
+const valueMapCustomError = ref('')
 
 // ── Value Map Presets ──────────────────────────────────────────────────────
 const VALUE_MAP_PRESETS = [
@@ -859,7 +861,10 @@ function onOutputPresetChange(e) {
 }
 
 function onValueMapPresetChange() {
-  if (valueMapPreset.value !== 'custom') valueMapCustom.value = ''
+  if (valueMapPreset.value !== 'custom') {
+    valueMapCustom.value = ''
+    valueMapCustomError.value = ''
+  }
   const preset = VALUE_MAP_PRESETS.find(p => p.key === valueMapPreset.value)
   localData.value.value_map = preset?.map ?? null
   emitUpdate()
@@ -874,9 +879,13 @@ function onExtractorPathSelect(e) {
 }
 
 function onValueMapCustomChange() {
+  valueMapCustomError.value = ''
   try {
     localData.value.value_map = JSON.parse(valueMapCustom.value)
-  } catch { localData.value.value_map = null }
+  } catch (e) {
+    valueMapCustomError.value = `Ungültiges JSON: ${e.message}`
+    localData.value.value_map = null
+  }
   emitUpdate()
 }
 
