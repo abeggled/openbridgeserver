@@ -734,6 +734,80 @@ class TestEnhancedGateInputs:
 
 
 # ===========================================================================
+# gate (TOR) node
+# ===========================================================================
+
+class TestGateNode:
+    """Tests for the 'gate' (TOR) function block.
+
+    Behaviour:
+      - enable=true  → output = input value; last value is stored in state
+      - enable=false, closed_behavior='retain'        → output = last stored value
+      - enable=false, closed_behavior='default_value' → output = configured default
+      - negate_enable inverts the gate control signal
+    """
+
+    def test_gate_open_passes_value(self):
+        out = run_single("gate", {}, {"in": 42, "enable": True})
+        assert out["out"] == 42
+
+    def test_gate_open_passes_false(self):
+        out = run_single("gate", {}, {"in": False, "enable": True})
+        assert out["out"] is False
+
+    def test_gate_closed_retain_returns_last(self):
+        state: dict = {}
+        n = node("g", "gate", {"closed_behavior": "retain"})
+        exc = make_executor([n], hysteresis_state=state)
+        # First run: gate open → stores 99
+        exc.execute({"g": {"in": 99, "enable": True}})
+        # Second run: gate closed → must return 99
+        out = exc.execute({"g": {"in": 0, "enable": False}})
+        assert out["g"]["out"] == 99
+
+    def test_gate_closed_retain_none_before_first_open(self):
+        out = run_single("gate", {"closed_behavior": "retain"}, {"in": 5, "enable": False})
+        assert out["out"] is None
+
+    def test_gate_closed_default_value_numeric(self):
+        out = run_single("gate", {"closed_behavior": "default_value", "default_value": "7"}, {"in": 99, "enable": False})
+        assert out["out"] == pytest.approx(7.0)
+
+    def test_gate_closed_default_value_string(self):
+        out = run_single("gate", {"closed_behavior": "default_value", "default_value": "aus"}, {"in": "ein", "enable": False})
+        assert out["out"] == "aus"
+
+    def test_gate_negate_enable_closed_when_true(self):
+        # negate_enable: enable=True → inverted → gate closed
+        out = run_single("gate", {"negate_enable": True, "closed_behavior": "default_value", "default_value": "0"}, {"in": 55, "enable": True})
+        assert out["out"] == pytest.approx(0.0)
+
+    def test_gate_negate_enable_open_when_false(self):
+        # negate_enable: enable=False → inverted → gate open
+        out = run_single("gate", {"negate_enable": True}, {"in": 77, "enable": False})
+        assert out["out"] == 77
+
+    def test_gate_enable_string_true(self):
+        out = run_single("gate", {}, {"in": 10, "enable": "true"})
+        assert out["out"] == 10
+
+    def test_gate_enable_string_false(self):
+        out = run_single("gate", {"closed_behavior": "default_value", "default_value": "0"}, {"in": 10, "enable": "false"})
+        assert out["out"] == pytest.approx(0.0)
+
+    def test_gate_updates_stored_value_on_each_open(self):
+        state: dict = {}
+        n = node("g", "gate", {"closed_behavior": "retain"})
+        exc = make_executor([n], hysteresis_state=state)
+        exc.execute({"g": {"in": 10, "enable": True}})
+        exc.execute({"g": {"in": 20, "enable": True}})
+        exc.execute({"g": {"in": 99, "enable": False}})  # gate closed
+        out = exc.execute({"g": {"in": 99, "enable": False}})
+        # Last stored value was 20
+        assert out["g"]["out"] == 20
+
+
+# ===========================================================================
 # heating_circuit  (Winter/Sommer-Umschaltung, DIN-Norm)
 # ===========================================================================
 

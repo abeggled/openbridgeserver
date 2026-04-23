@@ -245,6 +245,155 @@ test('consumption_counter-Node berechnet Verbrauch zwischen zwei Läufen', async
 })
 
 // ---------------------------------------------------------------------------
+// gate (TOR): gate open passes signal through
+// ---------------------------------------------------------------------------
+test('TOR-Gate offen: Eingang wird durchgeleitet', async ({ page }) => {
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-TOR-Open-${Date.now()}`,
+    description: 'Playwright: gate open passes value',
+    enabled: true,
+    flow_data: {
+      nodes: [
+        { id: 'val',  type: 'const_value', position: { x: 0,   y: 0   }, data: { value: '42', data_type: 'number' } },
+        { id: 'ena',  type: 'const_value', position: { x: 0,   y: 100 }, data: { value: 'true', data_type: 'bool' } },
+        { id: 'gate', type: 'gate',        position: { x: 300, y: 50  }, data: { closed_behavior: 'retain' } },
+      ],
+      edges: [
+        { id: 'e1', source: 'val',  target: 'gate', sourceHandle: 'value', targetHandle: 'in' },
+        { id: 'e2', source: 'ena',  target: 'gate', sourceHandle: 'value', targetHandle: 'enable' },
+      ],
+    },
+  }) as { id: string }
+  const graphId = graph.id
+  try {
+    const result = await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {}) as { outputs: Record<string, Record<string, unknown>> }
+    expect(result.outputs['gate']['out']).toBe(42)
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// gate (TOR): gate closed with retain holds last value
+// ---------------------------------------------------------------------------
+test('TOR-Gate geschlossen (retain): letzter Wert wird gehalten', async ({ page }) => {
+  // Run 1: gate open → store 99
+  // Run 2: gate closed → output must still be 99
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-TOR-Retain-${Date.now()}`,
+    description: 'Playwright: gate retain last value',
+    enabled: true,
+    flow_data: {
+      nodes: [
+        { id: 'val',  type: 'const_value', position: { x: 0,   y: 0   }, data: { value: '99', data_type: 'number' } },
+        { id: 'ena',  type: 'const_value', position: { x: 0,   y: 100 }, data: { value: 'true', data_type: 'bool' } },
+        { id: 'gate', type: 'gate',        position: { x: 300, y: 50  }, data: { closed_behavior: 'retain' } },
+      ],
+      edges: [
+        { id: 'e1', source: 'val',  target: 'gate', sourceHandle: 'value', targetHandle: 'in' },
+        { id: 'e2', source: 'ena',  target: 'gate', sourceHandle: 'value', targetHandle: 'enable' },
+      ],
+    },
+  }) as { id: string }
+  const graphId = graph.id
+  try {
+    // First run: gate open → stores 99
+    await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {})
+
+    // Update graph: gate now closed (enable=false)
+    await apiPut(`/api/v1/logic/graphs/${graphId}`, {
+      name: `E2E-TOR-Retain-closed`,
+      description: 'gate closed',
+      enabled: true,
+      flow_data: {
+        nodes: [
+          { id: 'val',  type: 'const_value', position: { x: 0,   y: 0   }, data: { value: '0', data_type: 'number' } },
+          { id: 'ena',  type: 'const_value', position: { x: 0,   y: 100 }, data: { value: 'false', data_type: 'bool' } },
+          { id: 'gate', type: 'gate',        position: { x: 300, y: 50  }, data: { closed_behavior: 'retain' } },
+        ],
+        edges: [
+          { id: 'e1', source: 'val',  target: 'gate', sourceHandle: 'value', targetHandle: 'in' },
+          { id: 'e2', source: 'ena',  target: 'gate', sourceHandle: 'value', targetHandle: 'enable' },
+        ],
+      },
+    })
+    const r2 = await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {}) as { outputs: Record<string, Record<string, unknown>> }
+    // Must return last stored value 99, not the new input 0
+    expect(r2.outputs['gate']['out']).toBe(99)
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// gate (TOR): gate closed with default_value outputs configured value
+// ---------------------------------------------------------------------------
+test('TOR-Gate geschlossen (default_value): Standardwert wird ausgegeben', async ({ page }) => {
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-TOR-Default-${Date.now()}`,
+    description: 'Playwright: gate default_value',
+    enabled: true,
+    flow_data: {
+      nodes: [
+        { id: 'val',  type: 'const_value', position: { x: 0,   y: 0   }, data: { value: '50', data_type: 'number' } },
+        { id: 'ena',  type: 'const_value', position: { x: 0,   y: 100 }, data: { value: 'false', data_type: 'bool' } },
+        { id: 'gate', type: 'gate',        position: { x: 300, y: 50  }, data: { closed_behavior: 'default_value', default_value: '7' } },
+      ],
+      edges: [
+        { id: 'e1', source: 'val',  target: 'gate', sourceHandle: 'value', targetHandle: 'in' },
+        { id: 'e2', source: 'ena',  target: 'gate', sourceHandle: 'value', targetHandle: 'enable' },
+      ],
+    },
+  }) as { id: string }
+  const graphId = graph.id
+  try {
+    const result = await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {}) as { outputs: Record<string, Record<string, unknown>> }
+    expect(result.outputs['gate']['out']).toBe(7)
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// gate (TOR): negate_enable inverts control signal
+// ---------------------------------------------------------------------------
+test('TOR-Gate negate_enable: Freigabe invertiert öffnet Tor bei enable=false', async ({ page }) => {
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-TOR-Negate-${Date.now()}`,
+    description: 'Playwright: gate negate_enable',
+    enabled: true,
+    flow_data: {
+      nodes: [
+        { id: 'val',  type: 'const_value', position: { x: 0,   y: 0   }, data: { value: '33', data_type: 'number' } },
+        { id: 'ena',  type: 'const_value', position: { x: 0,   y: 100 }, data: { value: 'false', data_type: 'bool' } },
+        { id: 'gate', type: 'gate',        position: { x: 300, y: 50  }, data: { negate_enable: true } },
+      ],
+      edges: [
+        { id: 'e1', source: 'val',  target: 'gate', sourceHandle: 'value', targetHandle: 'in' },
+        { id: 'e2', source: 'ena',  target: 'gate', sourceHandle: 'value', targetHandle: 'enable' },
+      ],
+    },
+  }) as { id: string }
+  const graphId = graph.id
+  try {
+    const result = await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {}) as { outputs: Record<string, Record<string, unknown>> }
+    // negate_enable=true, enable=false → gate open → passes 33
+    expect(result.outputs['gate']['out']).toBe(33)
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// gate (TOR): node appears in palette as "TOR"
+// ---------------------------------------------------------------------------
+test('Logic-Editor Palette zeigt TOR-Node an', async ({ page }) => {
+  await page.goto('/logic')
+  await page.waitForLoadState('networkidle')
+  await expect(page.getByText('TOR', { exact: true })).toBeVisible({ timeout: 8_000 })
+})
+
+// ---------------------------------------------------------------------------
 // node_types API: new types are listed in the registry
 // ---------------------------------------------------------------------------
 test('Node-Type-Registry enthält alle neuen Funktionsblöcke', async ({ page }) => {
@@ -253,6 +402,7 @@ test('Node-Type-Registry enthält alle neuen Funktionsblöcke', async ({ page })
   expect(typeIds).toContain('and')
   expect(typeIds).toContain('or')
   expect(typeIds).toContain('xor')
+  expect(typeIds).toContain('gate')
   expect(typeIds).toContain('heating_circuit')
   expect(typeIds).toContain('min_max_tracker')
   expect(typeIds).toContain('consumption_counter')

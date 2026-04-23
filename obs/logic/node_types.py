@@ -79,6 +79,36 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         },
         color="#1d4ed8",
     ),
+    NodeTypeDef(
+        type="gate",
+        label="TOR",
+        category="logic",
+        description=(
+            "Signal-Tor: lässt den Eingang durch wenn Freigabe=true, sperrt sonst. "
+            "Verhalten bei gesperrtem Tor: letzten Wert halten (retain) oder Standardwert ausgeben."
+        ),
+        inputs=[_port("in", "Eingang"), _port("enable", "Freigabe")],
+        outputs=[_port("out", "Ausgang")],
+        config_schema={
+            "closed_behavior": {
+                "type": "string",
+                "enum": ["retain", "default_value"],
+                "default": "retain",
+                "label": "Verhalten (gesperrt)",
+            },
+            "default_value": {
+                "type": "string",
+                "default": "0",
+                "label": "Standardwert (bei gesperrt)",
+            },
+            "negate_enable": {
+                "type": "boolean",
+                "default": False,
+                "label": "Freigabe invertieren",
+            },
+        },
+        color="#1d4ed8",
+    ),
 
     # ── Comparison ────────────────────────────────────────────────────────
     NodeTypeDef(

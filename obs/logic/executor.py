@@ -180,6 +180,24 @@ class GraphExecutor:
                     result = not result
                 return {"out": result}
 
+            case "gate":
+                enable = self._to_bool(inputs.get("enable"))
+                if d.get("negate_enable"):
+                    enable = not enable
+                if enable:
+                    val = inputs.get("in")
+                    self.hysteresis_state[node.id] = val
+                    return {"out": val}
+                # Gate is closed
+                if d.get("closed_behavior", "retain") == "retain":
+                    return {"out": self.hysteresis_state.get(node.id)}
+                raw = d.get("default_value", "0")
+                try:
+                    out_val: Any = float(raw)
+                except (TypeError, ValueError):
+                    out_val = str(raw) if raw is not None else None
+                return {"out": out_val}
+
             case "compare":
                 op  = _COMPARE_OPS.get(d.get("operator", ">"), operator.gt)
                 a, b = inputs.get("in1"), inputs.get("in2")
