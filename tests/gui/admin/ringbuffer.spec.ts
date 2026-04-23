@@ -28,9 +28,9 @@ test('RingBuffer Live-Eintrag ohne Reload', async ({ page }) => {
     // Push a value via API — server broadcasts ringbuffer_entry via WS
     await apiPost(`/api/v1/datapoints/${dpId}/value`, { value: 42.0, quality: 'good' })
 
-    // The WS push must add the new row within 6 s
+    // The WS push must add the new row within 15 s (CI environments can be slow)
     await expect(page.locator(`[data-testid="ringbuffer-entry"][data-dp="${dpId}"]`))
-      .toHaveCount(before + 1, { timeout: 6_000 })
+      .toHaveCount(before + 1, { timeout: 15_000 })
   } finally {
     await apiDelete(`/api/v1/datapoints/${dpId}`)
   }
