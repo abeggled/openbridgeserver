@@ -166,10 +166,10 @@ test('Admin kann einen Link löschen', async ({ page }) => {
 
     // Link sollte aus der Liste verschwinden
     await expect(page.locator(`text=Zu löschen`)).not.toBeVisible({ timeout: 5_000 })
-  } catch {
+  } catch (err) {
     // Falls Delete über UI schon geklappt hat, Cleanup per API könnte 404 zurückgeben — ok
     await deleteLinkViaApi(id).catch(() => {})
-    throw
+    throw err
   }
 })
 
