@@ -8,6 +8,13 @@ Alle wesentlichen Änderungen an open bridge server werden hier festgehalten.
 
 ### Neu
 
+**Visu — iFrame-Widget**
+- Neues Widget zum Einbetten externer Webseiten direkt in die Visualisierung
+- Konfigurierbar: URL, Bezeichnung, Sandbox-Berechtigungen (Checkboxen), Vollbildmodus, Seitenverhältnis (16:9, 4:3, 1:1, Frei)
+- Sandbox-Attribut schützt vor ungewollter Interaktion des eingebetteten Inhalts; Berechtigungen werden einzeln aktiviert
+- Sicherheitshinweis in der Konfiguration erinnert daran, nur vertrauenswürdige URLs einzubetten
+- Im Editor-Modus: Overlay verhindert Klick-Interaktion, Platzhalter wenn keine URL konfiguriert
+
 **RingBuffer — Live-Aktualisierung über WebSocket**
 - Neue Einträge werden sofort an alle geöffneten Browser übertragen — kein manuelles Neuladen mehr nötig
 - Status-Badge „Live" / „Offline" zeigt den Verbindungszustand an

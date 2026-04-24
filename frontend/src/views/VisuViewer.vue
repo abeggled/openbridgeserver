@@ -28,6 +28,7 @@ import '@/widgets/Fenster/index'
 import '@/widgets/Energiefluss/index'
 import '@/widgets/Kamera/index'
 import '@/widgets/QrCode/index'
+import '@/widgets/IFrame/index'
 
 const props = defineProps<{ id: string }>()
 const router = useRouter()
