@@ -94,6 +94,7 @@ import { onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useWebSocketStore } from '@/stores/websocket'
 import { useNavLinksStore } from '@/stores/navLinks'
+import { useAuthStore } from '@/stores/auth'
 import VisuIcon from '@/components/ui/VisuIcon.vue'
 
 defineProps({ collapsed: Boolean })
@@ -102,6 +103,7 @@ defineEmits(['toggle'])
 const route    = useRoute()
 const ws       = useWebSocketStore()
 const navStore = useNavLinksStore()
+const auth     = useAuthStore()
 
 const navItems = [
   { to: '/',           label: 'Übersicht',    icon: '&#9783;' },
@@ -113,7 +115,8 @@ const navItems = [
   { to: '/settings',   label: 'Einstellungen', icon: '&#9881;' },
 ]
 
-onMounted(() => { if (!navStore.links.length) navStore.load() })
+// Nur laden wenn bereits eingeloggt — sonst triggert der 401 den Interceptor-Redirect
+onMounted(() => { if (auth.isLoggedIn && !navStore.links.length) navStore.load() })
 
 function isActive(to) {
   if (to === '/') return route.path === '/'
