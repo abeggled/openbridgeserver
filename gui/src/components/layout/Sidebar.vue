@@ -56,7 +56,7 @@
           <span v-if="!collapsed" class="truncate">Visu</span>
         </a>
         <a
-          v-for="link in navLinks" :key="link.id"
+          v-for="link in navStore.links" :key="link.id"
           :href="link.url"
           :target="link.open_new_tab ? '_blank' : '_self'"
           rel="noopener noreferrer"
@@ -90,40 +90,30 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useWebSocketStore } from '@/stores/websocket'
-import { navLinksApi } from '@/api/client'
+import { useNavLinksStore } from '@/stores/navLinks'
 import VisuIcon from '@/components/ui/VisuIcon.vue'
 
 defineProps({ collapsed: Boolean })
 defineEmits(['toggle'])
 
-const route = useRoute()
-const ws    = useWebSocketStore()
+const route    = useRoute()
+const ws       = useWebSocketStore()
+const navStore = useNavLinksStore()
 
 const navItems = [
-  { to: '/',           label: 'Übersicht',     icon: '&#9783;' },
-  { to: '/datapoints', label: 'Objekte',          icon: '&#9636;' },
-  { to: '/adapters',   label: 'Adapter',        icon: '&#9741;' },
-  { to: '/history',    label: 'Historie',       icon: '&#9685;' },
-  { to: '/ringbuffer', label: 'Monitor',        icon: '&#9706;' },
-  { to: '/logic',      label: 'Logikmodul',     icon: '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18" style="display:inline-block;vertical-align:middle"><circle cx="4" cy="7" r="2"/><circle cx="4" cy="13" r="2"/><circle cx="16" cy="10" r="2.5"/><line x1="6" y1="7.5" x2="13.5" y2="9.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="6" y1="12.5" x2="13.5" y2="10.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' },
-  { to: '/settings',   label: 'Einstellungen',  icon: '&#9881;' },
+  { to: '/',           label: 'Übersicht',    icon: '&#9783;' },
+  { to: '/datapoints', label: 'Objekte',      icon: '&#9636;' },
+  { to: '/adapters',   label: 'Adapter',      icon: '&#9741;' },
+  { to: '/history',    label: 'Historie',     icon: '&#9685;' },
+  { to: '/ringbuffer', label: 'Monitor',      icon: '&#9706;' },
+  { to: '/logic',      label: 'Logikmodul',   icon: '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18" style="display:inline-block;vertical-align:middle"><circle cx="4" cy="7" r="2"/><circle cx="4" cy="13" r="2"/><circle cx="16" cy="10" r="2.5"/><line x1="6" y1="7.5" x2="13.5" y2="9.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="6" y1="12.5" x2="13.5" y2="10.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' },
+  { to: '/settings',   label: 'Einstellungen', icon: '&#9881;' },
 ]
 
-const navLinks = ref([])
-
-async function loadNavLinks() {
-  try {
-    const { data } = await navLinksApi.list()
-    navLinks.value = data
-  } catch {
-    // non-critical — sidebar works without custom links
-  }
-}
-
-onMounted(loadNavLinks)
+onMounted(() => { if (!navStore.links.length) navStore.load() })
 
 function isActive(to) {
   if (to === '/') return route.path === '/'

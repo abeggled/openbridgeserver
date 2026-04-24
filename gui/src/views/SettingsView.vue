@@ -629,12 +629,12 @@
         <div class="card-body flex flex-col gap-2">
 
           <!-- Leer-Zustand -->
-          <div v-if="!navLinksLoading && navLinks.length === 0" class="text-sm text-slate-500 py-4 text-center" data-testid="nav-links-empty">
+          <div v-if="!navStore.loading && navStore.links.length === 0" class="text-sm text-slate-500 py-4 text-center" data-testid="nav-links-empty">
             Noch keine Links vorhanden.
           </div>
 
           <!-- Link-Liste -->
-          <div v-for="link in navLinks" :key="link.id"
+          <div v-for="link in navStore.links" :key="link.id"
             class="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700/60 bg-slate-50 dark:bg-slate-800/40"
             :data-testid="'nav-link-row-' + link.id">
             <span class="text-lg w-6 text-center shrink-0"><VisuIcon :icon="link.icon || '🔗'" /></span>
@@ -846,7 +846,8 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { authApi, adapterApi, configApi, knxprojApi, historySettingsApi, iconsApi, dpApi, navLinksApi } from '@/api/client'
+import { authApi, adapterApi, configApi, knxprojApi, historySettingsApi, iconsApi, dpApi } from '@/api/client'
+import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
 import { useTz } from '@/composables/useTz'
@@ -859,6 +860,7 @@ import VisuIcon       from '@/components/ui/VisuIcon.vue'
 
 const auth     = useAuthStore()
 const settings = useSettingsStore()
+const navStore = useNavLinksStore()
 const { fmtDate } = useTz()
 const activeTab = ref('general')
 const isDemo   = computed(() => auth.username === 'demo')
@@ -942,7 +944,7 @@ watch(activeTab, (tab) => {
     loadHistoryFilterDps()
   }
   if (tab === 'icons') { loadIcons(); loadFaSettings() }
-  if (tab === 'links') { loadNavLinks() }
+  if (tab === 'links') { navStore.load() }
 })
 
 onUnmounted(() => {
@@ -1073,22 +1075,11 @@ async function histFilterSetAll(enable) {
 }
 
 // ── Nav Links ─────────────────────────────────────────────────────────────
-const navLinks        = ref([])
-const navLinksLoading = ref(false)
 const navLinksSaving  = ref(false)
 const navLinksMsg     = ref(null)
 const navLinkEditId   = ref(null)
 const navLinkForm     = reactive({ label: '', url: '', icon: '', sort_order: 0, open_new_tab: true })
 const navLinkShowForm = ref(false)
-
-async function loadNavLinks() {
-  navLinksLoading.value = true
-  try {
-    const { data } = await navLinksApi.list()
-    navLinks.value = data
-  } catch { /* non-critical */ }
-  finally { navLinksLoading.value = false }
-}
 
 function openNavLinkForm(link = null) {
   if (link) {
@@ -1096,7 +1087,7 @@ function openNavLinkForm(link = null) {
     Object.assign(navLinkForm, { label: link.label, url: link.url, icon: link.icon, sort_order: link.sort_order, open_new_tab: link.open_new_tab })
   } else {
     navLinkEditId.value = null
-    Object.assign(navLinkForm, { label: '', url: '', icon: '', sort_order: navLinks.value.length, open_new_tab: true })
+    Object.assign(navLinkForm, { label: '', url: '', icon: '', sort_order: navStore.links.length, open_new_tab: true })
   }
   navLinkShowForm.value = true
   navLinksMsg.value = null
@@ -1116,11 +1107,10 @@ async function saveNavLink() {
   navLinksSaving.value = true; navLinksMsg.value = null
   try {
     if (navLinkEditId.value) {
-      await navLinksApi.update(navLinkEditId.value, { ...navLinkForm })
+      await navStore.update(navLinkEditId.value, { ...navLinkForm })
     } else {
-      await navLinksApi.create({ ...navLinkForm })
+      await navStore.create({ ...navLinkForm })
     }
-    await loadNavLinks()
     navLinkShowForm.value = false
     navLinkEditId.value = null
   } catch (e) {
@@ -1132,8 +1122,7 @@ async function saveNavLink() {
 
 async function deleteNavLink(id) {
   try {
-    await navLinksApi.delete(id)
-    navLinks.value = navLinks.value.filter(l => l.id !== id)
+    await navStore.remove(id)
   } catch (e) {
     navLinksMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Löschen' }
   }
