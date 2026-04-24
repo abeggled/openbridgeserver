@@ -64,7 +64,7 @@
           :data-testid="'nav-custom-link-' + link.id"
           class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-800 dark:hover:text-slate-100"
         >
-          <span class="shrink-0 text-lg w-5 text-center" v-html="link.icon || '&#128279;'" />
+          <span class="shrink-0 text-lg w-5 text-center"><VisuIcon :icon="link.icon || '🔗'" /></span>
           <span v-if="!collapsed" class="truncate">{{ link.label }}</span>
         </a>
       </div>
@@ -94,6 +94,7 @@ import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useWebSocketStore } from '@/stores/websocket'
 import { navLinksApi } from '@/api/client'
+import VisuIcon from '@/components/ui/VisuIcon.vue'
 
 defineProps({ collapsed: Boolean })
 defineEmits(['toggle'])

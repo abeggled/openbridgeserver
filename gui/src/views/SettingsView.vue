@@ -637,7 +637,7 @@
           <div v-for="link in navLinks" :key="link.id"
             class="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700/60 bg-slate-50 dark:bg-slate-800/40"
             :data-testid="'nav-link-row-' + link.id">
-            <span class="text-lg w-6 text-center shrink-0" v-html="link.icon || '&#128279;'" />
+            <span class="text-lg w-6 text-center shrink-0"><VisuIcon :icon="link.icon || '🔗'" /></span>
             <div class="flex-1 min-w-0">
               <div class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">{{ link.label }}</div>
               <div class="text-xs text-slate-500 truncate">{{ link.url }}</div>
@@ -672,8 +672,10 @@
             <input v-model="navLinkForm.url" type="url" class="input" placeholder="https://beispiel.ch" data-testid="input-nav-link-url" />
           </div>
           <div class="form-group">
-            <label class="label">Icon <span class="text-xs text-slate-500">(HTML-Zeichen, z.B. &#128279; oder SVG)</span></label>
-            <input v-model="navLinkForm.icon" type="text" class="input font-mono text-sm" placeholder="&#128279;" data-testid="input-nav-link-icon" />
+            <label class="label">Icon</label>
+            <div class="p-3 rounded-lg border border-slate-200 dark:border-slate-700/60 bg-slate-50 dark:bg-slate-800/40">
+              <IconPicker v-model="navLinkForm.icon" data-testid="input-nav-link-icon" />
+            </div>
           </div>
           <div class="form-group">
             <label class="label">Reihenfolge</label>
@@ -852,6 +854,8 @@ import Badge          from '@/components/ui/Badge.vue'
 import Spinner        from '@/components/ui/Spinner.vue'
 import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
+import IconPicker     from '@/components/ui/IconPicker.vue'
+import VisuIcon       from '@/components/ui/VisuIcon.vue'
 
 const auth     = useAuthStore()
 const settings = useSettingsStore()
