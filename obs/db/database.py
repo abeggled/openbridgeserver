@@ -323,6 +323,18 @@ CREATE INDEX IF NOT EXISTS idx_vnu_node ON visu_node_users(node_id);
 CREATE INDEX IF NOT EXISTS idx_vnu_user ON visu_node_users(username);
 """
 
+_MIGRATION_V22 = """
+CREATE TABLE IF NOT EXISTS nav_links (
+    id           TEXT PRIMARY KEY,
+    label        TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    icon         TEXT NOT NULL DEFAULT '',
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    open_new_tab INTEGER NOT NULL DEFAULT 1,
+    created_at   TEXT NOT NULL
+);
+"""
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -346,6 +358,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (19, _MIGRATION_V19),
     (20, _MIGRATION_V20),
     (21, _MIGRATION_V21),
+    (22, _MIGRATION_V22),
 ]
 
 

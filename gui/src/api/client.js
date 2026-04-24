@@ -180,6 +180,14 @@ export const iconsApi = {
   saveSettings:   (data)                   => api.put('/icons/settings', data),
 }
 
+// ── Nav Links ─────────────────────────────────────────────────────────────
+export const navLinksApi = {
+  list:   ()          => api.get('/system/nav-links'),
+  create: (data)      => api.post('/system/nav-links', data),
+  update: (id, data)  => api.patch(`/system/nav-links/${id}`, data),
+  delete: (id)        => api.delete(`/system/nav-links/${id}`),
+}
+
 // ── Logic Engine ──────────────────────────────────────────────────────────
 export const logicApi = {
   nodeTypes:   ()           => api.get('/logic/node-types'),

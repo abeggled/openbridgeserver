@@ -1,20 +1,25 @@
 """
 System API — Phase 4 / Phase 5 (Multi-Instance)
 
-GET  /api/v1/system/health           liveness check (no auth required)
-GET  /api/v1/system/adapters         detailed adapter instances + binding stats
-GET  /api/v1/system/datatypes        all registered DataTypes
-GET  /api/v1/system/settings         read app settings (timezone, …)
-PUT  /api/v1/system/settings         update app settings
-GET  /api/v1/system/history/settings read history backend configuration
-PUT  /api/v1/system/history/settings update history backend configuration
-POST /api/v1/system/history/test     test history backend connectivity
+GET    /api/v1/system/health           liveness check (no auth required)
+GET    /api/v1/system/adapters         detailed adapter instances + binding stats
+GET    /api/v1/system/datatypes        all registered DataTypes
+GET    /api/v1/system/settings         read app settings (timezone, …)
+PUT    /api/v1/system/settings         update app settings
+GET    /api/v1/system/history/settings read history backend configuration
+PUT    /api/v1/system/history/settings update history backend configuration
+POST   /api/v1/system/history/test     test history backend connectivity
+GET    /api/v1/system/nav-links        list all custom nav links (auth required)
+POST   /api/v1/system/nav-links        create a custom nav link (admin only)
+PATCH  /api/v1/system/nav-links/{id}   update a custom nav link (admin only)
+DELETE /api/v1/system/nav-links/{id}   delete a custom nav link (admin only)
 """
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status as http_status
 from pydantic import BaseModel
 
 from obs import __version__
@@ -90,6 +95,31 @@ class HistorySettingsIn(BaseModel):
 class HistoryTestResult(BaseModel):
     ok: bool
     message: str
+
+
+class NavLinkOut(BaseModel):
+    id: str
+    label: str
+    url: str
+    icon: str
+    sort_order: int
+    open_new_tab: bool
+
+
+class NavLinkIn(BaseModel):
+    label: str
+    url: str
+    icon: str = ""
+    sort_order: int = 0
+    open_new_tab: bool = True
+
+
+class NavLinkPatch(BaseModel):
+    label: str | None = None
+    url: str | None = None
+    icon: str | None = None
+    sort_order: int | None = None
+    open_new_tab: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -172,8 +202,7 @@ async def update_app_settings(
         from zoneinfo import ZoneInfo
         ZoneInfo(body.timezone)
     except Exception:
-        from fastapi import HTTPException, status
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
                             detail=f"Unknown timezone: {body.timezone!r}")
 
     await db.execute_and_commit(
@@ -256,8 +285,6 @@ async def update_history_settings(
     _admin: str = Depends(get_admin_user),
 ) -> HistorySettingsOut:
     """Update history backend configuration and hot-reload the plugin. Admin only."""
-    from fastapi import HTTPException, status as http_status
-
     if body.plugin not in ("sqlite", "influxdb", "timescaledb"):
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -349,3 +376,100 @@ async def test_history_connection(
         return HistoryTestResult(ok=False, message=str(exc))
     except Exception as exc:
         return HistoryTestResult(ok=False, message=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Nav Links
+# ---------------------------------------------------------------------------
+
+@router.get("/nav-links", response_model=list[NavLinkOut])
+async def list_nav_links(
+    db: Database = Depends(get_db),
+    _user: str = Depends(get_current_user),
+) -> list[NavLinkOut]:
+    """List all custom navigation links, ordered by sort_order."""
+    rows = await db.fetchall(
+        "SELECT id, label, url, icon, sort_order, open_new_tab FROM nav_links ORDER BY sort_order, created_at"
+    )
+    return [
+        NavLinkOut(
+            id=r["id"],
+            label=r["label"],
+            url=r["url"],
+            icon=r["icon"] or "",
+            sort_order=r["sort_order"],
+            open_new_tab=bool(r["open_new_tab"]),
+        )
+        for r in rows
+    ]
+
+
+@router.post("/nav-links", response_model=NavLinkOut, status_code=201)
+async def create_nav_link(
+    body: NavLinkIn,
+    db: Database = Depends(get_db),
+    _admin: str = Depends(get_admin_user),
+) -> NavLinkOut:
+    """Create a new custom navigation link. Admin only."""
+    link_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute_and_commit(
+        "INSERT INTO nav_links (id, label, url, icon, sort_order, open_new_tab, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (link_id, body.label, body.url, body.icon, body.sort_order, int(body.open_new_tab), now),
+    )
+    return NavLinkOut(
+        id=link_id,
+        label=body.label,
+        url=body.url,
+        icon=body.icon,
+        sort_order=body.sort_order,
+        open_new_tab=body.open_new_tab,
+    )
+
+
+@router.patch("/nav-links/{link_id}", response_model=NavLinkOut)
+async def update_nav_link(
+    link_id: str,
+    body: NavLinkPatch,
+    db: Database = Depends(get_db),
+    _admin: str = Depends(get_admin_user),
+) -> NavLinkOut:
+    """Update an existing custom navigation link. Admin only."""
+    row = await db.fetchone(
+        "SELECT id, label, url, icon, sort_order, open_new_tab FROM nav_links WHERE id = ?",
+        (link_id,),
+    )
+    if row is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Link not found")
+
+    new_label       = body.label       if body.label       is not None else row["label"]
+    new_url         = body.url         if body.url         is not None else row["url"]
+    new_icon        = body.icon        if body.icon        is not None else row["icon"]
+    new_sort_order  = body.sort_order  if body.sort_order  is not None else row["sort_order"]
+    new_open_new_tab = body.open_new_tab if body.open_new_tab is not None else bool(row["open_new_tab"])
+
+    await db.execute_and_commit(
+        "UPDATE nav_links SET label=?, url=?, icon=?, sort_order=?, open_new_tab=? WHERE id=?",
+        (new_label, new_url, new_icon, new_sort_order, int(new_open_new_tab), link_id),
+    )
+    return NavLinkOut(
+        id=link_id,
+        label=new_label,
+        url=new_url,
+        icon=new_icon,
+        sort_order=new_sort_order,
+        open_new_tab=new_open_new_tab,
+    )
+
+
+@router.delete("/nav-links/{link_id}", status_code=204)
+async def delete_nav_link(
+    link_id: str,
+    db: Database = Depends(get_db),
+    _admin: str = Depends(get_admin_user),
+) -> None:
+    """Delete a custom navigation link. Admin only."""
+    row = await db.fetchone("SELECT id FROM nav_links WHERE id = ?", (link_id,))
+    if row is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Link not found")
+    await db.execute_and_commit("DELETE FROM nav_links WHERE id = ?", (link_id,))

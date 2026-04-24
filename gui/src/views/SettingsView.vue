@@ -614,6 +614,91 @@
       </div>
     </div>
 
+    <!-- ── Links ── -->
+    <div v-if="activeTab === 'links' && auth.isAdmin && !isDemo" class="flex flex-col gap-4 max-w-lg" data-testid="links-tab">
+      <div class="card">
+        <div class="card-header flex items-center justify-between">
+          <div>
+            <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Eigene Links</h3>
+            <p class="text-xs text-slate-500 mt-0.5">Erscheinen in der Seitennavigation (für alle Benutzer sichtbar).</p>
+          </div>
+          <button @click="openNavLinkForm()" class="btn-primary btn-sm" data-testid="btn-add-nav-link">
+            + Link hinzufügen
+          </button>
+        </div>
+        <div class="card-body flex flex-col gap-2">
+
+          <!-- Leer-Zustand -->
+          <div v-if="!navStore.loading && navStore.links.length === 0" class="text-sm text-slate-500 py-4 text-center" data-testid="nav-links-empty">
+            Noch keine Links vorhanden.
+          </div>
+
+          <!-- Link-Liste -->
+          <div v-for="link in navStore.links" :key="link.id"
+            class="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700/60 bg-slate-50 dark:bg-slate-800/40"
+            :data-testid="'nav-link-row-' + link.id">
+            <span class="text-lg w-6 text-center shrink-0"><VisuIcon :icon="link.icon || '🔗'" /></span>
+            <div class="flex-1 min-w-0">
+              <div class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">{{ link.label }}</div>
+              <div class="text-xs text-slate-500 truncate">{{ link.url }}</div>
+            </div>
+            <span v-if="link.open_new_tab" class="text-xs px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-500 shrink-0">neues Tab</span>
+            <button @click="openNavLinkForm(link)" class="btn-ghost btn-sm text-slate-400 hover:text-blue-500 shrink-0" title="Bearbeiten">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 012.828 2.828L11.828 15.828a2 2 0 01-2.828 0L7 13.657 9 13zm-4 8h4l9-9-4-4-9 9v4z"/></svg>
+            </button>
+            <button @click="deleteNavLink(link.id)" class="btn-ghost btn-sm text-slate-400 hover:text-red-500 shrink-0" title="Löschen" :data-testid="'btn-delete-nav-link-' + link.id">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4h6v3M4 7h16"/></svg>
+            </button>
+          </div>
+
+          <div v-if="navLinksMsg" :class="['p-3 rounded-lg text-sm border', navLinksMsg.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
+            {{ navLinksMsg.text }}
+          </div>
+        </div>
+      </div>
+
+      <!-- Link-Formular -->
+      <div v-if="navLinkShowForm" class="card" data-testid="nav-link-form">
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ navLinkEditId ? 'Link bearbeiten' : 'Neuer Link' }}</h3>
+        </div>
+        <div class="card-body flex flex-col gap-4">
+          <div class="form-group">
+            <label class="label">Bezeichnung <span class="text-red-400">*</span></label>
+            <input v-model="navLinkForm.label" type="text" class="input" placeholder="z.B. Grafana Dashboard" data-testid="input-nav-link-label" />
+          </div>
+          <div class="form-group">
+            <label class="label">URL <span class="text-red-400">*</span></label>
+            <input v-model="navLinkForm.url" type="url" class="input" placeholder="https://beispiel.ch" data-testid="input-nav-link-url" />
+          </div>
+          <div class="form-group">
+            <label class="label">Icon</label>
+            <div class="p-3 rounded-lg border border-slate-200 dark:border-slate-700/60 bg-slate-50 dark:bg-slate-800/40">
+              <IconPicker v-model="navLinkForm.icon" data-testid="input-nav-link-icon" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="label">Reihenfolge</label>
+            <input v-model.number="navLinkForm.sort_order" type="number" min="0" class="input w-24" data-testid="input-nav-link-order" />
+          </div>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" v-model="navLinkForm.open_new_tab" class="w-4 h-4 rounded accent-blue-500" data-testid="check-nav-link-new-tab" />
+            <span class="text-sm text-slate-700 dark:text-slate-300">In neuem Tab öffnen</span>
+          </label>
+          <div v-if="navLinksMsg" :class="['p-3 rounded-lg text-sm border', navLinksMsg.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
+            {{ navLinksMsg.text }}
+          </div>
+          <div class="flex justify-end gap-3">
+            <button type="button" @click="cancelNavLinkForm" class="btn-secondary" data-testid="btn-cancel-nav-link">Abbrechen</button>
+            <button type="button" @click="saveNavLink" class="btn-primary" :disabled="navLinksSaving" data-testid="btn-save-nav-link">
+              <Spinner v-if="navLinksSaving" size="sm" color="white" />
+              Speichern
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Danger Zone ── -->
     <div v-if="activeTab === 'dangerzone' && auth.isAdmin && !isDemo" class="flex flex-col gap-4 max-w-lg">
       <div class="rounded-lg border border-red-500/40 bg-red-500/5 overflow-hidden">
@@ -762,6 +847,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { authApi, adapterApi, configApi, knxprojApi, historySettingsApi, iconsApi, dpApi } from '@/api/client'
+import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
 import { useTz } from '@/composables/useTz'
@@ -769,9 +855,12 @@ import Badge          from '@/components/ui/Badge.vue'
 import Spinner        from '@/components/ui/Spinner.vue'
 import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
+import IconPicker     from '@/components/ui/IconPicker.vue'
+import VisuIcon       from '@/components/ui/VisuIcon.vue'
 
 const auth     = useAuthStore()
 const settings = useSettingsStore()
+const navStore = useNavLinksStore()
 const { fmtDate } = useTz()
 const activeTab = ref('general')
 const isDemo   = computed(() => auth.username === 'demo')
@@ -855,6 +944,7 @@ watch(activeTab, (tab) => {
     loadHistoryFilterDps()
   }
   if (tab === 'icons') { loadIcons(); loadFaSettings() }
+  if (tab === 'links') { navStore.load() }
 })
 
 onUnmounted(() => {
@@ -873,16 +963,17 @@ async function saveTz() {
   }
 }
 
-const tabs = [
+const tabs = computed(() => [
   { id: 'general',      label: 'Allgemein' },
   { id: 'password',     label: 'Passwort' },
   ...(auth.isAdmin ? [{ id: 'users', label: 'Benutzer' }] : []),
   { id: 'apikeys',      label: 'API Keys' },
+  ...(auth.isAdmin && !isDemo.value ? [{ id: 'links', label: 'Links' }] : []),
   { id: 'importexport', label: 'Datenmanagement' },
   { id: 'icons',        label: 'Icons' },
   ...(auth.isAdmin ? [{ id: 'history', label: 'Historie DB' }] : []),
   ...(auth.isAdmin ? [{ id: 'dangerzone', label: 'Danger Zone' }] : []),
-]
+])
 
 // ── History Backend ────────────────────────────────────────────────────────
 const histForm = reactive({
@@ -981,6 +1072,60 @@ async function toggleHistoryFilter(dp) {
 async function histFilterSetAll(enable) {
   const targets = histFilteredDps.value.filter(dp => dp.record_history !== enable)
   await Promise.all(targets.map(dp => toggleHistoryFilter(dp)))
+}
+
+// ── Nav Links ─────────────────────────────────────────────────────────────
+const navLinksSaving  = ref(false)
+const navLinksMsg     = ref(null)
+const navLinkEditId   = ref(null)
+const navLinkForm     = reactive({ label: '', url: '', icon: '', sort_order: 0, open_new_tab: true })
+const navLinkShowForm = ref(false)
+
+function openNavLinkForm(link = null) {
+  if (link) {
+    navLinkEditId.value = link.id
+    Object.assign(navLinkForm, { label: link.label, url: link.url, icon: link.icon, sort_order: link.sort_order, open_new_tab: link.open_new_tab })
+  } else {
+    navLinkEditId.value = null
+    Object.assign(navLinkForm, { label: '', url: '', icon: '', sort_order: navStore.links.length, open_new_tab: true })
+  }
+  navLinkShowForm.value = true
+  navLinksMsg.value = null
+}
+
+function cancelNavLinkForm() {
+  navLinkShowForm.value = false
+  navLinkEditId.value = null
+  navLinksMsg.value = null
+}
+
+async function saveNavLink() {
+  if (!navLinkForm.label.trim() || !navLinkForm.url.trim()) {
+    navLinksMsg.value = { ok: false, text: 'Bezeichnung und URL sind Pflichtfelder.' }
+    return
+  }
+  navLinksSaving.value = true; navLinksMsg.value = null
+  try {
+    if (navLinkEditId.value) {
+      await navStore.update(navLinkEditId.value, { ...navLinkForm })
+    } else {
+      await navStore.create({ ...navLinkForm })
+    }
+    navLinkShowForm.value = false
+    navLinkEditId.value = null
+  } catch (e) {
+    navLinksMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Speichern' }
+  } finally {
+    navLinksSaving.value = false
+  }
+}
+
+async function deleteNavLink(id) {
+  try {
+    await navStore.remove(id)
+  } catch (e) {
+    navLinksMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Löschen' }
+  }
 }
 
 // ── Theme ──────────────────────────────────────────────────────────────────
