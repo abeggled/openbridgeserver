@@ -963,7 +963,7 @@ async function saveTz() {
   }
 }
 
-const tabs = [
+const tabs = computed(() => [
   { id: 'general',      label: 'Allgemein' },
   { id: 'password',     label: 'Passwort' },
   ...(auth.isAdmin ? [{ id: 'users', label: 'Benutzer' }] : []),
@@ -973,7 +973,7 @@ const tabs = [
   { id: 'icons',        label: 'Icons' },
   ...(auth.isAdmin ? [{ id: 'history', label: 'Historie DB' }] : []),
   ...(auth.isAdmin ? [{ id: 'dangerzone', label: 'Danger Zone' }] : []),
-]
+])
 
 // ── History Backend ────────────────────────────────────────────────────────
 const histForm = reactive({
