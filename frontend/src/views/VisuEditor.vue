@@ -51,6 +51,7 @@ import '@/widgets/Energiefluss/index'
 import '@/widgets/Kamera/index'
 import '@/widgets/QrCode/index'
 import '@/widgets/IFrame/index'
+import '@/widgets/Uhr/index'
 
 // ── Props / Router / Store ────────────────────────────────────────────────────
 const props = defineProps<{ id: string }>()
