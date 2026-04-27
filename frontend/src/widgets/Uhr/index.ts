@@ -18,6 +18,7 @@ WidgetRegistry.register({
     showDate:    false,
     color:       '#3b82f6',
     label:       '',
+    timezone:    '',
   },
   compatibleTypes: ['*'],
   noDatapoint:     true,

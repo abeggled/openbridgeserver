@@ -16,6 +16,7 @@ const showSeconds = computed(() => (props.config.showSeconds as boolean | undefi
 const showDate    = computed(() => (props.config.showDate    as boolean | undefined) ?? false)
 const color       = computed(() => (props.config.color       as string  | undefined) ?? '#3b82f6')
 const label       = computed(() => (props.config.label       as string  | undefined) ?? '')
+const timezone    = computed(() => (props.config.timezone    as string  | undefined) ?? '')
 
 // ── Live-Zeit ─────────────────────────────────────────────────────────────────
 const now = ref(new Date())
@@ -44,12 +45,44 @@ const dateStr = computed(() =>
 )
 
 // ── Analog ────────────────────────────────────────────────────────────────────
-const hourDeg   = computed(() => {
-  const d = now.value
-  return (d.getHours() % 12) * 30 + d.getMinutes() * 0.5
+
+/**
+ * Gibt Stunden/Minuten/Sekunden für eine beliebige IANA-Zeitzone zurück.
+ * Leerer String oder ungültige Zeitzone → lokale Zeit.
+ */
+function getZonedTime(date: Date, tz: string): { h: number; m: number; s: number } {
+  if (!tz) return { h: date.getHours(), m: date.getMinutes(), s: date.getSeconds() }
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hour: 'numeric', minute: 'numeric', second: 'numeric',
+      hour12: false,
+    }).formatToParts(date)
+    const get = (type: string) => parseInt(parts.find(p => p.type === type)?.value ?? '0', 10)
+    // Stunde 24 (Mitternacht in manchen Implementierungen) → 0
+    return { h: get('hour') % 24, m: get('minute'), s: get('second') }
+  } catch {
+    return { h: date.getHours(), m: date.getMinutes(), s: date.getSeconds() }
+  }
+}
+
+const zonedTime  = computed(() => getZonedTime(now.value, timezone.value))
+const hourDeg    = computed(() => (zonedTime.value.h % 12) * 30 + zonedTime.value.m * 0.5)
+const minuteDeg  = computed(() => zonedTime.value.m * 6)
+const secondDeg  = computed(() => zonedTime.value.s * 6)
+
+/** Kurzes Kürzel der Zeitzone für die Anzeige unter dem Zifferblatt, z.B. "UTC+9" oder "EST" */
+const timezoneLabel = computed(() => {
+  if (!timezone.value) return ''
+  try {
+    return new Intl.DateTimeFormat('de-CH', {
+      timeZone: timezone.value,
+      timeZoneName: 'short',
+    }).formatToParts(now.value).find(p => p.type === 'timeZoneName')?.value ?? timezone.value
+  } catch {
+    return timezone.value
+  }
 })
-const minuteDeg = computed(() => now.value.getMinutes() * 6)
-const secondDeg = computed(() => now.value.getSeconds() * 6)
 
 // ── Wortuhr ───────────────────────────────────────────────────────────────────
 /**
@@ -254,7 +287,7 @@ function istZelleAktiv(zeile: number, spalte: number): boolean {
             x2="50" y2="12"
             stroke-width="2.5"
             stroke-linecap="round"
-            class="stroke-gray-100 dark:stroke-gray-200"
+            class="stroke-gray-700 dark:stroke-gray-100"
           />
 
           <!-- Sekundenzeiger -->
@@ -273,10 +306,21 @@ function istZelleAktiv(zeile: number, spalte: number): boolean {
           <circle v-if="showSeconds" cx="50" cy="50" r="1.5" fill="#ef4444" />
         </svg>
 
-        <span
-          v-if="label"
-          class="text-gray-500 dark:text-gray-400 text-xs text-center w-full truncate leading-none"
-        >{{ label }}</span>
+        <!-- Beschriftung + optionale Zeitzone -->
+        <div
+          v-if="label || timezoneLabel"
+          class="flex items-center justify-center gap-1.5 shrink-0"
+        >
+          <span
+            v-if="label"
+            class="text-gray-500 dark:text-gray-400 text-xs text-center truncate leading-none"
+          >{{ label }}</span>
+          <span
+            v-if="timezoneLabel"
+            class="text-xs font-mono leading-none px-1 py-0.5 rounded"
+            :style="{ color, backgroundColor: color + '22' }"
+          >{{ timezoneLabel }}</span>
+        </div>
       </div>
     </template>
 

@@ -9,12 +9,36 @@ interface UhrConfig {
   showDate:    boolean
   color:       string
   label:       string
+  timezone:    string
 }
 
 const MODI: { value: UhrModus; label: string }[] = [
   { value: 'digital', label: 'Digital' },
   { value: 'analog',  label: 'Analog'  },
   { value: 'wortuhr', label: 'Wortuhr' },
+]
+
+/** Häufig verwendete IANA-Zeitzonen als Vorschläge */
+const ZEITZONEN_VORSCHLÄGE = [
+  'Europe/Zurich',
+  'Europe/Berlin',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Moscow',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Sao_Paulo',
+  'Asia/Dubai',
+  'Asia/Kolkata',
+  'Asia/Bangkok',
+  'Asia/Shanghai',
+  'Asia/Tokyo',
+  'Asia/Seoul',
+  'Australia/Sydney',
+  'Pacific/Auckland',
+  'UTC',
 ]
 
 const props = defineProps<{ modelValue: Record<string, unknown> }>()
@@ -26,6 +50,7 @@ const cfg = reactive<UhrConfig>({
   showDate:    (props.modelValue.showDate    as boolean  | undefined) ?? false,
   color:       (props.modelValue.color       as string   | undefined) ?? '#3b82f6',
   label:       (props.modelValue.label       as string   | undefined) ?? '',
+  timezone:    (props.modelValue.timezone    as string   | undefined) ?? '',
 })
 
 watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
@@ -89,6 +114,27 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
         />
         <span class="text-xs text-gray-300">Datum anzeigen</span>
       </label>
+    </div>
+
+    <!-- Zeitzone (nur analog) -->
+    <div v-if="cfg.mode === 'analog'">
+      <label class="block text-xs text-gray-400 mb-1">
+        Zeitzone
+        <span class="text-gray-600 font-normal ml-1">(optional, leer = lokal)</span>
+      </label>
+      <input
+        v-model="cfg.timezone"
+        type="text"
+        list="tz-vorschlaege"
+        placeholder="z.B. Asia/Tokyo"
+        class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500 font-mono"
+      />
+      <datalist id="tz-vorschlaege">
+        <option v-for="tz in ZEITZONEN_VORSCHLÄGE" :key="tz" :value="tz" />
+      </datalist>
+      <p class="text-xs text-gray-600 mt-1">
+        IANA-Format, z.B. <span class="text-gray-500 font-mono">Europe/Zurich</span>
+      </p>
     </div>
 
     <!-- Beschriftung -->
