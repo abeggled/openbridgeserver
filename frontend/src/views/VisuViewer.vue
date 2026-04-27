@@ -30,6 +30,7 @@ import '@/widgets/Kamera/index'
 import '@/widgets/QrCode/index'
 import '@/widgets/IFrame/index'
 import '@/widgets/Uhr/index'
+import '@/widgets/RTR/index'
 
 const props = defineProps<{ id: string }>()
 const router = useRouter()

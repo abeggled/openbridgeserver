@@ -221,11 +221,18 @@ test('Uhr wortuhr-Modus: ES und IST sind immer in Akzentfarbe', async ({ page })
 
     // Prüfe, dass mindestens einige Zellen die Akzentfarbe haben
     // (ES und IST sind immer aktiv → mindestens 5 hervorgehobene Buchstaben)
+    // Browser normalisieren Hex → rgb(r, g, b), daher Konvertierung nötig
     const hervorgehobeneZellen = await wortuhrEl.locator('div > div').evaluateAll(
-      (cells, accentColor) => cells.filter(
-        cell => (cell as HTMLElement).style.color === accentColor
-          || (cell as HTMLElement).style.color.includes(accentColor.slice(1)),
-      ).length,
+      (cells, accentColor) => {
+        const r = parseInt(accentColor.slice(1, 3), 16)
+        const g = parseInt(accentColor.slice(3, 5), 16)
+        const b = parseInt(accentColor.slice(5, 7), 16)
+        const rgb = `rgb(${r}, ${g}, ${b})`
+        return cells.filter(
+          cell => (cell as HTMLElement).style.color === rgb
+            || (cell as HTMLElement).style.color === accentColor,
+        ).length
+      },
       color,
     )
 
