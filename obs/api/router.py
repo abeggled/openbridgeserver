@@ -22,6 +22,7 @@ from obs.api.v1.logic import router as logic_router
 from obs.api.v1.visu import router as visu_router
 from obs.api.v1.icons import router as icons_router
 from obs.api.v1.camera import router as camera_router
+from obs.api.v1.weather import router as weather_router
 
 router = APIRouter()
 
@@ -40,3 +41,4 @@ router.include_router(logic_router,    prefix="/logic")
 router.include_router(visu_router,     prefix="/visu")
 router.include_router(icons_router,    prefix="/icons")
 router.include_router(camera_router,   prefix="/camera")
+router.include_router(weather_router,  prefix="/weather")

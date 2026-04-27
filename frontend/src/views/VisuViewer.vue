@@ -31,6 +31,7 @@ import '@/widgets/QrCode/index'
 import '@/widgets/IFrame/index'
 import '@/widgets/Uhr/index'
 import '@/widgets/RTR/index'
+import '@/widgets/Wetter/index'
 
 const props = defineProps<{ id: string }>()
 const router = useRouter()
