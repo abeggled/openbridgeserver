@@ -287,7 +287,7 @@ function istZelleAktiv(zeile: number, spalte: number): boolean {
             x2="50" y2="12"
             stroke-width="2.5"
             stroke-linecap="round"
-            class="stroke-gray-700 dark:stroke-gray-100"
+            :stroke="color"
           />
 
           <!-- Sekundenzeiger -->
