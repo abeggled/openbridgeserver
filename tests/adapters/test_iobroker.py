@@ -131,6 +131,40 @@ class TestSubscribe:
         event = mock_bus.publish.call_args[0][0]
         assert event.value == pytest.approx(22.0)
 
+    @pytest.mark.asyncio
+    async def test_watchdog_resync_skips_unchanged_initial_values(self, adapter, mock_bus):
+        binding = make_binding({"state_id": "0_userdata.0.temp"})
+        adapter._state_map["0_userdata.0.temp"] = [binding]
+        adapter._socket.call = AsyncMock(side_effect=[
+            [None, None],
+            [None, {"val": 22.0}],
+            [None, None],
+            [None, {"val": 22.0}],
+        ])
+
+        await adapter._subscribe_bound_states(force_publish_initial=True)
+        await adapter._subscribe_bound_states(force_publish_initial=False)
+
+        assert mock_bus.publish.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_watchdog_resync_publishes_changed_initial_values(self, adapter, mock_bus):
+        binding = make_binding({"state_id": "0_userdata.0.temp"})
+        adapter._state_map["0_userdata.0.temp"] = [binding]
+        adapter._socket.call = AsyncMock(side_effect=[
+            [None, None],
+            [None, {"val": 22.0}],
+            [None, None],
+            [None, {"val": 23.0}],
+        ])
+
+        await adapter._subscribe_bound_states(force_publish_initial=True)
+        await adapter._subscribe_bound_states(force_publish_initial=False)
+
+        assert mock_bus.publish.call_count == 2
+        event = mock_bus.publish.call_args[0][0]
+        assert event.value == pytest.approx(23.0)
+
 
 class TestBrowseStates:
     @pytest.mark.asyncio
