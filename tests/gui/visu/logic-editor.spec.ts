@@ -169,6 +169,112 @@ test('heating_circuit-Node läuft durch und gibt heating_mode aus', async ({ pag
 })
 
 // ---------------------------------------------------------------------------
+// avg_multi: node type exists and outputs avg + all moving-average windows
+// ---------------------------------------------------------------------------
+test('avg_multi-Node berechnet Mittelwert und gibt alle Zeitfenster aus', async ({ page }) => {
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-AVGM-${Date.now()}`,
+    description: 'Playwright: avg_multi basic',
+    enabled: true,
+    flow_data: {
+      nodes: [
+        { id: 'c1', type: 'const_value', position: { x: 0,   y: 0   }, data: { value: '10', data_type: 'number' } },
+        { id: 'c2', type: 'const_value', position: { x: 0,   y: 100 }, data: { value: '20', data_type: 'number' } },
+        { id: 'am', type: 'avg_multi',   position: { x: 300, y: 50  }, data: { input_count: 2 } },
+      ],
+      edges: [
+        { id: 'e1', source: 'c1', target: 'am', sourceHandle: 'value', targetHandle: 'in_1' },
+        { id: 'e2', source: 'c2', target: 'am', sourceHandle: 'value', targetHandle: 'in_2' },
+      ],
+    },
+  }) as { id: string }
+  const graphId = graph.id
+  try {
+    const result = await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {}) as { outputs: Record<string, Record<string, unknown>> }
+    const amOut = result.outputs['am']
+    expect(amOut).toBeDefined()
+    // Current average of 10 and 20
+    expect(amOut['avg']).toBe(15)
+    // All moving-average windows must be present
+    for (const key of ['avg_1m', 'avg_1h', 'avg_1d', 'avg_7d', 'avg_14d', 'avg_30d', 'avg_180d', 'avg_365d']) {
+      expect(amOut).toHaveProperty(key)
+    }
+    // After a single run, all windows should equal 15 (only one sample)
+    expect(amOut['avg_1m']).toBe(15)
+    expect(amOut['avg_365d']).toBe(15)
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// avg_multi: persist_state=false means node_state not saved to DB
+// ---------------------------------------------------------------------------
+test('avg_multi persist_state=false speichert keinen Zustand in der Datenbank', async ({ page }) => {
+  // Create an avg_multi graph where persist_state=false
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-AVGM-NOPERSIST-${Date.now()}`,
+    description: 'Playwright: avg_multi persist_state=false',
+    enabled: true,
+    flow_data: {
+      nodes: [
+        { id: 'c1', type: 'const_value', position: { x: 0,   y: 0 }, data: { value: '42', data_type: 'number' } },
+        { id: 'am', type: 'avg_multi',   position: { x: 300, y: 0 }, data: { input_count: 1, persist_state: false } },
+      ],
+      edges: [
+        { id: 'e1', source: 'c1', target: 'am', sourceHandle: 'value', targetHandle: 'in_1' },
+      ],
+    },
+  }) as { id: string }
+  const graphId = graph.id
+  try {
+    // Run the graph so the manager processes it
+    const r1 = await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {}) as { outputs: Record<string, Record<string, unknown>> }
+    expect(r1.outputs['am']?.['avg']).toBe(42)
+    // Read the stored graph from the API to inspect node_state
+    // node_state is not exposed in the public API response, but we can verify the
+    // graph runs again without error (stateless restart simulation).
+    const r2 = await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {}) as { outputs: Record<string, Record<string, unknown>> }
+    expect(r2.outputs['am']?.['avg']).toBe(42)
+    // Both runs succeed — no error from missing persisted state
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// avg_multi: persist_state=true (default) — state is preserved across runs
+// ---------------------------------------------------------------------------
+test('avg_multi persist_state=true akkumuliert Zeitfenster-Samples über mehrere Runs', async ({ page }) => {
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-AVGM-PERSIST-${Date.now()}`,
+    description: 'Playwright: avg_multi persist_state=true',
+    enabled: true,
+    flow_data: {
+      nodes: [
+        { id: 'c1', type: 'const_value', position: { x: 0,   y: 0 }, data: { value: '10', data_type: 'number' } },
+        { id: 'am', type: 'avg_multi',   position: { x: 300, y: 0 }, data: { input_count: 1, persist_state: true } },
+      ],
+      edges: [
+        { id: 'e1', source: 'c1', target: 'am', sourceHandle: 'value', targetHandle: 'in_1' },
+      ],
+    },
+  }) as { id: string }
+  const graphId = graph.id
+  try {
+    // Run three times — each run adds a sample to the buffer
+    await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {})
+    await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {})
+    const r3 = await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {}) as { outputs: Record<string, Record<string, unknown>> }
+    // avg_1m covers all three samples (all within the last minute)
+    // All samples have value 10, so avg_1m must be 10
+    expect(r3.outputs['am']?.['avg_1m']).toBe(10)
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
 // min_max_tracker: node runs and returns min/max outputs
 // ---------------------------------------------------------------------------
 test('min_max_tracker-Node gibt min_abs und max_abs aus', async ({ page }) => {

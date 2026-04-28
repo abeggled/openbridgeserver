@@ -582,6 +582,46 @@ class GraphExecutor:
                     "min_abs": state["abs_min"],      "max_abs": state["abs_max"],
                 }
 
+            case "avg_multi":
+                import datetime as _dt  # noqa: PLC0415
+                state = self.hysteresis_state.setdefault(node.id, {"samples": []})
+                count = max(2, min(20, int(d.get("input_count", 2))))
+                # Collect all non-None inputs
+                values: list[float] = []
+                for i in range(1, count + 1):
+                    v = inputs.get(f"in_{i}")
+                    if v is not None:
+                        values.append(self._to_num(v))
+                if values:
+                    current_avg: float | None = sum(values) / len(values)
+                    now_utc = _dt.datetime.now(_dt.timezone.utc)
+                    state["samples"].append([now_utc.isoformat(), current_avg])
+                    # Trim buffer: keep only samples within the max window (365 days)
+                    cutoff_iso = (now_utc - _dt.timedelta(days=365)).isoformat()
+                    state["samples"] = [s for s in state["samples"] if s[0] >= cutoff_iso]
+                else:
+                    current_avg = None
+                # Compute moving averages for each time window
+                _WINDOWS = {
+                    "avg_1m":   60,
+                    "avg_1h":   3_600,
+                    "avg_1d":   86_400,
+                    "avg_7d":   604_800,
+                    "avg_14d":  1_209_600,
+                    "avg_30d":  2_592_000,
+                    "avg_180d": 15_552_000,
+                    "avg_365d": 31_536_000,
+                }
+                now_utc2 = _dt.datetime.now(_dt.timezone.utc)
+                result: dict[str, Any] = {
+                    "avg": round(current_avg, 6) if current_avg is not None else None
+                }
+                for key, seconds in _WINDOWS.items():
+                    cutoff = (now_utc2 - _dt.timedelta(seconds=seconds)).isoformat()
+                    window_vals = [s[1] for s in state["samples"] if s[0] >= cutoff]
+                    result[key] = round(sum(window_vals) / len(window_vals), 6) if window_vals else None
+                return result
+
             case "consumption_counter":
                 state = self.hysteresis_state.setdefault(node.id, {
                     "last_value": None,

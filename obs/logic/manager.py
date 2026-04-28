@@ -620,12 +620,24 @@ class LogicManager:
                 logger.warning("Graph %s: failed to write dp %s: %s", graph_id, dp_id_str, exc)
 
         # ── Persist node state (statistics / hysteresis) to DB ───────────
+        # Nodes with persist_state=False are excluded from the saved snapshot
+        # so their accumulators reset on server restart (opt-out behaviour).
         hyst = self._hysteresis.get(graph_id)
         if hyst:
             try:
+                graph_entry = self._graphs.get(graph_id)
+                if graph_entry:
+                    _, _, _flow = graph_entry
+                    no_persist = {
+                        n.id for n in _flow.nodes
+                        if n.data.get("persist_state") is False
+                    }
+                    state_to_save = {nid: s for nid, s in hyst.items() if nid not in no_persist}
+                else:
+                    state_to_save = hyst
                 await self._db.execute_and_commit(
                     "UPDATE logic_graphs SET node_state = ? WHERE id = ?",
-                    (json.dumps(hyst), graph_id),
+                    (json.dumps(state_to_save), graph_id),
                 )
             except Exception as exc:
                 logger.warning("Graph %s: failed to persist node_state: %s", graph_id[:8], exc)
