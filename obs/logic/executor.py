@@ -454,6 +454,70 @@ class GraphExecutor:
 
                 return {"value": value, "_preview": preview_str}
 
+            case "substring_extractor":
+                import re as _re  # noqa: PLC0415
+                raw_text = inputs.get("data")
+                mode = (d.get("mode") or "rechts_von").strip()
+                value = None
+
+                if isinstance(raw_text, str) and raw_text:
+                    try:
+                        if mode == "links_von":
+                            search = d.get("search") or ""
+                            if search:
+                                occ = d.get("occurrence", "first")
+                                idx = raw_text.rfind(search) if occ == "last" else raw_text.find(search)
+                                if idx != -1:
+                                    value = raw_text[:idx]
+
+                        elif mode == "rechts_von":
+                            search = d.get("search") or ""
+                            if search:
+                                occ = d.get("occurrence", "first")
+                                idx = raw_text.rfind(search) if occ == "last" else raw_text.find(search)
+                                if idx != -1:
+                                    value = raw_text[idx + len(search):]
+
+                        elif mode == "zwischen":
+                            start_m = d.get("start_marker") or ""
+                            end_m   = d.get("end_marker")   or ""
+                            if start_m and end_m:
+                                idx_s = raw_text.find(start_m)
+                                if idx_s != -1:
+                                    idx_s += len(start_m)
+                                    idx_e = raw_text.find(end_m, idx_s)
+                                    if idx_e != -1:
+                                        value = raw_text[idx_s:idx_e]
+
+                        elif mode == "ausschneiden":
+                            start  = int(d.get("start")  or 0)
+                            length = int(d.get("length") if d.get("length") is not None else -1)
+                            if length < 0:
+                                value = raw_text[start:]
+                            else:
+                                value = raw_text[start:start + length]
+
+                        elif mode == "regex":
+                            pattern = d.get("pattern") or ""
+                            if pattern:
+                                flag_str = (d.get("flags") or "").lower()
+                                re_flags = 0
+                                if "i" in flag_str:
+                                    re_flags |= _re.IGNORECASE
+                                if "m" in flag_str:
+                                    re_flags |= _re.MULTILINE
+                                if "s" in flag_str:
+                                    re_flags |= _re.DOTALL
+                                m = _re.search(pattern, raw_text, re_flags)
+                                if m:
+                                    group = int(d.get("group") or 0)
+                                    value = m.group(group)
+                    except Exception:
+                        value = None
+
+                preview_str = raw_text[:20_000] if raw_text and len(raw_text) > 20_000 else raw_text
+                return {"value": value, "_preview": preview_str}
+
             case "timer_cron":
                 # Fired by manager via input_overrides; pass trigger signal downstream
                 return {"trigger": inputs.get("trigger", False)}

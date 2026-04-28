@@ -126,8 +126,9 @@ const NODE_DEFS = {
   string_concat:      { label: 'String Verketten', color: '#0891b2', inputs: [{id:'in_1',label:'1'},{id:'in_2',label:'2'}], outputs: [{id:'result',label:'Ergebnis'}] },
   // Integration
   api_client:         { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'body',label:'Body'}],                  outputs: [{id:'response',label:'Antwort'},{id:'status',label:'Status'},{id:'success',label:'OK'}] },
-  json_extractor:     { label: 'JSON Extraktor', color: '#0369a1', inputs: [{id:'data',label:'Daten'}],                                                outputs: [{id:'value',label:'Wert'}] },
-  xml_extractor:      { label: 'XML Extraktor',  color: '#0369a1', inputs: [{id:'data',label:'Daten'}],                                                outputs: [{id:'value',label:'Wert'}] },
+  json_extractor:     { label: 'JSON Extraktor',     color: '#0369a1', inputs: [{id:'data',label:'Daten'}], outputs: [{id:'value',label:'Wert'}] },
+  xml_extractor:      { label: 'XML Extraktor',      color: '#0369a1', inputs: [{id:'data',label:'Daten'}], outputs: [{id:'value',label:'Wert'}] },
+  substring_extractor:{ label: 'Substring / RegEx',  color: '#0369a1', inputs: [{id:'data',label:'Daten'}], outputs: [{id:'value',label:'Wert'}] },
 }
 
 // ── Gate helpers ───────────────────────────────────────────────────────────
@@ -201,6 +202,12 @@ const summary = computed(() => {
   if (props.type === 'api_client')          return `${d.method ?? 'GET'}  ${(d.url || '—').slice(0, 20)}`
   if (props.type === 'json_extractor')      return d.json_path || '—'
   if (props.type === 'xml_extractor')       return d.xml_path  || '—'
+  if (props.type === 'substring_extractor') {
+    const modeLabel = { links_von:'links von', rechts_von:'rechts von', zwischen:'zwischen', ausschneiden:'ausschneiden', regex:'regex' }
+    const m = modeLabel[d.mode] ?? d.mode ?? '—'
+    const hint = d.mode === 'regex' ? (d.pattern || '—') : d.mode === 'zwischen' ? `"${d.start_marker ?? ''}…${d.end_marker ?? ''}"` : d.mode === 'ausschneiden' ? `[${d.start ?? 0}:${d.length ?? -1}]` : (d.search || '—')
+    return `${m}  ${hint}`
+  }
   if (props.type === 'heating_circuit')     return `W≤${d.temp_winter ?? 15} °C  S≥${d.temp_summer ?? 20} °C`
   if (props.type === 'min_max_tracker')     return null
   if (props.type === 'consumption_counter') return null
