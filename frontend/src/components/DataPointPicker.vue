@@ -24,17 +24,20 @@ const results = ref<DataPoint[]>([])
 const open = ref(false)
 const loading = ref(false)
 const selectedName = ref('')
+const notFound = ref(false)
 const inputEl = ref<HTMLInputElement | null>(null)
 const dropdownEl = ref<HTMLElement | null>(null)
 
 // DP-Namen laden: beim Mount und bei jeder Änderung von modelValue
 async function loadName(id: string | null) {
-  if (!id) { selectedName.value = ''; return }
+  if (!id) { selectedName.value = ''; notFound.value = false; return }
+  notFound.value = false
   try {
     const dp = await datapoints.get(id)
     selectedName.value = dp.name
   } catch {
-    selectedName.value = id
+    selectedName.value = ''
+    notFound.value = true
   }
 }
 
@@ -89,6 +92,7 @@ function select(dp: DataPoint) {
 
 function clear() {
   selectedName.value = ''
+  notFound.value = false
   emit('update:modelValue', null)
 }
 
@@ -109,19 +113,28 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
     <!-- Anzeige: aktuell gewählter DP -->
     <div
       v-if="!open"
-      class="flex items-center gap-2 w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 cursor-pointer hover:border-gray-400 dark:hover:border-gray-500 transition-colors"
+      class="flex items-center gap-2 w-full rounded px-2 py-1.5 cursor-pointer transition-colors"
+      :class="notFound
+        ? 'bg-red-50 dark:bg-red-950/30 border border-red-400 dark:border-red-600 hover:border-red-500'
+        : 'bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500'"
       @click="openSearch"
     >
+      <!-- Rotes ! bei fehlendem Objekt -->
+      <span
+        v-if="notFound"
+        class="flex-shrink-0 inline-flex items-center justify-center w-4 h-4 rounded-full bg-red-500 text-white font-bold text-xs leading-none"
+        title="Objekt nicht gefunden"
+      >!</span>
       <span
         class="flex-1 text-sm truncate"
-        :class="selectedName ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500'"
+        :class="notFound ? 'text-red-500 dark:text-red-400' : (selectedName ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500')"
         :title="selectedName || undefined"
       >
-        {{ selectedName || 'Objekt wählen …' }}
+        {{ notFound ? 'Objekt nicht gefunden' : (selectedName || 'Objekt wählen …') }}
       </span>
       <button
-        v-if="selectedName"
-        class="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xs shrink-0"
+        v-if="selectedName || notFound"
+        class="text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 text-xs shrink-0"
         @click.stop="clear"
       >✕</button>
       <span class="text-gray-400 dark:text-gray-500 text-xs shrink-0">▾</span>
