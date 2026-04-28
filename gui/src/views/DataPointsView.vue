@@ -90,40 +90,12 @@
               </td>
               <td>
                 <div class="flex flex-wrap items-center gap-2">
-                  <span class="font-mono text-sm text-blue-500 dark:text-blue-300 min-w-12">{{ liveValue(dp) }}</span>
-                  <template v-if="dp.data_type === 'BOOLEAN'">
-                    <button
-                      @click.stop="toggleBoolean(dp)"
-                      :disabled="writeBusy[dp.id]"
-                      class="btn-secondary btn-sm"
-                      :title="`Wert für ${dp.name} schreiben`"
-                    >
-                      {{ currentValue(dp) === true ? 'false' : 'true' }}
-                    </button>
-                  </template>
-                  <template v-else>
-                    <input
-                      :value="draftValue(dp)"
-                      @input="setDraftValue(dp, $event.target.value)"
-                      @blur="markDraftCleanIfCurrent(dp)"
-                      @keyup.enter="writeRowValue(dp)"
-                      :type="['FLOAT', 'INTEGER'].includes(dp.data_type) ? 'number' : 'text'"
-                      :step="dp.data_type === 'INTEGER' ? '1' : 'any'"
-                      class="input h-8 w-28 px-2 py-1 text-sm"
-                      :aria-label="`Wert für ${dp.name}`"
-                    />
-                    <button
-                      @click.stop="writeRowValue(dp)"
-                      :disabled="writeBusy[dp.id]"
-                      class="btn-secondary btn-sm"
-                      :title="`Wert für ${dp.name} schreiben`"
-                    >
-                      Schreiben
-                    </button>
-                  </template>
-                </div>
-                <div v-if="writeFeedback[dp.id]" class="text-xs mt-1" :class="writeFeedback[dp.id].type === 'error' ? 'text-red-500' : 'text-green-600'">
-                  {{ writeFeedback[dp.id].text }}
+                  <RouterLink
+                    :to="`/datapoints/${dp.id}`"
+                    class="font-mono text-sm text-blue-500 dark:text-blue-300 min-w-12 hover:text-blue-400 transition-colors"
+                  >
+                    {{ liveValue(dp) }}
+                  </RouterLink>
                 </div>
               </td>
               <td><Badge :variant="qualityVariant(liveQuality(dp))" dot size="xs">{{ qualityLabel(liveQuality(dp)) ?? '—' }}</Badge></td>
@@ -174,7 +146,7 @@
 </template>
 
 <script setup>
-import { ref, computed, reactive, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
@@ -203,10 +175,6 @@ const showConfirm  = ref(false)
 const editTarget   = ref(null)
 const deleteTarget = ref(null)
 const sentinelEl   = ref(null)
-const writeDrafts  = reactive({})
-const writeDraftDirty = reactive({})
-const writeBusy    = reactive({})
-const writeFeedback = reactive({})
 
 let searchTimeout = null
 let observer      = null
@@ -268,12 +236,6 @@ onBeforeRouteLeave((to) => {
 watch(() => store.items, (items) => {
   ws.subscribe(items.map(d => d.id))
 }, { immediate: true })
-
-watch(
-  () => store.items.map(dp => [dp.id, currentValue(dp)]),
-  () => syncCleanWriteDrafts(),
-  { deep: true }
-)
 
 // --------------------------------------------------------------------------
 // Infinite scroll
@@ -346,66 +308,6 @@ function liveValue(dp) {
 }
 function currentValue(dp) {
   return ws.liveValues[dp.id]?.value ?? dp.value
-}
-function draftValue(dp) {
-  if (!(dp.id in writeDrafts)) {
-    syncDraftFromValue(dp)
-  }
-  return writeDrafts[dp.id]
-}
-function setDraftValue(dp, value) {
-  writeDrafts[dp.id] = value
-  writeDraftDirty[dp.id] = true
-}
-function syncDraftFromValue(dp) {
-  const value = currentValue(dp)
-  writeDrafts[dp.id] = value === null || value === undefined ? '' : String(value)
-}
-function syncCleanWriteDrafts() {
-  for (const dp of store.items) {
-    if (writeBusy[dp.id] || writeDraftDirty[dp.id]) continue
-    syncDraftFromValue(dp)
-  }
-}
-function markDraftCleanIfCurrent(dp) {
-  if (writeDrafts[dp.id] === String(currentValue(dp) ?? '')) {
-    writeDraftDirty[dp.id] = false
-  }
-}
-function coerceWriteValue(dp, raw) {
-  if (dp.data_type === 'BOOLEAN') return raw === true || raw === 'true' || raw === '1' || raw === 1
-  if (dp.data_type === 'INTEGER') return Number.parseInt(raw, 10)
-  if (dp.data_type === 'FLOAT') return Number.parseFloat(raw)
-  return raw
-}
-function setWriteFeedback(dp, feedback) {
-  writeFeedback[dp.id] = feedback
-  if (feedback.type === 'success') {
-    setTimeout(() => {
-      if (writeFeedback[dp.id] === feedback) delete writeFeedback[dp.id]
-    }, 1800)
-  }
-}
-async function writeRowValue(dp, raw = writeDrafts[dp.id]) {
-  writeBusy[dp.id] = true
-  delete writeFeedback[dp.id]
-  try {
-    const value = coerceWriteValue(dp, raw)
-    if (['INTEGER', 'FLOAT'].includes(dp.data_type) && Number.isNaN(value)) {
-      throw new Error('Ungültige Zahl')
-    }
-    await store.writeValue(dp.id, value)
-    writeDrafts[dp.id] = value === null || value === undefined ? '' : String(value)
-    writeDraftDirty[dp.id] = false
-    setWriteFeedback(dp, { type: 'success', text: 'geschrieben' })
-  } catch (err) {
-    setWriteFeedback(dp, { type: 'error', text: err?.message || 'Fehler' })
-  } finally {
-    writeBusy[dp.id] = false
-  }
-}
-async function toggleBoolean(dp) {
-  await writeRowValue(dp, !(currentValue(dp) === true))
 }
 function liveQuality(dp) { return ws.liveValues[dp.id]?.quality ?? dp.quality }
 function qualityVariant(q) {

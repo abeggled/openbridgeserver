@@ -51,9 +51,8 @@
             <template v-else>
               <input
                 v-model="writeDraft"
-                :type="isNumericType ? 'number' : 'text'"
+                type="text"
                 class="input flex-1 min-w-36"
-                :step="dp.data_type === 'INTEGER' ? '1' : 'any'"
                 @keyup.enter="writeDetailValue(writeDraft)"
               />
               <button @click="writeDetailValue(writeDraft)" :disabled="writeBusy" class="btn-primary btn-sm">
@@ -192,7 +191,6 @@ const displayVal = computed(() => {
   if (v === null || v === undefined) return '—'
   return dp.value?.unit ? `${v} ${dp.value.unit}` : String(v)
 })
-const isNumericType = computed(() => ['FLOAT', 'INTEGER'].includes(dp.value?.data_type))
 const hasWritableBinding = computed(() =>
   bindings.value.some(b => b.enabled && ['DEST', 'BOTH'].includes(b.direction))
 )
