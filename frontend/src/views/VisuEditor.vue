@@ -479,7 +479,7 @@ const showSettings = ref(false)
             <!-- Fehler-Badge: fehlende Datenpunkt-Referenz -->
             <div
               v-if="widgetHasError(w)"
-              class="absolute top-1 right-1 z-20 flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white font-bold text-xs leading-none pointer-events-none shadow"
+              class="absolute top-1 right-7 z-20 flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white font-bold text-xs leading-none pointer-events-none shadow"
               title="Mindestens ein Datenpunkt-Verweis wurde nicht gefunden"
             >!</div>
 
