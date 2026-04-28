@@ -10,7 +10,7 @@ pydantic>=2.7.0
 pydantic-settings>=2.3.0
 
 # Database
-aiosqlite>=0.20.0
+aiosqlite>=0.22.1
 
 # MQTT
 aiomqtt>=2.0.0
