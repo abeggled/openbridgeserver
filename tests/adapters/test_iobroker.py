@@ -107,6 +107,38 @@ class TestStateChange:
         assert event.source_adapter == "IOBROKER"
 
     @pytest.mark.asyncio
+    async def test_state_change_send_on_change_skips_duplicate_values(self, adapter, mock_bus):
+        binding = make_binding(
+            {"state_id": "0_userdata.0.light", "source_data_type": "bool"},
+            send_on_change=True,
+        )
+        adapter._state_map["0_userdata.0.light"] = [binding]
+
+        await adapter._on_state_change_event("0_userdata.0.light", {"val": True})
+        await adapter._on_state_change_event("0_userdata.0.light", {"val": True})
+        await adapter._on_state_change_event("0_userdata.0.light", {"val": False})
+
+        assert mock_bus.publish.call_count == 2
+        assert mock_bus.publish.await_args_list[0].args[0].value is True
+        assert mock_bus.publish.await_args_list[1].args[0].value is False
+
+    @pytest.mark.asyncio
+    async def test_state_change_min_delta_skips_small_numeric_changes(self, adapter, mock_bus):
+        binding = make_binding(
+            {"state_id": "0_userdata.0.temp", "source_data_type": "float"},
+            send_min_delta=1.0,
+        )
+        adapter._state_map["0_userdata.0.temp"] = [binding]
+
+        await adapter._on_state_change_event("0_userdata.0.temp", {"val": 20.0})
+        await adapter._on_state_change_event("0_userdata.0.temp", {"val": 20.5})
+        await adapter._on_state_change_event("0_userdata.0.temp", {"val": 21.1})
+
+        assert mock_bus.publish.call_count == 2
+        assert mock_bus.publish.await_args_list[0].args[0].value == pytest.approx(20.0)
+        assert mock_bus.publish.await_args_list[1].args[0].value == pytest.approx(21.1)
+
+    @pytest.mark.asyncio
     async def test_unknown_state_ignored(self, adapter, mock_bus):
         await adapter._on_state_change_event("unknown.state", {"val": 1})
 
@@ -164,6 +196,20 @@ class TestSubscribe:
         assert mock_bus.publish.call_count == 2
         event = mock_bus.publish.call_args[0][0]
         assert event.value == pytest.approx(23.0)
+
+    @pytest.mark.asyncio
+    async def test_initial_read_seeds_source_filter_state(self, adapter, mock_bus):
+        binding = make_binding({"state_id": "0_userdata.0.light"}, send_on_change=True)
+        adapter._state_map["0_userdata.0.light"] = [binding]
+        adapter._socket.call = AsyncMock(side_effect=[
+            [None, None],
+            [None, {"val": True}],
+        ])
+
+        await adapter._subscribe_bound_states(force_publish_initial=True)
+        await adapter._on_state_change_event("0_userdata.0.light", {"val": True})
+
+        assert mock_bus.publish.call_count == 1
 
 
 class TestBrowseStates:

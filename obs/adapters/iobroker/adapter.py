@@ -33,6 +33,7 @@ import base64
 import contextlib
 import json
 import logging
+import time
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -124,6 +125,8 @@ class IoBrokerAdapter(AdapterBase):
         self._socket: Any | None = None
         self._state_map: dict[str, list[Any]] = {}
         self._last_source_values: dict[str, Any] = {}
+        self._source_filter_last_sent: dict[str, float] = {}
+        self._source_filter_last_values: dict[str, Any] = {}
         self._subscription_lock = asyncio.Lock()
         self._subscription_watchdog_task: asyncio.Task | None = None
 
@@ -205,6 +208,8 @@ class IoBrokerAdapter(AdapterBase):
 
         self._state_map.clear()
         self._last_source_values.clear()
+        self._source_filter_last_sent.clear()
+        self._source_filter_last_values.clear()
         await self._publish_status(False, "Getrennt")
 
     async def _on_bindings_reloaded(self) -> None:
@@ -282,6 +287,7 @@ class IoBrokerAdapter(AdapterBase):
                         binding,
                         value,
                         force=force_publish_initial,
+                        apply_filters=False,
                     )
         return True
 
@@ -450,9 +456,16 @@ class IoBrokerAdapter(AdapterBase):
             return
         value = self._extract_state_value(state)
         for binding in entries:
-            await self._publish_binding_value(binding, value, force=True)
+            await self._publish_binding_value(binding, value, force=True, apply_filters=True)
 
-    async def _publish_binding_value(self, binding: Any, value: Any, *, force: bool = True) -> None:
+    async def _publish_binding_value(
+        self,
+        binding: Any,
+        value: Any,
+        *,
+        force: bool = True,
+        apply_filters: bool = True,
+    ) -> None:
         try:
             bc = IoBrokerBindingConfig(**binding.config)
             raw = value if isinstance(value, str) else json.dumps(value)
@@ -477,7 +490,11 @@ class IoBrokerAdapter(AdapterBase):
         if not force and self._last_source_values.get(last_key) == pub_value:
             logger.debug("ioBroker adapter state unchanged: state_id=%s value=%r", bc.state_id, pub_value)
             return
+        if apply_filters and not self._source_filters_allow(binding, pub_value, bc.state_id):
+            return
         self._last_source_values[last_key] = pub_value
+        self._source_filter_last_sent[last_key] = time.monotonic()
+        self._source_filter_last_values[last_key] = pub_value
 
         logger.info(
             "ioBroker adapter state: state_id=%s → dp=%s value=%r",
@@ -490,6 +507,62 @@ class IoBrokerAdapter(AdapterBase):
             source_adapter=self.adapter_type,
             binding_id=binding.id,
         ))
+
+    def _source_filters_allow(self, binding: Any, value: Any, state_id: str) -> bool:
+        """Apply binding filters to incoming ioBroker source events.
+
+        Startup reads and watchdog resyncs bypass these filters so OBS can
+        restore the latest ioBroker state reliably after reconnects.
+        """
+        key = str(binding.id)
+
+        if binding.send_throttle_ms:
+            min_interval = binding.send_throttle_ms / 1000.0
+            last_ts = self._source_filter_last_sent.get(key)
+            if last_ts is not None and (time.monotonic() - last_ts) < min_interval:
+                logger.debug(
+                    "ioBroker adapter source throttle: state_id=%s binding=%s value=%r",
+                    state_id, binding.id, value,
+                )
+                return False
+
+        last_val = self._source_filter_last_values.get(key)
+        if last_val is None:
+            return True
+
+        if binding.send_on_change and value == last_val:
+            logger.debug(
+                "ioBroker adapter source on-change: state_id=%s binding=%s unchanged=%r",
+                state_id, binding.id, value,
+            )
+            return False
+
+        if binding.send_min_delta is not None or binding.send_min_delta_pct is not None:
+            try:
+                v_new = float(value)
+                v_last = float(last_val)
+                diff = abs(v_new - v_last)
+
+                if binding.send_min_delta is not None and diff < binding.send_min_delta:
+                    logger.debug(
+                        "ioBroker adapter source min_delta: state_id=%s binding=%s diff=%.4f min=%.4f",
+                        state_id, binding.id, diff, binding.send_min_delta,
+                    )
+                    return False
+
+                if binding.send_min_delta_pct is not None:
+                    base = abs(v_last) if v_last != 0 else abs(v_new)
+                    pct = (diff / base * 100) if base != 0 else 0.0
+                    if pct < binding.send_min_delta_pct:
+                        logger.debug(
+                            "ioBroker adapter source min_delta_pct: state_id=%s binding=%s %.2f%% < %.2f%%",
+                            state_id, binding.id, pct, binding.send_min_delta_pct,
+                        )
+                        return False
+            except (TypeError, ValueError):
+                pass
+
+        return True
 
     async def read(self, binding: Any) -> Any:
         if self._socket is None:

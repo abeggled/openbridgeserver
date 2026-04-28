@@ -977,7 +977,9 @@ const visibleTabs = computed(() => {
     if (selectedAdapterType.value === 'IOBROKER' && !showAdvancedTabs.value) return tabs
     const hasFormula = !!form.value_formula?.trim() || !!form.value_map_preset
     tabs.push({ id: 'transform', label: 'Transformation', badge: hasFormula })
-    if (form.direction === 'DEST' || form.direction === 'BOTH') {
+    const canUseFilter = selectedAdapterType.value === 'IOBROKER'
+      || form.direction === 'DEST' || form.direction === 'BOTH'
+    if (canUseFilter) {
       const hasFilter = form.throttle_value > 0 || form.send_on_change
         || (form.send_min_delta ?? 0) > 0 || (form.send_min_delta_pct ?? 0) > 0
       tabs.push({ id: 'filter', label: 'Filter', badge: hasFilter })
