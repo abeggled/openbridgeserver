@@ -105,6 +105,7 @@
                     <input
                       :value="draftValue(dp)"
                       @input="setDraftValue(dp, $event.target.value)"
+                      @blur="markDraftCleanIfCurrent(dp)"
                       @keyup.enter="writeRowValue(dp)"
                       :type="['FLOAT', 'INTEGER'].includes(dp.data_type) ? 'number' : 'text'"
                       :step="dp.data_type === 'INTEGER' ? '1' : 'any'"
@@ -203,6 +204,7 @@ const editTarget   = ref(null)
 const deleteTarget = ref(null)
 const sentinelEl   = ref(null)
 const writeDrafts  = reactive({})
+const writeDraftDirty = reactive({})
 const writeBusy    = reactive({})
 const writeFeedback = reactive({})
 
@@ -266,6 +268,12 @@ onBeforeRouteLeave((to) => {
 watch(() => store.items, (items) => {
   ws.subscribe(items.map(d => d.id))
 }, { immediate: true })
+
+watch(
+  () => store.items.map(dp => [dp.id, currentValue(dp)]),
+  () => syncCleanWriteDrafts(),
+  { deep: true }
+)
 
 // --------------------------------------------------------------------------
 // Infinite scroll
@@ -341,13 +349,28 @@ function currentValue(dp) {
 }
 function draftValue(dp) {
   if (!(dp.id in writeDrafts)) {
-    const value = currentValue(dp)
-    writeDrafts[dp.id] = value === null || value === undefined ? '' : String(value)
+    syncDraftFromValue(dp)
   }
   return writeDrafts[dp.id]
 }
 function setDraftValue(dp, value) {
   writeDrafts[dp.id] = value
+  writeDraftDirty[dp.id] = true
+}
+function syncDraftFromValue(dp) {
+  const value = currentValue(dp)
+  writeDrafts[dp.id] = value === null || value === undefined ? '' : String(value)
+}
+function syncCleanWriteDrafts() {
+  for (const dp of store.items) {
+    if (writeBusy[dp.id] || writeDraftDirty[dp.id]) continue
+    syncDraftFromValue(dp)
+  }
+}
+function markDraftCleanIfCurrent(dp) {
+  if (writeDrafts[dp.id] === String(currentValue(dp) ?? '')) {
+    writeDraftDirty[dp.id] = false
+  }
 }
 function coerceWriteValue(dp, raw) {
   if (dp.data_type === 'BOOLEAN') return raw === true || raw === 'true' || raw === '1' || raw === 1
@@ -373,6 +396,7 @@ async function writeRowValue(dp, raw = writeDrafts[dp.id]) {
     }
     await store.writeValue(dp.id, value)
     writeDrafts[dp.id] = value === null || value === undefined ? '' : String(value)
+    writeDraftDirty[dp.id] = false
     setWriteFeedback(dp, { type: 'success', text: 'geschrieben' })
   } catch (err) {
     setWriteFeedback(dp, { type: 'error', text: err?.message || 'Fehler' })
