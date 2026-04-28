@@ -52,5 +52,17 @@ export const useLogicStore = defineStore('logic', () => {
     return data
   }
 
-  return { graphs, nodeTypes, loading, fetchNodeTypes, fetchGraphs, createGraph, saveGraph, deleteGraph, runGraph }
+  async function duplicateGraph(id) {
+    const { data } = await logicApi.duplicateGraph(id)
+    graphs.value.push(data)
+    return data
+  }
+
+  async function importGraph(payload) {
+    const { data } = await logicApi.importGraph(payload)
+    graphs.value.push(data)
+    return data
+  }
+
+  return { graphs, nodeTypes, loading, fetchNodeTypes, fetchGraphs, createGraph, saveGraph, deleteGraph, runGraph, duplicateGraph, importGraph }
 })

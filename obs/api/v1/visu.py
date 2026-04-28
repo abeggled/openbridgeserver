@@ -5,12 +5,14 @@ Endpoints:
   GET    /visu/tree                      → Gesamtbaum (flach)
   GET    /visu/nodes/{id}                → Einzelner Knoten
   POST   /visu/nodes                     → Knoten erstellen
+  POST   /visu/nodes/import              → Teilbaum importieren
   PATCH  /visu/nodes/{id}                → Knoten bearbeiten
   DELETE /visu/nodes/{id}                → Knoten löschen
   GET    /visu/nodes/{id}/breadcrumb     → Breadcrumb-Pfad
   GET    /visu/nodes/{id}/children       → Direkte Kinder
   POST   /visu/nodes/{id}/copy           → Knoten kopieren
   PUT    /visu/nodes/{id}/move           → Knoten verschieben
+  GET    /visu/nodes/{id}/export         → Teilbaum als JSON exportieren
   POST   /visu/nodes/{id}/auth           → PIN-Authentifizierung
 
   GET    /visu/pages/{id}                → page_config lesen
@@ -24,6 +26,7 @@ from datetime import datetime, timezone
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 
 from obs.api.auth import get_admin_user, get_current_user, optional_current_user
 from obs.api.v1.sessions import create_session
@@ -33,6 +36,7 @@ from obs.models.visu import (
     VisuNodeCreate,
     VisuNodeUpdate,
     VisuNodeUsersUpdate,
+    VisuImportRequest,
     PageConfig,
     WidgetInstance,
     PinAuthRequest,
@@ -144,6 +148,52 @@ async def get_tree(db: Database = Depends(get_db)):
 
 
 # ── Einzelner Knoten ──────────────────────────────────────────────────────────
+
+@router.post("/nodes/import", response_model=VisuNode, status_code=status.HTTP_201_CREATED)
+async def import_nodes(
+    body: VisuImportRequest,
+    db: Database = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Importiert einen exportierten Visu-Teilbaum und hängt ihn an target_parent_id."""
+    if body.obs_export != "visu_subtree":
+        raise HTTPException(status_code=400, detail="Ungültiges Export-Format (erwartet 'visu_subtree')")
+    if not body.nodes:
+        raise HTTPException(status_code=400, detail="Keine Knoten im Export")
+
+    now = _now_iso()
+    # Neue IDs für alle Knoten generieren
+    id_map = {n.id: str(uuid.uuid4()) for n in body.nodes}
+    root_node = body.nodes[0]
+    root_new_id = id_map[root_node.id]
+
+    for node in body.nodes:
+        new_id = id_map[node.id]
+        if node.id == root_node.id:
+            new_parent_id = body.target_parent_id
+        else:
+            new_parent_id = id_map.get(node.parent_id or "", None) or body.target_parent_id
+
+        # Widget-UUIDs neu generieren
+        pc = node.page_config
+        if pc and "widgets" in pc:
+            for w in pc["widgets"]:
+                w["id"] = str(uuid.uuid4())
+        pc_json = json.dumps(pc) if pc else json.dumps(
+            {"grid_cols": 12, "grid_row_height": 80, "background": None, "widgets": []}
+        )
+
+        await db.conn.execute(
+            """INSERT INTO visu_nodes
+                   (id, parent_id, name, type, node_order, icon, access, access_pin,
+                    page_config, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (new_id, new_parent_id, node.name, node.type, node.node_order,
+             node.icon, node.access, None, pc_json, now, now),
+        )
+    await db.conn.commit()
+    return await _get_node_or_404(db, root_new_id)
+
 
 @router.get("/nodes/{node_id}", response_model=VisuNode)
 async def get_node(node_id: str, db: Database = Depends(get_db)):
@@ -298,6 +348,55 @@ async def copy_node(
     )
     await db.conn.commit()
     return await _get_node_or_404(db, new_id)
+
+
+# ── Exportieren ──────────────────────────────────────────────────────────────
+
+@router.get("/nodes/{node_id}/export")
+async def export_node(
+    node_id: str,
+    db: Database = Depends(get_db),
+    _user=Depends(get_current_user),
+) -> JSONResponse:
+    """Exportiert den Knoten und alle Nachfolger rekursiv als JSON (ohne access_pin)."""
+    async def collect(nid: str) -> list[dict]:
+        async with db.conn.execute("SELECT * FROM visu_nodes WHERE id = ?", (nid,)) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return []
+        result = [{
+            "id": row["id"],
+            "parent_id": row["parent_id"],
+            "name": row["name"],
+            "type": row["type"],
+            "node_order": row["node_order"],
+            "icon": row["icon"],
+            "access": row["access"],
+            "page_config": json.loads(row["page_config"]) if row["page_config"] else None,
+        }]
+        async with db.conn.execute(
+            "SELECT id FROM visu_nodes WHERE parent_id = ? ORDER BY node_order", (nid,)
+        ) as cur:
+            children = await cur.fetchall()
+        for child in children:
+            result.extend(await collect(child["id"]))
+        return result
+
+    nodes = await collect(node_id)
+    if not nodes:
+        raise HTTPException(status_code=404, detail="Knoten nicht gefunden")
+
+    export_data = {
+        "obs_export": "visu_subtree",
+        "version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "nodes": nodes,
+    }
+    safe_name = nodes[0]["name"].replace(" ", "_").replace("/", "_")
+    return JSONResponse(
+        content=export_data,
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_visu.json"'},
+    )
 
 
 # ── Verschieben ───────────────────────────────────────────────────────────────

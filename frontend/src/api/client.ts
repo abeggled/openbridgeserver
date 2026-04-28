@@ -172,7 +172,7 @@ export const visu = {
   getChildren: (id: string) =>
     request<VisuNode[]>(`/visu/nodes/${id}/children`),
 
-  copyNode: (id: string, targetParentId: string, newName: string) =>
+  copyNode: (id: string, targetParentId: string | null, newName: string) =>
     request<VisuNode>(`/visu/nodes/${id}/copy`, {
       method: 'POST',
       body: JSON.stringify({ target_parent_id: targetParentId, new_name: newName }),
@@ -211,6 +211,14 @@ export const visu = {
     request<void>(`/visu/nodes/${id}/users`, {
       method: 'PUT',
       body: JSON.stringify({ usernames }),
+    }),
+
+  exportNodeUrl: (id: string) => `/api/v1/visu/nodes/${id}/export`,
+
+  importNodes: (payload: unknown) =>
+    request<VisuNode>('/visu/nodes/import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
 }
 

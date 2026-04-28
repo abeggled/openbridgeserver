@@ -110,7 +110,7 @@ export const useVisuStore = defineStore('visu', () => {
     nodes.value = nodes.value.filter((n) => n.id !== id)
   }
 
-  async function copyNode(id: string, targetParentId: string, newName: string): Promise<VisuNode> {
+  async function copyNode(id: string, targetParentId: string | null, newName: string): Promise<VisuNode> {
     const node = await visuApi.copyNode(id, targetParentId, newName)
     nodes.value.push(node)
     return node

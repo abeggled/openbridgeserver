@@ -60,6 +60,16 @@ class LogicGraphOut(BaseModel):
     updated_at: str
 
 
+class LogicGraphImport(BaseModel):
+    """Import-Payload für einen exportierten Logic Graph."""
+    obs_export: str              # muss "logic_graph" sein
+    version: int
+    name: str
+    description: str = ""
+    enabled: bool = True
+    flow_data: FlowData
+
+
 class NodeTypePort(BaseModel):
     id: str
     label: str

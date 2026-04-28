@@ -94,10 +94,32 @@ class VisuNodeUsersUpdate(BaseModel):
 
 
 class CopyNodeRequest(BaseModel):
-    target_parent_id: str
+    target_parent_id: str | None = None
     new_name: str
 
 
 class MoveNodeRequest(BaseModel):
     new_parent_id: str | None = None
     order: int = 0
+
+
+# ── Export-/Import-Schemas ────────────────────────────────────────────────────
+
+class VisuExportNode(BaseModel):
+    """Ein einzelner Knoten im Export-Format (ohne access_pin)."""
+    id: str
+    parent_id: str | None = None
+    name: str
+    type: NodeType
+    node_order: int = 0
+    icon: str | None = None
+    access: AccessLevel | None = None
+    page_config: dict | None = None
+
+
+class VisuImportRequest(BaseModel):
+    """Import-Payload für einen exportierten Visu-Teilbaum."""
+    obs_export: str              # muss "visu_subtree" sein
+    version: int
+    nodes: list[VisuExportNode]
+    target_parent_id: str | None = None

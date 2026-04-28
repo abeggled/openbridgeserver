@@ -23,6 +23,16 @@
         title="Debug-Modus: zeigt Werte nach Ausführen" data-testid="btn-debug">
         &#128270; Debug
       </button>
+      <button v-if="activeGraphId" @click="doDuplicateGraph" class="btn-secondary btn-sm" title="Graph duplizieren" data-testid="btn-duplicate">
+        ⧉ Duplizieren
+      </button>
+      <a v-if="activeGraphId" :href="exportUrl" :download="exportFilename" class="btn-secondary btn-sm" title="Graph als JSON exportieren" data-testid="btn-export">
+        ↓ Exportieren
+      </a>
+      <label class="btn-secondary btn-sm cursor-pointer" title="Graph aus JSON importieren" data-testid="btn-import">
+        ↑ Importieren
+        <input type="file" accept=".json" class="hidden" @change="onImportFile" data-testid="input-import-file" />
+      </label>
       <button v-if="activeGraphId" @click="confirmDeleteGraph" class="btn-icon text-red-400">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
@@ -130,6 +140,7 @@ import Spinner             from '@/components/ui/Spinner.vue'
 import GenericNode      from '@/components/logic/nodes/GenericNode.vue'
 import DatapointNode    from '@/components/logic/nodes/DatapointNode.vue'
 import PythonScriptNode from '@/components/logic/nodes/PythonScriptNode.vue'
+import MissingNode      from '@/components/logic/nodes/MissingNode.vue'
 
 // ── Store ──────────────────────────────────────────────────────────────────
 const store    = useLogicStore()
@@ -144,12 +155,14 @@ const bgPatternColor = computed(() => {
 const nodes = ref([])
 const edges = ref([])
 
-// ── Node type → component mapping (ALL 14 types registered) ───────────────
+// ── Node type → component mapping ─────────────────────────────────────────
 const _generic      = markRaw(GenericNode)
 const _datapoint    = markRaw(DatapointNode)
 const _pythonScript = markRaw(PythonScriptNode)
+const _missing      = markRaw(MissingNode)
 
 const nodeTypeComponents = {
+  missing_node: _missing,
   // Constant
   const_value: _generic,
   // Logic
@@ -322,6 +335,45 @@ async function doDeleteGraph() {
   await store.deleteGraph(activeGraphId.value)
   activeGraphId.value = ''
   nodes.value = []; edges.value = []
+}
+
+// ── Duplizieren ────────────────────────────────────────────────────────────
+async function doDuplicateGraph() {
+  if (!activeGraphId.value) return
+  try {
+    const copy = await store.duplicateGraph(activeGraphId.value)
+    activeGraphId.value = copy.id
+    await loadGraph()
+    showStatus(true, `Graph dupliziert als „${copy.name}"`)
+  } catch (err) {
+    showStatus(false, err.response?.data?.detail ?? 'Fehler beim Duplizieren')
+  }
+}
+
+// ── Exportieren ────────────────────────────────────────────────────────────
+const exportUrl = computed(() =>
+  activeGraphId.value ? logicApi.exportGraphUrl(activeGraphId.value) : '#'
+)
+const exportFilename = computed(() => {
+  const g = store.graphs.find(g => g.id === activeGraphId.value)
+  return g ? `${g.name.replace(/ /g, '_')}.json` : 'logic_graph.json'
+})
+
+// ── Importieren ────────────────────────────────────────────────────────────
+async function onImportFile(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  event.target.value = ''   // Reset input für erneuten Import derselben Datei
+  try {
+    const text = await file.text()
+    const payload = JSON.parse(text)
+    const imported = await store.importGraph(payload)
+    activeGraphId.value = imported.id
+    await loadGraph()
+    showStatus(true, `Graph „${imported.name}" importiert`)
+  } catch (err) {
+    showStatus(false, err?.response?.data?.detail ?? 'Ungültige oder fehlerhafte Export-Datei')
+  }
 }
 
 // ── Connect handler — REQUIRED to actually create edges ────────────────────
