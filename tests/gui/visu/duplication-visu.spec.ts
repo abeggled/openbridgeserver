@@ -2,10 +2,14 @@
  * Playwright E2E-Tests — Visu Duplizierung (Issue #240)
  *
  * Prüft: Kopieren-Button/Modal, Export-Link, Import-Button in TreeManager.
+ *
+ * Die Visu-App liest 'visu_jwt' aus localStorage. Da auth.setup.ts das
+ * GUI-App-Token unter 'access_token' speichert, muss 'visu_jwt' mit
+ * addInitScript vor dem Seitenaufruf injiziert werden.
  */
 
 import { test, expect } from '@playwright/test'
-import { apiPost, apiDelete } from '../helpers'
+import { apiPost, apiDelete, getToken } from '../helpers'
 
 // ── API-Helpers ───────────────────────────────────────────────────────────
 
@@ -22,13 +26,23 @@ async function deleteVisuNodeViaApi(id: string): Promise<void> {
   await apiDelete(`/api/v1/visu/nodes/${id}`)
 }
 
-// ── Navigation zur Visu-Verwaltung ────────────────────────────────────────
+// ── Visu-Auth injizieren + zur Manage-Seite navigieren ───────────────────
 
-async function gotoManageAndSelectNode(page: any, nodeName: string) {
+async function gotoManage(page: any) {
+  const token = await getToken()
+  await page.addInitScript((t: string) => {
+    window.localStorage.setItem('visu_jwt', t)
+    window.localStorage.setItem('visu_is_admin', '1')
+  }, token)
   await page.goto('/visu/manage')
   await page.waitForLoadState('networkidle')
-  await page.click(`text="${nodeName}"`)
-  await expect(page.locator('text="Weitere Aktionen"')).toBeVisible({ timeout: 5_000 })
+}
+
+async function gotoManageAndSelectNode(page: any, nodeName: string) {
+  await gotoManage(page)
+  // Knoten-Namen im Baum anklicken (span mit genau diesem Text)
+  await page.getByText(nodeName, { exact: true }).first().click()
+  await expect(page.locator('text=Weitere Aktionen')).toBeVisible({ timeout: 5_000 })
 }
 
 // ---------------------------------------------------------------------------
@@ -56,9 +70,11 @@ test('Visu: Kopieren-Button öffnet das Kopieren-Modal', async ({ page }) => {
   try {
     await gotoManageAndSelectNode(page, name)
     await page.click('button:has-text("Kopieren")')
+
     // Modal öffnet sich
-    await expect(page.locator('text="Kopieren:"')).toBeVisible({ timeout: 3_000 })
-    await expect(page.locator('text="Name der Kopie"')).toBeVisible()
+    await expect(page.locator('text=Kopieren:')).toBeVisible({ timeout: 3_000 })
+    await expect(page.locator('text=Name der Kopie')).toBeVisible()
+
     // Standardname ist vorausgefüllt
     const input = page.locator('input[type="text"]').last()
     const value = await input.inputValue()
@@ -91,8 +107,7 @@ test('Visu: Exportieren-Link zeigt auf Export-Endpoint', async ({ page }) => {
 // ---------------------------------------------------------------------------
 
 test('Visu: Importieren-Button ist im Header sichtbar', async ({ page }) => {
-  await page.goto('/visu/manage')
-  await page.waitForLoadState('networkidle')
+  await gotoManage(page)
   await expect(page.locator('[data-testid="btn-import-visu"]')).toBeVisible({ timeout: 5_000 })
 })
 
