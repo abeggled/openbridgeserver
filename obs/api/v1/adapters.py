@@ -26,7 +26,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from obs.api.auth import get_current_user
@@ -98,6 +98,46 @@ class TestRequest(BaseModel):
 class TestResult(BaseModel):
     success: bool
     detail: str
+
+
+class IoBrokerStateOut(BaseModel):
+    id: str
+    name: str | None = None
+    type: str | None = None
+    role: str | None = None
+    read: bool = True
+    write: bool = False
+    value: Any = None
+    unit: str | None = None
+
+
+class IoBrokerImportRequest(BaseModel):
+    prefix: str = ""
+    states: list[str] = []
+    direction: str = "auto"
+    tags: list[str] = []
+    persist_value: bool = True
+    record_history: bool = True
+    limit: int = 300
+
+
+class IoBrokerImportItem(BaseModel):
+    state_id: str
+    name: str
+    data_type: str
+    unit: str | None = None
+    direction: str
+    tags: list[str]
+    exists: bool = False
+    reason: str | None = None
+
+
+class IoBrokerImportResult(BaseModel):
+    preview: list[IoBrokerImportItem] = []
+    created_datapoints: int = 0
+    created_bindings: int = 0
+    skipped_existing: int = 0
+    errors: list[str] = []
 
 
 class ConfigPatch(BaseModel):
@@ -482,6 +522,199 @@ async def mqtt_sample_payload(
         status.HTTP_404_NOT_FOUND,
         f"Kein Payload auf Topic '{topic}' innerhalb von {scan_secs} s empfangen",
     )
+
+
+@router.get("/instances/{instance_id}/iobroker/states", response_model=list[IoBrokerStateOut])
+async def iobroker_browse_states(
+    instance_id: uuid.UUID,
+    q: str = Query("", max_length=200),
+    limit: int = Query(50, ge=1, le=100),
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> list[IoBrokerStateOut]:
+    """Durchsuchbare ioBroker-State-Liste für Binding-Auswahl."""
+    row = await db.fetchone(
+        "SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),)
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "IOBROKER":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
+
+    instance = adapter_registry.get_instance_by_id(str(instance_id))
+    if instance is None or not getattr(instance, "connected", False):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ioBroker-Instanz ist nicht verbunden")
+    if not hasattr(instance, "browse_states"):
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "ioBroker-State-Browser nicht verfügbar")
+
+    try:
+        return [IoBrokerStateOut(**item) for item in await instance.browse_states(q, limit)]
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"ioBroker-State-Suche fehlgeschlagen: {exc}",
+        ) from exc
+
+
+def _iobroker_obs_type(state_type: str | None) -> tuple[str, str | None]:
+    t = (state_type or "").lower()
+    if t == "boolean":
+        return "BOOLEAN", "bool"
+    if t == "number":
+        return "FLOAT", "float"
+    if t == "string":
+        return "STRING", "string"
+    return "STRING", None
+
+
+def _iobroker_source_type(data_type: str) -> str | None:
+    return {
+        "BOOLEAN": "bool",
+        "FLOAT": "float",
+        "INTEGER": "int",
+        "STRING": "string",
+    }.get(data_type)
+
+
+def _iobroker_direction(item: dict[str, Any], requested: str) -> str:
+    if requested in ("SOURCE", "DEST", "BOTH"):
+        return requested
+    return "BOTH" if item.get("read", True) and item.get("write", False) else "SOURCE"
+
+
+def _iobroker_name(item: dict[str, Any]) -> str:
+    name = item.get("name")
+    if name:
+        return str(name)
+    return str(item.get("id", "")).split(".")[-1] or str(item.get("id", "ioBroker State"))
+
+
+def _iobroker_tags(item: dict[str, Any], extra_tags: list[str]) -> list[str]:
+    parts = str(item.get("id", "")).split(".")
+    tags = ["iobroker"]
+    if parts:
+        tags.append(parts[0])
+    for key in ("role", "type"):
+        if item.get(key):
+            tags.append(str(item[key]))
+    tags.extend(t.strip() for t in extra_tags if t.strip())
+    seen: set[str] = set()
+    return [t for t in tags if not (t in seen or seen.add(t))]
+
+
+async def _iobroker_candidates(
+    instance_id: str,
+    body: IoBrokerImportRequest,
+    db: Database,
+) -> list[IoBrokerImportItem]:
+    instance = adapter_registry.get_instance_by_id(instance_id)
+    if instance is None or not getattr(instance, "connected", False):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ioBroker-Instanz ist nicht verbunden")
+    states = await instance.browse_states(body.prefix, min(max(body.limit, 1), 500))
+    selected = set(body.states)
+    if selected:
+        states = [s for s in states if s["id"] in selected]
+
+    rows = await db.fetchall(
+        "SELECT config FROM adapter_bindings WHERE adapter_instance_id=?",
+        (instance_id,),
+    )
+    existing_states: set[str] = set()
+    for row in rows:
+        try:
+            cfg = json.loads(row["config"] or "{}")
+            if cfg.get("state_id"):
+                existing_states.add(str(cfg["state_id"]))
+        except Exception:
+            pass
+
+    result: list[IoBrokerImportItem] = []
+    for state in states:
+        dp_type, _source_type = _iobroker_obs_type(state.get("type"))
+        exists = state["id"] in existing_states
+        result.append(IoBrokerImportItem(
+            state_id=state["id"],
+            name=_iobroker_name(state),
+            data_type=dp_type,
+            unit=state.get("unit"),
+            direction=_iobroker_direction(state, body.direction),
+            tags=_iobroker_tags(state, body.tags),
+            exists=exists,
+            reason="Binding existiert bereits" if exists else None,
+        ))
+    return result
+
+
+@router.post("/instances/{instance_id}/iobroker/import-preview", response_model=IoBrokerImportResult)
+async def iobroker_import_preview(
+    instance_id: uuid.UUID,
+    body: IoBrokerImportRequest,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> IoBrokerImportResult:
+    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "IOBROKER":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
+    return IoBrokerImportResult(preview=await _iobroker_candidates(str(instance_id), body, db))
+
+
+@router.post("/instances/{instance_id}/iobroker/import", response_model=IoBrokerImportResult)
+async def iobroker_import_states(
+    instance_id: uuid.UUID,
+    body: IoBrokerImportRequest,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> IoBrokerImportResult:
+    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "IOBROKER":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
+
+    from obs.core.registry import get_registry
+    from obs.models.datapoint import DataPointCreate
+    from obs.models.binding import AdapterBindingCreate
+    from obs.api.v1.bindings import create_binding
+
+    candidates = await _iobroker_candidates(str(instance_id), body, db)
+    result = IoBrokerImportResult(preview=candidates)
+    registry = get_registry()
+
+    for item in candidates:
+        if item.exists:
+            result.skipped_existing += 1
+            continue
+        try:
+            source_type = _iobroker_source_type(item.data_type)
+            dp = await registry.create(DataPointCreate(
+                name=item.name,
+                data_type=item.data_type,
+                unit=item.unit,
+                tags=item.tags,
+                persist_value=body.persist_value,
+                record_history=body.record_history,
+            ))
+            result.created_datapoints += 1
+            config: dict[str, Any] = {"state_id": item.state_id}
+            if source_type:
+                config["source_data_type"] = source_type
+            await create_binding(
+                dp.id,
+                AdapterBindingCreate(
+                    adapter_instance_id=instance_id,
+                    direction=item.direction,
+                    config=config,
+                    enabled=True,
+                ),
+                _user,
+                db,
+            )
+            result.created_bindings += 1
+        except Exception as exc:
+            result.errors.append(f"{item.state_id}: {exc}")
+    return result
 
 
 # ---------------------------------------------------------------------------

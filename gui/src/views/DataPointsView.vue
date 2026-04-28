@@ -74,7 +74,7 @@
               <th>Tags</th>
               <th>Wert</th>
               <th>Qualität</th>
-              <th class="w-20"></th>
+              <th class="w-28"></th>
             </tr>
           </thead>
           <tbody>
@@ -88,10 +88,51 @@
                   <Badge v-for="t in dp.tags" :key="t" variant="default" size="xs">{{ t }}</Badge>
                 </div>
               </td>
-              <td class="font-mono text-sm text-blue-500 dark:text-blue-300">{{ liveValue(dp) }}</td>
+              <td>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="font-mono text-sm text-blue-500 dark:text-blue-300 min-w-12">{{ liveValue(dp) }}</span>
+                  <template v-if="dp.data_type === 'BOOLEAN'">
+                    <button
+                      @click.stop="toggleBoolean(dp)"
+                      :disabled="writeBusy[dp.id]"
+                      class="btn-secondary btn-sm"
+                      :title="`Wert für ${dp.name} schreiben`"
+                    >
+                      {{ currentValue(dp) === true ? 'false' : 'true' }}
+                    </button>
+                  </template>
+                  <template v-else>
+                    <input
+                      :value="draftValue(dp)"
+                      @input="setDraftValue(dp, $event.target.value)"
+                      @keyup.enter="writeRowValue(dp)"
+                      :type="['FLOAT', 'INTEGER'].includes(dp.data_type) ? 'number' : 'text'"
+                      :step="dp.data_type === 'INTEGER' ? '1' : 'any'"
+                      class="input h-8 w-28 px-2 py-1 text-sm"
+                      :aria-label="`Wert für ${dp.name}`"
+                    />
+                    <button
+                      @click.stop="writeRowValue(dp)"
+                      :disabled="writeBusy[dp.id]"
+                      class="btn-secondary btn-sm"
+                      :title="`Wert für ${dp.name} schreiben`"
+                    >
+                      Schreiben
+                    </button>
+                  </template>
+                </div>
+                <div v-if="writeFeedback[dp.id]" class="text-xs mt-1" :class="writeFeedback[dp.id].type === 'error' ? 'text-red-500' : 'text-green-600'">
+                  {{ writeFeedback[dp.id].text }}
+                </div>
+              </td>
               <td><Badge :variant="qualityVariant(liveQuality(dp))" dot size="xs">{{ qualityLabel(liveQuality(dp)) ?? '—' }}</Badge></td>
               <td>
                 <div class="flex items-center gap-1">
+                  <RouterLink :to="`/datapoints/${dp.id}`" class="btn-icon" title="Verknüpfungen">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.5 6.5l4-4a4.95 4.95 0 017 7l-4 4m-10 4l-4 4a4.95 4.95 0 01-7-7l4-4m5.5 3.5l5-5"/>
+                    </svg>
+                  </RouterLink>
                   <button @click="openEdit(dp)" class="btn-icon" title="Bearbeiten">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                   </button>
@@ -132,7 +173,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, reactive, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
@@ -161,6 +202,9 @@ const showConfirm  = ref(false)
 const editTarget   = ref(null)
 const deleteTarget = ref(null)
 const sentinelEl   = ref(null)
+const writeDrafts  = reactive({})
+const writeBusy    = reactive({})
+const writeFeedback = reactive({})
 
 let searchTimeout = null
 let observer      = null
@@ -288,10 +332,56 @@ async function doDelete()  { await store.remove(deleteTarget.value.id) }
 // --------------------------------------------------------------------------
 
 function liveValue(dp) {
-  const live = ws.liveValues[dp.id]
-  const v    = live?.value ?? dp.value
+  const v = currentValue(dp)
   if (v === null || v === undefined) return '—'
   return dp.unit ? `${v} ${dp.unit}` : String(v)
+}
+function currentValue(dp) {
+  return ws.liveValues[dp.id]?.value ?? dp.value
+}
+function draftValue(dp) {
+  if (!(dp.id in writeDrafts)) {
+    const value = currentValue(dp)
+    writeDrafts[dp.id] = value === null || value === undefined ? '' : String(value)
+  }
+  return writeDrafts[dp.id]
+}
+function setDraftValue(dp, value) {
+  writeDrafts[dp.id] = value
+}
+function coerceWriteValue(dp, raw) {
+  if (dp.data_type === 'BOOLEAN') return raw === true || raw === 'true' || raw === '1' || raw === 1
+  if (dp.data_type === 'INTEGER') return Number.parseInt(raw, 10)
+  if (dp.data_type === 'FLOAT') return Number.parseFloat(raw)
+  return raw
+}
+function setWriteFeedback(dp, feedback) {
+  writeFeedback[dp.id] = feedback
+  if (feedback.type === 'success') {
+    setTimeout(() => {
+      if (writeFeedback[dp.id] === feedback) delete writeFeedback[dp.id]
+    }, 1800)
+  }
+}
+async function writeRowValue(dp, raw = writeDrafts[dp.id]) {
+  writeBusy[dp.id] = true
+  delete writeFeedback[dp.id]
+  try {
+    const value = coerceWriteValue(dp, raw)
+    if (['INTEGER', 'FLOAT'].includes(dp.data_type) && Number.isNaN(value)) {
+      throw new Error('Ungültige Zahl')
+    }
+    await store.writeValue(dp.id, value)
+    writeDrafts[dp.id] = value === null || value === undefined ? '' : String(value)
+    setWriteFeedback(dp, { type: 'success', text: 'geschrieben' })
+  } catch (err) {
+    setWriteFeedback(dp, { type: 'error', text: err?.message || 'Fehler' })
+  } finally {
+    writeBusy[dp.id] = false
+  }
+}
+async function toggleBoolean(dp) {
+  await writeRowValue(dp, !(currentValue(dp) === true))
 }
 function liveQuality(dp) { return ws.liveValues[dp.id]?.quality ?? dp.quality }
 function qualityVariant(q) {

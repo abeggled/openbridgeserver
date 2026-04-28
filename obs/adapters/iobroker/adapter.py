@@ -1,0 +1,416 @@
+"""
+ioBroker Adapter.
+
+Verbindet open bridge server mit einer ioBroker-Instanz über Socket.IO.
+Der ioBroker socket.io/web Adapter stellt Methoden wie getState, setState und
+subscribe bereit; abonnierte Änderungen kommen als stateChange-Ereignisse.
+
+Adapter-Konfiguration (adapter_instances.config in DB):
+  host:          str    — Hostname/IP der ioBroker-Instanz
+  port:          int    — Socket.IO/Web Adapter Port (häufig 8084)
+  username:      str?   — optional
+  password:      str?   — optional
+  ssl:           bool   — HTTPS verwenden
+  path:          str    — Socket.IO Pfad
+  access_token:  str?   — optionaler Bearer/OAuth Token
+
+Binding-Konfiguration (pro AdapterBinding.config):
+  state_id:         str   — ioBroker-State-ID, z.B. "0_userdata.0.foo"
+  command_state_id: str?  — optional abweichender State für Schreibbefehle
+  ack:              bool  — ack-Flag beim Schreiben
+  source_data_type: str?  — "string"|"int"|"float"|"bool"|"json"|None(=auto)
+  json_key:         str?  — Schlüssel für JSON-Werte
+
+Richtungs-Semantik:
+  SOURCE  → State abonnieren, stateChange liefert Werte ins System
+  DEST    → State bei write() via setState setzen
+  BOTH    → Beides
+"""
+from __future__ import annotations
+
+import base64
+import json
+import logging
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from obs.adapters.base import AdapterBase
+from obs.adapters.registry import register
+from obs.core.event_bus import DataValueEvent
+from obs.core.transformation import apply_source_type, apply_value_map
+
+logger = logging.getLogger(__name__)
+
+
+class IoBrokerAdapterConfig(BaseModel):
+    host: str = "iobroker.local"
+    port: int = 8084
+    username: str | None = None
+    password: str | None = Field(default=None, json_schema_extra={"format": "password"})
+    ssl: bool = False
+    path: str = "/socket.io"
+    access_token: str | None = Field(default=None, json_schema_extra={"format": "password"})
+
+
+class IoBrokerBindingConfig(BaseModel):
+    state_id: str
+    command_state_id: str | None = None
+    ack: bool = False
+    source_data_type: str | None = None
+    json_key: str | None = None
+
+
+class IoBrokerStateInfo(BaseModel):
+    id: str
+    name: str | None = None
+    type: str | None = None
+    role: str | None = None
+    read: bool = True
+    write: bool = False
+    value: Any = None
+    unit: str | None = None
+
+
+def _coerce_iobroker_value(value: Any) -> Any:
+    """Convert common ioBroker/simple-api scalar strings to Python values."""
+    if not isinstance(value, str):
+        return value
+    raw = value.strip()
+    lowered = raw.lower()
+    if lowered in ("true", "on", "yes"):
+        return True
+    if lowered in ("false", "off", "no"):
+        return False
+    if lowered in ("null", "none", "undefined", "nan"):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return json.loads(raw)
+    except Exception:
+        return value
+
+
+@register
+class IoBrokerAdapter(AdapterBase):
+    adapter_type = "IOBROKER"
+    config_schema = IoBrokerAdapterConfig
+    binding_config_schema = IoBrokerBindingConfig
+
+    def __init__(self, event_bus: Any, config: dict | None = None, **kwargs) -> None:
+        super().__init__(event_bus, config, **kwargs)
+        self._cfg: IoBrokerAdapterConfig | None = None
+        self._socket: Any | None = None
+        self._state_map: dict[str, list[Any]] = {}
+
+    async def connect(self) -> None:
+        try:
+            import socketio
+        except ImportError:
+            logger.error("python-socketio not installed — ioBroker adapter disabled")
+            await self._publish_status(False, "python-socketio nicht installiert")
+            return
+        for noisy_logger in ("socketio", "socketio.client", "engineio", "engineio.client"):
+            logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
+        self._cfg = IoBrokerAdapterConfig(**self._config)
+        scheme = "https" if self._cfg.ssl else "http"
+        url = f"{scheme}://{self._cfg.host}:{self._cfg.port}"
+        headers = {}
+        if self._cfg.username and self._cfg.password:
+            raw = f"{self._cfg.username}:{self._cfg.password}".encode()
+            headers["Authorization"] = "Basic " + base64.b64encode(raw).decode()
+
+        auth_payload: dict[str, Any] | None = None
+        if self._cfg.access_token:
+            headers["Authorization"] = f"Bearer {self._cfg.access_token}"
+            auth_payload = {"token": self._cfg.access_token, "accessToken": self._cfg.access_token}
+
+        sio = socketio.AsyncClient(reconnection=True, logger=False, engineio_logger=False)
+        self._socket = sio
+
+        @sio.event
+        async def connect():  # noqa: ANN202
+            logger.info("ioBroker Socket.IO connected → %s", url)
+            await self._publish_status(True, f"Verbunden mit {self._cfg.host}:{self._cfg.port}")
+            await self._subscribe_bound_states()
+
+        @sio.event
+        async def disconnect():  # noqa: ANN202
+            logger.info("ioBroker Socket.IO disconnected")
+            await self._publish_status(False, "Socket.IO getrennt")
+
+        @sio.on("stateChange")
+        async def state_change(*args):  # noqa: ANN202
+            await self._on_state_change_event(*args)
+
+        try:
+            connect_kwargs = {
+                "socketio_path": self._cfg.path.strip("/"),
+            }
+            if headers:
+                connect_kwargs["headers"] = headers
+            if auth_payload:
+                connect_kwargs["auth"] = auth_payload
+            try:
+                await sio.connect(url, wait_timeout=10, **connect_kwargs)
+            except TypeError:
+                # python-socketio v4 (needed for ioBroker socketio v7 / Engine.IO v3)
+                # does not support wait_timeout or auth=.
+                v4_kwargs = dict(connect_kwargs)
+                v4_kwargs.pop("auth", None)
+                await sio.connect(url, **v4_kwargs)
+        except Exception:
+            self._socket = None
+            logger.exception("ioBroker Socket.IO connection failed")
+            await self._publish_status(False, "Socket.IO Verbindung fehlgeschlagen")
+            return
+
+        logger.info("ioBroker adapter started → %s:%d path=%s", self._cfg.host, self._cfg.port, self._cfg.path)
+
+    async def disconnect(self) -> None:
+        if self._socket:
+            try:
+                await self._socket.disconnect()
+            except Exception:
+                logger.exception("ioBroker Socket.IO disconnect failed")
+            self._socket = None
+
+        self._state_map.clear()
+        await self._publish_status(False, "Getrennt")
+
+    async def _on_bindings_reloaded(self) -> None:
+        if self._cfg is None:
+            return
+
+        self._state_map.clear()
+        for binding in self._bindings:
+            if binding.direction not in ("SOURCE", "BOTH"):
+                continue
+            try:
+                bc = IoBrokerBindingConfig(**binding.config)
+            except Exception:
+                logger.warning("Ungültige ioBroker Binding-Konfiguration für %s — übersprungen", binding.id)
+                continue
+            self._state_map.setdefault(bc.state_id, []).append(binding)
+
+        logger.info(
+            "ioBroker adapter: %d state subscription(s): %s",
+            len(self._state_map), list(self._state_map.keys()),
+        )
+
+        if self._state_map:
+            await self._subscribe_bound_states()
+
+    async def _subscribe_bound_states(self) -> None:
+        if not self._socket or not getattr(self._socket, "connected", False) or not self._state_map:
+            return
+        states = list(self._state_map.keys())
+        try:
+            await self._call_socket("subscribe", states)
+            logger.info("ioBroker Socket.IO subscribed: %s", states)
+        except Exception:
+            logger.exception("ioBroker Socket.IO subscribe failed")
+            await self._publish_status(False, "Subscribe fehlgeschlagen")
+            return
+
+        # Initial values: subscribe only reports future changes.
+        for bindings in list(self._state_map.values()):
+            for binding in bindings:
+                value = await self.read(binding)
+                await self._publish_binding_value(binding, value)
+
+    async def _call_socket(self, event: str, *args: Any, timeout: float = 10.0) -> Any:
+        if not self._socket or not getattr(self._socket, "connected", False):
+            raise RuntimeError("ioBroker Socket.IO is not connected")
+        if not args:
+            data = None
+        elif len(args) == 1:
+            data = args[0]
+        else:
+            data = tuple(args)
+        result = await self._socket.call(event, data, timeout=timeout)
+        if isinstance(result, (list, tuple)):
+            if len(result) >= 2:
+                err, value = result[0], result[1]
+                if err:
+                    raise RuntimeError(str(err))
+                return value
+            if len(result) == 1:
+                return result[0]
+        return result
+
+    async def browse_states(self, query: str = "", limit: int = 50) -> list[dict[str, Any]]:
+        q = query.strip()
+        max_results = min(max(limit, 1), 500)
+        matches: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        # ioBroker object IDs are tree-like. A query such as "hue" should first
+        # browse the "hue." namespace instead of returning unrelated full-text
+        # hits such as "system.adapter.hue.0.*".
+        prefixes: list[str] = []
+        if q:
+            prefixes.append(q if "." in q else f"{q}.")
+
+        for prefix in prefixes:
+            for item in await self._browse_state_rows(q, max_results, prefix=prefix):
+                if item["id"] in seen:
+                    continue
+                matches.append(item)
+                seen.add(item["id"])
+                if len(matches) >= max_results:
+                    break
+            if len(matches) >= max_results:
+                break
+
+        if len(matches) < max_results:
+            for item in await self._browse_state_rows(q, max_results, prefix=""):
+                if item["id"] in seen:
+                    continue
+                matches.append(item)
+                seen.add(item["id"])
+                if len(matches) >= max_results:
+                    break
+
+        await self._add_current_values(matches)
+        return matches
+
+    async def _browse_state_rows(self, query: str, max_results: int, prefix: str = "") -> list[dict[str, Any]]:
+        fetch_limit = max_results if prefix else min(max_results * 10, 500)
+        options: dict[str, Any] = {
+            "startkey": prefix,
+            "endkey": f"{prefix}\uffff" if prefix else "\uffff",
+            "limit": fetch_limit,
+        }
+        result = await self._call_socket("getObjectView", "system", "state", options, timeout=12.0)
+        rows = result.get("rows", []) if isinstance(result, dict) else []
+        matches: list[dict[str, Any]] = []
+        q_lower = query.lower()
+        for row in rows:
+            item = self._state_row_to_info(row)
+            haystack = " ".join(
+                str(part or "") for part in (item["id"], item.get("name"), item.get("role"), item.get("type"))
+            ).lower()
+            if q_lower and q_lower not in haystack:
+                continue
+            matches.append(item)
+            if len(matches) >= max_results:
+                break
+        return matches
+
+    async def _add_current_values(self, items: list[dict[str, Any]]) -> None:
+        for item in items:
+            try:
+                state = await self._call_socket("getState", item["id"], timeout=4.0)
+                item["value"] = self._extract_state_value(state)
+            except Exception:
+                item["value"] = None
+
+    @staticmethod
+    def _state_row_to_info(row: Any) -> dict[str, Any]:
+        state_id = str(row.get("id") or "")
+        value = row.get("value") if isinstance(row, dict) else {}
+        common = value.get("common", {}) if isinstance(value, dict) else {}
+        name = common.get("name")
+        if isinstance(name, dict):
+            name = name.get("de") or name.get("en") or next(iter(name.values()), None)
+        return IoBrokerStateInfo(
+            id=state_id,
+            name=str(name) if name else None,
+            type=common.get("type"),
+            role=common.get("role"),
+            read=bool(common.get("read", True)),
+            write=bool(common.get("write", False)),
+            unit=common.get("unit"),
+        ).model_dump()
+
+    async def _on_state_change_event(self, *args: Any) -> None:
+        if len(args) < 2:
+            return
+        state_id = str(args[0])
+        state = args[1]
+        entries = self._state_map.get(state_id)
+        if not entries:
+            return
+        value = self._extract_state_value(state)
+        for binding in entries:
+            await self._publish_binding_value(binding, value)
+
+    async def _publish_binding_value(self, binding: Any, value: Any) -> None:
+        try:
+            bc = IoBrokerBindingConfig(**binding.config)
+            raw = value if isinstance(value, str) else json.dumps(value)
+            auto_value = _coerce_iobroker_value(value)
+            pub_value = apply_source_type(
+                raw,
+                auto_value,
+                bc.source_data_type,
+                bc.json_key,
+                None,
+                binding.id,
+            )
+            pub_value = apply_value_map(pub_value, binding.value_map)
+            if binding.value_formula and pub_value is not None:
+                from obs.core.formula import apply_formula
+                pub_value = apply_formula(binding.value_formula, pub_value)
+        except Exception:
+            logger.exception("ioBroker adapter: error processing binding %s", binding.id)
+            return
+
+        logger.info(
+            "ioBroker adapter state: state_id=%s → dp=%s value=%r",
+            bc.state_id, binding.datapoint_id, pub_value,
+        )
+        await self._bus.publish(DataValueEvent(
+            datapoint_id=binding.datapoint_id,
+            value=pub_value,
+            quality="good",
+            source_adapter=self.adapter_type,
+            binding_id=binding.id,
+        ))
+
+    async def read(self, binding: Any) -> Any:
+        if self._socket is None:
+            return None
+        try:
+            bc = IoBrokerBindingConfig(**binding.config)
+            state = await self._call_socket("getState", bc.state_id)
+            return self._extract_state_value(state)
+        except Exception:
+            logger.exception("ioBroker adapter read failed for binding %s", binding.id)
+            return None
+
+    @staticmethod
+    def _extract_state_value(state: Any) -> Any:
+        if isinstance(state, dict):
+            if "val" in state:
+                return state.get("val")
+            if "value" in state:
+                return state.get("value")
+            if "state" in state:
+                inner = state.get("state")
+                if isinstance(inner, dict) and "val" in inner:
+                    return inner.get("val")
+                return _coerce_iobroker_value(inner)
+        return _coerce_iobroker_value(state)
+
+    async def write(self, binding: Any, value: Any) -> None:
+        if self._socket is None:
+            logger.warning("ioBroker adapter write called but Socket.IO client not initialized")
+            return
+        try:
+            bc = IoBrokerBindingConfig(**binding.config)
+            mapped = apply_value_map(value, binding.value_map)
+            state_id = bc.command_state_id or bc.state_id
+            await self._call_socket("setState", state_id, {"val": mapped, "ack": bc.ack})
+            logger.info("ioBroker adapter write: state=%s value=%r ack=%s", state_id, mapped, bc.ack)
+        except Exception:
+            logger.exception("ioBroker adapter write failed for binding %s", binding.id)

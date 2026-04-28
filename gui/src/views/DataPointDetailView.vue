@@ -27,6 +27,47 @@
         </div>
         <div class="font-mono text-xs text-slate-600 break-all">{{ dp.mqtt_topic }}</div>
         <div v-if="dp.mqtt_alias" class="font-mono text-xs text-slate-600 break-all">{{ dp.mqtt_alias }}</div>
+        <div class="border-t border-slate-200 dark:border-slate-700 pt-4 mt-1">
+          <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Wert schreiben</div>
+          <div v-if="hasWritableBinding" class="flex flex-wrap items-center gap-2">
+            <template v-if="dp.data_type === 'BOOLEAN'">
+              <button
+                @click="writeDetailValue(true)"
+                :disabled="writeBusy"
+                class="btn-secondary btn-sm"
+                :class="{ 'ring-2 ring-blue-400': currentRawValue === true }"
+              >
+                true
+              </button>
+              <button
+                @click="writeDetailValue(false)"
+                :disabled="writeBusy"
+                class="btn-secondary btn-sm"
+                :class="{ 'ring-2 ring-blue-400': currentRawValue === false }"
+              >
+                false
+              </button>
+            </template>
+            <template v-else>
+              <input
+                v-model="writeDraft"
+                :type="isNumericType ? 'number' : 'text'"
+                class="input flex-1 min-w-36"
+                :step="dp.data_type === 'INTEGER' ? '1' : 'any'"
+                @keyup.enter="writeDetailValue(writeDraft)"
+              />
+              <button @click="writeDetailValue(writeDraft)" :disabled="writeBusy" class="btn-primary btn-sm">
+                Schreiben
+              </button>
+            </template>
+          </div>
+          <div v-else class="text-xs text-slate-500">
+            Kein schreibbares Binding vorhanden.
+          </div>
+          <div v-if="writeFeedback" class="text-xs mt-2" :class="writeFeedback.type === 'error' ? 'text-red-500' : 'text-green-600'">
+            {{ writeFeedback.text }}
+          </div>
+        </div>
       </div>
 
       <!-- Properties -->
@@ -116,7 +157,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { dpApi } from '@/api/client'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
@@ -139,19 +180,32 @@ const showBindingForm = ref(false)
 const showBindingConfirm = ref(false)
 const editBinding     = ref(null)
 const deleteBindingTarget = ref(null)
+const writeDraft      = ref('')
+const writeBusy       = ref(false)
+const writeFeedback   = ref(null)
 let unsubWs = null
 
 const liveState  = computed(() => ws.liveValues[props.id])
+const currentRawValue = computed(() => liveState.value?.value ?? dp.value?.value)
 const displayVal = computed(() => {
-  const v = liveState.value?.value ?? dp.value?.value
+  const v = currentRawValue.value
   if (v === null || v === undefined) return '—'
   return dp.value?.unit ? `${v} ${dp.value.unit}` : String(v)
+})
+const isNumericType = computed(() => ['FLOAT', 'INTEGER'].includes(dp.value?.data_type))
+const hasWritableBinding = computed(() =>
+  bindings.value.some(b => b.enabled && ['DEST', 'BOTH'].includes(b.direction))
+)
+
+watch(currentRawValue, (value) => {
+  if (!writeBusy.value && value !== undefined && value !== null) writeDraft.value = String(value)
 })
 
 onMounted(async () => {
   await dpStore.loadDatatypes()
   const { data } = await dpApi.get(props.id)
   dp.value = data
+  if (data.value !== undefined && data.value !== null) writeDraft.value = String(data.value)
   ws.subscribe([props.id])
   unsubWs = ws.onValue((id, value, quality) => {
     if (id === props.id && dp.value) { dp.value.value = value; dp.value.quality = quality }
@@ -179,6 +233,38 @@ function confirmDeleteBinding(b) { deleteBindingTarget.value = b; showBindingCon
 async function doDeleteBinding() {
   await dpApi.deleteBinding(props.id, deleteBindingTarget.value.id)
   await loadBindings()
+}
+
+function coerceWriteValue(raw) {
+  if (dp.value?.data_type === 'BOOLEAN') return raw === true || raw === 'true' || raw === '1' || raw === 1
+  if (dp.value?.data_type === 'INTEGER') return Number.parseInt(raw, 10)
+  if (dp.value?.data_type === 'FLOAT') return Number.parseFloat(raw)
+  return raw
+}
+
+async function writeDetailValue(raw) {
+  writeBusy.value = true
+  writeFeedback.value = null
+  try {
+    const value = coerceWriteValue(raw)
+    if (['INTEGER', 'FLOAT'].includes(dp.value?.data_type) && Number.isNaN(value)) {
+      throw new Error('Bitte eine gültige Zahl eingeben.')
+    }
+    await dpStore.writeValue(props.id, value)
+    if (dp.value) {
+      dp.value.value = value
+      dp.value.quality = 'good'
+    }
+    writeDraft.value = String(value)
+    writeFeedback.value = { type: 'success', text: 'Wert geschrieben.' }
+  } catch (err) {
+    writeFeedback.value = {
+      type: 'error',
+      text: err?.message || 'Wert konnte nicht geschrieben werden.',
+    }
+  } finally {
+    writeBusy.value = false
+  }
 }
 
 function qualityVariant(q) {

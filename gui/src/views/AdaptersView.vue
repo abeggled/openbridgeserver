@@ -151,6 +151,10 @@
               <Spinner v-if="busy[a.id] === 'restart'" size="xs" color="slate" />
               Neu verbinden
             </button>
+            <button v-if="a.adapter_type === 'IOBROKER'" @click="openIoBrokerImport(a)" class="btn-secondary btn-sm" :disabled="!a.connected"
+              title="ioBroker-States als OBS-Objekte importieren">
+              Importieren
+            </button>
             <button @click="confirmDelete(a)" class="ml-auto btn-danger btn-sm" :disabled="busy[a.id] === 'delete'"
               title="Löscht diese Instanz und alle zugehörigen Verknüpfungen unwiderruflich"
               data-testid="btn-delete-instance">
@@ -170,6 +174,83 @@
       confirm-label="Löschen"
       @confirm="executeDelete"
     />
+
+    <Modal v-model="importOpen" :title="importInstance ? `ioBroker Import — ${importInstance.name}` : 'ioBroker Import'" max-width="2xl" resizable>
+      <div class="flex flex-col gap-4">
+        <div class="grid grid-cols-[1fr_auto] gap-3">
+          <div class="form-group">
+            <label class="label">Prefix oder Suche</label>
+            <input v-model="importForm.prefix" class="input font-mono text-sm" placeholder="z.B. hue.0 oder hue.0.Schlafzimmer" @keyup.enter="loadImportPreview" />
+            <p class="hint">Es werden nur ioBroker-Objekte vom Typ <code>state</code> importiert.</p>
+          </div>
+          <div class="form-group">
+            <label class="label">Limit</label>
+            <input v-model.number="importForm.limit" type="number" min="1" max="500" class="input w-24" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-3">
+          <div class="form-group">
+            <label class="label">Richtung</label>
+            <select v-model="importForm.direction" class="input">
+              <option value="auto">Automatisch</option>
+              <option value="SOURCE">Lesen</option>
+              <option value="BOTH">Lesen/Schreiben</option>
+              <option value="DEST">Schreiben</option>
+            </select>
+          </div>
+          <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 mt-7">
+            <input type="checkbox" v-model="importForm.persist_value" class="w-4 h-4 rounded" />
+            Letzten Wert speichern
+          </label>
+          <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 mt-7">
+            <input type="checkbox" v-model="importForm.record_history" class="w-4 h-4 rounded" />
+            Historisierung
+          </label>
+        </div>
+
+        <div class="flex gap-3">
+          <button @click="loadImportPreview" class="btn-secondary btn-sm" :disabled="importBusy">
+            <Spinner v-if="importBusy === 'preview'" size="xs" color="slate" />
+            Vorschau laden
+          </button>
+          <button @click="executeIoBrokerImport" class="btn-primary btn-sm" :disabled="importBusy || selectedImportCount === 0">
+            <Spinner v-if="importBusy === 'import'" size="xs" color="white" />
+            {{ selectedImportCount }} importieren
+          </button>
+        </div>
+
+        <div v-if="importError" class="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400">{{ importError }}</div>
+        <div v-if="importResult" class="p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-sm text-green-500">
+          Importiert: {{ importResult.created_datapoints }} Objekte, {{ importResult.created_bindings }} Verknüpfungen. Übersprungen: {{ importResult.skipped_existing }}.
+        </div>
+
+        <div v-if="importPreview.length" class="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+          <div class="px-3 py-2 bg-slate-50 dark:bg-slate-800/60 flex items-center justify-between text-sm">
+            <label class="flex items-center gap-2">
+              <input type="checkbox" :checked="allImportSelected" @change="toggleAllImport($event.target.checked)" class="w-4 h-4 rounded" />
+              Alle auswählbaren States
+            </label>
+            <span class="text-slate-500">{{ importPreview.length }} Treffer</span>
+          </div>
+          <div class="max-h-96 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-700/50">
+            <label v-for="item in importPreview" :key="item.state_id" class="flex gap-3 px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/50" :class="{ 'opacity-50': item.exists }">
+              <input type="checkbox" v-model="selectedImportStates" :value="item.state_id" :disabled="item.exists" class="w-4 h-4 rounded mt-1" />
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="font-mono text-sm truncate">{{ item.state_id }}</span>
+                  <Badge variant="info" size="xs">{{ item.data_type }}</Badge>
+                  <Badge v-if="item.direction === 'BOTH'" variant="success" size="xs">rw</Badge>
+                  <Badge v-else variant="muted" size="xs">{{ item.direction }}</Badge>
+                </div>
+                <div class="text-xs text-slate-500 truncate">{{ item.name }} · {{ item.tags.join(', ') }}</div>
+                <div v-if="item.reason" class="text-xs text-amber-500">{{ item.reason }}</div>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+    </Modal>
   </div>
 </template>
 
@@ -182,6 +263,7 @@ import Badge         from '@/components/ui/Badge.vue'
 import Spinner       from '@/components/ui/Spinner.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import SchemaForm    from '@/components/adapters/SchemaForm.vue'
+import Modal         from '@/components/ui/Modal.vue'
 
 const store          = useAdapterStore()
 const auth           = useAuthStore()
@@ -204,6 +286,28 @@ const createError       = ref(null)
 // Löschen
 const deleteTarget      = ref(null)
 const showDeleteConfirm = ref(false)
+
+// ioBroker Import
+const importOpen = ref(false)
+const importInstance = ref(null)
+const importBusy = ref(null)
+const importError = ref(null)
+const importResult = ref(null)
+const importPreview = ref([])
+const selectedImportStates = ref([])
+const importForm = reactive({
+  prefix: '',
+  direction: 'auto',
+  persist_value: true,
+  record_history: true,
+  limit: 300,
+})
+
+const selectedImportCount = computed(() => selectedImportStates.value.length)
+const allImportSelected = computed(() => {
+  const selectable = importPreview.value.filter(i => !i.exists).map(i => i.state_id)
+  return selectable.length > 0 && selectable.every(id => selectedImportStates.value.includes(id))
+})
 
 // ------------------------------------------------------------------
 
@@ -352,6 +456,75 @@ async function restartInstance(a) {
     feedback[a.id] = { success: false, detail: e.response?.data?.detail ?? 'Fehler' }
   } finally {
     busy[a.id] = null
+  }
+}
+
+// ---------- ioBroker Import ----------
+
+function openIoBrokerImport(a) {
+  importInstance.value = a
+  importOpen.value = true
+  importBusy.value = null
+  importError.value = null
+  importResult.value = null
+  importPreview.value = []
+  selectedImportStates.value = []
+  importForm.prefix = ''
+  importForm.direction = 'auto'
+  importForm.persist_value = true
+  importForm.record_history = true
+  importForm.limit = 300
+}
+
+function importPayload(states = selectedImportStates.value) {
+  return {
+    prefix: importForm.prefix.trim(),
+    states,
+    direction: importForm.direction,
+    persist_value: importForm.persist_value,
+    record_history: importForm.record_history,
+    limit: importForm.limit || 300,
+  }
+}
+
+async function loadImportPreview() {
+  if (!importInstance.value) return
+  importBusy.value = 'preview'
+  importError.value = null
+  importResult.value = null
+  try {
+    const { data } = await adapterApi.iobrokerImportPreview(importInstance.value.id, importPayload([]))
+    importPreview.value = data.preview || []
+    selectedImportStates.value = importPreview.value.filter(i => !i.exists).map(i => i.state_id)
+    if (!importPreview.value.length) importError.value = 'Keine ioBroker-States gefunden'
+  } catch (e) {
+    importError.value = e.response?.data?.detail ?? 'Vorschau konnte nicht geladen werden'
+  } finally {
+    importBusy.value = null
+  }
+}
+
+function toggleAllImport(checked) {
+  selectedImportStates.value = checked
+    ? importPreview.value.filter(i => !i.exists).map(i => i.state_id)
+    : []
+}
+
+async function executeIoBrokerImport() {
+  if (!importInstance.value || selectedImportStates.value.length === 0) return
+  importBusy.value = 'import'
+  importError.value = null
+  importResult.value = null
+  try {
+    const { data } = await adapterApi.iobrokerImport(importInstance.value.id, importPayload())
+    importResult.value = data
+    await store.fetchAdapters()
+    initDrafts()
+    await loadImportPreview()
+  } catch (e) {
+    importError.value = e.response?.data?.detail ?? 'Import fehlgeschlagen'
+  } finally {
+    importBusy.value = null
   }
 }
 

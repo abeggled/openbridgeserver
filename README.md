@@ -1088,6 +1088,38 @@ Textzustände wie `"on"`/`"off"`, `"true"`/`"false"` werden automatisch in Boole
 
 ---
 
+### ioBroker-Adapter
+
+Verbindet open bridge server bidirektional mit einer ioBroker-Instanz über Socket.IO. Werte werden beim Verknüpfen initial gelesen und danach in Echtzeit über `stateChange`-Ereignisse aktualisiert; Schreibbefehle werden per `setState` an ioBroker gesendet.
+
+**Instanz-Konfiguration:**
+
+| Feld | Standard | Beschreibung |
+|---|---|---|
+| `host` | `iobroker.local` | Hostname oder IP-Adresse der ioBroker-Instanz |
+| `port` | `8084` | Port des ioBroker Socket.IO/Web-Adapters |
+| `username` | — | Optionaler Benutzername |
+| `password` | — | Optionales Passwort (Passwort-Feld) |
+| `ssl` | `false` | HTTPS verwenden |
+| `path` | `/socket.io` | Socket.IO-Pfad |
+| `access_token` | — | Optionaler Bearer/OAuth-Token (Passwort-Feld) |
+
+**Verknüpfungs-Konfiguration:**
+
+| Feld | Beschreibung |
+|---|---|
+| `state_id` | ioBroker-State-ID, z. B. `0_userdata.0.wohnzimmer.temperatur` |
+| `command_state_id` | Optional abweichender State für Schreibbefehle, z. B. ein `.SET`-State |
+| `ack` | Ack-Flag beim Schreiben (`false` = Befehl, `true` = bestätigter Status) |
+| `source_data_type` | Optionaler Datentyp für eingehende Werte: `string`, `int`, `float`, `bool`, `json` |
+| `json_key` | Optionaler Schlüssel zum Extrahieren eines Werts aus JSON |
+
+Textzustände wie `"on"`/`"off"`, `"true"`/`"false"` werden automatisch in Boolean-Werte umgewandelt. Numerische Texte werden als Zahl übergeben. Für getrennte Status- und Befehlsobjekte kann `state_id` auf den Status und `command_state_id` auf den Befehls-State zeigen.
+
+Entwicklungs- und Review-Notizen zur aktuellen Implementierung stehen in [`docs/iobroker-adapter.md`](docs/iobroker-adapter.md).
+
+---
+
 ### Zeitschaltuhr-Adapter
 
 Erzeugt zeitgesteuerte Ereignisse ohne externe Hardware — für tageszeit- oder sonnenstandsbasierte Automatisierungen, Feiertags- und Ferienlogik.
