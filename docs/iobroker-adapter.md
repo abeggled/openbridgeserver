@@ -39,6 +39,7 @@ Instance configuration is stored in `adapter_instances.config`:
 | `ssl` | `false` | Uses HTTPS when enabled |
 | `path` | `/socket.io` | Socket.IO path |
 | `access_token` | empty | Optional bearer token |
+| `resubscribe_interval_seconds` | `60` | Periodically re-subscribes and re-reads bound source states; set to `0` to disable |
 
 Binding configuration:
 
@@ -76,6 +77,12 @@ On `stateChange`:
 2. Extract the ioBroker value from `val`, `value`, or nested state payloads.
 3. Apply automatic scalar conversion and optional OBS source transformation.
 4. Publish a `DataValueEvent` with the originating binding ID.
+
+A lightweight subscription watchdog runs by default every 60 seconds. It calls
+`subscribe` again and re-reads bound source states. Unchanged values are skipped,
+while drifted values are published back into OBS. This heals stale ioBroker
+Socket.IO subscriptions after ioBroker adapter restarts without requiring an OBS
+restart.
 
 On write:
 
