@@ -469,6 +469,113 @@
       </div>
     </template>
 
+    <!-- ── substring_extractor ──────────────────────────────────────────── -->
+    <template v-else-if="isSubstringExtractorNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
+
+        <!-- Modus -->
+        <div class="form-group">
+          <label class="label">Modus</label>
+          <select v-model="localData.mode" @change="emitUpdate" class="input text-sm" data-testid="substr-mode">
+            <option value="rechts_von">Rechts von (nach)</option>
+            <option value="links_von">Links von (vor)</option>
+            <option value="zwischen">Zwischen</option>
+            <option value="ausschneiden">Ausschneiden (Position + Länge)</option>
+            <option value="regex">Regulärer Ausdruck (RegEx)</option>
+          </select>
+        </div>
+
+        <!-- Fields: links_von / rechts_von -->
+        <template v-if="localData.mode === 'links_von' || localData.mode === 'rechts_von'">
+          <div class="form-group">
+            <label class="label">Suchbegriff</label>
+            <input v-model="localData.search" @change="emitUpdate" class="input text-sm font-mono"
+              placeholder="z.B. :" data-testid="substr-search" />
+          </div>
+          <div class="form-group">
+            <label class="label">Vorkommen</label>
+            <select v-model="localData.occurrence" @change="emitUpdate" class="input text-sm">
+              <option value="first">Erstes</option>
+              <option value="last">Letztes</option>
+            </select>
+          </div>
+        </template>
+
+        <!-- Fields: zwischen -->
+        <template v-else-if="localData.mode === 'zwischen'">
+          <div class="form-group">
+            <label class="label">Start-Markierung</label>
+            <input v-model="localData.start_marker" @change="emitUpdate" class="input text-sm font-mono"
+              placeholder="z.B. [" data-testid="substr-start-marker" />
+          </div>
+          <div class="form-group">
+            <label class="label">End-Markierung</label>
+            <input v-model="localData.end_marker" @change="emitUpdate" class="input text-sm font-mono"
+              placeholder="z.B. ]" data-testid="substr-end-marker" />
+          </div>
+        </template>
+
+        <!-- Fields: ausschneiden -->
+        <template v-else-if="localData.mode === 'ausschneiden'">
+          <div class="form-group">
+            <label class="label">Startposition (0-basiert)</label>
+            <input v-model.number="localData.start" @change="emitUpdate" type="number" min="0"
+              class="input text-sm" data-testid="substr-start" />
+          </div>
+          <div class="form-group">
+            <label class="label">Länge (–1 = bis Ende)</label>
+            <input v-model.number="localData.length" @change="emitUpdate" type="number" min="-1"
+              class="input text-sm" data-testid="substr-length" />
+          </div>
+        </template>
+
+        <!-- Fields: regex -->
+        <template v-else-if="localData.mode === 'regex'">
+          <div class="form-group">
+            <label class="label">
+              RegEx-Muster
+              <a :href="substringRegex101Url" target="_blank" rel="noopener"
+                class="ml-2 text-teal-400 underline text-xs" title="In regex101.com öffnen">
+                ↗ regex101.com
+              </a>
+            </label>
+            <input v-model="localData.pattern" @change="emitUpdate" class="input text-sm font-mono"
+              placeholder="z.B. (\d+\.\d+)" data-testid="substr-pattern" />
+          </div>
+          <div class="form-group">
+            <label class="label">Flags (z.B. i, m, s)</label>
+            <input v-model="localData.flags" @change="emitUpdate" class="input text-sm font-mono"
+              placeholder="i" data-testid="substr-flags" />
+          </div>
+          <div class="form-group">
+            <label class="label">Capture-Gruppe (0 = gesamter Treffer)</label>
+            <input v-model.number="localData.group" @change="emitUpdate" type="number" min="0"
+              class="input text-sm" data-testid="substr-group" />
+          </div>
+        </template>
+
+        <!-- Test: empfangene Daten oder manuelle Eingabe -->
+        <div class="form-group">
+          <div class="section-label">Test-Eingabe</div>
+          <textarea
+            v-model="substrTestInput"
+            rows="5"
+            class="input text-xs font-mono resize-y"
+            style="background:#0f172a;color:#94a3b8"
+            :placeholder="extractorPreview || 'Teststring eingeben oder Graph ausführen…'"
+            data-testid="substr-test-input"
+          />
+          <p v-if="substrTestResult !== null" class="text-xs text-teal-400 mt-1" data-testid="substr-test-result">
+            ↳ {{ String(substrTestResult) }}
+          </p>
+          <p v-else-if="substrTestInput || extractorPreview" class="text-xs text-slate-500 mt-1">
+            ↳ kein Treffer
+          </p>
+        </div>
+      </div>
+    </template>
+
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -666,6 +773,7 @@ const isApiClientNode  = computed(() => props.node?.type === 'api_client')
 const isExtractorNode  = computed(() =>
   props.node?.type === 'json_extractor' || props.node?.type === 'xml_extractor'
 )
+const isSubstringExtractorNode = computed(() => props.node?.type === 'substring_extractor')
 const isStringConcatNode = computed(() => props.node?.type === 'string_concat')
 
 // ── string_concat: dynamic slot count ─────────────────────────────────────
@@ -768,6 +876,62 @@ const extractorPreviewValue = computed(() => {
       return el ? el.textContent?.trim() ?? null : null
     } catch { return null }
   }
+})
+
+// ── Substring / RegEx extractor ───────────────────────────────────────────
+const substrTestInput = ref('')
+
+// Use typed test input if present, otherwise fall back to received preview
+const _substrSource = computed(() => substrTestInput.value || extractorPreview.value || '')
+
+const substrTestResult = computed(() => {
+  const text = _substrSource.value
+  if (!text) return null
+  const mode = localData.value.mode || 'rechts_von'
+  try {
+    if (mode === 'links_von' || mode === 'rechts_von') {
+      const search = localData.value.search || ''
+      if (!search) return null
+      const occ = localData.value.occurrence || 'first'
+      const idx = occ === 'last' ? text.lastIndexOf(search) : text.indexOf(search)
+      if (idx === -1) return null
+      return mode === 'links_von' ? text.slice(0, idx) : text.slice(idx + search.length)
+    }
+    if (mode === 'zwischen') {
+      const sm = localData.value.start_marker || ''
+      const em = localData.value.end_marker   || ''
+      if (!sm || !em) return null
+      const is = text.indexOf(sm)
+      if (is === -1) return null
+      const afterS = is + sm.length
+      const ie = text.indexOf(em, afterS)
+      return ie === -1 ? null : text.slice(afterS, ie)
+    }
+    if (mode === 'ausschneiden') {
+      const start  = Number(localData.value.start  ?? 0)
+      const length = Number(localData.value.length ?? -1)
+      return length < 0 ? text.slice(start) : text.slice(start, start + length)
+    }
+    if (mode === 'regex') {
+      const pattern = localData.value.pattern || ''
+      if (!pattern) return null
+      const flagStr = (localData.value.flags || '').toLowerCase().replace(/[^ims]/g, '')
+      const re = new RegExp(pattern, flagStr)
+      const m  = text.match(re)
+      if (!m) return null
+      const group = Number(localData.value.group ?? 0)
+      return m[group] !== undefined ? m[group] : null
+    }
+  } catch { return null }
+  return null
+})
+
+const substringRegex101Url = computed(() => {
+  const pattern = localData.value.pattern || ''
+  const flags   = (localData.value.flags   || '').toLowerCase().replace(/[^ims]/g, '')
+  const test    = _substrSource.value.slice(0, 2000)
+  const params  = new URLSearchParams({ regex: pattern, flags, testString: test })
+  return `https://regex101.com/?${params.toString()}`
 })
 
 const configFields = computed(() => {
