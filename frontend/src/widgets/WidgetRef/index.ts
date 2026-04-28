@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'WidgetRef',
   label: 'Widget-Referenz',
   icon: '🔗',
+  group: 'Medien & Sonstiges',
   minW: 2, minH: 2,
   defaultW: 3, defaultH: 2,
   component: Widget,

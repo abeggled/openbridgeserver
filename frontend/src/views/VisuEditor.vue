@@ -56,6 +56,7 @@ import '@/widgets/IFrame/index'
 import '@/widgets/Uhr/index'
 import '@/widgets/RTR/index'
 import '@/widgets/Wetter/index'
+import '@/widgets/Stufenschalter/index'
 
 // ── Props / Router / Store ────────────────────────────────────────────────────
 const props = defineProps<{ id: string }>()

@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'Text',
   label: 'Text',
   icon: '📝',
+  group: 'Medien & Sonstiges',
   minW: 2, minH: 1,
   defaultW: 4, defaultH: 3,
   component: Widget,

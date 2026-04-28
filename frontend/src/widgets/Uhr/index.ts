@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type:    'Uhr',
   label:   'Uhr',
   icon:    '🕐',
+  group:   'Anzeige',
   minW:    2,
   minH:    2,
   defaultW: 3,

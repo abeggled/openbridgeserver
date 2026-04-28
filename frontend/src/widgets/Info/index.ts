@@ -10,6 +10,7 @@ WidgetRegistry.register({
   type: 'Info',
   label: 'Info',
   icon: 'ℹ️',
+  group: 'Anzeige',
   minW: 2, minH: 2,
   defaultW: 3, defaultH: 3,
   component: Widget,

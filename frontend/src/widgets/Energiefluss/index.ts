@@ -10,6 +10,7 @@ WidgetRegistry.register({
   type: 'Energiefluss',
   label: 'Energiefluss',
   icon: '⚡',
+  group: 'Anzeige',
   minW: 4, minH: 4,
   defaultW: 6, defaultH: 5,
   component: Widget,

@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'ValueDisplay',
   label: 'Wertanzeige',
   icon: '🔢',
+  group: 'Anzeige',
   minW: 2, minH: 2,
   defaultW: 3, defaultH: 2,
   component: Widget,

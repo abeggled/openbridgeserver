@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type:     'RTR',
   label:    'Raumtemperaturregler',
   icon:     '🌡️',
+  group:    'Steuerung',
   minW:     3,
   minH:     4,
   defaultW: 3,

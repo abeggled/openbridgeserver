@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'Licht',
   label: 'Licht',
   icon: '💡',
+  group: 'Steuerung',
   minW: 2, minH: 2,
   defaultW: 3, defaultH: 4,
   component: Widget,

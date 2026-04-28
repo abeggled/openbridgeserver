@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'Slider',
   label: 'Schieberegler',
   icon: '🎚️',
+  group: 'Steuerung',
   minW: 3, minH: 2,
   defaultW: 4, defaultH: 2,
   component: Widget,

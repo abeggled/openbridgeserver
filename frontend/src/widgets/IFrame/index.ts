@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'IFrame',
   label: 'iFrame',
   icon: '🖼️',
+  group: 'Medien & Sonstiges',
   minW: 3, minH: 2,
   defaultW: 6, defaultH: 4,
   component: Widget,

@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'Chart',
   label: 'Verlauf',
   icon: '📈',
+  group: 'Anzeige',
   minW: 4, minH: 3,
   defaultW: 6, defaultH: 4,
   component: Widget,

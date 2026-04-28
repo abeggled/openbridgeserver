@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'Link',
   label: 'Link',
   icon: '🔗',
+  group: 'Medien & Sonstiges',
   minW: 2, minH: 2,
   defaultW: 2, defaultH: 2,
   component: Widget,

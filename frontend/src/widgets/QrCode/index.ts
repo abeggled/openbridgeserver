@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'QrCode',
   label: 'QR-Code',
   icon: '▣',
+  group: 'Medien & Sonstiges',
   minW: 2, minH: 2,
   defaultW: 3, defaultH: 3,
   component: Widget,

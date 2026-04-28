@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'Fenster',
   label: 'Fenster / Türe',
   icon: '🚪',
+  group: 'Anzeige',
   minW: 2, minH: 2,
   defaultW: 2, defaultH: 3,
   component: Widget,

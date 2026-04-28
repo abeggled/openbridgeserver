@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'Wetter',
   label: 'Wetter',
   icon: '🌤️',
+  group: 'Anzeige',
   minW: 4, minH: 3,
   defaultW: 6, defaultH: 5,
   component: Widget,

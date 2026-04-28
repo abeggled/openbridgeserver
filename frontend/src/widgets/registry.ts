@@ -14,6 +14,8 @@ export interface WidgetDefinition {
   label: string
   /** Emoji oder SVG-String für die Palette */
   icon: string
+  /** Gruppe in der Widget-Palette (z.B. "Steuerung", "Anzeige") */
+  group?: string
   /** Mindestbreite im Grid (in Spalten) */
   minW: number
   /** Mindesthöhe im Grid (in Zeilen) */

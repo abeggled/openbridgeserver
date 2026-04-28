@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'Rolladen',
   label: 'Rollladen / Jalousie',
   icon: '🪟',
+  group: 'Steuerung',
   minW: 3, minH: 3,
   defaultW: 4, defaultH: 4,
   component: Widget,

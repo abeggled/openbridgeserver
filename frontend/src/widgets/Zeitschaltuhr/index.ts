@@ -6,6 +6,7 @@ WidgetRegistry.register({
   type: 'Zeitschaltuhr',
   label: 'Zeitschaltuhr',
   icon: '🕐',
+  group: 'Steuerung',
   minW: 2, minH: 2,
   defaultW: 3, defaultH: 2,
   component: Widget,
