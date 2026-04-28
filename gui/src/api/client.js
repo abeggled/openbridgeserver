@@ -82,6 +82,7 @@ export const dpApi = {
   update:        (id, data)                     => api.patch(`/datapoints/${id}`, data),
   delete:        (id)                           => api.delete(`/datapoints/${id}`),
   value:         (id)                           => api.get(`/datapoints/${id}/value`),
+  writeValue:    (id, value)                    => api.post(`/datapoints/${id}/value`, { value }),
   listBindings:  (id)                           => api.get(`/datapoints/${id}/bindings`),
   createBinding: (id, data)                     => api.post(`/datapoints/${id}/bindings`, data),
   updateBinding: (id, bindingId, data)          => api.patch(`/datapoints/${id}/bindings/${bindingId}`, data),
@@ -114,6 +115,9 @@ export const adapterApi = {
   restartInstance:    (id)              => api.post(`/adapters/instances/${id}/restart`),
   mqttBrowseTopics:   (id, timeout = 5) => api.get(`/adapters/instances/${id}/mqtt/browse`, { params: { timeout }, timeout: (timeout + 3) * 1000 }),
   mqttSamplePayload:  (id, topic, timeout = 5) => api.get(`/adapters/instances/${id}/mqtt/sample`, { params: { topic, timeout }, timeout: (timeout + 3) * 1000 }),
+  iobrokerBrowseStates: (id, q = '', limit = 50) => api.get(`/adapters/instances/${id}/iobroker/states`, { params: { q, limit } }),
+  iobrokerImportPreview: (id, data) => api.post(`/adapters/instances/${id}/iobroker/import-preview`, data),
+  iobrokerImport:        (id, data) => api.post(`/adapters/instances/${id}/iobroker/import`, data),
 }
 
 // ── KNX Project Import ────────────────────────────────────────────────────

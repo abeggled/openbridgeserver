@@ -112,6 +112,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     import obs.adapters.mqtt.adapter             # noqa: F401
     import obs.adapters.zeitschaltuhr.adapter    # noqa: F401
     import obs.adapters.homeassistant.adapter    # noqa: F401
+    import obs.adapters.iobroker.adapter         # noqa: F401
     await adapter_registry.start_all(bus, db, value_getter=registry.get_value)
 
     # 9. Logic Engine
@@ -172,6 +173,16 @@ def create_app() -> FastAPI:
     from fastapi import Request
     from fastapi.responses import JSONResponse
 
+    def _spa_index_response(index: Path) -> FileResponse:
+        return FileResponse(
+            str(index),
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
+
     # ── Serve Vue Admin-GUI (gui_dist → /) ────────────────────────────────
     # NOTE: We deliberately avoid a catch-all @app.get("/{path:path}") route
     # because it causes 405 Method Not Allowed for POST/PATCH requests to API
@@ -200,7 +211,7 @@ def create_app() -> FastAPI:
             """Alle /visu/... Pfade → index.html (Vue Router history mode)."""
             index = _visu_dist / "index.html"
             if index.exists():
-                return FileResponse(str(index))
+                return _spa_index_response(index)
             return JSONResponse({"detail": "Visu nicht gebaut"}, status_code=404)
 
     # ── 404-Handler für alles andere ──────────────────────────────────────
@@ -217,7 +228,7 @@ def create_app() -> FastAPI:
         if _gui_dist.is_dir():
             index = _gui_dist / "index.html"
             if index.exists():
-                return FileResponse(str(index))
+                return _spa_index_response(index)
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     return app

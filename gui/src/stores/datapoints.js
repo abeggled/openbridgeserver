@@ -110,6 +110,11 @@ export const useDatapointStore = defineStore('datapoints', () => {
     if (dp) { dp.value = value; dp.quality = quality }
   }
 
+  async function writeValue(id, value) {
+    await dpApi.writeValue(id, value)
+    patchValue(id, value, 'good')
+  }
+
   // --------------------------------------------------------------------------
   // Scroll-state persistence (sessionStorage)
   // Used to restore position when navigating back from a detail view.
@@ -138,7 +143,7 @@ export const useDatapointStore = defineStore('datapoints', () => {
   return {
     items, total, loading, datatypes, sortCol, sortDir, hasMore,
     search, loadMore, setSort,
-    create, update, remove, loadDatatypes, patchValue,
+    create, update, remove, loadDatatypes, patchValue, writeValue,
     saveScrollState, restoreScrollState, clearScrollState,
   }
 })

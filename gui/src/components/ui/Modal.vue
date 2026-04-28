@@ -13,7 +13,10 @@
           enter-from-class="opacity-0 scale-95" enter-active-class="transition-all duration-200"
           leave-to-class="opacity-0 scale-95"   leave-active-class="transition-all duration-150"
         >
-          <div v-if="modelValue" :class="['relative card shadow-2xl w-full flex flex-col max-h-[90vh]', maxWidthClass]">
+          <div
+            v-if="modelValue"
+            :class="['relative card shadow-2xl w-full flex flex-col max-h-[90vh]', maxWidthClass, { 'modal-resizable': resizable }]"
+          >
             <!-- Header -->
             <div v-if="title" class="card-header shrink-0">
               <h3 class="text-base font-semibold text-slate-800 dark:text-slate-100">{{ title }}</h3>
@@ -46,8 +49,19 @@ const props = defineProps({
   modelValue: Boolean,
   title:      String,
   maxWidth:   { type: String, default: 'lg' },
+  resizable:  { type: Boolean, default: false },
 })
 defineEmits(['update:modelValue'])
 const maxWidths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '2xl': 'max-w-2xl' }
 const maxWidthClass = computed(() => maxWidths[props.maxWidth] ?? maxWidths.lg)
 </script>
+
+<style scoped>
+.modal-resizable {
+  resize: both;
+  overflow: hidden;
+  min-width: min(42rem, calc(100vw - 2rem));
+  min-height: min(28rem, calc(100vh - 2rem));
+  max-width: calc(100vw - 2rem);
+}
+</style>

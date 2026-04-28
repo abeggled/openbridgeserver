@@ -412,6 +412,107 @@
         </div>
       </template>
 
+      <!-- ioBroker -->
+      <template v-if="selectedAdapterType === 'IOBROKER'">
+        <div class="section-header">ioBroker Binding</div>
+        <div class="form-group">
+          <label class="label">State-ID *</label>
+          <div class="flex gap-2">
+            <input
+              v-model="cfg.state_id"
+              class="input font-mono text-sm flex-1"
+              placeholder="Suchen oder State-ID eingeben …"
+              data-testid="config-field-state_id"
+              required
+              @input="onIoBrokerStateInput"
+            />
+            <button
+              type="button"
+              class="btn-secondary px-3 text-sm whitespace-nowrap"
+              :disabled="!selectedInstanceId || iobrokerBrowseLoading"
+              @click="browseIoBrokerStates"
+            >
+              <span v-if="iobrokerBrowseLoading" class="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1"></span>
+              {{ iobrokerBrowseLoading ? 'Lädt …' : 'Durchsuchen' }}
+            </button>
+          </div>
+          <p class="hint">Der ioBroker-State, der gelesen und abonniert wird.</p>
+
+          <div
+            v-if="iobrokerStates.length > 0"
+            class="mt-2 max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800"
+          >
+            <button
+              v-for="state in iobrokerStates"
+              :key="state.id"
+              type="button"
+              class="w-full text-left px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-700/50"
+              @click="selectIoBrokerState(state)"
+            >
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="font-mono text-sm text-slate-700 dark:text-slate-100 truncate">{{ state.id }}</span>
+                <span class="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-500 shrink-0">{{ state.type || 'auto' }}</span>
+                <span v-if="state.write" class="text-[11px] px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 shrink-0">write</span>
+              </div>
+              <div class="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
+                <span class="truncate">{{ state.name || '—' }}</span>
+                <span v-if="state.role" class="shrink-0">{{ state.role }}</span>
+                <span v-if="state.value !== null && state.value !== undefined" class="font-mono shrink-0">= {{ state.value }}</span>
+              </div>
+            </button>
+          </div>
+          <p v-if="iobrokerBrowseError" class="text-xs text-red-400 mt-1">{{ iobrokerBrowseError }}</p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="form-group">
+            <label class="label">Datentyp</label>
+            <select v-model="cfg.source_data_type" class="input">
+              <option value="">Automatisch</option>
+              <option value="bool">Boolean</option>
+              <option value="float">Zahl mit Komma</option>
+              <option value="int">Ganzzahl</option>
+              <option value="string">Text</option>
+              <option value="json">JSON-Feld</option>
+            </select>
+            <p class="hint">Automatisch reicht meistens. Bei Licht/Schalter: Boolean.</p>
+          </div>
+          <div v-if="cfg.source_data_type === 'json' && (form.direction === 'SOURCE' || form.direction === 'BOTH')" class="form-group">
+            <label class="label">JSON-Schlüssel</label>
+            <input v-model="cfg.json_key" class="input" placeholder="z.B. val, temperature" />
+            <p class="hint">Optional, wenn der State selbst ein JSON-Objekt enthält.</p>
+          </div>
+        </div>
+
+        <div v-if="form.direction === 'DEST' || form.direction === 'BOTH'" class="optional-divider">Schreiben</div>
+        <div v-if="form.direction === 'DEST' || form.direction === 'BOTH'" class="grid grid-cols-2 gap-4">
+          <div class="form-group">
+            <label class="label">Command-State <span class="optional">(optional)</span></label>
+            <input
+              v-model="cfg.command_state_id"
+              class="input font-mono text-sm"
+              placeholder="leer = gleiche State-ID"
+            />
+            <p class="hint">Nur nötig, wenn Status und Befehl getrennte States sind.</p>
+          </div>
+          <div class="form-group flex flex-col justify-end">
+            <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 mt-6">
+              <input type="checkbox" v-model="cfg.ack" class="w-4 h-4 rounded" />
+              Mit ack=true schreiben
+            </label>
+            <p class="hint">Für Befehle normalerweise aus lassen.</p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          class="text-sm text-blue-500 hover:text-blue-400 self-start"
+          @click="showAdvancedTabs = !showAdvancedTabs"
+        >
+          {{ showAdvancedTabs ? 'Erweiterte Optionen ausblenden' : 'Erweiterte Optionen anzeigen' }}
+        </button>
+      </template>
+
       <!-- Zeitschaltuhr -->
       <template v-if="selectedAdapterType === 'ZEITSCHALTUHR'">
         <div class="section-header">Zeitschaltuhr Binding</div>
@@ -750,6 +851,7 @@ const error        = ref(null)
 const allInstances = ref([])
 const allDpts      = ref([])
 const activeTab    = ref('conn')
+const showAdvancedTabs = ref(false)
 
 // ---------------------------------------------------------------------------
 // Form-State
@@ -793,6 +895,8 @@ const cfg = reactive({
   sensor_id: '', sensor_type: 'DS18B20',
   // HOME_ASSISTANT
   entity_id: '', attribute: '', service_domain: '', service_name: '', service_data_key: '',
+  // IOBROKER
+  state_id: '', command_state_id: '', ack: false,
   // ZEITSCHALTUHR
   timer_type: 'daily', meta_type: 'none',
   weekdays: [0,1,2,3,4,5,6], months: [], day_of_month: 0,
@@ -843,6 +947,12 @@ const mqttBrowseTopics = ref([])
 const mqttBrowseLoading = ref(false)
 const mqttBrowseError  = ref(null)
 
+// ioBroker state browser state
+const iobrokerStates = ref([])
+const iobrokerBrowseLoading = ref(false)
+const iobrokerBrowseError = ref(null)
+let iobrokerBrowseTimer = null
+
 // ---------------------------------------------------------------------------
 // Computed
 // ---------------------------------------------------------------------------
@@ -859,9 +969,12 @@ const currentInstanceName = computed(() => {
   return props.initial.adapter_type
 })
 
+const selectedInstanceId = computed(() => props.initial?.adapter_instance_id || form.adapter_instance_id)
+
 const visibleTabs = computed(() => {
   const tabs = [{ id: 'conn', label: 'Verbindung', badge: false }]
   if (selectedAdapterType.value && selectedAdapterType.value !== 'ZEITSCHALTUHR') {
+    if (selectedAdapterType.value === 'IOBROKER' && !showAdvancedTabs.value) return tabs
     const hasFormula = !!form.value_formula?.trim() || !!form.value_map_preset
     tabs.push({ id: 'transform', label: 'Transformation', badge: hasFormula })
     if (form.direction === 'DEST' || form.direction === 'BOTH') {
@@ -945,6 +1058,10 @@ watch(() => props.initial, val => {
   if (cfg.service_domain   == null) cfg.service_domain   = ''
   if (cfg.service_name     == null) cfg.service_name     = ''
   if (cfg.service_data_key == null) cfg.service_data_key = ''
+  // IOBROKER defaults when loading
+  if (cfg.state_id         == null) cfg.state_id = ''
+  if (cfg.command_state_id == null) cfg.command_state_id = ''
+  if (cfg.ack              == null) cfg.ack = false
   // ZEITSCHALTUHR defaults when loading
   if (cfg.timer_type    == null) cfg.timer_type    = 'daily'
   if (cfg.meta_type     == null) cfg.meta_type     = 'none'
@@ -1019,6 +1136,49 @@ function selectMqttTopic(topic) {
   mqttBrowseError.value  = null
 }
 
+function onIoBrokerStateInput() {
+  iobrokerBrowseError.value = null
+  clearTimeout(iobrokerBrowseTimer)
+  const q = cfg.state_id?.trim() ?? ''
+  if (q.length < 2) {
+    iobrokerStates.value = []
+    return
+  }
+  iobrokerBrowseTimer = setTimeout(() => browseIoBrokerStates(), 350)
+}
+
+async function browseIoBrokerStates() {
+  const instanceId = selectedInstanceId.value
+  if (!instanceId) {
+    iobrokerBrowseError.value = 'Bitte zuerst eine ioBroker-Instanz wählen'
+    return
+  }
+  iobrokerBrowseLoading.value = true
+  iobrokerBrowseError.value = null
+  try {
+    const { data } = await adapterApi.iobrokerBrowseStates(instanceId, cfg.state_id?.trim() ?? '', 50)
+    iobrokerStates.value = data
+    if (data.length === 0) iobrokerBrowseError.value = 'Keine States gefunden'
+  } catch (e) {
+    iobrokerBrowseError.value = e.response?.data?.detail ?? 'ioBroker-States konnten nicht geladen werden'
+  } finally {
+    iobrokerBrowseLoading.value = false
+  }
+}
+
+function selectIoBrokerState(state) {
+  cfg.state_id = state.id
+  if (state.type && !cfg.source_data_type) {
+    const t = String(state.type).toLowerCase()
+    if (t === 'boolean') cfg.source_data_type = 'bool'
+    else if (t === 'number') cfg.source_data_type = 'float'
+    else if (t === 'string') cfg.source_data_type = 'string'
+  }
+  if (!state.write && form.direction !== 'SOURCE') form.direction = 'SOURCE'
+  iobrokerStates.value = []
+  iobrokerBrowseError.value = null
+}
+
 function onValueMapPresetChange() {
   if (form.value_map_preset !== 'custom') {
     form.value_map_custom = ''
@@ -1070,6 +1230,10 @@ watch(() => cfg.source_data_type, sdt => {
 // Force direction to SOURCE when ZEITSCHALTUHR is selected
 watch(selectedAdapterType, type => {
   if (type === 'ZEITSCHALTUHR') form.direction = 'SOURCE'
+  if (type === 'IOBROKER') {
+    activeTab.value = 'conn'
+    showAdvancedTabs.value = false
+  }
 })
 
 // Zeitschaltuhr helpers
@@ -1211,6 +1375,16 @@ function buildConfig() {
     if (cfg.service_domain?.trim())   c.service_domain   = cfg.service_domain.trim()
     if (cfg.service_name?.trim())     c.service_name     = cfg.service_name.trim()
     if (cfg.service_data_key?.trim()) c.service_data_key = cfg.service_data_key.trim()
+    return c
+  }
+  if (type === 'IOBROKER') {
+    const c = { state_id: cfg.state_id }
+    if (cfg.command_state_id?.trim()) c.command_state_id = cfg.command_state_id.trim()
+    if (form.direction === 'DEST' || form.direction === 'BOTH') c.ack = !!cfg.ack
+    if ((form.direction === 'SOURCE' || form.direction === 'BOTH') && cfg.source_data_type)
+      c.source_data_type = cfg.source_data_type
+    if (cfg.source_data_type === 'json' && cfg.json_key?.trim())
+      c.json_key = cfg.json_key.trim()
     return c
   }
   if (type === 'ZEITSCHALTUHR') {
