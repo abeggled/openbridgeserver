@@ -37,7 +37,7 @@ pyzipper>=0.3.6
 xknxproject>=1.0.0
 
 # Logic Engine — cron scheduling
-croniter>=1.4.0
+croniter>=6.2.2
 astral>=3.0
 
 # Zeitschaltuhr — holiday calendar
