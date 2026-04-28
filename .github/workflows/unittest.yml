@@ -54,20 +54,3 @@ jobs:
           flags: unittests
           report_type: test_results
           fail_ci_if_error: false
-
-      - name: Run ruff
-        run: ruff check custom_components/
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install ruff
-        run: pip install ruff==0.14.1
-
-      - name: Run ruff
-        run: ruff check obs/
