@@ -127,6 +127,11 @@ export const knxprojApi = {
   clearGA: ()         => api.delete('/knxproj/group-addresses'),
 }
 
+export const homekitApi = {
+  preview: (data) => api.post('/homekit/preview', data),
+  apply:   (data) => api.post('/homekit/apply', data),
+}
+
 // ── System ────────────────────────────────────────────────────────────────
 export const systemApi = {
   health:    () => axios.get('/api/v1/system/health'),  // no auth
