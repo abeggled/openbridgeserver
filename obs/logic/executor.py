@@ -296,6 +296,7 @@ class GraphExecutor:
                 if not self._to_bool(inputs.get("trigger")):
                     return {"value": None}
                 import random
+
                 lo = float(d.get("min", 0))
                 hi = float(d.get("max", 100))
                 if lo > hi:
