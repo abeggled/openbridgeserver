@@ -1,6 +1,6 @@
 # open bridge multiprotocol ai server
 
-![open bridge server Logo](logo/obs_logo_dark.svg)
+![**open bridge server** Logo](logo/obs_logo_dark.svg)
 
 **Offene Gebäudeautomations-Plattform — verbindet KNX, Modbus, MQTT, Home Assistant und mehr**
 
@@ -81,7 +81,7 @@ curl http://localhost:8080/api/v1/system/health
 
 | Dienst | Adresse | Protokoll |
 |---|---|---|
-| open bridge server Weboberfläche + API | http://localhost:8080 | HTTP |
+| **open bridge server** Weboberfläche + API | http://localhost:8080 | HTTP |
 | Mosquitto MQTT (intern) | localhost:1883 | MQTT |
 | Mosquitto MQTT über WebSocket | localhost:9001 | MQTT/WS |
 
@@ -224,13 +224,13 @@ security:
 - **Adapter** lesen Werte aus dem Gebäude (KNX-Telegramm, Modbus-Register, MQTT-Nachricht, …) und melden sie an den Ereignisbus.
 - Der **Ereignisbus** verteilt jeden Wert gleichzeitig an: Werteabbild (aktueller Stand), Verlauf, Änderungsprotokoll, MQTT-Broker, WebSocket-Clients und den Logik-Editor.
 - Der **Logik-Editor** reagiert auf Wertänderungen, führt Automatisierungslogiken aus und schreibt Ergebnisse zurück in DataPoints.
-- **Protokoll-Brücke:** Wenn ein Wert über ein Protokoll empfangen wird, schreibt open bridge server ihn automatisch über alle anderen verknüpften Protokolle weiter — ohne zusätzliche Konfiguration.
+- **Protokoll-Brücke:** Wenn ein Wert über ein Protokoll empfangen wird, schreibt **open bridge server** ihn automatisch über alle anderen verknüpften Protokolle weiter — ohne zusätzliche Konfiguration.
 
 ---
 
 ## Datenpunkte
 
-Ein Datenpunkt ist das zentrale Objekt in open bridge server. Jeder physische oder virtuelle Wert im System — eine Temperatur, ein Schaltzustand, ein Energiezähler — ist ein Datenpunkt.
+Ein Datenpunkt ist das zentrale Objekt in **open bridge server**. Jeder physische oder virtuelle Wert im System — eine Temperatur, ein Schaltzustand, ein Energiezähler — ist ein Datenpunkt.
 
 ```
 GET    /api/v1/datapoints?page=0&size=50       # Liste (seitenweise)
@@ -284,8 +284,8 @@ DELETE /api/v1/datapoints/{id}/bindings/{binding_id}
 
 | Richtung | Bedeutung |
 |---|---|
-| `SOURCE` | Lesen: Adapter empfängt Werte und leitet sie an open bridge server weiter |
-| `DEST` | Schreiben: open bridge server sendet Werte an den Adapter |
+| `SOURCE` | Lesen: Adapter empfängt Werte und leitet sie an **open bridge server** weiter |
+| `DEST` | Schreiben: **open bridge server** sendet Werte an den Adapter |
 | `BOTH` | Beides gleichzeitig |
 
 **Wert-Transformation (`value_formula`):**
@@ -390,7 +390,7 @@ GET    /api/v1/adapters/{type}/binding-schema  # JSON-Schema der Verknüpfungs-K
 
 ### Anmeldung und Zugangsverwaltung
 
-open bridge server unterstützt zwei Anmeldemethoden:
+**open bridge server** unterstützt zwei Anmeldemethoden:
 
 | Methode | Verwendung |
 |---|---|
@@ -545,7 +545,7 @@ Der Logik-Editor ermöglicht das visuelle Erstellen von Automatisierungsregeln �
 
 **Ablauf:**
 1. Ein **DP Lesen**-Block beobachtet einen Datenpunkt.
-2. Ändert sich der Wert, führt open bridge server den gesamten Graphen aus.
+2. Ändert sich der Wert, führt **open bridge server** den gesamten Graphen aus.
 3. Die Blöcke werden der Reihe nach berechnet.
 4. Ein **DP Schreiben**-Block schreibt das Ergebnis zurück — das löst automatisch alle Adapter, MQTT, den Verlauf und den RingBuffer aus.
 5. Der **Trigger**-Block löst den Graphen nach einem Zeitplan aus (z. B. täglich um 07:00 Uhr).
@@ -810,11 +810,11 @@ Zeigt berechnete Zwischenwerte direkt auf den Blöcken an — live und automatis
 | `group_address` | KNX-Gruppenadresse (dreiteilig, z. B. `27/6/6`) |
 | `dpt_id` | DPT-Kennung — Tabelle unten |
 | `state_group_address` | Optionale Rückmelde-Adresse für DEST-Verknüpfungen |
-| `respond_to_read` | `true`: open bridge server beantwortet KNX-Leseanfragen (GroupValueRead) mit dem aktuellen Wert. Standard: `false` |
+| `respond_to_read` | `true`: **open bridge server** beantwortet KNX-Leseanfragen (GroupValueRead) mit dem aktuellen Wert. Standard: `false` |
 
 **Unterstützte DPTs:**
 
-open bridge server unterstützt über 85 KNX-Datentypen. Die vollständige Liste ist über `GET /api/v1/adapters/knx/dpts` abrufbar.
+**open bridge server** unterstützt über 85 KNX-Datentypen. Die vollständige Liste ist über `GET /api/v1/adapters/knx/dpts` abrufbar.
 
 **DPT 1 — 1-Bit Boolean**
 
@@ -1107,7 +1107,7 @@ Verbindet sich mit einem **externen** MQTT-Broker (getrennt vom internen Mosquit
 
 ### Home-Assistant-Adapter
 
-Verbindet open bridge server bidirektional mit einer Home-Assistant-Instanz. Empfängt Zustandsänderungen in Echtzeit über WebSocket (`state_changed`-Ereignisse) und schreibt Werte über die HA-REST-API (Dienst-Aufrufe).
+Verbindet **open bridge server** bidirektional mit einer Home-Assistant-Instanz. Empfängt Zustandsänderungen in Echtzeit über WebSocket (`state_changed`-Ereignisse) und schreibt Werte über die HA-REST-API (Dienst-Aufrufe).
 
 **Instanz-Konfiguration:**
 
@@ -1134,7 +1134,7 @@ Textzustände wie `"on"`/`"off"`, `"true"`/`"false"` werden automatisch in Boole
 
 ### ioBroker-Adapter
 
-Verbindet open bridge server bidirektional mit einer ioBroker-Instanz über Socket.IO. Werte werden beim Verknüpfen initial gelesen und danach in Echtzeit über `stateChange`-Ereignisse aktualisiert; Schreibbefehle werden per `setState` an ioBroker gesendet.
+Verbindet **open bridge server** bidirektional mit einer ioBroker-Instanz über Socket.IO. Werte werden beim Verknüpfen initial gelesen und danach in Echtzeit über `stateChange`-Ereignisse aktualisiert; Schreibbefehle werden per `setState` an ioBroker gesendet.
 
 **Instanz-Konfiguration:**
 
@@ -1175,7 +1175,7 @@ Erzeugt zeitgesteuerte Ereignisse ohne externe Hardware — für tageszeit- oder
 | `latitude` | `47.5` | Breitengrad für Sonnenstandsberechnung |
 | `longitude` | `8.0` | Längengrad für Sonnenstandsberechnung |
 | `altitude` | `400.0` | Höhe über NN in Metern |
-| `timezone` | (App-Zeitzone) | IANA-Zeitzone; leer = Systemzeitzone von open bridge server verwenden |
+| `timezone` | (App-Zeitzone) | IANA-Zeitzone; leer = Systemzeitzone von **open bridge server** verwenden |
 | `holiday_country` | `CH` | ISO-3166-Ländercode für Feiertagskalender |
 | `holiday_subdivision` | — | Kanton/Bundesland, z. B. `ZH` oder `BY` |
 | `holiday_language` | `de` | Sprache für Feiertagsnamen |
@@ -1214,7 +1214,7 @@ Erzeugt zeitgesteuerte Ereignisse ohne externe Hardware — für tageszeit- oder
 
 ## MQTT-Topics
 
-open bridge server verwendet zwei parallele Topic-Strategien:
+**open bridge server** verwendet zwei parallele Topic-Strategien:
 
 | Topic | Beschreibung |
 |---|---|
@@ -1288,16 +1288,16 @@ Das Skript `scripts/Import-EtsGaCsv.ps1` liest einen ETS-GA-CSV-Export und legt 
 automatisch einen DataPoint mit passendem Typ und Einheit an. Anschliessend wird eine
 Verknüpfung zur angegebenen KNX-Adapter-Instanz erstellt.
 
-**Voraussetzungen:** PowerShell 5.1 oder neuer, erreichbare open bridge server-Instanz, gültiger API-Schlüssel.
+**Voraussetzungen:** PowerShell 5.1 oder neuer, erreichbare **open bridge server**-Instanz, gültiger API-Schlüssel.
 
 **Parameter:**
 
 | Parameter | Pflicht | Beschreibung |
 |---|---|---|
-| `-Url` | ja | Basis-URL der open bridge server-Instanz, z.B. `http://localhost:8080` |
+| `-Url` | ja | Basis-URL der **open bridge server**-Instanz, z.B. `http://localhost:8080` |
 | `-ApiKey` | ja | API-Schlüssel (`obs_…`) |
 | `-File` | ja | Pfad zur ETS-GA-CSV-Datei |
-| `-Adapter` | ja | Name der KNX-Adapter-Instanz in open bridge server |
+| `-Adapter` | ja | Name der KNX-Adapter-Instanz in **open bridge server** |
 | `-LogFile` | nein | Pfad für Fehlerprotokoll; ohne Angabe werden Fehler auf der Konsole ausgegeben |
 | `-Direction` | nein | Verknüpfungsrichtung: `SOURCE` (Standard), `DEST` oder `BOTH` |
 | `-Encoding` | nein | Zeichenkodierung der CSV-Datei: `UTF8` (Standard) oder `Default` (ANSI/Windows-1252). ETS 5 exportiert i.d.R. ANSI, ETS 6 UTF-8. |
@@ -1315,7 +1315,7 @@ Komma-Trennzeichen sowie deutschsprachige und englischsprachige Spaltenköpfe au
 ```
 
 DPT-Angaben im Format `DPST-X-Y` (Haupt- und Subtyp) oder `DPT-X` (nur Haupttyp) werden
-automatisch in das open bridge server-Format (`DPT9.001`) umgewandelt und der passende Datentyp (`FLOAT`,
+automatisch in das **open bridge server**-Format (`DPT9.001`) umgewandelt und der passende Datentyp (`FLOAT`,
 `INTEGER`, `BOOLEAN`, `STRING`) sowie die Einheit werden gesetzt. Fehlt der DPT, wird `FLOAT`
 ohne Einheit verwendet.
 
