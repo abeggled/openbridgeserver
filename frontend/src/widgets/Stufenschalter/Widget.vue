@@ -6,7 +6,7 @@ import type { DataPointValue } from '@/types'
 
 interface Step {
   label: string
-  value: number
+  value: string
   icon: string
   color: string
 }
@@ -27,69 +27,88 @@ const steps = computed<Step[]>(() => {
   const raw = props.config.steps as Partial<Step>[] | undefined
   return (raw ?? []).map((s) => ({
     label: s.label ?? '',
-    value: s.value ?? 0,
+    value: String(s.value ?? ''),
     icon:  s.icon  ?? '',
     color: s.color ?? '#6b7280',
   }))
 })
 
+// Wert aus String parsen: 'true'/'false' → bool, Zahl → number, sonst string
+function parseValue(s: string): unknown {
+  if (s === 'true')  return true
+  if (s === 'false') return false
+  const n = Number(s)
+  if (s.trim() !== '' && !isNaN(n)) return n
+  return s
+}
+
+function valuesMatch(dpVal: unknown, stepVal: string): boolean {
+  const parsed = parseValue(stepVal)
+  if (typeof dpVal === 'boolean') return dpVal === parsed
+  if (typeof dpVal === 'number')  return dpVal === parsed
+  if (typeof dpVal === 'string')  return dpVal === stepVal
+  return false
+}
+
 // Status-Datenpunkt hat Vorrang
 const displayValue = computed(() => props.statusValue ?? props.value)
 
-function resolveCurrentValue(v: DataPointValue | null): number | null {
-  if (v === null) return null
-  const raw = v.v
-  if (typeof raw === 'number') return raw
-  return null
+function findStepIndex(v: DataPointValue | null): number {
+  if (v === null) return -1
+  return steps.value.findIndex((s) => valuesMatch(v.v, s.value))
 }
 
-const optimisticValue = ref<number | null>(null)
+// Optimistischer Schritt-Index: -1 = unbekannt
+const optimisticIndex = ref<number | null>(null)
 
-watch(displayValue, () => { optimisticValue.value = null })
+watch(displayValue, () => { optimisticIndex.value = null })
 
-const currentValue = computed(() => {
-  if (optimisticValue.value !== null) return optimisticValue.value
-  return resolveCurrentValue(displayValue.value)
+const currentIndex = computed<number>(() => {
+  if (optimisticIndex.value !== null) return optimisticIndex.value
+  return findStepIndex(displayValue.value)
 })
 
-function isActive(step: Step): boolean {
-  if (currentValue.value === null) return false
-  return Math.abs(currentValue.value - step.value) < 1e-9
-}
+const currentStep = computed<Step | null>(() =>
+  currentIndex.value >= 0 ? steps.value[currentIndex.value] : null,
+)
 
 const pending = ref(false)
 
-async function selectStep(step: Step) {
+async function advance() {
   if (props.editorMode || props.readonly || !props.datapointId || pending.value) return
-  if (isActive(step)) return
-  optimisticValue.value = step.value
+  if (steps.value.length === 0) return
+  const nextIndex = currentIndex.value < 0
+    ? 0
+    : (currentIndex.value + 1) % steps.value.length
+  const nextStep = steps.value[nextIndex]
+  optimisticIndex.value = nextIndex
   pending.value = true
   try {
-    await datapoints.write(props.datapointId, step.value)
+    await datapoints.write(props.datapointId, parseValue(nextStep.value))
   } catch {
-    optimisticValue.value = null
+    optimisticIndex.value = null
   } finally {
     pending.value = false
   }
 }
 
-// SVG-Icons pro Stufe: Cache nach Icon-Name
-const svgCache = ref<Map<string, string>>(new Map())
+// SVG-Icon laden und einfärben
+const svgContent = ref('')
 
-async function loadSvg(icon: string) {
-  if (!icon || !isSvgIcon(icon) || svgCache.value.has(icon)) return
-  const svg = await getSvg(svgIconName(icon))
-  svgCache.value = new Map(svgCache.value).set(icon, svg)
-}
+watch(
+  () => currentStep.value?.icon,
+  async (icon) => {
+    if (!icon || !isSvgIcon(icon)) { svgContent.value = ''; return }
+    svgContent.value = await getSvg(svgIconName(icon))
+  },
+  { immediate: true },
+)
 
-watch(steps, (newSteps) => {
-  newSteps.forEach((s) => { if (s.icon) loadSvg(s.icon) })
-}, { immediate: true, deep: true })
-
-function colorSvg(raw: string, color: string): string {
-  if (!raw) return ''
+const coloredSvg = computed(() => {
+  if (!svgContent.value || !currentStep.value) return ''
+  const color = currentStep.value.color
   const nonNoneFill = /\bfill\s*:\s*(?!none\b)/g
-  return raw
+  return svgContent.value
     .replace(/<svg\b([^>]*)>/, (_, attrs: string) => {
       const updated = /\bfill=/.test(attrs)
         ? attrs.replace(/\bfill="(?!none\b)[^"]*"/, `fill="${color}"`)
@@ -106,63 +125,68 @@ function colorSvg(raw: string, color: string): string {
       `${open}${css
         .replace(nonNoneFill, `fill:${color} `)
         .replace(/\bstroke\s*:\s*(?!none\b)[^;}\n]*/g, `stroke:${color}`)}${close}`)
-}
+})
 
-function getStepSvg(step: Step): string {
-  if (!step.icon || !isSvgIcon(step.icon)) return ''
-  const raw = svgCache.value.get(step.icon) ?? ''
-  if (!raw) return ''
-  return colorSvg(raw, isActive(step) ? step.color : '#9ca3af')
-}
+const activeColor  = computed(() => currentStep.value?.color ?? '#6b7280')
+const activeIcon   = computed(() => currentStep.value?.icon  ?? '')
+const activeLabel  = computed(() => currentStep.value?.label ?? '—')
 </script>
 
 <template>
-  <div class="flex flex-col h-full p-2 gap-1 select-none overflow-hidden">
+  <div
+    class="flex flex-col items-center h-full p-2 select-none"
+    :class="[editorMode || readonly ? 'opacity-60 cursor-default' : 'cursor-pointer']"
+    @click="advance"
+  >
     <!-- Widget-Beschriftung -->
     <span
       v-if="label"
-      class="text-xs text-gray-500 dark:text-gray-400 truncate text-center shrink-0"
+      class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center shrink-0 mb-1"
     >{{ label }}</span>
 
-    <!-- Stufen-Buttons -->
-    <div class="flex flex-wrap gap-1 flex-1 min-h-0 content-center">
-      <button
-        v-for="(step, i) in steps"
-        :key="i"
-        type="button"
-        :disabled="editorMode || readonly || pending"
-        class="flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded border transition-all duration-150 flex-1 min-w-0 min-h-[2.5rem]"
-        :class="[
-          isActive(step)
-            ? 'shadow-sm'
-            : 'border-gray-600 dark:border-gray-700 text-gray-400 hover:border-gray-400 hover:text-gray-300',
-          editorMode || readonly ? 'cursor-default opacity-70' : 'cursor-pointer',
-        ]"
-        :style="isActive(step)
-          ? { borderColor: step.color, backgroundColor: step.color + '22', color: step.color }
-          : {}"
-        @click="selectStep(step)"
-      >
-        <!-- Icon -->
-        <template v-if="step.icon">
-          <span
-            v-if="!isSvgIcon(step.icon)"
-            class="text-lg leading-none"
-            :style="{ filter: isActive(step) ? 'none' : 'grayscale(1) opacity(0.5)' }"
-          >{{ step.icon }}</span>
-          <span
-            v-else-if="getStepSvg(step)"
-            class="w-5 h-5 [&>svg]:w-full [&>svg]:h-full shrink-0"
-            v-html="getStepSvg(step)"
-          />
-          <span v-else class="inline-block opacity-30 text-xs">▪</span>
-        </template>
+    <!-- Abstandhalter oben -->
+    <div style="flex: 1" />
 
-        <!-- Label -->
-        <span class="text-xs font-medium truncate w-full text-center leading-none">
-          {{ step.label || step.value }}
-        </span>
-      </button>
+    <!-- Icon-Bereich -->
+    <div
+      class="min-h-0 flex items-center justify-center w-full"
+      style="flex: 3; aspect-ratio: 1; max-width: 100%"
+      :style="{ color: activeColor }"
+    >
+      <!-- Emoji-Icon -->
+      <span
+        v-if="activeIcon && !isSvgIcon(activeIcon)"
+        class="leading-none select-none h-full flex items-center"
+        style="font-size: min(100%, 4rem)"
+      >{{ activeIcon }}</span>
+
+      <!-- SVG-Icon -->
+      <span
+        v-else-if="activeIcon && coloredSvg"
+        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
+        style="aspect-ratio: 1"
+        v-html="coloredSvg"
+      />
+
+      <!-- Kein Icon: Fallback-Punkt in Aktivfarbe -->
+      <span
+        v-else
+        class="text-4xl leading-none opacity-60"
+      >●</span>
     </div>
+
+    <!-- Abstandhalter Mitte -->
+    <div style="flex: 0.5" />
+
+    <!-- Stufen-Bezeichnung -->
+    <div class="min-h-0 flex items-center justify-center text-center" style="flex: 1.5">
+      <span
+        class="text-sm font-semibold leading-tight"
+        :style="{ color: activeColor }"
+      >{{ activeLabel }}</span>
+    </div>
+
+    <!-- Abstandhalter unten -->
+    <div style="flex: 0.5" />
   </div>
 </template>

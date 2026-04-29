@@ -4,7 +4,7 @@ import IconPicker from '@/components/IconPicker.vue'
 
 interface Step {
   label: string
-  value: number
+  value: string
   icon: string
   color: string
 }
@@ -14,7 +14,7 @@ interface Cfg {
   steps: Step[]
 }
 
-const MIN_STEPS = 3
+const MIN_STEPS = 2
 const MAX_STEPS = 10
 
 const props = defineProps<{ modelValue: Record<string, unknown> }>()
@@ -24,14 +24,14 @@ function parseSteps(raw: unknown): Step[] {
   const arr = raw as Partial<Step>[] | undefined
   if (!Array.isArray(arr) || arr.length < MIN_STEPS) {
     return [
-      { label: 'Stufe 1', value: 0, icon: '', color: '#6b7280' },
-      { label: 'Stufe 2', value: 1, icon: '', color: '#3b82f6' },
-      { label: 'Stufe 3', value: 2, icon: '', color: '#10b981' },
+      { label: 'Stufe 1', value: '0', icon: '', color: '#6b7280' },
+      { label: 'Stufe 2', value: '1', icon: '', color: '#3b82f6' },
+      { label: 'Stufe 3', value: '2', icon: '', color: '#10b981' },
     ]
   }
   return arr.map((s) => ({
     label: s.label ?? '',
-    value: s.value ?? 0,
+    value: String(s.value ?? ''),
     icon:  s.icon  ?? '',
     color: s.color ?? '#6b7280',
   }))
@@ -46,8 +46,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg, steps: [...cfg.steps] }), {
 
 function addStep() {
   if (cfg.steps.length >= MAX_STEPS) return
-  const next = cfg.steps.length
-  cfg.steps.push({ label: `Stufe ${next + 1}`, value: next, icon: '', color: '#6b7280' })
+  cfg.steps.push({ label: `Stufe ${cfg.steps.length + 1}`, value: String(cfg.steps.length), icon: '', color: '#6b7280' })
 }
 
 function removeStep(i: number) {
@@ -57,16 +56,12 @@ function removeStep(i: number) {
 
 function moveUp(i: number) {
   if (i === 0) return
-  const tmp = cfg.steps[i - 1]
-  cfg.steps[i - 1] = cfg.steps[i]
-  cfg.steps[i] = tmp
+  ;[cfg.steps[i - 1], cfg.steps[i]] = [cfg.steps[i], cfg.steps[i - 1]]
 }
 
 function moveDown(i: number) {
   if (i === cfg.steps.length - 1) return
-  const tmp = cfg.steps[i + 1]
-  cfg.steps[i + 1] = cfg.steps[i]
-  cfg.steps[i] = tmp
+  ;[cfg.steps[i + 1], cfg.steps[i]] = [cfg.steps[i], cfg.steps[i + 1]]
 }
 </script>
 
@@ -98,34 +93,39 @@ function moveDown(i: number) {
         >+ Stufe</button>
       </div>
 
+      <p class="text-xs text-gray-600 mb-2">
+        Beim Drücken wird durchgeschaltet. Der Wert wird je nach Objekt als
+        bool / int / float / string gesendet.
+      </p>
+
       <div class="space-y-2">
         <div
           v-for="(step, i) in cfg.steps"
           :key="i"
           class="border border-gray-700 rounded p-2 space-y-2"
         >
-          <!-- Stufen-Kopfzeile mit Nummerierung + Reihenfolge-Buttons -->
+          <!-- Kopfzeile mit Reihenfolge-Buttons -->
           <div class="flex items-center gap-1">
             <span class="text-xs font-semibold text-gray-500 w-4 shrink-0">{{ i + 1 }}</span>
             <div class="flex gap-0.5 ml-auto">
               <button
                 type="button"
                 :disabled="i === 0"
-                class="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-gray-300 disabled:opacity-20"
+                class="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-gray-300 disabled:opacity-20 text-xs"
                 title="Nach oben"
                 @click="moveUp(i)"
               >▲</button>
               <button
                 type="button"
                 :disabled="i === cfg.steps.length - 1"
-                class="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-gray-300 disabled:opacity-20"
+                class="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-gray-300 disabled:opacity-20 text-xs"
                 title="Nach unten"
                 @click="moveDown(i)"
               >▼</button>
               <button
                 type="button"
                 :disabled="cfg.steps.length <= MIN_STEPS"
-                class="w-5 h-5 flex items-center justify-center rounded text-red-600 hover:text-red-400 disabled:opacity-20"
+                class="w-5 h-5 flex items-center justify-center rounded text-red-600 hover:text-red-400 disabled:opacity-20 text-xs"
                 title="Entfernen"
                 @click="removeStep(i)"
               >✕</button>
@@ -144,10 +144,10 @@ function moveDown(i: number) {
             />
           </div>
 
-          <!-- Beschriftung + Wert -->
+          <!-- Name + Wert -->
           <div class="flex gap-2">
             <div class="flex-1">
-              <label class="block text-xs text-gray-500 mb-0.5">Beschriftung</label>
+              <label class="block text-xs text-gray-500 mb-0.5">Name</label>
               <input
                 v-model="step.label"
                 type="text"
@@ -155,12 +155,13 @@ function moveDown(i: number) {
                 class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
               />
             </div>
-            <div class="w-20">
+            <div class="w-24">
               <label class="block text-xs text-gray-500 mb-0.5">Wert</label>
               <input
-                v-model.number="step.value"
-                type="number"
-                class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
+                v-model="step.value"
+                type="text"
+                placeholder="0"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 font-mono focus:outline-none focus:border-blue-500"
               />
             </div>
           </div>
