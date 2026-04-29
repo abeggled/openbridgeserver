@@ -292,6 +292,21 @@ class GraphExecutor:
                 val = self._to_num(inputs.get("value"))
                 return {"result": max(lo, min(hi, val))}
 
+            case "random_value":
+                if not self._to_bool(inputs.get("trigger")):
+                    return {"value": None}
+                import random
+                lo = float(d.get("min", 0))
+                hi = float(d.get("max", 100))
+                if lo > hi:
+                    lo, hi = hi, lo
+                if d.get("data_type", "int") == "float":
+                    decimals = max(0, min(10, int(d.get("decimal_places", 2))))
+                    result: int | float = round(random.uniform(lo, hi), decimals)
+                else:
+                    result = random.randint(int(lo), int(hi))
+                return {"value": result}
+
             case "string_concat":
                 count = max(2, min(20, int(d.get("count", 2))))
                 sep = str(d.get("separator", ""))

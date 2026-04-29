@@ -198,7 +198,7 @@ const nodeTypeComponents = {
   // Astro
   astro_sun: _generic,
   // Math extended
-  clamp: _generic, statistics: _generic, avg_multi: _generic,
+  clamp: _generic, random_value: _generic, statistics: _generic, avg_multi: _generic,
   heating_circuit: _generic, min_max_tracker: _generic, consumption_counter: _generic,
   // Timer extended
   operating_hours: _generic,

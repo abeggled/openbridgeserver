@@ -435,6 +435,54 @@ class TestClampNode:
 
 
 # ===========================================================================
+# random_value node
+# ===========================================================================
+
+
+class TestRandomValueNode:
+    def test_no_output_without_trigger(self):
+        out = run_single("random_value", {"data_type": "int", "min": 0, "max": 100}, {"trigger": False})
+        assert out["value"] is None
+
+    def test_no_output_when_trigger_absent(self):
+        out = run_single("random_value", {"data_type": "int", "min": 0, "max": 100})
+        assert out["value"] is None
+
+    def test_integer_in_range(self):
+        for _ in range(50):
+            out = run_single("random_value", {"data_type": "int", "min": 10, "max": 20}, {"trigger": True})
+            assert isinstance(out["value"], int)
+            assert 10 <= out["value"] <= 20
+
+    def test_float_in_range(self):
+        for _ in range(50):
+            out = run_single("random_value", {"data_type": "float", "min": 1.5, "max": 3.5, "decimal_places": 2}, {"trigger": True})
+            assert isinstance(out["value"], float)
+            assert 1.5 <= out["value"] <= 3.5
+
+    def test_float_decimal_places(self):
+        for _ in range(20):
+            out = run_single("random_value", {"data_type": "float", "min": 0, "max": 1, "decimal_places": 1}, {"trigger": True})
+            val = out["value"]
+            assert round(val, 1) == val
+
+    def test_swapped_min_max_corrected(self):
+        for _ in range(20):
+            out = run_single("random_value", {"data_type": "int", "min": 100, "max": 10}, {"trigger": True})
+            assert 10 <= out["value"] <= 100
+
+    def test_integer_zero_decimal_places_returns_int(self):
+        out = run_single("random_value", {"data_type": "int", "min": 5, "max": 5}, {"trigger": True})
+        assert out["value"] == 5
+        assert isinstance(out["value"], int)
+
+    def test_float_zero_decimal_places_is_whole_number(self):
+        for _ in range(10):
+            out = run_single("random_value", {"data_type": "float", "min": 0, "max": 100, "decimal_places": 0}, {"trigger": True})
+            assert out["value"] == int(out["value"])
+
+
+# ===========================================================================
 # statistics node
 # ===========================================================================
 

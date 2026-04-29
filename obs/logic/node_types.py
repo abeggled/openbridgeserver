@@ -256,6 +256,36 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         color="#7c3aed",
     ),
     NodeTypeDef(
+        type="random_value",
+        label="Zufallswert",
+        category="math",
+        description=(
+            "Gibt bei jedem Trigger-Signal einen zufälligen Wert zwischen Min und Max aus. "
+            "Typ 'int' liefert eine Ganzzahl (random.randint), "
+            "Typ 'float' liefert eine Gleitkommazahl mit konfigurierbaren Nachkommastellen."
+        ),
+        inputs=[_port("trigger", "Trigger", "trigger")],
+        outputs=[_port("value", "Wert")],
+        config_schema={
+            "data_type": {
+                "type": "string",
+                "enum": ["int", "float"],
+                "default": "int",
+                "label": "Datentyp",
+            },
+            "min": {"type": "number", "default": 0, "label": "Minimum"},
+            "max": {"type": "number", "default": 100, "label": "Maximum"},
+            "decimal_places": {
+                "type": "integer",
+                "default": 2,
+                "minimum": 0,
+                "maximum": 10,
+                "label": "Nachkommastellen (nur float)",
+            },
+        },
+        color="#7c3aed",
+    ),
+    NodeTypeDef(
         type="statistics",
         label="Statistik",
         category="math",

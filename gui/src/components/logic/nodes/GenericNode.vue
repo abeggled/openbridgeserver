@@ -98,6 +98,7 @@ const NODE_DEFS = {
   astro_sun:          { label: 'Astro Sonne',    color: '#d97706', inputs: [],                                                                         outputs: [{id:'sunrise',label:'Aufgang'},{id:'sunset',label:'Untergang'},{id:'is_day',label:'Tagsüber'}] },
   // Math (extended)
   clamp:              { label: 'Begrenzer',      color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                                                outputs: [{id:'result',label:'Erg.'}]      },
+  random_value:       { label: 'Zufallswert',    color: '#7c3aed', inputs: [{id:'trigger',label:'Trigger'}],                                           outputs: [{id:'value', label:'Wert'}]      },
   statistics:         { label: 'Statistik',      color: '#7c3aed', inputs: [{id:'value',label:'Wert'},{id:'reset',label:'Reset'}],                      outputs: [{id:'min',label:'Min'},{id:'max',label:'Max'},{id:'avg',label:'∅'},{id:'count',label:'N'}] },
   heating_circuit:    { label: 'Sommer/Winter', color: '#7c3aed', inputs: [{id:'value',label:'Temp °C'}], outputs: [{id:'heating_mode',label:'Heizmodus'},{id:'daily_avg',label:'Tagesmittel'},{id:'monthly_avg',label:'Monatsmittel'},{id:'t1',label:'T1 (dbg)'},{id:'t2',label:'T2 (dbg)'},{id:'t3',label:'T3 (dbg)'}] },
   min_max_tracker:    { label: 'Min/Max',        color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                                                outputs: [{id:'min_daily',label:'Min/d'},{id:'max_daily',label:'Max/d'},{id:'min_weekly',label:'Min/w'},{id:'max_weekly',label:'Max/w'},{id:'min_monthly',label:'Min/m'},{id:'max_monthly',label:'Max/m'},{id:'min_yearly',label:'Min/y'},{id:'max_yearly',label:'Max/y'},{id:'min_abs',label:'Min∞'},{id:'max_abs',label:'Max∞'}] },
@@ -186,6 +187,7 @@ const summary = computed(() => {
   if (props.type === 'mcp_tool')     return d.tool_name || '—'
   if (props.type === 'astro_sun')       return `${d.latitude ?? 47.37}° N  ${d.longitude ?? 8.54}° E`
   if (props.type === 'clamp')           return `[${d.min ?? 0} … ${d.max ?? 100}]`
+  if (props.type === 'random_value')    return `${d.data_type ?? 'int'}  [${d.min ?? 0} … ${d.max ?? 100}]`
   if (props.type === 'statistics')      return null
   if (props.type === 'operating_hours') return null
   if (props.type === 'notify_pushover')     return d.title || 'open bridge server'
