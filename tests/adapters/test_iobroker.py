@@ -1,4 +1,5 @@
-"""Unit-Tests für den ioBroker Adapter.
+"""
+Unit-Tests für den ioBroker Adapter.
 
 Keine echte ioBroker-Instanz erforderlich — Socket.IO-Client wird gemockt.
 """
@@ -9,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from obs.adapters.iobroker.adapter import IoBrokerAdapter, _coerce_iobroker_value
 from tests.adapters.conftest import make_binding
+from obs.adapters.iobroker.adapter import IoBrokerAdapter, _coerce_iobroker_value
 
 
 @pytest.fixture
@@ -152,7 +153,7 @@ class TestSubscribe:
             side_effect=[
                 [None, None],  # subscribe
                 [None, {"val": 22.0}],  # getState initial read
-            ],
+            ]
         )
 
         await adapter._subscribe_bound_states()
@@ -219,6 +220,32 @@ class TestSubscribe:
         assert mock_bus.publish.call_count == 1
 
 
+class TestReconnect:
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_retries_until_connect_succeeds(self, adapter, monkeypatch):
+        adapter._disconnect_requested = False
+        adapter._cfg = adapter.config_schema(**{**adapter._config, "reconnect_interval_seconds": 1})
+        adapter._socket.connected = False
+        adapter._connect_socket = AsyncMock(side_effect=[False, False, True])
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr("obs.adapters.iobroker.adapter.asyncio.sleep", sleep_mock)
+
+        await adapter._reconnect_loop()
+
+        assert adapter._connect_socket.await_count == 3
+        assert sleep_mock.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_stops_when_disconnect_requested(self, adapter):
+        adapter._disconnect_requested = True
+        adapter._cfg = adapter.config_schema(**adapter._config)
+        adapter._connect_socket = AsyncMock()
+
+        await adapter._reconnect_loop()
+
+        adapter._connect_socket.assert_not_called()
+
+
 class TestBrowseStates:
     @pytest.mark.asyncio
     async def test_short_query_prefers_iobroker_namespace(self, adapter):
@@ -236,10 +263,10 @@ class TestBrowseStates:
                                         "type": "boolean",
                                         "role": "switch.light",
                                         "write": True,
-                                    },
+                                    }
                                 },
                             },
-                        ],
+                        ]
                     },
                 ],
                 [
@@ -254,15 +281,15 @@ class TestBrowseStates:
                                         "type": "boolean",
                                         "role": "indicator.state",
                                         "write": False,
-                                    },
+                                    }
                                 },
                             },
-                        ],
+                        ]
                     },
                 ],
                 [None, {"val": False}],
                 [None, {"val": True}],
-            ],
+            ]
         )
 
         result = await adapter.browse_states("hue", 10)
@@ -290,14 +317,14 @@ class TestBrowseStates:
                                         "name": "hue alive",
                                         "type": "boolean",
                                         "role": "indicator.state",
-                                    },
+                                    }
                                 },
                             },
-                        ],
+                        ]
                     },
                 ],
                 [None, {"val": True}],
-            ],
+            ]
         )
 
         result = await adapter.browse_states("alive", 10)
@@ -328,7 +355,7 @@ class TestWrite:
                 "state_id": "device.0.light.STATE",
                 "command_state_id": "device.0.light.SET",
                 "ack": True,
-            },
+            }
         )
         adapter._socket.call = AsyncMock(return_value=[None, None])
 
