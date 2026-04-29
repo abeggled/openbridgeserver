@@ -86,7 +86,7 @@ jobs:
             sudo debootstrap \
               --arch=${{ env.ARCH }} \
               --components=main,restricted,universe \
-              --include=systemd,systemd-sysv,dbus,apt-utils,locales,iproute2,wget,curl,ca-certificates,less,logrotate,openssh-server,ifupdown2 \
+              --include=systemd,systemd-sysv,dbus,apt-utils,locales,iproute2,wget,curl,ca-certificates,less,logrotate,openssh-server,ifupdown \
               plucky \
               "$ROOTFS" \
               http://archive.ubuntu.com/ubuntu
