@@ -26,6 +26,7 @@ Richtungs-Semantik:
   DEST    → State bei write() via setState setzen
   BOTH    → Beides
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -53,8 +54,11 @@ class IoBrokerAdapterConfig(BaseModel):
     password: str | None = Field(default=None, json_schema_extra={"format": "password"})
     ssl: bool = False
     path: str = "/socket.io"
-    access_token: str | None = Field(default=None, json_schema_extra={"format": "password"})
+    access_token: str | None = Field(
+        default=None, json_schema_extra={"format": "password"}
+    )
     resubscribe_interval_seconds: int = Field(default=60, ge=0)
+    reconnect_interval_seconds: int = Field(default=5, ge=1)
 
 
 class IoBrokerBindingConfig(BaseModel):
@@ -128,7 +132,13 @@ class IoBrokerAdapter(AdapterBase):
         self._source_filter_last_sent: dict[str, float] = {}
         self._source_filter_last_values: dict[str, Any] = {}
         self._subscription_lock = asyncio.Lock()
+        self._connect_lock = asyncio.Lock()
         self._subscription_watchdog_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task | None = None
+        self._disconnect_requested = False
+        self._socketio: Any | None = None
+        self._connect_url: str | None = None
+        self._connect_kwargs: dict[str, Any] = {}
 
     async def connect(self) -> None:
         try:
@@ -137,12 +147,20 @@ class IoBrokerAdapter(AdapterBase):
             logger.error("python-socketio not installed — ioBroker adapter disabled")
             await self._publish_status(False, "python-socketio nicht installiert")
             return
-        for noisy_logger in ("socketio", "socketio.client", "engineio", "engineio.client"):
+        for noisy_logger in (
+            "socketio",
+            "socketio.client",
+            "engineio",
+            "engineio.client",
+        ):
             logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
+        self._socketio = socketio
         self._cfg = IoBrokerAdapterConfig(**self._config)
+        self._disconnect_requested = False
         scheme = "https" if self._cfg.ssl else "http"
         url = f"{scheme}://{self._cfg.host}:{self._cfg.port}"
+        self._connect_url = url
         headers = {}
         if self._cfg.username and self._cfg.password:
             raw = f"{self._cfg.username}:{self._cfg.password}".encode()
@@ -151,54 +169,37 @@ class IoBrokerAdapter(AdapterBase):
         auth_payload: dict[str, Any] | None = None
         if self._cfg.access_token:
             headers["Authorization"] = f"Bearer {self._cfg.access_token}"
-            auth_payload = {"token": self._cfg.access_token, "accessToken": self._cfg.access_token}
-
-        sio = socketio.AsyncClient(reconnection=True, logger=False, engineio_logger=False)
-        self._socket = sio
-
-        @sio.event
-        async def connect():  # noqa: ANN202
-            logger.info("ioBroker Socket.IO connected → %s", url)
-            subscribed = await self._subscribe_bound_states(force_publish_initial=True)
-            if subscribed:
-                await self._publish_status(True, f"Verbunden mit {self._cfg.host}:{self._cfg.port}")
-
-        @sio.event
-        async def disconnect():  # noqa: ANN202
-            logger.info("ioBroker Socket.IO disconnected")
-            await self._publish_status(False, "Socket.IO getrennt")
-
-        @sio.on("stateChange")
-        async def state_change(*args):  # noqa: ANN202
-            await self._on_state_change_event(*args)
-
-        try:
-            connect_kwargs = {
-                "socketio_path": self._cfg.path.strip("/"),
+            auth_payload = {
+                "token": self._cfg.access_token,
+                "accessToken": self._cfg.access_token,
             }
-            if headers:
-                connect_kwargs["headers"] = headers
-            if auth_payload:
-                connect_kwargs["auth"] = auth_payload
-            try:
-                await sio.connect(url, wait_timeout=10, **connect_kwargs)
-            except TypeError:
-                # python-socketio v4 (needed for ioBroker socketio v7 / Engine.IO v3)
-                # does not support wait_timeout or auth=.
-                v4_kwargs = dict(connect_kwargs)
-                v4_kwargs.pop("auth", None)
-                await sio.connect(url, **v4_kwargs)
-        except Exception:
-            self._socket = None
-            logger.exception("ioBroker Socket.IO connection failed")
-            await self._publish_status(False, "Socket.IO Verbindung fehlgeschlagen")
-            return
 
-        logger.info("ioBroker adapter started → %s:%d path=%s", self._cfg.host, self._cfg.port, self._cfg.path)
+        connect_kwargs = {
+            "socketio_path": self._cfg.path.strip("/"),
+        }
+        if headers:
+            connect_kwargs["headers"] = headers
+        if auth_payload:
+            connect_kwargs["auth"] = auth_payload
+        self._connect_kwargs = connect_kwargs
+
+        connected = await self._connect_socket()
+        if not connected:
+            await self._publish_status(False, "Socket.IO Verbindung fehlgeschlagen")
+            self._ensure_reconnect_task()
+
+        logger.info(
+            "ioBroker adapter started → %s:%d path=%s",
+            self._cfg.host,
+            self._cfg.port,
+            self._cfg.path,
+        )
         self._start_subscription_watchdog()
 
     async def disconnect(self) -> None:
+        self._disconnect_requested = True
         await self._stop_subscription_watchdog()
+        await self._stop_reconnect_task()
         if self._socket:
             try:
                 await self._socket.disconnect()
@@ -223,28 +224,53 @@ class IoBrokerAdapter(AdapterBase):
             try:
                 bc = IoBrokerBindingConfig(**binding.config)
             except Exception:
-                logger.warning("Ungültige ioBroker Binding-Konfiguration für %s — übersprungen", binding.id)
+                logger.warning(
+                    "Ungültige ioBroker Binding-Konfiguration für %s — übersprungen",
+                    binding.id,
+                )
                 continue
             self._state_map.setdefault(bc.state_id, []).append(binding)
 
         logger.info(
             "ioBroker adapter: %d state subscription(s): %s",
-            len(self._state_map), list(self._state_map.keys()),
+            len(self._state_map),
+            list(self._state_map.keys()),
         )
 
         if self._state_map:
             await self._subscribe_bound_states(force_publish_initial=True)
 
     def _start_subscription_watchdog(self) -> None:
-        if self._subscription_watchdog_task and not self._subscription_watchdog_task.done():
+        if (
+            self._subscription_watchdog_task
+            and not self._subscription_watchdog_task.done()
+        ):
             return
         if self._cfg is None or self._cfg.resubscribe_interval_seconds <= 0:
             return
-        self._subscription_watchdog_task = asyncio.create_task(self._subscription_watchdog())
+        self._subscription_watchdog_task = asyncio.create_task(
+            self._subscription_watchdog()
+        )
 
     async def _stop_subscription_watchdog(self) -> None:
         task = self._subscription_watchdog_task
         self._subscription_watchdog_task = None
+        if not task:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    def _ensure_reconnect_task(self) -> None:
+        if self._disconnect_requested:
+            return
+        if self._reconnect_task and not self._reconnect_task.done():
+            return
+        self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    async def _stop_reconnect_task(self) -> None:
+        task = self._reconnect_task
+        self._reconnect_task = None
         if not task:
             return
         task.cancel()
@@ -263,8 +289,82 @@ class IoBrokerAdapter(AdapterBase):
             except Exception:
                 logger.exception("ioBroker subscription watchdog failed")
 
-    async def _subscribe_bound_states(self, *, force_publish_initial: bool = True) -> bool:
-        if not self._socket or not getattr(self._socket, "connected", False) or not self._state_map:
+    def _build_socket(self) -> Any:
+        assert self._socketio is not None
+        sio = self._socketio.AsyncClient(
+            reconnection=True, logger=False, engineio_logger=False
+        )
+        self._register_socket_handlers(sio)
+        return sio
+
+    def _register_socket_handlers(self, sio: Any) -> None:
+        @sio.event
+        async def connect():  # noqa: ANN202
+            if self._socket is not sio:
+                return
+            logger.info("ioBroker Socket.IO connected → %s", self._connect_url)
+            subscribed = await self._subscribe_bound_states(force_publish_initial=True)
+            if subscribed and self._cfg is not None:
+                await self._publish_status(
+                    True, f"Verbunden mit {self._cfg.host}:{self._cfg.port}"
+                )
+
+        @sio.event
+        async def disconnect():  # noqa: ANN202
+            if self._socket is not sio:
+                return
+            logger.info("ioBroker Socket.IO disconnected")
+            await self._publish_status(False, "Socket.IO getrennt")
+            self._ensure_reconnect_task()
+
+        @sio.on("stateChange")
+        async def state_change(*args):  # noqa: ANN202
+            if self._socket is not sio:
+                return
+            await self._on_state_change_event(*args)
+
+    async def _connect_socket(self) -> bool:
+        if self._cfg is None or self._connect_url is None:
+            return False
+        async with self._connect_lock:
+            if self._disconnect_requested:
+                return False
+            sio = self._build_socket()
+            self._socket = sio
+            try:
+                try:
+                    await sio.connect(
+                        self._connect_url, wait_timeout=10, **self._connect_kwargs
+                    )
+                except TypeError:
+                    v4_kwargs = dict(self._connect_kwargs)
+                    v4_kwargs.pop("auth", None)
+                    await sio.connect(self._connect_url, **v4_kwargs)
+                return True
+            except Exception:
+                if self._socket is sio:
+                    self._socket = None
+                logger.exception("ioBroker Socket.IO connection failed")
+                return False
+
+    async def _reconnect_loop(self) -> None:
+        assert self._cfg is not None
+        while not self._disconnect_requested:
+            if self._socket and getattr(self._socket, "connected", False):
+                return
+            connected = await self._connect_socket()
+            if connected:
+                return
+            await asyncio.sleep(self._cfg.reconnect_interval_seconds)
+
+    async def _subscribe_bound_states(
+        self, *, force_publish_initial: bool = True
+    ) -> bool:
+        if (
+            not self._socket
+            or not getattr(self._socket, "connected", False)
+            or not self._state_map
+        ):
             return bool(self._socket and getattr(self._socket, "connected", False))
 
         async with self._subscription_lock:
@@ -311,7 +411,9 @@ class IoBrokerAdapter(AdapterBase):
                 return result[0]
         return result
 
-    async def browse_states(self, query: str = "", limit: int = 50) -> list[dict[str, Any]]:
+    async def browse_states(
+        self, query: str = "", limit: int = 50
+    ) -> list[dict[str, Any]]:
         q = query.strip()
         max_results = min(max(limit, 1), 500)
         matches: list[dict[str, Any]] = []
@@ -347,14 +449,20 @@ class IoBrokerAdapter(AdapterBase):
         await self._add_current_values(matches)
         return matches
 
-    async def ensure_state(self, request: IoBrokerEnsureStateRequest | dict[str, Any]) -> None:
+    async def ensure_state(
+        self, request: IoBrokerEnsureStateRequest | dict[str, Any]
+    ) -> None:
         """Create/update an ioBroker state object if the socket.io adapter exposes setObject.
 
         This is used by the HomeKit/Yahka import path for 0_userdata.0.obs.home.*
         states. If the object already exists, setObject updates common metadata
         while preserving runtime state value in ioBroker.
         """
-        req = request if isinstance(request, IoBrokerEnsureStateRequest) else IoBrokerEnsureStateRequest(**request)
+        req = (
+            request
+            if isinstance(request, IoBrokerEnsureStateRequest)
+            else IoBrokerEnsureStateRequest(**request)
+        )
         common: dict[str, Any] = {
             "name": req.name or req.state_id.split(".")[-1],
             "type": self._iobroker_common_type(req.data_type),
@@ -371,7 +479,9 @@ class IoBrokerAdapter(AdapterBase):
         }
         await self._call_socket("setObject", req.state_id, obj, timeout=8.0)
         if req.initial_value is not None:
-            await self._call_socket("setState", req.state_id, {"val": req.initial_value, "ack": True})
+            await self._call_socket(
+                "setState", req.state_id, {"val": req.initial_value, "ack": True}
+            )
 
     @staticmethod
     def _iobroker_common_type(data_type: str) -> str:
@@ -397,21 +507,31 @@ class IoBrokerAdapter(AdapterBase):
             "number": "value",
         }.get(data_type, "state")
 
-    async def _browse_state_rows(self, query: str, max_results: int, prefix: str = "") -> list[dict[str, Any]]:
+    async def _browse_state_rows(
+        self, query: str, max_results: int, prefix: str = ""
+    ) -> list[dict[str, Any]]:
         fetch_limit = max_results if prefix else min(max_results * 10, 500)
         options: dict[str, Any] = {
             "startkey": prefix,
             "endkey": f"{prefix}\uffff" if prefix else "\uffff",
             "limit": fetch_limit,
         }
-        result = await self._call_socket("getObjectView", "system", "state", options, timeout=12.0)
+        result = await self._call_socket(
+            "getObjectView", "system", "state", options, timeout=12.0
+        )
         rows = result.get("rows", []) if isinstance(result, dict) else []
         matches: list[dict[str, Any]] = []
         q_lower = query.lower()
         for row in rows:
             item = self._state_row_to_info(row)
             haystack = " ".join(
-                str(part or "") for part in (item["id"], item.get("name"), item.get("role"), item.get("type"))
+                str(part or "")
+                for part in (
+                    item["id"],
+                    item.get("name"),
+                    item.get("role"),
+                    item.get("type"),
+                )
             ).lower()
             if q_lower and q_lower not in haystack:
                 continue
@@ -456,7 +576,9 @@ class IoBrokerAdapter(AdapterBase):
             return
         value = self._extract_state_value(state)
         for binding in entries:
-            await self._publish_binding_value(binding, value, force=True, apply_filters=True)
+            await self._publish_binding_value(
+                binding, value, force=True, apply_filters=True
+            )
 
     async def _publish_binding_value(
         self,
@@ -481,16 +603,25 @@ class IoBrokerAdapter(AdapterBase):
             pub_value = apply_value_map(pub_value, binding.value_map)
             if binding.value_formula and pub_value is not None:
                 from obs.core.formula import apply_formula
+
                 pub_value = apply_formula(binding.value_formula, pub_value)
         except Exception:
-            logger.exception("ioBroker adapter: error processing binding %s", binding.id)
+            logger.exception(
+                "ioBroker adapter: error processing binding %s", binding.id
+            )
             return
 
         last_key = str(binding.id)
         if not force and self._last_source_values.get(last_key) == pub_value:
-            logger.debug("ioBroker adapter state unchanged: state_id=%s value=%r", bc.state_id, pub_value)
+            logger.debug(
+                "ioBroker adapter state unchanged: state_id=%s value=%r",
+                bc.state_id,
+                pub_value,
+            )
             return
-        if apply_filters and not self._source_filters_allow(binding, pub_value, bc.state_id):
+        if apply_filters and not self._source_filters_allow(
+            binding, pub_value, bc.state_id
+        ):
             return
         self._last_source_values[last_key] = pub_value
         self._source_filter_last_sent[last_key] = time.monotonic()
@@ -498,15 +629,19 @@ class IoBrokerAdapter(AdapterBase):
 
         logger.info(
             "ioBroker adapter state: state_id=%s → dp=%s value=%r",
-            bc.state_id, binding.datapoint_id, pub_value,
+            bc.state_id,
+            binding.datapoint_id,
+            pub_value,
         )
-        await self._bus.publish(DataValueEvent(
-            datapoint_id=binding.datapoint_id,
-            value=pub_value,
-            quality="good",
-            source_adapter=self.adapter_type,
-            binding_id=binding.id,
-        ))
+        await self._bus.publish(
+            DataValueEvent(
+                datapoint_id=binding.datapoint_id,
+                value=pub_value,
+                quality="good",
+                source_adapter=self.adapter_type,
+                binding_id=binding.id,
+            )
+        )
 
     def _source_filters_allow(self, binding: Any, value: Any, state_id: str) -> bool:
         """Apply binding filters to incoming ioBroker source events.
@@ -522,7 +657,9 @@ class IoBrokerAdapter(AdapterBase):
             if last_ts is not None and (time.monotonic() - last_ts) < min_interval:
                 logger.debug(
                     "ioBroker adapter source throttle: state_id=%s binding=%s value=%r",
-                    state_id, binding.id, value,
+                    state_id,
+                    binding.id,
+                    value,
                 )
                 return False
 
@@ -533,7 +670,9 @@ class IoBrokerAdapter(AdapterBase):
         if binding.send_on_change and value == last_val:
             logger.debug(
                 "ioBroker adapter source on-change: state_id=%s binding=%s unchanged=%r",
-                state_id, binding.id, value,
+                state_id,
+                binding.id,
+                value,
             )
             return False
 
@@ -546,7 +685,10 @@ class IoBrokerAdapter(AdapterBase):
                 if binding.send_min_delta is not None and diff < binding.send_min_delta:
                     logger.debug(
                         "ioBroker adapter source min_delta: state_id=%s binding=%s diff=%.4f min=%.4f",
-                        state_id, binding.id, diff, binding.send_min_delta,
+                        state_id,
+                        binding.id,
+                        diff,
+                        binding.send_min_delta,
                     )
                     return False
 
@@ -556,7 +698,10 @@ class IoBrokerAdapter(AdapterBase):
                     if pct < binding.send_min_delta_pct:
                         logger.debug(
                             "ioBroker adapter source min_delta_pct: state_id=%s binding=%s %.2f%% < %.2f%%",
-                            state_id, binding.id, pct, binding.send_min_delta_pct,
+                            state_id,
+                            binding.id,
+                            pct,
+                            binding.send_min_delta_pct,
                         )
                         return False
             except (TypeError, ValueError):
@@ -591,13 +736,22 @@ class IoBrokerAdapter(AdapterBase):
 
     async def write(self, binding: Any, value: Any) -> None:
         if self._socket is None:
-            logger.warning("ioBroker adapter write called but Socket.IO client not initialized")
+            logger.warning(
+                "ioBroker adapter write called but Socket.IO client not initialized"
+            )
             return
         try:
             bc = IoBrokerBindingConfig(**binding.config)
             mapped = apply_value_map(value, binding.value_map)
             state_id = bc.command_state_id or bc.state_id
-            await self._call_socket("setState", state_id, {"val": mapped, "ack": bc.ack})
-            logger.info("ioBroker adapter write: state=%s value=%r ack=%s", state_id, mapped, bc.ack)
+            await self._call_socket(
+                "setState", state_id, {"val": mapped, "ack": bc.ack}
+            )
+            logger.info(
+                "ioBroker adapter write: state=%s value=%r ack=%s",
+                state_id,
+                mapped,
+                bc.ack,
+            )
         except Exception:
             logger.exception("ioBroker adapter write failed for binding %s", binding.id)

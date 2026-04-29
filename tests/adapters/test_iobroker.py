@@ -3,6 +3,7 @@ Unit-Tests für den ioBroker Adapter.
 
 Keine echte ioBroker-Instanz erforderlich — Socket.IO-Client wird gemockt.
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -72,7 +73,9 @@ class TestRead:
     @pytest.mark.asyncio
     async def test_get_state_extracts_val(self, adapter):
         binding = make_binding({"state_id": "0_userdata.0.temp"})
-        adapter._socket.call = AsyncMock(return_value=[None, {"val": 21.5, "ack": True}])
+        adapter._socket.call = AsyncMock(
+            return_value=[None, {"val": 21.5, "ack": True}]
+        )
 
         value = await adapter.read(binding)
 
@@ -94,7 +97,9 @@ class TestRead:
 class TestStateChange:
     @pytest.mark.asyncio
     async def test_state_change_publishes_bound_state(self, adapter, mock_bus):
-        binding = make_binding({"state_id": "0_userdata.0.temp", "source_data_type": "float"})
+        binding = make_binding(
+            {"state_id": "0_userdata.0.temp", "source_data_type": "float"}
+        )
         adapter._state_map["0_userdata.0.temp"] = [binding]
 
         await adapter._on_state_change_event("0_userdata.0.temp", {"val": "21.75"})
@@ -107,7 +112,9 @@ class TestStateChange:
         assert event.source_adapter == "IOBROKER"
 
     @pytest.mark.asyncio
-    async def test_state_change_send_on_change_skips_duplicate_values(self, adapter, mock_bus):
+    async def test_state_change_send_on_change_skips_duplicate_values(
+        self, adapter, mock_bus
+    ):
         binding = make_binding(
             {"state_id": "0_userdata.0.light", "source_data_type": "bool"},
             send_on_change=True,
@@ -123,7 +130,9 @@ class TestStateChange:
         assert mock_bus.publish.await_args_list[1].args[0].value is False
 
     @pytest.mark.asyncio
-    async def test_state_change_min_delta_skips_small_numeric_changes(self, adapter, mock_bus):
+    async def test_state_change_min_delta_skips_small_numeric_changes(
+        self, adapter, mock_bus
+    ):
         binding = make_binding(
             {"state_id": "0_userdata.0.temp", "source_data_type": "float"},
             send_min_delta=1.0,
@@ -150,29 +159,36 @@ class TestSubscribe:
     async def test_subscribe_uses_state_list_and_initial_read(self, adapter, mock_bus):
         binding = make_binding({"state_id": "0_userdata.0.temp"})
         adapter._state_map["0_userdata.0.temp"] = [binding]
-        adapter._socket.call = AsyncMock(side_effect=[
-            [None, None],                    # subscribe
-            [None, {"val": 22.0}],           # getState initial read
-        ])
+        adapter._socket.call = AsyncMock(
+            side_effect=[
+                [None, None],  # subscribe
+                [None, {"val": 22.0}],  # getState initial read
+            ]
+        )
 
         await adapter._subscribe_bound_states()
 
         assert adapter._socket.call.await_args_list[0].args == (
-            "subscribe", ["0_userdata.0.temp"]
+            "subscribe",
+            ["0_userdata.0.temp"],
         )
         event = mock_bus.publish.call_args[0][0]
         assert event.value == pytest.approx(22.0)
 
     @pytest.mark.asyncio
-    async def test_watchdog_resync_skips_unchanged_initial_values(self, adapter, mock_bus):
+    async def test_watchdog_resync_skips_unchanged_initial_values(
+        self, adapter, mock_bus
+    ):
         binding = make_binding({"state_id": "0_userdata.0.temp"})
         adapter._state_map["0_userdata.0.temp"] = [binding]
-        adapter._socket.call = AsyncMock(side_effect=[
-            [None, None],
-            [None, {"val": 22.0}],
-            [None, None],
-            [None, {"val": 22.0}],
-        ])
+        adapter._socket.call = AsyncMock(
+            side_effect=[
+                [None, None],
+                [None, {"val": 22.0}],
+                [None, None],
+                [None, {"val": 22.0}],
+            ]
+        )
 
         await adapter._subscribe_bound_states(force_publish_initial=True)
         await adapter._subscribe_bound_states(force_publish_initial=False)
@@ -180,15 +196,19 @@ class TestSubscribe:
         assert mock_bus.publish.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_watchdog_resync_publishes_changed_initial_values(self, adapter, mock_bus):
+    async def test_watchdog_resync_publishes_changed_initial_values(
+        self, adapter, mock_bus
+    ):
         binding = make_binding({"state_id": "0_userdata.0.temp"})
         adapter._state_map["0_userdata.0.temp"] = [binding]
-        adapter._socket.call = AsyncMock(side_effect=[
-            [None, None],
-            [None, {"val": 22.0}],
-            [None, None],
-            [None, {"val": 23.0}],
-        ])
+        adapter._socket.call = AsyncMock(
+            side_effect=[
+                [None, None],
+                [None, {"val": 22.0}],
+                [None, None],
+                [None, {"val": 23.0}],
+            ]
+        )
 
         await adapter._subscribe_bound_states(force_publish_initial=True)
         await adapter._subscribe_bound_states(force_publish_initial=False)
@@ -201,10 +221,12 @@ class TestSubscribe:
     async def test_initial_read_seeds_source_filter_state(self, adapter, mock_bus):
         binding = make_binding({"state_id": "0_userdata.0.light"}, send_on_change=True)
         adapter._state_map["0_userdata.0.light"] = [binding]
-        adapter._socket.call = AsyncMock(side_effect=[
-            [None, None],
-            [None, {"val": True}],
-        ])
+        adapter._socket.call = AsyncMock(
+            side_effect=[
+                [None, None],
+                [None, {"val": True}],
+            ]
+        )
 
         await adapter._subscribe_bound_states(force_publish_initial=True)
         await adapter._on_state_change_event("0_userdata.0.light", {"val": True})
@@ -212,25 +234,81 @@ class TestSubscribe:
         assert mock_bus.publish.call_count == 1
 
 
+class TestReconnect:
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_retries_until_connect_succeeds(
+        self, adapter, monkeypatch
+    ):
+        adapter._disconnect_requested = False
+        adapter._cfg = adapter.config_schema(
+            **{**adapter._config, "reconnect_interval_seconds": 1}
+        )
+        adapter._socket.connected = False
+        adapter._connect_socket = AsyncMock(side_effect=[False, False, True])
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr("obs.adapters.iobroker.adapter.asyncio.sleep", sleep_mock)
+
+        await adapter._reconnect_loop()
+
+        assert adapter._connect_socket.await_count == 3
+        assert sleep_mock.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_stops_when_disconnect_requested(self, adapter):
+        adapter._disconnect_requested = True
+        adapter._cfg = adapter.config_schema(**adapter._config)
+        adapter._connect_socket = AsyncMock()
+
+        await adapter._reconnect_loop()
+
+        adapter._connect_socket.assert_not_called()
+
+
 class TestBrowseStates:
     @pytest.mark.asyncio
     async def test_short_query_prefers_iobroker_namespace(self, adapter):
-        adapter._socket.call = AsyncMock(side_effect=[
-            [None, {"rows": [
-                {
-                    "id": "hue.0.SZ_Hue_white_lamp_1.on",
-                    "value": {"common": {"name": "Lamp on", "type": "boolean", "role": "switch.light", "write": True}},
-                },
-            ]}],
-            [None, {"rows": [
-                {
-                    "id": "system.adapter.hue.0.alive",
-                    "value": {"common": {"name": "hue alive", "type": "boolean", "role": "indicator.state", "write": False}},
-                },
-            ]}],
-            [None, {"val": False}],
-            [None, {"val": True}],
-        ])
+        adapter._socket.call = AsyncMock(
+            side_effect=[
+                [
+                    None,
+                    {
+                        "rows": [
+                            {
+                                "id": "hue.0.SZ_Hue_white_lamp_1.on",
+                                "value": {
+                                    "common": {
+                                        "name": "Lamp on",
+                                        "type": "boolean",
+                                        "role": "switch.light",
+                                        "write": True,
+                                    }
+                                },
+                            },
+                        ]
+                    },
+                ],
+                [
+                    None,
+                    {
+                        "rows": [
+                            {
+                                "id": "system.adapter.hue.0.alive",
+                                "value": {
+                                    "common": {
+                                        "name": "hue alive",
+                                        "type": "boolean",
+                                        "role": "indicator.state",
+                                        "write": False,
+                                    }
+                                },
+                            },
+                        ]
+                    },
+                ],
+                [None, {"val": False}],
+                [None, {"val": True}],
+            ]
+        )
 
         result = await adapter.browse_states("hue", 10)
 
@@ -243,21 +321,36 @@ class TestBrowseStates:
 
     @pytest.mark.asyncio
     async def test_short_query_falls_back_to_full_text(self, adapter):
-        adapter._socket.call = AsyncMock(side_effect=[
-            [None, {"rows": []}],
-            [None, {"rows": [
-                {
-                    "id": "system.adapter.hue.0.alive",
-                    "value": {"common": {"name": "hue alive", "type": "boolean", "role": "indicator.state"}},
-                },
-            ]}],
-            [None, {"val": True}],
-        ])
+        adapter._socket.call = AsyncMock(
+            side_effect=[
+                [None, {"rows": []}],
+                [
+                    None,
+                    {
+                        "rows": [
+                            {
+                                "id": "system.adapter.hue.0.alive",
+                                "value": {
+                                    "common": {
+                                        "name": "hue alive",
+                                        "type": "boolean",
+                                        "role": "indicator.state",
+                                    }
+                                },
+                            },
+                        ]
+                    },
+                ],
+                [None, {"val": True}],
+            ]
+        )
 
         result = await adapter.browse_states("alive", 10)
 
         assert [item["id"] for item in result] == ["system.adapter.hue.0.alive"]
-        assert adapter._socket.call.await_args_list[0].args[1][2]["startkey"] == "alive."
+        assert (
+            adapter._socket.call.await_args_list[0].args[1][2]["startkey"] == "alive."
+        )
         assert adapter._socket.call.await_args_list[1].args[1][2]["startkey"] == ""
 
 
@@ -277,11 +370,13 @@ class TestWrite:
 
     @pytest.mark.asyncio
     async def test_write_uses_command_state_id_and_ack(self, adapter):
-        binding = make_binding({
-            "state_id": "device.0.light.STATE",
-            "command_state_id": "device.0.light.SET",
-            "ack": True,
-        })
+        binding = make_binding(
+            {
+                "state_id": "device.0.light.STATE",
+                "command_state_id": "device.0.light.SET",
+                "ack": True,
+            }
+        )
         adapter._socket.call = AsyncMock(return_value=[None, None])
 
         await adapter.write(binding, "ON")
