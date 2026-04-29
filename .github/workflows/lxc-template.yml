@@ -383,7 +383,7 @@ jobs:
               bundle_checksum = f.read().strip()
           marker = "<!-- LXC_INSERT -->"
           section = (
-              "### LXC Template\n\n"
+              "### Checksums\n\n"
               "**LXC Template** (`.tar.zst` — Proxmox CT template):\n"
               f"```\n{lxc_checksum}\n```\n\n"
               "**App Bundle** (`.tar.gz` — for in-place updates via `obs-update`):\n"
