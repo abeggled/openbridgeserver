@@ -1,0 +1,295 @@
+name: Build Ubuntu LXC Template
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+
+env:
+  TEMPLATE_NAME: openbridgeserver
+  BASE_OS: ubuntu-plucky
+  ARCH: amd64
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      template_file: ${{ steps.meta.outputs.template_file }}
+      version: ${{ steps.meta.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set template metadata
+        id: meta
+        run: |
+          # On a tag push use the tag name directly; fall back for manual runs
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "0.0.0")
+          fi
+          TEMPLATE_FILE="${{ env.BASE_OS }}-${{ env.TEMPLATE_NAME }}_${VERSION}_${{ env.ARCH }}.tar.zst"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "template_file=$TEMPLATE_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Install debootstrap and tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap zstd ubuntu-keyring
+
+      # ── Build GUI and frontend on the runner (no Node needed in the LXC) ─────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: |
+            gui/package-lock.json
+            frontend/package-lock.json
+
+      - name: Build Admin GUI
+        run: |
+          cd gui
+          npm install --prefer-offline
+          npm run build
+
+      - name: Build Visu Frontend
+        run: |
+          cd frontend
+          npm install --prefer-offline
+          npm run build
+
+      # ── Base system ───────────────────────────────────────────────────────────
+      - name: Cache base system
+        id: cache-base
+        uses: actions/cache@v4
+        with:
+          path: base-system-cache.tar.zst
+          key: base-system-ubuntu-plucky-amd64-v1
+
+      - name: Create or restore base system
+        run: |
+          ROOTFS="${{ runner.temp }}/rootfs"
+          CACHE_FILE="${{ github.workspace }}/base-system-cache.tar.zst"
+
+          if [[ -f "$CACHE_FILE" ]]; then
+            echo "::notice::Restoring base system from cache..."
+            sudo mkdir -p "$ROOTFS"
+            sudo tar --zstd -xf "$CACHE_FILE" -C "$ROOTFS"
+          else
+            echo "::notice::Building fresh base system (will be cached)..."
+            sudo mkdir -p "$ROOTFS"
+
+            sudo debootstrap \
+              --arch=${{ env.ARCH }} \
+              --components=main,restricted,universe \
+              --include=systemd,systemd-sysv,dbus,apt-utils,locales,iproute2,wget,curl,ca-certificates,less,logrotate,openssh-server,ifupdown2 \
+              plucky \
+              "$ROOTFS" \
+              http://archive.ubuntu.com/ubuntu
+
+            sudo chroot "$ROOTFS" /bin/bash <<'BASESCRIPT'
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
+          # Full sources list
+          cat > /etc/apt/sources.list << 'EOF'
+          deb http://archive.ubuntu.com/ubuntu plucky main restricted universe multiverse
+          deb http://archive.ubuntu.com/ubuntu plucky-updates main restricted universe multiverse
+          deb http://security.ubuntu.com/ubuntu plucky-security main restricted universe multiverse
+          EOF
+
+          # Locale
+          echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+          locale-gen
+          update-locale LANG=en_US.UTF-8
+
+          # Timezone
+          ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+          echo "UTC" > /etc/timezone
+
+          # Network — minimal, Proxmox configures eth0 on container creation
+          cat > /etc/network/interfaces << 'EOF'
+          auto lo
+          iface lo inet loopback
+          EOF
+
+          # Hostname placeholder — Proxmox sets this on container creation
+          echo "localhost" > /etc/hostname
+
+          cat > /etc/hosts << 'EOF'
+          127.0.0.1   localhost
+          ::1         localhost ip6-localhost ip6-loopback
+          ff02::1     ip6-allnodes
+          ff02::2     ip6-allrouters
+          EOF
+
+          # Proxmox manages container mounts
+          echo "# Proxmox manages container mounts" > /etc/fstab
+
+          # Prevent boot delays in Proxmox LXC
+          mkdir -p /etc/systemd/system-preset
+          echo "disable systemd-networkd-wait-online.service" \
+            > /etc/systemd/system-preset/00-pve-template.preset
+
+          apt-get clean
+          rm -rf /var/lib/apt/lists/*
+          BASESCRIPT
+
+            echo "::notice::Saving base system to cache..."
+            sudo tar --zstd -cf "$CACHE_FILE" -C "$ROOTFS" .
+            sudo chown "$(id -u):$(id -g)" "$CACHE_FILE"
+          fi
+
+          echo "ROOTFS=$ROOTFS" >> "$GITHUB_ENV"
+
+      # ── APT cache for app-specific packages ───────────────────────────────────
+      - name: Cache APT packages
+        uses: actions/cache@v4
+        with:
+          path: /tmp/apt-cache
+          key: apt-obs-${{ hashFiles('requirements.txt') }}
+          restore-keys: apt-obs-
+
+      - name: Restore APT cache to rootfs
+        run: |
+          if [[ -d /tmp/apt-cache ]] && [[ -n "$(ls -A /tmp/apt-cache 2>/dev/null)" ]]; then
+            echo "::notice::Restoring APT cache..."
+            sudo mkdir -p "$ROOTFS/var/cache/apt/archives"
+            sudo cp -a /tmp/apt-cache/*.deb "$ROOTFS/var/cache/apt/archives/" 2>/dev/null || true
+          fi
+
+      # ── Install app ───────────────────────────────────────────────────────────
+      - name: Install Python dependencies and app
+        run: |
+          sudo cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
+
+          if ! mountpoint -q "$ROOTFS/proc"; then
+            sudo mount -t proc proc "$ROOTFS/proc"
+          fi
+          cleanup() { mountpoint -q "$ROOTFS/proc" && sudo umount "$ROOTFS/proc" || true; }
+          trap cleanup EXIT
+
+          # Copy application source and built assets into rootfs
+          sudo mkdir -p "$ROOTFS/opt/obs"
+          sudo cp -r obs              "$ROOTFS/opt/obs/"
+          sudo cp -r gui_dist         "$ROOTFS/opt/obs/"
+          sudo cp -r frontend_dist    "$ROOTFS/opt/obs/"
+          sudo cp    requirements.txt "$ROOTFS/opt/obs/"
+
+          sudo chroot "$ROOTFS" /bin/bash <<'INSTALL'
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
+          apt-get update
+          apt-get install -y python3 python3-pip python3-venv gcc libffi-dev libssl-dev
+
+          # Isolated venv — mirrors the --prefix=/install pattern from the Dockerfile
+          python3 -m venv /opt/obs/venv
+          /opt/obs/venv/bin/pip install --no-cache-dir -r /opt/obs/requirements.txt
+
+          # Data directory (matches Dockerfile VOLUME ["/data"])
+          mkdir -p /data
+
+          # Runtime environment defaults (overridable via mounted config.yaml)
+          cat > /etc/obs.env << 'EOF'
+          OBS_DATABASE__PATH=/data/obs.db
+          OBS_CONFIG=/data/config.yaml
+          EOF
+
+          cat > /etc/systemd/system/obs.service << 'EOF'
+          [Unit]
+          Description=open bridge server
+          After=network.target
+
+          [Service]
+          Type=simple
+          WorkingDirectory=/opt/obs
+          ExecStart=/opt/obs/venv/bin/python3 -m obs
+          Restart=on-failure
+          RestartSec=5
+          EnvironmentFile=/etc/obs.env
+          StandardOutput=journal
+          StandardError=journal
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          systemctl enable obs.service
+
+          apt-get clean
+          rm -rf /var/lib/apt/lists/*
+          INSTALL
+
+      - name: Save APT cache
+        run: |
+          sudo mkdir -p /tmp/apt-cache
+          sudo cp -a "$ROOTFS/var/cache/apt/archives"/*.deb /tmp/apt-cache/ 2>/dev/null || true
+          sudo chown -R "$(id -u):$(id -g)" /tmp/apt-cache
+
+      # ── Finalize ──────────────────────────────────────────────────────────────
+      - name: Finalize rootfs
+        run: |
+          sudo chroot "$ROOTFS" /bin/bash <<'CLEANUP'
+          set -euo pipefail
+
+          # Proxmox generates a new machine-id on first boot
+          truncate -s 0 /etc/machine-id
+
+          # Proxmox regenerates SSH host keys on first boot
+          rm -f /etc/ssh/ssh_host_*
+
+          find /var/log -type f -exec truncate -s 0 {} \;
+          apt-get clean
+          rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+          rm -f /root/.bash_history
+
+          # Proxmox configures DNS on container creation
+          truncate -s 0 /etc/resolv.conf
+          CLEANUP
+
+      # ── Package ───────────────────────────────────────────────────────────────
+      - name: Create tar.zst archive
+        run: |
+          cd "$ROOTFS"
+          sudo tar --numeric-owner --acls --xattrs \
+            -cf - . | zstd -T0 -9 -o "${{ runner.temp }}/${{ steps.meta.outputs.template_file }}"
+          cd "${{ runner.temp }}"
+          sha512sum "${{ steps.meta.outputs.template_file }}" \
+            > "${{ steps.meta.outputs.template_file }}.sha512"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lxc-template
+          path: |
+            ${{ runner.temp }}/${{ steps.meta.outputs.template_file }}
+            ${{ runner.temp }}/${{ steps.meta.outputs.template_file }}.sha512
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    # Only upload on real tag pushes — release.yml already created the release
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lxc-template
+          path: artifacts
+
+      - name: Upload LXC assets to existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            artifacts/*.tar.zst artifacts/*.sha512 \
+            --repo "${{ github.repository }}" \
+            --clobber
