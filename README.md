@@ -101,6 +101,8 @@ Das LXC-Template enthält ein vollständiges Ubuntu 26.04-System mit **open brid
 6. Den kopierten Hash einfügen.
 7. Auf **Download** klicken.
 
+![ProxmoxDownloadFromURL](docs/ProxmoxDownloadFromURL.png)
+
 **Schritt 2 — Container erstellen**
 
 1. Im Proxmox-Menü **Create CT** wählen.
