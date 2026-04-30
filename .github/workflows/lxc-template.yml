@@ -84,55 +84,87 @@ jobs:
           cat > /tmp/obs-update << 'SCRIPTEOF'
           #!/bin/bash
           set -euo pipefail
-
+          
           REPO="__REPO__"
           INSTALL_DIR="/opt/obs"
           SERVICE="obs"
-
-          USE_RC=false
-          for arg in "$@"; do
-            [[ "$arg" == "--rc" ]] && USE_RC=true
-          done
-
+          
           CURRENT=$(cat "$INSTALL_DIR/version" 2>/dev/null || echo "unknown")
+          echo "Fetching release information..."
           ALL_RELEASES=$(curl -sf "https://api.github.com/repos/${REPO}/releases")
-
+          
           LATEST_STABLE=$(echo "$ALL_RELEASES" | python3 -c "
           import sys, json
           releases = json.load(sys.stdin)
           r = next((r for r in releases if not r['prerelease'] and not r['draft']), None)
           print(r['tag_name'] if r else 'none')
           ")
-
+          
           LATEST_RC=$(echo "$ALL_RELEASES" | python3 -c "
           import sys, json
           releases = json.load(sys.stdin)
           r = next((r for r in releases if r['prerelease'] and not r['draft']), None)
           print(r['tag_name'] if r else 'none')
           ")
-
-          echo "Current:       $CURRENT"
-          echo "Latest stable: $LATEST_STABLE"
-          echo "Latest RC:     $LATEST_RC"
-
-          if $USE_RC && [[ "$LATEST_RC" != "none" ]]; then
-              TARGET="$LATEST_RC"
-          else
-              TARGET="$LATEST_STABLE"
+          
+          echo "Current version: $CURRENT"
+          echo ""
+          
+          OPTIONS=()
+          LABELS=()
+          
+          if [[ "$LATEST_STABLE" != "none" ]]; then
+              OPTIONS+=("$LATEST_STABLE")
+              if [[ "$LATEST_STABLE" == "$CURRENT" ]]; then
+                  LABELS+=("$LATEST_STABLE  (stable, current)")
+              else
+                  LABELS+=("$LATEST_STABLE  (stable)")
+              fi
           fi
-
-          if [[ "$TARGET" == "none" ]]; then
-              echo "Error: no suitable release found" >&2
-              exit 1
+          
+          if [[ "$LATEST_RC" != "none" ]]; then
+              OPTIONS+=("$LATEST_RC")
+              if [[ "$LATEST_RC" == "$CURRENT" ]]; then
+                  LABELS+=("$LATEST_RC  (release candidate, current)")
+              else
+                  LABELS+=("$LATEST_RC  (release candidate)")
+              fi
           fi
-
-          if [[ "$TARGET" == "$CURRENT" ]]; then
-              echo "Already up to date ($CURRENT)"
+          
+          if [[ ${#OPTIONS[@]} -eq 0 ]]; then
+              echo "No releases found."
               exit 0
           fi
-
-          echo "Updating $CURRENT -> $TARGET ..."
-
+          
+          echo "Available versions:"
+          for i in "${!OPTIONS[@]}"; do
+              echo "  $((i+1))) ${LABELS[$i]}"
+          done
+          echo "  0) Cancel"
+          echo ""
+          
+          while true; do
+              read -rp "Select version to install [0-${#OPTIONS[@]}]: " CHOICE
+              if [[ "$CHOICE" =~ ^[0-9]+$ ]] && [[ "$CHOICE" -ge 0 ]] && [[ "$CHOICE" -le "${#OPTIONS[@]}" ]]; then
+                  break
+              fi
+              echo "Invalid selection, please try again."
+          done
+          
+          if [[ "$CHOICE" -eq 0 ]]; then
+              echo "Cancelled."
+              exit 0
+          fi
+          
+          TARGET="${OPTIONS[$((CHOICE-1))]}"
+          
+          if [[ "$TARGET" == "$CURRENT" ]]; then
+              echo "$TARGET is already installed."
+              exit 0
+          fi
+          
+          echo "Installing $TARGET ..."
+          
           BUNDLE_URL=$(echo "$ALL_RELEASES" | python3 -c "
           import sys, json
           target = '${TARGET}'
@@ -143,29 +175,29 @@ jobs:
               if a:
                   print(a['browser_download_url'])
           ")
-
+          
           if [[ -z "$BUNDLE_URL" ]]; then
-              echo "Error: no app-bundle asset found in release $TARGET" >&2
+              echo "Error: no app-bundle asset found for $TARGET" >&2
               exit 1
           fi
-
+          
           TMP=$(mktemp -d)
           trap "rm -rf $TMP" EXIT
-
+          
           echo "Downloading $BUNDLE_URL ..."
           curl -fL "$BUNDLE_URL" -o "$TMP/app-bundle.tar.gz"
-
+          
           systemctl stop "$SERVICE"
-
+          
           tar -xzf "$TMP/app-bundle.tar.gz" -C "$INSTALL_DIR"
           "$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
-
+          
           echo "$TARGET" > "$INSTALL_DIR/version"
-
+          
           systemctl start "$SERVICE"
-          echo "Updated to $TARGET"
+          echo "Done. Now running $TARGET."
           SCRIPTEOF
-
+          
           sed -i "s|__REPO__|${{ github.repository }}|g" /tmp/obs-update
           chmod +x /tmp/obs-update
 
