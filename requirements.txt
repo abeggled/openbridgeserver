@@ -2,7 +2,7 @@
 # Python 3.11+
 
 # Web Framework
-fastapi>=0.115.0
+fastapi>=0.136.1
 uvicorn[standard]>=0.30.0
 
 # Data Validation & Settings
