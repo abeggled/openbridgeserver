@@ -3,7 +3,7 @@
 
 # Web Framework
 fastapi>=0.136.1
-uvicorn[standard]>=0.30.0
+uvicorn[standard]>=0.46.0
 
 # Data Validation & Settings
 pydantic>=2.7.0
