@@ -221,7 +221,7 @@ jobs:
       # ── Base system ───────────────────────────────────────────────────────────
       - name: Cache base system
         id: cache-base
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: base-system-cache.tar.zst
           key: base-system-ubuntu-plucky-amd64-v1
@@ -304,7 +304,7 @@ jobs:
 
       # ── APT cache for app-specific packages ───────────────────────────────────
       - name: Cache APT packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /tmp/apt-cache
           key: apt-obs-${{ hashFiles('requirements.txt') }}
