@@ -149,7 +149,12 @@ def apply_value_map(value: Any, value_map: dict[str, Any] | None) -> Any:
     if not value_map:
         return value
     if isinstance(value, bool):
-        key = str(value).lower()
+        key = str(value).lower()  # "true" or "false"
+        # Fall back to numeric "1"/"0" when the bool key is not in the map.
+        # This allows numeric maps like {"0": "1", "1": "0"} to work with
+        # boolean inputs (e.g. KNX DPT1.x decodes to Python bool).
+        if key not in value_map:
+            key = "1" if value else "0"
     elif isinstance(value, float) and value.is_integer():
         key = str(int(value))
     else:

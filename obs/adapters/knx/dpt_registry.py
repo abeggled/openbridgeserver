@@ -87,7 +87,13 @@ def _dpt1_decode(b: bytes) -> bool:
 
 
 def _dpt1_encode(v: Any) -> bytes:
-    return bytes([0x01 if v else 0x00])
+    # Non-empty strings are truthy in Python, so "0" / "false" / "off" would
+    # incorrectly encode as 1 without explicit string handling.
+    if isinstance(v, str):
+        flag = v.strip().lower() not in ("0", "false", "off", "no", "")
+    else:
+        flag = bool(v)
+    return bytes([0x01 if flag else 0x00])
 
 
 # --- DPT 5.x — 8-bit unsigned ------------------------------------------------
