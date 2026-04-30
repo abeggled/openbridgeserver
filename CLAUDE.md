@@ -126,15 +126,22 @@ Two workflows run on every tag push (`push: tags: '*'`):
 
 `lxc-template.yml` never creates a release — it only uploads assets to the release that `release.yml` already created. The LXC build takes several minutes, so no race condition exists.
 
+### Versioning
+
+- The version is derived from the **topmost `## ` headline in `RELEASENOTES.md`**, with the RC suffix (e.g. `-RC1`) appended from the git tag when applicable.
+- `obs/version` is committed to the repo as `dev-version` (indicates a local dev environment). Both `release.yml` and `lxc-template.yml` overwrite it with the real version at build time before packaging.
+- `obs/__init__.py` reads `obs/version` at import time to expose `__version__`. Do not hardcode the version there.
+- To start a new release cycle: add a new `## <version>` headline at the top of `RELEASENOTES.md`. No other file needs to change.
+
 ### LXC Template
 
 - Base OS: **Ubuntu 26.04 (Plucky)** — chosen for native Python 3.14 support
 - Two release assets are produced:
   - `ubuntu-plucky-openbridgeserver_<version>_amd64.tar.zst` — full Proxmox CT template
-  - `openbridgeserver-app-bundle_<version>.tar.gz` — app-only archive (`obs/`, `gui_dist/`, `frontend_dist/`, `requirements.txt`) used for in-place updates
+  - `openbridgeserver-app-bundle_<version>.tar.gz` — app-only archive (`obs/`, `gui_dist/`, `frontend_dist/`, `requirements.txt`, `obs-update`) used for in-place updates
 - App installs to `/opt/obs/`, Python venv at `/opt/obs/venv/`, data volume at `/data/`
-- Current version tracked in `/opt/obs/version`
-- `obs-update` script at `/usr/local/bin/obs-update` performs in-place updates by downloading the app bundle from the latest GitHub release
+- Installed version tracked in `/opt/obs/version` (written by `obs-update` after each install)
+- `obs-update` script at `/usr/local/bin/obs-update` presents an interactive version picker (all RCs + up to two stable releases, sorted semantically). It self-updates on every install by copying the `obs-update` from the extracted bundle.
 
 ### Release Notes
 
