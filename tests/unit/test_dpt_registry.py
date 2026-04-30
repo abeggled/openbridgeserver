@@ -126,6 +126,33 @@ class TestDPT1:
             d = DPTRegistry.get(dpt_id)
             assert d.data_type == "BOOLEAN", f"{dpt_id} should be BOOLEAN"
 
+    # String inputs — fix for issue #287:
+    # value_map can produce string "0"/"false"/"off" as output; _dpt1_encode
+    # must treat those as falsy rather than relying on Python string truthiness.
+    def test_encode_string_zero(self):
+        assert encode("DPT1.001", "0") == bytes([0x00])
+
+    def test_encode_string_one(self):
+        assert encode("DPT1.001", "1") == bytes([0x01])
+
+    def test_encode_string_false(self):
+        assert encode("DPT1.001", "false") == bytes([0x00])
+
+    def test_encode_string_true(self):
+        assert encode("DPT1.001", "true") == bytes([0x01])
+
+    def test_encode_string_off(self):
+        assert encode("DPT1.001", "off") == bytes([0x00])
+
+    def test_encode_string_on(self):
+        assert encode("DPT1.001", "on") == bytes([0x01])
+
+    def test_encode_int_1(self):
+        assert encode("DPT1.001", 1) == bytes([0x01])
+
+    def test_encode_int_0(self):
+        assert encode("DPT1.001", 0) == bytes([0x00])
+
 
 # ===========================================================================
 # DPT 5 — 8-bit unsigned

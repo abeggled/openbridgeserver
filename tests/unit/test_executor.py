@@ -621,6 +621,29 @@ class TestDatapointNodes:
         out = run_single("datapoint_write", {"value_map": m}, {"value": 3.0})
         assert out["_write_value"] == "Aktiv"
 
+    # ── bool inputs with numeric value_map (issue #287) ─────────────────────
+
+    def test_read_bool_true_with_numeric_map(self):
+        # KNX DPT1.x decodes to Python bool; num_invert preset must apply
+        m = {"0": "1", "1": "0"}
+        out = run_single("datapoint_read", {"value_map": m}, {"value": True})
+        assert out["value"] == "0"
+
+    def test_read_bool_false_with_numeric_map(self):
+        m = {"0": "1", "1": "0"}
+        out = run_single("datapoint_read", {"value_map": m}, {"value": False})
+        assert out["value"] == "1"
+
+    def test_write_bool_true_with_numeric_map(self):
+        m = {"0": "1", "1": "0"}
+        out = run_single("datapoint_write", {"value_map": m}, {"value": True})
+        assert out["_write_value"] == "0"
+
+    def test_write_bool_false_with_numeric_map(self):
+        m = {"0": "1", "1": "0"}
+        out = run_single("datapoint_write", {"value_map": m}, {"value": False})
+        assert out["_write_value"] == "1"
+
 
 # ===========================================================================
 # python_script node

@@ -102,12 +102,33 @@ class TestApplyValueMapBoolNormalisation:
     def test_false_matches_lowercase(self):
         assert apply_value_map(False, {"true": "on", "false": "off"}) == "off"
 
-    def test_bool_true_not_matched_by_1(self):
-        # True normalises to "true", not "1"
-        assert apply_value_map(True, {"1": "on"}) is True  # no match → original
+    def test_bool_true_falls_back_to_numeric_1(self):
+        # When "true" is not a key, fall back to "1" (fix for issue #287)
+        assert apply_value_map(True, {"1": "on"}) == "on"
+
+    def test_bool_false_falls_back_to_numeric_0(self):
+        # When "false" is not a key, fall back to "0" (fix for issue #287)
+        assert apply_value_map(False, {"0": "off"}) == "off"
+
+    def test_bool_true_prefers_true_key_over_numeric(self):
+        # If both "true" and "1" exist, "true" wins (bool key has priority)
+        assert apply_value_map(True, {"true": "bool-on", "1": "num-on"}) == "bool-on"
+
+    def test_bool_no_match_returns_original(self):
+        # Neither "true" nor "1" in map → original value returned
+        assert apply_value_map(True, {"foo": "bar"}) is True
 
     def test_numeric_1_matches_1_key(self):
         assert apply_value_map(1, {"1": "on"}) == "on"
+
+    def test_num_invert_preset_with_bool_true(self):
+        # KNX DPT1.x decodes to bool; "0↔1 invert" preset must work (issue #287)
+        m = {"0": "1", "1": "0"}
+        assert apply_value_map(True, m) == "0"
+
+    def test_num_invert_preset_with_bool_false(self):
+        m = {"0": "1", "1": "0"}
+        assert apply_value_map(False, m) == "1"
 
 
 class TestApplyValueMapStringValues:
