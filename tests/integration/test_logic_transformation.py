@@ -63,7 +63,7 @@ async def _run_graph(client, auth_headers, graph_id: str) -> dict:
 async def _cleanup(client, auth_headers, graph_id: str | None = None, dp_ids: list | None = None) -> None:
     if graph_id:
         await client.delete(f"/api/v1/logic/graphs/{graph_id}", headers=auth_headers)
-    for dp_id in (dp_ids or []):
+    for dp_id in dp_ids or []:
         await client.delete(f"/api/v1/datapoints/{dp_id}", headers=auth_headers)
 
 
@@ -81,18 +81,24 @@ async def test_datapoint_read_value_formula_applied(client, auth_headers):
     try:
         await _set_value(client, auth_headers, dp_id, 10)
 
-        graph_id = await _create_graph(client, auth_headers, "IT-Read-Formula", [
-            {
-                "id": "r1",
-                "type": "datapoint_read",
-                "position": {"x": 0, "y": 0},
-                "data": {
-                    "datapoint_id": dp_id,
-                    "datapoint_name": "test",
-                    "value_formula": "x * 2",
-                },
-            }
-        ], [])
+        graph_id = await _create_graph(
+            client,
+            auth_headers,
+            "IT-Read-Formula",
+            [
+                {
+                    "id": "r1",
+                    "type": "datapoint_read",
+                    "position": {"x": 0, "y": 0},
+                    "data": {
+                        "datapoint_id": dp_id,
+                        "datapoint_name": "test",
+                        "value_formula": "x * 2",
+                    },
+                }
+            ],
+            [],
+        )
 
         outputs = await _run_graph(client, auth_headers, graph_id)
         assert outputs["r1"]["value"] == pytest.approx(20.0)
@@ -109,18 +115,24 @@ async def test_datapoint_read_value_map_integer_applied(client, auth_headers):
     try:
         await _set_value(client, auth_headers, dp_id, 1)
 
-        graph_id = await _create_graph(client, auth_headers, "IT-Read-Map-Int", [
-            {
-                "id": "r1",
-                "type": "datapoint_read",
-                "position": {"x": 0, "y": 0},
-                "data": {
-                    "datapoint_id": dp_id,
-                    "datapoint_name": "test",
-                    "value_map": {"0": "1", "1": "0"},
-                },
-            }
-        ], [])
+        graph_id = await _create_graph(
+            client,
+            auth_headers,
+            "IT-Read-Map-Int",
+            [
+                {
+                    "id": "r1",
+                    "type": "datapoint_read",
+                    "position": {"x": 0, "y": 0},
+                    "data": {
+                        "datapoint_id": dp_id,
+                        "datapoint_name": "test",
+                        "value_map": {"0": "1", "1": "0"},
+                    },
+                }
+            ],
+            [],
+        )
 
         outputs = await _run_graph(client, auth_headers, graph_id)
         # Integer 1 → key "1" → mapped to "0"
@@ -142,18 +154,24 @@ async def test_datapoint_read_value_map_bool_input_applied(client, auth_headers)
     try:
         await _set_value(client, auth_headers, dp_id, True)
 
-        graph_id = await _create_graph(client, auth_headers, "IT-Read-Map-Bool", [
-            {
-                "id": "r1",
-                "type": "datapoint_read",
-                "position": {"x": 0, "y": 0},
-                "data": {
-                    "datapoint_id": dp_id,
-                    "datapoint_name": "test",
-                    "value_map": {"0": "1", "1": "0"},
-                },
-            }
-        ], [])
+        graph_id = await _create_graph(
+            client,
+            auth_headers,
+            "IT-Read-Map-Bool",
+            [
+                {
+                    "id": "r1",
+                    "type": "datapoint_read",
+                    "position": {"x": 0, "y": 0},
+                    "data": {
+                        "datapoint_id": dp_id,
+                        "datapoint_name": "test",
+                        "value_map": {"0": "1", "1": "0"},
+                    },
+                }
+            ],
+            [],
+        )
 
         outputs = await _run_graph(client, auth_headers, graph_id)
         # True → numeric fallback key "1" → mapped to "0"
@@ -173,30 +191,38 @@ async def test_datapoint_write_value_map_applied(client, auth_headers):
     try:
         await _set_value(client, auth_headers, src_id, 0)
 
-        graph_id = await _create_graph(client, auth_headers, "IT-Write-Map", [
-            {
-                "id": "r1",
-                "type": "datapoint_read",
-                "position": {"x": 0, "y": 0},
-                "data": {"datapoint_id": src_id, "datapoint_name": "src"},
-            },
-            {
-                "id": "w1",
-                "type": "datapoint_write",
-                "position": {"x": 300, "y": 0},
-                "data": {
-                    "datapoint_id": dst_id,
-                    "datapoint_name": "dst",
-                    "value_map": {"0": "Aus", "1": "An"},
+        graph_id = await _create_graph(
+            client,
+            auth_headers,
+            "IT-Write-Map",
+            [
+                {
+                    "id": "r1",
+                    "type": "datapoint_read",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"datapoint_id": src_id, "datapoint_name": "src"},
                 },
-            },
-        ], [
-            {
-                "id": "e1",
-                "source": "r1", "sourceHandle": "value",
-                "target": "w1", "targetHandle": "value",
-            }
-        ])
+                {
+                    "id": "w1",
+                    "type": "datapoint_write",
+                    "position": {"x": 300, "y": 0},
+                    "data": {
+                        "datapoint_id": dst_id,
+                        "datapoint_name": "dst",
+                        "value_map": {"0": "Aus", "1": "An"},
+                    },
+                },
+            ],
+            [
+                {
+                    "id": "e1",
+                    "source": "r1",
+                    "sourceHandle": "value",
+                    "target": "w1",
+                    "targetHandle": "value",
+                }
+            ],
+        )
 
         outputs = await _run_graph(client, auth_headers, graph_id)
         # write node output is _write_value (private, not in outputs)
@@ -215,19 +241,25 @@ async def test_datapoint_read_formula_then_value_map(client, auth_headers):
     try:
         await _set_value(client, auth_headers, dp_id, 1)
 
-        graph_id = await _create_graph(client, auth_headers, "IT-Formula-Map", [
-            {
-                "id": "r1",
-                "type": "datapoint_read",
-                "position": {"x": 0, "y": 0},
-                "data": {
-                    "datapoint_id": dp_id,
-                    "datapoint_name": "test",
-                    "value_formula": "x * 2",    # 1 * 2 = 2
-                    "value_map": {"2": "Zwei"},   # 2 → "Zwei"
-                },
-            }
-        ], [])
+        graph_id = await _create_graph(
+            client,
+            auth_headers,
+            "IT-Formula-Map",
+            [
+                {
+                    "id": "r1",
+                    "type": "datapoint_read",
+                    "position": {"x": 0, "y": 0},
+                    "data": {
+                        "datapoint_id": dp_id,
+                        "datapoint_name": "test",
+                        "value_formula": "x * 2",  # 1 * 2 = 2
+                        "value_map": {"2": "Zwei"},  # 2 → "Zwei"
+                    },
+                }
+            ],
+            [],
+        )
 
         outputs = await _run_graph(client, auth_headers, graph_id)
         assert outputs["r1"]["value"] == "Zwei"
