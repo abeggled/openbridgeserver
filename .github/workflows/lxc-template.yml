@@ -93,28 +93,33 @@ jobs:
           echo "Fetching release information..."
           ALL_RELEASES=$(curl -sf "https://api.github.com/repos/${REPO}/releases")
 
-          # Build ordered list: latest stable, all RCs newest-first, previous stable
+          # Build ordered list via semantic version sort, stopping after 2 stables
           VERSION_LIST=$(echo "$ALL_RELEASES" | python3 -c "
           import sys, json, re
 
           releases = json.load(sys.stdin)
-          stables = [r for r in releases if not r['prerelease'] and not r['draft']]
 
-          def rc_num(r):
-              m = re.search(r'RC(\d+)$', r['tag_name'], re.IGNORECASE)
-              return int(m.group(1)) if m else 0
+          def sort_key(tag):
+              m = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-RC(\d+))?\$', tag, re.IGNORECASE)
+              if not m:
+                  return (0, 0, 0, 0, 0)
+              y, mn, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
+              rc = int(m.group(4)) if m.group(4) else None
+              return (y, mn, p, 1 if rc is None else 0, rc or 0)
 
-          rcs = sorted(
-              [r for r in releases if r['prerelease'] and not r['draft']],
-              key=rc_num, reverse=True
+          candidates = sorted(
+              [r for r in releases if not r['draft']],
+              key=lambda r: sort_key(r['tag_name']), reverse=True
           )
 
-          if stables:
-              print('stable ' + stables[0]['tag_name'])
-          for r in rcs:
-              print('rc ' + r['tag_name'])
-          if len(stables) > 1:
-              print('stable ' + stables[1]['tag_name'])
+          stables_seen = 0
+          for r in candidates:
+              kind = 'rc' if r['prerelease'] else 'stable'
+              print(kind + ' ' + r['tag_name'])
+              if not r['prerelease']:
+                  stables_seen += 1
+                  if stables_seen >= 2:
+                      break
           ")
 
           echo "Current version: $CURRENT"
