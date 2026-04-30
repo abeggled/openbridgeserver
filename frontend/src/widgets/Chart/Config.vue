@@ -2,19 +2,23 @@
 import { reactive, watch } from 'vue'
 import DataPointPicker from '@/components/DataPointPicker.vue'
 
+type Axis = 'left' | 'right'
+
 interface Series {
   dp_id: string
   label: string
   color: string
+  axis: Axis
 }
 
 interface Cfg {
   label: string
   hours: number
+  primary_color: string
+  primary_axis: Axis
   series: Series[]
 }
 
-// Palette für automatisch zugewiesene Farben (Primär-DP hat #3b82f6, daher ab Eintrag 1)
 const SERIES_COLORS = ['#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316']
 
 const props = defineProps<{ modelValue: Record<string, unknown> }>()
@@ -23,27 +27,32 @@ const emit = defineEmits<{ (e: 'update:modelValue', val: Record<string, unknown>
 function normalizeSeries(raw: unknown): Series[] {
   if (!Array.isArray(raw)) return []
   return raw.map(s => ({
-    dp_id: (s as Record<string, unknown>).dp_id as string ?? '',
-    label: (s as Record<string, unknown>).label as string ?? '',
-    color: (s as Record<string, unknown>).color as string ?? SERIES_COLORS[0],
+    dp_id:  (s as Record<string, unknown>).dp_id  as string ?? '',
+    label:  (s as Record<string, unknown>).label  as string ?? '',
+    color:  (s as Record<string, unknown>).color  as string ?? SERIES_COLORS[0],
+    axis:   ((s as Record<string, unknown>).axis  as Axis)  ?? 'left',
   }))
 }
 
 const cfg = reactive<Cfg>({
-  label: (props.modelValue.label as string) ?? '',
-  hours: (props.modelValue.hours as number) ?? 24,
-  series: normalizeSeries(props.modelValue.series),
+  label:         (props.modelValue.label         as string) ?? '',
+  hours:         (props.modelValue.hours         as number) ?? 24,
+  primary_color: (props.modelValue.primary_color as string) ?? '#3b82f6',
+  primary_axis:  (props.modelValue.primary_axis  as Axis)   ?? 'left',
+  series:        normalizeSeries(props.modelValue.series),
 })
 
 watch(cfg, () => emit('update:modelValue', {
-  label: cfg.label,
-  hours: cfg.hours,
-  series: cfg.series.map(s => ({ ...s })),
+  label:         cfg.label,
+  hours:         cfg.hours,
+  primary_color: cfg.primary_color,
+  primary_axis:  cfg.primary_axis,
+  series:        cfg.series.map(s => ({ ...s })),
 }), { deep: true })
 
 function addSeries() {
   const color = SERIES_COLORS[cfg.series.length % SERIES_COLORS.length]
-  cfg.series.push({ dp_id: '', label: '', color })
+  cfg.series.push({ dp_id: '', label: '', color, axis: 'left' })
 }
 
 function removeSeries(i: number) {
@@ -77,14 +86,37 @@ function removeSeries(i: number) {
       />
     </div>
 
+    <!-- Primäre Reihe -->
+    <div class="border-t border-gray-700 pt-3">
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Primäre Reihe</p>
+      <div class="flex gap-2 items-center">
+        <input
+          v-model="cfg.primary_color"
+          type="color"
+          class="w-7 h-7 rounded cursor-pointer border border-gray-700 bg-transparent p-0.5 shrink-0"
+          title="Farbe"
+        />
+        <!-- Achsen-Toggle -->
+        <div class="flex gap-1 flex-1">
+          <button
+            v-for="opt in [{ v: 'left', l: '◀ Links' }, { v: 'right', l: 'Rechts ▶' }]"
+            :key="opt.v"
+            type="button"
+            :class="[
+              'flex-1 py-1 text-xs rounded border',
+              cfg.primary_axis === opt.v
+                ? 'border-blue-500 bg-blue-500/20 text-blue-300'
+                : 'border-gray-700 text-gray-400 hover:border-gray-500',
+            ]"
+            @click="cfg.primary_axis = opt.v as Axis"
+          >{{ opt.l }}</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Weitere Reihen -->
     <div class="border-t border-gray-700 pt-3">
-      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
-        Weitere Reihen
-      </p>
-      <p class="text-xs text-gray-600 mb-3">
-        Das oben gewählte Objekt ist die erste Reihe (blau). Hier können weitere hinzugefügt werden.
-      </p>
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Weitere Reihen</p>
 
       <div class="space-y-3">
         <div
@@ -119,6 +151,22 @@ function removeSeries(i: number) {
               title="Reihe entfernen"
               @click="removeSeries(i)"
             >🗑</button>
+          </div>
+
+          <!-- Achsen-Toggle -->
+          <div class="flex gap-1">
+            <button
+              v-for="opt in [{ v: 'left', l: '◀ Links' }, { v: 'right', l: 'Rechts ▶' }]"
+              :key="opt.v"
+              type="button"
+              :class="[
+                'flex-1 py-1 text-xs rounded border',
+                s.axis === opt.v
+                  ? 'border-blue-500 bg-blue-500/20 text-blue-300'
+                  : 'border-gray-700 text-gray-400 hover:border-gray-500',
+              ]"
+              @click="s.axis = opt.v as Axis"
+            >{{ opt.l }}</button>
           </div>
         </div>
       </div>
