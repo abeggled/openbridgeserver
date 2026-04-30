@@ -629,13 +629,13 @@ class IoBrokerAdapter(AdapterBase):
             return
         try:
             bc = IoBrokerBindingConfig(**binding.config)
-            mapped = apply_value_map(value, binding.value_map)
+            # value already transformed by write_router (formula + value_map)
             state_id = bc.command_state_id or bc.state_id
-            await self._call_socket("setState", state_id, {"val": mapped, "ack": bc.ack})
+            await self._call_socket("setState", state_id, {"val": value, "ack": bc.ack})
             logger.info(
                 "ioBroker adapter write: state=%s value=%r ack=%s",
                 state_id,
-                mapped,
+                value,
                 bc.ack,
             )
         except Exception:

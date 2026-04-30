@@ -309,21 +309,19 @@ class MqttAdapter(AdapterBase):
             bc = MqttBindingConfig(**binding.config)
             topic = bc.publish_topic or bc.topic
 
-            # Apply value_map substitution (general binding-level field)
-            mapped = apply_value_map(value, binding.value_map)
-
+            # value already transformed by write_router (formula + value_map)
             # Build payload
             if bc.payload_template:
-                val_str = mapped if isinstance(mapped, str) else json.dumps(mapped)
+                val_str = value if isinstance(value, str) else json.dumps(value)
                 payload = bc.payload_template.replace("###DP###", val_str)
             else:
-                payload = mapped if isinstance(mapped, str) else json.dumps(mapped)
+                payload = value if isinstance(value, str) else json.dumps(value)
 
             await self._publish_queue.put((topic, payload, bc.retain))
             logger.info(
                 "MQTT adapter write queued: topic=%s value=%r retain=%s",
                 topic,
-                mapped,
+                value,
                 bc.retain,
             )
         except Exception:

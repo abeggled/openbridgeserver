@@ -438,23 +438,21 @@ class HomeAssistantAdapter(AdapterBase):
         try:
             bc = HaBindingConfig(**binding.config)
 
-            # Apply value_map (general binding-level field)
-            mapped = apply_value_map(value, binding.value_map)
-
+            # value already transformed by write_router (formula + value_map)
             domain = bc.service_domain or _domain_from_entity(bc.entity_id)
 
             # Determine service name
             if bc.service_name:
                 service = bc.service_name
-            elif isinstance(mapped, bool):
-                service = "turn_on" if mapped else "turn_off"
+            elif isinstance(value, bool):
+                service = "turn_on" if value else "turn_off"
             else:
                 service = "set_value"
 
             # Build service data
             service_data: dict = {"entity_id": bc.entity_id}
-            if bc.service_data_key and not isinstance(mapped, bool):
-                service_data[bc.service_data_key] = mapped
+            if bc.service_data_key and not isinstance(value, bool):
+                service_data[bc.service_data_key] = value
 
             resp = await self._http_client.post(
                 f"/api/services/{domain}/{service}",
@@ -466,7 +464,7 @@ class HomeAssistantAdapter(AdapterBase):
                 domain,
                 service,
                 bc.entity_id,
-                mapped,
+                value,
             )
         except Exception:
             logger.exception("HA adapter write failed for binding %s", binding.id)
