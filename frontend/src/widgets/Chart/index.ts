@@ -11,6 +11,11 @@ WidgetRegistry.register({
   defaultW: 6, defaultH: 4,
   component: Widget,
   configComponent: Config,
-  defaultConfig: { label: '', hours: 24 },
+  defaultConfig: { label: '', hours: 24, series: [] },
   compatibleTypes: ['FLOAT', 'INTEGER'],
+  getExtraDatapointIds: (config) => {
+    const series = config.series as Array<{ dp_id?: string }> | undefined
+    if (!Array.isArray(series)) return []
+    return series.map(s => s.dp_id).filter((id): id is string => typeof id === 'string' && id.length > 0)
+  },
 })
