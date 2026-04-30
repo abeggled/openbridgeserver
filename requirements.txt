@@ -16,7 +16,7 @@ aiosqlite>=0.22.1
 aiomqtt>=2.5.1
 
 # Protocols
-xknx>=2.13.0
+xknx>=3.15.0
 pymodbus>=3.13.0,<3.14.0
 w1thermsensor>=2.3.0
 
