@@ -65,20 +65,6 @@ jobs:
           npm install --prefer-offline
           npm run build
 
-      - name: Stamp version file
-        run: |
-          BASE=$(grep -m1 '^## ' RELEASENOTES.md | sed 's/^## *//')
-          RC=$(echo "${{ steps.meta.outputs.version }}" | grep -oP -- '-RC\d*$' || true)
-          echo "${BASE}${RC}" > obs/version
-
-      - name: Create app bundle
-        run: |
-          tar -czf "${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}" \
-            obs/ gui_dist/ frontend_dist/ requirements.txt
-          cd "${{ runner.temp }}"
-          sha512sum "${{ steps.meta.outputs.app_bundle_file }}" \
-            > "${{ steps.meta.outputs.app_bundle_file }}.sha512"
-
       - name: Write obs-update script
         run: |
           cat > /tmp/obs-update << 'SCRIPTEOF'
@@ -199,15 +185,35 @@ jobs:
           
           tar -xzf "$TMP/app-bundle.tar.gz" -C "$INSTALL_DIR"
           "$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
-          
+
+          # Self-update: replace this script with the version from the bundle
+          cp "$INSTALL_DIR/obs-update" /usr/local/bin/obs-update
+          chmod +x /usr/local/bin/obs-update
+          rm -f "$INSTALL_DIR/obs-update"
+
           echo "$TARGET" > "$INSTALL_DIR/version"
-          
+
           systemctl start "$SERVICE"
           echo "Done. Now running $TARGET."
           SCRIPTEOF
-          
+
           sed -i "s|__REPO__|${{ github.repository }}|g" /tmp/obs-update
           chmod +x /tmp/obs-update
+          cp /tmp/obs-update obs-update
+
+      - name: Stamp version file
+        run: |
+          BASE=$(grep -m1 '^## ' RELEASENOTES.md | sed 's/^## *//')
+          RC=$(echo "${{ steps.meta.outputs.version }}" | grep -oP -- '-RC\d*$' || true)
+          echo "${BASE}${RC}" > obs/version
+
+      - name: Create app bundle
+        run: |
+          tar -czf "${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}" \
+            obs/ gui_dist/ frontend_dist/ requirements.txt obs-update
+          cd "${{ runner.temp }}"
+          sha512sum "${{ steps.meta.outputs.app_bundle_file }}" \
+            > "${{ steps.meta.outputs.app_bundle_file }}.sha512"
 
       # ── Base system ───────────────────────────────────────────────────────────
       - name: Cache base system
