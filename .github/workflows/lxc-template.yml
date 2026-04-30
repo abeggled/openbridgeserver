@@ -53,6 +53,9 @@ jobs:
             gui/package-lock.json
             frontend/package-lock.json
 
+      - name: Stamp gui/package.json version
+        run: npm pkg set version="${{ steps.meta.outputs.version }}" --prefix gui
+
       - name: Build Admin GUI
         run: |
           cd gui
