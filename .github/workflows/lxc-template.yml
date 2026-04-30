@@ -89,28 +89,63 @@ jobs:
           INSTALL_DIR="/opt/obs"
           SERVICE="obs"
 
-          echo "Checking for updates..."
-          LATEST_JSON=$(curl -sf "https://api.github.com/repos/${REPO}/releases/latest")
-          LATEST_TAG=$(echo "$LATEST_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
-          CURRENT=$(cat "$INSTALL_DIR/version" 2>/dev/null || echo "unknown")
+          USE_RC=false
+          for arg in "$@"; do
+            [[ "$arg" == "--rc" ]] && USE_RC=true
+          done
 
-          if [[ "$LATEST_TAG" == "$CURRENT" ]]; then
+          CURRENT=$(cat "$INSTALL_DIR/version" 2>/dev/null || echo "unknown")
+          ALL_RELEASES=$(curl -sf "https://api.github.com/repos/${REPO}/releases")
+
+          LATEST_STABLE=$(echo "$ALL_RELEASES" | python3 -c "
+          import sys, json
+          releases = json.load(sys.stdin)
+          r = next((r for r in releases if not r['prerelease'] and not r['draft']), None)
+          print(r['tag_name'] if r else 'none')
+          ")
+
+          LATEST_RC=$(echo "$ALL_RELEASES" | python3 -c "
+          import sys, json
+          releases = json.load(sys.stdin)
+          r = next((r for r in releases if r['prerelease'] and not r['draft']), None)
+          print(r['tag_name'] if r else 'none')
+          ")
+
+          echo "Current:       $CURRENT"
+          echo "Latest stable: $LATEST_STABLE"
+          echo "Latest RC:     $LATEST_RC"
+
+          if $USE_RC && [[ "$LATEST_RC" != "none" ]]; then
+              TARGET="$LATEST_RC"
+          else
+              TARGET="$LATEST_STABLE"
+          fi
+
+          if [[ "$TARGET" == "none" ]]; then
+              echo "Error: no suitable release found" >&2
+              exit 1
+          fi
+
+          if [[ "$TARGET" == "$CURRENT" ]]; then
               echo "Already up to date ($CURRENT)"
               exit 0
           fi
 
-          echo "Updating $CURRENT -> $LATEST_TAG ..."
+          echo "Updating $CURRENT -> $TARGET ..."
 
-          BUNDLE_URL=$(echo "$LATEST_JSON" | python3 -c "
+          BUNDLE_URL=$(echo "$ALL_RELEASES" | python3 -c "
           import sys, json
-          for a in json.load(sys.stdin)['assets']:
-              if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz'):
+          target = '${TARGET}'
+          releases = json.load(sys.stdin)
+          r = next((r for r in releases if r['tag_name'] == target), None)
+          if r:
+              a = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz')), None)
+              if a:
                   print(a['browser_download_url'])
-                  break
           ")
 
           if [[ -z "$BUNDLE_URL" ]]; then
-              echo "Error: no app-bundle asset found in release $LATEST_TAG" >&2
+              echo "Error: no app-bundle asset found in release $TARGET" >&2
               exit 1
           fi
 
@@ -125,10 +160,10 @@ jobs:
           tar -xzf "$TMP/app-bundle.tar.gz" -C "$INSTALL_DIR"
           "$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
 
-          echo "$LATEST_TAG" > "$INSTALL_DIR/version"
+          echo "$TARGET" > "$INSTALL_DIR/version"
 
           systemctl start "$SERVICE"
-          echo "Updated to $LATEST_TAG"
+          echo "Updated to $TARGET"
           SCRIPTEOF
 
           sed -i "s|__REPO__|${{ github.repository }}|g" /tmp/obs-update
