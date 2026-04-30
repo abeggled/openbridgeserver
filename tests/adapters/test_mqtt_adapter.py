@@ -239,13 +239,11 @@ class TestWrite:
         assert payload == '{"brightness": 75}'
 
     @pytest.mark.asyncio
-    async def test_write_with_value_map(self, adapter):
-        # apply_value_map uses str(value).lower() for booleans → key must be lowercase
-        binding = make_binding(
-            {"topic": "switch/set"},
-            value_map={"true": "ON", "false": "OFF"},
-        )
-        await adapter.write(binding, True)
+    async def test_write_passes_through_pretransformed_value(self, adapter):
+        # write_router applies value_map before calling adapter.write();
+        # the adapter receives an already-transformed value and must not re-map it.
+        binding = make_binding({"topic": "switch/set"})
+        await adapter.write(binding, "ON")
 
         _, payload, _ = await adapter._publish_queue.get()
         assert payload == "ON"

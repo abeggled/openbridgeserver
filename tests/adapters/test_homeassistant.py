@@ -386,19 +386,16 @@ class TestWrite:
         assert call_args[0][0] == "/api/services/homeassistant/turn_on"
 
     @pytest.mark.asyncio
-    async def test_write_with_value_map(self, adapter):
+    async def test_write_passes_through_pretransformed_value(self, adapter):
+        # write_router applies value_map before calling adapter.write();
+        # the adapter receives an already-transformed bool and must not re-map it.
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
         adapter._http_client.post = AsyncMock(return_value=mock_response)
 
-        binding = make_binding(
-            {"entity_id": "switch.pump"},
-            value_map={"true": True, "false": False},
-        )
-        # value_map maps string "true" → bool True
+        binding = make_binding({"entity_id": "switch.pump"})
         await adapter.write(binding, True)
 
-        # After value_map, bool True → turn_on
         call_args = adapter._http_client.post.call_args
         assert "/turn_on" in call_args[0][0]
 

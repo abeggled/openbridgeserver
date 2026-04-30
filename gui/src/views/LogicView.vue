@@ -283,16 +283,21 @@ function fmtDebugVal(nodeOut) {
     return msg + sent
   }
 
-  // Public keys (no leading _)
-  const pairs = Object.entries(nodeOut)
-    .filter(([k]) => !k.startsWith('_'))
-    .map(([k, v]) => `${k}=${fv(v)}`)
-  if (pairs.length) return pairs.join('   ')
+  // datapoint_read — show value compactly with = prefix
+  if ('value' in nodeOut && 'changed' in nodeOut) {
+    return `= ${fv(nodeOut.value)}`
+  }
 
   // datapoint_write outputs are all _private — show write value with → prefix
   if ('_write_value' in nodeOut) {
     return `→ ${fv(nodeOut._write_value)}`
   }
+
+  // Public keys (no leading _) — generic fallback
+  const pairs = Object.entries(nodeOut)
+    .filter(([k]) => !k.startsWith('_'))
+    .map(([k, v]) => `${k}=${fv(v)}`)
+  if (pairs.length) return pairs.join('   ')
 
   return null
 }

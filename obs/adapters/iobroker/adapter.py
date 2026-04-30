@@ -496,11 +496,12 @@ class IoBrokerAdapter(AdapterBase):
                 None,
                 binding.id,
             )
-            pub_value = apply_value_map(pub_value, binding.value_map)
+            # formula first (numeric scale), then value_map (text substitution)
             if binding.value_formula and pub_value is not None:
                 from obs.core.formula import apply_formula
 
                 pub_value = apply_formula(binding.value_formula, pub_value)
+            pub_value = apply_value_map(pub_value, binding.value_map)
         except Exception:
             logger.exception("ioBroker adapter: error processing binding %s", binding.id)
             return
@@ -628,13 +629,13 @@ class IoBrokerAdapter(AdapterBase):
             return
         try:
             bc = IoBrokerBindingConfig(**binding.config)
-            mapped = apply_value_map(value, binding.value_map)
+            # value already transformed by write_router (formula + value_map)
             state_id = bc.command_state_id or bc.state_id
-            await self._call_socket("setState", state_id, {"val": mapped, "ack": bc.ack})
+            await self._call_socket("setState", state_id, {"val": value, "ack": bc.ack})
             logger.info(
                 "ioBroker adapter write: state=%s value=%r ack=%s",
                 state_id,
-                mapped,
+                value,
                 bc.ack,
             )
         except Exception:
