@@ -38,7 +38,7 @@ xknxproject>=1.0.0
 
 # Logic Engine — cron scheduling
 croniter>=6.2.2
-astral>=3.0
+astral>=3.2
 
 # Zeitschaltuhr — holiday calendar
 holidays>=0.50
