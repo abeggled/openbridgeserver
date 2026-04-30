@@ -239,15 +239,14 @@ class MqttAdapter(AdapterBase):
                     binding.id,
                 )
 
-                # --- value_map substitution ---
+                # --- formula first (numeric), then value_map (text substitution) ---
+                if binding.value_formula and pub_value is not None:
+                    from obs.core.formula import apply_formula
+
+                    pub_value = apply_formula(binding.value_formula, pub_value)
                 pub_value = apply_value_map(pub_value, binding.value_map)
             except Exception:
                 logger.exception("MQTT: error processing binding %s", binding.id)
-
-            if binding.value_formula and pub_value is not None:
-                from obs.core.formula import apply_formula
-
-                pub_value = apply_formula(binding.value_formula, pub_value)
             logger.info(
                 "MQTT adapter received: topic=%s → dp=%s value=%r",
                 topic,

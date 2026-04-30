@@ -240,11 +240,13 @@ class HomeAssistantAdapter(AdapterBase):
                         raw_str = state_obj.get("state", "unavailable")
                         raw_val = _coerce_state(raw_str) if raw_str not in ("unavailable", "unknown") else None
 
-                    pub_value = apply_value_map(raw_val, binding.value_map)
+                    # formula first (numeric scale), then value_map (text substitution)
+                    pub_value = raw_val
                     if binding.value_formula and pub_value is not None:
                         from obs.core.formula import apply_formula
 
                         pub_value = apply_formula(binding.value_formula, pub_value)
+                    pub_value = apply_value_map(pub_value, binding.value_map)
 
                     logger.info(
                         "HA adapter initial read: entity=%s attr=%s → dp=%s value=%r",
@@ -372,13 +374,13 @@ class HomeAssistantAdapter(AdapterBase):
                     raw_str = new_state.get("state", "unavailable")
                     raw_val = _coerce_state(raw_str) if raw_str not in ("unavailable", "unknown") else None
 
-                # Apply value_map
-                pub_value = apply_value_map(raw_val, binding.value_map)
-
+                # formula first (numeric scale), then value_map (text substitution)
+                pub_value = raw_val
                 if binding.value_formula and pub_value is not None:
                     from obs.core.formula import apply_formula
 
                     pub_value = apply_formula(binding.value_formula, pub_value)
+                pub_value = apply_value_map(pub_value, binding.value_map)
 
             except Exception:
                 logger.exception("HA adapter: error processing binding %s", binding.id)
