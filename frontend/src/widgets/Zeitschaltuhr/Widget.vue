@@ -47,9 +47,11 @@ const outputActive = computed(() => resolveBool(liveValue.value))
 const quality      = computed(() => liveValue.value?.q ?? null)
 
 // ── ZSU bindings ──────────────────────────────────────────────────────────
-const bindings  = ref<BindingOut[]>([])
-const toggling  = ref(false)
-const showModal = ref(false)
+const bindings        = ref<BindingOut[]>([])
+const toggling        = ref(false)
+const showModal       = ref(false)
+const confirmPending  = ref(false)
+const pendingTarget   = ref(false)   // true = enable all, false = disable all
 
 const canInteract = computed(() => !props.editorMode && hasConfig.value && !!getJwt())
 
@@ -67,11 +69,17 @@ onMounted(async () => {
   }
 })
 
-async function handleCardClick() {
-  if (!canInteract.value || toggling.value) return
+function handleCardClick() {
+  if (!canInteract.value || toggling.value || confirmPending.value) return
+  pendingTarget.value = !anyEnabled.value
+  confirmPending.value = true
+}
+
+async function executeToggle() {
+  confirmPending.value = false
   toggling.value = true
   try {
-    const targetEnabled = !anyEnabled.value
+    const targetEnabled = pendingTarget.value
     await Promise.all(
       instanceBindings.value.map((b) =>
         dpApi.updateBinding(cfgDatapointId.value, String(b.id), { enabled: targetEnabled })
@@ -85,6 +93,10 @@ async function handleCardClick() {
   }
 }
 
+function cancelToggle() {
+  confirmPending.value = false
+}
+
 function openEdit(e: MouseEvent) {
   e.stopPropagation()
   if (!canInteract.value) return
@@ -93,76 +105,119 @@ function openEdit(e: MouseEvent) {
 </script>
 
 <template>
-  <div
-    class="flex flex-col h-full p-3 select-none gap-1.5"
-    :class="canInteract ? 'cursor-pointer' : 'cursor-default'"
-    @click="handleCardClick"
-  >
-    <!-- Kopfzeile -->
-    <div class="flex items-center gap-1.5 min-w-0">
-      <span class="text-sm leading-none flex-shrink-0">🕐</span>
-      <span class="text-xs text-gray-500 dark:text-gray-400 truncate">{{ label }}</span>
-      <template v-if="toggling">
-        <span class="ml-auto text-xs text-gray-400 dark:text-gray-600">…</span>
-      </template>
-      <template v-else>
-        <span
-          v-if="quality === 'bad'"
-          class="ml-auto w-2 h-2 rounded-full bg-red-500 flex-shrink-0"
-          title="Qualität: schlecht"
-        />
-        <span
-          v-else-if="quality === 'uncertain'"
-          class="ml-auto w-2 h-2 rounded-full bg-yellow-400 flex-shrink-0"
-          title="Qualität: undefiniert"
-        />
-      </template>
-    </div>
+  <div class="relative h-full">
 
-    <!-- Ausgang: effektiver Objektwert -->
-    <div class="flex items-center gap-2 mt-1">
-      <span
-        class="inline-flex items-center px-2.5 py-1 rounded-md font-semibold leading-none text-base"
-        :class="outputActive === null
-          ? 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500'
-          : outputActive
-            ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400'
-            : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'"
-      >
-        {{ liveValue !== null ? String(liveValue.v) : (editorMode ? '—' : '…') }}
-      </span>
-    </div>
-
-    <!-- Zeitplan-Status + Edit-Button -->
-    <div v-if="hasConfig" class="flex items-center gap-2 mt-2">
-      <span
-        class="w-3 h-3 rounded-full flex-shrink-0"
-        :class="instanceBindings.length === 0 || editorMode
-          ? 'bg-gray-300 dark:bg-gray-600'
-          : anyEnabled ? 'bg-green-500' : 'bg-red-500'"
-      />
-      <span class="text-xs font-medium truncate"
-        :class="instanceBindings.length === 0 || editorMode
-          ? 'text-gray-400 dark:text-gray-500'
-          : anyEnabled ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'"
-      >
-        <template v-if="editorMode">
-          {{ cfgMode === 'full' ? 'Vollzugriff' : cfgMode === 'restricted' ? 'Eingeschränkt' : 'Minimal' }}
+    <!-- Haupt-Inhalt -->
+    <div
+      class="flex flex-col h-full p-3 select-none"
+      :class="canInteract && !confirmPending ? 'cursor-pointer' : 'cursor-default'"
+      @click="handleCardClick"
+    >
+      <!-- Kopfzeile -->
+      <div class="flex items-center gap-1.5 min-w-0">
+        <span class="text-sm leading-none flex-shrink-0">🕐</span>
+        <span class="text-xs text-gray-500 dark:text-gray-400 truncate">{{ label }}</span>
+        <template v-if="toggling">
+          <span class="ml-auto text-xs text-gray-400 dark:text-gray-600">…</span>
         </template>
-        <template v-else-if="instanceBindings.length === 0">Keine Schaltpunkte</template>
-        <template v-else>{{ anyEnabled ? 'Zeitschaltuhr aktiv' : 'Zeitschaltuhr inaktiv' }}</template>
-      </span>
-      <button
-        v-if="canInteract"
-        type="button"
-        title="Schaltpunkte bearbeiten"
-        class="ml-auto text-xs text-gray-400 dark:text-gray-600 hover:text-blue-500 dark:hover:text-blue-400 px-1 rounded transition-colors leading-none"
-        @click="openEdit"
-      >✏️</button>
+        <template v-else>
+          <span
+            v-if="quality === 'bad'"
+            class="ml-auto w-2 h-2 rounded-full bg-red-500 flex-shrink-0"
+            title="Qualität: schlecht"
+          />
+          <span
+            v-else-if="quality === 'uncertain'"
+            class="ml-auto w-2 h-2 rounded-full bg-yellow-400 flex-shrink-0"
+            title="Qualität: undefiniert"
+          />
+        </template>
+      </div>
+
+      <!-- Ausgang: effektiver Objektwert -->
+      <div class="flex items-center gap-2 mt-1">
+        <span
+          class="inline-flex items-center px-2.5 py-1 rounded-md font-semibold leading-none text-base"
+          :class="outputActive === null
+            ? 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500'
+            : outputActive
+              ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400'
+              : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'"
+        >
+          {{ liveValue !== null ? String(liveValue.v) : (editorMode ? '—' : '…') }}
+        </span>
+      </div>
+
+      <!-- Spacer -->
+      <div class="flex-1" />
+
+      <!-- Zeitplan-Status (kein truncate, Zeilenumbruch erlaubt) -->
+      <div v-if="hasConfig" class="flex items-start gap-2">
+        <span
+          class="w-3 h-3 rounded-full flex-shrink-0 mt-0.5"
+          :class="instanceBindings.length === 0 || editorMode
+            ? 'bg-gray-300 dark:bg-gray-600'
+            : anyEnabled ? 'bg-green-500' : 'bg-red-500'"
+        />
+        <span
+          class="text-xs font-medium leading-snug"
+          :class="instanceBindings.length === 0 || editorMode
+            ? 'text-gray-400 dark:text-gray-500'
+            : anyEnabled ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'"
+        >
+          <template v-if="editorMode">
+            {{ cfgMode === 'full' ? 'Vollzugriff' : cfgMode === 'restricted' ? 'Eingeschränkt' : 'Minimal' }}
+          </template>
+          <template v-else-if="instanceBindings.length === 0">Keine Schaltpunkte</template>
+          <template v-else>{{ anyEnabled ? 'Zeitschaltuhr aktiv' : 'Zeitschaltuhr inaktiv' }}</template>
+        </span>
+      </div>
+
+      <!-- Edit-Button am unteren Rand -->
+      <div v-if="canInteract" class="flex justify-end mt-1">
+        <button
+          type="button"
+          title="Schaltpunkte bearbeiten"
+          class="text-xs text-gray-400 dark:text-gray-600 hover:text-blue-500 dark:hover:text-blue-400 px-1 rounded transition-colors leading-none"
+          @click="openEdit"
+        >✏️</button>
+      </div>
     </div>
+
+    <!-- Bestätigungs-Overlay -->
+    <Transition
+      enter-active-class="transition-opacity duration-150"
+      leave-active-class="transition-opacity duration-100"
+      enter-from-class="opacity-0"
+      leave-to-class="opacity-0"
+    >
+      <div
+        v-if="confirmPending"
+        class="absolute inset-0 flex flex-col items-center justify-center gap-2 p-3 rounded bg-white/95 dark:bg-gray-900/95 z-10"
+        @click.stop
+      >
+        <p class="text-xs text-center text-gray-700 dark:text-gray-200 leading-tight font-medium">
+          Zeitschaltuhr {{ pendingTarget ? 'aktivieren' : 'deaktivieren' }}?
+        </p>
+        <div class="flex gap-2">
+          <button
+            type="button"
+            class="px-3 py-1 rounded text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            @click.stop="cancelToggle"
+          >Nein</button>
+          <button
+            type="button"
+            class="px-3 py-1 rounded text-xs text-white transition-colors"
+            :class="pendingTarget ? 'bg-green-600 hover:bg-green-500' : 'bg-red-600 hover:bg-red-500'"
+            @click.stop="executeToggle"
+          >Ja</button>
+        </div>
+      </div>
+    </Transition>
+
   </div>
 
-  <!-- Modal -->
+  <!-- Schaltpunkte-Modal -->
   <Teleport to="body">
     <ZeitschaltuhrAddRemoveModal
       v-if="showModal"
