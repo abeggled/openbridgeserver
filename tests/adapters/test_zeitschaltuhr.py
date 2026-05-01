@@ -522,3 +522,30 @@ class TestBuildHolidaysCustom:
         adapter._hol = adapter._build_holidays()
         # Valid entry still works
         assert adapter._is_holiday(date(2026, 12, 25)) is True
+
+
+# ---------------------------------------------------------------------------
+# ZeitschaltuhrConfig — field_validator string coercion
+# ---------------------------------------------------------------------------
+
+
+class TestCustomHolidaysStringCoercion:
+    def test_single_string_becomes_single_element_list(self):
+        cfg = ZeitschaltuhrConfig(custom_holidays="05-02:DanielsTag")
+        assert cfg.custom_holidays == ["05-02:DanielsTag"]
+
+    def test_comma_separated_string_splits_correctly(self):
+        cfg = ZeitschaltuhrConfig(custom_holidays="12-26:Stephanstag, easter+1:Ostermontag")
+        assert cfg.custom_holidays == ["12-26:Stephanstag", "easter+1:Ostermontag"]
+
+    def test_newline_separated_string_splits_correctly(self):
+        cfg = ZeitschaltuhrConfig(custom_holidays="12-26:Stephanstag\neaster+1:Ostermontag")
+        assert cfg.custom_holidays == ["12-26:Stephanstag", "easter+1:Ostermontag"]
+
+    def test_list_input_unchanged(self):
+        cfg = ZeitschaltuhrConfig(custom_holidays=["12-26:Stephanstag", "easter+1:Ostermontag"])
+        assert cfg.custom_holidays == ["12-26:Stephanstag", "easter+1:Ostermontag"]
+
+    def test_empty_string_becomes_empty_list(self):
+        cfg = ZeitschaltuhrConfig(custom_holidays="")
+        assert cfg.custom_holidays == []

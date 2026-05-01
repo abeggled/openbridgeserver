@@ -65,7 +65,7 @@ from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.registry import register
@@ -209,9 +209,18 @@ class ZeitschaltuhrConfig(BaseModel):
             "'last_WT_MON[:Name]' (letzter Wochentag des Monats, z.B. 'last_SO_NOV:Buß+Bettag'), "
             "'N_WT_MON[:Name]' (n-ter Wochentag, z.B. '2_SO_OKT:Erntedank'). "
             "Wochentags-Kürzel: MO DI MI DO FR SA SO (dt.) oder MON TUE WED THU FRI SAT SUN (en.). "
-            "Monats-Kürzel: JAN FEB MAR APR MAI JUN JUL AUG SEP OKT NOV DEZ."
+            "Monats-Kürzel: JAN FEB MAR APR MAI JUN JUL AUG SEP OKT NOV DEZ. "
+            "Mehrere Einträge durch Komma oder Zeilenumbruch trennen."
         ),
     )
+
+    @field_validator("custom_holidays", mode="before")
+    @classmethod
+    def _coerce_to_list(cls, v: Any) -> list[str]:
+        """Accept a plain string (e.g. from the generic config UI) by splitting on commas/newlines."""
+        if isinstance(v, str):
+            return [item.strip() for item in v.replace("\n", ",").split(",") if item.strip()]
+        return v
 
 
 class ZeitschaltuhrBindingConfig(BaseModel):
