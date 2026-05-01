@@ -7,7 +7,7 @@ uvicorn[standard]>=0.46.0
 
 # Data Validation & Settings
 pydantic>=2.7.0
-pydantic-settings>=2.3.0
+pydantic-settings>=2.14.0
 
 # Database
 aiosqlite>=0.22.1
