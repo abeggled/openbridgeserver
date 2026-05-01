@@ -34,7 +34,7 @@
       <div class="form-group">
         <label class="label">Typ</label>
         <select v-model="form.type" class="input text-sm">
-          <option value="fixed">Festes Datum (z.B. 1. Mai)</option>
+          <option value="fixed">Festes Datum (z.B. 26. März)</option>
           <option value="easter">Ostern-relativ (z.B. Karfreitag = easter−2)</option>
           <option value="last_weekday">Letzter Wochentag im Monat</option>
           <option value="nth_weekday">N-ter Wochentag im Monat</option>
@@ -122,7 +122,7 @@
       <!-- Name (always shown) -->
       <div class="form-group">
         <label class="label">Bezeichnung</label>
-        <input v-model="form.name" type="text" class="input text-sm" placeholder="z.B. Daniels Geburtstag" @keyup.enter="addEntry" />
+        <input v-model="form.name" type="text" class="input text-sm" placeholder="z.B. open bridge server Geburtstag" @keyup.enter="addEntry" />
       </div>
 
       <!-- Preview of generated entry string -->
