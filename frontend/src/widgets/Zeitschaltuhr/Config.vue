@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { reactive, ref, watch, onMounted, computed } from 'vue'
+import { reactive, ref, watch, onMounted } from 'vue'
 import { adapters as adaptersApi, datapoints as datapointsApi } from '@/api/client'
-import type { InstanceBindingEntry } from '@/api/client'
 
 const props = defineProps<{
   modelValue: Record<string, unknown>
@@ -22,17 +21,13 @@ interface DpOption {
 }
 
 const instances = ref<ZSUInstance[]>([])
-const bindings = ref<InstanceBindingEntry[]>([])
 const loadingInstances = ref(false)
-const loadingBindings = ref(false)
 const errorMsg = ref('')
 
-// Datapoint search (for full mode — any dp)
 const dpQuery = ref('')
 const dpResults = ref<DpOption[]>([])
 const dpSearchLoading = ref(false)
 const dpSearchOpen = ref(false)
-const dpSelectedName = ref('')
 
 const cfg = reactive({
   label:        (props.modelValue.label        as string) ?? '',
@@ -44,19 +39,6 @@ const cfg = reactive({
 // Normalize legacy mode values
 if (cfg.mode === 'add_remove') cfg.mode = 'full'
 if (cfg.mode === 'toggle')     cfg.mode = 'minimal'
-
-const isFullMode = computed(() => cfg.mode === 'full')
-
-/** Einmalig pro Datenpunkt-ID (für Dropdown 2, full/toggle mode) */
-const availableDatapoints = computed(() => {
-  const seen = new Set<string>()
-  return bindings.value.filter((b) => {
-    if (seen.has(b.datapoint_id)) return false
-    seen.add(b.datapoint_id)
-    return true
-  })
-})
-
 
 onMounted(async () => {
   loadingInstances.value = true
@@ -72,53 +54,18 @@ onMounted(async () => {
     loadingInstances.value = false
   }
 
-  if (cfg.instance_id && !isFullMode.value) {
-    await loadBindings(cfg.instance_id)
-  }
-
-  // Restore dp name for full mode (search-based)
-  if (isFullMode.value && cfg.datapoint_id) {
+  if (cfg.datapoint_id) {
     try {
       const dp = await datapointsApi.get(cfg.datapoint_id)
       dpQuery.value = dp.name
-      dpSelectedName.value = dp.name
     } catch { /* ignore */ }
   }
 })
-
-async function loadBindings(instanceId: string) {
-  loadingBindings.value = true
-  errorMsg.value = ''
-  try {
-    bindings.value = await adaptersApi.instanceBindings(instanceId)
-  } catch {
-    errorMsg.value = 'Verknüpfungen konnten nicht geladen werden.'
-    bindings.value = []
-  } finally {
-    loadingBindings.value = false
-  }
-}
-
-async function onInstanceChange() {
-  cfg.datapoint_id = ''
-  bindings.value = []
-  dpQuery.value = ''
-  dpSelectedName.value = ''
-  dpResults.value = []
-  if (cfg.instance_id && !isFullMode.value) {
-    await loadBindings(cfg.instance_id)
-  }
-}
-
-function onDatapointChange() { /* no-op */ }
-
-// ── add_remove mode: datapoint search ─────────────────────────────────────────
 
 let _dpSearchTimer: ReturnType<typeof setTimeout> | null = null
 
 async function onDpQueryInput() {
   cfg.datapoint_id = ''
-  dpSelectedName.value = ''
   if (_dpSearchTimer) clearTimeout(_dpSearchTimer)
   if (!dpQuery.value.trim()) {
     dpResults.value = []
@@ -142,7 +89,6 @@ async function onDpQueryInput() {
 function selectDp(dp: DpOption) {
   cfg.datapoint_id = dp.id
   dpQuery.value = dp.name
-  dpSelectedName.value = dp.name
   dpResults.value = []
   dpSearchOpen.value = false
 }
@@ -150,12 +96,9 @@ function selectDp(dp: DpOption) {
 function clearDp() {
   cfg.datapoint_id = ''
   dpQuery.value = ''
-  dpSelectedName.value = ''
   dpResults.value = []
   dpSearchOpen.value = false
 }
-
-
 
 const selCls = 'w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 disabled:opacity-50'
 const lCls   = 'block text-xs text-gray-500 dark:text-gray-400 mb-1'
@@ -177,24 +120,32 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
       />
     </div>
 
-    <!-- Widget-Modus (zuerst wählen, damit nachfolgende Dropdowns korrekt sind) -->
+    <!-- Widget-Modus als 3 Buttons -->
     <div>
       <label :class="lCls">Widget-Modus</label>
-      <select v-model="cfg.mode" :class="selCls" @change="onInstanceChange">
-        <option value="full">Vollzugriff — hinzufügen, bearbeiten, löschen</option>
-        <option value="restricted">Eingeschränkt — nur bearbeiten und aktivieren</option>
-        <option value="minimal">Minimal — nur aktivieren/deaktivieren</option>
-      </select>
+      <div class="flex gap-1">
+        <button
+          v-for="m in [
+            { value: 'full',       label: 'Vollzugriff',   title: 'Hinzufügen, bearbeiten, löschen' },
+            { value: 'restricted', label: 'Eingeschränkt', title: 'Nur bearbeiten und aktivieren' },
+            { value: 'minimal',    label: 'Minimal',       title: 'Nur aktivieren/deaktivieren' },
+          ]"
+          :key="m.value"
+          type="button"
+          :title="m.title"
+          class="flex-1 px-2 py-1.5 text-xs rounded border transition-colors"
+          :class="cfg.mode === m.value
+            ? 'bg-blue-600 border-blue-600 text-white'
+            : 'bg-gray-50 dark:bg-gray-800 border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-blue-400 dark:hover:border-blue-500'"
+          @click="cfg.mode = m.value"
+        >{{ m.label }}</button>
+      </div>
     </div>
 
-    <!-- Dropdown 1: Zeitschaltuhr-Instanz -->
+    <!-- Zeitschaltuhr-Instanz -->
     <div>
       <label :class="lCls">Zeitschaltuhr</label>
-      <select
-        v-model="cfg.instance_id"
-        :class="selCls"
-        @change="onInstanceChange"
-      >
+      <select v-model="cfg.instance_id" :class="selCls">
         <option value="">
           {{ loadingInstances ? 'Lade …' : instances.length === 0 ? 'Keine Zeitschaltuhr konfiguriert' : '— Zeitschaltuhr wählen —' }}
         </option>
@@ -204,8 +155,8 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
       </select>
     </div>
 
-    <!-- full mode: Datenpunkt-Suche (beliebiger Datenpunkt) -->
-    <template v-if="cfg.instance_id && isFullMode">
+    <!-- Datenpunkt-Suche (für alle Modi gleich) -->
+    <template v-if="cfg.instance_id">
       <div class="relative">
         <label :class="lCls">
           Objekt
@@ -243,28 +194,8 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
         </div>
         <p v-if="dpSearchLoading" class="text-xs text-gray-400 mt-0.5">Suche …</p>
         <p v-if="cfg.datapoint_id" class="text-xs text-blue-500 dark:text-blue-400 mt-0.5">
-          ✓ Ausgewählt — Schaltpunkte werden im Widget verwaltet
+          ✓ Ausgewählt
         </p>
-      </div>
-    </template>
-
-    <!-- restricted / minimal mode: Objekt aus bestehenden Bindings -->
-    <template v-else-if="cfg.instance_id && !isFullMode">
-      <div>
-        <label :class="lCls">Objekt</label>
-        <select
-          v-model="cfg.datapoint_id"
-          :class="selCls"
-          :disabled="loadingBindings"
-          @change="onDatapointChange"
-        >
-          <option value="">
-            {{ loadingBindings ? 'Lade …' : availableDatapoints.length === 0 ? 'Keine Objekte gefunden' : '— Objekt wählen —' }}
-          </option>
-          <option v-for="dp in availableDatapoints" :key="dp.datapoint_id" :value="dp.datapoint_id">
-            {{ dp.datapoint_name }}
-          </option>
-        </select>
       </div>
     </template>
 
