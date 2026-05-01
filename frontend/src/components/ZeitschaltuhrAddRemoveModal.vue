@@ -28,7 +28,8 @@ const saving    = ref(false)
 const errorMsg  = ref('')
 const bindings  = ref<BindingOut[]>([])
 
-const editingBinding = ref<BindingOut | null>(null)
+const editingBinding   = ref<BindingOut | null>(null)
+const pendingDeleteId  = ref<string | null>(null)
 
 // ── Load ──────────────────────────────────────────────────────────────────────
 
@@ -64,8 +65,16 @@ async function toggleEnabled(b: BindingOut) {
 
 // ── Delete (full mode only) ───────────────────────────────────────────────────
 
-async function deleteBinding(b: BindingOut) {
-  if (!confirm(`Schaltpunkt "${bindingLabel(b)}" wirklich löschen?`)) return
+function requestDelete(b: BindingOut) {
+  pendingDeleteId.value = String(b.id)
+}
+
+function cancelDelete() {
+  pendingDeleteId.value = null
+}
+
+async function confirmDelete(b: BindingOut) {
+  pendingDeleteId.value = null
   saving.value = true
   errorMsg.value = ''
   try {
@@ -182,50 +191,74 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
           <div
             v-for="b in bindings"
             :key="String(b.id)"
-            class="flex items-center gap-2 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700"
+            class="rounded-lg border transition-colors"
+            :class="pendingDeleteId === String(b.id)
+              ? 'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20'
+              : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800'"
           >
-            <!-- Enable/Disable toggle -->
-            <button
-              type="button"
-              :title="b.enabled ? 'Deaktivieren' : 'Aktivieren'"
-              class="w-7 h-7 flex items-center justify-center rounded-full flex-shrink-0 transition-colors"
-              :class="b.enabled
-                ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/70'
-                : 'bg-gray-200 dark:bg-gray-700 text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'"
-              :disabled="saving"
-              @click="toggleEnabled(b)"
-            >
-              <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
-                <path v-if="b.enabled" fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/>
-                <path v-else fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd"/>
-              </svg>
-            </button>
+            <!-- Normaler Zustand -->
+            <div v-if="pendingDeleteId !== String(b.id)" class="flex items-center gap-2 px-3 py-2">
+              <!-- Enable/Disable toggle -->
+              <button
+                type="button"
+                :title="b.enabled ? 'Deaktivieren' : 'Aktivieren'"
+                class="w-7 h-7 flex items-center justify-center rounded-full flex-shrink-0 transition-colors"
+                :class="b.enabled
+                  ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/70'
+                  : 'bg-gray-200 dark:bg-gray-700 text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'"
+                :disabled="saving"
+                @click="toggleEnabled(b)"
+              >
+                <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+                  <path v-if="b.enabled" fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/>
+                  <path v-else fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd"/>
+                </svg>
+              </button>
 
-            <!-- Label -->
-            <span
-              class="flex-1 text-xs truncate min-w-0"
-              :class="b.enabled ? 'text-gray-800 dark:text-gray-200' : 'text-gray-400 dark:text-gray-500 line-through'"
-            >{{ bindingLabel(b) }}</span>
+              <!-- Label -->
+              <span
+                class="flex-1 text-xs truncate min-w-0"
+                :class="b.enabled ? 'text-gray-800 dark:text-gray-200' : 'text-gray-400 dark:text-gray-500 line-through'"
+              >{{ bindingLabel(b) }}</span>
 
-            <!-- Edit button (full + restricted) -->
-            <button
-              v-if="mode !== 'minimal'"
-              type="button"
-              title="Bearbeiten"
-              :class="[btnBase, 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 hover:text-blue-600 dark:hover:text-blue-400 border border-gray-200 dark:border-gray-600']"
-              :disabled="saving"
-              @click="openEdit(b)"
-            >✏️</button>
+              <!-- Edit button (full + restricted) -->
+              <button
+                v-if="mode !== 'minimal'"
+                type="button"
+                title="Bearbeiten"
+                :class="[btnBase, 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 hover:text-blue-600 dark:hover:text-blue-400 border border-gray-200 dark:border-gray-600']"
+                :disabled="saving"
+                @click="openEdit(b)"
+              >✏️</button>
 
-            <!-- Delete button (full only) -->
-            <button
-              v-if="mode === 'full'"
-              type="button"
-              title="Löschen"
-              :class="[btnBase, 'bg-red-50 dark:bg-red-900/20 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 border border-red-200 dark:border-red-800']"
-              :disabled="saving"
-              @click="deleteBinding(b)"
-            >×</button>
+              <!-- Delete button (full only) — öffnet Bestätigung -->
+              <button
+                v-if="mode === 'full'"
+                type="button"
+                title="Löschen"
+                :class="[btnBase, 'bg-red-50 dark:bg-red-900/20 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 border border-red-200 dark:border-red-800']"
+                :disabled="saving"
+                @click="requestDelete(b)"
+              >×</button>
+            </div>
+
+            <!-- Bestätigungs-Zustand -->
+            <div v-else class="flex items-center gap-2 px-3 py-2">
+              <span class="flex-1 text-xs text-red-600 dark:text-red-400 font-medium truncate min-w-0">
+                Löschen: {{ bindingLabel(b) }}
+              </span>
+              <button
+                type="button"
+                :class="[btnBase, 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600']"
+                @click="cancelDelete"
+              >Nein</button>
+              <button
+                type="button"
+                :class="[btnBase, 'bg-red-600 hover:bg-red-500 text-white border border-red-600']"
+                :disabled="saving"
+                @click="confirmDelete(b)"
+              >Ja</button>
+            </div>
           </div>
 
           <p v-if="errorMsg" class="text-xs text-red-400 pt-1">{{ errorMsg }}</p>
