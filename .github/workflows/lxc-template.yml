@@ -421,7 +421,7 @@ jobs:
             > "${{ steps.meta.outputs.template_file }}.sha512"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lxc-template
           path: |
