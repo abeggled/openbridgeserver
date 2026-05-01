@@ -49,7 +49,7 @@ cd gui && npm run dev
 ## Local Development Setup
 
 ### Prerequisites
-- Python 3.13+, Docker Desktop, Node.js
+- Python 3.13+, Docker Desktop, Node.js 20.19+ or 22+ (use nvm; `.nvmrc` pins v22)
 
 ### One-time setup
 
