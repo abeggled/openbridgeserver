@@ -16,6 +16,9 @@ from obs.adapters.zeitschaltuhr.adapter import (
     ZeitschaltuhrAdapter,
     ZeitschaltuhrBindingConfig,
     ZeitschaltuhrConfig,
+    _easter_date,
+    _last_weekday_of_month,
+    _nth_weekday_of_month,
 )
 
 # ---------------------------------------------------------------------------
@@ -354,3 +357,168 @@ class TestIsVacation:
     def test_empty_vacation_period_returns_false(self):
         adapter = _make_adapter()  # no vacation configured
         assert adapter._is_vacation_n(date(2026, 7, 10), 1) is False
+
+
+# ---------------------------------------------------------------------------
+# Module-level helper functions
+# ---------------------------------------------------------------------------
+
+
+class TestEasterDate:
+    def test_easter_2026(self):
+        # Easter Sunday 2026 is April 5
+        assert _easter_date(2026) == date(2026, 4, 5)
+
+    def test_easter_2024(self):
+        # Easter Sunday 2024 is March 31
+        assert _easter_date(2024) == date(2024, 3, 31)
+
+    def test_easter_2025(self):
+        # Easter Sunday 2025 is April 20
+        assert _easter_date(2025) == date(2025, 4, 20)
+
+
+class TestLastWeekdayOfMonth:
+    def test_last_sunday_of_november_2026(self):
+        # Last Sunday of November 2026 = Nov 29
+        result = _last_weekday_of_month(2026, 11, 6)
+        assert result == date(2026, 11, 29)
+        assert result.weekday() == 6
+
+    def test_last_monday_of_december_2026(self):
+        result = _last_weekday_of_month(2026, 12, 0)
+        assert result.weekday() == 0
+        assert result.month == 12
+        assert result.year == 2026
+
+
+class TestNthWeekdayOfMonth:
+    def test_first_sunday_of_november_2026(self):
+        result = _nth_weekday_of_month(2026, 11, 6, 1)
+        assert result is not None
+        assert result.weekday() == 6
+        assert result.month == 11
+
+    def test_second_sunday_of_october_2026(self):
+        result = _nth_weekday_of_month(2026, 10, 6, 2)
+        assert result is not None
+        assert result.weekday() == 6
+        assert result.month == 10
+
+    def test_fifth_weekday_out_of_range_returns_none(self):
+        # February 2026 has 28 days — no month can have a 5th occurrence of every weekday.
+        # Feb 2026 starts on Sunday; 5th Sunday would be day 29 which doesn't exist.
+        result = _nth_weekday_of_month(2026, 2, 6, 5)  # 5th Sunday of Feb 2026
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _parse_custom_holiday_entry
+# ---------------------------------------------------------------------------
+
+
+class TestParseCustomHolidayEntry:
+    def _adapter(self) -> ZeitschaltuhrAdapter:
+        return _make_adapter()
+
+    def test_fixed_date_no_name(self):
+        adapter = self._adapter()
+        result = adapter._parse_custom_holiday_entry("12-26", 2026)
+        assert result == {date(2026, 12, 26): "Benutzerdefinierter Feiertag"}
+
+    def test_fixed_date_with_name(self):
+        adapter = self._adapter()
+        result = adapter._parse_custom_holiday_entry("12-26:Stephanstag", 2026)
+        assert result == {date(2026, 12, 26): "Stephanstag"}
+
+    def test_easter_plus_one(self):
+        adapter = self._adapter()
+        result = adapter._parse_custom_holiday_entry("easter+1:Ostermontag", 2026)
+        # Easter 2026 = April 5 → +1 = April 6
+        assert result == {date(2026, 4, 6): "Ostermontag"}
+
+    def test_easter_minus_47_rosenmontag(self):
+        adapter = self._adapter()
+        result = adapter._parse_custom_holiday_entry("easter-47:Rosenmontag", 2026)
+        from datetime import timedelta
+        expected = _easter_date(2026) - timedelta(days=47)
+        assert result == {expected: "Rosenmontag"}
+
+    def test_easter_zero_offset(self):
+        adapter = self._adapter()
+        result = adapter._parse_custom_holiday_entry("easter:Ostersonntag", 2026)
+        assert result == {_easter_date(2026): "Ostersonntag"}
+
+    def test_last_weekday_german_abbreviation(self):
+        adapter = self._adapter()
+        # Last Sunday of November
+        result = adapter._parse_custom_holiday_entry("last_SO_NOV:Buß- und Bettag", 2026)
+        expected_date = _last_weekday_of_month(2026, 11, 6)
+        assert result == {expected_date: "Buß- und Bettag"}
+
+    def test_last_weekday_english_abbreviation(self):
+        adapter = self._adapter()
+        result = adapter._parse_custom_holiday_entry("last_SUN_NOV", 2026)
+        expected_date = _last_weekday_of_month(2026, 11, 6)
+        assert date(2026, 11, 29) in result
+
+    def test_nth_weekday(self):
+        adapter = self._adapter()
+        result = adapter._parse_custom_holiday_entry("2_SO_OKT:Erntedank", 2026)
+        expected_date = _nth_weekday_of_month(2026, 10, 6, 2)
+        assert result == {expected_date: "Erntedank"}
+
+    def test_unknown_format_returns_empty(self):
+        adapter = self._adapter()
+        result = adapter._parse_custom_holiday_entry("invalid_expression", 2026)
+        assert result == {}
+
+    def test_unknown_weekday_abbreviation_returns_empty(self):
+        adapter = self._adapter()
+        result = adapter._parse_custom_holiday_entry("last_XYZ_NOV", 2026)
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# _build_holidays — custom holidays integration
+# ---------------------------------------------------------------------------
+
+
+class TestBuildHolidaysCustom:
+    def test_custom_fixed_date_appears_in_holidays(self):
+        adapter = _make_adapter(custom_holidays=["12-26:Stephanstag"])
+        adapter._hol = adapter._build_holidays()
+        assert adapter._is_holiday(date(2026, 12, 26)) is True
+        assert adapter._holiday_name(date(2026, 12, 26)) == "Stephanstag"
+
+    def test_custom_easter_relative_appears_in_holidays(self):
+        adapter = _make_adapter(custom_holidays=["easter+1:Ostermontag"])
+        adapter._hol = adapter._build_holidays()
+        easter_monday_2026 = date(2026, 4, 6)
+        assert adapter._is_holiday(easter_monday_2026) is True
+
+    def test_custom_last_weekday_appears_in_holidays(self):
+        adapter = _make_adapter(custom_holidays=["last_SO_NOV:Buss+Bettag"])
+        adapter._hol = adapter._build_holidays()
+        last_sun_nov = _last_weekday_of_month(2026, 11, 6)
+        assert adapter._is_holiday(last_sun_nov) is True
+
+    def test_custom_holiday_triggers_skip_mode(self):
+        adapter = _make_adapter(custom_holidays=["12-26:Stephanstag"])
+        adapter._hol = adapter._build_holidays()
+        cfg = _cfg(
+            time_ref=TimeRef.ABSOLUTE,
+            hour=8,
+            minute=0,
+            holiday_mode=HolidayMode.SKIP,
+        )
+        # Simulate datetime for Dec 26 at 08:00 (a Saturday in 2026)
+        from datetime import timezone
+        dec26 = datetime(2026, 12, 26, 8, 0, 0, tzinfo=UTC)
+        assert adapter._should_fire(cfg, dec26) is False
+
+    def test_invalid_entry_is_skipped_gracefully(self):
+        adapter = _make_adapter(custom_holidays=["INVALID_ENTRY", "12-25:Weihnachten"])
+        adapter._hol = adapter._build_holidays()
+        # Valid entry still works
+        assert adapter._is_holiday(date(2026, 12, 25)) is True

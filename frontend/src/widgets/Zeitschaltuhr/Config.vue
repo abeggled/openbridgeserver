@@ -27,6 +27,7 @@ const cfg = reactive({
   datapoint_id:    (props.modelValue.datapoint_id    as string)  ?? '',
   binding_id:      (props.modelValue.binding_id      as string)  ?? '',
   binding_enabled: (props.modelValue.binding_enabled as boolean) ?? true,
+  mode:            (props.modelValue.mode            as string)  ?? 'full',
 })
 
 /** Einmalig pro Datenpunkt-ID (für Dropdown 2) */
@@ -187,6 +188,19 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
         <option v-for="b in availableBindings" :key="b.binding_id" :value="b.binding_id">
           {{ bindingLabel(b) }}
         </option>
+      </select>
+    </div>
+
+    <!-- Bedienungsmodus -->
+    <div>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Widget-Modus</label>
+      <select
+        v-model="cfg.mode"
+        class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
+      >
+        <option value="full">Vollzugriff — Schaltpunkte bearbeiten</option>
+        <option value="add_remove">Eingeschränkt — Schaltpunkte hinzufügen/löschen</option>
+        <option value="toggle">Minimal — Nur aktivieren/deaktivieren</option>
       </select>
     </div>
 

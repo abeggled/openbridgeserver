@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useDatapointsStore } from '@/stores/datapoints'
-import { getJwt } from '@/api/client'
+import { getJwt, datapoints as dpApi } from '@/api/client'
 import ZeitschaltuhrBindingModal from '@/components/ZeitschaltuhrBindingModal.vue'
+import ZeitschaltuhrAddRemoveModal from '@/components/ZeitschaltuhrAddRemoveModal.vue'
 import type { DataPointValue } from '@/types'
 
 const props = defineProps<{
@@ -18,6 +19,8 @@ const dpStore = useDatapointsStore()
 const label          = computed(() => (props.config.label        as string  | undefined) ?? '—')
 const cfgDatapointId = computed(() => (props.config.datapoint_id as string  | undefined) ?? '')
 const cfgBindingId   = computed(() => (props.config.binding_id   as string  | undefined) ?? '')
+const cfgInstanceId  = computed(() => (props.config.instance_id  as string  | undefined) ?? '')
+const cfgMode        = computed(() => (props.config.mode         as string  | undefined) ?? 'full')
 const hasBinding     = computed(() => !!(cfgDatapointId.value && cfgBindingId.value))
 
 /** Live-Wert aus dem Datenpunkt-Store (wird via getExtraDatapointIds abonniert) */
@@ -41,25 +44,51 @@ const quality      = computed(() => liveValue.value?.q ?? null)
 /** Binding-Status: aus Config (Snapshot, aktualisiert nach Modal-Speichern) */
 const bindingEnabled = ref((props.config.binding_enabled as boolean | undefined) ?? true)
 
-/** Modal nur wenn JWT vorhanden (Admin) und Binding konfiguriert */
-const canEdit   = computed(() => !props.editorMode && hasBinding.value && !!getJwt())
-const showModal = ref(false)
+/** Modals */
+const canEdit      = computed(() => !props.editorMode && hasBinding.value && !!getJwt())
+const canAddRemove = computed(() => !props.editorMode && !!cfgDatapointId.value && !!cfgInstanceId.value && !!getJwt())
+const showFullModal      = ref(false)
+const showAddRemoveModal = ref(false)
+const toggling           = ref(false)
 
-function handleClick() {
-  if (!canEdit.value) return
-  showModal.value = true
+async function handleClick() {
+  const mode = cfgMode.value
+  if (mode === 'toggle') {
+    if (!canEdit.value || toggling.value) return
+    toggling.value = true
+    try {
+      const newEnabled = !bindingEnabled.value
+      await dpApi.updateBinding(cfgDatapointId.value, cfgBindingId.value, { enabled: newEnabled })
+      bindingEnabled.value = newEnabled
+    } catch {
+      // ignore — no toast available in widget context
+    } finally {
+      toggling.value = false
+    }
+  } else if (mode === 'add_remove') {
+    if (!canAddRemove.value) return
+    showAddRemoveModal.value = true
+  } else {
+    // full (default)
+    if (!canEdit.value) return
+    showFullModal.value = true
+  }
 }
 
-function onSaved(enabled: boolean) {
+function onFullSaved(enabled: boolean) {
   bindingEnabled.value = enabled
-  showModal.value = false
+  showFullModal.value = false
+}
+
+function onAddRemoveClosed() {
+  showAddRemoveModal.value = false
 }
 </script>
 
 <template>
   <div
     class="flex flex-col h-full p-3 select-none gap-1.5"
-    :class="canEdit ? 'cursor-pointer' : 'cursor-default'"
+    :class="(canEdit || canAddRemove) ? 'cursor-pointer' : 'cursor-default'"
     @click="handleClick"
   >
     <!-- Kopfzeile: Icon + Beschriftung + Qualitätsindikator -->
@@ -90,6 +119,8 @@ function onSaved(enabled: boolean) {
       >
         {{ outputActive === null ? (editorMode ? '—' : '…') : outputActive ? 'AKTIV' : 'INAKTIV' }}
       </span>
+      <!-- Toggle-Spinner -->
+      <span v-if="toggling" class="text-xs text-gray-400 dark:text-gray-500 animate-pulse">…</span>
     </div>
 
     <!-- Aktivierungsstatus der Verknüpfung -->
@@ -101,19 +132,27 @@ function onSaved(enabled: boolean) {
       <span class="text-xs text-gray-400 dark:text-gray-500">
         {{ bindingEnabled ? 'ZSU aktiviert' : 'ZSU deaktiviert' }}
       </span>
-      <!-- Edit-Hinweis für Admins -->
-      <span v-if="canEdit" class="ml-auto text-xs text-gray-600 dark:text-gray-700">✏️</span>
+      <!-- Modus-Hinweis für Admins -->
+      <span v-if="canEdit && cfgMode === 'full'" class="ml-auto text-xs text-gray-600 dark:text-gray-700">✏️</span>
+      <span v-else-if="canEdit && cfgMode === 'toggle'" class="ml-auto text-xs text-gray-600 dark:text-gray-700">⏯</span>
+      <span v-else-if="canAddRemove && cfgMode === 'add_remove'" class="ml-auto text-xs text-gray-600 dark:text-gray-700">±</span>
     </div>
   </div>
 
-  <!-- Binding-Edit-Modal (Teleport ins body, damit es über allem liegt) -->
+  <!-- Modals (Teleport ins body, damit sie über allem liegen) -->
   <Teleport to="body">
     <ZeitschaltuhrBindingModal
-      v-if="showModal"
+      v-if="showFullModal"
       :datapoint-id="cfgDatapointId"
       :binding-id="cfgBindingId"
-      @close="showModal = false"
-      @saved="onSaved"
+      @close="showFullModal = false"
+      @saved="onFullSaved"
+    />
+    <ZeitschaltuhrAddRemoveModal
+      v-if="showAddRemoveModal"
+      :datapoint-id="cfgDatapointId"
+      :instance-id="cfgInstanceId"
+      @close="onAddRemoveClosed"
     />
   </Teleport>
 </template>

@@ -268,6 +268,15 @@ export const datapoints = {
       body: JSON.stringify(data),
     }),
 
+  createBinding: (dpId: string, data: { adapter_instance_id: string; direction: string; config?: Record<string, unknown>; enabled?: boolean }) =>
+    request<BindingOut>(`/datapoints/${dpId}/bindings`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  deleteBinding: (dpId: string, bindingId: string) =>
+    request<void>(`/datapoints/${dpId}/bindings/${bindingId}`, { method: 'DELETE' }),
+
   write: (id: string, value: unknown) => {
     const headers: Record<string, string> = {}
     if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
