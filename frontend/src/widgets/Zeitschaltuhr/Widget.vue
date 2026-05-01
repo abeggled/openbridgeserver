@@ -135,7 +135,7 @@ function openEdit(e: MouseEvent) {
       </div>
 
       <!-- Ausgang: effektiver Objektwert -->
-      <div class="flex items-center gap-2 mt-1">
+      <div class="flex items-center gap-2 mt-3">
         <span
           class="inline-flex items-center px-2.5 py-1 rounded-md font-semibold leading-none text-base"
           :class="outputActive === null
@@ -151,16 +151,16 @@ function openEdit(e: MouseEvent) {
       <!-- Spacer -->
       <div class="flex-1" />
 
-      <!-- Zeitplan-Status (kein truncate, Zeilenumbruch erlaubt) -->
-      <div v-if="hasConfig" class="flex items-start gap-2">
+      <!-- Zeitplan-Status: immer einzeilig, kein Umbruch -->
+      <div v-if="hasConfig" class="flex items-center gap-2 min-w-0">
         <span
-          class="w-3 h-3 rounded-full flex-shrink-0 mt-0.5"
+          class="w-3 h-3 rounded-full flex-shrink-0"
           :class="instanceBindings.length === 0 || editorMode
             ? 'bg-gray-300 dark:bg-gray-600'
             : anyEnabled ? 'bg-green-500' : 'bg-red-500'"
         />
         <span
-          class="text-xs font-medium leading-snug"
+          class="text-xs font-medium whitespace-nowrap overflow-hidden text-ellipsis"
           :class="instanceBindings.length === 0 || editorMode
             ? 'text-gray-400 dark:text-gray-500'
             : anyEnabled ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'"
