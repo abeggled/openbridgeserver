@@ -30,7 +30,7 @@ slowapi>=0.1.9
 
 # Config
 pyyaml>=6.0.3
-python-multipart>=0.0.9
+python-multipart>=0.0.27
 
 # KNX Project File Import
 pyzipper>=0.3.6
