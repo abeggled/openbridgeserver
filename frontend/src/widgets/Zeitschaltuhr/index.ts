@@ -15,8 +15,6 @@ WidgetRegistry.register({
     label: '',
     instance_id: '',
     datapoint_id: '',
-    binding_id: '',
-    binding_enabled: true,
     mode: 'full',
   },
   compatibleTypes: ['*'],

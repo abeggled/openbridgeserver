@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useDatapointsStore } from '@/stores/datapoints'
-import { getJwt, datapoints as dpApi } from '@/api/client'
-import ZeitschaltuhrBindingModal from '@/components/ZeitschaltuhrBindingModal.vue'
+import { getJwt } from '@/api/client'
 import ZeitschaltuhrAddRemoveModal from '@/components/ZeitschaltuhrAddRemoveModal.vue'
 import type { DataPointValue } from '@/types'
 
@@ -16,14 +15,21 @@ const props = defineProps<{
 
 const dpStore = useDatapointsStore()
 
-const label          = computed(() => (props.config.label        as string  | undefined) ?? '—')
-const cfgDatapointId = computed(() => (props.config.datapoint_id as string  | undefined) ?? '')
-const cfgBindingId   = computed(() => (props.config.binding_id   as string  | undefined) ?? '')
-const cfgInstanceId  = computed(() => (props.config.instance_id  as string  | undefined) ?? '')
-const cfgMode        = computed(() => (props.config.mode         as string  | undefined) ?? 'full')
-const hasBinding     = computed(() => !!(cfgDatapointId.value && cfgBindingId.value))
+const label         = computed(() => (props.config.label        as string | undefined) ?? '—')
+const cfgDatapointId = computed(() => (props.config.datapoint_id as string | undefined) ?? '')
+const cfgInstanceId  = computed(() => (props.config.instance_id  as string | undefined) ?? '')
+const cfgMode        = computed((): 'full' | 'restricted' | 'minimal' => {
+  const m = props.config.mode as string | undefined
+  if (m === 'full' || m === 'restricted' || m === 'minimal') return m
+  // backward-compat: old values
+  if (m === 'add_remove') return 'full'
+  if (m === 'toggle')     return 'minimal'
+  return 'full'
+})
 
-/** Live-Wert aus dem Datenpunkt-Store (wird via getExtraDatapointIds abonniert) */
+const hasConfig = computed(() => !!(cfgDatapointId.value && cfgInstanceId.value))
+
+/** Live-Wert aus dem Datenpunkt-Store */
 const liveValue = computed((): DataPointValue | null => {
   if (props.editorMode || !cfgDatapointId.value) return null
   return dpStore.getValue(cfgDatapointId.value)
@@ -41,54 +47,26 @@ function resolveBool(v: DataPointValue | null): boolean | null {
 const outputActive = computed(() => resolveBool(liveValue.value))
 const quality      = computed(() => liveValue.value?.q ?? null)
 
-/** Binding-Status: aus Config (Snapshot, aktualisiert nach Modal-Speichern) */
-const bindingEnabled = ref((props.config.binding_enabled as boolean | undefined) ?? true)
+/** Modal öffnen wenn JWT vorhanden und Widget konfiguriert */
+const canOpen   = computed(() => !props.editorMode && hasConfig.value && !!getJwt())
+const showModal = ref(false)
 
-/** Modals */
-const canEdit      = computed(() => !props.editorMode && hasBinding.value && !!getJwt())
-const canAddRemove = computed(() => !props.editorMode && !!cfgDatapointId.value && !!cfgInstanceId.value && !!getJwt())
-const showFullModal      = ref(false)
-const showAddRemoveModal = ref(false)
-const toggling           = ref(false)
-
-async function handleClick() {
-  const mode = cfgMode.value
-  if (mode === 'toggle') {
-    if (!canEdit.value || toggling.value) return
-    toggling.value = true
-    try {
-      const newEnabled = !bindingEnabled.value
-      await dpApi.updateBinding(cfgDatapointId.value, cfgBindingId.value, { enabled: newEnabled })
-      bindingEnabled.value = newEnabled
-    } catch {
-      // ignore — no toast available in widget context
-    } finally {
-      toggling.value = false
-    }
-  } else if (mode === 'add_remove') {
-    if (!canAddRemove.value) return
-    showAddRemoveModal.value = true
-  } else {
-    // full (default)
-    if (!canEdit.value) return
-    showFullModal.value = true
-  }
+function handleClick() {
+  if (!canOpen.value) return
+  showModal.value = true
 }
 
-function onFullSaved(enabled: boolean) {
-  bindingEnabled.value = enabled
-  showFullModal.value = false
-}
-
-function onAddRemoveClosed() {
-  showAddRemoveModal.value = false
+const modeIcon: Record<string, string> = {
+  full:       '✏️',
+  restricted: '🔒',
+  minimal:    '⏯',
 }
 </script>
 
 <template>
   <div
     class="flex flex-col h-full p-3 select-none gap-1.5"
-    :class="(canEdit || canAddRemove) ? 'cursor-pointer' : 'cursor-default'"
+    :class="canOpen ? 'cursor-pointer' : 'cursor-default'"
     @click="handleClick"
   >
     <!-- Kopfzeile: Icon + Beschriftung + Qualitätsindikator -->
@@ -119,40 +97,30 @@ function onAddRemoveClosed() {
       >
         {{ outputActive === null ? (editorMode ? '—' : '…') : outputActive ? 'AKTIV' : 'INAKTIV' }}
       </span>
-      <!-- Toggle-Spinner -->
-      <span v-if="toggling" class="text-xs text-gray-400 dark:text-gray-500 animate-pulse">…</span>
     </div>
 
-    <!-- Aktivierungsstatus der Verknüpfung -->
-    <div v-if="hasBinding" class="flex items-center gap-1.5 mt-auto">
+    <!-- Fusszeile: Modus-Indikator -->
+    <div v-if="hasConfig" class="flex items-center gap-1.5 mt-auto">
       <span
-        class="w-1.5 h-1.5 rounded-full flex-shrink-0"
-        :class="bindingEnabled ? 'bg-blue-400' : 'bg-gray-400 dark:bg-gray-600'"
+        class="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-blue-400"
       />
-      <span class="text-xs text-gray-400 dark:text-gray-500">
-        {{ bindingEnabled ? 'ZSU aktiviert' : 'ZSU deaktiviert' }}
+      <span class="text-xs text-gray-400 dark:text-gray-500 truncate">
+        {{ cfgMode === 'full' ? 'Vollzugriff' : cfgMode === 'restricted' ? 'Eingeschränkt' : 'Minimal' }}
       </span>
-      <!-- Modus-Hinweis für Admins -->
-      <span v-if="canEdit && cfgMode === 'full'" class="ml-auto text-xs text-gray-600 dark:text-gray-700">✏️</span>
-      <span v-else-if="canEdit && cfgMode === 'toggle'" class="ml-auto text-xs text-gray-600 dark:text-gray-700">⏯</span>
-      <span v-else-if="canAddRemove && cfgMode === 'add_remove'" class="ml-auto text-xs text-gray-600 dark:text-gray-700">±</span>
+      <span v-if="canOpen" class="ml-auto text-xs text-gray-600 dark:text-gray-700">
+        {{ modeIcon[cfgMode] }}
+      </span>
     </div>
   </div>
 
-  <!-- Modals (Teleport ins body, damit sie über allem liegen) -->
+  <!-- Modal -->
   <Teleport to="body">
-    <ZeitschaltuhrBindingModal
-      v-if="showFullModal"
-      :datapoint-id="cfgDatapointId"
-      :binding-id="cfgBindingId"
-      @close="showFullModal = false"
-      @saved="onFullSaved"
-    />
     <ZeitschaltuhrAddRemoveModal
-      v-if="showAddRemoveModal"
+      v-if="showModal"
       :datapoint-id="cfgDatapointId"
       :instance-id="cfgInstanceId"
-      @close="onAddRemoveClosed"
+      :mode="cfgMode"
+      @close="showModal = false"
     />
   </Teleport>
 </template>

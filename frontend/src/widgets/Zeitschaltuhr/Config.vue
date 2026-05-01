@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { reactive, ref, watch, onMounted, computed } from 'vue'
-import { adapters as adaptersApi, datapoints as datapointsApi, type InstanceBindingEntry } from '@/api/client'
+import { adapters as adaptersApi, datapoints as datapointsApi } from '@/api/client'
+import type { InstanceBindingEntry } from '@/api/client'
 
 const props = defineProps<{
   modelValue: Record<string, unknown>
@@ -26,7 +27,7 @@ const loadingInstances = ref(false)
 const loadingBindings = ref(false)
 const errorMsg = ref('')
 
-// Datapoint search (for add_remove mode)
+// Datapoint search (for full mode — any dp)
 const dpQuery = ref('')
 const dpResults = ref<DpOption[]>([])
 const dpSearchLoading = ref(false)
@@ -34,15 +35,17 @@ const dpSearchOpen = ref(false)
 const dpSelectedName = ref('')
 
 const cfg = reactive({
-  label:           (props.modelValue.label           as string)  ?? '',
-  instance_id:     (props.modelValue.instance_id     as string)  ?? '',
-  datapoint_id:    (props.modelValue.datapoint_id    as string)  ?? '',
-  binding_id:      (props.modelValue.binding_id      as string)  ?? '',
-  binding_enabled: (props.modelValue.binding_enabled as boolean) ?? true,
-  mode:            (props.modelValue.mode            as string)  ?? 'full',
+  label:        (props.modelValue.label        as string) ?? '',
+  instance_id:  (props.modelValue.instance_id  as string) ?? '',
+  datapoint_id: (props.modelValue.datapoint_id as string) ?? '',
+  mode:         (props.modelValue.mode         as string) ?? 'full',
 })
 
-const isAddRemoveMode = computed(() => cfg.mode === 'add_remove')
+// Normalize legacy mode values
+if (cfg.mode === 'add_remove') cfg.mode = 'full'
+if (cfg.mode === 'toggle')     cfg.mode = 'minimal'
+
+const isFullMode = computed(() => cfg.mode === 'full')
 
 /** Einmalig pro Datenpunkt-ID (für Dropdown 2, full/toggle mode) */
 const availableDatapoints = computed(() => {
@@ -54,10 +57,6 @@ const availableDatapoints = computed(() => {
   })
 })
 
-/** Alle Verknüpfungen des gewählten Datenpunkts (für Dropdown 3) */
-const availableBindings = computed(() =>
-  bindings.value.filter((b) => b.datapoint_id === cfg.datapoint_id)
-)
 
 onMounted(async () => {
   loadingInstances.value = true
@@ -73,12 +72,12 @@ onMounted(async () => {
     loadingInstances.value = false
   }
 
-  if (cfg.instance_id && !isAddRemoveMode.value) {
+  if (cfg.instance_id && !isFullMode.value) {
     await loadBindings(cfg.instance_id)
   }
 
-  // Restore dp name for add_remove mode
-  if (isAddRemoveMode.value && cfg.datapoint_id) {
+  // Restore dp name for full mode (search-based)
+  if (isFullMode.value && cfg.datapoint_id) {
     try {
       const dp = await datapointsApi.get(cfg.datapoint_id)
       dpQuery.value = dp.name
@@ -102,32 +101,16 @@ async function loadBindings(instanceId: string) {
 
 async function onInstanceChange() {
   cfg.datapoint_id = ''
-  cfg.binding_id = ''
-  cfg.binding_enabled = true
   bindings.value = []
   dpQuery.value = ''
   dpSelectedName.value = ''
   dpResults.value = []
-  if (cfg.instance_id && !isAddRemoveMode.value) {
+  if (cfg.instance_id && !isFullMode.value) {
     await loadBindings(cfg.instance_id)
   }
 }
 
-function onDatapointChange() {
-  cfg.binding_id = ''
-  cfg.binding_enabled = true
-  // Automatisch wählen wenn nur eine Verknüpfung vorhanden
-  const matches = availableBindings.value
-  if (matches.length === 1) {
-    cfg.binding_id = matches[0].binding_id
-    cfg.binding_enabled = matches[0].enabled
-  }
-}
-
-function onBindingChange() {
-  const b = bindings.value.find((b) => b.binding_id === cfg.binding_id)
-  if (b) cfg.binding_enabled = b.enabled
-}
+function onDatapointChange() { /* no-op */ }
 
 // ── add_remove mode: datapoint search ─────────────────────────────────────────
 
@@ -172,28 +155,7 @@ function clearDp() {
   dpSearchOpen.value = false
 }
 
-/** Lesbare Bezeichnung für eine Verknüpfung */
-function bindingLabel(b: InstanceBindingEntry): string {
-  const c = b.config
-  const type  = (c.timer_type as string | undefined) ?? 'daily'
-  const ref   = (c.time_ref   as string | undefined) ?? 'absolute'
-  const val   = (c.value      as string | undefined) ?? '?'
 
-  let timeStr = ''
-  if (ref === 'absolute') {
-    const h = String((c.hour   as number | undefined) ?? 0).padStart(2, '0')
-    const m = String((c.minute as number | undefined) ?? 0).padStart(2, '0')
-    timeStr = `${h}:${m}`
-  } else if (ref === 'sunrise')        timeStr = 'Sonnenaufgang'
-  else if (ref === 'sunset')           timeStr = 'Sonnenuntergang'
-  else if (ref === 'solar_noon')       timeStr = 'Sonnenmittag'
-  else if (ref === 'solar_altitude')   timeStr = `Sonne ${c.solar_altitude_deg ?? '?'}°`
-
-  const typeStr = type === 'meta' ? 'Meta' : type === 'annual' ? 'jährlich' : 'täglich'
-  const suffix  = b.enabled ? '' : ' ⚠ deaktiviert'
-
-  return `${typeStr} ${timeStr} → ${val}${suffix}`.trim()
-}
 
 const selCls = 'w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 disabled:opacity-50'
 const lCls   = 'block text-xs text-gray-500 dark:text-gray-400 mb-1'
@@ -219,9 +181,9 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     <div>
       <label :class="lCls">Widget-Modus</label>
       <select v-model="cfg.mode" :class="selCls" @change="onInstanceChange">
-        <option value="full">Vollzugriff — Schaltpunkte bearbeiten</option>
-        <option value="add_remove">Eingeschränkt — Schaltpunkte hinzufügen/löschen</option>
-        <option value="toggle">Minimal — Nur aktivieren/deaktivieren</option>
+        <option value="full">Vollzugriff — hinzufügen, bearbeiten, löschen</option>
+        <option value="restricted">Eingeschränkt — nur bearbeiten und aktivieren</option>
+        <option value="minimal">Minimal — nur aktivieren/deaktivieren</option>
       </select>
     </div>
 
@@ -242,8 +204,8 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
       </select>
     </div>
 
-    <!-- add_remove mode: Datenpunkt-Suche -->
-    <template v-if="cfg.instance_id && isAddRemoveMode">
+    <!-- full mode: Datenpunkt-Suche (beliebiger Datenpunkt) -->
+    <template v-if="cfg.instance_id && isFullMode">
       <div class="relative">
         <label :class="lCls">
           Objekt
@@ -286,8 +248,8 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
       </div>
     </template>
 
-    <!-- full / toggle mode: Objekt aus bestehenden Bindings -->
-    <template v-else-if="cfg.instance_id && !isAddRemoveMode">
+    <!-- restricted / minimal mode: Objekt aus bestehenden Bindings -->
+    <template v-else-if="cfg.instance_id && !isFullMode">
       <div>
         <label :class="lCls">Objekt</label>
         <select
@@ -301,21 +263,6 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
           </option>
           <option v-for="dp in availableDatapoints" :key="dp.datapoint_id" :value="dp.datapoint_id">
             {{ dp.datapoint_name }}
-          </option>
-        </select>
-      </div>
-
-      <!-- Dropdown 3: Verknüpfung -->
-      <div v-if="cfg.datapoint_id">
-        <label :class="lCls">Verknüpfung</label>
-        <select
-          v-model="cfg.binding_id"
-          :class="selCls"
-          @change="onBindingChange"
-        >
-          <option value="">— Verknüpfung wählen —</option>
-          <option v-for="b in availableBindings" :key="b.binding_id" :value="b.binding_id">
-            {{ bindingLabel(b) }}
           </option>
         </select>
       </div>

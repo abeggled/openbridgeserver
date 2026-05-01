@@ -1,21 +1,20 @@
 <script setup lang="ts">
 /**
- * ZeitschaltuhrAddRemoveModal — Schaltpunkte hinzufügen und entfernen.
+ * ZeitschaltuhrAddRemoveModal — Schaltpunkte verwalten.
  *
- * Zeigt alle Verknüpfungen des konfigurierten Datenpunkts und erlaubt:
- *  - Enable/Disable per Toggle
- *  - Löschen einer Verknüpfung
- *  - Hinzufügen einer neuen Verknüpfung mit Standardkonfiguration
- *
- * Konfigurationsdetails (Wochentage, Uhrzeit, …) sind in diesem Modus nicht editierbar.
+ * mode="full"        — Hinzufügen + Bearbeiten + Aktivieren/Deaktivieren + Löschen
+ * mode="restricted"  — Bearbeiten + Aktivieren/Deaktivieren (kein Hinzufügen/Löschen)
+ * mode="minimal"     — nur Aktivieren/Deaktivieren
  */
 import { ref, onMounted } from 'vue'
 import { datapoints as dpApi } from '@/api/client'
 import type { BindingOut } from '@/api/client'
+import ZeitschaltuhrBindingModal from '@/components/ZeitschaltuhrBindingModal.vue'
 
 const props = defineProps<{
   datapointId: string
   instanceId:  string
+  mode:        'full' | 'restricted' | 'minimal'
 }>()
 
 const emit = defineEmits<{
@@ -28,6 +27,8 @@ const loading   = ref(true)
 const saving    = ref(false)
 const errorMsg  = ref('')
 const bindings  = ref<BindingOut[]>([])
+
+const editingBinding = ref<BindingOut | null>(null)
 
 // ── Load ──────────────────────────────────────────────────────────────────────
 
@@ -61,23 +62,23 @@ async function toggleEnabled(b: BindingOut) {
   }
 }
 
-// ── Delete ────────────────────────────────────────────────────────────────────
+// ── Delete (full mode only) ───────────────────────────────────────────────────
 
 async function deleteBinding(b: BindingOut) {
-  if (!confirm(`Verknüpfung "${bindingLabel(b)}" wirklich löschen?`)) return
+  if (!confirm(`Schaltpunkt "${bindingLabel(b)}" wirklich löschen?`)) return
   saving.value = true
   errorMsg.value = ''
   try {
     await dpApi.deleteBinding(props.datapointId, String(b.id))
     bindings.value = bindings.value.filter((x) => x.id !== b.id)
   } catch {
-    errorMsg.value = 'Fehler beim Löschen der Verknüpfung.'
+    errorMsg.value = 'Fehler beim Löschen des Schaltpunkts.'
   } finally {
     saving.value = false
   }
 }
 
-// ── Add ───────────────────────────────────────────────────────────────────────
+// ── Add (full mode only) ──────────────────────────────────────────────────────
 
 async function addBinding() {
   saving.value = true
@@ -90,11 +91,29 @@ async function addBinding() {
       enabled: true,
     })
     bindings.value.push(created)
+    // Direkt den neuen Schaltpunkt zum Bearbeiten öffnen
+    editingBinding.value = created
   } catch {
-    errorMsg.value = 'Fehler beim Erstellen der Verknüpfung.'
+    errorMsg.value = 'Fehler beim Erstellen des Schaltpunkts.'
   } finally {
     saving.value = false
   }
+}
+
+// ── Edit ──────────────────────────────────────────────────────────────────────
+
+function openEdit(b: BindingOut) {
+  editingBinding.value = b
+}
+
+function onEditSaved(enabled: boolean) {
+  if (editingBinding.value) {
+    const idx = bindings.value.findIndex((x) => x.id === editingBinding.value!.id)
+    if (idx >= 0) bindings.value[idx] = { ...bindings.value[idx], enabled }
+  }
+  editingBinding.value = null
+  // Reload to get fresh config labels
+  load()
 }
 
 // ── Label helper ──────────────────────────────────────────────────────────────
@@ -119,8 +138,7 @@ function bindingLabel(b: BindingOut): string {
   return `${typeStr} ${timeStr} → ${val}`.trim()
 }
 
-// ── CSS helpers ───────────────────────────────────────────────────────────────
-const btnBase = 'px-2.5 py-1 rounded text-xs font-medium transition-colors disabled:opacity-50'
+const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disabled:opacity-50 flex-shrink-0'
 </script>
 
 <template>
@@ -134,7 +152,12 @@ const btnBase = 'px-2.5 py-1 rounded text-xs font-medium transition-colors disab
 
       <!-- Header -->
       <div class="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-        <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">🕐 Schaltpunkte verwalten</h2>
+        <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          🕐 Schaltpunkte
+          <span class="ml-1 text-xs font-normal text-gray-400 dark:text-gray-500">
+            {{ mode === 'full' ? '(Vollzugriff)' : mode === 'restricted' ? '(Eingeschränkt)' : '(Minimal)' }}
+          </span>
+        </h2>
         <button
           class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-lg leading-none"
           @click="emit('close')"
@@ -180,12 +203,23 @@ const btnBase = 'px-2.5 py-1 rounded text-xs font-medium transition-colors disab
 
             <!-- Label -->
             <span
-              class="flex-1 text-xs truncate"
+              class="flex-1 text-xs truncate min-w-0"
               :class="b.enabled ? 'text-gray-800 dark:text-gray-200' : 'text-gray-400 dark:text-gray-500 line-through'"
             >{{ bindingLabel(b) }}</span>
 
-            <!-- Delete button -->
+            <!-- Edit button (full + restricted) -->
             <button
+              v-if="mode !== 'minimal'"
+              type="button"
+              title="Bearbeiten"
+              :class="[btnBase, 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 hover:text-blue-600 dark:hover:text-blue-400 border border-gray-200 dark:border-gray-600']"
+              :disabled="saving"
+              @click="openEdit(b)"
+            >✏️</button>
+
+            <!-- Delete button (full only) -->
+            <button
+              v-if="mode === 'full'"
               type="button"
               title="Löschen"
               :class="[btnBase, 'bg-red-50 dark:bg-red-900/20 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 border border-red-200 dark:border-red-800']"
@@ -201,13 +235,17 @@ const btnBase = 'px-2.5 py-1 rounded text-xs font-medium transition-colors disab
 
       <!-- Footer -->
       <div class="flex justify-between items-center gap-2 px-5 py-3 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
+        <!-- Add button (full only) -->
         <button
-          :class="[btnBase, 'bg-blue-600 hover:bg-blue-500 text-white']"
+          v-if="mode === 'full'"
+          :class="[btnBase, 'px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm']"
           :disabled="saving || loading"
           @click="addBinding"
         >
           {{ saving ? '…' : '+ Neuer Schaltpunkt' }}
         </button>
+        <span v-else />
+
         <button
           class="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded"
           @click="emit('close')"
@@ -216,4 +254,15 @@ const btnBase = 'px-2.5 py-1 rounded text-xs font-medium transition-colors disab
 
     </div>
   </div>
+
+  <!-- Edit-Modal (eingebettet, Teleport ins body) -->
+  <Teleport to="body">
+    <ZeitschaltuhrBindingModal
+      v-if="editingBinding"
+      :datapoint-id="props.datapointId"
+      :binding-id="String(editingBinding.id)"
+      @close="editingBinding = null"
+      @saved="onEditSaved"
+    />
+  </Teleport>
 </template>
