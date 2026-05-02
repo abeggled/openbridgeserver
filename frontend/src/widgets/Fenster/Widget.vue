@@ -195,7 +195,7 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
       -->
       <svg
         v-if="mode === 'fenster'"
-        viewBox="0 0 120 60"
+        viewBox="0 -2 120 64"
         class="w-full h-full max-h-full"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
@@ -237,7 +237,7 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
       <!-- ── Single-wing window RIGHT-hinged (fenster_r) ──────────────── -->
       <svg
         v-else-if="mode === 'fenster_r'"
-        viewBox="0 0 120 60"
+        viewBox="0 -2 120 64"
         class="w-full h-full max-h-full"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
@@ -285,7 +285,7 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
       -->
       <svg
         v-else-if="mode === 'fenster_2'"
-        viewBox="0 0 120 60"
+        viewBox="-10 -2 140 64"
         class="w-full h-full max-h-full"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
@@ -375,7 +375,7 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
       -->
       <svg
         v-else-if="mode === 'zweituerer'"
-        viewBox="0 0 180 200"
+        viewBox="-10 0 200 200"
         class="w-full h-full max-h-full"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
