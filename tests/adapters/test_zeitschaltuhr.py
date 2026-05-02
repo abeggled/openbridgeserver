@@ -390,8 +390,7 @@ class TestAdvent1Date:
         # 1. Advent always falls between Nov 27 and Dec 3
         for year in range(2020, 2031):
             d = _advent1_date(year)
-            assert (d.month == 11 and d.day >= 27) or (d.month == 12 and d.day <= 3), \
-                f"1. Advent {year} = {d} out of expected range"
+            assert (d.month == 11 and d.day >= 27) or (d.month == 12 and d.day <= 3), f"1. Advent {year} = {d} out of expected range"
 
 
 class TestEasterDate:
@@ -471,6 +470,7 @@ class TestParseCustomHolidayEntry:
         adapter = self._adapter()
         result = adapter._parse_custom_holiday_entry("easter-47:Rosenmontag", 2026)
         from datetime import timedelta
+
         expected = _easter_date(2026) - timedelta(days=47)
         assert result == {expected: "Rosenmontag"}
 
@@ -489,7 +489,6 @@ class TestParseCustomHolidayEntry:
     def test_last_weekday_english_abbreviation(self):
         adapter = self._adapter()
         result = adapter._parse_custom_holiday_entry("last_SUN_NOV", 2026)
-        expected_date = _last_weekday_of_month(2026, 11, 6)
         assert date(2026, 11, 29) in result
 
     def test_nth_weekday(self):
@@ -505,12 +504,14 @@ class TestParseCustomHolidayEntry:
 
     def test_advent_plus_7_second_advent(self):
         from datetime import timedelta
+
         adapter = self._adapter()
         result = adapter._parse_custom_holiday_entry("advent+7:2. Advent", 2025)
         assert result == {_advent1_date(2025) + timedelta(days=7): "2. Advent"}
 
     def test_advent_plus_24_heiligabend(self):
         from datetime import timedelta
+
         adapter = self._adapter()
         result = adapter._parse_custom_holiday_entry("advent+24:Heiligabend", 2025)
         expected = _advent1_date(2025) + timedelta(days=24)
@@ -568,7 +569,7 @@ class TestBuildHolidaysCustom:
             holiday_mode=HolidayMode.SKIP,
         )
         # Simulate datetime for Dec 26 at 08:00 (a Saturday in 2026)
-        from datetime import timezone
+
         dec26 = datetime(2026, 12, 26, 8, 0, 0, tzinfo=UTC)
         assert adapter._should_fire(cfg, dec26) is False
 
@@ -635,7 +636,9 @@ class TestShouldFireHolidayType:
         cfg = _cfg(
             timer_type=TimerType.HOLIDAY,
             selected_holidays=["Neujahr", "Weihnachten"],
-            time_ref=TimeRef.ABSOLUTE, hour=8, minute=0,
+            time_ref=TimeRef.ABSOLUTE,
+            hour=8,
+            minute=0,
         )
         assert adapter._should_fire(cfg, now) is True
 
@@ -644,7 +647,9 @@ class TestShouldFireHolidayType:
         cfg = _cfg(
             timer_type=TimerType.HOLIDAY,
             selected_holidays=["Weihnachten"],
-            time_ref=TimeRef.ABSOLUTE, hour=8, minute=0,
+            time_ref=TimeRef.ABSOLUTE,
+            hour=8,
+            minute=0,
         )
         assert adapter._should_fire(cfg, now) is False
 
@@ -660,7 +665,9 @@ class TestShouldFireHolidayType:
         cfg = _cfg(
             timer_type=TimerType.HOLIDAY,
             weekdays=[6],  # Sunday only
-            time_ref=TimeRef.ABSOLUTE, hour=8, minute=0,
+            time_ref=TimeRef.ABSOLUTE,
+            hour=8,
+            minute=0,
         )
         assert adapter._should_fire(cfg, now) is True
 
@@ -676,7 +683,9 @@ class TestShouldFireHolidayType:
         cfg = _cfg(
             timer_type=TimerType.HOLIDAY,
             vacation_mode=HolidayMode.SKIP,
-            time_ref=TimeRef.ABSOLUTE, hour=8, minute=0,
+            time_ref=TimeRef.ABSOLUTE,
+            hour=8,
+            minute=0,
         )
         assert adapter._should_fire(cfg, now) is False
 
@@ -690,7 +699,9 @@ class TestShouldFireHolidayType:
             cfg = _cfg(
                 timer_type=TimerType.HOLIDAY,
                 selected_holidays=[],  # no filter
-                time_ref=TimeRef.ABSOLUTE, hour=8, minute=0,
+                time_ref=TimeRef.ABSOLUTE,
+                hour=8,
+                minute=0,
             )
             assert adapter._should_fire(cfg, now) is True, f"Should fire on {name}"
 
@@ -724,12 +735,14 @@ class TestParseDateExpression:
 
     def test_easter_plus_offset(self):
         from datetime import timedelta
+
         adapter = _make_adapter()
         result = adapter._parse_date_expression("easter+1", 2026)
         assert result == _easter_date(2026) + timedelta(days=1)
 
     def test_easter_minus_offset(self):
         from datetime import timedelta
+
         adapter = _make_adapter()
         result = adapter._parse_date_expression("easter-7", 2026)
         assert result == _easter_date(2026) + timedelta(days=-7)
@@ -740,6 +753,7 @@ class TestParseDateExpression:
 
     def test_advent_plus_21(self):
         from datetime import timedelta
+
         adapter = _make_adapter()
         result = adapter._parse_date_expression("advent+21", 2026)
         assert result == _advent1_date(2026) + timedelta(days=21)
@@ -751,6 +765,7 @@ class TestParseDateExpression:
 
     def test_holiday_name_with_offset(self):
         from datetime import timedelta
+
         adapter = self._adapter_with_hol()
         result = adapter._parse_date_expression("holiday:Nationalfeiertag-7", 2026)
         assert result == date(2026, 8, 1) + timedelta(days=-7)
@@ -820,6 +835,7 @@ class TestInDateWindow:
         # Easter 2026 = Apr 5; window: easter-7 to easter+7
         easter = _easter_date(2026)
         from datetime import timedelta
+
         assert adapter._in_date_window("easter-7", "easter+7", easter) is True
         assert adapter._in_date_window("easter-7", "easter+7", easter - timedelta(days=8)) is False
         assert adapter._in_date_window("easter-7", "easter+7", easter + timedelta(days=8)) is False
@@ -827,7 +843,7 @@ class TestInDateWindow:
     def test_holiday_name_window(self):
         adapter = _make_adapter()
         adapter._hol[date(2026, 8, 1)] = "Nationalfeiertag"
-        from datetime import timedelta
+
         # Window: 7 days before to 7 days after Nationalfeiertag (Aug 1 ± 7)
         assert adapter._in_date_window("holiday:Nationalfeiertag-7", "holiday:Nationalfeiertag+7", date(2026, 8, 1)) is True
         assert adapter._in_date_window("holiday:Nationalfeiertag-7", "holiday:Nationalfeiertag+7", date(2026, 7, 25)) is True
@@ -842,6 +858,7 @@ class TestInDateWindow:
         # 1. Advent to 4. Advent: advent+0 to advent+21
         advent1_2026 = _advent1_date(2026)
         from datetime import timedelta
+
         advent4_2026 = advent1_2026 + timedelta(days=21)
         # 2. Advent (day 7) should be inside
         assert adapter._in_date_window("advent+0", "advent+21", advent1_2026 + timedelta(days=7)) is True
