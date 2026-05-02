@@ -6,17 +6,36 @@
  *  2. Widget zeigt "Zeitschaltuhr aktiv" bei aktiviertem Binding
  *  3. Widget zeigt "Zeitschaltuhr inaktiv" bei deaktiviertem Binding
  *  4. Klick auf Widget öffnet Bestätigungs-Overlay (aktivieren/deaktivieren)
- *  5. Bestätigung aktiviert alle Bindings
+ *  5. Bestätigung "Nein" schliesst Overlay ohne Statusänderung
  *  6. Widget mit Feiertagsschaltuhr-Binding (timer_type='holiday') zeigt korrekten Status
  *  7. Widget mit Datum-Fenster-Binding zeigt korrekten Status
+ *
+ * Auth-Hinweis: Die Visu-App liest JWT aus localStorage['visu_jwt'], der Admin-Login
+ * setzt aber 'access_token'. Deshalb wird der Token via page.addInitScript() vor
+ * jeder Navigation manuell als 'visu_jwt' gesetzt, damit dpApi.listBindings() auth'd läuft.
  */
 
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { randomUUID } from 'crypto'
-import { apiPost, apiDelete, apiPut } from '../helpers'
+import { apiPost, apiDelete, apiPut, getToken } from '../helpers'
 
 // ---------------------------------------------------------------------------
-// Hilfsfunktionen
+// Auth-Hilfsfunktion
+// ---------------------------------------------------------------------------
+
+/**
+ * Setzt visu_jwt in localStorage BEVOR die Seite lädt, damit der Visu-Frontend
+ * dpApi.listBindings() mit JWT-Auth aufruft.
+ */
+async function injectVisuJwt(page: Page) {
+  const token = await getToken()
+  await page.addInitScript((t: string) => {
+    localStorage.setItem('visu_jwt', t)
+  }, token)
+}
+
+// ---------------------------------------------------------------------------
+// Fixture-Hilfsfunktionen
 // ---------------------------------------------------------------------------
 
 async function createZsuInstance() {
@@ -123,6 +142,7 @@ test('ZSU-Widget zeigt "Keine Schaltpunkte" wenn kein Binding existiert', async 
   const widgetId = randomUUID()
 
   await buildZsuPage(pageId, widgetId, dp.id, instance.id)
+  await injectVisuJwt(page)
 
   try {
     await page.goto(`/visu/${pageId}`)
@@ -131,10 +151,7 @@ test('ZSU-Widget zeigt "Keine Schaltpunkte" wenn kein Binding existiert', async 
     const widget = page.locator(`[data-widget-id="${widgetId}"]`)
     await expect(widget).toBeVisible({ timeout: 8_000 })
 
-    // Label must be rendered
     await expect(widget.locator('[data-testid="zsu-label"]')).toHaveText('Testschaltuhr')
-
-    // No bindings → status text
     await expect(widget.locator('[data-testid="zsu-status"]')).toHaveText('Keine Schaltpunkte', { timeout: 5_000 })
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
@@ -156,6 +173,7 @@ test('ZSU-Widget zeigt "Zeitschaltuhr aktiv" bei enabled=true Binding', async ({
 
   await createZsuBinding(dp.id, instance.id, {}, true)
   await buildZsuPage(pageId, widgetId, dp.id, instance.id)
+  await injectVisuJwt(page)
 
   try {
     await page.goto(`/visu/${pageId}`)
@@ -184,6 +202,7 @@ test('ZSU-Widget zeigt "Zeitschaltuhr inaktiv" bei enabled=false Binding', async
 
   await createZsuBinding(dp.id, instance.id, {}, false)
   await buildZsuPage(pageId, widgetId, dp.id, instance.id)
+  await injectVisuJwt(page)
 
   try {
     await page.goto(`/visu/${pageId}`)
@@ -200,10 +219,10 @@ test('ZSU-Widget zeigt "Zeitschaltuhr inaktiv" bei enabled=false Binding', async
 })
 
 // ---------------------------------------------------------------------------
-// Test 4: Klick auf Widget öffnet Bestätigungs-Overlay (aktivieren)
+// Test 4: Klick auf Widget öffnet Bestätigungs-Overlay
 // ---------------------------------------------------------------------------
 
-test('Klick auf inaktives ZSU-Widget öffnet Bestätigungs-Overlay', async ({ page }) => {
+test('Klick auf inaktives ZSU-Widget öffnet Bestätigungs-Overlay, Nein schliesst es', async ({ page }) => {
   const dp       = await createBoolDp('confirm')
   const instance = await createZsuInstance()
   const visuNode = await createVisuPage()
@@ -212,33 +231,24 @@ test('Klick auf inaktives ZSU-Widget öffnet Bestätigungs-Overlay', async ({ pa
 
   await createZsuBinding(dp.id, instance.id, {}, false)
   await buildZsuPage(pageId, widgetId, dp.id, instance.id)
+  await injectVisuJwt(page)
 
   try {
-    // Log in as admin so the widget is interactive
-    await page.goto('/login')
-    await page.waitForLoadState('networkidle')
-    await page.fill('[data-testid="input-username"]', 'admin')
-    await page.fill('[data-testid="input-password"]', 'admin')
-    await page.click('[data-testid="btn-login"]')
-    await page.waitForURL(/visu|dashboard|admin/, { timeout: 8_000 })
-
     await page.goto(`/visu/${pageId}`)
     await page.waitForLoadState('networkidle')
 
     const widget = page.locator(`[data-widget-id="${widgetId}"]`)
     await expect(widget).toBeVisible({ timeout: 8_000 })
+    await expect(widget.locator('[data-testid="zsu-status"]')).toHaveText('Zeitschaltuhr inaktiv', { timeout: 5_000 })
 
-    // Click the card body to trigger confirmation overlay
+    // Klick auf Widget → Overlay erscheint
     await widget.click()
-
     const overlay = widget.locator('[data-testid="zsu-confirm-overlay"]')
     await expect(overlay).toBeVisible({ timeout: 3_000 })
 
-    // Cancel
+    // "Nein" → Overlay verschwindet, Status unverändert
     await widget.locator('[data-testid="zsu-confirm-no"]').click()
     await expect(overlay).not.toBeVisible({ timeout: 2_000 })
-
-    // Status must still be inaktiv
     await expect(widget.locator('[data-testid="zsu-status"]')).toHaveText('Zeitschaltuhr inaktiv')
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
@@ -251,7 +261,7 @@ test('Klick auf inaktives ZSU-Widget öffnet Bestätigungs-Overlay', async ({ pa
 // Test 5: Widget mit Feiertagsschaltuhr-Binding (timer_type='holiday')
 // ---------------------------------------------------------------------------
 
-test('ZSU-Widget mit Feiertagsschaltuhr-Binding zeigt korrekten Status', async ({ page }) => {
+test('ZSU-Widget mit Feiertagsschaltuhr-Binding (timer_type=holiday) zeigt korrekten Status', async ({ page }) => {
   const dp       = await createBoolDp('holiday-type')
   const instance = await createZsuInstance()
   const visuNode = await createVisuPage()
@@ -263,6 +273,7 @@ test('ZSU-Widget mit Feiertagsschaltuhr-Binding zeigt korrekten Status', async (
     selected_holidays: ['Neujahr'],
   }, true)
   await buildZsuPage(pageId, widgetId, dp.id, instance.id)
+  await injectVisuJwt(page)
 
   try {
     await page.goto(`/visu/${pageId}`)
@@ -270,7 +281,6 @@ test('ZSU-Widget mit Feiertagsschaltuhr-Binding zeigt korrekten Status', async (
 
     const widget = page.locator(`[data-widget-id="${widgetId}"]`)
     await expect(widget).toBeVisible({ timeout: 8_000 })
-    // Binding is enabled → aktiv
     await expect(widget.locator('[data-testid="zsu-status"]')).toHaveText('Zeitschaltuhr aktiv', { timeout: 5_000 })
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
@@ -296,6 +306,7 @@ test('ZSU-Widget mit Datum-Fenster-Binding (easter-7 bis easter+7) zeigt korrekt
     date_window_to: 'easter+7',
   }, true)
   await buildZsuPage(pageId, widgetId, dp.id, instance.id)
+  await injectVisuJwt(page)
 
   try {
     await page.goto(`/visu/${pageId}`)
@@ -303,7 +314,7 @@ test('ZSU-Widget mit Datum-Fenster-Binding (easter-7 bis easter+7) zeigt korrekt
 
     const widget = page.locator(`[data-widget-id="${widgetId}"]`)
     await expect(widget).toBeVisible({ timeout: 8_000 })
-    // Binding is enabled → aktiv (date window only suppresses firing, not the enabled flag)
+    // Binding ist enabled=true → "aktiv" (Datum-Fenster unterdrückt nur das Feuern, nicht das enabled-Flag)
     await expect(widget.locator('[data-testid="zsu-status"]')).toHaveText('Zeitschaltuhr aktiv', { timeout: 5_000 })
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
