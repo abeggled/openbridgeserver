@@ -524,6 +524,7 @@
             <select v-model="cfg.timer_type" class="input">
               <option value="daily">Tagesschaltuhr (täglich/wöchentlich)</option>
               <option value="annual">Jahresschaltuhr (monatlich/jährlich)</option>
+              <option value="holiday">Feiertagsschaltuhr (nur an Feiertagen)</option>
               <option value="meta">Metadaten (Feiertag-/Ferienstatus)</option>
             </select>
           </div>
@@ -551,8 +552,43 @@
 
         <template v-if="cfg.timer_type !== 'meta'">
 
-          <!-- Wochentage -->
-          <div class="form-group">
+          <!-- Feiertagsschaltuhr: Feiertagsauswahl -->
+          <template v-if="cfg.timer_type === 'holiday'">
+            <div class="form-group">
+              <label class="label">Feiertage <span class="optional">(leer = alle Feiertage)</span></label>
+              <p class="hint mb-2">Schaltet nur an den ausgewählten Feiertagen. Kein Eintrag = an jedem Feiertag.</p>
+              <div v-if="ztHolidaysLoading" class="text-xs text-slate-400 py-2">Lade Feiertage …</div>
+              <div v-else-if="ztHolidaysError" class="text-xs text-red-400 py-2">{{ ztHolidaysError }}</div>
+              <div v-else-if="ztHolidays.length === 0" class="text-xs text-slate-400 italic py-2">Keine Feiertage gefunden. Bitte Adapter-Instanz prüfen.</div>
+              <div v-else class="space-y-0.5 max-h-56 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded p-2 bg-white dark:bg-slate-800/50">
+                <label
+                  v-for="h in ztHolidays"
+                  :key="h.name"
+                  class="flex items-center gap-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/40 px-1.5 py-1 rounded text-xs"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="cfg.selected_holidays.length === 0 || cfg.selected_holidays.includes(h.name)"
+                    class="w-3.5 h-3.5 rounded flex-shrink-0"
+                    @change="ztToggleHoliday(h.name)"
+                  />
+                  <span class="font-mono text-slate-400 dark:text-slate-500 flex-shrink-0">{{ h.date }}</span>
+                  <span class="text-slate-700 dark:text-slate-200 truncate">{{ h.name }}</span>
+                </label>
+              </div>
+              <div class="flex gap-3 mt-1.5 items-center">
+                <button type="button" class="text-xs text-slate-400 hover:text-blue-400" @click="cfg.selected_holidays = []">Alle (kein Filter)</button>
+                <span class="text-xs text-slate-300 dark:text-slate-600">·</span>
+                <span class="text-xs text-slate-400">
+                  {{ cfg.selected_holidays.length === 0 ? 'Alle Feiertage' : `${cfg.selected_holidays.length} ausgewählt` }}
+                </span>
+                <button type="button" class="text-xs text-slate-400 hover:text-blue-400 ml-auto" @click="loadZsuHolidays()">↻ Neu laden</button>
+              </div>
+            </div>
+          </template>
+
+          <!-- Wochentage (nicht für Feiertagsschaltuhr) -->
+          <div v-if="cfg.timer_type !== 'holiday'" class="form-group">
             <label class="label">Wochentage</label>
             <div class="flex gap-1.5 flex-wrap">
               <button
@@ -571,7 +607,7 @@
             </div>
           </div>
 
-          <!-- Monate + Tag (nur Jahresschaltuhr) -->
+          <!-- Monate + Tag (nur Jahresschaltuhr, nicht bei Feiertagsschaltuhr) -->
           <template v-if="cfg.timer_type === 'annual'">
             <div class="form-group">
               <label class="label">Monate <span class="optional">(leer = alle)</span></label>
@@ -671,7 +707,7 @@
           <!-- Feiertag / Ferien -->
           <div class="optional-divider">Feiertag &amp; Ferien</div>
           <div class="grid grid-cols-2 gap-4">
-            <div class="form-group">
+            <div v-if="cfg.timer_type !== 'holiday'" class="form-group">
               <label class="label">Feiertagsbehandlung</label>
               <select v-model="cfg.holiday_mode" class="input">
                 <option value="ignore">Ignorieren (wie Normaltage)</option>
@@ -690,6 +726,62 @@
               </select>
             </div>
           </div>
+
+          <!-- Datum-Fenster -->
+          <div class="optional-divider">Datum-Fenster</div>
+          <div class="flex items-start gap-2">
+            <input type="checkbox" id="zt_date_window" v-model="cfg.date_window_enabled" class="w-4 h-4 rounded mt-0.5" />
+            <div>
+              <label for="zt_date_window" class="text-sm text-slate-600 dark:text-slate-300">Nur innerhalb eines Zeitraums schalten</label>
+              <p class="hint">Schaltpunkt wird nur ausgeführt wenn das Datum im definierten Fenster liegt</p>
+            </div>
+          </div>
+          <template v-if="cfg.date_window_enabled">
+            <template v-for="(ep, epLabel) in [{ ep: winFrom, label: 'Von' }, { ep: winTo, label: 'Bis (einschliesslich)' }]" :key="epLabel">
+              <div class="form-group">
+                <label class="label">{{ ep.label }}</label>
+                <div class="flex gap-2 flex-wrap items-center">
+                  <select v-model="ep.ep.type" class="input text-xs" style="width:160px" @change="onWinTypeChange(ep.ep)">
+                    <option value="fixed">Festes Datum</option>
+                    <option value="easter">Relativ zu Ostern</option>
+                    <option value="advent">Relativ zu 1. Advent</option>
+                    <option value="holiday_name">Feiertag nach Name</option>
+                  </select>
+                  <template v-if="ep.ep.type === 'fixed'">
+                    <select v-model.number="ep.ep.month" class="input text-xs" style="width:110px">
+                      <option v-for="m in WIN_MONTHS" :key="m.v" :value="m.v">{{ m.l }}</option>
+                    </select>
+                    <input v-model.number="ep.ep.day" type="number" min="1" max="31" class="input text-xs" style="width:56px" />
+                  </template>
+                  <template v-else-if="ep.ep.type === 'easter' || ep.ep.type === 'advent'">
+                    <select v-model="ep.ep.sign" class="input text-xs" style="width:48px">
+                      <option value="+">+</option>
+                      <option value="-">−</option>
+                    </select>
+                    <input v-model.number="ep.ep.offset" type="number" min="0" max="400" class="input text-xs" style="width:64px" />
+                    <span class="text-xs text-slate-400">Tage</span>
+                  </template>
+                  <template v-else-if="ep.ep.type === 'holiday_name'">
+                    <div v-if="ztHolidaysLoading" class="text-xs text-slate-400">Lade …</div>
+                    <select v-else v-model="ep.ep.name" class="input text-xs flex-1" style="min-width:0">
+                      <option value="">— Feiertag wählen —</option>
+                      <option v-for="h in ztHolidays" :key="h.name" :value="h.name">{{ h.date }} · {{ h.name }}</option>
+                    </select>
+                    <select v-model="ep.ep.sign" class="input text-xs" style="width:48px">
+                      <option value="+">+</option>
+                      <option value="-">−</option>
+                    </select>
+                    <input v-model.number="ep.ep.offset" type="number" min="0" max="400" placeholder="0" class="input text-xs" style="width:64px" />
+                    <span class="text-xs text-slate-400">Tage</span>
+                  </template>
+                </div>
+                <p class="hint">{{ describeWinEp(ep.ep) }}</p>
+              </div>
+            </template>
+            <div v-if="buildWinExpr(winFrom) && buildWinExpr(winTo)" class="text-xs font-mono text-blue-500 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded px-2 py-1">
+              {{ buildWinExpr(winFrom) }} → {{ buildWinExpr(winTo) }}
+            </div>
+          </template>
 
           <!-- Ausgabewert -->
           <div class="optional-divider">Ausgabe</div>
@@ -904,6 +996,10 @@ const cfg = reactive({
   solar_altitude_deg: 0.0, sun_direction: 'rising',
   every_hour: false, every_minute: false,
   holiday_mode: 'ignore', vacation_mode: 'ignore',
+  selected_holidays: [],
+  date_window_enabled: false,
+  date_window_from: '',
+  date_window_to: '',
   value: '1',
 })
 
@@ -952,6 +1048,21 @@ const iobrokerStates = ref([])
 const iobrokerBrowseLoading = ref(false)
 const iobrokerBrowseError = ref(null)
 let iobrokerBrowseTimer = null
+
+// Zeitschaltuhr holiday list state (for Feiertagsschaltuhr)
+const ztHolidays = ref([])   // [{date, name}, …] sorted by date
+const ztHolidaysLoading = ref(false)
+const ztHolidaysError = ref(null)
+
+// Date window UI state
+const WIN_MONTHS = [
+  { v: 1, l: 'Januar' }, { v: 2, l: 'Februar' }, { v: 3, l: 'März' },
+  { v: 4, l: 'April' }, { v: 5, l: 'Mai' }, { v: 6, l: 'Juni' },
+  { v: 7, l: 'Juli' }, { v: 8, l: 'August' }, { v: 9, l: 'September' },
+  { v: 10, l: 'Oktober' }, { v: 11, l: 'November' }, { v: 12, l: 'Dezember' },
+]
+const winFrom = reactive({ type: 'fixed', month: 1,  day: 1,  sign: '+', offset: 0, name: '' })
+const winTo   = reactive({ type: 'fixed', month: 12, day: 31, sign: '+', offset: 0, name: '' })
 
 // ---------------------------------------------------------------------------
 // Computed
@@ -1079,8 +1190,14 @@ watch(() => props.initial, val => {
   if (cfg.every_hour    == null) cfg.every_hour    = false
   if (cfg.every_minute  == null) cfg.every_minute  = false
   if (cfg.holiday_mode  == null) cfg.holiday_mode  = 'ignore'
-  if (cfg.vacation_mode == null) cfg.vacation_mode = 'ignore'
-  if (cfg.value         == null) cfg.value         = '1'
+  if (cfg.vacation_mode     == null) cfg.vacation_mode     = 'ignore'
+  if (cfg.selected_holidays    == null) cfg.selected_holidays    = []
+  if (cfg.date_window_enabled == null) cfg.date_window_enabled = false
+  if (cfg.date_window_from    == null) cfg.date_window_from    = ''
+  if (cfg.date_window_to      == null) cfg.date_window_to      = ''
+  if (cfg.date_window_from) parseWinExprInto(cfg.date_window_from, winFrom)
+  if (cfg.date_window_to)   parseWinExprInto(cfg.date_window_to,   winTo)
+  if (cfg.value             == null) cfg.value             = '1'
   // Restore value_map UI state from top-level binding field
   if (val.value_map && typeof val.value_map === 'object') {
     const mapStr = JSON.stringify(val.value_map)
@@ -1111,6 +1228,31 @@ onMounted(async () => {
     allInstances.value = instRes.data
     allDpts.value      = dptRes.data
   } catch {}
+  // If editing an existing holiday-type binding, load holidays immediately
+  if (cfg.timer_type === 'holiday' && selectedInstanceId.value) {
+    await loadZsuHolidays()
+  }
+})
+
+async function loadZsuHolidays() {
+  const instanceId = selectedInstanceId.value
+  if (!instanceId) return
+  ztHolidaysLoading.value = true
+  ztHolidaysError.value = null
+  try {
+    const { data } = await adapterApi.getZsuHolidays(instanceId)
+    ztHolidays.value = data
+  } catch (e) {
+    ztHolidaysError.value = e.response?.data?.detail ?? 'Feiertage konnten nicht geladen werden'
+  } finally {
+    ztHolidaysLoading.value = false
+  }
+}
+
+watch(() => [selectedAdapterType.value, cfg.timer_type, selectedInstanceId.value], ([type, timerType]) => {
+  if (type === 'ZEITSCHALTUHR' && timerType === 'holiday' && selectedInstanceId.value) {
+    loadZsuHolidays()
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -1249,6 +1391,100 @@ function ztToggleMonth(m) {
   const i = cfg.months.indexOf(m)
   if (i >= 0) cfg.months.splice(i, 1)
   else cfg.months.push(m)
+}
+
+function ztToggleHoliday(name) {
+  if (cfg.selected_holidays.length === 0) {
+    // All selected (empty = no filter): unchecking one → select all except this one
+    cfg.selected_holidays = ztHolidays.value.map(h => h.name).filter(n => n !== name)
+  } else {
+    const i = cfg.selected_holidays.indexOf(name)
+    if (i >= 0) {
+      cfg.selected_holidays.splice(i, 1)
+      // If all removed → treat as "all selected" (empty list = no filter)
+    } else {
+      cfg.selected_holidays.push(name)
+      // If now all are explicitly selected, collapse to empty (= no filter)
+      if (cfg.selected_holidays.length === ztHolidays.value.length) {
+        cfg.selected_holidays = []
+      }
+    }
+  }
+}
+
+function buildWinExpr(ep) {
+  switch (ep.type) {
+    case 'fixed': {
+      const mm = String(ep.month).padStart(2, '0')
+      const dd = String(ep.day).padStart(2, '0')
+      return `${mm}-${dd}`
+    }
+    case 'easter':
+      return ep.offset === 0 ? 'easter+0' : `easter${ep.sign}${ep.offset}`
+    case 'advent':
+      return ep.offset === 0 ? 'advent+0' : `advent${ep.sign}${ep.offset}`
+    case 'holiday_name':
+      if (!ep.name) return ''
+      return ep.offset === 0 ? `holiday:${ep.name}` : `holiday:${ep.name}${ep.sign}${ep.offset}`
+    default:
+      return ''
+  }
+}
+
+function parseWinExprInto(expr, ep) {
+  if (!expr) return
+  const exprUp = expr.toUpperCase()
+  const fixedM = expr.match(/^(\d{1,2})-(\d{1,2})$/)
+  if (fixedM) {
+    ep.type = 'fixed'; ep.month = parseInt(fixedM[1], 10); ep.day = parseInt(fixedM[2], 10)
+    return
+  }
+  const easterM = exprUp.match(/^EASTER([+-])?(\d+)?$/)
+  if (easterM) {
+    ep.type = 'easter'; ep.sign = easterM[1] ?? '+'; ep.offset = parseInt(easterM[2] ?? '0', 10)
+    return
+  }
+  const adventM = exprUp.match(/^ADVENT([+-])?(\d+)?$/)
+  if (adventM) {
+    ep.type = 'advent'; ep.sign = adventM[1] ?? '+'; ep.offset = parseInt(adventM[2] ?? '0', 10)
+    return
+  }
+  if (exprUp.startsWith('HOLIDAY:')) {
+    const remainder = expr.slice(8)
+    const offsetM = remainder.match(/([+-])(\d+)$/)
+    ep.type = 'holiday_name'
+    if (offsetM) {
+      ep.name = remainder.slice(0, offsetM.index).trim()
+      ep.sign = offsetM[1]; ep.offset = parseInt(offsetM[2], 10)
+    } else {
+      ep.name = remainder.trim(); ep.sign = '+'; ep.offset = 0
+    }
+  }
+}
+
+function describeWinEp(ep) {
+  switch (ep.type) {
+    case 'fixed': {
+      const mon = WIN_MONTHS.find(m => m.v === ep.month)?.l ?? String(ep.month)
+      return `${ep.day}. ${mon}`
+    }
+    case 'easter':
+      return ep.offset === 0 ? 'Ostersonntag' : `Ostern ${ep.sign}${ep.offset} Tage`
+    case 'advent': {
+      const presets = { '0': '1. Advent', '7': '2. Advent', '14': '3. Advent', '21': '4. Advent', '24': 'Heiligabend' }
+      if (ep.sign === '+' && presets[String(ep.offset)]) return presets[String(ep.offset)]
+      return ep.offset === 0 ? '1. Advent' : `1. Advent ${ep.sign}${ep.offset} Tage`
+    }
+    case 'holiday_name':
+      if (!ep.name) return '—'
+      return ep.offset === 0 ? ep.name : `${ep.name} ${ep.sign}${ep.offset} Tage`
+    default:
+      return '—'
+  }
+}
+
+async function onWinTypeChange(ep) {
+  if (ep.type === 'holiday_name' && selectedInstanceId.value) await loadZsuHolidays()
 }
 
 function collectXmlLeafPaths(el, prefix) {
@@ -1397,6 +1633,9 @@ function buildConfig() {
       holiday_mode: cfg.holiday_mode,
       vacation_mode: cfg.vacation_mode,
     }
+    if (cfg.timer_type === 'holiday') {
+      c.selected_holidays = [...(cfg.selected_holidays ?? [])]
+    }
     if (cfg.timer_type === 'annual') {
       c.months        = [...cfg.months]
       c.day_of_month  = cfg.day_of_month ?? 0
@@ -1415,6 +1654,11 @@ function buildConfig() {
       if (cfg.time_ref === 'solar_altitude') {
         c.solar_altitude_deg = cfg.solar_altitude_deg ?? 0.0
         c.sun_direction      = cfg.sun_direction || 'rising'
+      }
+      if (cfg.date_window_enabled) {
+        c.date_window_enabled = true
+        c.date_window_from    = buildWinExpr(winFrom)
+        c.date_window_to      = buildWinExpr(winTo)
       }
     }
     return c

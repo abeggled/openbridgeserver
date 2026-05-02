@@ -58,17 +58,82 @@ Binding-Konfiguration (1 Binding = 1 Schaltpunkt):
 from __future__ import annotations
 
 import asyncio
+import calendar
 import logging
+import re
 from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.registry import register
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Custom holiday helpers
+# ---------------------------------------------------------------------------
+
+_WEEKDAY_ABBR: dict[str, int] = {
+    "MO": 0, "DI": 1, "MI": 2, "DO": 3, "FR": 4, "SA": 5, "SO": 6,
+    "MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4, "SAT": 5, "SUN": 6,
+}
+_MONTH_ABBR: dict[str, int] = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "MÄR": 3, "APR": 4,
+    "MAY": 5, "MAI": 5, "JUN": 6, "JUL": 7, "AUG": 8,
+    "SEP": 9, "OKT": 10, "OCT": 10, "NOV": 11, "DEZ": 12, "DEC": 12,
+}
+
+
+def _advent1_date(year: int) -> date:
+    """Returns the 1st Advent Sunday for the given year.
+
+    1. Advent is always the 4th Sunday before Christmas (Dec 25),
+    i.e. the last Sunday of November/first Sunday of December (Nov 27 – Dec 3).
+    """
+    dec25 = date(year, 12, 25)
+    # weekday(): 0=Mon … 6=Sun  →  days to step back to reach Sunday before Dec 25
+    days_back = dec25.weekday() + 1   # Mon→1, Tue→2, …, Sun→7
+    advent4 = dec25 - timedelta(days=days_back)
+    return advent4 - timedelta(days=21)
+
+
+def _easter_date(year: int) -> date:
+    """Computes Easter Sunday for the given year (Gregorian calendar, Anonymous algorithm)."""
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    lv = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * lv) // 451
+    month = (h + lv - 7 * m + 114) // 31
+    day = ((h + lv - 7 * m + 114) % 31) + 1
+    return date(year, month, day)
+
+
+def _last_weekday_of_month(year: int, month: int, weekday: int) -> date:
+    """Returns the last occurrence of `weekday` (0=Mon…6=Sun) in the given month."""
+    last_day = calendar.monthrange(year, month)[1]
+    d = date(year, month, last_day)
+    while d.weekday() != weekday:
+        d -= timedelta(days=1)
+    return d
+
+
+def _nth_weekday_of_month(year: int, month: int, weekday: int, n: int) -> date | None:
+    """Returns the n-th occurrence (1-based) of `weekday` in the given month, or None if out of range."""
+    first = date(year, month, 1)
+    offset = (weekday - first.weekday()) % 7
+    target = first + timedelta(days=offset + 7 * (n - 1))
+    return target if target.month == month else None
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +145,7 @@ class TimerType(str, Enum):
     DAILY = "daily"
     ANNUAL = "annual"
     META = "meta"
+    HOLIDAY = "holiday"
 
 
 class TimeRef(str, Enum):
@@ -122,31 +188,56 @@ class MetaType(str, Enum):
 
 
 class ZeitschaltuhrConfig(BaseModel):
-    latitude: float = Field(47.5, description="Breitengrad für Sonnenauf/-untergang")
-    longitude: float = Field(8.0, description="Längengrad für Sonnenauf/-untergang")
-    altitude: float = Field(400.0, description="Höhe ü.M. in Metern")
-    timezone: str = Field("", description="Zeitzone (leer = App-Zeitzone, z.B. Europe/Zurich)")
-    holiday_country: str = Field("CH", description="Feiertagsland (ISO 3166-1: DE, AT, CH, FR …)")
+    latitude: float = Field(47.5, title="Breitengrad", description="Breitengrad für Sonnenauf/-untergang")
+    longitude: float = Field(8.0, title="Längengrad", description="Längengrad für Sonnenauf/-untergang")
+    altitude: float = Field(400.0, title="Höhe ü.M. (m)", description="Höhe ü.M. in Metern")
+    timezone: str = Field("", title="Zeitzone", description="Zeitzone (leer = App-Zeitzone, z.B. Europe/Zurich)")
+    holiday_country: str = Field("CH", title="Feiertagsland", description="Feiertagsland (ISO 3166-1: DE, AT, CH, FR …)")
     holiday_subdivision: str = Field(
         "",
+        title="Kanton / Bundesland",
         description="Kanton/Bundesland (z.B. ZH, BY, OÖ) — leer = nur nationale Feiertage",
     )
     holiday_language: str = Field(
         "de",
+        title="Feiertagssprache",
         description="Sprache der Feiertagsnamen (de, fr, it, en) — Standard: de",
     )
-    vacation_1_start: str = Field("", description="Ferienperiode 1 Beginn (JJJJ-MM-TT)")
-    vacation_1_end: str = Field("", description="Ferienperiode 1 Ende (JJJJ-MM-TT)")
-    vacation_2_start: str = Field("", description="Ferienperiode 2 Beginn (JJJJ-MM-TT)")
-    vacation_2_end: str = Field("", description="Ferienperiode 2 Ende (JJJJ-MM-TT)")
-    vacation_3_start: str = Field("", description="Ferienperiode 3 Beginn (JJJJ-MM-TT)")
-    vacation_3_end: str = Field("", description="Ferienperiode 3 Ende (JJJJ-MM-TT)")
-    vacation_4_start: str = Field("", description="Ferienperiode 4 Beginn (JJJJ-MM-TT)")
-    vacation_4_end: str = Field("", description="Ferienperiode 4 Ende (JJJJ-MM-TT)")
-    vacation_5_start: str = Field("", description="Ferienperiode 5 Beginn (JJJJ-MM-TT)")
-    vacation_5_end: str = Field("", description="Ferienperiode 5 Ende (JJJJ-MM-TT)")
-    vacation_6_start: str = Field("", description="Ferienperiode 6 Beginn (JJJJ-MM-TT)")
-    vacation_6_end: str = Field("", description="Ferienperiode 6 Ende (JJJJ-MM-TT)")
+    vacation_1_start: str = Field("", title="Ferien 1 Beginn", description="Ferienperiode 1 Beginn (JJJJ-MM-TT)")
+    vacation_1_end: str = Field("", title="Ferien 1 Ende", description="Ferienperiode 1 Ende (JJJJ-MM-TT)")
+    vacation_2_start: str = Field("", title="Ferien 2 Beginn", description="Ferienperiode 2 Beginn (JJJJ-MM-TT)")
+    vacation_2_end: str = Field("", title="Ferien 2 Ende", description="Ferienperiode 2 Ende (JJJJ-MM-TT)")
+    vacation_3_start: str = Field("", title="Ferien 3 Beginn", description="Ferienperiode 3 Beginn (JJJJ-MM-TT)")
+    vacation_3_end: str = Field("", title="Ferien 3 Ende", description="Ferienperiode 3 Ende (JJJJ-MM-TT)")
+    vacation_4_start: str = Field("", title="Ferien 4 Beginn", description="Ferienperiode 4 Beginn (JJJJ-MM-TT)")
+    vacation_4_end: str = Field("", title="Ferien 4 Ende", description="Ferienperiode 4 Ende (JJJJ-MM-TT)")
+    vacation_5_start: str = Field("", title="Ferien 5 Beginn", description="Ferienperiode 5 Beginn (JJJJ-MM-TT)")
+    vacation_5_end: str = Field("", title="Ferien 5 Ende", description="Ferienperiode 5 Ende (JJJJ-MM-TT)")
+    vacation_6_start: str = Field("", title="Ferien 6 Beginn", description="Ferienperiode 6 Beginn (JJJJ-MM-TT)")
+    vacation_6_end: str = Field("", title="Ferien 6 Ende", description="Ferienperiode 6 Ende (JJJJ-MM-TT)")
+    custom_holidays: list[str] = Field(
+        default=[],
+        description=(
+            "Benutzerdefinierte Feiertage als Liste von Ausdrücken. "
+            "Formate: "
+            "'MM-TT[:Name]' (fixes Datum, z.B. '12-26:Stephanstag'), "
+            "'easter+N[:Name]' / 'easter-N[:Name]' (relativ zu Ostersonntag, z.B. 'easter+1:Ostermontag', 'easter-47:Rosenmontag'), "
+            "'advent+N[:Name]' / 'advent-N[:Name]' (relativ zum 1. Advent, z.B. 'advent+0:1. Advent', 'advent+13:Heiligabend'), "
+            "'last_WT_MON[:Name]' (letzter Wochentag des Monats, z.B. 'last_SO_NOV:Buß+Bettag'), "
+            "'N_WT_MON[:Name]' (n-ter Wochentag, z.B. '2_SO_OKT:Erntedank'). "
+            "Wochentags-Kürzel: MO DI MI DO FR SA SO (dt.) oder MON TUE WED THU FRI SAT SUN (en.). "
+            "Monats-Kürzel: JAN FEB MAR APR MAI JUN JUL AUG SEP OKT NOV DEZ. "
+            "Mehrere Einträge durch Komma oder Zeilenumbruch trennen."
+        ),
+    )
+
+    @field_validator("custom_holidays", mode="before")
+    @classmethod
+    def _coerce_to_list(cls, v: Any) -> list[str]:
+        """Accept a plain string (e.g. from the generic config UI) by splitting on commas/newlines."""
+        if isinstance(v, str):
+            return [item.strip() for item in v.replace("\n", ",").split(",") if item.strip()]
+        return v
 
 
 class ZeitschaltuhrBindingConfig(BaseModel):
@@ -206,6 +297,17 @@ class ZeitschaltuhrBindingConfig(BaseModel):
     holiday_mode: HolidayMode = Field(HolidayMode.IGNORE, description="Feiertagsbehandlung")
     vacation_mode: HolidayMode = Field(HolidayMode.IGNORE, description="Ferienbehandlung")
 
+    # ── Feiertagsschaltuhr ────────────────────────────────────────────────────
+    selected_holidays: list[str] = Field(
+        default=[],
+        description="Ausgewählte Feiertage für timer_type=holiday (leer = alle Feiertage)",
+    )
+
+    # ── Datum-Fenster ─────────────────────────────────────────────────────────
+    date_window_enabled: bool = Field(False, description="Datum-Fenster: nur innerhalb eines Zeitraums schalten")
+    date_window_from: str = Field("", description="Fenster-Beginn (MM-TT | easter±N | advent±N | holiday:Name±N)")
+    date_window_to: str = Field("", description="Fenster-Ende (MM-TT | easter±N | advent±N | holiday:Name±N)")
+
     # ── Ausgabe ───────────────────────────────────────────────────────────────
     value: str = Field(
         "1",
@@ -249,7 +351,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
         self._cfg = ZeitschaltuhrConfig(**(config or {}))
         self._tz: Any = UTC
         self._task: asyncio.Task | None = None
-        self._hol: Any = {}
+        self._hol: dict[date, str] = {}
         self._last_date: date | None = None
 
     # ------------------------------------------------------------------
@@ -343,7 +445,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
                 for binding in list(self._bindings):
                     try:
                         cfg = ZeitschaltuhrBindingConfig(**binding.config)
-                        if cfg.timer_type != TimerType.META and self._should_fire(cfg, now_local):
+                        if cfg.timer_type not in (TimerType.META,) and self._should_fire(cfg, now_local):
                             await self._fire_binding(binding, cfg)
                     except Exception:
                         logger.exception("Fehler beim Prüfen von Binding %s", binding.id)
@@ -360,6 +462,33 @@ class ZeitschaltuhrAdapter(AdapterBase):
 
     def _should_fire(self, cfg: ZeitschaltuhrBindingConfig, now: datetime) -> bool:
         today = now.date()
+
+        # Date window gate (DAILY / ANNUAL / HOLIDAY — checked before all other gates)
+        if cfg.date_window_enabled and cfg.date_window_from and cfg.date_window_to:
+            if not self._in_date_window(cfg.date_window_from, cfg.date_window_to, today):
+                return False
+
+        # Feiertagsschaltuhr: fires on specific holidays only
+        if cfg.timer_type == TimerType.HOLIDAY:
+            holiday_name = self._hol.get(today)
+            if holiday_name is None:
+                return False
+            if cfg.selected_holidays and holiday_name not in cfg.selected_holidays:
+                return False
+            is_vacation = self._is_vacation(today)
+            if is_vacation and cfg.vacation_mode == HolidayMode.SKIP:
+                return False
+            if not is_vacation and cfg.vacation_mode == HolidayMode.ONLY:
+                return False
+            if cfg.every_minute:
+                return True
+            if cfg.every_hour:
+                return now.minute == cfg.minute
+            target = self._calculate_target_time(cfg, today)
+            if target is None:
+                return False
+            return now.hour == target.hour and now.minute == target.minute
+
         is_holiday = self._is_holiday(today)
         is_vacation = self._is_vacation(today)
 
@@ -570,33 +699,212 @@ class ZeitschaltuhrAdapter(AdapterBase):
     # Holiday helpers
     # ------------------------------------------------------------------
 
-    def _build_holidays(self) -> Any:
+    def _build_holidays(self) -> dict[date, str]:
+        year = datetime.now().year
+        years = [year, year + 1]
+        result: dict[date, str] = {}
+
+        # Library holidays
         try:
             import holidays as hol_lib
 
-            year = datetime.now().year
-            kwargs: dict[str, Any] = {"years": [year, year + 1]}
+            kwargs: dict[str, Any] = {"years": years}
             if self._cfg.holiday_subdivision:
                 kwargs["subdiv"] = self._cfg.holiday_subdivision
             if self._cfg.holiday_language:
                 kwargs["language"] = self._cfg.holiday_language
             try:
-                return hol_lib.country_holidays(self._cfg.holiday_country, **kwargs)
+                hol_obj = hol_lib.country_holidays(self._cfg.holiday_country, **kwargs)
             except Exception:
-                # Language not supported for this country — retry without language param
                 kwargs.pop("language", None)
                 logger.debug(
                     "Sprache '%s' für Land '%s' nicht unterstützt — nutze Standardsprache",
                     self._cfg.holiday_language,
                     self._cfg.holiday_country,
                 )
-                return hol_lib.country_holidays(self._cfg.holiday_country, **kwargs)
+                hol_obj = hol_lib.country_holidays(self._cfg.holiday_country, **kwargs)
+            result.update(dict(hol_obj.items()))
         except ImportError:
             logger.info("holidays-Bibliothek nicht installiert — Feiertagserkennung deaktiviert (pip install holidays)")
-            return {}
         except Exception as exc:
             logger.warning("Feiertagskalender konnte nicht geladen werden: %s", exc)
-            return {}
+
+        # Custom holidays (merged on top — custom entries override library names for same date)
+        for y in years:
+            for entry in self._cfg.custom_holidays:
+                try:
+                    result.update(self._parse_custom_holiday_entry(entry, y))
+                except Exception as exc:
+                    logger.warning("Benutzerdefinierter Feiertag '%s' konnte nicht geparst werden: %s", entry, exc)
+
+        return result
+
+    def _parse_custom_holiday_entry(self, entry: str, year: int) -> dict[date, str]:
+        """Parse one custom holiday expression and return {date: name} for the given year.
+
+        Supported formats:
+          MM-TT[:Name]              — fixed annual date (e.g. "12-26:Stephanstag")
+          easter+N[:Name]           — N days after Easter Sunday (e.g. "easter+1:Ostermontag")
+          easter-N[:Name]           — N days before Easter Sunday (e.g. "easter-47:Rosenmontag")
+          advent+N[:Name]           — N days after 1st Advent (e.g. "advent+0:1. Advent")
+          advent-N[:Name]           — N days before 1st Advent
+          last_WT_MON[:Name]        — last weekday of month (e.g. "last_SO_NOV:Buß- und Bettag")
+          N_WT_MON[:Name]           — n-th weekday of month (e.g. "2_SO_OKT:Erntedank")
+        """
+        parts = entry.split(":", 1)
+        expr = parts[0].strip()
+        name = parts[1].strip() if len(parts) > 1 else "Benutzerdefinierter Feiertag"
+        expr_up = expr.upper()
+
+        # Fixed date: MM-TT (1-2 digit month/day)
+        if re.fullmatch(r"\d{1,2}-\d{1,2}", expr):
+            month, day = (int(x) for x in expr.split("-"))
+            return {date(year, month, day): name}
+
+        # Easter-relative: easter / easter+N / easter-N
+        m = re.fullmatch(r"EASTER([+-]\d+)?", expr_up)
+        if m:
+            offset = int(m.group(1)) if m.group(1) else 0
+            return {_easter_date(year) + timedelta(days=offset): name}
+
+        # Advent-relative: advent / advent+N / advent-N
+        m = re.fullmatch(r"ADVENT([+-]\d+)?", expr_up)
+        if m:
+            offset = int(m.group(1)) if m.group(1) else 0
+            return {_advent1_date(year) + timedelta(days=offset): name}
+
+        # Nth or last weekday of month: (LAST|N)_WT_MON
+        m2 = re.fullmatch(r"(LAST|\d+)_([A-ZÄÖÜa-z]{2,3})_([A-ZÄÖÜa-z]{2,3})", expr_up)
+        if m2:
+            nth_str, wday_str, month_str = m2.groups()
+            weekday = _WEEKDAY_ABBR.get(wday_str)
+            month = _MONTH_ABBR.get(month_str)
+            if weekday is None or month is None:
+                logger.warning(
+                    "Unbekanntes Wochentags- oder Monatskürzel in '%s' (Wochentag=%s, Monat=%s)",
+                    entry, wday_str, month_str,
+                )
+                return {}
+            if nth_str == "LAST":
+                d = _last_weekday_of_month(year, month, weekday)
+            else:
+                d = _nth_weekday_of_month(year, month, weekday, int(nth_str))
+            return {d: name} if d is not None else {}
+
+        logger.warning("Unbekanntes Format für benutzerdefinierten Feiertag: '%s'", entry)
+        return {}
+
+    # ------------------------------------------------------------------
+    # Date window helpers
+    # ------------------------------------------------------------------
+
+    def _parse_date_expression(self, expr: str, year: int) -> date | None:
+        """Parse a date window expression for the given year.
+
+        Formats:
+          MM-TT               — fixed annual date (e.g. "05-01")
+          easter[±N]          — relative to Easter Sunday
+          advent[±N]          — relative to 1st Advent
+          holiday:Name[±N]    — named holiday ± offset
+        """
+        if not expr or not (expr_s := expr.strip()):
+            return None
+        expr_up = expr_s.upper()
+
+        # Fixed date MM-TT
+        if re.fullmatch(r"\d{1,2}-\d{1,2}", expr_s):
+            month, day = (int(x) for x in expr_s.split("-"))
+            try:
+                return date(year, month, day)
+            except ValueError:
+                return None
+
+        # Easter-relative
+        m = re.fullmatch(r"EASTER([+-]\d+)?", expr_up)
+        if m:
+            offset = int(m.group(1)) if m.group(1) else 0
+            return _easter_date(year) + timedelta(days=offset)
+
+        # Advent-relative
+        m = re.fullmatch(r"ADVENT([+-]\d+)?", expr_up)
+        if m:
+            offset = int(m.group(1)) if m.group(1) else 0
+            return _advent1_date(year) + timedelta(days=offset)
+
+        # Named holiday: holiday:Name or holiday:Name±N
+        if expr_up.startswith("HOLIDAY:"):
+            remainder = expr_s[8:]
+            off_m = re.search(r"([+-]\d+)$", remainder)
+            if off_m:
+                name = remainder[: off_m.start()].strip()
+                offset = int(off_m.group(1))
+            else:
+                name = remainder.strip()
+                offset = 0
+            name_up = name.upper()
+            # Fast path: self._hol covers current + next year
+            for d, n in self._hol.items():
+                if d.year == year and n.upper() == name_up:
+                    return d + timedelta(days=offset)
+            # Slow path: year not in self._hol (e.g. year-1 in cross-year check)
+            try:
+                for h in self.get_holidays_for_year(year):
+                    if h["name"].upper() == name_up:
+                        return date.fromisoformat(h["date"]) + timedelta(days=offset)
+            except Exception:
+                pass
+            return None
+
+        logger.debug("Unbekanntes Datum-Fenster-Ausdruck: '%s'", expr_s)
+        return None
+
+    def _in_date_window(self, from_expr: str, to_expr: str, today: date) -> bool:
+        """Returns True if today falls within the [from, to] date window (inclusive)."""
+        year = today.year
+        d_from = self._parse_date_expression(from_expr, year)
+        d_to   = self._parse_date_expression(to_expr,   year)
+        if d_from is None or d_to is None:
+            return False
+        if d_from <= d_to:
+            return d_from <= today <= d_to
+        # Cross-year window (e.g. 1. Advent in Nov/Dec → Epiphany in Jan)
+        d_to_next   = self._parse_date_expression(to_expr,   year + 1)
+        if d_to_next is not None and d_from <= today <= d_to_next:
+            return True
+        d_from_prev = self._parse_date_expression(from_expr, year - 1)
+        if d_from_prev is not None and d_from_prev <= today <= d_to:
+            return True
+        return False
+
+    def get_holidays_for_year(self, year: int) -> list[dict]:
+        """Returns all holidays for the given year as a date-sorted list of {date, name} dicts."""
+        result: dict[date, str] = {}
+        try:
+            import holidays as hol_lib
+
+            kwargs: dict[str, Any] = {"years": [year]}
+            if self._cfg.holiday_subdivision:
+                kwargs["subdiv"] = self._cfg.holiday_subdivision
+            if self._cfg.holiday_language:
+                kwargs["language"] = self._cfg.holiday_language
+            try:
+                hol_obj = hol_lib.country_holidays(self._cfg.holiday_country, **kwargs)
+            except Exception:
+                kwargs.pop("language", None)
+                hol_obj = hol_lib.country_holidays(self._cfg.holiday_country, **kwargs)
+            result.update(dict(hol_obj.items()))
+        except ImportError:
+            pass
+        except Exception as exc:
+            logger.warning("Feiertagskalender konnte nicht geladen werden: %s", exc)
+
+        for entry in self._cfg.custom_holidays:
+            try:
+                result.update(self._parse_custom_holiday_entry(entry, year))
+            except Exception:
+                pass
+
+        return [{"date": d.isoformat(), "name": n} for d, n in sorted(result.items())]
 
     def _is_holiday(self, d: date) -> bool:
         return d in self._hol

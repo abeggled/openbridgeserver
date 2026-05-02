@@ -50,7 +50,16 @@
           <!-- Schema-based config form -->
           <div v-if="newForm.adapter_type && newSchema">
             <label class="label mb-2">Konfiguration</label>
-            <SchemaForm :schema="newSchema" v-model="newForm.config" />
+            <SchemaForm
+              :schema="newSchema"
+              v-model="newForm.config"
+              :exclude="newForm.adapter_type.toLowerCase() === 'zeitschaltuhr' ? ['custom_holidays'] : []"
+            />
+            <ZeitschaltuhrCustomHolidaysEditor
+              v-if="newForm.adapter_type.toLowerCase() === 'zeitschaltuhr'"
+              :model-value="newForm.config.custom_holidays ?? []"
+              @update:model-value="newForm.config.custom_holidays = $event"
+            />
           </div>
           <div v-else-if="newForm.adapter_type && schemaLoading" class="flex items-center gap-2 text-sm text-slate-500">
             <Spinner size="xs" /> Schema wird geladen…
@@ -111,7 +120,16 @@
             <!-- Schema-based config form -->
             <div v-if="schemas[a.adapter_type]" class="mt-4">
               <label class="label mb-2">Konfiguration</label>
-              <SchemaForm :schema="schemas[a.adapter_type]" v-model="drafts[a.id].config" />
+              <SchemaForm
+                :schema="schemas[a.adapter_type]"
+                v-model="drafts[a.id].config"
+                :exclude="a.adapter_type.toLowerCase() === 'zeitschaltuhr' ? ['custom_holidays'] : []"
+              />
+              <ZeitschaltuhrCustomHolidaysEditor
+                v-if="a.adapter_type.toLowerCase() === 'zeitschaltuhr'"
+                :model-value="drafts[a.id].config.custom_holidays ?? []"
+                @update:model-value="drafts[a.id].config.custom_holidays = $event"
+              />
             </div>
             <div v-else class="flex items-center gap-2 text-sm text-slate-500 mt-4">
               <Spinner size="xs" /> Schema wird geladen…
@@ -263,6 +281,7 @@ import Badge         from '@/components/ui/Badge.vue'
 import Spinner       from '@/components/ui/Spinner.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import SchemaForm    from '@/components/adapters/SchemaForm.vue'
+import ZeitschaltuhrCustomHolidaysEditor from '@/components/adapters/ZeitschaltuhrCustomHolidaysEditor.vue'
 import Modal         from '@/components/ui/Modal.vue'
 
 const store          = useAdapterStore()

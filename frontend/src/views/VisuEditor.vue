@@ -90,10 +90,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 function collectWidgetDpIds(w: WidgetInstance): string[] {
   const ids = new Set<string>()
-  if (w.datapoint_id) ids.add(w.datapoint_id)
+  const def = WidgetRegistry.get(w.type)
+  if (!def?.noDatapoint && w.datapoint_id) ids.add(w.datapoint_id)
   if (w.status_datapoint_id) ids.add(w.status_datapoint_id)
-  for (const val of Object.values(w.config ?? {})) {
-    if (typeof val === 'string' && UUID_RE.test(val)) ids.add(val)
+  if (def?.getExtraDatapointIds) {
+    for (const id of def.getExtraDatapointIds(w.config ?? {})) ids.add(id)
+  } else {
+    for (const val of Object.values(w.config ?? {})) {
+      if (typeof val === 'string' && UUID_RE.test(val)) ids.add(val)
+    }
   }
   return [...ids]
 }

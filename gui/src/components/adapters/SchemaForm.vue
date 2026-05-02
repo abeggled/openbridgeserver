@@ -1,9 +1,8 @@
 <template>
   <div class="flex flex-col gap-4">
     <template v-for="(prop, key) in schema.properties" :key="key">
-
       <!-- Boolean: checkbox + inline label -->
-      <div v-if="resolvedType(prop) === 'boolean'" class="flex items-center gap-2">
+      <div v-if="!exclude.includes(key) && resolvedType(prop) === 'boolean'" class="flex items-center gap-2">
         <input
           type="checkbox"
           :id="`sf-${key}`"
@@ -18,7 +17,7 @@
       </div>
 
       <!-- All other types: label on top -->
-      <div v-else class="form-group">
+      <div v-else-if="!exclude.includes(key)" class="form-group">
         <label class="label">
           {{ fieldLabel(key, prop) }}
           <span v-if="isRequired(key)" class="text-red-400 ml-0.5">*</span>
@@ -94,6 +93,7 @@ import { reactive, watch } from 'vue'
 const props = defineProps({
   schema:     { type: Object, required: true },
   modelValue: { type: Object, default: () => ({}) },
+  exclude:    { type: Array,  default: () => [] },
 })
 const emit = defineEmits(['update:modelValue'])
 

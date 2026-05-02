@@ -118,6 +118,7 @@ export const adapterApi = {
   iobrokerBrowseStates: (id, q = '', limit = 50) => api.get(`/adapters/instances/${id}/iobroker/states`, { params: { q, limit } }),
   iobrokerImportPreview: (id, data) => api.post(`/adapters/instances/${id}/iobroker/import-preview`, data),
   iobrokerImport:        (id, data) => api.post(`/adapters/instances/${id}/iobroker/import`, data),
+  getZsuHolidays:        (id, year = 0) => api.get(`/adapters/instances/${id}/holidays`, { params: year ? { year } : {} }),
 }
 
 // ── KNX Project Import ────────────────────────────────────────────────────

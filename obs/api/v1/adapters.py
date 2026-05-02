@@ -411,6 +411,46 @@ async def list_instance_bindings(
     ]
 
 
+class HolidayEntry(BaseModel):
+    date: str
+    name: str
+
+
+@router.get("/instances/{instance_id}/holidays", response_model=list[HolidayEntry])
+async def list_instance_holidays(
+    instance_id: uuid.UUID,
+    year: int = Query(default=0, description="Jahr (0 = aktuelles Jahr)"),
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> list[HolidayEntry]:
+    """Alle Feiertage einer Zeitschaltuhr-Instanz für das angegebene Jahr (Library + benutzerdefiniert)."""
+    from datetime import datetime as _dt
+
+    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "ZEITSCHALTUHR":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für Zeitschaltuhr-Instanzen verfügbar")
+
+    target_year = year if year > 0 else _dt.now().year
+
+    instance = adapter_registry.get_instance_by_id(str(instance_id))
+    if instance is not None and hasattr(instance, "get_holidays_for_year"):
+        holidays = instance.get_holidays_for_year(target_year)
+    else:
+        # Instance not running — reconstruct adapter to query holidays
+        from obs.adapters.zeitschaltuhr.adapter import ZeitschaltuhrAdapter
+
+        raw_config = row["config"] or "{}"
+        config_dict = json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+        from obs.core.event_bus import EventBus
+
+        dummy = ZeitschaltuhrAdapter(event_bus=EventBus(), config=config_dict)
+        holidays = dummy.get_holidays_for_year(target_year)
+
+    return [HolidayEntry(date=h["date"], name=h["name"]) for h in holidays]
+
+
 @router.get("/instances/{instance_id}/mqtt/browse", response_model=list[str])
 async def mqtt_browse_topics(
     instance_id: uuid.UUID,

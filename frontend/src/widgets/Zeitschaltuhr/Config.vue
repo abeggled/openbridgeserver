@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { reactive, ref, watch, onMounted, computed } from 'vue'
-import { adapters as adaptersApi, type InstanceBindingEntry } from '@/api/client'
+import { reactive, ref, watch, onMounted } from 'vue'
+import { adapters as adaptersApi, datapoints as datapointsApi } from '@/api/client'
 
 const props = defineProps<{
   modelValue: Record<string, unknown>
@@ -15,34 +15,30 @@ interface ZSUInstance {
   name: string
 }
 
+interface DpOption {
+  id: string
+  name: string
+}
+
 const instances = ref<ZSUInstance[]>([])
-const bindings = ref<InstanceBindingEntry[]>([])
 const loadingInstances = ref(false)
-const loadingBindings = ref(false)
 const errorMsg = ref('')
 
+const dpQuery = ref('')
+const dpResults = ref<DpOption[]>([])
+const dpSearchLoading = ref(false)
+const dpSearchOpen = ref(false)
+
 const cfg = reactive({
-  label:           (props.modelValue.label           as string)  ?? '',
-  instance_id:     (props.modelValue.instance_id     as string)  ?? '',
-  datapoint_id:    (props.modelValue.datapoint_id    as string)  ?? '',
-  binding_id:      (props.modelValue.binding_id      as string)  ?? '',
-  binding_enabled: (props.modelValue.binding_enabled as boolean) ?? true,
+  label:        (props.modelValue.label        as string) ?? '',
+  instance_id:  (props.modelValue.instance_id  as string) ?? '',
+  datapoint_id: (props.modelValue.datapoint_id as string) ?? '',
+  mode:         (props.modelValue.mode         as string) ?? 'full',
 })
 
-/** Einmalig pro Datenpunkt-ID (für Dropdown 2) */
-const availableDatapoints = computed(() => {
-  const seen = new Set<string>()
-  return bindings.value.filter((b) => {
-    if (seen.has(b.datapoint_id)) return false
-    seen.add(b.datapoint_id)
-    return true
-  })
-})
-
-/** Alle Verknüpfungen des gewählten Datenpunkts (für Dropdown 3) */
-const availableBindings = computed(() =>
-  bindings.value.filter((b) => b.datapoint_id === cfg.datapoint_id)
-)
+// Normalize legacy mode values
+if (cfg.mode === 'add_remove') cfg.mode = 'full'
+if (cfg.mode === 'toggle')     cfg.mode = 'minimal'
 
 onMounted(async () => {
   loadingInstances.value = true
@@ -58,70 +54,54 @@ onMounted(async () => {
     loadingInstances.value = false
   }
 
-  if (cfg.instance_id) {
-    await loadBindings(cfg.instance_id)
+  if (cfg.datapoint_id) {
+    try {
+      const dp = await datapointsApi.get(cfg.datapoint_id)
+      dpQuery.value = dp.name
+    } catch { /* ignore */ }
   }
 })
 
-async function loadBindings(instanceId: string) {
-  loadingBindings.value = true
-  errorMsg.value = ''
-  try {
-    bindings.value = await adaptersApi.instanceBindings(instanceId)
-  } catch {
-    errorMsg.value = 'Verknüpfungen konnten nicht geladen werden.'
-    bindings.value = []
-  } finally {
-    loadingBindings.value = false
-  }
-}
+let _dpSearchTimer: ReturnType<typeof setTimeout> | null = null
 
-async function onInstanceChange() {
+async function onDpQueryInput() {
   cfg.datapoint_id = ''
-  cfg.binding_id = ''
-  cfg.binding_enabled = true
-  bindings.value = []
-  if (cfg.instance_id) await loadBindings(cfg.instance_id)
-}
-
-function onDatapointChange() {
-  cfg.binding_id = ''
-  cfg.binding_enabled = true
-  // Automatisch wählen wenn nur eine Verknüpfung vorhanden
-  const matches = availableBindings.value
-  if (matches.length === 1) {
-    cfg.binding_id = matches[0].binding_id
-    cfg.binding_enabled = matches[0].enabled
+  if (_dpSearchTimer) clearTimeout(_dpSearchTimer)
+  if (!dpQuery.value.trim()) {
+    dpResults.value = []
+    dpSearchOpen.value = false
+    return
   }
+  _dpSearchTimer = setTimeout(async () => {
+    dpSearchLoading.value = true
+    try {
+      const res = await datapointsApi.search(dpQuery.value.trim(), 0, 20)
+      dpResults.value = res.items.map((dp) => ({ id: dp.id, name: dp.name }))
+      dpSearchOpen.value = dpResults.value.length > 0
+    } catch {
+      dpResults.value = []
+    } finally {
+      dpSearchLoading.value = false
+    }
+  }, 250)
 }
 
-function onBindingChange() {
-  const b = bindings.value.find((b) => b.binding_id === cfg.binding_id)
-  if (b) cfg.binding_enabled = b.enabled
+function selectDp(dp: DpOption) {
+  cfg.datapoint_id = dp.id
+  dpQuery.value = dp.name
+  dpResults.value = []
+  dpSearchOpen.value = false
 }
 
-/** Lesbare Bezeichnung für eine Verknüpfung */
-function bindingLabel(b: InstanceBindingEntry): string {
-  const c = b.config
-  const type  = (c.timer_type as string | undefined) ?? 'daily'
-  const ref   = (c.time_ref   as string | undefined) ?? 'absolute'
-  const val   = (c.value      as string | undefined) ?? '?'
-
-  let timeStr = ''
-  if (ref === 'absolute') {
-    const h = String((c.hour   as number | undefined) ?? 0).padStart(2, '0')
-    const m = String((c.minute as number | undefined) ?? 0).padStart(2, '0')
-    timeStr = `${h}:${m}`
-  } else if (ref === 'sunrise')        timeStr = 'Sonnenaufgang'
-  else if (ref === 'sunset')           timeStr = 'Sonnenuntergang'
-  else if (ref === 'solar_noon')       timeStr = 'Sonnenmittag'
-  else if (ref === 'solar_altitude')   timeStr = `Sonne ${c.solar_altitude_deg ?? '?'}°`
-
-  const typeStr = type === 'meta' ? 'Meta' : type === 'annual' ? 'jährlich' : 'täglich'
-  const suffix  = b.enabled ? '' : ' ⚠ deaktiviert'
-
-  return `${typeStr} ${timeStr} → ${val}${suffix}`.trim()
+function clearDp() {
+  cfg.datapoint_id = ''
+  dpQuery.value = ''
+  dpResults.value = []
+  dpSearchOpen.value = false
 }
+
+const selCls = 'w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 disabled:opacity-50'
+const lCls   = 'block text-xs text-gray-500 dark:text-gray-400 mb-1'
 
 watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 </script>
@@ -131,23 +111,41 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Beschriftung -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Beschriftung</label>
+      <label :class="lCls">Beschriftung</label>
       <input
         v-model="cfg.label"
         type="text"
         placeholder="z.B. Licht EG Nacht"
-        class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
+        :class="selCls"
       />
     </div>
 
-    <!-- Dropdown 1: Zeitschaltuhr-Instanz -->
+    <!-- Widget-Modus als 3 Buttons -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Zeitschaltuhr</label>
-      <select
-        v-model="cfg.instance_id"
-        class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
-        @change="onInstanceChange"
-      >
+      <label :class="lCls">Widget-Modus</label>
+      <div class="flex gap-1">
+        <button
+          v-for="m in [
+            { value: 'full',       label: 'Vollzugriff',   title: 'Hinzufügen, bearbeiten, löschen' },
+            { value: 'restricted', label: 'Eingeschränkt', title: 'Nur bearbeiten und aktivieren' },
+            { value: 'minimal',    label: 'Minimal',       title: 'Nur aktivieren/deaktivieren' },
+          ]"
+          :key="m.value"
+          type="button"
+          :title="m.title"
+          class="flex-1 px-2 py-1.5 text-xs rounded border transition-colors"
+          :class="cfg.mode === m.value
+            ? 'bg-blue-600 border-blue-600 text-white'
+            : 'bg-gray-50 dark:bg-gray-800 border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-blue-400 dark:hover:border-blue-500'"
+          @click="cfg.mode = m.value"
+        >{{ m.label }}</button>
+      </div>
+    </div>
+
+    <!-- Zeitschaltuhr-Instanz -->
+    <div>
+      <label :class="lCls">Zeitschaltuhr</label>
+      <select v-model="cfg.instance_id" :class="selCls">
         <option value="">
           {{ loadingInstances ? 'Lade …' : instances.length === 0 ? 'Keine Zeitschaltuhr konfiguriert' : '— Zeitschaltuhr wählen —' }}
         </option>
@@ -157,38 +155,49 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
       </select>
     </div>
 
-    <!-- Dropdown 2: Objekt (Datenpunkt) -->
-    <div v-if="cfg.instance_id">
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Objekt</label>
-      <select
-        v-model="cfg.datapoint_id"
-        class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 disabled:opacity-50"
-        :disabled="loadingBindings"
-        @change="onDatapointChange"
-      >
-        <option value="">
-          {{ loadingBindings ? 'Lade …' : availableDatapoints.length === 0 ? 'Keine Objekte gefunden' : '— Objekt wählen —' }}
-        </option>
-        <option v-for="dp in availableDatapoints" :key="dp.datapoint_id" :value="dp.datapoint_id">
-          {{ dp.datapoint_name }}
-        </option>
-      </select>
-    </div>
-
-    <!-- Dropdown 3: Verknüpfung -->
-    <div v-if="cfg.datapoint_id">
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Verknüpfung</label>
-      <select
-        v-model="cfg.binding_id"
-        class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
-        @change="onBindingChange"
-      >
-        <option value="">— Verknüpfung wählen —</option>
-        <option v-for="b in availableBindings" :key="b.binding_id" :value="b.binding_id">
-          {{ bindingLabel(b) }}
-        </option>
-      </select>
-    </div>
+    <!-- Datenpunkt-Suche (für alle Modi gleich) -->
+    <template v-if="cfg.instance_id">
+      <div class="relative">
+        <label :class="lCls">
+          Objekt
+          <span class="text-gray-400 dark:text-gray-600">(Datenpunkt suchen)</span>
+        </label>
+        <div class="flex gap-1">
+          <input
+            v-model="dpQuery"
+            type="text"
+            placeholder="Name eingeben …"
+            :class="[selCls, 'flex-1', cfg.datapoint_id ? 'border-blue-500' : '']"
+            @input="onDpQueryInput"
+            @focus="dpSearchOpen = dpResults.length > 0"
+          />
+          <button
+            v-if="cfg.datapoint_id"
+            type="button"
+            class="px-2 text-gray-400 hover:text-red-400 text-sm"
+            title="Auswahl aufheben"
+            @click="clearDp"
+          >×</button>
+        </div>
+        <!-- Suchergebnisse -->
+        <div
+          v-if="dpSearchOpen && dpResults.length"
+          class="absolute z-10 mt-0.5 w-full bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded shadow-lg max-h-48 overflow-y-auto"
+        >
+          <button
+            v-for="dp in dpResults"
+            :key="dp.id"
+            type="button"
+            class="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 dark:hover:bg-blue-900/30 text-gray-800 dark:text-gray-200 truncate"
+            @click="selectDp(dp)"
+          >{{ dp.name }}</button>
+        </div>
+        <p v-if="dpSearchLoading" class="text-xs text-gray-400 mt-0.5">Suche …</p>
+        <p v-if="cfg.datapoint_id" class="text-xs text-blue-500 dark:text-blue-400 mt-0.5">
+          ✓ Ausgewählt
+        </p>
+      </div>
+    </template>
 
     <!-- Fehlermeldung -->
     <p v-if="errorMsg" class="text-xs text-red-400">{{ errorMsg }}</p>
