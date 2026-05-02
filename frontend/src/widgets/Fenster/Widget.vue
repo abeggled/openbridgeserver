@@ -224,9 +224,10 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
         <template v-else-if="stateMain === 'open'">
           <polygon points="35,5 75,11 75,61 35,55" stroke-width="1.5" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- Arm parallel zur Paneloberfläche: Steigung (35,5)→(75,11) = 6/40 → −2px y pro 10px x -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="73" cy="36" r="1.5"/>
-            <line x1="73" y1="36" x2="63" y2="36" stroke-width="2" stroke-linecap="round"/>
+            <line x1="73" y1="36" x2="63" y2="34" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
@@ -266,9 +267,10 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
         <template v-else-if="stateMain === 'open'">
           <polygon points="85,5 45,11 45,61 85,55" stroke-width="1.5" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- Arm parallel zur Paneloberfläche: Steigung (85,5)→(45,11) = 6/40 → −2px y pro 10px x Richtung Scharnier -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="47" cy="36" r="1.5"/>
-            <line x1="47" y1="36" x2="57" y2="36" stroke-width="2" stroke-linecap="round"/>
+            <line x1="47" y1="36" x2="57" y2="34" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
@@ -328,7 +330,7 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="43" cy="36" r="1.5"/>
-            <line x1="43" y1="36" x2="33" y2="36" stroke-width="2" stroke-linecap="round"/>
+            <line x1="43" y1="36" x2="33" y2="34" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
@@ -360,7 +362,7 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="77" cy="36" r="1.5"/>
-            <line x1="77" y1="36" x2="87" y2="36" stroke-width="2" stroke-linecap="round"/>
+            <line x1="77" y1="36" x2="87" y2="34" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
@@ -418,7 +420,7 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="65" cy="107" r="2"/>
-            <line x1="65" y1="107" x2="50" y2="107" stroke-width="3" stroke-linecap="round"/>
+            <line x1="65" y1="107" x2="50" y2="105" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
@@ -448,7 +450,7 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="115" cy="107" r="2"/>
-            <line x1="115" y1="107" x2="130" y2="107" stroke-width="3" stroke-linecap="round"/>
+            <line x1="115" y1="107" x2="130" y2="105" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
@@ -487,9 +489,10 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
         <template v-else-if="stateMain === 'open'">
           <polygon points="7,7 67,16 67,199 7,190" stroke-width="2" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- Arm parallel zur Paneloberfläche: Steigung (7,7)→(67,16) = 9/60 → −2px y pro 15px x -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="65" cy="107" r="2"/>
-            <line x1="65" y1="107" x2="50" y2="107" stroke-width="3" stroke-linecap="round"/>
+            <line x1="65" y1="107" x2="50" y2="105" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
@@ -522,9 +525,10 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
         <template v-else-if="stateMain === 'open'">
           <polygon points="83,7 23,16 23,199 83,190" stroke-width="2" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- Arm parallel zur Paneloberfläche: Steigung (83,7)→(23,16) = 9/60 → −2px y pro 15px x Richtung Scharnier -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="25" cy="107" r="2"/>
-            <line x1="25" y1="107" x2="40" y2="107" stroke-width="3" stroke-linecap="round"/>
+            <line x1="25" y1="107" x2="40" y2="105" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else>
