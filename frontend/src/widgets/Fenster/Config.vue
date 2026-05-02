@@ -34,16 +34,18 @@ const cfg = reactive({
 
 const isSingleWing  = computed(() => cfg.mode === 'fenster' || cfg.mode === 'fenster_r')
 const isDoubleWing  = computed(() => cfg.mode === 'fenster_2' || cfg.mode === 'zweituerer')
-const isDoor        = computed(() => cfg.mode === 'tuere' || cfg.mode === 'tuere_r' || cfg.mode === 'eintuer_l' || cfg.mode === 'eintuer_r')
+const isDoor        = computed(() => cfg.mode === 'tuere' || cfg.mode === 'tuere_r')
 const isSlidingDoor = computed(() => cfg.mode === 'schiebetuer' || cfg.mode === 'schiebetuer_r')
 const isRoof        = computed(() => cfg.mode === 'dachfenster')
 
 // Dachflächenfenster hat keine Kontakt-/Kippschalter mehr — nur noch Positionswerte
-const showContact  = computed(() => isSingleWing.value || isDoor.value || isSlidingDoor.value)
-const isEintuer    = computed(() => cfg.mode === 'eintuer_l' || cfg.mode === 'eintuer_r')
-const showTilt     = computed(() => isSingleWing.value || isEintuer.value)
-const showWings    = computed(() => isDoubleWing.value)
-const showPosition = computed(() => isRoof.value)
+const showContact       = computed(() => isSingleWing.value || isDoor.value || isSlidingDoor.value)
+const showTilt          = computed(() => isSingleWing.value)
+const showWings         = computed(() => isDoubleWing.value)
+const showPosition      = computed(() => isRoof.value)
+// Eintürer nutzen denselben Datenpunkt-Satz wie der jeweilige Flügel des Zweitürers
+const showEintuerLeft   = computed(() => cfg.mode === 'eintuer_l')
+const showEintuerRight  = computed(() => cfg.mode === 'eintuer_r')
 
 watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 </script>
@@ -194,6 +196,56 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
         label="Kippsensor rechts (optional, BOOLEAN)"
         :compatible-types="['BOOLEAN']"
       />
+      <div class="flex items-center gap-2 pl-1">
+        <input id="inv-tilt-right" v-model="cfg.invert_tilt_right" type="checkbox" class="rounded accent-blue-500" />
+        <label for="inv-tilt-right" class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+          Invertieren — aktivieren wenn false = gekippt
+        </label>
+      </div>
+    </template>
+
+    <!-- Eintürer links angeschlagen — nutzt dp_contact_left / dp_tilt_left (= linker Flügel des Zweitürers) -->
+    <template v-if="showEintuerLeft">
+      <div class="flex items-center gap-2 pl-1">
+        <input id="handle-left" v-model="cfg.handle_left" type="checkbox" class="rounded accent-blue-500" />
+        <label for="handle-left" class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+          Griff anzeigen
+        </label>
+      </div>
+      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">Kontakt</p>
+      <DataPointPicker v-model="cfg.dp_contact_left" label="Türkontakt (BOOLEAN)" :compatible-types="['BOOLEAN']"/>
+      <div class="flex items-center gap-2 pl-1">
+        <input id="inv-contact-left" v-model="cfg.invert_contact_left" type="checkbox" class="rounded accent-blue-500" />
+        <label for="inv-contact-left" class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+          Invertieren — aktivieren wenn false = offen
+        </label>
+      </div>
+      <DataPointPicker v-model="cfg.dp_tilt_left" label="Kippsensor (optional, BOOLEAN)" :compatible-types="['BOOLEAN']"/>
+      <div class="flex items-center gap-2 pl-1">
+        <input id="inv-tilt-left" v-model="cfg.invert_tilt_left" type="checkbox" class="rounded accent-blue-500" />
+        <label for="inv-tilt-left" class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+          Invertieren — aktivieren wenn false = gekippt
+        </label>
+      </div>
+    </template>
+
+    <!-- Eintürer rechts angeschlagen — nutzt dp_contact_right / dp_tilt_right (= rechter Flügel des Zweitürers) -->
+    <template v-if="showEintuerRight">
+      <div class="flex items-center gap-2 pl-1">
+        <input id="handle-right" v-model="cfg.handle_right" type="checkbox" class="rounded accent-blue-500" />
+        <label for="handle-right" class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+          Griff anzeigen
+        </label>
+      </div>
+      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">Kontakt</p>
+      <DataPointPicker v-model="cfg.dp_contact_right" label="Türkontakt (BOOLEAN)" :compatible-types="['BOOLEAN']"/>
+      <div class="flex items-center gap-2 pl-1">
+        <input id="inv-contact-right" v-model="cfg.invert_contact_right" type="checkbox" class="rounded accent-blue-500" />
+        <label for="inv-contact-right" class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+          Invertieren — aktivieren wenn false = offen
+        </label>
+      </div>
+      <DataPointPicker v-model="cfg.dp_tilt_right" label="Kippsensor (optional, BOOLEAN)" :compatible-types="['BOOLEAN']"/>
       <div class="flex items-center gap-2 pl-1">
         <input id="inv-tilt-right" v-model="cfg.invert_tilt_right" type="checkbox" class="rounded accent-blue-500" />
         <label for="inv-tilt-right" class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">

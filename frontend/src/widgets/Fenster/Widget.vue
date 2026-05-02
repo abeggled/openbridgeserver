@@ -80,10 +80,10 @@ function deriveState(
   return 'unknown'
 }
 
-// Kipp nur für Einzelflügelfenster und Eintürer auswerten — bei Türe/Schiebetüre ignorieren
+// Kipp nur für Einzelflügelfenster auswerten — bei Türen/Schiebetüren ignorieren
 const stateMain  = computed(() => {
-  const usesTilt = mode.value === 'fenster' || mode.value === 'fenster_r' || mode.value === 'eintuer_l' || mode.value === 'eintuer_r'
-  return deriveState(dpContact.value, invContact.value, usesTilt ? dpTilt.value : null, invTilt.value)
+  const tiltId = (mode.value === 'fenster' || mode.value === 'fenster_r') ? dpTilt.value : null
+  return deriveState(dpContact.value, invContact.value, tiltId, invTilt.value)
 })
 const stateLeft  = computed(() => deriveState(dpContactLeft.value, invContactLeft.value, dpTiltLeft.value, invTiltLeft.value))
 const stateRight = computed(() => deriveState(dpContactRight.value, invContactRight.value, dpTiltRight.value, invTiltRight.value))
@@ -151,6 +151,8 @@ const summaryState = computed<WinState>(() => {
     if (effectiveStateLeft.value === 'closed' && effectiveStateRight.value === 'closed') return 'closed'
     return 'unknown'
   }
+  if (mode.value === 'eintuer_l') return effectiveStateLeft.value
+  if (mode.value === 'eintuer_r') return effectiveStateRight.value
   if (mode.value === 'dachfenster') return roofState.value
   return stateMain.value
 })
@@ -485,28 +487,28 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
         <line x1="2"  y1="2"   x2="90" y2="2"   stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
         <line x1="2"  y1="196" x2="90" y2="196" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
 
-        <template v-if="stateMain === 'closed'">
+        <template v-if="effectiveStateLeft === 'closed'">
           <rect x="7" y="7" width="76" height="183" stroke-width="2"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+          <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="76" cy="100" r="2"/>
             <line x1="76" y1="100" x2="76" y2="115" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
-        <template v-else-if="stateMain === 'tilted'">
+        <template v-else-if="effectiveStateLeft === 'tilted'">
           <!-- Freie rechte Kante: (70,7)→(83,190), bei y=100 → x≈77. Griff 5px vom Rand, Arm dx=−1 pro 15px -->
           <polygon points="-6,7 70,7 83,190 7,190" stroke-width="2"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+          <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="72" cy="100" r="2"/>
             <line x1="72" y1="100" x2="71" y2="85" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
-        <template v-else-if="stateMain === 'open'">
+        <template v-else-if="effectiveStateLeft === 'open'">
           <polygon points="7,7 67,16 67,199 7,190" stroke-width="2" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <!-- Arm parallel zur Paneloberfläche: Steigung (7,7)→(67,16) = 9/60 → −2px y pro 15px x -->
-          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+          <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="60" cy="107" r="2"/>
             <line x1="60" y1="107" x2="45" y2="105" stroke-width="3" stroke-linecap="round"/>
           </g>
@@ -532,28 +534,28 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
         <line x1="2"  y1="2"   x2="90" y2="2"   stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
         <line x1="2"  y1="196" x2="90" y2="196" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
 
-        <template v-if="stateMain === 'closed'">
+        <template v-if="effectiveStateRight === 'closed'">
           <rect x="7" y="7" width="76" height="183" stroke-width="2"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+          <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="14" cy="100" r="2"/>
             <line x1="14" y1="100" x2="14" y2="115" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
-        <template v-else-if="stateMain === 'tilted'">
+        <template v-else-if="effectiveStateRight === 'tilted'">
           <!-- Freie linke Kante (R-angeschlagen): (20,7)→(7,190), bei y=100 → x≈13. Griff 5px vom Rand, Arm dx=+1 pro 15px -->
           <polygon points="96,7 20,7 7,190 83,190" stroke-width="2"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+          <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="18" cy="100" r="2"/>
             <line x1="18" y1="100" x2="19" y2="85" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
-        <template v-else-if="stateMain === 'open'">
+        <template v-else-if="effectiveStateRight === 'open'">
           <polygon points="83,7 23,16 23,199 83,190" stroke-width="2" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <!-- Arm parallel zur Paneloberfläche: Steigung (83,7)→(23,16) = 9/60 → −2px y pro 15px x Richtung Scharnier -->
-          <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
+          <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="30" cy="107" r="2"/>
             <line x1="30" y1="107" x2="45" y2="105" stroke-width="3" stroke-linecap="round"/>
           </g>
