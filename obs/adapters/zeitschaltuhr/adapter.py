@@ -303,6 +303,11 @@ class ZeitschaltuhrBindingConfig(BaseModel):
         description="Ausgewählte Feiertage für timer_type=holiday (leer = alle Feiertage)",
     )
 
+    # ── Datum-Fenster ─────────────────────────────────────────────────────────
+    date_window_enabled: bool = Field(False, description="Datum-Fenster: nur innerhalb eines Zeitraums schalten")
+    date_window_from: str = Field("", description="Fenster-Beginn (MM-TT | easter±N | advent±N | holiday:Name±N)")
+    date_window_to: str = Field("", description="Fenster-Ende (MM-TT | easter±N | advent±N | holiday:Name±N)")
+
     # ── Ausgabe ───────────────────────────────────────────────────────────────
     value: str = Field(
         "1",
@@ -457,6 +462,11 @@ class ZeitschaltuhrAdapter(AdapterBase):
 
     def _should_fire(self, cfg: ZeitschaltuhrBindingConfig, now: datetime) -> bool:
         today = now.date()
+
+        # Date window gate (DAILY / ANNUAL / HOLIDAY — checked before all other gates)
+        if cfg.date_window_enabled and cfg.date_window_from and cfg.date_window_to:
+            if not self._in_date_window(cfg.date_window_from, cfg.date_window_to, today):
+                return False
 
         # Feiertagsschaltuhr: fires on specific holidays only
         if cfg.timer_type == TimerType.HOLIDAY:
@@ -783,6 +793,88 @@ class ZeitschaltuhrAdapter(AdapterBase):
 
         logger.warning("Unbekanntes Format für benutzerdefinierten Feiertag: '%s'", entry)
         return {}
+
+    # ------------------------------------------------------------------
+    # Date window helpers
+    # ------------------------------------------------------------------
+
+    def _parse_date_expression(self, expr: str, year: int) -> date | None:
+        """Parse a date window expression for the given year.
+
+        Formats:
+          MM-TT               — fixed annual date (e.g. "05-01")
+          easter[±N]          — relative to Easter Sunday
+          advent[±N]          — relative to 1st Advent
+          holiday:Name[±N]    — named holiday ± offset
+        """
+        if not expr or not (expr_s := expr.strip()):
+            return None
+        expr_up = expr_s.upper()
+
+        # Fixed date MM-TT
+        if re.fullmatch(r"\d{1,2}-\d{1,2}", expr_s):
+            month, day = (int(x) for x in expr_s.split("-"))
+            try:
+                return date(year, month, day)
+            except ValueError:
+                return None
+
+        # Easter-relative
+        m = re.fullmatch(r"EASTER([+-]\d+)?", expr_up)
+        if m:
+            offset = int(m.group(1)) if m.group(1) else 0
+            return _easter_date(year) + timedelta(days=offset)
+
+        # Advent-relative
+        m = re.fullmatch(r"ADVENT([+-]\d+)?", expr_up)
+        if m:
+            offset = int(m.group(1)) if m.group(1) else 0
+            return _advent1_date(year) + timedelta(days=offset)
+
+        # Named holiday: holiday:Name or holiday:Name±N
+        if expr_up.startswith("HOLIDAY:"):
+            remainder = expr_s[8:]
+            off_m = re.search(r"([+-]\d+)$", remainder)
+            if off_m:
+                name = remainder[: off_m.start()].strip()
+                offset = int(off_m.group(1))
+            else:
+                name = remainder.strip()
+                offset = 0
+            name_up = name.upper()
+            # Fast path: self._hol covers current + next year
+            for d, n in self._hol.items():
+                if d.year == year and n.upper() == name_up:
+                    return d + timedelta(days=offset)
+            # Slow path: year not in self._hol (e.g. year-1 in cross-year check)
+            try:
+                for h in self.get_holidays_for_year(year):
+                    if h["name"].upper() == name_up:
+                        return date.fromisoformat(h["date"]) + timedelta(days=offset)
+            except Exception:
+                pass
+            return None
+
+        logger.debug("Unbekanntes Datum-Fenster-Ausdruck: '%s'", expr_s)
+        return None
+
+    def _in_date_window(self, from_expr: str, to_expr: str, today: date) -> bool:
+        """Returns True if today falls within the [from, to] date window (inclusive)."""
+        year = today.year
+        d_from = self._parse_date_expression(from_expr, year)
+        d_to   = self._parse_date_expression(to_expr,   year)
+        if d_from is None or d_to is None:
+            return False
+        if d_from <= d_to:
+            return d_from <= today <= d_to
+        # Cross-year window (e.g. 1. Advent in Nov/Dec → Epiphany in Jan)
+        d_to_next   = self._parse_date_expression(to_expr,   year + 1)
+        if d_to_next is not None and d_from <= today <= d_to_next:
+            return True
+        d_from_prev = self._parse_date_expression(from_expr, year - 1)
+        if d_from_prev is not None and d_from_prev <= today <= d_to:
+            return True
+        return False
 
     def get_holidays_for_year(self, year: int) -> list[dict]:
         """Returns all holidays for the given year as a date-sorted list of {date, name} dicts."""

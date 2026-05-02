@@ -695,6 +695,162 @@ class TestShouldFireHolidayType:
             assert adapter._should_fire(cfg, now) is True, f"Should fire on {name}"
 
 
+# ---------------------------------------------------------------------------
+# _parse_date_expression
+# ---------------------------------------------------------------------------
+
+
+class TestParseDateExpression:
+    def _adapter_with_hol(self) -> ZeitschaltuhrAdapter:
+        adapter = _make_adapter()
+        adapter._hol = {
+            date(2026, 1, 1): "Neujahr",
+            date(2026, 8, 1): "Nationalfeiertag",
+        }
+        return adapter
+
+    def test_fixed_date(self):
+        adapter = _make_adapter()
+        result = adapter._parse_date_expression("05-01", 2026)
+        assert result == date(2026, 5, 1)
+
+    def test_fixed_date_leading_zeros(self):
+        adapter = _make_adapter()
+        assert adapter._parse_date_expression("01-01", 2026) == date(2026, 1, 1)
+
+    def test_easter_no_offset(self):
+        adapter = _make_adapter()
+        assert adapter._parse_date_expression("easter", 2026) == _easter_date(2026)
+
+    def test_easter_plus_offset(self):
+        from datetime import timedelta
+        adapter = _make_adapter()
+        result = adapter._parse_date_expression("easter+1", 2026)
+        assert result == _easter_date(2026) + timedelta(days=1)
+
+    def test_easter_minus_offset(self):
+        from datetime import timedelta
+        adapter = _make_adapter()
+        result = adapter._parse_date_expression("easter-7", 2026)
+        assert result == _easter_date(2026) + timedelta(days=-7)
+
+    def test_advent_no_offset(self):
+        adapter = _make_adapter()
+        assert adapter._parse_date_expression("advent", 2026) == _advent1_date(2026)
+
+    def test_advent_plus_21(self):
+        from datetime import timedelta
+        adapter = _make_adapter()
+        result = adapter._parse_date_expression("advent+21", 2026)
+        assert result == _advent1_date(2026) + timedelta(days=21)
+
+    def test_holiday_name_found_in_hol(self):
+        adapter = self._adapter_with_hol()
+        result = adapter._parse_date_expression("holiday:Neujahr", 2026)
+        assert result == date(2026, 1, 1)
+
+    def test_holiday_name_with_offset(self):
+        from datetime import timedelta
+        adapter = self._adapter_with_hol()
+        result = adapter._parse_date_expression("holiday:Nationalfeiertag-7", 2026)
+        assert result == date(2026, 8, 1) + timedelta(days=-7)
+
+    def test_holiday_name_not_found_returns_none(self):
+        adapter = _make_adapter()  # empty _hol
+        result = adapter._parse_date_expression("holiday:Unbekannt", 2026)
+        assert result is None
+
+    def test_unknown_expr_returns_none(self):
+        adapter = _make_adapter()
+        assert adapter._parse_date_expression("completely_invalid", 2026) is None
+
+    def test_empty_expr_returns_none(self):
+        adapter = _make_adapter()
+        assert adapter._parse_date_expression("", 2026) is None
+
+    def test_case_insensitive_easter(self):
+        adapter = _make_adapter()
+        assert adapter._parse_date_expression("EASTER+1", 2026) == adapter._parse_date_expression("easter+1", 2026)
+
+
+# ---------------------------------------------------------------------------
+# _in_date_window
+# ---------------------------------------------------------------------------
+
+
+class TestInDateWindow:
+    def test_today_within_window(self):
+        adapter = _make_adapter()
+        # Window: May 1 to Aug 31; today = July 15
+        assert adapter._in_date_window("05-01", "08-31", date(2026, 7, 15)) is True
+
+    def test_today_on_from_boundary(self):
+        adapter = _make_adapter()
+        assert adapter._in_date_window("05-01", "08-31", date(2026, 5, 1)) is True
+
+    def test_today_on_to_boundary(self):
+        adapter = _make_adapter()
+        assert adapter._in_date_window("05-01", "08-31", date(2026, 5, 31)) is True
+
+    def test_today_before_window(self):
+        adapter = _make_adapter()
+        assert adapter._in_date_window("05-01", "08-31", date(2026, 4, 30)) is False
+
+    def test_today_after_window(self):
+        adapter = _make_adapter()
+        assert adapter._in_date_window("05-01", "08-31", date(2026, 9, 1)) is False
+
+    def test_cross_year_window_within(self):
+        adapter = _make_adapter()
+        # Advent (late Nov) → Epiphany (Jan 6 next year): Dec 24 should be inside
+        assert adapter._in_date_window("advent+0", "01-06", date(2026, 12, 24)) is True
+
+    def test_cross_year_window_in_january(self):
+        adapter = _make_adapter()
+        # Jan 3 should be inside the Advent→Epiphany window
+        assert adapter._in_date_window("advent+0", "01-06", date(2026, 1, 3)) is True
+
+    def test_cross_year_window_after_epiphany(self):
+        adapter = _make_adapter()
+        # Jan 7 should be outside
+        assert adapter._in_date_window("advent+0", "01-06", date(2026, 1, 7)) is False
+
+    def test_easter_window(self):
+        adapter = _make_adapter()
+        # Easter 2026 = Apr 5; window: easter-7 to easter+7
+        easter = _easter_date(2026)
+        from datetime import timedelta
+        assert adapter._in_date_window("easter-7", "easter+7", easter) is True
+        assert adapter._in_date_window("easter-7", "easter+7", easter - timedelta(days=8)) is False
+        assert adapter._in_date_window("easter-7", "easter+7", easter + timedelta(days=8)) is False
+
+    def test_holiday_name_window(self):
+        adapter = _make_adapter()
+        adapter._hol[date(2026, 8, 1)] = "Nationalfeiertag"
+        from datetime import timedelta
+        # Window: 7 days before to 7 days after Nationalfeiertag (Aug 1 ± 7)
+        assert adapter._in_date_window("holiday:Nationalfeiertag-7", "holiday:Nationalfeiertag+7", date(2026, 8, 1)) is True
+        assert adapter._in_date_window("holiday:Nationalfeiertag-7", "holiday:Nationalfeiertag+7", date(2026, 7, 25)) is True
+        assert adapter._in_date_window("holiday:Nationalfeiertag-7", "holiday:Nationalfeiertag+7", date(2026, 7, 24)) is False
+
+    def test_invalid_expression_returns_false(self):
+        adapter = _make_adapter()
+        assert adapter._in_date_window("INVALID", "08-31", date(2026, 7, 15)) is False
+
+    def test_advent_window_within_one_year(self):
+        adapter = _make_adapter()
+        # 1. Advent to 4. Advent: advent+0 to advent+21
+        advent1_2026 = _advent1_date(2026)
+        from datetime import timedelta
+        advent4_2026 = advent1_2026 + timedelta(days=21)
+        # 2. Advent (day 7) should be inside
+        assert adapter._in_date_window("advent+0", "advent+21", advent1_2026 + timedelta(days=7)) is True
+        # Day before 1. Advent should be outside
+        assert adapter._in_date_window("advent+0", "advent+21", advent1_2026 - timedelta(days=1)) is False
+        # Day after 4. Advent should be outside
+        assert adapter._in_date_window("advent+0", "advent+21", advent4_2026 + timedelta(days=1)) is False
+
+
 class TestGetHolidaysForYear:
     def test_returns_list_with_date_and_name(self):
         adapter = _make_adapter(custom_holidays=["01-01:Neujahr", "12-25:Weihnachten"])
