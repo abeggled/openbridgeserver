@@ -368,3 +368,89 @@ test('Dachflächenfenster: dp_position_status 0%=geschlossen (grün), 50%=teilof
     await apiDelete(`/api/v1/datapoints/${dpPosStatus.id}`)
   }
 })
+
+// ─── Test 10 (hoch): Dachflächenfenster — invert_position ────────────────────
+
+test('Dachflächenfenster: invert_position=true → Wert 0=offen (rot), 100=geschlossen (grün)', async ({ page }) => {
+  const dpPos = await apiPost('/api/v1/datapoints', {
+    name: `E2E-Dach-InvPos-${Date.now()}`,
+    data_type: 'FLOAT',
+    tags: [],
+  }) as { id: string }
+
+  const visuNode = await createVisuPage()
+  const pageId   = visuNode.id
+  const widgetId = randomUUID()
+
+  await buildFensterPage(pageId, widgetId, 'dachfenster', {
+    dp_position_status: dpPos.id,
+    invert_position:    true,
+  })
+
+  try {
+    await page.goto(`/visu/${pageId}`)
+    await page.waitForLoadState('networkidle')
+
+    const colorDiv = page.locator(`[data-widget-id="${widgetId}"] div`).first()
+
+    // Wert 0 → invertiert = 100 = offen → rot
+    await apiPost(`/api/v1/datapoints/${dpPos.id}/value`, { value: 0 })
+    await expect(colorDiv).toHaveCSS('color', COLOR_OPEN, { timeout: 3_000 })
+
+    // Wert 50 → invertiert = 50 = teiloffen → orange
+    await apiPost(`/api/v1/datapoints/${dpPos.id}/value`, { value: 50 })
+    await expect(colorDiv).toHaveCSS('color', COLOR_TILTED, { timeout: 3_000 })
+
+    // Wert 100 → invertiert = 0 = geschlossen → grün
+    await apiPost(`/api/v1/datapoints/${dpPos.id}/value`, { value: 100 })
+    await expect(colorDiv).toHaveCSS('color', COLOR_CLOSED, { timeout: 3_000 })
+  } finally {
+    await apiDelete(`/api/v1/visu/nodes/${pageId}`)
+    await apiDelete(`/api/v1/datapoints/${dpPos.id}`)
+  }
+})
+
+// ─── Test 11 (mittel): Dachflächenfenster — invert_shutter ───────────────────
+
+test('Dachflächenfenster: invert_shutter=true → Rollladen-Overlay bei Wert 0 vollständig sichtbar', async ({ page }) => {
+  const dpShutter = await apiPost('/api/v1/datapoints', {
+    name: `E2E-Dach-InvShutter-${Date.now()}`,
+    data_type: 'FLOAT',
+    tags: [],
+  }) as { id: string }
+
+  const visuNode = await createVisuPage()
+  const pageId   = visuNode.id
+  const widgetId = randomUUID()
+
+  await buildFensterPage(pageId, widgetId, 'dachfenster', {
+    enable_shutter:    true,
+    dp_shutter_status: dpShutter.id,
+    invert_shutter:    true,
+  })
+
+  try {
+    await page.goto(`/visu/${pageId}`)
+    await page.waitForLoadState('networkidle')
+
+    const widget = page.locator(`[data-widget-id="${widgetId}"]`)
+
+    // Wert 0 → invertiert = 100% geschlossen → Rollladen-Overlay rect sichtbar (height > 0)
+    await apiPost(`/api/v1/datapoints/${dpShutter.id}/value`, { value: 0 })
+    await page.waitForTimeout(500)
+    const shutterRect = widget.locator('svg rect[height]').last()
+    const h = await shutterRect.getAttribute('height')
+    expect(Number(h)).toBeGreaterThan(0)
+
+    // Wert 100 → invertiert = 0% geschlossen → kein Rollladen-Overlay
+    await apiPost(`/api/v1/datapoints/${dpShutter.id}/value`, { value: 100 })
+    await page.waitForTimeout(500)
+    await expect(widget.locator('svg rect[height="0"]')).toHaveCount(0)
+    // Overlay-Rect darf nicht mehr existieren (shutterBarH = 0 → v-if="enableShutter && shutterBarH > 0")
+    const shutterRects = widget.locator('svg rect.fill-gray-600, svg rect.fill-gray-500')
+    await expect(shutterRects).toHaveCount(0)
+  } finally {
+    await apiDelete(`/api/v1/visu/nodes/${pageId}`)
+    await apiDelete(`/api/v1/datapoints/${dpShutter.id}`)
+  }
+})

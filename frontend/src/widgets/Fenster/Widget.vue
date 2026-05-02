@@ -39,6 +39,8 @@ const invContactLeft  = computed(() => (props.config.invert_contact_left  as boo
 const invTiltLeft     = computed(() => (props.config.invert_tilt_left     as boolean) ?? false)
 const invContactRight = computed(() => (props.config.invert_contact_right as boolean) ?? false)
 const invTiltRight    = computed(() => (props.config.invert_tilt_right    as boolean) ?? false)
+const invPosition     = computed(() => (props.config.invert_position      as boolean) ?? false)
+const invShutter      = computed(() => (props.config.invert_shutter       as boolean) ?? false)
 
 function getBool(id: string | null, invert = false): boolean | null {
   if (!id) return null
@@ -103,15 +105,18 @@ const effectiveStateRight = computed<WinState>(() =>
 // Dachflächenfenster: Anzeige-Position bevorzugt dp_position_status, Fallback dp_position
 const displayPosition = computed<number | null>(() => {
   if (props.editorMode) return null
-  return getNumber(dpPositionStatus.value) ?? getNumber(dpPosition.value)
+  const raw = getNumber(dpPositionStatus.value) ?? getNumber(dpPosition.value)
+  if (raw === null) return null
+  return invPosition.value ? 100 - Math.max(0, Math.min(100, raw)) : raw
 })
 
 // Dachflächenfenster: Rollladen-Anzeigeposition
 const shutterDisplayPct = computed<number>(() => {
   if (props.editorMode || !enableShutter.value) return 0
-  const v = getNumber(dpShutterStatus.value) ?? getNumber(dpShutter.value)
-  if (v === null) return 0
-  return Math.max(0, Math.min(100, v))
+  const raw = getNumber(dpShutterStatus.value) ?? getNumber(dpShutter.value)
+  if (raw === null) return 0
+  const v = Math.max(0, Math.min(100, raw))
+  return invShutter.value ? 100 - v : v
 })
 
 // Dachflächenfenster: Zustand nur aus Position (kein Kontakt-Fallback mehr)

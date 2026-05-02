@@ -22,9 +22,11 @@ const cfg = reactive({
   invert_tilt_right:    (props.modelValue.invert_tilt_right    as boolean) ?? false,
   dp_position:          (props.modelValue.dp_position          as string)  ?? '',
   dp_position_status:   (props.modelValue.dp_position_status   as string)  ?? '',
+  invert_position:      (props.modelValue.invert_position      as boolean) ?? false,
   enable_shutter:       (props.modelValue.enable_shutter       as boolean) ?? false,
   dp_shutter:           (props.modelValue.dp_shutter           as string)  ?? '',
   dp_shutter_status:    (props.modelValue.dp_shutter_status    as string)  ?? '',
+  invert_shutter:       (props.modelValue.invert_shutter       as boolean) ?? false,
   handle_left:          (props.modelValue.handle_left          as boolean) ?? true,
   handle_right:         (props.modelValue.handle_right         as boolean) ?? true,
   color_closed:         (props.modelValue.color_closed         as string)  ?? '#16a34a',
@@ -268,6 +270,12 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
         label="Fensterposition Status / Anzeige (0 = zu, 100 = offen)"
         :compatible-types="['FLOAT', 'INTEGER']"
       />
+      <div class="flex items-center gap-2 pl-1">
+        <input id="inv-position" v-model="cfg.invert_position" type="checkbox" class="rounded accent-blue-500" />
+        <label for="inv-position" class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+          Invertieren — aktivieren wenn 0 = offen, 100 = zu
+        </label>
+      </div>
 
       <hr class="border-gray-200 dark:border-gray-700" />
 
@@ -289,6 +297,12 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
           label="Rollladenposition Status / Anzeige"
           :compatible-types="['FLOAT', 'INTEGER']"
         />
+        <div class="flex items-center gap-2 pl-1">
+          <input id="inv-shutter" v-model="cfg.invert_shutter" type="checkbox" class="rounded accent-blue-500" />
+          <label for="inv-shutter" class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+            Invertieren — aktivieren wenn 0 = offen, 100 = geschlossen
+          </label>
+        </div>
       </template>
     </template>
   </div>
