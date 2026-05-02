@@ -77,13 +77,38 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _WEEKDAY_ABBR: dict[str, int] = {
-    "MO": 0, "DI": 1, "MI": 2, "DO": 3, "FR": 4, "SA": 5, "SO": 6,
-    "MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4, "SAT": 5, "SUN": 6,
+    "MO": 0,
+    "DI": 1,
+    "MI": 2,
+    "DO": 3,
+    "FR": 4,
+    "SA": 5,
+    "SO": 6,
+    "MON": 0,
+    "TUE": 1,
+    "WED": 2,
+    "THU": 3,
+    "FRI": 4,
+    "SAT": 5,
+    "SUN": 6,
 }
 _MONTH_ABBR: dict[str, int] = {
-    "JAN": 1, "FEB": 2, "MAR": 3, "MÄR": 3, "APR": 4,
-    "MAY": 5, "MAI": 5, "JUN": 6, "JUL": 7, "AUG": 8,
-    "SEP": 9, "OKT": 10, "OCT": 10, "NOV": 11, "DEZ": 12, "DEC": 12,
+    "JAN": 1,
+    "FEB": 2,
+    "MAR": 3,
+    "MÄR": 3,
+    "APR": 4,
+    "MAY": 5,
+    "MAI": 5,
+    "JUN": 6,
+    "JUL": 7,
+    "AUG": 8,
+    "SEP": 9,
+    "OKT": 10,
+    "OCT": 10,
+    "NOV": 11,
+    "DEZ": 12,
+    "DEC": 12,
 }
 
 
@@ -95,7 +120,7 @@ def _advent1_date(year: int) -> date:
     """
     dec25 = date(year, 12, 25)
     # weekday(): 0=Mon … 6=Sun  →  days to step back to reach Sunday before Dec 25
-    days_back = dec25.weekday() + 1   # Mon→1, Tue→2, …, Sun→7
+    days_back = dec25.weekday() + 1  # Mon→1, Tue→2, …, Sun→7
     advent4 = dec25 - timedelta(days=days_back)
     return advent4 - timedelta(days=21)
 
@@ -782,7 +807,9 @@ class ZeitschaltuhrAdapter(AdapterBase):
             if weekday is None or month is None:
                 logger.warning(
                     "Unbekanntes Wochentags- oder Monatskürzel in '%s' (Wochentag=%s, Monat=%s)",
-                    entry, wday_str, month_str,
+                    entry,
+                    wday_str,
+                    month_str,
                 )
                 return {}
             if nth_str == "LAST":
@@ -862,13 +889,13 @@ class ZeitschaltuhrAdapter(AdapterBase):
         """Returns True if today falls within the [from, to] date window (inclusive)."""
         year = today.year
         d_from = self._parse_date_expression(from_expr, year)
-        d_to   = self._parse_date_expression(to_expr,   year)
+        d_to = self._parse_date_expression(to_expr, year)
         if d_from is None or d_to is None:
             return False
         if d_from <= d_to:
             return d_from <= today <= d_to
         # Cross-year window (e.g. 1. Advent in Nov/Dec → Epiphany in Jan)
-        d_to_next   = self._parse_date_expression(to_expr,   year + 1)
+        d_to_next = self._parse_date_expression(to_expr, year + 1)
         if d_to_next is not None and d_from <= today <= d_to_next:
             return True
         d_from_prev = self._parse_date_expression(from_expr, year - 1)
