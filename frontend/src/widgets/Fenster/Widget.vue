@@ -649,14 +649,14 @@ const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
                 font-size="16" fill="currentColor" opacity="0.4">?</text>
         </template>
 
-        <!-- Rollladen-Overlay (optional, von oben nach unten) -->
+        <!-- Rollladen-Overlay: dunkler Hintergrund (Lamellenrücken) + helle Lamellenstreifen (3px + 1px Schatten) -->
         <template v-if="enableShutter && shutterBarH > 0">
           <rect x="7" y="7" width="58" :height="shutterBarH"
-                class="fill-gray-500 dark:fill-gray-400" opacity="0.75"/>
-          <line
+                class="fill-gray-600 dark:fill-gray-500" opacity="0.95"/>
+          <rect
             v-for="i in shutterSlatCount" :key="i"
-            x1="7" :y1="7 + i * 4" x2="65" :y2="7 + i * 4"
-            stroke="currentColor" stroke-width="0.5" opacity="0.4"
+            x="7" :y="7 + (i - 1) * 4" width="58" height="3"
+            class="fill-gray-300 dark:fill-gray-300" opacity="0.85"
           />
         </template>
       </svg>
