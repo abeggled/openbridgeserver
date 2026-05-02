@@ -6,7 +6,7 @@ fastapi>=0.136.1
 uvicorn[standard]>=0.46.0
 
 # Data Validation & Settings
-pydantic>=2.7.0
+pydantic>=2.13.3
 pydantic-settings>=2.14.0
 
 # Database
