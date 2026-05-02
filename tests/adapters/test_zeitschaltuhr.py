@@ -604,3 +604,120 @@ class TestCustomHolidaysStringCoercion:
     def test_empty_string_becomes_empty_list(self):
         cfg = ZeitschaltuhrConfig(custom_holidays="")
         assert cfg.custom_holidays == []
+
+
+# ---------------------------------------------------------------------------
+# Feiertagsschaltuhr (timer_type = "holiday")
+# ---------------------------------------------------------------------------
+
+
+class TestShouldFireHolidayType:
+    def _adapter_on_holiday(self, holiday_name: str = "Neujahr") -> tuple[ZeitschaltuhrAdapter, datetime]:
+        adapter = _make_adapter()
+        d = date(2026, 1, 1)
+        adapter._hol = {d: holiday_name}
+        now = datetime(2026, 1, 1, 8, 0, 0, tzinfo=UTC)  # Thursday (weekday=3)
+        return adapter, now
+
+    def test_fires_on_holiday_no_filter(self):
+        adapter, now = self._adapter_on_holiday()
+        cfg = _cfg(timer_type=TimerType.HOLIDAY, time_ref=TimeRef.ABSOLUTE, hour=8, minute=0)
+        assert adapter._should_fire(cfg, now) is True
+
+    def test_does_not_fire_on_non_holiday(self):
+        adapter = _make_adapter()  # no holidays
+        now = _now(hour=8, minute=0)
+        cfg = _cfg(timer_type=TimerType.HOLIDAY, time_ref=TimeRef.ABSOLUTE, hour=8, minute=0)
+        assert adapter._should_fire(cfg, now) is False
+
+    def test_fires_when_holiday_in_selected_list(self):
+        adapter, now = self._adapter_on_holiday("Neujahr")
+        cfg = _cfg(
+            timer_type=TimerType.HOLIDAY,
+            selected_holidays=["Neujahr", "Weihnachten"],
+            time_ref=TimeRef.ABSOLUTE, hour=8, minute=0,
+        )
+        assert adapter._should_fire(cfg, now) is True
+
+    def test_does_not_fire_when_holiday_not_in_selected_list(self):
+        adapter, now = self._adapter_on_holiday("Neujahr")
+        cfg = _cfg(
+            timer_type=TimerType.HOLIDAY,
+            selected_holidays=["Weihnachten"],
+            time_ref=TimeRef.ABSOLUTE, hour=8, minute=0,
+        )
+        assert adapter._should_fire(cfg, now) is False
+
+    def test_fires_at_correct_time(self):
+        adapter, _ = self._adapter_on_holiday()
+        now_wrong = datetime(2026, 1, 1, 9, 0, 0, tzinfo=UTC)
+        cfg = _cfg(timer_type=TimerType.HOLIDAY, time_ref=TimeRef.ABSOLUTE, hour=8, minute=0)
+        assert adapter._should_fire(cfg, now_wrong) is False
+
+    def test_does_not_use_weekday_filter(self):
+        """Holiday type ignores weekdays — Thursday holiday should fire even with weekdays=[6] (Sunday only)."""
+        adapter, now = self._adapter_on_holiday()
+        cfg = _cfg(
+            timer_type=TimerType.HOLIDAY,
+            weekdays=[6],  # Sunday only
+            time_ref=TimeRef.ABSOLUTE, hour=8, minute=0,
+        )
+        assert adapter._should_fire(cfg, now) is True
+
+    def test_every_minute_fires_on_holiday(self):
+        adapter, now = self._adapter_on_holiday()
+        cfg = _cfg(timer_type=TimerType.HOLIDAY, every_minute=True)
+        assert adapter._should_fire(cfg, now) is True
+
+    def test_vacation_skip_prevents_fire_on_holiday(self):
+        adapter, now = self._adapter_on_holiday()
+        # Also put the date in a vacation period
+        adapter._cfg = ZeitschaltuhrConfig(vacation_1_start="2026-01-01", vacation_1_end="2026-01-07")
+        cfg = _cfg(
+            timer_type=TimerType.HOLIDAY,
+            vacation_mode=HolidayMode.SKIP,
+            time_ref=TimeRef.ABSOLUTE, hour=8, minute=0,
+        )
+        assert adapter._should_fire(cfg, now) is False
+
+    def test_empty_selected_holidays_fires_on_all(self):
+        adapter = _make_adapter()
+        day1 = date(2026, 1, 1)
+        day2 = date(2026, 3, 26)
+        adapter._hol = {day1: "Neujahr", day2: "open bridge server Geburtstag"}
+        for d, name in [(day1, "Neujahr"), (day2, "open bridge server Geburtstag")]:
+            now = datetime(d.year, d.month, d.day, 8, 0, 0, tzinfo=UTC)
+            cfg = _cfg(
+                timer_type=TimerType.HOLIDAY,
+                selected_holidays=[],  # no filter
+                time_ref=TimeRef.ABSOLUTE, hour=8, minute=0,
+            )
+            assert adapter._should_fire(cfg, now) is True, f"Should fire on {name}"
+
+
+class TestGetHolidaysForYear:
+    def test_returns_list_with_date_and_name(self):
+        adapter = _make_adapter(custom_holidays=["01-01:Neujahr", "12-25:Weihnachten"])
+        result = adapter.get_holidays_for_year(2026)
+        dates = [h["date"] for h in result]
+        names = [h["name"] for h in result]
+        assert "2026-01-01" in dates
+        assert "2026-12-25" in dates
+        assert "Neujahr" in names
+        assert "Weihnachten" in names
+
+    def test_result_is_sorted_by_date(self):
+        adapter = _make_adapter(custom_holidays=["12-25:Weihnachten", "01-01:Neujahr"])
+        result = adapter.get_holidays_for_year(2026)
+        dates = [h["date"] for h in result]
+        assert dates == sorted(dates)
+
+    def test_empty_when_no_library_and_no_custom(self):
+        adapter = _make_adapter()
+        # Without the holidays library or custom entries, result may be empty
+        # (We cannot guarantee the library is installed, so just check it doesn't crash)
+        result = adapter.get_holidays_for_year(2026)
+        assert isinstance(result, list)
+        for h in result:
+            assert "date" in h
+            assert "name" in h

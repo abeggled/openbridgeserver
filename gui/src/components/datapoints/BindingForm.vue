@@ -524,6 +524,7 @@
             <select v-model="cfg.timer_type" class="input">
               <option value="daily">Tagesschaltuhr (täglich/wöchentlich)</option>
               <option value="annual">Jahresschaltuhr (monatlich/jährlich)</option>
+              <option value="holiday">Feiertagsschaltuhr (nur an Feiertagen)</option>
               <option value="meta">Metadaten (Feiertag-/Ferienstatus)</option>
             </select>
           </div>
@@ -551,8 +552,43 @@
 
         <template v-if="cfg.timer_type !== 'meta'">
 
-          <!-- Wochentage -->
-          <div class="form-group">
+          <!-- Feiertagsschaltuhr: Feiertagsauswahl -->
+          <template v-if="cfg.timer_type === 'holiday'">
+            <div class="form-group">
+              <label class="label">Feiertage <span class="optional">(leer = alle Feiertage)</span></label>
+              <p class="hint mb-2">Schaltet nur an den ausgewählten Feiertagen. Kein Eintrag = an jedem Feiertag.</p>
+              <div v-if="ztHolidaysLoading" class="text-xs text-slate-400 py-2">Lade Feiertage …</div>
+              <div v-else-if="ztHolidaysError" class="text-xs text-red-400 py-2">{{ ztHolidaysError }}</div>
+              <div v-else-if="ztHolidays.length === 0" class="text-xs text-slate-400 italic py-2">Keine Feiertage gefunden. Bitte Adapter-Instanz prüfen.</div>
+              <div v-else class="space-y-0.5 max-h-56 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded p-2 bg-white dark:bg-slate-800/50">
+                <label
+                  v-for="h in ztHolidays"
+                  :key="h.name"
+                  class="flex items-center gap-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/40 px-1.5 py-1 rounded text-xs"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="cfg.selected_holidays.length === 0 || cfg.selected_holidays.includes(h.name)"
+                    class="w-3.5 h-3.5 rounded flex-shrink-0"
+                    @change="ztToggleHoliday(h.name)"
+                  />
+                  <span class="font-mono text-slate-400 dark:text-slate-500 flex-shrink-0">{{ h.date }}</span>
+                  <span class="text-slate-700 dark:text-slate-200 truncate">{{ h.name }}</span>
+                </label>
+              </div>
+              <div class="flex gap-3 mt-1.5 items-center">
+                <button type="button" class="text-xs text-slate-400 hover:text-blue-400" @click="cfg.selected_holidays = []">Alle (kein Filter)</button>
+                <span class="text-xs text-slate-300 dark:text-slate-600">·</span>
+                <span class="text-xs text-slate-400">
+                  {{ cfg.selected_holidays.length === 0 ? 'Alle Feiertage' : `${cfg.selected_holidays.length} ausgewählt` }}
+                </span>
+                <button type="button" class="text-xs text-slate-400 hover:text-blue-400 ml-auto" @click="loadZsuHolidays()">↻ Neu laden</button>
+              </div>
+            </div>
+          </template>
+
+          <!-- Wochentage (nicht für Feiertagsschaltuhr) -->
+          <div v-if="cfg.timer_type !== 'holiday'" class="form-group">
             <label class="label">Wochentage</label>
             <div class="flex gap-1.5 flex-wrap">
               <button
@@ -571,7 +607,7 @@
             </div>
           </div>
 
-          <!-- Monate + Tag (nur Jahresschaltuhr) -->
+          <!-- Monate + Tag (nur Jahresschaltuhr, nicht bei Feiertagsschaltuhr) -->
           <template v-if="cfg.timer_type === 'annual'">
             <div class="form-group">
               <label class="label">Monate <span class="optional">(leer = alle)</span></label>
@@ -671,7 +707,7 @@
           <!-- Feiertag / Ferien -->
           <div class="optional-divider">Feiertag &amp; Ferien</div>
           <div class="grid grid-cols-2 gap-4">
-            <div class="form-group">
+            <div v-if="cfg.timer_type !== 'holiday'" class="form-group">
               <label class="label">Feiertagsbehandlung</label>
               <select v-model="cfg.holiday_mode" class="input">
                 <option value="ignore">Ignorieren (wie Normaltage)</option>
@@ -904,6 +940,7 @@ const cfg = reactive({
   solar_altitude_deg: 0.0, sun_direction: 'rising',
   every_hour: false, every_minute: false,
   holiday_mode: 'ignore', vacation_mode: 'ignore',
+  selected_holidays: [],
   value: '1',
 })
 
@@ -952,6 +989,11 @@ const iobrokerStates = ref([])
 const iobrokerBrowseLoading = ref(false)
 const iobrokerBrowseError = ref(null)
 let iobrokerBrowseTimer = null
+
+// Zeitschaltuhr holiday list state (for Feiertagsschaltuhr)
+const ztHolidays = ref([])   // [{date, name}, …] sorted by date
+const ztHolidaysLoading = ref(false)
+const ztHolidaysError = ref(null)
 
 // ---------------------------------------------------------------------------
 // Computed
@@ -1079,8 +1121,9 @@ watch(() => props.initial, val => {
   if (cfg.every_hour    == null) cfg.every_hour    = false
   if (cfg.every_minute  == null) cfg.every_minute  = false
   if (cfg.holiday_mode  == null) cfg.holiday_mode  = 'ignore'
-  if (cfg.vacation_mode == null) cfg.vacation_mode = 'ignore'
-  if (cfg.value         == null) cfg.value         = '1'
+  if (cfg.vacation_mode     == null) cfg.vacation_mode     = 'ignore'
+  if (cfg.selected_holidays == null) cfg.selected_holidays = []
+  if (cfg.value             == null) cfg.value             = '1'
   // Restore value_map UI state from top-level binding field
   if (val.value_map && typeof val.value_map === 'object') {
     const mapStr = JSON.stringify(val.value_map)
@@ -1111,6 +1154,31 @@ onMounted(async () => {
     allInstances.value = instRes.data
     allDpts.value      = dptRes.data
   } catch {}
+  // If editing an existing holiday-type binding, load holidays immediately
+  if (cfg.timer_type === 'holiday' && selectedInstanceId.value) {
+    await loadZsuHolidays()
+  }
+})
+
+async function loadZsuHolidays() {
+  const instanceId = selectedInstanceId.value
+  if (!instanceId) return
+  ztHolidaysLoading.value = true
+  ztHolidaysError.value = null
+  try {
+    const { data } = await adapterApi.getZsuHolidays(instanceId)
+    ztHolidays.value = data
+  } catch (e) {
+    ztHolidaysError.value = e.response?.data?.detail ?? 'Feiertage konnten nicht geladen werden'
+  } finally {
+    ztHolidaysLoading.value = false
+  }
+}
+
+watch(() => [selectedAdapterType.value, cfg.timer_type, selectedInstanceId.value], ([type, timerType]) => {
+  if (type === 'ZEITSCHALTUHR' && timerType === 'holiday' && selectedInstanceId.value) {
+    loadZsuHolidays()
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -1249,6 +1317,25 @@ function ztToggleMonth(m) {
   const i = cfg.months.indexOf(m)
   if (i >= 0) cfg.months.splice(i, 1)
   else cfg.months.push(m)
+}
+
+function ztToggleHoliday(name) {
+  if (cfg.selected_holidays.length === 0) {
+    // All selected (empty = no filter): unchecking one → select all except this one
+    cfg.selected_holidays = ztHolidays.value.map(h => h.name).filter(n => n !== name)
+  } else {
+    const i = cfg.selected_holidays.indexOf(name)
+    if (i >= 0) {
+      cfg.selected_holidays.splice(i, 1)
+      // If all removed → treat as "all selected" (empty list = no filter)
+    } else {
+      cfg.selected_holidays.push(name)
+      // If now all are explicitly selected, collapse to empty (= no filter)
+      if (cfg.selected_holidays.length === ztHolidays.value.length) {
+        cfg.selected_holidays = []
+      }
+    }
+  }
 }
 
 function collectXmlLeafPaths(el, prefix) {
@@ -1396,6 +1483,9 @@ function buildConfig() {
       weekdays:     [...cfg.weekdays],
       holiday_mode: cfg.holiday_mode,
       vacation_mode: cfg.vacation_mode,
+    }
+    if (cfg.timer_type === 'holiday') {
+      c.selected_holidays = [...(cfg.selected_holidays ?? [])]
     }
     if (cfg.timer_type === 'annual') {
       c.months        = [...cfg.months]

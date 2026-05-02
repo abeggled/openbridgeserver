@@ -143,7 +143,7 @@ function bindingLabel(b: BindingOut): string {
   else if (ref === 'solar_noon')     timeStr = 'Sonnenmittag'
   else if (ref === 'solar_altitude') timeStr = `Sonne ${c.solar_altitude_deg ?? '?'}°`
 
-  const typeStr = type === 'meta' ? 'Meta' : type === 'annual' ? 'jährlich' : 'täglich'
+  const typeStr = type === 'meta' ? 'Meta' : type === 'annual' ? 'jährlich' : type === 'holiday' ? 'Feiertag' : 'täglich'
   return `${typeStr} ${timeStr} → ${val}`.trim()
 }
 

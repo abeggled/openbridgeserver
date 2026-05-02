@@ -145,6 +145,7 @@ class TimerType(str, Enum):
     DAILY = "daily"
     ANNUAL = "annual"
     META = "meta"
+    HOLIDAY = "holiday"
 
 
 class TimeRef(str, Enum):
@@ -296,6 +297,12 @@ class ZeitschaltuhrBindingConfig(BaseModel):
     holiday_mode: HolidayMode = Field(HolidayMode.IGNORE, description="Feiertagsbehandlung")
     vacation_mode: HolidayMode = Field(HolidayMode.IGNORE, description="Ferienbehandlung")
 
+    # ── Feiertagsschaltuhr ────────────────────────────────────────────────────
+    selected_holidays: list[str] = Field(
+        default=[],
+        description="Ausgewählte Feiertage für timer_type=holiday (leer = alle Feiertage)",
+    )
+
     # ── Ausgabe ───────────────────────────────────────────────────────────────
     value: str = Field(
         "1",
@@ -433,7 +440,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
                 for binding in list(self._bindings):
                     try:
                         cfg = ZeitschaltuhrBindingConfig(**binding.config)
-                        if cfg.timer_type != TimerType.META and self._should_fire(cfg, now_local):
+                        if cfg.timer_type not in (TimerType.META,) and self._should_fire(cfg, now_local):
                             await self._fire_binding(binding, cfg)
                     except Exception:
                         logger.exception("Fehler beim Prüfen von Binding %s", binding.id)
@@ -450,6 +457,28 @@ class ZeitschaltuhrAdapter(AdapterBase):
 
     def _should_fire(self, cfg: ZeitschaltuhrBindingConfig, now: datetime) -> bool:
         today = now.date()
+
+        # Feiertagsschaltuhr: fires on specific holidays only
+        if cfg.timer_type == TimerType.HOLIDAY:
+            holiday_name = self._hol.get(today)
+            if holiday_name is None:
+                return False
+            if cfg.selected_holidays and holiday_name not in cfg.selected_holidays:
+                return False
+            is_vacation = self._is_vacation(today)
+            if is_vacation and cfg.vacation_mode == HolidayMode.SKIP:
+                return False
+            if not is_vacation and cfg.vacation_mode == HolidayMode.ONLY:
+                return False
+            if cfg.every_minute:
+                return True
+            if cfg.every_hour:
+                return now.minute == cfg.minute
+            target = self._calculate_target_time(cfg, today)
+            if target is None:
+                return False
+            return now.hour == target.hour and now.minute == target.minute
+
         is_holiday = self._is_holiday(today)
         is_vacation = self._is_vacation(today)
 
@@ -754,6 +783,36 @@ class ZeitschaltuhrAdapter(AdapterBase):
 
         logger.warning("Unbekanntes Format für benutzerdefinierten Feiertag: '%s'", entry)
         return {}
+
+    def get_holidays_for_year(self, year: int) -> list[dict]:
+        """Returns all holidays for the given year as a date-sorted list of {date, name} dicts."""
+        result: dict[date, str] = {}
+        try:
+            import holidays as hol_lib
+
+            kwargs: dict[str, Any] = {"years": [year]}
+            if self._cfg.holiday_subdivision:
+                kwargs["subdiv"] = self._cfg.holiday_subdivision
+            if self._cfg.holiday_language:
+                kwargs["language"] = self._cfg.holiday_language
+            try:
+                hol_obj = hol_lib.country_holidays(self._cfg.holiday_country, **kwargs)
+            except Exception:
+                kwargs.pop("language", None)
+                hol_obj = hol_lib.country_holidays(self._cfg.holiday_country, **kwargs)
+            result.update(dict(hol_obj.items()))
+        except ImportError:
+            pass
+        except Exception as exc:
+            logger.warning("Feiertagskalender konnte nicht geladen werden: %s", exc)
+
+        for entry in self._cfg.custom_holidays:
+            try:
+                result.update(self._parse_custom_holiday_entry(entry, year))
+            except Exception:
+                pass
+
+        return [{"date": d.isoformat(), "name": n} for d, n in sorted(result.items())]
 
     def _is_holiday(self, d: date) -> bool:
         return d in self._hol
