@@ -50,6 +50,7 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 19. [Einstellungen](#einstellungen)
 20. [Hilfsskripte](#hilfsskripte)
 21. [Entwicklung](#entwicklung)
+   - [Lokale Entwicklung mit PyCharm](#lokale-entwicklung-mit-pycharm)
 
 ---
 
@@ -1359,6 +1360,94 @@ Das Skript läuft bei Einzelfehlern durch. Am Ende werden Anzahl der erfolgreich
 ---
 
 ## Entwicklung
+
+### Lokale Entwicklung mit PyCharm
+
+Das Repository enthält vorkonfigurierte [PyCharm](https://www.jetbrains.com/de-de/pycharm/)-Startkonfigurationen im Verzeichnis `.run/`. Nach dem Öffnen des Projekts stehen sie direkt in der Run-Auswahl zur Verfügung.
+
+#### Einmalige Einrichtung
+
+**1. Python-Umgebung anlegen**
+
+```bash
+cd openbridgeserver
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt -r requirements_dev.txt
+```
+
+In PyCharm unter **Settings → Project → Python Interpreter** den Interpreter `.venv/bin/python` auswählen.
+
+**2. Frontend-Abhängigkeiten installieren**
+
+```bash
+cd gui && npm install
+```
+
+**3. Konfigurationsdatei anlegen**
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+Folgende Werte in `config.yaml` anpassen:
+
+```yaml
+mqtt:
+  username: obs
+  password: change-this-mqtt-service-password   # muss mit .env übereinstimmen
+
+database:
+  path: /absoluter/pfad/zum/projekt/data/obs.db  # lokaler Pfad, kein /data
+
+mosquitto:
+  passwd_file: /absoluter/pfad/zum/projekt/data/mosquitto/passwd
+  reload_pid: null
+  reload_command: null
+  service_username: obs
+  service_password: change-this-mqtt-service-password
+```
+
+**4. Umgebungsvariablen einrichten**
+
+```bash
+cp .env.example .env   # falls noch nicht vorhanden
+```
+
+Die `.env`-Datei enthält das MQTT-Passwort, mit dem der Docker-Mosquitto initialisiert wird — dieser Wert muss mit `mqtt.password` in `config.yaml` übereinstimmen.
+
+#### Starten
+
+| Run-Konfiguration | Beschreibung |
+|---|---|
+| **OBS Mosquitto (Docker)** | Startet den MQTT-Broker via Docker |
+| **OBS Backend** | Startet den FastAPI-Server auf `localhost:8080` |
+| **OBS GUI (Admin)** | Startet den Vite-Dev-Server auf `localhost:5173` |
+| **OBS Full Dev Stack** | Startet alle drei gleichzeitig (Compound) |
+
+> **Voraussetzung:** Docker Desktop muss laufen (für den Mosquitto-Broker).
+
+#### Erreichbare Dienste im Dev-Modus
+
+| Dienst | Adresse |
+|---|---|
+| Admin-GUI | http://localhost:5173 |
+| API (Swagger) | http://localhost:8080/docs |
+| MQTT | localhost:1883 |
+
+**Standardzugang:** `admin` / `admin`
+
+#### Tests ausführen
+
+```bash
+# Nur Unit- und Adapter-Tests (kein Docker nötig)
+pytest tests/unit/ tests/adapters/
+
+# Alle Tests inkl. Integration (Docker muss laufen)
+pytest tests/
+```
+
+---
 
 ### Starten ohne Docker
 

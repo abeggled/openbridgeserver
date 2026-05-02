@@ -1,0 +1,9 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="OBS Full Dev Stack" type="CompoundRunConfigurationType">
+    <toRun name="OBS Mosquitto (Docker)" type="ShConfigurationType" />
+    <toRun name="OBS Backend" type="PythonConfigurationType" />
+    <toRun name="OBS GUI (Admin)" type="js.build_tools.npm" />
+    <method v="2" />
+  </configuration>
+</component>
+

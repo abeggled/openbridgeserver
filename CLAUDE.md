@@ -38,7 +38,85 @@ ruff format .
 
 # Docker Compose (full stack)
 docker compose up -d
+
+# Docker Compose (Mosquitto only — for local dev outside Docker)
+docker compose up -d mosquitto
+
+# Admin GUI dev server (proxies /api to localhost:8080)
+cd gui && npm run dev
 ```
+
+## Local Development Setup
+
+### Prerequisites
+- Python 3.13+, Docker Desktop, Node.js 20.19+ or 22+ (use nvm; `.nvmrc` pins v22)
+
+### One-time setup
+
+```bash
+# 1. Create local venv
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt -r requirements_dev.txt
+
+# 2. Config files
+cp config.example.yaml config.yaml   # then edit (see below)
+cp .env.example .env                  # set OBS_MQTT_PASSWORD
+
+# 3. Frontend deps
+cd gui && npm install
+```
+
+### config.yaml — required local overrides
+
+The defaults assume a Docker deployment (`/data/obs.db`, `/mosquitto/passwd/passwd`).
+For local dev, override these keys:
+
+```yaml
+mqtt:
+  username: obs
+  password: <value of OBS_MQTT_PASSWORD in .env>
+
+database:
+  path: <absolute-project-path>/data/obs.db
+
+mosquitto:
+  passwd_file: <absolute-project-path>/data/mosquitto/passwd
+  reload_pid: null
+  reload_command: null
+  service_username: obs
+  service_password: <same as mqtt.password>
+```
+
+**Important:** `mqtt.password` and `mosquitto.service_password` must match `OBS_MQTT_PASSWORD` in `.env`,
+which is the password the Dockerized Mosquitto is initialized with. Mismatch → `MqttConnectError: Not authorized`.
+
+### PyCharm run configurations
+
+Shared configs live in `.run/` and are loaded automatically by PyCharm:
+
+| Config | Description |
+|---|---|
+| **OBS Mosquitto (Docker)** | Starts MQTT broker via `docker compose up mosquitto` |
+| **OBS Backend** | Runs `python -m obs` with project venv |
+| **OBS GUI (Admin)** | Runs `npm run dev` in `gui/`, serves on `localhost:5173` |
+| **OBS Full Dev Stack** | Compound — launches all three at once |
+
+### Dev URLs
+
+| Service | URL |
+|---|---|
+| Admin GUI | http://localhost:5173 |
+| API docs (Swagger) | http://localhost:8080/docs |
+| MQTT | localhost:1883 |
+
+Default login: `admin` / `admin`
+
+### GUI architecture
+
+- `gui/` — Admin GUI (Vue 3 + Vite), dev server on port 5173, built to `gui_dist/` (served by FastAPI at `/`)
+- `frontend/` — Visu SPA (Vue 3 + TypeScript), built to `frontend_dist/` (served by FastAPI at `/visu`)
+- Both proxy `/api` to `localhost:8080` during dev via `vite.config`
 
 ## Architecture
 
