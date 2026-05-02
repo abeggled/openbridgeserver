@@ -307,12 +307,20 @@ export interface InstanceBindingEntry {
   config: Record<string, unknown>
 }
 
+export interface HolidayEntry {
+  date: string
+  name: string
+}
+
 export const adapters = {
   listInstances: () =>
     request<AdapterInstanceSummary[]>('/adapters/instances'),
 
   instanceBindings: (instanceId: string) =>
     request<InstanceBindingEntry[]>(`/adapters/instances/${instanceId}/bindings`),
+
+  zsuHolidays: (instanceId: string, year = 0) =>
+    request<HolidayEntry[]>(`/adapters/instances/${instanceId}/holidays${year ? `?year=${year}` : ''}`),
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────

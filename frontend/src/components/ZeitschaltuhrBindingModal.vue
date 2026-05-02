@@ -6,7 +6,8 @@
  * per PATCH zurück. Nur sichtbar wenn der Benutzer ein gültiges JWT besitzt.
  */
 import { ref, reactive, computed, onMounted } from 'vue'
-import { datapoints as dpApi } from '@/api/client'
+import { datapoints as dpApi, adapters as adapterApi } from '@/api/client'
+import type { HolidayEntry } from '@/api/client'
 
 const props = defineProps<{
   datapointId: string
@@ -26,6 +27,9 @@ const errorMsg = ref('')
 
 const bindingEnabled = ref(true)
 
+// Instance ID is needed to load holidays
+const instanceId = ref('')
+
 interface ZstCfg {
   timer_type:         string
   meta_type:          string
@@ -42,6 +46,7 @@ interface ZstCfg {
   every_minute:       boolean
   holiday_mode:       string
   vacation_mode:      string
+  selected_holidays:  string[]
   value:              string
 }
 
@@ -61,10 +66,16 @@ const DEFAULT_CFG: ZstCfg = {
   every_minute:       false,
   holiday_mode:       'ignore',
   vacation_mode:      'ignore',
+  selected_holidays:  [],
   value:              '1',
 }
 
 const cfg = reactive<ZstCfg>({ ...DEFAULT_CFG })
+
+// Holiday list state
+const holidays        = ref<HolidayEntry[]>([])
+const holidaysLoading = ref(false)
+const holidaysError   = ref('')
 
 // ── Load ──────────────────────────────────────────────────────────────────────
 
@@ -78,14 +89,31 @@ async function loadBinding() {
     const b = bindings.find((b) => b.id === props.bindingId)
     if (!b) { errorMsg.value = 'Verknüpfung nicht gefunden.'; return }
     bindingEnabled.value = b.enabled
+    instanceId.value = b.adapter_instance_id ?? ''
     Object.assign(cfg, DEFAULT_CFG, b.config)
-    // Sicherstellen dass weekdays/months Arrays sind
-    if (!Array.isArray(cfg.weekdays)) cfg.weekdays = [0, 1, 2, 3, 4, 5, 6]
-    if (!Array.isArray(cfg.months))   cfg.months   = []
+    if (!Array.isArray(cfg.weekdays))          cfg.weekdays          = [0, 1, 2, 3, 4, 5, 6]
+    if (!Array.isArray(cfg.months))            cfg.months            = []
+    if (!Array.isArray(cfg.selected_holidays)) cfg.selected_holidays = []
+    if (cfg.timer_type === 'holiday' && instanceId.value) {
+      await loadHolidays()
+    }
   } catch {
     errorMsg.value = 'Verknüpfung konnte nicht geladen werden.'
   } finally {
     loading.value = false
+  }
+}
+
+async function loadHolidays() {
+  if (!instanceId.value) return
+  holidaysLoading.value = true
+  holidaysError.value   = ''
+  try {
+    holidays.value = await adapterApi.zsuHolidays(instanceId.value)
+  } catch {
+    holidaysError.value = 'Feiertage konnten nicht geladen werden'
+  } finally {
+    holidaysLoading.value = false
   }
 }
 
@@ -124,6 +152,29 @@ function toggleMonth(m: number) {
   if (i >= 0) cfg.months.splice(i, 1)
   else        cfg.months.push(m)
   cfg.months.sort((a, b) => a - b)
+}
+
+function toggleHoliday(name: string) {
+  if (cfg.selected_holidays.length === 0) {
+    // All selected (empty = no filter): unchecking one → select all except this one
+    cfg.selected_holidays = holidays.value.map(h => h.name).filter(n => n !== name)
+  } else {
+    const i = cfg.selected_holidays.indexOf(name)
+    if (i >= 0) {
+      cfg.selected_holidays.splice(i, 1)
+    } else {
+      cfg.selected_holidays.push(name)
+      if (cfg.selected_holidays.length === holidays.value.length) {
+        cfg.selected_holidays = []
+      }
+    }
+  }
+}
+
+async function onTimerTypeChange() {
+  if (cfg.timer_type === 'holiday' && instanceId.value && holidays.value.length === 0) {
+    await loadHolidays()
+  }
 }
 
 const showTimeRef  = computed(() => cfg.timer_type !== 'meta')
@@ -179,9 +230,10 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label :class="lCls">Typ</label>
-              <select v-model="cfg.timer_type" :class="iCls">
+              <select v-model="cfg.timer_type" :class="iCls" @change="onTimerTypeChange">
                 <option value="daily">Tagesschaltuhr (täglich/wöchentlich)</option>
                 <option value="annual">Jahresschaltuhr (monatlich/jährlich)</option>
+                <option value="holiday">Feiertagsschaltuhr (nur an Feiertagen)</option>
                 <option value="meta">Metadaten (Feiertag-/Ferienstatus)</option>
               </select>
             </div>
@@ -209,8 +261,46 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
 
           <template v-if="cfg.timer_type !== 'meta'">
 
-            <!-- Wochentage -->
-            <div>
+            <!-- Feiertagsschaltuhr: Feiertagsauswahl -->
+            <template v-if="cfg.timer_type === 'holiday'">
+              <div>
+                <label :class="lCls">
+                  Feiertage
+                  <span class="text-gray-400 dark:text-gray-600 font-normal ml-1">(leer = alle)</span>
+                </label>
+                <p :class="hCls" class="mb-2">Schaltet nur an den markierten Feiertagen.</p>
+                <div v-if="holidaysLoading" class="text-xs text-gray-400 py-2">Lade Feiertage …</div>
+                <div v-else-if="holidaysError" class="text-xs text-red-400 py-2">{{ holidaysError }}</div>
+                <div v-else-if="holidays.length === 0" class="text-xs text-gray-400 italic py-2">Keine Feiertage gefunden.</div>
+                <div v-else class="space-y-0.5 max-h-52 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded p-2 bg-gray-50 dark:bg-gray-800/50">
+                  <label
+                    v-for="h in holidays"
+                    :key="h.name"
+                    class="flex items-center gap-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700/40 px-1.5 py-1 rounded text-xs"
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="cfg.selected_holidays.length === 0 || cfg.selected_holidays.includes(h.name)"
+                      class="w-3.5 h-3.5 rounded flex-shrink-0 accent-blue-500"
+                      @change="toggleHoliday(h.name)"
+                    />
+                    <span class="font-mono text-gray-400 dark:text-gray-500 flex-shrink-0">{{ h.date }}</span>
+                    <span class="text-gray-700 dark:text-gray-200 truncate">{{ h.name }}</span>
+                  </label>
+                </div>
+                <div class="flex items-center gap-3 mt-1.5">
+                  <button type="button" class="text-xs text-gray-400 hover:text-blue-400" @click="cfg.selected_holidays = []">Alle (kein Filter)</button>
+                  <span class="text-xs text-gray-300 dark:text-gray-600">·</span>
+                  <span class="text-xs text-gray-400">
+                    {{ cfg.selected_holidays.length === 0 ? 'Alle Feiertage' : `${cfg.selected_holidays.length} ausgewählt` }}
+                  </span>
+                  <button type="button" class="text-xs text-gray-400 hover:text-blue-400 ml-auto" @click="loadHolidays">↻ Neu laden</button>
+                </div>
+              </div>
+            </template>
+
+            <!-- Wochentage (nicht für Feiertagsschaltuhr) -->
+            <div v-if="cfg.timer_type !== 'holiday'">
               <label :class="lCls">Wochentage</label>
               <div class="flex gap-1.5 flex-wrap">
                 <button
@@ -308,7 +398,7 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
                 <input id="zt-every-minute" type="checkbox" v-model="cfg.every_minute" class="w-4 h-4 rounded accent-blue-500" />
                 <div>
                   <label for="zt-every-minute" class="text-xs text-gray-600 dark:text-gray-300">Jede Minute schalten</label>
-                  <p :class="hCls">Wochentag-Filter gilt weiterhin</p>
+                  <p :class="hCls">{{ cfg.timer_type === 'holiday' ? 'Nur an Feiertagen' : 'Wochentag-Filter gilt weiterhin' }}</p>
                 </div>
               </div>
               <div class="flex items-center gap-2">
@@ -327,7 +417,7 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
             <!-- Feiertag / Ferien -->
             <hr class="border-gray-200 dark:border-gray-700" />
             <div class="grid grid-cols-2 gap-3">
-              <div>
+              <div v-if="cfg.timer_type !== 'holiday'">
                 <label :class="lCls">Feiertagsbehandlung</label>
                 <select v-model="cfg.holiday_mode" :class="iCls">
                   <option value="ignore">Ignorieren (wie Normaltage)</option>
