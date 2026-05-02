@@ -295,3 +295,76 @@ test('Zweiflügler: handle_left=false → nur rechter Flügel hat Griff-Kreis', 
     await apiDelete(`/api/v1/datapoints/${dpRight.id}`)
   }
 })
+
+// ─── Test 8 (hoch): Zweiflügler handle_left=false → Flügel intern immer geschlossen ──
+
+test('Zweiflügler: handle_left=false → linker Flügel immer grün (geschlossen), auch wenn Kontakt offen', async ({ page }) => {
+  const dpLeft   = await createBoolDP('hl-state-left')
+  const dpRight  = await createBoolDP('hl-state-right')
+  const visuNode = await createVisuPage()
+  const pageId   = visuNode.id
+  const widgetId = randomUUID()
+
+  await buildFensterPage(pageId, widgetId, 'fenster_2', {
+    dp_contact_left:  dpLeft.id,
+    dp_contact_right: dpRight.id,
+    handle_left:      false,
+    handle_right:     true,
+  })
+
+  try {
+    await page.goto(`/visu/${pageId}`)
+    await page.waitForLoadState('networkidle')
+
+    // Linker Kontakt = offen (true), aber Griff deaktiviert → linker Flügel trotzdem grün
+    await pushBool(dpLeft.id,  true)
+    await pushBool(dpRight.id, false)
+
+    const widget        = page.locator(`[data-widget-id="${widgetId}"]`)
+    const coloredGroups = widget.locator('svg g[style]')
+
+    await expect(coloredGroups.first()).toHaveCSS('color', COLOR_CLOSED, { timeout: 3_000 })
+    await expect(coloredGroups.nth(1)).toHaveCSS('color', COLOR_CLOSED, { timeout: 3_000 })
+  } finally {
+    await apiDelete(`/api/v1/visu/nodes/${pageId}`)
+    await apiDelete(`/api/v1/datapoints/${dpLeft.id}`)
+    await apiDelete(`/api/v1/datapoints/${dpRight.id}`)
+  }
+})
+
+// ─── Test 9 (hoch): Dachflächenfenster — Position-Status steuert Anzeigefarbe ───────
+
+test('Dachflächenfenster: dp_position_status 0%=geschlossen (grün), 50%=teiloffen (orange), 100%=offen (rot)', async ({ page }) => {
+  const dpPosStatus = await apiPost('/api/v1/datapoints', {
+    name: `E2E-Dach-PosStatus-${Date.now()}`,
+    data_type: 'FLOAT',
+    tags: [],
+  }) as { id: string }
+
+  const visuNode = await createVisuPage()
+  const pageId   = visuNode.id
+  const widgetId = randomUUID()
+
+  await buildFensterPage(pageId, widgetId, 'dachfenster', {
+    dp_position_status: dpPosStatus.id,
+  })
+
+  try {
+    await page.goto(`/visu/${pageId}`)
+    await page.waitForLoadState('networkidle')
+
+    const colorDiv = page.locator(`[data-widget-id="${widgetId}"] div`).first()
+
+    await apiPost(`/api/v1/datapoints/${dpPosStatus.id}/value`, { value: 0 })
+    await expect(colorDiv).toHaveCSS('color', COLOR_CLOSED, { timeout: 3_000 })
+
+    await apiPost(`/api/v1/datapoints/${dpPosStatus.id}/value`, { value: 50 })
+    await expect(colorDiv).toHaveCSS('color', COLOR_TILTED, { timeout: 3_000 })
+
+    await apiPost(`/api/v1/datapoints/${dpPosStatus.id}/value`, { value: 100 })
+    await expect(colorDiv).toHaveCSS('color', COLOR_OPEN, { timeout: 3_000 })
+  } finally {
+    await apiDelete(`/api/v1/visu/nodes/${pageId}`)
+    await apiDelete(`/api/v1/datapoints/${dpPosStatus.id}`)
+  }
+})

@@ -26,6 +26,12 @@ const dpContactRight = computed(() => (props.config.dp_contact_right as string) 
 const dpTiltRight    = computed(() => (props.config.dp_tilt_right    as string) || null)
 const dpPosition     = computed(() => (props.config.dp_position      as string) || null)
 
+// Dachflächenfenster: separate Status-DPs
+const dpPositionStatus = computed(() => (props.config.dp_position_status as string) || null)
+const dpShutter        = computed(() => (props.config.dp_shutter         as string) || null)
+const dpShutterStatus  = computed(() => (props.config.dp_shutter_status  as string) || null)
+const enableShutter    = computed(() => (props.config.enable_shutter     as boolean) ?? false)
+
 // Invert flags
 const invContact      = computed(() => (props.config.invert_contact       as boolean) ?? false)
 const invTilt         = computed(() => (props.config.invert_tilt          as boolean) ?? false)
@@ -78,21 +84,42 @@ const stateMain  = computed(() => deriveState(dpContact.value, invContact.value,
 const stateLeft  = computed(() => deriveState(dpContactLeft.value, invContactLeft.value, dpTiltLeft.value, invTiltLeft.value))
 const stateRight = computed(() => deriveState(dpContactRight.value, invContactRight.value, dpTiltRight.value, invTiltRight.value))
 
-const position = computed<number | null>(() => {
+// Handle visibility (fenster_2 / zweituerer)
+const showHandleLeft  = computed(() => (props.config.handle_left  as boolean) ?? true)
+const showHandleRight = computed(() => (props.config.handle_right as boolean) ?? true)
+
+// Wenn Griff deaktiviert → Flügel intern immer als geschlossen klassifizieren
+const effectiveStateLeft = computed<WinState>(() =>
+  !showHandleLeft.value ? 'closed' : stateLeft.value
+)
+const effectiveStateRight = computed<WinState>(() =>
+  !showHandleRight.value ? 'closed' : stateRight.value
+)
+
+// Dachflächenfenster: Anzeige-Position bevorzugt dp_position_status, Fallback dp_position
+const displayPosition = computed<number | null>(() => {
   if (props.editorMode) return null
-  return getNumber(dpPosition.value)
+  return getNumber(dpPositionStatus.value) ?? getNumber(dpPosition.value)
 })
 
-// Roof window: derive state from position if no contact datapoint given
+// Dachflächenfenster: Rollladen-Anzeigeposition
+const shutterDisplayPct = computed<number>(() => {
+  if (props.editorMode || !enableShutter.value) return 0
+  const v = getNumber(dpShutterStatus.value) ?? getNumber(dpShutter.value)
+  if (v === null) return 0
+  return Math.max(0, Math.min(100, v))
+})
+
+// Dachflächenfenster: Zustand nur aus Position (kein Kontakt-Fallback mehr)
 const roofState = computed<WinState>(() => {
   if (props.editorMode) return 'closed'
-  const pos = position.value
+  const pos = displayPosition.value
   if (pos !== null) {
     if (pos <= 0)   return 'closed'
     if (pos >= 100) return 'open'
     return 'tilted'
   }
-  return deriveState(dpContact.value, invContact.value, dpTilt.value, invTilt.value)
+  return 'unknown'
 })
 
 // Custom state colors from config (hex), fallback to green/orange/red
@@ -115,9 +142,9 @@ function stateColorStyle(s: WinState): { color: string } {
 
 const summaryState = computed<WinState>(() => {
   if (mode.value === 'fenster_2' || mode.value === 'zweituerer') {
-    if (stateLeft.value === 'open'   || stateRight.value === 'open')   return 'open'
-    if (stateLeft.value === 'tilted' || stateRight.value === 'tilted') return 'tilted'
-    if (stateLeft.value === 'closed' && stateRight.value === 'closed') return 'closed'
+    if (effectiveStateLeft.value === 'open'   || effectiveStateRight.value === 'open')   return 'open'
+    if (effectiveStateLeft.value === 'tilted' || effectiveStateRight.value === 'tilted') return 'tilted'
+    if (effectiveStateLeft.value === 'closed' && effectiveStateRight.value === 'closed') return 'closed'
     return 'unknown'
   }
   if (mode.value === 'dachfenster') return roofState.value
@@ -126,21 +153,28 @@ const summaryState = computed<WinState>(() => {
 
 const colorStyle = computed(() => stateColorStyle(summaryState.value))
 
-// Handle visibility (fenster_2 only)
-const showHandleLeft  = computed(() => (props.config.handle_left  as boolean) ?? true)
-const showHandleRight = computed(() => (props.config.handle_right as boolean) ?? true)
-
-// Opening percentage (0-100) for roof window gap rendering
+// Opening percentage (0-100) for roof window rendering
 const openPct = computed(() => {
   if (mode.value !== 'dachfenster') return 0
-  const pos = position.value
-  if (pos === null) {
-    if (roofState.value === 'open')   return 100
-    if (roofState.value === 'tilted') return 40
-    return 0
-  }
+  const pos = displayPosition.value
+  if (pos === null) return 0
   return Math.max(0, Math.min(100, pos))
 })
+
+// Sichtbare Paneelhöhe (perspektivische Verkürzung bei geöffnetem Dachflächenfenster)
+// Drehachse oben: Scheibe klappt nach unten weg, bei 100% nur noch schmaler Streifen
+const roofPaneH = computed(() => {
+  if (mode.value !== 'dachfenster') return 42
+  return Math.max(2, Math.round(42 * Math.cos(openPct.value * Math.PI / 200)))
+})
+
+// Rollladenhöhe in SVG-Einheiten (42 = volle Innenhöhe)
+const shutterBarH = computed(() =>
+  Math.min(42, Math.round(42 * shutterDisplayPct.value / 100))
+)
+
+// Lamellen-Anzahl (alle 4 SVG-Einheiten eine Linie)
+const shutterSlatCount = computed(() => Math.floor(shutterBarH.value / 4))
 </script>
 
 <template>
@@ -178,8 +212,10 @@ const openPct = computed(() => {
           </g>
         </template>
         <template v-else-if="stateMain === 'tilted'">
+          <!-- Kipp: Drehachse unten, Oberkante kippt nach innen (links) -->
           <polygon points="27,5 77,5 85,55 35,55" stroke-width="1.5"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- Griff auf freier rechter Kante (L-angeschlagen): bei y=30 interpoliert x=81 -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="81" cy="30" r="1.5"/>
             <line x1="81" y1="30" x2="81" y2="20" stroke-width="2" stroke-linecap="round"/>
@@ -199,7 +235,6 @@ const openPct = computed(() => {
       </svg>
 
       <!-- ── Single-wing window RIGHT-hinged (fenster_r) ──────────────── -->
-      <!-- Real: 60×60cm → viewBox 60×60. Mirror of fenster. -->
       <svg
         v-else-if="mode === 'fenster_r'"
         viewBox="0 0 120 60"
@@ -207,7 +242,6 @@ const openPct = computed(() => {
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
       >
-        <!-- content centred: original 60×60 shifted +30 on x -->
         <rect x="31.5" y="1.5" width="57" height="57" rx="0.5" stroke-width="2.5" stroke="currentColor"/>
 
         <template v-if="stateMain === 'closed'">
@@ -219,11 +253,13 @@ const openPct = computed(() => {
           </g>
         </template>
         <template v-else-if="stateMain === 'tilted'">
+          <!-- Kipp: Drehachse unten, gleiche Polygon-Geometrie wie L-angeschlagen -->
           <polygon points="27,5 77,5 85,55 35,55" stroke-width="1.5"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- Griff auf freier linker Kante (R-angeschlagen): bei y=30 → x=31 (interp. (27,5)→(35,55)) -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
-            <circle cx="39" cy="30" r="1.5"/>
-            <line x1="39" y1="30" x2="39" y2="20" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="31" cy="30" r="1.5"/>
+            <line x1="31" y1="30" x2="31" y2="20" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
         <template v-else-if="stateMain === 'open'">
@@ -244,6 +280,7 @@ const openPct = computed(() => {
         Real: 120×60cm  →  viewBox 120×60  (1cm = 1unit)
         Each wing = 60×60cm = identical to single fenster (pane x=5→55 / x=65→115, w=50, h=50)
         Frame split L/R per wing state. Center divider at x=60. Strokes same as fenster.
+        Griff deaktiviert → Flügel immer als geschlossen klassifiziert (effectiveState)
       -->
       <svg
         v-else-if="mode === 'fenster_2'"
@@ -252,14 +289,14 @@ const openPct = computed(() => {
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
       >
-        <!-- Left half-frame (stateLeft color) -->
-        <g :style="stateColorStyle(stateLeft)">
+        <!-- Left half-frame (effectiveStateLeft color) -->
+        <g :style="stateColorStyle(effectiveStateLeft)">
           <line x1="1.5" y1="1.5" x2="1.5"  y2="58.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
           <line x1="1.5" y1="1.5" x2="60"   y2="1.5"  stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
           <line x1="1.5" y1="58.5" x2="60"  y2="58.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
         </g>
-        <!-- Right half-frame (stateRight color) -->
-        <g :style="stateColorStyle(stateRight)">
+        <!-- Right half-frame (effectiveStateRight color) -->
+        <g :style="stateColorStyle(effectiveStateRight)">
           <line x1="118.5" y1="1.5" x2="118.5" y2="58.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
           <line x1="60"    y1="1.5" x2="118.5" y2="1.5"  stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
           <line x1="60"    y1="58.5" x2="118.5" y2="58.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
@@ -267,8 +304,8 @@ const openPct = computed(() => {
         <!-- Center divider (summaryState) -->
         <line x1="60" y1="1.5" x2="60" y2="58.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
 
-        <!-- Left wing pane — identical to single fenster (L-hinged) -->
-        <template v-if="stateLeft === 'closed'">
+        <!-- Left wing pane — L-hinged -->
+        <template v-if="effectiveStateLeft === 'closed'">
           <rect x="5" y="5" width="50" height="50" stroke-width="1.5"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
@@ -276,7 +313,8 @@ const openPct = computed(() => {
             <line x1="53" y1="30" x2="53" y2="40" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
-        <template v-else-if="stateLeft === 'tilted'">
+        <template v-else-if="effectiveStateLeft === 'tilted'">
+          <!-- Freie rechte Kante: (47,5)→(55,55), bei y=30 → x=51 -->
           <polygon points="-3,5 47,5 55,55 5,55" stroke-width="1.5"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
@@ -284,7 +322,7 @@ const openPct = computed(() => {
             <line x1="51" y1="30" x2="51" y2="20" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
-        <template v-else-if="stateLeft === 'open'">
+        <template v-else-if="effectiveStateLeft === 'open'">
           <polygon points="5,5 45,11 45,61 5,55" stroke-width="1.5" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
@@ -296,29 +334,27 @@ const openPct = computed(() => {
           <text x="30" y="30" text-anchor="middle" dominant-baseline="middle" font-size="20" fill="currentColor" opacity="0.4">?</text>
         </template>
 
-        <!-- Right wing pane — R-hinged, offset +60, mirror of left -->
-        <template v-if="stateRight === 'closed'">
+        <!-- Right wing pane — R-hinged, offset +60 -->
+        <template v-if="effectiveStateRight === 'closed'">
           <rect x="65" y="5" width="50" height="50" stroke-width="1.5"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle on free (left) edge, arm DOWN -->
           <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="67" cy="30" r="1.5"/>
             <line x1="67" y1="30" x2="67" y2="40" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
-        <template v-else-if="stateRight === 'tilted'">
+        <template v-else-if="effectiveStateRight === 'tilted'">
+          <!-- Freie linke Kante (R-angeschlagen): (57,5)→(65,55), bei y=30 → x=61 -->
           <polygon points="57,5 107,5 115,55 65,55" stroke-width="1.5"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- arm UP = kipp -->
           <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
-            <circle cx="69" cy="30" r="1.5"/>
-            <line x1="69" y1="30" x2="69" y2="20" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="61" cy="30" r="1.5"/>
+            <line x1="61" y1="30" x2="61" y2="20" stroke-width="2" stroke-linecap="round"/>
           </g>
         </template>
-        <template v-else-if="stateRight === 'open'">
+        <template v-else-if="effectiveStateRight === 'open'">
           <polygon points="115,5 75,11 75,61 115,55" stroke-width="1.5" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- arm RIGHT toward hinge (Anschlag rechts) = open -->
           <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="77" cy="36" r="1.5"/>
             <line x1="77" y1="36" x2="87" y2="36" stroke-width="2" stroke-linecap="round"/>
@@ -332,8 +368,7 @@ const openPct = computed(() => {
       <!-- ── Double door (zweituerer) ──────────────────────────────────── -->
       <!--
         Real: 2×90×200cm  →  viewBox 180×200  (1cm = 1unit)
-        Left wing = tuere (L-hinged), right wing = tuere_r (R-hinged, offset +90)
-        Frame split L/R per wing state. Center divider at x=90. Strokes same as tuere.
+        Griff deaktiviert → Flügel immer als geschlossen klassifiziert (effectiveState)
       -->
       <svg
         v-else-if="mode === 'zweituerer'"
@@ -342,15 +377,15 @@ const openPct = computed(() => {
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
       >
-        <!-- Left half-frame (stateLeft color) -->
-        <g :style="stateColorStyle(stateLeft)">
+        <!-- Left half-frame (effectiveStateLeft color) -->
+        <g :style="stateColorStyle(effectiveStateLeft)">
           <line x1="2"  y1="2"  x2="2"  y2="194" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
           <line x1="2"  y1="2"  x2="90" y2="2"   stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
         </g>
         <!-- Center divider (summaryState) -->
         <line x1="90" y1="2" x2="90" y2="194" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
-        <!-- Right half-frame (stateRight color) -->
-        <g :style="stateColorStyle(stateRight)">
+        <!-- Right half-frame (effectiveStateRight color) -->
+        <g :style="stateColorStyle(effectiveStateRight)">
           <line x1="178" y1="2"   x2="178" y2="194" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
           <line x1="90"  y1="2"   x2="178" y2="2"   stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
         </g>
@@ -358,29 +393,26 @@ const openPct = computed(() => {
         <line x1="2" y1="196" x2="178" y2="196" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
 
         <!-- Left wing pane (L-hinged) -->
-        <template v-if="stateLeft === 'closed'">
+        <template v-if="effectiveStateLeft === 'closed'">
           <rect x="7" y="7" width="76" height="183" stroke-width="2"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle: closed → DOWN -->
           <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="81" cy="100" r="2"/>
             <line x1="81" y1="100" x2="81" y2="115" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
-        <template v-else-if="stateLeft === 'tilted'">
-          <!-- kipp: bottom fixed, top shifts left 13 units (17% of 76) -->
+        <template v-else-if="effectiveStateLeft === 'tilted'">
+          <!-- Freie rechte Kante: (70,7)→(83,190), bei y=100 → x≈77 -->
           <polygon points="-6,7 70,7 83,190 7,190" stroke-width="2"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle: kipp → UP, pivot on free (right) edge -->
           <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
-            <circle cx="75" cy="100" r="2"/>
-            <line x1="75" y1="100" x2="75" y2="85" stroke-width="3" stroke-linecap="round"/>
+            <circle cx="77" cy="100" r="2"/>
+            <line x1="77" y1="100" x2="77" y2="85" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
-        <template v-else-if="stateLeft === 'open'">
+        <template v-else-if="effectiveStateLeft === 'open'">
           <polygon points="7,7 67,16 67,199 7,190" stroke-width="2" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle: open → LEFT (toward hinge) -->
           <g v-if="showHandleLeft" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="65" cy="107" r="2"/>
             <line x1="65" y1="107" x2="50" y2="107" stroke-width="3" stroke-linecap="round"/>
@@ -391,29 +423,26 @@ const openPct = computed(() => {
         </template>
 
         <!-- Right wing pane (R-hinged, tuere_r offset +90) -->
-        <template v-if="stateRight === 'closed'">
+        <template v-if="effectiveStateRight === 'closed'">
           <rect x="97" y="7" width="76" height="183" stroke-width="2"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle: closed → DOWN -->
           <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="99" cy="100" r="2"/>
             <line x1="99" y1="100" x2="99" y2="115" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
-        <template v-else-if="stateRight === 'tilted'">
-          <!-- kipp: bottom fixed, top shifts right 13 units (mirror of left wing) -->
+        <template v-else-if="effectiveStateRight === 'tilted'">
+          <!-- Freie linke Kante (R-angeschlagen): (110,7)→(97,190), bei y=100 → x≈103 -->
           <polygon points="110,7 186,7 173,190 97,190" stroke-width="2"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle: kipp → UP, pivot on free (left) edge -->
           <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
-            <circle cx="105" cy="100" r="2"/>
-            <line x1="105" y1="100" x2="105" y2="85" stroke-width="3" stroke-linecap="round"/>
+            <circle cx="103" cy="100" r="2"/>
+            <line x1="103" y1="100" x2="103" y2="85" stroke-width="3" stroke-linecap="round"/>
           </g>
         </template>
-        <template v-else-if="stateRight === 'open'">
+        <template v-else-if="effectiveStateRight === 'open'">
           <polygon points="173,7 113,16 113,199 173,190" stroke-width="2" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle: open → RIGHT (toward hinge) -->
           <g v-if="showHandleRight" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="115" cy="107" r="2"/>
             <line x1="115" y1="107" x2="130" y2="107" stroke-width="3" stroke-linecap="round"/>
@@ -455,7 +484,6 @@ const openPct = computed(() => {
         <template v-else-if="stateMain === 'open'">
           <polygon points="7,7 67,16 67,199 7,190" stroke-width="2" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle on free edge of open panel, same direction (LEFT) — ändert sich nicht -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="65" cy="107" r="2"/>
             <line x1="65" y1="107" x2="50" y2="107" stroke-width="3" stroke-linecap="round"/>
@@ -491,7 +519,6 @@ const openPct = computed(() => {
         <template v-else-if="stateMain === 'open'">
           <polygon points="83,7 23,16 23,199 83,190" stroke-width="2" stroke-linejoin="round"
                    class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle on free edge of open panel, same direction (RIGHT) -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="25" cy="107" r="2"/>
             <line x1="25" y1="107" x2="40" y2="107" stroke-width="3" stroke-linecap="round"/>
@@ -524,7 +551,6 @@ const openPct = computed(() => {
         <template v-if="stateMain === 'closed'">
           <rect x="7" y="7" width="186" height="82" stroke-width="2"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- schiebetuer: movable=right → grab right edge to slide left; schiebetuer_r: movable=left → grab left edge to slide right -->
           <g v-if="mode === 'schiebetuer'" class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="188" cy="48" r="2"/>
             <line x1="188" y1="48" x2="188" y2="25" stroke-width="3" stroke-linecap="round"/>
@@ -540,7 +566,6 @@ const openPct = computed(() => {
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
           <rect x="100" y="7" width="93" height="82" stroke-width="1.5" stroke-dasharray="8,5"
                 class="fill-gray-200 dark:fill-gray-700 stroke-gray-300 dark:stroke-gray-600" opacity="0.5"/>
-          <!-- handle at right edge of movable panel → DOWN -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="97" cy="48" r="2"/>
             <line x1="97" y1="48" x2="97" y2="71" stroke-width="3" stroke-linecap="round"/>
@@ -552,7 +577,6 @@ const openPct = computed(() => {
                 class="fill-gray-200 dark:fill-gray-700 stroke-gray-300 dark:stroke-gray-600" opacity="0.5"/>
           <rect x="100" y="7" width="93" height="82" stroke-width="2"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
-          <!-- handle at left edge of movable panel → DOWN -->
           <g class="stroke-gray-500 dark:stroke-gray-400 fill-gray-500 dark:fill-gray-400">
             <circle cx="103" cy="48" r="2"/>
             <line x1="103" y1="48" x2="103" y2="71" stroke-width="3" stroke-linecap="round"/>
@@ -563,7 +587,13 @@ const openPct = computed(() => {
         </template>
       </svg>
 
-      <!-- ── Roof window (dachfenster) ──────────────────────────────── -->
+      <!-- ── Dachflächenfenster (dachfenster) ─────────────────────────── -->
+      <!--
+        viewBox 72×56. Rahmen rect(2,2,68,52). Innenfläche: x=7…65, y=7…49 (w=58, h=42).
+        Drehachse oben (y=7): Scheibe klappt nach unten weg.
+        0% = geschlossen (Vollfläche), 100% = schmaler Streifen (Cosinus-Projektion).
+        Optional: Rollladen-Overlay von oben nach unten.
+      -->
       <svg
         v-else-if="mode === 'dachfenster'"
         viewBox="0 0 72 56"
@@ -571,48 +601,52 @@ const openPct = computed(() => {
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
       >
-        <!-- Outer frame (landscape orientation) -->
+        <!-- Outer frame -->
         <rect x="2" y="2" width="68" height="52" rx="1" stroke="currentColor" stroke-width="2.5"/>
 
-        <!-- Closed: gray pane fills the frame -->
+        <!-- Geschlossen: volle Scheibe -->
         <template v-if="roofState === 'closed'">
           <rect x="7" y="7" width="58" height="42" stroke-width="1.5"
                 class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
         </template>
 
-        <!-- Open / partial: gray pane outline + moving bar showing open amount -->
-        <template v-else>
-          <rect x="7" y="7" width="58" height="42" stroke-width="1.5"
-                class="fill-gray-200 dark:fill-gray-700 stroke-gray-300 dark:stroke-gray-600" opacity="0.4"/>
-          <line
-            x1="7"
-            :y1="7 + (42 * (1 - openPct / 100))"
-            x2="65"
-            :y2="7 + (42 * (1 - openPct / 100))"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-          />
-          <rect
-            x="7"
-            y="7"
-            width="58"
-            :height="42 * openPct / 100"
-            stroke="currentColor"
-            stroke-width="1"
-            stroke-dasharray="3,3"
-            fill="none"
-            opacity="0.5"
-          />
+        <!-- Teilweise/ganz offen: perspektivisch verkürzte Scheibe -->
+        <template v-else-if="roofState !== 'unknown'">
+          <!-- Geisterumriss der vollen Innenfläche -->
+          <rect x="7" y="7" width="58" height="42" stroke-width="1" stroke-dasharray="2,2"
+                class="fill-gray-100 dark:fill-gray-800 stroke-gray-300 dark:stroke-gray-600" opacity="0.4"/>
+          <!-- Verkürzte Scheibe (Cosinus-Projektion, Drehachse oben) -->
+          <rect x="7" y="7" width="58" :height="roofPaneH" stroke-width="1.5"
+                class="fill-gray-300 dark:fill-gray-600 stroke-gray-400 dark:stroke-gray-500"/>
+          <!-- Unterkante der sichtbaren Scheibe hervorheben -->
+          <line x1="7" :y1="7 + roofPaneH" x2="65" :y2="7 + roofPaneH"
+                stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.6"/>
+          <!-- Öffnungsgrad in Prozent -->
           <text
-            v-if="position !== null && roofState === 'tilted'"
+            v-if="displayPosition !== null"
             x="36" y="44"
-            text-anchor="middle"
-            dominant-baseline="middle"
-            font-size="10"
-            fill="currentColor"
-            opacity="0.8"
+            text-anchor="middle" dominant-baseline="middle"
+            font-size="10" fill="currentColor" opacity="0.8"
           >{{ Math.round(openPct) }}%</text>
+        </template>
+
+        <!-- Unbekannter Zustand (kein Datenpunkt) -->
+        <template v-else>
+          <text x="36" y="28" text-anchor="middle" dominant-baseline="middle"
+                font-size="16" fill="currentColor" opacity="0.4">?</text>
+        </template>
+
+        <!-- Rollladen-Overlay (optional, von oben nach unten) -->
+        <template v-if="enableShutter && shutterBarH > 0">
+          <!-- Rollladen-Fläche -->
+          <rect x="7" y="7" width="58" :height="shutterBarH"
+                class="fill-gray-500 dark:fill-gray-400" opacity="0.75"/>
+          <!-- Lamellen-Linien alle 4 SVG-Einheiten -->
+          <line
+            v-for="i in shutterSlatCount" :key="i"
+            x1="7" :y1="7 + i * 4" x2="65" :y2="7 + i * 4"
+            stroke="currentColor" stroke-width="0.5" opacity="0.4"
+          />
         </template>
       </svg>
 
