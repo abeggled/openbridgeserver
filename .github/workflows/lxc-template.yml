@@ -343,7 +343,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
 
           apt-get update
-          apt-get install -y python3 python3-pip python3-venv gcc libffi-dev libssl-dev
+          apt-get install -y python3 python3-pip python3-venv gcc libffi-dev libssl-dev mosquitto mosquitto-clients
 
           # Isolated venv — mirrors the --prefix=/install pattern from the Dockerfile
           python3 -m venv /opt/obs/venv
@@ -361,7 +361,8 @@ jobs:
           cat > /etc/systemd/system/obs.service << 'EOF'
           [Unit]
           Description=open bridge server
-          After=network.target
+          After=network.target mosquitto.service
+          Requires=mosquitto.service
 
           [Service]
           Type=simple
@@ -377,7 +378,72 @@ jobs:
           WantedBy=multi-user.target
           EOF
 
-          systemctl enable obs.service
+          # Mosquitto configuration — replaces the package default (no anonymous, WebSocket, syslog)
+          cat > /etc/mosquitto/mosquitto.conf << 'MQTTCONF'
+          pid_file /run/mosquitto/mosquitto.pid
+
+          allow_anonymous false
+          password_file /etc/mosquitto/passwd
+
+          listener 1883
+          protocol mqtt
+
+          listener 9001
+          protocol websockets
+
+          persistence true
+          persistence_location /var/lib/mosquitto/
+
+          log_dest stdout
+          log_type error
+          log_type warning
+          log_type notice
+
+          max_connections 100
+          max_keepalive 120
+          MQTTCONF
+
+          # First-boot script: generates a unique random MQTT password per deployment
+          cat > /opt/obs/obs-first-boot.sh << 'FIRSTBOOT'
+          #!/bin/bash
+          set -euo pipefail
+
+          MQTT_PASSWORD=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32)))")
+
+          mosquitto_passwd -c -b /etc/mosquitto/passwd obs "$MQTT_PASSWORD"
+          chmod 640 /etc/mosquitto/passwd
+          chown mosquitto:mosquitto /etc/mosquitto/passwd
+
+          cat >> /etc/obs.env << EOF
+          OBS_MQTT__HOST=localhost
+          OBS_MQTT__PORT=1883
+          OBS_MQTT__USERNAME=obs
+          OBS_MQTT__PASSWORD=$MQTT_PASSWORD
+          OBS_MOSQUITTO__PASSWD_FILE=/etc/mosquitto/passwd
+          OBS_MOSQUITTO__RELOAD_COMMAND=systemctl reload mosquitto
+          OBS_MOSQUITTO__SERVICE_USERNAME=obs
+          OBS_MOSQUITTO__SERVICE_PASSWORD=$MQTT_PASSWORD
+          EOF
+          FIRSTBOOT
+          chmod +x /opt/obs/obs-first-boot.sh
+
+          cat > /etc/systemd/system/obs-first-boot.service << 'FIRSTBOOTSVC'
+          [Unit]
+          Description=open bridge server — first-boot MQTT credential setup
+          Before=mosquitto.service obs.service
+          ConditionPathExists=!/etc/obs-first-boot-done
+
+          [Service]
+          Type=oneshot
+          ExecStart=/opt/obs/obs-first-boot.sh
+          ExecStartPost=/bin/touch /etc/obs-first-boot-done
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+          FIRSTBOOTSVC
+
+          systemctl enable obs.service mosquitto.service obs-first-boot.service
 
           apt-get clean
           rm -rf /var/lib/apt/lists/*
