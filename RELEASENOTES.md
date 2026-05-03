@@ -2,7 +2,7 @@
 
 ## 2026.5.1
 ### New features:
-* none
+* LXC template for ARM architectures
 
 ### Fixes:
 * Fix used tags at docker images https://github.com/abeggled/openbridgeserver/pull/323 (the real reason for 2026.5.1-RC2)
