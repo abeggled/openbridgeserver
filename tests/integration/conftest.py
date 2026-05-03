@@ -177,3 +177,65 @@ async def auth_headers(client):
     assert resp.status_code == 200, f"Login failed: {resp.text}"
     token = resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+# ---------------------------------------------------------------------------
+# Response shape assertion helpers
+# ---------------------------------------------------------------------------
+# These catch regressions where a FastAPI/Pydantic upgrade silently drops or
+# renames a field from a serialized response model.
+
+
+_DATAPOINT_OUT_FIELDS = {
+    "id",
+    "name",
+    "data_type",
+    "unit",
+    "tags",
+    "mqtt_topic",
+    "mqtt_alias",
+    "persist_value",
+    "record_history",
+    "created_at",
+    "updated_at",
+    "value",
+    "quality",
+}
+
+_DATAPOINT_PAGE_FIELDS = {"items", "total", "page", "size", "pages"}
+
+_VALUE_OUT_FIELDS = {"id", "value", "unit", "quality", "ts"}
+
+_AUTH_TOKEN_FIELDS = {"access_token", "refresh_token", "token_type"}
+
+
+def assert_datapoint_shape(body: dict) -> None:
+    """Assert that a DataPointOut response body contains all expected fields."""
+    missing = _DATAPOINT_OUT_FIELDS - set(body.keys())
+    assert not missing, (
+        f"DataPointOut response is missing fields: {missing}. A FastAPI or Pydantic upgrade may have changed the serialization of DataPointOut."
+    )
+
+
+def assert_datapoint_page_shape(body: dict) -> None:
+    """Assert that a DataPointPage response body contains all expected fields."""
+    missing = _DATAPOINT_PAGE_FIELDS - set(body.keys())
+    assert not missing, (
+        f"DataPointPage response is missing fields: {missing}. A FastAPI or Pydantic upgrade may have changed the serialization of DataPointPage."
+    )
+
+
+def assert_value_out_shape(body: dict) -> None:
+    """Assert that a ValueOut response body contains all expected fields."""
+    missing = _VALUE_OUT_FIELDS - set(body.keys())
+    assert not missing, (
+        f"ValueOut response is missing fields: {missing}. A FastAPI or Pydantic upgrade may have changed the serialization of ValueOut."
+    )
+
+
+def assert_auth_token_shape(body: dict) -> None:
+    """Assert that a login response body contains all expected token fields."""
+    missing = _AUTH_TOKEN_FIELDS - set(body.keys())
+    assert not missing, (
+        f"Auth token response is missing fields: {missing}. A FastAPI or Pydantic upgrade may have changed the serialization of the login response."
+    )

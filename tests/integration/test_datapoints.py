@@ -15,6 +15,12 @@ from __future__ import annotations
 
 import pytest
 
+from tests.integration.conftest import (
+    assert_datapoint_page_shape,
+    assert_datapoint_shape,
+    assert_value_out_shape,
+)
+
 pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
@@ -49,11 +55,10 @@ async def _create_dp(client, auth_headers, payload: dict | None = None) -> dict:
 async def test_create_datapoint(client, auth_headers):
     body = await _create_dp(client, auth_headers)
 
-    assert "id" in body
+    assert_datapoint_shape(body)
     assert body["name"] == _DP_PAYLOAD["name"]
     assert body["data_type"] == "FLOAT"
     assert body["unit"] == "°C"
-    assert "mqtt_topic" in body
     assert body["mqtt_topic"].startswith("dp/")
 
 
@@ -77,7 +82,9 @@ async def test_read_datapoint(client, auth_headers):
 
     resp = await client.get(f"/api/v1/datapoints/{dp_id}", headers=auth_headers)
     assert resp.status_code == 200
-    assert resp.json()["name"] == "Read-Test DP"
+    body = resp.json()
+    assert_datapoint_shape(body)
+    assert body["name"] == "Read-Test DP"
 
 
 async def test_read_nonexistent_returns_404(client, auth_headers):
@@ -98,8 +105,7 @@ async def test_list_datapoints_returns_paged_result(client, auth_headers):
     resp = await client.get("/api/v1/datapoints/", headers=auth_headers)
     assert resp.status_code == 200
     body = resp.json()
-    assert "items" in body
-    assert "total" in body
+    assert_datapoint_page_shape(body)
     assert body["total"] >= 1
     assert isinstance(body["items"], list)
 
@@ -233,6 +239,7 @@ async def test_write_and_read_value(client, auth_headers):
     )
     assert read_resp.status_code == 200
     val_body = read_resp.json()
+    assert_value_out_shape(val_body)
     assert val_body["value"] == pytest.approx(22.5)
     assert val_body["unit"] == "°C"
 

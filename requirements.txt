@@ -2,31 +2,31 @@
 # Python 3.11+
 
 # Web Framework
-fastapi>=0.136.1
+fastapi>=0.136.1,<1       # pre-1.0; a 1.0 release may carry breaking changes
 uvicorn[standard]>=0.46.0
 
 # Data Validation & Settings
-pydantic>=2.13.3
-pydantic-settings>=2.14.0
+pydantic>=2.13.3,<3       # v3 would be a full API break (model_dump → ?, field_validator → ?)
+pydantic-settings>=2.14.0,<3
 
 # Database
 aiosqlite>=0.22.1
 
 # MQTT
-aiomqtt>=2.5.1
+aiomqtt>=2.5.1,<3         # 1.x→2.x renamed Client(host=) to Client(hostname=)
 
 # Protocols
-xknx>=3.15.0
+xknx>=3.15.0,<4           # major versions have restructured telegram/apci imports
 pymodbus>=3.13.0,<3.14.0
 w1thermsensor>=2.3.0
 
 # Authentication
-python-jose[cryptography]>=3.5.0
+python-jose[cryptography]>=3.5.0,<4
 bcrypt>=5.0.0
 # passlib removed — password hashing via stdlib hashlib.pbkdf2_hmac
 
 # Rate limiting
-slowapi>=0.1.9
+slowapi>=0.1.9,<1         # pre-1.0; API may change at 1.0
 
 # Config
 pyyaml>=6.0.3
@@ -34,16 +34,16 @@ python-multipart>=0.0.27
 
 # KNX Project File Import
 pyzipper>=0.3.6
-xknxproject>=3.8.2
+xknxproject>=3.8.2,<4     # tracks xknx major version
 
 # Logic Engine — cron scheduling
-croniter>=6.2.2
-astral>=3.2
+croniter>=6.2.2,<7
+astral>=3.2,<4             # 2.x→3.x changed LocationInfo constructor signature
 
 # Zeitschaltuhr — holiday calendar
-holidays>=0.95
-httpx>=0.28.1
-websockets>=16.0
+holidays>=0.95,<1          # pre-1.0; country_holidays() API may change
+httpx>=0.28.1,<1           # pre-1.0
+websockets>=16.0,<17       # major versions have broken the connect/send API
 # ioBroker socketio v7 still speaks Engine.IO v3; python-socketio v4 is compatible.
 python-socketio[asyncio_client]>=5.16.1,<6
 

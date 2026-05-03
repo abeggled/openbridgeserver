@@ -1,6 +1,6 @@
 # Changes
 
-## 2026.5.1-RC2
+## 2026.5.1
 ### New features:
 * none
 
@@ -10,6 +10,7 @@
 * History give only last 1000 entries https://github.com/abeggled/openbridgeserver/issues/316
 * Enhancment Roof Window Widget (new Velux-Type) https://github.com/abeggled/openbridgeserver/issues/317
 * Sommer/Winter Umschaltung nach DIN Functional Block does not work as expected https://github.com/abeggled/openbridgeserver/issues/311
+* Implement contract tests for dependencies
 
 ### Breaking changes:
 * none

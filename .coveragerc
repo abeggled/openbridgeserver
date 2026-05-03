@@ -1,0 +1,17 @@
+[run]
+source = obs
+omit =
+    # Optional history backends — require extra deps not installed in CI
+    obs/history/influxdb_plugin.py
+    obs/history/timescaledb_plugin.py
+
+[report]
+exclude_lines =
+    # Standard exclusions
+    pragma: no cover
+    if TYPE_CHECKING:
+    raise NotImplementedError
+    # Import-guard blocks (optional deps)
+    except ImportError:
+    logger\.warning.*not installed
+    logger\.info.*not installed

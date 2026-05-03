@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.integration.conftest import assert_auth_token_shape
+
 pytestmark = pytest.mark.integration
 
 
@@ -26,9 +28,8 @@ async def test_login_returns_token(client):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert "access_token" in body
-    assert "refresh_token" in body
-    assert body.get("token_type") == "bearer"
+    assert_auth_token_shape(body)
+    assert body["token_type"] == "bearer"
 
 
 async def test_login_invalid_password(client):
