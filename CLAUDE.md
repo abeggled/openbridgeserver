@@ -224,7 +224,7 @@ One file per external library. Each test verifies the exact import paths and API
 
 ### Linting
 
-`ruff` is the sole linter/formatter. Config in `.ruff.toml`: line length 150, target Python 3.13. Tests have relaxed rules (no `assert` warnings, no type annotations required, no docstrings).
+`ruff` is the sole linter/formatter. Config in `.ruff.toml`: line length 150, target Python 3.13. Tests have relaxed rules (no `assert` warnings, no type annotations required, no docstrings). Contract tests (`tests/contracts/`) additionally suppress E402 (module-level import not at top of file) because `pytest.importorskip()` must precede the library imports it guards — a standard pytest pattern.
 
 ## Release & CI
 
