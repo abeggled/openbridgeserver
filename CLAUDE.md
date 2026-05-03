@@ -258,9 +258,12 @@ RCs never receive the `latest` tag.
 ### LXC Template
 
 - Base OS: **Ubuntu 26.04 (Plucky)** — chosen for native Python 3.14 support
-- Two release assets are produced:
-  - `ubuntu-plucky-openbridgeserver_<version>_amd64.tar.zst` — full Proxmox CT template
-  - `openbridgeserver-app-bundle_<version>.tar.gz` — app-only archive (`obs/`, `gui_dist/`, `frontend_dist/`, `requirements.txt`, `obs-update`) used for in-place updates
+- The build job runs as a **matrix** (two parallel jobs): `amd64` on `ubuntu-latest`, `arm64` on `ubuntu-24.04-arm` (native runner — no QEMU)
+  - `amd64` uses `archive.ubuntu.com`; `arm64` uses `ports.ubuntu.com/ubuntu-ports` (including security updates)
+- Three release assets are produced:
+  - `ubuntu-plucky-openbridgeserver_<version>_amd64.tar.zst` — full Proxmox CT template (x86-64)
+  - `ubuntu-plucky-openbridgeserver_<version>_arm64.tar.zst` — full Proxmox CT template (ARM64)
+  - `openbridgeserver-app-bundle_<version>.tar.gz` — arch-agnostic app archive (`obs/`, `gui_dist/`, `frontend_dist/`, `requirements.txt`, `obs-update`) used for in-place updates; built once from the amd64 job
 - App installs to `/opt/obs/`, Python venv at `/opt/obs/venv/`, data volume at `/data/`
 - Installed version tracked in `/opt/obs/version` (written by `obs-update` after each install)
 - `obs-update` script at `/usr/local/bin/obs-update` presents an interactive version picker (all RCs + up to two stable releases, sorted semantically). It self-updates on every install by copying the `obs-update` from the extracted bundle.

@@ -9,14 +9,22 @@ on:
 env:
   TEMPLATE_NAME: openbridgeserver
   BASE_OS: ubuntu-plucky
-  ARCH: amd64
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            mirror: http://archive.ubuntu.com/ubuntu
+            security_mirror: http://security.ubuntu.com/ubuntu
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            mirror: http://ports.ubuntu.com/ubuntu-ports
+            security_mirror: http://ports.ubuntu.com/ubuntu-ports
+    runs-on: ${{ matrix.runner }}
     outputs:
-      template_file: ${{ steps.meta.outputs.template_file }}
-      app_bundle_file: ${{ steps.meta.outputs.app_bundle_file }}
       version: ${{ steps.meta.outputs.version }}
 
     steps:
@@ -32,7 +40,7 @@ jobs:
           else
             VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "0.0.0")
           fi
-          TEMPLATE_FILE="${{ env.BASE_OS }}-${{ env.TEMPLATE_NAME }}_${VERSION}_${{ env.ARCH }}.tar.zst"
+          TEMPLATE_FILE="${{ env.BASE_OS }}-${{ env.TEMPLATE_NAME }}_${VERSION}_${{ matrix.arch }}.tar.zst"
           APP_BUNDLE_FILE="${{ env.TEMPLATE_NAME }}-app-bundle_${VERSION}.tar.gz"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "template_file=$TEMPLATE_FILE" >> "$GITHUB_OUTPUT"
@@ -73,11 +81,11 @@ jobs:
           cat > /tmp/obs-update << 'SCRIPTEOF'
           #!/bin/bash
           set -euo pipefail
-          
+
           REPO="__REPO__"
           INSTALL_DIR="/opt/obs"
           SERVICE="obs"
-          
+
           CURRENT=$(cat "$INSTALL_DIR/version" 2>/dev/null || echo "unknown")
           echo "Fetching release information..."
           ALL_RELEASES=$(curl -sf "https://api.github.com/repos/${REPO}/releases")
@@ -127,19 +135,19 @@ jobs:
                   LABELS+=("$TAG  (release candidate${MARKER})")
               fi
           done <<< "$VERSION_LIST"
-          
+
           if [[ ${#OPTIONS[@]} -eq 0 ]]; then
               echo "No releases found."
               exit 0
           fi
-          
+
           echo "Available versions:"
           for i in "${!OPTIONS[@]}"; do
               echo "  $((i+1))) ${LABELS[$i]}"
           done
           echo "  0) Cancel"
           echo ""
-          
+
           while true; do
               read -rp "Select version to install [0-${#OPTIONS[@]}]: " CHOICE
               if [[ "$CHOICE" =~ ^[0-9]+$ ]] && [[ "$CHOICE" -ge 0 ]] && [[ "$CHOICE" -le "${#OPTIONS[@]}" ]]; then
@@ -147,21 +155,21 @@ jobs:
               fi
               echo "Invalid selection, please try again."
           done
-          
+
           if [[ "$CHOICE" -eq 0 ]]; then
               echo "Cancelled."
               exit 0
           fi
-          
+
           TARGET="${OPTIONS[$((CHOICE-1))]}"
-          
+
           if [[ "$TARGET" == "$CURRENT" ]]; then
               echo "$TARGET is already installed."
               exit 0
           fi
-          
+
           echo "Installing $TARGET ..."
-          
+
           BUNDLE_URL=$(echo "$ALL_RELEASES" | python3 -c "
           import sys, json
           target = '${TARGET}'
@@ -172,20 +180,20 @@ jobs:
               if a:
                   print(a['browser_download_url'])
           ")
-          
+
           if [[ -z "$BUNDLE_URL" ]]; then
               echo "Error: no app-bundle asset found for $TARGET" >&2
               exit 1
           fi
-          
+
           TMP=$(mktemp -d)
           trap "rm -rf $TMP" EXIT
-          
+
           echo "Downloading $BUNDLE_URL ..."
           curl -fL "$BUNDLE_URL" -o "$TMP/app-bundle.tar.gz"
-          
+
           systemctl stop "$SERVICE"
-          
+
           tar -xzf "$TMP/app-bundle.tar.gz" -C "$INSTALL_DIR"
           "$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
 
@@ -211,6 +219,7 @@ jobs:
           echo "${BASE}${RC}" > obs/version
 
       - name: Create app bundle
+        if: matrix.arch == 'amd64'
         run: |
           tar -czf "${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}" \
             obs/ gui_dist/ frontend_dist/ requirements.txt obs-update
@@ -224,7 +233,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: base-system-cache.tar.zst
-          key: base-system-ubuntu-plucky-amd64-v1
+          key: base-system-ubuntu-plucky-${{ matrix.arch }}-v1
 
       - name: Create or restore base system
         run: |
@@ -240,23 +249,23 @@ jobs:
             sudo mkdir -p "$ROOTFS"
 
             sudo debootstrap \
-              --arch=${{ env.ARCH }} \
+              --arch=${{ matrix.arch }} \
               --components=main,restricted,universe \
               --include=systemd,systemd-sysv,dbus,apt-utils,locales,iproute2,wget,curl,ca-certificates,less,logrotate,openssh-server,ifupdown \
               plucky \
               "$ROOTFS" \
-              http://archive.ubuntu.com/ubuntu
+              ${{ matrix.mirror }}
+
+            # Write arch-specific sources.list before entering the chroot
+            sudo tee "$ROOTFS/etc/apt/sources.list" > /dev/null <<SOURCES
+          deb ${{ matrix.mirror }} plucky main restricted universe multiverse
+          deb ${{ matrix.mirror }} plucky-updates main restricted universe multiverse
+          deb ${{ matrix.security_mirror }} plucky-security main restricted universe multiverse
+          SOURCES
 
             sudo chroot "$ROOTFS" /bin/bash <<'BASESCRIPT'
           set -euo pipefail
           export DEBIAN_FRONTEND=noninteractive
-
-          # Full sources list
-          cat > /etc/apt/sources.list << 'EOF'
-          deb http://archive.ubuntu.com/ubuntu plucky main restricted universe multiverse
-          deb http://archive.ubuntu.com/ubuntu plucky-updates main restricted universe multiverse
-          deb http://security.ubuntu.com/ubuntu plucky-security main restricted universe multiverse
-          EOF
 
           # Locale
           echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
@@ -307,8 +316,8 @@ jobs:
         uses: actions/cache@v5
         with:
           path: /tmp/apt-cache
-          key: apt-obs-${{ hashFiles('requirements.txt') }}
-          restore-keys: apt-obs-
+          key: apt-obs-${{ matrix.arch }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: apt-obs-${{ matrix.arch }}-
 
       - name: Restore APT cache to rootfs
         run: |
@@ -486,13 +495,20 @@ jobs:
           sha512sum "${{ steps.meta.outputs.template_file }}" \
             > "${{ steps.meta.outputs.template_file }}.sha512"
 
-      - name: Upload artifact
+      - name: Upload LXC template artifact
         uses: actions/upload-artifact@v7
         with:
-          name: lxc-template
+          name: lxc-${{ matrix.arch }}
           path: |
             ${{ runner.temp }}/${{ steps.meta.outputs.template_file }}
             ${{ runner.temp }}/${{ steps.meta.outputs.template_file }}.sha512
+
+      - name: Upload app bundle artifact
+        if: matrix.arch == 'amd64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-bundle
+          path: |
             ${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}
             ${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}.sha512
 
@@ -505,46 +521,66 @@ jobs:
       contents: write
 
     steps:
-      - name: Download artifact
+      - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
-          name: lxc-template
           path: artifacts
 
       - name: Upload LXC assets to existing release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.ref_name }}" \
-            artifacts/*.tar.zst artifacts/*.tar.gz artifacts/*.sha512 \
-            --repo "${{ github.repository }}" \
-            --clobber
+          find artifacts/ -type f \( -name "*.tar.zst" -o -name "*.tar.gz" -o -name "*.sha512" \) \
+            | xargs gh release upload "${{ github.ref_name }}" \
+              --repo "${{ github.repository }}" \
+              --clobber
 
       - name: Insert LXC checksums into release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cat "artifacts/${{ needs.build.outputs.template_file }}.sha512"    > /tmp/lxc_checksum.txt
-          cat "artifacts/${{ needs.build.outputs.app_bundle_file }}.sha512"  > /tmp/bundle_checksum.txt
           gh release view "${{ github.ref_name }}" \
             --repo "${{ github.repository }}" --json body -q .body \
             > /tmp/release_body.txt
 
           python3 <<'PYEOF' > /tmp/new_body.txt
-          with open('/tmp/release_body.txt') as f:
-              body = f.read()
-          with open('/tmp/lxc_checksum.txt') as f:
-              lxc_checksum = f.read().strip()
-          with open('/tmp/bundle_checksum.txt') as f:
-              bundle_checksum = f.read().strip()
+          import glob, os
+
+          def read(path):
+              with open(path) as f:
+                  return f.read().strip()
+
+          body = read('/tmp/release_body.txt')
+
+          lxc_entries = []
+          bundle_checksum = None
+
+          for f in sorted(glob.glob('artifacts/**/*.sha512', recursive=True)):
+              content = read(f)
+              name = os.path.basename(f).removesuffix('.sha512')
+              if 'app-bundle' in name:
+                  bundle_checksum = content
+              elif name.endswith('.tar.zst'):
+                  lxc_entries.append((name, content))
+
           marker = "<!-- LXC_INSERT -->"
+
+          lxc_section = "**LXC Templates** (`.tar.zst` — Proxmox CT template):\n"
+          for name, cs in lxc_entries:
+              lxc_section += f"\n*{name}*:\n```\n{cs}\n```\n"
+
+          bundle_section = ""
+          if bundle_checksum:
+              bundle_section = (
+                  "\n**App Bundle** (`.tar.gz` — for in-place updates via `obs-update`):\n"
+                  f"```\n{bundle_checksum}\n```\n\n"
+              )
+
           section = (
               "### Checksums\n\n"
-              "**LXC Template** (`.tar.zst` — Proxmox CT template):\n"
-              f"```\n{lxc_checksum}\n```\n\n"
-              "**App Bundle** (`.tar.gz` — for in-place updates via `obs-update`):\n"
-              f"```\n{bundle_checksum}\n```\n\n"
-              f"{marker}"
+              + lxc_section
+              + bundle_section
+              + marker
           )
           print(body.replace(marker, section), end='')
           PYEOF
