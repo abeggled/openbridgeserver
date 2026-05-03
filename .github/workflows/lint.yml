@@ -9,7 +9,7 @@ on:
       - feature/*
   pull_request:
     branches:
-      - master
+      - main
 
 permissions: {}
 
