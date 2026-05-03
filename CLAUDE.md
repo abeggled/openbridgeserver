@@ -211,6 +211,15 @@ Two workflows run on every tag push (`push: tags: '*'`):
 - `obs/__init__.py` reads `obs/version` at import time to expose `__version__`. Do not hardcode the version there.
 - To start a new release cycle: add a new `## <version>` headline at the top of `RELEASENOTES.md`. No other file needs to change.
 
+### Docker Image Tags
+
+| Release type | Tags applied |
+|---|---|
+| Stable release | `latest`, `<version>`, `<short-git-hash>` |
+| Release candidate | `<version-RC#>`, `<short-git-hash>` |
+
+RCs never receive the `latest` tag.
+
 ### LXC Template
 
 - Base OS: **Ubuntu 26.04 (Plucky)** — chosen for native Python 3.14 support
@@ -220,6 +229,21 @@ Two workflows run on every tag push (`push: tags: '*'`):
 - App installs to `/opt/obs/`, Python venv at `/opt/obs/venv/`, data volume at `/data/`
 - Installed version tracked in `/opt/obs/version` (written by `obs-update` after each install)
 - `obs-update` script at `/usr/local/bin/obs-update` presents an interactive version picker (all RCs + up to two stable releases, sorted semantically). It self-updates on every install by copying the `obs-update` from the extracted bundle.
+
+#### Mosquitto in the LXC template
+
+Mosquitto is installed as a systemd service alongside OBS. Key paths:
+
+| Path | Purpose |
+|---|---|
+| `/etc/mosquitto/mosquitto.conf` | Broker config (no anonymous, MQTT 1883, WebSocket 9001) |
+| `/etc/mosquitto/passwd` | Password file managed by OBS |
+| `/etc/obs.env` | Runtime environment vars including generated MQTT credentials |
+| `/opt/obs/obs-first-boot.sh` | First-boot credential generator |
+
+**First-boot credential setup:** `obs-first-boot.service` is a oneshot unit that runs once before `mosquitto.service` and `obs.service` on the first boot. It generates a 32-character random MQTT password, creates the Mosquitto passwd file for the `obs` service account, and appends all `OBS_MQTT__*` / `OBS_MOSQUITTO__*` / `OBS_SECURITY__*` variables to `/etc/obs.env`. A flag file `/etc/obs-first-boot-done` prevents it from running again on subsequent boots.
+
+OBS reloads Mosquitto after passwd file changes via `OBS_MOSQUITTO__RELOAD_COMMAND=systemctl reload mosquitto`.
 
 ### Release Notes
 
