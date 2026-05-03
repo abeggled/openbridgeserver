@@ -45,7 +45,7 @@ holidays>=0.95
 httpx>=0.28.1
 websockets>=16.0
 # ioBroker socketio v7 still speaks Engine.IO v3; python-socketio v4 is compatible.
-python-socketio[asyncio_client]>=4.6,<5
+python-socketio[asyncio_client]>=5.16.1,<6
 
 # History plugins — optional, install only the backend(s) you use:
 asyncpg>=0.31.0         # TimescaleDB / PostgreSQL history plugin
