@@ -51,7 +51,9 @@ jobs:
                   break
               if in_section:
                   notes.append(line.rstrip())
-          image = f"ghcr.io/{repo.lower()}:{tag}"
+          is_rc = bool(re.search(r'-RC\d*$', tag, re.IGNORECASE))
+          pull_tag = tag if is_rc else 'latest'
+          image = f"ghcr.io/{repo.lower()}:{pull_tag}"
           notes += [
               '',
               '### Docker Image',
@@ -113,9 +115,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ env.PRERELEASE == 'false' }}
+            type=raw,value=${{ env.VERSION }}
+            type=raw,value=${{ env.GITHASH }}
 
       - name: Build and Push Image
         uses: docker/build-push-action@v7
