@@ -138,6 +138,20 @@ class IoBrokerAdapter(AdapterBase):
         self._connect_url: str | None = None
         self._connect_kwargs: dict[str, Any] = {}
 
+    def _socket_is_connected(self) -> bool:
+        if self._socket is None:
+            return False
+        if getattr(self._socket, "connected", False):
+            return True
+        engineio_client = getattr(self._socket, "eio", None)
+        return getattr(engineio_client, "state", None) == "connected"
+
+    @property
+    def connected(self) -> bool:
+        if self._socket_is_connected():
+            return True
+        return self._connected
+
     async def connect(self) -> None:
         try:
             import socketio
@@ -294,9 +308,9 @@ class IoBrokerAdapter(AdapterBase):
             if self._socket is not sio:
                 return
             logger.info("ioBroker Socket.IO connected → %s", self._connect_url)
-            subscribed = await self._subscribe_bound_states(force_publish_initial=True)
-            if subscribed and self._cfg is not None:
+            if self._cfg is not None:
                 await self._publish_status(True, f"Verbunden mit {self._cfg.host}:{self._cfg.port}")
+            await self._subscribe_bound_states(force_publish_initial=True)
 
         @sio.event
         async def disconnect():  # noqa: ANN202
@@ -337,7 +351,7 @@ class IoBrokerAdapter(AdapterBase):
     async def _reconnect_loop(self) -> None:
         assert self._cfg is not None
         while not self._disconnect_requested:
-            if self._socket and getattr(self._socket, "connected", False):
+            if self._socket_is_connected():
                 return
             connected = await self._connect_socket()
             if connected:
@@ -345,14 +359,16 @@ class IoBrokerAdapter(AdapterBase):
             await asyncio.sleep(self._cfg.reconnect_interval_seconds)
 
     async def _subscribe_bound_states(self, *, force_publish_initial: bool = True) -> bool:
-        if not self._socket or not getattr(self._socket, "connected", False) or not self._state_map:
-            return bool(self._socket and getattr(self._socket, "connected", False))
+        if not self._socket_is_connected() or not self._state_map:
+            return self._socket_is_connected()
 
         async with self._subscription_lock:
             states = list(self._state_map.keys())
             try:
                 await self._call_socket("subscribe", states)
                 logger.info("ioBroker Socket.IO subscribed: %s", states)
+                if self._cfg is not None:
+                    await self._publish_status(True, f"Verbunden mit {self._cfg.host}:{self._cfg.port}")
             except Exception:
                 logger.exception("ioBroker Socket.IO subscribe failed")
                 await self._publish_status(False, "Subscribe fehlgeschlagen")
@@ -373,7 +389,7 @@ class IoBrokerAdapter(AdapterBase):
         return True
 
     async def _call_socket(self, event: str, *args: Any, timeout: float = 10.0) -> Any:
-        if not self._socket or not getattr(self._socket, "connected", False):
+        if not self._socket or not self._socket_is_connected():
             raise RuntimeError("ioBroker Socket.IO is not connected")
         if not args:
             data = None
