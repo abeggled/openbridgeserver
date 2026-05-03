@@ -24,11 +24,17 @@ pytest tests/unit/test_converter.py
 # Run a specific test
 pytest tests/unit/test_converter.py::test_float_to_int
 
-# Run only adapter tests (no Docker needed)
+# Run only adapter + unit tests (no Docker needed)
 pytest tests/adapters/ tests/unit/
+
+# Run contract tests — verify external library API surfaces (no Docker needed)
+pytest tests/contracts/
 
 # Run integration tests (requires Docker for Mosquitto)
 pytest tests/integration/
+
+# Run with coverage report
+pytest tests/ --cov=obs --cov-report=term-missing
 
 # Lint
 ruff check .
@@ -183,9 +189,38 @@ Dual-auth: JWT Bearer token (`Authorization: Bearer {token}`) and API Key (`X-AP
 |---|---|---|
 | `tests/unit/` | Pure logic (converter, models, DPT registry, etc.) | None |
 | `tests/adapters/` | Adapter unit tests with mocked EventBus | None |
+| `tests/contracts/` | External library API surface contracts (see below) | None |
 | `tests/integration/` | Full FastAPI app + real SQLite + real MQTT | Docker (Mosquitto) |
 
 Integration tests spin up a `eclipse-mosquitto` Docker container on port 18830 automatically via the session-scoped `mosquitto_port` fixture. The `make_binding()` helper in `tests/adapters/conftest.py` creates mock bindings for adapter tests.
+
+#### Contract tests (`tests/contracts/`)
+
+One file per external library. Each test verifies the exact import paths and API surface that OBS uses — constructor parameter names, method signatures, return types. They run without Docker and complete in ~2 seconds.
+
+**Purpose:** catch breaking changes when Renovate/Dependabot bumps a dependency. A library that renames a constructor parameter (e.g. `aiomqtt` 1.x→2.x changed `host=` to `hostname=`) will fail a contract test immediately rather than failing silently at runtime.
+
+| File | Library | Key checks |
+|---|---|---|
+| `test_aiomqtt_contract.py` | `aiomqtt` | `Client(hostname=, port=, username=, password=)`, `publish/subscribe/messages`, `Message` fields |
+| `test_astral_contract.py` | `astral` | `LocationInfo.observer`, `sun()` keys, `SunDirection`, `time_at_elevation()` |
+| `test_croniter_contract.py` | `croniter` | `croniter(expr, now).get_next(datetime)` — exact manager.py pattern |
+| `test_fastapi_contract.py` | `fastapi` | Routing, 422 response shape (`detail` list with `loc`/`msg`), `HTTPException`, `APIRouter` |
+| `test_holidays_contract.py` | `holidays` | `country_holidays()`, `.items()`, date membership, `subdiv` kwarg |
+| `test_jose_contract.py` | `python-jose` | `jwt.encode/decode` roundtrip, `JWTError`, expiry handling |
+| `test_pydantic_contract.py` | `pydantic` | v2 APIs: `model_dump()`, `model_validate()`, `field_validator(mode=)`, `model_config` |
+| `test_pymodbus_contract.py` | `pymodbus` | Import path `from pymodbus.client import Async*`, all read/write method names, `connected` |
+| `test_slowapi_contract.py` | `slowapi` | `Limiter`, `_rate_limit_exceeded_handler`, `RateLimitExceeded` |
+| `test_socketio_contract.py` | `python-socketio` | `AsyncClient`, `@sio.event`, `connect/emit/disconnect` as coroutines |
+| `test_xknx_contract.py` | `xknx` | `Telegram`, `GroupAddress`, `DPTArray/DPTBinary`, APCI types |
+
+#### Response shape helpers (`tests/integration/conftest.py`)
+
+`assert_datapoint_shape()`, `assert_datapoint_page_shape()`, `assert_value_out_shape()`, `assert_auth_token_shape()` — call these after any integration test that reads a response body to verify all expected fields are present. Catches silent Pydantic/FastAPI serialization regressions that still return HTTP 200.
+
+#### Dependency version bounds
+
+`requirements.txt` caps all volatile libraries at the next major version (e.g. `pydantic>=2.13.3,<3`, `aiomqtt>=2.5.1,<3`). Renovate PRs are therefore scoped to minor/patch upgrades by default; a deliberate edit is required to cross a major version boundary. Coverage config lives in `.coveragerc`.
 
 ### Linting
 
