@@ -581,7 +581,7 @@ async def iobroker_browse_states(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
 
     instance = adapter_registry.get_instance_by_id(str(instance_id))
-    if instance is None or not getattr(instance, "connected", False):
+    if instance is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ioBroker-Instanz ist nicht verbunden")
     if not hasattr(instance, "browse_states"):
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "ioBroker-State-Browser nicht verfügbar")
@@ -647,7 +647,7 @@ async def _iobroker_candidates(
     db: Database,
 ) -> list[IoBrokerImportItem]:
     instance = adapter_registry.get_instance_by_id(instance_id)
-    if instance is None or not getattr(instance, "connected", False):
+    if instance is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ioBroker-Instanz ist nicht verbunden")
     states = await instance.browse_states(body.prefix, min(max(body.limit, 1), 500))
     selected = set(body.states)
