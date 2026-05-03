@@ -11,7 +11,6 @@ Production usage:
 
 from __future__ import annotations
 
-import pytest
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -27,10 +26,7 @@ class TestLimiter:
 
     def test_limiter_has_limit_decorator(self):
         limiter = Limiter(key_func=get_remote_address)
-        assert hasattr(limiter, "limit"), (
-            "slowapi.Limiter no longer has a 'limit' method. "
-            "This is used as @limiter.limit('X/minute') in auth routes."
-        )
+        assert hasattr(limiter, "limit"), "slowapi.Limiter no longer has a 'limit' method. This is used as @limiter.limit('X/minute') in auth routes."
 
 
 class TestRateLimitExceeded:

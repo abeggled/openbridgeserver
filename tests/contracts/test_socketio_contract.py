@@ -22,15 +22,13 @@ socketio = pytest.importorskip("socketio", reason="python-socketio not installed
 class TestAsyncClient:
     def test_async_client_importable(self):
         assert hasattr(socketio, "AsyncClient"), (
-            "socketio.AsyncClient no longer exists. "
-            "obs/adapters/iobroker/adapter.py instantiates socketio.AsyncClient(...)."
+            "socketio.AsyncClient no longer exists. obs/adapters/iobroker/adapter.py instantiates socketio.AsyncClient(...)."
         )
 
     def test_async_client_constructor_accepts_reconnection(self):
         sig = inspect.signature(socketio.AsyncClient.__init__)
         assert "reconnection" in sig.parameters, (
-            "socketio.AsyncClient.__init__ no longer accepts 'reconnection'. "
-            "Adapter uses: socketio.AsyncClient(reconnection=True, ...)"
+            "socketio.AsyncClient.__init__ no longer accepts 'reconnection'. Adapter uses: socketio.AsyncClient(reconnection=True, ...)"
         )
 
     def test_async_client_constructor_accepts_logger(self):
@@ -43,12 +41,9 @@ class TestAsyncClient:
         # passing engineio_logger=False doesn't raise TypeError.
         sig = inspect.signature(socketio.AsyncClient.__init__)
         params = sig.parameters
-        has_var_keyword = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-        )
+        has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
         assert has_var_keyword, (
-            "socketio.AsyncClient.__init__ no longer accepts **kwargs. "
-            "The adapter passes engineio_logger=False which must not raise TypeError."
+            "socketio.AsyncClient.__init__ no longer accepts **kwargs. The adapter passes engineio_logger=False which must not raise TypeError."
         )
 
     def test_engineio_logger_kwarg_does_not_raise(self):
@@ -62,10 +57,7 @@ class TestAsyncClient:
 
     def test_has_event_decorator(self):
         sio = socketio.AsyncClient(reconnection=False, logger=False, engineio_logger=False)
-        assert hasattr(sio, "event"), (
-            "socketio.AsyncClient no longer has an 'event' decorator. "
-            "Adapter registers handlers with @sio.event."
-        )
+        assert hasattr(sio, "event"), "socketio.AsyncClient no longer has an 'event' decorator. Adapter registers handlers with @sio.event."
 
     def test_event_is_callable(self):
         sio = socketio.AsyncClient(reconnection=False, logger=False, engineio_logger=False)
@@ -81,17 +73,11 @@ class TestAsyncClient:
 
     def test_has_emit_method(self):
         sio = socketio.AsyncClient(reconnection=False, logger=False, engineio_logger=False)
-        assert hasattr(sio, "emit"), (
-            "socketio.AsyncClient missing 'emit' method. "
-            "Adapter uses sio.emit(event, data) to send state updates."
-        )
+        assert hasattr(sio, "emit"), "socketio.AsyncClient missing 'emit' method. Adapter uses sio.emit(event, data) to send state updates."
 
     def test_connect_is_coroutine(self):
         sio = socketio.AsyncClient(reconnection=False, logger=False, engineio_logger=False)
-        assert inspect.iscoroutinefunction(sio.connect), (
-            "socketio.AsyncClient.connect must be a coroutine. "
-            "Adapter awaits sio.connect(url, ...)."
-        )
+        assert inspect.iscoroutinefunction(sio.connect), "socketio.AsyncClient.connect must be a coroutine. Adapter awaits sio.connect(url, ...)."
 
     def test_emit_is_coroutine(self):
         sio = socketio.AsyncClient(reconnection=False, logger=False, engineio_logger=False)

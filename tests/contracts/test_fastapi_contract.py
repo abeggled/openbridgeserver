@@ -91,23 +91,18 @@ class TestValidationErrors:
     def test_missing_required_field_returns_422(self):
         resp = _client.post("/items/", json={"name": "sensor"})  # missing 'value'
         assert resp.status_code == 422, (
-            "FastAPI must return 422 for missing required fields. "
-            "OBS integration tests and the GUI rely on this status code."
+            "FastAPI must return 422 for missing required fields. OBS integration tests and the GUI rely on this status code."
         )
 
     def test_422_response_has_detail_key(self):
         resp = _client.post("/items/", json={})
-        assert "detail" in resp.json(), (
-            "FastAPI 422 response must contain a 'detail' key. "
-            "Format may have changed in this FastAPI version."
-        )
+        assert "detail" in resp.json(), "FastAPI 422 response must contain a 'detail' key. Format may have changed in this FastAPI version."
 
     def test_422_detail_is_list(self):
         resp = _client.post("/items/", json={})
         detail = resp.json()["detail"]
         assert isinstance(detail, list), (
-            "FastAPI 422 detail must be a list of error objects. "
-            "OBS integration tests assert isinstance(body['detail'], list)."
+            "FastAPI 422 detail must be a list of error objects. OBS integration tests assert isinstance(body['detail'], list)."
         )
 
     def test_422_detail_items_have_loc_and_msg(self):

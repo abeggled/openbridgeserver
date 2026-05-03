@@ -52,10 +52,7 @@ class TestBaseModel:
 
     def test_model_dump_exists(self):
         m = _SimpleModel(name="test")
-        assert hasattr(m, "model_dump"), (
-            "pydantic.BaseModel no longer has model_dump(). "
-            "This is the pydantic v2 API; v1 used .dict()."
-        )
+        assert hasattr(m, "model_dump"), "pydantic.BaseModel no longer has model_dump(). This is the pydantic v2 API; v1 used .dict()."
 
     def test_model_dump_returns_dict(self):
         m = _SimpleModel(name="test", value=2.5)
@@ -66,8 +63,7 @@ class TestBaseModel:
 
     def test_model_validate_exists(self):
         assert hasattr(_SimpleModel, "model_validate"), (
-            "pydantic.BaseModel no longer has model_validate(). "
-            "This is the pydantic v2 API; v1 used .parse_obj()."
+            "pydantic.BaseModel no longer has model_validate(). This is the pydantic v2 API; v1 used .parse_obj()."
         )
 
     def test_model_validate_from_dict(self):

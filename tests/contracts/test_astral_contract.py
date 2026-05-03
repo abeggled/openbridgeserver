@@ -38,8 +38,7 @@ class TestLocationInfo:
 
     def test_has_observer(self):
         assert hasattr(_BERLIN, "observer"), (
-            "astral.LocationInfo no longer has an 'observer' attribute. "
-            "zeitschaltuhr passes location.observer to sun() and time_at_elevation()."
+            "astral.LocationInfo no longer has an 'observer' attribute. zeitschaltuhr passes location.observer to sun() and time_at_elevation()."
         )
 
     def test_observer_has_latitude_longitude(self):
@@ -75,14 +74,11 @@ class TestSunFunction:
 class TestSunDirection:
     def test_rising_exists(self):
         assert hasattr(SunDirection, "RISING"), (
-            "astral.SunDirection.RISING no longer exists. "
-            "Used in obs/adapters/zeitschaltuhr/adapter.py for time_at_elevation()."
+            "astral.SunDirection.RISING no longer exists. Used in obs/adapters/zeitschaltuhr/adapter.py for time_at_elevation()."
         )
 
     def test_setting_exists(self):
-        assert hasattr(SunDirection, "SETTING"), (
-            "astral.SunDirection.SETTING no longer exists."
-        )
+        assert hasattr(SunDirection, "SETTING"), "astral.SunDirection.SETTING no longer exists."
 
 
 class TestTimeAtElevation:
@@ -97,6 +93,5 @@ class TestTimeAtElevation:
             direction=SunDirection.RISING,
         )
         assert isinstance(result, datetime), (
-            "astral.sun.time_at_elevation() must return a datetime. "
-            "Used in zeitschaltuhr for civil/nautical/astronomical twilight calculations."
+            "astral.sun.time_at_elevation() must return a datetime. Used in zeitschaltuhr for civil/nautical/astronomical twilight calculations."
         )

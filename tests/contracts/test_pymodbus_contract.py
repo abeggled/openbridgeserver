@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import inspect
 
-import pytest
-
 
 class TestImportPaths:
     def test_async_modbus_tcp_client_importable(self):
@@ -33,8 +31,7 @@ class TestTcpClientInterface:
 
         sig = inspect.signature(AsyncModbusTcpClient.__init__)
         assert "host" in sig.parameters, (
-            "AsyncModbusTcpClient.__init__ no longer accepts 'host'. "
-            "obs/adapters/modbus_tcp/adapter.py passes host=cfg.host."
+            "AsyncModbusTcpClient.__init__ no longer accepts 'host'. obs/adapters/modbus_tcp/adapter.py passes host=cfg.host."
         )
 
     def test_constructor_accepts_port(self):

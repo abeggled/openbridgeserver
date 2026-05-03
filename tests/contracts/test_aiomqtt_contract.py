@@ -26,8 +26,7 @@ class TestClientClass:
     def test_client_constructor_accepts_hostname(self):
         sig = inspect.signature(aiomqtt.Client.__init__)
         assert "hostname" in sig.parameters, (
-            "aiomqtt.Client no longer accepts 'hostname'. "
-            "obs/core/mqtt_client.py uses 'hostname=...' — update if renamed."
+            "aiomqtt.Client no longer accepts 'hostname'. obs/core/mqtt_client.py uses 'hostname=...' — update if renamed."
         )
 
     def test_client_constructor_accepts_port(self):
@@ -79,12 +78,10 @@ class TestMessageClass:
 
     def test_message_has_topic(self):
         assert "topic" in self._message_fields(), (
-            "aiomqtt.Message no longer has a 'topic' attribute. "
-            "mqtt_client.py uses str(message.topic) to extract the topic string."
+            "aiomqtt.Message no longer has a 'topic' attribute. mqtt_client.py uses str(message.topic) to extract the topic string."
         )
 
     def test_message_has_payload(self):
         assert "payload" in self._message_fields(), (
-            "aiomqtt.Message no longer has a 'payload' attribute. "
-            "mqtt_client.py passes message.payload to _handle_set_message()."
+            "aiomqtt.Message no longer has a 'payload' attribute. mqtt_client.py passes message.payload to _handle_set_message()."
         )
