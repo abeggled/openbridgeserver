@@ -80,16 +80,18 @@ class LogicManager:
         """Subscribe to EventBus, load all graphs and start cron schedulers."""
         await self._load_app_config()
         await self._load_graphs()
-        from obs.core.event_bus import DataValueEvent
+        from obs.core.event_bus import DataPointRenamedEvent, DataValueEvent
 
         self._event_bus.subscribe(DataValueEvent, self._on_value_event)
+        self._event_bus.subscribe(DataPointRenamedEvent, self._on_datapoint_renamed)
         self._start_cron_tasks()
         logger.info("LogicManager started — %d graphs loaded", len(self._graphs))
 
     async def stop(self) -> None:
-        from obs.core.event_bus import DataValueEvent
+        from obs.core.event_bus import DataPointRenamedEvent, DataValueEvent
 
         self._event_bus.unsubscribe(DataValueEvent, self._on_value_event)
+        self._event_bus.unsubscribe(DataPointRenamedEvent, self._on_datapoint_renamed)
         for task in self._cron_tasks.values():
             task.cancel()
         self._cron_tasks.clear()
@@ -256,6 +258,30 @@ class LogicManager:
             if not overrides:
                 continue
             await self._execute_graph(graph_id, name, flow, overrides)
+
+    async def _on_datapoint_renamed(self, event: Any) -> None:
+        """Update datapoint_name in all logic nodes that reference the renamed DataPoint."""
+        dp_id_str = str(event.dp_id)
+        for graph_id, (name, enabled, flow) in self._graphs.items():
+            changed = False
+            for node in flow.nodes:
+                if node.data.get("datapoint_id") == dp_id_str and node.data.get("datapoint_name") != event.new_name:
+                    node.data["datapoint_name"] = event.new_name
+                    changed = True
+            if changed:
+                try:
+                    await self._db.execute_and_commit(
+                        "UPDATE logic_graphs SET flow_data=?, updated_at=? WHERE id=?",
+                        (flow.model_dump_json(), datetime.now(UTC).isoformat(), graph_id),
+                    )
+                    logger.info(
+                        "LogicManager: updated datapoint_name '%s' → '%s' in graph %s",
+                        event.old_name,
+                        event.new_name,
+                        graph_id[:8],
+                    )
+                except Exception as exc:
+                    logger.warning("LogicManager: failed to persist renamed datapoint in graph %s: %s", graph_id[:8], exc)
 
     # ── Execution ─────────────────────────────────────────────────────────
 

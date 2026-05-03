@@ -196,6 +196,7 @@ class DataPointRegistry:
         updates = payload.model_dump(exclude_none=True)
         now = datetime.now(UTC)
 
+        old_name = dp.name
         for key, val in updates.items():
             setattr(dp, key, val)
         dp.updated_at = now
@@ -222,6 +223,12 @@ class DataPointRegistry:
 
         self._points[dp_id] = dp
         logger.debug("DataPoint updated: %s (%s)", dp.name, dp_id)
+
+        if dp.name != old_name:
+            from obs.core.event_bus import DataPointRenamedEvent
+
+            await self._bus.publish(DataPointRenamedEvent(dp_id=dp_id, old_name=old_name, new_name=dp.name))
+
         return dp
 
     async def delete(self, dp_id: uuid.UUID) -> None:

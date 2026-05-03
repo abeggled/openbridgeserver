@@ -51,8 +51,17 @@ class AdapterStatusEvent:
     ts: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
+@dataclass
+class DataPointRenamedEvent:
+    """Fired when a DataPoint's name is changed via the registry."""
+
+    dp_id: uuid.UUID
+    old_name: str
+    new_name: str
+
+
 # All event types that the bus understands
-AnyEvent = DataValueEvent | AdapterStatusEvent
+AnyEvent = DataValueEvent | AdapterStatusEvent | DataPointRenamedEvent
 
 Handler = Callable[[AnyEvent], Coroutine[Any, Any, None]]
 

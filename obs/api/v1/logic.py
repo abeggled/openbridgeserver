@@ -214,6 +214,14 @@ async def import_graph(
     known_types = {nt.type for nt in list_node_types()}
 
     # Unbekannte Node-Typen → missing_node Platzhalter
+    # Bekannte Nodes: datapoint_name aus aktuellem Objektsystem holen
+    try:
+        from obs.core.registry import get_registry
+
+        _registry = get_registry()
+    except Exception:
+        _registry = None
+
     processed_nodes: list[LogicNode] = []
     for node in body.flow_data.nodes:
         if node.type not in known_types and node.type != "missing_node":
@@ -229,6 +237,13 @@ async def import_graph(
                 ),
             )
         else:
+            if _registry is not None and "datapoint_id" in node.data:
+                try:
+                    dp = _registry.get(uuid.UUID(node.data["datapoint_id"]))
+                    if dp is not None:
+                        node.data["datapoint_name"] = dp.name
+                except Exception:
+                    pass
             processed_nodes.append(node)
 
     processed_flow = FlowData(nodes=processed_nodes, edges=body.flow_data.edges)
