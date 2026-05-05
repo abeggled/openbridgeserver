@@ -342,7 +342,29 @@ class LogicManager:
                     "_computed_hours": round(acc, 6),
                 }
 
+        # ── Pre-fetch iCal URLs (refresh only when cache is stale) ───────────
         hyst = self._hysteresis.setdefault(graph_id, {})
+        for node in flow.nodes:
+            if node.type != "ical":
+                continue
+            url = (node.data.get("url") or "").strip()
+            if not url:
+                continue
+            refresh_min = float(node.data.get("refresh_interval_min") or 60)
+            hyst_node = hyst.setdefault(node.id, {})
+            last_fetch: float | None = hyst_node.get("last_fetch_ts")
+            needs_fetch = last_fetch is None or (execute_now.timestamp() - last_fetch) >= refresh_min * 60
+            if needs_fetch:
+                try:
+                    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _hclient:
+                        _resp = await _hclient.get(url)
+                        _resp.raise_for_status()
+                        hyst_node["raw"] = _resp.text
+                        hyst_node["last_fetch_ts"] = execute_now.timestamp()
+                        logger.info("Graph %s: iCal fetched from %s (%d bytes)", graph_id[:8], url, len(_resp.text))
+                except Exception as _exc:
+                    logger.warning("Graph %s: iCal fetch failed for node %s (%s): %s", graph_id[:8], node.id[:8], url, _exc)
+
         executor = GraphExecutor(flow, hyst, self._app_config)
         try:
             outputs = executor.execute(aug_overrides)

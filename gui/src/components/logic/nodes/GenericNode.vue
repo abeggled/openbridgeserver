@@ -130,6 +130,7 @@ const NODE_DEFS = {
   json_extractor:     { label: 'JSON Extraktor',     color: '#0369a1', inputs: [{id:'data',label:'Daten'}], outputs: [{id:'value',label:'Wert'}] },
   xml_extractor:      { label: 'XML Extraktor',      color: '#0369a1', inputs: [{id:'data',label:'Daten'}], outputs: [{id:'value',label:'Wert'}] },
   substring_extractor:{ label: 'Substring / RegEx',  color: '#0369a1', inputs: [{id:'data',label:'Daten'}], outputs: [{id:'value',label:'Wert'}] },
+  ical:               { label: 'iCalendar',          color: '#0369a1', inputs: [], outputs: [{id:'raw', label:'RAW'}] },
 }
 
 // ── Gate helpers ───────────────────────────────────────────────────────────
@@ -163,6 +164,22 @@ const def = computed(() => {
       label: `IN ${i + 1}`,
     }))
     return { ...base, inputs }
+  }
+  if (props.type === 'ical') {
+    const filterCount = Math.max(0, Math.min(20, Number(props.data?.filter_count) || 0))
+    let filters = []
+    try { filters = JSON.parse(props.data?.filters || '[]') } catch (_) { filters = [] }
+    const outputs = [{ id: 'raw', label: 'RAW' }]
+    for (let i = 0; i < filterCount; i++) {
+      const fname = (Array.isArray(filters) && filters[i]?.name) ? filters[i].name : `F${i + 1}`
+      outputs.push(
+        { id: `f${i}_array`,     label: `${fname}: Array`  },
+        { id: `f${i}_next_date`, label: `${fname}: Datum`  },
+        { id: `f${i}_tomorrow`,  label: `${fname}: Morgen` },
+        { id: `f${i}_today`,     label: `${fname}: Heute`  },
+      )
+    }
+    return { ...base, outputs }
   }
   return base
 })
@@ -200,6 +217,11 @@ const summary = computed(() => {
     const count = Math.max(2, Math.min(20, Number(d.count) || 2))
     const sep = d.separator != null && d.separator !== '' ? `"${String(d.separator).slice(0, 6)}"` : null
     return sep ? `${count} Teile · ${sep}` : `${count} Teile`
+  }
+  if (props.type === 'ical') {
+    const count = Number(d.filter_count) || 0
+    const url = (d.url || '—').replace(/^https?:\/\//, '').slice(0, 22)
+    return `${url} · ${count} Filter`
   }
   if (props.type === 'api_client')          return `${d.method ?? 'GET'}  ${(d.url || '—').slice(0, 20)}`
   if (props.type === 'json_extractor')      return d.json_path || '—'

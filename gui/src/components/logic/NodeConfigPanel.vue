@@ -576,6 +576,103 @@
       </div>
     </template>
 
+    <!-- ── iCalendar ──────────────────────────────────────────────────────── -->
+    <template v-else-if="isICalNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
+
+        <!-- URL -->
+        <div class="form-group">
+          <label class="label">iCal-URL</label>
+          <input v-model="localData.url" type="url" class="input text-sm"
+            placeholder="https://example.com/calendar.ics"
+            @change="emitUpdate" data-testid="ical-url" />
+        </div>
+
+        <!-- Refresh interval -->
+        <div class="form-group">
+          <label class="label">Aktualisierungsintervall (Minuten)</label>
+          <input v-model.number="localData.refresh_interval_min" type="number" min="1"
+            class="input text-sm" @change="emitUpdate" data-testid="ical-refresh" />
+          <p class="text-xs text-slate-500 mt-1">Kalender wird höchstens alle N Minuten neu geladen.</p>
+        </div>
+
+        <!-- RAW output info -->
+        <p class="text-xs text-slate-400">
+          Der <strong class="text-slate-300">RAW</strong>-Ausgang liefert immer den rohen iCal-Text.
+          Für erweiterte Auswertungen können Filter hinzugefügt werden.
+        </p>
+
+        <!-- Filter list -->
+        <div class="section-label flex items-center justify-between">
+          <span>Filter / Instanzen</span>
+          <button @click="icalAddFilter" class="btn-secondary btn-sm text-teal-400"
+            data-testid="ical-add-filter">+ Filter hinzufügen</button>
+        </div>
+
+        <div v-if="icalFilters.length === 0" class="text-xs text-slate-500 italic">
+          Noch keine Filter. Pro Filter gibt es 4 Ausgänge: Array, Nächstes Datum, Morgen, Heute.
+        </div>
+
+        <div v-for="(flt, i) in icalFilters" :key="i"
+          class="border border-slate-700 rounded-lg p-3 flex flex-col gap-2 bg-slate-900/40">
+
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-xs font-semibold text-teal-400">Filter {{ i + 1 }}</span>
+            <button @click="icalRemoveFilter(i)"
+              class="text-xs text-red-400 hover:text-red-300"
+              :data-testid="`ical-remove-filter-${i}`">✕ Entfernen</button>
+          </div>
+
+          <!-- Name -->
+          <div class="form-group">
+            <label class="label">Name</label>
+            <input :value="flt.name" @input="icalUpdateFilter(i, 'name', $event.target.value)"
+              @change="emitUpdate" type="text" class="input text-sm"
+              placeholder="z.B. Müll, Ferien …" :data-testid="`ical-filter-name-${i}`" />
+          </div>
+
+          <!-- Search pattern -->
+          <div class="form-group">
+            <label class="label">Suchmuster (Text oder RegEx)</label>
+            <input :value="flt.pattern" @input="icalUpdateFilter(i, 'pattern', $event.target.value)"
+              @change="emitUpdate" type="text" class="input text-sm font-mono"
+              placeholder="z.B. Müll oder (?i)müll" :data-testid="`ical-filter-pattern-${i}`" />
+            <p class="text-xs text-slate-500 mt-0.5">Leer = alle Termine. Python re-Syntax.</p>
+          </div>
+
+          <!-- Fields -->
+          <div class="form-group">
+            <label class="label">Felder</label>
+            <div class="flex gap-3 mt-1">
+              <label v-for="field in ['summary', 'location', 'description']" :key="field"
+                class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox"
+                  :checked="flt.fields.includes(field)"
+                  @change="icalToggleField(i, field, $event.target.checked)"
+                  class="accent-teal-500" :data-testid="`ical-filter-field-${i}-${field}`" />
+                <span class="text-xs text-slate-300 capitalize">{{ field }}</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Case sensitive -->
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox"
+              :checked="!!flt.case_sensitive"
+              @change="icalUpdateFilter(i, 'case_sensitive', $event.target.checked)"
+              class="accent-teal-500" :data-testid="`ical-filter-case-${i}`" />
+            <span class="text-xs text-slate-300">Gross-/Kleinschreibung beachten</span>
+          </label>
+
+          <!-- Output port summary -->
+          <div class="text-xs text-slate-500 mt-1 font-mono leading-relaxed">
+            Ausgänge: f{{ i }}_array · f{{ i }}_next_date · f{{ i }}_tomorrow · f{{ i }}_today
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -775,6 +872,47 @@ const isExtractorNode  = computed(() =>
 )
 const isSubstringExtractorNode = computed(() => props.node?.type === 'substring_extractor')
 const isStringConcatNode = computed(() => props.node?.type === 'string_concat')
+const isICalNode          = computed(() => props.node?.type === 'ical')
+
+// ── iCal: filter management ───────────────────────────────────────────────
+const icalFilters = computed(() => {
+  try {
+    const parsed = JSON.parse(localData.value.filters || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch { return [] }
+})
+
+function _icalSave(filters) {
+  localData.value.filters = JSON.stringify(filters)
+  localData.value.filter_count = filters.length
+  emitUpdate()
+}
+
+function icalAddFilter() {
+  const filters = icalFilters.value.slice()
+  filters.push({ name: `Filter ${filters.length + 1}`, fields: ['summary'], pattern: '', case_sensitive: false })
+  _icalSave(filters)
+}
+
+function icalRemoveFilter(i) {
+  const filters = icalFilters.value.slice()
+  filters.splice(i, 1)
+  _icalSave(filters)
+}
+
+function icalUpdateFilter(i, key, value) {
+  const filters = icalFilters.value.map(f => ({ ...f }))
+  filters[i][key] = value
+  _icalSave(filters)
+}
+
+function icalToggleField(i, field, checked) {
+  const filters = icalFilters.value.map(f => ({ ...f, fields: [...(f.fields || [])] }))
+  const fields = filters[i].fields
+  if (checked && !fields.includes(field)) fields.push(field)
+  if (!checked) filters[i].fields = fields.filter(f => f !== field)
+  _icalSave(filters)
+}
 
 // ── string_concat: dynamic slot count ─────────────────────────────────────
 const concatCount = computed(() => Math.max(2, Math.min(20, Number(localData.value.count) || 2)))

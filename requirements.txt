@@ -47,6 +47,10 @@ websockets>=16.0,<17       # major versions have broken the connect/send API
 # ioBroker socketio v7 still speaks Engine.IO v3; python-socketio v4 is compatible.
 python-socketio[asyncio_client]>=5.16.1,<6
 
+# Logic Engine — iCalendar function block
+icalendar>=6.1.0,<8                  # RFC 5545 iCal parser
+recurring-ical-events>=3.3.0,<4     # expands recurring VEVENT components
+
 # History plugins — optional, install only the backend(s) you use:
 asyncpg>=0.31.0         # TimescaleDB / PostgreSQL history plugin
 

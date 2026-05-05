@@ -846,6 +846,136 @@ class GraphExecutor:
                     "prev_yearly": state["prev_yearly"],
                 }
 
+            case "ical":
+                # The raw iCal text is pre-fetched by LogicManager and stored in
+                # hysteresis_state[node.id]["raw"] before each executor run.
+                import json as _json_ic  # noqa: PLC0415
+                import re as _re_ic  # noqa: PLC0415
+
+                hyst_node = self.hysteresis_state.setdefault(node.id, {})
+                raw_text: str = hyst_node.get("raw", "")
+                filters_json = (d.get("filters") or "[]").strip()
+                try:
+                    filters: list[dict] = _json_ic.loads(filters_json) if filters_json else []
+                    if not isinstance(filters, list):
+                        filters = []
+                except Exception:
+                    filters = []
+
+                out: dict[str, Any] = {"raw": raw_text}
+
+                if not raw_text:
+                    for i in range(len(filters)):
+                        out[f"f{i}_array"] = []
+                        out[f"f{i}_next_date"] = None
+                        out[f"f{i}_tomorrow"] = False
+                        out[f"f{i}_today"] = False
+                    return out
+
+                try:
+                    import datetime as _dt_ic  # noqa: PLC0415
+                    from zoneinfo import ZoneInfo as _ZI  # noqa: PLC0415
+
+                    from icalendar import Calendar as _ICal  # noqa: PLC0415
+
+                    try:
+                        import recurring_ical_events as _rie  # noqa: PLC0415
+
+                        _HAS_RIE = True
+                    except ImportError:
+                        _HAS_RIE = False
+
+                    tz_name = self.app_config.get("timezone", "Europe/Zurich")
+                    tz = _ZI(tz_name)
+                    today = _dt_ic.datetime.now(tz).date()
+                    tomorrow = today + _dt_ic.timedelta(days=1)
+                    window_end = today + _dt_ic.timedelta(days=365)
+
+                    cal = _ICal.from_ical(raw_text)
+
+                    if _HAS_RIE:
+                        raw_events = _rie.of(cal).between(today, window_end)
+                    else:
+                        raw_events = [c for c in cal.walk() if c.name == "VEVENT"]
+
+                    def _event_to_row(ev: Any) -> tuple[_dt_ic.date, list] | None:  # type: ignore[return]
+                        dtstart = ev.get("DTSTART")
+                        if dtstart is None:
+                            return None
+                        dtend = ev.get("DTEND")
+                        start_raw = dtstart.dt
+                        end_raw = dtend.dt if dtend else start_raw
+
+                        if isinstance(start_raw, _dt_ic.datetime):
+                            if start_raw.tzinfo is not None:
+                                start_raw = start_raw.astimezone(tz)
+                            event_date = start_raw.date()
+                            start_time = start_raw.strftime("%H:%M")
+                        else:
+                            event_date = start_raw
+                            start_time = ""
+
+                        if isinstance(end_raw, _dt_ic.datetime):
+                            if end_raw.tzinfo is not None:
+                                end_raw = end_raw.astimezone(tz)
+                            end_time = end_raw.strftime("%H:%M")
+                        else:
+                            end_time = ""
+
+                        summary = str(ev.get("SUMMARY", "") or "")
+                        location = str(ev.get("LOCATION", "") or "")
+                        description = str(ev.get("DESCRIPTION", "") or "")
+                        return event_date, [event_date.isoformat(), start_time, end_time, summary, location, description]
+
+                    event_rows: list[tuple[_dt_ic.date, list]] = []
+                    for ev in raw_events:
+                        r = _event_to_row(ev)
+                        if r:
+                            event_rows.append(r)
+                    event_rows.sort(key=lambda x: x[0])
+
+                    _FIELD_IDX = {"summary": 3, "location": 4, "description": 5}
+
+                    def _matches(row_data: list, flt: dict) -> bool:
+                        pattern = str(flt.get("pattern") or "")
+                        if not pattern:
+                            return True
+                        fields = flt.get("fields") or ["summary"]
+                        case_sensitive = bool(flt.get("case_sensitive", False))
+                        flags = 0 if case_sensitive else _re_ic.IGNORECASE
+                        for field in fields:
+                            idx = _FIELD_IDX.get(field)
+                            if idx is not None:
+                                try:
+                                    if _re_ic.search(pattern, row_data[idx], flags):
+                                        return True
+                                except _re_ic.error:
+                                    needle = pattern if case_sensitive else pattern.lower()
+                                    haystack = row_data[idx] if case_sensitive else row_data[idx].lower()
+                                    if needle in haystack:
+                                        return True
+                        return False
+
+                    for i, flt in enumerate(filters):
+                        matching = [(ev_date, row) for ev_date, row in event_rows if _matches(row, flt)]
+                        future = [(ev_date, row) for ev_date, row in matching if ev_date >= today]
+                        out[f"f{i}_array"] = [row for _, row in future]
+                        out[f"f{i}_next_date"] = future[0][0].isoformat() if future else None
+                        out[f"f{i}_today"] = any(ev_date == today for ev_date, _ in matching)
+                        out[f"f{i}_tomorrow"] = any(ev_date == tomorrow for ev_date, _ in matching)
+
+                except ImportError as exc:
+                    logger.warning("ical node %s: missing library — %s", node.id[:8], exc)
+                except Exception as exc:
+                    logger.warning("ical node %s: parse error — %s", node.id[:8], exc)
+                    for i in range(len(filters)):
+                        out.setdefault(f"f{i}_array", [])
+                        out.setdefault(f"f{i}_next_date", None)
+                        out.setdefault(f"f{i}_today", False)
+                        out.setdefault(f"f{i}_tomorrow", False)
+
+                return out
+
             case _:
                 logger.debug("Unknown node type: %s", t)
                 return {}
