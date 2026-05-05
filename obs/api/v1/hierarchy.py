@@ -140,13 +140,15 @@ class NodeSearchResult(BaseModel):
 
 class EtsImportRequest(BaseModel):
     tree_name: str
-    mode: str  # "groups" (3-stufig) | "flat" (2-stufig)
+    mode: str  # "groups" | "mid" | "flat" | "buildings" | "trades"
+    auto_link: bool = True  # automatically link DataPoints via GA addresses
 
 
 class ImportResult(BaseModel):
     tree_id: str
     tree_name: str
     nodes_created: int
+    links_created: int = 0
     message: str
 
 
@@ -540,29 +542,16 @@ async def import_from_ets(
     (main_group_name / mid_group_name). Fehlen diese (CSV-Import), wird
     "Hauptgruppe X" bzw. "Mittelgruppe X" als Fallback verwendet.
     """
-    if body.mode not in ("groups", "mid", "flat"):
+    if body.mode not in ("groups", "mid", "flat", "buildings", "trades"):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "mode muss 'groups', 'mid' oder 'flat' sein",
-        )
-
-    rows = await db.fetchall(
-        "SELECT address, name, description, dpt, main_group_name, mid_group_name FROM knx_group_addresses ORDER BY address"
-    )
-    if not rows:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Keine ETS-Gruppenadressen importiert. Bitte zuerst eine .knxproj oder CSV importieren.",
+            "mode muss 'groups', 'mid', 'flat', 'buildings' oder 'trades' sein",
         )
 
     now = _now()
     tree_id = _new_id()
-    await db.execute_and_commit(
-        "INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)",
-        (tree_id, body.tree_name, f"Importiert aus ETS ({body.mode})", now, now),
-    )
-
     nodes_created = 0
+    links_created = 0
 
     # Batch all inserts — commit once at the end for performance
     inserts: list[tuple] = []
@@ -570,93 +559,209 @@ async def import_from_ets(
     def _q_insert(nid: str, parent_id: str | None, name: str, desc: str, order: int) -> None:
         inserts.append((nid, tree_id, parent_id, name, desc, order, None, now, now))
 
-    if body.mode == "mid":
-        # 2-Ebenen: Hauptgruppe / Mittelgruppe (GA-Blätter werden weggelassen)
-        main_nodes: dict[str, str] = {}
-        mid_nodes: dict[str, str] = {}
+    if body.mode in ("groups", "mid", "flat"):
+        rows = await db.fetchall(
+            "SELECT address, name, description, dpt, main_group_name, mid_group_name FROM knx_group_addresses ORDER BY address"
+        )
+        if not rows:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Keine ETS-Gruppenadressen importiert. Bitte zuerst eine .knxproj oder CSV importieren.",
+            )
 
-        for row in rows:
-            parts = str(row["address"]).split("/")
-            if len(parts) < 2:
-                continue
-            main_key, mid_key = parts[0], parts[1]
-            mid_composite = f"{main_key}/{mid_key}"
+        if body.mode == "mid":
+            main_nodes: dict[str, str] = {}
+            mid_nodes: dict[str, str] = {}
+            for row in rows:
+                parts = str(row["address"]).split("/")
+                if len(parts) < 2:
+                    continue
+                main_key, mid_key = parts[0], parts[1]
+                mid_composite = f"{main_key}/{mid_key}"
+                if main_key not in main_nodes:
+                    nid = _new_id()
+                    main_label = str(row["main_group_name"] or "").strip() or f"Hauptgruppe {main_key}"
+                    _q_insert(nid, None, main_label, "", int(main_key))
+                    main_nodes[main_key] = nid
+                    nodes_created += 1
+                if mid_composite not in mid_nodes:
+                    nid = _new_id()
+                    mid_label = str(row["mid_group_name"] or "").strip() or f"Mittelgruppe {mid_key}"
+                    _q_insert(nid, main_nodes[main_key], mid_label, "", int(mid_key))
+                    mid_nodes[mid_composite] = nid
+                    nodes_created += 1
 
-            if main_key not in main_nodes:
+        elif body.mode == "groups":
+            main_nodes = {}
+            mid_nodes = {}
+            for row in rows:
+                parts = str(row["address"]).split("/")
+                if len(parts) != 3:
+                    continue
+                main_key, mid_key, _ = parts
+                mid_composite = f"{main_key}/{mid_key}"
+                if main_key not in main_nodes:
+                    nid = _new_id()
+                    main_label = str(row["main_group_name"] or "").strip() or f"Hauptgruppe {main_key}"
+                    _q_insert(nid, None, main_label, "", int(main_key))
+                    main_nodes[main_key] = nid
+                    nodes_created += 1
+                if mid_composite not in mid_nodes:
+                    nid = _new_id()
+                    mid_label = str(row["mid_group_name"] or "").strip() or f"Mittelgruppe {mid_key}"
+                    _q_insert(nid, main_nodes[main_key], mid_label, "", int(mid_key))
+                    mid_nodes[mid_composite] = nid
+                    nodes_created += 1
+                ga_name = str(row["name"]).strip() or row["address"]
                 nid = _new_id()
-                main_label = str(row["main_group_name"] or "").strip() or f"Hauptgruppe {main_key}"
-                _q_insert(nid, None, main_label, "", int(main_key))
-                main_nodes[main_key] = nid
+                _q_insert(nid, mid_nodes[mid_composite], ga_name, str(row["description"] or ""), 0)
                 nodes_created += 1
 
-            if mid_composite not in mid_nodes:
+        else:  # "flat"
+            main_nodes = {}
+            for row in rows:
+                parts = str(row["address"]).split("/")
+                main_key = parts[0]
+                if main_key not in main_nodes:
+                    nid = _new_id()
+                    main_label = str(row["main_group_name"] or "").strip() or f"Hauptgruppe {main_key}"
+                    _q_insert(nid, None, main_label, "", int(main_key))
+                    main_nodes[main_key] = nid
+                    nodes_created += 1
+                ga_name = str(row["name"]).strip() or row["address"]
                 nid = _new_id()
-                mid_label = str(row["mid_group_name"] or "").strip() or f"Mittelgruppe {mid_key}"
-                _q_insert(nid, main_nodes[main_key], mid_label, "", int(mid_key))
-                mid_nodes[mid_composite] = nid
+                _q_insert(nid, main_nodes[main_key], ga_name, str(row["description"] or ""), 0)
                 nodes_created += 1
 
-    elif body.mode == "groups":
-        # 3-Ebenen: Hauptgruppe / Mittelgruppe / GA
-        main_nodes = {}
-        mid_nodes = {}
+    elif body.mode == "buildings":
+        # Gebäude-Hierarchie aus knx_locations
+        loc_rows = await db.fetchall(
+            "SELECT id, parent_id, name, space_type, sort_order FROM knx_locations ORDER BY sort_order"
+        )
+        if not loc_rows:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Keine Gebäude-Daten importiert. Bitte zuerst eine .knxproj importieren.",
+            )
 
-        for row in rows:
-            parts = str(row["address"]).split("/")
-            if len(parts) != 3:
-                continue
-            main_key, mid_key, _ = parts
-            mid_composite = f"{main_key}/{mid_key}"
-
-            if main_key not in main_nodes:
-                nid = _new_id()
-                # Use actual ETS name, fall back to "Hauptgruppe X"
-                main_label = str(row["main_group_name"] or "").strip() or f"Hauptgruppe {main_key}"
-                _q_insert(nid, None, main_label, "", int(main_key))
-                main_nodes[main_key] = nid
-                nodes_created += 1
-
-            if mid_composite not in mid_nodes:
-                nid = _new_id()
-                mid_label = str(row["mid_group_name"] or "").strip() or f"Mittelgruppe {mid_key}"
-                _q_insert(nid, main_nodes[main_key], mid_label, "", int(mid_key))
-                mid_nodes[mid_composite] = nid
-                nodes_created += 1
-
-            ga_name = str(row["name"]).strip() or row["address"]
+        # map ETS location id → hierarchy node id
+        loc_to_node: dict[str, str] = {}
+        for loc in loc_rows:
             nid = _new_id()
-            _q_insert(nid, mid_nodes[mid_composite], ga_name, str(row["description"] or ""), 0)
+            parent_nid = loc_to_node.get(loc["parent_id"]) if loc["parent_id"] else None
+            _q_insert(nid, parent_nid, loc["name"] or loc["id"], loc["space_type"] or "", loc["sort_order"])
+            loc_to_node[loc["id"]] = nid
             nodes_created += 1
 
-    else:  # "flat" — Hauptgruppe → GA (Mittelgruppe wird übersprungen)
-        main_nodes = {}
-        for row in rows:
-            parts = str(row["address"]).split("/")
-            main_key = parts[0]
+        # Auto-link DataPoints via GA addresses in functions linked to spaces
+        if body.auto_link:
+            fn_rows = await db.fetchall(
+                """SELECT f.space_id, l.ga_address
+                   FROM knx_functions f
+                   JOIN knx_function_ga_links l ON l.function_id = f.id"""
+            )
+            # space_id → set of GA addresses
+            space_gas: dict[str, set[str]] = {}
+            for fr in fn_rows:
+                space_gas.setdefault(fr["space_id"], set()).add(fr["ga_address"])
 
-            if main_key not in main_nodes:
+            for space_id, gas in space_gas.items():
+                node_id = loc_to_node.get(space_id)
+                if not node_id or not gas:
+                    continue
+                placeholders = ",".join("?" * len(gas))
+                dp_rows = await db.fetchall(
+                    f"""SELECT DISTINCT dp.id
+                        FROM datapoints dp
+                        JOIN adapter_bindings ab ON ab.datapoint_id = dp.id
+                        WHERE ab.adapter_type = 'knx'
+                          AND JSON_EXTRACT(ab.config, '$.group_address') IN ({placeholders})""",
+                    list(gas),
+                )
+                for dp in dp_rows:
+                    links_created += 1
+                    inserts.append(("__link__", node_id, dp["id"]))  # sentinel — handled below
+
+    else:  # "trades" — Gewerke-Hierarchie aus knx_functions grouped by usage_text
+        fn_rows = await db.fetchall(
+            """SELECT f.id, f.space_id, f.name, f.usage_text
+               FROM knx_functions f
+               ORDER BY f.usage_text, f.name"""
+        )
+        if not fn_rows:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Keine Gewerke-Daten importiert. Bitte zuerst eine .knxproj importieren.",
+            )
+
+        fn_ga_rows = await db.fetchall("SELECT function_id, ga_address FROM knx_function_ga_links")
+        fn_gas: dict[str, list[str]] = {}
+        for r in fn_ga_rows:
+            fn_gas.setdefault(r["function_id"], []).append(r["ga_address"])
+
+        usage_nodes: dict[str, str] = {}  # usage_text → hierarchy node id
+        order_counter = 0
+        for fn in fn_rows:
+            usage = str(fn["usage_text"] or "Sonstige").strip() or "Sonstige"
+            if usage not in usage_nodes:
                 nid = _new_id()
-                main_label = str(row["main_group_name"] or "").strip() or f"Hauptgruppe {main_key}"
-                _q_insert(nid, None, main_label, "", int(main_key))
-                main_nodes[main_key] = nid
+                _q_insert(nid, None, usage, "", order_counter)
+                usage_nodes[usage] = nid
                 nodes_created += 1
+                order_counter += 1
 
-            ga_name = str(row["name"]).strip() or row["address"]
-            nid = _new_id()
-            _q_insert(nid, main_nodes[main_key], ga_name, str(row["description"] or ""), 0)
+            fn_nid = _new_id()
+            fn_name = str(fn["name"] or fn["id"]).strip() or fn["id"]
+            _q_insert(fn_nid, usage_nodes[usage], fn_name, "", 0)
             nodes_created += 1
 
-    await db.executemany(
-        """INSERT INTO hierarchy_nodes
-           (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        inserts,
+            if body.auto_link:
+                gas = fn_gas.get(fn["id"], [])
+                if gas:
+                    placeholders = ",".join("?" * len(gas))
+                    dp_rows = await db.fetchall(
+                        f"""SELECT DISTINCT dp.id
+                            FROM datapoints dp
+                            JOIN adapter_bindings ab ON ab.datapoint_id = dp.id
+                            WHERE ab.adapter_type = 'knx'
+                              AND JSON_EXTRACT(ab.config, '$.group_address') IN ({placeholders})""",
+                        gas,
+                    )
+                    for dp in dp_rows:
+                        links_created += 1
+                        inserts.append(("__link__", fn_nid, dp["id"]))
+
+    # Separate node inserts from link sentinels
+    node_inserts = [t for t in inserts if t[0] != "__link__"]
+    link_sentinels = [t for t in inserts if t[0] == "__link__"]
+
+    await db.execute_and_commit(
+        "INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)",
+        (tree_id, body.tree_name, f"Importiert aus ETS ({body.mode})", now, now),
     )
+
+    if node_inserts:
+        await db.executemany(
+            """INSERT INTO hierarchy_nodes
+               (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            node_inserts,
+        )
+
+    if link_sentinels:
+        link_rows = [(_new_id(), node_id, dp_id, now) for (_, node_id, dp_id) in link_sentinels]
+        await db.executemany(
+            "INSERT OR IGNORE INTO hierarchy_datapoint_links (id, node_id, datapoint_id, created_at) VALUES (?,?,?,?)",
+            link_rows,
+        )
+
     await db.commit()
 
     return ImportResult(
         tree_id=tree_id,
         tree_name=body.tree_name,
         nodes_created=nodes_created,
-        message=f"Hierarchiebaum '{body.tree_name}' mit {nodes_created} Knoten aus ETS-Daten erstellt",
+        links_created=links_created,
+        message=f"Hierarchiebaum '{body.tree_name}' mit {nodes_created} Knoten erstellt"
+        + (f", {links_created} DataPoints automatisch verknüpft" if links_created else ""),
     )

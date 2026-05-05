@@ -141,8 +141,9 @@
       <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-lg p-6 flex flex-col gap-4">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100">Hierarchie aus ETS importieren</h3>
         <p class="text-sm text-slate-500">
-          Erzeugt einen neuen Hierarchiebaum aus den bereits importierten ETS-Gruppenadressen.
-          Gruppenbezeichnungen werden direkt aus dem ETS-Projekt übernommen (nicht nummeriert).
+          Erzeugt einen neuen Hierarchiebaum aus den importierten ETS-Daten.
+          <span v-if="['buildings','trades'].includes(etsModal.mode)">Gebäude/Gewerke-Modus nutzt die räumliche bzw. funktionale Struktur aus dem ETS-Projekt.</span>
+          <span v-else>Gruppenbezeichnungen werden direkt aus dem ETS-Projekt übernommen.</span>
         </p>
 
         <!-- Schnell-Presets -->
@@ -169,12 +170,23 @@
         </div>
 
         <div class="form-group">
-          <label class="label">Tiefe</label>
+          <label class="label">Modus</label>
           <select v-model="etsModal.mode" class="input text-sm">
-            <option value="groups">3-stufig: Hauptgruppe → Mittelgruppe → GA</option>
-            <option value="mid">2-stufig: Hauptgruppe → Mittelgruppe (ohne GA-Blätter)</option>
-            <option value="flat">2-stufig: Hauptgruppe → GA (Mittelgruppen überspringen)</option>
+            <optgroup label="Topologie (Gruppenadressen)">
+              <option value="groups">3-stufig: Hauptgruppe → Mittelgruppe → GA</option>
+              <option value="mid">2-stufig: Hauptgruppe → Mittelgruppe (ohne GA-Blätter)</option>
+              <option value="flat">2-stufig: Hauptgruppe → GA (Mittelgruppen überspringen)</option>
+            </optgroup>
+            <optgroup label="Gebäudestruktur (aus ETS-Projekt)">
+              <option value="buildings">Gebäude → Stockwerk → Raum (räumliche Hierarchie)</option>
+              <option value="trades">Gewerke → Funktion (nach Gewerk gruppiert)</option>
+            </optgroup>
           </select>
+        </div>
+
+        <div v-if="['buildings','trades'].includes(etsModal.mode)" class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+          <input id="auto-link" v-model="etsModal.autoLink" type="checkbox" class="rounded" />
+          <label for="auto-link">DataPoints automatisch verknüpfen (über Gruppenadresse)</label>
         </div>
 
         <div v-if="etsModal.msg" :class="['p-2 rounded text-sm', etsModal.msg.ok ? 'text-green-400' : 'text-red-400']">{{ etsModal.msg.text }}</div>
@@ -228,12 +240,12 @@ const nodeNameInput = ref(null)
 
 const treeModal = reactive({ open: false, isEdit: false, id: null, name: '', description: '', saving: false, msg: null })
 const nodeModal = reactive({ open: false, isEdit: false, id: null, treeId: null, parentId: null, name: '', description: '', saving: false, msg: null })
-const etsModal  = reactive({ open: false, treeName: '', mode: 'groups', saving: false, msg: null })
+const etsModal  = reactive({ open: false, treeName: '', mode: 'groups', autoLink: true, saving: false, msg: null })
 
 const etsPresets = [
-  { name: 'Topologie', mode: 'groups' },
-  { name: 'Gebäude',   mode: 'groups' },
-  { name: 'Gewerke',   mode: 'groups' },
+  { name: 'Topologie', mode: 'groups'    },
+  { name: 'Gebäude',   mode: 'buildings' },
+  { name: 'Gewerke',   mode: 'trades'    },
 ]
 const deleteConfirm = reactive({ open: false, title: '', message: '', saving: false, action: null })
 
@@ -384,7 +396,7 @@ function confirmDeleteNode(node) {
 // ── ETS Import ─────────────────────────────────────────────────────────────
 
 function openEtsImport() {
-  Object.assign(etsModal, { open: true, treeName: '', mode: 'groups', saving: false, msg: null })
+  Object.assign(etsModal, { open: true, treeName: '', mode: 'groups', autoLink: true, saving: false, msg: null })
 }
 
 async function doEtsImport() {
@@ -392,7 +404,11 @@ async function doEtsImport() {
   etsModal.saving = true
   etsModal.msg = null
   try {
-    const { data } = await hierarchyApi.importFromEts({ tree_name: etsModal.treeName, mode: etsModal.mode })
+    const { data } = await hierarchyApi.importFromEts({
+      tree_name: etsModal.treeName,
+      mode: etsModal.mode,
+      auto_link: etsModal.autoLink,
+    })
     etsModal.msg = { ok: true, text: data.message }
     await loadTrees()
     // Neuen Baum sofort öffnen

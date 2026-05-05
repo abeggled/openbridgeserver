@@ -373,6 +373,35 @@ ALTER TABLE knx_group_addresses ADD COLUMN main_group_name TEXT NOT NULL DEFAULT
 ALTER TABLE knx_group_addresses ADD COLUMN mid_group_name  TEXT NOT NULL DEFAULT '';
 """
 
+_MIGRATION_V25 = """
+CREATE TABLE IF NOT EXISTS knx_locations (
+    id          TEXT PRIMARY KEY,
+    parent_id   TEXT,
+    name        TEXT NOT NULL DEFAULT '',
+    space_type  TEXT NOT NULL DEFAULT '',
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    imported_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_knx_loc_parent ON knx_locations(parent_id);
+
+CREATE TABLE IF NOT EXISTS knx_functions (
+    id          TEXT PRIMARY KEY,
+    space_id    TEXT NOT NULL DEFAULT '',
+    name        TEXT NOT NULL DEFAULT '',
+    usage_text  TEXT NOT NULL DEFAULT '',
+    imported_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_knx_fn_space ON knx_functions(space_id);
+
+CREATE TABLE IF NOT EXISTS knx_function_ga_links (
+    function_id TEXT NOT NULL,
+    ga_address  TEXT NOT NULL,
+    PRIMARY KEY (function_id, ga_address)
+);
+CREATE INDEX IF NOT EXISTS idx_knx_fga_fn ON knx_function_ga_links(function_id);
+CREATE INDEX IF NOT EXISTS idx_knx_fga_ga ON knx_function_ga_links(ga_address);
+"""
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -399,6 +428,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (22, _MIGRATION_V22),
     (23, _MIGRATION_V23),
     (24, _MIGRATION_V24),
+    (25, _MIGRATION_V25),
 ]
 
 

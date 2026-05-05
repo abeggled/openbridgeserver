@@ -13,7 +13,8 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,24 @@ class GroupAddressRecord:
     dpt: str | None          # "DPT9.001" oder None
     main_group_name: str = ""  # ETS-Name der Hauptgruppe (z.B. "Lichtsteuerung")
     mid_group_name: str = ""   # ETS-Name der Mittelgruppe (z.B. "Erdgeschoss")
+
+
+@dataclass
+class LocationRecord:
+    identifier: str       # stable ETS ID, e.g. "P-0001-0_B-17"
+    parent_id: str | None # parent identifier or None for roots
+    name: str
+    space_type: str       # "Building", "Floor", "Room", "Distribution", …
+    sort_order: int = 0
+
+
+@dataclass
+class FunctionRecord:
+    identifier: str       # stable ETS function ID
+    space_id: str         # identifier of the containing Space
+    name: str
+    usage_text: str       # e.g. "Bewegung", "Heizen/Klima", "Schalten/Dimmen"
+    ga_addresses: list[str] = field(default_factory=list)  # ["1/2/3", …]
 
 
 def _extract_group_names(project: Any) -> tuple[dict[str, str], dict[str, str]]:
@@ -97,6 +116,132 @@ def _dpt_from_xknxproject(dpt: dict | None) -> str | None:
         16: "DPT16.000",
     }
     return defaults.get(main, f"DPT{main}.001")
+
+
+def _walk_spaces(
+    spaces: dict,
+    parent_id: str | None,
+    loc_list: list[LocationRecord],
+    fn_list: list[FunctionRecord],
+    all_functions: dict,
+    sort_counter: list[int],
+) -> None:
+    """Recursively walk xknxproject Space dict and collect LocationRecords + FunctionRecords."""
+    for space_key, space in spaces.items():
+        if isinstance(space, dict):
+            identifier = str(space.get("identifier") or space_key)
+            name = str(space.get("name") or "").strip() or identifier
+            space_type = str(space.get("type") or space.get("space_type") or "").strip()
+            fn_ids: list = space.get("functions") or []
+            sub_spaces: dict = space.get("spaces") or {}
+        else:
+            identifier = str(getattr(space, "identifier", space_key))
+            name = str(getattr(space, "name", "") or "").strip() or identifier
+            space_type = str(getattr(space, "type", "") or getattr(space, "space_type", "") or "").strip()
+            fn_ids = list(getattr(space, "functions", []) or [])
+            sub_spaces = dict(getattr(space, "spaces", {}) or {})
+
+        sort_counter[0] += 1
+        loc_list.append(
+            LocationRecord(
+                identifier=identifier,
+                parent_id=parent_id,
+                name=name,
+                space_type=space_type,
+                sort_order=sort_counter[0],
+            )
+        )
+
+        # Functions linked to this space
+        for fn_id in fn_ids:
+            fn_id_str = str(fn_id)
+            fn = all_functions.get(fn_id_str)
+            if fn is None:
+                continue
+            if isinstance(fn, dict):
+                fn_name = str(fn.get("name") or "").strip()
+                usage_text = str(fn.get("usage_text") or fn.get("type") or "").strip()
+                ga_refs = fn.get("group_addresses") or {}
+            else:
+                fn_name = str(getattr(fn, "name", "") or "").strip()
+                usage_text = str(getattr(fn, "usage_text", "") or getattr(fn, "type", "") or "").strip()
+                ga_refs = dict(getattr(fn, "group_addresses", {}) or {})
+
+            ga_addresses: list[str] = []
+            for _ref_key, ref in ga_refs.items():
+                if isinstance(ref, dict):
+                    addr = str(ref.get("address") or "").strip()
+                else:
+                    addr = str(getattr(ref, "address", "") or "").strip()
+                if addr:
+                    ga_addresses.append(addr)
+
+            fn_list.append(
+                FunctionRecord(
+                    identifier=fn_id_str,
+                    space_id=identifier,
+                    name=fn_name,
+                    usage_text=usage_text,
+                    ga_addresses=ga_addresses,
+                )
+            )
+
+        # Recurse
+        if sub_spaces:
+            _walk_spaces(sub_spaces, identifier, loc_list, fn_list, all_functions, sort_counter)
+
+
+def parse_knxproj_locations(
+    file_bytes: bytes,
+    password: str | None = None,
+) -> tuple[list[LocationRecord], list[FunctionRecord]]:
+    """Parse .knxproj and return building/space hierarchy + function groups.
+
+    Returns:
+        (locations, functions) — lists ready for DB insertion.
+    """
+    try:
+        from xknxproject import XKNXProj
+    except ImportError as e:
+        raise ValueError("xknxproject nicht installiert.") from e
+
+    tmp_path = None
+    try:
+        import tempfile as _tmp
+        with _tmp.NamedTemporaryFile(suffix=".knxproj", delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+
+        knxproject = XKNXProj(tmp_path, password=password)
+        project = knxproject.parse()
+    except Exception as e:
+        msg = str(e)
+        if "password" in msg.lower() or "decrypt" in msg.lower():
+            raise ValueError("Falsches Passwort oder Datei ist verschlüsselt.") from e
+        raise ValueError(f"Fehler beim Parsen: {msg}") from e
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    if isinstance(project, dict):
+        top_spaces = project.get("locations") or {}
+        all_functions = project.get("functions") or {}
+    else:
+        top_spaces = dict(getattr(project, "locations", {}) or {})
+        all_functions = dict(getattr(project, "functions", {}) or {})
+
+    loc_list: list[LocationRecord] = []
+    fn_list: list[FunctionRecord] = []
+    sort_counter = [0]
+
+    _walk_spaces(top_spaces, None, loc_list, fn_list, all_functions, sort_counter)
+
+    logger.info(
+        "parse_knxproj_locations: %d Spaces, %d Functions",
+        len(loc_list),
+        len(fn_list),
+    )
+    return loc_list, fn_list
 
 
 def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupAddressRecord]:

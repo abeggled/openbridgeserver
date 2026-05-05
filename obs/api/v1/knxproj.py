@@ -28,7 +28,7 @@ from pydantic import BaseModel
 from obs.api.auth import get_current_user
 from obs.db.database import Database, get_db
 from obs.knxproj.csv_parser import parse_ga_csv
-from obs.knxproj.parser import parse_knxproj
+from obs.knxproj.parser import parse_knxproj, parse_knxproj_locations
 
 router = APIRouter(tags=["knxproj"])
 
@@ -42,6 +42,8 @@ class ImportResult(BaseModel):
     imported: int
     created: int = 0
     updated: int = 0
+    locations: int = 0
+    functions: int = 0
     message: str
 
 
@@ -306,11 +308,55 @@ async def import_knxproj_file(
     )
     await db.commit()
 
+    # Import Gebäude/Gewerke structure (locations + functions)
+    locations_count = 0
+    functions_count = 0
+    try:
+        loc_records, fn_records = parse_knxproj_locations(content, password or None)
+
+        if loc_records:
+            await db.execute_and_commit("DELETE FROM knx_locations")
+            await db.executemany(
+                """INSERT INTO knx_locations (id, parent_id, name, space_type, sort_order, imported_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                [(r.identifier, r.parent_id, r.name, r.space_type, r.sort_order, now) for r in loc_records],
+            )
+            await db.commit()
+            locations_count = len(loc_records)
+
+        if fn_records:
+            await db.execute_and_commit("DELETE FROM knx_functions")
+            await db.execute_and_commit("DELETE FROM knx_function_ga_links")
+            await db.executemany(
+                """INSERT INTO knx_functions (id, space_id, name, usage_text, imported_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [(r.identifier, r.space_id, r.name, r.usage_text, now) for r in fn_records],
+            )
+            ga_links = [
+                (r.identifier, addr)
+                for r in fn_records
+                for addr in r.ga_addresses
+            ]
+            if ga_links:
+                await db.executemany(
+                    "INSERT OR IGNORE INTO knx_function_ga_links (function_id, ga_address) VALUES (?, ?)",
+                    ga_links,
+                )
+            await db.commit()
+            functions_count = len(fn_records)
+    except Exception as e:
+        logger.warning("Gebäude/Gewerke-Import fehlgeschlagen (wird ignoriert): %s", e)
+
     # Ohne Adapter: nur GA-Tabelle → fertig
     if not adapter_name:
+        msg = f"{len(records)} Gruppenadressen importiert"
+        if locations_count:
+            msg += f", {locations_count} Räume/Gebäude, {functions_count} Funktionen"
         return ImportResult(
             imported=len(records),
-            message=f"{len(records)} Gruppenadressen erfolgreich importiert",
+            locations=locations_count,
+            functions=functions_count,
+            message=msg,
         )
 
     # Mit Adapter: DataPoints + Bindings bulk anlegen
@@ -320,6 +366,8 @@ async def import_knxproj_file(
         imported=len(records),
         created=created,
         updated=updated,
+        locations=locations_count,
+        functions=functions_count,
         message=f"{len(records)} Gruppenadressen importiert, {created} DataPoints neu erstellt, {updated} aktualisiert",
     )
 
