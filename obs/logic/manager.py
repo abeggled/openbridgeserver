@@ -402,9 +402,29 @@ class LogicManager:
                     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _hclient:
                         _resp = await _hclient.get(url)
                         _resp.raise_for_status()
-                        hyst_node["raw"] = _resp.text
+                        # Decode with charset from Content-Type; many iCal servers
+                        # omit the charset and serve Latin-1 (e.g. c-trace.de).
+                        # Try strict UTF-8 first; fall back to Latin-1 which always
+                        # succeeds and covers ISO-8859-1 / CP-1252 content.
+                        _ct = _resp.headers.get("content-type", "")
+                        _charset: str | None = None
+                        for _part in _ct.split(";"):
+                            _p = _part.strip()
+                            if _p.lower().startswith("charset="):
+                                _charset = _p[8:].strip().strip('"').strip("'")
+                                break
+                        if _charset:
+                            _raw_text = _resp.content.decode(_charset, errors="replace")
+                        else:
+                            try:
+                                _raw_text = _resp.content.decode("utf-8")
+                            except UnicodeDecodeError:
+                                _raw_text = _resp.content.decode("latin-1")
+                        if not _raw_text.lstrip().startswith("BEGIN:VCALENDAR"):
+                            raise ValueError(f"Response is not an iCal file (starts with {_raw_text[:60]!r})")
+                        hyst_node["raw"] = _raw_text
                         hyst_node["last_fetch_ts"] = execute_now.timestamp()
-                        logger.info("Graph %s: iCal fetched from %s (%d bytes)", graph_id[:8], url, len(_resp.text))
+                        logger.info("Graph %s: iCal fetched from %s (%d bytes)", graph_id[:8], url, len(_raw_text))
                 except Exception as _exc:
                     logger.warning("Graph %s: iCal fetch failed for node %s (%s): %s", graph_id[:8], node.id[:8], url, _exc)
 
