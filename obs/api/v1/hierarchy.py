@@ -684,7 +684,7 @@ async def import_from_ets(
 
     else:  # "trades" — Gewerke aus knx_trades Tabelle (ETS <Trades> XML-Sektion)
         trade_rows = await db.fetchall(
-            "SELECT id, name, sort_order FROM knx_trades ORDER BY sort_order, name"
+            "SELECT id, name, parent_id, sort_order FROM knx_trades ORDER BY sort_order"
         )
         if not trade_rows:
             raise HTTPException(
@@ -699,9 +699,16 @@ async def import_from_ets(
         )
         has_fn_links = fn_count_row and (fn_count_row["cnt"] or 0) > 0
 
+        # Build trade hierarchy: ETS trade_id → hierarchy node_id
+        # Trades are ordered by sort_order (pre-order from recursive parse), so parents come first.
+        trade_id_to_nid: dict[str, str] = {}
+
         for trade in trade_rows:
+            parent_trade_id = trade["parent_id"]  # ETS parent trade ID or None
+            parent_nid = trade_id_to_nid.get(parent_trade_id) if parent_trade_id else None
             trade_nid = _new_id()
-            _q_insert(trade_nid, None, trade["name"] or trade["id"], "", trade["sort_order"])
+            _q_insert(trade_nid, parent_nid, trade["name"] or trade["id"], "", trade["sort_order"])
+            trade_id_to_nid[trade["id"]] = trade_nid
             nodes_created += 1
 
             if not has_fn_links:

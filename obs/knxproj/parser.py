@@ -52,10 +52,11 @@ class FunctionRecord:
 
 @dataclass
 class TradeRecord:
-    identifier: str   # ETS Trade ID, e.g. "P-065E-0_T-1"
-    name: str         # e.g. "Bewegung", "Schalten/Dimmen"
+    identifier: str        # ETS Trade ID, e.g. "P-065E-0_T-1"
+    name: str              # e.g. "Bewegung", "Schalten/Dimmen"
+    parent_id: str | None = None   # parent trade ID for nested trades
     sort_order: int = 0
-    function_ids: list[str] = field(default_factory=list)  # IDs from DeviceInstanceRef.Links
+    function_ids: list[str] = field(default_factory=list)  # resolved Function IDs
 
 
 def _extract_group_names(project: Any) -> tuple[dict[str, str], dict[str, str]]:
@@ -129,19 +130,80 @@ def _dpt_from_xknxproject(dpt: dict | None) -> str | None:
     return defaults.get(main, f"DPT{main}.001")
 
 
+def _collect_fi_to_fn(root: Any) -> dict[str, str]:
+    """Build FunctionInstance-ID → Function-ID mapping from <Topology>.
+
+    In ETS XML a <DeviceInstance> in <Topology> holds <FunctionInstance Id="..." RefId="..."/>
+    where RefId points to the <Function> in <Locations>.  Trade references in
+    <DeviceInstanceRef Links="..."> use FunctionInstance IDs — this map resolves them to the
+    Function IDs that xknxproject stores in knx_functions.id.
+    """
+    fi_to_fn: dict[str, str] = {}
+    for el in root.iter():
+        tag = el.tag.split("}")[-1] if "}" in el.tag else el.tag
+        if tag == "FunctionInstance":
+            fi_id = el.get("Id", "").strip()
+            fn_ref = el.get("RefId", "").strip()
+            if fi_id and fn_ref:
+                fi_to_fn[fi_id] = fn_ref
+    return fi_to_fn
+
+
+def _walk_trade_el(
+    trade_el: Any,
+    parent_id: str | None,
+    records: list[TradeRecord],
+    sort_counter: list[int],
+    fi_to_fn: dict[str, str],
+) -> None:
+    """Recursively walk a <Trade> element and collect TradeRecords with parent hierarchy."""
+    tag = trade_el.tag.split("}")[-1] if "}" in trade_el.tag else trade_el.tag
+    if tag != "Trade":
+        return
+
+    tid = trade_el.get("Id", "").strip()
+    name = trade_el.get("Name", "").strip()
+    if not (tid and name):
+        return
+
+    # Collect function IDs from DeviceInstanceRef.Links; resolve FunctionInstance → Function
+    function_ids: list[str] = []
+    for child in trade_el:
+        ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        if ctag == "DeviceInstanceRef":
+            links = child.get("Links", "").strip()
+            for link_id in links.split():
+                # Resolve via FunctionInstance map if available; fall back to raw ID
+                function_ids.append(fi_to_fn.get(link_id, link_id))
+
+    sort_counter[0] += 1
+    records.append(TradeRecord(
+        identifier=tid,
+        name=name,
+        parent_id=parent_id,
+        sort_order=sort_counter[0],
+        function_ids=function_ids,
+    ))
+
+    # Recurse into nested <Trade> children (ETS supports trade sub-categories)
+    for child in trade_el:
+        ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        if ctag == "Trade":
+            _walk_trade_el(child, tid, records, sort_counter, fi_to_fn)
+
+
 def parse_knxproj_trades(file_bytes: bytes) -> list[TradeRecord]:
     """Parse <Trades><Trade .../></Trades> directly from the .knxproj ZIP.
 
-    xknxproject does not expose this section. The Trades element is a sibling of
-    <Locations> and <GroupAddresses> inside <Installation>.  Each <Trade> is just a
-    named category — no GA links are stored here.
+    xknxproject does not expose this section. Supports:
+    - Nested <Trade> elements (sub-categories) → parent_id is set accordingly
+    - DeviceInstanceRef.Links → resolves FunctionInstance IDs to Function IDs
 
-    Returns: list of TradeRecord in document order.
+    Returns: list of TradeRecord in pre-order document order.
     """
     records: list[TradeRecord] = []
     try:
         with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
-            # Find the project 0.xml — path is like "P-XXXX/0.xml"
             candidates = [n for n in zf.namelist() if n.endswith("0.xml") and "/" in n]
             if not candidates:
                 logger.warning("parse_knxproj_trades: no 0.xml found in archive")
@@ -150,26 +212,19 @@ def parse_knxproj_trades(file_bytes: bytes) -> list[TradeRecord]:
             xml_bytes = zf.read(candidates[0])
             root = ElementTree.fromstring(xml_bytes)
 
-            # <Trades> sits inside .../Project/Installations/Installation
-            for trade_el in root.iter():
-                if trade_el.tag.endswith("}Trade") or trade_el.tag == "Trade":
-                    tid = trade_el.get("Id", "")
-                    name = trade_el.get("Name", "").strip()
-                    if tid and name:
-                        # Collect function IDs referenced by this trade via DeviceInstanceRef.Links
-                        function_ids: list[str] = []
-                        for child in trade_el:
-                            child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-                            if child_tag == "DeviceInstanceRef":
-                                links = child.get("Links", "").strip()
-                                if links:
-                                    function_ids.extend(links.split())
-                        records.append(TradeRecord(
-                            identifier=tid,
-                            name=name,
-                            sort_order=len(records),
-                            function_ids=function_ids,
-                        ))
+            fi_to_fn = _collect_fi_to_fn(root)
+
+            # Find top-level <Trades> container and walk direct <Trade> children
+            sort_counter = [0]
+            for el in root.iter():
+                etag = el.tag.split("}")[-1] if "}" in el.tag else el.tag
+                if etag == "Trades":
+                    for child in el:
+                        ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                        if ctag == "Trade":
+                            _walk_trade_el(child, None, records, sort_counter, fi_to_fn)
+                    break  # only the first <Trades> element
+
     except Exception as e:
         logger.warning("parse_knxproj_trades failed (ignored): %s", e)
 

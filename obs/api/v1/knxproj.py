@@ -355,8 +355,8 @@ async def import_knxproj_file(
         if trade_records:
             await db.execute_and_commit("DELETE FROM knx_trades")
             await db.executemany(
-                "INSERT INTO knx_trades (id, name, sort_order, imported_at) VALUES (?, ?, ?, ?)",
-                [(r.identifier, r.name, r.sort_order, now) for r in trade_records],
+                "INSERT INTO knx_trades (id, name, parent_id, sort_order, imported_at) VALUES (?, ?, ?, ?, ?)",
+                [(r.identifier, r.name, r.parent_id, r.sort_order, now) for r in trade_records],
             )
             await db.commit()
             trades_count = len(trade_records)
