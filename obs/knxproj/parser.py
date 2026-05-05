@@ -29,39 +29,42 @@ class GroupAddressRecord:
 
 
 def _extract_group_names(project: Any) -> tuple[dict[str, str], dict[str, str]]:
-    """Extracts main- and middle-group names from xknxproject group_address_ranges.
+    """Extracts main- and middle-group names from xknxproject group_ranges.
 
-    Returns two dicts:
-      main_names["1"]     → "Lichtsteuerung"
-      mid_names["1/2"]    → "Erdgeschoss"
+    xknxproject uses:
+      project["group_ranges"]                      → dict keyed by str_address() e.g. "0", "1"
+      project["group_ranges"]["0"]["group_ranges"] → nested dict keyed by "0/0", "0/1", …
+
+    Returns:
+      main_names["1"]    → "Lichtsteuerung"
+      mid_names["1/2"]   → "Erdgeschoss"
     """
     main_names: dict[str, str] = {}
     mid_names: dict[str, str] = {}
 
     if isinstance(project, dict):
-        ranges = project.get("group_address_ranges", {}) or {}
+        top_ranges = project.get("group_ranges", {}) or {}
     else:
-        ranges = getattr(project, "group_address_ranges", {}) or {}
+        top_ranges = getattr(project, "group_ranges", {}) or {}
 
-    for raw_main_key, main_range in ranges.items():
-        main_str = str(raw_main_key)
+    for main_key, main_range in top_ranges.items():
+        main_str = str(main_key)  # already "0", "1", …
         if isinstance(main_range, dict):
             main_name = str(main_range.get("name", "") or "").strip()
-            sub_ranges = main_range.get("ranges", {}) or {}
+            sub_ranges = main_range.get("group_ranges", {}) or {}
         else:
             main_name = str(getattr(main_range, "name", "") or "").strip()
-            sub_ranges = getattr(main_range, "ranges", {}) or {}
+            sub_ranges = getattr(main_range, "group_ranges", {}) or {}
         main_names[main_str] = main_name
 
-        for raw_mid_key, mid_range in sub_ranges.items():
-            mid_str = str(raw_mid_key)
+        for mid_key, mid_range in sub_ranges.items():
+            # mid_key is already "0/0", "0/1", … from str_address()
+            mid_str = str(mid_key)
             if isinstance(mid_range, dict):
                 mid_name = str(mid_range.get("name", "") or "").strip()
             else:
                 mid_name = str(getattr(mid_range, "name", "") or "").strip()
-            # Normalize: key may already be "1/2" or just "2"
-            full_mid = mid_str if "/" in mid_str else f"{main_str}/{mid_str}"
-            mid_names[full_mid] = mid_name
+            mid_names[mid_str] = mid_name
 
     return main_names, mid_names
 
