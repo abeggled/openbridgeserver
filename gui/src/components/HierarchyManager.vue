@@ -172,6 +172,7 @@
           <label class="label">Tiefe</label>
           <select v-model="etsModal.mode" class="input text-sm">
             <option value="groups">3-stufig: Hauptgruppe → Mittelgruppe → GA</option>
+            <option value="mid">2-stufig: Hauptgruppe → Mittelgruppe (ohne GA-Blätter)</option>
             <option value="flat">2-stufig: Hauptgruppe → GA (Mittelgruppen überspringen)</option>
           </select>
         </div>

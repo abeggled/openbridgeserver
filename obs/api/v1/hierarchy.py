@@ -540,10 +540,10 @@ async def import_from_ets(
     (main_group_name / mid_group_name). Fehlen diese (CSV-Import), wird
     "Hauptgruppe X" bzw. "Mittelgruppe X" als Fallback verwendet.
     """
-    if body.mode not in ("groups", "flat"):
+    if body.mode not in ("groups", "mid", "flat"):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "mode muss 'groups' oder 'flat' sein",
+            "mode muss 'groups', 'mid' oder 'flat' sein",
         )
 
     rows = await db.fetchall(
@@ -570,10 +570,36 @@ async def import_from_ets(
     def _q_insert(nid: str, parent_id: str | None, name: str, desc: str, order: int) -> None:
         inserts.append((nid, tree_id, parent_id, name, desc, order, None, now, now))
 
-    if body.mode == "groups":
-        # 3-Ebenen: Hauptgruppe / Mittelgruppe / GA
+    if body.mode == "mid":
+        # 2-Ebenen: Hauptgruppe / Mittelgruppe (GA-Blätter werden weggelassen)
         main_nodes: dict[str, str] = {}
         mid_nodes: dict[str, str] = {}
+
+        for row in rows:
+            parts = str(row["address"]).split("/")
+            if len(parts) < 2:
+                continue
+            main_key, mid_key = parts[0], parts[1]
+            mid_composite = f"{main_key}/{mid_key}"
+
+            if main_key not in main_nodes:
+                nid = _new_id()
+                main_label = str(row["main_group_name"] or "").strip() or f"Hauptgruppe {main_key}"
+                _q_insert(nid, None, main_label, "", int(main_key))
+                main_nodes[main_key] = nid
+                nodes_created += 1
+
+            if mid_composite not in mid_nodes:
+                nid = _new_id()
+                mid_label = str(row["mid_group_name"] or "").strip() or f"Mittelgruppe {mid_key}"
+                _q_insert(nid, main_nodes[main_key], mid_label, "", int(mid_key))
+                mid_nodes[mid_composite] = nid
+                nodes_created += 1
+
+    elif body.mode == "groups":
+        # 3-Ebenen: Hauptgruppe / Mittelgruppe / GA
+        main_nodes = {}
+        mid_nodes = {}
 
         for row in rows:
             parts = str(row["address"]).split("/")
@@ -602,7 +628,7 @@ async def import_from_ets(
             _q_insert(nid, mid_nodes[mid_composite], ga_name, str(row["description"] or ""), 0)
             nodes_created += 1
 
-    else:  # flat — Hauptgruppe → GA (Mittelgruppe wird übersprungen)
+    else:  # "flat" — Hauptgruppe → GA (Mittelgruppe wird übersprungen)
         main_nodes = {}
         for row in rows:
             parts = str(row["address"]).split("/")
