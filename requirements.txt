@@ -41,7 +41,7 @@ croniter>=6.2.2,<7
 astral>=3.2,<4             # 2.x→3.x changed LocationInfo constructor signature
 
 # Zeitschaltuhr — holiday calendar
-holidays>=0.95,<1          # pre-1.0; country_holidays() API may change
+holidays>=0.96,<1          # pre-1.0; country_holidays() API may change
 httpx>=0.28.1,<1           # pre-1.0
 websockets>=16.0,<17       # major versions have broken the connect/send API
 # ioBroker socketio v7 still speaks Engine.IO v3; python-socketio v4 is compatible.
