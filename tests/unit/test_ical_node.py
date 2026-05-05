@@ -198,9 +198,18 @@ class TestICalNoPattern:
         out = _run_ical(ics, [{"name": "All", "fields": ["summary"], "pattern": ""}])
         assert len(out["f0_array"]) >= 2
 
+    def test_new_format_all_empty_matches_all(self):
+        ics = _make_ics(
+            _allday_event("ev1", _TODAY, "Alpha"),
+            _allday_event("ev2", _TOMORROW, "Beta"),
+        )
+        flt = {"name": "All", "field_logic": "or", "summary_pattern": "", "location_pattern": "", "description_pattern": ""}
+        out = _run_ical(ics, [flt])
+        assert len(out["f0_array"]) >= 2
+
 
 # ---------------------------------------------------------------------------
-# Filter: field selection
+# Filter: field selection (legacy format)
 # ---------------------------------------------------------------------------
 
 
@@ -227,37 +236,51 @@ class TestICalFieldFilter:
 
 
 # ---------------------------------------------------------------------------
-# match_all_fields (AND between fields)
+# New filter format: per-field patterns with OR / AND logic
 # ---------------------------------------------------------------------------
 
 
-class TestICalMatchAllFields:
-    def test_and_both_fields_match(self):
-        """Event with 'Abfuhr' in summary AND 'Strasse' in location → matches."""
-        ics = _make_ics(_allday_event("ev1", _TODAY, "Abfuhr", location="Strasse"))
-        flt = {"name": "and", "fields": ["summary", "location"], "pattern": "a", "match_all_fields": True}
-        out = _run_ical(ics, [flt])
-        assert out["f0_today"] is True
+class TestICalPerFieldPatterns:
+    def test_or_summary_only(self):
+        ics = _make_ics(_allday_event("ev1", _TODAY, "Restmüll", location="Strasse"))
+        flt = {"name": "t", "field_logic": "or", "summary_pattern": "Restm", "location_pattern": "", "description_pattern": ""}
+        assert _run_ical(ics, [flt])["f0_today"] is True
 
-    def test_and_only_one_field_matches(self):
-        """Pattern matches summary but not location → no match with match_all_fields."""
-        ics = _make_ics(_allday_event("ev1", _TODAY, "Abfuhr", location="Nichts"))
-        flt = {"name": "and", "fields": ["summary", "location"], "pattern": "Abfuhr", "match_all_fields": True}
-        out = _run_ical(ics, [flt])
-        assert out["f0_today"] is False
+    def test_or_location_only(self):
+        ics = _make_ics(_allday_event("ev1", _TODAY, "Termin", location="Bahnhof"))
+        flt = {"name": "t", "field_logic": "or", "summary_pattern": "", "location_pattern": "Bahn", "description_pattern": ""}
+        assert _run_ical(ics, [flt])["f0_today"] is True
 
-    def test_and_vs_or_different_results(self):
-        """OR matches where AND does not when only one field contains the pattern."""
-        ics = _make_ics(_allday_event("ev1", _TODAY, "Müll", location="Bahnhof"))
-        flt_or  = {"name": "or",  "fields": ["summary", "location"], "pattern": "Müll", "match_all_fields": False}
-        flt_and = {"name": "and", "fields": ["summary", "location"], "pattern": "Müll", "match_all_fields": True}
-        assert _run_ical(ics, [flt_or])["f0_today"] is True
-        assert _run_ical(ics, [flt_and])["f0_today"] is False
+    def test_or_either_field_matches(self):
+        ics = _make_ics(_allday_event("ev1", _TODAY, "Müll", location="Strasse"))
+        flt = {"name": "t", "field_logic": "or", "summary_pattern": "Müll", "location_pattern": "Büro", "description_pattern": ""}
+        assert _run_ical(ics, [flt])["f0_today"] is True  # summary matches
 
-    def test_and_single_field_behaves_like_or(self):
-        """With only one field selected, match_all_fields is equivalent to OR."""
-        ics = _make_ics(_allday_event("ev1", _TODAY, "Biotonne"))
-        flt = {"name": "bio", "fields": ["summary"], "pattern": "Bio", "match_all_fields": True}
+    def test_or_no_field_matches(self):
+        ics = _make_ics(_allday_event("ev1", _TODAY, "Termin", location="Büro"))
+        flt = {"name": "t", "field_logic": "or", "summary_pattern": "Müll", "location_pattern": "Bahn", "description_pattern": ""}
+        assert _run_ical(ics, [flt])["f0_today"] is False
+
+    def test_and_all_fields_match(self):
+        ics = _make_ics(_allday_event("ev1", _TODAY, "Restmüll", location="Strasse", description="Bio"))
+        flt = {"name": "t", "field_logic": "and", "summary_pattern": "Restm", "location_pattern": "Strasse", "description_pattern": "Bio"}
+        assert _run_ical(ics, [flt])["f0_today"] is True
+
+    def test_and_one_field_missing(self):
+        ics = _make_ics(_allday_event("ev1", _TODAY, "Restmüll", location="Strasse"))
+        flt = {"name": "t", "field_logic": "and", "summary_pattern": "Restm", "location_pattern": "Bahn", "description_pattern": ""}
+        # location doesn't match → AND fails
+        assert _run_ical(ics, [flt])["f0_today"] is False
+
+    def test_and_empty_fields_ignored(self):
+        """Empty patterns don't count as active → only non-empty patterns participate in AND."""
+        ics = _make_ics(_allday_event("ev1", _TODAY, "Restmüll"))
+        flt = {"name": "t", "field_logic": "and", "summary_pattern": "Restm", "location_pattern": "", "description_pattern": ""}
+        assert _run_ical(ics, [flt])["f0_today"] is True
+
+    def test_description_pattern(self):
+        ics = _make_ics(_allday_event("ev1", _TODAY, "Termin", description="Jahreshauptversammlung"))
+        flt = {"name": "t", "field_logic": "or", "summary_pattern": "", "location_pattern": "", "description_pattern": "Jahres"}
         assert _run_ical(ics, [flt])["f0_today"] is True
 
 
@@ -281,6 +304,11 @@ class TestICalCaseSensitivity:
         ics = _make_ics(_allday_event("ev1", _TODAY, "Müllabfuhr"))
         out = _run_ical(ics, [{"name": "m", "fields": ["summary"], "pattern": "Müll", "case_sensitive": True}])
         assert out["f0_today"] is True
+
+    def test_new_format_case_insensitive(self):
+        ics = _make_ics(_allday_event("ev1", _TODAY, "Restmüll"))
+        flt = {"name": "t", "field_logic": "or", "summary_pattern": "RESTMÜLL", "location_pattern": "", "description_pattern": "", "case_sensitive": False}
+        assert _run_ical(ics, [flt])["f0_today"] is True
 
 
 # ---------------------------------------------------------------------------

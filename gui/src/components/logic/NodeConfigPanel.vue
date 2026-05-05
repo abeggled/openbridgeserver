@@ -632,38 +632,41 @@
               placeholder="z.B. Müll, Ferien …" :data-testid="`ical-filter-name-${i}`" />
           </div>
 
-          <!-- Search pattern -->
-          <div class="form-group">
-            <label class="label">Suchmuster (Text oder RegEx)</label>
-            <input :value="flt.pattern" @input="icalUpdateFilter(i, 'pattern', $event.target.value)"
-              @change="emitUpdate" type="text" class="input text-sm font-mono"
-              placeholder="z.B. Müll oder (?i)müll" :data-testid="`ical-filter-pattern-${i}`" />
-            <p class="text-xs text-slate-500 mt-0.5">Leer = alle Termine. Python re-Syntax.</p>
+          <!-- AND / OR toggle -->
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-slate-400">Verknüpfung:</span>
+            <button
+              @click="icalUpdateFilter(i, 'field_logic', 'or')"
+              :class="['px-2 py-0.5 rounded text-xs font-semibold transition-colors',
+                (flt.field_logic || 'or') === 'or'
+                  ? 'bg-teal-600 text-white'
+                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600']"
+              :data-testid="`ical-filter-logic-or-${i}`">ODER</button>
+            <button
+              @click="icalUpdateFilter(i, 'field_logic', 'and')"
+              :class="['px-2 py-0.5 rounded text-xs font-semibold transition-colors',
+                flt.field_logic === 'and'
+                  ? 'bg-teal-600 text-white'
+                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600']"
+              :data-testid="`ical-filter-logic-and-${i}`">UND</button>
           </div>
 
-          <!-- Fields -->
-          <div class="form-group">
-            <label class="label">Felder</label>
-            <div class="flex gap-3 mt-1">
-              <label v-for="field in ['summary', 'location', 'description']" :key="field"
-                class="flex items-center gap-1.5 cursor-pointer">
-                <input type="checkbox"
-                  :checked="flt.fields.includes(field)"
-                  @change="icalToggleField(i, field, $event.target.checked)"
-                  class="accent-teal-500" :data-testid="`ical-filter-field-${i}-${field}`" />
-                <span class="text-xs text-slate-300 capitalize">{{ field }}</span>
-              </label>
-            </div>
+          <!-- Per-field patterns -->
+          <div v-for="field in [
+              { key: 'summary_pattern',     label: 'Summary',     placeholder: 'z.B. Restmüll' },
+              { key: 'location_pattern',    label: 'Location',    placeholder: 'z.B. Strasse' },
+              { key: 'description_pattern', label: 'Description', placeholder: 'z.B. Biotonne' },
+            ]" :key="field.key" class="form-group">
+            <label class="label text-slate-400">{{ field.label }}</label>
+            <input
+              :value="flt[field.key] || ''"
+              @input="icalUpdateFilter(i, field.key, $event.target.value)"
+              @change="emitUpdate"
+              type="text" class="input text-sm font-mono"
+              :placeholder="field.placeholder + ' (leer = ignorieren)'"
+              :data-testid="`ical-filter-${field.key}-${i}`" />
           </div>
-
-          <!-- Match mode: any / all fields -->
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox"
-              :checked="!!flt.match_all_fields"
-              @change="icalUpdateFilter(i, 'match_all_fields', $event.target.checked)"
-              class="accent-teal-500" :data-testid="`ical-filter-matchall-${i}`" />
-            <span class="text-xs text-slate-300">Alle Felder müssen matchen (UND)</span>
-          </label>
+          <p class="text-xs text-slate-500 -mt-1">Python re-Syntax. Leer = Feld wird ignoriert.</p>
 
           <!-- Case sensitive -->
           <label class="flex items-center gap-2 cursor-pointer">
@@ -899,7 +902,14 @@ function _icalSave(filters) {
 
 function icalAddFilter() {
   const filters = icalFilters.value.slice()
-  filters.push({ name: `Filter ${filters.length + 1}`, fields: ['summary'], pattern: '', case_sensitive: false, match_all_fields: false })
+  filters.push({
+    name: `Filter ${filters.length + 1}`,
+    field_logic: 'or',
+    summary_pattern: '',
+    location_pattern: '',
+    description_pattern: '',
+    case_sensitive: false,
+  })
   _icalSave(filters)
 }
 
@@ -912,14 +922,6 @@ function icalRemoveFilter(i) {
 function icalUpdateFilter(i, key, value) {
   const filters = icalFilters.value.map(f => ({ ...f }))
   filters[i][key] = value
-  _icalSave(filters)
-}
-
-function icalToggleField(i, field, checked) {
-  const filters = icalFilters.value.map(f => ({ ...f, fields: [...(f.fields || [])] }))
-  const fields = filters[i].fields
-  if (checked && !fields.includes(field)) fields.push(field)
-  if (!checked) filters[i].fields = fields.filter(f => f !== field)
   _icalSave(filters)
 }
 

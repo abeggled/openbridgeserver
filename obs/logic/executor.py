@@ -937,29 +937,45 @@ class GraphExecutor:
                     _FIELD_IDX = {"summary": 3, "location": 4, "description": 5}
 
                     def _matches(row_data: list, flt: dict) -> bool:
+                        case_sensitive = bool(flt.get("case_sensitive", False))
+                        flags = 0 if case_sensitive else _re_ic.IGNORECASE
+                        field_logic = str(flt.get("field_logic", "or")).lower()
+
+                        def _pat_matches(pattern: str, text: str) -> bool:
+                            if not pattern:
+                                return True  # empty pattern = ignore this field
+                            try:
+                                return bool(_re_ic.search(pattern, text, flags))
+                            except _re_ic.error:
+                                needle = pattern if case_sensitive else pattern.lower()
+                                haystack = text if case_sensitive else text.lower()
+                                return needle in haystack
+
+                        # New format: per-field patterns
+                        if any(k in flt for k in ("summary_pattern", "location_pattern", "description_pattern")):
+                            checks = [
+                                (flt.get("summary_pattern") or "",     row_data[3]),
+                                (flt.get("location_pattern") or "",    row_data[4]),
+                                (flt.get("description_pattern") or "", row_data[5]),
+                            ]
+                            active = [(pat, val) for pat, val in checks if pat]
+                            if not active:
+                                return True  # all patterns empty = match all
+                            if field_logic == "and":
+                                return all(_pat_matches(p, v) for p, v in active)
+                            return any(_pat_matches(p, v) for p, v in active)
+
+                        # Legacy format: single pattern across selected fields
                         pattern = str(flt.get("pattern") or "")
                         if not pattern:
                             return True
                         fields = flt.get("fields") or ["summary"]
-                        case_sensitive = bool(flt.get("case_sensitive", False))
                         match_all = bool(flt.get("match_all_fields", False))
-                        flags = 0 if case_sensitive else _re_ic.IGNORECASE
-
-                        def _field_matches(field: str) -> bool:
-                            idx = _FIELD_IDX.get(field)
-                            if idx is None:
-                                return False
-                            try:
-                                return bool(_re_ic.search(pattern, row_data[idx], flags))
-                            except _re_ic.error:
-                                needle = pattern if case_sensitive else pattern.lower()
-                                haystack = row_data[idx] if case_sensitive else row_data[idx].lower()
-                                return needle in haystack
-
-                        active = [f for f in fields if f in _FIELD_IDX]
-                        if not active:
+                        active_fields = [f for f in fields if f in _FIELD_IDX]
+                        if not active_fields:
                             return False
-                        return all(_field_matches(f) for f in active) if match_all else any(_field_matches(f) for f in active)
+                        results = [_pat_matches(pattern, row_data[_FIELD_IDX[f]]) for f in active_fields]
+                        return all(results) if match_all else any(results)
 
                     for i, flt in enumerate(filters):
                         matching = [(ev_date, row) for ev_date, row in event_rows if _matches(row, flt)]
