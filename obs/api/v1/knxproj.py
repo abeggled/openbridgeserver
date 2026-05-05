@@ -292,14 +292,17 @@ async def import_knxproj_file(
     now = datetime.now(UTC).isoformat()
 
     await db.executemany(
-        """INSERT INTO knx_group_addresses (address, name, description, dpt, imported_at)
-           VALUES (?, ?, ?, ?, ?)
+        """INSERT INTO knx_group_addresses
+               (address, name, description, dpt, main_group_name, mid_group_name, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(address) DO UPDATE SET
-               name        = excluded.name,
-               description = excluded.description,
-               dpt         = excluded.dpt,
-               imported_at = excluded.imported_at""",
-        [(r.address, r.name, r.description, r.dpt, now) for r in records],
+               name            = excluded.name,
+               description     = excluded.description,
+               dpt             = excluded.dpt,
+               main_group_name = excluded.main_group_name,
+               mid_group_name  = excluded.mid_group_name,
+               imported_at     = excluded.imported_at""",
+        [(r.address, r.name, r.description, r.dpt, r.main_group_name, r.mid_group_name, now) for r in records],
     )
     await db.commit()
 
@@ -370,14 +373,17 @@ async def import_ga_csv_file(
 
     # GA-Tabelle immer befüllen (für Vorschau / manuelle Bindung im GUI)
     await db.executemany(
-        """INSERT INTO knx_group_addresses (address, name, description, dpt, imported_at)
-           VALUES (?, ?, ?, ?, ?)
+        """INSERT INTO knx_group_addresses
+               (address, name, description, dpt, main_group_name, mid_group_name, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(address) DO UPDATE SET
-               name        = excluded.name,
-               description = excluded.description,
-               dpt         = excluded.dpt,
-               imported_at = excluded.imported_at""",
-        [(r.address, r.name, r.description, r.dpt, now) for r in records],
+               name            = excluded.name,
+               description     = excluded.description,
+               dpt             = excluded.dpt,
+               main_group_name = excluded.main_group_name,
+               mid_group_name  = excluded.mid_group_name,
+               imported_at     = excluded.imported_at""",
+        [(r.address, r.name, r.description, r.dpt, r.main_group_name, r.mid_group_name, now) for r in records],
     )
     await db.commit()
 

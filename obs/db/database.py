@@ -368,6 +368,11 @@ CREATE INDEX IF NOT EXISTS idx_hdl_node ON hierarchy_datapoint_links(node_id);
 CREATE INDEX IF NOT EXISTS idx_hdl_dp   ON hierarchy_datapoint_links(datapoint_id);
 """
 
+_MIGRATION_V24 = """
+ALTER TABLE knx_group_addresses ADD COLUMN main_group_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE knx_group_addresses ADD COLUMN mid_group_name  TEXT NOT NULL DEFAULT '';
+"""
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -393,6 +398,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (21, _MIGRATION_V21),
     (22, _MIGRATION_V22),
     (23, _MIGRATION_V23),
+    (24, _MIGRATION_V24),
 ]
 
 

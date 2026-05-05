@@ -138,27 +138,44 @@
 
     <!-- ── Modal: ETS Import ── -->
     <div v-if="etsModal.open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="etsModal.open = false">
-      <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-md p-6 flex flex-col gap-4">
+      <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-lg p-6 flex flex-col gap-4">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100">Hierarchie aus ETS importieren</h3>
         <p class="text-sm text-slate-500">
-          Erstellt einen neuen Hierarchiebaum aus den bereits importierten ETS-Gruppenadressen.
-          Die Baumstruktur wird anhand der Gruppenadress-Nummern (z.B. 1/2/3) aufgebaut.
+          Erzeugt einen neuen Hierarchiebaum aus den bereits importierten ETS-Gruppenadressen.
+          Gruppenbezeichnungen werden direkt aus dem ETS-Projekt übernommen (nicht nummeriert).
         </p>
+
+        <!-- Schnell-Presets -->
         <div class="form-group">
-          <label class="label">Name des neuen Astes</label>
-          <input v-model="etsModal.treeName" type="text" class="input" placeholder="z.B. ETS Topologie" />
-        </div>
-        <div class="form-group">
-          <label class="label">Strukturmodus</label>
-          <select v-model="etsModal.mode" class="input text-sm">
-            <option value="groups">Hauptgruppe → Mittelgruppe → GA (3-stufig)</option>
-            <option value="flat">Hauptgruppe → GA (2-stufig)</option>
-          </select>
-          <p class="text-xs text-slate-500 mt-1">
-            <span v-if="etsModal.mode === 'groups'">Erzeugt Knoten für jede Hauptgruppe und Mittelgruppe.</span>
-            <span v-else>Erzeugt nur Knoten für jede Hauptgruppe.</span>
+          <label class="label">Perspektive</label>
+          <div class="flex gap-2 flex-wrap">
+            <button v-for="preset in etsPresets" :key="preset.name"
+              @click="etsModal.treeName = preset.name; etsModal.mode = preset.mode"
+              :class="['px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors',
+                etsModal.treeName === preset.name && etsModal.mode === preset.mode
+                  ? 'border-blue-500 bg-blue-500/10 text-blue-600 dark:text-blue-400'
+                  : 'border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-blue-400']">
+              {{ preset.name }}
+            </button>
+          </div>
+          <p class="text-xs text-slate-500 mt-1.5">
+            Wähle die Perspektive entsprechend der Struktur deines ETS-Projekts, oder vergib unten einen eigenen Namen.
           </p>
         </div>
+
+        <div class="form-group">
+          <label class="label">Name des neuen Astes</label>
+          <input v-model="etsModal.treeName" type="text" class="input" placeholder="z.B. Gewerke" />
+        </div>
+
+        <div class="form-group">
+          <label class="label">Tiefe</label>
+          <select v-model="etsModal.mode" class="input text-sm">
+            <option value="groups">3-stufig: Hauptgruppe → Mittelgruppe → GA</option>
+            <option value="flat">2-stufig: Hauptgruppe → GA (Mittelgruppen überspringen)</option>
+          </select>
+        </div>
+
         <div v-if="etsModal.msg" :class="['p-2 rounded text-sm', etsModal.msg.ok ? 'text-green-400' : 'text-red-400']">{{ etsModal.msg.text }}</div>
         <div class="flex gap-2 justify-end">
           <button @click="etsModal.open = false" class="btn-secondary">Abbrechen</button>
@@ -211,6 +228,12 @@ const nodeNameInput = ref(null)
 const treeModal = reactive({ open: false, isEdit: false, id: null, name: '', description: '', saving: false, msg: null })
 const nodeModal = reactive({ open: false, isEdit: false, id: null, treeId: null, parentId: null, name: '', description: '', saving: false, msg: null })
 const etsModal  = reactive({ open: false, treeName: '', mode: 'groups', saving: false, msg: null })
+
+const etsPresets = [
+  { name: 'Topologie', mode: 'groups' },
+  { name: 'Gebäude',   mode: 'groups' },
+  { name: 'Gewerke',   mode: 'groups' },
+]
 const deleteConfirm = reactive({ open: false, title: '', message: '', saving: false, action: null })
 
 // ── Load ───────────────────────────────────────────────────────────────────

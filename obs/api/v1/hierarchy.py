@@ -140,7 +140,7 @@ class NodeSearchResult(BaseModel):
 
 class EtsImportRequest(BaseModel):
     tree_name: str
-    mode: str  # "topology" | "buildings" | "trades" | "groups"
+    mode: str  # "groups" (3-stufig) | "flat" (2-stufig)
 
 
 class ImportResult(BaseModel):
@@ -533,8 +533,12 @@ async def import_from_ets(
     """Erzeugt einen neuen Hierarchiebaum aus importierten ETS-Gruppenadressen.
 
     Modes:
-      groups    — Hauptgruppe → Mittelgruppe → GA (3-stufig, Standard-ETS-Struktur)
-      flat      — Nur Hauptgruppe → GA (2-stufig)
+      groups — Hauptgruppe → Mittelgruppe → GA (3-stufig)
+      flat   — Hauptgruppe → GA (2-stufig, Mittelgruppen werden übersprungen)
+
+    Knotenbezeichnungen werden aus den ETS-Gruppenadress-Bereichen übernommen
+    (main_group_name / mid_group_name). Fehlen diese (CSV-Import), wird
+    "Hauptgruppe X" bzw. "Mittelgruppe X" als Fallback verwendet.
     """
     if body.mode not in ("groups", "flat"):
         raise HTTPException(
@@ -542,7 +546,9 @@ async def import_from_ets(
             "mode muss 'groups' oder 'flat' sein",
         )
 
-    rows = await db.fetchall("SELECT address, name, description, dpt FROM knx_group_addresses ORDER BY address")
+    rows = await db.fetchall(
+        "SELECT address, name, description, dpt, main_group_name, mid_group_name FROM knx_group_addresses ORDER BY address"
+    )
     if not rows:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -558,81 +564,69 @@ async def import_from_ets(
 
     nodes_created = 0
 
+    # Batch all inserts — commit once at the end for performance
+    inserts: list[tuple] = []
+
+    def _q_insert(nid: str, parent_id: str | None, name: str, desc: str, order: int) -> None:
+        inserts.append((nid, tree_id, parent_id, name, desc, order, None, now, now))
+
     if body.mode == "groups":
-        # 3-Ebenen: Hauptgruppe / Mittelgruppe / GA-Name
-        main_nodes: dict[str, str] = {}   # main_key → node_id
-        mid_nodes: dict[str, str] = {}    # "main/mid" → node_id
+        # 3-Ebenen: Hauptgruppe / Mittelgruppe / GA
+        main_nodes: dict[str, str] = {}
+        mid_nodes: dict[str, str] = {}
 
         for row in rows:
             parts = str(row["address"]).split("/")
             if len(parts) != 3:
                 continue
             main_key, mid_key, _ = parts
+            mid_composite = f"{main_key}/{mid_key}"
 
-            # Hauptgruppe
-            main_label = f"Hauptgruppe {main_key}"
             if main_key not in main_nodes:
                 nid = _new_id()
-                await db.execute_and_commit(
-                    """INSERT INTO hierarchy_nodes
-                       (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?)""",
-                    (nid, tree_id, None, main_label, "", int(main_key), None, now, now),
-                )
+                # Use actual ETS name, fall back to "Hauptgruppe X"
+                main_label = str(row["main_group_name"] or "").strip() or f"Hauptgruppe {main_key}"
+                _q_insert(nid, None, main_label, "", int(main_key))
                 main_nodes[main_key] = nid
                 nodes_created += 1
 
-            # Mittelgruppe
-            mid_composite = f"{main_key}/{mid_key}"
-            mid_label = f"Mittelgruppe {mid_key}"
             if mid_composite not in mid_nodes:
                 nid = _new_id()
-                await db.execute_and_commit(
-                    """INSERT INTO hierarchy_nodes
-                       (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?)""",
-                    (nid, tree_id, main_nodes[main_key], mid_label, "", int(mid_key), None, now, now),
-                )
+                mid_label = str(row["mid_group_name"] or "").strip() or f"Mittelgruppe {mid_key}"
+                _q_insert(nid, main_nodes[main_key], mid_label, "", int(mid_key))
                 mid_nodes[mid_composite] = nid
                 nodes_created += 1
 
-            # GA-Blattknoten (nur wenn ein Name vorhanden)
             ga_name = str(row["name"]).strip() or row["address"]
             nid = _new_id()
-            await db.execute_and_commit(
-                """INSERT INTO hierarchy_nodes
-                   (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                (nid, tree_id, mid_nodes[mid_composite], ga_name, str(row["description"] or ""), 0, None, now, now),
-            )
+            _q_insert(nid, mid_nodes[mid_composite], ga_name, str(row["description"] or ""), 0)
             nodes_created += 1
 
-    else:  # flat
+    else:  # flat — Hauptgruppe → GA (Mittelgruppe wird übersprungen)
         main_nodes = {}
         for row in rows:
             parts = str(row["address"]).split("/")
             main_key = parts[0]
-            main_label = f"Hauptgruppe {main_key}"
+
             if main_key not in main_nodes:
                 nid = _new_id()
-                await db.execute_and_commit(
-                    """INSERT INTO hierarchy_nodes
-                       (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?)""",
-                    (nid, tree_id, None, main_label, "", int(main_key), None, now, now),
-                )
+                main_label = str(row["main_group_name"] or "").strip() or f"Hauptgruppe {main_key}"
+                _q_insert(nid, None, main_label, "", int(main_key))
                 main_nodes[main_key] = nid
                 nodes_created += 1
 
             ga_name = str(row["name"]).strip() or row["address"]
             nid = _new_id()
-            await db.execute_and_commit(
-                """INSERT INTO hierarchy_nodes
-                   (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                (nid, tree_id, main_nodes[main_key], ga_name, str(row["description"] or ""), 0, None, now, now),
-            )
+            _q_insert(nid, main_nodes[main_key], ga_name, str(row["description"] or ""), 0)
             nodes_created += 1
+
+    await db.executemany(
+        """INSERT INTO hierarchy_nodes
+           (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        inserts,
+    )
+    await db.commit()
 
     return ImportResult(
         tree_id=tree_id,

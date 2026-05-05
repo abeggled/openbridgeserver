@@ -129,7 +129,7 @@ export const useDatapointStore = defineStore('datapoints', () => {
     try {
       sessionStorage.setItem(SCROLL_STATE_KEY, JSON.stringify({
         scrollY,
-        filters: { ...filters, tags: filters.tags ?? [], node_id: filters.node_id ?? '', node_label: filters.node_label ?? '' },
+        filters: { ...filters, tags: filters.tags ?? [], node_ids: filters.node_ids ?? [] },
         count: items.value.length,
       }))
     } catch { /* quota errors are non-fatal */ }

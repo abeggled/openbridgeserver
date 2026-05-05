@@ -71,7 +71,7 @@ async def search(
     type: str = Query("", description="data_type match"),
     adapter: str = Query("", description="Has binding with this adapter_type"),
     quality: str = Query("", description="Runtime quality filter: good | bad | uncertain"),
-    node_id: str = Query("", description="Nur DataPoints die diesem Hierarchieknoten zugeordnet sind"),
+    node_id: str = Query("", description="Comma-separated node IDs — OR logic"),
     sort: str = Query("name", pattern="^(name|data_type|created_at|updated_at)$"),
     order: str = Query("asc", pattern="^(asc|desc)$"),
     page: int = Query(0, ge=0),
@@ -126,14 +126,17 @@ async def search(
 
         results = [dp for dp in results if _matches(dp)]
 
-    # 5. node_id filter (hierarchy — one DB query)
+    # 5. node_id filter (hierarchy — one query per node, OR logic)
     if node_id:
-        rows = await db.fetchall(
-            "SELECT datapoint_id FROM hierarchy_datapoint_links WHERE node_id=?",
-            (node_id,),
-        )
-        matched_ids = {r["datapoint_id"] for r in rows}
-        results = [dp for dp in results if str(dp.id) in matched_ids]
+        node_id_list = [n.strip() for n in node_id.split(",") if n.strip()]
+        if node_id_list:
+            placeholders = ",".join("?" * len(node_id_list))
+            rows = await db.fetchall(
+                f"SELECT DISTINCT datapoint_id FROM hierarchy_datapoint_links WHERE node_id IN ({placeholders})",
+                node_id_list,
+            )
+            matched_ids = {r["datapoint_id"] for r in rows}
+            results = [dp for dp in results if str(dp.id) in matched_ids]
 
     # 6. quality filter (runtime, must come after cheaper filters)
     if quality:
