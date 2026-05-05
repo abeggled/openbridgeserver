@@ -20,7 +20,15 @@ test('DataPoint anlegen und in Liste sehen', async ({ page }) => {
 
   await page.click('[data-testid="btn-save"]')
 
-  // The new row must appear in the table
+  // Wait for the modal to close
+  await expect(page.locator('[data-testid="btn-save"]')).not.toBeVisible({ timeout: 5_000 })
+
+  // Search for the new DP — the list is alphabetically paginated so it won't
+  // appear on page 1 without filtering
+  await page.fill('[data-testid="input-search"]', name)
+  await page.waitForTimeout(500)
+
+  // The new row must appear in the filtered table
   await expect(page.locator('[data-testid="datapoint-list"]')).toContainText(name, { timeout: 5_000 })
 
   // Cleanup: find the row and delete via API
@@ -132,12 +140,14 @@ test('Quality-Filter good zeigt nur DataPoints mit Wert', async ({ page }) => {
     await expect(page.locator(`[data-testid="dp-row-${dpId}"]`)).toBeVisible({ timeout: 5_000 })
 
     // Filter to good-quality only — our DP must stay visible
-    await page.selectOption('[data-testid="select-quality"]', 'good')
+    // Quality filter is a row of toggle buttons, not a <select>
+    await page.click('[data-testid="btn-quality-good"]')
     await page.waitForTimeout(500)
     await expect(page.locator(`[data-testid="dp-row-${dpId}"]`)).toBeVisible({ timeout: 5_000 })
 
     // Switch to bad — the DP must disappear
-    await page.selectOption('[data-testid="select-quality"]', 'bad')
+    await page.click('[data-testid="btn-quality-good"]') // deactivate good first
+    await page.click('[data-testid="btn-quality-bad"]')
     await page.waitForTimeout(500)
     await expect(page.locator(`[data-testid="dp-row-${dpId}"]`)).not.toBeVisible({ timeout: 5_000 })
   } finally {
@@ -172,12 +182,14 @@ test('Tag-Filter-Dropdown enthält Tags und filtert korrekt', async ({ page }) =
     await page.fill('[data-testid="input-search"]', 'E2E-Tag-')
     await page.waitForTimeout(500)
 
-    // Verify the tag option appears in the dropdown
-    const tagSelect = page.locator('[data-testid="select-tag"]')
-    await expect(tagSelect.locator(`option[value="${uniqueTag}"]`)).toHaveCount(1, { timeout: 5_000 })
+    // Tag filter is a custom multi-select dropdown — open it and verify the tag
+    // appears, then click it to select
+    await page.click('[data-testid="tag-filter"]')
+    await expect(
+      page.locator('[data-testid="tag-filter"]').getByText(uniqueTag, { exact: true })
+    ).toBeVisible({ timeout: 5_000 })
 
-    // Select the tag
-    await page.selectOption('[data-testid="select-tag"]', uniqueTag)
+    await page.locator('[data-testid="tag-filter"]').getByText(uniqueTag, { exact: true }).click()
     await page.waitForTimeout(500)
 
     // Tagged DP visible, untagged DP hidden
@@ -310,6 +322,11 @@ test('DataPoint mit Einheit ° anlegen', async ({ page }) => {
   await page.fill('[data-testid="input-name"]', name)
   await page.selectOption('[data-testid="select-unit"]', '°')
   await page.click('[data-testid="btn-save"]')
+
+  // Wait for the modal to close, then search so the DP appears on page 1
+  await expect(page.locator('[data-testid="btn-save"]')).not.toBeVisible({ timeout: 5_000 })
+  await page.fill('[data-testid="input-search"]', name)
+  await page.waitForTimeout(500)
 
   await expect(page.locator('[data-testid="datapoint-list"]')).toContainText(name, { timeout: 5_000 })
 
