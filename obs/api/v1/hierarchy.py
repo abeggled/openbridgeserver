@@ -674,7 +674,7 @@ async def import_from_ets(
                     f"""SELECT DISTINCT dp.id
                         FROM datapoints dp
                         JOIN adapter_bindings ab ON ab.datapoint_id = dp.id
-                        WHERE ab.adapter_type = 'knx'
+                        WHERE UPPER(ab.adapter_type) = 'KNX'
                           AND JSON_EXTRACT(ab.config, '$.group_address') IN ({placeholders})""",
                     list(gas),
                 )
@@ -742,7 +742,7 @@ async def import_from_ets(
                     f"""SELECT DISTINCT dp.id
                         FROM datapoints dp
                         JOIN adapter_bindings ab ON ab.datapoint_id = dp.id
-                        WHERE ab.adapter_type = 'knx'
+                        WHERE UPPER(ab.adapter_type) = 'KNX'
                           AND JSON_EXTRACT(ab.config, '$.group_address') IN ({placeholders})""",
                     gas,
                 )
