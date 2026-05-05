@@ -295,9 +295,7 @@ async def create_node(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Hierarchiebaum nicht gefunden")
     # Parent muss im selben Baum liegen
     if body.parent_id:
-        parent = await db.fetchone(
-            "SELECT tree_id FROM hierarchy_nodes WHERE id=?", (body.parent_id,)
-        )
+        parent = await db.fetchone("SELECT tree_id FROM hierarchy_nodes WHERE id=?", (body.parent_id,))
         if not parent or parent["tree_id"] != body.tree_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Elternknoten nicht im gleichen Baum")
 
@@ -349,9 +347,7 @@ async def move_node(
     tree_id = row["tree_id"]
 
     if body.new_parent_id:
-        parent = await db.fetchone(
-            "SELECT tree_id FROM hierarchy_nodes WHERE id=?", (body.new_parent_id,)
-        )
+        parent = await db.fetchone("SELECT tree_id FROM hierarchy_nodes WHERE id=?", (body.new_parent_id,))
         if not parent or parent["tree_id"] != tree_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Zielknoten nicht im gleichen Baum")
         # Zirkuläre Abhängigkeit verhindern
@@ -560,12 +556,10 @@ async def import_from_ets(
         inserts.append((nid, tree_id, parent_id, name, desc, order, None, now, now))
 
     if body.mode in ("groups", "mid", "flat"):
-        rows = await db.fetchall(
-            "SELECT address, name, description, dpt, main_group_name, mid_group_name FROM knx_group_addresses ORDER BY address"
-        )
+        rows = await db.fetchall("SELECT address, name, description, dpt, main_group_name, mid_group_name FROM knx_group_addresses ORDER BY address")
         if not rows:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Keine ETS-Gruppenadressen importiert. Bitte zuerst eine .knxproj oder CSV importieren.",
             )
 
@@ -635,12 +629,10 @@ async def import_from_ets(
 
     elif body.mode == "buildings":
         # Gebäude-Hierarchie aus knx_locations
-        loc_rows = await db.fetchall(
-            "SELECT id, parent_id, name, space_type, sort_order FROM knx_locations ORDER BY sort_order"
-        )
+        loc_rows = await db.fetchall("SELECT id, parent_id, name, space_type, sort_order FROM knx_locations ORDER BY sort_order")
         if not loc_rows:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Keine Gebäude-Daten importiert. Bitte zuerst eine .knxproj importieren.",
             )
 
@@ -683,20 +675,15 @@ async def import_from_ets(
                     inserts.append(("__link__", node_id, dp["id"]))  # sentinel — handled below
 
     else:  # "trades" — Gewerke aus knx_trades Tabelle (ETS <Trades> XML-Sektion)
-        trade_rows = await db.fetchall(
-            "SELECT id, name, parent_id, sort_order FROM knx_trades ORDER BY sort_order"
-        )
+        trade_rows = await db.fetchall("SELECT id, name, parent_id, sort_order FROM knx_trades ORDER BY sort_order")
         if not trade_rows:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "Keine Gewerke-Daten importiert. Bitte zuerst eine .knxproj importieren "
-                "(die Datei muss einen <Trades>-Abschnitt enthalten).",
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "Keine Gewerke-Daten importiert. Bitte zuerst eine .knxproj importieren (die Datei muss einen <Trades>-Abschnitt enthalten).",
             )
 
         # Check whether function→trade links exist (populated during knxproj upload)
-        fn_count_row = await db.fetchone(
-            "SELECT COUNT(*) AS cnt FROM knx_functions WHERE trade_id IS NOT NULL"
-        )
+        fn_count_row = await db.fetchone("SELECT COUNT(*) AS cnt FROM knx_functions WHERE trade_id IS NOT NULL")
         has_fn_links = fn_count_row and (fn_count_row["cnt"] or 0) > 0
 
         # Build trade hierarchy: ETS trade_id → hierarchy node_id
