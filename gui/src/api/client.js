@@ -83,6 +83,7 @@ export const dpApi = {
   delete:        (id)                           => api.delete(`/datapoints/${id}`),
   value:         (id)                           => api.get(`/datapoints/${id}/value`),
   writeValue:    (id, value)                    => api.post(`/datapoints/${id}/value`, { value }),
+  tags:          ()                             => api.get('/datapoints/tags'),
   listBindings:  (id)                           => api.get(`/datapoints/${id}/bindings`),
   createBinding: (id, data)                     => api.post(`/datapoints/${id}/bindings`, data),
   updateBinding: (id, bindingId, data)          => api.patch(`/datapoints/${id}/bindings/${bindingId}`, data),

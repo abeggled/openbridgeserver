@@ -58,20 +58,52 @@
           </button>
         </div>
 
-        <!-- Tag -->
-        <div class="relative">
-          <select v-model="filters.tag" @change="onSearch"
-            :class="['input text-sm pr-7 appearance-none', filters.tag ? 'border-blue-500 bg-blue-500/5 text-blue-600 dark:text-blue-400 font-medium' : '']"
-            data-testid="select-tag" style="min-width: 130px">
-            <option value="">Alle Tags</option>
-            <option v-for="t in availableTags" :key="t" :value="t">{{ t }}</option>
-          </select>
-          <button v-if="filters.tag" @click="clearFilter('tag')"
-            class="absolute right-1.5 top-1/2 -translate-y-1/2 text-blue-400 hover:text-blue-600">
-            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        <!-- Tag (Multi-Select) -->
+        <div class="relative" ref="tagFilterRef" data-testid="tag-filter">
+          <button
+            @click="tagDropOpen = !tagDropOpen"
+            :class="['input text-sm flex items-center gap-1.5 cursor-pointer select-none min-w-36',
+              filters.tags.length ? 'border-blue-500 bg-blue-500/5' : '']">
+            <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a2 2 0 014-4z"/>
+            </svg>
+            <span v-if="!filters.tags.length" class="text-slate-400 flex-1 text-left">Alle Tags</span>
+            <span v-else class="text-blue-600 dark:text-blue-400 font-medium flex-1 text-left">
+              {{ filters.tags.length === 1 ? filters.tags[0] : `${filters.tags.length} Tags` }}
+            </span>
+            <svg class="w-3 h-3 text-slate-400 shrink-0 transition-transform" :class="tagDropOpen ? 'rotate-180' : ''"
+              fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
             </svg>
           </button>
+
+          <!-- Tag dropdown -->
+          <div v-if="tagDropOpen"
+            class="absolute z-20 left-0 mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl overflow-hidden"
+            style="min-width: 160px">
+            <div v-if="!store.allTags.length" class="text-xs text-slate-500 text-center py-3">Keine Tags vorhanden</div>
+            <div v-else class="max-h-60 overflow-y-auto py-1">
+              <button v-for="t in store.allTags" :key="t"
+                @click="toggleTag(t)"
+                class="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                <span :class="['flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors',
+                  filters.tags.includes(t)
+                    ? 'bg-blue-500 border-blue-500'
+                    : 'border-slate-300 dark:border-slate-600']">
+                  <svg v-if="filters.tags.includes(t)" class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
+                  </svg>
+                </span>
+                <span :class="filters.tags.includes(t) ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-700 dark:text-slate-200'">{{ t }}</span>
+              </button>
+            </div>
+            <div v-if="filters.tags.length" class="border-t border-slate-100 dark:border-slate-700 p-1.5">
+              <button @click="clearFilter('tags')"
+                class="w-full text-xs text-center text-slate-500 hover:text-red-500 transition-colors py-1">
+                Auswahl aufheben
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- Qualität -->
@@ -302,13 +334,15 @@ const qualityOptions = [
 const store = useDatapointStore()
 const ws    = useWebSocketStore()
 
-const filters      = ref({ q: '', tag: '', quality: '', type: '', node_id: '', node_label: '' })
+const filters      = ref({ q: '', tags: [], quality: '', type: '', node_id: '', node_label: '' })
 const showForm     = ref(false)
 const showConfirm  = ref(false)
 const editTarget   = ref(null)
 const deleteTarget = ref(null)
 const sentinelEl   = ref(null)
 const nodeFilterRef = ref(null)
+const tagFilterRef  = ref(null)
+const tagDropOpen   = ref(false)
 
 // Node filter state
 const nodeSearchQ      = ref('')
@@ -321,12 +355,8 @@ let searchTimeout = null
 let observer      = null
 let unsubWs       = null
 
-const availableTags = computed(() =>
-  [...new Set(store.items.flatMap(dp => dp.tags))].sort()
-)
-
 const hasActiveFilters = computed(() =>
-  !!(filters.value.q || filters.value.tag || filters.value.quality || filters.value.type || filters.value.node_id)
+  !!(filters.value.q || filters.value.tags.length || filters.value.quality || filters.value.type || filters.value.node_id)
 )
 
 // --------------------------------------------------------------------------
@@ -334,7 +364,7 @@ const hasActiveFilters = computed(() =>
 // --------------------------------------------------------------------------
 
 onMounted(async () => {
-  await store.loadDatatypes()
+  await Promise.all([store.loadDatatypes(), store.loadTags()])
 
   const saved = store.restoreScrollState()
   if (saved) {
@@ -356,7 +386,6 @@ onMounted(async () => {
   unsubWs = ws.onValue((id, value, quality) => store.patchValue(id, value, quality))
   _setupObserver()
 
-  // Close node dropdown on outside click
   document.addEventListener('click', onDocClick)
 })
 
@@ -404,7 +433,7 @@ watch(sentinelEl, (el) => {
 function apiFilters() {
   return {
     q:       filters.value.q,
-    tag:     filters.value.tag,
+    tag:     filters.value.tags.join(','),
     quality: filters.value.quality,
     type:    filters.value.type,
     node_id: filters.value.node_id,
@@ -421,9 +450,18 @@ function toggleQuality(val) {
   onSearch()
 }
 
-function setTagFilter(tag) {
-  filters.value.tag = filters.value.tag === tag ? '' : tag
+function toggleTag(tag) {
+  const idx = filters.value.tags.indexOf(tag)
+  if (idx === -1) filters.value.tags.push(tag)
+  else filters.value.tags.splice(idx, 1)
   onSearch()
+}
+
+function setTagFilter(tag) {
+  if (!filters.value.tags.includes(tag)) {
+    filters.value.tags.push(tag)
+    onSearch()
+  }
 }
 
 function clearFilter(key) {
@@ -432,6 +470,8 @@ function clearFilter(key) {
     filters.value.node_label = ''
     nodeSearchQ.value = ''
     nodeResults.value = []
+  } else if (key === 'tags') {
+    filters.value.tags = []
   } else {
     filters.value[key] = ''
   }
@@ -439,7 +479,7 @@ function clearFilter(key) {
 }
 
 function clearAllFilters() {
-  filters.value = { q: '', tag: '', quality: '', type: '', node_id: '', node_label: '' }
+  filters.value = { q: '', tags: [], quality: '', type: '', node_id: '', node_label: '' }
   nodeSearchQ.value = ''
   nodeResults.value = []
   onSearch()
@@ -474,9 +514,8 @@ function selectNode(node) {
 }
 
 function onDocClick(e) {
-  if (nodeFilterRef.value && !nodeFilterRef.value.contains(e.target)) {
-    nodeDropOpen.value = false
-  }
+  if (nodeFilterRef.value && !nodeFilterRef.value.contains(e.target)) nodeDropOpen.value = false
+  if (tagFilterRef.value && !tagFilterRef.value.contains(e.target)) tagDropOpen.value = false
 }
 
 // --------------------------------------------------------------------------

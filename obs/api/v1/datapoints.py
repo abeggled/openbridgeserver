@@ -123,6 +123,12 @@ _SORT_KEYS = {
 }
 
 
+@router.get("/tags", response_model=list[str])
+async def list_tags(_user: str = Depends(get_current_user)) -> list[str]:
+    reg = get_registry()
+    return sorted({t for dp in reg.all() for t in dp.tags})
+
+
 @router.get("/", response_model=DataPointPage)
 async def list_datapoints(
     page: int = Query(0, ge=0),

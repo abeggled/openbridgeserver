@@ -67,7 +67,7 @@ async def _add_hierarchy(items: list[DataPointOut], db: Database) -> None:
 @router.get("/", response_model=SearchPage)
 async def search(
     q: str = Query("", description="Substring match on name, UUID, or binding config fields"),
-    tag: str = Query("", description="Exact tag match"),
+    tag: str = Query("", description="Comma-separated tag list — OR logic (e.g. 'heating,lighting')"),
     type: str = Query("", description="data_type match"),
     adapter: str = Query("", description="Has binding with this adapter_type"),
     quality: str = Query("", description="Runtime quality filter: good | bad | uncertain"),
@@ -86,9 +86,10 @@ async def search(
     if type:
         results = [dp for dp in results if dp.data_type == type]
 
-    # 2. tag filter (cheap, in-memory)
+    # 2. tag filter (cheap, in-memory) — comma-separated, OR logic
     if tag:
-        results = [dp for dp in results if tag in dp.tags]
+        tag_list = [t.strip() for t in tag.split(",") if t.strip()]
+        results = [dp for dp in results if any(t in dp.tags for t in tag_list)]
 
     # 3. adapter filter (one DB query)
     if adapter:
