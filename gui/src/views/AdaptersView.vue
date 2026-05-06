@@ -123,6 +123,20 @@
               <input v-model="drafts[a.id].name" type="text" class="input" />
             </div>
 
+            <!-- Anwesenheitssimulation: History-Verfügbarkeit -->
+            <div v-if="a.adapter_type === 'ANWESENHEITSSIMULATION' && anwesenheitHealth[a.id]" :class="[
+              'mt-4 flex items-start gap-2 p-3 rounded-lg text-sm',
+              anwesenheitHealth[a.id].healthy
+                ? 'bg-green-500/10 border border-green-500/30 text-green-400'
+                : 'bg-amber-500/10 border border-amber-500/30 text-amber-400'
+            ]">
+              <svg class="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path v-if="anwesenheitHealth[a.id].healthy" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                <path v-else stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+              </svg>
+              {{ anwesenheitHealth[a.id].message }}
+            </div>
+
             <!-- Schema-based config form -->
             <div v-if="schemas[a.adapter_type]" class="mt-4">
               <label class="label mb-2">Konfiguration</label>
@@ -166,7 +180,7 @@
           </div>
 
           <div v-if="!isDemo" class="flex gap-3 flex-wrap">
-            <button @click="testConnection(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'test'"
+            <button v-if="a.adapter_type !== 'ANWESENHEITSSIMULATION'" @click="testConnection(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'test'"
               title="Prüft die Verbindung mit der aktuellen Konfiguration ohne zu speichern">
               <Spinner v-if="busy[a.id] === 'test'" size="xs" color="slate" />
               Verbindung testen
@@ -176,7 +190,7 @@
               <Spinner v-if="busy[a.id] === 'save'" size="xs" color="white" />
               Speichern
             </button>
-            <button @click="restartInstance(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'restart'"
+            <button v-if="a.adapter_type !== 'ANWESENHEITSSIMULATION'" @click="restartInstance(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'restart'"
               title="Verbindet den Adapter neu ohne die Konfiguration zu ändern">
               <Spinner v-if="busy[a.id] === 'restart'" size="xs" color="slate" />
               Neu verbinden
@@ -329,13 +343,23 @@ const createError       = ref(null)
 const deleteTarget      = ref(null)
 const showDeleteConfirm = ref(false)
 
-// Anwesenheitssimulation — Objekte verwalten
-const anwesenheitOpen = ref(false)
+// Anwesenheitssimulation — Objekte verwalten + Health
+const anwesenheitOpen     = ref(false)
 const anwesenheitInstance = ref(null)
+const anwesenheitHealth   = reactive({})  // id → { healthy, message, ... }
 
 function openAnwesenheitSelector(a) {
   anwesenheitInstance.value = a
   anwesenheitOpen.value = true
+}
+
+async function loadAnwesenheitHealth(a) {
+  try {
+    const { data } = await adapterApi.anwesenheitHealth(a.id)
+    anwesenheitHealth[a.id] = data
+  } catch {
+    // silently ignore — health is informational only
+  }
 }
 
 // ioBroker Import
@@ -403,6 +427,7 @@ async function toggleExpand(a) {
   expanded[a.id] = !expanded[a.id]
   if (expanded[a.id]) {
     await loadSchema(a.adapter_type)
+    if (a.adapter_type === 'ANWESENHEITSSIMULATION') loadAnwesenheitHealth(a)
   }
 }
 
@@ -488,6 +513,7 @@ async function saveInstance(a) {
       enabled: drafts[a.id].enabled,
     })
     feedback[a.id] = { success: true, detail: 'Gespeichert und neu verbunden' }
+    if (a.adapter_type === 'ANWESENHEITSSIMULATION') loadAnwesenheitHealth(a)
   } catch (e) {
     feedback[a.id] = { success: false, detail: e.response?.data?.detail ?? 'Fehler' }
   } finally {

@@ -768,6 +768,95 @@ async def iobroker_import_states(
 # ---------------------------------------------------------------------------
 
 
+class AnwesenheitHealthResult(BaseModel):
+    healthy: bool
+    message: str
+    bindings_total: int = 0
+    bindings_with_data: int = 0
+
+
+@router.get("/instances/{instance_id}/anwesenheit/health", response_model=AnwesenheitHealthResult)
+async def anwesenheit_health(
+    instance_id: uuid.UUID,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> AnwesenheitHealthResult:
+    """Check whether history data is available for the configured offset window."""
+    from datetime import timedelta, timezone
+    from datetime import datetime as _dt
+
+    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "ANWESENHEITSSIMULATION":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEITSSIMULATION-Instanzen verfügbar")
+
+    raw_config = row["config"] or "{}"
+    config_dict = json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+
+    from obs.adapters.anwesenheit.adapter import AnwesenheitssimulationConfig
+
+    try:
+        cfg = AnwesenheitssimulationConfig(**config_dict)
+    except Exception as exc:
+        return AnwesenheitHealthResult(healthy=False, message=f"Config-Fehler: {exc}")
+
+    try:
+        from obs.history.factory import get_history_plugin
+
+        history = get_history_plugin()
+    except RuntimeError:
+        return AnwesenheitHealthResult(healthy=False, message="History-Plugin nicht verfügbar — bitte History-Backend in den Einstellungen konfigurieren")
+
+    binding_rows = await db.fetchall(
+        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=? AND direction='SOURCE' AND enabled=1",
+        (str(instance_id),),
+    )
+    total = len(binding_rows)
+    if total == 0:
+        return AnwesenheitHealthResult(
+            healthy=False,
+            message="Keine aktiven Verknüpfungen konfiguriert — bitte zuerst Objekte über 'Objekte verwalten' hinzufügen",
+            bindings_total=0,
+            bindings_with_data=0,
+        )
+
+    now = _dt.now(tz=timezone.utc)
+    delta = timedelta(days=cfg.offset_days)
+    hist_from = now - delta - timedelta(hours=12)
+    hist_to = now - delta + timedelta(hours=12)
+
+    with_data = 0
+    for b_row in binding_rows:
+        try:
+            dp_id = uuid.UUID(b_row["datapoint_id"])
+            records = await history.query(dp_id, hist_from, hist_to, limit=1)
+            if records:
+                with_data += 1
+        except Exception:
+            pass
+
+    healthy = with_data > 0
+    if healthy:
+        msg = (
+            f"{with_data} von {total} Objekt(en) haben historische Daten für den Versatz von {cfg.offset_days} Tag(en). "
+            f"Die Simulation wird heute Ereignisse aus dem {cfg.offset_days}-Tage-Fenster wiedergeben."
+        )
+    else:
+        msg = (
+            f"Keine historischen Daten für den Versatz von {cfg.offset_days} Tag(en) gefunden. "
+            f"Stellen Sie sicher, dass für die verknüpften Objekte die Historisierung aktiviert ist "
+            f"und Aufzeichnungen aus dem Zeitraum vor {cfg.offset_days + 1} Tagen vorhanden sind."
+        )
+
+    return AnwesenheitHealthResult(
+        healthy=healthy,
+        message=msg,
+        bindings_total=total,
+        bindings_with_data=with_data,
+    )
+
+
 class AnwesenheitDatapointEntry(BaseModel):
     id: str
     name: str
