@@ -37,13 +37,7 @@ def _fmt(d: datetime.date) -> str:
 
 def _make_ics(*events: str) -> str:
     body = "\r\n".join(events)
-    return (
-        "BEGIN:VCALENDAR\r\n"
-        "VERSION:2.0\r\n"
-        "PRODID:-//Test//Test//EN\r\n"
-        f"{body}\r\n"
-        "END:VCALENDAR\r\n"
-    )
+    return f"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//Test//EN\r\n{body}\r\nEND:VCALENDAR\r\n"
 
 
 def _allday_event(uid: str, date: datetime.date, summary: str, location: str = "", description: str = "") -> str:
@@ -65,19 +59,13 @@ def _allday_event(uid: str, date: datetime.date, summary: str, location: str = "
 def _timed_event(uid: str, date: datetime.date, summary: str, start: str = "09:00", end: str = "10:00") -> str:
     ds = f"{_fmt(date)}T{start.replace(':', '')}00Z"
     de = f"{_fmt(date)}T{end.replace(':', '')}00Z"
-    return (
-        f"BEGIN:VEVENT\r\n"
-        f"UID:{uid}\r\n"
-        f"DTSTART:{ds}\r\n"
-        f"DTEND:{de}\r\n"
-        f"SUMMARY:{summary}\r\n"
-        "END:VEVENT"
-    )
+    return f"BEGIN:VEVENT\r\nUID:{uid}\r\nDTSTART:{ds}\r\nDTEND:{de}\r\nSUMMARY:{summary}\r\nEND:VEVENT"
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _run_ical(raw_ical: str, filters: list[dict], app_config: dict | None = None) -> dict:
     """Execute a single ical node with pre-seeded cache and return its outputs."""
@@ -307,7 +295,14 @@ class TestICalCaseSensitivity:
 
     def test_new_format_case_insensitive(self):
         ics = _make_ics(_allday_event("ev1", _TODAY, "Restmüll"))
-        flt = {"name": "t", "field_logic": "or", "summary_pattern": "RESTMÜLL", "location_pattern": "", "description_pattern": "", "case_sensitive": False}
+        flt = {
+            "name": "t",
+            "field_logic": "or",
+            "summary_pattern": "RESTMÜLL",
+            "location_pattern": "",
+            "description_pattern": "",
+            "case_sensitive": False,
+        }
         assert _run_ical(ics, [flt])["f0_today"] is True
 
 

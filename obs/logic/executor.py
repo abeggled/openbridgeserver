@@ -965,8 +965,8 @@ class GraphExecutor:
                         # New format: per-field patterns
                         if any(k in flt for k in ("summary_pattern", "location_pattern", "description_pattern")):
                             checks = [
-                                (flt.get("summary_pattern") or "",     row_data[3]),
-                                (flt.get("location_pattern") or "",    row_data[4]),
+                                (flt.get("summary_pattern") or "", row_data[3]),
+                                (flt.get("location_pattern") or "", row_data[4]),
                                 (flt.get("description_pattern") or "", row_data[5]),
                             ]
                             active = [(pat, val) for pat, val in checks if pat]
