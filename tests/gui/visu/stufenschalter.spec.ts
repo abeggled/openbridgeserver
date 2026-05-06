@@ -123,6 +123,9 @@ test('Stufenschalter: Klick schaltet optimistisch zur nächsten Stufe', async ({
     // 1. Klick → "Mittel" (optimistisch)
     await widget.click()
     await expect(label).toHaveText('Mittel', { timeout: 3_000 })
+    // Wait for the first write to complete — the widget blocks a second click while
+    // the API call is in-flight (pending flag), so we must let it settle first.
+    await page.waitForLoadState('networkidle', { timeout: 5_000 })
 
     // 2. Klick → "Hoch" (optimistisch)
     await widget.click()

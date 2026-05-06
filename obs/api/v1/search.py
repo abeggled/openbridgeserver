@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from obs.api.auth import get_current_user
-from obs.api.v1.datapoints import _SORT_KEYS, DataPointOut, _enrich
+from obs.api.v1.datapoints import _SORT_KEYS, DataPointOut, HierarchyNodeRef, _enrich
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
 
@@ -34,13 +34,44 @@ class SearchPage(BaseModel):
     query: dict
 
 
+async def _add_hierarchy(items: list[DataPointOut], db: Database) -> None:
+    """Batch-query hierarchy node links and inject into items in-place."""
+    if not items:
+        return
+    dp_ids = [str(item.id) for item in items]
+    placeholders = ",".join("?" * len(dp_ids))
+    rows = await db.fetchall(
+        f"""SELECT hdl.datapoint_id, hn.id AS node_id, hn.name AS node_name,
+                   ht.id AS tree_id, ht.name AS tree_name
+            FROM hierarchy_datapoint_links hdl
+            JOIN hierarchy_nodes hn ON hn.id = hdl.node_id
+            JOIN hierarchy_trees ht ON ht.id = hn.tree_id
+            WHERE hdl.datapoint_id IN ({placeholders})
+            ORDER BY ht.name, hn.name""",
+        dp_ids,
+    )
+    by_dp: dict[str, list[HierarchyNodeRef]] = {}
+    for r in rows:
+        by_dp.setdefault(r["datapoint_id"], []).append(
+            HierarchyNodeRef(
+                node_id=r["node_id"],
+                node_name=r["node_name"],
+                tree_id=r["tree_id"],
+                tree_name=r["tree_name"],
+            )
+        )
+    for item in items:
+        item.hierarchy_nodes = by_dp.get(str(item.id), [])
+
+
 @router.get("/", response_model=SearchPage)
 async def search(
     q: str = Query("", description="Substring match on name, UUID, or binding config fields"),
-    tag: str = Query("", description="Exact tag match"),
+    tag: str = Query("", description="Comma-separated tag list — OR logic (e.g. 'heating,lighting')"),
     type: str = Query("", description="data_type match"),
     adapter: str = Query("", description="Has binding with this adapter_type"),
     quality: str = Query("", description="Runtime quality filter: good | bad | uncertain"),
+    node_id: str = Query("", description="Comma-separated node IDs — OR logic"),
     sort: str = Query("name", pattern="^(name|data_type|created_at|updated_at)$"),
     order: str = Query("asc", pattern="^(asc|desc)$"),
     page: int = Query(0, ge=0),
@@ -55,9 +86,10 @@ async def search(
     if type:
         results = [dp for dp in results if dp.data_type == type]
 
-    # 2. tag filter (cheap, in-memory)
+    # 2. tag filter (cheap, in-memory) — comma-separated, OR logic
     if tag:
-        results = [dp for dp in results if tag in dp.tags]
+        tag_list = [t.strip() for t in tag.split(",") if t.strip()]
+        results = [dp for dp in results if any(t in dp.tags for t in tag_list)]
 
     # 3. adapter filter (one DB query)
     if adapter:
@@ -94,7 +126,19 @@ async def search(
 
         results = [dp for dp in results if _matches(dp)]
 
-    # 5. quality filter (runtime, must come after cheaper filters)
+    # 5. node_id filter (hierarchy — one query per node, OR logic)
+    if node_id:
+        node_id_list = [n.strip() for n in node_id.split(",") if n.strip()]
+        if node_id_list:
+            placeholders = ",".join("?" * len(node_id_list))
+            rows = await db.fetchall(
+                f"SELECT DISTINCT datapoint_id FROM hierarchy_datapoint_links WHERE node_id IN ({placeholders})",
+                node_id_list,
+            )
+            matched_ids = {r["datapoint_id"] for r in rows}
+            results = [dp for dp in results if str(dp.id) in matched_ids]
+
+    # 6. quality filter (runtime, must come after cheaper filters)
     if quality:
 
         def _quality_of(dp) -> str:
@@ -105,13 +149,16 @@ async def search(
 
         results = [dp for dp in results if _quality_of(dp) == quality]
 
-    # 6. Sort
+    # 7. Sort
     results = sorted(results, key=_SORT_KEYS[sort], reverse=(order == "desc"))
 
-    # 7. Paginate
+    # 8. Paginate
     total = len(results)
     offset = page * size
     items = [_enrich(dp) for dp in results[offset : offset + size]]
+
+    # 9. Enrich with hierarchy node assignments (single batch query)
+    await _add_hierarchy(items, db)
 
     return SearchPage(
         items=items,
@@ -125,6 +172,7 @@ async def search(
             "type": type,
             "adapter": adapter,
             "quality": quality,
+            "node_id": node_id,
             "sort": sort,
             "order": order,
         },

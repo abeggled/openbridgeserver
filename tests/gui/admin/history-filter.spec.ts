@@ -217,14 +217,17 @@ test('Objekt-Filter zeigt alle Objekte — Zähler entspricht API-Gesamtzahl', a
     await expect(page.locator('[data-testid="history-filter-card"]')).toBeVisible({ timeout: 8_000 })
     await expect(page.locator('[data-testid="history-filter-loading"]')).not.toBeVisible({ timeout: 10_000 })
 
-    // Der Zähler muss Y >= expectedTotal zeigen — parallel laufende Tests können weitere DPs anlegen,
-    // daher ist nur eine Untergrenze korrekt (nicht exakter Vergleich).
+    // Re-fetch API total after reload as the authoritative lower bound — parallel
+    // tests may have added or deleted DPs since we computed expectedTotal, so
+    // the pre-reload snapshot is unreliable.
+    const afterReload = await apiGet('/api/v1/datapoints/?page=0&size=1') as { total: number }
+
     const counterText = page.locator('[data-testid="history-filter-card"] .card-header span')
     await expect.poll(async () => {
       const text = await counterText.textContent() ?? ''
       const m = text.match(/von (\d+) Objekt/)
       return m ? parseInt(m[1]) : 0
-    }, { timeout: 8_000 }).toBeGreaterThanOrEqual(expectedTotal)
+    }, { timeout: 8_000 }).toBeGreaterThanOrEqual(afterReload.total)
 
     // Alle 3 neu erstellten Objekte müssen einzeln auffindbar sein
     for (const dp of created) {

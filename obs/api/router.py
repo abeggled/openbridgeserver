@@ -21,6 +21,7 @@ from obs.api.v1.ringbuffer import router as rb_router
 from obs.api.v1.search import router as search_router
 from obs.api.v1.system import router as system_router
 from obs.api.v1.visu import router as visu_router
+from obs.api.v1.hierarchy import router as hierarchy_router
 from obs.api.v1.weather import router as weather_router
 from obs.api.v1.websocket import router as ws_router
 
@@ -42,3 +43,4 @@ router.include_router(visu_router, prefix="/visu")
 router.include_router(icons_router, prefix="/icons")
 router.include_router(camera_router, prefix="/camera")
 router.include_router(weather_router, prefix="/weather")
+router.include_router(hierarchy_router, prefix="/hierarchy")

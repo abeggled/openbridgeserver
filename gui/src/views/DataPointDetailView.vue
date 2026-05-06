@@ -99,6 +99,9 @@
       </div>
     </div>
 
+    <!-- Hierarchie-Zuordnungen -->
+    <DataPointHierarchyCard :dp-id="id" />
+
     <!-- Verknüpfungen -->
     <div class="card">
       <div class="card-header">
@@ -164,8 +167,9 @@ import Badge          from '@/components/ui/Badge.vue'
 import Spinner        from '@/components/ui/Spinner.vue'
 import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
-import DataPointForm  from '@/components/datapoints/DataPointForm.vue'
-import BindingForm    from '@/components/datapoints/BindingForm.vue'
+import DataPointForm          from '@/components/datapoints/DataPointForm.vue'
+import BindingForm            from '@/components/datapoints/BindingForm.vue'
+import DataPointHierarchyCard from '@/components/datapoints/DataPointHierarchyCard.vue'
 
 const props   = defineProps({ id: { type: String, required: true } })
 const dpStore = useDatapointStore()

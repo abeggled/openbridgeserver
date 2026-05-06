@@ -453,6 +453,15 @@
       </div>
     </div>
 
+    <!-- ── Hierarchie ── -->
+    <div v-if="activeTab === 'hierarchy'" class="flex flex-col gap-4" data-testid="hierarchy-tab">
+      <div class="card">
+        <div class="card-body">
+          <HierarchyManager />
+        </div>
+      </div>
+    </div>
+
     <!-- ── Icons Library ── -->
     <div v-if="activeTab === 'icons' && !isDemo" class="flex flex-col gap-4" data-testid="icons-tab">
 
@@ -851,8 +860,9 @@ import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
 import { useTz } from '@/composables/useTz'
-import Badge          from '@/components/ui/Badge.vue'
-import Spinner        from '@/components/ui/Spinner.vue'
+import Badge            from '@/components/ui/Badge.vue'
+import Spinner          from '@/components/ui/Spinner.vue'
+import HierarchyManager from '@/components/HierarchyManager.vue'
 import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import IconPicker     from '@/components/ui/IconPicker.vue'
@@ -969,6 +979,7 @@ const tabs = computed(() => [
   ...(auth.isAdmin ? [{ id: 'users', label: 'Benutzer' }] : []),
   { id: 'apikeys',      label: 'API Keys' },
   ...(auth.isAdmin && !isDemo.value ? [{ id: 'links', label: 'Links' }] : []),
+  { id: 'hierarchy',    label: 'Hierarchie' },
   { id: 'importexport', label: 'Datenmanagement' },
   { id: 'icons',        label: 'Icons' },
   ...(auth.isAdmin ? [{ id: 'history', label: 'Historie DB' }] : []),

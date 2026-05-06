@@ -31,6 +31,13 @@ router = APIRouter(tags=["datapoints"])
 # ---------------------------------------------------------------------------
 
 
+class HierarchyNodeRef(BaseModel):
+    node_id: str
+    node_name: str
+    tree_id: str
+    tree_name: str
+
+
 class DataPointOut(BaseModel):
     id: uuid.UUID
     name: str
@@ -46,6 +53,8 @@ class DataPointOut(BaseModel):
     # Runtime
     value: Any = None
     quality: str | None = None
+    # Hierarchy (populated by search endpoint, empty elsewhere)
+    hierarchy_nodes: list[HierarchyNodeRef] = []
 
     model_config = {"from_attributes": True}
 
@@ -112,6 +121,12 @@ _SORT_KEYS = {
     "created_at": lambda dp: dp.created_at.isoformat(),
     "updated_at": lambda dp: dp.updated_at.isoformat(),
 }
+
+
+@router.get("/tags", response_model=list[str])
+async def list_tags(_user: str = Depends(get_current_user)) -> list[str]:
+    reg = get_registry()
+    return sorted({t for dp in reg.all() for t in dp.tags})
 
 
 @router.get("/", response_model=DataPointPage)

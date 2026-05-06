@@ -9,6 +9,7 @@ export const useDatapointStore = defineStore('datapoints', () => {
   const total    = ref(0)
   const loading  = ref(false)
   const datatypes = ref([])  // [{ name, python_type, description }]
+  const allTags   = ref([])  // all known tags (loaded once, independent of current filter)
   const sortCol  = ref('name')
   const sortDir  = ref('asc')
   const hasMore  = ref(false)
@@ -104,6 +105,11 @@ export const useDatapointStore = defineStore('datapoints', () => {
     datatypes.value = data
   }
 
+  async function loadTags() {
+    const { data } = await dpApi.tags()
+    allTags.value = data
+  }
+
   // Update a single item's live value from WebSocket.
   function patchValue(id, value, quality) {
     const dp = items.value.find(d => d.id === id)
@@ -123,7 +129,7 @@ export const useDatapointStore = defineStore('datapoints', () => {
     try {
       sessionStorage.setItem(SCROLL_STATE_KEY, JSON.stringify({
         scrollY,
-        filters,
+        filters: { ...filters, tags: filters.tags ?? [], node_ids: filters.node_ids ?? [] },
         count: items.value.length,
       }))
     } catch { /* quota errors are non-fatal */ }
@@ -141,9 +147,9 @@ export const useDatapointStore = defineStore('datapoints', () => {
   }
 
   return {
-    items, total, loading, datatypes, sortCol, sortDir, hasMore,
+    items, total, loading, datatypes, allTags, sortCol, sortDir, hasMore,
     search, loadMore, setSort,
-    create, update, remove, loadDatatypes, patchValue, writeValue,
+    create, update, remove, loadDatatypes, loadTags, patchValue, writeValue,
     saveScrollState, restoreScrollState, clearScrollState,
   }
 })
