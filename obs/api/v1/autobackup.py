@@ -185,13 +185,13 @@ async def restore_autobackup(
         raise HTTPException(status_code=400, detail="Ungültiger Sicherungsname.")
 
     base_dir = _autobackup_dir().resolve()
-    backup_path = (base_dir / f"{safe_name}.json").resolve()
-    try:
-        backup_path.relative_to(base_dir)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Ungültiger Sicherungspfad.")
-
-    if not backup_path.exists():
+    allowed_backups = {
+        p.stem: p
+        for p in base_dir.glob("*.json")
+        if p.is_file() and re.fullmatch(r"\d{8}-\d{4}", p.stem)
+    }
+    backup_path = allowed_backups.get(safe_name)
+    if backup_path is None:
         raise HTTPException(status_code=404, detail=f"Sicherung '{safe_name}' nicht gefunden.")
 
     try:
