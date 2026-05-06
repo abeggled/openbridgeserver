@@ -790,6 +790,237 @@ async def iobroker_import_states(
 
 
 # ---------------------------------------------------------------------------
+# Anwesenheitssimulation: Datenpunkt-Selektor + Binding-Sync
+# ---------------------------------------------------------------------------
+
+
+class AnwesenheitHealthResult(BaseModel):
+    healthy: bool
+    message: str
+    bindings_total: int = 0
+    bindings_with_data: int = 0
+
+
+@router.get("/instances/{instance_id}/anwesenheit/health", response_model=AnwesenheitHealthResult)
+async def anwesenheit_health(
+    instance_id: uuid.UUID,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> AnwesenheitHealthResult:
+    """Check whether history data is available for the configured offset window."""
+    from datetime import timedelta, timezone
+    from datetime import datetime as _dt
+
+    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "ANWESENHEITSSIMULATION":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEITSSIMULATION-Instanzen verfügbar")
+
+    raw_config = row["config"] or "{}"
+    config_dict = json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+
+    from obs.adapters.anwesenheit.adapter import AnwesenheitssimulationConfig
+
+    try:
+        cfg = AnwesenheitssimulationConfig(**config_dict)
+    except Exception as exc:
+        return AnwesenheitHealthResult(healthy=False, message=f"Config-Fehler: {exc}")
+
+    try:
+        from obs.history.factory import get_history_plugin
+
+        history = get_history_plugin()
+    except RuntimeError:
+        return AnwesenheitHealthResult(
+            healthy=False, message="History-Plugin nicht verfügbar — bitte History-Backend in den Einstellungen konfigurieren"
+        )
+
+    binding_rows = await db.fetchall(
+        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=? AND direction='SOURCE' AND enabled=1",
+        (str(instance_id),),
+    )
+    total = len(binding_rows)
+    if total == 0:
+        return AnwesenheitHealthResult(
+            healthy=False,
+            message="Keine aktiven Verknüpfungen konfiguriert — bitte zuerst Objekte über 'Objekte verwalten' hinzufügen",
+            bindings_total=0,
+            bindings_with_data=0,
+        )
+
+    now = _dt.now(tz=timezone.utc)
+    delta = timedelta(days=cfg.offset_days)
+    hist_from = now - delta - timedelta(hours=12)
+    hist_to = now - delta + timedelta(hours=12)
+
+    with_data = 0
+    for b_row in binding_rows:
+        try:
+            dp_id = uuid.UUID(b_row["datapoint_id"])
+            records = await history.query(dp_id, hist_from, hist_to, limit=1)
+            if records:
+                with_data += 1
+        except Exception:
+            pass
+
+    healthy = with_data > 0
+    if healthy:
+        msg = (
+            f"{with_data} von {total} Objekt(en) haben historische Daten für den Versatz von {cfg.offset_days} Tag(en). "
+            f"Die Simulation wird heute Ereignisse aus dem {cfg.offset_days}-Tage-Fenster wiedergeben."
+        )
+    else:
+        msg = (
+            f"Keine historischen Daten für den Versatz von {cfg.offset_days} Tag(en) gefunden. "
+            f"Stellen Sie sicher, dass für die verknüpften Objekte die Historisierung aktiviert ist "
+            f"und Aufzeichnungen aus dem Zeitraum vor {cfg.offset_days + 1} Tagen vorhanden sind."
+        )
+
+    return AnwesenheitHealthResult(
+        healthy=healthy,
+        message=msg,
+        bindings_total=total,
+        bindings_with_data=with_data,
+    )
+
+
+class AnwesenheitDatapointEntry(BaseModel):
+    id: str
+    name: str
+    data_type: str
+    has_binding: bool
+    binding_id: str | None
+
+
+class AnwesenheitSyncRequest(BaseModel):
+    datapoint_ids: list[str]
+
+
+class AnwesenheitSyncResult(BaseModel):
+    created: int = 0
+    removed: int = 0
+    errors: list[str] = []
+
+
+@router.get(
+    "/instances/{instance_id}/anwesenheit/datapoints",
+    response_model=list[AnwesenheitDatapointEntry],
+)
+async def anwesenheit_list_datapoints(
+    instance_id: uuid.UUID,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> list[AnwesenheitDatapointEntry]:
+    """List all Boolean/Integer DataPoints with their binding status for this instance."""
+    row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "ANWESENHEITSSIMULATION":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEIT-Instanzen verfügbar")
+
+    from obs.core.registry import get_registry
+
+    registry = get_registry()
+    all_dps = registry.all()
+
+    # Existing bindings for this instance
+    binding_rows = await db.fetchall(
+        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=?",
+        (str(instance_id),),
+    )
+    bound_map: dict[str, str] = {r["datapoint_id"]: r["id"] for r in binding_rows}
+
+    result: list[AnwesenheitDatapointEntry] = []
+    for dp in sorted(all_dps, key=lambda d: d.name.lower()):
+        if dp.data_type not in ("BOOLEAN", "INTEGER"):
+            continue
+        dp_id_str = str(dp.id)
+        result.append(
+            AnwesenheitDatapointEntry(
+                id=dp_id_str,
+                name=dp.name,
+                data_type=dp.data_type,
+                has_binding=dp_id_str in bound_map,
+                binding_id=bound_map.get(dp_id_str),
+            )
+        )
+    return result
+
+
+@router.post(
+    "/instances/{instance_id}/anwesenheit/sync-bindings",
+    response_model=AnwesenheitSyncResult,
+)
+async def anwesenheit_sync_bindings(
+    instance_id: uuid.UUID,
+    body: AnwesenheitSyncRequest,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> AnwesenheitSyncResult:
+    """Create missing bindings for selected DataPoints and remove bindings for deselected ones."""
+    row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "ANWESENHEITSSIMULATION":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEIT-Instanzen verfügbar")
+
+    from obs.api.v1.bindings import create_binding, delete_binding
+    from obs.models.binding import AdapterBindingCreate
+
+    # Current bindings for this instance
+    binding_rows = await db.fetchall(
+        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=?",
+        (str(instance_id),),
+    )
+    current: dict[str, str] = {r["datapoint_id"]: r["id"] for r in binding_rows}
+
+    desired_ids = set(body.datapoint_ids)
+    current_ids = set(current.keys())
+
+    result = AnwesenheitSyncResult()
+
+    # Create missing bindings
+    for dp_id_str in desired_ids - current_ids:
+        try:
+            dp_uuid = uuid.UUID(dp_id_str)
+            await create_binding(
+                dp_uuid,
+                AdapterBindingCreate(
+                    adapter_instance_id=instance_id,
+                    direction="SOURCE",
+                    config={},
+                    enabled=True,
+                ),
+                _user,
+                db,
+            )
+            result.created += 1
+        except Exception as exc:
+            result.errors.append(f"{dp_id_str}: {exc}")
+
+    # Remove bindings for deselected DataPoints
+    for dp_id_str in current_ids - desired_ids:
+        try:
+            binding_uuid = uuid.UUID(current[dp_id_str])
+            dp_uuid = uuid.UUID(dp_id_str)
+            await delete_binding(dp_uuid, binding_uuid, _user, db)
+            result.removed += 1
+        except Exception as exc:
+            result.errors.append(f"{dp_id_str}: {exc}")
+
+    # Reload adapter bindings if the instance is running
+    try:
+        inst = adapter_registry.get_instance_by_id(instance_id)
+        if inst is not None:
+            await adapter_registry.reload_instance_bindings(instance_id, db)
+    except Exception:
+        pass  # non-critical — bindings take effect on next restart
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Typ-Routen (unverändert — Schema-Abfragen + Legacy-Config)
 # ---------------------------------------------------------------------------
 

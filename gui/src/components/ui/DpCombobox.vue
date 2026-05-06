@@ -73,14 +73,19 @@ const activeIndex = ref(-1)
 const container   = ref(null)
 
 let debounceTimer = null
+let _skipSearch = false  // suppresses search when displayName syncs programmatically
 
 // When the parent updates displayName (e.g. on mount after async load), sync input
 watch(() => props.displayName, val => {
-  if (val && !open.value) query.value = val
+  if (val && !open.value) {
+    _skipSearch = true
+    query.value = val
+  }
 })
 
 // Trigger search on every keystroke
 watch(query, val => {
+  if (_skipSearch) { _skipSearch = false; return }
   clearTimeout(debounceTimer)
   noResults.value = false
 

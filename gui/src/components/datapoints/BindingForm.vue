@@ -18,7 +18,7 @@
     <!-- ── TAB: Verbindung ── -->
     <div v-show="activeTab === 'conn'" class="flex flex-col gap-4">
 
-      <div class="grid grid-cols-2 gap-4">
+      <div class="grid gap-4" :class="selectedAdapterType === 'ANWESENHEITSSIMULATION' ? 'grid-cols-1' : 'grid-cols-2'">
         <div class="form-group">
           <label class="label">Adapter-Instanz *</label>
           <div v-if="props.initial" class="input bg-slate-100 dark:bg-slate-800/50 text-slate-400 cursor-not-allowed">
@@ -31,7 +31,7 @@
             </optgroup>
           </select>
         </div>
-        <div class="form-group">
+        <div v-if="selectedAdapterType !== 'ANWESENHEITSSIMULATION'" class="form-group">
           <label class="label">Richtung *</label>
           <select
             v-model="form.direction"
@@ -798,6 +798,51 @@
         </template><!-- /timer_type !== meta -->
       </template>
 
+      <!-- Anwesenheitssimulation — per-Binding Overrides -->
+      <template v-if="selectedAdapterType === 'ANWESENHEITSSIMULATION'">
+        <div class="section-header">Anwesenheitssimulation — Binding-Optionen</div>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="form-group">
+            <label class="label">Versatz überschreiben</label>
+            <div class="flex gap-2">
+              <select v-model="anwOffsetSelect" class="input" @change="onAnwOffsetSelectChange">
+                <option value="">Standard (Adapter)</option>
+                <option value="1">1 Tag</option>
+                <option value="7">7 Tage</option>
+                <option value="14">14 Tage</option>
+                <option value="custom">Andere (1–30 Tage) …</option>
+              </select>
+              <input
+                v-if="anwOffsetSelect === 'custom'"
+                v-model.number="cfg.offset_override"
+                type="number" min="1" max="30"
+                class="input w-24"
+                placeholder="Tage"
+                @input="onAnwOffsetCustomInput"
+              />
+            </div>
+            <p class="hint">Leer = Versatz aus der Adapter-Konfiguration verwenden.</p>
+          </div>
+          <div class="form-group">
+            <label class="label">Verhalten bei Anwesenheit</label>
+            <select v-model="cfg.on_presence_override" class="input">
+              <option :value="null">Standard (Adapter)</option>
+              <option value="behalten">Wert behalten</option>
+              <option value="zuruecksetzen">Wert zurücksetzen (false / 0)</option>
+              <option value="setzen">Wert setzen auf …</option>
+            </select>
+            <input
+              v-if="cfg.on_presence_override === 'setzen'"
+              v-model="cfg.on_presence_value"
+              type="text"
+              class="input mt-2"
+              placeholder="z.B. 0 / 1 / false / true / 21.5"
+            />
+            <p class="hint">Leer = Verhalten aus der Adapter-Konfiguration verwenden.</p>
+          </div>
+        </div>
+      </template>
+
       <div v-if="!selectedAdapterType && !props.initial" class="p-3 bg-slate-100/80 dark:bg-slate-800/40 rounded-lg text-sm text-slate-500 text-center">
         Bitte zuerst eine Adapter-Instanz wählen
       </div>
@@ -948,6 +993,7 @@ const allInstances = ref([])
 const allDpts      = ref([])
 const activeTab    = ref('conn')
 const showAdvancedTabs = ref(false)
+const anwOffsetSelect  = ref('')  // '' | '1' | '7' | '14' | 'custom'
 
 // ---------------------------------------------------------------------------
 // Form-State
@@ -993,6 +1039,10 @@ const cfg = reactive({
   entity_id: '', attribute: '', service_domain: '', service_name: '', service_data_key: '',
   // IOBROKER
   state_id: '', command_state_id: '', ack: false,
+  // ANWESENHEITSSIMULATION
+  offset_override: null,
+  on_presence_override: null,
+  on_presence_value: '',
   // ZEITSCHALTUHR
   timer_type: 'daily', meta_type: 'none',
   weekdays: [0,1,2,3,4,5,6], months: [], day_of_month: 0,
@@ -1088,7 +1138,7 @@ const selectedInstanceId = computed(() => props.initial?.adapter_instance_id || 
 
 const visibleTabs = computed(() => {
   const tabs = [{ id: 'conn', label: 'Verbindung', badge: false }]
-  if (selectedAdapterType.value && selectedAdapterType.value !== 'ZEITSCHALTUHR') {
+  if (selectedAdapterType.value && selectedAdapterType.value !== 'ZEITSCHALTUHR' && selectedAdapterType.value !== 'ANWESENHEITSSIMULATION') {
     if (selectedAdapterType.value === 'IOBROKER' && !showAdvancedTabs.value) return tabs
     const hasFormula = !!form.value_formula?.trim() || !!form.value_map_preset
     tabs.push({ id: 'transform', label: 'Transformation', badge: hasFormula })
@@ -1202,6 +1252,18 @@ watch(() => props.initial, val => {
   if (cfg.date_window_from) parseWinExprInto(cfg.date_window_from, winFrom)
   if (cfg.date_window_to)   parseWinExprInto(cfg.date_window_to,   winTo)
   if (cfg.value             == null) cfg.value             = '1'
+  // ANWESENHEITSSIMULATION defaults + select sync
+  if (cfg.offset_override      === undefined) cfg.offset_override      = null
+  if (cfg.on_presence_override === undefined) cfg.on_presence_override = null
+  if (cfg.on_presence_value    === undefined) cfg.on_presence_value    = ''
+  {
+    const ANW_PRESETS = ['1', '7', '14']
+    if (cfg.offset_override != null) {
+      anwOffsetSelect.value = ANW_PRESETS.includes(String(cfg.offset_override)) ? String(cfg.offset_override) : 'custom'
+    } else {
+      anwOffsetSelect.value = ''
+    }
+  }
   // Restore value_map UI state from top-level binding field
   if (val.value_map && typeof val.value_map === 'object') {
     const mapStr = JSON.stringify(val.value_map)
@@ -1491,6 +1553,20 @@ async function onWinTypeChange(ep) {
   if (ep.type === 'holiday_name' && selectedInstanceId.value) await loadZsuHolidays()
 }
 
+function onAnwOffsetSelectChange() {
+  if (anwOffsetSelect.value === '') {
+    cfg.offset_override = null
+  } else if (anwOffsetSelect.value !== 'custom') {
+    cfg.offset_override = parseInt(anwOffsetSelect.value)
+  }
+}
+
+function onAnwOffsetCustomInput() {
+  if (cfg.offset_override != null) {
+    cfg.offset_override = Math.min(30, Math.max(1, cfg.offset_override || 1))
+  }
+}
+
 function collectXmlLeafPaths(el, prefix) {
   const result = []
 
@@ -1687,6 +1763,16 @@ function buildConfig() {
     }
     return c
   }
+  if (type === 'ANWESENHEITSSIMULATION') {
+    const c = {}
+    if (cfg.offset_override != null) c.offset_override = cfg.offset_override
+    if (cfg.on_presence_override != null) {
+      c.on_presence_override = cfg.on_presence_override
+      if (cfg.on_presence_override === 'setzen' && cfg.on_presence_value?.trim())
+        c.on_presence_value = cfg.on_presence_value.trim()
+    }
+    return c
+  }
   return {}
 }
 
@@ -1695,6 +1781,7 @@ async function submit() {
   saving.value = true
   try {
     const config     = buildConfig()
+    const effectiveDirection = selectedAdapterType.value === 'ANWESENHEITSSIMULATION' ? 'SOURCE' : form.direction
     const throttleMs = form.throttle_value > 0
       ? Math.round(form.throttle_value * THROTTLE_FACTORS[form.throttle_unit]) : null
     let resolvedValueMap = null
@@ -1713,7 +1800,7 @@ async function submit() {
     }
     if (props.initial) {
       await dpApi.updateBinding(props.dpId, props.initial.id, {
-        direction: form.direction, config, enabled: form.enabled, ...filterPayload,
+        direction: effectiveDirection, config, enabled: form.enabled, ...filterPayload,
       })
     } else {
       if (!form.adapter_instance_id) {
@@ -1721,7 +1808,7 @@ async function submit() {
       }
       await dpApi.createBinding(props.dpId, {
         adapter_instance_id: form.adapter_instance_id,
-        direction: form.direction, config, enabled: form.enabled, ...filterPayload,
+        direction: effectiveDirection, config, enabled: form.enabled, ...filterPayload,
       })
     }
     emit('save')

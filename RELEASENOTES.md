@@ -1,17 +1,8 @@
 # Changes
 
-## 2026.5.2
-### Breaking changes 🚨
-* none
-
-### New features 💡
-* none
-  
-### Fixes 🐞
-* #361: General: Missing Docker Image for ARM64
-* #363: Adapter: The MQTT adapter did not send an MQTT client ID; the adapter now generates a random one, the client ID and TLS settings are now configurable
-* #356: Adapter: Nested JSON structures could not be processed by the JSON selector in the MQTT adapter and displayed for selection
-* #342: Visu: Some Visu widgets incorrectly displayed a red exclamation mark, which actually indicates a missing object after an import
+## 2026.6.0
+### New features:
+* Adapter: Anwesenheitssimulation — replays historical switch states (Boolean/Integer) during absence with a configurable day offset (1/7/14 days or custom 1–30). Includes control DataPoint for automatic activation/deactivation, configurable on-presence behaviour (keep/reset), per-binding offset overrides, and a GUI datapoint-selector with bulk binding management.
 
 ## 2026.5.1
 ### New features:
