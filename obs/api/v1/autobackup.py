@@ -224,7 +224,16 @@ async def delete_autobackup(
 ) -> dict:
     """Eine einzelne Autobackup-Sicherung löschen."""
     safe_name = Path(name).name
-    backup_path = _autobackup_dir() / f"{safe_name}.json"
+    if not re.fullmatch(r"\d{8}-\d{4}", safe_name):
+        raise HTTPException(status_code=400, detail="Ungültiger Sicherungsname.")
+
+    base_dir = _autobackup_dir().resolve()
+    backup_path = (base_dir / f"{safe_name}.json").resolve()
+    try:
+        backup_path.relative_to(base_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Ungültiger Sicherungspfad.")
+
     if not backup_path.exists():
         raise HTTPException(status_code=404, detail=f"Sicherung '{safe_name}' nicht gefunden.")
     backup_path.unlink()
