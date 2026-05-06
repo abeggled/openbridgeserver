@@ -3,6 +3,7 @@
     <toRun name="OBS Mosquitto (Docker)" type="ShConfigurationType" />
     <toRun name="OBS Backend" type="PythonConfigurationType" />
     <toRun name="OBS GUI (Admin)" type="js.build_tools.npm" />
+    <toRun name="OBS GUI (Visu)" type="ShConfigurationType" />
     <method v="2" />
   </configuration>
 </component>
