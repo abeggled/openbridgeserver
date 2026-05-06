@@ -1,5 +1,16 @@
 # Changes
 
+## 2026.6.0
+### New features:
+* none
+  
+### Fixes:
+* #361: Missing Docker Image for ARM64
+
+### Breaking changes:
+* none
+  
+
 ## 2026.5.1
 ### New features:
 * General: LXC template for ARM architectures
