@@ -173,6 +173,10 @@
               title="ioBroker-States als OBS-Objekte importieren">
               Importieren
             </button>
+            <button v-if="a.adapter_type === 'ANWESENHEIT'" @click="openAnwesenheitSelector(a)" class="btn-secondary btn-sm"
+              title="Simulierte Objekte (Boolean/Integer) auswählen und Bindings verwalten">
+              Objekte verwalten
+            </button>
             <button @click="confirmDelete(a)" class="ml-auto btn-danger btn-sm" :disabled="busy[a.id] === 'delete'"
               title="Löscht diese Instanz und alle zugehörigen Verknüpfungen unwiderruflich"
               data-testid="btn-delete-instance">
@@ -192,6 +196,11 @@
       confirm-label="Löschen"
       @confirm="executeDelete"
     />
+
+    <!-- Anwesenheitssimulation: Objekte verwalten -->
+    <Modal v-model="anwesenheitOpen" :title="anwesenheitInstance ? `Anwesenheitssimulation — ${anwesenheitInstance.name}` : 'Anwesenheitssimulation'" max-width="xl">
+      <AnwesenheitDatapointSelector v-if="anwesenheitOpen && anwesenheitInstance" :instance-id="anwesenheitInstance.id" />
+    </Modal>
 
     <Modal v-model="importOpen" :title="importInstance ? `ioBroker Import — ${importInstance.name}` : 'ioBroker Import'" max-width="2xl" resizable>
       <div class="flex flex-col gap-4">
@@ -282,6 +291,7 @@ import Spinner       from '@/components/ui/Spinner.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import SchemaForm    from '@/components/adapters/SchemaForm.vue'
 import ZeitschaltuhrCustomHolidaysEditor from '@/components/adapters/ZeitschaltuhrCustomHolidaysEditor.vue'
+import AnwesenheitDatapointSelector from '@/components/adapters/AnwesenheitDatapointSelector.vue'
 import Modal         from '@/components/ui/Modal.vue'
 
 const store          = useAdapterStore()
@@ -305,6 +315,15 @@ const createError       = ref(null)
 // Löschen
 const deleteTarget      = ref(null)
 const showDeleteConfirm = ref(false)
+
+// Anwesenheitssimulation — Objekte verwalten
+const anwesenheitOpen = ref(false)
+const anwesenheitInstance = ref(null)
+
+function openAnwesenheitSelector(a) {
+  anwesenheitInstance.value = a
+  anwesenheitOpen.value = true
+}
 
 // ioBroker Import
 const importOpen = ref(false)

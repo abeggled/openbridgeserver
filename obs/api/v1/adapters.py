@@ -764,6 +764,146 @@ async def iobroker_import_states(
 
 
 # ---------------------------------------------------------------------------
+# Anwesenheitssimulation: Datenpunkt-Selektor + Binding-Sync
+# ---------------------------------------------------------------------------
+
+
+class AnwesenheitDatapointEntry(BaseModel):
+    id: str
+    name: str
+    data_type: str
+    has_binding: bool
+    binding_id: str | None
+
+
+class AnwesenheitSyncRequest(BaseModel):
+    datapoint_ids: list[str]
+
+
+class AnwesenheitSyncResult(BaseModel):
+    created: int = 0
+    removed: int = 0
+    errors: list[str] = []
+
+
+@router.get(
+    "/instances/{instance_id}/anwesenheit/datapoints",
+    response_model=list[AnwesenheitDatapointEntry],
+)
+async def anwesenheit_list_datapoints(
+    instance_id: uuid.UUID,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> list[AnwesenheitDatapointEntry]:
+    """List all Boolean/Integer DataPoints with their binding status for this instance."""
+    row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "ANWESENHEIT":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEIT-Instanzen verfügbar")
+
+    from obs.core.registry import get_registry
+
+    registry = get_registry()
+    all_dps = registry.all()
+
+    # Existing bindings for this instance
+    binding_rows = await db.fetchall(
+        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=?",
+        (str(instance_id),),
+    )
+    bound_map: dict[str, str] = {r["datapoint_id"]: r["id"] for r in binding_rows}
+
+    result: list[AnwesenheitDatapointEntry] = []
+    for dp in sorted(all_dps, key=lambda d: d.name.lower()):
+        if dp.data_type not in ("BOOLEAN", "INTEGER"):
+            continue
+        dp_id_str = str(dp.id)
+        result.append(
+            AnwesenheitDatapointEntry(
+                id=dp_id_str,
+                name=dp.name,
+                data_type=dp.data_type,
+                has_binding=dp_id_str in bound_map,
+                binding_id=bound_map.get(dp_id_str),
+            )
+        )
+    return result
+
+
+@router.post(
+    "/instances/{instance_id}/anwesenheit/sync-bindings",
+    response_model=AnwesenheitSyncResult,
+)
+async def anwesenheit_sync_bindings(
+    instance_id: uuid.UUID,
+    body: AnwesenheitSyncRequest,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> AnwesenheitSyncResult:
+    """Create missing bindings for selected DataPoints and remove bindings for deselected ones."""
+    row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "ANWESENHEIT":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEIT-Instanzen verfügbar")
+
+    from obs.api.v1.bindings import create_binding, delete_binding
+    from obs.models.binding import AdapterBindingCreate
+
+    # Current bindings for this instance
+    binding_rows = await db.fetchall(
+        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=?",
+        (str(instance_id),),
+    )
+    current: dict[str, str] = {r["datapoint_id"]: r["id"] for r in binding_rows}
+
+    desired_ids = set(body.datapoint_ids)
+    current_ids = set(current.keys())
+
+    result = AnwesenheitSyncResult()
+
+    # Create missing bindings
+    for dp_id_str in desired_ids - current_ids:
+        try:
+            dp_uuid = uuid.UUID(dp_id_str)
+            await create_binding(
+                dp_uuid,
+                AdapterBindingCreate(
+                    adapter_instance_id=instance_id,
+                    direction="SOURCE",
+                    config={},
+                    enabled=True,
+                ),
+                _user,
+                db,
+            )
+            result.created += 1
+        except Exception as exc:
+            result.errors.append(f"{dp_id_str}: {exc}")
+
+    # Remove bindings for deselected DataPoints
+    for dp_id_str in current_ids - desired_ids:
+        try:
+            binding_uuid = uuid.UUID(current[dp_id_str])
+            dp_uuid = uuid.UUID(dp_id_str)
+            await delete_binding(dp_uuid, binding_uuid, _user, db)
+            result.removed += 1
+        except Exception as exc:
+            result.errors.append(f"{dp_id_str}: {exc}")
+
+    # Reload adapter bindings if the instance is running
+    try:
+        inst = adapter_registry.get_instance_by_id(instance_id)
+        if inst is not None:
+            await adapter_registry.reload_instance_bindings(instance_id, db)
+    except Exception:
+        pass  # non-critical — bindings take effect on next restart
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Typ-Routen (unverändert — Schema-Abfragen + Legacy-Config)
 # ---------------------------------------------------------------------------
 
