@@ -15,7 +15,7 @@ export default defineConfig({
     alias: { '@': resolve(__dirname, 'src') }
   },
 
-  // Dev server: proxy all /api calls to the open bridge server backend
+  // Dev server: proxy /api to backend, /visu to the Visu frontend dev server (port 5174)
   server: {
     port: 5173,
     proxy: {
@@ -23,7 +23,11 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
         ws: true,            // WebSocket proxy
-      }
+      },
+      '/visu': {
+        target: 'http://localhost:5174',
+        changeOrigin: true,
+      },
     }
   },
 

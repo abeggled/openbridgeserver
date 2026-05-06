@@ -46,7 +46,7 @@
       <!-- Visu link + Custom Links (abgesetzt) -->
       <div class="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700/60 flex flex-col gap-0.5">
         <a
-          href="/visu"
+          href="/visu/"
           target="_blank"
           rel="noopener"
           :title="collapsed ? 'Visu' : ''"
