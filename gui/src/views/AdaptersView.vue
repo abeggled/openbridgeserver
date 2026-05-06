@@ -50,16 +50,22 @@
           <!-- Schema-based config form -->
           <div v-if="newForm.adapter_type && newSchema">
             <label class="label mb-2">Konfiguration</label>
-            <SchemaForm
-              :schema="newSchema"
+            <AnwesenheitConfigForm
+              v-if="newForm.adapter_type === 'ANWESENHEITSSIMULATION'"
               v-model="newForm.config"
-              :exclude="newForm.adapter_type.toLowerCase() === 'zeitschaltuhr' ? ['custom_holidays'] : []"
             />
-            <ZeitschaltuhrCustomHolidaysEditor
-              v-if="newForm.adapter_type.toLowerCase() === 'zeitschaltuhr'"
-              :model-value="newForm.config.custom_holidays ?? []"
-              @update:model-value="newForm.config.custom_holidays = $event"
-            />
+            <template v-else>
+              <SchemaForm
+                :schema="newSchema"
+                v-model="newForm.config"
+                :exclude="newForm.adapter_type.toLowerCase() === 'zeitschaltuhr' ? ['custom_holidays'] : []"
+              />
+              <ZeitschaltuhrCustomHolidaysEditor
+                v-if="newForm.adapter_type.toLowerCase() === 'zeitschaltuhr'"
+                :model-value="newForm.config.custom_holidays ?? []"
+                @update:model-value="newForm.config.custom_holidays = $event"
+              />
+            </template>
           </div>
           <div v-else-if="newForm.adapter_type && schemaLoading" class="flex items-center gap-2 text-sm text-slate-500">
             <Spinner size="xs" /> Schema wird geladen…
@@ -120,16 +126,22 @@
             <!-- Schema-based config form -->
             <div v-if="schemas[a.adapter_type]" class="mt-4">
               <label class="label mb-2">Konfiguration</label>
-              <SchemaForm
-                :schema="schemas[a.adapter_type]"
+              <AnwesenheitConfigForm
+                v-if="a.adapter_type === 'ANWESENHEITSSIMULATION'"
                 v-model="drafts[a.id].config"
-                :exclude="a.adapter_type.toLowerCase() === 'zeitschaltuhr' ? ['custom_holidays'] : []"
               />
-              <ZeitschaltuhrCustomHolidaysEditor
-                v-if="a.adapter_type.toLowerCase() === 'zeitschaltuhr'"
-                :model-value="drafts[a.id].config.custom_holidays ?? []"
-                @update:model-value="drafts[a.id].config.custom_holidays = $event"
-              />
+              <template v-else>
+                <SchemaForm
+                  :schema="schemas[a.adapter_type]"
+                  v-model="drafts[a.id].config"
+                  :exclude="a.adapter_type.toLowerCase() === 'zeitschaltuhr' ? ['custom_holidays'] : []"
+                />
+                <ZeitschaltuhrCustomHolidaysEditor
+                  v-if="a.adapter_type.toLowerCase() === 'zeitschaltuhr'"
+                  :model-value="drafts[a.id].config.custom_holidays ?? []"
+                  @update:model-value="drafts[a.id].config.custom_holidays = $event"
+                />
+              </template>
             </div>
             <div v-else class="flex items-center gap-2 text-sm text-slate-500 mt-4">
               <Spinner size="xs" /> Schema wird geladen…
@@ -173,7 +185,7 @@
               title="ioBroker-States als OBS-Objekte importieren">
               Importieren
             </button>
-            <button v-if="a.adapter_type === 'ANWESENHEIT'" @click="openAnwesenheitSelector(a)" class="btn-secondary btn-sm"
+            <button v-if="a.adapter_type === 'ANWESENHEITSSIMULATION'" @click="openAnwesenheitSelector(a)" class="btn-secondary btn-sm"
               title="Simulierte Objekte (Boolean/Integer) auswählen und Bindings verwalten">
               Objekte verwalten
             </button>
@@ -292,6 +304,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import SchemaForm    from '@/components/adapters/SchemaForm.vue'
 import ZeitschaltuhrCustomHolidaysEditor from '@/components/adapters/ZeitschaltuhrCustomHolidaysEditor.vue'
 import AnwesenheitDatapointSelector from '@/components/adapters/AnwesenheitDatapointSelector.vue'
+import AnwesenheitConfigForm from '@/components/adapters/AnwesenheitConfigForm.vue'
 import Modal         from '@/components/ui/Modal.vue'
 
 const store          = useAdapterStore()

@@ -799,7 +799,7 @@ async def anwesenheit_list_datapoints(
     row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
-    if row["adapter_type"] != "ANWESENHEIT":
+    if row["adapter_type"] != "ANWESENHEITSSIMULATION":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEIT-Instanzen verfügbar")
 
     from obs.core.registry import get_registry
@@ -845,7 +845,7 @@ async def anwesenheit_sync_bindings(
     row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
-    if row["adapter_type"] != "ANWESENHEIT":
+    if row["adapter_type"] != "ANWESENHEITSSIMULATION":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEIT-Instanzen verfügbar")
 
     from obs.api.v1.bindings import create_binding, delete_binding

@@ -20,8 +20,8 @@ Activation:
       control value = 0  (or 1 if inverted) → you are AWAY  → simulation ACTIVE.
 
 On-presence action (triggered when you return home):
-  - "keep"  → leave all simulated objects in their current state (default).
-  - "reset" → publish False/0 to every bound DataPoint.
+  - "behalten"      → leave all simulated objects in their current state (default).
+  - "zuruecksetzen" → publish False/0 to every bound DataPoint.
 
 Only SOURCE bindings are valid (pure-source adapter — no write-back).
 DEST and BOTH bindings are skipped with a warning.
@@ -51,35 +51,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class OffsetPreset(str, Enum):
-    ONE = "1"
-    SEVEN = "7"
-    FOURTEEN = "14"
-    CUSTOM = "custom"
-
-
 class OnPresence(str, Enum):
-    KEEP = "keep"
-    RESET = "reset"
+    KEEP = "behalten"
+    RESET = "zuruecksetzen"
 
 
 class AnwesenheitssimulationConfig(BaseModel):
-    offset_preset: OffsetPreset = Field(
-        default=OffsetPreset.SEVEN,
-        title="Historischer Versatz",
-        description="Voreingestellter Versatz: 1, 7 oder 14 Tage",
-    )
-    offset_custom: int = Field(
+    offset_days: int = Field(
         default=7,
         ge=1,
         le=30,
-        title="Benutzerdefinierter Versatz (Tage)",
-        description="Nur aktiv wenn Versatz auf 'Benutzerdefiniert' gesetzt ist (1–30 Tage)",
+        title="Historischer Versatz (Tage)",
+        description="Anzahl Tage in der Vergangenheit, deren Schaltzustände wiederholt werden (1–30)",
     )
     control_dp_id: str | None = Field(
         default=None,
-        title="Steuerobjekt UUID",
-        description="UUID des Boolean-Datenpunkts: Wert 1 = Anwesend (Simulation aus)",
+        title="Steuerobjekt",
+        description="Boolean-Datenpunkt: Wert 1 = Anwesend (Simulation aus), Wert 0 = Abwesend (Simulation an)",
     )
     control_invert: bool = Field(
         default=False,
@@ -89,14 +77,8 @@ class AnwesenheitssimulationConfig(BaseModel):
     on_presence: OnPresence = Field(
         default=OnPresence.KEEP,
         title="Verhalten bei Anwesenheit",
-        description="Was passiert wenn Anwesenheit erkannt wird (Steuerobjekt aktiviert)",
+        description="Was passiert wenn Anwesenheit erkannt wird (Steuerobjekt = 1)",
     )
-
-    @property
-    def effective_offset_days(self) -> int:
-        if self.offset_preset == OffsetPreset.CUSTOM:
-            return self.offset_custom
-        return int(self.offset_preset.value)
 
 
 class AnwesenheitssimulationBindingConfig(BaseModel):
@@ -127,7 +109,7 @@ _HeapEntry = tuple[datetime, int, str, str, Any, str]
 class AnwesenheitssimulationAdapter(AdapterBase):
     """Presence-simulation adapter — SOURCE-only, replays historical values."""
 
-    adapter_type = "ANWESENHEIT"
+    adapter_type = "ANWESENHEITSSIMULATION"
     config_schema = AnwesenheitssimulationConfig
     binding_config_schema = AnwesenheitssimulationBindingConfig
 
@@ -156,7 +138,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
         self._bus.subscribe(DataValueEvent, self._handle_control_event)
         self._task = asyncio.create_task(
             self._simulation_loop(),
-            name=f"anwesenheit_{self._instance_id}",
+            name=f"anwesenheitssimulation_{self._instance_id}",
         )
         self._publish_status(True, "Anwesenheitssimulation gestartet")
 
@@ -179,11 +161,10 @@ class AnwesenheitssimulationAdapter(AdapterBase):
         pass
 
     async def _on_bindings_reloaded(self) -> None:
-        active_bindings = [b for b in self._bindings if b.direction == "SOURCE" and b.enabled]
-        skipped = len(self._bindings) - len(active_bindings)
+        skipped = sum(1 for b in self._bindings if b.direction != "SOURCE")
         if skipped:
             logger.warning(
-                "AnwesenheitAdapter: %d DEST/BOTH binding(s) ignoriert — nur SOURCE erlaubt",
+                "AnwesenheitssimulationAdapter: %d DEST/BOTH binding(s) ignoriert — nur SOURCE erlaubt",
                 skipped,
             )
         self._pending.clear()
@@ -270,7 +251,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
         try:
             history = get_history_plugin()
         except RuntimeError:
-            logger.warning("AnwesenheitAdapter: History-Plugin nicht verfügbar — Vorabruf übersprungen")
+            logger.warning("AnwesenheitssimulationAdapter: History-Plugin nicht verfügbar — Vorabruf übersprungen")
             return
 
         now = datetime.now(tz=timezone.utc)
@@ -280,7 +261,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
             if binding.direction != "SOURCE" or not binding.enabled:
                 continue
             bc = AnwesenheitssimulationBindingConfig(**(binding.config or {}))
-            offset_days = bc.offset_override if bc.offset_override is not None else self._cfg.effective_offset_days
+            offset_days = bc.offset_override if bc.offset_override is not None else self._cfg.offset_days
             delta = timedelta(days=offset_days)
 
             hist_from = from_dt - delta
@@ -295,7 +276,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
                 )
             except Exception:
                 logger.exception(
-                    "AnwesenheitAdapter: History-Abfrage für Binding %s fehlgeschlagen",
+                    "AnwesenheitssimulationAdapter: History-Abfrage für Binding %s fehlgeschlagen",
                     binding.id,
                 )
                 continue
@@ -331,7 +312,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
         heapq.heapify(self._pending)
 
         logger.debug(
-            "AnwesenheitAdapter: %d Ereignisse vorgeladen (%s – %s)",
+            "AnwesenheitssimulationAdapter: %d Ereignisse vorgeladen (%s – %s)",
             len(new_entries),
             from_dt.isoformat(),
             to_dt.isoformat(),
@@ -364,7 +345,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
                 )
             )
             logger.debug(
-                "AnwesenheitAdapter: Wert %r für DP %s gesendet (historisch: %s)",
+                "AnwesenheitssimulationAdapter: Wert %r für DP %s gesendet (historisch: %s)",
                 value,
                 dp_id_str,
                 fire_at.isoformat(),
@@ -389,7 +370,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
             at_home = raw ^ self._cfg.control_invert
             return not at_home
         except Exception:
-            logger.exception("AnwesenheitAdapter: Steuerobjekt-Initialzustand konnte nicht ermittelt werden")
+            logger.exception("AnwesenheitssimulationAdapter: Steuerobjekt-Initialzustand konnte nicht ermittelt werden")
             return True
 
     # ------------------------------------------------------------------
@@ -423,5 +404,5 @@ class AnwesenheitssimulationAdapter(AdapterBase):
             except asyncio.CancelledError:
                 break
             except Exception:
-                logger.exception("AnwesenheitAdapter: Unerwarteter Fehler im Simulations-Loop")
+                logger.exception("AnwesenheitssimulationAdapter: Unerwarteter Fehler im Simulations-Loop")
                 await asyncio.sleep(60)

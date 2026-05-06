@@ -20,7 +20,6 @@ from obs.adapters.anwesenheit.adapter import (
     AnwesenheitssimulationAdapter,
     AnwesenheitssimulationBindingConfig,
     AnwesenheitssimulationConfig,
-    OffsetPreset,
     OnPresence,
 )
 from obs.core.event_bus import DataValueEvent
@@ -78,37 +77,41 @@ def _utcnow() -> datetime:
 class TestConfig:
     def test_default_offset_seven(self):
         cfg = AnwesenheitssimulationConfig()
-        assert cfg.effective_offset_days == 7
-
-    def test_preset_one(self):
-        cfg = AnwesenheitssimulationConfig(offset_preset=OffsetPreset.ONE)
-        assert cfg.effective_offset_days == 1
-
-    def test_preset_fourteen(self):
-        cfg = AnwesenheitssimulationConfig(offset_preset=OffsetPreset.FOURTEEN)
-        assert cfg.effective_offset_days == 14
+        assert cfg.offset_days == 7
 
     def test_custom_offset(self):
-        cfg = AnwesenheitssimulationConfig(offset_preset=OffsetPreset.CUSTOM, offset_custom=21)
-        assert cfg.effective_offset_days == 21
+        cfg = AnwesenheitssimulationConfig(offset_days=14)
+        assert cfg.offset_days == 14
 
-    def test_custom_offset_lower_bound(self):
+    def test_offset_lower_bound(self):
         import pydantic
 
         with pytest.raises(pydantic.ValidationError):
-            AnwesenheitssimulationConfig(offset_preset=OffsetPreset.CUSTOM, offset_custom=0)
+            AnwesenheitssimulationConfig(offset_days=0)
 
-    def test_custom_offset_upper_bound(self):
+    def test_offset_upper_bound(self):
         import pydantic
 
         with pytest.raises(pydantic.ValidationError):
-            AnwesenheitssimulationConfig(offset_preset=OffsetPreset.CUSTOM, offset_custom=31)
+            AnwesenheitssimulationConfig(offset_days=31)
+
+    def test_offset_min_valid(self):
+        cfg = AnwesenheitssimulationConfig(offset_days=1)
+        assert cfg.offset_days == 1
+
+    def test_offset_max_valid(self):
+        cfg = AnwesenheitssimulationConfig(offset_days=30)
+        assert cfg.offset_days == 30
 
     def test_defaults(self):
         cfg = AnwesenheitssimulationConfig()
         assert cfg.control_dp_id is None
         assert cfg.control_invert is False
         assert cfg.on_presence == OnPresence.KEEP
+
+    def test_on_presence_values(self):
+        assert OnPresence.KEEP == "behalten"
+        assert OnPresence.RESET == "zuruecksetzen"
 
 
 class TestBindingConfig:
@@ -128,6 +131,17 @@ class TestBindingConfig:
     def test_on_presence_override(self):
         bc = AnwesenheitssimulationBindingConfig(on_presence_override=OnPresence.RESET)
         assert bc.on_presence_override == OnPresence.RESET
+
+
+# ---------------------------------------------------------------------------
+# Adapter type
+# ---------------------------------------------------------------------------
+
+
+class TestAdapterType:
+    def test_adapter_type_name(self):
+        adapter = _make_adapter()
+        assert adapter.adapter_type == "ANWESENHEITSSIMULATION"
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +233,7 @@ class TestControlDatapoint:
     @pytest.mark.asyncio
     async def test_returns_home_clears_pending(self):
         ctrl = uuid.uuid4()
-        adapter = _make_adapter({"control_dp_id": str(ctrl), "on_presence": "keep"})
+        adapter = _make_adapter({"control_dp_id": str(ctrl), "on_presence": "behalten"})
         adapter._active = True
         adapter._bindings = []
         adapter._pending = [(_utcnow() + timedelta(hours=1), 0, str(uuid.uuid4()), str(uuid.uuid4()), True, "good")]
@@ -238,7 +252,7 @@ class TestPresenceAction:
     @pytest.mark.asyncio
     async def test_keep_does_not_publish(self):
         bus = _make_bus()
-        adapter = _make_adapter({"on_presence": "keep"}, bus=bus)
+        adapter = _make_adapter({"on_presence": "behalten"}, bus=bus)
         adapter._bindings = [_make_binding()]
 
         await adapter._handle_presence()
@@ -248,7 +262,7 @@ class TestPresenceAction:
     @pytest.mark.asyncio
     async def test_reset_publishes_false(self):
         bus = _make_bus()
-        adapter = _make_adapter({"on_presence": "reset"}, bus=bus)
+        adapter = _make_adapter({"on_presence": "zuruecksetzen"}, bus=bus)
         dp_id = uuid.uuid4()
         adapter._bindings = [_make_binding(dp_id=dp_id)]
 
@@ -263,9 +277,9 @@ class TestPresenceAction:
     @pytest.mark.asyncio
     async def test_binding_override_reset_beats_adapter_keep(self):
         bus = _make_bus()
-        adapter = _make_adapter({"on_presence": "keep"}, bus=bus)
+        adapter = _make_adapter({"on_presence": "behalten"}, bus=bus)
         dp_id = uuid.uuid4()
-        adapter._bindings = [_make_binding(dp_id=dp_id, config={"on_presence_override": "reset"})]
+        adapter._bindings = [_make_binding(dp_id=dp_id, config={"on_presence_override": "zuruecksetzen"})]
 
         await adapter._handle_presence()
 
@@ -274,8 +288,8 @@ class TestPresenceAction:
     @pytest.mark.asyncio
     async def test_binding_override_keep_beats_adapter_reset(self):
         bus = _make_bus()
-        adapter = _make_adapter({"on_presence": "reset"}, bus=bus)
-        adapter._bindings = [_make_binding(config={"on_presence_override": "keep"})]
+        adapter = _make_adapter({"on_presence": "zuruecksetzen"}, bus=bus)
+        adapter._bindings = [_make_binding(config={"on_presence_override": "behalten"})]
 
         await adapter._handle_presence()
 
@@ -284,7 +298,7 @@ class TestPresenceAction:
     @pytest.mark.asyncio
     async def test_disabled_binding_skipped(self):
         bus = _make_bus()
-        adapter = _make_adapter({"on_presence": "reset"}, bus=bus)
+        adapter = _make_adapter({"on_presence": "zuruecksetzen"}, bus=bus)
         adapter._bindings = [_make_binding(enabled=False)]
 
         await adapter._handle_presence()
@@ -294,7 +308,7 @@ class TestPresenceAction:
     @pytest.mark.asyncio
     async def test_dest_binding_skipped(self):
         bus = _make_bus()
-        adapter = _make_adapter({"on_presence": "reset"}, bus=bus)
+        adapter = _make_adapter({"on_presence": "zuruecksetzen"}, bus=bus)
         adapter._bindings = [_make_binding(direction="DEST")]
 
         await adapter._handle_presence()
@@ -304,7 +318,7 @@ class TestPresenceAction:
     @pytest.mark.asyncio
     async def test_multiple_bindings_all_reset(self):
         bus = _make_bus()
-        adapter = _make_adapter({"on_presence": "reset"}, bus=bus)
+        adapter = _make_adapter({"on_presence": "zuruecksetzen"}, bus=bus)
         adapter._bindings = [_make_binding(), _make_binding(), _make_binding()]
 
         await adapter._handle_presence()
@@ -326,7 +340,7 @@ class TestPreloadWindow:
 
     @pytest.mark.asyncio
     async def test_loads_future_events_into_pending(self):
-        adapter = _make_adapter()
+        adapter = _make_adapter({"offset_days": 7})
         adapter._active = True
         dp_id = uuid.uuid4()
         binding = _make_binding(dp_id=dp_id)
@@ -374,7 +388,7 @@ class TestPreloadWindow:
 
     @pytest.mark.asyncio
     async def test_binding_offset_override_used(self):
-        adapter = _make_adapter({"offset_preset": "7"})
+        adapter = _make_adapter({"offset_days": 7})
         adapter._active = True
         binding = _make_binding(config={"offset_override": 14})
         adapter._bindings = [binding]
@@ -423,16 +437,16 @@ class TestPreloadWindow:
 
     @pytest.mark.asyncio
     async def test_heap_is_ordered(self):
-        adapter = _make_adapter()
+        adapter = _make_adapter({"offset_days": 7})
         adapter._active = True
         dp_id = uuid.uuid4()
         adapter._bindings = [_make_binding(dp_id=dp_id)]
 
         now = _utcnow()
         delta = timedelta(days=7)
-        t1 = (now + timedelta(minutes=45) - delta)
-        t2 = (now + timedelta(minutes=20) - delta)
-        t3 = (now + timedelta(minutes=50) - delta)
+        t1 = now + timedelta(minutes=45) - delta
+        t2 = now + timedelta(minutes=20) - delta
+        t3 = now + timedelta(minutes=50) - delta
 
         records = [
             {"ts": t1.isoformat(), "v": 1, "q": "good"},
@@ -446,7 +460,6 @@ class TestPreloadWindow:
 
         assert len(adapter._pending) == 3
         times = [adapter._pending[i][0] for i in range(3)]
-        # Heap property: first element is smallest
         assert adapter._pending[0][0] == min(times)
 
     @pytest.mark.asyncio
