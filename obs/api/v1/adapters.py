@@ -356,6 +356,11 @@ async def test_instance(
     test_instance = cls(event_bus=dummy_bus, config=config_dict)
     try:
         await test_instance.connect()
+        # Some adapters (e.g. MQTT) establish the connection in a background task
+        # started by connect(). Poll briefly so that task gets a chance to run.
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while not test_instance.connected and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.1)
         connected = test_instance.connected
         await test_instance.disconnect()
         if connected:
@@ -840,6 +845,11 @@ async def test_adapter(
     test_instance = cls(event_bus=dummy_bus, config=body.config)
     try:
         await test_instance.connect()
+        # Some adapters (e.g. MQTT) establish the connection in a background task
+        # started by connect(). Poll briefly so that task gets a chance to run.
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while not test_instance.connected and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.1)
         connected = test_instance.connected
         await test_instance.disconnect()
         if connected:
