@@ -88,8 +88,6 @@ class SQLiteHistoryPlugin(HistoryPlugin):
                 str(datapoint_id),
                 _to_sqlite_ts(from_ts),
                 _to_sqlite_ts(to_ts),
-                _ts_z(from_ts),
-                _ts_z(to_ts),
                 limit,
             ),
         )

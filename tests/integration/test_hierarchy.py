@@ -307,8 +307,10 @@ async def test_import_from_ets_groups_mode(client, auth_headers):
         headers=auth_headers,
     )
     from obs.db.database import get_db
+
     db = get_db()
     from datetime import UTC, datetime
+
     now = datetime.now(UTC).isoformat()
     await db.executemany(
         "INSERT OR REPLACE INTO knx_group_addresses (address, name, description, dpt, imported_at) VALUES (?,?,?,?,?)",

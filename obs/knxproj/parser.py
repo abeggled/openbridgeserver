@@ -27,34 +27,34 @@ class GroupAddressRecord:
     address: str  # "1/2/3"
     name: str
     description: str
-    dpt: str | None          # "DPT9.001" oder None
+    dpt: str | None  # "DPT9.001" oder None
     main_group_name: str = ""  # ETS-Name der Hauptgruppe (z.B. "Lichtsteuerung")
-    mid_group_name: str = ""   # ETS-Name der Mittelgruppe (z.B. "Erdgeschoss")
+    mid_group_name: str = ""  # ETS-Name der Mittelgruppe (z.B. "Erdgeschoss")
 
 
 @dataclass
 class LocationRecord:
-    identifier: str       # stable ETS ID, e.g. "P-0001-0_B-17"
-    parent_id: str | None # parent identifier or None for roots
+    identifier: str  # stable ETS ID, e.g. "P-0001-0_B-17"
+    parent_id: str | None  # parent identifier or None for roots
     name: str
-    space_type: str       # "Building", "Floor", "Room", "Distribution", …
+    space_type: str  # "Building", "Floor", "Room", "Distribution", …
     sort_order: int = 0
 
 
 @dataclass
 class FunctionRecord:
-    identifier: str       # stable ETS function ID
-    space_id: str         # identifier of the containing Space
+    identifier: str  # stable ETS function ID
+    space_id: str  # identifier of the containing Space
     name: str
-    usage_text: str       # e.g. "Bewegung", "Heizen/Klima", "Schalten/Dimmen"
+    usage_text: str  # e.g. "Bewegung", "Heizen/Klima", "Schalten/Dimmen"
     ga_addresses: list[str] = field(default_factory=list)  # ["1/2/3", …]
 
 
 @dataclass
 class TradeRecord:
-    identifier: str        # ETS Trade ID, e.g. "P-065E-0_T-1"
-    name: str              # e.g. "Bewegung", "Schalten/Dimmen"
-    parent_id: str | None = None   # parent trade ID for nested trades
+    identifier: str  # ETS Trade ID, e.g. "P-065E-0_T-1"
+    name: str  # e.g. "Bewegung", "Schalten/Dimmen"
+    parent_id: str | None = None  # parent trade ID for nested trades
     sort_order: int = 0
     function_ids: list[str] = field(default_factory=list)  # resolved Function IDs
 
@@ -177,13 +177,15 @@ def _walk_trade_el(
                 function_ids.append(fi_to_fn.get(link_id, link_id))
 
     sort_counter[0] += 1
-    records.append(TradeRecord(
-        identifier=tid,
-        name=name,
-        parent_id=parent_id,
-        sort_order=sort_counter[0],
-        function_ids=function_ids,
-    ))
+    records.append(
+        TradeRecord(
+            identifier=tid,
+            name=name,
+            parent_id=parent_id,
+            sort_order=sort_counter[0],
+            function_ids=function_ids,
+        )
+    )
 
     # Recurse into nested <Trade> children (ETS supports trade sub-categories)
     for child in trade_el:
@@ -322,6 +324,7 @@ def parse_knxproj_locations(
     tmp_path = None
     try:
         import tempfile as _tmp
+
         with _tmp.NamedTemporaryFile(suffix=".knxproj", delete=False) as tmp:
             tmp.write(file_bytes)
             tmp_path = tmp.name
