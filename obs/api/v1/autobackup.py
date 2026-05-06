@@ -227,8 +227,14 @@ async def delete_autobackup(
     if not re.fullmatch(r"\d{8}-\d{4}", safe_name):
         raise HTTPException(status_code=400, detail="Ungültiger Sicherungsname.")
 
+    # Allowlist: nur Namen löschen, die als vorhandene Backups gelistet sind.
+    existing_backups = _list_backups()
+    matched = next((entry for entry in existing_backups if entry.name == safe_name), None)
+    if matched is None:
+        raise HTTPException(status_code=404, detail=f"Sicherung '{safe_name}' nicht gefunden.")
+
     base_dir = _autobackup_dir().resolve()
-    backup_path = (base_dir / f"{safe_name}.json").resolve()
+    backup_path = (base_dir / f"{matched.name}.json").resolve()
     try:
         backup_path.relative_to(base_dir)
     except ValueError:
