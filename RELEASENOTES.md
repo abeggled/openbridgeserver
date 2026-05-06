@@ -1,15 +1,17 @@
 # Changes
 
-## 2026.6.0
-### New features:
+## 2026.5.2
+### Breaking changes 🚨
 * none
-  
-### Fixes:
-* #361: Missing Docker Image for ARM64
 
-### Breaking changes:
+### New features 💡
 * none
   
+### Fixes 🐞
+* #361: General: Missing Docker Image for ARM64
+* #363: Adapter: The MQTT adapter did not send an MQTT client ID; the adapter now generates a random one, the client ID and TLS settings are now configurable
+* #356: Adapter: Nested JSON structures could not be processed by the JSON selector in the MQTT adapter and displayed for selection
+* #342: Visu: Some Visu widgets incorrectly displayed a red exclamation mark, which actually indicates a missing object after an import
 
 ## 2026.5.1
 ### New features:
