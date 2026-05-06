@@ -6,13 +6,15 @@ Covers:
   - apply_value_map: bool normalisation (True → "true")
   - apply_value_map: passthrough when no map / no match
   - apply_source_type: type coercions (int, float, bool, string, json, xml)
+  - apply_source_type / json: nested dot-notation paths (issue #356)
+  - _extract_nested: dot-notation helper
 """
 
 from __future__ import annotations
 
 import pytest
 
-from obs.core.transformation import apply_source_type, apply_value_map
+from obs.core.transformation import _extract_nested, apply_source_type, apply_value_map
 
 # ===========================================================================
 # apply_value_map
@@ -217,3 +219,71 @@ class TestApplySourceTypeJson:
         auto = json.loads(raw)
         result = apply_source_type(raw, auto, "json", None, None)
         assert result == {"a": 1, "b": 2}
+
+    def test_nested_dot_notation(self):
+        """Issue #356 – nested JSON must be reachable with dot-notation."""
+        raw = '{"channels": {"Temperature": 17.5, "Humidity": 58}}'
+        result = _run(raw, "json", json_key="channels.Temperature")
+        assert result == pytest.approx(17.5)
+
+    def test_nested_dot_notation_second_key(self):
+        raw = '{"channels": {"Temperature": 17.5, "Humidity": 58}}'
+        result = _run(raw, "json", json_key="channels.Humidity")
+        assert result == 58
+
+    def test_deeply_nested(self):
+        raw = '{"a": {"b": {"c": 42}}}'
+        result = _run(raw, "json", json_key="a.b.c")
+        assert result == 42
+
+    def test_array_index_notation(self):
+        raw = '{"items": [10, 20, 30]}'
+        result = _run(raw, "json", json_key="items[1]")
+        assert result == 20
+
+    def test_mixed_array_and_object(self):
+        raw = '{"sensors": [{"value": 99}]}'
+        result = _run(raw, "json", json_key="sensors[0].value")
+        assert result == 99
+
+    def test_missing_nested_key_returns_auto(self):
+        """Missing nested path falls back to the full parsed object (auto_value)."""
+        import json as _json
+
+        raw = '{"channels": {"Temperature": 17.5}}'
+        auto = _json.loads(raw)
+        result = apply_source_type(raw, auto, "json", "channels.DoesNotExist", None)
+        assert result == auto
+
+
+# ===========================================================================
+# _extract_nested helper
+# ===========================================================================
+
+
+class TestExtractNested:
+    def test_top_level_key(self):
+        assert _extract_nested({"a": 1}, "a") == 1
+
+    def test_nested_two_levels(self):
+        assert _extract_nested({"a": {"b": 2}}, "a.b") == 2
+
+    def test_nested_three_levels(self):
+        assert _extract_nested({"x": {"y": {"z": 3}}}, "x.y.z") == 3
+
+    def test_array_dot_index(self):
+        assert _extract_nested({"items": [10, 20]}, "items.0") == 10
+
+    def test_array_bracket_index(self):
+        assert _extract_nested({"items": [10, 20]}, "items[1]") == 20
+
+    def test_mixed_path(self):
+        assert _extract_nested({"sensors": [{"val": 5}]}, "sensors[0].val") == 5
+
+    def test_missing_key_raises(self):
+        with pytest.raises(KeyError):
+            _extract_nested({"a": 1}, "b")
+
+    def test_missing_nested_key_raises(self):
+        with pytest.raises(KeyError):
+            _extract_nested({"a": {"b": 1}}, "a.c")

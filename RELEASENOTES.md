@@ -1,6 +1,6 @@
 # Changes
 
-## 2026.5.2
+## 2026.6.0
 ### New features:
 * Adapter: Anwesenheitssimulation — replays historical switch states (Boolean/Integer) during absence with a configurable day offset (1/7/14 days or custom 1–30). Includes control DataPoint for automatic activation/deactivation, configurable on-presence behaviour (keep/reset), per-binding offset overrides, and a GUI datapoint-selector with bulk binding management.
 

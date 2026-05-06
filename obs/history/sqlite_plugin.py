@@ -86,8 +86,8 @@ class SQLiteHistoryPlugin(HistoryPlugin):
                LIMIT ?""",
             (
                 str(datapoint_id),
-                from_ts.isoformat(),
-                to_ts.isoformat(),
+                _ts_z(from_ts),
+                _ts_z(to_ts),
                 limit,
             ),
         )
@@ -135,7 +135,7 @@ class SQLiteHistoryPlugin(HistoryPlugin):
                     WHERE datapoint_id=? AND ts >= ? AND ts <= ?
                     GROUP BY bucket
                     ORDER BY bucket""",
-                (str(datapoint_id), from_ts.isoformat(), to_ts.isoformat()),
+                (str(datapoint_id), _ts_z(from_ts), _ts_z(to_ts)),
             )
             return [{"bucket": r["bucket"], "v": r["v"]} for r in rows]
         # Sub-hourly: fetch raw, group in Python
@@ -143,7 +143,7 @@ class SQLiteHistoryPlugin(HistoryPlugin):
             """SELECT ts, value FROM history_values
                    WHERE datapoint_id=? AND ts >= ? AND ts <= ?
                    ORDER BY ts""",
-            (str(datapoint_id), from_ts.isoformat(), to_ts.isoformat()),
+            (str(datapoint_id), _ts_z(from_ts), _ts_z(to_ts)),
         )
         return _aggregate_python(rows, fn, minutes)
 
@@ -164,14 +164,14 @@ class SQLiteHistoryPlugin(HistoryPlugin):
                     GROUP BY bucket
                     HAVING ts = MAX(ts)
                     ORDER BY bucket""",
-                (str(datapoint_id), from_ts.isoformat(), to_ts.isoformat()),
+                (str(datapoint_id), _ts_z(from_ts), _ts_z(to_ts)),
             )
         else:
             raw = await self._db.fetchall(
                 """SELECT ts, value FROM history_values
                    WHERE datapoint_id=? AND ts >= ? AND ts <= ?
                    ORDER BY ts""",
-                (str(datapoint_id), from_ts.isoformat(), to_ts.isoformat()),
+                (str(datapoint_id), _ts_z(from_ts), _ts_z(to_ts)),
             )
             return _aggregate_python(raw, "last", minutes)
         return [{"bucket": r["bucket"], "v": _safe_loads(r["value"])} for r in rows]
@@ -184,7 +184,7 @@ class SQLiteHistoryPlugin(HistoryPlugin):
         """Delete history older than *before_ts*. Returns deleted row count."""
         cur = await self._db.execute(
             "DELETE FROM history_values WHERE datapoint_id=? AND ts < ?",
-            (str(datapoint_id), before_ts.isoformat()),
+            (str(datapoint_id), _ts_z(before_ts)),
         )
         await self._db.commit()
         return cur.rowcount
@@ -193,6 +193,11 @@ class SQLiteHistoryPlugin(HistoryPlugin):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _ts_z(dt: datetime) -> str:
+    """Format *dt* as the same millisecond-precision Z-suffix string used for stored timestamps."""
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 def _safe_loads(s: str | None) -> Any:

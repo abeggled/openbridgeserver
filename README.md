@@ -29,62 +29,26 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 
 ## Inhaltsverzeichnis
 
-1. [Schnellstart — Docker](#schnellstart--docker)
-2. [Schnellstart — Proxmox LXC](#schnellstart--proxmox-lxc)
-3. [Schnellstart — Direkt](#schnellstart--direkt)
-4. [Konfiguration](#konfiguration)
-5. [Wie funktioniert open bridge?](#wie-funktioniert-open-bridge)
-6. [Datenpunkte](#datenpunkte)
-7. [Verknüpfungen (Bindings)](#verknüpfungen-bindings)
-8. [Suche](#suche)
-9. [Adapter](#adapter)
-10. [Verlauf (History)](#verlauf-history)
-11. [Änderungsprotokoll (RingBuffer)](#änderungsprotokoll-ringbuffer)
-12. [Sicherung & Wiederherstellung](#sicherung--wiederherstellung)
-13. [Systemstatus](#systemstatus)
-14. [Live-Verbindung (WebSocket)](#live-verbindung-websocket)
-15. [Logik-Editor](#logik-editor)
-16. [Adapter-Konfiguration](#adapter-konfiguration)
-17. [MQTT-Topics](#mqtt-topics)
-18. [Datentypen](#datentypen)
-19. [Einstellungen](#einstellungen)
-20. [Hilfsskripte](#hilfsskripte)
-21. [Entwicklung](#entwicklung)
+1. [Schnellstart — Proxmox LXC](#schnellstart--proxmox-lxc)
+2. [Konfiguration](#konfiguration)
+3. [Wie funktioniert open bridge?](#wie-funktioniert-open-bridge)
+4. [Datenpunkte](#datenpunkte)
+5. [Verknüpfungen (Bindings)](#verknüpfungen-bindings)
+6. [Suche](#suche)
+7. [Adapter](#adapter)
+8. [Verlauf (History)](#verlauf-history)
+9. [Änderungsprotokoll (RingBuffer)](#änderungsprotokoll-ringbuffer)
+10. [Sicherung & Wiederherstellung](#sicherung--wiederherstellung)
+11. [Systemstatus](#systemstatus)
+12. [Live-Verbindung (WebSocket)](#live-verbindung-websocket)
+13. [Logik-Editor](#logik-editor)
+14. [Adapter-Konfiguration](#adapter-konfiguration)
+15. [MQTT-Topics](#mqtt-topics)
+16. [Datentypen](#datentypen)
+17. [Einstellungen](#einstellungen)
+18. [Hilfsskripte](#hilfsskripte)
+19. [Entwicklung](#entwicklung)
    - [Lokale Entwicklung mit PyCharm](#lokale-entwicklung-mit-pycharm)
-
----
-
-## Schnellstart — Docker
-
-```bash
-# 1. Herunterladen
-git clone https://github.com/abeggled/openbridgeserver
-cd openbridgeserver
-
-# 2. Zugangsdaten einrichten
-cp .env.example .env
-# .env öffnen und mindestens setzen:
-#   OBS_JWT_SECRET        → zufällige Zeichenkette, min. 32 Zeichen
-#   OBS_MQTT_PASSWORD     → Passwort für den internen MQTT-Dienst — BITTE ÄNDERN!
-
-# 3. Starten
-docker compose up -d
-
-# 4. Prüfen
-curl http://localhost:8080/api/v1/system/health
-# → {"status": "ok", "version": "0.1.0"}
-```
-
-**Standardzugang:** Benutzername `admin`, Passwort `admin`
-⚠️ Das Passwort sofort nach der ersten Anmeldung ändern (Einstellungen → Passwort).
-
-**Erreichbare Dienste:**
-
-| Dienst | Adresse | Protokoll |
-|---|---|---|
-| **open bridge server** Weboberfläche + API | http://localhost:8080 | HTTP |
-| Mosquitto MQTT (intern) | localhost:1883 | MQTT |
-| Mosquitto MQTT über WebSocket | localhost:9001 | MQTT/WS |
 
 ---
 
@@ -129,30 +93,6 @@ OBS_SECURITY__JWT_SECRET=mein-geheimes-passwort
 
 # Dienst neu starten
 systemctl restart obs
-```
-
----
-
-## Schnellstart — Direkt
-
-**Voraussetzungen:** Python 3.11 oder neuer, laufender Mosquitto-Broker (oder anderer MQTT-Broker)
-
-```bash
-# 1. Herunterladen + virtuelle Umgebung anlegen
-git clone https://github.com/abeggled/openbridgeserver
-cd openbridgeserver
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-
-# 2. Abhängigkeiten installieren
-pip install -r requirements.txt
-
-# 3. Konfigurieren
-cp config.example.yaml config.yaml
-# config.yaml anpassen: mqtt.host und security.jwt_secret setzen
-
-# 4. Starten
-python -m obs
 ```
 
 ---

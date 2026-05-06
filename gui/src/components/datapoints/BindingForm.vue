@@ -24,7 +24,7 @@
           <div v-if="props.initial" class="input bg-slate-100 dark:bg-slate-800/50 text-slate-400 cursor-not-allowed">
             {{ currentInstanceName }}
           </div>
-          <select v-else v-model="form.adapter_instance_id" class="input" required>
+          <select v-else v-model="form.adapter_instance_id" class="input" required data-testid="select-adapter-instance">
             <option value="">Instanz wählen …</option>
             <optgroup v-for="group in groupedInstances" :key="group.type" :label="group.type">
               <option v-for="inst in group.items" :key="inst.id" :value="inst.id">{{ inst.name }}</option>
@@ -37,6 +37,7 @@
             v-model="form.direction"
             class="input"
             :disabled="selectedAdapterType === 'ZEITSCHALTUHR'"
+            data-testid="select-direction"
           >
             <option value="SOURCE">Lesen (von Adapter)</option>
             <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR'" value="DEST">Schreiben (auf Adapter)</option>
@@ -173,7 +174,7 @@
         <div class="form-group">
           <label class="label">Topic *</label>
           <div class="flex gap-2">
-            <input v-model="cfg.topic" class="input flex-1" placeholder="z.B. haus/wohnzimmer/temperatur" required />
+            <input v-model="cfg.topic" class="input flex-1" placeholder="z.B. haus/wohnzimmer/temperatur" required data-testid="input-mqtt-topic" />
             <button
               type="button"
               class="btn-secondary px-3 text-sm whitespace-nowrap"
@@ -235,7 +236,7 @@
         <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="form-group">
           <label class="label">Quell-Datentyp <span class="optional">(optional)</span></label>
           <div class="flex gap-2 items-start">
-            <select v-model="cfg.source_data_type" class="input flex-1">
+            <select v-model="cfg.source_data_type" class="input flex-1" data-testid="select-source-data-type">
               <option v-for="t in MQTT_SOURCE_TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>
             </select>
             <span v-if="mqttTypeCompat" class="mt-1.5 shrink-0 text-xs px-2 py-1 rounded-full font-medium" :class="mqttTypeCompat.cls">
@@ -263,6 +264,7 @@
                 v-model="mqttJsonSample"
                 class="input font-mono text-xs h-20 resize-y"
                 placeholder='{"temperature": 22.5, "humidity": 65}'
+                data-testid="mqtt-json-sample"
                 @input="onMqttJsonSampleInput"
               />
               <p v-if="mqttJsonParseError" class="text-xs text-red-400 mt-0.5">{{ mqttJsonParseError }}</p>
@@ -273,12 +275,14 @@
                 <input
                   v-model="cfg.json_key"
                   class="input flex-1 font-mono text-sm"
-                  placeholder="z.B. temperature"
+                  placeholder="z.B. temperature oder channels.Temperature"
+                  data-testid="mqtt-json-key-input"
                 />
                 <select
                   v-if="mqttJsonKeys.length"
                   v-model="cfg.json_key"
                   class="input w-52 shrink-0"
+                  data-testid="mqtt-json-key-select"
                 >
                   <option value="">— aus Sample —</option>
                   <option v-for="k in mqttJsonKeys" :key="k.key" :value="k.key">
@@ -286,7 +290,7 @@
                   </option>
                 </select>
               </div>
-              <p class="hint">Schlüssel im JSON-Objekt, dessen Wert übernommen wird.</p>
+              <p class="hint">Schlüssel im JSON-Objekt (Dot-Notation für verschachtelte Werte, z.B. <code class="text-blue-400">channels.Temperature</code>).</p>
             </div>
           </div>
 
@@ -1615,6 +1619,30 @@ function onMqttXmlSampleInput() {
     mqttXmlParseError.value = 'Keine Kind-Elemente gefunden'
 }
 
+// Flatten all leaf paths from a JSON object/array to dot-notation (max depth 6)
+function _flattenJsonLeaves(obj, prefix = '', depth = 0) {
+  if (depth > 6 || obj === null || typeof obj !== 'object') {
+    return prefix ? [{ key: prefix, text: obj === null ? 'null' : String(obj) }] : []
+  }
+  const paths = []
+  if (Array.isArray(obj)) {
+    obj.forEach((item, i) => {
+      const key = `${prefix}[${i}]`
+      paths.push(..._flattenJsonLeaves(item, key, depth + 1))
+    })
+  } else {
+    for (const [k, v] of Object.entries(obj)) {
+      const key = prefix ? `${prefix}.${k}` : k
+      if (v !== null && typeof v === 'object') {
+        paths.push(..._flattenJsonLeaves(v, key, depth + 1))
+      } else {
+        paths.push({ key, text: v === null ? 'null' : String(v) })
+      }
+    }
+  }
+  return paths
+}
+
 function onMqttJsonSampleInput() {
   mqttJsonParseError.value = null
   mqttJsonKeys.value = []
@@ -1622,14 +1650,10 @@ function onMqttJsonSampleInput() {
   if (!s) return
   try {
     const obj = JSON.parse(s)
-    if (obj !== null && typeof obj === 'object' && !Array.isArray(obj)) {
-      mqttJsonKeys.value = Object.entries(obj).map(([k, v]) => ({
-        key: k,
-        type: v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v,
-        text: v === null ? 'null' : Array.isArray(v) || typeof v === 'object' ? JSON.stringify(v) : String(v),
-      }))
+    if (obj !== null && typeof obj === 'object') {
+      mqttJsonKeys.value = _flattenJsonLeaves(obj)
     } else {
-      mqttJsonParseError.value = 'Sample muss ein JSON-Objekt sein (kein Array / Primitivwert)'
+      mqttJsonParseError.value = 'Sample muss ein JSON-Objekt oder Array sein'
     }
   } catch (e) {
     mqttJsonParseError.value = `Kein gültiges JSON: ${e.message}`

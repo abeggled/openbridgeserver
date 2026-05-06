@@ -103,7 +103,7 @@
     <div class="card">
       <div class="card-header">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">Adapter Verknüpfungen</h3>
-        <button @click="showBindingForm = true" class="btn-primary btn-sm">
+        <button @click="showBindingForm = true" class="btn-primary btn-sm" data-testid="btn-add-binding">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
           Verknüpfung
         </button>

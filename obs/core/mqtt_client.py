@@ -20,6 +20,7 @@ Architecture note (aiomqtt ≥ 2.0):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
@@ -100,6 +101,11 @@ class MqttClient:
         self._sub_task: asyncio.Task | None = None
         self._publish_queue: asyncio.Queue = asyncio.Queue()
         self._write_handlers: list[Any] = []  # callbacks for dp/+/set messages
+        # Stable, non-empty client IDs derived from connection target so that brokers
+        # with allow_zero_length_clientid false accept the internal OBS connections.
+        _short = hashlib.sha256(f"{host}:{port}".encode()).hexdigest()[:8]
+        self._pub_id = f"obs-int-pub-{_short}"
+        self._sub_id = f"obs-int-sub-{_short}"
 
     def on_write_request(self, handler) -> None:
         """Register a callback for inbound dp/{id}/set messages.
@@ -171,6 +177,7 @@ class MqttClient:
                     port=self._port,
                     username=self._username,
                     password=self._password,
+                    identifier=self._pub_id,
                 ) as client:
                     logger.info("MQTT publisher connected to %s:%d", self._host, self._port)
                     while True:
@@ -197,6 +204,7 @@ class MqttClient:
                     port=self._port,
                     username=self._username,
                     password=self._password,
+                    identifier=self._sub_id,
                 ) as client:
                     logger.info("MQTT subscriber connected, listening dp/+/set")
                     await client.subscribe("dp/+/set")

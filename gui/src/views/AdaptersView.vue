@@ -308,7 +308,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { adapterApi } from '@/api/client'
 import { useAdapterStore } from '@/stores/adapters'
 import { useAuthStore } from '@/stores/auth'
@@ -384,15 +384,35 @@ const allImportSelected = computed(() => {
   return selectable.length > 0 && selectable.every(id => selectedImportStates.value.includes(id))
 })
 
+let refreshTimer = null
+
 // ------------------------------------------------------------------
 
-onMounted(async () => {
+async function refreshInstances() {
   await store.fetchAdapters()
   initDrafts()
+  for (const a of store.instances) {
+    const fb = feedback[a.id]
+    if (a.connected && fb && fb.success === false) {
+      delete feedback[a.id]
+    }
+  }
+}
+
+onMounted(async () => {
+  await refreshInstances()
   try {
     availableTypes.value = await store.fetchTypes()
   } catch {
     availableTypesErr.value = true
+  }
+  refreshTimer = window.setInterval(refreshInstances, 10000)
+})
+
+onBeforeUnmount(() => {
+  if (refreshTimer) {
+    window.clearInterval(refreshTimer)
+    refreshTimer = null
   }
 })
 
@@ -494,6 +514,7 @@ async function testConnection(a) {
   try {
     const result = await store.testInstance(a.id, drafts[a.id].config)
     feedback[a.id] = result
+    await refreshInstances()
   } catch (e) {
     feedback[a.id] = { success: false, detail: e.response?.data?.detail ?? 'Fehler' }
   } finally {
@@ -514,6 +535,7 @@ async function saveInstance(a) {
     })
     feedback[a.id] = { success: true, detail: 'Gespeichert und neu verbunden' }
     if (a.adapter_type === 'ANWESENHEITSSIMULATION') loadAnwesenheitHealth(a)
+    await refreshInstances()
   } catch (e) {
     feedback[a.id] = { success: false, detail: e.response?.data?.detail ?? 'Fehler' }
   } finally {
@@ -529,6 +551,7 @@ async function restartInstance(a) {
   try {
     await store.restartInstance(a.id)
     feedback[a.id] = { success: true, detail: 'Verbindung neu aufgebaut' }
+    await refreshInstances()
   } catch (e) {
     feedback[a.id] = { success: false, detail: e.response?.data?.detail ?? 'Fehler' }
   } finally {
