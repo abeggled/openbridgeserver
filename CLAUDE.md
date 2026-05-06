@@ -106,7 +106,8 @@ Shared configs live in `.run/` and are loaded automatically by PyCharm:
 | **OBS Mosquitto (Docker)** | Starts MQTT broker via `docker compose up mosquitto` |
 | **OBS Backend** | Runs `python -m obs` with project venv |
 | **OBS GUI (Admin)** | Runs `npm run dev` in `gui/`, serves on `localhost:5173` |
-| **OBS Full Dev Stack** | Compound — launches all three at once |
+| **OBS GUI (Visu)** | Runs `npm run dev` in `frontend/`, serves on `localhost:5174` |
+| **OBS Full Dev Stack** | Compound — launches all four at once |
 
 ### Dev URLs
 
