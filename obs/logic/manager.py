@@ -124,35 +124,54 @@ class LogicManager:
     # ── Cron Scheduler ────────────────────────────────────────────────────
 
     def _start_cron_tasks(self) -> None:
-        """Start asyncio tasks for all timer_cron nodes in enabled graphs."""
+        """Start asyncio tasks for all timer_cron and ical nodes in enabled graphs."""
+        _has_croniter = True
         try:
             import croniter as _croniter_check  # noqa: F401
         except ImportError:
             logger.warning("croniter not installed — timer_cron nodes will not auto-execute. Install with: pip install croniter")
-            return
+            _has_croniter = False
 
         for graph_id, (name, enabled, flow) in self._graphs.items():
             if not enabled:
                 continue
             for node in flow.nodes:
-                if node.type != "timer_cron":
-                    continue
-                key = (graph_id, node.id)
-                if key in self._cron_tasks and not self._cron_tasks[key].done():
-                    continue  # already running
-                cron_expr = node.data.get("cron", "0 7 * * *")
-                task = asyncio.create_task(
-                    self._cron_loop(graph_id, node.id, cron_expr),
-                    name=f"cron-{graph_id[:8]}-{node.id[:8]}",
-                )
-                self._cron_tasks[key] = task
-                logger.info(
-                    "Cron scheduled: graph=%s (%s) node=%s expr=%r",
-                    graph_id[:8],
-                    name,
-                    node.id[:8],
-                    cron_expr,
-                )
+                if node.type == "timer_cron":
+                    if not _has_croniter:
+                        continue
+                    key = (graph_id, node.id)
+                    if key in self._cron_tasks and not self._cron_tasks[key].done():
+                        continue  # already running
+                    cron_expr = node.data.get("cron", "0 7 * * *")
+                    task = asyncio.create_task(
+                        self._cron_loop(graph_id, node.id, cron_expr),
+                        name=f"cron-{graph_id[:8]}-{node.id[:8]}",
+                    )
+                    self._cron_tasks[key] = task
+                    logger.info(
+                        "Cron scheduled: graph=%s (%s) node=%s expr=%r",
+                        graph_id[:8],
+                        name,
+                        node.id[:8],
+                        cron_expr,
+                    )
+                elif node.type == "ical":
+                    key = (graph_id, node.id)
+                    if key in self._cron_tasks and not self._cron_tasks[key].done():
+                        continue  # already running
+                    refresh_min = max(1.0, float(node.data.get("refresh_interval_min") or 60))
+                    task = asyncio.create_task(
+                        self._ical_loop(graph_id, node.id, refresh_min),
+                        name=f"ical-{graph_id[:8]}-{node.id[:8]}",
+                    )
+                    self._cron_tasks[key] = task
+                    logger.info(
+                        "iCal scheduled: graph=%s (%s) node=%s interval=%.0fmin",
+                        graph_id[:8],
+                        name,
+                        node.id[:8],
+                        refresh_min,
+                    )
 
     async def _cron_loop(self, graph_id: str, node_id: str, cron_expr: str) -> None:
         """Fires a timer_cron graph node on its cron schedule — runs indefinitely."""
@@ -188,6 +207,30 @@ class LogicManager:
                 raise
             except Exception as exc:
                 logger.error("Cron loop error graph=%s: %s", graph_id[:8], exc)
+                await asyncio.sleep(60)  # back-off on unexpected errors
+
+    async def _ical_loop(self, graph_id: str, node_id: str, refresh_min: float) -> None:
+        """Triggers the graph containing an ical node on its refresh schedule.
+
+        Fires once immediately (to populate outputs on startup), then every
+        refresh_min minutes.  The actual HTTP fetch is throttled inside
+        _execute_graph via the last_fetch_ts timestamp, so redundant calls are
+        cheap.
+        """
+        while True:
+            try:
+                entry = self._graphs.get(graph_id)
+                if entry and entry[1]:  # still exists and enabled
+                    g_name, _, flow = entry
+                    await self._execute_graph(graph_id, g_name, flow, {})
+                    logger.debug("iCal graph %s (%s) node %s refreshed", graph_id[:8], g_name, node_id[:8])
+
+                await asyncio.sleep(refresh_min * 60)
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("iCal loop error graph=%s node=%s: %s", graph_id[:8], node_id[:8], exc)
                 await asyncio.sleep(60)  # back-off on unexpected errors
 
     # ── Event Handler ─────────────────────────────────────────────────────
@@ -342,7 +385,51 @@ class LogicManager:
                     "_computed_hours": round(acc, 6),
                 }
 
+        # ── Pre-fetch iCal URLs (refresh only when cache is stale) ───────────
         hyst = self._hysteresis.setdefault(graph_id, {})
+        for node in flow.nodes:
+            if node.type != "ical":
+                continue
+            url = (node.data.get("url") or "").strip()
+            if not url:
+                continue
+            refresh_min = float(node.data.get("refresh_interval_min") or 60)
+            hyst_node = hyst.setdefault(node.id, {})
+            last_fetch: float | None = hyst_node.get("last_fetch_ts")
+            url_changed = hyst_node.get("fetched_url") != url
+            needs_fetch = url_changed or last_fetch is None or (execute_now.timestamp() - last_fetch) >= refresh_min * 60
+            if needs_fetch:
+                try:
+                    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _hclient:
+                        _resp = await _hclient.get(url)
+                        _resp.raise_for_status()
+                        # Decode with charset from Content-Type; many iCal servers
+                        # omit the charset and serve Latin-1 (e.g. c-trace.de).
+                        # Try strict UTF-8 first; fall back to Latin-1 which always
+                        # succeeds and covers ISO-8859-1 / CP-1252 content.
+                        _ct = _resp.headers.get("content-type", "")
+                        _charset: str | None = None
+                        for _part in _ct.split(";"):
+                            _p = _part.strip()
+                            if _p.lower().startswith("charset="):
+                                _charset = _p[8:].strip().strip('"').strip("'")
+                                break
+                        if _charset:
+                            _raw_text = _resp.content.decode(_charset, errors="replace")
+                        else:
+                            try:
+                                _raw_text = _resp.content.decode("utf-8")
+                            except UnicodeDecodeError:
+                                _raw_text = _resp.content.decode("latin-1")
+                        if not _raw_text.lstrip().startswith("BEGIN:VCALENDAR"):
+                            raise ValueError(f"Response is not an iCal file (starts with {_raw_text[:60]!r})")
+                        hyst_node["raw"] = _raw_text
+                        hyst_node["fetched_url"] = url
+                        hyst_node["last_fetch_ts"] = execute_now.timestamp()
+                        logger.info("Graph %s: iCal fetched from %s (%d bytes)", graph_id[:8], url, len(_raw_text))
+                except Exception as _exc:
+                    logger.warning("Graph %s: iCal fetch failed for node %s (%s): %s", graph_id[:8], node.id[:8], url, _exc)
+
         executor = GraphExecutor(flow, hyst, self._app_config)
         try:
             outputs = executor.execute(aug_overrides)

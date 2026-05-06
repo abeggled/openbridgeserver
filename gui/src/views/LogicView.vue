@@ -208,6 +208,7 @@ const nodeTypeComponents = {
   notify_pushover: _generic, notify_sms: _generic,
   // Integration
   api_client: _generic, json_extractor: _generic, xml_extractor: _generic, substring_extractor: _generic,
+  ical: _generic,
   // DataPoints & Script
   datapoint_read:  _datapoint,
   datapoint_write: _datapoint,
