@@ -12,7 +12,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import shutil
 import sqlite3
 import tempfile
 import uuid
@@ -348,10 +347,7 @@ async def export_config(
 
     # Hierarchy
     tree_rows = await db.fetchall("SELECT * FROM hierarchy_trees ORDER BY name")
-    hierarchy_trees = [
-        ExportedHierarchyTree(id=r["id"], name=r["name"], description=r["description"])
-        for r in tree_rows
-    ]
+    hierarchy_trees = [ExportedHierarchyTree(id=r["id"], name=r["name"], description=r["description"]) for r in tree_rows]
 
     h_node_rows = await db.fetchall("SELECT * FROM hierarchy_nodes ORDER BY node_order, created_at")
     hierarchy_nodes = [
@@ -368,10 +364,7 @@ async def export_config(
     ]
 
     dp_link_rows = await db.fetchall("SELECT * FROM hierarchy_datapoint_links")
-    hierarchy_dp_links = [
-        ExportedHierarchyDpLink(id=r["id"], node_id=r["node_id"], datapoint_id=r["datapoint_id"])
-        for r in dp_link_rows
-    ]
+    hierarchy_dp_links = [ExportedHierarchyDpLink(id=r["id"], node_id=r["node_id"], datapoint_id=r["datapoint_id"]) for r in dp_link_rows]
 
     return ConfigExport(
         obs_version=_EXPORT_VERSION,
@@ -455,12 +448,14 @@ async def import_db(
         # Adapter und Logic Engine stoppen
         try:
             from obs.adapters import registry as adapter_registry
+
             await adapter_registry.stop_all()
         except Exception:
             pass
 
         try:
             from obs.logic.manager import get_logic_manager
+
             await get_logic_manager().stop()
         except Exception:
             pass
@@ -490,6 +485,7 @@ async def import_db(
         # Logic Engine neu starten
         try:
             from obs.logic.manager import get_logic_manager
+
             logic_mgr = get_logic_manager()
             await logic_mgr.start()
         except Exception:
@@ -500,6 +496,7 @@ async def import_db(
         try:
             from obs.adapters import registry as adapter_registry
             from obs.core.event_bus import get_event_bus
+
             event_bus = get_event_bus()
             await adapter_registry.start_all(event_bus, db)
             adapters_restarted = len(adapter_registry.get_all_instances())
@@ -806,8 +803,17 @@ async def import_config(
                                    node_order=excluded.node_order, icon=excluded.icon, access=excluded.access,
                                    access_pin=excluded.access_pin, page_config=excluded.page_config, updated_at=excluded.updated_at""",
                             (
-                                node.id, node.parent_id, node.name, node.type, node.node_order,
-                                node.icon, node.access, node.access_pin, node.page_config, now, now,
+                                node.id,
+                                node.parent_id,
+                                node.name,
+                                node.type,
+                                node.node_order,
+                                node.icon,
+                                node.access,
+                                node.access_pin,
+                                node.page_config,
+                                now,
+                                now,
                             ),
                         )
                         inserted_ids.add(node.id)
@@ -1013,9 +1019,7 @@ async def factory_reset(
     # App-Settings zurücksetzen (Autobackup-Einstellungen behalten, Standard-Timezone wiederherstellen)
     try:
         await db.execute_and_commit("DELETE FROM app_settings WHERE key NOT LIKE 'autobackup.%'")
-        await db.execute_and_commit(
-            "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('timezone', 'Europe/Zurich')"
-        )
+        await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('timezone', 'Europe/Zurich')")
     except Exception as exc:
         result.errors.append(f"App settings reset failed: {exc}")
 

@@ -61,9 +61,7 @@ def _autobackup_dir() -> Path:
 
 
 async def _load_config(db: Database) -> AutobackupConfig:
-    rows = await db.fetchall(
-        "SELECT key, value FROM app_settings WHERE key LIKE 'autobackup.%'"
-    )
+    rows = await db.fetchall("SELECT key, value FROM app_settings WHERE key LIKE 'autobackup.%'")
     settings = {r["key"]: r["value"] for r in rows}
     return AutobackupConfig(
         enabled=settings.get("autobackup.enabled", "0") == "1",
@@ -287,6 +285,7 @@ class AutobackupScheduler:
                     if tomorrow <= now:
                         # Nächsten Monat / Jahr berücksichtigen
                         import calendar
+
                         days_in_month = calendar.monthrange(now.year, now.month)[1]
                         if now.day < days_in_month:
                             tomorrow = datetime(now.year, now.month, now.day + 1, cfg.hour, 0, tzinfo=UTC)
