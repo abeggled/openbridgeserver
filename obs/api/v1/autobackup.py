@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -178,9 +179,17 @@ async def restore_autobackup(
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
     """Autobackup-Sicherung wiederherstellen (Upsert-Semantik, wie JSON-Import)."""
-    # Dateinamen sichern (kein Path Traversal)
+    # Dateinamen strikt validieren (erwartetes Format: YYYYMMDD-HHMM)
     safe_name = Path(name).name
-    backup_path = _autobackup_dir() / f"{safe_name}.json"
+    if not re.fullmatch(r"\d{8}-\d{4}", safe_name):
+        raise HTTPException(status_code=400, detail="Ungültiger Sicherungsname.")
+
+    base_dir = _autobackup_dir().resolve()
+    backup_path = (base_dir / f"{safe_name}.json").resolve()
+    try:
+        backup_path.relative_to(base_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Ungültiger Sicherungspfad.")
 
     if not backup_path.exists():
         raise HTTPException(status_code=404, detail=f"Sicherung '{safe_name}' nicht gefunden.")
