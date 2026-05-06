@@ -38,6 +38,9 @@ WidgetRegistry.register({
   noDatapoint: true,
   getExtraDatapointIds: (config) => {
     return [
+      config.dp_move_up as string,
+      config.dp_move_down as string,
+      config.dp_stop as string,
       config.dp_position as string,
       config.dp_position_status as string,
       config.dp_slat as string,
