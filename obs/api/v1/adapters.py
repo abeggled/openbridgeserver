@@ -456,6 +456,19 @@ async def list_instance_holidays(
     return [HolidayEntry(date=h["date"], name=h["name"]) for h in holidays]
 
 
+def _build_tls_context(cfg: Any) -> Any:
+    """Return an ssl.SSLContext if cfg.tls is True, else None."""
+    if not getattr(cfg, "tls", False):
+        return None
+    import ssl
+
+    ctx = ssl.create_default_context()
+    if getattr(cfg, "tls_insecure", False):
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
 @router.get("/instances/{instance_id}/mqtt/browse", response_model=list[str])
 async def mqtt_browse_topics(
     instance_id: uuid.UUID,
@@ -486,6 +499,8 @@ async def mqtt_browse_topics(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "aiomqtt nicht installiert")
 
     scan_secs = min(max(timeout, 1), 10)
+    tls_context = _build_tls_context(cfg)
+    browse_id = f"obs-mqtt-{instance_id.hex[:8]}-browse"
     topics: set[str] = set()
     try:
         async with aiomqtt.Client(
@@ -493,6 +508,8 @@ async def mqtt_browse_topics(
             port=cfg.port,
             username=cfg.username,
             password=cfg.password,
+            identifier=browse_id,
+            tls_context=tls_context,
         ) as client:
             await client.subscribe("#")
             try:
@@ -541,12 +558,16 @@ async def mqtt_sample_payload(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "aiomqtt nicht installiert")
 
     scan_secs = min(max(timeout, 1), 10)
+    tls_context = _build_tls_context(cfg)
+    sample_id = f"obs-mqtt-{instance_id.hex[:8]}-sample"
     try:
         async with aiomqtt.Client(
             hostname=cfg.host,
             port=cfg.port,
             username=cfg.username,
             password=cfg.password,
+            identifier=sample_id,
+            tls_context=tls_context,
         ) as client:
             await client.subscribe(topic)
             try:
