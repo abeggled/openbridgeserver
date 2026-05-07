@@ -47,7 +47,9 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 16. [Datentypen](#datentypen)
 17. [Einstellungen](#einstellungen)
 18. [Hilfsskripte](#hilfsskripte)
-19. [Entwicklung](#entwicklung)
+19. [Visualisierung (Visu)](#visualisierung-visu)
+   - [Grundriss- und Anlagenschema-Widget](#grundriss--und-anlagenschema-widget)
+20. [Entwicklung](#entwicklung)
    - [Lokale Entwicklung mit PyCharm](#lokale-entwicklung-mit-pycharm)
 
 ---
@@ -1296,6 +1298,64 @@ Mit Fehlerprotokoll:
 
 Das Skript läuft bei Einzelfehlern durch. Am Ende werden Anzahl der erfolgreich importierten,
 übersprungenen (Zeilen ohne Adresse) und fehlgeschlagenen GAs ausgegeben.
+
+---
+
+## Visualisierung (Visu)
+
+Die Visu-Oberfläche ist eine separate Single-Page-App (erreichbar unter `/visu/`), mit der interaktive Bedienoberflächen — sogenannte **Visu-Seiten** — erstellt und im Vollbildmodus auf Displays oder Tablets angezeigt werden können. Jede Seite besteht aus frei platzierbaren Widgets, die Datenpunkte anzeigen oder steuern.
+
+### Grundriss- und Anlagenschema-Widget
+
+Das **Grundriss-Widget** ermöglicht es, einen Gebäudegrundriss oder ein Anlagenschema als interaktiven Hintergrund in eine Visu-Seite einzubinden. Auf dem Bild lassen sich Bereiche (Polygone) definieren, beschriften und mit Aktionen verknüpfen — sowie Mini-Widgets direkt auf dem Plan platzieren.
+
+#### Bild einbinden
+
+Im Konfigurations-Panel des Widgets kann ein Bild hochgeladen werden (SVG, PNG oder JPG). Das Bild wird als Base64-Data-URL direkt im Konfig-JSON gespeichert — kein separater Upload-Endpunkt nötig. Bei Dateien über 2 MB erscheint ein Hinweis; für Grundrisse wird **SVG empfohlen**, da es verlustfrei skaliert.
+
+Die **Rotation** des Bildes lässt sich in 90°-Schritten einstellen (0° / 90° / 180° / 270°), um Landscape-Grafiken direkt im Portrait-Modus verwenden zu können. 
+
+#### Bereiche (Polygone) zeichnen
+
+Mit dem Polygon-Werkzeug im Vollbild-Canvas lassen sich Bereiche auf dem Grundriss einzeichnen:
+
+1. Im Konfigurations-Panel auf **Neuer Bereich** klicken — der Fullscreen-Canvas öffnet sich.
+2. Durch Klicken auf die Arbeitsfläche werden Eckpunkte des Polygons gesetzt.
+3. Das Polygon wird geschlossen, indem der erste Punkt erneut angeklickt oder **Enter** gedrückt wird.
+
+Jedem Bereich können folgende Eigenschaften zugewiesen werden:
+
+| Eigenschaft | Beschreibung |
+|---|---|
+| **Name** | Bezeichnung des Bereichs (z. B. „Wohnzimmer") |
+| **Beschriftung anzeigen** | Schaltet die Textbeschriftung auf dem Plan ein/aus |
+| **Beschriftungsfarbe** | Textfarbe der Bereichsbeschriftung |
+| **Beschriftungsposition** | Durch Klick auf den Bereich im Canvas frei positionierbar |
+| **Aktion bei Klick** | `Keine` oder `Navigation` — bei Navigation: Ziel-Visu-Seite auswählen |
+
+#### Navigation zwischen Seiten
+
+Wenn als Klick-Aktion **Navigation** gewählt wird, öffnet sich eine Seitenauswahl. Die gewählte Visu-Seite wird beim Klick auf den Bereich im Viewer direkt aufgerufen. So lassen sich z. B. Etagenpläne miteinander verknüpfen — Klick auf einen Raum öffnet eine Detailansicht.
+
+#### Mini-Widgets platzieren
+
+Auf dem Grundriss können beliebige **Mini-Widgets** (z. B. Schalter, Temperaturanzeige, Dimmregler) direkt auf dem Plan positioniert werden:
+
+1. Im Konfigurations-Panel auf **Mini-Widget hinzufügen** klicken und den Widget-Typ wählen.
+2. Auf **Positionieren** klicken — der Fullscreen-Canvas öffnet sich.
+3. Das Mini-Widget per **Drag & Drop** an die gewünschte Stelle auf dem Plan ziehen.
+
+Für jedes Mini-Widget lassen sich einstellen:
+
+| Eigenschaft | Beschreibung |
+|---|---|
+| **Widget-Typ** | Beliebiger Visu-Widget-Typ (Schalter, Anzeige, Dimmer, …) |
+| **Datenpunkt** | Steuert den Wert des Widgets (Hauptdatenpunkt) |
+| **Status-Datenpunkt** | Optionaler zweiter Datenpunkt für den Anzeigestatus |
+| **Breite / Höhe** | Größe des Mini-Widgets in Pixeln |
+| **Sichtbar** | Blendet das Widget im Viewer ein oder aus |
+
+Mini-Widgets drehen sich beim Rotieren des Grundrisses nicht mit — sie bleiben immer aufrecht und werden anhand der Bildkoordinaten korrekt über dem Grundriss positioniert.
 
 ---
 

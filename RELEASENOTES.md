@@ -5,7 +5,7 @@
 * none
 
 ### New features 💡
-* none
+* #228: Add floorplan widget
   
 ### Fixes 🐞
 * #375: Confusing checksum field content within releasenotes
