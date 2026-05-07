@@ -897,6 +897,14 @@
               <span class="text-slate-600 dark:text-slate-300 truncate">{{ entry.value }}</span>
             </button>
           </div>
+          <button
+            v-if="snmpWalkHasMore && !snmpWalkLoading"
+            type="button"
+            class="mt-1 w-full text-xs text-center py-1 rounded border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+            @click="snmpWalk(true)"
+          >
+            {{ snmpWalkResults.length }} geladen — weitere 50 laden …
+          </button>
           <p v-if="snmpWalkError" class="text-xs text-red-400 mt-1">{{ snmpWalkError }}</p>
           <p class="hint">
             Beispiele:
@@ -1215,6 +1223,7 @@ let iobrokerBrowseTimer = null
 const snmpWalkResults = ref([])
 const snmpWalkLoading = ref(false)
 const snmpWalkError   = ref(null)
+const snmpWalkHasMore = ref(false)
 
 // Zeitschaltuhr holiday list state (for Feiertagsschaltuhr)
 const ztHolidays = ref([])   // [{date, name}, …] sorted by date
@@ -1509,17 +1518,27 @@ function selectIoBrokerState(state) {
   iobrokerBrowseError.value = null
 }
 
-async function snmpWalk() {
+async function snmpWalk(append = false) {
   const instanceId = selectedInstanceId.value
   if (!instanceId || !cfg.host) return
   snmpWalkLoading.value = true
-  snmpWalkError.value = null
-  snmpWalkResults.value = []
+  if (!append) {
+    snmpWalkError.value = null
+    snmpWalkResults.value = []
+  }
   try {
-    const startOid = cfg.oid?.trim() || '1.3.6.1.2.1'
-    const { data } = await adapterApi.snmpWalk(instanceId, cfg.host, startOid, cfg.port || 161)
-    snmpWalkResults.value = data
-    if (data.length === 0) snmpWalkError.value = 'Keine OIDs gefunden'
+    const rootOid  = cfg.oid?.trim() || '1.3.6.1.2.1'
+    const startOid = append && snmpWalkResults.value.length
+      ? snmpWalkResults.value[snmpWalkResults.value.length - 1].oid
+      : null
+    const { data } = await adapterApi.snmpWalk(instanceId, cfg.host, rootOid, cfg.port || 161, 50, 10, startOid)
+    if (append) {
+      snmpWalkResults.value = [...snmpWalkResults.value, ...data]
+    } else {
+      snmpWalkResults.value = data
+    }
+    if (snmpWalkResults.value.length === 0) snmpWalkError.value = 'Keine OIDs gefunden'
+    snmpWalkHasMore.value = data.length === 50
   } catch (e) {
     snmpWalkError.value = e.response?.data?.detail ?? 'SNMP Walk fehlgeschlagen'
   } finally {

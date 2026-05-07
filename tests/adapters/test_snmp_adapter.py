@@ -559,6 +559,17 @@ class TestWrite:
 # ---------------------------------------------------------------------------
 
 
+def _make_walk_row(oid_str: str, value_str: str, type_name: str = "OctetString", int_val: int | None = None):
+    """Create a nextCmd 2D-row: [[( OID-mock, value-mock )]] matching pysnmp's actual return format."""
+    oid = MagicMock()
+    oid.__str__ = MagicMock(return_value=oid_str)
+    val = _make_snmp_value(value_str, type_name, int_val=int_val)
+    type(val).__name__ = type_name
+    # nextCmd returns list-of-rows; each row is a list with one ObjectType per requested OID.
+    # We model ObjectType as a 2-tuple (oid, val) since it supports indexing.
+    return (None, None, None, [[(oid, val)]])
+
+
 class TestSnmpWalk:
     @pytest.mark.asyncio
     async def test_walk_returns_oid_value_type(self, mock_bus, snmp_symbols):
@@ -567,26 +578,15 @@ class TestSnmpWalk:
         adapter._engine = snmp_symbols["SnmpEngine"]()
         adapter._connected = True
 
-        oid1 = MagicMock()
-        oid1.__str__ = MagicMock(return_value="1.3.6.1.2.1.1.1.0")
-        val1 = _make_snmp_value("Linux 5.15", "OctetString")
-        type(val1).__name__ = "OctetString"
-
-        oid2 = MagicMock()
-        oid2.__str__ = MagicMock(return_value="1.3.6.1.2.1.1.2.0")
-        val2 = _make_snmp_value("42", "Integer32", int_val=42)
-        type(val2).__name__ = "Integer32"
-
         oid_out = MagicMock()
-        oid_out.__str__ = MagicMock(return_value="1.3.6.1.3.1.1.0")  # outside subtree
+        oid_out.__str__ = MagicMock(return_value="1.3.6.1.3.1.1.0")  # outside subtree → stops walk
         val_out = _make_snmp_value("x", "OctetString")
         type(val_out).__name__ = "OctetString"
 
-        # nextCmd is a coroutine (one GETNEXT per call); walk loops until subtree ends
         responses = iter([
-            (None, None, None, [(oid1, val1)]),
-            (None, None, None, [(oid2, val2)]),
-            (None, None, None, [(oid_out, val_out)]),
+            _make_walk_row("1.3.6.1.2.1.1.1.0", "Linux 5.15", "OctetString"),
+            _make_walk_row("1.3.6.1.2.1.1.2.0", "42", "Integer32", int_val=42),
+            (None, None, None, [[(oid_out, val_out)]]),  # outside subtree
         ])
 
         async def fake_next(*args, **kwargs):
@@ -613,16 +613,36 @@ class TestSnmpWalk:
         async def fake_next_many(*args, **kwargs):
             i = counter["n"]
             counter["n"] += 1
-            oid = MagicMock()
-            oid.__str__ = MagicMock(return_value=f"1.3.6.1.2.1.1.{i}.0")
-            val = _make_snmp_value(str(i), "Integer32", int_val=i)
-            type(val).__name__ = "Integer32"
-            return (None, None, None, [(oid, val)])
+            return _make_walk_row(f"1.3.6.1.2.1.1.{i}.0", str(i), "Integer32", int_val=i)
 
         snmp_symbols["nextCmd"] = fake_next_many
 
         results = await adapter.snmp_walk(host="192.168.1.1", oid="1.3.6.1.2.1", max_results=5)
         assert len(results) == 5
+
+    @pytest.mark.asyncio
+    async def test_walk_start_oid_pagination(self, mock_bus, snmp_symbols):
+        """start_oid lets the walk continue from a cursor (pagination)."""
+        adapter = SnmpAdapter(event_bus=mock_bus, config={"version": "2c", "community": "public"})
+        adapter._snmp = snmp_symbols
+        adapter._engine = snmp_symbols["SnmpEngine"]()
+        adapter._connected = True
+
+        called_with = []
+
+        async def fake_next(*args, **kwargs):
+            # Record what OID was passed as the varBind
+            called_with.append(str(args[4][0][0]))  # ObjectIdentity string
+            return _make_walk_row("1.3.6.1.2.1.1.9.0", "val", "OctetString")
+
+        snmp_symbols["nextCmd"] = fake_next
+
+        results = await adapter.snmp_walk(
+            host="192.168.1.1", oid="1.3.6.1.2.1", max_results=1,
+            start_oid="1.3.6.1.2.1.1.8.0",
+        )
+        assert len(results) == 1
+        assert results[0]["oid"] == "1.3.6.1.2.1.1.9.0"
 
     @pytest.mark.asyncio
     async def test_walk_raises_when_not_connected(self, mock_bus):

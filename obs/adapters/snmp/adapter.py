@@ -522,12 +522,18 @@ class SnmpAdapter(AdapterBase):
         port: int = 161,
         timeout: float = 5.0,
         retries: int = 1,
-        max_results: int = 500,
+        max_results: int = 50,
+        start_oid: str | None = None,
     ) -> list[dict[str, str]]:
         """SNMP-Walk über einen OID-Teilbaum; gibt Liste von {oid, value, type} zurück.
 
-        nextCmd() in pysnmp hlapi returns a single GETNEXT step per call, so we
-        loop manually and stop once the returned OID leaves the target subtree.
+        getCmd()  → var_binds is 1D: [ObjectType, ...]
+        nextCmd() → var_binds is 2D: [[ObjectType, ...], ...]  (table rows)
+        Each call to nextCmd() returns one GETNEXT step; we loop until the
+        returned OID leaves the requested subtree.
+
+        start_oid: optional cursor for pagination — walk starts here instead of
+        at `oid`, but the subtree boundary is still determined by `oid`.
         """
         if not self._engine:
             raise RuntimeError("SNMP Adapter nicht verbunden")
@@ -537,11 +543,9 @@ class SnmpAdapter(AdapterBase):
         auth = self._build_auth(cfg)
         transport = s["UdpTransportTarget"]((host, port), timeout=timeout, retries=retries)
 
-        # Normalise root OID for subtree comparison (ensure trailing dot)
         root_prefix = oid if oid.endswith(".") else oid + "."
-
         results: list[dict[str, str]] = []
-        current_oid = oid
+        current_oid = start_oid if start_oid else oid
 
         while True:
             error_indication, error_status, _error_index, var_binds = await s["nextCmd"](
@@ -562,10 +566,13 @@ class SnmpAdapter(AdapterBase):
             if not var_binds:
                 break
 
-            for var_bind in var_binds:
-                obj_oid = var_bind[0]  # ObjectType[0]=OID, [1]=value
-                value   = var_bind[1]
-                oid_str = str(obj_oid)
+            # nextCmd var_binds is 2D: list of rows; each row holds one ObjectType per
+            # requested variable. We pass one OID → each row has exactly one entry.
+            for row in var_binds:
+                var_bind = row[0]           # ObjectType for our single OID
+                obj_oid  = var_bind[0]      # ObjectType[0] = OID
+                value    = var_bind[1]      # ObjectType[1] = value
+                oid_str  = str(obj_oid)
 
                 # Stop when we leave the requested subtree
                 if not (oid_str == oid or oid_str.startswith(root_prefix)):

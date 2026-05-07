@@ -1035,14 +1035,18 @@ class SnmpWalkEntry(BaseModel):
 async def snmp_walk(
     instance_id: uuid.UUID,
     host: str = Query(..., description="IP-Adresse oder DNS-Name des SNMP-Geräts"),
-    oid: str = Query(default="1.3.6.1.2.1", description="Start-OID für den Walk"),
+    oid: str = Query(default="1.3.6.1.2.1", description="Subtree-Root OID"),
     port: int = Query(default=161, ge=1, le=65535, description="UDP-Port"),
     timeout: float = Query(default=5.0, ge=0.5, le=30.0, description="Timeout pro Request (s)"),
-    max_results: int = Query(default=500, ge=1, le=2000, description="Maximale Anzahl Einträge"),
+    max_results: int = Query(default=50, ge=1, le=500, description="Einträge pro Seite"),
+    start_oid: str | None = Query(default=None, description="Cursor für Paginierung (letzter OID der Vorseite)"),
     _user: str = Depends(get_current_user),
     db: Database = Depends(lambda: get_db()),
 ) -> list[SnmpWalkEntry]:
-    """SNMP-Walk über einen OID-Teilbaum — nützlich für OID-Discovery beim Binding-Anlegen."""
+    """SNMP-Walk über einen OID-Teilbaum — nützlich für OID-Discovery beim Binding-Anlegen.
+
+    Paginierung: start_oid auf den letzten OID der Vorseite setzen um weitere Einträge zu laden.
+    """
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
@@ -1051,13 +1055,11 @@ async def snmp_walk(
 
     instance = adapter_registry.get_instance_by_id(str(instance_id))
     if instance is None or not instance.connected:
-        # Adapter nicht verbunden → temporäre Instanz erzeugen
         from obs.adapters.snmp.adapter import SnmpAdapter
         from obs.core.event_bus import EventBus
-
-        raw_config = row["config"] or "{}"
         import json as _json
 
+        raw_config = row["config"] or "{}"
         config_dict = _json.loads(raw_config) if isinstance(raw_config, str) else raw_config
         dummy_bus = EventBus()
         instance = SnmpAdapter(event_bus=dummy_bus, config=config_dict)
@@ -1072,7 +1074,10 @@ async def snmp_walk(
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "snmp_walk nicht verfügbar")
 
     try:
-        entries = await instance.snmp_walk(host=host, oid=oid, port=port, timeout=timeout, max_results=max_results)
+        entries = await instance.snmp_walk(
+            host=host, oid=oid, port=port, timeout=timeout,
+            max_results=max_results, start_oid=start_oid,
+        )
         return [SnmpWalkEntry(**e) for e in entries]
     except Exception as exc:
         raise HTTPException(
