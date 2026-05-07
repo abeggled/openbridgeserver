@@ -138,7 +138,7 @@ const labelFontSz  = computed(() => naturalW.value * 0.018)
 
 function handleAreaClick(area: GrundrissArea) {
   if (area.actionType === 'navigate' && area.actionValue) {
-    router.push(`/visu/${area.actionValue}`)
+    router.push({ name: 'viewer', params: { id: area.actionValue } })
   }
 }
 </script>
