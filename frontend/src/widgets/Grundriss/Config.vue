@@ -320,7 +320,8 @@ const filteredNodes = computed(() => {
     .slice(0, 40)
 })
 
-function openPagePicker() {
+async function openPagePicker() {
+  if (!store.treeLoaded) await store.loadTree()
   pagePickerOpen.value  = true
   pagePickerQuery.value = ''
   nextTick(() => pagePickerInput.value?.focus())
@@ -595,7 +596,7 @@ function openPlacement(mwId: string) {
             <div v-if="!pagePickerOpen" class="flex items-center gap-1">
               <div
                 class="flex-1 flex items-center gap-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 cursor-pointer hover:border-gray-400 dark:hover:border-gray-500 transition-colors overflow-hidden"
-                @click="openPagePicker"
+                @click.stop="openPagePicker"
               >
                 <span
                   class="text-xs truncate"
