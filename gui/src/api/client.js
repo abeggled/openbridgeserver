@@ -241,15 +241,16 @@ export const navLinksApi = {
 
 // ── Logic Engine ──────────────────────────────────────────────────────────
 export const logicApi = {
-  nodeTypes:      ()           => api.get('/logic/node-types'),
-  listGraphs:     ()           => api.get('/logic/graphs'),
-  createGraph:    (data)       => api.post('/logic/graphs', data),
-  importGraph:    (data)       => api.post('/logic/graphs/import', data),
-  getGraph:       (id)         => api.get(`/logic/graphs/${id}`),
-  saveGraph:      (id, data)   => api.put(`/logic/graphs/${id}`, data),
-  patchGraph:     (id, data)   => api.patch(`/logic/graphs/${id}`, data),
-  deleteGraph:    (id)         => api.delete(`/logic/graphs/${id}`),
-  runGraph:       (id)         => api.post(`/logic/graphs/${id}/run`),
-  duplicateGraph: (id)         => api.post(`/logic/graphs/${id}/duplicate`),
-  exportGraph:    (id)         => api.get(`/logic/graphs/${id}/export`),
+  nodeTypes:        ()           => api.get('/logic/node-types'),
+  listGraphs:       ()           => api.get('/logic/graphs'),
+  createGraph:      (data)       => api.post('/logic/graphs', data),
+  importGraph:      (data)       => api.post('/logic/graphs/import', data),
+  getGraph:         (id)         => api.get(`/logic/graphs/${id}`),
+  saveGraph:        (id, data)   => api.put(`/logic/graphs/${id}`, data),
+  patchGraph:       (id, data)   => api.patch(`/logic/graphs/${id}`, data),
+  deleteGraph:      (id)         => api.delete(`/logic/graphs/${id}`),
+  runGraph:         (id)         => api.post(`/logic/graphs/${id}/run`),
+  duplicateGraph:   (id)         => api.post(`/logic/graphs/${id}/duplicate`),
+  exportGraph:      (id)         => api.get(`/logic/graphs/${id}/export`),
+  datapointUsages:  (dpId)       => api.get(`/logic/datapoint/${dpId}/usages`),
 }

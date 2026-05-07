@@ -139,6 +139,38 @@
       </div>
     </div>
 
+    <!-- Logic Verknüpfungen -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">Logic Verknüpfungen</h3>
+      </div>
+      <div class="card-body">
+        <div v-if="logicUsagesLoading" class="flex justify-center py-4"><Spinner /></div>
+        <div v-else-if="!logicUsages.length" class="text-center text-slate-500 text-sm py-4">
+          Objekt wird in keinem Logic-Sheet verwendet
+        </div>
+        <div v-else class="flex flex-col gap-2">
+          <div v-for="u in logicUsages" :key="u.node_id" class="flex items-center gap-3 p-3 bg-surface-700 rounded-lg">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ u.graph_name }}</span>
+                <Badge :variant="u.direction === 'SOURCE' ? 'info' : 'warning'" size="xs">
+                  {{ u.direction === 'SOURCE' ? 'Lesen' : 'Schreiben' }}
+                </Badge>
+                <Badge v-if="!u.graph_enabled" variant="muted" size="xs">Deaktiviert</Badge>
+              </div>
+              <div class="text-xs text-slate-500 mt-1">
+                {{ u.node_type === 'datapoint_read' ? 'Read Object — Logic liest dieses Objekt' : 'Write Object — Logic schreibt auf dieses Objekt' }}
+              </div>
+            </div>
+            <RouterLink :to="`/logic?graph=${u.graph_id}`" class="btn-icon shrink-0" title="Logic-Sheet öffnen">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            </RouterLink>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Edit Objekt Modal -->
     <Modal v-model="showEdit" title="Objekt bearbeiten">
       <DataPointForm :initial="dp" :datatypes="dpStore.datatypes" :save-handler="onEditSave" @cancel="showEdit = false" />
@@ -160,7 +192,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { dpApi } from '@/api/client'
+import { dpApi, logicApi } from '@/api/client'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
 import Badge          from '@/components/ui/Badge.vue'
@@ -175,10 +207,12 @@ const props   = defineProps({ id: { type: String, required: true } })
 const dpStore = useDatapointStore()
 const ws      = useWebSocketStore()
 
-const dp              = ref(null)
-const bindings        = ref([])
-const bindingsLoading = ref(false)
-const showEdit        = ref(false)
+const dp                  = ref(null)
+const bindings            = ref([])
+const bindingsLoading     = ref(false)
+const logicUsages         = ref([])
+const logicUsagesLoading  = ref(false)
+const showEdit            = ref(false)
 const showBindingForm = ref(false)
 const showBindingConfirm = ref(false)
 const editBinding     = ref(null)
@@ -212,7 +246,7 @@ onMounted(async () => {
   unsubWs = ws.onValue((id, value, quality) => {
     if (id === props.id && dp.value) { dp.value.value = value; dp.value.quality = quality }
   })
-  await loadBindings()
+  await Promise.all([loadBindings(), loadLogicUsages()])
 })
 onUnmounted(() => unsubWs?.())
 
@@ -220,6 +254,12 @@ async function loadBindings() {
   bindingsLoading.value = true
   try { const { data } = await dpApi.listBindings(props.id); bindings.value = data }
   finally { bindingsLoading.value = false }
+}
+
+async function loadLogicUsages() {
+  logicUsagesLoading.value = true
+  try { const { data } = await logicApi.datapointUsages(props.id); logicUsages.value = data }
+  finally { logicUsagesLoading.value = false }
 }
 
 async function onEditSave(payload) {
