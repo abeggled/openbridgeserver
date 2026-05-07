@@ -170,45 +170,85 @@ def _import_pysnmp() -> dict:
         return {}
 
 
+def _pretty(snmp_value: Any) -> str:
+    """Return a string representation regardless of whether the value is a pysnmp type or a Python native."""
+    if hasattr(snmp_value, "prettyPrint"):
+        return snmp_value.prettyPrint()
+    return str(snmp_value)
+
+
 def _coerce_value(snmp_value: Any, data_type: str) -> Any:
-    """Convert a pysnmp value object to a Python native type."""
+    """Convert a pysnmp value object (or already-native Python value) to a Python native type.
+
+    pysnmp 6.x with lookupMib=True may return Python int/str directly instead of
+    pysnmp wrapper objects, so we must not assume prettyPrint() is available.
+    """
+    # Already a native Python scalar — return directly or apply requested cast
+    if isinstance(snmp_value, (bool, int, float)):
+        if data_type == "float":
+            return float(snmp_value)
+        if data_type in ("int", "counter", "gauge", "timeticks"):
+            return int(snmp_value)
+        if data_type == "hex":
+            return hex(int(snmp_value))
+        if data_type == "string":
+            return str(snmp_value)
+        return snmp_value  # auto: keep native type
+
+    if isinstance(snmp_value, (bytes, bytearray)):
+        if data_type == "hex" or data_type == "auto":
+            return snmp_value.hex()
+        return snmp_value.decode(errors="replace")
+
+    if isinstance(snmp_value, str):
+        if data_type == "auto":
+            try:
+                return int(snmp_value)
+            except ValueError:
+                pass
+            try:
+                return float(snmp_value)
+            except ValueError:
+                pass
+        return snmp_value
+
+    # pysnmp wrapper object — use prettyPrint() / int() as before
     type_name = type(snmp_value).__name__
 
     if data_type == "int" or (data_type == "auto" and type_name in ("Integer32", "Integer", "Unsigned32")):
         try:
             return int(snmp_value)
         except Exception:
-            return snmp_value.prettyPrint()
+            return _pretty(snmp_value)
 
     if data_type in ("counter", "gauge") or (data_type == "auto" and type_name in ("Counter32", "Counter64", "Gauge32", "Gauge")):
         try:
             return int(snmp_value)
         except Exception:
-            return snmp_value.prettyPrint()
+            return _pretty(snmp_value)
 
     if data_type == "timeticks" or (data_type == "auto" and type_name == "TimeTicks"):
         try:
             return int(snmp_value)
         except Exception:
-            return snmp_value.prettyPrint()
+            return _pretty(snmp_value)
 
     if data_type == "float":
         try:
-            return float(snmp_value.prettyPrint())
+            return float(_pretty(snmp_value))
         except ValueError:
-            return snmp_value.prettyPrint()
+            return _pretty(snmp_value)
 
     if data_type == "hex":
         try:
             raw = bytes(snmp_value)
             return raw.hex()
         except Exception:
-            return snmp_value.prettyPrint()
+            return _pretty(snmp_value)
 
     # "string" or "auto" fallback
-    pp = snmp_value.prettyPrint()
+    pp = _pretty(snmp_value)
     if data_type == "auto":
-        # Try numeric coercion for auto mode
         try:
             return int(pp)
         except ValueError:
@@ -539,7 +579,7 @@ class SnmpAdapter(AdapterBase):
                 results.append(
                     {
                         "oid": oid_str,
-                        "value": value.prettyPrint(),
+                        "value": _pretty(value),
                         "type": type(value).__name__,
                     }
                 )
