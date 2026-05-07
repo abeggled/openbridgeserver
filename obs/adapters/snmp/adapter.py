@@ -53,9 +53,9 @@ class SnmpAdapterConfig(BaseModel):
     security_name: str = Field(default="", title="Security Name / Username (v3)")
     security_level: Literal["noAuthNoPriv", "authNoPriv", "authPriv"] = Field(default="noAuthNoPriv", title="Security Level (v3)")
     auth_protocol: Literal["MD5", "SHA", "SHA256", "SHA512"] = Field(default="MD5", title="Auth-Protokoll (v3)")
-    auth_key: str = Field(default="", title="Auth-Key (v3)")
+    auth_key: str = Field(default="", title="Auth-Key (v3)", json_schema_extra={"format": "password"})
     priv_protocol: Literal["DES", "3DES", "AES128", "AES192", "AES256"] = Field(default="DES", title="Privacy-Protokoll (v3)")
-    priv_key: str = Field(default="", title="Privacy-Key (v3)")
+    priv_key: str = Field(default="", title="Privacy-Key (v3)", json_schema_extra={"format": "password"})
 
 
 class SnmpBindingConfig(BaseModel):
