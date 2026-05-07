@@ -316,7 +316,7 @@ class TestPollLoop:
         snmp_value = _make_snmp_value("42", "Integer32", int_val=42)
 
         async def fake_get(*args, **kwargs):
-            return (None, None, None, [(MagicMock(), snmp_value)])
+            return (None, None, None, [[(MagicMock(), snmp_value)]])
 
         snmp_symbols["getCmd"] = fake_get
         binding = make_binding({"host": "192.168.1.1", "oid": "1.3.6.1.2.1.1.1.0", "poll_interval": 999})
@@ -369,7 +369,7 @@ class TestPollLoop:
         snmp_value = _make_snmp_value("1000", "Integer32", int_val=1000)
 
         async def fake_get(*args, **kwargs):
-            return (None, None, None, [(MagicMock(), snmp_value)])
+            return (None, None, None, [[(MagicMock(), snmp_value)]])
 
         snmp_symbols["getCmd"] = fake_get
         binding = make_binding(
@@ -397,7 +397,7 @@ class TestPollLoop:
         snmp_value = _make_snmp_value("1", "Integer32", int_val=1)
 
         async def fake_get(*args, **kwargs):
-            return (None, None, None, [(MagicMock(), snmp_value)])
+            return (None, None, None, [[(MagicMock(), snmp_value)]])
 
         snmp_symbols["getCmd"] = fake_get
         binding = make_binding(
@@ -446,7 +446,7 @@ class TestOnBindingsReloaded:
         snmp_value = _make_snmp_value("1", "Integer32", int_val=1)
 
         async def fake_get(*args, **kwargs):
-            return (None, None, None, [(MagicMock(), snmp_value)])
+            return (None, None, None, [[(MagicMock(), snmp_value)]])
 
         snmp_symbols["getCmd"] = fake_get
 
@@ -477,7 +477,7 @@ class TestOnBindingsReloaded:
         snmp_value = _make_snmp_value("0", "Integer32", int_val=0)
 
         async def fake_get(*args, **kwargs):
-            return (None, None, None, [(MagicMock(), snmp_value)])
+            return (None, None, None, [[(MagicMock(), snmp_value)]])
 
         snmp_symbols["getCmd"] = fake_get
 
@@ -509,7 +509,7 @@ class TestRead:
         snmp_value = _make_snmp_value("55", "Integer32", int_val=55)
 
         async def fake_get(*args, **kwargs):
-            return (None, None, None, [(MagicMock(), snmp_value)])
+            return (None, None, None, [[(MagicMock(), snmp_value)]])
 
         snmp_symbols["getCmd"] = fake_get
         binding = make_binding({"host": "192.168.1.1", "oid": "1.3.6.1.2.1.1.1.0", "poll_interval": 30})
@@ -584,9 +584,9 @@ class TestSnmpWalk:
 
         # nextCmd is a coroutine (one GETNEXT per call); walk loops until subtree ends
         responses = iter([
-            (None, None, None, [(oid1, val1)]),
-            (None, None, None, [(oid2, val2)]),
-            (None, None, None, [(oid_out, val_out)]),
+            (None, None, None, [[(oid1, val1)]]),
+            (None, None, None, [[(oid2, val2)]]),
+            (None, None, None, [[(oid_out, val_out)]]),
         ])
 
         async def fake_next(*args, **kwargs):
@@ -617,7 +617,7 @@ class TestSnmpWalk:
             oid.__str__ = MagicMock(return_value=f"1.3.6.1.2.1.1.{i}.0")
             val = _make_snmp_value(str(i), "Integer32", int_val=i)
             type(val).__name__ = "Integer32"
-            return (None, None, None, [(oid, val)])
+            return (None, None, None, [[(oid, val)]])
 
         snmp_symbols["nextCmd"] = fake_next_many
 
