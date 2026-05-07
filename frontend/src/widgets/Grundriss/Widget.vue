@@ -195,6 +195,9 @@ function handleAreaClick(area: GrundrissArea) {
             dominant-baseline="middle"
             :font-size="labelFontSz"
             :fill="area.labelColor || '#ffffff'"
+            :stroke-width="labelFontSz * 0.18"
+            stroke="rgba(0,0,0,0.65)"
+            paint-order="stroke fill"
             style="pointer-events: none; user-select: none;"
           >{{ area.name }}</text>
         </g>

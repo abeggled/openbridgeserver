@@ -35,7 +35,7 @@ interface GrundrissMiniWidget {
 
 // ── Props / Emit ──────────────────────────────────────────────────────────────
 
-const props = defineProps<{ modelValue: Record<string, unknown> }>()
+const props = defineProps<{ modelValue: Record<string, unknown>; widgetId?: string }>()
 const emit  = defineEmits<{ (e: 'update:modelValue', val: Record<string, unknown>): void }>()
 
 // ── Visu Store (page picker) ──────────────────────────────────────────────────
@@ -120,10 +120,12 @@ const closeThreshold = computed(() => cfg.imageNaturalW * 0.04)
 
 function getImageCoords(e: MouseEvent, el: HTMLElement): [number, number] {
   const rect  = el.getBoundingClientRect()
-  const scale = cfg.imageNaturalW / rect.width
+  const scale = Math.min(rect.width / cfg.imageNaturalW, rect.height / cfg.imageNaturalH)
+  const offX  = (rect.width  - cfg.imageNaturalW * scale) / 2
+  const offY  = (rect.height - cfg.imageNaturalH * scale) / 2
   return [
-    Math.max(0, Math.min(cfg.imageNaturalW, (e.clientX - rect.left) * scale)),
-    Math.max(0, Math.min(cfg.imageNaturalH, (e.clientY - rect.top)  * scale)),
+    Math.max(0, Math.min(cfg.imageNaturalW, (e.clientX - rect.left - offX) / scale)),
+    Math.max(0, Math.min(cfg.imageNaturalH, (e.clientY - rect.top  - offY) / scale)),
   ]
 }
 
@@ -168,14 +170,39 @@ type FullscreenMode = 'draw' | 'place'
 const fullscreenOpen = ref(false)
 const fullscreenMode = ref<FullscreenMode>('draw')
 const canvasRef      = ref<HTMLDivElement>()
+const widgetRect     = ref<DOMRect | null>(null)
 
-// Canvas fills the available area while preserving the image's aspect ratio.
-const canvasStyle = computed(() => ({
-  width: `min(calc(100vw - 2rem), calc((100vh - 5rem) * ${cfg.imageNaturalW} / ${cfg.imageNaturalH}))`,
-  aspectRatio: `${cfg.imageNaturalW} / ${cfg.imageNaturalH}`,
-}))
+function captureWidgetRect() {
+  if (!props.widgetId) { widgetRect.value = null; return }
+  const el = document.querySelector(`[data-widget-id="${props.widgetId}"]`)
+  widgetRect.value = el ? (el as HTMLElement).getBoundingClientRect() : null
+}
+
+const canvasPositionStyle = computed(() => {
+  const shadow = '0 0 0 9999px rgba(0,0,0,0.65)'
+  if (widgetRect.value) {
+    return {
+      position:  'absolute' as const,
+      left:      `${widgetRect.value.left}px`,
+      top:       `${widgetRect.value.top}px`,
+      width:     `${widgetRect.value.width}px`,
+      height:    `${widgetRect.value.height}px`,
+      boxShadow: shadow,
+    }
+  }
+  return {
+    position:    'absolute' as const,
+    left:        '50%',
+    top:         '50%',
+    transform:   'translate(-50%, -50%)',
+    width:       `min(calc(100vw - 2rem), calc((100vh - 8rem) * ${cfg.imageNaturalW} / ${cfg.imageNaturalH}))`,
+    aspectRatio: `${cfg.imageNaturalW} / ${cfg.imageNaturalH}`,
+    boxShadow:   shadow,
+  }
+})
 
 function openFullscreen() {
+  captureWidgetRect()
   fullscreenMode.value = 'draw'
   placingMwId.value    = null
   fullscreenOpen.value = true
@@ -267,13 +294,6 @@ function deleteArea(id: string) {
   if (idx !== -1) cfg.areas.splice(idx, 1)
   if (selectedAreaId.value === id) selectedAreaId.value = null
 }
-
-function onPreviewAreaClick(e: MouseEvent, areaId: string) {
-  e.stopPropagation()
-  selectArea(areaId)
-}
-
-const previewAspect = computed(() => `${cfg.imageNaturalW} / ${cfg.imageNaturalH}`)
 
 // ── Page Picker (navigate action) ─────────────────────────────────────────────
 
@@ -370,6 +390,7 @@ const placingMw   = computed(() =>
 )
 
 function openPlacement(mwId: string) {
+  captureWidgetRect()
   placingMwId.value    = mwId
   fullscreenMode.value = 'place'
   fullscreenOpen.value = true
@@ -448,70 +469,6 @@ function openPlacement(mwId: string) {
     <!-- ══ Bereiche ══════════════════════════════════════════════════════════ -->
     <div>
       <p class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Bereiche</p>
-
-      <!-- Sidebar preview — read-only, click polygon/marker to select -->
-      <div
-        class="relative w-full border border-gray-300 dark:border-gray-700 rounded overflow-hidden select-none preview-canvas"
-        :style="{ aspectRatio: previewAspect }"
-      >
-        <img
-          v-if="cfg.image"
-          :src="cfg.image"
-          class="absolute inset-0 w-full h-full"
-          style="object-fit: fill;"
-          alt=""
-          draggable="false"
-        />
-        <div
-          v-else
-          class="absolute inset-0 flex items-center justify-center text-gray-500 dark:text-gray-600 text-xs"
-        >Zuerst Bild hochladen</div>
-
-        <svg
-          class="absolute inset-0 w-full h-full"
-          :viewBox="svgViewBox"
-          preserveAspectRatio="none"
-        >
-          <!-- Areas -->
-          <g v-for="area in cfg.areas" :key="area.id">
-            <polygon
-              :points="ptStr(area.points)"
-              :fill="area.id === selectedAreaId ? 'rgba(59,130,246,0.3)' : 'rgba(59,130,246,0.12)'"
-              :stroke="area.id === selectedAreaId ? '#60a5fa' : '#3b82f6'"
-              :stroke-width="strokeW"
-              class="cursor-pointer"
-              @click.stop="onPreviewAreaClick($event, area.id)"
-            />
-            <text
-              v-if="area.showLabel"
-              :x="area.labelX" :y="area.labelY"
-              text-anchor="middle" dominant-baseline="middle"
-              :font-size="fontSize" :fill="area.labelColor || '#ffffff'"
-              style="pointer-events: none; user-select: none;"
-            >{{ area.name }}</text>
-          </g>
-
-          <!-- Mini-widget position markers -->
-          <g v-for="mw in cfg.miniWidgets" :key="`prev-mw-${mw.id}`">
-            <circle
-              :cx="mw.x" :cy="mw.y"
-              :r="cfg.imageNaturalW * 0.013"
-              :fill="mw.id === selectedMwId ? 'rgba(239,68,68,0.85)' : 'rgba(239,68,68,0.5)'"
-              :stroke="mw.id === selectedMwId ? '#fff' : '#ef4444'"
-              :stroke-width="strokeW * 1.5"
-              class="cursor-pointer"
-              @click.stop="selectMw(mw.id)"
-            />
-            <text
-              :x="mw.x" :y="mw.y + cfg.imageNaturalW * 0.02"
-              text-anchor="middle" dominant-baseline="hanging"
-              :font-size="fontSize * 0.55"
-              fill="#fca5a5"
-              style="pointer-events: none; user-select: none;"
-            >{{ mw.label || mw.widgetType }}</text>
-          </g>
-        </svg>
-      </div>
 
       <!-- Open fullscreen drawing button -->
       <button
@@ -879,78 +836,23 @@ function openPlacement(mwId: string) {
   <Teleport to="body">
     <div
       v-if="fullscreenOpen"
-      class="fixed inset-0 z-50 flex flex-col bg-black/90"
-      style="backdrop-filter: blur(2px);"
+      class="fixed inset-0 z-50 pointer-events-none"
     >
-      <!-- Toolbar -->
-      <div class="flex-none flex items-center gap-3 px-4 py-2.5 bg-gray-900 border-b border-gray-700">
+      <!-- Drawing / placement canvas — positioned over the widget, shadow dims the rest -->
+      <div
+        ref="canvasRef"
+        class="relative select-none cursor-crosshair pointer-events-auto"
+        :style="canvasPositionStyle"
+        @click="onCanvasClick"
+        @mousemove="onCanvasMouseMove"
+      >
 
-        <!-- Draw mode toolbar -->
-        <template v-if="fullscreenMode === 'draw'">
-          <span class="text-sm font-semibold text-gray-100">Bereiche zeichnen</span>
-          <span class="text-xs text-gray-400 flex-1 min-w-0 truncate">{{ drawingHint }}</span>
-
-          <button
-            type="button"
-            :disabled="currentPoints.length < 3"
-            class="py-1 px-3 text-xs rounded border border-amber-600 text-amber-300 hover:border-amber-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
-            @click="finishArea"
-          >Polygon abschliessen ↩</button>
-
-          <button
-            type="button"
-            :disabled="currentPoints.length === 0"
-            class="py-1 px-3 text-xs rounded border border-gray-600 text-gray-300 hover:border-gray-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
-            @click="cancelCurrentPolygon"
-          >Aktuelles verwerfen Esc</button>
-
-          <button
-            type="button"
-            class="py-1 px-4 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors shrink-0"
-            @click="closeFullscreen"
-          >Fertig</button>
-        </template>
-
-        <!-- Place mode toolbar -->
-        <template v-else>
-          <span class="text-sm font-semibold text-gray-100">Mini-Widget platzieren</span>
-          <span class="text-xs text-gray-400 flex-1 min-w-0 truncate">
-            Klicken um Mittelpunkt von „{{ placingMw?.label || placingMw?.widgetType }}" zu setzen
-          </span>
-          <button
-            type="button"
-            class="py-1 px-3 text-xs rounded border border-gray-600 text-gray-300 hover:border-gray-400 transition-colors shrink-0"
-            @click="closeFullscreen"
-          >Abbrechen Esc</button>
-        </template>
-      </div>
-
-      <!-- Drawing / placement canvas -->
-      <div class="flex-1 flex items-center justify-center overflow-hidden p-4">
-        <div
-          ref="canvasRef"
-          class="relative select-none"
-          :class="fullscreenMode === 'place' ? 'cursor-crosshair' : 'cursor-crosshair'"
-          :style="canvasStyle"
-          @click="onCanvasClick"
-          @mousemove="onCanvasMouseMove"
+        <!-- SVG overlay -->
+        <svg
+          class="absolute inset-0 w-full h-full"
+          :viewBox="svgViewBox"
+          preserveAspectRatio="xMidYMid meet"
         >
-          <!-- Background image -->
-          <img
-            v-if="cfg.image"
-            :src="cfg.image"
-            class="w-full h-full"
-            style="object-fit: fill; display: block;"
-            alt=""
-            draggable="false"
-          />
-
-          <!-- SVG overlay -->
-          <svg
-            class="absolute inset-0 w-full h-full"
-            :viewBox="svgViewBox"
-            preserveAspectRatio="none"
-          >
             <!-- Existing areas -->
             <g v-for="area in cfg.areas" :key="area.id">
               <polygon
@@ -964,6 +866,8 @@ function openPlacement(mwId: string) {
                 :x="area.labelX" :y="area.labelY"
                 text-anchor="middle" dominant-baseline="middle"
                 :font-size="fontSize" :fill="area.labelColor || '#ffffff'"
+                stroke="rgba(0,0,0,0.65)" :stroke-width="fontSize * 0.18"
+                paint-order="stroke fill"
                 style="pointer-events: none; user-select: none;"
               >{{ area.name }}</text>
             </g>
@@ -1020,11 +924,53 @@ function openPlacement(mwId: string) {
               />
             </g>
           </svg>
-        </div>
       </div>
 
-      <!-- Status bar -->
-      <div class="flex-none flex items-center justify-between px-4 py-2 bg-gray-900/80 border-t border-gray-800 text-xs text-gray-400">
+      <!-- Toolbar — above the dimming shadow -->
+      <div class="absolute top-0 left-0 right-0 flex items-center gap-3 px-4 py-2.5 bg-gray-900 border-b border-gray-700 pointer-events-auto">
+
+        <!-- Draw mode toolbar -->
+        <template v-if="fullscreenMode === 'draw'">
+          <span class="text-sm font-semibold text-gray-100">Bereiche zeichnen</span>
+          <span class="text-xs text-gray-400 flex-1 min-w-0 truncate">{{ drawingHint }}</span>
+
+          <button
+            type="button"
+            :disabled="currentPoints.length < 3"
+            class="py-1 px-3 text-xs rounded border border-amber-600 text-amber-300 hover:border-amber-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+            @click="finishArea"
+          >Polygon abschliessen ↩</button>
+
+          <button
+            type="button"
+            :disabled="currentPoints.length === 0"
+            class="py-1 px-3 text-xs rounded border border-gray-600 text-gray-300 hover:border-gray-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+            @click="cancelCurrentPolygon"
+          >Aktuelles verwerfen Esc</button>
+
+          <button
+            type="button"
+            class="py-1 px-4 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors shrink-0"
+            @click="closeFullscreen"
+          >Fertig</button>
+        </template>
+
+        <!-- Place mode toolbar -->
+        <template v-else>
+          <span class="text-sm font-semibold text-gray-100">Mini-Widget platzieren</span>
+          <span class="text-xs text-gray-400 flex-1 min-w-0 truncate">
+            Klicken um Mittelpunkt von „{{ placingMw?.label || placingMw?.widgetType }}" zu setzen
+          </span>
+          <button
+            type="button"
+            class="py-1 px-3 text-xs rounded border border-gray-600 text-gray-300 hover:border-gray-400 transition-colors shrink-0"
+            @click="closeFullscreen"
+          >Abbrechen Esc</button>
+        </template>
+      </div>
+
+      <!-- Status bar — above the dimming shadow -->
+      <div class="absolute bottom-0 left-0 right-0 flex items-center justify-between px-4 py-2 bg-gray-900/80 border-t border-gray-800 text-xs text-gray-400 pointer-events-auto">
         <span>{{ cfg.areas.length }} Bereich(e) · {{ cfg.miniWidgets.length }} Mini-Widget(s)</span>
         <span v-if="fullscreenMode === 'draw'">
           Enter = Polygon schliessen · Esc = aktuelles Polygon verwerfen · Klick auf ersten Punkt = schliessen
@@ -1035,16 +981,3 @@ function openPlacement(mwId: string) {
   </Teleport>
 </template>
 
-<style scoped>
-/* Checkerboard background for the small sidebar preview */
-.preview-canvas {
-  background-color: #e8e8e8;
-  background-image:
-    linear-gradient(45deg, #c8c8c8 25%, transparent 25%),
-    linear-gradient(-45deg, #c8c8c8 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #c8c8c8 75%),
-    linear-gradient(-45deg, transparent 75%, #c8c8c8 75%);
-  background-size: 12px 12px;
-  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
-}
-</style>
