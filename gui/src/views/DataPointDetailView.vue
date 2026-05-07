@@ -142,7 +142,7 @@
     <!-- Logic Verknüpfungen -->
     <div class="card">
       <div class="card-header">
-        <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">Logic Verknüpfungen</h3>
+        <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">Logik Verknüpfungen</h3>
       </div>
       <div class="card-body">
         <div v-if="logicUsagesLoading" class="flex justify-center py-4"><Spinner /></div>
@@ -160,7 +160,7 @@
                 <Badge v-if="!u.graph_enabled" variant="muted" size="xs">Deaktiviert</Badge>
               </div>
               <div class="text-xs text-slate-500 mt-1">
-                {{ u.node_type === 'datapoint_read' ? 'Read Object — Logic liest dieses Objekt' : 'Write Object — Logic schreibt auf dieses Objekt' }}
+                {{ u.node_type === 'datapoint_read' ? 'Logik liest im verlinkten Blatt dieses Objekt' : 'Logik schreibt im verlinkten Blatt auf dieses Objekt' }}
               </div>
             </div>
             <RouterLink :to="`/logic?graph=${u.graph_id}`" class="btn-icon shrink-0" title="Logic-Sheet öffnen">
