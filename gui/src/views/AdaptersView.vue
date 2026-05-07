@@ -332,8 +332,8 @@ let refreshTimer = null
 
 // ------------------------------------------------------------------
 
-async function refreshInstances() {
-  await store.fetchAdapters()
+async function refreshInstances({ silent = false } = {}) {
+  await store.fetchAdapters({ silent })
   initDrafts()
   for (const a of store.instances) {
     const fb = feedback[a.id]
@@ -350,7 +350,7 @@ onMounted(async () => {
   } catch {
     availableTypesErr.value = true
   }
-  refreshTimer = window.setInterval(refreshInstances, 10000)
+  refreshTimer = window.setInterval(() => refreshInstances({ silent: true }), 10000)
 })
 
 onBeforeUnmount(() => {
