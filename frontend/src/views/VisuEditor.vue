@@ -57,6 +57,7 @@ import '@/widgets/Uhr/index'
 import '@/widgets/RTR/index'
 import '@/widgets/Wetter/index'
 import '@/widgets/Stufenschalter/index'
+import '@/widgets/Grundriss/index'
 
 // ── Props / Router / Store ────────────────────────────────────────────────────
 const props = defineProps<{ id: string }>()
@@ -464,6 +465,7 @@ const showSettings = ref(false)
               drag?.widgetId === w.id && drag?.type === 'move' ? 'opacity-90' : '',
             ]"
             :style="widgetStyle(w)"
+            :data-widget-id="w.id"
             @mousedown="startDrag($event, w)"
             @click.stop="selectedId = w.id"
           >
@@ -620,6 +622,7 @@ const showSettings = ref(false)
                 :is="selectedDef.configComponent"
                 :key="selectedWidget.id"
                 :model-value="selectedWidget.config"
+                :widget-id="selectedWidget.id"
                 @update:model-value="updateConfig"
               />
             </div>

@@ -34,6 +34,7 @@ import '@/widgets/Uhr/index'
 import '@/widgets/RTR/index'
 import '@/widgets/Wetter/index'
 import '@/widgets/Stufenschalter/index'
+import '@/widgets/Grundriss/index'
 
 const props = defineProps<{ id: string }>()
 const router = useRouter()

@@ -52,8 +52,7 @@ function selectSvg(name: string) {
 }
 
 function onCustomInput(e: Event) {
-  const val = (e.target as HTMLInputElement).value
-  if (val) emit('update:modelValue', val)
+  emit('update:modelValue', (e.target as HTMLInputElement).value)
 }
 
 onMounted(loadList)
@@ -115,18 +114,28 @@ const svgBtnActiveCls = computed(() =>
 
     <!-- ── Emoji tab ─────────────────────────────────────────────────────── -->
     <template v-if="tab === 'emoji'">
-      <!-- Free-text emoji input -->
-      <input
-        :value="isSvgIcon(modelValue) ? '' : (modelValue ?? '')"
-        type="text"
-        maxlength="4"
-        placeholder="Emoji"
-        class="w-14 text-center rounded px-2 py-1 text-lg focus:outline-none"
-        :class="inputCls"
-        @input="onCustomInput"
-      />
-      <!-- Quick picks grid -->
-      <div class="flex flex-wrap gap-1">
+      <!-- Free-text emoji input + clear button -->
+      <div class="flex items-center gap-1">
+        <input
+          :value="isSvgIcon(modelValue) ? '' : (modelValue ?? '')"
+          type="text"
+          maxlength="4"
+          placeholder="Emoji"
+          class="w-14 text-center rounded px-2 py-1 text-lg focus:outline-none"
+          :class="inputCls"
+          @input="onCustomInput"
+        />
+        <button
+          v-if="modelValue"
+          type="button"
+          class="text-xs px-1.5 py-1 rounded transition-colors"
+          :class="props.dark ? 'text-gray-500 hover:text-gray-300 hover:bg-gray-700' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'"
+          title="Icon entfernen"
+          @click="emit('update:modelValue', '')"
+        >✕</button>
+      </div>
+      <!-- Quick picks grid (max 3 rows, scrollable) -->
+      <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
         <button
           v-for="ic in QUICK_ICONS"
           :key="ic"

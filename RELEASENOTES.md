@@ -1,11 +1,11 @@
 # Changes
 
-## 2026.5.3
+## 2026.6.0
 ### Breaking changes 🚨
 * none
 
 ### New features 💡
-* none
+* #228: Add floorplan widget
   
 ### Fixes 🐞
 * #375: Confusing checksum field content within releasenotes
