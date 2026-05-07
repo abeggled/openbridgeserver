@@ -180,7 +180,7 @@
           </div>
 
           <div v-if="!isDemo" class="flex gap-3 flex-wrap">
-            <button v-if="a.adapter_type !== 'ANWESENHEITSSIMULATION'" @click="testConnection(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'test'"
+            <button v-if="a.adapter_type !== 'ANWESENHEITSSIMULATION' && a.adapter_type !== 'SNMP'" @click="testConnection(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'test'"
               title="Prüft die Verbindung mit der aktuellen Konfiguration ohne zu speichern">
               <Spinner v-if="busy[a.id] === 'test'" size="xs" color="slate" />
               Verbindung testen

@@ -843,6 +843,123 @@
         </div>
       </template>
 
+      <!-- SNMP -->
+      <template v-if="selectedAdapterType === 'SNMP'">
+        <div class="section-header">SNMP Binding</div>
+
+        <!-- Host + Port -->
+        <div class="grid grid-cols-3 gap-4">
+          <div class="form-group col-span-2">
+            <label class="label">Gerät (IP/DNS) *</label>
+            <input v-model="cfg.host" class="input" placeholder="z.B. 192.168.1.100 oder switch.local" required />
+          </div>
+          <div class="form-group">
+            <label class="label">UDP-Port</label>
+            <input v-model.number="cfg.port" type="number" min="1" max="65535" class="input" />
+            <p class="hint">Standard: 161</p>
+          </div>
+        </div>
+
+        <!-- OID with Walk -->
+        <div class="form-group">
+          <label class="label">OID *</label>
+          <div class="flex gap-2">
+            <input
+              v-model="cfg.oid"
+              class="input flex-1 font-mono text-sm"
+              placeholder="z.B. 1.3.6.1.2.1.1.1.0"
+              required
+            />
+          </div>
+          <!-- Walk root (independent from binding OID) -->
+          <div class="flex gap-2 mt-2">
+            <input
+              v-model="snmpWalkRoot"
+              class="input flex-1 font-mono text-xs"
+              placeholder="Walk ab OID, z.B. 1.3.6.1.2.1"
+            />
+            <button
+              type="button"
+              class="btn-secondary px-3 text-sm whitespace-nowrap"
+              :disabled="!cfg.host || !selectedInstanceId || snmpWalkLoading"
+              @click="snmpWalk"
+            >
+              <span v-if="snmpWalkLoading" class="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1"></span>
+              {{ snmpWalkLoading ? 'Walk …' : 'OID-Walk' }}
+            </button>
+          </div>
+          <!-- Walk results -->
+          <div
+            v-if="snmpWalkResults.length > 0"
+            class="mt-1 max-h-52 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800"
+          >
+            <button
+              v-for="entry in snmpWalkResults"
+              :key="entry.oid"
+              type="button"
+              class="w-full text-left px-3 py-1.5 text-xs hover:bg-slate-50 dark:hover:bg-slate-700/50 flex gap-2 items-baseline"
+              @click="cfg.oid = entry.oid"
+            >
+              <code class="text-blue-400 shrink-0">{{ entry.oid }}</code>
+              <span class="text-slate-400 shrink-0">[{{ entry.type }}]</span>
+              <span class="text-slate-600 dark:text-slate-300 truncate">{{ entry.value }}</span>
+            </button>
+          </div>
+          <button
+            v-if="snmpWalkHasMore && !snmpWalkLoading"
+            type="button"
+            class="mt-1 w-full text-xs text-center py-1 rounded border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+            @click="snmpWalk(true)"
+          >
+            {{ snmpWalkResults.length }} geladen — weitere 50 laden …
+          </button>
+          <p v-if="snmpWalkError" class="text-xs text-red-400 mt-1">{{ snmpWalkError }}</p>
+          <p class="hint">
+            Beispiele:
+            <code class="text-blue-400 cursor-pointer hover:underline" @click="cfg.oid='1.3.6.1.2.1.1.1.0'">1.3.6.1.2.1.1.1.0</code> (sysDescr) ·
+            <code class="text-blue-400 cursor-pointer hover:underline" @click="cfg.oid='1.3.6.1.2.1.1.3.0'">1.3.6.1.2.1.1.3.0</code> (sysUpTime) ·
+            <code class="text-blue-400 cursor-pointer hover:underline" @click="cfg.oid='1.3.6.1.4.1'">1.3.6.1.4.1</code> (enterprises)
+          </p>
+        </div>
+
+        <!-- Datentyp + Poll-Intervall -->
+        <div class="grid grid-cols-2 gap-4">
+          <div class="form-group">
+            <label class="label">Datentyp</label>
+            <select v-model="cfg.data_type" class="input">
+              <option value="auto">auto — automatisch erkennen</option>
+              <option value="int">int — Ganzzahl</option>
+              <option value="float">float — Gleitkomma</option>
+              <option value="string">string — Zeichenkette</option>
+              <option value="hex">hex — Hexadezimal</option>
+              <option value="counter">counter — Counter32/64</option>
+              <option value="gauge">gauge — Gauge32</option>
+              <option value="timeticks">timeticks — TimeTicks (1/100 s)</option>
+            </select>
+            <p class="hint">Bestimmt wie der Rohwert umgewandelt wird</p>
+          </div>
+          <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="form-group">
+            <label class="label">Poll-Intervall (s)</label>
+            <input v-model.number="cfg.poll_interval" type="number" min="1" step="1" class="input" />
+            <p class="hint">Standard: 30 s</p>
+          </div>
+        </div>
+
+        <div class="optional-divider">Erweiterte Einstellungen</div>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="form-group">
+            <label class="label">Timeout (s)</label>
+            <input v-model.number="cfg.timeout" type="number" min="0.5" max="30" step="0.5" class="input" />
+            <p class="hint">Standard: 5 s</p>
+          </div>
+          <div class="form-group">
+            <label class="label">Wiederholungen</label>
+            <input v-model.number="cfg.retries" type="number" min="0" max="5" class="input" />
+            <p class="hint">Standard: 1</p>
+          </div>
+        </div>
+      </template>
+
       <div v-if="!selectedAdapterType && !props.initial" class="p-3 bg-slate-100/80 dark:bg-slate-800/40 rounded-lg text-sm text-slate-500 text-center">
         Bitte zuerst eine Adapter-Instanz wählen
       </div>
@@ -1043,6 +1160,13 @@ const cfg = reactive({
   offset_override: null,
   on_presence_override: null,
   on_presence_value: '',
+  // SNMP
+  host: '192.168.1.1',
+  port: 161,
+  oid: '',
+  data_type: 'auto',
+  timeout: 5.0,
+  retries: 1,
   // ZEITSCHALTUHR
   timer_type: 'daily', meta_type: 'none',
   weekdays: [0,1,2,3,4,5,6], months: [], day_of_month: 0,
@@ -1102,6 +1226,13 @@ const iobrokerStates = ref([])
 const iobrokerBrowseLoading = ref(false)
 const iobrokerBrowseError = ref(null)
 let iobrokerBrowseTimer = null
+
+// SNMP Walk state
+const snmpWalkResults = ref([])
+const snmpWalkLoading = ref(false)
+const snmpWalkError   = ref(null)
+const snmpWalkHasMore = ref(false)
+const snmpWalkRoot    = ref('1.3.6.1.2.1')
 
 // Zeitschaltuhr holiday list state (for Feiertagsschaltuhr)
 const ztHolidays = ref([])   // [{date, name}, …] sorted by date
@@ -1256,6 +1387,13 @@ watch(() => props.initial, val => {
   if (cfg.offset_override      === undefined) cfg.offset_override      = null
   if (cfg.on_presence_override === undefined) cfg.on_presence_override = null
   if (cfg.on_presence_value    === undefined) cfg.on_presence_value    = ''
+  // SNMP defaults when loading
+  if (cfg.host     == null) cfg.host     = '192.168.1.1'
+  if (cfg.port     == null) cfg.port     = 161
+  if (cfg.oid      == null) cfg.oid      = ''
+  if (cfg.data_type == null) cfg.data_type = 'auto'
+  if (cfg.timeout  == null) cfg.timeout  = 5.0
+  if (cfg.retries  == null) cfg.retries  = 1
   {
     const ANW_PRESETS = ['1', '7', '14']
     if (cfg.offset_override != null) {
@@ -1389,6 +1527,34 @@ function selectIoBrokerState(state) {
   iobrokerBrowseError.value = null
 }
 
+async function snmpWalk(append = false) {
+  const instanceId = selectedInstanceId.value
+  if (!instanceId || !cfg.host) return
+  snmpWalkLoading.value = true
+  if (!append) {
+    snmpWalkError.value = null
+    snmpWalkResults.value = []
+  }
+  try {
+    const rootOid  = snmpWalkRoot.value?.trim() || '1.3.6.1.2.1'
+    const startOid = append && snmpWalkResults.value.length
+      ? snmpWalkResults.value[snmpWalkResults.value.length - 1].oid
+      : null
+    const { data } = await adapterApi.snmpWalk(instanceId, cfg.host, rootOid, cfg.port || 161, 50, 10, startOid)
+    if (append) {
+      snmpWalkResults.value = [...snmpWalkResults.value, ...data]
+    } else {
+      snmpWalkResults.value = data
+    }
+    if (snmpWalkResults.value.length === 0) snmpWalkError.value = 'Keine OIDs gefunden'
+    snmpWalkHasMore.value = data.length === 50
+  } catch (e) {
+    snmpWalkError.value = e.response?.data?.detail ?? 'SNMP Walk fehlgeschlagen'
+  } finally {
+    snmpWalkLoading.value = false
+  }
+}
+
 function onValueMapPresetChange() {
   if (form.value_map_preset !== 'custom') {
     form.value_map_custom = ''
@@ -1444,6 +1610,7 @@ watch(selectedAdapterType, type => {
     activeTab.value = 'conn'
     showAdvancedTabs.value = false
   }
+  if (type === 'SNMP' && !cfg.poll_interval) cfg.poll_interval = 30.0
 })
 
 // Zeitschaltuhr helpers
@@ -1771,6 +1938,18 @@ function buildConfig() {
       if (cfg.on_presence_override === 'setzen' && cfg.on_presence_value?.trim())
         c.on_presence_value = cfg.on_presence_value.trim()
     }
+    return c
+  }
+  if (type === 'SNMP') {
+    const c = {
+      host: cfg.host || '192.168.1.1',
+      oid:  cfg.oid  || '1.3.6.1.2.1.1.1.0',
+    }
+    if (cfg.port && cfg.port !== 161)            c.port        = cfg.port
+    if (cfg.data_type && cfg.data_type !== 'auto') c.data_type = cfg.data_type
+    if (cfg.poll_interval)                         c.poll_interval = cfg.poll_interval
+    if (cfg.timeout && cfg.timeout !== 5.0)        c.timeout    = cfg.timeout
+    if (cfg.retries !== undefined && cfg.retries !== 1) c.retries = cfg.retries
     return c
   }
   return {}

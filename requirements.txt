@@ -19,6 +19,7 @@ aiomqtt>=2.5.1,<3         # 1.x→2.x renamed Client(host=) to Client(hostname=)
 xknx>=3.15.0,<4           # major versions have restructured telegram/apci imports
 pymodbus>=3.13.0,<3.14.0
 w1thermsensor>=2.3.0
+pysnmp>=6.1.0,<7          # SNMPv1/v2c/v3 adapter; 6.x restructured hlapi paths
 
 # Authentication
 python-jose[cryptography]>=3.5.0,<4
