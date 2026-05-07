@@ -1021,6 +1021,67 @@ async def anwesenheit_sync_bindings(
 
 
 # ---------------------------------------------------------------------------
+# SNMP Walk (Discovery)
+# ---------------------------------------------------------------------------
+
+
+class SnmpWalkEntry(BaseModel):
+    oid: str
+    value: str
+    type: str
+
+
+@router.get("/instances/{instance_id}/snmp/walk", response_model=list[SnmpWalkEntry])
+async def snmp_walk(
+    instance_id: uuid.UUID,
+    host: str = Query(..., description="IP-Adresse oder DNS-Name des SNMP-Geräts"),
+    oid: str = Query(default="1.3.6.1.2.1", description="Start-OID für den Walk"),
+    port: int = Query(default=161, ge=1, le=65535, description="UDP-Port"),
+    timeout: float = Query(default=5.0, ge=0.5, le=30.0, description="Timeout pro Request (s)"),
+    max_results: int = Query(default=500, ge=1, le=2000, description="Maximale Anzahl Einträge"),
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> list[SnmpWalkEntry]:
+    """SNMP-Walk über einen OID-Teilbaum — nützlich für OID-Discovery beim Binding-Anlegen."""
+    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "SNMP":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für SNMP-Instanzen verfügbar")
+
+    instance = adapter_registry.get_instance_by_id(str(instance_id))
+    if instance is None or not instance.connected:
+        # Adapter nicht verbunden → temporäre Instanz erzeugen
+        from obs.adapters.snmp.adapter import SnmpAdapter
+        from obs.core.event_bus import EventBus
+
+        raw_config = row["config"] or "{}"
+        import json as _json
+
+        config_dict = _json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+        dummy_bus = EventBus()
+        instance = SnmpAdapter(event_bus=dummy_bus, config=config_dict)
+        await instance.connect()
+        if not instance.connected:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "SNMP Adapter konnte nicht verbunden werden (pysnmp installiert?)",
+            )
+
+    if not hasattr(instance, "snmp_walk"):
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "snmp_walk nicht verfügbar")
+
+    try:
+        entries = await instance.snmp_walk(host=host, oid=oid, port=port, timeout=timeout, max_results=max_results)
+        return [SnmpWalkEntry(**e) for e in entries]
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"SNMP Walk fehlgeschlagen: {exc}",
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
 # Typ-Routen (unverändert — Schema-Abfragen + Legacy-Config)
 # ---------------------------------------------------------------------------
 

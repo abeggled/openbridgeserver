@@ -119,6 +119,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     import obs.adapters.modbus_tcp.adapter
     import obs.adapters.mqtt.adapter
     import obs.adapters.onewire.adapter
+    import obs.adapters.snmp.adapter  # noqa: F401
     import obs.adapters.anwesenheit.adapter  # noqa: F401
     import obs.adapters.zeitschaltuhr.adapter  # noqa: F401
 
