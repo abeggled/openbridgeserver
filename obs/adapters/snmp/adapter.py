@@ -51,16 +51,10 @@ class SnmpAdapterConfig(BaseModel):
     version: Literal["1", "2c", "3"] = Field(default="2c", title="SNMP-Version")
     community: str = Field(default="public", title="Community-String (v1/v2c)")
     security_name: str = Field(default="", title="Security Name (v3)")
-    security_level: Literal["noAuthNoPriv", "authNoPriv", "authPriv"] = Field(
-        default="noAuthNoPriv", title="Security Level (v3)"
-    )
-    auth_protocol: Literal["MD5", "SHA", "SHA256", "SHA512"] = Field(
-        default="MD5", title="Auth-Protokoll (v3)"
-    )
+    security_level: Literal["noAuthNoPriv", "authNoPriv", "authPriv"] = Field(default="noAuthNoPriv", title="Security Level (v3)")
+    auth_protocol: Literal["MD5", "SHA", "SHA256", "SHA512"] = Field(default="MD5", title="Auth-Protokoll (v3)")
     auth_key: str = Field(default="", title="Auth-Key (v3)")
-    priv_protocol: Literal["DES", "3DES", "AES128", "AES192", "AES256"] = Field(
-        default="DES", title="Privacy-Protokoll (v3)"
-    )
+    priv_protocol: Literal["DES", "3DES", "AES128", "AES192", "AES256"] = Field(default="DES", title="Privacy-Protokoll (v3)")
     priv_key: str = Field(default="", title="Privacy-Key (v3)")
 
 
@@ -68,9 +62,7 @@ class SnmpBindingConfig(BaseModel):
     host: str = Field(default="192.168.1.1", title="Host (IP/DNS)")
     port: int = Field(default=161, ge=1, le=65535, title="UDP-Port")
     oid: str = Field(default="1.3.6.1.2.1.1.1.0", title="OID")
-    data_type: Literal["auto", "int", "float", "string", "hex", "counter", "gauge", "timeticks"] = Field(
-        default="auto", title="Datentyp"
-    )
+    data_type: Literal["auto", "int", "float", "string", "hex", "counter", "gauge", "timeticks"] = Field(default="auto", title="Datentyp")
     poll_interval: float = Field(default=30.0, ge=1.0, title="Poll-Intervall (s)")
     timeout: float = Field(default=5.0, ge=0.5, le=30.0, title="Timeout (s)")
     retries: int = Field(default=1, ge=0, le=5, title="Wiederholungen")
@@ -126,13 +118,19 @@ def _import_pysnmp() -> dict:
             }
         )
 
-        from pysnmp.hlapi import (  # type: ignore[import]
-            usmHMACMD5AuthProtocol,
-            usmHMACSHAAuthProtocol,
-            usmNoAuthProtocol,
-            usmNoPrivProtocol,
-            usmDESPrivProtocol,
-        )
+        # Auth/priv constants: in v6.x they live in hlapi.asyncio (or hlapi.v3arch.asyncio),
+        # not in hlapi directly. Try the path that already succeeded above.
+        _hlapi_mod: Any
+        try:
+            import pysnmp.hlapi.v3arch.asyncio as _hlapi_mod  # type: ignore[import]
+        except ImportError:
+            import pysnmp.hlapi.asyncio as _hlapi_mod  # type: ignore[import]
+
+        usmHMACMD5AuthProtocol   = _hlapi_mod.usmHMACMD5AuthProtocol
+        usmHMACSHAAuthProtocol   = _hlapi_mod.usmHMACSHAAuthProtocol
+        usmNoAuthProtocol        = _hlapi_mod.usmNoAuthProtocol
+        usmNoPrivProtocol        = _hlapi_mod.usmNoPrivProtocol
+        usmDESPrivProtocol       = _hlapi_mod.usmDESPrivProtocol
 
         auth_map: dict[str, Any] = {
             "MD5": usmHMACMD5AuthProtocol,
@@ -146,38 +144,21 @@ def _import_pysnmp() -> dict:
         }
 
         # Optional modern auth protocols
-        try:
-            from pysnmp.hlapi import usmHMAC192SHA256AuthProtocol  # type: ignore[import]
-            auth_map["SHA256"] = usmHMAC192SHA256AuthProtocol
-        except ImportError:
-            pass
-        try:
-            from pysnmp.hlapi import usmHMAC384SHA512AuthProtocol  # type: ignore[import]
-            auth_map["SHA512"] = usmHMAC384SHA512AuthProtocol
-        except ImportError:
-            pass
+        for attr, key in [("usmHMAC192SHA256AuthProtocol", "SHA256"), ("usmHMAC384SHA512AuthProtocol", "SHA512")]:
+            val = getattr(_hlapi_mod, attr, None)
+            if val is not None:
+                auth_map[key] = val
 
         # Optional privacy protocols
-        try:
-            from pysnmp.hlapi import usm3DESEDEPrivProtocol  # type: ignore[import]
-            priv_map["3DES"] = usm3DESEDEPrivProtocol
-        except ImportError:
-            priv_map["3DES"] = usmDESPrivProtocol
-        try:
-            from pysnmp.hlapi import usmAesCfb128Protocol  # type: ignore[import]
-            priv_map["AES128"] = usmAesCfb128Protocol
-        except ImportError:
-            pass
-        try:
-            from pysnmp.hlapi import usmAesCfb192Protocol  # type: ignore[import]
-            priv_map["AES192"] = usmAesCfb192Protocol
-        except ImportError:
-            pass
-        try:
-            from pysnmp.hlapi import usmAesCfb256Protocol  # type: ignore[import]
-            priv_map["AES256"] = usmAesCfb256Protocol
-        except ImportError:
-            pass
+        for attr, key, fallback in [
+            ("usm3DESEDEPrivProtocol", "3DES", usmDESPrivProtocol),
+            ("usmAesCfb128Protocol", "AES128", None),
+            ("usmAesCfb192Protocol", "AES192", None),
+            ("usmAesCfb256Protocol", "AES256", None),
+        ]:
+            val = getattr(_hlapi_mod, attr, fallback)
+            if val is not None:
+                priv_map[key] = val
 
         symbols["_auth_map"] = auth_map
         symbols["_priv_map"] = priv_map
@@ -193,17 +174,13 @@ def _coerce_value(snmp_value: Any, data_type: str) -> Any:
     """Convert a pysnmp value object to a Python native type."""
     type_name = type(snmp_value).__name__
 
-    if data_type == "int" or (
-        data_type == "auto" and type_name in ("Integer32", "Integer", "Unsigned32")
-    ):
+    if data_type == "int" or (data_type == "auto" and type_name in ("Integer32", "Integer", "Unsigned32")):
         try:
             return int(snmp_value)
         except Exception:
             return snmp_value.prettyPrint()
 
-    if data_type in ("counter", "gauge") or (
-        data_type == "auto" and type_name in ("Counter32", "Counter64", "Gauge32", "Gauge")
-    ):
+    if data_type in ("counter", "gauge") or (data_type == "auto" and type_name in ("Counter32", "Counter64", "Gauge32", "Gauge")):
         try:
             return int(snmp_value)
         except Exception:
@@ -287,8 +264,8 @@ class SnmpAdapter(AdapterBase):
 
     def __init__(self, event_bus: Any, config: dict | None = None, **kwargs) -> None:
         super().__init__(event_bus, config, **kwargs)
-        self._snmp: dict = {}           # lazy-loaded pysnmp symbols
-        self._engine: Any = None        # SnmpEngine instance
+        self._snmp: dict = {}  # lazy-loaded pysnmp symbols
+        self._engine: Any = None  # SnmpEngine instance
         self._poll_tasks: list[asyncio.Task] = []
 
     # ------------------------------------------------------------------
@@ -508,7 +485,11 @@ class SnmpAdapter(AdapterBase):
         retries: int = 1,
         max_results: int = 500,
     ) -> list[dict[str, str]]:
-        """SNMP-Walk über einen OID-Teilbaum; gibt Liste von {oid, value, type} zurück."""
+        """SNMP-Walk über einen OID-Teilbaum; gibt Liste von {oid, value, type} zurück.
+
+        nextCmd() in pysnmp hlapi returns a single GETNEXT step per call, so we
+        loop manually and stop once the returned OID leaves the target subtree.
+        """
         if not self._engine:
             raise RuntimeError("SNMP Adapter nicht verbunden")
 
@@ -517,15 +498,21 @@ class SnmpAdapter(AdapterBase):
         auth = self._build_auth(cfg)
         transport = s["UdpTransportTarget"]((host, port), timeout=timeout, retries=retries)
 
+        # Normalise root OID for subtree comparison (ensure trailing dot)
+        root_prefix = oid if oid.endswith(".") else oid + "."
+
         results: list[dict[str, str]] = []
-        async for error_indication, error_status, _error_index, var_binds in s["nextCmd"](
-            self._engine,
-            auth,
-            transport,
-            s["ContextData"](),
-            s["ObjectType"](s["ObjectIdentity"](oid)),
-            lexicographicMode=False,
-        ):
+        current_oid = oid
+
+        while True:
+            error_indication, error_status, _error_index, var_binds = await s["nextCmd"](
+                self._engine,
+                auth,
+                transport,
+                s["ContextData"](),
+                s["ObjectType"](s["ObjectIdentity"](current_oid)),
+            )
+
             if error_indication:
                 logger.warning("SNMP Walk Fehler: %s", error_indication)
                 break
@@ -533,16 +520,27 @@ class SnmpAdapter(AdapterBase):
                 logger.warning("SNMP Walk Status-Fehler: %s", error_status.prettyPrint())
                 break
 
+            if not var_binds:
+                break
+
             for var_bind in var_binds:
                 obj_oid, value = var_bind
+                oid_str = str(obj_oid)
+
+                # Stop when we leave the requested subtree
+                if not (oid_str == oid or oid_str.startswith(root_prefix)):
+                    return results
+
                 results.append(
                     {
-                        "oid": str(obj_oid),
+                        "oid": oid_str,
                         "value": value.prettyPrint(),
                         "type": type(value).__name__,
                     }
                 )
-                if len(results) >= max_results:
-                    return results
+                current_oid = oid_str
+
+            if len(results) >= max_results:
+                break
 
         return results

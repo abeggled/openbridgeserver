@@ -290,6 +290,7 @@ class TestConnect:
         adapter._poll_tasks.append(t)
 
         await adapter.disconnect()
+        await asyncio.sleep(0)  # let event loop process the cancellation
         assert adapter.connected is False
         assert len(adapter._poll_tasks) == 0
         assert t.cancelled()
@@ -486,6 +487,7 @@ class TestOnBindingsReloaded:
         old_task = adapter._poll_tasks[0]
 
         await adapter.reload_bindings([binding])  # zweites Reload
+        await asyncio.sleep(0)  # let event loop process the cancellation
         assert old_task.cancelled()
         for t in adapter._poll_tasks:
             t.cancel()
@@ -575,9 +577,20 @@ class TestSnmpWalk:
         val2 = _make_snmp_value("42", "Integer32", int_val=42)
         type(val2).__name__ = "Integer32"
 
+        oid_out = MagicMock()
+        oid_out.__str__ = MagicMock(return_value="1.3.6.1.3.1.1.0")  # outside subtree
+        val_out = _make_snmp_value("x", "OctetString")
+        type(val_out).__name__ = "OctetString"
+
+        # nextCmd is a coroutine (one GETNEXT per call); walk loops until subtree ends
+        responses = iter([
+            (None, None, None, [(oid1, val1)]),
+            (None, None, None, [(oid2, val2)]),
+            (None, None, None, [(oid_out, val_out)]),
+        ])
+
         async def fake_next(*args, **kwargs):
-            yield (None, None, None, [(oid1, val1)])
-            yield (None, None, None, [(oid2, val2)])
+            return next(responses)
 
         snmp_symbols["nextCmd"] = fake_next
 
@@ -595,13 +608,16 @@ class TestSnmpWalk:
         adapter._engine = snmp_symbols["SnmpEngine"]()
         adapter._connected = True
 
+        counter = {"n": 0}
+
         async def fake_next_many(*args, **kwargs):
-            for i in range(100):
-                oid = MagicMock()
-                oid.__str__ = MagicMock(return_value=f"1.3.6.1.2.1.1.{i}.0")
-                val = _make_snmp_value(str(i), "Integer32", int_val=i)
-                type(val).__name__ = "Integer32"
-                yield (None, None, None, [(oid, val)])
+            i = counter["n"]
+            counter["n"] += 1
+            oid = MagicMock()
+            oid.__str__ = MagicMock(return_value=f"1.3.6.1.2.1.1.{i}.0")
+            val = _make_snmp_value(str(i), "Integer32", int_val=i)
+            type(val).__name__ = "Integer32"
+            return (None, None, None, [(oid, val)])
 
         snmp_symbols["nextCmd"] = fake_next_many
 
@@ -625,7 +641,7 @@ class TestSnmpWalk:
         error_ind.__str__ = MagicMock(return_value="noSuchName")
 
         async def fake_next_err(*args, **kwargs):
-            yield (error_ind, None, None, [])
+            return (error_ind, None, None, [])
 
         snmp_symbols["nextCmd"] = fake_next_err
 

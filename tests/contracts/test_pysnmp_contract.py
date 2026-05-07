@@ -29,6 +29,7 @@ def _import_hlapi():
             nextCmd,
             setCmd,
         )
+
         return "v6"
     except ImportError:
         from pysnmp.hlapi.asyncio import (  # noqa: F401
@@ -43,6 +44,7 @@ def _import_hlapi():
             nextCmd,
             setCmd,
         )
+
         return "v5"
 
 
@@ -58,6 +60,7 @@ def test_get_cmd_is_callable():
     except ImportError:
         from pysnmp.hlapi.asyncio import getCmd
     import inspect
+
     assert callable(getCmd)
     # getCmd muss mindestens snmpEngine, authData, transportTarget, contextData, *varBinds annehmen
     sig = inspect.signature(getCmd)
@@ -136,12 +139,22 @@ def test_usm_user_data_no_auth():
     assert usm is not None
 
 
+def _import_auth_constants():
+    """Auth/priv constants moved from hlapi to hlapi.asyncio in pysnmp 6.x."""
+    try:
+        from pysnmp.hlapi.v3arch.asyncio import usmHMACMD5AuthProtocol, usmDESPrivProtocol  # noqa: F401
+        return usmHMACMD5AuthProtocol, usmDESPrivProtocol
+    except ImportError:
+        from pysnmp.hlapi.asyncio import usmHMACMD5AuthProtocol, usmDESPrivProtocol  # noqa: F401
+        return usmHMACMD5AuthProtocol, usmDESPrivProtocol
+
+
 def test_usm_user_data_auth_no_priv():
     try:
         from pysnmp.hlapi.v3arch.asyncio import UsmUserData
     except ImportError:
         from pysnmp.hlapi.asyncio import UsmUserData
-    from pysnmp.hlapi import usmHMACMD5AuthProtocol
+    usmHMACMD5AuthProtocol, _ = _import_auth_constants()
     usm = UsmUserData("testuser", authKey="authpass", authProtocol=usmHMACMD5AuthProtocol)
     assert usm is not None
 
@@ -151,7 +164,7 @@ def test_usm_user_data_auth_priv():
         from pysnmp.hlapi.v3arch.asyncio import UsmUserData
     except ImportError:
         from pysnmp.hlapi.asyncio import UsmUserData
-    from pysnmp.hlapi import usmHMACMD5AuthProtocol, usmDESPrivProtocol
+    usmHMACMD5AuthProtocol, usmDESPrivProtocol = _import_auth_constants()
     usm = UsmUserData(
         "testuser",
         authKey="authpass",
@@ -191,34 +204,39 @@ def test_object_type_with_oid():
 
 
 # ---------------------------------------------------------------------------
-# Auth/Priv protocol constants — hlapi top-level
+# Auth/Priv protocol constants — in pysnmp 6.x moved to hlapi.asyncio
 # ---------------------------------------------------------------------------
 
 
+def _hlapi_asyncio():
+    try:
+        import pysnmp.hlapi.v3arch.asyncio as m
+        return m
+    except ImportError:
+        import pysnmp.hlapi.asyncio as m
+        return m
+
+
 def test_auth_protocol_md5():
-    from pysnmp.hlapi import usmHMACMD5AuthProtocol
-    assert usmHMACMD5AuthProtocol is not None
+    assert _hlapi_asyncio().usmHMACMD5AuthProtocol is not None
 
 
 def test_auth_protocol_sha():
-    from pysnmp.hlapi import usmHMACSHAAuthProtocol
-    assert usmHMACSHAAuthProtocol is not None
+    assert _hlapi_asyncio().usmHMACSHAAuthProtocol is not None
 
 
 def test_priv_protocol_des():
-    from pysnmp.hlapi import usmDESPrivProtocol
-    assert usmDESPrivProtocol is not None
+    assert _hlapi_asyncio().usmDESPrivProtocol is not None
 
 
 def test_priv_protocol_aes128():
-    from pysnmp.hlapi import usmAesCfb128Protocol
-    assert usmAesCfb128Protocol is not None
+    assert _hlapi_asyncio().usmAesCfb128Protocol is not None
 
 
 def test_no_auth_no_priv_protocols():
-    from pysnmp.hlapi import usmNoAuthProtocol, usmNoPrivProtocol
-    assert usmNoAuthProtocol is not None
-    assert usmNoPrivProtocol is not None
+    m = _hlapi_asyncio()
+    assert m.usmNoAuthProtocol is not None
+    assert m.usmNoPrivProtocol is not None
 
 
 # ---------------------------------------------------------------------------
@@ -228,17 +246,20 @@ def test_no_auth_no_priv_protocols():
 
 def test_integer32_importable():
     from pysnmp.proto.rfc1902 import Integer32
+
     v = Integer32(42)
     assert int(v) == 42
 
 
 def test_octet_string_importable():
     from pysnmp.proto.rfc1902 import OctetString
+
     v = OctetString(b"hello")
     assert v is not None
 
 
 def test_value_pretty_print():
     from pysnmp.proto.rfc1902 import Integer32, OctetString
+
     assert Integer32(99).prettyPrint() == "99"
     assert OctetString(b"test").prettyPrint() == "test"
