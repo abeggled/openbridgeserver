@@ -90,3 +90,14 @@ class NodeTypeDef(BaseModel):
     outputs: list[NodeTypePort] = []
     config_schema: dict[str, Any] = {}  # JSON schema for node data
     color: str = "#475569"  # default node color (tailwind slate-600)
+
+
+class LogicUsageOut(BaseModel):
+    """Describes a single usage of a DataPoint inside a logic graph."""
+
+    graph_id: str
+    graph_name: str
+    graph_enabled: bool
+    node_id: str
+    node_type: str  # "datapoint_read" | "datapoint_write"
+    direction: str  # "SOURCE" | "DEST" — from the DataPoint's perspective

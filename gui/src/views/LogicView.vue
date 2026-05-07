@@ -139,6 +139,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, markRaw } from 'vue'
+import { useRoute } from 'vue-router'
 import { VueFlow, useVueFlow, addEdge } from '@vue-flow/core'
 import { Background }           from '@vue-flow/background'
 import { Controls }             from '@vue-flow/controls'
@@ -164,6 +165,7 @@ import PythonScriptNode from '@/components/logic/nodes/PythonScriptNode.vue'
 import MissingNode      from '@/components/logic/nodes/MissingNode.vue'
 
 // ── Store ──────────────────────────────────────────────────────────────────
+const route    = useRoute()
 const store    = useLogicStore()
 const settings = useSettingsStore()
 // Reactive background pattern colour — recomputes when theme changes
@@ -553,10 +555,12 @@ onMounted(async () => {
   await store.fetchNodeTypes()
   await store.fetchGraphs()
   _wsConnect()
-  // Restore last active graph
-  const lastId = localStorage.getItem('logic_active_graph')
-  if (lastId && store.graphs.find(g => g.id === lastId)) {
-    activeGraphId.value = lastId
+  // Query-Parameter ?graph=<id> hat Vorrang vor dem gespeicherten letzten Graph
+  const queryId = route.query.graph
+  const lastId  = localStorage.getItem('logic_active_graph')
+  const targetId = queryId || lastId
+  if (targetId && store.graphs.find(g => g.id === targetId)) {
+    activeGraphId.value = targetId
     await loadGraph()
   }
 })
