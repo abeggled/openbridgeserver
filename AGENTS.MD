@@ -6,7 +6,7 @@ You only need to read one of them; reading both is redundant.
 
 # AGENTS.MD
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents when working with code in this repository.
 
 ## Project Overview
 
