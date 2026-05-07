@@ -198,11 +198,25 @@ export const configApi = {
   export:          ()     => api.get('/config/export'),
   exportDb:        ()     => api.get('/config/export/db', { responseType: 'blob' }),
   import:          (data) => api.post('/config/import', data),
+  importDb:        (file) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/config/import/db', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+  },
   reset:           ()     => api.delete('/config/reset'),
   resetBindings:   ()     => api.delete('/config/reset/bindings'),
   resetDatapoints: ()     => api.delete('/config/reset/datapoints'),
   resetLogic:      ()     => api.delete('/config/reset/logic'),
   resetAdapters:   ()     => api.delete('/config/reset/adapters'),
+}
+
+// ── Autobackup ────────────────────────────────────────────────────────────
+export const autobackupApi = {
+  getConfig:    ()           => api.get('/config/autobackup/config'),
+  setConfig:    (cfg)        => api.put('/config/autobackup/config', cfg),
+  list:         ()           => api.get('/config/autobackup/list'),
+  runNow:       ()           => api.post('/config/autobackup/run'),
+  restore:      (name)       => api.post(`/config/autobackup/restore/${name}`),
+  delete:       (name)       => api.delete(`/config/autobackup/${name}`),
 }
 
 // ── Icons Library ─────────────────────────────────────────────────────────
@@ -227,15 +241,16 @@ export const navLinksApi = {
 
 // ── Logic Engine ──────────────────────────────────────────────────────────
 export const logicApi = {
-  nodeTypes:      ()           => api.get('/logic/node-types'),
-  listGraphs:     ()           => api.get('/logic/graphs'),
-  createGraph:    (data)       => api.post('/logic/graphs', data),
-  importGraph:    (data)       => api.post('/logic/graphs/import', data),
-  getGraph:       (id)         => api.get(`/logic/graphs/${id}`),
-  saveGraph:      (id, data)   => api.put(`/logic/graphs/${id}`, data),
-  patchGraph:     (id, data)   => api.patch(`/logic/graphs/${id}`, data),
-  deleteGraph:    (id)         => api.delete(`/logic/graphs/${id}`),
-  runGraph:       (id)         => api.post(`/logic/graphs/${id}/run`),
-  duplicateGraph: (id)         => api.post(`/logic/graphs/${id}/duplicate`),
-  exportGraph:    (id)         => api.get(`/logic/graphs/${id}/export`),
+  nodeTypes:        ()           => api.get('/logic/node-types'),
+  listGraphs:       ()           => api.get('/logic/graphs'),
+  createGraph:      (data)       => api.post('/logic/graphs', data),
+  importGraph:      (data)       => api.post('/logic/graphs/import', data),
+  getGraph:         (id)         => api.get(`/logic/graphs/${id}`),
+  saveGraph:        (id, data)   => api.put(`/logic/graphs/${id}`, data),
+  patchGraph:       (id, data)   => api.patch(`/logic/graphs/${id}`, data),
+  deleteGraph:      (id)         => api.delete(`/logic/graphs/${id}`),
+  runGraph:         (id)         => api.post(`/logic/graphs/${id}/run`),
+  duplicateGraph:   (id)         => api.post(`/logic/graphs/${id}/duplicate`),
+  exportGraph:      (id)         => api.get(`/logic/graphs/${id}/export`),
+  datapointUsages:  (dpId)       => api.get(`/logic/datapoint/${dpId}/usages`),
 }

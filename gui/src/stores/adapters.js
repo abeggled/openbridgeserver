@@ -6,13 +6,21 @@ export const useAdapterStore = defineStore('adapters', () => {
   const instances = ref([])   // AdapterInstanceOut[]
   const loading   = ref(false)
 
-  async function fetchAdapters() {
-    loading.value = true
+  async function fetchAdapters({ silent = false } = {}) {
+    if (!silent) loading.value = true
     try {
       const { data } = await adapterApi.listInstances()
-      instances.value = data
+      if (silent && instances.value.length) {
+        // Background refresh: only update status fields to avoid re-rendering the whole list
+        for (const updated of data) {
+          const existing = instances.value.find(a => a.id === updated.id)
+          if (existing) existing.connected = updated.connected
+        }
+      } else {
+        instances.value = data
+      }
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 

@@ -11,6 +11,7 @@ from obs.api.auth import router as auth_router
 from obs.api.v1.adapters import router as adapters_router
 from obs.api.v1.bindings import router as bindings_router
 from obs.api.v1.camera import router as camera_router
+from obs.api.v1.autobackup import router as autobackup_router
 from obs.api.v1.config import router as config_router
 from obs.api.v1.datapoints import router as dp_router
 from obs.api.v1.history import router as history_router
@@ -37,6 +38,7 @@ router.include_router(ws_router)
 router.include_router(rb_router, prefix="/ringbuffer")
 router.include_router(history_router, prefix="/history")
 router.include_router(config_router, prefix="/config")
+router.include_router(autobackup_router, prefix="/config")
 router.include_router(knxproj_router, prefix="/knxproj")
 router.include_router(logic_router, prefix="/logic")
 router.include_router(visu_router, prefix="/visu")

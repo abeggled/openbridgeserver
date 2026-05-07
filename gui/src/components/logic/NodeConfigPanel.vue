@@ -27,13 +27,13 @@
       <div class="flex-1 overflow-y-auto">
 
         <!-- Verbindung -->
-        <div v-show="activeTab === 'connection'" class="p-4 flex flex-col gap-3">
-          <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
-          <div class="form-group">
-            <label class="label">Objekt</label>
-            <input v-model="dpSearch" type="text" class="input text-sm" placeholder="Suchen…" @input="searchDps" />
+        <div v-show="activeTab === 'connection'" class="p-4 flex flex-col h-full">
+          <p class="text-xs text-slate-500 mb-3 shrink-0">{{ nodeDef?.description }}</p>
+          <div class="flex flex-col flex-1 min-h-0 gap-1">
+            <label class="label shrink-0">Objekt</label>
+            <input v-model="dpSearch" type="text" class="input text-sm shrink-0" placeholder="Suchen…" @input="searchDps" />
             <div v-if="dpResults.length"
-              class="mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden max-h-40 overflow-y-auto">
+              class="mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden flex-1 min-h-0 overflow-y-auto">
               <button v-for="dp in dpResults" :key="dp.id"
                 @click="selectDp(dp)"
                 class="w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200">
@@ -41,7 +41,7 @@
                 <span class="text-slate-500 ml-1">{{ dp.data_type }}</span>
               </button>
             </div>
-            <div v-if="localData.datapoint_name" class="mt-1 text-xs text-teal-400">
+            <div v-if="localData.datapoint_name" class="mt-1 text-xs text-teal-400 shrink-0">
               ✓ {{ localData.datapoint_name }}
             </div>
           </div>

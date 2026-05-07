@@ -1,7 +1,8 @@
 """Config Backup / Restore — Phase 5 (Multi-Instance)
 
-GET  /api/v1/config/export   → JSON-Sicherung: DataPoints + Bindings + AdapterInstances + KNX-GAs
-POST /api/v1/config/import   ← JSON, upsert-Semantik (existierende IDs werden aktualisiert)
+GET  /api/v1/config/export        → JSON-Sicherung: DataPoints + Bindings + AdapterInstances + KNX-GAs + Visu + NavLinks + AppSettings + Hierarchy
+POST /api/v1/config/import        ← JSON, upsert-Semantik (existierende IDs werden aktualisiert)
+POST /api/v1/config/import/db     ← SQLite-Datei hochladen und als neue Datenbank einspielen
 
 Rückwärtskompatibel: Alter Export mit adapter_configs wird beim Import erkannt und migriert.
 """
@@ -16,7 +17,7 @@ import tempfile
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -27,7 +28,7 @@ from obs.models.datapoint import DataPoint
 
 router = APIRouter(tags=["config"])
 
-_EXPORT_VERSION = "4"
+_EXPORT_VERSION = "5"
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +95,55 @@ class ExportedIcon(BaseModel):
     content_b64: str  # base64-kodierter SVG-Inhalt
 
 
+class ExportedVisuNode(BaseModel):
+    id: str
+    parent_id: str | None
+    name: str
+    type: str
+    node_order: int
+    icon: str | None
+    access: str | None
+    access_pin: str | None
+    page_config: str | None
+    users: list[str] = []
+
+
+class ExportedNavLink(BaseModel):
+    id: str
+    label: str
+    url: str
+    icon: str
+    sort_order: int
+    open_new_tab: bool
+
+
+class ExportedAppSetting(BaseModel):
+    key: str
+    value: str
+
+
+class ExportedHierarchyTree(BaseModel):
+    id: str
+    name: str
+    description: str
+
+
+class ExportedHierarchyNode(BaseModel):
+    id: str
+    tree_id: str
+    parent_id: str | None
+    name: str
+    description: str
+    node_order: int
+    icon: str | None
+
+
+class ExportedHierarchyDpLink(BaseModel):
+    id: str
+    node_id: str
+    datapoint_id: str
+
+
 class ConfigExport(BaseModel):
     obs_version: str
     exported_at: str
@@ -107,6 +157,13 @@ class ConfigExport(BaseModel):
     # Icons & FA-Key (ab Version 4)
     icons: list[ExportedIcon] = []
     fa_api_key: str | None = None
+    # Visu, NavLinks, AppSettings, Hierarchy (ab Version 5)
+    visu_nodes: list[ExportedVisuNode] = []
+    nav_links: list[ExportedNavLink] = []
+    app_settings: list[ExportedAppSetting] = []
+    hierarchy_trees: list[ExportedHierarchyTree] = []
+    hierarchy_nodes: list[ExportedHierarchyNode] = []
+    hierarchy_dp_links: list[ExportedHierarchyDpLink] = []
 
 
 class ImportResult(BaseModel):
@@ -120,6 +177,10 @@ class ImportResult(BaseModel):
     logic_graphs_updated: int
     adapters_restarted: int
     icons_imported: int = 0
+    visu_nodes_upserted: int = 0
+    nav_links_upserted: int = 0
+    app_settings_upserted: int = 0
+    hierarchy_upserted: int = 0
     errors: list[str]
 
 
@@ -130,6 +191,9 @@ class ResetResult(BaseModel):
     knx_group_addresses_deleted: int
     logic_graphs_deleted: int
     icons_deleted: int = 0
+    visu_nodes_deleted: int = 0
+    nav_links_deleted: int = 0
+    hierarchy_deleted: int = 0
     errors: list[str]
 
 
@@ -240,6 +304,68 @@ async def export_config(
     fa_key_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'icons.fontawesome_api_key'")
     fa_api_key = fa_key_row["value"] if fa_key_row else None
 
+    # Visu-Nodes (mit Benutzerzuordnungen)
+    visu_node_rows = await db.fetchall("SELECT * FROM visu_nodes ORDER BY node_order, created_at")
+    visu_node_user_rows = await db.fetchall("SELECT node_id, username FROM visu_node_users")
+    node_users: dict[str, list[str]] = {}
+    for r in visu_node_user_rows:
+        node_users.setdefault(r["node_id"], []).append(r["username"])
+
+    visu_nodes = [
+        ExportedVisuNode(
+            id=r["id"],
+            parent_id=r["parent_id"],
+            name=r["name"],
+            type=r["type"],
+            node_order=r["node_order"],
+            icon=r["icon"],
+            access=r["access"],
+            access_pin=r["access_pin"],
+            page_config=r["page_config"],
+            users=node_users.get(r["id"], []),
+        )
+        for r in visu_node_rows
+    ]
+
+    # NavLinks
+    nav_link_rows = await db.fetchall("SELECT * FROM nav_links ORDER BY sort_order, label")
+    nav_links = [
+        ExportedNavLink(
+            id=r["id"],
+            label=r["label"],
+            url=r["url"],
+            icon=r["icon"],
+            sort_order=r["sort_order"],
+            open_new_tab=bool(r["open_new_tab"]),
+        )
+        for r in nav_link_rows
+    ]
+
+    # App-Settings (alle außer FA-Key — der wird separat übergeben für Rückwärtskompatibilität)
+    setting_rows = await db.fetchall("SELECT key, value FROM app_settings WHERE key != 'icons.fontawesome_api_key' ORDER BY key")
+    app_settings = [ExportedAppSetting(key=r["key"], value=r["value"]) for r in setting_rows]
+
+    # Hierarchy
+    tree_rows = await db.fetchall("SELECT * FROM hierarchy_trees ORDER BY name")
+    hierarchy_trees = [ExportedHierarchyTree(id=r["id"], name=r["name"], description=r["description"]) for r in tree_rows]
+
+    h_node_rows = await db.fetchall("SELECT * FROM hierarchy_nodes ORDER BY node_order, created_at")
+    hierarchy_nodes = [
+        ExportedHierarchyNode(
+            id=r["id"],
+            tree_id=r["tree_id"],
+            parent_id=r["parent_id"],
+            name=r["name"],
+            description=r["description"],
+            node_order=r["node_order"],
+            icon=r["icon"],
+        )
+        for r in h_node_rows
+    ]
+
+    dp_link_rows = await db.fetchall("SELECT * FROM hierarchy_datapoint_links")
+    hierarchy_dp_links = [ExportedHierarchyDpLink(id=r["id"], node_id=r["node_id"], datapoint_id=r["datapoint_id"]) for r in dp_link_rows]
+
     return ConfigExport(
         obs_version=_EXPORT_VERSION,
         exported_at=datetime.now(UTC).isoformat(),
@@ -250,6 +376,12 @@ async def export_config(
         logic_graphs=logic_graphs,
         icons=icons,
         fa_api_key=fa_api_key,
+        visu_nodes=visu_nodes,
+        nav_links=nav_links,
+        app_settings=app_settings,
+        hierarchy_trees=hierarchy_trees,
+        hierarchy_nodes=hierarchy_nodes,
+        hierarchy_dp_links=hierarchy_dp_links,
     )
 
 
@@ -284,6 +416,100 @@ async def export_db(
         media_type="application/octet-stream",
         filename="obs.sqlite",
     )
+
+
+@router.post("/import/db", status_code=status.HTTP_200_OK)
+async def import_db(
+    file: UploadFile = File(...),
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> dict:
+    """SQLite-Datenbank aus hochgeladener Datei wiederherstellen.
+
+    ACHTUNG: Alle aktuellen Daten werden durch den Inhalt der hochgeladenen Datei ersetzt.
+    Adapter, Logik-Engine und Registry werden nach dem Restore neu gestartet.
+    """
+    from obs.config import get_settings
+
+    dst_path = get_settings().database.path
+
+    # Hochgeladene Datei in temporäre Datei speichern
+    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+    try:
+        content = await file.read()
+        tmp.write(content)
+        tmp.close()
+
+        # SQLite-Magic-Header prüfen (erste 16 Bytes: "SQLite format 3\000")
+        if len(content) < 16 or not content.startswith(b"SQLite format 3\x00"):
+            os.unlink(tmp.name)
+            raise HTTPException(status_code=400, detail="Die hochgeladene Datei ist keine gültige SQLite-Datenbank.")
+
+        # Adapter und Logic Engine stoppen
+        try:
+            from obs.adapters import registry as adapter_registry
+
+            await adapter_registry.stop_all()
+        except Exception:
+            pass
+
+        try:
+            from obs.logic.manager import get_logic_manager
+
+            await get_logic_manager().stop()
+        except Exception:
+            pass
+
+        # Aiosqlite-Verbindung trennen
+        await db.disconnect()
+
+        # Restore via sqlite3.backup()
+        try:
+            src_conn = sqlite3.connect(tmp.name)
+            dst_conn = sqlite3.connect(dst_path)
+            src_conn.backup(dst_conn)
+            dst_conn.close()
+            src_conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Datenbankwiederherstellung fehlgeschlagen: {exc}") from exc
+
+        # Verbindung wieder aufbauen (inkl. Migrationen)
+        await db.connect()
+
+        # Registry neu laden
+        reg = get_registry()
+        reg._points.clear()
+        reg._values.clear()
+        await reg.load_from_db()
+
+        # Logic Engine neu starten
+        try:
+            from obs.logic.manager import get_logic_manager
+
+            logic_mgr = get_logic_manager()
+            await logic_mgr.start()
+        except Exception:
+            pass
+
+        # Adapter neu starten
+        adapters_restarted = 0
+        try:
+            from obs.adapters import registry as adapter_registry
+            from obs.core.event_bus import get_event_bus
+
+            event_bus = get_event_bus()
+            await adapter_registry.start_all(event_bus, db)
+            adapters_restarted = len(adapter_registry.get_all_instances())
+        except Exception:
+            pass
+
+        return {"ok": True, "message": "Datenbankwiederherstellung erfolgreich.", "adapters_restarted": adapters_restarted}
+
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
 
 
 @router.post("/import", response_model=ImportResult, status_code=status.HTTP_200_OK)
@@ -551,6 +777,155 @@ async def import_config(
             except Exception as exc:
                 result.errors.append(f"Icon '{icon.name}': {exc}")
 
+    # --- Visu Nodes (topologisch sortiert: Eltern vor Kindern) ---
+    if body.visu_nodes:
+        inserted_ids: set[str] = set()
+        remaining = list(body.visu_nodes)
+
+        # Vorhandene IDs als bereits eingefügt markieren (damit parent_id-Referenzen korrekt aufgelöst werden)
+        existing_rows = await db.fetchall("SELECT id FROM visu_nodes")
+        for r in existing_rows:
+            inserted_ids.add(r["id"])
+
+        for _pass in range(len(remaining) + 1):
+            if not remaining:
+                break
+            next_remaining = []
+            for node in remaining:
+                if node.parent_id is None or node.parent_id in inserted_ids:
+                    try:
+                        await db.execute_and_commit(
+                            """INSERT INTO visu_nodes
+                               (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                               ON CONFLICT(id) DO UPDATE
+                               SET parent_id=excluded.parent_id, name=excluded.name, type=excluded.type,
+                                   node_order=excluded.node_order, icon=excluded.icon, access=excluded.access,
+                                   access_pin=excluded.access_pin, page_config=excluded.page_config, updated_at=excluded.updated_at""",
+                            (
+                                node.id,
+                                node.parent_id,
+                                node.name,
+                                node.type,
+                                node.node_order,
+                                node.icon,
+                                node.access,
+                                node.access_pin,
+                                node.page_config,
+                                now,
+                                now,
+                            ),
+                        )
+                        inserted_ids.add(node.id)
+                        result.visu_nodes_upserted += 1
+
+                        # Benutzerzuordnungen
+                        if node.users:
+                            await db.execute_and_commit("DELETE FROM visu_node_users WHERE node_id=?", (node.id,))
+                            for username in node.users:
+                                try:
+                                    await db.execute_and_commit(
+                                        "INSERT OR IGNORE INTO visu_node_users (node_id, username) VALUES (?,?)",
+                                        (node.id, username),
+                                    )
+                                except Exception:
+                                    pass
+                    except Exception as exc:
+                        result.errors.append(f"VisuNode {node.id}: {exc}")
+                        inserted_ids.add(node.id)
+                else:
+                    next_remaining.append(node)
+            remaining = next_remaining
+
+        for node in remaining:
+            result.errors.append(f"VisuNode {node.id}: parent_id '{node.parent_id}' nicht gefunden, übersprungen")
+
+    # --- NavLinks ---
+    for nl in body.nav_links:
+        try:
+            await db.execute_and_commit(
+                """INSERT INTO nav_links (id, label, url, icon, sort_order, open_new_tab, created_at)
+                   VALUES (?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE
+                   SET label=excluded.label, url=excluded.url, icon=excluded.icon,
+                       sort_order=excluded.sort_order, open_new_tab=excluded.open_new_tab""",
+                (nl.id, nl.label, nl.url, nl.icon, nl.sort_order, int(nl.open_new_tab), now),
+            )
+            result.nav_links_upserted += 1
+        except Exception as exc:
+            result.errors.append(f"NavLink {nl.id}: {exc}")
+
+    # --- App Settings ---
+    for s in body.app_settings:
+        try:
+            await db.execute_and_commit(
+                "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?,?)",
+                (s.key, s.value),
+            )
+            result.app_settings_upserted += 1
+        except Exception as exc:
+            result.errors.append(f"AppSetting {s.key}: {exc}")
+
+    # --- Hierarchy Trees ---
+    for ht in body.hierarchy_trees:
+        try:
+            await db.execute_and_commit(
+                """INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE
+                   SET name=excluded.name, description=excluded.description, updated_at=excluded.updated_at""",
+                (ht.id, ht.name, ht.description, now, now),
+            )
+            result.hierarchy_upserted += 1
+        except Exception as exc:
+            result.errors.append(f"HierarchyTree {ht.id}: {exc}")
+
+    # --- Hierarchy Nodes (topologisch sortiert) ---
+    if body.hierarchy_nodes:
+        inserted_h_ids: set[str] = set()
+        existing_h = await db.fetchall("SELECT id FROM hierarchy_nodes")
+        for r in existing_h:
+            inserted_h_ids.add(r["id"])
+
+        remaining_h = list(body.hierarchy_nodes)
+        for _pass in range(len(remaining_h) + 1):
+            if not remaining_h:
+                break
+            next_remaining_h = []
+            for hn in remaining_h:
+                if hn.parent_id is None or hn.parent_id in inserted_h_ids:
+                    try:
+                        await db.execute_and_commit(
+                            """INSERT INTO hierarchy_nodes
+                               (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+                               VALUES (?,?,?,?,?,?,?,?,?)
+                               ON CONFLICT(id) DO UPDATE
+                               SET tree_id=excluded.tree_id, parent_id=excluded.parent_id, name=excluded.name,
+                                   description=excluded.description, node_order=excluded.node_order,
+                                   icon=excluded.icon, updated_at=excluded.updated_at""",
+                            (hn.id, hn.tree_id, hn.parent_id, hn.name, hn.description, hn.node_order, hn.icon, now, now),
+                        )
+                        inserted_h_ids.add(hn.id)
+                        result.hierarchy_upserted += 1
+                    except Exception as exc:
+                        result.errors.append(f"HierarchyNode {hn.id}: {exc}")
+                        inserted_h_ids.add(hn.id)
+                else:
+                    next_remaining_h.append(hn)
+            remaining_h = next_remaining_h
+
+    # --- Hierarchy DataPoint Links ---
+    for link in body.hierarchy_dp_links:
+        try:
+            await db.execute_and_commit(
+                """INSERT OR IGNORE INTO hierarchy_datapoint_links (id, node_id, datapoint_id, created_at)
+                   VALUES (?,?,?,?)""",
+                (link.id, link.node_id, link.datapoint_id, now),
+            )
+            result.hierarchy_upserted += 1
+        except Exception as exc:
+            result.errors.append(f"HierarchyDpLink {link.id}: {exc}")
+
     return result
 
 
@@ -617,6 +992,37 @@ async def factory_reset(
     except Exception as exc:
         result.errors.append(f"KNX group addresses reset failed: {exc}")
 
+    # Visu-Nodes löschen (Kinder werden durch CASCADE automatisch gelöscht)
+    try:
+        row = await db.fetchone("SELECT COUNT(*) as n FROM visu_nodes")
+        result.visu_nodes_deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM visu_nodes WHERE parent_id IS NULL")
+    except Exception as exc:
+        result.errors.append(f"Visu nodes reset failed: {exc}")
+
+    # NavLinks löschen
+    try:
+        row = await db.fetchone("SELECT COUNT(*) as n FROM nav_links")
+        result.nav_links_deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM nav_links")
+    except Exception as exc:
+        result.errors.append(f"NavLinks reset failed: {exc}")
+
+    # Hierarchy löschen
+    try:
+        row = await db.fetchone("SELECT COUNT(*) as n FROM hierarchy_trees")
+        result.hierarchy_deleted = row["n"] if row else 0
+        await db.execute_and_commit("DELETE FROM hierarchy_trees")
+    except Exception as exc:
+        result.errors.append(f"Hierarchy reset failed: {exc}")
+
+    # App-Settings zurücksetzen (Autobackup-Einstellungen behalten, Standard-Timezone wiederherstellen)
+    try:
+        await db.execute_and_commit("DELETE FROM app_settings WHERE key NOT LIKE 'autobackup.%'")
+        await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('timezone', 'Europe/Zurich')")
+    except Exception as exc:
+        result.errors.append(f"App settings reset failed: {exc}")
+
     # Icons (SVG-Dateien) löschen
     try:
         from obs.api.v1.icons import _icons_dir
@@ -627,12 +1033,6 @@ async def factory_reset(
             result.icons_deleted += 1
     except Exception as exc:
         result.errors.append(f"Icons reset failed: {exc}")
-
-    # FontAwesome API Key löschen
-    try:
-        await db.execute_and_commit("DELETE FROM app_settings WHERE key = 'icons.fontawesome_api_key'")
-    except Exception as exc:
-        result.errors.append(f"FA API Key reset failed: {exc}")
 
     return result
 
