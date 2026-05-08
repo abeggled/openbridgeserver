@@ -158,8 +158,9 @@ class KnxAdapter(AdapterBase):
         if cfg.connection_type == "tunneling_secure":
             try:
                 from xknx.io import SecureConfig
+
                 secure_config = SecureConfig(
-                    ip_secure_password=cfg.device_authentication_password or "",
+                    device_authentication_password=cfg.device_authentication_password or "",
                     user_id=cfg.user_id,
                     user_password=cfg.user_password or "",
                 )
@@ -170,12 +171,15 @@ class KnxAdapter(AdapterBase):
         elif cfg.connection_type == "routing_secure":
             try:
                 from xknx.io import SecureConfig
+
                 if not cfg.backbone_key:
                     await self._publish_status(False, "routing_secure erfordert backbone_key")
                     logger.error("KNX IP Secure (Routing): backbone_key fehlt")
                     return
-                backbone_bytes = bytes.fromhex(cfg.backbone_key.replace(":", "").replace(" ", ""))
-                secure_config = SecureConfig(backbone_key=backbone_bytes)
+                # xknx erwartet backbone_key als Hex-String (wandelt intern in bytes um)
+                backbone_hex = cfg.backbone_key.replace(":", "").replace(" ", "")
+                bytes.fromhex(backbone_hex)  # Validierung: frühzeitig ValueError bei ungültigem Hex
+                secure_config = SecureConfig(backbone_key=backbone_hex)
             except ValueError as exc:
                 await self._publish_status(False, f"KNX Backbone-Key ungültig (kein gültiger Hex-String): {exc}")
                 logger.error("KNX IP Secure (Routing) backbone_key Parse-Fehler: %s", exc)

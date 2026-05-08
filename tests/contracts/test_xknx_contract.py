@@ -71,30 +71,33 @@ class TestConnectionConfig:
 class TestSecureConfig:
     def test_tunneling_secure_config(self):
         sc = SecureConfig(
-            ip_secure_password="devauth",
+            device_authentication_password="devauth",
             user_id=2,
             user_password="userpass",
         )
         assert sc is not None
 
     def test_routing_secure_config_with_backbone_key(self):
-        backbone = bytes.fromhex("0102030405060708090a0b0c0d0e0f10")
-        sc = SecureConfig(backbone_key=backbone)
+        # xknx erwartet backbone_key als Hex-String, nicht als bytes
+        sc = SecureConfig(backbone_key="0102030405060708090a0b0c0d0e0f10")
         assert sc is not None
 
-    def test_backbone_key_hex_parse(self):
+    def test_backbone_key_hex_parse_and_validate(self):
+        """Normalisierung von Hex-String (Trennzeichen entfernen) + Längenprüfung."""
         hex_str = "0102030405060708090a0b0c0d0e0f10"
-        backbone_bytes = bytes.fromhex(hex_str.replace(":", "").replace(" ", ""))
-        assert len(backbone_bytes) == 16
+        normalized = hex_str.replace(":", "").replace(" ", "")
+        assert len(bytes.fromhex(normalized)) == 16
 
     def test_backbone_key_with_colons(self):
         hex_str = "01:02:03:04:05:06:07:08:09:0a:0b:0c:0d:0e:0f:10"
-        backbone_bytes = bytes.fromhex(hex_str.replace(":", "").replace(" ", ""))
-        assert len(backbone_bytes) == 16
+        normalized = hex_str.replace(":", "").replace(" ", "")
+        assert len(bytes.fromhex(normalized)) == 16
+        sc = SecureConfig(backbone_key=normalized)
+        assert sc is not None
 
     def test_connection_config_with_secure_config(self):
         sc = SecureConfig(
-            ip_secure_password="devauth",
+            device_authentication_password="devauth",
             user_id=2,
             user_password="userpass",
         )
