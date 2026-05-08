@@ -66,6 +66,7 @@ class TestKnxAdapterConfig:
 
     def test_user_id_bounds(self):
         import pydantic
+
         with pytest.raises(pydantic.ValidationError):
             KnxAdapterConfig(user_id=0)
         with pytest.raises(pydantic.ValidationError):
@@ -76,9 +77,7 @@ class TestKnxAdapterConfig:
         schema = KnxAdapterConfig.model_json_schema()
         props = schema["properties"]
         for field_name in ("user_password", "device_authentication_password", "backbone_key"):
-            assert props[field_name].get("format") == "password", (
-                f"{field_name} muss format=password im Schema haben"
-            )
+            assert props[field_name].get("format") == "password", f"{field_name} muss format=password im Schema haben"
 
     def test_individual_address_default(self):
         cfg = KnxAdapterConfig()
@@ -111,7 +110,7 @@ class TestDoConnectSecure:
         assert mock_bus.publish.called
         event = mock_bus.publish.call_args[0][0]
         assert event.connected is False
-        assert "backbone_key" in event.message.lower() or "backbone" in event.message.lower()
+        assert "backbone_key" in event.detail.lower() or "backbone" in event.detail.lower()
 
     @pytest.mark.asyncio
     async def test_routing_secure_invalid_backbone_key_publishes_error(self, mock_bus):
