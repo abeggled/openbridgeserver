@@ -16,13 +16,15 @@ Adapter-Konfiguration (adapter_configs.config in DB):
   connection_type:                 "tunneling" | "tunneling_secure" | "routing" | "routing_secure"
   host:                            str          (KNX/IP Gateway IP)
   port:                            int          (default: 3671)
-  individual_address:              str          (default: "1.1.255")
+  individual_address:              str          (default: "1.1.255"; bei Keyfile: wählt Tunnel)
   local_ip:                        str?         (für Routing/Multicast, optional)
-  --- KNX IP Secure (Tunneling) ---
+  --- KNX IP Secure — Keyfile-Modus (bevorzugt) ---
+  knxkeys_file_path:               str?         (Pfad zur gespeicherten .knxkeys Datei)
+  knxkeys_password:                str?         (Passwort-Feld)
+  --- KNX IP Secure — Manueller Modus (Fallback) ---
   user_id:                         int          (default: 2, Bereich 1–127)
   user_password:                   str?         (Passwort-Feld)
   device_authentication_password:  str?         (Passwort-Feld)
-  --- KNX IP Secure (Routing) ---
   backbone_key:                    str?         (Hex-String, 32 Zeichen; Passwort-Feld)
 """
 
@@ -76,6 +78,12 @@ class KnxAdapterConfig(BaseModel):
     )
     # KNX IP Secure — Routing Secure (Backbone-Schlüssel als 32-stelliger Hex-String)
     backbone_key: str | None = Field(
+        default=None,
+        json_schema_extra={"format": "password", "writeOnly": True},
+    )
+    # KNX IP Secure — Keyfile-Modus (bevorzugt gegenüber manuellen Feldern)
+    knxkeys_file_path: str | None = None
+    knxkeys_password: str | None = Field(
         default=None,
         json_schema_extra={"format": "password", "writeOnly": True},
     )
@@ -155,38 +163,43 @@ class KnxAdapter(AdapterBase):
 
         # Build SecureConfig for KNX IP Secure modes
         secure_config = None
-        if cfg.connection_type == "tunneling_secure":
+        if cfg.connection_type in ("tunneling_secure", "routing_secure"):
             try:
                 from xknx.io import SecureConfig
 
-                secure_config = SecureConfig(
-                    device_authentication_password=cfg.device_authentication_password or "",
-                    user_id=cfg.user_id,
-                    user_password=cfg.user_password or "",
-                )
-            except Exception as exc:
-                await self._publish_status(False, f"KNX IP Secure Konfigurationsfehler: {exc}")
-                logger.error("KNX IP Secure (Tunneling) Konfigurationsfehler: %s", exc)
-                return
-        elif cfg.connection_type == "routing_secure":
-            try:
-                from xknx.io import SecureConfig
-
-                if not cfg.backbone_key:
-                    await self._publish_status(False, "routing_secure erfordert backbone_key")
-                    logger.error("KNX IP Secure (Routing): backbone_key fehlt")
-                    return
-                # xknx erwartet backbone_key als Hex-String (wandelt intern in bytes um)
-                backbone_hex = cfg.backbone_key.replace(":", "").replace(" ", "")
-                bytes.fromhex(backbone_hex)  # Validierung: frühzeitig ValueError bei ungültigem Hex
-                secure_config = SecureConfig(backbone_key=backbone_hex)
+                if cfg.knxkeys_file_path and cfg.knxkeys_password:
+                    # Keyfile-Modus (bevorzugt): xknx liest alle Credentials aus dem .knxkeys File.
+                    # individual_address in ConnectionConfig wählt den Tunnel aus.
+                    secure_config = SecureConfig(
+                        knxkeys_file_path=cfg.knxkeys_file_path,
+                        knxkeys_password=cfg.knxkeys_password,
+                    )
+                    logger.info("KNX IP Secure: Keyfile-Modus (%s)", cfg.knxkeys_file_path)
+                elif cfg.connection_type == "tunneling_secure":
+                    # Manueller Modus Tunneling: Credentials einzeln angeben
+                    secure_config = SecureConfig(
+                        device_authentication_password=cfg.device_authentication_password or "",
+                        user_id=cfg.user_id,
+                        user_password=cfg.user_password or "",
+                    )
+                    logger.info("KNX IP Secure: Manueller Modus (Tunneling)")
+                else:
+                    # Manueller Modus Routing: Backbone-Key
+                    if not cfg.backbone_key:
+                        await self._publish_status(False, "routing_secure erfordert backbone_key oder knxkeys_file_path")
+                        logger.error("KNX IP Secure (Routing): backbone_key und knxkeys_file_path fehlen")
+                        return
+                    backbone_hex = cfg.backbone_key.replace(":", "").replace(" ", "")
+                    bytes.fromhex(backbone_hex)  # Früh-Validierung: ValueError bei ungültigem Hex
+                    secure_config = SecureConfig(backbone_key=backbone_hex)
+                    logger.info("KNX IP Secure: Manueller Modus (Routing, backbone_key)")
             except ValueError as exc:
-                await self._publish_status(False, f"KNX Backbone-Key ungültig (kein gültiger Hex-String): {exc}")
-                logger.error("KNX IP Secure (Routing) backbone_key Parse-Fehler: %s", exc)
+                await self._publish_status(False, f"KNX Backbone-Key ungültig (kein Hex-String): {exc}")
+                logger.error("KNX IP Secure backbone_key Parse-Fehler: %s", exc)
                 return
             except Exception as exc:
                 await self._publish_status(False, f"KNX IP Secure Konfigurationsfehler: {exc}")
-                logger.error("KNX IP Secure (Routing) Konfigurationsfehler: %s", exc)
+                logger.error("KNX IP Secure Konfigurationsfehler: %s", exc)
                 return
 
         conn_cfg = ConnectionConfig(

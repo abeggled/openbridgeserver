@@ -42,6 +42,8 @@ class TestKnxAdapterConfig:
         assert cfg.user_password is None
         assert cfg.device_authentication_password is None
         assert cfg.backbone_key is None
+        assert cfg.knxkeys_file_path is None
+        assert cfg.knxkeys_password is None
 
     def test_tunneling_secure_fields(self):
         cfg = KnxAdapterConfig(
@@ -72,11 +74,28 @@ class TestKnxAdapterConfig:
         with pytest.raises(pydantic.ValidationError):
             KnxAdapterConfig(user_id=128)
 
+    def test_keyfile_fields(self):
+        cfg = KnxAdapterConfig(
+            connection_type="tunneling_secure",
+            host="192.168.1.50",
+            knxkeys_file_path="/data/knxkeys/abc.knxkeys",
+            knxkeys_password="geheim",
+            individual_address="1.1.100",
+        )
+        assert cfg.knxkeys_file_path == "/data/knxkeys/abc.knxkeys"
+        assert cfg.knxkeys_password == "geheim"
+        assert cfg.individual_address == "1.1.100"
+
     def test_password_fields_in_json_schema(self):
         """Passwort-Felder müssen format=password im JSON-Schema haben."""
         schema = KnxAdapterConfig.model_json_schema()
         props = schema["properties"]
-        for field_name in ("user_password", "device_authentication_password", "backbone_key"):
+        for field_name in (
+            "user_password",
+            "device_authentication_password",
+            "backbone_key",
+            "knxkeys_password",
+        ):
             assert props[field_name].get("format") == "password", f"{field_name} muss format=password im Schema haben"
 
     def test_individual_address_default(self):

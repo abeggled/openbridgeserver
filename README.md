@@ -757,23 +757,60 @@ Zeigt berechnete Zwischenwerte direkt auf den Blöcken an — live und automatis
 | `routing` | IP-Multicast-Routing |
 | `routing_secure` | KNX IP Secure Routing (verschlüsselt, Multicast) |
 
-**KNX IP Secure — Tunneling Secure** (`connection_type: tunneling_secure`):
+**KNX IP Secure — Keyfile-Modus (empfohlen)**
+
+Der einfachste Weg für KNX IP Secure ist der Import der `.knxkeys`-Datei aus ETS:
+
+1. In ETS: **Sicherheit → Schlüsselsicherung exportieren** → `.knxkeys`-Datei speichern
+2. In open bridge server: **Einstellungen → Adapter → KNX-Instanz bearbeiten → Keyfile hochladen**
+3. Keyfile-Passwort eingeben — open bridge server zeigt alle verfügbaren Tunnel mit PA, User-ID und Anzahl gesicherter Gruppenadressen
+4. Gewünschten Tunnel wählen → `individual_address` wird automatisch gesetzt
+5. `connection_type` auf `tunneling_secure` (oder `routing_secure`) setzen
+
+| Feld | Beschreibung |
+|---|---|
+| `knxkeys_file_path` | Wird automatisch gesetzt nach dem Hochladen der Keyfile |
+| `knxkeys_password` | Passwort-Feld — Passwort zur `.knxkeys`-Datei |
+| `individual_address` | PA des gewählten Tunnels (aus der Tunnel-Liste) |
+
+**KNX IP Secure — Manueller Modus** (nur wenn kein Keyfile vorhanden):
+
+Für `tunneling_secure`:
 
 | Feld | Werte | Beschreibung |
 |---|---|---|
 | `user_id` | `1`–`127`, Standard `2` | Benutzer-ID am KNX/IP-Gateway |
-| `user_password` | Passwort-Feld | Benutzerpasswort (aus ETS-Projektdatei) |
-| `device_authentication_password` | Passwort-Feld | Geräte-Authentifizierungspasswort des Gateways |
+| `user_password` | Passwort-Feld | Benutzerpasswort |
+| `device_authentication_password` | Passwort-Feld | Geräte-Authentifizierungspasswort |
 
-**KNX IP Secure — Routing Secure** (`connection_type: routing_secure`):
+Für `routing_secure`:
 
 | Feld | Werte | Beschreibung |
 |---|---|---|
 | `backbone_key` | Passwort-Feld | 128-Bit Backbone-Schlüssel als Hex-String (32 Zeichen, z. B. `0102030405060708090a0b0c0d0e0f10`; Trennzeichen `:` und Leerzeichen werden ignoriert) |
 
-> **Hinweis:** Alle Passwort-Felder werden in der Weboberfläche maskiert dargestellt und niemals im Klartext angezeigt.
->
-> **KNX IP Secure Voraussetzungen:** Das KNX/IP-Gateway muss KNX IP Secure unterstützen und in ETS entsprechend konfiguriert sein. Die nötigen Schlüssel und Passwörter sind der ETS-Projektdatei zu entnehmen.
+> **Hinweis:** Sind `knxkeys_file_path` und `knxkeys_password` gesetzt, haben sie Vorrang vor den manuellen Feldern. Alle Passwort-Felder werden in der Weboberfläche maskiert dargestellt.
+
+**Keyfile API** (für eigene Integrationen):
+
+```
+POST /api/v1/knx/keyfile   # .knxkeys hochladen, Tunnel-Liste zurückgeben
+DELETE /api/v1/knx/keyfile/{file_id}  # Keyfile löschen
+```
+
+Antwort des Upload-Endpunkts:
+```json
+{
+  "file_id": "uuid",
+  "file_path": "/data/knxkeys/uuid.knxkeys",
+  "project_name": "Mein KNX-Projekt",
+  "tunnels": [
+    { "individual_address": "1.1.100", "host": "1.1.50", "user_id": 2, "secure_ga_count": 15 },
+    { "individual_address": "1.1.101", "host": "1.1.50", "user_id": 3, "secure_ga_count": 15 }
+  ],
+  "backbone": null
+}
+```
 
 **Verknüpfungs-Konfiguration:**
 
