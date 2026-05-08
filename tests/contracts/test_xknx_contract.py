@@ -7,8 +7,9 @@ import pytest
 xknx = pytest.importorskip("xknx", reason="xknx not installed")
 
 from xknx.dpt import DPTArray, DPTBinary
+from xknx.io import ConnectionConfig, ConnectionType, SecureConfig
 from xknx.telegram import Telegram
-from xknx.telegram.address import GroupAddress
+from xknx.telegram.address import GroupAddress, IndividualAddress
 from xknx.telegram.apci import GroupValueRead, GroupValueResponse, GroupValueWrite
 
 
@@ -20,6 +21,81 @@ class TestGroupAddress:
     def test_equality(self):
         assert GroupAddress("1/2/3") == GroupAddress("1/2/3")
         assert GroupAddress("1/2/3") != GroupAddress("1/2/4")
+
+
+class TestIndividualAddress:
+    def test_construction_from_string(self):
+        ia = IndividualAddress("1.1.255")
+        assert str(ia) == "1.1.255"
+
+    def test_custom_address(self):
+        ia = IndividualAddress("2.3.10")
+        assert str(ia) == "2.3.10"
+
+
+class TestConnectionConfig:
+    def test_tunneling_with_individual_address(self):
+        cfg = ConnectionConfig(
+            connection_type=ConnectionType.TUNNELING,
+            gateway_ip="192.168.1.100",
+            gateway_port=3671,
+            individual_address=IndividualAddress("1.1.255"),
+        )
+        assert cfg.connection_type == ConnectionType.TUNNELING
+
+    def test_routing_with_local_ip(self):
+        cfg = ConnectionConfig(
+            connection_type=ConnectionType.ROUTING,
+            gateway_ip="224.0.23.12",
+            local_ip="192.168.1.5",
+        )
+        assert cfg.connection_type == ConnectionType.ROUTING
+
+    def test_tunneling_tcp_secure_connection_type_exists(self):
+        assert hasattr(ConnectionType, "TUNNELING_TCP_SECURE")
+
+    def test_routing_secure_connection_type_exists(self):
+        assert hasattr(ConnectionType, "ROUTING_SECURE")
+
+
+class TestSecureConfig:
+    def test_tunneling_secure_config(self):
+        sc = SecureConfig(
+            ip_secure_password="devauth",
+            user_id=2,
+            user_password="userpass",
+        )
+        assert sc is not None
+
+    def test_routing_secure_config_with_backbone_key(self):
+        backbone = bytes.fromhex("0102030405060708090a0b0c0d0e0f10")
+        sc = SecureConfig(backbone_key=backbone)
+        assert sc is not None
+
+    def test_backbone_key_hex_parse(self):
+        hex_str = "0102030405060708090a0b0c0d0e0f10"
+        backbone_bytes = bytes.fromhex(hex_str.replace(":", "").replace(" ", ""))
+        assert len(backbone_bytes) == 16
+
+    def test_backbone_key_with_colons(self):
+        hex_str = "01:02:03:04:05:06:07:08:09:0a:0b:0c:0d:0e:0f:10"
+        backbone_bytes = bytes.fromhex(hex_str.replace(":", "").replace(" ", ""))
+        assert len(backbone_bytes) == 16
+
+    def test_connection_config_with_secure_config(self):
+        sc = SecureConfig(
+            ip_secure_password="devauth",
+            user_id=2,
+            user_password="userpass",
+        )
+        cfg = ConnectionConfig(
+            connection_type=ConnectionType.TUNNELING_TCP_SECURE,
+            gateway_ip="192.168.1.100",
+            gateway_port=3671,
+            individual_address=IndividualAddress("1.1.255"),
+            secure_config=sc,
+        )
+        assert cfg.connection_type == ConnectionType.TUNNELING_TCP_SECURE
 
 
 class TestDPTTypes:

@@ -1,6 +1,6 @@
 """KNX Adapter — Phase 3
 
-Verbindet sich mit einem KNX/IP-Gateway (Tunneling oder Routing).
+Verbindet sich mit einem KNX/IP-Gateway (Tunneling, Routing oder IP Secure).
 Nutzt xknx für das Protokoll, eigenen DPTRegistry für Codierung.
 
 xknx ≥ 3.x: Device-dispatch läuft über _iter_remote_values() → GA-Map.
@@ -13,11 +13,17 @@ Binding-Konfiguration (pro AdapterBinding.config):
   state_group_address: str?  — Rückmelde-GA für DEST-Bindings (optional)
 
 Adapter-Konfiguration (adapter_configs.config in DB):
-  connection_type: "tunneling" | "routing"   (default: tunneling)
-  host:            str                        (KNX/IP Gateway IP)
-  port:            int                        (default: 3671)
-  individual_address: str                     (default: "1.1.255")
-  local_ip:        str?                       (für Routing/Multicast)
+  connection_type:                 "tunneling" | "tunneling_secure" | "routing" | "routing_secure"
+  host:                            str          (KNX/IP Gateway IP)
+  port:                            int          (default: 3671)
+  individual_address:              str          (default: "1.1.255")
+  local_ip:                        str?         (für Routing/Multicast, optional)
+  --- KNX IP Secure (Tunneling) ---
+  user_id:                         int          (default: 2, Bereich 1–127)
+  user_password:                   str?         (Passwort-Feld)
+  device_authentication_password:  str?         (Passwort-Feld)
+  --- KNX IP Secure (Routing) ---
+  backbone_key:                    str?         (Hex-String, 32 Zeichen; Passwort-Feld)
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ import asyncio
 import logging
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.knx.dpt_registry import DPTRegistry
@@ -53,11 +59,26 @@ logger = logging.getLogger(__name__)
 
 
 class KnxAdapterConfig(BaseModel):
-    connection_type: Literal["tunneling", "routing"] = "tunneling"
+    connection_type: Literal["tunneling", "tunneling_secure", "routing", "routing_secure"] = "tunneling"
     host: str = "192.168.1.100"
     port: int = 3671
     individual_address: str = "1.1.255"
     local_ip: str | None = None
+    # KNX IP Secure — Tunneling Secure
+    user_id: int = Field(default=2, ge=1, le=127)
+    user_password: str | None = Field(
+        default=None,
+        json_schema_extra={"format": "password", "writeOnly": True},
+    )
+    device_authentication_password: str | None = Field(
+        default=None,
+        json_schema_extra={"format": "password", "writeOnly": True},
+    )
+    # KNX IP Secure — Routing Secure (Backbone-Schlüssel als 32-stelliger Hex-String)
+    backbone_key: str | None = Field(
+        default=None,
+        json_schema_extra={"format": "password", "writeOnly": True},
+    )
 
 
 class KnxBindingConfig(BaseModel):
@@ -107,6 +128,7 @@ class KnxAdapter(AdapterBase):
         try:
             from xknx import XKNX
             from xknx.io import ConnectionConfig, ConnectionType
+            from xknx.telegram.address import IndividualAddress
         except ImportError:
             logger.error("xknx not installed — KNX adapter disabled")
             await self._publish_status(False, "xknx not installed")
@@ -122,12 +144,54 @@ class KnxAdapter(AdapterBase):
             self._xknx = None
 
         cfg = KnxAdapterConfig(**self._config)
-        conn_type = ConnectionType.ROUTING if cfg.connection_type == "routing" else ConnectionType.TUNNELING
+
+        _conn_type_map = {
+            "tunneling": ConnectionType.TUNNELING,
+            "tunneling_secure": ConnectionType.TUNNELING_TCP_SECURE,
+            "routing": ConnectionType.ROUTING,
+            "routing_secure": ConnectionType.ROUTING_SECURE,
+        }
+        conn_type = _conn_type_map.get(cfg.connection_type, ConnectionType.TUNNELING)
+
+        # Build SecureConfig for KNX IP Secure modes
+        secure_config = None
+        if cfg.connection_type == "tunneling_secure":
+            try:
+                from xknx.io import SecureConfig
+                secure_config = SecureConfig(
+                    ip_secure_password=cfg.device_authentication_password or "",
+                    user_id=cfg.user_id,
+                    user_password=cfg.user_password or "",
+                )
+            except Exception as exc:
+                await self._publish_status(False, f"KNX IP Secure Konfigurationsfehler: {exc}")
+                logger.error("KNX IP Secure (Tunneling) Konfigurationsfehler: %s", exc)
+                return
+        elif cfg.connection_type == "routing_secure":
+            try:
+                from xknx.io import SecureConfig
+                if not cfg.backbone_key:
+                    await self._publish_status(False, "routing_secure erfordert backbone_key")
+                    logger.error("KNX IP Secure (Routing): backbone_key fehlt")
+                    return
+                backbone_bytes = bytes.fromhex(cfg.backbone_key.replace(":", "").replace(" ", ""))
+                secure_config = SecureConfig(backbone_key=backbone_bytes)
+            except ValueError as exc:
+                await self._publish_status(False, f"KNX Backbone-Key ungültig (kein gültiger Hex-String): {exc}")
+                logger.error("KNX IP Secure (Routing) backbone_key Parse-Fehler: %s", exc)
+                return
+            except Exception as exc:
+                await self._publish_status(False, f"KNX IP Secure Konfigurationsfehler: {exc}")
+                logger.error("KNX IP Secure (Routing) Konfigurationsfehler: %s", exc)
+                return
+
         conn_cfg = ConnectionConfig(
             connection_type=conn_type,
             gateway_ip=cfg.host,
             gateway_port=cfg.port,
             local_ip=cfg.local_ip,
+            individual_address=IndividualAddress(cfg.individual_address),
+            secure_config=secure_config,
         )
 
         self._xknx = XKNX(connection_config=conn_cfg)

@@ -11,7 +11,7 @@ from xknx.telegram import Telegram
 from xknx.telegram.address import GroupAddress
 from xknx.telegram.apci import GroupValueRead, GroupValueResponse, GroupValueWrite
 
-from obs.adapters.knx.adapter import KnxAdapter, KnxBindingConfig, _telegram_to_bytes
+from obs.adapters.knx.adapter import KnxAdapter, KnxAdapterConfig, KnxBindingConfig, _telegram_to_bytes
 from obs.adapters.knx.dpt_registry import DPTRegistry
 
 
@@ -24,6 +24,112 @@ from tests.adapters.conftest import make_binding
 # ---------------------------------------------------------------------------
 
 xknx = pytest.importorskip("xknx", reason="xknx not installed")
+
+# ---------------------------------------------------------------------------
+# KnxAdapterConfig validation
+# ---------------------------------------------------------------------------
+
+
+class TestKnxAdapterConfig:
+    def test_defaults(self):
+        cfg = KnxAdapterConfig()
+        assert cfg.connection_type == "tunneling"
+        assert cfg.host == "192.168.1.100"
+        assert cfg.port == 3671
+        assert cfg.individual_address == "1.1.255"
+        assert cfg.local_ip is None
+        assert cfg.user_id == 2
+        assert cfg.user_password is None
+        assert cfg.device_authentication_password is None
+        assert cfg.backbone_key is None
+
+    def test_tunneling_secure_fields(self):
+        cfg = KnxAdapterConfig(
+            connection_type="tunneling_secure",
+            host="192.168.1.50",
+            user_id=3,
+            user_password="secret",
+            device_authentication_password="devauth",
+        )
+        assert cfg.connection_type == "tunneling_secure"
+        assert cfg.user_id == 3
+        assert cfg.user_password == "secret"
+        assert cfg.device_authentication_password == "devauth"
+
+    def test_routing_secure_fields(self):
+        cfg = KnxAdapterConfig(
+            connection_type="routing_secure",
+            backbone_key="0102030405060708090a0b0c0d0e0f10",
+        )
+        assert cfg.connection_type == "routing_secure"
+        assert cfg.backbone_key == "0102030405060708090a0b0c0d0e0f10"
+
+    def test_user_id_bounds(self):
+        import pydantic
+        with pytest.raises(pydantic.ValidationError):
+            KnxAdapterConfig(user_id=0)
+        with pytest.raises(pydantic.ValidationError):
+            KnxAdapterConfig(user_id=128)
+
+    def test_password_fields_in_json_schema(self):
+        """Passwort-Felder müssen format=password im JSON-Schema haben."""
+        schema = KnxAdapterConfig.model_json_schema()
+        props = schema["properties"]
+        for field_name in ("user_password", "device_authentication_password", "backbone_key"):
+            assert props[field_name].get("format") == "password", (
+                f"{field_name} muss format=password im Schema haben"
+            )
+
+    def test_individual_address_default(self):
+        cfg = KnxAdapterConfig()
+        assert cfg.individual_address == "1.1.255"
+
+    def test_individual_address_custom(self):
+        cfg = KnxAdapterConfig(individual_address="2.3.10")
+        assert cfg.individual_address == "2.3.10"
+
+    def test_local_ip_for_routing(self):
+        cfg = KnxAdapterConfig(connection_type="routing", local_ip="192.168.1.5")
+        assert cfg.local_ip == "192.168.1.5"
+
+
+# ---------------------------------------------------------------------------
+# _do_connect — SecureConfig Aufbau (ohne echte Netzwerkverbindung)
+# ---------------------------------------------------------------------------
+
+
+class TestDoConnectSecure:
+    @pytest.mark.asyncio
+    async def test_routing_secure_missing_backbone_key_publishes_error(self, mock_bus):
+        """routing_secure ohne backbone_key → Status-Fehler, kein Absturz."""
+        adapter = KnxAdapter(
+            event_bus=mock_bus,
+            config={"connection_type": "routing_secure", "host": "239.0.0.1"},
+        )
+        await adapter._do_connect()
+
+        assert mock_bus.publish.called
+        event = mock_bus.publish.call_args[0][0]
+        assert event.connected is False
+        assert "backbone_key" in event.message.lower() or "backbone" in event.message.lower()
+
+    @pytest.mark.asyncio
+    async def test_routing_secure_invalid_backbone_key_publishes_error(self, mock_bus):
+        """routing_secure mit ungültigem Hex → Status-Fehler, kein Absturz."""
+        adapter = KnxAdapter(
+            event_bus=mock_bus,
+            config={
+                "connection_type": "routing_secure",
+                "host": "239.0.0.1",
+                "backbone_key": "KEIN-HEX",
+            },
+        )
+        await adapter._do_connect()
+
+        assert mock_bus.publish.called
+        event = mock_bus.publish.call_args[0][0]
+        assert event.connected is False
+
 
 # ---------------------------------------------------------------------------
 # Config validation

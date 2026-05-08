@@ -12,7 +12,7 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 
 | Funktion | Beschreibung |
 |---|---|
-| **Protokolle** | KNX/IP (Tunneling + Routing), Modbus TCP, Modbus RTU, 1-Wire, externes MQTT, Home Assistant, Zeitschaltuhr |
+| **Protokolle** | KNX/IP (Tunneling + Routing + KNX IP Secure), Modbus TCP, Modbus RTU, 1-Wire, externes MQTT, Home Assistant, Zeitschaltuhr |
 | **Mehrere Instanzen** | Beliebig viele Instanzen pro Protokoll (z. B. 2× KNX, 3× Modbus TCP) |
 | **Protokoll-Brücke** | Ein KNX-Wert wird automatisch in ein Modbus-Register geschrieben — und umgekehrt |
 | **Logik-Editor** | Visuelle Automatisierungslogik ohne Programmierung: 35+ Blocktypen, Zeitpläne, Formeln, Python-Skripte, Benachrichtigungen, HTTP-Anfragen, Sonnenstand |
@@ -738,15 +738,42 @@ Zeigt berechnete Zwischenwerte direkt auf den Blöcken an — live und automatis
 
 ### KNX-Adapter
 
-**Instanz-Konfiguration:**
+**Instanz-Konfiguration — Grundparameter:**
 
 | Feld | Werte | Beschreibung |
 |---|---|---|
-| `connection_type` | `tunneling` / `routing` | Tunneling = direkte Verbindung zur Zentrale; Routing = IP-Multicast |
+| `connection_type` | `tunneling` / `tunneling_secure` / `routing` / `routing_secure` | Verbindungstyp (siehe unten) |
 | `host` | IP-Adresse | IP der KNX/IP-Zentrale (Tunneling) oder Multicast-Adresse (Routing) |
-| `port` | Standard `3671` | Port der KNX/IP-Zentrale (manche Geräte: `3674`) |
-| `individual_address` | z. B. `1.1.210` | Eigene KNX-Adresse (Tunneling) |
-| `local_ip` | IP-Adresse | Lokale Netzwerkschnittstelle (nur Routing, optional) |
+| `port` | Standard `3671` | Port der KNX/IP-Zentrale |
+| `individual_address` | z. B. `1.1.210` | Eigene KNX-Adresse des open bridge Servers |
+| `local_ip` | IP-Adresse | Lokale Netzwerkschnittstelle (nur Routing/Routing Secure, optional) |
+
+**Verbindungstypen:**
+
+| `connection_type` | Beschreibung |
+|---|---|
+| `tunneling` | UDP-Tunneling zur KNX/IP-Zentrale (Standard) |
+| `tunneling_secure` | KNX IP Secure Tunneling (verschlüsselt, TCP) |
+| `routing` | IP-Multicast-Routing |
+| `routing_secure` | KNX IP Secure Routing (verschlüsselt, Multicast) |
+
+**KNX IP Secure — Tunneling Secure** (`connection_type: tunneling_secure`):
+
+| Feld | Werte | Beschreibung |
+|---|---|---|
+| `user_id` | `1`–`127`, Standard `2` | Benutzer-ID am KNX/IP-Gateway |
+| `user_password` | Passwort-Feld | Benutzerpasswort (aus ETS-Projektdatei) |
+| `device_authentication_password` | Passwort-Feld | Geräte-Authentifizierungspasswort des Gateways |
+
+**KNX IP Secure — Routing Secure** (`connection_type: routing_secure`):
+
+| Feld | Werte | Beschreibung |
+|---|---|---|
+| `backbone_key` | Passwort-Feld | 128-Bit Backbone-Schlüssel als Hex-String (32 Zeichen, z. B. `0102030405060708090a0b0c0d0e0f10`; Trennzeichen `:` und Leerzeichen werden ignoriert) |
+
+> **Hinweis:** Alle Passwort-Felder werden in der Weboberfläche maskiert dargestellt und niemals im Klartext angezeigt.
+>
+> **KNX IP Secure Voraussetzungen:** Das KNX/IP-Gateway muss KNX IP Secure unterstützen und in ETS entsprechend konfiguriert sein. Die nötigen Schlüssel und Passwörter sind der ETS-Projektdatei zu entnehmen.
 
 **Verknüpfungs-Konfiguration:**
 
