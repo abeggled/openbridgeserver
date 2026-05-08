@@ -51,6 +51,16 @@ class TestConnectionConfig:
         )
         assert cfg.connection_type == ConnectionType.ROUTING
 
+    def test_tunneling_with_local_ip(self):
+        """local_ip ist auch bei Tunneling gültig (Schnittstellen-Binding)."""
+        cfg = ConnectionConfig(
+            connection_type=ConnectionType.TUNNELING,
+            gateway_ip="192.168.1.100",
+            gateway_port=3671,
+            local_ip="192.168.1.5",
+        )
+        assert cfg.connection_type == ConnectionType.TUNNELING
+
     def test_tunneling_tcp_secure_connection_type_exists(self):
         assert hasattr(ConnectionType, "TUNNELING_TCP_SECURE")
 

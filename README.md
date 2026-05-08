@@ -746,7 +746,7 @@ Zeigt berechnete Zwischenwerte direkt auf den Blöcken an — live und automatis
 | `host` | IP-Adresse | IP der KNX/IP-Zentrale (Tunneling) oder Multicast-Adresse (Routing) |
 | `port` | Standard `3671` | Port der KNX/IP-Zentrale |
 | `individual_address` | z. B. `1.1.210` | Eigene KNX-Adresse des open bridge Servers |
-| `local_ip` | IP-Adresse | Lokale Netzwerkschnittstelle (nur Routing/Routing Secure, optional) |
+| `local_ip` | IP-Adresse | Lokale Netzwerkschnittstelle (optional). Bei Routing/Routing Secure: wählt die Netzwerkkarte für Multicast — bei mehreren Netzwerkkarten **empfohlen**. Bei Tunneling/Tunneling Secure: bindet den Socket an eine bestimmte Schnittstelle — meist nur bei Mehrfach-Netzwerkkarten nötig. Leer lassen = automatische Auswahl. |
 
 **Verbindungstypen:**
 
