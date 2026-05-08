@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from pydantic import BaseModel
 
 from obs.api.auth import get_current_user
+from obs.config import get_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["knx"])
@@ -52,8 +53,6 @@ class KeyfileParseResult(BaseModel):
 
 def _keyfiles_dir() -> Path:
     """Gibt das Verzeichnis für gespeicherte .knxkeys Dateien zurück."""
-    from obs.config import get_settings
-
     db_path = Path(get_settings().database.path)
     d = db_path.parent / "knxkeys"
     d.mkdir(parents=True, exist_ok=True)
