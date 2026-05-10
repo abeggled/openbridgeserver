@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { reactive, watch } from 'vue'
 import DataPointPicker from '@/components/DataPointPicker.vue'
+import { TIME_RANGE_PRESETS, DEFAULT_TIME_RANGE } from './timeRangePresets'
 
 type Axis = 'left' | 'right'
 
@@ -13,7 +14,7 @@ interface Series {
 
 interface Cfg {
   label: string
-  hours: number
+  time_range: string
   primary_color: string
   primary_axis: Axis
   series: Series[]
@@ -34,9 +35,14 @@ function normalizeSeries(raw: unknown): Series[] {
   }))
 }
 
+function resolveTimeRange(raw: Record<string, unknown>): string {
+  if (raw.time_range && typeof raw.time_range === 'string') return raw.time_range as string
+  return DEFAULT_TIME_RANGE
+}
+
 const cfg = reactive<Cfg>({
   label:         (props.modelValue.label         as string) ?? '',
-  hours:         (props.modelValue.hours         as number) ?? 24,
+  time_range:    resolveTimeRange(props.modelValue),
   primary_color: (props.modelValue.primary_color as string) ?? '#3b82f6',
   primary_axis:  (props.modelValue.primary_axis  as Axis)   ?? 'left',
   series:        normalizeSeries(props.modelValue.series),
@@ -44,7 +50,7 @@ const cfg = reactive<Cfg>({
 
 watch(cfg, () => emit('update:modelValue', {
   label:         cfg.label,
-  hours:         cfg.hours,
+  time_range:    cfg.time_range,
   primary_color: cfg.primary_color,
   primary_axis:  cfg.primary_axis,
   series:        cfg.series.map(s => ({ ...s })),
@@ -76,14 +82,13 @@ function removeSeries(i: number) {
 
     <!-- Zeitraum -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Zeitraum (Stunden)</label>
-      <input
-        v-model.number="cfg.hours"
-        type="number"
-        min="1"
-        max="720"
-        class="w-32 bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
-      />
+      <label class="block text-xs text-gray-400 mb-1">Standard-Zeitbereich</label>
+      <select
+        v-model="cfg.time_range"
+        class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+      >
+        <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ p.label }}</option>
+      </select>
     </div>
 
     <!-- Primäre Reihe -->
