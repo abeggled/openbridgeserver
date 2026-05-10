@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, getCurrentInstance, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Chart, LineController, LineElement, PointElement, LinearScale, Filler, Tooltip } from 'chart.js'
 import { history } from '@/api/client'
 import { useIcons } from '@/composables/useIcons'
@@ -10,7 +10,7 @@ import type { DataPointValue } from '@/types'
 Chart.register(LineController, LineElement, PointElement, LinearScale, Filler, Tooltip)
 
 type CondFn = 'eq' | 'lt' | 'lte' | 'gt' | 'gte'
-type DisplayMode = 'value' | 'history' | 'icon_only'
+type DisplayMode = 'value' | 'history' | 'icon_only' | 'gauge_arc' | 'gauge_circle'
 
 interface Rule {
   fn: CondFn | 'default'
@@ -37,6 +37,8 @@ const props = defineProps<{
 const dpStore = useDatapointsStore()
 const { getSvg, isSvgIcon, svgIconName } = useIcons()
 
+const gaugeGradId = `gg-${getCurrentInstance()?.uid ?? Math.random().toString(36).slice(2)}`
+
 // ── Config ─────────────────────────────────────────────────────────────────────
 
 const mode          = computed<DisplayMode>(() => (props.config.mode as DisplayMode | undefined) ?? 'value')
@@ -46,6 +48,9 @@ const historyHours  = computed(() => (props.config.history_hours as number | und
 const secondaryDpId = computed(() => (props.config.secondary_dp_id as string | undefined) ?? '')
 const secLabel      = computed(() => (props.config.secondary_label as string | undefined) ?? '')
 const secDecimals   = computed(() => (props.config.secondary_decimals as number | undefined) ?? 1)
+const gaugeMin      = computed(() => (props.config.gauge_min as number | undefined) ?? 0)
+const gaugeMax      = computed(() => (props.config.gauge_max as number | undefined) ?? 100)
+const gaugeColors   = computed<string[]>(() => (props.config.gauge_colors as string[] | undefined) ?? ['#22c55e', '#f59e0b', '#ef4444'])
 
 // ── Rule evaluation ────────────────────────────────────────────────────────────
 
@@ -74,6 +79,35 @@ const activeRule = computed<Rule | null>(() => {
     if (v !== null && testRule(r.fn, r.threshold, v)) return r
   }
   return rules.value.find(r => r.fn === 'default') ?? null
+})
+
+// ── Gauge ──────────────────────────────────────────────────────────────────────
+
+// Arc gauge: center (50,55), radius 42, half-circle M 8 55 A 42 42 0 0 1 92 55
+const GAUGE_ARC_R    = 42
+const GAUGE_CIRC_R   = 38
+const gaugeArcLength  = Math.PI * GAUGE_ARC_R           // ≈ 131.95
+const gaugeCircLength = 2 * Math.PI * GAUGE_CIRC_R      // ≈ 238.76
+
+const gaugePercent = computed(() => {
+  if (props.editorMode) return 0.5
+  const v = rawValue.value
+  if (v === null || typeof v !== 'number') return 0
+  const min = gaugeMin.value
+  const max = gaugeMax.value
+  if (max <= min) return 0
+  return Math.max(0, Math.min(1, (v - min) / (max - min)))
+})
+
+const gaugeArcOffset  = computed(() => gaugeArcLength  * (1 - gaugePercent.value))
+const gaugeCircOffset = computed(() => gaugeCircLength * (1 - gaugePercent.value))
+
+const gaugeGradientStops = computed(() => {
+  const colors = gaugeColors.value.length >= 2 ? gaugeColors.value : ['#22c55e', '#ef4444']
+  return colors.map((color, i) => ({
+    offset: `${(i / (colors.length - 1)) * 100}%`,
+    color,
+  }))
 })
 
 // ── Icon ───────────────────────────────────────────────────────────────────────
@@ -379,6 +413,78 @@ const quality = computed(() => props.value?.q ?? null)
     >
       <canvas v-if="!editorMode" ref="canvasEl" class="w-full h-full" />
       <div v-else class="flex items-center justify-center h-full text-gray-600 text-xs">Verlauf</div>
+    </div>
+  </div>
+
+  <!-- ── GAUGE ARC (Halbkreis-Gauge) ─────────────────────────────────────── -->
+  <div v-else-if="mode === 'gauge_arc'" class="flex flex-col items-center h-full p-2 select-none text-gray-900 dark:text-gray-100">
+    <span v-if="widgetLabel" class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center shrink-0 mb-1">{{ widgetLabel }}</span>
+    <div class="flex-1 min-h-0 w-full flex items-center justify-center">
+      <svg viewBox="0 0 100 65" class="w-full max-h-full" style="overflow: visible">
+        <defs>
+          <linearGradient :id="gaugeGradId" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop v-for="stop in gaugeGradientStops" :key="stop.offset" :offset="stop.offset" :stop-color="stop.color" />
+          </linearGradient>
+        </defs>
+        <!-- Track -->
+        <path d="M 8 55 A 42 42 0 0 1 92 55" fill="none" stroke="#374151" stroke-width="9" stroke-linecap="round" />
+        <!-- Fill -->
+        <path
+          d="M 8 55 A 42 42 0 0 1 92 55"
+          fill="none"
+          :stroke="`url(#${gaugeGradId})`"
+          stroke-width="9"
+          stroke-linecap="round"
+          :stroke-dasharray="gaugeArcLength"
+          :stroke-dashoffset="gaugeArcOffset"
+          data-testid="gauge-arc-fill"
+        />
+        <!-- Value text -->
+        <text x="50" y="49" text-anchor="middle" dominant-baseline="auto" font-size="13" font-weight="600" fill="currentColor" data-testid="widget-value">{{ mainDisplay.value }}</text>
+        <text v-if="mainDisplay.postfix" x="50" y="60" text-anchor="middle" font-size="8" fill="#6b7280">{{ mainDisplay.postfix }}</text>
+        <!-- Min/Max labels -->
+        <text x="8" y="64" text-anchor="middle" font-size="7" fill="#6b7280">{{ gaugeMin }}</text>
+        <text x="92" y="64" text-anchor="middle" font-size="7" fill="#6b7280">{{ gaugeMax }}</text>
+      </svg>
+    </div>
+    <div class="flex justify-end w-full mt-0.5">
+      <span v-if="quality === 'bad'" class="w-2 h-2 rounded-full bg-red-500" title="Qualität: schlecht" />
+      <span v-else-if="quality === 'uncertain'" class="w-2 h-2 rounded-full bg-yellow-400" title="Qualität: undefiniert" />
+    </div>
+  </div>
+
+  <!-- ── GAUGE CIRCLE (Vollkreis-Gauge) ────────────────────────────────────── -->
+  <div v-else-if="mode === 'gauge_circle'" class="flex flex-col items-center h-full p-2 select-none text-gray-900 dark:text-gray-100">
+    <span v-if="widgetLabel" class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center shrink-0 mb-1">{{ widgetLabel }}</span>
+    <div class="flex-1 min-h-0 w-full flex items-center justify-center">
+      <svg viewBox="0 0 100 100" class="max-w-full max-h-full" style="aspect-ratio: 1">
+        <defs>
+          <linearGradient :id="`${gaugeGradId}-c`" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop v-for="stop in gaugeGradientStops" :key="stop.offset" :offset="stop.offset" :stop-color="stop.color" />
+          </linearGradient>
+        </defs>
+        <!-- Track -->
+        <circle cx="50" cy="50" r="38" fill="none" stroke="#374151" stroke-width="9" />
+        <!-- Fill -->
+        <circle
+          cx="50" cy="50" r="38"
+          fill="none"
+          :stroke="`url(#${gaugeGradId}-c)`"
+          stroke-width="9"
+          stroke-linecap="round"
+          :stroke-dasharray="gaugeCircLength"
+          :stroke-dashoffset="gaugeCircOffset"
+          transform="rotate(-90 50 50)"
+          data-testid="gauge-circle-fill"
+        />
+        <!-- Value text -->
+        <text x="50" y="48" text-anchor="middle" dominant-baseline="auto" font-size="14" font-weight="600" fill="currentColor" data-testid="widget-value">{{ mainDisplay.value }}</text>
+        <text v-if="mainDisplay.postfix" x="50" y="62" text-anchor="middle" font-size="10" fill="#6b7280">{{ mainDisplay.postfix }}</text>
+      </svg>
+    </div>
+    <div class="flex justify-end w-full mt-0.5">
+      <span v-if="quality === 'bad'" class="w-2 h-2 rounded-full bg-red-500" title="Qualität: schlecht" />
+      <span v-else-if="quality === 'uncertain'" class="w-2 h-2 rounded-full bg-yellow-400" title="Qualität: undefiniert" />
     </div>
   </div>
 
