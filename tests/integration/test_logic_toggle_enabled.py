@@ -106,6 +106,46 @@ async def test_patch_enabled_does_not_affect_name_or_flow(client, auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_run_disabled_graph_returns_422(client, auth_headers):
+    """POST .../run auf einem deaktivierten Logikblatt liefert HTTP 422."""
+    ts = time.time()
+    graph = await _create_graph(client, auth_headers, f"IT-Toggle-Run-{ts}")
+    graph_id = graph["id"]
+    try:
+        # Deaktivieren
+        await _patch_graph(client, auth_headers, graph_id, {"enabled": False})
+
+        # Ausführen muss fehlschlagen
+        resp = await client.post(f"/api/v1/logic/graphs/{graph_id}/run", headers=auth_headers)
+        assert resp.status_code == 422, resp.text
+        assert "deaktiviert" in resp.json().get("detail", "").lower()
+    finally:
+        await _cleanup(client, auth_headers, graph_id)
+
+
+@pytest.mark.asyncio
+async def test_run_reactivated_graph_succeeds(client, auth_headers):
+    """Re-aktiviertes Logikblatt kann wieder ausgeführt werden."""
+    ts = time.time()
+    graph = await _create_graph(client, auth_headers, f"IT-Toggle-Rerun-{ts}")
+    graph_id = graph["id"]
+    try:
+        await _patch_graph(client, auth_headers, graph_id, {"enabled": False})
+        # Direkt nach Deaktivierung schlägt Run fehl
+        resp = await client.post(f"/api/v1/logic/graphs/{graph_id}/run", headers=auth_headers)
+        assert resp.status_code == 422
+
+        # Re-aktivieren
+        await _patch_graph(client, auth_headers, graph_id, {"enabled": True})
+
+        # Jetzt muss Run erfolgreich sein
+        resp2 = await client.post(f"/api/v1/logic/graphs/{graph_id}/run", headers=auth_headers)
+        assert resp2.status_code == 200, resp2.text
+    finally:
+        await _cleanup(client, auth_headers, graph_id)
+
+
+@pytest.mark.asyncio
 async def test_list_graphs_includes_enabled_field(client, auth_headers):
     """GET /api/v1/logic/graphs gibt enabled-Feld für alle Logikblätter zurück."""
     ts = time.time()

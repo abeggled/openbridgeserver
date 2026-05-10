@@ -15,7 +15,11 @@
         <Spinner v-if="saving" size="sm" color="white" />
         Speichern
       </button>
-      <button v-if="activeGraphId" @click="runGraph" class="btn-secondary btn-sm text-green-400" data-testid="btn-run">
+      <button v-if="activeGraphId" @click="runGraph"
+        :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
+        :disabled="!activeGraph?.enabled"
+        :title="activeGraph?.enabled ? 'Logikblatt ausführen' : 'Logikblatt ist deaktiviert — kein Ausführen möglich'"
+        data-testid="btn-run">
         &#9654; Ausführen
       </button>
       <button v-if="activeGraphId" @click="toggleDebug"
@@ -68,7 +72,7 @@
           v-model:nodes="nodes"
           v-model:edges="edges"
           :node-types="nodeTypeComponents"
-          :default-edge-options="{ type: 'smoothstep', animated: true, interactionWidth: 20, style: { stroke: '#475569', strokeWidth: 2 } }"
+          :default-edge-options="defaultEdgeOptions"
           :delete-key-code="['Backspace', 'Delete']"
           fit-view-on-init
           class="logic-canvas"
@@ -226,6 +230,35 @@ const nodeTypeComponents = {
 // ── Active graph ───────────────────────────────────────────────────────────
 const activeGraphId = ref('')
 const activeGraph   = computed(() => store.graphs.find(g => g.id === activeGraphId.value))
+
+// ── Edge options — animated only when graph is enabled ─────────────────────
+const defaultEdgeOptions = computed(() => {
+  const enabled = activeGraph.value?.enabled !== false
+  return {
+    type: 'smoothstep',
+    animated: enabled,
+    interactionWidth: 20,
+    style: {
+      stroke: enabled ? '#475569' : '#64748b',
+      strokeDasharray: enabled ? undefined : '8 5',
+      strokeWidth: 2,
+    },
+  }
+})
+
+// Update existing edges reactively when enabled state changes
+watch(() => activeGraph.value?.enabled, (enabled) => {
+  const isEnabled = enabled !== false
+  edges.value = edges.value.map(e => ({
+    ...e,
+    animated: isEnabled,
+    style: {
+      stroke: isEnabled ? '#475569' : '#64748b',
+      strokeDasharray: isEnabled ? undefined : '8 5',
+      strokeWidth: 2,
+    },
+  }))
+})
 const saving        = ref(false)
 const statusMsg     = ref(null)
 const canvasWrapper = ref(null)
@@ -467,11 +500,12 @@ async function onImportFile(event) {
 
 // ── Connect handler — REQUIRED to actually create edges ────────────────────
 function onConnect(params) {
+  const opts = defaultEdgeOptions.value
   edges.value = addEdge({
     ...params,
-    type: 'smoothstep',
-    animated: true,
-    style: { stroke: '#475569', strokeWidth: 2 },
+    type: opts.type,
+    animated: opts.animated,
+    style: opts.style,
   }, edges.value)
 }
 

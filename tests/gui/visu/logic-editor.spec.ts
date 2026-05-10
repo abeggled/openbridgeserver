@@ -982,6 +982,47 @@ test('Logikblatt-Toggle: Button zeigt Aktiv-Status und deaktiviert das Blatt', a
   }
 })
 
+test('Deaktiviertes Logikblatt: Ausführen-Button ist disabled und Kanten sind gestrichelt', async ({ page }) => {
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-Disabled-Run-${Date.now()}`,
+    description: 'Playwright: disabled graph blocks run',
+    enabled: false,
+    flow_data: {
+      nodes: [
+        { id: 'c1', type: 'const_value', position: { x: 100, y: 100 }, data: { value: '1', data_type: 'number' } },
+        { id: 'c2', type: 'const_value', position: { x: 100, y: 200 }, data: { value: '2', data_type: 'number' } },
+      ],
+      edges: [
+        { id: 'e1', source: 'c1', target: 'c2', sourceHandle: 'value', targetHandle: 'value' },
+      ],
+    },
+  }) as { id: string }
+  const graphId = graph.id
+
+  try {
+    await page.goto('/logic')
+    await page.waitForLoadState('networkidle')
+    await page.selectOption('[data-testid="select-graph"]', graphId)
+    await page.waitForTimeout(800)
+
+    // Ausführen-Button muss disabled sein
+    const runBtn = page.locator('[data-testid="btn-run"]')
+    await expect(runBtn).toBeDisabled({ timeout: 5_000 })
+
+    // Toggle-Button zeigt "Deaktiviert"
+    const toggleBtn = page.locator('[data-testid="btn-toggle-enabled"]')
+    await expect(toggleBtn).toContainText('Deaktiviert')
+
+    // Kante muss stroke-dasharray haben (gestrichelt = nicht animiert)
+    const edgePath = page.locator('.vue-flow__edge-path').first()
+    await expect(edgePath).toBeVisible({ timeout: 5_000 })
+    const dasharray = await edgePath.getAttribute('style')
+    expect(dasharray).toContain('stroke-dasharray')
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})
+
 test('Logikblatt-Bezeichnung: Toolbar und Modals verwenden "Logikblatt" statt "Graph"', async ({ page }) => {
   await page.goto('/logic')
   await page.waitForLoadState('networkidle')
