@@ -52,11 +52,8 @@ function configHistoryTimeRange(config: Record<string, unknown>): string {
   return DEFAULT_TIME_RANGE
 }
 
-const selectedTimeRange = ref(configHistoryTimeRange(props.config))
-
-watch(() => props.config.history_time_range, () => {
-  selectedTimeRange.value = configHistoryTimeRange(props.config)
-})
+// Zeitbereich nur für das Modal — wird beim Öffnen auf den Config-Wert zurückgesetzt
+const modalTimeRange = ref(configHistoryTimeRange(props.config))
 
 // ── Rule evaluation ────────────────────────────────────────────────────────────
 
@@ -210,9 +207,9 @@ function makeDataset(color: string) {
   }
 }
 
-async function fetchPoints() {
+async function fetchPoints(timeRange: string) {
   if (!props.datapointId || props.editorMode) return { pts: [], minMs: 0, maxMs: 0 }
-  const { from: fromDate, to: toDate } = resolveTimeRange(selectedTimeRange.value)
+  const { from: fromDate, to: toDate } = resolveTimeRange(timeRange)
   const data = await history.query(props.datapointId, fromDate.toISOString(), toDate.toISOString())
   histUnit = data[0]?.u ?? ''
   return {
@@ -222,21 +219,25 @@ async function fetchPoints() {
   }
 }
 
+// Mini-Chart: immer den konfigurierten Zeitbereich verwenden
 async function updateMiniChart() {
   if (mode.value !== 'history') return
-  const { pts, minMs, maxMs } = await fetchPoints()
-  if (miniChart) {
-    miniChart.data.datasets[0].data = pts
-    const xAxis = miniChart.options.scales?.x as any
-    if (xAxis) { xAxis.min = minMs; xAxis.max = maxMs }
-    miniChart.update()
-  }
-  if (modalChart && modalOpen.value) {
-    modalChart.data.datasets[0].data = pts
-    const xAxis = modalChart.options.scales?.x as any
-    if (xAxis) { xAxis.min = minMs; xAxis.max = maxMs }
-    modalChart.update()
-  }
+  const { pts, minMs, maxMs } = await fetchPoints(configHistoryTimeRange(props.config))
+  if (!miniChart) return
+  miniChart.data.datasets[0].data = pts
+  const xAxis = miniChart.options.scales?.x as any
+  if (xAxis) { xAxis.min = minMs; xAxis.max = maxMs }
+  miniChart.update()
+}
+
+// Modal-Chart: den im Modal gewählten Zeitbereich verwenden
+async function updateModalChart() {
+  if (!modalChart || !modalOpen.value) return
+  const { pts, minMs, maxMs } = await fetchPoints(modalTimeRange.value)
+  modalChart.data.datasets[0].data = pts
+  const xAxis = modalChart.options.scales?.x as any
+  if (xAxis) { xAxis.min = minMs; xAxis.max = maxMs }
+  modalChart.update()
 }
 
 onMounted(() => {
@@ -248,7 +249,11 @@ onMounted(() => {
     if (mode.value !== 'history' || props.editorMode) return
     if (!msg.id || msg.v === undefined || msg.id !== props.datapointId) return
     if (reloadTimer) clearTimeout(reloadTimer)
-    reloadTimer = setTimeout(() => { reloadTimer = null; updateMiniChart() }, 2_000)
+    reloadTimer = setTimeout(() => {
+      reloadTimer = null
+      updateMiniChart()
+      updateModalChart()
+    }, 2_000)
   })
 
   if (mode.value !== 'history' || !canvasEl.value) return
@@ -268,13 +273,16 @@ onMounted(() => {
 })
 
 watch(() => props.datapointId, updateMiniChart)
-watch(selectedTimeRange, updateMiniChart)
+watch(() => props.config.history_time_range, updateMiniChart)
+watch(modalTimeRange, updateModalChart)
 
 watch(modalOpen, async (open) => {
   if (!open) { modalChart?.destroy(); modalChart = null; return }
+  // Zeitbereich im Modal auf den aktuellen Config-Default zurücksetzen
+  modalTimeRange.value = configHistoryTimeRange(props.config)
   await new Promise<void>(r => setTimeout(r, 50))
   if (!modalCanvasEl.value) return
-  const { pts, minMs, maxMs } = await fetchPoints()
+  const { pts, minMs, maxMs } = await fetchPoints(modalTimeRange.value)
   modalChart = new Chart(modalCanvasEl.value, {
     type: 'line',
     data: { datasets: [{ ...makeDataset(activeColor.value), data: pts }] },
@@ -355,18 +363,7 @@ const quality = computed(() => props.value?.q ?? null)
 
   <!-- ── HISTORY MODE ───────────────────────────────────────────────────────── -->
   <div v-else-if="mode === 'history'" class="flex flex-col items-center h-full p-2 select-none">
-    <div class="flex items-center justify-between gap-1 w-full shrink-0 mb-1 min-w-0">
-      <span v-if="widgetLabel" class="text-xs text-gray-500 dark:text-gray-400 truncate">{{ widgetLabel }}</span>
-      <span v-else class="shrink-0" />
-      <select
-        v-if="!editorMode"
-        v-model="selectedTimeRange"
-        class="shrink-0 text-xs bg-gray-800 border border-gray-700 rounded px-1 py-0.5 text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer"
-        title="Zeitbereich wählen"
-      >
-        <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ p.label }}</option>
-      </select>
-    </div>
+    <span v-if="widgetLabel" class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center shrink-0 mb-1">{{ widgetLabel }}</span>
 
     <!-- Icon: 3 flex shares, no circle -->
     <div class="min-h-0 flex items-center justify-center w-full" style="flex: 3; aspect-ratio: 1; max-width: 100%">
@@ -456,7 +453,7 @@ const quality = computed(() => props.value?.q ?? null)
           </div>
           <div class="flex items-center gap-2 shrink-0">
             <select
-              v-model="selectedTimeRange"
+              v-model="modalTimeRange"
               class="text-xs bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer"
               title="Zeitbereich wählen"
             >

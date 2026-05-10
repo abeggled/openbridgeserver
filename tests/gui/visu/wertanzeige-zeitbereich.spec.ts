@@ -6,13 +6,18 @@ import { apiPost, apiPut, apiDelete } from '../helpers'
  * E2E-Tests für die Verlaufsansicht des Wertanzeige-Widgets mit variablem
  * Zeitbereich (analog Issue #413, Verlauf-Widget).
  *
+ * Verhalten:
+ *   - Kleinformat-Widget: kein Zeitbereich-Dropdown, immer der Config-Wert
+ *   - Modal: Zeitbereich-Dropdown mit allen 18 Optionen
+ *
  * Getestete Szenarien:
- *   1. Standard-Zeitbereich aus Config wird im Widget-Dropdown angezeigt
- *   2. Dropdown enthält alle 18 Zeitbereich-Optionen
- *   3. Auswahl eines anderen Zeitbereichs aktualisiert das Chart ohne Fehler
- *   4. Zeitbereich-Dropdown ist auch im Modal vorhanden und funktioniert
- *   5. Rückwärtskompatibilität: Widget ohne history_time_range zeigt last_24h
- *   6. Automatische Aktualisierung via WebSocket: neuer Wert aktualisiert den Chart
+ *   1. Kleinformat zeigt keinen Zeitbereich-Dropdown
+ *   2. Modal: Dropdown vorhanden und zeigt den konfigurierten Standard
+ *   3. Modal: Dropdown enthält alle 18 Optionen
+ *   4. Modal: Zeitbereichswechsel aktualisiert Chart ohne Fehler
+ *   5. Modal: wird beim erneuten Öffnen auf Config-Default zurückgesetzt
+ *   6. Rückwärtskompatibilität: Widget ohne history_time_range zeigt last_24h im Modal
+ *   7. Automatische Aktualisierung via WebSocket
  */
 
 // ─── Hilfsfunktionen ─────────────────────────────────────────────────────────
@@ -69,17 +74,17 @@ const DEFAULT_RULES = [
   { fn: 'default', threshold: '', icon: '🌡️', color: '#3b82f6', output_type: 'value', calculation: '', prefix: '', text: '', decimals: 1, postfix: '' },
 ]
 
-// ─── Test 1: Standard-Zeitbereich aus Config wird im Dropdown angezeigt ──────
+// ─── Test 1: Kleinformat zeigt keinen Zeitbereich-Dropdown ───────────────────
 
-test('Wertanzeige-Verlauf: Standard-Zeitbereich "Letzte 3 Stunden" wird angezeigt', async ({ page }) => {
-  const dp = await createFloatDP('default-tr')
+test('Wertanzeige-Verlauf: Kleinformat zeigt kein Zeitbereich-Dropdown', async ({ page }) => {
+  const dp = await createFloatDP('no-dropdown')
   const visuNode = await createVisuPage()
   const pageId = visuNode.id
   const widgetId = randomUUID()
 
   await pushValue(dp.id, 22.0)
   await buildValueDisplayPage(pageId, widgetId, dp.id, {
-    label: 'Zeitbereich-Test',
+    label: 'Kein-Dropdown-Test',
     mode: 'history',
     rules: DEFAULT_RULES,
     history_time_range: 'last_3h',
@@ -89,19 +94,51 @@ test('Wertanzeige-Verlauf: Standard-Zeitbereich "Letzte 3 Stunden" wird angezeig
     await page.goto(`/visu/${pageId}`)
     await expect(page.locator('canvas').first()).toBeVisible({ timeout: 8000 })
 
-    const select = page.locator('select[title="Zeitbereich wählen"]').first()
-    await expect(select).toBeVisible()
-    await expect(select).toHaveValue('last_3h')
+    // Im Kleinformat darf kein Dropdown sichtbar sein
+    await expect(page.locator('select[title="Zeitbereich wählen"]')).toHaveCount(0)
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
     await apiDelete(`/api/v1/datapoints/${dp.id}`)
   }
 })
 
-// ─── Test 2: Dropdown enthält alle 18 Optionen ───────────────────────────────
+// ─── Test 2: Modal zeigt Dropdown mit Config-Default ─────────────────────────
 
-test('Wertanzeige-Verlauf: Dropdown enthält alle 18 Zeitbereich-Optionen', async ({ page }) => {
-  const dp = await createFloatDP('options')
+test('Wertanzeige-Verlauf: Modal zeigt Dropdown mit konfiguriertem Standard', async ({ page }) => {
+  const dp = await createFloatDP('modal-default')
+  const visuNode = await createVisuPage()
+  const pageId = visuNode.id
+  const widgetId = randomUUID()
+
+  await pushValue(dp.id, 20.0)
+  await buildValueDisplayPage(pageId, widgetId, dp.id, {
+    label: 'Modal-Default-Test',
+    mode: 'history',
+    rules: DEFAULT_RULES,
+    history_time_range: 'last_3h',
+  })
+
+  try {
+    await page.goto(`/visu/${pageId}`)
+    await expect(page.locator('canvas').first()).toBeVisible({ timeout: 8000 })
+
+    // Modal öffnen
+    await page.locator('canvas').first().click()
+    await expect(page.locator('[class*="fixed inset-0"]')).toBeVisible({ timeout: 3000 })
+
+    const modalSelect = page.locator('[class*="fixed inset-0"] select[title="Zeitbereich wählen"]')
+    await expect(modalSelect).toBeVisible()
+    await expect(modalSelect).toHaveValue('last_3h')
+  } finally {
+    await apiDelete(`/api/v1/visu/nodes/${pageId}`)
+    await apiDelete(`/api/v1/datapoints/${dp.id}`)
+  }
+})
+
+// ─── Test 3: Modal-Dropdown enthält alle 18 Optionen ─────────────────────────
+
+test('Wertanzeige-Verlauf: Modal-Dropdown enthält alle 18 Zeitbereich-Optionen', async ({ page }) => {
+  const dp = await createFloatDP('modal-options')
   const visuNode = await createVisuPage()
   const pageId = visuNode.id
   const widgetId = randomUUID()
@@ -126,14 +163,17 @@ test('Wertanzeige-Verlauf: Dropdown enthält alle 18 Zeitbereich-Optionen', asyn
     await page.goto(`/visu/${pageId}`)
     await expect(page.locator('canvas').first()).toBeVisible({ timeout: 8000 })
 
-    const select = page.locator('select[title="Zeitbereich wählen"]').first()
-    await expect(select).toBeVisible()
+    await page.locator('canvas').first().click()
+    await expect(page.locator('[class*="fixed inset-0"]')).toBeVisible({ timeout: 3000 })
 
-    const optionCount = await select.locator('option').count()
+    const modalSelect = page.locator('[class*="fixed inset-0"] select[title="Zeitbereich wählen"]')
+    await expect(modalSelect).toBeVisible()
+
+    const optionCount = await modalSelect.locator('option').count()
     expect(optionCount).toBe(expectedValues.length)
 
     for (const val of expectedValues) {
-      await expect(select.locator(`option[value="${val}"]`)).toBeAttached()
+      await expect(modalSelect.locator(`option[value="${val}"]`)).toBeAttached()
     }
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
@@ -141,10 +181,10 @@ test('Wertanzeige-Verlauf: Dropdown enthält alle 18 Zeitbereich-Optionen', asyn
   }
 })
 
-// ─── Test 3: Auswahl eines anderen Zeitbereichs löst Neuladung aus ───────────
+// ─── Test 4: Zeitbereichswechsel im Modal aktualisiert Chart ─────────────────
 
-test('Wertanzeige-Verlauf: Auswahl eines anderen Zeitbereichs aktualisiert Chart', async ({ page }) => {
-  const dp = await createFloatDP('switch-tr')
+test('Wertanzeige-Verlauf: Zeitbereichswechsel im Modal aktualisiert Chart ohne Fehler', async ({ page }) => {
+  const dp = await createFloatDP('modal-switch')
   const visuNode = await createVisuPage()
   const pageId = visuNode.id
   const widgetId = randomUUID()
@@ -164,20 +204,22 @@ test('Wertanzeige-Verlauf: Auswahl eines anderen Zeitbereichs aktualisiert Chart
     await page.goto(`/visu/${pageId}`)
     await expect(page.locator('canvas').first()).toBeVisible({ timeout: 8000 })
 
-    const select = page.locator('select[title="Zeitbereich wählen"]').first()
-    await expect(select).toBeVisible()
+    await page.locator('canvas').first().click()
+    await expect(page.locator('[class*="fixed inset-0"]')).toBeVisible({ timeout: 3000 })
+
+    const modalSelect = page.locator('[class*="fixed inset-0"] select[title="Zeitbereich wählen"]')
+    await expect(modalSelect).toBeVisible()
 
     // Auf "Letzte 7 Tage" wechseln
-    await select.selectOption('last_7d')
-    await expect(select).toHaveValue('last_7d')
+    await modalSelect.selectOption('last_7d')
+    await expect(modalSelect).toHaveValue('last_7d')
     await page.waitForTimeout(1000)
-    await expect(page.locator('canvas').first()).toBeVisible()
+    await expect(page.locator('[class*="fixed inset-0"] canvas')).toBeVisible()
 
     // Auf "Heute bis jetzt" wechseln
-    await select.selectOption('today')
-    await expect(select).toHaveValue('today')
+    await modalSelect.selectOption('today')
+    await expect(modalSelect).toHaveValue('today')
     await page.waitForTimeout(500)
-    await expect(page.locator('canvas').first()).toBeVisible()
 
     const chartErrors = errors.filter(e =>
       e.toLowerCase().includes('chart') || e.toLowerCase().includes('cannot'),
@@ -189,67 +231,51 @@ test('Wertanzeige-Verlauf: Auswahl eines anderen Zeitbereichs aktualisiert Chart
   }
 })
 
-// ─── Test 4: Zeitbereich-Dropdown im Modal vorhanden und funktionsfähig ──────
+// ─── Test 5: Modal-Zeitbereich wird beim Öffnen auf Config-Default zurückgesetzt
 
-test('Wertanzeige-Verlauf: Modal zeigt Zeitbereich-Dropdown und Wechsel funktioniert', async ({ page }) => {
-  const dp = await createFloatDP('modal-tr')
+test('Wertanzeige-Verlauf: Modal-Dropdown wird beim erneuten Öffnen auf Config-Default zurückgesetzt', async ({ page }) => {
+  const dp = await createFloatDP('modal-reset')
   const visuNode = await createVisuPage()
   const pageId = visuNode.id
   const widgetId = randomUUID()
 
   await pushValue(dp.id, 19.0)
   await buildValueDisplayPage(pageId, widgetId, dp.id, {
-    label: 'Modal-Test',
+    label: 'Reset-Test',
     mode: 'history',
     rules: DEFAULT_RULES,
     history_time_range: 'last_1h',
   })
 
-  const errors: string[] = []
-  page.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()) })
-
   try {
     await page.goto(`/visu/${pageId}`)
     await expect(page.locator('canvas').first()).toBeVisible({ timeout: 8000 })
 
-    // Modal öffnen durch Klick auf den Mini-Chart
+    // Modal öffnen und Zeitbereich wechseln
     await page.locator('canvas').first().click()
     await expect(page.locator('[class*="fixed inset-0"]')).toBeVisible({ timeout: 3000 })
-
-    // Modal-Canvas muss sichtbar sein
-    await expect(page.locator('[class*="fixed inset-0"] canvas')).toBeVisible()
-
-    // Dropdown im Modal muss vorhanden sein und den richtigen Wert zeigen
     const modalSelect = page.locator('[class*="fixed inset-0"] select[title="Zeitbereich wählen"]')
-    await expect(modalSelect).toBeVisible()
-    await expect(modalSelect).toHaveValue('last_1h')
-
-    // Zeitbereich im Modal wechseln
     await modalSelect.selectOption('last_7d')
     await expect(modalSelect).toHaveValue('last_7d')
-    await page.waitForTimeout(1000)
-
-    // Widget-Dropdown muss ebenfalls aktualisiert sein (gleicher State)
-    const widgetSelect = page.locator('select[title="Zeitbereich wählen"]').first()
-    await expect(widgetSelect).toHaveValue('last_7d')
 
     // Modal schliessen
-    await page.keyboard.press('Escape')
     await page.locator('button:has-text("✕")').click()
+    await expect(page.locator('[class*="fixed inset-0"]')).toHaveCount(0)
 
-    const chartErrors = errors.filter(e =>
-      e.toLowerCase().includes('chart') || e.toLowerCase().includes('cannot'),
-    )
-    expect(chartErrors).toHaveLength(0)
+    // Modal erneut öffnen — soll wieder auf Config-Default zeigen
+    await page.locator('canvas').first().click()
+    await expect(page.locator('[class*="fixed inset-0"]')).toBeVisible({ timeout: 3000 })
+    const resetSelect = page.locator('[class*="fixed inset-0"] select[title="Zeitbereich wählen"]')
+    await expect(resetSelect).toHaveValue('last_1h')
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
     await apiDelete(`/api/v1/datapoints/${dp.id}`)
   }
 })
 
-// ─── Test 5: Rückwärtskompatibilität — alte Config ohne history_time_range ───
+// ─── Test 6: Rückwärtskompatibilität — alte Config ohne history_time_range ───
 
-test('Wertanzeige-Verlauf: alte Config ohne history_time_range fällt auf last_24h zurück', async ({ page }) => {
+test('Wertanzeige-Verlauf: alte Config ohne history_time_range zeigt last_24h im Modal', async ({ page }) => {
   const dp = await createFloatDP('compat')
   const visuNode = await createVisuPage()
   const pageId = visuNode.id
@@ -267,16 +293,19 @@ test('Wertanzeige-Verlauf: alte Config ohne history_time_range fällt auf last_2
     await page.goto(`/visu/${pageId}`)
     await expect(page.locator('canvas').first()).toBeVisible({ timeout: 8000 })
 
-    const select = page.locator('select[title="Zeitbereich wählen"]').first()
-    await expect(select).toBeVisible()
-    await expect(select).toHaveValue('last_24h')
+    await page.locator('canvas').first().click()
+    await expect(page.locator('[class*="fixed inset-0"]')).toBeVisible({ timeout: 3000 })
+
+    const modalSelect = page.locator('[class*="fixed inset-0"] select[title="Zeitbereich wählen"]')
+    await expect(modalSelect).toBeVisible()
+    await expect(modalSelect).toHaveValue('last_24h')
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
     await apiDelete(`/api/v1/datapoints/${dp.id}`)
   }
 })
 
-// ─── Test 6: Automatische Aktualisierung via WebSocket ───────────────────────
+// ─── Test 7: Automatische Aktualisierung via WebSocket ───────────────────────
 
 test('Wertanzeige-Verlauf: Canvas bleibt nach WS-Aktualisierung sichtbar und fehlerfrei', async ({ page }) => {
   const dp = await createFloatDP('ws-refresh')
@@ -303,10 +332,9 @@ test('Wertanzeige-Verlauf: Canvas bleibt nach WS-Aktualisierung sichtbar und feh
     // Neuen Wert via API senden (simuliert WS-Update)
     await pushValue(dp.id, 21.5)
 
-    // Kurz warten — Widget wartet 2 s nach WS-Nachricht bevor es neu lädt
+    // Widget wartet 2 s nach WS-Nachricht bevor es neu lädt
     await page.waitForTimeout(3500)
 
-    // Canvas muss noch sichtbar und fehlerfrei sein
     await expect(canvas).toBeVisible()
     const chartErrors = errors.filter(e =>
       e.toLowerCase().includes('chart') || e.toLowerCase().includes('cannot'),
