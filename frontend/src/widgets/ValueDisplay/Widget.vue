@@ -110,13 +110,19 @@ const gaugePercent = computed(() => {
 const gaugeArcOffset  = computed(() => gaugeArcLength  * (1 - gaugePercent.value))
 const gaugeCircOffset = computed(() => gaugeCircLength * (1 - gaugePercent.value))
 
+const gaugeSingleColor = computed(() => gaugeColors.value.length === 1 ? gaugeColors.value[0] : null)
+
 const gaugeGradientStops = computed(() => {
-  const colors = gaugeColors.value.length >= 2 ? gaugeColors.value : ['#22c55e', '#ef4444']
+  const colors = gaugeColors.value
+  if (colors.length <= 1) return []
   return colors.map((color, i) => ({
     offset: `${(i / (colors.length - 1)) * 100}%`,
     color,
   }))
 })
+
+const gaugeArcStroke    = computed(() => gaugeSingleColor.value ?? `url(#${gaugeGradId})`)
+const gaugeCircleStroke = computed(() => gaugeSingleColor.value ?? `url(#${gaugeGradId}-c)`)
 
 // ── Icon ───────────────────────────────────────────────────────────────────────
 
@@ -451,7 +457,7 @@ const quality = computed(() => props.value?.q ?? null)
         <path
           d="M 8 55 A 42 42 0 0 1 92 55"
           fill="none"
-          :stroke="`url(#${gaugeGradId})`"
+          :stroke="gaugeArcStroke"
           stroke-width="9"
           stroke-linecap="round"
           :stroke-dasharray="gaugeArcLength"
@@ -488,7 +494,7 @@ const quality = computed(() => props.value?.q ?? null)
         <circle
           cx="50" cy="50" r="38"
           fill="none"
-          :stroke="`url(#${gaugeGradId}-c)`"
+          :stroke="gaugeCircleStroke"
           stroke-width="9"
           stroke-linecap="round"
           :stroke-dasharray="gaugeCircLength"

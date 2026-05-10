@@ -461,7 +461,7 @@ function dupRule(i: number) {
 
       <!-- Gradient colors -->
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Farbverlauf (2–4 Farben, niedrig → hoch)</label>
+        <label class="block text-xs text-gray-400 mb-1">Farbe / Farbverlauf (1–4 Farben, niedrig → hoch)</label>
         <div class="flex items-center gap-2 flex-wrap">
           <input
             v-for="(_, i) in cfg.gauge_colors"
@@ -478,7 +478,7 @@ function dupRule(i: number) {
             @click="cfg.gauge_colors.push('#6b7280')"
           >+</button>
           <button
-            v-if="cfg.gauge_colors.length > 2"
+            v-if="cfg.gauge_colors.length > 1"
             type="button"
             class="text-xs text-red-400 hover:text-red-300 px-2 py-1 border border-gray-700 rounded"
             @click="cfg.gauge_colors.splice(cfg.gauge_colors.length - 1, 1)"
