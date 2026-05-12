@@ -221,8 +221,9 @@ const bindings            = ref([])
 const bindingsLoading     = ref(false)
 const logicUsages         = ref([])
 const logicUsagesLoading  = ref(false)
-const grafanaUrl          = ref('')
-const grafanaDatasource   = ref('')
+const grafanaUrl           = ref('')
+const grafanaDatasource    = ref('')
+const grafanaQueryTemplate = ref('')
 const showEdit            = ref(false)
 const showBindingForm = ref(false)
 const showBindingConfirm = ref(false)
@@ -247,9 +248,14 @@ const hasWritableBinding = computed(() =>
 const grafanaExploreUrl = computed(() => {
   if (!grafanaUrl.value || !grafanaDatasource.value || !dp.value?.record_history) return null
   const base = grafanaUrl.value.replace(/\/$/, '')
+  const query = { refId: 'A' }
+  if (grafanaQueryTemplate.value) {
+    const rawQuery = grafanaQueryTemplate.value.replaceAll('{dp_id}', dp.value.id)
+    Object.assign(query, { rawQuery: true, rawSql: rawQuery, format: 'time_series' })
+  }
   const left = JSON.stringify({
     datasource: grafanaDatasource.value,
-    queries: [{ refId: 'A' }],
+    queries: [query],
     range: { from: 'now-24h', to: 'now' },
   })
   return `${base}/explore?orgId=1&left=${encodeURIComponent(left)}`
@@ -270,6 +276,7 @@ onMounted(async () => {
   if (grafanaCfg) {
     grafanaUrl.value = grafanaCfg.data.url ?? ''
     grafanaDatasource.value = grafanaCfg.data.datasource ?? ''
+    grafanaQueryTemplate.value = grafanaCfg.data.query_template ?? ''
   }
   ws.subscribe([props.id])
   unsubWs = ws.onValue((id, value, quality) => {

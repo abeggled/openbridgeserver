@@ -817,8 +817,17 @@
           <div class="form-group">
             <label class="label">Datasource Name / UID</label>
             <input v-model="grafanaForm.datasource" type="text" class="input text-sm font-mono"
-              placeholder="InfluxDB" autocomplete="off" />
+              placeholder="postgresql-knx_data" autocomplete="off" />
             <p class="text-xs text-slate-500 mt-1">Name oder UID der Grafana-Datasource, die die OBS-Historiendaten enthält.</p>
+          </div>
+          <div class="form-group">
+            <label class="label">Query-Template</label>
+            <textarea v-model="grafanaForm.query_template" rows="4" class="input text-sm font-mono resize-y"
+              placeholder="SELECT ts AS time, value::float AS value FROM history_values WHERE datapoint_id = '{dp_id}' ORDER BY ts" />
+            <p class="text-xs text-slate-500 mt-1">
+              Abfrage-Vorlage für Grafana Explore. Verwende <code class="font-mono bg-slate-100 dark:bg-slate-700 px-1 rounded">{dp_id}</code> als Platzhalter für die Objekt-ID.
+              Für InfluxDB Flux: <code class="font-mono bg-slate-100 dark:bg-slate-700 px-1 rounded">|&gt; filter(fn: (r) =&gt; r["dp_id"] == "{dp_id}")</code>
+            </p>
           </div>
           <div v-if="grafanaMsg" :class="['p-3 rounded-lg text-sm border', grafanaMsg.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
             {{ grafanaMsg.text }}
@@ -1212,7 +1221,7 @@ async function histFilterSetAll(enable) {
 }
 
 // ── Grafana ────────────────────────────────────────────────────────────────
-const grafanaForm    = reactive({ url: '', datasource: '' })
+const grafanaForm    = reactive({ url: '', datasource: '', query_template: '' })
 const grafanaSaving  = ref(false)
 const grafanaMsg     = ref(null)
 
