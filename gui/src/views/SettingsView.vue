@@ -817,6 +817,16 @@
             <p class="text-xs text-slate-500 mt-1">Basis-URL deiner Grafana-Instanz (ohne abschliessenden Schrägstrich).</p>
           </div>
           <div class="form-group">
+            <label class="label">Datasource Typ</label>
+            <select v-model="grafanaForm.datasource_type" class="input text-sm">
+              <option value="postgres">PostgreSQL / TimescaleDB</option>
+              <option value="influxdb">InfluxDB (v1 / v2 / v3 — InfluxQL)</option>
+            </select>
+            <p class="text-xs text-slate-500 mt-1">
+              Bestimmt das Query-Format im generierten Dashboard. InfluxDB wird über InfluxQL abgefragt (alle Versionen).
+            </p>
+          </div>
+          <div class="form-group">
             <label class="label">Datasource UID</label>
             <input v-model="grafanaForm.datasource" type="text" class="input text-sm font-mono"
               placeholder="abc123def456" autocomplete="off" />
@@ -828,9 +838,14 @@
             </p>
           </div>
           <div class="form-group">
-            <label class="label">Query-Template</label>
+            <div class="flex items-center justify-between mb-1">
+              <label class="label !mb-0">Query-Template</label>
+              <button @click="loadDefaultQueryTemplate" type="button" class="btn-secondary btn-sm">
+                Standard laden
+              </button>
+            </div>
             <textarea v-model="grafanaForm.query_template" rows="3" class="input text-sm font-mono resize-y"
-              placeholder="SELECT ts AS time, value::float AS value FROM history_values WHERE datapoint_id = '{dp_id}' ORDER BY ts" />
+              :placeholder="GRAFANA_DEFAULT_QUERIES[grafanaForm.datasource_type]" />
             <p class="text-xs text-slate-500 mt-1">
               <code class="font-mono bg-slate-100 dark:bg-slate-700 px-1 rounded">{dp_id}</code> wird durch die Objekt-UUID ersetzt.
               Wird ins generierte Dashboard eingebettet und als Fallback für Grafana Explore verwendet.
@@ -1287,15 +1302,23 @@ async function histFilterSetAll(enable) {
 }
 
 // ── Grafana ────────────────────────────────────────────────────────────────
-const grafanaForm          = reactive({ url: '', datasource: '', query_template: '', dashboard_url_template: '' })
+const GRAFANA_DEFAULT_QUERIES = {
+  postgres: "SELECT time, v AS value FROM dp_history WHERE dp_id = '{dp_id}' AND $__timeFilter(time) ORDER BY time",
+  influxdb: "SELECT mean(\"v\") FROM \"obs\" WHERE (\"dp_id\" = '{dp_id}') AND $timeFilter GROUP BY time($__interval) fill(none)",
+}
+
+const grafanaForm          = reactive({ url: '', datasource: '', datasource_type: 'postgres', query_template: '', dashboard_url_template: '' })
 const grafanaCopied        = ref(false)
 const dashboardJsonRef     = ref(null)
 
 const generatedDashboardJson = computed(() => {
   const dsUid = grafanaForm.datasource || 'DATASOURCE_UID_HIER_EINTRAGEN'
-  const rawSql = (grafanaForm.query_template ||
-    "SELECT ts AS time, value::float AS value FROM history_values WHERE datapoint_id = '{dp_id}' ORDER BY ts"
-  ).replace(/\{dp_id\}/g, '${dp_id}')
+  const queryStr = (grafanaForm.query_template || GRAFANA_DEFAULT_QUERIES[grafanaForm.datasource_type] || GRAFANA_DEFAULT_QUERIES.postgres)
+    .replace(/\{dp_id\}/g, '${dp_id}')
+
+  const target = grafanaForm.datasource_type === 'influxdb'
+    ? { refId: 'A', rawQuery: true, query: queryStr, datasource: { uid: dsUid } }
+    : { refId: 'A', rawQuery: true, rawSql: queryStr, format: 'time_series', datasource: { uid: dsUid } }
 
   return JSON.stringify({
     title: 'Open Bridge Server — Objekt',
@@ -1312,13 +1335,7 @@ const generatedDashboardJson = computed(() => {
       title: 'Verlauf — ${dp_name}',
       gridPos: { x: 0, y: 0, w: 24, h: 20 },
       datasource: { uid: dsUid },
-      targets: [{
-        refId: 'A',
-        rawQuery: true,
-        rawSql,
-        format: 'time_series',
-        datasource: { uid: dsUid },
-      }],
+      targets: [target],
       fieldConfig: {
         defaults: {
           displayName: '${dp_name}',
@@ -1433,7 +1450,12 @@ async function loadGrafanaSettings() {
   try {
     const { data } = await grafanaSettingsApi.get()
     Object.assign(grafanaForm, data)
+    if (!grafanaForm.datasource_type) grafanaForm.datasource_type = 'postgres'
   } catch { /* non-critical */ }
+}
+
+function loadDefaultQueryTemplate() {
+  grafanaForm.query_template = GRAFANA_DEFAULT_QUERIES[grafanaForm.datasource_type] || GRAFANA_DEFAULT_QUERIES.postgres
 }
 
 async function saveGrafanaSettings() {

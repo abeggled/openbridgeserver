@@ -223,6 +223,7 @@ const logicUsages         = ref([])
 const logicUsagesLoading  = ref(false)
 const grafanaUrl                = ref('')
 const grafanaDatasource         = ref('')
+const grafanaDatasourceType     = ref('postgres')
 const grafanaQueryTemplate      = ref('')
 const grafanaDashboardUrlTpl    = ref('')
 const showEdit            = ref(false)
@@ -259,11 +260,10 @@ const grafanaLinkUrl = computed(() => {
   // Fallback: Grafana Explore
   if (!grafanaDatasource.value) return null
   const base = grafanaUrl.value.replace(/\/$/, '')
-  const query = { refId: 'A' }
-  if (grafanaQueryTemplate.value) {
-    const rawQuery = grafanaQueryTemplate.value.replaceAll('{dp_id}', dpId)
-    Object.assign(query, { rawQuery: true, rawSql: rawQuery, format: 'time_series' })
-  }
+  const rawQuery = (grafanaQueryTemplate.value || '').replaceAll('{dp_id}', dpId)
+  const query = grafanaDatasourceType.value === 'influxdb'
+    ? { refId: 'A', rawQuery: true, query: rawQuery }
+    : { refId: 'A', rawQuery: true, rawSql: rawQuery, format: 'time_series' }
   const left = JSON.stringify({
     datasource: grafanaDatasource.value,
     queries: [query],
@@ -285,9 +285,10 @@ onMounted(async () => {
   dp.value = data
   if (data.value !== undefined && data.value !== null) writeDraft.value = String(data.value)
   if (grafanaCfg) {
-    grafanaUrl.value = grafanaCfg.data.url ?? ''
-    grafanaDatasource.value = grafanaCfg.data.datasource ?? ''
-    grafanaQueryTemplate.value = grafanaCfg.data.query_template ?? ''
+    grafanaUrl.value             = grafanaCfg.data.url ?? ''
+    grafanaDatasource.value      = grafanaCfg.data.datasource ?? ''
+    grafanaDatasourceType.value  = grafanaCfg.data.datasource_type ?? 'postgres'
+    grafanaQueryTemplate.value   = grafanaCfg.data.query_template ?? ''
     grafanaDashboardUrlTpl.value = grafanaCfg.data.dashboard_url_template ?? ''
   }
   ws.subscribe([props.id])
