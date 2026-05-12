@@ -185,6 +185,12 @@ export const settingsApi = {
   update: (data) => api.put('/system/settings', data),
 }
 
+// ── Grafana Settings ───────────────────────────────────────────────────────
+export const grafanaSettingsApi = {
+  get:    ()     => api.get('/system/grafana/settings'),
+  update: (data) => api.put('/system/grafana/settings', data),
+}
+
 // ── History Settings ───────────────────────────────────────────────────────
 export const historySettingsApi = {
   get:    ()     => api.get('/system/history/settings'),

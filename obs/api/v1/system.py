@@ -99,6 +99,16 @@ class HistoryTestResult(BaseModel):
     message: str
 
 
+class GrafanaSettingsOut(BaseModel):
+    url: str
+    datasource: str
+
+
+class GrafanaSettingsIn(BaseModel):
+    url: str = ""
+    datasource: str = ""
+
+
 class NavLinkOut(BaseModel):
     id: str
     label: str
@@ -399,6 +409,51 @@ async def test_history_connection(
         return HistoryTestResult(ok=False, message=str(exc))
     except Exception as exc:
         return HistoryTestResult(ok=False, message=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Grafana settings
+# ---------------------------------------------------------------------------
+
+_GRAFANA_DEFAULTS: dict[str, str] = {
+    "url": "",
+    "datasource": "",
+}
+
+
+async def _read_grafana_cfg(db: Database) -> dict[str, str]:
+    rows = await db.fetchall("SELECT key, value FROM app_settings WHERE key LIKE 'grafana.%'")
+    cfg = dict(_GRAFANA_DEFAULTS)
+    for r in rows:
+        short_key = r["key"][len("grafana."):]
+        if short_key in cfg:
+            cfg[short_key] = r["value"] or ""
+    return cfg
+
+
+@router.get("/grafana/settings", response_model=GrafanaSettingsOut)
+async def get_grafana_settings(
+    db: Database = Depends(get_db),
+    _user: str = Depends(get_current_user),
+) -> GrafanaSettingsOut:
+    """Read current Grafana integration configuration."""
+    cfg = await _read_grafana_cfg(db)
+    return GrafanaSettingsOut(url=cfg["url"], datasource=cfg["datasource"])
+
+
+@router.put("/grafana/settings", response_model=GrafanaSettingsOut)
+async def update_grafana_settings(
+    body: GrafanaSettingsIn,
+    db: Database = Depends(get_db),
+    _admin: str = Depends(get_admin_user),
+) -> GrafanaSettingsOut:
+    """Update Grafana integration configuration. Admin only."""
+    for k, v in {"url": body.url, "datasource": body.datasource}.items():
+        await db.execute_and_commit(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+            (f"grafana.{k}", v),
+        )
+    return GrafanaSettingsOut(url=body.url, datasource=body.datasource)
 
 
 # ---------------------------------------------------------------------------

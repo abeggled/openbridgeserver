@@ -797,6 +797,40 @@
       </div>
     </div>
 
+    <!-- ── Grafana ── -->
+    <div v-if="activeTab === 'grafana' && auth.isAdmin && !isDemo" class="flex flex-col gap-4 max-w-lg">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Grafana Integration</h3>
+        </div>
+        <div class="card-body flex flex-col gap-4">
+          <p class="text-sm text-slate-500">
+            Verbinde Open Bridge Server mit deiner Grafana-Instanz. Sobald URL und Datasource konfiguriert sind,
+            erscheint in jedem Objekt mit aktiver Historisierung ein direkter Grafana-Link.
+          </p>
+          <div class="form-group">
+            <label class="label">Grafana URL</label>
+            <input v-model="grafanaForm.url" type="url" class="input text-sm font-mono"
+              placeholder="https://grafana.example.com" autocomplete="off" />
+            <p class="text-xs text-slate-500 mt-1">Basis-URL deiner Grafana-Instanz (ohne abschliessenden Schrägstrich).</p>
+          </div>
+          <div class="form-group">
+            <label class="label">Datasource Name / UID</label>
+            <input v-model="grafanaForm.datasource" type="text" class="input text-sm font-mono"
+              placeholder="InfluxDB" autocomplete="off" />
+            <p class="text-xs text-slate-500 mt-1">Name oder UID der Grafana-Datasource, die die OBS-Historiendaten enthält.</p>
+          </div>
+          <div v-if="grafanaMsg" :class="['p-3 rounded-lg text-sm border', grafanaMsg.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
+            {{ grafanaMsg.text }}
+          </div>
+          <button @click="saveGrafanaSettings" class="btn-primary" :disabled="grafanaSaving">
+            <Spinner v-if="grafanaSaving" size="sm" color="white" />
+            Speichern
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Danger Zone ── -->
     <div v-if="activeTab === 'dangerzone' && auth.isAdmin && !isDemo" class="flex flex-col gap-4 max-w-lg">
       <div class="rounded-lg border border-red-500/40 bg-red-500/5 overflow-hidden">
@@ -944,7 +978,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { authApi, adapterApi, configApi, autobackupApi, knxprojApi, historySettingsApi, iconsApi, dpApi } from '@/api/client'
+import { authApi, adapterApi, configApi, autobackupApi, knxprojApi, historySettingsApi, grafanaSettingsApi, iconsApi, dpApi } from '@/api/client'
 import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
@@ -1034,6 +1068,7 @@ onMounted(async () => {
   if (auth.isAdmin) {
     loadHistorySettings()
     loadHistoryFilterDps()
+    loadGrafanaSettings()
   }
 })
 
@@ -1042,6 +1077,7 @@ watch(activeTab, (tab) => {
     loadHistorySettings()
     loadHistoryFilterDps()
   }
+  if (tab === 'grafana' && auth.isAdmin) loadGrafanaSettings()
   if (tab === 'icons') { loadIcons(); loadFaSettings() }
   if (tab === 'links') { navStore.load() }
 })
@@ -1072,6 +1108,7 @@ const tabs = computed(() => [
   { id: 'importexport', label: 'Datenmanagement' },
   { id: 'icons',        label: 'Icons' },
   ...(auth.isAdmin ? [{ id: 'history', label: 'Historie DB' }] : []),
+  ...(auth.isAdmin ? [{ id: 'grafana', label: 'Grafana' }] : []),
   ...(auth.isAdmin ? [{ id: 'dangerzone', label: 'Danger Zone' }] : []),
 ])
 
@@ -1172,6 +1209,30 @@ async function toggleHistoryFilter(dp) {
 async function histFilterSetAll(enable) {
   const targets = histFilteredDps.value.filter(dp => dp.record_history !== enable)
   await Promise.all(targets.map(dp => toggleHistoryFilter(dp)))
+}
+
+// ── Grafana ────────────────────────────────────────────────────────────────
+const grafanaForm    = reactive({ url: '', datasource: '' })
+const grafanaSaving  = ref(false)
+const grafanaMsg     = ref(null)
+
+async function loadGrafanaSettings() {
+  try {
+    const { data } = await grafanaSettingsApi.get()
+    Object.assign(grafanaForm, data)
+  } catch { /* non-critical */ }
+}
+
+async function saveGrafanaSettings() {
+  grafanaSaving.value = true; grafanaMsg.value = null
+  try {
+    await grafanaSettingsApi.update({ ...grafanaForm })
+    grafanaMsg.value = { ok: true, text: 'Grafana-Einstellungen gespeichert.' }
+  } catch (e) {
+    grafanaMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Speichern' }
+  } finally {
+    grafanaSaving.value = false
+  }
 }
 
 // ── Nav Links ─────────────────────────────────────────────────────────────

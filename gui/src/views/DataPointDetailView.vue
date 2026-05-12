@@ -92,9 +92,18 @@
           <dt class="text-slate-500">Erstellt</dt>   <dd class="text-slate-400 text-xs">{{ new Date(dp.created_at).toLocaleString('de-CH') }}</dd>
           <dt class="text-slate-500">Geändert</dt>   <dd class="text-slate-400 text-xs">{{ new Date(dp.updated_at).toLocaleString('de-CH') }}</dd>
         </dl>
-        <div class="flex gap-3 mt-5">
+        <div class="flex flex-wrap gap-3 mt-5">
           <button @click="showEdit = true" class="btn-secondary btn-sm">Bearbeiten</button>
           <RouterLink :to="`/history?dp=${dp.id}`" class="btn-secondary btn-sm">Historie →</RouterLink>
+          <a v-if="grafanaExploreUrl" :href="grafanaExploreUrl" target="_blank" rel="noopener noreferrer"
+            class="btn-secondary btn-sm flex items-center gap-1.5"
+            title="In Grafana Explore öffnen">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+            </svg>
+            Grafana →
+          </a>
         </div>
       </div>
     </div>
@@ -192,7 +201,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { dpApi, logicApi } from '@/api/client'
+import { dpApi, logicApi, grafanaSettingsApi } from '@/api/client'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
 import Badge          from '@/components/ui/Badge.vue'
@@ -212,6 +221,8 @@ const bindings            = ref([])
 const bindingsLoading     = ref(false)
 const logicUsages         = ref([])
 const logicUsagesLoading  = ref(false)
+const grafanaUrl          = ref('')
+const grafanaDatasource   = ref('')
 const showEdit            = ref(false)
 const showBindingForm = ref(false)
 const showBindingConfirm = ref(false)
@@ -233,15 +244,33 @@ const hasWritableBinding = computed(() =>
   bindings.value.some(b => b.enabled && ['DEST', 'BOTH'].includes(b.direction))
 )
 
+const grafanaExploreUrl = computed(() => {
+  if (!grafanaUrl.value || !grafanaDatasource.value || !dp.value?.record_history) return null
+  const base = grafanaUrl.value.replace(/\/$/, '')
+  const left = JSON.stringify({
+    datasource: grafanaDatasource.value,
+    queries: [{ refId: 'A' }],
+    range: { from: 'now-24h', to: 'now' },
+  })
+  return `${base}/explore?orgId=1&left=${encodeURIComponent(left)}`
+})
+
 watch(currentRawValue, (value) => {
   if (!writeBusy.value && value !== undefined && value !== null) writeDraft.value = String(value)
 })
 
 onMounted(async () => {
   await dpStore.loadDatatypes()
-  const { data } = await dpApi.get(props.id)
+  const [{ data }, grafanaCfg] = await Promise.all([
+    dpApi.get(props.id),
+    grafanaSettingsApi.get().catch(() => null),
+  ])
   dp.value = data
   if (data.value !== undefined && data.value !== null) writeDraft.value = String(data.value)
+  if (grafanaCfg) {
+    grafanaUrl.value = grafanaCfg.data.url ?? ''
+    grafanaDatasource.value = grafanaCfg.data.datasource ?? ''
+  }
   ws.subscribe([props.id])
   unsubWs = ws.onValue((id, value, quality) => {
     if (id === props.id && dp.value) { dp.value.value = value; dp.value.quality = quality }
