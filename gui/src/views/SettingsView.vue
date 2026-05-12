@@ -1308,7 +1308,7 @@ const generatedDashboardJson = computed(() => {
     panels: [{
       type: 'timeseries',
       id: 1,
-      title: 'Verlauf — ${dp_id}',
+      title: 'Verlauf — ${dp_name}',
       gridPos: { x: 0, y: 0, w: 24, h: 20 },
       datasource: { uid: dsUid },
       targets: [{
@@ -1320,6 +1320,7 @@ const generatedDashboardJson = computed(() => {
       }],
       fieldConfig: {
         defaults: {
+          displayName: '${dp_name}',
           color: { mode: 'palette-classic' },
           custom: {
             drawStyle: 'line',
@@ -1328,6 +1329,7 @@ const generatedDashboardJson = computed(() => {
             lineWidth: 2,
             showPoints: 'auto',
             spanNulls: false,
+            axisLabel: '${dp_unit}',
           },
         },
         overrides: [],
@@ -1338,22 +1340,42 @@ const generatedDashboardJson = computed(() => {
       },
     }],
     templating: {
-      list: [{
-        name: 'dp_id',
-        type: 'textbox',
-        label: 'Objekt ID',
-        description: 'UUID des Open Bridge Server Objekts',
-        hide: 2,
-        current: { value: '', text: '' },
-        skipUrlSync: false,
-      }],
+      list: [
+        {
+          name: 'dp_id',
+          type: 'textbox',
+          label: 'Objekt ID',
+          description: 'UUID des Open Bridge Server Objekts',
+          hide: 2,
+          current: { value: '', text: '' },
+          skipUrlSync: false,
+        },
+        {
+          name: 'dp_name',
+          type: 'textbox',
+          label: 'Objektname',
+          description: 'Name des Open Bridge Server Objekts',
+          hide: 2,
+          current: { value: '', text: '' },
+          skipUrlSync: false,
+        },
+        {
+          name: 'dp_unit',
+          type: 'textbox',
+          label: 'Einheit',
+          description: 'Einheit des Objektwerts',
+          hide: 2,
+          current: { value: '', text: '' },
+          skipUrlSync: false,
+        },
+      ],
     },
   }, null, 2)
 })
 
 const suggestedDashboardUrl = computed(() => {
   const base = grafanaForm.url.replace(/\/$/, '') || 'https://grafana.example.com'
-  return `${base}/d/obs-datapoint/open-bridge-server-objekt?var-dp_id={dp_id}&from=now-24h&to=now&kiosk=1`
+  return `${base}/d/obs-datapoint/open-bridge-server-objekt?var-dp_id={dp_id}&var-dp_name={dp_name}&var-dp_unit={dp_unit}&from=now-24h&to=now&kiosk=1`
 })
 
 async function copyDashboardJson() {

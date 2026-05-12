@@ -251,7 +251,10 @@ const grafanaLinkUrl = computed(() => {
   const dpId = dp.value.id
   // Wenn Dashboard-URL-Template konfiguriert: direkt den Graph öffnen
   if (grafanaDashboardUrlTpl.value) {
-    return grafanaDashboardUrlTpl.value.replaceAll('{dp_id}', dpId)
+    return grafanaDashboardUrlTpl.value
+      .replaceAll('{dp_id}',   encodeURIComponent(dpId))
+      .replaceAll('{dp_name}', encodeURIComponent(dp.value.name ?? ''))
+      .replaceAll('{dp_unit}', encodeURIComponent(dp.value.unit ?? ''))
   }
   // Fallback: Grafana Explore
   if (!grafanaDatasource.value) return null
