@@ -817,10 +817,15 @@
             <p class="text-xs text-slate-500 mt-1">Basis-URL deiner Grafana-Instanz (ohne abschliessenden Schrägstrich).</p>
           </div>
           <div class="form-group">
-            <label class="label">Datasource Name / UID</label>
+            <label class="label">Datasource UID</label>
             <input v-model="grafanaForm.datasource" type="text" class="input text-sm font-mono"
-              placeholder="postgresql-obs_history" autocomplete="off" />
-            <p class="text-xs text-slate-500 mt-1">Name oder UID der Grafana-Datasource (wird für das generierte Dashboard und den Explore-Fallback verwendet).</p>
+              placeholder="abc123def456" autocomplete="off" />
+            <p class="text-xs text-slate-500 mt-1">
+              Die UID findest du in Grafana unter
+              <span class="font-medium text-slate-600 dark:text-slate-300">Settings → Data Sources → [Datasource] → URL</span>
+              (<code class="font-mono bg-slate-100 dark:bg-slate-700 px-1 rounded">/datasources/edit/<strong>abc123</strong></code>).
+              Wird direkt ins generierte Dashboard eingebettet.
+            </p>
           </div>
           <div class="form-group">
             <label class="label">Query-Template</label>
@@ -1286,22 +1291,12 @@ const grafanaForm    = reactive({ url: '', datasource: '', query_template: '', d
 const grafanaCopied  = ref(false)
 
 const generatedDashboardJson = computed(() => {
+  const dsUid = grafanaForm.datasource || 'DATASOURCE_UID_HIER_EINTRAGEN'
   const rawSql = (grafanaForm.query_template ||
     "SELECT ts AS time, value::float AS value FROM history_values WHERE datapoint_id = '{dp_id}' ORDER BY ts"
   ).replace(/\{dp_id\}/g, '${dp_id}')
 
   return JSON.stringify({
-    __inputs: [{
-      name: 'DS_OBS_HISTORY',
-      label: grafanaForm.datasource || 'OBS History Datasource',
-      description: 'Datasource mit den Open Bridge Server Historiendaten',
-      type: 'datasource',
-      pluginId: 'postgres',
-    }],
-    __requires: [
-      { type: 'datasource', id: 'postgres', name: 'PostgreSQL', version: '1.0.0' },
-      { type: 'panel', id: 'timeseries', name: 'Time series', version: '' },
-    ],
     title: 'Open Bridge Server — Objekt',
     uid: 'obs-datapoint',
     schemaVersion: 39,
@@ -1315,13 +1310,13 @@ const generatedDashboardJson = computed(() => {
       id: 1,
       title: 'Verlauf — ${dp_id}',
       gridPos: { x: 0, y: 0, w: 24, h: 20 },
-      datasource: { type: 'postgres', uid: '${DS_OBS_HISTORY}' },
+      datasource: { uid: dsUid },
       targets: [{
         refId: 'A',
         rawQuery: true,
         rawSql,
         format: 'time_series',
-        datasource: { type: 'postgres', uid: '${DS_OBS_HISTORY}' },
+        datasource: { uid: dsUid },
       }],
       fieldConfig: {
         defaults: {
