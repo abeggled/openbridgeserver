@@ -1286,12 +1286,22 @@ const grafanaForm    = reactive({ url: '', datasource: '', query_template: '', d
 const grafanaCopied  = ref(false)
 
 const generatedDashboardJson = computed(() => {
-  const ds = grafanaForm.datasource || 'YOUR_DATASOURCE_UID'
   const rawSql = (grafanaForm.query_template ||
     "SELECT ts AS time, value::float AS value FROM history_values WHERE datapoint_id = '{dp_id}' ORDER BY ts"
   ).replace(/\{dp_id\}/g, '${dp_id}')
 
   return JSON.stringify({
+    __inputs: [{
+      name: 'DS_OBS_HISTORY',
+      label: grafanaForm.datasource || 'OBS History Datasource',
+      description: 'Datasource mit den Open Bridge Server Historiendaten',
+      type: 'datasource',
+      pluginId: 'postgres',
+    }],
+    __requires: [
+      { type: 'datasource', id: 'postgres', name: 'PostgreSQL', version: '1.0.0' },
+      { type: 'panel', id: 'timeseries', name: 'Time series', version: '' },
+    ],
     title: 'Open Bridge Server — Objekt',
     uid: 'obs-datapoint',
     schemaVersion: 39,
@@ -1305,13 +1315,13 @@ const generatedDashboardJson = computed(() => {
       id: 1,
       title: 'Verlauf — ${dp_id}',
       gridPos: { x: 0, y: 0, w: 24, h: 20 },
-      datasource: ds,
+      datasource: { type: 'postgres', uid: '${DS_OBS_HISTORY}' },
       targets: [{
         refId: 'A',
         rawQuery: true,
         rawSql,
         format: 'time_series',
-        datasource: ds,
+        datasource: { type: 'postgres', uid: '${DS_OBS_HISTORY}' },
       }],
       fieldConfig: {
         defaults: {
