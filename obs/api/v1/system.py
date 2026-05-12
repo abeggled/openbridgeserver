@@ -103,12 +103,14 @@ class GrafanaSettingsOut(BaseModel):
     url: str
     datasource: str
     query_template: str
+    dashboard_url_template: str
 
 
 class GrafanaSettingsIn(BaseModel):
     url: str = ""
     datasource: str = ""
     query_template: str = ""
+    dashboard_url_template: str = ""
 
 
 class NavLinkOut(BaseModel):
@@ -421,6 +423,7 @@ _GRAFANA_DEFAULTS: dict[str, str] = {
     "url": "",
     "datasource": "",
     "query_template": "",
+    "dashboard_url_template": "",
 }
 
 
@@ -441,7 +444,7 @@ async def get_grafana_settings(
 ) -> GrafanaSettingsOut:
     """Read current Grafana integration configuration."""
     cfg = await _read_grafana_cfg(db)
-    return GrafanaSettingsOut(url=cfg["url"], datasource=cfg["datasource"], query_template=cfg["query_template"])
+    return GrafanaSettingsOut(url=cfg["url"], datasource=cfg["datasource"], query_template=cfg["query_template"], dashboard_url_template=cfg["dashboard_url_template"])
 
 
 @router.put("/grafana/settings", response_model=GrafanaSettingsOut)
@@ -451,12 +454,12 @@ async def update_grafana_settings(
     _admin: str = Depends(get_admin_user),
 ) -> GrafanaSettingsOut:
     """Update Grafana integration configuration. Admin only."""
-    for k, v in {"url": body.url, "datasource": body.datasource, "query_template": body.query_template}.items():
+    for k, v in {"url": body.url, "datasource": body.datasource, "query_template": body.query_template, "dashboard_url_template": body.dashboard_url_template}.items():
         await db.execute_and_commit(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
             (f"grafana.{k}", v),
         )
-    return GrafanaSettingsOut(url=body.url, datasource=body.datasource, query_template=body.query_template)
+    return GrafanaSettingsOut(url=body.url, datasource=body.datasource, query_template=body.query_template, dashboard_url_template=body.dashboard_url_template)
 
 
 # ---------------------------------------------------------------------------

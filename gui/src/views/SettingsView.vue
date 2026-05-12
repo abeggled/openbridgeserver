@@ -798,15 +798,17 @@
     </div>
 
     <!-- ── Grafana ── -->
-    <div v-if="activeTab === 'grafana' && auth.isAdmin && !isDemo" class="flex flex-col gap-4 max-w-lg">
+    <div v-if="activeTab === 'grafana' && auth.isAdmin && !isDemo" class="flex flex-col gap-4 max-w-2xl">
+
+      <!-- Verbindung -->
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Grafana Integration</h3>
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">
-            Verbinde Open Bridge Server mit deiner Grafana-Instanz. Sobald URL und Datasource konfiguriert sind,
-            erscheint in jedem Objekt mit aktiver Historisierung ein direkter Grafana-Link.
+            Verbinde Open Bridge Server mit deiner Grafana-Instanz. Sobald eine Dashboard-URL konfiguriert ist,
+            öffnet der «Grafana →»-Button in Objekten mit aktiver Historisierung direkt den Graph.
           </p>
           <div class="form-group">
             <label class="label">Grafana URL</label>
@@ -817,22 +819,81 @@
           <div class="form-group">
             <label class="label">Datasource Name / UID</label>
             <input v-model="grafanaForm.datasource" type="text" class="input text-sm font-mono"
-              placeholder="postgresql-knx_data" autocomplete="off" />
-            <p class="text-xs text-slate-500 mt-1">Name oder UID der Grafana-Datasource, die die OBS-Historiendaten enthält.</p>
+              placeholder="postgresql-obs_history" autocomplete="off" />
+            <p class="text-xs text-slate-500 mt-1">Name oder UID der Grafana-Datasource (wird für das generierte Dashboard und den Explore-Fallback verwendet).</p>
           </div>
           <div class="form-group">
             <label class="label">Query-Template</label>
-            <textarea v-model="grafanaForm.query_template" rows="4" class="input text-sm font-mono resize-y"
+            <textarea v-model="grafanaForm.query_template" rows="3" class="input text-sm font-mono resize-y"
               placeholder="SELECT ts AS time, value::float AS value FROM history_values WHERE datapoint_id = '{dp_id}' ORDER BY ts" />
             <p class="text-xs text-slate-500 mt-1">
-              Abfrage-Vorlage für Grafana Explore. Verwende <code class="font-mono bg-slate-100 dark:bg-slate-700 px-1 rounded">{dp_id}</code> als Platzhalter für die Objekt-ID.
-              Für InfluxDB Flux: <code class="font-mono bg-slate-100 dark:bg-slate-700 px-1 rounded">|&gt; filter(fn: (r) =&gt; r["dp_id"] == "{dp_id}")</code>
+              <code class="font-mono bg-slate-100 dark:bg-slate-700 px-1 rounded">{dp_id}</code> wird durch die Objekt-UUID ersetzt.
+              Wird ins generierte Dashboard eingebettet und als Fallback für Grafana Explore verwendet.
             </p>
           </div>
           <div v-if="grafanaMsg" :class="['p-3 rounded-lg text-sm border', grafanaMsg.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
             {{ grafanaMsg.text }}
           </div>
-          <button @click="saveGrafanaSettings" class="btn-primary" :disabled="grafanaSaving">
+          <button @click="saveGrafanaSettings" class="btn-primary w-fit" :disabled="grafanaSaving">
+            <Spinner v-if="grafanaSaving" size="sm" color="white" />
+            Speichern
+          </button>
+        </div>
+      </div>
+
+      <!-- Dashboard Generator -->
+      <div class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Grafana Dashboard</h3>
+          <p class="text-xs text-slate-500 mt-0.5">Generiert aus Datasource + Query-Template oben</p>
+        </div>
+        <div class="card-body flex flex-col gap-4">
+          <p class="text-sm text-slate-500">
+            Importiere dieses Dashboard in Grafana (<span class="font-medium text-slate-600 dark:text-slate-300">Dashboards → Neu → Import → JSON einfügen</span>).
+            Es enthält eine versteckte <code class="font-mono bg-slate-100 dark:bg-slate-700 px-1 rounded">dp_id</code>-Variable,
+            die über die URL gesetzt wird — kein manuelles Eintippen nötig.
+          </p>
+
+          <!-- Schritt 1: JSON kopieren -->
+          <div class="flex flex-col gap-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Schritt 1 — Dashboard-JSON kopieren</span>
+              <button @click="copyDashboardJson" class="btn-secondary btn-sm flex items-center gap-1.5">
+                <svg v-if="!grafanaCopied" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                </svg>
+                <svg v-else class="w-3.5 h-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+                {{ grafanaCopied ? 'Kopiert!' : 'JSON kopieren' }}
+              </button>
+            </div>
+            <textarea readonly :value="generatedDashboardJson" rows="8"
+              class="input text-xs font-mono resize-y bg-slate-50 dark:bg-slate-900/50 cursor-text select-all" />
+          </div>
+
+          <!-- Schritt 2: Dashboard-URL -->
+          <div class="flex flex-col gap-2">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Schritt 2 — Dashboard-URL konfigurieren</span>
+            <p class="text-sm text-slate-500">
+              Nach dem Import in Grafana: die URL hier eintragen.
+              <code class="font-mono bg-slate-100 dark:bg-slate-700 px-1 rounded">{dp_id}</code> wird beim Öffnen durch die Objekt-UUID ersetzt.
+              Mit <code class="font-mono bg-slate-100 dark:bg-slate-700 px-1 rounded">kiosk=1</code> wird nur der Graph angezeigt (ohne Grafana-Navigation).
+            </p>
+            <div class="form-group">
+              <label class="label">Dashboard-URL-Template</label>
+              <input v-model="grafanaForm.dashboard_url_template" type="text" class="input text-sm font-mono"
+                :placeholder="suggestedDashboardUrl" autocomplete="off" />
+              <p class="text-xs text-slate-400 mt-1">
+                Leer = Fallback auf Grafana Explore (mit Query-Template).
+                Vorschlag basierend auf deiner Konfiguration:
+                <button @click="grafanaForm.dashboard_url_template = suggestedDashboardUrl"
+                  class="text-blue-400 hover:underline">übernehmen</button>
+              </p>
+            </div>
+          </div>
+
+          <button @click="saveGrafanaSettings" class="btn-primary w-fit" :disabled="grafanaSaving">
             <Spinner v-if="grafanaSaving" size="sm" color="white" />
             Speichern
           </button>
@@ -1221,7 +1282,82 @@ async function histFilterSetAll(enable) {
 }
 
 // ── Grafana ────────────────────────────────────────────────────────────────
-const grafanaForm    = reactive({ url: '', datasource: '', query_template: '' })
+const grafanaForm    = reactive({ url: '', datasource: '', query_template: '', dashboard_url_template: '' })
+const grafanaCopied  = ref(false)
+
+const generatedDashboardJson = computed(() => {
+  const ds = grafanaForm.datasource || 'YOUR_DATASOURCE_UID'
+  const rawSql = (grafanaForm.query_template ||
+    "SELECT ts AS time, value::float AS value FROM history_values WHERE datapoint_id = '{dp_id}' ORDER BY ts"
+  ).replace(/\{dp_id\}/g, '${dp_id}')
+
+  return JSON.stringify({
+    title: 'Open Bridge Server — Objekt',
+    uid: 'obs-datapoint',
+    schemaVersion: 39,
+    version: 1,
+    refresh: '30s',
+    time: { from: 'now-24h', to: 'now' },
+    timezone: 'browser',
+    tags: ['obs', 'open-bridge-server'],
+    panels: [{
+      type: 'timeseries',
+      id: 1,
+      title: 'Verlauf — ${dp_id}',
+      gridPos: { x: 0, y: 0, w: 24, h: 20 },
+      datasource: ds,
+      targets: [{
+        refId: 'A',
+        rawQuery: true,
+        rawSql,
+        format: 'time_series',
+        datasource: ds,
+      }],
+      fieldConfig: {
+        defaults: {
+          color: { mode: 'palette-classic' },
+          custom: {
+            drawStyle: 'line',
+            lineInterpolation: 'linear',
+            fillOpacity: 10,
+            lineWidth: 2,
+            showPoints: 'auto',
+            spanNulls: false,
+          },
+        },
+        overrides: [],
+      },
+      options: {
+        legend: { displayMode: 'list', placement: 'bottom', showLegend: true },
+        tooltip: { mode: 'single', sort: 'none' },
+      },
+    }],
+    templating: {
+      list: [{
+        name: 'dp_id',
+        type: 'textbox',
+        label: 'Objekt ID',
+        description: 'UUID des Open Bridge Server Objekts',
+        hide: 2,
+        current: { value: '', text: '' },
+        skipUrlSync: false,
+      }],
+    },
+  }, null, 2)
+})
+
+const suggestedDashboardUrl = computed(() => {
+  const base = grafanaForm.url.replace(/\/$/, '') || 'https://grafana.example.com'
+  return `${base}/d/obs-datapoint/open-bridge-server-objekt?var-dp_id={dp_id}&from=now-24h&to=now&kiosk=1`
+})
+
+async function copyDashboardJson() {
+  try {
+    await navigator.clipboard.writeText(generatedDashboardJson.value)
+    grafanaCopied.value = true
+    setTimeout(() => { grafanaCopied.value = false }, 2000)
+  } catch { /* noop */ }
+}
 const grafanaSaving  = ref(false)
 const grafanaMsg     = ref(null)
 

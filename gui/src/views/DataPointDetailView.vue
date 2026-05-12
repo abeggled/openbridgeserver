@@ -95,7 +95,7 @@
         <div class="flex flex-wrap gap-3 mt-5">
           <button @click="showEdit = true" class="btn-secondary btn-sm">Bearbeiten</button>
           <RouterLink :to="`/history?dp=${dp.id}`" class="btn-secondary btn-sm">Historie →</RouterLink>
-          <a v-if="grafanaExploreUrl" :href="grafanaExploreUrl" target="_blank" rel="noopener noreferrer"
+          <a v-if="grafanaLinkUrl" :href="grafanaLinkUrl" target="_blank" rel="noopener noreferrer"
             class="btn-secondary btn-sm flex items-center gap-1.5"
             title="In Grafana Explore öffnen">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -221,9 +221,10 @@ const bindings            = ref([])
 const bindingsLoading     = ref(false)
 const logicUsages         = ref([])
 const logicUsagesLoading  = ref(false)
-const grafanaUrl           = ref('')
-const grafanaDatasource    = ref('')
-const grafanaQueryTemplate = ref('')
+const grafanaUrl                = ref('')
+const grafanaDatasource         = ref('')
+const grafanaQueryTemplate      = ref('')
+const grafanaDashboardUrlTpl    = ref('')
 const showEdit            = ref(false)
 const showBindingForm = ref(false)
 const showBindingConfirm = ref(false)
@@ -245,12 +246,19 @@ const hasWritableBinding = computed(() =>
   bindings.value.some(b => b.enabled && ['DEST', 'BOTH'].includes(b.direction))
 )
 
-const grafanaExploreUrl = computed(() => {
-  if (!grafanaUrl.value || !grafanaDatasource.value || !dp.value?.record_history) return null
+const grafanaLinkUrl = computed(() => {
+  if (!grafanaUrl.value || !dp.value?.record_history) return null
+  const dpId = dp.value.id
+  // Wenn Dashboard-URL-Template konfiguriert: direkt den Graph öffnen
+  if (grafanaDashboardUrlTpl.value) {
+    return grafanaDashboardUrlTpl.value.replaceAll('{dp_id}', dpId)
+  }
+  // Fallback: Grafana Explore
+  if (!grafanaDatasource.value) return null
   const base = grafanaUrl.value.replace(/\/$/, '')
   const query = { refId: 'A' }
   if (grafanaQueryTemplate.value) {
-    const rawQuery = grafanaQueryTemplate.value.replaceAll('{dp_id}', dp.value.id)
+    const rawQuery = grafanaQueryTemplate.value.replaceAll('{dp_id}', dpId)
     Object.assign(query, { rawQuery: true, rawSql: rawQuery, format: 'time_series' })
   }
   const left = JSON.stringify({
@@ -277,6 +285,7 @@ onMounted(async () => {
     grafanaUrl.value = grafanaCfg.data.url ?? ''
     grafanaDatasource.value = grafanaCfg.data.datasource ?? ''
     grafanaQueryTemplate.value = grafanaCfg.data.query_template ?? ''
+    grafanaDashboardUrlTpl.value = grafanaCfg.data.dashboard_url_template ?? ''
   }
   ws.subscribe([props.id])
   unsubWs = ws.onValue((id, value, quality) => {
