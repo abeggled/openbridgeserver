@@ -873,7 +873,7 @@
                 {{ grafanaCopied ? 'Kopiert!' : 'JSON kopieren' }}
               </button>
             </div>
-            <textarea readonly :value="generatedDashboardJson" rows="8"
+            <textarea ref="dashboardJsonRef" readonly :value="generatedDashboardJson" rows="8"
               class="input text-xs font-mono resize-y bg-slate-50 dark:bg-slate-900/50 cursor-text select-all" />
           </div>
 
@@ -891,10 +891,10 @@
                 :placeholder="suggestedDashboardUrl" autocomplete="off" />
               <p class="text-xs text-slate-400 mt-1">
                 Leer = Fallback auf Grafana Explore (mit Query-Template).
-                Vorschlag basierend auf deiner Konfiguration:
-                <button @click="grafanaForm.dashboard_url_template = suggestedDashboardUrl"
-                  class="text-blue-400 hover:underline">übernehmen</button>
               </p>
+              <button @click="adaptDashboardUrl" type="button" class="btn-secondary btn-sm w-fit mt-1">
+                URL anpassen — var-dp_id / dp_name / dp_unit einfügen
+              </button>
             </div>
           </div>
 
@@ -1287,8 +1287,9 @@ async function histFilterSetAll(enable) {
 }
 
 // ── Grafana ────────────────────────────────────────────────────────────────
-const grafanaForm    = reactive({ url: '', datasource: '', query_template: '', dashboard_url_template: '' })
-const grafanaCopied  = ref(false)
+const grafanaForm          = reactive({ url: '', datasource: '', query_template: '', dashboard_url_template: '' })
+const grafanaCopied        = ref(false)
+const dashboardJsonRef     = ref(null)
 
 const generatedDashboardJson = computed(() => {
   const dsUid = grafanaForm.datasource || 'DATASOURCE_UID_HIER_EINTRAGEN'
@@ -1380,10 +1381,50 @@ const suggestedDashboardUrl = computed(() => {
 
 async function copyDashboardJson() {
   try {
-    await navigator.clipboard.writeText(generatedDashboardJson.value)
+    const text = generatedDashboardJson.value
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const ta = dashboardJsonRef.value
+      if (ta) { ta.select(); ta.setSelectionRange(0, 99999); document.execCommand('copy') }
+    }
     grafanaCopied.value = true
     setTimeout(() => { grafanaCopied.value = false }, 2000)
   } catch { /* noop */ }
+}
+
+function adaptDashboardUrl() {
+  const url = grafanaForm.dashboard_url_template || suggestedDashboardUrl.value
+  const qIdx = url.indexOf('?')
+  const base = qIdx === -1 ? url : url.slice(0, qIdx)
+  const queryStr = qIdx === -1 ? '' : url.slice(qIdx + 1)
+
+  // Parse existing params as ordered entries to preserve sequence
+  const params = []
+  const seen = new Set()
+  if (queryStr) {
+    queryStr.split('&').forEach(part => {
+      const eqIdx = part.indexOf('=')
+      const key = eqIdx > -1 ? part.slice(0, eqIdx) : part
+      const val = eqIdx > -1 ? part.slice(eqIdx + 1) : ''
+      if (!['var-dp_id', 'var-dp_name', 'var-dp_unit'].includes(key)) {
+        params.push([key, val])
+        seen.add(key)
+      }
+    })
+  }
+  // Prepend the three OBS params (after any orgId, before from/to/kiosk)
+  const obsParams = [
+    ['var-dp_id',   '{dp_id}'],
+    ['var-dp_name', '{dp_name}'],
+    ['var-dp_unit', '{dp_unit}'],
+  ]
+  const fromIdx = params.findIndex(([k]) => k === 'from')
+  const insertAt = fromIdx > -1 ? fromIdx : params.length
+  params.splice(insertAt, 0, ...obsParams)
+
+  const newQuery = params.map(([k, v]) => v !== '' ? `${k}=${v}` : k).join('&')
+  grafanaForm.dashboard_url_template = `${base}?${newQuery}`
 }
 const grafanaSaving  = ref(false)
 const grafanaMsg     = ref(null)
