@@ -418,7 +418,6 @@ class GraphExecutor:
 
                 raw = inputs.get("data")
                 json_path = (d.get("json_path") or "").strip()
-                json_paths_raw = (d.get("json_paths") or "").strip()
 
                 # Parse raw input to Python object
                 if isinstance(raw, str):
@@ -431,6 +430,17 @@ class GraphExecutor:
                 else:
                     data_obj = None
 
+                # Extract value at dotted path
+                value: Any = None
+                if data_obj is not None:
+                    if json_path:
+                        try:
+                            value = self._json_extract(data_obj, json_path)
+                        except (KeyError, IndexError, TypeError, ValueError):
+                            value = None
+                    else:
+                        value = None  # No path configured — user must select one
+
                 # _preview: compact JSON snapshot for config-panel path picker (max 20 KB)
                 try:
                     preview = _json_mod.dumps(data_obj, default=str, ensure_ascii=False)
@@ -438,34 +448,6 @@ class GraphExecutor:
                         preview = preview[:20_000] + "…"
                 except Exception:
                     preview = str(data_obj) if data_obj is not None else None
-
-                # Multi-path mode: json_paths is a JSON array of {label, path} entries
-                if json_paths_raw:
-                    try:
-                        path_list = _json_mod.loads(json_paths_raw)
-                    except Exception:
-                        path_list = []
-
-                    if isinstance(path_list, list) and path_list:
-                        result: dict[str, Any] = {"_preview": preview}
-                        for i, entry in enumerate(path_list):
-                            p = (entry.get("path") or "").strip() if isinstance(entry, dict) else ""
-                            val: Any = None
-                            if data_obj is not None and p:
-                                try:
-                                    val = self._json_extract(data_obj, p)
-                                except (KeyError, IndexError, TypeError, ValueError):
-                                    val = None
-                            result[f"out_{i + 1}"] = val
-                        return result
-
-                # Legacy single-path mode
-                value: Any = None
-                if data_obj is not None and json_path:
-                    try:
-                        value = self._json_extract(data_obj, json_path)
-                    except (KeyError, IndexError, TypeError, ValueError):
-                        value = None
 
                 return {"value": value, "_preview": preview}
 

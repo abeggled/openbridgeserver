@@ -707,12 +707,11 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="json_extractor",
         label="JSON Extractor",
         category="integration",
-        description="Parst einen JSON-String und extrahiert einen oder mehrere Werte anhand von Schlüsselpfaden (Punkt-Notation, z.B. sensors.temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
+        description="Parst einen JSON-String und extrahiert einen Wert anhand eines Schlüsselpfades (Punkt-Notation, z.B. sensors.temperature). Empfangene Daten werden im Konfigurations-Panel zur Pfad-Auswahl angezeigt.",
         inputs=[_port("data", "Daten")],
-        outputs=[_port("value", "Wert")],  # overridden dynamically when json_paths is set
+        outputs=[_port("value", "Wert")],
         config_schema={
-            "json_path": {"type": "string", "default": "", "label": "Schlüsselpfad (Legacy)"},
-            "json_paths": {"type": "string", "default": "", "label": "Ausgänge (JSON-Array)"},
+            "json_path": {"type": "string", "default": "", "label": "Schlüsselpfad"},
         },
         color="#0369a1",
     ),
