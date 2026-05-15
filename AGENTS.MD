@@ -150,6 +150,38 @@ Default login: `admin` / `admin`
 - `frontend/` — Visu SPA (Vue 3 + TypeScript), built to `frontend_dist/` (served by FastAPI at `/visu`)
 - Both proxy `/api` to `localhost:8080` during dev via `vite.config`
 
+### Internationalisation (i18n)
+
+Both frontends use **vue-i18n v9** (Composition API mode, `legacy: false`).
+
+| File | Purpose |
+|---|---|
+| `gui/src/i18n.js` | i18n instance; locale auto-detected from `localStorage` → browser language → fallback `de` |
+| `gui/src/locales/de.json` | German source strings (authoritative) |
+| `gui/src/locales/en.json` | English translations |
+| `gui/src/components/ui/LocaleSwitcher.vue` | Dropdown wired into Settings → Appearance |
+| `frontend/src/i18n.ts` | Same setup for the Visu SPA (TypeScript) |
+| `frontend/src/locales/{de,en}.json` | Visu locale files |
+| `.tx/config` | Transifex CLI config for community translations |
+
+**Migration pattern** (converting a hardcoded string):
+```vue
+<!-- Before -->
+<h2>Übersicht</h2>
+
+<!-- After -->
+<h2>{{ $t('dashboard.title') }}</h2>
+```
+
+In `<script setup>` blocks use `const { t } = useI18n()` and call `t('key')`.
+
+**Adding a new locale:**
+1. Add `src/locales/<lang>.json` (copy `de.json` as a starting point)
+2. Import it in `i18n.js` / `i18n.ts` and add to `messages` + `SUPPORTED_LOCALES`
+3. Run `tx push -s` to upload source; community translates on Transifex; `tx pull -a` to pull back
+
+**Transifex** resources are named `gui-admin` (Admin GUI) and `frontend-visu` (Visu SPA) under the `openbridgeserver` project. Source language is `de`; file format is `KEYVALUEJSON`.
+
 ## Architecture
 
 ### Startup Sequence (`obs/main.py`)

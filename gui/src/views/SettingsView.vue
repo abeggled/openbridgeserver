@@ -95,6 +95,10 @@
               </div>
             </label>
           </div>
+          <!-- Language switcher -->
+          <div class="pt-2 border-t border-slate-200 dark:border-slate-700/60">
+            <LocaleSwitcher />
+          </div>
         </div>
       </div>
     </div>
@@ -956,6 +960,7 @@ import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import IconPicker     from '@/components/ui/IconPicker.vue'
 import VisuIcon       from '@/components/ui/VisuIcon.vue'
+import LocaleSwitcher from '@/components/ui/LocaleSwitcher.vue'
 
 const auth     = useAuthStore()
 const settings = useSettingsStore()

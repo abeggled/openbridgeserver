@@ -2,16 +2,16 @@
   <div class="flex flex-col gap-6">
     <!-- Header -->
     <div>
-      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Übersicht</h2>
-      <p class="text-sm text-slate-500 mt-0.5">Systemübersicht · Live-Status</p>
+      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('dashboard.title') }}</h2>
+      <p class="text-sm text-slate-500 mt-0.5">{{ $t('dashboard.subtitle') }}</p>
     </div>
 
     <!-- Stat cards -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <StatCard label="Objekte" :value="health.datapoints" icon="📋" color="blue" />
-      <StatCard label="Aktive Adapter Instanzen" :value="health.adapters_running" icon="🔌" color="green" />
-      <StatCard label="WS-Status" :value="ws.connected ? 'Live' : 'Offline'" icon="⚡" :color="ws.connected ? 'green' : 'red'" />
-      <StatCard label="Server" :value="health.status === 'ok' ? 'Online' : 'Fehler'" icon="🖥️" :color="health.status === 'ok' ? 'green' : 'red'" />
+      <StatCard :label="$t('dashboard.stats.datapoints')" :value="health.datapoints" icon="📋" color="blue" />
+      <StatCard :label="$t('dashboard.stats.adaptersRunning')" :value="health.adapters_running" icon="🔌" color="green" />
+      <StatCard :label="$t('dashboard.stats.wsStatus')" :value="ws.connected ? $t('dashboard.stats.live') : $t('dashboard.stats.offline')" icon="⚡" :color="ws.connected ? 'green' : 'red'" />
+      <StatCard :label="$t('dashboard.stats.server')" :value="health.status === 'ok' ? $t('dashboard.stats.online') : $t('dashboard.stats.error')" icon="🖥️" :color="health.status === 'ok' ? 'green' : 'red'" />
     </div>
 
     <!-- Aktive Warnungen (issue #466) — nur sichtbar bei degraded/fehlerhaften Adaptern -->
@@ -66,12 +66,12 @@
       <!-- Adapters -->
       <div class="card">
         <div class="card-header">
-          <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">Adapter Status</h3>
-          <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">Alle →</RouterLink>
+          <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('dashboard.adapterStatus.title') }}</h3>
+          <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.adapterStatus.showAll') }}</RouterLink>
         </div>
         <div class="card-body flex flex-col gap-2">
           <div v-if="adaptersLoading" class="flex justify-center py-4"><Spinner /></div>
-          <div v-else-if="!adapters.length" class="text-center text-slate-500 text-sm py-4">Keine Adapter konfiguriert</div>
+          <div v-else-if="!adapters.length" class="text-center text-slate-500 text-sm py-4">{{ $t('dashboard.adapterStatus.noAdapters') }}</div>
           <div v-for="a in adapters" :key="a.adapter_type"
                class="flex items-center gap-3 p-3 bg-surface-700 rounded-lg">
             <span :class="['w-2.5 h-2.5 rounded-full shrink-0', adapterDot(a)]" />
@@ -85,12 +85,12 @@
       <!-- Recent live values -->
       <div class="card">
         <div class="card-header">
-          <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">Live-Werte</h3>
-          <RouterLink to="/datapoints" class="text-xs text-blue-400 hover:underline">Alle →</RouterLink>
+          <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('dashboard.liveValues.title') }}</h3>
+          <RouterLink to="/datapoints" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.liveValues.showAll') }}</RouterLink>
         </div>
         <div class="card-body flex flex-col gap-0 -mx-5 -my-5 overflow-hidden rounded-b-xl">
           <div v-if="dpStore.loading" class="flex justify-center py-8"><Spinner /></div>
-          <div v-else-if="!dpStore.items.length" class="text-center text-slate-500 text-sm py-8">Keine Objekte vorhanden</div>
+          <div v-else-if="!dpStore.items.length" class="text-center text-slate-500 text-sm py-8">{{ $t('dashboard.liveValues.noDatapoints') }}</div>
           <template v-else>
             <div v-for="dp in dpStore.items.slice(0, 10)" :key="dp.id"
                  class="flex items-center gap-3 px-5 py-2.5 border-b border-slate-200/60 dark:border-slate-700/40 last:border-0 hover:bg-slate-100/80 dark:hover:bg-slate-800/40 transition-colors">

@@ -1,0 +1,35 @@
+---
+# Transifex CLI configuration for open bridge server
+# https://developers.transifex.com/docs/cli
+#
+# Prerequisites:
+#   npm install -g @transifex/cli   (or: pip install transifex-client)
+#   tx init  (sets credentials in ~/.transifexrc)
+#
+# Usage:
+#   tx push -s          # upload source strings (de.json) to Transifex
+#   tx pull -a          # download all translated locale files
+#   tx pull -l en       # download English only
+#
+# The community can then translate via https://app.transifex.com/
+
+version: "3"
+git_project_file: .tx/config
+
+resources:
+  # ── Admin GUI ─────────────────────────────────────────────────────────────
+  - project_slug: openbridgeserver
+    resource_slug: gui-admin
+    file_filter: gui/src/locales/<lang>.json
+    source_file: gui/src/locales/de.json
+    source_lang: de
+    type: KEYVALUEJSON
+
+  # ── Visu frontend ─────────────────────────────────────────────────────────
+  - project_slug: openbridgeserver
+    resource_slug: frontend-visu
+    file_filter: frontend/src/locales/<lang>.json
+    source_file: frontend/src/locales/de.json
+    source_lang: de
+    type: KEYVALUEJSON
+
