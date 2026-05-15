@@ -162,7 +162,7 @@ Both frontends use **vue-i18n v9** (Composition API mode, `legacy: false`).
 | `gui/src/components/ui/LocaleSwitcher.vue` | Dropdown wired into Settings → Appearance |
 | `frontend/src/i18n.ts` | Same setup for the Visu SPA (TypeScript) |
 | `frontend/src/locales/{de,en}.json` | Visu locale files |
-| `.tx/config` | Transifex CLI config for community translations |
+| `.weblate` | Weblate CLI (`wlc`) config for community translations |
 
 **Migration pattern** (converting a hardcoded string):
 ```vue
@@ -181,6 +181,8 @@ In `<script setup>` blocks use `const { t } = useI18n()` and call `t('key')`.
 3. Run `wlc push gui-admin` to upload source; community translates on Weblate; `wlc pull gui-admin` to pull back
 
 **Weblate** components are named `gui-admin` (Admin GUI) and `frontend-visu` (Visu SPA) under the `openbridgeserver` project on [hosted.weblate.org](https://hosted.weblate.org/projects/openbridgeserver/). Source language is `de`; file format is `JSON (simple)`. CLI tool: `pip install wlc`; credentials in `~/.config/weblate` or via `WLC_URL` / `WLC_KEY` env vars.
+
+**Important — editing `de.json`:** The file must be written as UTF-8. Do NOT edit it via shell heredocs or tools that strip non-ASCII characters. Use a Python script with `chr()` codepoints or write values programmatically via `json.dumps(..., ensure_ascii=False)`. The authoritative key namespaces in `gui/src/locales/de.json` are: `nav`, `sidebar`, `topbar`, `login`, `dashboard`, `datapoints`, `adapters`, `history`, `ringbuffer`, `logs`, `logic`, `settings`, `common`, `hierarchy`. `TopBar.vue` uses `nav.*` for page titles and `topbar.logout` for the logout button.
 
 ## Architecture
 
