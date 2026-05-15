@@ -1539,6 +1539,40 @@ pytest tests/
 ./tools/lint.sh --fix
 ```
 
+#### Übersetzungen (Weblate / wlc)
+
+Die GUI-Übersetzungen werden über [hosted.weblate.org](https://hosted.weblate.org/projects/openbridgeserver/) verwaltet. Quellsprache ist Deutsch (`de.json`); die Community übersetzt auf Weblate.
+
+**Voraussetzung:** `wlc` ist bereits in `requirements_dev.txt` enthalten und wird bei der normalen Einrichtung mitinstalliert.
+
+Zugangsdaten einrichten — entweder in `~/.config/weblate`:
+
+```ini
+[weblate]
+url = https://hosted.weblate.org/api/
+
+[keys]
+https://hosted.weblate.org/api/ = <dein-api-key>
+```
+
+oder via Umgebungsvariablen: `WLC_URL` / `WLC_KEY`.
+
+**Quell-Strings hochladen** (nach Änderungen an `de.json`):
+
+```bash
+wlc push gui-admin       # Admin-GUI  (gui/src/locales/de.json)
+wlc push frontend-visu   # Visu-SPA   (frontend/src/locales/de.json)
+```
+
+**Übersetzungen herunterladen** (nach Community-Übersetzungen auf Weblate):
+
+```bash
+wlc pull gui-admin
+wlc pull frontend-visu
+```
+
+Die Weblate-Projektkonfiguration liegt in `.weblate` im Projektwurzelverzeichnis.
+
 ---
 
 ### Starten ohne Docker
