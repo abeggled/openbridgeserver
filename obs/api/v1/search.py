@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from obs.api.auth import get_current_user
-from obs.api.v1.datapoints import _SORT_KEYS, DataPointOut, HierarchyNodeRef, _enrich
+from obs.api.v1.datapoints import _SORT_KEYS, DataPointOut, HierarchyNodeRef, NodePathSegment, _enrich
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
 
@@ -42,7 +42,7 @@ async def _add_hierarchy(items: list[DataPointOut], db: Database) -> None:
     placeholders = ",".join("?" * len(dp_ids))
     rows = await db.fetchall(
         f"""SELECT hdl.datapoint_id, hn.id AS node_id, hn.name AS node_name,
-                   ht.id AS tree_id, ht.name AS tree_name
+                   ht.id AS tree_id, ht.name AS tree_name, ht.display_depth
             FROM hierarchy_datapoint_links hdl
             JOIN hierarchy_nodes hn ON hn.id = hdl.node_id
             JOIN hierarchy_trees ht ON ht.id = hn.tree_id
@@ -50,6 +50,27 @@ async def _add_hierarchy(items: list[DataPointOut], db: Database) -> None:
             ORDER BY ht.name, hn.name""",
         dp_ids,
     )
+
+    # Build ancestor paths for all linked nodes via recursive CTE
+    node_ids = list({r["node_id"] for r in rows})
+    node_paths: dict[str, list[NodePathSegment]] = {}
+    if node_ids:
+        ph2 = ",".join("?" * len(node_ids))
+        path_rows = await db.fetchall(
+            f"""WITH RECURSIVE anc(leaf_id, cur_id, cur_name, cur_parent, depth) AS (
+                SELECT id, id, name, parent_id, 0 FROM hierarchy_nodes WHERE id IN ({ph2})
+                UNION ALL
+                SELECT a.leaf_id, hn2.id, hn2.name, hn2.parent_id, a.depth + 1
+                FROM anc a JOIN hierarchy_nodes hn2 ON hn2.id = a.cur_parent
+                WHERE a.cur_parent IS NOT NULL
+            )
+            SELECT leaf_id, cur_id, cur_name FROM anc WHERE depth > 0
+            ORDER BY leaf_id, depth DESC""",
+            node_ids,
+        )
+        for r in path_rows:
+            node_paths.setdefault(r["leaf_id"], []).append(NodePathSegment(node_id=r["cur_id"], node_name=r["cur_name"]))
+
     by_dp: dict[str, list[HierarchyNodeRef]] = {}
     for r in rows:
         by_dp.setdefault(r["datapoint_id"], []).append(
@@ -58,6 +79,8 @@ async def _add_hierarchy(items: list[DataPointOut], db: Database) -> None:
                 node_name=r["node_name"],
                 tree_id=r["tree_id"],
                 tree_name=r["tree_name"],
+                node_path=node_paths.get(r["node_id"], []),
+                display_depth=r["display_depth"] if r["display_depth"] is not None else 0,
             )
         )
     for item in items:
@@ -72,6 +95,7 @@ async def search(
     adapter: str = Query("", description="Has binding with this adapter_type"),
     quality: str = Query("", description="Runtime quality filter: good | bad | uncertain"),
     node_id: str = Query("", description="Comma-separated node IDs — OR logic"),
+    tree_id: str = Query("", description="Comma-separated tree IDs — matches any node in these trees"),
     sort: str = Query("name", pattern="^(name|data_type|created_at|updated_at)$"),
     order: str = Query("asc", pattern="^(asc|desc)$"),
     page: int = Query(0, ge=0),
@@ -126,14 +150,36 @@ async def search(
 
         results = [dp for dp in results if _matches(dp)]
 
-    # 5. node_id filter (hierarchy — one query per node, OR logic)
+    # 5a. node_id filter — includes selected nodes AND all their descendants
     if node_id:
         node_id_list = [n.strip() for n in node_id.split(",") if n.strip()]
         if node_id_list:
             placeholders = ",".join("?" * len(node_id_list))
             rows = await db.fetchall(
-                f"SELECT DISTINCT datapoint_id FROM hierarchy_datapoint_links WHERE node_id IN ({placeholders})",
+                f"""WITH RECURSIVE desc(id) AS (
+                    SELECT id FROM hierarchy_nodes WHERE id IN ({placeholders})
+                    UNION ALL
+                    SELECT hn.id FROM hierarchy_nodes hn JOIN desc d ON hn.parent_id = d.id
+                )
+                SELECT DISTINCT hdl.datapoint_id
+                FROM hierarchy_datapoint_links hdl
+                JOIN desc d ON hdl.node_id = d.id""",
                 node_id_list,
+            )
+            matched_ids = {r["datapoint_id"] for r in rows}
+            results = [dp for dp in results if str(dp.id) in matched_ids]
+
+    # 5b. tree_id filter (all nodes in these trees — OR logic)
+    if tree_id:
+        tree_id_list = [t.strip() for t in tree_id.split(",") if t.strip()]
+        if tree_id_list:
+            placeholders = ",".join("?" * len(tree_id_list))
+            rows = await db.fetchall(
+                f"""SELECT DISTINCT hdl.datapoint_id
+                    FROM hierarchy_datapoint_links hdl
+                    JOIN hierarchy_nodes hn ON hn.id = hdl.node_id
+                    WHERE hn.tree_id IN ({placeholders})""",
+                tree_id_list,
             )
             matched_ids = {r["datapoint_id"] for r in rows}
             results = [dp for dp in results if str(dp.id) in matched_ids]
@@ -173,6 +219,7 @@ async def search(
             "adapter": adapter,
             "quality": quality,
             "node_id": node_id,
+            "tree_id": tree_id,
             "sort": sort,
             "order": order,
         },

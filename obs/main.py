@@ -43,10 +43,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     settings = get_settings()
 
-    logging.basicConfig(
-        level=getattr(logging, settings.server.log_level.upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    log_level = getattr(logging, settings.server.log_level.upper(), logging.INFO)
+    logging.basicConfig(level=log_level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    import asyncio
+
+    from obs.log_buffer import LogBufferHandler
+
+    LogBufferHandler.install(asyncio.get_event_loop(), level=log_level)
     logger.info(f"open bridge server v{__version__} starting …")
 
     # 1. Database

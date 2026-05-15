@@ -421,6 +421,10 @@ ALTER TABLE knx_trades ADD COLUMN parent_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_knx_trade_parent ON knx_trades(parent_id);
 """
 
+_MIGRATION_V29 = """
+ALTER TABLE hierarchy_trees ADD COLUMN display_depth INTEGER NOT NULL DEFAULT 0;
+"""
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -451,6 +455,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (26, _MIGRATION_V26),
     (27, _MIGRATION_V27),
     (28, _MIGRATION_V28),
+    (29, _MIGRATION_V29),
 ]
 
 

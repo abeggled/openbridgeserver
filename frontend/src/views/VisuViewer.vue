@@ -125,10 +125,11 @@ async function load() {
 
     if (currentNode?.type === 'PAGE') {
       await visuStore.loadPage(props.id)
-      // Write-Kontext für Backend-Autorisierung setzen (pageId + ggf. Session-Token)
+      // Write-Kontext für Backend-Autorisierung setzen (pageId + Session-Token + definingId)
       setWriteContext({
         pageId:       props.id,
         sessionToken: getSessionToken(definingId) ?? undefined,
+        definingId,
       })
       ws.connect()
       dpStore.subscribe(allDpIds.value)
@@ -142,8 +143,17 @@ async function load() {
   }
 }
 
-onMounted(load)
-onUnmounted(clearWriteContext)
+// Session abgelaufen (z.B. nach Server-Neustart) — erneut laden; load() leitet zu PIN-Auth weiter
+function onSessionExpired() { load() }
+
+onMounted(() => {
+  load()
+  window.addEventListener('visu:session-expired', onSessionExpired)
+})
+onUnmounted(() => {
+  window.removeEventListener('visu:session-expired', onSessionExpired)
+  clearWriteContext()
+})
 watch(() => props.id, load)
 
 // Grid-Geometrie — feste Pixel-Werte → 1:1 identisch mit Editor (WYSIWYG)

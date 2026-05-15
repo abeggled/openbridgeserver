@@ -47,6 +47,20 @@ from obs.core.transformation import apply_source_type, apply_value_map
 logger = logging.getLogger(__name__)
 
 
+class _EngineIOQueueFilter(logging.Filter):
+    """Suppresses the spurious 'packet queue is empty' ERROR from python-engineio.
+
+    When the server stops sending, the read loop times out and puts None into the
+    packet queue as a disconnect signal.  The write loop receives None, clears the
+    queue, but then loops back and waits again instead of exiting — after another
+    timeout it logs an ERROR 'packet queue is empty'.  This is an internal
+    clean-up artifact, not a real application error.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "packet queue is empty" not in record.getMessage()
+
+
 class IoBrokerAdapterConfig(BaseModel):
     host: str = "iobroker.local"
     port: int = 8084
@@ -166,6 +180,7 @@ class IoBrokerAdapter(AdapterBase):
             "engineio.client",
         ):
             logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+        logging.getLogger("engineio.client").addFilter(_EngineIOQueueFilter())
 
         self._socketio = socketio
         self._cfg = IoBrokerAdapterConfig(**self._config)
@@ -298,7 +313,10 @@ class IoBrokerAdapter(AdapterBase):
 
     def _build_socket(self) -> Any:
         assert self._socketio is not None
-        sio = self._socketio.AsyncClient(reconnection=True, logger=False, engineio_logger=False)
+        # reconnection=False: OBS owns the full reconnect cycle via _reconnect_loop.
+        # Leaving reconnection=True would create a second parallel reconnect mechanism
+        # that races with _reconnect_loop and can produce double-connect attempts.
+        sio = self._socketio.AsyncClient(reconnection=False, logger=False, engineio_logger=False)
         self._register_socket_handlers(sio)
         return sio
 

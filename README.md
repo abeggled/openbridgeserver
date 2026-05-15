@@ -86,12 +86,14 @@ Das LXC-Template enthält ein vollständiges Ubuntu 26.04-System mit **open brid
 **Standardzugang:** Benutzername `admin`, Passwort `admin`
 ⚠️ Das Passwort sofort nach der ersten Anmeldung ändern (Einstellungen → Passwort).
 
-**Konfiguration anpassen** (optional):
+**Sicherheitskonfiguration** (erforderlich):
 
 ```bash
 # Umgebungsvariablen in /etc/obs.env setzen, z. B.:
 OBS_MQTT__HOST=192.168.1.10
-OBS_SECURITY__JWT_SECRET=mein-geheimes-passwort
+# Wird im LXC-Template automatisch beim ersten Start gesetzt (zufällig, pro Container).
+# Nur bei manuellem Override setzen:
+OBS_SECURITY__JWT_SECRET=<mindestens-32-zufällige-zeichen>
 
 # Dienst neu starten
 systemctl restart obs

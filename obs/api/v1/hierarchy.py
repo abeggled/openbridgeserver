@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from obs.api.auth import get_current_user
+from obs.api.v1.datapoints import NodePathSegment
 from obs.db.database import Database, get_db
 
 router = APIRouter(tags=["hierarchy"])
@@ -57,6 +58,7 @@ class HierarchyTree(BaseModel):
     id: str
     name: str
     description: str
+    display_depth: int
     created_at: str
     updated_at: str
 
@@ -64,11 +66,13 @@ class HierarchyTree(BaseModel):
 class HierarchyTreeCreate(BaseModel):
     name: str
     description: str = ""
+    display_depth: int = 0
 
 
 class HierarchyTreeUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    display_depth: int | None = None
 
 
 class HierarchyNode(BaseModel):
@@ -129,6 +133,7 @@ class NodeRef(BaseModel):
     node_name: str
     tree_id: str
     tree_name: str
+    node_path: list[NodePathSegment] = []
 
 
 class NodeSearchResult(BaseModel):
@@ -162,6 +167,7 @@ def _row_to_tree(row: Any) -> HierarchyTree:
         id=row["id"],
         name=row["name"],
         description=row["description"],
+        display_depth=row["display_depth"] if row["display_depth"] is not None else 0,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -220,8 +226,8 @@ async def create_tree(
     now = _now()
     tid = _new_id()
     await db.execute_and_commit(
-        "INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)",
-        (tid, body.name, body.description, now, now),
+        "INSERT INTO hierarchy_trees (id, name, description, display_depth, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+        (tid, body.name, body.description, body.display_depth, now, now),
     )
     row = await db.fetchone("SELECT * FROM hierarchy_trees WHERE id=?", (tid,))
     return _row_to_tree(row)
@@ -239,10 +245,11 @@ async def update_tree(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Hierarchiebaum nicht gefunden")
     name = body.name if body.name is not None else row["name"]
     desc = body.description if body.description is not None else row["description"]
+    depth = body.display_depth if body.display_depth is not None else (row["display_depth"] or 0)
     now = _now()
     await db.execute_and_commit(
-        "UPDATE hierarchy_trees SET name=?, description=?, updated_at=? WHERE id=?",
-        (name, desc, now, tree_id),
+        "UPDATE hierarchy_trees SET name=?, description=?, display_depth=?, updated_at=? WHERE id=?",
+        (name, desc, depth, now, tree_id),
     )
     row = await db.fetchone("SELECT * FROM hierarchy_trees WHERE id=?", (tree_id,))
     return _row_to_tree(row)
@@ -425,6 +432,24 @@ async def get_datapoint_nodes(
            ORDER BY ht.name, hn.name""",
         (dp_id,),
     )
+    node_ids = [r["node_id"] for r in rows]
+    node_paths: dict[str, list[NodePathSegment]] = {}
+    if node_ids:
+        ph = ",".join("?" * len(node_ids))
+        path_rows = await db.fetchall(
+            f"""WITH RECURSIVE anc(leaf_id, cur_id, cur_name, cur_parent, depth) AS (
+                SELECT id, id, name, parent_id, 0 FROM hierarchy_nodes WHERE id IN ({ph})
+                UNION ALL
+                SELECT a.leaf_id, hn2.id, hn2.name, hn2.parent_id, a.depth + 1
+                FROM anc a JOIN hierarchy_nodes hn2 ON hn2.id = a.cur_parent
+                WHERE a.cur_parent IS NOT NULL
+            )
+            SELECT leaf_id, cur_id, cur_name FROM anc WHERE depth > 0
+            ORDER BY leaf_id, depth DESC""",
+            node_ids,
+        )
+        for r in path_rows:
+            node_paths.setdefault(r["leaf_id"], []).append(NodePathSegment(node_id=r["cur_id"], node_name=r["cur_name"]))
     return [
         NodeRef(
             link_id=r["link_id"],
@@ -432,6 +457,7 @@ async def get_datapoint_nodes(
             node_name=r["node_name"],
             tree_id=r["tree_id"],
             tree_name=r["tree_name"],
+            node_path=node_paths.get(r["node_id"], []),
         )
         for r in rows
     ]

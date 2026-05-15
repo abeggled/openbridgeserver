@@ -12,7 +12,7 @@ import pytest
 
 from obs.core.event_bus import AdapterStatusEvent, DataValueEvent
 from tests.adapters.conftest import make_binding
-from obs.adapters.iobroker.adapter import IoBrokerAdapter, _coerce_iobroker_value
+from obs.adapters.iobroker.adapter import IoBrokerAdapter, _EngineIOQueueFilter, _coerce_iobroker_value
 
 
 @pytest.fixture
@@ -406,6 +406,31 @@ class TestBrowseStates:
         assert [item["id"] for item in result] == ["system.adapter.hue.0.alive"]
         assert adapter._socket.call.await_args_list[0].args[1][2]["startkey"] == "alive."
         assert adapter._socket.call.await_args_list[1].args[1][2]["startkey"] == ""
+
+
+class TestBuildSocket:
+    def test_reconnection_is_disabled(self, adapter):
+        mock_sio = MagicMock()
+        adapter._socketio = MagicMock()
+        adapter._socketio.AsyncClient = MagicMock(return_value=mock_sio)
+
+        adapter._build_socket()
+
+        adapter._socketio.AsyncClient.assert_called_once()
+        _, kwargs = adapter._socketio.AsyncClient.call_args
+        assert kwargs["reconnection"] is False
+
+    def test_engineio_queue_filter_passes_normal_messages(self):
+        f = _EngineIOQueueFilter()
+        record = MagicMock()
+        record.getMessage.return_value = "some other error"
+        assert f.filter(record) is True
+
+    def test_engineio_queue_filter_suppresses_queue_empty_error(self):
+        f = _EngineIOQueueFilter()
+        record = MagicMock()
+        record.getMessage.return_value = "packet queue is empty, aborting"
+        assert f.filter(record) is False
 
 
 class TestWrite:

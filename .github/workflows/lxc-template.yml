@@ -418,6 +418,7 @@ jobs:
           set -euo pipefail
 
           MQTT_PASSWORD=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32)))")
+          JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
 
           mosquitto_passwd -c -b /etc/mosquitto/passwd obs "$MQTT_PASSWORD"
           chmod 640 /etc/mosquitto/passwd
@@ -432,6 +433,7 @@ jobs:
           OBS_MOSQUITTO__RELOAD_COMMAND=systemctl reload mosquitto
           OBS_MOSQUITTO__SERVICE_USERNAME=obs
           OBS_MOSQUITTO__SERVICE_PASSWORD=$MQTT_PASSWORD
+          OBS_SECURITY__JWT_SECRET=$JWT_SECRET
           EOF
           FIRSTBOOT
           chmod +x /opt/obs/obs-first-boot.sh

@@ -19,6 +19,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const _ws          = shallowRef(null)
   const _handlers    = []        // [{ id, fn }] — external value listeners
   const _rbHandlers  = []        // ringbuffer entry listeners
+  const _logHandlers = []        // log_entry listeners
   let   _pingInterval = null
 
   function connect() {
@@ -63,6 +64,10 @@ export const useWebSocketStore = defineStore('websocket', () => {
         // RingBuffer live push
         if (msg.action === 'ringbuffer_entry') {
           _rbHandlers.forEach(h => h.fn(msg.entry))
+        }
+        // Log live push
+        if (msg.action === 'log_entry') {
+          _logHandlers.forEach(h => h.fn(msg.entry))
         }
         // Server keepalive ping — reply with pong
         if (msg.action === 'ping') {
@@ -118,5 +123,15 @@ export const useWebSocketStore = defineStore('websocket', () => {
     }
   }
 
-  return { connected, liveValues, connect, disconnect, subscribe, unsubscribe, onValue, onRingbufferEntry }
+  /** Register a handler to be called on every log_entry push. Returns unregister fn. */
+  function onLogEntry(fn) {
+    const entry = { id: Math.random(), fn }
+    _logHandlers.push(entry)
+    return () => {
+      const idx = _logHandlers.indexOf(entry)
+      if (idx !== -1) _logHandlers.splice(idx, 1)
+    }
+  }
+
+  return { connected, liveValues, connect, disconnect, subscribe, unsubscribe, onValue, onRingbufferEntry, onLogEntry }
 })

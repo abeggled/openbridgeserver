@@ -111,6 +111,7 @@ const navItems = [
   { to: '/adapters',   label: 'Adapter',      icon: '&#9741;' },
   { to: '/history',    label: 'Historie',     icon: '&#9685;' },
   { to: '/ringbuffer', label: 'Monitor',      icon: '&#9706;' },
+  { to: '/logs',       label: 'Logs',         icon: '&#9783;' },
   { to: '/logic',      label: 'Logikmodul',   icon: '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18" style="display:inline-block;vertical-align:middle"><circle cx="4" cy="7" r="2"/><circle cx="4" cy="13" r="2"/><circle cx="16" cy="10" r="2.5"/><line x1="6" y1="7.5" x2="13.5" y2="9.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="6" y1="12.5" x2="13.5" y2="10.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' },
   { to: '/settings',   label: 'Einstellungen', icon: '&#9881;' },
 ]

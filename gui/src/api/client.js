@@ -204,6 +204,13 @@ export const historyApi = {
   aggregate: (id, params) => api.get(`/history/${id}/aggregate`, { params }),
 }
 
+// ── Log Buffer ────────────────────────────────────────────────────────────
+export const logsApi = {
+  list:     (params) => api.get('/system/logs', { params }),
+  getLevel: ()       => api.get('/system/log-level'),
+  setLevel: (level)  => api.put('/system/log-level', { level }),
+}
+
 // ── RingBuffer ────────────────────────────────────────────────────────────
 export const ringbufferApi = {
   query:  (params)                  => api.get('/ringbuffer/', { params }),

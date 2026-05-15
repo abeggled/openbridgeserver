@@ -120,7 +120,10 @@ class YamlConfigSource(PydanticBaseSettingsSource):
 # Main settings class
 # ---------------------------------------------------------------------------
 
-_CONFIG_PATH = Path(os.environ.get("OBS_CONFIG", "config.yaml"))
+
+def _config_path() -> Path:
+    """Resolve the YAML config path at construction time (honours OBS_CONFIG)."""
+    return Path(os.environ.get("OBS_CONFIG", "config.yaml"))
 
 
 class Settings(BaseSettings):
@@ -150,7 +153,7 @@ class Settings(BaseSettings):
         return (
             init_settings,
             env_settings,
-            YamlConfigSource(settings_cls, _CONFIG_PATH),
+            YamlConfigSource(settings_cls, _config_path()),
         )
 
 

@@ -86,6 +86,10 @@ async def app(mosquitto_port):
     Lifespan is managed by asgi_lifespan.LifespanManager so startup/shutdown
     hooks run exactly once for the whole test session.
     """
+    # Isolate the test from any host config.yaml in the CWD — the fixture
+    # constructs Settings explicitly and must not merge external config.
+    os.environ["OBS_CONFIG"] = os.path.join(tempfile.gettempdir(), "obs_nonexistent_test_config.yaml")
+
     from obs.config import (
         DatabaseSettings,
         MosquittoSettings,

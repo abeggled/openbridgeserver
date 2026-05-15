@@ -341,3 +341,88 @@ async def test_import_from_ets_groups_mode(client, auth_headers):
     resp3 = await client.get(f"/api/v1/hierarchy/trees/{body['tree_id']}/nodes", headers=auth_headers)
     roots = resp3.json()
     assert len(roots) == 2  # Hauptgruppe 1 + 2
+
+
+# ---------------------------------------------------------------------------
+# display_depth (Issue #443)
+# ---------------------------------------------------------------------------
+
+
+async def test_tree_display_depth_default(client, auth_headers):
+    """Newly created tree has display_depth=0 by default."""
+    tree = await _create_tree(client, auth_headers, "DepthTest")
+    assert tree["display_depth"] == 0
+
+
+async def test_tree_create_with_display_depth(client, auth_headers):
+    """Create a tree with explicit display_depth."""
+    resp = await client.post(
+        "/api/v1/hierarchy/trees",
+        json={"name": "Tiefe2", "description": "", "display_depth": 2},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["display_depth"] == 2
+
+
+async def test_tree_update_display_depth(client, auth_headers):
+    """Update display_depth via PUT."""
+    tree = await _create_tree(client, auth_headers, "UpdDepth")
+    assert tree["display_depth"] == 0
+
+    resp = await client.put(
+        f"/api/v1/hierarchy/trees/{tree['id']}",
+        json={"display_depth": 1},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["display_depth"] == 1
+
+
+# ---------------------------------------------------------------------------
+# node_path in NodeRef (Issue #443)
+# ---------------------------------------------------------------------------
+
+
+async def test_datapoint_nodes_include_path(client, auth_headers):
+    """GET /hierarchy/datapoints/{id}/nodes returns node_path with ancestors."""
+    tree = await _create_tree(client, auth_headers, "Pfadtest")
+    root = await _create_node(client, auth_headers, tree["id"], "EG")
+    mid = await _create_node(client, auth_headers, tree["id"], "Wohnzimmer", parent_id=root["id"])
+    leaf = await _create_node(client, auth_headers, tree["id"], "Licht", parent_id=mid["id"])
+    dp = await _create_dp(client, auth_headers, "LichtDP")
+
+    await client.post(
+        "/api/v1/hierarchy/links",
+        json={"node_id": leaf["id"], "datapoint_id": dp["id"]},
+        headers=auth_headers,
+    )
+
+    resp = await client.get(f"/api/v1/hierarchy/datapoints/{dp['id']}/nodes", headers=auth_headers)
+    assert resp.status_code == 200
+    refs = resp.json()
+    assert len(refs) == 1
+    ref = refs[0]
+    assert ref["node_name"] == "Licht"
+    assert "node_path" in ref
+    # Path should contain EG and Wohnzimmer (root-first order)
+    path_names = [seg["node_name"] for seg in ref["node_path"]]
+    assert path_names == ["EG", "Wohnzimmer"]
+
+
+async def test_datapoint_nodes_path_root_node(client, auth_headers):
+    """A root-level node has an empty node_path."""
+    tree = await _create_tree(client, auth_headers, "RootPfad")
+    root = await _create_node(client, auth_headers, tree["id"], "Gebäude")
+    dp = await _create_dp(client, auth_headers, "GebaeudeDP")
+
+    await client.post(
+        "/api/v1/hierarchy/links",
+        json={"node_id": root["id"], "datapoint_id": dp["id"]},
+        headers=auth_headers,
+    )
+
+    resp = await client.get(f"/api/v1/hierarchy/datapoints/{dp['id']}/nodes", headers=auth_headers)
+    assert resp.status_code == 200
+    ref = resp.json()[0]
+    assert ref["node_path"] == []
