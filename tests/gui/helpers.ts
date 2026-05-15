@@ -13,6 +13,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as dotenv from 'dotenv'
+import { expect, type Page } from '@playwright/test'
 
 // Load the repository-root .env so `OBS_HTTP_HOST_PORT` resolves the same way
 // it does in playwright.config.ts when the runner hasn't pre-populated it.
@@ -135,6 +136,24 @@ export async function apiDelete(path: string): Promise<void> {
   if (!res.ok && res.status !== 404) {
     throw new Error(`DELETE ${path} failed: ${res.status}`)
   }
+}
+
+/**
+ * Navigate to the Monitor (/ringbuffer) and wait until it is interactive.
+ *
+ * The Monitor holds a persistent WebSocket plus a 10 s /stats poll, so
+ * `page.waitForLoadState('networkidle')` never settles and times out. Wait
+ * for the always-rendered status badge instead — once it is visible the view
+ * has mounted and the initial query has run.
+ */
+export async function gotoMonitor(page: Page): Promise<void> {
+  await page.goto('/ringbuffer')
+  await waitForMonitorReady(page)
+}
+
+/** Wait for the Monitor view to be interactive (e.g. after a page.reload()). */
+export async function waitForMonitorReady(page: Page): Promise<void> {
+  await expect(page.locator('[data-testid="status-badge"]')).toBeVisible({ timeout: 15_000 })
 }
 
 /** Upload a single SVG file to the icon library. `name` is the filename without extension. */
