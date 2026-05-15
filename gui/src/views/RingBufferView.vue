@@ -5,8 +5,8 @@
   <div class="flex flex-col gap-5 h-full min-h-0">
     <div class="flex flex-wrap items-start gap-3 shrink-0">
       <div class="flex-1">
-        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Monitor</h2>
-        <p class="text-sm text-slate-500 mt-0.5">Live Log</p>
+        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('ringbuffer.title') }}</h2>
+        <p class="text-sm text-slate-500 mt-0.5">{{ $t('ringbuffer.subtitle') }}</p>
       </div>
       <!-- Right cluster: aligns buttons + status chip + ringbuffer stats on a
            single baseline; status badge matches the button height. -->
@@ -76,17 +76,17 @@
     <div class="card overflow-hidden flex-1 min-h-0 flex flex-col">
       <div v-if="loading" class="flex justify-center py-12"><Spinner size="lg" /></div>
       <div v-else-if="listError" class="px-4 py-6 text-sm text-red-500" data-testid="ringbuffer-error">{{ listError }}</div>
-      <div v-else-if="!entries.length" class="text-center text-slate-500 text-sm py-12" data-testid="ringbuffer-empty">Keine Einträge im Monitor</div>
+      <div v-else-if="!entries.length" class="text-center text-slate-500 text-sm py-12" data-testid="ringbuffer-empty">{{ $t('ringbuffer.noEntries') }}</div>
       <div v-else class="table-wrap flex-1 min-h-0 overflow-y-auto" ref="tableWrapRef" data-testid="ringbuffer-table-wrap">
         <table class="table">
           <thead class="sticky top-0">
             <tr>
-              <th>Zeitstempel</th>
-              <th>Objekt</th>
-              <th>Wert</th>
-              <th>Vorheriger Wert</th>
-              <th>Qualität</th>
-              <th>Adapter</th>
+              <th>{{ $t('ringbuffer.colTimestamp') }}</th>
+              <th>{{ $t('ringbuffer.colObject') }}</th>
+              <th>{{ $t('ringbuffer.colValue') }}</th>
+              <th>{{ $t('ringbuffer.colPrevValue') }}</th>
+              <th>{{ $t('ringbuffer.colQuality') }}</th>
+              <th>{{ $t('ringbuffer.colAdapter') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -121,6 +121,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
 import { useTz } from '@/composables/useTz'
 import { useSetColors } from '@/composables/useSetColors'
@@ -139,6 +140,7 @@ import MonitorConfigModal from '@/views/ringbuffer/MonitorConfigModal.vue'
 
 const DEFAULT_QUERY_LIMIT = 500
 
+const { t } = useI18n()
 const { fmtDateTime } = useTz()
 const wsStore = useWebSocketStore()
 const { getRowStyle, setSets, sets: topbarSetsRef } = useSetColors()
@@ -366,6 +368,6 @@ async function load() {
 }
 
 function qualityLabel(q) {
-  return q === 'good' ? 'gut' : q === 'bad' ? 'schlecht' : q === 'uncertain' ? 'undefiniert' : q
+  return q === 'good' ? t('datapoints.quality.good') : q === 'bad' ? t('datapoints.quality.bad') : q === 'uncertain' ? t('datapoints.quality.uncertain') : q
 }
 </script>
