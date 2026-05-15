@@ -10,6 +10,7 @@
  * @prop dark  Force dark-mode styling (for widget config panels that are always dark)
  */
 import { ref, computed, watch, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useIcons } from '@/composables/useIcons'
 import VisuIcon from '@/components/VisuIcon.vue'
 
@@ -26,6 +27,7 @@ const QUICK_ICONS = [
   '🔗','🏊','🌳','🚗','🔑','📊','🔋','🏭','☀️','🌬️',
 ]
 
+const { t } = useI18n()
 const { iconNames, loadList, isSvgIcon } = useIcons()
 const tab = ref<'emoji' | 'svg'>('emoji')
 const search = ref('')
@@ -120,7 +122,7 @@ const svgBtnActiveCls = computed(() =>
           :value="isSvgIcon(modelValue) ? '' : (modelValue ?? '')"
           type="text"
           maxlength="4"
-          placeholder="Emoji"
+  :placeholder="'Emoji'"
           class="w-14 text-center rounded px-2 py-1 text-lg focus:outline-none"
           :class="inputCls"
           @input="onCustomInput"
@@ -130,7 +132,7 @@ const svgBtnActiveCls = computed(() =>
           type="button"
           class="text-xs px-1.5 py-1 rounded transition-colors"
           :class="props.dark ? 'text-gray-500 hover:text-gray-300 hover:bg-gray-700' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'"
-          title="Icon entfernen"
+          :title="$t('iconPicker.removeTitle')"
           @click="emit('update:modelValue', '')"
         >✕</button>
       </div>
@@ -153,12 +155,12 @@ const svgBtnActiveCls = computed(() =>
       <input
         v-model="search"
         type="text"
-        placeholder="Suchen …"
+:placeholder="$t('iconPicker.searchPlaceholder')"
         class="w-full rounded px-2 py-1 text-sm focus:outline-none"
         :class="inputCls"
       />
       <p v-if="filteredSvg.length === 0" class="text-xs py-2 text-center" :class="props.dark ? 'text-gray-500' : 'text-gray-400 dark:text-gray-500'">
-        {{ search ? 'Keine Treffer' : 'Keine Icons importiert' }}
+        {{ search ? $t('iconPicker.noResults') : $t('iconPicker.noIcons') }}
       </p>
       <div v-else class="flex flex-wrap gap-1 max-h-40 overflow-y-auto">
         <button

@@ -12,6 +12,7 @@
  * - Navigation zu Viewer / Editor
  */
 import { ref, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
 import { useThemeStore } from '@/stores/theme'
@@ -21,6 +22,7 @@ import VisuIcon from '@/components/VisuIcon.vue'
 import { visu as visuApi, users as usersApi } from '@/api/client'
 import type { VisuNode, NodeType, AccessLevel, UserResponse } from '@/types'
 
+const { t } = useI18n()
 const router = useRouter()
 const store  = useVisuStore()
 const theme  = useThemeStore()
@@ -90,7 +92,7 @@ function selectNode(node: VisuNode) {
 async function saveNode() {
   if (!selectedId.value || !editName.value.trim()) return
   if (editAccess.value === 'protected' && editPin.value && editPin.value !== editPinConfirm.value) {
-    errorMsg.value = 'PINs stimmen nicht überein'
+    errorMsg.value = t('tree.pinMismatch')
     return
   }
   saving.value  = true
@@ -116,7 +118,7 @@ async function saveNode() {
     flashOk.value        = true
     setTimeout(() => { flashOk.value = false }, 2000)
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : 'Fehler beim Speichern'
+    errorMsg.value = e instanceof Error ? e.message : t('common.saveError')
   } finally {
     saving.value = false
   }
@@ -155,7 +157,7 @@ async function createNode() {
     showAddModal.value = false
     selectNode(created)
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : 'Fehler beim Erstellen'
+    errorMsg.value = e instanceof Error ? e.message : t('tree.errorCreate')
   } finally {
     saving.value = false
   }
@@ -206,7 +208,7 @@ const moveOptions = computed(() => {
     .filter(n => !excluded.has(n.id))
     .map(n => ({ id: n.id, path: `${n.type === 'PAGE' ? '📄' : '📁'} ${nodePath(n)}` }))
     .sort((a, b) => a.path.localeCompare(b.path))
-  return [{ id: null as string | null, path: '— Wurzel (kein übergeordneter Knoten) —' }, ...targets]
+  return [{ id: null as string | null, path: t('tree.rootNoParent') }, ...targets]
 })
 
 function openMoveModal(nodeId: string) {
@@ -227,7 +229,7 @@ async function doMove() {
     if (moveDestId.value) expanded.value.add(moveDestId.value)
     showMoveModal.value = false
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : 'Fehler beim Verschieben'
+    errorMsg.value = e instanceof Error ? e.message : t('tree.errorMove')
   } finally {
     saving.value = false
   }
@@ -251,20 +253,20 @@ async function doDelete() {
     showDeleteModal.value  = false
     deleteTargetNode.value = null
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : 'Fehler beim Löschen'
+    errorMsg.value = e instanceof Error ? e.message : t('tree.errorDelete')
   } finally {
     saving.value = false
   }
 }
 
 // ── Zugangs-Optionen ──────────────────────────────────────────────────────────
-const ACCESS_OPTIONS = [
-  { value: null        as AccessLevel | null, label: 'Erben',            desc: 'Vom übergeordneten Knoten',           icon: '↑'  },
-  { value: 'readonly'  as AccessLevel,        label: 'Nur ansehen',      desc: 'Öffentlich, keine Interaktion',       icon: '👁' },
-  { value: 'public'    as AccessLevel,        label: 'Öffentlich',       desc: 'Ohne Anmeldung, interaktiv',          icon: '🌐' },
-  { value: 'protected' as AccessLevel,        label: 'Authentifiziert (PIN)', desc: 'PIN-Eingabe erforderlich',        icon: '🔐' },
-  { value: 'user'      as AccessLevel,        label: 'Authentifiziert (Benutzer)', desc: 'Admins + zugewiesene Benutzer', icon: '👤' },
-]
+const ACCESS_OPTIONS = computed(() => [
+  { value: null        as AccessLevel | null, label: t('tree.access.inherit'),   desc: t('tree.access.inheritDesc'),  icon: '↑'  },
+  { value: 'readonly'  as AccessLevel,        label: t('common.readonly'),        desc: t('tree.access.readonlyDesc'), icon: '👁' },
+  { value: 'public'    as AccessLevel,        label: t('tree.access.public'),     desc: t('tree.access.publicDesc'),   icon: '🌐' },
+  { value: 'protected' as AccessLevel,        label: t('common.authenticatedPin'),    desc: t('tree.access.pinDesc'),  icon: '🔐' },
+  { value: 'user'      as AccessLevel,        label: t('common.authenticatedUser'),   desc: t('common.adminAndAssignedUsers'), icon: '👤' },
+])
 
 function accessBadge(access: AccessLevel | null) {
   switch (access) {
@@ -277,7 +279,7 @@ function accessBadge(access: AccessLevel | null) {
 }
 
 function accessLabel(access: AccessLevel | null) {
-  return ACCESS_OPTIONS.find(o => o.value === access)?.label ?? '—'
+  return ACCESS_OPTIONS.value.find(o => o.value === access)?.label ?? '—'
 }
 
 // ── Benutzer-Zuweisung (user-Access) ─────────────────────────────────────────
@@ -342,7 +344,7 @@ const copyDestId     = ref<string | null>(null)
 function openCopyModal(nodeId: string) {
   copySourceId.value = nodeId
   const node = store.getNode(nodeId)
-  copyNewName.value  = node ? `Kopie von ${node.name}` : ''
+  copyNewName.value  = node ? t('tree.copyOf', { name: node.name }) : ''
   copyDestId.value   = node?.parent_id ?? null
   showCopyModal.value = true
 }
@@ -352,7 +354,7 @@ const copyOptions = computed(() => {
     .filter(n => n.type === 'LOCATION')
     .map(n => ({ id: n.id, path: `📁 ${nodePath(n)}` }))
     .sort((a, b) => a.path.localeCompare(b.path))
-  return [{ id: null as string | null, path: '— Wurzel —' }, ...locations]
+  return [{ id: null as string | null, path: t('tree.root') }, ...locations]
 })
 
 async function doCopy() {
@@ -365,7 +367,7 @@ async function doCopy() {
     showCopyModal.value = false
     selectNode(created)
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : 'Fehler beim Kopieren'
+    errorMsg.value = e instanceof Error ? e.message : t('tree.errorCopy')
   } finally {
     saving.value = false
   }
@@ -384,7 +386,7 @@ async function doExportNode(node: VisuNode) {
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : 'Fehler beim Exportieren'
+    errorMsg.value = e instanceof Error ? e.message : t('tree.errorExport')
   }
 }
 
@@ -416,10 +418,10 @@ async function onImportFile(event: Event) {
       n => n.parent_id === created.parent_id && n.id !== created.id && n.name === created.name,
     )
     if (siblings.length > 0) {
-      errorMsg.value = 'Name bereits vorhanden – bitte umbenennen und speichern.'
+      errorMsg.value = t('tree.errorImportNameConflict')
     }
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : 'Ungültige oder fehlerhafte Export-Datei'
+    errorMsg.value = e instanceof Error ? e.message : t('tree.errorImport')
   } finally {
     saving.value = false
   }
@@ -444,24 +446,24 @@ onMounted(async () => {
 
     <!-- ── Header ──────────────────────────────────────────────────────────── -->
     <header class="flex-shrink-0 border-b border-gray-200 dark:border-gray-800 px-4 py-2.5 flex items-center gap-3 bg-gray-50 dark:bg-gray-900">
-      <span class="text-lg font-semibold">🗂 Visu Verwaltung</span>
+      <span class="text-lg font-semibold">🗂 {{ $t('tree.manage') }}</span>
       <div class="flex-1" />
       <button
         class="text-xs text-gray-400 dark:text-gray-500 hover:text-emerald-600 dark:hover:text-emerald-400 px-2 py-1 rounded transition-colors border border-transparent hover:border-emerald-500/30"
-        title="Visu-Seite / Bereich importieren (JSON)"
+        :title="$t('tree.importTitle')"
         data-testid="btn-import-visu"
         @click="triggerImport(null)"
-      >↑ Importieren</button>
+      >↑ {{ $t('tree.import') }}</button>
       <button
         class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded transition-colors"
-        :title="theme.isDark ? 'Heller Modus' : 'Dunkler Modus'"
+        :title="theme.isDark ? $t('common.darkMode') : $t('common.lightMode')"
         @click="theme.toggle()"
       >{{ theme.isDark ? '☀️' : '🌙' }}</button>
       <AuthButton />
       <button
         class="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 border border-gray-300 dark:border-gray-700 px-3 py-1.5 rounded transition-colors"
         @click="router.push({ name: 'tree' })"
-      >← Zurück</button>
+      >{{ $t('common.back') }}</button>
     </header>
 
     <!-- ── Hauptbereich ────────────────────────────────────────────────────── -->
@@ -474,11 +476,11 @@ onMounted(async () => {
       <!-- ── Baum (links) ──────────────────────────────────────────────────── -->
       <div class="w-[30rem] flex-shrink-0 flex flex-col border-r border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 overflow-y-auto">
         <div class="flex items-center justify-between px-3 pt-3 pb-2">
-          <span class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Struktur</span>
+          <span class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">{{ $t('tree.structure') }}</span>
           <button
             class="text-xs flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:text-blue-500 font-medium px-2 py-1 rounded hover:bg-blue-500/10 transition-colors"
             @click="openAddModal(null)"
-          >＋ Neu</button>
+          >{{ $t('tree.new') }}</button>
         </div>
 
         <!-- Baum-Einträge -->
@@ -513,7 +515,7 @@ onMounted(async () => {
             <!-- Type-Badge -->
             <span class="flex-shrink-0 text-xs px-1 rounded"
               :class="node.type === 'PAGE' ? 'text-blue-400 dark:text-blue-500' : 'text-purple-400 dark:text-purple-500'">
-              {{ node.type === 'PAGE' ? 'Seite' : 'Bereich' }}
+              {{ node.type === 'PAGE' ? $t('tree.typePage') : $t('tree.typeLocation') }}
             </span>
 
             <!-- Access-Badge -->
@@ -526,23 +528,23 @@ onMounted(async () => {
               class="flex-shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
               :class="{ '!opacity-100': selectedId === node.id }"
             >
-              <button title="Nach oben" class="w-5 h-5 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-700"
+              <button :title="$t('tree.moveUp')" class="w-5 h-5 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-700"
                 @click.stop="moveOrder(node, -1)">↑</button>
-              <button title="Nach unten" class="w-5 h-5 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-700"
+              <button :title="$t('tree.moveDown')" class="w-5 h-5 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-700"
                 @click.stop="moveOrder(node, 1)">↓</button>
-              <button title="Kind hinzufügen" class="w-5 h-5 flex items-center justify-center text-gray-400 hover:text-blue-500 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-700"
+              <button :title="$t('tree.addChild')" class="w-5 h-5 flex items-center justify-center text-gray-400 hover:text-blue-500 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-700"
                 @click.stop="openAddModal(node.id)">＋</button>
-              <button title="Kopieren" class="w-5 h-5 flex items-center justify-center text-gray-400 hover:text-emerald-500 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-700"
+              <button :title="$t('tree.copy')" class="w-5 h-5 flex items-center justify-center text-gray-400 hover:text-emerald-500 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-700"
                 @click.stop="openCopyModal(node.id)">⧉</button>
-              <button title="Löschen" class="w-5 h-5 flex items-center justify-center text-gray-400 hover:text-red-500 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-700"
+              <button :title="$t('common.delete')" class="w-5 h-5 flex items-center justify-center text-gray-400 hover:text-red-500 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-700"
                 @click.stop="confirmDelete(node)">✕</button>
             </div>
           </div>
 
           <!-- Leerer Zustand -->
           <div v-if="flatTree.length === 0" class="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-600">
-            Noch keine Seiten vorhanden.<br/>
-            <button class="mt-2 text-blue-500 hover:underline" @click="openAddModal(null)">Ersten Knoten erstellen</button>
+            {{ $t('tree.noPages') }}<br/>
+            <button class="mt-2 text-blue-500 hover:underline" @click="openAddModal(null)">{{ $t('tree.createFirstNode') }}</button>
           </div>
         </div>
       </div>
@@ -553,7 +555,7 @@ onMounted(async () => {
         <!-- Kein Knoten ausgewählt -->
         <div v-if="!selectedNode" class="flex flex-col items-center justify-center h-full gap-3 text-center text-gray-400 dark:text-gray-600">
           <span class="text-5xl">👈</span>
-          <p class="text-sm">Knoten aus dem Baum auswählen<br/>oder neuen Knoten erstellen</p>
+          <p class="text-sm">{{ $t('tree.hintSelect') }}</p>
         </div>
 
         <!-- Knoten-Eigenschaften -->
@@ -568,7 +570,7 @@ onMounted(async () => {
               <h1 class="text-xl font-semibold text-gray-900 dark:text-gray-100">{{ selectedNode.name }}</h1>
               <span class="text-xs px-2 py-0.5 rounded font-medium"
                 :class="selectedNode.type === 'PAGE' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400' : 'bg-purple-500/10 text-purple-600 dark:text-purple-400'">
-                {{ selectedNode.type === 'PAGE' ? '📄 Seite' : '📁 Bereich' }}
+                {{ selectedNode.type === 'PAGE' ? '📄 ' + $t('tree.typePage') : '📁 ' + $t('tree.typeLocation') }}
               </span>
             </div>
           </div>
@@ -581,39 +583,39 @@ onMounted(async () => {
             <button
               class="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-400 dark:hover:border-gray-500 transition-colors"
               @click="router.push({ name: 'viewer', params: { id: selectedNode.id } })"
-            >👁 Anzeigen</button>
+            >👁 {{ $t('tree.view') }}</button>
             <button
               v-if="selectedNode.type === 'PAGE'"
               class="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-400 dark:hover:border-gray-500 transition-colors"
               @click="router.push({ name: 'editor', params: { id: selectedNode.id } })"
-            >✏️ Layout bearbeiten</button>
+            >✏️ {{ $t('tree.editLayout') }}</button>
           </div>
 
           <!-- ── Allgemein ──────────────────────────────────────────────────── -->
           <section class="space-y-4">
-            <h2 class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Allgemein</h2>
+            <h2 class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">{{ $t('tree.general') }}</h2>
 
             <!-- Name -->
             <div>
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ $t('tree.name') }}</label>
               <input
                 v-model="editName"
                 type="text"
-                placeholder="Knotenname"
+                :placeholder="$t('tree.nodeName')"
                 class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30"
               />
             </div>
 
             <!-- Icon -->
             <div>
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Icon</label>
+              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ $t('tree.icon') }}</label>
               <IconPicker v-model="editIcon" />
             </div>
           </section>
 
           <!-- ── Zugangsberechtigung ────────────────────────────────────────── -->
           <section class="space-y-3">
-            <h2 class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Berechtigung</h2>
+            <h2 class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">{{ $t('tree.permission') }}</h2>
 
             <div class="space-y-2">
               <label
@@ -641,43 +643,43 @@ onMounted(async () => {
             <!-- PIN-Felder (nur wenn protected gewählt) -->
             <div v-if="editAccess === 'protected'" class="space-y-2 pl-2 border-l-2 border-amber-500/40">
               <p class="text-xs text-amber-600 dark:text-amber-400 font-medium">
-                PIN {{ selectedNode.access === 'protected' ? 'ändern (leer lassen = behalten)' : 'vergeben' }}
+                {{ selectedNode.access === 'protected' ? $t('tree.pinChange') : $t('tree.pinAssign') }}
               </p>
               <div class="grid grid-cols-2 gap-2">
                 <div>
-                  <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Neuer PIN</label>
+                  <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('tree.newPin') }}</label>
                   <input
                     v-model="editPin"
                     type="password"
                     inputmode="numeric"
-                    placeholder="z.B. 1234"
+                    :placeholder="$t('tree.pinPlaceholder')"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/30"
                   />
                 </div>
                 <div>
-                  <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">PIN bestätigen</label>
+                  <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('tree.confirmPin') }}</label>
                   <input
                     v-model="editPinConfirm"
                     type="password"
                     inputmode="numeric"
-                    placeholder="Wiederholen"
+                    :placeholder="$t('tree.repeatPlaceholder')"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/30"
                     :class="editPin && editPinConfirm && editPin !== editPinConfirm ? 'border-red-400' : ''"
                   />
                 </div>
               </div>
               <p v-if="editPin && editPinConfirm && editPin !== editPinConfirm" class="text-xs text-red-500">
-                PINs stimmen nicht überein
+                {{ $t('tree.pinMismatch') }}
               </p>
             </div>
 
             <!-- Benutzer-Auswahl (nur wenn user gewählt) -->
             <div v-if="editAccess === 'user'" class="space-y-2 pl-2 border-l-2 border-purple-500/40">
               <p class="text-xs text-purple-600 dark:text-purple-400 font-medium">
-                Zugelassene Benutzer (Admins haben immer Zugriff)
+                {{ $t('tree.allowedUsers') }}
               </p>
               <div v-if="selectableUsers.length === 0" class="text-xs text-gray-400 dark:text-gray-500 italic">
-                Keine nicht-Admin Benutzer vorhanden. Benutzer können in den Einstellungen angelegt werden.
+                {{ $t('tree.noNonAdminUsers') }}
               </div>
               <div v-else class="space-y-1">
                 <label
@@ -712,37 +714,37 @@ onMounted(async () => {
             :disabled="saving || !editName.trim()"
             @click="saveNode"
           >
-            {{ flashOk ? '✓ Gespeichert' : (saving ? 'Speichere …' : '💾 Speichern') }}
+            {{ flashOk ? '✓ ' + $t('tree.saved') : (saving ? $t('editor.saving') : '💾 ' + $t('editor.save')) }}
           </button>
 
           <!-- ── Gefahrenzone ───────────────────────────────────────────────── -->
           <section class="space-y-3 pt-2">
-            <h2 class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Weitere Aktionen</h2>
+            <h2 class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">{{ $t('tree.furtherActions') }}</h2>
             <div class="flex gap-2 flex-wrap">
               <button
                 class="flex-1 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-blue-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
                 @click="openMoveModal(selectedNode.id)"
-              >🔀 Verschieben</button>
+              >🔀 {{ $t('tree.move') }}</button>
               <button
                 class="flex-1 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-emerald-500 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
                 @click="openCopyModal(selectedNode.id)"
-              >⧉ Kopieren</button>
+              >⧉ {{ $t('tree.copy') }}</button>
             </div>
             <div class="flex gap-2 flex-wrap">
               <button
                 class="flex-1 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
                 data-testid="btn-export-visu-panel"
                 @click="doExportNode(selectedNode)"
-              >↓ Exportieren</button>
+              >↓ {{ $t('tree.export') }}</button>
               <button
                 class="flex-1 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-emerald-500 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
                 data-testid="btn-import-visu-panel"
                 @click="triggerImport(selectedNode.type === 'LOCATION' ? selectedNode.id : selectedNode.parent_id)"
-              >↑ Importieren</button>
+              >↑ {{ $t('tree.import') }}</button>
               <button
                 class="flex-1 py-2 text-sm rounded-lg border border-red-200 dark:border-red-900/50 text-red-500 dark:text-red-400 hover:bg-red-500/10 transition-colors"
                 @click="confirmDelete(selectedNode)"
-              >🗑 Löschen</button>
+              >🗑 {{ $t('common.delete') }}</button>
             </div>
           </section>
 
@@ -756,7 +758,7 @@ onMounted(async () => {
     <Teleport to="body">
       <div v-if="showAddModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" @click.self="showAddModal = false">
         <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-5">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Neuer Knoten</h2>
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ $t('tree.newNode') }}</h2>
 
           <!-- Typ -->
           <div class="grid grid-cols-2 gap-2">
@@ -765,24 +767,24 @@ onMounted(async () => {
               :class="addType === 'LOCATION' ? 'border-blue-500 bg-blue-500/10 text-blue-600 dark:text-blue-400' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300'"
               @click="addType = 'LOCATION'"
             >
-              <span class="text-2xl">📁</span> Bereich
+              <span class="text-2xl">📁</span> {{ $t('tree.typeLocation') }}
             </button>
             <button
               class="py-3 rounded-xl border-2 text-sm font-medium transition-colors flex flex-col items-center gap-1"
               :class="addType === 'PAGE' ? 'border-blue-500 bg-blue-500/10 text-blue-600 dark:text-blue-400' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300'"
               @click="addType = 'PAGE'"
             >
-              <span class="text-2xl">📄</span> Seite
+              <span class="text-2xl">📄</span> {{ $t('tree.typePage') }}
             </button>
           </div>
 
           <!-- Name -->
           <div>
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ $t('tree.name') }}</label>
             <input
               v-model="addName"
               type="text"
-              placeholder="z.B. Wohnzimmer"
+              :placeholder="$t('tree.namePlaceholder')"
               autofocus
               class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
               @keydown.enter="createNode"
@@ -791,23 +793,23 @@ onMounted(async () => {
 
           <!-- Icon -->
           <div>
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Icon (optional)</label>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ $t('tree.iconOptional') }}</label>
             <IconPicker v-model="addIcon" />
           </div>
 
           <p v-if="addParentId" class="text-xs text-gray-500 dark:text-gray-400">
-            Wird erstellt unter: <strong>{{ store.getNode(addParentId)?.name ?? '?' }}</strong>
+            {{ $t('tree.createdUnder') }} <strong>{{ store.getNode(addParentId)?.name ?? '?' }}</strong>
           </p>
 
           <!-- Buttons -->
           <div class="flex gap-2 pt-1">
             <button class="flex-1 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
-              @click="showAddModal = false">Abbrechen</button>
+              @click="showAddModal = false">{{ $t('common.cancel') }}</button>
             <button
               class="flex-1 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium disabled:opacity-50 transition-colors"
               :disabled="!addName.trim() || saving"
               @click="createNode"
-            >{{ saving ? '…' : 'Erstellen' }}</button>
+            >{{ saving ? '…' : $t('tree.create') }}</button>
           </div>
         </div>
       </div>
@@ -820,11 +822,11 @@ onMounted(async () => {
       <div v-if="showMoveModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" @click.self="showMoveModal = false">
         <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
-            Verschieben: <span class="text-blue-500">{{ moveTargetId ? store.getNode(moveTargetId)?.name : '' }}</span>
+            {{ $t('tree.moveTitle') }}: <span class="text-blue-500">{{ moveTargetId ? store.getNode(moveTargetId)?.name : '' }}</span>
           </h2>
 
           <div>
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Neuer übergeordneter Knoten</label>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{{ $t('tree.newParent') }}</label>
             <select
               v-model="moveDestId"
               class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
@@ -837,12 +839,12 @@ onMounted(async () => {
 
           <div class="flex gap-2">
             <button class="flex-1 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400"
-              @click="showMoveModal = false">Abbrechen</button>
+              @click="showMoveModal = false">{{ $t('common.cancel') }}</button>
             <button
               class="flex-1 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium disabled:opacity-50"
               :disabled="saving"
               @click="doMove"
-            >{{ saving ? '…' : 'Verschieben' }}</button>
+            >{{ saving ? '…' : $t('tree.move') }}</button>
           </div>
         </div>
       </div>
@@ -855,12 +857,12 @@ onMounted(async () => {
       <div v-if="showCopyModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" @click.self="showCopyModal = false">
         <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
-            Kopieren: <span class="text-emerald-500">{{ copySourceId ? store.getNode(copySourceId)?.name : '' }}</span>
+            {{ $t('tree.copyTitle') }}: <span class="text-emerald-500">{{ copySourceId ? store.getNode(copySourceId)?.name : '' }}</span>
           </h2>
 
           <!-- Name der Kopie -->
           <div>
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name der Kopie</label>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ $t('tree.copyName') }}</label>
             <input
               v-model="copyNewName"
               type="text"
@@ -872,7 +874,7 @@ onMounted(async () => {
 
           <!-- Zielort -->
           <div>
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Zielort</label>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{{ $t('tree.destination') }}</label>
             <select
               v-model="copyDestId"
               class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-emerald-500"
@@ -885,12 +887,12 @@ onMounted(async () => {
 
           <div class="flex gap-2">
             <button class="flex-1 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400"
-              @click="showCopyModal = false">Abbrechen</button>
+              @click="showCopyModal = false">{{ $t('common.cancel') }}</button>
             <button
               class="flex-1 py-2 text-sm rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium disabled:opacity-50"
               :disabled="!copyNewName.trim() || saving"
               @click="doCopy"
-            >{{ saving ? '…' : '⧉ Kopieren' }}</button>
+            >{{ saving ? '…' : '⧉ ' + $t('tree.copy') }}</button>
           </div>
         </div>
       </div>
@@ -905,21 +907,21 @@ onMounted(async () => {
           <div class="flex items-center gap-3">
             <span class="text-3xl">⚠️</span>
             <div>
-              <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">Wirklich löschen?</h2>
+              <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ $t('tree.deleteConfirmTitle') }}</h2>
               <p class="text-sm text-gray-500 dark:text-gray-400">
-                <strong>{{ deleteTargetNode?.name }}</strong> und alle untergeordneten Knoten werden unwiderruflich gelöscht.
+                <strong>{{ deleteTargetNode?.name }}</strong> {{ $t('tree.deleteConfirmText') }}
               </p>
             </div>
           </div>
 
           <div class="flex gap-2">
             <button class="flex-1 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
-              @click="showDeleteModal = false">Abbrechen</button>
+              @click="showDeleteModal = false">{{ $t('common.cancel') }}</button>
             <button
               class="flex-1 py-2 text-sm rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium disabled:opacity-50"
               :disabled="saving"
               @click="doDelete"
-            >{{ saving ? '…' : '🗑 Löschen' }}</button>
+            >{{ saving ? '…' : '🗑 ' + $t('common.delete') }}</button>
           </div>
         </div>
       </div>
