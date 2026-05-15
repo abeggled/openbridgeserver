@@ -5,6 +5,7 @@ Schlägt sofort fehl, wenn ein Dependency-Upgrade die API verändert,
 statt erst beim Laufzeit-Fehler im Adapter zu scheitern.
 """
 
+import asyncio
 import pytest
 
 pysnmp = pytest.importorskip("pysnmp", reason="pysnmp nicht installiert")
@@ -14,76 +15,66 @@ pysnmp = pytest.importorskip("pysnmp", reason="pysnmp nicht installiert")
 # ---------------------------------------------------------------------------
 
 
-def _import_hlapi():
-    """Importiert hlapi-Symbole — probiert v6-Pfad zuerst, fällt auf v5 zurück."""
+def _hlapi_asyncio():
     try:
-        from pysnmp.hlapi.v3arch.asyncio import (  # noqa: F401
-            CommunityData,
-            ContextData,
-            ObjectIdentity,
-            ObjectType,
-            SnmpEngine,
-            UdpTransportTarget,
-            UsmUserData,
-            getCmd,
-            nextCmd,
-            setCmd,
-        )
+        import pysnmp.hlapi.v3arch.asyncio as m
 
-        return "v6"
+        return m
     except ImportError:
-        from pysnmp.hlapi.asyncio import (  # noqa: F401
-            CommunityData,
-            ContextData,
-            ObjectIdentity,
-            ObjectType,
-            SnmpEngine,
-            UdpTransportTarget,
-            UsmUserData,
-            getCmd,
-            nextCmd,
-            setCmd,
-        )
+        import pysnmp.hlapi.asyncio as m
 
-        return "v5"
+        return m
+
+
+def _import_hlapi():
+    """Importiert hlapi-Symbole; unterstützt alte und neue Command-Namen."""
+    m = _hlapi_asyncio()
+    for symbol in [
+        "CommunityData",
+        "ContextData",
+        "ObjectIdentity",
+        "ObjectType",
+        "SnmpEngine",
+        "UdpTransportTarget",
+        "UsmUserData",
+    ]:
+        assert hasattr(m, symbol)
+
+    get_cmd = getattr(m, "getCmd", None) or getattr(m, "get_cmd", None)
+    set_cmd = getattr(m, "setCmd", None) or getattr(m, "set_cmd", None)
+    next_cmd = getattr(m, "nextCmd", None) or getattr(m, "next_cmd", None)
+    assert callable(get_cmd)
+    assert callable(set_cmd)
+    assert callable(next_cmd)
+    return m
 
 
 def test_hlapi_importable():
-    path = _import_hlapi()
-    assert path in ("v5", "v6")
+    assert _import_hlapi() is not None
 
 
 def test_get_cmd_is_callable():
-    _import_hlapi()
-    try:
-        from pysnmp.hlapi.v3arch.asyncio import getCmd
-    except ImportError:
-        from pysnmp.hlapi.asyncio import getCmd
+    m = _import_hlapi()
+    get_cmd = getattr(m, "getCmd", None) or getattr(m, "get_cmd", None)
     import inspect
 
-    assert callable(getCmd)
+    assert callable(get_cmd)
     # getCmd muss mindestens snmpEngine, authData, transportTarget, contextData, *varBinds annehmen
-    sig = inspect.signature(getCmd)
+    sig = inspect.signature(get_cmd)
     params = list(sig.parameters.keys())
     assert len(params) >= 4
 
 
 def test_set_cmd_is_callable():
-    _import_hlapi()
-    try:
-        from pysnmp.hlapi.v3arch.asyncio import setCmd
-    except ImportError:
-        from pysnmp.hlapi.asyncio import setCmd
-    assert callable(setCmd)
+    m = _import_hlapi()
+    set_cmd = getattr(m, "setCmd", None) or getattr(m, "set_cmd", None)
+    assert callable(set_cmd)
 
 
 def test_next_cmd_is_callable():
-    _import_hlapi()
-    try:
-        from pysnmp.hlapi.v3arch.asyncio import nextCmd
-    except ImportError:
-        from pysnmp.hlapi.asyncio import nextCmd
-    assert callable(nextCmd)
+    m = _import_hlapi()
+    next_cmd = getattr(m, "nextCmd", None) or getattr(m, "next_cmd", None)
+    assert callable(next_cmd)
 
 
 # ---------------------------------------------------------------------------
@@ -183,11 +174,13 @@ def test_usm_user_data_auth_priv():
 
 
 def test_udp_transport_target():
-    try:
-        from pysnmp.hlapi.v3arch.asyncio import UdpTransportTarget
-    except ImportError:
-        from pysnmp.hlapi.asyncio import UdpTransportTarget
-    t = UdpTransportTarget(("192.168.1.1", 161), timeout=5, retries=1)
+    m = _hlapi_asyncio()
+    UdpTransportTarget = m.UdpTransportTarget
+    create = getattr(UdpTransportTarget, "create", None)
+    if create and asyncio.iscoroutinefunction(create):
+        t = asyncio.run(create(("192.168.1.1", 161), timeout=5, retries=1))
+    else:
+        t = UdpTransportTarget(("192.168.1.1", 161), timeout=5, retries=1)
     assert t is not None
 
 
@@ -208,17 +201,6 @@ def test_object_type_with_oid():
 # ---------------------------------------------------------------------------
 # Auth/Priv protocol constants — in pysnmp 6.x moved to hlapi.asyncio
 # ---------------------------------------------------------------------------
-
-
-def _hlapi_asyncio():
-    try:
-        import pysnmp.hlapi.v3arch.asyncio as m
-
-        return m
-    except ImportError:
-        import pysnmp.hlapi.asyncio as m
-
-        return m
 
 
 def test_auth_protocol_md5():
