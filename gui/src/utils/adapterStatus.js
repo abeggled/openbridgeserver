@@ -20,9 +20,9 @@ export function adapterBadgeVariant(a) {
 }
 
 export function adapterStatusLabel(a) {
-  if (!a.running) return 'Inaktiv'
-  if (a.severity === 'error') return 'Fehler'
-  if (a.severity === 'warning') return 'Eingeschränkt'
-  if (a.connected) return 'Verbunden'
-  return 'Läuft'
+  if (!a.running) return 'adapters.status.inactive'
+  if (a.severity === 'error') return 'common.error'
+  if (a.severity === 'warning') return 'adapters.status.degraded'
+  if (a.connected) return 'adapters.status.connected'
+  return 'adapters.status.running'
 }

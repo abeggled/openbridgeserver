@@ -11,8 +11,8 @@
       <!-- Right cluster: aligns buttons + status chip + ringbuffer stats on a
            single baseline; status badge matches the button height. -->
       <div class="flex items-center gap-2">
-        <button @click="showConfig = true" class="btn-secondary btn-sm" data-testid="btn-open-monitor-config">⚙ Konfigurieren</button>
-        <button @click="applyFilters" class="btn-secondary btn-sm" data-testid="btn-refresh-ringbuffer">↻ Aktualisieren</button>
+        <button @click="showConfig = true" class="btn-secondary btn-sm" data-testid="btn-open-monitor-config">{{ $t('ringbuffer.configure') }}</button>
+        <button @click="applyFilters" class="btn-secondary btn-sm" data-testid="btn-refresh-ringbuffer">{{ $t('ringbuffer.refresh') }}</button>
         <button
           v-if="!paused"
           @click="pauseLive"
@@ -225,9 +225,9 @@ const { paused, queuedCount, enqueue: enqueueLive, pause: pauseLive, resume: res
 const wsConnected = computed(() => wsStore.connected)
 
 const statusBadgeText = computed(() => {
-  if (!wsConnected.value) return 'Offline'
-  if (paused.value) return `Pausiert (${queuedCount.value} wartend)`
-  return 'Live'
+  if (!wsConnected.value) return t('sidebar.offline')
+  if (paused.value) return t('ringbuffer.paused', { n: queuedCount.value })
+  return t('sidebar.live')
 })
 
 const statusBadgeClass = computed(() => {
@@ -243,9 +243,9 @@ const statusDotClass = computed(() => {
 })
 
 const statusBadgeTitle = computed(() => {
-  if (!wsConnected.value) return 'WebSocket offline'
-  if (paused.value) return 'Live-Updates pausiert — Resume klicken'
-  return 'Live — WebSocket verbunden, Updates aktiv'
+  if (!wsConnected.value) return t('ringbuffer.offlineTitle')
+  if (paused.value) return t('ringbuffer.pausedTitle')
+  return t('ringbuffer.liveTitle')
 })
 
 let unregisterRb = null
@@ -361,7 +361,7 @@ async function load() {
     if (!paused.value && tableWrapRef.value) tableWrapRef.value.scrollTop = 0
   } catch (error) {
     entries.value = []
-    listError.value = extractErrorMessage(error, 'Monitor-Abfrage fehlgeschlagen')
+    listError.value = extractErrorMessage(error, t('ringbuffer.queryFailed'))
   } finally {
     loading.value = false
   }

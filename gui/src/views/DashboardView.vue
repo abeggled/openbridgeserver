@@ -27,10 +27,10 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
               d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
           </svg>
-          Aktive Warnungen
+          {{ $t('dashboard.activeWarnings') }}
           <span class="text-xs text-slate-500 font-normal">({{ adapterIssues.length }})</span>
         </h3>
-        <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">Zu Adaptern →</RouterLink>
+        <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.toAdapters') }}</RouterLink>
       </div>
       <div class="card-body flex flex-col gap-2">
         <RouterLink
@@ -50,7 +50,7 @@
               <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ a.name }}</span>
               <Badge variant="info" size="xs">{{ a.adapter_type }}</Badge>
               <Badge :variant="a.severity === 'error' ? 'danger' : 'warning'" size="xs">
-                {{ a.severity === 'error' ? 'Fehler' : 'Warnung' }}
+                {{ a.severity === 'error' ? $t('common.error') : $t('common.warning') }}
               </Badge>
             </div>
             <div v-if="a.status_detail" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -76,8 +76,8 @@
                class="flex items-center gap-3 p-3 bg-surface-700 rounded-lg">
             <span :class="['w-2.5 h-2.5 rounded-full shrink-0', adapterDot(a)]" />
             <span class="flex-1 text-sm font-medium text-slate-700 dark:text-slate-200">{{ a.adapter_type }}</span>
-            <Badge :variant="adapterBadgeVariant(a)" size="xs">{{ adapterStatusLabel(a) }}</Badge>
-            <span class="text-xs text-slate-500">{{ a.bindings }} Verknüpfungen</span>
+            <Badge :variant="adapterBadgeVariant(a)" size="xs">{{ $t(adapterStatusLabel(a)) }}</Badge>
+            <span class="text-xs text-slate-500">{{ $t('dashboard.adapterStatus.bindings', { n: a.bindings }) }}</span>
           </div>
         </div>
       </div>

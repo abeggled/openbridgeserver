@@ -48,7 +48,9 @@
       "title": "Live Values",
       "showAll": "All →",
       "noDatapoints": "No data points"
-    }
+    },
+    "activeWarnings": "Active warnings",
+    "toAdapters": "To adapters →"
   },
   "datapoints": {
     "title": "Data Points",
@@ -174,7 +176,8 @@
     "status": {
       "connected": "Connected",
       "running": "Running",
-      "inactive": "Inactive"
+      "inactive": "Inactive",
+      "degraded": "Degraded"
     },
     "direction": {
       "SOURCE": "SOURCE",
@@ -324,7 +327,12 @@
     "storageDisk": "disk (SQLite, persistent)",
     "maxEntries": "Max. entries",
     "apply": "Apply",
-    "configSaved": "Configuration applied"
+    "configSaved": "Configuration applied",
+    "paused": "Paused ({n} pending)",
+    "pausedTitle": "Live updates paused — click Resume",
+    "liveTitle": "Live — WebSocket connected, updates active",
+    "offlineTitle": "WebSocket offline",
+    "queryFailed": "Monitor query failed"
   },
   "logs": {
     "title": "Logs",
@@ -461,7 +469,8 @@
     "demoMode": "Demo mode — this area is read-only/locked.",
     "disabled": "Disabled",
     "emptyNotSet": "(empty = not set)",
-    "optional": "(optional)"
+    "optional": "(optional)",
+    "warning": "Warning"
   },
   "hierarchy": {
     "title": "Device structure",

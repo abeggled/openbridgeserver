@@ -48,7 +48,9 @@
       "title": "Live-Werte",
       "showAll": "Alle →",
       "noDatapoints": "Keine Objekte vorhanden"
-    }
+    },
+    "activeWarnings": "Aktive Warnungen",
+    "toAdapters": "Zu Adaptern →"
   },
   "datapoints": {
     "title": "Objekte",
@@ -174,7 +176,8 @@
     "status": {
       "connected": "Verbunden",
       "running": "Läuft",
-      "inactive": "Inaktiv"
+      "inactive": "Inaktiv",
+      "degraded": "Eingeschränkt"
     },
     "direction": {
       "SOURCE": "SOURCE",
@@ -324,7 +327,12 @@
     "storageDisk": "disk (SQLite, persistent)",
     "maxEntries": "Max. Einträge",
     "apply": "Übernehmen",
-    "configSaved": "Konfiguration übernommen"
+    "configSaved": "Konfiguration übernommen",
+    "paused": "Pausiert ({n} wartend)",
+    "pausedTitle": "Live-Updates pausiert — Resume klicken",
+    "liveTitle": "Live — WebSocket verbunden, Updates aktiv",
+    "offlineTitle": "WebSocket offline",
+    "queryFailed": "Monitor-Abfrage fehlgeschlagen"
   },
   "logs": {
     "title": "Logs",
@@ -461,7 +469,8 @@
     "demoMode": "Demo-Modus — dieser Bereich ist schreibgeschützt/gesperrt.",
     "disabled": "Deaktiviert",
     "emptyNotSet": "(leer = nicht gesetzt)",
-    "optional": "(optional)"
+    "optional": "(optional)",
+    "warning": "Warnung"
   },
   "hierarchy": {
     "title": "Gerätestruktur",

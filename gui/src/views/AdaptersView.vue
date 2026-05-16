@@ -101,7 +101,7 @@
             <h3 class="font-semibold text-slate-800 dark:text-slate-100 truncate">{{ a.name }}</h3>
             <Badge variant="info" size="xs">{{ a.adapter_type }}</Badge>
             <Badge :variant="statusBadgeVariant(a)" size="xs" :data-testid="`adapter-status-badge-${a.id}`">
-              {{ statusLabel(a) }}
+              {{ $t(statusLabel(a)) }}
             </Badge>
           </div>
           <div class="flex items-center gap-2 shrink-0">
