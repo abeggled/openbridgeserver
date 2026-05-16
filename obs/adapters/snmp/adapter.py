@@ -74,58 +74,37 @@ class SnmpBindingConfig(BaseModel):
 
 
 def _import_pysnmp() -> dict:
-    """Import pysnmp symbols; supports both v5 (hlapi.asyncio) and v6 (hlapi.v3arch.asyncio)."""
+    """Import pysnmp symbols; supports v5/v6/v7 naming and module layouts."""
     symbols: dict = {}
     try:
-        try:
-            from pysnmp.hlapi.v3arch.asyncio import (  # type: ignore[import]
-                CommunityData,
-                ContextData,
-                ObjectIdentity,
-                ObjectType,
-                SnmpEngine,
-                UdpTransportTarget,
-                UsmUserData,
-                getCmd,
-                nextCmd,
-                setCmd,
-            )
-        except ImportError:
-            from pysnmp.hlapi.asyncio import (  # type: ignore[import]
-                CommunityData,
-                ContextData,
-                ObjectIdentity,
-                ObjectType,
-                SnmpEngine,
-                UdpTransportTarget,
-                UsmUserData,
-                getCmd,
-                nextCmd,
-                setCmd,
-            )
-        symbols.update(
-            {
-                "getCmd": getCmd,
-                "setCmd": setCmd,
-                "nextCmd": nextCmd,
-                "SnmpEngine": SnmpEngine,
-                "CommunityData": CommunityData,
-                "UsmUserData": UsmUserData,
-                "UdpTransportTarget": UdpTransportTarget,
-                "ContextData": ContextData,
-                "ObjectType": ObjectType,
-                "ObjectIdentity": ObjectIdentity,
-            }
-        )
-
-        # Auth/priv constants: in v6.x they live in hlapi.asyncio (or hlapi.v3arch.asyncio),
-        # not in hlapi directly. Try the path that already succeeded above.
-        _hlapi_mod: Any
         try:
             import pysnmp.hlapi.v3arch.asyncio as _hlapi_mod  # type: ignore[import]
         except ImportError:
             import pysnmp.hlapi.asyncio as _hlapi_mod  # type: ignore[import]
 
+        get_cmd = getattr(_hlapi_mod, "getCmd", None) or getattr(_hlapi_mod, "get_cmd", None)
+        set_cmd = getattr(_hlapi_mod, "setCmd", None) or getattr(_hlapi_mod, "set_cmd", None)
+        next_cmd = getattr(_hlapi_mod, "nextCmd", None) or getattr(_hlapi_mod, "next_cmd", None)
+        if not (callable(get_cmd) and callable(set_cmd) and callable(next_cmd)):
+            return {}
+
+        symbols.update(
+            {
+                "getCmd": get_cmd,
+                "setCmd": set_cmd,
+                "nextCmd": next_cmd,
+                "SnmpEngine": _hlapi_mod.SnmpEngine,
+                "CommunityData": _hlapi_mod.CommunityData,
+                "UsmUserData": _hlapi_mod.UsmUserData,
+                "UdpTransportTarget": _hlapi_mod.UdpTransportTarget,
+                "ContextData": _hlapi_mod.ContextData,
+                "ObjectType": _hlapi_mod.ObjectType,
+                "ObjectIdentity": _hlapi_mod.ObjectIdentity,
+            }
+        )
+
+        # Auth/priv constants: in v6.x they live in hlapi.asyncio (or hlapi.v3arch.asyncio),
+        # not in hlapi directly. Try the path that already succeeded above.
         usmHMACMD5AuthProtocol = _hlapi_mod.usmHMACMD5AuthProtocol
         usmHMACSHAAuthProtocol = _hlapi_mod.usmHMACSHAAuthProtocol
         usmNoAuthProtocol = _hlapi_mod.usmNoAuthProtocol
@@ -168,6 +147,19 @@ def _import_pysnmp() -> dict:
 
     except ImportError:
         return {}
+
+
+async def _build_transport_target(snmp_symbols: dict, host: str, port: int, timeout: float, retries: int) -> Any:
+    """Build UdpTransportTarget across pysnmp versions.
+
+    - v5/v6 typically use constructor: UdpTransportTarget((host, port), ...)
+    - v7 uses async factory: await UdpTransportTarget.create((host, port), ...)
+    """
+    target_cls = snmp_symbols["UdpTransportTarget"]
+    create = getattr(target_cls, "create", None)
+    if create and asyncio.iscoroutinefunction(create):
+        return await create((host, port), timeout=timeout, retries=retries)
+    return target_cls((host, port), timeout=timeout, retries=retries)
 
 
 def _pretty(snmp_value: Any) -> str:
@@ -474,7 +466,7 @@ class SnmpAdapter(AdapterBase):
         s = self._snmp
         cfg = SnmpAdapterConfig(**self._config)
         auth = self._build_auth(cfg)
-        transport = s["UdpTransportTarget"]((bc.host, bc.port), timeout=bc.timeout, retries=bc.retries)
+        transport = await _build_transport_target(s, bc.host, bc.port, timeout=bc.timeout, retries=bc.retries)
 
         error_indication, error_status, error_index, var_binds = await s["getCmd"](
             self._engine,
@@ -497,7 +489,7 @@ class SnmpAdapter(AdapterBase):
         s = self._snmp
         cfg = SnmpAdapterConfig(**self._config)
         auth = self._build_auth(cfg)
-        transport = s["UdpTransportTarget"]((bc.host, bc.port), timeout=bc.timeout, retries=bc.retries)
+        transport = await _build_transport_target(s, bc.host, bc.port, timeout=bc.timeout, retries=bc.retries)
         snmp_value = _encode_write_value(value, bc.data_type)
 
         error_indication, error_status, error_index, _var_binds = await s["setCmd"](
@@ -543,7 +535,7 @@ class SnmpAdapter(AdapterBase):
         s = self._snmp
         cfg = SnmpAdapterConfig(**self._config)
         auth = self._build_auth(cfg)
-        transport = s["UdpTransportTarget"]((host, port), timeout=timeout, retries=retries)
+        transport = await _build_transport_target(s, host, port, timeout=timeout, retries=retries)
 
         root_prefix = oid if oid.endswith(".") else oid + "."
         results: list[dict[str, str]] = []
@@ -568,10 +560,14 @@ class SnmpAdapter(AdapterBase):
             if not var_binds:
                 break
 
-            # nextCmd var_binds is 2D: list of rows; each row holds one ObjectType per
-            # requested variable. We pass one OID → each row has exactly one entry.
+            # nextCmd() can return either:
+            # - 2D (legacy): [[ObjectType, ...], ...]
+            # - 1D (newer):  (ObjectType, ...)
             for row in var_binds:
-                var_bind = row[0]  # ObjectType for our single OID
+                if isinstance(row, (list, tuple)) and row and isinstance(row[0], (list, tuple)):
+                    var_bind = row[0]
+                else:
+                    var_bind = row
                 obj_oid = var_bind[0]  # ObjectType[0] = OID
                 value = var_bind[1]  # ObjectType[1] = value
                 oid_str = str(obj_oid)
