@@ -164,25 +164,112 @@ Both frontends use **vue-i18n v9** (Composition API mode, `legacy: false`).
 | `frontend/src/locales/{de,en}.json` | Visu locale files |
 | `.weblate` | Weblate CLI (`wlc`) config for community translations |
 
-**Migration pattern** (converting a hardcoded string):
-```vue
-<!-- Before -->
-<h2>Übersicht</h2>
+#### Rules — every new feature must follow these
 
-<!-- After -->
-<h2>{{ $t('dashboard.title') }}</h2>
+**No hardcoded user-facing strings.** Any text visible to the user — labels, button text, placeholders, tooltips, error messages, badge text, empty-state messages — must go through `$t()` / `t()`. This includes strings returned from utility functions (`utils/`, composables) that end up rendered in a template.
+
+**`de.json` is the source of truth.** Always add new keys to both `de.json` (German) and `en.json` (English) in the same commit. Use Python (`json.dumps(..., ensure_ascii=False)`) when writing locale files programmatically — never shell heredocs, which strip non-ASCII characters.
+
+#### Key namespace conventions
+
+Admin GUI (`gui/src/locales/`):
+
+| Namespace | Used for |
+|---|---|
+| `nav.*` | Sidebar navigation labels; page titles in TopBar |
+| `topbar.*` | TopBar actions (e.g. `topbar.logout`) |
+| `sidebar.*` | Connection status labels |
+| `login.*` | Login view |
+| `dashboard.*` | Dashboard view (stats, adapter status, live values, warnings) |
+| `datapoints.*` | Data points list + detail view |
+| `adapters.*` | Adapter instances view; `adapters.status.*` for badge labels |
+| `history.*` | History view |
+| `ringbuffer.*` | Monitor / ring-buffer view |
+| `logs.*` | Log view |
+| `logic.*` | Logic engine view |
+| `settings.*` | Settings view |
+| `common.*` | Shared across views (save, cancel, delete, error, warning, …) |
+| `hierarchy.*` | Hierarchy manager |
+
+Visu SPA (`frontend/src/locales/`):
+
+| Namespace | Used for |
+|---|---|
+| `login.*`, `pin.*` | Auth views |
+| `common.*` | Shared UI strings |
+| `widgets.common.*` | Strings shared across widget configs |
+| `widgets.<name>.*` | Per-widget config strings |
+
+#### Usage patterns
+
+**Template-only** — no script import needed when `t()` is not called from JS:
+```vue
+<label>{{ $t('datapoints.form.name') }}</label>
+<input :placeholder="$t('datapoints.searchPlaceholder')" />
+<button :title="$t('common.delete')">…</button>
 ```
 
-In `<script setup>` blocks use `const { t } = useI18n()` and call `t('key')`.
+**Script usage** — import `useI18n` only when `t()` is called in `<script setup>`:
+```js
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 
-**Adding a new locale:**
+// computed properties, functions, error messages:
+const label = computed(() => t('adapters.status.connected'))
+const msg = t('ringbuffer.queryFailed')
+```
+
+Do **not** add `const { t } = useI18n()` if the component only uses `$t()` in its template — TypeScript will flag `t` as declared but never used.
+
+**Parametrized strings** — use named placeholders in the JSON value, pass an object as the second argument:
+```json
+{ "bindings": "{n} Verknüpfungen", "areasCount": "{n} Bereiche" }
+```
+```vue
+{{ $t('dashboard.adapterStatus.bindings', { n: a.bindings }) }}
+{{ $t('widgets.grundriss.areasCount', { n: cfg.areas.length }) }}
+```
+
+**Reactive option arrays** — when an array of `{ label, value }` objects is used in a `v-for` select/radio, it must be `computed` so labels update when the locale changes:
+```js
+// Wrong — labels are frozen at component creation time
+const MODES = [{ value: 'a', label: t('key.a') }, …]
+
+// Correct — labels recompute on locale change
+const MODES = computed(() => [{ value: 'a', label: t('key.a') }, …])
+```
+
+**Pure utility functions** (`utils/`, plain `.js`/`.ts` files without a Vue setup context) cannot call `t()`. Instead, return locale key strings and translate at the callsite:
+```js
+// utils/adapterStatus.js
+export function adapterStatusLabel(a) {
+  if (!a.running) return 'adapters.status.inactive'
+  if (a.connected) return 'adapters.status.connected'
+  return 'adapters.status.running'
+}
+
+// In the template:
+{{ $t(adapterStatusLabel(a)) }}
+```
+
+#### Checklist for new features
+
+When adding a new view, widget config, or significant UI component:
+
+1. Add all user-facing strings to `gui/src/locales/de.json` **and** `en.json` under the appropriate namespace, in the same commit.
+2. Use `$t('namespace.key')` in templates; `t('namespace.key')` in script (after `const { t } = useI18n()`).
+3. Only add `useI18n()` to a component's script if `t()` is actually called there.
+4. Make option/select arrays `computed` if they contain translated labels.
+5. Pure utility functions must return keys, not translated strings.
+6. Run `npm run build` in `gui/` (and `frontend/` if Visu was touched) — a missing key does not throw at dev time but will surface as `[namespace.key]` in production.
+
+#### Adding a new locale
+
 1. Add `src/locales/<lang>.json` (copy `de.json` as a starting point)
 2. Import it in `i18n.js` / `i18n.ts` and add to `messages` + `SUPPORTED_LOCALES`
 3. Run `wlc push gui-admin` to upload source; community translates on Weblate; `wlc pull gui-admin` to pull back
 
 **Weblate** components are named `gui-admin` (Admin GUI) and `frontend-visu` (Visu SPA) under the `openbridgeserver` project on [hosted.weblate.org](https://hosted.weblate.org/projects/openbridgeserver/). Source language is `de`; file format is `JSON (simple)`. CLI tool: `pip install wlc`; credentials in `~/.config/weblate` or via `WLC_URL` / `WLC_KEY` env vars.
-
-**Important — editing `de.json`:** The file must be written as UTF-8. Do NOT edit it via shell heredocs or tools that strip non-ASCII characters. Use a Python script with `chr()` codepoints or write values programmatically via `json.dumps(..., ensure_ascii=False)`. The authoritative key namespaces in `gui/src/locales/de.json` are: `nav`, `sidebar`, `topbar`, `login`, `dashboard`, `datapoints`, `adapters`, `history`, `ringbuffer`, `logs`, `logic`, `settings`, `common`, `hierarchy`. `TopBar.vue` uses `nav.*` for page titles and `topbar.logout` for the logout button.
 
 ## Architecture
 
