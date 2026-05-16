@@ -125,7 +125,7 @@
             </select>
           </div>
         </div>
-        <div class="optional-divider">Optionale Einstellungen</div>
+        <div class="optional-divider">{{ $t('adapters.binding.optionalSettings') }}</div>
         <div class="grid grid-cols-4 gap-4">
           <div class="form-group">
             <label class="label">Unit ID</label>
@@ -203,7 +203,7 @@
           <p v-if="mqttBrowseError" class="text-xs text-red-400 mt-1">{{ mqttBrowseError }}</p>
         </div>
 
-        <div class="optional-divider">Optionale Einstellungen</div>
+        <div class="optional-divider">{{ $t('adapters.binding.optionalSettings') }}</div>
         <div class="grid grid-cols-2 gap-4">
           <!-- Publish-Topic: nur bei Lesen/Schreiben (BOTH) sichtbar -->
           <div v-if="form.direction === 'BOTH'" class="form-group">
@@ -945,7 +945,7 @@
           </div>
         </div>
 
-        <div class="optional-divider">Erweiterte Einstellungen</div>
+        <div class="optional-divider">{{ $t('adapters.binding.advancedSettings') }}</div>
         <div class="grid grid-cols-2 gap-4">
           <div class="form-group">
             <label class="label">Timeout (s)</label>

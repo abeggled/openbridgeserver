@@ -186,7 +186,9 @@
     },
     "binding": {
       "deleteConfirm": "Really delete this binding?",
-      "delete": "Delete binding"
+      "delete": "Delete binding",
+      "optionalSettings": "Optional settings",
+      "advancedSettings": "Advanced settings"
     },
     "demoMode": "Demo mode — view is read-only.",
     "typesError": "Could not load adapter types.",
@@ -409,7 +411,13 @@
       "users": "Users",
       "apikeys": "API Keys",
       "backup": "Backup",
-      "dangerzone": "Danger zone"
+      "dangerzone": "Danger zone",
+      "password": "Password",
+      "links": "Links",
+      "hierarchy": "Hierarchy",
+      "importexport": "Data management",
+      "icons": "Icons",
+      "history": "History DB"
     },
     "general": {
       "title": "General settings",

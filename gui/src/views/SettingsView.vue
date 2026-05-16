@@ -1,26 +1,26 @@
 <template>
   <div class="flex flex-col gap-5">
     <div>
-      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Einstellungen</h2>
-      <p class="text-sm text-slate-500 mt-0.5">Benutzer, API Keys, Passwort, Sicherung</p>
+      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('settings.title') }}</h2>
+      <p class="text-sm text-slate-500 mt-0.5">{{ $t('settings.subtitle') }}</p>
     </div>
 
     <!-- Tabs -->
     <div class="flex gap-1 border-b border-slate-200 dark:border-slate-700/60">
-      <button v-for="t in tabs" :key="t.id" @click="activeTab = t.id"
+      <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id"
         :class="['px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px',
-          activeTab === t.id && t.id === 'dangerzone' ? 'text-red-500 dark:text-red-400 border-red-500' :
-          activeTab === t.id ? 'text-blue-500 dark:text-blue-400 border-blue-500' :
-          t.id === 'dangerzone' ? 'text-red-400/70 dark:text-red-400/60 border-transparent hover:text-red-400' :
+          activeTab === tab.id && tab.id === 'dangerzone' ? 'text-red-500 dark:text-red-400 border-red-500' :
+          activeTab === tab.id ? 'text-blue-500 dark:text-blue-400 border-blue-500' :
+          tab.id === 'dangerzone' ? 'text-red-400/70 dark:text-red-400/60 border-transparent hover:text-red-400' :
           'text-slate-500 dark:text-slate-400 border-transparent hover:text-slate-700 dark:hover:text-slate-200']">
-        {{ t.label }}
+        {{ tab.label }}
       </button>
     </div>
 
     <!-- Demo-Modus Banner -->
     <div v-if="isDemo" class="flex items-center gap-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-sm text-amber-600 dark:text-amber-400">
       <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M12 3a9 9 0 110 18A9 9 0 0112 3z"/></svg>
-      Demo-Modus — dieser Bereich ist schreibgeschützt/gesperrt.
+      {{ $t('common.demoMode') }}
     </div>
 
     <!-- ── Allgemein ── -->
@@ -28,11 +28,11 @@
 
       <!-- Zeitzone -->
       <div class="card" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Allgemeine Einstellungen</h3></div>
+        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.general.title') }}</h3></div>
         <div class="card-body flex flex-col gap-4">
           <div class="form-group">
-            <label class="label">Zeitzone</label>
-            <p class="text-xs text-slate-500 mb-2">Alle Zeitangaben im System werden in dieser Zeitzone dargestellt.</p>
+            <label class="label">{{ $t('settings.general.timezone') }}</label>
+            <p class="text-xs text-slate-500 mb-2">{{ $t('settings.general.timezoneHint') }}</p>
             <!-- Custom dropdown trigger -->
             <div class="relative" ref="tzDropdownRef">
               <button type="button" @click="tzDropdownOpen = !tzDropdownOpen"
@@ -49,7 +49,7 @@
                 <div class="p-2 border-b border-slate-200 dark:border-slate-700">
                   <input ref="tzSearchInputRef" v-model="tzSearch" type="text"
                     class="input text-sm w-full"
-                    placeholder="Suchen … z.B. Zurich, Berlin, UTC"
+                    :placeholder="$t('settings.general.timezonePlaceholder')"
                     @keydown.escape="tzDropdownOpen = false"
                     @keydown.enter.prevent="selectFirstTz" />
                 </div>
@@ -60,7 +60,7 @@
                       tz === tzSelected ? 'text-teal-600 dark:text-teal-400 bg-slate-100/80 dark:bg-slate-700/50' : 'text-slate-600 dark:text-slate-300']">
                     {{ tz }}
                   </button>
-                  <div v-if="!filteredTimezones.length" class="px-3 py-3 text-xs text-slate-500 text-center">Keine Treffer</div>
+                  <div v-if="!filteredTimezones.length" class="px-3 py-3 text-xs text-slate-500 text-center">{{ $t('settings.general.noResults') }}</div>
                 </div>
               </div>
             </div>
@@ -68,7 +68,7 @@
           <div v-if="tzMsg" :class="['p-3 rounded-lg text-sm', tzMsg.ok ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30']">{{ tzMsg.text }}</div>
           <button @click="saveTz" class="btn-primary" :disabled="tzSaving">
             <Spinner v-if="tzSaving" size="sm" color="white" />
-            Speichern
+            {{ $t('settings.general.save') }}
           </button>
         </div>
       </div>
@@ -76,7 +76,7 @@
       <!-- Erscheinungsbild -->
       <div class="card">
         <div class="card-header">
-          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Erscheinungsbild</h3>
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.general.appearance') }}</h3>
         </div>
         <div class="card-body flex flex-col gap-3">
           <p class="text-sm text-slate-500">Wähle, wie die Benutzeroberfläche dargestellt werden soll.</p>
@@ -949,6 +949,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { authApi, adapterApi, configApi, autobackupApi, knxprojApi, historySettingsApi, iconsApi, dpApi } from '@/api/client'
+import { useI18n } from 'vue-i18n'
 import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
@@ -962,6 +963,7 @@ import IconPicker     from '@/components/ui/IconPicker.vue'
 import VisuIcon       from '@/components/ui/VisuIcon.vue'
 import LocaleSwitcher from '@/components/ui/LocaleSwitcher.vue'
 
+const { t }    = useI18n()
 const auth     = useAuthStore()
 const settings = useSettingsStore()
 const navStore = useNavLinksStore()
@@ -1068,16 +1070,16 @@ async function saveTz() {
 }
 
 const tabs = computed(() => [
-  { id: 'general',      label: 'Allgemein' },
-  { id: 'password',     label: 'Passwort' },
-  ...(auth.isAdmin || isDemo.value ? [{ id: 'users', label: 'Benutzer' }] : []),
-  { id: 'apikeys',      label: 'API Keys' },
-  { id: 'links',        label: 'Links' },
-  { id: 'hierarchy',    label: 'Hierarchie' },
-  { id: 'importexport', label: 'Datenmanagement' },
-  { id: 'icons',        label: 'Icons' },
-  { id: 'history',      label: 'Historie DB' },
-  { id: 'dangerzone',   label: 'Danger Zone' },
+  { id: 'general',      label: t('settings.tabs.general') },
+  { id: 'password',     label: t('settings.tabs.password') },
+  ...(auth.isAdmin || isDemo.value ? [{ id: 'users', label: t('settings.tabs.users') }] : []),
+  { id: 'apikeys',      label: t('settings.tabs.apikeys') },
+  { id: 'links',        label: t('settings.tabs.links') },
+  { id: 'hierarchy',    label: t('settings.tabs.hierarchy') },
+  { id: 'importexport', label: t('settings.tabs.importexport') },
+  { id: 'icons',        label: t('settings.tabs.icons') },
+  { id: 'history',      label: t('settings.tabs.history') },
+  { id: 'dangerzone',   label: t('settings.tabs.dangerzone') },
 ])
 
 // ── History Backend ────────────────────────────────────────────────────────

@@ -186,7 +186,9 @@
     },
     "binding": {
       "deleteConfirm": "Dieses Binding wirklich löschen?",
-      "delete": "Binding löschen"
+      "delete": "Binding löschen",
+      "optionalSettings": "Optionale Einstellungen",
+      "advancedSettings": "Erweiterte Einstellungen"
     },
     "demoMode": "Demo-Modus — Ansicht ist schreibgeschützt.",
     "typesError": "Adapter-Typen konnten nicht geladen werden.",
@@ -409,7 +411,13 @@
       "users": "Benutzer",
       "apikeys": "API Keys",
       "backup": "Sicherung",
-      "dangerzone": "Gefahrenzone"
+      "dangerzone": "Gefahrenzone",
+      "password": "Passwort",
+      "links": "Links",
+      "hierarchy": "Hierarchie",
+      "importexport": "Datenmanagement",
+      "icons": "Icons",
+      "history": "Historie DB"
     },
     "general": {
       "title": "Allgemeine Einstellungen",
