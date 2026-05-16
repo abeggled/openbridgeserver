@@ -2,6 +2,8 @@
 
 ![**open bridge server** Logo](logo/obs_logo_dark.svg)
 
+Go to the [English version](/README.md) version of the documentation.
+
 **Offene Gebäudeautomations-Plattform — verbindet KNX, Modbus, MQTT, Home Assistant und mehr**
 
 open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitlichen System. Alle Werte lassen sich über eine Weboberfläche überwachen, per Logik verknüpfen und über MQTT weitergeben — ohne proprietäre Konfigurationsdateien.
