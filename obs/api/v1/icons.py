@@ -14,6 +14,7 @@ import io
 import re
 import zipfile
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -107,6 +108,40 @@ def _is_svg(content: bytes) -> bool:
     return bool(_SVG_RE.search(content[:2048]))
 
 
+
+
+def _sanitize_svg_content(content: bytes) -> bytes | None:
+    """Remove active SVG content (scripts, event handlers, javascript: URLs)."""
+    try:
+        parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=False))
+        root = ET.fromstring(content, parser=parser)
+    except ET.ParseError:
+        return None
+
+    if root.tag.split('}')[-1].lower() != 'svg':
+        return None
+
+    banned_tags = {'script', 'foreignobject'}
+    xlink_href = '{http://www.w3.org/1999/xlink}href'
+
+    def scrub(node: ET.Element) -> None:
+        for child in list(node):
+            if child.tag.split('}')[-1].lower() in banned_tags:
+                node.remove(child)
+            else:
+                scrub(child)
+
+        for attr in list(node.attrib):
+            lower = attr.lower()
+            value = (node.attrib.get(attr) or '').strip().lower()
+            if lower.startswith('on'):
+                del node.attrib[attr]
+            elif lower in {'href', xlink_href} and value.startswith('javascript:'):
+                del node.attrib[attr]
+
+    scrub(root)
+    return ET.tostring(root, encoding='utf-8')
+
 def _safe_name(filename: str) -> str | None:
     """Return a sanitised icon name (stem only, alphanumeric + hyphen/underscore,
     lowercase). Returns None if the name cannot be made safe.
@@ -178,7 +213,7 @@ async def list_icons(
                 IconOut(
                     name=svg_file.stem,
                     size=len(raw),
-                    content=raw.decode("utf-8", errors="replace"),
+                    content=(_sanitize_svg_content(raw) or b"").decode("utf-8", errors="replace"),
                 ),
             )
         except OSError:
@@ -228,7 +263,11 @@ async def import_icons(
                             if not name:
                                 skipped += 1
                                 continue
-                            (icons_dir / f"{name}.svg").write_bytes(member_bytes)
+                            sanitized = _sanitize_svg_content(member_bytes)
+                            if not sanitized:
+                                skipped += 1
+                                continue
+                            (icons_dir / f"{name}.svg").write_bytes(sanitized)
                             if name not in imported:
                                 imported.append(name)
                         else:
@@ -249,7 +288,13 @@ async def import_icons(
             if not name:
                 skipped += 1
                 continue
-            (icons_dir / f"{name}.svg").write_bytes(content)
+            sanitized = _sanitize_svg_content(content)
+            if not sanitized:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    f"'{filename}' enthält kein parsebares SVG",
+                )
+            (icons_dir / f"{name}.svg").write_bytes(sanitized)
             if name not in imported:
                 imported.append(name)
 
