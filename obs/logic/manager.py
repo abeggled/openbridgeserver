@@ -9,11 +9,14 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
+import socket
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -35,6 +38,22 @@ def _msg_to_str(v: object) -> str:
     if isinstance(v, (dict, list)):
         return _j.dumps(v, ensure_ascii=False)
     return str(v)
+
+
+def _is_safe_remote_image_url(url: str) -> bool:
+    """Best-effort SSRF guard for remote image downloads."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme.lower() != "https" or not parsed.hostname:
+            return False
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+                return False
+        return True
+    except Exception:
+        return False
 
 
 _THROTTLE_UNITS: dict[str, float] = {
@@ -522,14 +541,21 @@ class LogicManager:
 
                     if image_url:
                         # Download image and attach as multipart
-                        img_r = await client.get(image_url, timeout=10.0)
+                        if not _is_safe_remote_image_url(image_url):
+                            raise ValueError("image_url must be a public https URL")
+                        img_r = await client.get(image_url, timeout=10.0, follow_redirects=False)
                         img_r.raise_for_status()
-                        content_type = img_r.headers.get("content-type", "image/jpeg")
+                        content_type = img_r.headers.get("content-type", "").split(";")[0].strip().lower()
+                        if not content_type.startswith("image/"):
+                            raise ValueError("image_url must return an image content-type")
+                        content = img_r.content
+                        if len(content) > 5 * 1024 * 1024:
+                            raise ValueError("image_url response too large")
                         fname = image_url.split("?")[0].split("/")[-1] or "image.jpg"
                         r = await client.post(
                             "https://api.pushover.net/1/messages.json",
                             data=payload,
-                            files={"attachment": (fname, img_r.content, content_type)},
+                            files={"attachment": (fname, content, content_type)},
                         )
                     else:
                         r = await client.post(
