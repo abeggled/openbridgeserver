@@ -379,7 +379,14 @@ class IoBrokerAdapter(AdapterBase):
             # can heal stale subscriptions without creating repeated writes.
             for bindings in list(self._state_map.values()):
                 for binding in bindings:
-                    value = await self.read(binding)
+                    try:
+                        value = await self._read_binding_value(binding, suppress_errors=False)
+                    except Exception:
+                        logger.warning(
+                            "ioBroker adapter skipped publish after failed read during subscribe/resync for binding %s",
+                            binding.id,
+                        )
+                        continue
                     await self._publish_binding_value(
                         binding,
                         value,
@@ -686,7 +693,7 @@ class IoBrokerAdapter(AdapterBase):
 
         return True
 
-    async def read(self, binding: Any) -> Any:
+    async def _read_binding_value(self, binding: Any, *, suppress_errors: bool = True) -> Any:
         if self._socket is None:
             return None
         try:
@@ -694,8 +701,13 @@ class IoBrokerAdapter(AdapterBase):
             state = await self._call_socket("getState", bc.state_id)
             return self._extract_state_value(state)
         except Exception:
-            logger.exception("ioBroker adapter read failed for binding %s", binding.id)
-            return None
+            if suppress_errors:
+                logger.exception("ioBroker adapter read failed for binding %s", binding.id)
+                return None
+            raise
+
+    async def read(self, binding: Any) -> Any:
+        return await self._read_binding_value(binding, suppress_errors=True)
 
     @staticmethod
     def _extract_state_value(state: Any) -> Any:

@@ -215,6 +215,27 @@ class TestSubscribe:
         event = self._data_events(mock_bus)[-1]
         assert event.value == pytest.approx(23.0)
 
+
+    @pytest.mark.asyncio
+    async def test_watchdog_resync_skips_failed_reads(self, adapter, mock_bus):
+        binding = make_binding({"state_id": "0_userdata.0.light", "source_data_type": "bool"})
+        adapter._state_map["0_userdata.0.light"] = [binding]
+        adapter._socket.call = AsyncMock(
+            side_effect=[
+                [None, None],
+                [None, {"val": True}],
+                [None, None],
+                TimeoutError("temporary getState timeout"),
+            ]
+        )
+
+        await adapter._subscribe_bound_states(force_publish_initial=True)
+        await adapter._subscribe_bound_states(force_publish_initial=False)
+
+        events = self._data_events(mock_bus)
+        assert len(events) == 1
+        assert events[0].value is True
+
     @pytest.mark.asyncio
     async def test_initial_read_seeds_source_filter_state(self, adapter, mock_bus):
         binding = make_binding({"state_id": "0_userdata.0.light"}, send_on_change=True)
