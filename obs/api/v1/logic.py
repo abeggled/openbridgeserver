@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.logic.models import (
     FlowData,
@@ -69,7 +69,7 @@ async def list_graphs(
 @router.post("/graphs", response_model=LogicGraphOut, status_code=status.HTTP_201_CREATED)
 async def create_graph(
     body: LogicGraphCreate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     now = datetime.now(UTC).isoformat()
@@ -114,7 +114,7 @@ async def get_graph(
 async def update_graph_full(
     graph_id: str,
     body: LogicGraphCreate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     now = datetime.now(UTC).isoformat()
@@ -150,7 +150,7 @@ async def update_graph_full(
 async def update_graph_partial(
     graph_id: str,
     body: LogicGraphUpdate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     now = datetime.now(UTC).isoformat()
@@ -184,7 +184,7 @@ async def update_graph_partial(
 @router.delete("/graphs/{graph_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_graph(
     graph_id: str,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
     row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (graph_id,))
@@ -202,7 +202,7 @@ async def delete_graph(
 @router.post("/graphs/import", response_model=LogicGraphOut, status_code=status.HTTP_201_CREATED)
 async def import_graph(
     body: LogicGraphImport,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     if body.obs_export != "logic_graph":
@@ -276,7 +276,7 @@ async def import_graph(
 @router.post("/graphs/{graph_id}/run", status_code=status.HTTP_200_OK)
 async def run_graph(
     graph_id: str,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
     row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (graph_id,))
@@ -298,7 +298,7 @@ async def run_graph(
 )
 async def duplicate_graph(
     graph_id: str,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
