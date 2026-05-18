@@ -6,7 +6,7 @@ FastAPI app or database connection.
 
 from __future__ import annotations
 
-from obs.api.v1.icons import _is_svg, _safe_name
+from obs.api.v1.icons import _is_svg, _safe_name, _sanitize_svg
 
 # ---------------------------------------------------------------------------
 # _is_svg
@@ -119,3 +119,24 @@ class TestSafeName:
         # _safe_name(member) — dadurch wird der Slash vorher entfernt.
         member = "folder/home.svg"
         assert _safe_name(Path(member).name) == "home"
+
+
+class TestSanitizeSvg:
+    def test_removes_event_handlers(self):
+        payload = b'<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><path d="M1 1"/></svg>'
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert "onload" not in out
+
+    def test_removes_script_and_foreignobject(self):
+        payload = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><foreignObject><div>bad</div></foreignObject><path d="M1 1"/></svg>'
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert "<script" not in out
+        assert "<foreignObject" not in out
+        assert "path" in out
+
+    def test_rejects_invalid_xml(self):
+        import pytest
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException):
+            _sanitize_svg(b"<svg><path></svg")

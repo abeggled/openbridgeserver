@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import httpx
@@ -20,7 +21,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.config import get_settings
 from obs.db.database import Database, get_db
 
@@ -107,6 +108,44 @@ def _is_svg(content: bytes) -> bool:
     return bool(_SVG_RE.search(content[:2048]))
 
 
+
+
+def _sanitize_svg(content: bytes) -> bytes:
+    """Remove executable/dangerous SVG constructs and return sanitized UTF-8 bytes."""
+    try:
+        decoded = content.decode("utf-8")
+        root = ET.fromstring(decoded)
+    except (UnicodeDecodeError, ET.ParseError):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Ungültiges SVG (XML konnte nicht gelesen werden)",
+        )
+
+    def local_name(tag: str) -> str:
+        return tag.split("}", 1)[-1].lower()
+
+    def clean_element(elem: ET.Element) -> None:
+        tag_name = local_name(elem.tag)
+        if tag_name in {"script", "foreignobject", "iframe", "object", "embed"}:
+            elem.clear()
+            elem.tag = "removed"
+            return
+
+        for attr in list(elem.attrib):
+            attr_name = local_name(attr)
+            value = (elem.attrib.get(attr) or "").strip().lower()
+            if attr_name.startswith("on"):
+                del elem.attrib[attr]
+            elif attr_name in {"href", "xlink:href"} and value.startswith("javascript:"):
+                del elem.attrib[attr]
+
+        for child in list(elem):
+            clean_element(child)
+
+    clean_element(root)
+    if local_name(root.tag) != "svg":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Ungültiges SVG")
+    return ET.tostring(root, encoding="utf-8", xml_declaration=False)
 def _safe_name(filename: str) -> str | None:
     """Return a sanitised icon name (stem only, alphanumeric + hyphen/underscore,
     lowercase). Returns None if the name cannot be made safe.
@@ -189,7 +228,7 @@ async def list_icons(
 @router.post("/import", response_model=ImportResult)
 async def import_icons(
     files: list[UploadFile] = File(...),
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> ImportResult:
     """Upload one or more SVG files or a ZIP archive containing SVGs.
     Each file is validated to confirm it actually contains SVG markup,
@@ -228,7 +267,7 @@ async def import_icons(
                             if not name:
                                 skipped += 1
                                 continue
-                            (icons_dir / f"{name}.svg").write_bytes(member_bytes)
+                            (icons_dir / f"{name}.svg").write_bytes(_sanitize_svg(member_bytes))
                             if name not in imported:
                                 imported.append(name)
                         else:
@@ -249,7 +288,7 @@ async def import_icons(
             if not name:
                 skipped += 1
                 continue
-            (icons_dir / f"{name}.svg").write_bytes(content)
+            (icons_dir / f"{name}.svg").write_bytes(_sanitize_svg(content))
             if name not in imported:
                 imported.append(name)
 
