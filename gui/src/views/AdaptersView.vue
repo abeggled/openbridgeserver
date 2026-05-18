@@ -229,6 +229,14 @@
               :title="$t('adapters.manageObjectsTitle')">
               {{ $t('adapters.manageObjects') }}
             </button>
+            <button
+              @click="openBindingMigration(a)"
+              class="btn-secondary btn-sm"
+              :disabled="migrationTargetsFor(a).length === 0"
+              :data-testid="`btn-open-migrate-bindings-${a.id}`"
+              :title="$t('adapters.migration.openTitle')">
+              {{ $t('adapters.migration.openButton') }}
+            </button>
             <button @click="confirmDelete(a)" class="ml-auto btn-danger btn-sm" :disabled="busy[a.id] === 'delete'"
               :title="$t('adapters.deleteConfirm')"
               data-testid="btn-delete-instance">
@@ -252,6 +260,51 @@
     <!-- Anwesenheitssimulation: Objekte verwalten -->
     <Modal v-model="anwesenheitOpen" :title="anwesenheitInstance ? $t('adapters.anwesenheit.modalTitleFull', { name: anwesenheitInstance.name }) : $t('adapters.anwesenheit.modalTitle')" max-width="xl">
       <AnwesenheitDatapointSelector v-if="anwesenheitOpen && anwesenheitInstance" :instance-id="anwesenheitInstance.id" />
+    </Modal>
+
+    <Modal
+      v-model="migrationOpen"
+      :title="migrationSource ? $t('adapters.migration.modalTitleFull', { name: migrationSource.name }) : $t('adapters.migration.modalTitle')"
+      max-width="lg">
+      <div class="flex flex-col gap-4">
+        <p class="text-sm text-slate-500">
+          {{ $t('adapters.migration.description') }}
+        </p>
+        <div class="form-group">
+          <label class="label">{{ $t('adapters.migration.targetLabel') }}</label>
+          <select v-model="migrationTargetId" class="input" data-testid="select-migration-target">
+            <option value="">{{ $t('adapters.migration.targetPlaceholder') }}</option>
+            <option
+              v-for="item in migrationSourceTargets"
+              :key="item.id"
+              :value="item.id">
+              {{ item.name }} ({{ $t('adapters.migration.targetBindingCount', { n: item.bindings }) }})
+            </option>
+          </select>
+        </div>
+
+        <div v-if="migrationError" class="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400">
+          {{ migrationError }}
+        </div>
+        <div
+          v-if="migrationResult"
+          class="p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-sm text-green-500"
+          data-testid="migration-result">
+          {{ $t('adapters.migration.result', { migrated: migrationResult.migrated, skipped: migrationResult.skipped }) }}
+        </div>
+
+        <div class="flex gap-3">
+          <button class="btn-secondary btn-sm" @click="migrationOpen = false">{{ $t('common.cancel') }}</button>
+          <button
+            class="btn-primary btn-sm"
+            :disabled="migrationBusy || !migrationTargetId"
+            data-testid="btn-migrate-bindings-confirm"
+            @click="executeBindingMigration">
+            <Spinner v-if="migrationBusy" size="xs" color="white" />
+            {{ $t('adapters.migration.confirmButton') }}
+          </button>
+        </div>
+      </div>
     </Modal>
 
     <Modal v-model="importOpen" :title="importInstance ? $t('adapters.iobroker.modalTitleFull', { name: importInstance.name }) : $t('adapters.iobroker.modalTitle')" max-width="2xl" resizable>
@@ -374,6 +427,14 @@ const createError       = ref(null)
 const deleteTarget      = ref(null)
 const showDeleteConfirm = ref(false)
 
+// Binding-Migration
+const migrationOpen = ref(false)
+const migrationSource = ref(null)
+const migrationTargetId = ref('')
+const migrationBusy = ref(false)
+const migrationError = ref(null)
+const migrationResult = ref(null)
+
 // Anwesenheitssimulation — Objekte verwalten + Health
 const anwesenheitOpen     = ref(false)
 const anwesenheitInstance = ref(null)
@@ -413,6 +474,11 @@ const selectedImportCount = computed(() => selectedImportStates.value.length)
 const allImportSelected = computed(() => {
   const selectable = importPreview.value.filter(i => !i.exists).map(i => i.state_id)
   return selectable.length > 0 && selectable.every(id => selectedImportStates.value.includes(id))
+})
+const migrationSourceTargets = computed(() => {
+  const src = migrationSource.value
+  if (!src) return []
+  return store.instances.filter((item) => item.id !== src.id && item.adapter_type === src.adapter_type)
 })
 
 let refreshTimer = null
@@ -656,6 +722,39 @@ async function executeIoBrokerImport() {
     importError.value = e.response?.data?.detail ?? t('adapters.iobroker.importFailed')
   } finally {
     importBusy.value = null
+  }
+}
+
+function migrationTargetsFor(source) {
+  return store.instances.filter((item) => item.id !== source.id && item.adapter_type === source.adapter_type)
+}
+
+function openBindingMigration(source) {
+  migrationSource.value = source
+  migrationTargetId.value = ''
+  migrationError.value = null
+  migrationResult.value = null
+  migrationOpen.value = true
+}
+
+async function executeBindingMigration() {
+  const source = migrationSource.value
+  if (!source || !migrationTargetId.value) return
+  migrationBusy.value = true
+  migrationError.value = null
+  migrationResult.value = null
+  try {
+    const { data } = await adapterApi.migrateBindings(source.id, migrationTargetId.value)
+    migrationResult.value = data
+    feedback[source.id] = {
+      success: true,
+      detail: `${data.migrated} Verknüpfungen migriert, ${data.skipped} übersprungen`,
+    }
+    await refreshInstances()
+  } catch (e) {
+    migrationError.value = e.response?.data?.detail ?? 'Migration fehlgeschlagen'
+  } finally {
+    migrationBusy.value = false
   }
 }
 
