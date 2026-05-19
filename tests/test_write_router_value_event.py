@@ -15,7 +15,31 @@ class _Registry:
 
 
 @pytest.mark.anyio
-async def test_handle_value_event_skips_bad_quality_and_none(monkeypatch):
+async def test_handle_value_event_skips_bad_quality(monkeypatch):
+    router = WriteRouter(db=None, registry=_Registry())
+    called = False
+
+    async def _fake_write(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(router, "_write_to_dest_bindings", _fake_write)
+
+    event = DataValueEvent(
+        datapoint_id=uuid.uuid4(),
+        value=True,
+        quality="bad",
+        source_adapter="modbus_tcp",
+        binding_id=uuid.uuid4(),
+    )
+
+    await router.handle_value_event(event)
+
+    assert called is False
+
+
+@pytest.mark.anyio
+async def test_handle_value_event_skips_none_value(monkeypatch):
     router = WriteRouter(db=None, registry=_Registry())
     called = False
 
@@ -28,7 +52,7 @@ async def test_handle_value_event_skips_bad_quality_and_none(monkeypatch):
     event = DataValueEvent(
         datapoint_id=uuid.uuid4(),
         value=None,
-        quality="bad",
+        quality="good",
         source_adapter="modbus_tcp",
         binding_id=uuid.uuid4(),
     )
@@ -52,6 +76,30 @@ async def test_handle_value_event_skips_type_mismatch(monkeypatch):
     event = DataValueEvent(
         datapoint_id=uuid.uuid4(),
         value="not-bool",
+        quality="good",
+        source_adapter="modbus_tcp",
+        binding_id=uuid.uuid4(),
+    )
+
+    await router.handle_value_event(event)
+
+    assert called is False
+
+
+@pytest.mark.anyio
+async def test_handle_value_event_skips_bool_for_float_datapoint(monkeypatch):
+    router = WriteRouter(db=None, registry=_Registry(data_type="FLOAT"))
+    called = False
+
+    async def _fake_write(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(router, "_write_to_dest_bindings", _fake_write)
+
+    event = DataValueEvent(
+        datapoint_id=uuid.uuid4(),
+        value=True,
         quality="good",
         source_adapter="modbus_tcp",
         binding_id=uuid.uuid4(),
