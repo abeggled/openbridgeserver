@@ -77,7 +77,9 @@ export const useWebSocketStore = defineStore('websocket', () => {
       connected.value = false
       clearInterval(_pingInterval)
       // Reconnect after 5 s
-      setTimeout(() => { connect() }, 5000)
+      setTimeout(() => {
+        if (localStorage.getItem('access_token')) connect()
+      }, 5000)
     }
 
     ws.onerror = () => ws.close()
