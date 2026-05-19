@@ -136,11 +136,7 @@ class WriteRouter:
         dt = DataTypeRegistry.get(dp.data_type)
         value = event.value
         if dt.name != "UNKNOWN" and not isinstance(value, dt.python_type):
-            allow_float_numeric = (
-                dt.name == "FLOAT"
-                and isinstance(value, int | float)
-                and not isinstance(value, bool)
-            )
+            allow_float_numeric = dt.name == "FLOAT" and isinstance(value, int | float) and not isinstance(value, bool)
             if not allow_float_numeric:
                 logger.warning(
                     "WriteRouter: skip DataValueEvent for dp=%s due to type mismatch (expected=%s got=%s)",
