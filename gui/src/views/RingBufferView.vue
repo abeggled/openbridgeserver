@@ -212,6 +212,7 @@ async function onTimeFilterChanged() {
 
 const tableWrapRef = ref(null)
 const filtersets = ref([])
+let liveIngressSeq = 0
 
 const { paused, queuedCount, enqueue: enqueueLive, pause: pauseLive, resume: resumeLive, clear: clearLiveQueue, dispose: disposeLiveQueue } =
   useLiveQueue(entries, {
@@ -221,6 +222,34 @@ const { paused, queuedCount, enqueue: enqueueLive, pause: pauseLive, resume: res
       if (tableWrapRef.value) tableWrapRef.value.scrollTop = 0
     },
   })
+
+function markAndEnqueueLive(entry) {
+  liveIngressSeq += 1
+  enqueueLive(entry)
+}
+
+function entryIdentity(entry) {
+  return [
+    entry?.datapoint_id ?? '',
+    entry?.ts ?? '',
+    entry?.source_adapter ?? '',
+    JSON.stringify(entry?.new_value ?? null),
+    JSON.stringify(entry?.old_value ?? null),
+  ].join('|')
+}
+
+function mergeEntriesKeepingLiveFirst(liveFirst, loaded) {
+  const merged = []
+  const seen = new Set()
+  for (const entry of [...liveFirst, ...loaded]) {
+    const key = entryIdentity(entry)
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(entry)
+    if (merged.length >= DEFAULT_QUERY_LIMIT) break
+  }
+  return merged
+}
 
 const wsConnected = computed(() => wsStore.connected)
 
@@ -297,16 +326,16 @@ function onLiveEntry(entry) {
   const presetMatched = Array.isArray(entry?.matched_set_ids) ? entry.matched_set_ids : null
 
   if (activeSets.length === 0) {
-    enqueueLive({ ...entry, matched_set_ids: presetMatched ?? [] })
+    markAndEnqueueLive({ ...entry, matched_set_ids: presetMatched ?? [] })
     return
   }
   if (presetMatched && presetMatched.length > 0) {
-    enqueueLive({ ...entry, matched_set_ids: presetMatched })
+    markAndEnqueueLive({ ...entry, matched_set_ids: presetMatched })
     return
   }
   const ids = matchedSetIds(entry, activeSets)
   if (ids.length === 0) return
-  enqueueLive({ ...entry, matched_set_ids: ids })
+  markAndEnqueueLive({ ...entry, matched_set_ids: ids })
 }
 
 async function applyFilters() {
@@ -344,6 +373,7 @@ function activeTopbarSetIds() {
 async function load() {
   loading.value = true
   listError.value = ''
+  const liveSeqAtLoadStart = liveIngressSeq
   try {
     const setIds = activeTopbarSetIds()
     let data
@@ -360,7 +390,11 @@ async function load() {
       const resp = await ringbufferApi.queryV2(buildQueryV2())
       data = resp.data
     }
-    entries.value = data
+    const loadedEntries = Array.isArray(data) ? data : []
+    const liveArrivedDuringLoad = liveIngressSeq !== liveSeqAtLoadStart
+    entries.value = liveArrivedDuringLoad
+      ? mergeEntriesKeepingLiveFirst(entries.value, loadedEntries)
+      : loadedEntries
     await nextTick()
     if (!paused.value && tableWrapRef.value) tableWrapRef.value.scrollTop = 0
   } catch (error) {

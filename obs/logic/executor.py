@@ -19,6 +19,14 @@ from obs.logic.models import FlowData, LogicNode
 
 logger = logging.getLogger(__name__)
 
+# Sandboxed rounding helper used by formula/script environments.
+# It is compiled with an empty builtins dict so `round.__globals__`
+# cannot be abused to recover real builtins.
+_SANDBOX_ROUND_HALF_UP = eval(  # noqa: S307
+    "lambda x, ndigits=0: (int(float(Decimal(str(x)).quantize(Decimal(10) ** -ndigits, rounding=ROUND_HALF_UP))) if ndigits <= 0 else float(Decimal(str(x)).quantize(Decimal(10) ** -ndigits, rounding=ROUND_HALF_UP)))",
+    {"Decimal": Decimal, "ROUND_HALF_UP": ROUND_HALF_UP, "int": int, "float": float, "str": str, "__builtins__": {}},
+)
+
 _COMPARE_OPS = {
     ">": operator.gt,
     "<": operator.lt,
@@ -1076,9 +1084,7 @@ class GraphExecutor:
         """
         allowed = {k: v for k, v in math.__dict__.items() if not k.startswith("_")}
         # Add Python builtins that are safe and useful in formulas.
-        # Use _round_half_up instead of built-in round to get mathematical
-        # rounding (0.5 always rounds up) rather than banker's rounding.
-        allowed.update({"abs": abs, "round": GraphExecutor._round_half_up, "min": min, "max": max})
+        allowed.update({"abs": abs, "round": _SANDBOX_ROUND_HALF_UP, "min": min, "max": max})
         allowed.update(ctx)
         try:
             tree = ast.parse(expr, mode="eval")
@@ -1104,7 +1110,7 @@ class GraphExecutor:
                         "abs": abs,
                         "min": min,
                         "max": max,
-                        "round": GraphExecutor._round_half_up,
+                        "round": _SANDBOX_ROUND_HALF_UP,
                         "math": math,
                     },
                 },

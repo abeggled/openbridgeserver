@@ -17,13 +17,49 @@ Fallback auf Typ-String für Bindings ohne instance_id (Rückwärtskompatibilit�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
 import uuid
 from typing import Any
 
+_MAX_CACHED_VALUE_CHARS = 8192
+_CACHE_TAG_STR_DIGEST = "__str_digest__"
+_CACHE_TAG_REPR_DIGEST = "__repr_digest__"
+
 logger = logging.getLogger(__name__)
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _to_cached_value(value: Any) -> Any:
+    if isinstance(value, str):
+        if len(value) <= _MAX_CACHED_VALUE_CHARS:
+            return value
+        return (_CACHE_TAG_STR_DIGEST, len(value), _sha256(value))
+
+    rendered = repr(value)
+    if len(rendered) > _MAX_CACHED_VALUE_CHARS:
+        # Keep only a compact fingerprint for large objects to bound cache memory.
+        return (_CACHE_TAG_REPR_DIGEST, len(rendered), _sha256(rendered))
+    return value
+
+
+def _cached_value_equals(current_value: Any, cached_value: Any) -> bool:
+    if isinstance(cached_value, tuple) and len(cached_value) == 3 and cached_value[0] in {_CACHE_TAG_STR_DIGEST, _CACHE_TAG_REPR_DIGEST}:
+        tag, expected_len, expected_hash = cached_value
+        if tag == _CACHE_TAG_STR_DIGEST:
+            if not isinstance(current_value, str):
+                return False
+            return len(current_value) == expected_len and _sha256(current_value) == expected_hash
+
+        current_repr = repr(current_value)
+        return len(current_repr) == expected_len and _sha256(current_repr) == expected_hash
+
+    return current_value == cached_value
 
 
 class WriteRouter:
@@ -143,7 +179,7 @@ class WriteRouter:
             last_val = self._last_value.get(binding.id)
             if last_val is not None:
                 # Filter 2: Nur bei Änderung
-                if binding.send_on_change and value == last_val:
+                if binding.send_on_change and _cached_value_equals(value, last_val):
                     logger.debug(
                         "WriteRouter: on-change — skipping binding %s (value unchanged: %r)",
                         binding.id,
@@ -206,7 +242,13 @@ class WriteRouter:
             try:
                 await instance.write(binding, write_value)
                 self._last_sent[binding.id] = time.monotonic()
-                self._last_value[binding.id] = value  # Original für Delta/OnChange
+
+                needs_value_cache = binding.send_on_change or binding.send_min_delta is not None or binding.send_min_delta_pct is not None
+                if needs_value_cache:
+                    cache_value = _to_cached_value(value)
+                    self._last_value[binding.id] = cache_value  # Original für Delta/OnChange
+                else:
+                    self._last_value.pop(binding.id, None)
                 logger.info(
                     "WriteRouter: wrote to adapter=%s instance=%s binding=%s value=%r",
                     binding.adapter_type,

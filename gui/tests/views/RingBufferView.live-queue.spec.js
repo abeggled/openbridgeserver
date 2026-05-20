@@ -119,4 +119,39 @@ describe('RingBufferView live WebSocket queue', () => {
     expect(wrapper.findAll('[data-testid="ringbuffer-entry"]').length).toBe(250)
   })
 
+  it('keeps resumed live entries when initial load resolves afterwards', async () => {
+    const { mountRingBufferView, flushPromises, makeRingbufferApiMock } = await import('../helpers/mountRingBufferView.js')
+
+    let resolveInitialQuery
+    const initialQuery = new Promise((resolve) => {
+      resolveInitialQuery = resolve
+    })
+
+    const ringbufferApi = makeRingbufferApiMock({
+      queryV2: vi.fn(() => initialQuery),
+      listFiltersets: vi.fn().mockResolvedValue({ data: [] }),
+    })
+
+    const { wrapper, emitLive } = await mountRingBufferView({ wsConnected: true, ringbufferApi })
+
+    await wrapper.find('[data-testid="btn-live-pause"]').trigger('click')
+    await flushPromises()
+
+    emitLive(makeEntry(1, { datapoint_id: 'dp-race' }))
+    emitLive(makeEntry(2, { datapoint_id: 'dp-race' }))
+    await flushPromises()
+
+    await wrapper.find('[data-testid="btn-live-resume"]').trigger('click')
+    await new Promise((r) => setTimeout(r, 100))
+    await flushPromises()
+
+    // Initial mount query resolves after resume and must not clobber the
+    // already flushed live entries.
+    resolveInitialQuery({ data: [] })
+    await flushPromises()
+
+    const rows = wrapper.findAll('[data-testid="ringbuffer-entry"]')
+    expect(rows.length).toBe(2)
+  })
+
 })

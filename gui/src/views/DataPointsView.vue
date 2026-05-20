@@ -58,6 +58,15 @@
           </button>
         </div>
 
+        <!-- Adapter (Multi-Select) -->
+        <div class="min-w-56" data-testid="adapter-filter">
+          <AdapterCombobox
+            :model-value="filters.adapters"
+            placeholder="Alle Adapter"
+            @update:modelValue="setAdapterFilter"
+          />
+        </div>
+
         <!-- Tag (Multi-Select) -->
         <div class="relative" ref="tagFilterRef" data-testid="tag-filter">
           <button
@@ -397,6 +406,7 @@ import Spinner       from '@/components/ui/Spinner.vue'
 import Modal         from '@/components/ui/Modal.vue'
 import PathLabel     from '@/components/ui/PathLabel.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
+import AdapterCombobox from '@/components/ui/AdapterCombobox.vue'
 import DataPointForm from '@/components/datapoints/DataPointForm.vue'
 
 // Inline sort-indicator
@@ -419,7 +429,7 @@ const { t } = useI18n()
 const store = useDatapointStore()
 const ws    = useWebSocketStore()
 
-const filters      = ref({ q: '', tags: [], quality: '', type: '', node_ids: [], tree_ids: [] })
+const filters      = ref({ q: '', tags: [], adapters: [], quality: '', type: '', node_ids: [], tree_ids: [] })
 const showForm     = ref(false)
 const showConfirm  = ref(false)
 const editTarget   = ref(null)
@@ -441,7 +451,15 @@ let observer      = null
 let unsubWs       = null
 
 const hasActiveFilters = computed(() =>
-  !!(filters.value.q || filters.value.tags.length || filters.value.quality || filters.value.type || filters.value.node_ids.length || filters.value.tree_ids.length)
+  !!(
+    filters.value.q
+    || filters.value.tags.length
+    || filters.value.adapters.length
+    || filters.value.quality
+    || filters.value.type
+    || filters.value.node_ids.length
+    || filters.value.tree_ids.length
+  )
 )
 
 const hierarchyFilterLabel = computed(() => {
@@ -468,6 +486,7 @@ onMounted(async () => {
     Object.assign(filters.value, {
       ...saved.filters,
       tags:     saved.filters?.tags     ?? [],
+      adapters: saved.filters?.adapters ?? [],
       node_ids: saved.filters?.node_ids ?? [],
       tree_ids: saved.filters?.tree_ids ?? [],
     })
@@ -535,6 +554,7 @@ function apiFilters() {
   return {
     q:       filters.value.q,
     tag:     filters.value.tags.join(','),
+    adapter: filters.value.adapters.join(','),
     quality: filters.value.quality,
     type:    filters.value.type,
     node_id: filters.value.node_ids.map(n => n.node_id).join(','),
@@ -566,6 +586,11 @@ function setTagFilter(tag) {
   }
 }
 
+function setAdapterFilter(adapters) {
+  filters.value.adapters = Array.isArray(adapters) ? adapters : []
+  onSearch()
+}
+
 function clearFilter(key) {
   if (key === 'node_ids' || key === 'node_id') {
     filters.value.node_ids = []
@@ -575,6 +600,8 @@ function clearFilter(key) {
     filters.value.tree_ids = []
   } else if (key === 'tags') {
     filters.value.tags = []
+  } else if (key === 'adapters') {
+    filters.value.adapters = []
   } else {
     filters.value[key] = ''
   }
@@ -582,7 +609,7 @@ function clearFilter(key) {
 }
 
 function clearAllFilters() {
-  filters.value = { q: '', tags: [], quality: '', type: '', node_ids: [], tree_ids: [] }
+  filters.value = { q: '', tags: [], adapters: [], quality: '', type: '', node_ids: [], tree_ids: [] }
   nodeSearchQ.value = ''
   nodeResults.value = []
   onSearch()
