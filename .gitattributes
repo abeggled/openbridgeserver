@@ -1,0 +1,18 @@
+# Erzwinge LF für alle Textdateien (verhindert CRLF-Probleme auf Windows)
+* text=auto eol=lf
+
+# Binärdateien explizit markieren
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.db binary
+*.sqlite binary
+*.zip binary
+*.gz binary
+*.tar binary

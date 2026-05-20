@@ -97,11 +97,11 @@
         <!-- Card Header -->
         <div class="card-header">
           <div class="flex items-center gap-3 min-w-0">
-            <span :class="['w-3 h-3 rounded-full shrink-0', a.connected ? 'bg-green-400' : a.running ? 'bg-amber-400 animate-pulse' : 'bg-slate-600']" />
+            <span :class="['w-3 h-3 rounded-full shrink-0', dotClass(a)]" :data-testid="`adapter-dot-${a.id}`" />
             <h3 class="font-semibold text-slate-800 dark:text-slate-100 truncate">{{ a.name }}</h3>
             <Badge variant="info" size="xs">{{ a.adapter_type }}</Badge>
-            <Badge :variant="a.connected ? 'success' : a.running ? 'warning' : 'muted'" size="xs">
-              {{ a.connected ? 'Verbunden' : a.running ? 'Läuft' : 'Inaktiv' }}
+            <Badge :variant="statusBadgeVariant(a)" size="xs" :data-testid="`adapter-status-badge-${a.id}`">
+              {{ statusLabel(a) }}
             </Badge>
           </div>
           <div class="flex items-center gap-2 shrink-0">
@@ -117,6 +117,24 @@
         <div class="px-5 py-2 flex gap-4 text-sm text-slate-500">
           <span>Verknüpfungen: <span class="text-slate-600 dark:text-slate-300 font-medium">{{ a.bindings }}</span></span>
           <span v-if="!a.registered" class="text-amber-400">⚠ Typ nicht registriert</span>
+        </div>
+
+        <!-- Status-Detail bei Warning/Error -->
+        <div
+          v-if="a.severity && a.severity !== 'ok' && a.status_detail"
+          :class="[
+            'mx-5 mb-3 flex items-start gap-2 p-3 rounded-lg text-sm',
+            a.severity === 'error'
+              ? 'bg-red-500/10 border border-red-500/30 text-red-500 dark:text-red-400'
+              : 'bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400',
+          ]"
+          :data-testid="`adapter-status-detail-${a.id}`"
+        >
+          <svg class="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+          <span>{{ a.status_detail }}</span>
         </div>
 
         <!-- Expanded Config Panel -->
@@ -329,11 +347,13 @@ import AnwesenheitDatapointSelector from '@/components/adapters/AnwesenheitDatap
 import AnwesenheitConfigForm from '@/components/adapters/AnwesenheitConfigForm.vue'
 import KnxConfigForm        from '@/components/adapters/KnxConfigForm.vue'
 import Modal         from '@/components/ui/Modal.vue'
+import { adapterDotClass as dotClass, adapterBadgeVariant as statusBadgeVariant, adapterStatusLabel as statusLabel } from '@/utils/adapterStatus'
 
 const store          = useAdapterStore()
 const auth           = useAuthStore()
 const isDemo         = computed(() => auth.username === 'demo')
 const expanded       = reactive({})
+
 const drafts         = reactive({})   // id → { name, config, enabled }
 const feedback       = reactive({})   // id → { success, detail }
 const busy           = reactive({})   // id → 'test' | 'save' | 'restart' | null

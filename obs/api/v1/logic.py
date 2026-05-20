@@ -280,9 +280,11 @@ async def run_graph(
     _user: str = Depends(get_current_user),
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
-    row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (graph_id,))
+    row = await db.fetchone("SELECT id, enabled FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    if not bool(row["enabled"]):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Logikblatt ist deaktiviert")
     try:
         from obs.logic.manager import get_logic_manager
 

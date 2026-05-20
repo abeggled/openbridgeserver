@@ -32,7 +32,7 @@ pytestmark = pytest.mark.integration
 # ---------------------------------------------------------------------------
 
 
-async def _create_tree(client, auth_headers, name="Gebäude", desc="Test-Ast") -> dict:
+async def _create_tree(client, auth_headers, name="Gebäude", desc="Test-Hierarchie") -> dict:
     resp = await client.post(
         "/api/v1/hierarchy/trees",
         json={"name": name, "description": desc},

@@ -51,6 +51,8 @@ class AdapterInstanceOut(BaseModel):
     registered: bool  # Typ-Klasse geladen?
     running: bool
     connected: bool
+    severity: str = "ok"  # "ok" | "warning" | "error" — last AdapterStatusEvent
+    status_detail: str = ""
     bindings: int
     created_at: str
     updated_at: str
@@ -162,6 +164,8 @@ def _instance_out(row: Any, instance: Any | None) -> AdapterInstanceOut:
         registered=cls is not None,
         running=instance is not None,
         connected=instance.connected if instance else False,
+        severity=getattr(instance, "last_severity", "ok") if instance else "ok",
+        status_detail=getattr(instance, "last_detail", "") if instance else "",
         bindings=len(instance.get_bindings()) if instance else 0,
         created_at=row["created_at"],
         updated_at=row["updated_at"],

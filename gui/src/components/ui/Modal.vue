@@ -4,9 +4,20 @@
       enter-from-class="opacity-0" enter-active-class="transition-opacity duration-200"
       leave-to-class="opacity-0"   leave-active-class="transition-opacity duration-150"
     >
-      <div v-if="modelValue" class="fixed inset-0 z-50 flex items-center justify-center p-4" @mousedown.self="$emit('update:modelValue', false)">
+      <div
+        v-if="modelValue"
+        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        @mousedown.self="onBackdropClick"
+      >
         <!-- Backdrop -->
-        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+        <div
+          :class="[
+            'absolute inset-0',
+            softBackdrop
+              ? 'bg-slate-900/5 dark:bg-black/20 pointer-events-none'
+              : 'bg-black/60 backdrop-blur-sm',
+          ]"
+        />
 
         <!-- Panel -->
         <Transition
@@ -15,7 +26,7 @@
         >
           <div
             v-if="modelValue"
-            :class="['relative card shadow-2xl w-full flex flex-col max-h-[90vh]', maxWidthClass, { 'modal-resizable': resizable }]"
+            :class="['relative card shadow-2xl w-full flex flex-col max-h-[90vh] pointer-events-auto', maxWidthClass, { 'modal-resizable': resizable }]"
           >
             <!-- Header -->
             <div v-if="title" class="card-header shrink-0">
@@ -44,16 +55,54 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, onBeforeUnmount, watch } from 'vue'
 const props = defineProps({
   modelValue: Boolean,
   title:      String,
   maxWidth:   { type: String, default: 'lg' },
   resizable:  { type: Boolean, default: false },
+  /**
+   * Soft backdrop variant (issue #435): renders a very light, non-blocking
+   * backdrop without blur. Click-outside does NOT close the modal — only
+   * ESC and the X button do. Default `false` preserves prior behaviour
+   * for all existing callers.
+   */
+  softBackdrop: { type: Boolean, default: false },
 })
-defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue'])
 const maxWidths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '2xl': 'max-w-2xl' }
 const maxWidthClass = computed(() => maxWidths[props.maxWidth] ?? maxWidths.lg)
+
+function onBackdropClick() {
+  if (props.softBackdrop) return
+  emit('update:modelValue', false)
+}
+
+function onKeyDown(event) {
+  if (event.key !== 'Escape' || !props.modelValue) return
+  // Don't close the modal while the user is actively editing a field —
+  // the field's own ESC handler (e.g. a combobox closing its dropdown)
+  // should run, but the modal itself stays open. The user dismisses the
+  // modal with another ESC after the field is blurred.
+  const target = event.target
+  const tag = target?.tagName?.toUpperCase?.() || ''
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+  if (target?.isContentEditable) return
+  emit('update:modelValue', false)
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', onKeyDown)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onKeyDown)
+})
+
+// Keep listener active across remounts — re-attach if modelValue toggles
+// after mount (defensive).
+watch(() => props.modelValue, () => {
+  // no-op; listener is global. kept here as a hook point for future logic.
+})
 </script>
 
 <style scoped>

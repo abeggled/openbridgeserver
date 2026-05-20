@@ -71,5 +71,14 @@ export const useLogicStore = defineStore('logic', () => {
     return data
   }
 
-  return { graphs, nodeTypes, loading, fetchNodeTypes, fetchGraphs, createGraph, saveGraph, deleteGraph, runGraph, renameGraph, duplicateGraph, importGraph }
+  async function toggleEnabled(id) {
+    const g = graphs.value.find(g => g.id === id)
+    if (!g) return
+    const { data } = await logicApi.patchGraph(id, { enabled: !g.enabled })
+    const idx = graphs.value.findIndex(g => g.id === id)
+    if (idx !== -1) graphs.value[idx] = data
+    return data
+  }
+
+  return { graphs, nodeTypes, loading, fetchNodeTypes, fetchGraphs, createGraph, saveGraph, deleteGraph, runGraph, renameGraph, duplicateGraph, importGraph, toggleEnabled }
 })

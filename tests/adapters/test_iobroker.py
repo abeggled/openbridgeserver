@@ -253,6 +253,79 @@ class TestSubscribe:
 
 
 class TestReconnect:
+    def test_build_socket_disables_socketio_internal_reconnect(self, adapter):
+        class FakeSocket:
+            def event(self, handler):
+                return handler
+
+            def on(self, _event):
+                def decorator(handler):
+                    return handler
+
+                return decorator
+
+        class FakeSocketIO:
+            def __init__(self):
+                self.kwargs = None
+
+            def AsyncClient(self, **kwargs):  # noqa: N802
+                self.kwargs = kwargs
+                return FakeSocket()
+
+        fake_socketio = FakeSocketIO()
+        adapter._socketio = fake_socketio
+
+        adapter._build_socket()
+
+        assert fake_socketio.kwargs["reconnection"] is False
+        assert fake_socketio.kwargs["logger"] is False
+        assert fake_socketio.kwargs["engineio_logger"] is False
+
+    @pytest.mark.asyncio
+    async def test_disconnect_handler_detaches_socket_and_starts_single_reconnect(self, adapter):
+        class FakeSocket:
+            def event(self, handler):
+                setattr(self, handler.__name__, handler)
+                return handler
+
+            def on(self, _event):
+                def decorator(handler):
+                    return handler
+
+                return decorator
+
+        socket = FakeSocket()
+        adapter._socket = socket
+        adapter._disconnect_requested = False
+        adapter._publish_status = AsyncMock()
+        adapter._ensure_reconnect_task = MagicMock()
+
+        adapter._register_socket_handlers(socket)
+        await socket.disconnect()
+        await socket.disconnect()
+
+        assert adapter._socket is None
+        adapter._publish_status.assert_awaited_once_with(False, "Socket.IO getrennt")
+        adapter._ensure_reconnect_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_connect_socket_closes_stale_socket_before_replacing_it(self, adapter):
+        adapter._connect_url = "http://192.168.1.50:8084"
+        adapter._connect_kwargs = {"socketio_path": "socket.io"}
+        stale_socket = MagicMock()
+        stale_socket.connected = False
+        stale_socket.disconnect = AsyncMock()
+        new_socket = MagicMock()
+        new_socket.connect = AsyncMock()
+        adapter._socket = stale_socket
+        adapter._build_socket = MagicMock(return_value=new_socket)
+
+        connected = await adapter._connect_socket()
+
+        assert connected is True
+        stale_socket.disconnect.assert_awaited_once()
+        assert adapter._socket is new_socket
+
     @pytest.mark.asyncio
     async def test_connect_socket_retries_open_packet_error_with_websocket(self, adapter):
         adapter._connect_url = "http://192.168.1.50:8084"

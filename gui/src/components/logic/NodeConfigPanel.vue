@@ -507,7 +507,7 @@
               class="mt-2 p-2 rounded-lg border border-slate-700/50 bg-slate-800/60 flex flex-col gap-1"
             >
               <div class="flex items-center gap-1">
-                <span class="text-xs font-mono text-slate-500 w-5 shrink-0 text-center">{{ i + 1 }}</span>
+                <span class="text-xs font-semibold text-teal-600 dark:text-teal-400 w-5 shrink-0 text-center">{{ i + 1 }}</span>
                 <input
                   :value="entry.label"
                   @input="updateXmlPath(i, 'label', $event.target.value)"
@@ -516,7 +516,7 @@
                 />
                 <button
                   @click="removeXmlPath(i)"
-                  class="w-5 h-5 flex items-center justify-center rounded text-slate-500 hover:text-red-400 hover:bg-red-400/10 text-base leading-none shrink-0"
+                  class="w-5 h-5 flex items-center justify-center rounded text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 hover:bg-red-400/10 text-base leading-none shrink-0"
                   title="Ausgang entfernen"
                 >−</button>
               </div>

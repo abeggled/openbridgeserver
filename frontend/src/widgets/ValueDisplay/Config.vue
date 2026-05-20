@@ -2,6 +2,7 @@
 import { reactive, watch } from 'vue'
 import IconPicker from '@/components/IconPicker.vue'
 import DataPointPicker from '@/components/DataPointPicker.vue'
+import { TIME_RANGE_PRESETS, DEFAULT_TIME_RANGE } from '@/widgets/Chart/timeRangePresets'
 
 type CondFn = 'eq' | 'lt' | 'lte' | 'gt' | 'gte'
 type DisplayMode = 'value' | 'history' | 'icon_only'
@@ -23,7 +24,7 @@ interface Cfg {
   label: string
   mode: DisplayMode
   rules: Rule[]
-  history_hours: number
+  history_time_range: string
   secondary_dp_id: string
   secondary_label: string
   secondary_decimals: number
@@ -95,11 +96,16 @@ function normalizeRules(raw: Partial<Rule>[] | undefined): Rule[] {
 
 // ── Reactive config ───────────────────────────────────────────────────────────
 
+function resolveHistoryTimeRange(raw: Record<string, unknown>): string {
+  if (raw.history_time_range && typeof raw.history_time_range === 'string') return raw.history_time_range as string
+  return DEFAULT_TIME_RANGE
+}
+
 const cfg = reactive<Cfg>({
   label:              (props.modelValue.label              as string)      ?? '',
   mode:               (props.modelValue.mode               as DisplayMode) ?? 'value',
   rules:              normalizeRules(props.modelValue.rules as Partial<Rule>[] | undefined),
-  history_hours:      (props.modelValue.history_hours      as number)      ?? 24,
+  history_time_range: resolveHistoryTimeRange(props.modelValue),
   secondary_dp_id:    (props.modelValue.secondary_dp_id    as string)      ?? '',
   secondary_label:    (props.modelValue.secondary_label    as string)      ?? '',
   secondary_decimals: (props.modelValue.secondary_decimals as number)      ?? 1,
@@ -107,13 +113,13 @@ const cfg = reactive<Cfg>({
 
 watch(cfg, () => {
   emit('update:modelValue', {
-    label:              cfg.label,
-    mode:               cfg.mode,
-    rules:              cfg.rules,
-    history_hours:      cfg.mode === 'history' ? cfg.history_hours : undefined,
-    secondary_dp_id:    cfg.mode === 'value' && cfg.secondary_dp_id ? cfg.secondary_dp_id : undefined,
-    secondary_label:    cfg.mode === 'value' && cfg.secondary_dp_id ? cfg.secondary_label : undefined,
-    secondary_decimals: cfg.mode === 'value' && cfg.secondary_dp_id ? cfg.secondary_decimals : undefined,
+    label:               cfg.label,
+    mode:                cfg.mode,
+    rules:               cfg.rules,
+    history_time_range:  cfg.mode === 'history' ? cfg.history_time_range : undefined,
+    secondary_dp_id:     cfg.mode === 'value' && cfg.secondary_dp_id ? cfg.secondary_dp_id : undefined,
+    secondary_label:     cfg.mode === 'value' && cfg.secondary_dp_id ? cfg.secondary_label : undefined,
+    secondary_decimals:  cfg.mode === 'value' && cfg.secondary_dp_id ? cfg.secondary_decimals : undefined,
   })
 }, { deep: true })
 
@@ -403,16 +409,15 @@ function dupRule(i: number) {
       </template>
     </div>
 
-    <!-- ── History hours (history mode only) ─────────────────────────────── -->
+    <!-- ── History time range (history mode only) ───────────────────────── -->
     <div v-if="cfg.mode === 'history'" class="border-t border-gray-700 pt-3">
-      <label class="block text-xs text-gray-400 mb-1">Zeitraum (Stunden)</label>
-      <input
-        v-model.number="cfg.history_hours"
-        type="number"
-        min="1"
-        max="720"
-        class="w-28 bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
-      />
+      <label class="block text-xs text-gray-400 mb-1">Standard-Zeitbereich</label>
+      <select
+        v-model="cfg.history_time_range"
+        class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+      >
+        <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ p.label }}</option>
+      </select>
     </div>
 
   </div>

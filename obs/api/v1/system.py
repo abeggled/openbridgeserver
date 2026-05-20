@@ -12,6 +12,9 @@ GET    /api/v1/system/nav-links        list all custom nav links (auth required)
 POST   /api/v1/system/nav-links        create a custom nav link (admin only)
 PATCH  /api/v1/system/nav-links/{id}   update a custom nav link (admin only)
 DELETE /api/v1/system/nav-links/{id}   delete a custom nav link (admin only)
+GET    /api/v1/system/logs             recent log entries from in-memory buffer
+GET    /api/v1/system/log-level        read current root log level (admin only)
+PUT    /api/v1/system/log-level        change log level at runtime (admin only)
 """
 
 from __future__ import annotations
@@ -122,6 +125,21 @@ class NavLinkPatch(BaseModel):
     icon: str | None = None
     sort_order: int | None = None
     open_new_tab: bool | None = None
+
+
+class LogEntryOut(BaseModel):
+    ts: str
+    level: str
+    logger: str
+    message: str
+
+
+class LogLevelOut(BaseModel):
+    level: str
+
+
+class LogLevelIn(BaseModel):
+    level: str
 
 
 # ---------------------------------------------------------------------------
@@ -503,3 +521,62 @@ async def delete_nav_link(
     if row is None:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Link not found")
     await db.execute_and_commit("DELETE FROM nav_links WHERE id = ?", (link_id,))
+
+
+# ---------------------------------------------------------------------------
+# Log buffer
+# ---------------------------------------------------------------------------
+
+_VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
+
+@router.get("/logs", response_model=list[LogEntryOut])
+async def get_logs(
+    level: str | None = None,
+    limit: int = 200,
+    _user: str = Depends(get_current_user),
+) -> list[LogEntryOut]:
+    """Recent log entries from the in-memory buffer, newest first.
+
+    Optional query params:
+    - level: filter by exact level name (INFO, WARNING, ERROR, CRITICAL)
+    - limit: max entries to return (default 200, max 500)
+    """
+    from obs.log_buffer import get_log_buffer
+
+    entries = get_log_buffer()
+    if level:
+        lvl = level.upper()
+        entries = [e for e in entries if e["level"] == lvl]
+    limit = max(1, min(limit, 500))
+    entries = entries[-limit:]
+    entries.reverse()
+    return [LogEntryOut(**e) for e in entries]
+
+
+@router.get("/log-level", response_model=LogLevelOut)
+async def get_log_level(
+    _admin: str = Depends(get_admin_user),
+) -> LogLevelOut:
+    """Return the current root log level. Admin only."""
+    import logging as _logging
+
+    lvl = _logging.getLevelName(_logging.getLogger().level)
+    return LogLevelOut(level=lvl)
+
+
+@router.put("/log-level", status_code=204)
+async def set_log_level(
+    body: LogLevelIn,
+    _admin: str = Depends(get_admin_user),
+) -> None:
+    """Change the root log level at runtime without restarting. Admin only."""
+    from obs.log_buffer import set_log_buffer_level
+
+    lvl = body.level.upper()
+    if lvl not in _VALID_LOG_LEVELS:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"level must be one of: {', '.join(sorted(_VALID_LOG_LEVELS))}",
+        )
+    set_log_buffer_level(lvl)

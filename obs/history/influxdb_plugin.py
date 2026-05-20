@@ -98,7 +98,7 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
         # v3
         return (
             f"{self._url}/api/v3/write_lp",
-            {"database": self._database, "precision": "nanosecond"},
+            {"db": self._database, "precision": "nanosecond"},
         )
 
     def _query_url_params(self) -> tuple[str, dict]:

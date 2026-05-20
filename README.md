@@ -125,8 +125,10 @@ database:
   path: /data/obs.db      # Datenbankdatei
 
 ringbuffer:
-  storage: disk               # Änderungsprotokoll: memory (RAM) oder disk (Datei)
+  storage: file               # Änderungsprotokoll: file-only (Datei)
   max_entries: 10000          # Maximale Anzahl Einträge
+  max_file_size_bytes: null   # Optional: harte Dateigrenze für den Ringbuffer
+  max_age: null               # Optional: maximale Eintrags-Alterung in Sekunden
 
 security:
   jwt_secret: changeme        # Sitzungsschlüssel — unbedingt ändern!
@@ -389,11 +391,25 @@ Der RingBuffer speichert die letzten N Wertänderungen als Protokoll. In der Web
 
 ```
 GET  /api/v1/ringbuffer?q=&adapter=&from=&limit=   # Einträge abfragen
+POST /api/v1/ringbuffer/query                       # v2 Query-DSL (Filtergruppen + Pagination + Sortierung)
+POST /api/v1/ringbuffer/export/csv                  # CSV-Export der vollständigen gefilterten Ergebnismenge
 GET  /api/v1/ringbuffer/stats                       # Anzahl Einträge, Kapazität
-POST /api/v1/ringbuffer/config                      # Speicherart + Kapazität ändern
+POST /api/v1/ringbuffer/config                      # file-only + Kapazität ändern
 ```
 
 Der Parameter `q` durchsucht sowohl den Namen als auch die ID des Datenpunkts.
+
+`POST /api/v1/ringbuffer/query` verwendet eine Filter-DSL mit klarer Semantik:
+- `filters.adapters.any_of`: OR innerhalb der Adapterliste.
+- `filters.values`: typbewusste Wertfilter (`eq/ne/gt/gte/lt/lte/between/contains/regex`) passend zu `data_type`.
+- `filters.metadata`: filterbare Snapshot-Metadaten aus DataPoint/Binding-Kontext (`tags`, `adapter_types`, `group_addresses`, `topics`, `entity_ids`, `register_types`, `register_addresses`).
+- Filtergruppen (`time`, `adapters`, `datapoints`, `values`, `metadata`, `q`) werden per AND kombiniert.
+- Zeitfilter unterstützen offene Ränder (`from` ohne `to`, `to` ohne `from`) und die Kombination aus absoluten Grenzen (`from`/`to`) plus relativen Offsets (`from_relative_seconds`/`to_relative_seconds`).
+- Pagination über `pagination.limit` + `pagination.offset`, Sortierung über `sort.field` (`id|ts`) und `sort.order` (`asc|desc`).
+- Das versionierte Metadatenmodell ist dokumentiert in `docs/ringbuffer-metadata-model-v1.md` (`metadata_version: 1`).
+
+`POST /api/v1/ringbuffer/export/csv` nutzt denselben Request-Body wie `/query`, exportiert aber immer die vollständige gefilterte Ergebnismenge (Pagination der UI wird ignoriert).  
+CSV-Spalten: `id`, `ts`, `datapoint_id`, `name`, `topic`, `old_value_json`, `new_value_json`, `source_adapter`, `quality`, `metadata_version`, `metadata_json`.
 
 ---
 
@@ -1555,6 +1571,9 @@ Die Datenbank wird automatisch aktualisiert — jede neue Version fügt fehlende
 | `datapoint_last_values` | Letzter bekannter Wert je Datenpunkt — wird beim Start wiederhergestellt |
 
 ---
+
+## Translations
+We use [Weblate](https://hosted.weblate.org/projects/open-bridge-server)  to support language translations. Contributions are always welcome.
 
 ## Lizenz
 

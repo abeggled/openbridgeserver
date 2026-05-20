@@ -1,0 +1,43 @@
+{
+  "login": {
+    "title": "Sign in",
+    "username": "Username",
+    "password": "Password",
+    "pin": "PIN",
+    "submit": "Sign in",
+    "submitting": "Signing in …"
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "close": "Close",
+    "confirm": "Confirm",
+    "on": "ON",
+    "off": "OFF",
+    "auto": "Auto",
+    "active": "Activate",
+    "display": "Display",
+    "analog": "Analog",
+    "boolean": "BOOLEAN",
+    "area": "Area",
+    "drawAreas": "Draw areas",
+    "allHolidays": "All public holidays",
+    "clickFirstPointToClose": "Click first point to close ↩",
+    "hiddenClickToShow": "Hidden — click to show",
+    "adminAndAssignedUsers": "Admins + assigned users",
+    "authenticatedUser": "Authenticated (user)",
+    "authenticatedPin": "Authenticated (PIN)"
+  },
+  "editor": {
+    "title": "Visu Editor",
+    "addWidget": "Add widget",
+    "deleteWidget": "Delete widget",
+    "save": "Save"
+  },
+  "viewer": {
+    "noVisuSelected": "No visu selected"
+  }
+}
+

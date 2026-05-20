@@ -1,10 +1,10 @@
 """Hierarchy Manager API — /api/v1/hierarchy/...
 
 Endpoints:
-  GET    /hierarchy/trees                         → alle Äste (Trees)
-  POST   /hierarchy/trees                         → Ast anlegen
-  PUT    /hierarchy/trees/{tree_id}               → Ast umbenennen
-  DELETE /hierarchy/trees/{tree_id}               → Ast löschen
+  GET    /hierarchy/trees                         → alle Hierarchien (Trees)
+  POST   /hierarchy/trees                         → Hierarchie anlegen
+  PUT    /hierarchy/trees/{tree_id}               → Hierarchie umbenennen
+  DELETE /hierarchy/trees/{tree_id}               → Hierarchie löschen
 
   GET    /hierarchy/trees/{tree_id}/nodes         → Baumstruktur (nested)
   POST   /hierarchy/nodes                         → Knoten anlegen
@@ -141,6 +141,7 @@ class NodeSearchResult(BaseModel):
     node_name: str
     tree_id: str
     tree_name: str
+    path: list[str] = []  # ancestor node names (root → leaf), excluding tree_name (#433)
 
 
 class EtsImportRequest(BaseModel):
@@ -512,12 +513,12 @@ async def delete_link(
 
 @router.get("/nodes/search", response_model=list[NodeSearchResult])
 async def search_nodes(
-    q: str = Query("", description="Volltext-Suche in Knoten- und Ast-Namen"),
+    q: str = Query("", description="Volltext-Suche in Knoten- und Hierarchienamen"),
     limit: int = Query(30, ge=1, le=200),
     _user: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ) -> list[NodeSearchResult]:
-    """Knoten über alle Äste hinweg suchen. Gibt Knoten mit Ast-Kontext zurück."""
+    """Knoten über alle Hierarchien hinweg suchen. Gibt Knoten mit Hierarchie-Kontext zurück."""
     if q:
         like = f"%{q}%"
         rows = await db.fetchall(
@@ -540,7 +541,25 @@ async def search_nodes(
                LIMIT ?""",
             (limit,),
         )
-    return [NodeSearchResult(**dict(r)) for r in rows]
+
+    # Build ancestor paths so callers can disambiguate same-named leaves under
+    # different parents (#433). One DB roundtrip for the full node map is
+    # cheaper than per-row Recursive CTEs at typical sizes.
+    node_rows = await db.fetchall("SELECT id, parent_id, name FROM hierarchy_nodes")
+    node_map: dict[str, tuple[str | None, str]] = {nr["id"]: (nr["parent_id"], nr["name"]) for nr in node_rows}
+
+    def _path_for(node_id: str) -> list[str]:
+        path: list[str] = []
+        cursor: str | None = node_id
+        for _ in range(64):
+            if cursor is None or cursor not in node_map:
+                break
+            parent_id, name = node_map[cursor]
+            path.append(name)
+            cursor = parent_id
+        return list(reversed(path))
+
+    return [NodeSearchResult(**dict(r), path=_path_for(r["node_id"])) for r in rows]
 
 
 # ---------------------------------------------------------------------------
