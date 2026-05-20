@@ -421,6 +421,138 @@ ALTER TABLE knx_trades ADD COLUMN parent_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_knx_trade_parent ON knx_trades(parent_id);
 """
 
+_MIGRATION_V29 = """
+ALTER TABLE hierarchy_trees ADD COLUMN display_depth INTEGER NOT NULL DEFAULT 0;
+"""
+
+
+async def _migration_v32(conn: aiosqlite.Connection) -> None:
+    """Consolidated flat-filterset schema (was epic V29+V30+V31) plus a
+    display_depth fixup for epic dev DBs.
+
+    Background — three schema histories converge here:
+      - Fresh DBs (post #462 merge): run V29 (display_depth on hierarchy_trees)
+        then V32 (build filtersets fresh).
+      - Upstream pre-#462 dev DBs at schema_version=28: run V29 then V32 — V32
+        creates the filterset table from scratch since it never existed.
+      - Epic dev DBs at schema_version=31: V29 is already marked applied (with
+        the OLD in-place content that built filtersets), so the new V29
+        (display_depth) does NOT re-run for them. V32 adds display_depth via
+        the idempotent ALTER at the end, and its other steps are no-ops
+        because filtersets already has the final schema.
+
+    Every step here is idempotent (CREATE IF NOT EXISTS, duplicate-column /
+    no-such-column guards, DROP IF EXISTS).
+
+    Epic V30 and V31 were intentionally dropped from the MIGRATIONS list —
+    they only ever shipped to a handful of dev DBs, and their effect is folded
+    into this migration. The version numbers 30 and 31 are skipped on fresh
+    installs, which the monotonic-MAX migration runner handles fine.
+    """
+    # 1. Filtersets table — create if missing (fresh DBs + upstream pre-#462).
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ringbuffer_filtersets (
+            id            TEXT PRIMARY KEY,
+            name          TEXT NOT NULL,
+            description   TEXT NOT NULL DEFAULT '',
+            dsl_version   INTEGER NOT NULL DEFAULT 2,
+            is_active     INTEGER NOT NULL DEFAULT 1,
+            color         TEXT NOT NULL DEFAULT '#3b82f6',
+            topbar_active INTEGER NOT NULL DEFAULT 0,
+            topbar_order  INTEGER NOT NULL DEFAULT 0,
+            filter_json   TEXT NOT NULL DEFAULT '{}',
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
+        )
+        """
+    )
+
+    # 2. Ensure all columns are present (idempotent for older epic dev DBs).
+    async def _add(column: str, definition: str) -> None:
+        try:
+            await conn.execute(f"ALTER TABLE ringbuffer_filtersets ADD COLUMN {column} {definition}")
+        except aiosqlite.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+
+    await _add("color", "TEXT NOT NULL DEFAULT '#3b82f6'")
+    await _add("topbar_active", "INTEGER NOT NULL DEFAULT 0")
+    await _add("topbar_order", "INTEGER NOT NULL DEFAULT 0")
+    await _add("filter_json", "TEXT NOT NULL DEFAULT '{}'")
+
+    # 3. Drop the obsolete is_default column if present (epic dev DBs that ran
+    # an early V29 variant, before the in-place rewrite removed is_default).
+    try:
+        await conn.execute("ALTER TABLE ringbuffer_filtersets DROP COLUMN is_default")
+    except aiosqlite.OperationalError as exc:
+        if "no such column" not in str(exc).lower():
+            raise
+
+    # 4. Drop legacy groups/rules helper tables (#431 flattening).
+    await conn.execute("DROP TABLE IF EXISTS ringbuffer_filterset_rules")
+    await conn.execute("DROP TABLE IF EXISTS ringbuffer_filterset_groups")
+
+    # 5. Indexes.
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_rb_fs_active ON ringbuffer_filtersets(is_active)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_rb_fs_topbar_active ON ringbuffer_filtersets(topbar_active)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_rb_fs_topbar_order ON ringbuffer_filtersets(topbar_order)")
+    await conn.execute("DROP INDEX IF EXISTS idx_rb_fs_default")
+
+    # 6. Epic dev DB display_depth fixup. Those DBs ran the OLD epic V29
+    # (filtersets CREATE) instead of the new upstream V29 (display_depth) and
+    # therefore never received the new column. duplicate-column for everyone
+    # else.
+    try:
+        await conn.execute("ALTER TABLE hierarchy_trees ADD COLUMN display_depth INTEGER NOT NULL DEFAULT 0")
+    except aiosqlite.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+
+
+async def _migration_v33(conn: aiosqlite.Connection) -> None:
+    """Fine-grained filterset ownership (#478).
+
+    Adds the ``created_by`` owner column to ``ringbuffer_filtersets`` and a
+    per-user state table that overrides the topbar pinning and ordering. The
+    global ``topbar_active`` / ``topbar_order`` columns on
+    ``ringbuffer_filtersets`` are no longer read by the API; they remain in
+    place for backward-compat-friendly schema diffs only.
+
+    Existing rows keep ``created_by = NULL`` and are treated as shared,
+    admin-only-editable by the API.
+    """
+    try:
+        await conn.execute("ALTER TABLE ringbuffer_filtersets ADD COLUMN created_by TEXT")
+    except aiosqlite.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_rb_fs_created_by ON ringbuffer_filtersets(created_by)")
+
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ringbuffer_filterset_user_state (
+            username       TEXT NOT NULL,
+            filterset_id   TEXT NOT NULL REFERENCES ringbuffer_filtersets(id) ON DELETE CASCADE,
+            is_active      INTEGER NOT NULL DEFAULT 1,
+            topbar_active  INTEGER NOT NULL DEFAULT 0,
+            topbar_order   INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (username, filterset_id)
+        )
+        """
+    )
+    # ``is_active`` was added after the initial V33 draft. Guard the column-add
+    # for any DB that may have been created against the early shape.
+    try:
+        await conn.execute("ALTER TABLE ringbuffer_filterset_user_state ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+    except aiosqlite.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_rb_fs_user_state_active ON ringbuffer_filterset_user_state(username, topbar_active)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_rb_fs_user_state_order ON ringbuffer_filterset_user_state(username, topbar_order)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_rb_fs_user_state_is_active ON ringbuffer_filterset_user_state(username, is_active)")
+
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -451,6 +583,13 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (26, _MIGRATION_V26),
     (27, _MIGRATION_V27),
     (28, _MIGRATION_V28),
+    (29, _MIGRATION_V29),
+    # V30 and V31 were epic-only follow-ups to the original V29; their effect
+    # is consolidated into V32 below. Version numbers 30 and 31 are deliberately
+    # skipped so fresh DBs jump 29→32, while epic dev DBs at schema_version=31
+    # see V32 as the next applicable migration.
+    (32, _migration_v32),
+    (33, _migration_v33),
 ]
 
 

@@ -46,6 +46,10 @@ class AdapterBase(ABC):
         self._bindings: list[Any] = []  # list[AdapterBinding]
         self._instance_id: uuid.UUID = instance_id or uuid.uuid4()
         self._instance_name: str = name or getattr(self, "adapter_type", "unknown")
+        # Cached so REST API can serve last-known severity/detail without
+        # subscribing to the EventBus (GUI polls /adapters/instances).
+        self._last_severity: str = "ok"
+        self._last_detail: str = ""
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -98,16 +102,30 @@ class AdapterBase(ABC):
     def connected(self) -> bool:
         return self._connected
 
-    async def _publish_status(self, connected: bool, detail: str = "") -> None:
+    @property
+    def last_severity(self) -> str:
+        return self._last_severity
+
+    @property
+    def last_detail(self) -> str:
+        return self._last_detail
+
+    async def _publish_status(self, connected: bool, detail: str = "", severity: str = "ok") -> None:
         from obs.core.event_bus import AdapterStatusEvent
 
-        self._connected = connected
+        # severity="warning" signals degraded operation without changing the
+        # connected flag — issue #466. All other severities track `connected`.
+        if severity != "warning":
+            self._connected = connected
+        self._last_severity = severity
+        self._last_detail = detail
         await self._bus.publish(
             AdapterStatusEvent(
                 adapter_type=self.adapter_type,
                 instance_id=self._instance_id,
                 instance_name=self._instance_name,
-                connected=connected,
+                connected=self._connected,
                 detail=detail,
+                severity=severity,
             ),
         )

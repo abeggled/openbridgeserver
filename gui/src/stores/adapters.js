@@ -14,7 +14,11 @@ export const useAdapterStore = defineStore('adapters', () => {
         // Background refresh: only update status fields to avoid re-rendering the whole list
         for (const updated of data) {
           const existing = instances.value.find(a => a.id === updated.id)
-          if (existing) existing.connected = updated.connected
+          if (existing) {
+            existing.connected = updated.connected
+            existing.severity = updated.severity ?? 'ok'
+            existing.status_detail = updated.status_detail ?? ''
+          }
         }
       } else {
         instances.value = data

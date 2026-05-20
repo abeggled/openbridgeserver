@@ -12,7 +12,7 @@ import pytest
 
 from obs.core.event_bus import AdapterStatusEvent, DataValueEvent
 from tests.adapters.conftest import make_binding
-from obs.adapters.iobroker.adapter import IoBrokerAdapter, _coerce_iobroker_value
+from obs.adapters.iobroker.adapter import IoBrokerAdapter, _EngineIOQueueFilter, _coerce_iobroker_value
 
 
 @pytest.fixture
@@ -253,6 +253,121 @@ class TestSubscribe:
 
 
 class TestReconnect:
+    def test_build_socket_disables_socketio_internal_reconnect(self, adapter):
+        class FakeSocket:
+            def event(self, handler):
+                return handler
+
+            def on(self, _event):
+                def decorator(handler):
+                    return handler
+
+                return decorator
+
+        class FakeSocketIO:
+            def __init__(self):
+                self.kwargs = None
+
+            def AsyncClient(self, **kwargs):  # noqa: N802
+                self.kwargs = kwargs
+                return FakeSocket()
+
+        fake_socketio = FakeSocketIO()
+        adapter._socketio = fake_socketio
+
+        adapter._build_socket()
+
+        assert fake_socketio.kwargs["reconnection"] is False
+        assert fake_socketio.kwargs["logger"] is False
+        assert fake_socketio.kwargs["engineio_logger"] is False
+
+    @pytest.mark.asyncio
+    async def test_disconnect_handler_detaches_socket_and_starts_single_reconnect(self, adapter):
+        class FakeSocket:
+            def event(self, handler):
+                setattr(self, handler.__name__, handler)
+                return handler
+
+            def on(self, _event):
+                def decorator(handler):
+                    return handler
+
+                return decorator
+
+        socket = FakeSocket()
+        adapter._socket = socket
+        adapter._disconnect_requested = False
+        adapter._publish_status = AsyncMock()
+        adapter._ensure_reconnect_task = MagicMock()
+
+        adapter._register_socket_handlers(socket)
+        await socket.disconnect()
+        await socket.disconnect()
+
+        assert adapter._socket is None
+        adapter._publish_status.assert_awaited_once_with(False, "Socket.IO getrennt")
+        adapter._ensure_reconnect_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_connect_socket_closes_stale_socket_before_replacing_it(self, adapter):
+        adapter._connect_url = "http://192.168.1.50:8084"
+        adapter._connect_kwargs = {"socketio_path": "socket.io"}
+        stale_socket = MagicMock()
+        stale_socket.connected = False
+        stale_socket.disconnect = AsyncMock()
+        new_socket = MagicMock()
+        new_socket.connect = AsyncMock()
+        adapter._socket = stale_socket
+        adapter._build_socket = MagicMock(return_value=new_socket)
+
+        connected = await adapter._connect_socket()
+
+        assert connected is True
+        stale_socket.disconnect.assert_awaited_once()
+        assert adapter._socket is new_socket
+
+    @pytest.mark.asyncio
+    async def test_connect_socket_retries_open_packet_error_with_websocket(self, adapter):
+        adapter._connect_url = "http://192.168.1.50:8084"
+        adapter._connect_kwargs = {"socketio_path": "socket.io"}
+        polling_socket = MagicMock()
+        polling_socket.connect = AsyncMock(side_effect=Exception("OPEN packet not returned by server"))
+        websocket_socket = MagicMock()
+        websocket_socket.connect = AsyncMock()
+        adapter._build_socket = MagicMock(side_effect=[polling_socket, websocket_socket])
+
+        connected = await adapter._connect_socket()
+
+        assert connected is True
+        polling_socket.connect.assert_awaited_once_with(
+            "http://192.168.1.50:8084",
+            wait_timeout=10,
+            socketio_path="socket.io",
+        )
+        websocket_socket.connect.assert_awaited_once_with(
+            "http://192.168.1.50:8084",
+            wait_timeout=10,
+            socketio_path="socket.io",
+            transports=["websocket"],
+        )
+        assert adapter._socket is websocket_socket
+        assert adapter._connect_kwargs["transports"] == ["websocket"]
+
+    @pytest.mark.asyncio
+    async def test_connect_socket_does_not_retry_unrelated_errors(self, adapter):
+        adapter._connect_url = "http://192.168.1.50:8084"
+        adapter._connect_kwargs = {"socketio_path": "socket.io"}
+        socket = MagicMock()
+        socket.connect = AsyncMock(side_effect=Exception("connection refused"))
+        adapter._build_socket = MagicMock(return_value=socket)
+
+        connected = await adapter._connect_socket()
+
+        assert connected is False
+        assert adapter._build_socket.call_count == 1
+        socket.connect.assert_awaited_once()
+        assert adapter._socket is None
+
     @pytest.mark.asyncio
     async def test_reconnect_loop_retries_until_connect_succeeds(self, adapter, monkeypatch):
         adapter._disconnect_requested = False
@@ -364,6 +479,31 @@ class TestBrowseStates:
         assert [item["id"] for item in result] == ["system.adapter.hue.0.alive"]
         assert adapter._socket.call.await_args_list[0].args[1][2]["startkey"] == "alive."
         assert adapter._socket.call.await_args_list[1].args[1][2]["startkey"] == ""
+
+
+class TestBuildSocket:
+    def test_reconnection_is_disabled(self, adapter):
+        mock_sio = MagicMock()
+        adapter._socketio = MagicMock()
+        adapter._socketio.AsyncClient = MagicMock(return_value=mock_sio)
+
+        adapter._build_socket()
+
+        adapter._socketio.AsyncClient.assert_called_once()
+        _, kwargs = adapter._socketio.AsyncClient.call_args
+        assert kwargs["reconnection"] is False
+
+    def test_engineio_queue_filter_passes_normal_messages(self):
+        f = _EngineIOQueueFilter()
+        record = MagicMock()
+        record.getMessage.return_value = "some other error"
+        assert f.filter(record) is True
+
+    def test_engineio_queue_filter_suppresses_queue_empty_error(self):
+        f = _EngineIOQueueFilter()
+        record = MagicMock()
+        record.getMessage.return_value = "packet queue is empty, aborting"
+        assert f.filter(record) is False
 
 
 class TestWrite:

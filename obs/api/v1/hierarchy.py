@@ -1,10 +1,10 @@
 """Hierarchy Manager API — /api/v1/hierarchy/...
 
 Endpoints:
-  GET    /hierarchy/trees                         → alle Äste (Trees)
-  POST   /hierarchy/trees                         → Ast anlegen
-  PUT    /hierarchy/trees/{tree_id}               → Ast umbenennen
-  DELETE /hierarchy/trees/{tree_id}               → Ast löschen
+  GET    /hierarchy/trees                         → alle Hierarchien (Trees)
+  POST   /hierarchy/trees                         → Hierarchie anlegen
+  PUT    /hierarchy/trees/{tree_id}               → Hierarchie umbenennen
+  DELETE /hierarchy/trees/{tree_id}               → Hierarchie löschen
 
   GET    /hierarchy/trees/{tree_id}/nodes         → Baumstruktur (nested)
   POST   /hierarchy/nodes                         → Knoten anlegen
@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from obs.api.auth import get_current_user
+from obs.api.v1.datapoints import NodePathSegment
 from obs.db.database import Database, get_db
 
 router = APIRouter(tags=["hierarchy"])
@@ -57,6 +58,7 @@ class HierarchyTree(BaseModel):
     id: str
     name: str
     description: str
+    display_depth: int
     created_at: str
     updated_at: str
 
@@ -64,11 +66,13 @@ class HierarchyTree(BaseModel):
 class HierarchyTreeCreate(BaseModel):
     name: str
     description: str = ""
+    display_depth: int = 0
 
 
 class HierarchyTreeUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    display_depth: int | None = None
 
 
 class HierarchyNode(BaseModel):
@@ -129,6 +133,7 @@ class NodeRef(BaseModel):
     node_name: str
     tree_id: str
     tree_name: str
+    node_path: list[NodePathSegment] = []
 
 
 class NodeSearchResult(BaseModel):
@@ -136,6 +141,7 @@ class NodeSearchResult(BaseModel):
     node_name: str
     tree_id: str
     tree_name: str
+    path: list[str] = []  # ancestor node names (root → leaf), excluding tree_name (#433)
 
 
 class EtsImportRequest(BaseModel):
@@ -162,6 +168,7 @@ def _row_to_tree(row: Any) -> HierarchyTree:
         id=row["id"],
         name=row["name"],
         description=row["description"],
+        display_depth=row["display_depth"] if row["display_depth"] is not None else 0,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -220,8 +227,8 @@ async def create_tree(
     now = _now()
     tid = _new_id()
     await db.execute_and_commit(
-        "INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)",
-        (tid, body.name, body.description, now, now),
+        "INSERT INTO hierarchy_trees (id, name, description, display_depth, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+        (tid, body.name, body.description, body.display_depth, now, now),
     )
     row = await db.fetchone("SELECT * FROM hierarchy_trees WHERE id=?", (tid,))
     return _row_to_tree(row)
@@ -239,10 +246,11 @@ async def update_tree(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Hierarchiebaum nicht gefunden")
     name = body.name if body.name is not None else row["name"]
     desc = body.description if body.description is not None else row["description"]
+    depth = body.display_depth if body.display_depth is not None else (row["display_depth"] or 0)
     now = _now()
     await db.execute_and_commit(
-        "UPDATE hierarchy_trees SET name=?, description=?, updated_at=? WHERE id=?",
-        (name, desc, now, tree_id),
+        "UPDATE hierarchy_trees SET name=?, description=?, display_depth=?, updated_at=? WHERE id=?",
+        (name, desc, depth, now, tree_id),
     )
     row = await db.fetchone("SELECT * FROM hierarchy_trees WHERE id=?", (tree_id,))
     return _row_to_tree(row)
@@ -425,6 +433,24 @@ async def get_datapoint_nodes(
            ORDER BY ht.name, hn.name""",
         (dp_id,),
     )
+    node_ids = [r["node_id"] for r in rows]
+    node_paths: dict[str, list[NodePathSegment]] = {}
+    if node_ids:
+        ph = ",".join("?" * len(node_ids))
+        path_rows = await db.fetchall(
+            f"""WITH RECURSIVE anc(leaf_id, cur_id, cur_name, cur_parent, depth) AS (
+                SELECT id, id, name, parent_id, 0 FROM hierarchy_nodes WHERE id IN ({ph})
+                UNION ALL
+                SELECT a.leaf_id, hn2.id, hn2.name, hn2.parent_id, a.depth + 1
+                FROM anc a JOIN hierarchy_nodes hn2 ON hn2.id = a.cur_parent
+                WHERE a.cur_parent IS NOT NULL
+            )
+            SELECT leaf_id, cur_id, cur_name FROM anc WHERE depth > 0
+            ORDER BY leaf_id, depth DESC""",
+            node_ids,
+        )
+        for r in path_rows:
+            node_paths.setdefault(r["leaf_id"], []).append(NodePathSegment(node_id=r["cur_id"], node_name=r["cur_name"]))
     return [
         NodeRef(
             link_id=r["link_id"],
@@ -432,6 +458,7 @@ async def get_datapoint_nodes(
             node_name=r["node_name"],
             tree_id=r["tree_id"],
             tree_name=r["tree_name"],
+            node_path=node_paths.get(r["node_id"], []),
         )
         for r in rows
     ]
@@ -486,12 +513,12 @@ async def delete_link(
 
 @router.get("/nodes/search", response_model=list[NodeSearchResult])
 async def search_nodes(
-    q: str = Query("", description="Volltext-Suche in Knoten- und Ast-Namen"),
+    q: str = Query("", description="Volltext-Suche in Knoten- und Hierarchienamen"),
     limit: int = Query(30, ge=1, le=200),
     _user: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ) -> list[NodeSearchResult]:
-    """Knoten über alle Äste hinweg suchen. Gibt Knoten mit Ast-Kontext zurück."""
+    """Knoten über alle Hierarchien hinweg suchen. Gibt Knoten mit Hierarchie-Kontext zurück."""
     if q:
         like = f"%{q}%"
         rows = await db.fetchall(
@@ -514,7 +541,25 @@ async def search_nodes(
                LIMIT ?""",
             (limit,),
         )
-    return [NodeSearchResult(**dict(r)) for r in rows]
+
+    # Build ancestor paths so callers can disambiguate same-named leaves under
+    # different parents (#433). One DB roundtrip for the full node map is
+    # cheaper than per-row Recursive CTEs at typical sizes.
+    node_rows = await db.fetchall("SELECT id, parent_id, name FROM hierarchy_nodes")
+    node_map: dict[str, tuple[str | None, str]] = {nr["id"]: (nr["parent_id"], nr["name"]) for nr in node_rows}
+
+    def _path_for(node_id: str) -> list[str]:
+        path: list[str] = []
+        cursor: str | None = node_id
+        for _ in range(64):
+            if cursor is None or cursor not in node_map:
+                break
+            parent_id, name = node_map[cursor]
+            path.append(name)
+            cursor = parent_id
+        return list(reversed(path))
+
+    return [NodeSearchResult(**dict(r), path=_path_for(r["node_id"])) for r in rows]
 
 
 # ---------------------------------------------------------------------------

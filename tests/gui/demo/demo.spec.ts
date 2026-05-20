@@ -8,6 +8,7 @@
  */
 
 import { test, expect } from '@playwright/test'
+import { waitForMonitorReady } from '../helpers'
 
 test('Demo-User sieht Dashboard (Übersicht)', async ({ page }) => {
   await page.goto('/')
@@ -41,7 +42,7 @@ test('Demo-User kann Historie aufrufen', async ({ page }) => {
 
 test('Demo-User kann Monitor aufrufen', async ({ page }) => {
   await page.goto('/ringbuffer')
-  await page.waitForLoadState('networkidle')
+  await waitForMonitorReady(page)
   await expect(page).toHaveURL('/ringbuffer')
 })
 

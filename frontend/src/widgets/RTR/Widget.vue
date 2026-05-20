@@ -28,7 +28,8 @@ const actualOffset   = computed(() => (props.config.actual_offset   as number   
 const actualDpId     = computed(() => (props.config.actual_temp_dp_id as string | null | undefined) ?? null)
 const modeDpId       = computed(() => (props.config.mode_dp_id     as string   | null | undefined) ?? null)
 const showModes      = computed(() => (props.config.show_modes      as boolean  | undefined) ?? true)
-const supportedModes = computed(() => (props.config.supported_modes as number[] | undefined) ?? [0, 1, 3, 6])
+const supportedModes = computed(() => (props.config.supported_modes as number[] | undefined) ?? [0, 1, 2, 3, 4])
+const variant        = computed(() => (props.config.variant         as 'heating' | 'ac' | undefined) ?? 'heating')
 
 // ── Solltemperatur ────────────────────────────────────────────────────────────
 
@@ -104,15 +105,26 @@ async function setMode(mode: number) {
   } catch { /* ignore */ }
 }
 
-const ALL_MODES = [
-  { value: 0, label: 'Auto'   },
-  { value: 1, label: 'Heizen' },
-  { value: 3, label: 'Kühlen' },
-  { value: 6, label: 'Aus'    },
+const HEATING_MODES = [
+  { value: 0, label: 'Auto'        },
+  { value: 1, label: 'Komfort'     },
+  { value: 2, label: 'Standby'     },
+  { value: 3, label: 'Economy'     },
+  { value: 4, label: 'Frostschutz' },
 ]
 
-const visibleModes      = computed(() => ALL_MODES.filter(m => supportedModes.value.includes(m.value)))
-const currentModeLabel  = computed(() => ALL_MODES.find(m => m.value === currentMode.value)?.label ?? null)
+const AC_MODES = [
+  { value:  0, label: 'Automatik'   },
+  { value:  1, label: 'Heizen'      },
+  { value:  3, label: 'Kühlen'      },
+  { value:  6, label: 'Aus'         },
+  { value:  9, label: 'Nur Lüfter'  },
+  { value: 14, label: 'Entfeuchten' },
+]
+
+const allModes         = computed(() => variant.value === 'ac' ? AC_MODES : HEATING_MODES)
+const visibleModes     = computed(() => allModes.value.filter(m => supportedModes.value.includes(m.value)))
+const currentModeLabel = computed(() => allModes.value.find(m => m.value === currentMode.value)?.label ?? null)
 
 // ── Einheit ───────────────────────────────────────────────────────────────────
 

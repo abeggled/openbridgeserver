@@ -198,11 +198,36 @@ export const historyApi = {
   aggregate: (id, params) => api.get(`/history/${id}/aggregate`, { params }),
 }
 
+// ── Log Buffer ────────────────────────────────────────────────────────────
+export const logsApi = {
+  list:     (params) => api.get('/system/logs', { params }),
+  getLevel: ()       => api.get('/system/log-level'),
+  setLevel: (level)  => api.put('/system/log-level', { level }),
+}
+
 // ── RingBuffer ────────────────────────────────────────────────────────────
 export const ringbufferApi = {
   query:  (params)                  => api.get('/ringbuffer/', { params }),
+  queryV2:(body)                    => api.post('/ringbuffer/query', body),
+  exportCsv: (body)                 => api.post('/ringbuffer/export/csv', body, { responseType: 'blob' }),
   stats:  ()                        => api.get('/ringbuffer/stats'),
-  config: (storage, max_entries)    => api.post('/ringbuffer/config', { storage, max_entries }),
+  config: (body)                    => api.post('/ringbuffer/config', body),
+  listFiltersets: ()                => api.get('/ringbuffer/filtersets'),
+  getFilterset: (id)                => api.get(`/ringbuffer/filtersets/${id}`),
+  createFilterset: (body)           => api.post('/ringbuffer/filtersets', body),
+  updateFilterset: (id, body)       => api.put(`/ringbuffer/filtersets/${id}`, body),
+  deleteFilterset: (id)             => api.delete(`/ringbuffer/filtersets/${id}`),
+  cloneFilterset: (id, name = null) => api.post(`/ringbuffer/filtersets/${id}/clone`, name ? { name } : {}),
+  queryFilterset: (id)              => api.post(`/ringbuffer/filtersets/${id}/query`, {}),
+  // #431 — flat filterset schema, multi-active topbar
+  patchFiltersetTopbar: (id, body)  => api.patch(`/ringbuffer/filtersets/${id}/topbar`, body),
+  patchFiltersetOrder: (items)      => api.patch('/ringbuffer/filtersets/order', { items }),
+  queryMultiFiltersets: (body)      => api.post('/ringbuffer/filtersets/query', body),
+  // #427 — multi-set CSV/TSV export + persisted format defaults
+  exportMultiCsv: (body)            => api.post('/ringbuffer/filtersets/export/csv', body, { responseType: 'blob' }),
+  countExportRows: (body)           => api.post('/ringbuffer/filtersets/export/count', body),
+  getExportSettings: ()             => api.get('/ringbuffer/export/settings'),
+  putExportSettings: (body)         => api.put('/ringbuffer/export/settings', body),
 }
 
 // ── Config Import/Export ──────────────────────────────────────────────────

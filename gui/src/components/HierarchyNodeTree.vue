@@ -20,7 +20,12 @@
         <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7h18M3 12h12M3 17h8"/>
         </svg>
-        <span class="text-sm text-slate-700 dark:text-slate-200 flex-1 truncate">{{ node.name }}</span>
+        <span
+          @click="node.children?.length && toggleExpand(node.id)"
+          :class="['text-sm text-slate-700 dark:text-slate-200 flex-1 truncate select-none',
+            node.children?.length ? 'cursor-pointer hover:text-blue-500 dark:hover:text-blue-400 transition-colors' : '']">
+          {{ node.name }}
+        </span>
         <span v-if="node.description" class="text-xs text-slate-400 hidden lg:block truncate max-w-24">{{ node.description }}</span>
 
         <!-- ── Reihenfolge ↑↓ (hover) ── -->

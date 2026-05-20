@@ -13,8 +13,15 @@
       <div v-else class="flex flex-wrap gap-2">
         <div
           v-for="ref in linked" :key="ref.link_id"
-          class="flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full text-xs font-medium bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/20">
+          class="flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-full text-xs font-medium bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/20"
+          :title="nodeFullPath(ref)">
           <span class="text-blue-400 dark:text-blue-500 font-normal">{{ ref.tree_name }}</span>
+          <template v-for="seg in (ref.node_path || [])" :key="seg.node_id">
+            <svg class="w-2 h-2 text-blue-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+            <span class="text-blue-500 dark:text-blue-400 font-normal">{{ seg.node_name }}</span>
+          </template>
           <svg class="w-2.5 h-2.5 text-blue-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
           </svg>
@@ -164,6 +171,11 @@ async function removeLink(ref) {
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────
+
+function nodeFullPath(ref) {
+  const parts = [ref.tree_name, ...(ref.node_path || []).map(n => n.node_name), ref.node_name]
+  return parts.join(' › ')
+}
 
 function showFeedback(text, ok) {
   feedback.value = { text, ok }
