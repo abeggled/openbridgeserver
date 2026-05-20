@@ -905,7 +905,7 @@ test('json_extractor Config-Panel zeigt Preview-Bereich und Pfad-Eingabe', async
           id: 'jx',
           type: 'json_extractor',
           position: { x: 100, y: 100 },
-          data: { json_path: 'temperature' },
+          data: { json_paths: JSON.stringify([{ label: 'Temperatur', path: 'temperature' }]) },
         },
       ],
       edges: [],
