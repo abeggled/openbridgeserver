@@ -4,18 +4,22 @@
     <div class="flex items-center gap-3 px-4 py-2 bg-surface-800 border-b border-slate-200 dark:border-slate-700/60 flex-shrink-0">
       <h2 class="text-sm font-bold text-slate-800 dark:text-slate-100">Logikmodul</h2>
       <div class="flex-1" />
-      <!-- Graph selector -->
+      <!-- Logikblatt selector -->
       <select v-model="activeGraphId" @change="loadGraph"
         class="input text-xs py-1 px-2 max-w-[200px]" data-testid="select-graph">
-        <option value="">— Graph wählen —</option>
-        <option v-for="g in store.graphs" :key="g.id" :value="g.id">{{ g.name }}</option>
+        <option value="">— Logikblatt wählen —</option>
+        <option v-for="g in store.graphs" :key="g.id" :value="g.id">{{ g.name }}{{ g.enabled ? '' : ' (deaktiviert)' }}</option>
       </select>
       <button @click="newGraph" class="btn-primary btn-sm">+ Neu</button>
       <button v-if="activeGraphId" @click="saveGraph" class="btn-secondary btn-sm" :disabled="saving">
         <Spinner v-if="saving" size="sm" color="white" />
         Speichern
       </button>
-      <button v-if="activeGraphId" @click="runGraph" class="btn-secondary btn-sm text-green-400" data-testid="btn-run">
+      <button v-if="activeGraphId" @click="runGraph"
+        :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
+        :disabled="!activeGraph?.enabled"
+        :title="activeGraph?.enabled ? 'Logikblatt ausführen' : 'Logikblatt ist deaktiviert — kein Ausführen möglich'"
+        data-testid="btn-run">
         &#9654; Ausführen
       </button>
       <button v-if="activeGraphId" @click="toggleDebug"
@@ -23,16 +27,22 @@
         title="Debug-Modus: zeigt Werte nach Ausführen" data-testid="btn-debug">
         &#128270; Debug
       </button>
-      <button v-if="activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm" title="Graph umbenennen" data-testid="btn-rename">
+      <button v-if="activeGraphId" @click="doToggleEnabled"
+        :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-orange-400 ring-1 ring-orange-400/50']"
+        :title="activeGraph?.enabled ? 'Logikblatt deaktivieren' : 'Logikblatt aktivieren'"
+        data-testid="btn-toggle-enabled">
+        {{ activeGraph?.enabled ? '✓ Aktiv' : '⊘ Deaktiviert' }}
+      </button>
+      <button v-if="activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm" title="Logikblatt umbenennen" data-testid="btn-rename">
         ✏ Umbenennen
       </button>
-      <button v-if="activeGraphId" @click="doDuplicateGraph" class="btn-secondary btn-sm" title="Graph duplizieren" data-testid="btn-duplicate">
+      <button v-if="activeGraphId" @click="doDuplicateGraph" class="btn-secondary btn-sm" title="Logikblatt duplizieren" data-testid="btn-duplicate">
         ⧉ Duplizieren
       </button>
-      <button v-if="activeGraphId" @click="doExportGraph" class="btn-secondary btn-sm" title="Graph als JSON exportieren" data-testid="btn-export">
+      <button v-if="activeGraphId" @click="doExportGraph" class="btn-secondary btn-sm" title="Logikblatt als JSON exportieren" data-testid="btn-export">
         ↓ Exportieren
       </button>
-      <label class="btn-secondary btn-sm cursor-pointer" title="Graph aus JSON importieren" data-testid="btn-import">
+      <label class="btn-secondary btn-sm cursor-pointer" title="Logikblatt aus JSON importieren" data-testid="btn-import">
         ↑ Importieren
         <input type="file" accept=".json" class="hidden" @change="onImportFile" data-testid="input-import-file" />
       </label>
@@ -62,7 +72,7 @@
           v-model:nodes="nodes"
           v-model:edges="edges"
           :node-types="nodeTypeComponents"
-          :default-edge-options="{ type: 'smoothstep', animated: true, interactionWidth: 20, style: { stroke: '#475569', strokeWidth: 2 } }"
+          :default-edge-options="defaultEdgeOptions"
           :delete-key-code="['Backspace', 'Delete']"
           fit-view-on-init
           class="logic-canvas"
@@ -78,7 +88,7 @@
           <svg class="w-16 h-16 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M13 10V3L4 14h7v7l9-11h-7z"/>
           </svg>
-          <p class="text-sm">Graph wählen oder neu erstellen</p>
+          <p class="text-sm">Logikblatt wählen oder neu erstellen</p>
         </div>
       </div>
 
@@ -94,7 +104,7 @@
     </div>
 
     <!-- New Graph Modal -->
-    <Modal v-model="showNewGraph" title="Neuer Logic Graph" max-width="sm">
+    <Modal v-model="showNewGraph" title="Neues Logikblatt" max-width="sm">
       <form @submit.prevent="doCreateGraph" class="flex flex-col gap-4">
         <div class="form-group">
           <label class="label">Name</label>
@@ -112,7 +122,7 @@
     </Modal>
 
     <!-- Rename Graph Modal -->
-    <Modal v-model="showRenameGraph" title="Graph umbenennen" max-width="sm">
+    <Modal v-model="showRenameGraph" title="Logikblatt umbenennen" max-width="sm">
       <form @submit.prevent="doRenameGraph" class="flex flex-col gap-4">
         <div class="form-group">
           <label class="label">Name</label>
@@ -130,8 +140,8 @@
     </Modal>
 
     <ConfirmDialog v-model="showDeleteConfirm"
-      title="Logic Graph löschen"
-      message="Dieser Graph wird unwiderruflich gelöscht."
+      title="Logikblatt löschen"
+      message="Dieses Logikblatt wird unwiderruflich gelöscht."
       confirm-label="Löschen"
       @confirm="doDeleteGraph" />
   </div>
@@ -219,6 +229,36 @@ const nodeTypeComponents = {
 
 // ── Active graph ───────────────────────────────────────────────────────────
 const activeGraphId = ref('')
+const activeGraph   = computed(() => store.graphs.find(g => g.id === activeGraphId.value))
+
+// ── Edge options — animated only when graph is enabled ─────────────────────
+const defaultEdgeOptions = computed(() => {
+  const enabled = activeGraph.value?.enabled !== false
+  return {
+    type: 'smoothstep',
+    animated: enabled,
+    interactionWidth: 20,
+    style: {
+      stroke: enabled ? '#475569' : '#64748b',
+      strokeDasharray: enabled ? undefined : '8 5',
+      strokeWidth: 2,
+    },
+  }
+})
+
+// Update existing edges reactively when enabled state changes
+watch(() => activeGraph.value?.enabled, (enabled) => {
+  const isEnabled = enabled !== false
+  edges.value = edges.value.map(e => ({
+    ...e,
+    animated: isEnabled,
+    style: {
+      stroke: isEnabled ? '#475569' : '#64748b',
+      strokeDasharray: isEnabled ? undefined : '8 5',
+      strokeWidth: 2,
+    },
+  }))
+})
 const saving        = ref(false)
 const statusMsg     = ref(null)
 const canvasWrapper = ref(null)
@@ -256,7 +296,7 @@ async function saveGraph() {
         sourceHandle: e.sourceHandle, targetHandle: e.targetHandle
       })),
     })
-    showStatus(true, 'Graph gespeichert')
+    showStatus(true, 'Logikblatt gespeichert')
   } catch (err) {
     showStatus(false, err.response?.data?.detail ?? 'Fehler beim Speichern')
   } finally {
@@ -335,7 +375,7 @@ async function runGraph() {
   try {
     const { data } = await logicApi.runGraph(activeGraphId.value)
     const evalCount = Object.keys(data.outputs || {}).length
-    showStatus(true, `Graph ausgeführt — ${evalCount} Nodes evaluiert`)
+    showStatus(true, `Logikblatt ausgeführt — ${evalCount} Nodes evaluiert`)
     // Always update lastRunOutputs (needed for extractor config panels)
     lastRunOutputs.value = data.outputs || {}
     if (debugMode.value) applyDebugValues(data.outputs || {})
@@ -357,6 +397,17 @@ async function doCreateGraph() {
   nodes.value = []; edges.value = []
 }
 
+// ── Toggle enabled ─────────────────────────────────────────────────────────
+async function doToggleEnabled() {
+  if (!activeGraphId.value) return
+  try {
+    const updated = await store.toggleEnabled(activeGraphId.value)
+    showStatus(true, updated.enabled ? 'Logikblatt aktiviert' : 'Logikblatt deaktiviert')
+  } catch (err) {
+    showStatus(false, err.response?.data?.detail ?? 'Fehler beim Ändern des Status')
+  }
+}
+
 // ── Delete graph ───────────────────────────────────────────────────────────
 const showDeleteConfirm = ref(false)
 function confirmDeleteGraph() { showDeleteConfirm.value = true }
@@ -373,7 +424,7 @@ async function doDuplicateGraph() {
     const copy = await store.duplicateGraph(activeGraphId.value)
     activeGraphId.value = copy.id
     await loadGraph()
-    showStatus(true, `Graph dupliziert als „${copy.name}"`)
+    showStatus(true, `Logikblatt dupliziert als „${copy.name}"`)
   } catch (err) {
     showStatus(false, err.response?.data?.detail ?? 'Fehler beim Duplizieren')
   }
@@ -415,7 +466,7 @@ async function doRenameGraph() {
   try {
     await store.renameGraph(activeGraphId.value, renameGraphName.value.trim(), renameGraphDesc.value)
     showRenameGraph.value = false
-    showStatus(true, 'Graph umbenannt')
+    showStatus(true, 'Logikblatt umbenannt')
   } catch (err) {
     showStatus(false, err.response?.data?.detail ?? 'Fehler beim Umbenennen')
   }
@@ -438,9 +489,9 @@ async function onImportFile(event) {
       renameGraphName.value = imported.name
       renameGraphDesc.value = imported.description ?? ''
       showRenameGraph.value = true
-      showStatus(true, `Graph importiert – bitte umbenennen (Name bereits vorhanden)`)
+      showStatus(true, `Logikblatt importiert – bitte umbenennen (Name bereits vorhanden)`)
     } else {
-      showStatus(true, `Graph „${imported.name}" importiert`)
+      showStatus(true, `Logikblatt „${imported.name}" importiert`)
     }
   } catch (err) {
     showStatus(false, err?.response?.data?.detail ?? 'Ungültige oder fehlerhafte Export-Datei')
@@ -449,11 +500,12 @@ async function onImportFile(event) {
 
 // ── Connect handler — REQUIRED to actually create edges ────────────────────
 function onConnect(params) {
+  const opts = defaultEdgeOptions.value
   edges.value = addEdge({
     ...params,
-    type: 'smoothstep',
-    animated: true,
-    style: { stroke: '#475569', strokeWidth: 2 },
+    type: opts.type,
+    animated: opts.animated,
+    style: opts.style,
   }, edges.value)
 }
 

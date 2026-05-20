@@ -18,7 +18,7 @@
     </div>
 
     <!-- Demo-Modus Banner -->
-    <div v-if="isDemo && activeTab !== 'general'" class="flex items-center gap-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-sm text-amber-600 dark:text-amber-400">
+    <div v-if="isDemo" class="flex items-center gap-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-sm text-amber-600 dark:text-amber-400">
       <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M12 3a9 9 0 110 18A9 9 0 0112 3z"/></svg>
       Demo-Modus — dieser Bereich ist schreibgeschützt/gesperrt.
     </div>
@@ -27,7 +27,7 @@
     <div v-if="activeTab === 'general'" class="flex flex-col gap-4 max-w-md">
 
       <!-- Zeitzone -->
-      <div v-if="!isDemo" class="card">
+      <div class="card" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
         <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Allgemeine Einstellungen</h3></div>
         <div class="card-body flex flex-col gap-4">
           <div class="form-group">
@@ -100,7 +100,7 @@
     </div>
 
     <!-- ── Passwort ── -->
-    <div v-if="activeTab === 'password' && !isDemo" class="card max-w-md">
+    <div v-if="activeTab === 'password'" class="card max-w-md" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Passwort ändern</h3></div>
       <div class="card-body">
         <form @submit.prevent="changePassword" class="flex flex-col gap-4">
@@ -126,7 +126,7 @@
     </div>
 
     <!-- ── Benutzer (Admin only) ── -->
-    <div v-if="activeTab === 'users' && auth.isAdmin && !isDemo">
+    <div v-if="activeTab === 'users' && (auth.isAdmin || isDemo)" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="flex items-center gap-3 mb-4">
         <span class="flex-1 text-sm text-slate-400">{{ users.length }} Benutzer</span>
         <button @click="openCreateUser" class="btn-primary btn-sm">+ Benutzer</button>
@@ -163,7 +163,7 @@
     </div>
 
     <!-- ── API Keys ── -->
-    <div v-if="activeTab === 'apikeys' && !isDemo">
+    <div v-if="activeTab === 'apikeys'" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="flex items-center gap-3 mb-4">
         <span class="flex-1 text-sm text-slate-400">{{ apiKeys.length }} API Keys</span>
         <button @click="createApiKey" class="btn-primary btn-sm">+ API Key</button>
@@ -189,7 +189,7 @@
     </div>
 
     <!-- ── Datenmanagement ── -->
-    <div v-if="activeTab === 'importexport' && !isDemo" class="flex flex-col gap-4 max-w-lg">
+    <div v-if="activeTab === 'importexport'" class="flex flex-col gap-4 max-w-lg" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
 
       <!-- Sicherung erstellen (download) -->
       <div class="card p-5 flex flex-col gap-3">
@@ -356,7 +356,7 @@
     </div>
 
     <!-- ── History Backend ── -->
-    <div v-if="activeTab === 'history' && !isDemo" class="flex flex-col gap-4 max-w-2xl">
+    <div v-if="activeTab === 'history'" class="flex flex-col gap-4 max-w-2xl" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Historie DB</h3>
@@ -545,14 +545,14 @@
     <!-- ── Hierarchie ── -->
     <div v-if="activeTab === 'hierarchy'" class="flex flex-col gap-4" data-testid="hierarchy-tab">
       <div class="card">
-        <div class="card-body">
+        <div class="card-body" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
           <HierarchyManager />
         </div>
       </div>
     </div>
 
     <!-- ── Icons Library ── -->
-    <div v-if="activeTab === 'icons' && !isDemo" class="flex flex-col gap-4" data-testid="icons-tab">
+    <div v-if="activeTab === 'icons'" class="flex flex-col gap-4" data-testid="icons-tab" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
 
       <!-- Toolbar -->
       <div class="flex flex-wrap items-center gap-3">
@@ -713,7 +713,7 @@
     </div>
 
     <!-- ── Links ── -->
-    <div v-if="activeTab === 'links' && auth.isAdmin && !isDemo" class="flex flex-col gap-4 max-w-lg" data-testid="links-tab">
+    <div v-if="activeTab === 'links'" class="flex flex-col gap-4 max-w-lg" data-testid="links-tab" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="card">
         <div class="card-header flex items-center justify-between">
           <div>
@@ -798,7 +798,7 @@
     </div>
 
     <!-- ── Danger Zone ── -->
-    <div v-if="activeTab === 'dangerzone' && auth.isAdmin && !isDemo" class="flex flex-col gap-4 max-w-lg">
+    <div v-if="activeTab === 'dangerzone'" class="flex flex-col gap-4 max-w-lg" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="rounded-lg border border-red-500/40 bg-red-500/5 overflow-hidden">
         <div class="px-5 py-3 border-b border-red-500/30 flex items-center gap-2">
           <svg class="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1038,7 +1038,7 @@ onMounted(async () => {
 })
 
 watch(activeTab, (tab) => {
-  if (tab === 'history' && auth.isAdmin) {
+  if (tab === 'history') {
     loadHistorySettings()
     loadHistoryFilterDps()
   }
@@ -1065,14 +1065,14 @@ async function saveTz() {
 const tabs = computed(() => [
   { id: 'general',      label: 'Allgemein' },
   { id: 'password',     label: 'Passwort' },
-  ...(auth.isAdmin ? [{ id: 'users', label: 'Benutzer' }] : []),
+  ...(auth.isAdmin || isDemo.value ? [{ id: 'users', label: 'Benutzer' }] : []),
   { id: 'apikeys',      label: 'API Keys' },
-  ...(auth.isAdmin && !isDemo.value ? [{ id: 'links', label: 'Links' }] : []),
+  { id: 'links',        label: 'Links' },
   { id: 'hierarchy',    label: 'Hierarchie' },
   { id: 'importexport', label: 'Datenmanagement' },
   { id: 'icons',        label: 'Icons' },
-  ...(auth.isAdmin ? [{ id: 'history', label: 'Historie DB' }] : []),
-  ...(auth.isAdmin ? [{ id: 'dangerzone', label: 'Danger Zone' }] : []),
+  { id: 'history',      label: 'Historie DB' },
+  { id: 'dangerzone',   label: 'Danger Zone' },
 ])
 
 // ── History Backend ────────────────────────────────────────────────────────

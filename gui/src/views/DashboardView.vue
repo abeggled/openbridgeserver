@@ -14,6 +14,53 @@
       <StatCard label="Server" :value="health.status === 'ok' ? 'Online' : 'Fehler'" icon="🖥️" :color="health.status === 'ok' ? 'green' : 'red'" />
     </div>
 
+    <!-- Aktive Warnungen (issue #466) — nur sichtbar bei degraded/fehlerhaften Adaptern -->
+    <div
+      v-if="adapterIssues.length"
+      class="card border-l-4"
+      :class="adapterIssues.some(a => a.severity === 'error') ? 'border-red-500' : 'border-amber-500'"
+      data-testid="dashboard-adapter-issues"
+    >
+      <div class="card-header">
+        <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm flex items-center gap-2">
+          <svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+          Aktive Warnungen
+          <span class="text-xs text-slate-500 font-normal">({{ adapterIssues.length }})</span>
+        </h3>
+        <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">Zu Adaptern →</RouterLink>
+      </div>
+      <div class="card-body flex flex-col gap-2">
+        <RouterLink
+          v-for="a in adapterIssues"
+          :key="a.id"
+          to="/adapters"
+          class="flex items-start gap-3 p-3 rounded-lg hover:bg-slate-100/80 dark:hover:bg-slate-800/40 transition-colors"
+        >
+          <span
+            :class="[
+              'w-2.5 h-2.5 mt-1.5 rounded-full shrink-0',
+              a.severity === 'error' ? 'bg-red-500' : 'bg-amber-400',
+            ]"
+          />
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ a.name }}</span>
+              <Badge variant="info" size="xs">{{ a.adapter_type }}</Badge>
+              <Badge :variant="a.severity === 'error' ? 'danger' : 'warning'" size="xs">
+                {{ a.severity === 'error' ? 'Fehler' : 'Warnung' }}
+              </Badge>
+            </div>
+            <div v-if="a.status_detail" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              {{ a.status_detail }}
+            </div>
+          </div>
+        </RouterLink>
+      </div>
+    </div>
+
     <!-- Adapter status + recent values -->
     <div class="grid lg:grid-cols-2 gap-4">
       <!-- Adapters -->
@@ -27,11 +74,9 @@
           <div v-else-if="!adapters.length" class="text-center text-slate-500 text-sm py-4">Keine Adapter konfiguriert</div>
           <div v-for="a in adapters" :key="a.adapter_type"
                class="flex items-center gap-3 p-3 bg-surface-700 rounded-lg">
-            <span :class="['w-2.5 h-2.5 rounded-full shrink-0', a.connected ? 'bg-green-400' : a.running ? 'bg-amber-400' : 'bg-slate-600']" />
+            <span :class="['w-2.5 h-2.5 rounded-full shrink-0', adapterDot(a)]" />
             <span class="flex-1 text-sm font-medium text-slate-700 dark:text-slate-200">{{ a.adapter_type }}</span>
-            <Badge :variant="a.connected ? 'success' : a.running ? 'warning' : 'muted'" size="xs">
-              {{ a.connected ? 'Verbunden' : a.running ? 'Läuft' : 'Inaktiv' }}
-            </Badge>
+            <Badge :variant="adapterBadgeVariant(a)" size="xs">{{ adapterStatusLabel(a) }}</Badge>
             <span class="text-xs text-slate-500">{{ a.bindings }} Verknüpfungen</span>
           </div>
         </div>
@@ -68,7 +113,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { systemApi } from '@/api/client'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
@@ -76,6 +121,7 @@ import { useAdapterStore } from '@/stores/adapters'
 import Badge   from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import StatCard from '@/components/ui/StatCard.vue'
+import { adapterDotClass as adapterDot, adapterBadgeVariant, adapterStatusLabel } from '@/utils/adapterStatus'
 
 const dpStore  = useDatapointStore()
 const ws       = useWebSocketStore()
@@ -84,6 +130,13 @@ const adStore  = useAdapterStore()
 const health   = ref({ status: '…', datapoints: '…', adapters_running: '…' })
 const adapters = ref([])
 const adaptersLoading = ref(false)
+
+// Issue #466: surface adapters reporting warning/error so degraded ones are
+// not buried in the regular adapter list.
+const adapterIssues = computed(
+  () => adStore.instances.filter(a => a.severity && a.severity !== 'ok'),
+)
+
 
 let unsubWs = null
 

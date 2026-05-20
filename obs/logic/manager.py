@@ -338,6 +338,8 @@ class LogicManager:
         if not entry:
             raise KeyError(f"Graph {graph_id} not in cache")
         name, enabled, flow = entry
+        if not enabled:
+            raise ValueError(f"Graph {graph_id} ist deaktiviert")
         return await self._execute_graph(graph_id, name, flow, {})
 
     async def _execute_graph(

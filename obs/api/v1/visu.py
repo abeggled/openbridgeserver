@@ -25,11 +25,11 @@ import uuid
 from datetime import UTC, datetime
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
-from obs.api.auth import get_admin_user, get_current_user, optional_current_user
-from obs.api.v1.sessions import create_session
+from obs.api.auth import get_admin_user, get_current_user, limiter, optional_current_user
+from obs.api.v1.sessions import create_session, validate_session
 from obs.db.database import Database, get_db
 from obs.models.visu import (
     CopyNodeRequest,
@@ -457,9 +457,11 @@ async def move_node(
 
 
 @router.post("/nodes/{node_id}/auth", response_model=PinAuthResponse)
+@limiter.limit("10/minute")
 async def pin_auth(
     node_id: str,
     body: PinAuthRequest,
+    request: Request,
     db: Database = Depends(get_db),
 ):
     async with db.conn.execute("SELECT access_pin, access FROM visu_nodes WHERE id = ?", (node_id,)) as cur:
@@ -487,6 +489,7 @@ async def pin_auth(
 @router.get("/pages/{node_id}", response_model=PageConfig)
 async def get_page(
     node_id: str,
+    request: Request,
     db: Database = Depends(get_db),
     user: str | None = Depends(optional_current_user),
 ):
@@ -494,29 +497,64 @@ async def get_page(
     if node.type != "PAGE":
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
 
-    access = await _resolve_access(db, node_id)
-    if access == "user":
-        if user is None:
+    access, defining_node_id = await _resolve_access_with_node(db, node_id)
+    if user is None:
+        # Unauthentisierter Zugriff: Seitentyp prüfen
+        if access == "user":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Anmeldung erforderlich",
             )
-        if not await _check_user_access(db, node_id, user):
+        elif access == "protected":
+            session_token = request.headers.get("X-Session-Token")
+            validate_id = defining_node_id or node_id
+            if not session_token or not validate_session(session_token, validate_id):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="PIN-Authentifizierung erforderlich",
+                )
+    else:
+        # Authentifizierter Benutzer: bei user-Pages explizite Zuweisung prüfen
+        if access == "user" and not await _check_user_access(db, node_id, user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
     return node.page_config or PageConfig()
 
 
 @router.get("/widget-ref/{page_id}", response_model=list[WidgetInstance])
-async def get_widget_ref(page_id: str, db: Database = Depends(get_db)):
-    """Gibt alle Widget-Instanzen einer Seite zurück — ohne Zugriffsprüfung.
-    Wird ausschließlich von WidgetRef-Widgets verwendet, die einzelne Widgets
-    aus einer anderen Seite einbetten. Die Zugriffskontrolle erfolgt auf Ebene
-    der einbettenden Seite.
+async def get_widget_ref(
+    page_id: str,
+    request: Request,
+    db: Database = Depends(get_db),
+    user: str | None = Depends(optional_current_user),
+):
+    """Gibt alle Widget-Instanzen einer Seite zurück.
+    Wird von WidgetRef-Widgets verwendet, die einzelne Widgets aus einer anderen
+    Seite einbetten. Zugriff richtet sich nach dem Access-Level der Quell-Seite.
     """
     node = await _get_node_or_404(db, page_id)
     if node.type != "PAGE":
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
+
+    access, defining_node_id = await _resolve_access_with_node(db, page_id)
+    if user is None:
+        if access == "user":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Anmeldung erforderlich",
+            )
+        elif access == "protected":
+            session_token = request.headers.get("X-Session-Token")
+            validate_id = defining_node_id or page_id
+            if not session_token or not validate_session(session_token, validate_id):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="PIN-Authentifizierung erforderlich",
+                )
+    else:
+        if access == "user" and not await _check_user_access(db, page_id, user):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+
     pc = node.page_config or PageConfig()
     return pc.widgets
 

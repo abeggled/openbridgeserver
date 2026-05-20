@@ -41,9 +41,12 @@ const runtimeStripClass = computed(() => {
 
 onMounted(async () => {
   if (auth.isLoggedIn) {
+    // Open the WebSocket first — it must not wait behind the loadMe/settings
+    // round-trips, otherwise live pushes that arrive during the handshake gap
+    // are lost (the server does not replay missed events).
+    ws.connect()
     await auth.loadMe()
     await settings.load()
-    ws.connect()
   }
 })
 

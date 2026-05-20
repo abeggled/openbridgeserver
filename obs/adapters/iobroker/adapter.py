@@ -34,6 +34,7 @@ import base64
 import contextlib
 import json
 import logging
+import random
 import time
 from typing import Any
 
@@ -71,6 +72,7 @@ class IoBrokerAdapterConfig(BaseModel):
     access_token: str | None = Field(default=None, json_schema_extra={"format": "password"})
     resubscribe_interval_seconds: int = Field(default=60, ge=0)
     reconnect_interval_seconds: int = Field(default=5, ge=1)
+    reconnect_max_interval_seconds: int = Field(default=60, ge=1)
 
 
 class IoBrokerBindingConfig(BaseModel):
@@ -299,6 +301,19 @@ class IoBrokerAdapter(AdapterBase):
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
+    async def _close_socket(self, sio: Any | None) -> None:
+        if sio is None:
+            return
+        with contextlib.suppress(Exception):
+            await sio.disconnect()
+
+    async def _detach_and_close_socket(self, sio: Any | None) -> None:
+        if sio is None:
+            return
+        if self._socket is sio:
+            self._socket = None
+        await self._close_socket(sio)
+
     async def _subscription_watchdog(self) -> None:
         assert self._cfg is not None
         interval = self._cfg.resubscribe_interval_seconds
@@ -335,6 +350,7 @@ class IoBrokerAdapter(AdapterBase):
             if self._socket is not sio:
                 return
             logger.info("ioBroker Socket.IO disconnected")
+            self._socket = None
             await self._publish_status(False, "Socket.IO getrennt")
             self._ensure_reconnect_task()
 
@@ -350,6 +366,9 @@ class IoBrokerAdapter(AdapterBase):
         async with self._connect_lock:
             if self._disconnect_requested:
                 return False
+            old_socket = self._socket
+            if old_socket is not None:
+                await self._detach_and_close_socket(old_socket)
             sio = self._build_socket()
             self._socket = sio
             try:
@@ -360,6 +379,7 @@ class IoBrokerAdapter(AdapterBase):
                     logger.warning("ioBroker Socket.IO polling handshake failed; retrying with websocket transport")
                     fallback_kwargs = dict(self._connect_kwargs)
                     fallback_kwargs["transports"] = ["websocket"]
+                    await self._detach_and_close_socket(sio)
                     fallback_sio = self._build_socket()
                     self._socket = fallback_sio
                     try:
@@ -367,12 +387,10 @@ class IoBrokerAdapter(AdapterBase):
                         self._connect_kwargs = fallback_kwargs
                         return True
                     except Exception:
-                        if self._socket is fallback_sio:
-                            self._socket = None
+                        await self._detach_and_close_socket(fallback_sio)
                         logger.exception("ioBroker Socket.IO websocket fallback failed")
                         return False
-                if self._socket is sio:
-                    self._socket = None
+                await self._detach_and_close_socket(sio)
                 logger.exception("ioBroker Socket.IO connection failed")
                 return False
 
@@ -391,13 +409,19 @@ class IoBrokerAdapter(AdapterBase):
 
     async def _reconnect_loop(self) -> None:
         assert self._cfg is not None
+        base_delay = float(self._cfg.reconnect_interval_seconds)
+        max_delay = float(max(self._cfg.reconnect_max_interval_seconds, self._cfg.reconnect_interval_seconds))
+        attempt = 0
         while not self._disconnect_requested:
             if self._socket_is_connected():
                 return
             connected = await self._connect_socket()
             if connected:
                 return
-            await asyncio.sleep(self._cfg.reconnect_interval_seconds)
+            delay = min(max_delay, base_delay * (2**attempt))
+            jitter = random.uniform(-0.2 * delay, 0.2 * delay)
+            await asyncio.sleep(max(0.1, delay + jitter))
+            attempt += 1
 
     async def _subscribe_bound_states(self, *, force_publish_initial: bool = True) -> bool:
         if not self._socket_is_connected() or not self._state_map:

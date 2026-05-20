@@ -152,6 +152,7 @@ class WebSocketManager:
                 "old_value": state.old_value if state else None,
                 "quality": event.quality,
                 "source_adapter": event.source_adapter,
+                "unit": dp.unit if dp else None,
             },
         }
         await self.broadcast(rb_msg)

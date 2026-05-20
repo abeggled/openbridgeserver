@@ -35,7 +35,12 @@ class SearchPage(BaseModel):
 
 
 async def _add_hierarchy(items: list[DataPointOut], db: Database) -> None:
-    """Batch-query hierarchy node links and inject into items in-place."""
+    """Batch-query hierarchy node links and inject into items in-place.
+
+    Also computes each node's ancestor path (root → leaf, excluding tree name)
+    so the frontend can disambiguate same-named leaves under different parents
+    (e.g. "Gebäude › EG › Küche" vs "Gebäude › OG › Küche") — see #433.
+    """
     if not items:
         return
     dp_ids = [str(item.id) for item in items]
@@ -50,8 +55,12 @@ async def _add_hierarchy(items: list[DataPointOut], db: Database) -> None:
             ORDER BY ht.name, hn.name""",
         dp_ids,
     )
-
-    # Build ancestor paths for all linked nodes via recursive CTE
+    # Build ancestor paths for all linked nodes via recursive CTE (upstream
+    # PR #462) — produces the richer node_path schema (objects with stable
+    # node_id + node_name per segment) that the epic switched to during the
+    # merge. The epic's earlier in-memory walker over a full hierarchy_nodes
+    # SELECT is dropped: the CTE scales with the actual matched node set
+    # instead of the whole tree.
     node_ids = list({r["node_id"] for r in rows})
     node_paths: dict[str, list[NodePathSegment]] = {}
     if node_ids:

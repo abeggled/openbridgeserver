@@ -1,0 +1,43 @@
+{
+  "login": {
+    "title": "Anmeldung",
+    "username": "Benutzername",
+    "password": "Passwort",
+    "pin": "PIN",
+    "submit": "Anmelden",
+    "submitting": "Anmelden …"
+  },
+  "common": {
+    "save": "Speichern",
+    "cancel": "Abbrechen",
+    "delete": "Löschen",
+    "edit": "Bearbeiten",
+    "close": "Schließen",
+    "confirm": "Bestätigen",
+    "on": "AN",
+    "off": "AUS",
+    "auto": "Automatik",
+    "active": "Aktivieren",
+    "display": "Anzeige",
+    "analog": "Analog",
+    "boolean": "BOOLEAN",
+    "area": "Bereich",
+    "drawAreas": "Bereiche zeichnen",
+    "allHolidays": "Alle Feiertage",
+    "clickFirstPointToClose": "Auf den ersten Punkt klicken zum Schliessen ↩",
+    "hiddenClickToShow": "Ausgeblendet — klicken zum Einblenden",
+    "adminAndAssignedUsers": "Admins + zugewiesene Benutzer",
+    "authenticatedUser": "Authentifiziert (Benutzer)",
+    "authenticatedPin": "Authentifiziert (PIN)"
+  },
+  "editor": {
+    "title": "Visu Editor",
+    "addWidget": "Widget hinzufügen",
+    "deleteWidget": "Widget löschen",
+    "save": "Speichern"
+  },
+  "viewer": {
+    "noVisuSelected": "Keine Visu ausgewählt"
+  }
+}
+

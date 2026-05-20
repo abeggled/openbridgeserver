@@ -9,7 +9,7 @@
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
         </svg>
-        Neuer Ast
+        Neue Hierarchie
       </button>
       <button @click="openEtsImport" class="btn-secondary btn-sm" data-testid="btn-ets-import">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -32,7 +32,7 @@
       <svg class="w-10 h-10 mx-auto mb-3 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7h18M3 12h12M3 17h8"/>
       </svg>
-      Noch keine Hierarchieäste. Erstelle einen neuen Ast oder importiere aus ETS.
+      Noch keine Hierarchien. Erstelle eine neue Hierarchie oder importiere aus ETS.
     </div>
 
     <!-- Tree list -->
@@ -58,12 +58,12 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.293-6.293a1 1 0 011.414 0l1.586 1.586a1 1 0 010 1.414L12 16H9v-3z"/>
             </svg>
           </button>
-          <button @click="addRootNode(tree)" class="btn-secondary btn-xs" :data-testid="`btn-add-root-${tree.id}`" title="Obersten Knoten hinzufügen">
+          <button @click="addRootNode(tree)" class="btn-secondary btn-xs" :data-testid="`btn-add-root-${tree.id}`" title="Wurzelknoten hinzufügen">
             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
             </svg>
           </button>
-          <button @click="confirmDeleteTree(tree)" class="btn-danger btn-xs" :data-testid="`btn-delete-tree-${tree.id}`" title="Ast löschen">
+          <button @click="confirmDeleteTree(tree)" class="btn-danger btn-xs" :data-testid="`btn-delete-tree-${tree.id}`" title="Hierarchie löschen">
             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7h6m-7 0a1 1 0 011-1h4a1 1 0 011 1m-7 0h8"/>
             </svg>
@@ -74,7 +74,7 @@
         <div v-if="expandedTrees.has(tree.id)" class="card-body pt-0">
           <div v-if="treeLoading.has(tree.id)" class="flex justify-center py-4"><Spinner size="sm" /></div>
           <div v-else-if="!treeNodes[tree.id]?.length" class="text-xs text-slate-500 py-2 text-center">
-            Dieser Ast ist noch leer.
+            Diese Hierarchie ist noch leer.
           </div>
           <div v-else class="tree-container">
             <HierarchyNodeTree
@@ -94,11 +94,11 @@
     <div v-if="treeModal.open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="treeModal.open = false">
       <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100">
-          {{ treeModal.isEdit ? 'Ast umbenennen' : 'Neuer Hierarchiebaum' }}
+          {{ treeModal.isEdit ? 'Hierarchie umbenennen' : 'Neue Hierarchie' }}
         </h3>
         <div class="form-group">
           <label class="label">Name</label>
-          <input v-model="treeModal.name" ref="treeNameInput" type="text" class="input" placeholder="z.B. Gebäude, Gewerke, Funktion" @keydown.enter="saveTree" />
+          <input v-model="treeModal.name" ref="treeNameInput" type="text" class="input" :placeholder="treeModal.isEdit ? '' : 'z.B. Gebäude, Gewerke, Funktion'" @keydown.enter="saveTree" />
         </div>
         <div class="form-group">
           <label class="label">Beschreibung</label>
@@ -106,12 +106,8 @@
         </div>
         <div class="form-group">
           <label class="label">Anzeigestart-Ebene</label>
-          <select v-model="treeModal.display_depth" class="input text-sm">
-            <option :value="0">0 — Ast-Name (Standard, z.B. "Gebäude")</option>
-            <option :value="1">1 — Erste Ebene (z.B. "EG" statt "Gebäude")</option>
-            <option :value="2">2 — Zweite Ebene (z.B. "Wohnzimmer")</option>
-            <option :value="3">3 — Dritte Ebene</option>
-            <option :value="4">4 — Vierte Ebene</option>
+          <select v-model="treeModal.display_depth" class="input text-sm" data-testid="select-display-depth">
+            <option v-for="opt in depthOptions" :key="opt.value" :value="opt.value" :disabled="opt.disabled">{{ opt.label }}</option>
           </select>
           <p class="text-xs text-slate-500 mt-1">Bestimmt, welche Ebene im verkürzten Pfad-Tag angezeigt wird. Der vollständige Pfad ist stets als Tooltip sichtbar.</p>
         </div>
@@ -156,7 +152,7 @@
       <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-lg p-6 flex flex-col gap-4">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100">Hierarchie aus ETS importieren</h3>
         <p class="text-sm text-slate-500">
-          Erzeugt einen neuen Hierarchiebaum aus den importierten ETS-Daten.
+          Erzeugt eine neue Hierarchie aus den importierten ETS-Daten.
           <span v-if="['buildings','trades'].includes(etsModal.mode)">Gebäude/Gewerke-Modus nutzt die räumliche bzw. funktionale Struktur aus dem ETS-Projekt.</span>
           <span v-else>Gruppenbezeichnungen werden direkt aus dem ETS-Projekt übernommen.</span>
         </p>
@@ -180,7 +176,7 @@
         </div>
 
         <div class="form-group">
-          <label class="label">Name des neuen Astes</label>
+          <label class="label">Name der neuen Hierarchie</label>
           <input v-model="etsModal.treeName" type="text" class="input" placeholder="z.B. Gewerke" />
         </div>
 
@@ -234,10 +230,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, nextTick, onMounted } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted } from 'vue'
 import { hierarchyApi } from '@/api/client.js'
 import HierarchyNodeTree from '@/components/HierarchyNodeTree.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import { buildDepthOptions } from '@/utils/hierarchyDepthOptions.js'
 
 // ── State ─────────────────────────────────────────────────────────────────
 
@@ -254,6 +251,14 @@ const treeNameInput = ref(null)
 const nodeNameInput = ref(null)
 
 const treeModal = reactive({ open: false, isEdit: false, id: null, name: '', description: '', display_depth: 0, saving: false, msg: null })
+
+const depthOptions = computed(() =>
+  buildDepthOptions({
+    isEdit: treeModal.isEdit,
+    tree: treeModal.isEdit ? { id: treeModal.id, name: treeModal.name } : null,
+    rootNodes: treeModal.isEdit ? treeNodes[treeModal.id] : null,
+  })
+)
 const nodeModal = reactive({ open: false, isEdit: false, id: null, treeId: null, parentId: null, name: '', description: '', saving: false, msg: null })
 const etsModal  = reactive({ open: false, treeName: '', mode: 'groups', autoLink: true, saving: false, msg: null })
 
@@ -308,6 +313,7 @@ function openCreateTree() {
 
 function openEditTree(tree) {
   Object.assign(treeModal, { open: true, isEdit: true, id: tree.id, name: tree.name, description: tree.description, display_depth: tree.display_depth ?? 0, saving: false, msg: null })
+  if (!treeNodes[tree.id]) loadTreeNodes(tree.id)
   nextTick(() => treeNameInput.value?.focus())
 }
 
@@ -331,8 +337,8 @@ async function saveTree() {
 }
 
 function confirmDeleteTree(tree) {
-  deleteConfirm.title = `Ast löschen: ${tree.name}`
-  deleteConfirm.message = 'Dieser Ast und alle enthaltenen Knoten sowie Verknüpfungen werden unwiderruflich gelöscht.'
+  deleteConfirm.title = `Hierarchie löschen: ${tree.name}`
+  deleteConfirm.message = 'Diese Hierarchie und alle enthaltenen Knoten sowie Verknüpfungen werden unwiderruflich gelöscht.'
   deleteConfirm.saving = false
   deleteConfirm.action = async () => {
     deleteConfirm.saving = true

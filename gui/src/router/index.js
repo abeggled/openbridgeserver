@@ -8,6 +8,7 @@ const routes = [
   { path: '/adapters',             name: 'Adapters',   component: () => import('@/views/AdaptersView.vue')   },
   { path: '/history',              name: 'History',    component: () => import('@/views/HistoryView.vue')    },
   { path: '/ringbuffer',           name: 'RingBuffer', component: () => import('@/views/RingBufferView.vue') },
+  { path: '/logs',                 name: 'Logs',       component: () => import('@/views/LogView.vue')        },
   { path: '/settings',             name: 'Settings',   component: () => import('@/views/SettingsView.vue')   },
   { path: '/logic',                name: 'Logic',      component: () => import('@/views/LogicView.vue')      },
 { path: '/:pathMatch(.*)*',      redirect: '/' },
