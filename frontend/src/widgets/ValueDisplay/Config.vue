@@ -6,7 +6,7 @@ import DataPointPicker from '@/components/DataPointPicker.vue'
 import { TIME_RANGE_PRESETS, DEFAULT_TIME_RANGE } from '@/widgets/Chart/timeRangePresets'
 
 type CondFn = 'eq' | 'lt' | 'lte' | 'gt' | 'gte'
-type DisplayMode = 'value' | 'history' | 'icon_only'
+type DisplayMode = 'value' | 'history' | 'icon_only' | 'gauge_arc' | 'gauge_circle'
 
 interface Rule {
   fn: CondFn | 'default'
@@ -29,6 +29,9 @@ interface Cfg {
   secondary_dp_id: string
   secondary_label: string
   secondary_decimals: number
+  gauge_min: number
+  gauge_max: number
+  gauge_colors: string[]
 }
 
 const props = defineProps<{ modelValue: Record<string, unknown> }>()
@@ -43,14 +46,19 @@ const emit  = defineEmits<{ (e: 'update:modelValue', val: Record<string, unknown
 
 
 
-
 const { t } = useI18n()
 
 const MODES = computed(() => [
-  { value: 'value'     as DisplayMode, label: t('widgets.valuedisplay.modeValueIcon') },
-  { value: 'history'   as DisplayMode, label: t('widgets.valuedisplay.modeValueHistory') },
-  { value: 'icon_only' as DisplayMode, label: t('widgets.valuedisplay.modeIconOnly') },
+  { value: 'value'        as DisplayMode, label: t('widgets.valuedisplay.modeValueIcon') },
+  { value: 'history'      as DisplayMode, label: t('widgets.valuedisplay.modeValueHistory') },
+  { value: 'icon_only'    as DisplayMode, label: t('widgets.valuedisplay.modeIconOnly') },
+  { value: 'gauge_arc'    as DisplayMode, label: t('widgets.valuedisplay.modeGaugeArc') },
+  { value: 'gauge_circle' as DisplayMode, label: t('widgets.valuedisplay.modeGaugeCircle') },
 ])
+
+function isGaugeMode(m: DisplayMode): boolean {
+  return m === 'gauge_arc' || m === 'gauge_circle'
+}
 
 const FN_OPTIONS = computed(() => [
   { value: 'eq'  as CondFn, label: t('widgets.valuedisplay.fnEq') },
@@ -120,6 +128,9 @@ const cfg = reactive<Cfg>({
   secondary_dp_id:    (props.modelValue.secondary_dp_id    as string)      ?? '',
   secondary_label:    (props.modelValue.secondary_label    as string)      ?? '',
   secondary_decimals: (props.modelValue.secondary_decimals as number)      ?? 1,
+  gauge_min:          (props.modelValue.gauge_min          as number)      ?? 0,
+  gauge_max:          (props.modelValue.gauge_max          as number)      ?? 100,
+  gauge_colors:       (props.modelValue.gauge_colors       as string[])    ?? ['#22c55e', '#f59e0b', '#ef4444'],
 })
 
 watch(cfg, () => {
@@ -131,6 +142,9 @@ watch(cfg, () => {
     secondary_dp_id:     cfg.mode === 'value' && cfg.secondary_dp_id ? cfg.secondary_dp_id : undefined,
     secondary_label:     cfg.mode === 'value' && cfg.secondary_dp_id ? cfg.secondary_label : undefined,
     secondary_decimals:  cfg.mode === 'value' && cfg.secondary_dp_id ? cfg.secondary_decimals : undefined,
+    gauge_min:           isGaugeMode(cfg.mode) ? cfg.gauge_min    : undefined,
+    gauge_max:           isGaugeMode(cfg.mode) ? cfg.gauge_max    : undefined,
+    gauge_colors:        isGaugeMode(cfg.mode) ? cfg.gauge_colors : undefined,
   })
 }, { deep: true })
 
@@ -168,13 +182,13 @@ function dupRule(i: number) {
     <!-- Mode -->
     <div>
       <label class="block text-xs text-gray-400 mb-1">{{ $t('common.mode') }}</label>
-      <div class="flex gap-1">
+      <div class="flex flex-wrap gap-1">
         <button
           v-for="m in MODES"
           :key="m.value"
           type="button"
           :class="[
-            'flex-1 py-1.5 text-xs rounded border',
+            'flex-1 min-w-[6rem] py-1.5 text-xs rounded border',
             cfg.mode === m.value
               ? 'border-blue-500 bg-blue-500/20 text-blue-300'
               : 'border-gray-700 text-gray-400 hover:border-gray-500',
@@ -429,6 +443,58 @@ function dupRule(i: number) {
       >
         <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ $t(p.label) }}</option>
       </select>
+    </div>
+
+    <!-- ── Gauge settings (gauge_arc / gauge_circle only) ─────────────────── -->
+    <div v-if="isGaugeMode(cfg.mode)" class="border-t border-gray-700 pt-3 space-y-3">
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Gauge Einstellungen</p>
+
+      <!-- Min / Max -->
+      <div class="flex gap-2">
+        <div class="flex-1">
+          <label class="block text-xs text-gray-400 mb-1">Minimum</label>
+          <input
+            v-model.number="cfg.gauge_min"
+            type="number"
+            class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
+          />
+        </div>
+        <div class="flex-1">
+          <label class="block text-xs text-gray-400 mb-1">Maximum</label>
+          <input
+            v-model.number="cfg.gauge_max"
+            type="number"
+            class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
+          />
+        </div>
+      </div>
+
+      <!-- Gradient colors -->
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">Farbe / Farbverlauf (1–4 Farben, niedrig → hoch)</label>
+        <div class="flex items-center gap-2 flex-wrap">
+          <input
+            v-for="(_, i) in cfg.gauge_colors"
+            :key="i"
+            v-model="cfg.gauge_colors[i]"
+            type="color"
+            class="w-8 h-8 rounded cursor-pointer border border-gray-700 bg-transparent p-0.5 shrink-0"
+            :title="`Farbe ${i + 1}`"
+          />
+          <button
+            v-if="cfg.gauge_colors.length < 4"
+            type="button"
+            class="text-xs text-blue-400 hover:text-blue-300 px-2 py-1 border border-gray-700 rounded"
+            @click="cfg.gauge_colors.push('#6b7280')"
+          >+</button>
+          <button
+            v-if="cfg.gauge_colors.length > 1"
+            type="button"
+            class="text-xs text-red-400 hover:text-red-300 px-2 py-1 border border-gray-700 rounded"
+            @click="cfg.gauge_colors.splice(cfg.gauge_colors.length - 1, 1)"
+          >−</button>
+        </div>
+      </div>
     </div>
 
   </div>

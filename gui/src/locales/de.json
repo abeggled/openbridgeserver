@@ -752,7 +752,9 @@
         "receivedData": "Empfangene Daten",
         "noDataPlaceholder": "Noch keine Daten empfangen. Graph ausführen um Daten zu laden.",
         "selectPath": "Pfad aus Daten wählen",
-        "pathPlaceholder": "— Pfad wählen —"
+        "pathPlaceholder": "— Pfad wählen —",
+        "jsonPath": "JSON-Pfad",
+        "jsonPathPlaceholder": "z.B. data.temperature"
       },
       "substr": {
         "modeLabel": "Modus",

@@ -460,25 +460,48 @@ class GraphExecutor:
                 return {"value": value, "_preview": preview}
 
             case "xml_extractor":
+                import json as _json_xml  # noqa: PLC0415
                 import xml.etree.ElementTree as _ET  # noqa: PLC0415
 
                 raw_xml = inputs.get("data")
                 xml_path = (d.get("xml_path") or "").strip()
+                xml_paths_raw = (d.get("xml_paths") or "").strip()
 
-                value = None
+                _xml_root = None
                 preview_str: str | None = None
 
                 if isinstance(raw_xml, str) and raw_xml.strip():
                     preview_str = raw_xml[:20_000] if len(raw_xml) > 20_000 else raw_xml
                     try:
-                        root = _ET.fromstring(raw_xml.strip())
-                        if xml_path:
-                            el = root.find(xml_path)
-                            if el is not None:
-                                value = (el.text or "").strip()
-                        # no path → value stays None; user must select one
+                        _xml_root = _ET.fromstring(raw_xml.strip())
                     except _ET.ParseError:
                         pass
+
+                # Multi-path mode: xml_paths is a JSON array of {label, path} entries
+                if xml_paths_raw:
+                    try:
+                        path_list = _json_xml.loads(xml_paths_raw)
+                    except Exception:
+                        path_list = []
+
+                    if isinstance(path_list, list) and path_list:
+                        result: dict[str, Any] = {"_preview": preview_str}
+                        for i, entry in enumerate(path_list):
+                            p = (entry.get("path") or "").strip() if isinstance(entry, dict) else ""
+                            val: Any = None
+                            if _xml_root is not None and p:
+                                el = _xml_root.find(p)
+                                if el is not None:
+                                    val = (el.text or "").strip()
+                            result[f"out_{i + 1}"] = val
+                        return result
+
+                # Legacy single-path mode
+                value = None
+                if _xml_root is not None and xml_path:
+                    el = _xml_root.find(xml_path)
+                    if el is not None:
+                        value = (el.text or "").strip()
 
                 return {"value": value, "_preview": preview_str}
 

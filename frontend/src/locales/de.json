@@ -639,6 +639,8 @@
       "modeValueIcon": "Wert + Icon",
       "modeValueHistory": "Wert + Verlauf",
       "modeIconOnly": "Nur Icon",
+      "modeGaugeArc": "Gauge Bogen",
+      "modeGaugeCircle": "Gauge Kreis",
       "rules": "Regeln",
       "defaultRule": "Standard",
       "defaultRuleHint": "Wenn keine andere Regel zutrifft",

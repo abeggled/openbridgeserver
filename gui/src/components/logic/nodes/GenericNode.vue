@@ -184,6 +184,18 @@ const def = computed(() => {
     }
     return { ...base, label, outputs }
   }
+  if (props.type === 'xml_extractor') {
+    let pathList = []
+    try { pathList = JSON.parse(props.data?.xml_paths || '[]') } catch (_) { pathList = [] }
+    if (Array.isArray(pathList) && pathList.length > 0) {
+      const outputs = pathList.map((entry, i) => ({
+        id:    `out_${i + 1}`,
+        label: (entry?.label || `Wert ${i + 1}`),
+      }))
+      return { ...base, outputs }
+    }
+    return base
+  }
   return { ...base, label }
 })
 
@@ -228,7 +240,12 @@ const summary = computed(() => {
   }
   if (props.type === 'api_client')          return `${d.method ?? 'GET'}  ${(d.url || '—').slice(0, 20)}`
   if (props.type === 'json_extractor')      return d.json_path || '—'
-  if (props.type === 'xml_extractor')       return d.xml_path  || '—'
+  if (props.type === 'xml_extractor') {
+    let pathList = []
+    try { pathList = JSON.parse(d.xml_paths || '[]') } catch (_) { pathList = [] }
+    if (Array.isArray(pathList) && pathList.length > 0) return `${pathList.length} Ausgänge`
+    return d.xml_path || '—'
+  }
   if (props.type === 'substring_extractor') {
     const MODES = ['links_von', 'rechts_von', 'zwischen', 'ausschneiden', 'regex']
     const m = MODES.includes(d.mode) ? t(`logic.summary.modes.${d.mode}`) : (d.mode ?? '—')

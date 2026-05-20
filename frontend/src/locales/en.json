@@ -639,6 +639,8 @@
       "modeValueIcon": "Value + Icon",
       "modeValueHistory": "Value + History",
       "modeIconOnly": "Icon only",
+      "modeGaugeArc": "Gauge arc",
+      "modeGaugeCircle": "Gauge circle",
       "rules": "Rules",
       "defaultRule": "Default",
       "defaultRuleHint": "When no other rule matches",

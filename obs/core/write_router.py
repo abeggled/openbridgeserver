@@ -116,7 +116,37 @@ class WriteRouter:
             event.value,
             event.binding_id,
         )
-        await self._write_to_dest_bindings(event.datapoint_id, event.value, skip_binding_id=event.binding_id)
+
+        if event.quality != "good" or event.value is None:
+            logger.warning(
+                "WriteRouter: skip DataValueEvent propagation for dp=%s due to quality=%s value=%r",
+                event.datapoint_id,
+                event.quality,
+                event.value,
+            )
+            return
+
+        dp = self._registry.get(event.datapoint_id)
+        if dp is None:
+            logger.warning("DataValueEvent for unknown DataPoint %s — ignored", event.datapoint_id)
+            return
+
+        from obs.models.types import DataTypeRegistry
+
+        dt = DataTypeRegistry.get(dp.data_type)
+        value = event.value
+        if dt.name != "UNKNOWN" and not isinstance(value, dt.python_type):
+            allow_float_numeric = dt.name == "FLOAT" and isinstance(value, int | float) and not isinstance(value, bool)
+            if not allow_float_numeric:
+                logger.warning(
+                    "WriteRouter: skip DataValueEvent for dp=%s due to type mismatch (expected=%s got=%s)",
+                    event.datapoint_id,
+                    dt.python_type.__name__,
+                    type(value).__name__,
+                )
+                return
+
+        await self._write_to_dest_bindings(event.datapoint_id, value, skip_binding_id=event.binding_id)
 
     # ------------------------------------------------------------------
     # Shared helper

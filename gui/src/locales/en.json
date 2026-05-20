@@ -752,7 +752,9 @@
         "receivedData": "Received data",
         "noDataPlaceholder": "No data received yet. Run the graph to load data.",
         "selectPath": "Select path from data",
-        "pathPlaceholder": "— Select path —"
+        "pathPlaceholder": "— Select path —",
+        "jsonPath": "JSON path",
+        "jsonPathPlaceholder": "e.g. data.temperature"
       },
       "substr": {
         "modeLabel": "Mode",
