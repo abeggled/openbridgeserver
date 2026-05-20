@@ -113,8 +113,46 @@ const gaugeGradientStops = computed(() => {
   }))
 })
 
-const gaugeArcStroke    = computed(() => gaugeSingleColor.value ?? `url(#${gaugeGradId})`)
-const gaugeCircleStroke = computed(() => gaugeSingleColor.value ?? `url(#${gaugeGradId}-c)`)
+const gaugeArcStroke = computed(() => gaugeSingleColor.value ?? `url(#${gaugeGradId})`)
+
+function lerpHex(c1: string, c2: string, t: number): string {
+  const toRgb = (c: string) => {
+    const h = c.replace('#', '')
+    const full = h.length === 3 ? h.split('').map(x => x + x).join('') : h
+    return [parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16)] as const
+  }
+  const [r1, g1, b1] = toRgb(c1)
+  const [r2, g2, b2] = toRgb(c2)
+  return `rgb(${Math.round(r1 + (r2 - r1) * t)},${Math.round(g1 + (g2 - g1) * t)},${Math.round(b1 + (b2 - b1) * t)})`
+}
+
+function interpolateGradient(colors: string[], t: number): string {
+  if (colors.length === 1) return colors[0]
+  const s = Math.max(0, Math.min(1, t)) * (colors.length - 1)
+  const i = Math.min(Math.floor(s), colors.length - 2)
+  return lerpHex(colors[i], colors[i + 1], s - i)
+}
+
+const gaugeCircleSegments = computed(() => {
+  const colors = gaugeColors.value
+  if (colors.length <= 1 || gaugePercent.value <= 0) return []
+  const N = 60
+  const r = GAUGE_CIRC_R
+  const segs: Array<{ d: string; color: string }> = []
+  for (let i = 0; i < N; i++) {
+    const t0 = i / N
+    const t1 = (i + 1) / N
+    if (t0 >= gaugePercent.value) break
+    const tEnd = Math.min(t1, gaugePercent.value)
+    const a0 = (-90 + t0 * 360) * (Math.PI / 180)
+    const a1 = (-90 + tEnd * 360) * (Math.PI / 180)
+    segs.push({
+      d: `M ${(50 + r * Math.cos(a0)).toFixed(3)} ${(50 + r * Math.sin(a0)).toFixed(3)} A ${r} ${r} 0 0 1 ${(50 + r * Math.cos(a1)).toFixed(3)} ${(50 + r * Math.sin(a1)).toFixed(3)}`,
+      color: interpolateGradient(colors, (t0 + tEnd) / 2),
+    })
+  }
+  return segs
+})
 
 // ── Icon ───────────────────────────────────────────────────────────────────────
 
@@ -464,18 +502,14 @@ const quality = computed(() => props.value?.q ?? null)
     <span v-if="widgetLabel" class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center shrink-0 mb-1">{{ widgetLabel }}</span>
     <div class="flex-1 min-h-0 w-full flex items-center justify-center">
       <svg viewBox="0 0 100 100" class="max-w-full max-h-full" style="aspect-ratio: 1">
-        <defs>
-          <linearGradient :id="`${gaugeGradId}-c`" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop v-for="stop in gaugeGradientStops" :key="stop.offset" :offset="stop.offset" :stop-color="stop.color" />
-          </linearGradient>
-        </defs>
         <!-- Track -->
         <circle cx="50" cy="50" r="38" fill="none" stroke="#374151" stroke-width="9" />
-        <!-- Fill -->
+        <!-- Fill: single color -->
         <circle
+          v-if="gaugeSingleColor"
           cx="50" cy="50" r="38"
           fill="none"
-          :stroke="gaugeCircleStroke"
+          :stroke="gaugeSingleColor"
           stroke-width="9"
           stroke-linecap="round"
           :stroke-dasharray="gaugeCircLength"
@@ -483,6 +517,18 @@ const quality = computed(() => props.value?.q ?? null)
           transform="rotate(-90 50 50)"
           data-testid="gauge-circle-fill"
         />
+        <!-- Fill: gradient folgt dem Strich (Bogensegmente mit interpolierter Farbe) -->
+        <g v-else data-testid="gauge-circle-fill">
+          <path
+            v-for="(seg, idx) in gaugeCircleSegments"
+            :key="idx"
+            :d="seg.d"
+            fill="none"
+            :stroke="seg.color"
+            stroke-width="9"
+            stroke-linecap="round"
+          />
+        </g>
         <!-- Value text -->
         <text x="50" y="48" text-anchor="middle" dominant-baseline="auto" font-size="14" font-weight="600" fill="currentColor" data-testid="widget-value">{{ mainDisplay.value }}</text>
         <text v-if="mainDisplay.postfix" x="50" y="62" text-anchor="middle" font-size="10" fill="#6b7280">{{ mainDisplay.postfix }}</text>
