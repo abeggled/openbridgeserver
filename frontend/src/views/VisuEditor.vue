@@ -59,6 +59,7 @@ import '@/widgets/RTR/index'
 import '@/widgets/Wetter/index'
 import '@/widgets/Stufenschalter/index'
 import '@/widgets/Grundriss/index'
+import '@/widgets/HorizontalBar/index'
 
 // ── Props / Router / Store ────────────────────────────────────────────────────
 const { t } = useI18n()
