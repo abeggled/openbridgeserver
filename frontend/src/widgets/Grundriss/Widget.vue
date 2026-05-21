@@ -39,6 +39,7 @@ const props = defineProps<{
   value: DataPointValue | null
   statusValue: DataPointValue | null
   editorMode: boolean
+  readonly?: boolean
 }>()
 
 const router  = useRouter()
@@ -242,6 +243,7 @@ function handleAreaClick(area: GrundrissArea) {
           :value="mw.datapointId ? dpStore.getValue(mw.datapointId) : null"
           :status-value="mw.statusDatapointId ? dpStore.getValue(mw.statusDatapointId) : null"
           :editor-mode="editorMode"
+          :readonly="props.readonly"
           :h="Math.round(mw.hPx / 80)"
         />
         <div v-else class="flex items-center justify-center h-full text-xs text-gray-500">
