@@ -1,0 +1,43 @@
+name: i18n Guard
+
+on:
+  push:
+    branches:
+      - main
+      - bugfix/*
+      - feature/*
+  pull_request:
+    branches:
+      - main
+
+permissions: {}
+
+jobs:
+  i18n-guard:
+    name: i18n-guard
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Run i18n hard gate (pull_request)
+        if: github.event_name == 'pull_request'
+        env:
+          I18N_DIFF_BASE: ${{ github.event.pull_request.base.sha }}
+          I18N_DIFF_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: ./scripts/check-i18n-hardcoded-strings.sh
+
+      - name: Run i18n hard gate (push)
+        if: github.event_name == 'push'
+        env:
+          I18N_DIFF_BASE: ${{ github.event.before }}
+          I18N_DIFF_HEAD: ${{ github.sha }}
+        run: ./scripts/check-i18n-hardcoded-strings.sh

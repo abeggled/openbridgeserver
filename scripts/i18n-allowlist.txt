@@ -1,0 +1,24 @@
+# i18n hard-gate allowlist
+#
+# One entry per line.
+# - Exact literal match: copied as-is
+# - Regex match: prefix with `re:`
+#
+# Keep this list tight. Every entry should be reviewable and justified.
+
+MB
+kWh
+kW
+°C
+URL
+HTTP
+HTTPS
+API
+JSON
+CSV
+UUID
+MQTT
+KNX
+re:^0 — \$\{name\} \(Hierarchiename\)$
+re:^\$\{level\} — \$\{levelLabel\}$
+re:^\$\{level\} — \$\{levelLabel\} \$\{suffix\}$
