@@ -24,13 +24,9 @@ ATTR_RE = re.compile(
     r"\b(label|title|placeholder|alt|aria-label|helper-text|tooltip|caption|headline|confirm-text|cancel-text|no-data-text|loading-text)\s*=\s*(['\"])(.*?)\2"
 )
 TEXT_NODE_RE = re.compile(r">([^<{][^<]*)<")
-UI_CALL_RE = re.compile(
-    r"\b(?:alert|confirm|prompt|toast(?:\.[A-Za-z_][A-Za-z0-9_]*)?|notify(?:\.[A-Za-z_][A-Za-z0-9_]*)?)\s*\(\s*(['\"`])(.+?)\1"
-)
+UI_CALL_RE = re.compile(r"\b(?:alert|confirm|prompt|toast(?:\.[A-Za-z_][A-Za-z0-9_]*)?|notify(?:\.[A-Za-z_][A-Za-z0-9_]*)?)\s*\(\s*(['\"`])(.+?)\1")
 ERROR_RE = re.compile(r"\b(?:throw\s+new\s+Error|new\s+Error)\s*\(\s*(['\"`])(.+?)\1")
-ASSIGN_RE = re.compile(
-    r"\b(?:errorMessage|warningMessage|successMessage|message|label|title|placeholder|tooltip|caption)\s*[:=]\s*(['\"`])(.+?)\1"
-)
+ASSIGN_RE = re.compile(r"\b(?:errorMessage|warningMessage|successMessage|message|label|title|placeholder|tooltip|caption)\s*[:=]\s*(['\"`])(.+?)\1")
 COMMENT_RE = re.compile(r"<!--.*?-->")
 
 
@@ -67,15 +63,15 @@ class Allowlist:
 def run_git_diff(repo_root: Path, base: str | None, head: str | None) -> list[str]:
     candidates: list[list[str]] = []
     if base and head:
+        candidates.append(["git", "diff", "--name-only", f"{base}...{head}"])
         candidates.append(["git", "diff", "--name-only", base, head])
-    else:
-        candidates.extend(
-            [
-                ["git", "diff", "--name-only", "origin/main...HEAD"],
-                ["git", "diff", "--name-only", "main...HEAD"],
-                ["git", "diff", "--name-only", "HEAD~1...HEAD"],
-            ]
-        )
+    candidates.extend(
+        [
+            ["git", "diff", "--name-only", "origin/main...HEAD"],
+            ["git", "diff", "--name-only", "main...HEAD"],
+            ["git", "diff", "--name-only", "HEAD~1...HEAD"],
+        ]
+    )
 
     for cmd in candidates:
         proc = subprocess.run(cmd, cwd=repo_root, text=True, capture_output=True)
@@ -346,10 +342,7 @@ def main() -> int:
         print("i18n guard: FAILED")
         return 1
 
-    print(
-        "i18n guard: OK "
-        f"(scanned {len(scan_files)} changed frontend files; locale-app-checks: {', '.join(sorted(touched_apps)) or 'none'})"
-    )
+    print(f"i18n guard: OK (scanned {len(scan_files)} changed frontend files; locale-app-checks: {', '.join(sorted(touched_apps)) or 'none'})")
     return 0
 
 
