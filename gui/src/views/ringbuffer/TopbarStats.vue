@@ -12,14 +12,14 @@
     <span v-if="formattedDiskSize" class="tabular-nums" data-testid="topbar-stats-disk-size">{{ formattedDiskSize }}</span>
     <span v-if="formattedRetention" class="text-slate-400">·</span>
     <span v-if="formattedRetention" class="tabular-nums" data-testid="topbar-stats-retention"
-          title="Aktuelle effektive Retention im Ringbuffer">⏱ {{ formattedRetention }}</span>
+          :title="$t('ringbuffer.retentionIndicatorTitle')">⏱ {{ formattedRetention }}</span>
     <span
       ref="helpIcon"
       data-testid="topbar-stats-help"
       class="cursor-help text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 select-none"
       tabindex="0"
       role="button"
-      aria-label="Speicherverhalten anzeigen"
+      :aria-label="$t('ringbuffer.storageInfoAriaLabel')"
       @pointerenter="showTip"
       @pointerleave="hideTip"
       @focus="showTip"
@@ -35,13 +35,8 @@
         :style="floatingStyles"
         role="tooltip"
       >
-        <p class="font-semibold mb-1">Speicherverhalten</p>
-        <p>
-          Der Monitor läuft im <strong>file-only</strong>-Modus mit serverseitig
-          festen Limits. Sobald die maximale Anzahl Einträge oder der
-          konfigurierte Speicherplatz erreicht ist, werden die ältesten
-          Einträge überschrieben.
-        </p>
+        <p class="font-semibold mb-1">{{ $t('ringbuffer.storageInfoTitle') }}</p>
+        <p>{{ $t('ringbuffer.storageInfoBody', { mode: 'file-only' }) }}</p>
       </div>
     </Teleport>
   </div>

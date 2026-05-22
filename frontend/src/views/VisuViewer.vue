@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
 import { useDatapointsStore } from '@/stores/datapoints'
@@ -35,7 +36,9 @@ import '@/widgets/RTR/index'
 import '@/widgets/Wetter/index'
 import '@/widgets/Stufenschalter/index'
 import '@/widgets/Grundriss/index'
+import '@/widgets/HorizontalBar/index'
 
+const { t } = useI18n()
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const visuStore = useVisuStore()
@@ -137,7 +140,7 @@ async function load() {
       await dpStore.fetchInitialValues(allDpIds.value)
     }
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Fehler beim Laden'
+    error.value = e instanceof Error ? e.message : t('common.loadError')
   } finally {
     loading.value = false
   }
@@ -180,16 +183,16 @@ function gridStyle(w: WidgetInstance) {
           v-if="visuStore.isAdmin && isPage"
           class="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-500 dark:hover:text-blue-400 transition-colors px-2 py-1 rounded"
           @click="router.push({ name: 'editor', params: { id } })"
-        >✏️ Bearbeiten</button>
+        >✏️ {{ $t('common.edit') }}</button>
         <button
           v-if="visuStore.isAdmin"
           class="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-500 dark:hover:text-blue-400 transition-colors px-2 py-1 rounded"
           @click="router.push({ name: 'manage' })"
-        >🗂 Visu Verwaltung</button>
+        >🗂 {{ $t('tree.manage') }}</button>
         <!-- Hell/Dunkel-Umschalter -->
         <button
           class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 transition-colors px-2 py-1 rounded"
-          :title="theme.isDark ? 'Heller Modus' : 'Dunkler Modus'"
+          :title="theme.isDark ? $t('common.darkMode') : $t('common.lightMode')"
           @click="theme.toggle()"
         >{{ theme.isDark ? '☀️' : '🌙' }}</button>
         <AuthButton />
@@ -198,7 +201,7 @@ function gridStyle(w: WidgetInstance) {
 
     <!-- Loading -->
     <div v-if="loading" class="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">
-      Lade …
+      {{ $t('common.loading') }}
     </div>
 
     <!-- Error -->

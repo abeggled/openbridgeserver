@@ -36,17 +36,17 @@ const selectClass = inputClass
 
     <!-- Bezeichnung -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Bezeichnung (erscheint oberhalb)</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.labelAbove') }}</label>
       <input v-model="cfg.label" type="text" placeholder="z.B. Gäste-WLAN" :class="inputClass" />
     </div>
 
     <!-- Typ -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">QR-Code-Typ</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.type') }}</label>
       <select v-model="cfg.qrType" :class="selectClass">
-        <option value="url">URL</option>
-        <option value="wifi">WiFi</option>
-        <option value="vcard">vCard (Kontakt)</option>
+        <option value="url">{{ $t('widgets.qrcode.typeUrl') }}</option>
+        <option value="wifi">{{ $t('widgets.qrcode.typeWifi') }}</option>
+        <option value="vcard">{{ $t('widgets.qrcode.typeVcard') }}</option>
       </select>
     </div>
 
@@ -66,19 +66,19 @@ const selectClass = inputClass
     <!-- ── WiFi ──────────────────────────────────────────────────────────── -->
     <template v-else-if="cfg.qrType === 'wifi'">
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Verschlüsselung</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.encryption') }}</label>
         <select v-model="cfg.wifi_encryption" :class="selectClass">
-          <option value="WPA">WPA / WPA2</option>
-          <option value="WEP">WEP</option>
-          <option value="none">Unverschlüsselt</option>
+          <option value="WPA">{{ $t('widgets.qrcode.encWpa') }}</option>
+          <option value="WEP">{{ $t('widgets.qrcode.encWep') }}</option>
+          <option value="none">{{ $t('widgets.qrcode.encNone') }}</option>
         </select>
       </div>
       <div>
-        <label class="block text-xs text-gray-400 mb-1">SSID (Netzwerkname)</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.ssid') }}</label>
         <input v-model="cfg.wifi_ssid" type="text" placeholder="MeinHeimnetz" :class="inputClass" />
       </div>
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Passwort</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.password') }}</label>
         <input v-model="cfg.wifi_password" type="text" placeholder="Passwort" :class="inputClass" />
       </div>
       <div class="flex items-center gap-2">
@@ -88,7 +88,7 @@ const selectClass = inputClass
           type="checkbox"
           class="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500"
         />
-        <label for="wifi-hidden" class="text-xs text-gray-300 cursor-pointer">SSID versteckt</label>
+        <label for="wifi-hidden" class="text-xs text-gray-300 cursor-pointer">{{ $t('widgets.qrcode.hiddenSsid') }}</label>
       </div>
     </template>
 
@@ -96,24 +96,24 @@ const selectClass = inputClass
     <template v-else-if="cfg.qrType === 'vcard'">
       <div class="grid grid-cols-2 gap-2">
         <div>
-          <label class="block text-xs text-gray-400 mb-1">Vorname</label>
+          <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.firstname') }}</label>
           <input v-model="cfg.vcard_firstname" type="text" placeholder="Max" :class="inputClass" />
         </div>
         <div>
-          <label class="block text-xs text-gray-400 mb-1">Name</label>
+          <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.lastname') }}</label>
           <input v-model="cfg.vcard_lastname" type="text" placeholder="Mustermann" :class="inputClass" />
         </div>
       </div>
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Firma</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.company') }}</label>
         <input v-model="cfg.vcard_company" type="text" placeholder="Musterfirma AG" :class="inputClass" />
       </div>
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Telefon (mobil)</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.phone') }}</label>
         <input v-model="cfg.vcard_mobile" type="tel" placeholder="+41 79 123 45 67" :class="inputClass" />
       </div>
       <div>
-        <label class="block text-xs text-gray-400 mb-1">E-Mail (geschäftlich)</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.email') }}</label>
         <input v-model="cfg.vcard_email" type="email" placeholder="max@musterfirma.ch" :class="inputClass" />
       </div>
     </template>
@@ -122,25 +122,25 @@ const selectClass = inputClass
     <hr class="border-gray-700" />
 
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Fehlerkorrektur</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.errorCorrection') }}</label>
       <select v-model="cfg.errorCorrection" :class="selectClass">
-        <option value="L">L – niedrig (7 %)</option>
-        <option value="M">M – mittel (15 %) – empfohlen</option>
-        <option value="Q">Q – hoch (25 %)</option>
-        <option value="H">H – sehr hoch (30 %)</option>
+        <option value="L">{{ $t('widgets.qrcode.ecL') }}</option>
+        <option value="M">{{ $t('widgets.qrcode.ecM') }}</option>
+        <option value="Q">{{ $t('widgets.qrcode.ecQ') }}</option>
+        <option value="H">{{ $t('widgets.qrcode.ecH') }}</option>
       </select>
     </div>
 
     <div class="grid grid-cols-2 gap-2">
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Vordergrundfarbe</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.fgColor') }}</label>
         <div class="flex items-center gap-2">
           <input v-model="cfg.darkColor" type="color" class="h-8 w-12 rounded border border-gray-700 bg-gray-800 cursor-pointer" />
           <input v-model="cfg.darkColor" type="text" maxlength="7" class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 font-mono focus:outline-none focus:border-blue-500" />
         </div>
       </div>
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Hintergrundfarbe</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.qrcode.bgColor') }}</label>
         <div class="flex items-center gap-2">
           <input v-model="cfg.lightColor" type="color" class="h-8 w-12 rounded border border-gray-700 bg-gray-800 cursor-pointer" />
           <input v-model="cfg.lightColor" type="text" maxlength="7" class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 font-mono focus:outline-none focus:border-blue-500" />

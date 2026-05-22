@@ -15,6 +15,7 @@
 import {
   computed, onMounted, onUnmounted, ref, shallowRef, nextTick,
 } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 /** UUID-Generator mit Fallback für non-HTTPS Umgebungen */
 function newId(): string {
@@ -58,8 +59,10 @@ import '@/widgets/RTR/index'
 import '@/widgets/Wetter/index'
 import '@/widgets/Stufenschalter/index'
 import '@/widgets/Grundriss/index'
+import '@/widgets/HorizontalBar/index'
 
 // ── Props / Router / Store ────────────────────────────────────────────────────
+const { t } = useI18n()
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const store = useVisuStore()
@@ -67,7 +70,7 @@ const theme = useThemeStore()
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const isNew   = computed(() => props.id === 'new')
-const newPageName = ref('Neue Seite')
+const newPageName = ref('')
 
 const loading = ref(true)
 const saving  = ref(false)
@@ -249,7 +252,7 @@ onMounted(async () => {
       validateDatapointRefs()
     }
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Fehler beim Laden'
+    error.value = e instanceof Error ? e.message : t('common.loadError')
   } finally {
     loading.value = false
   }
@@ -323,7 +326,7 @@ async function save() {
   error.value = ''
   try {
     if (isNew.value) {
-      const node = await store.createNode({ name: newPageName.value.trim() || 'Neue Seite', type: 'PAGE', parent_id: null })
+      const node = await store.createNode({ name: newPageName.value.trim() || t('editor.newPage'), type: 'PAGE', parent_id: null })
       await store.savePage(node.id, config.value)
       router.push({ name: 'viewer', params: { id: node.id } })
     } else {
@@ -331,7 +334,7 @@ async function save() {
       router.push({ name: 'viewer', params: { id: props.id } })
     }
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Fehler beim Speichern'
+    error.value = e instanceof Error ? e.message : t('common.saveError')
   } finally {
     saving.value = false
   }
@@ -351,12 +354,12 @@ const showSettings = ref(false)
     <!-- ── Toolbar ──────────────────────────────────────────────────────────── -->
     <header class="border-b border-gray-200 dark:border-gray-800 px-4 py-2 flex items-center gap-3 flex-shrink-0 bg-gray-50 dark:bg-gray-900">
       <Breadcrumb />
-      <span class="text-xs font-medium text-blue-500 dark:text-blue-400 bg-blue-500/10 dark:bg-blue-400/10 px-2 py-0.5 rounded">Editor</span>
+      <span class="text-xs font-medium text-blue-500 dark:text-blue-400 bg-blue-500/10 dark:bg-blue-400/10 px-2 py-0.5 rounded">{{ $t('editor.badge') }}</span>
       <input
         v-if="isNew"
         v-model="newPageName"
         type="text"
-        placeholder="Seitenname …"
+        :placeholder="$t('editor.pageNamePlaceholder')"
         class="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 w-48"
       />
       <div class="flex-1" />
@@ -364,7 +367,7 @@ const showSettings = ref(false)
       <!-- Hell/Dunkel -->
       <button
         class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded transition-colors"
-        :title="theme.isDark ? 'Heller Modus' : 'Dunkler Modus'"
+        :title="theme.isDark ? $t('common.darkMode') : $t('common.lightMode')"
         @click="theme.toggle()"
       >{{ theme.isDark ? '☀️' : '🌙' }}</button>
       <AuthButton />
@@ -373,51 +376,51 @@ const showSettings = ref(false)
       <button
         class="text-xs text-gray-400 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded transition-colors"
         @click="showSettings = !showSettings"
-        title="Grid-Einstellungen"
+        :title="$t('editor.gridSettings')"
       >⚙️</button>
 
       <button
         class="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700"
         @click="router.push(isNew ? { name: 'tree' } : { name: 'viewer', params: { id } })"
-      >Abbrechen</button>
+      >{{ $t('common.cancel') }}</button>
 
       <button
         class="text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-lg transition-colors font-medium"
         :disabled="saving"
         @click="save"
-      >{{ saving ? 'Speichere …' : '💾 Speichern' }}</button>
+      >{{ saving ? $t('editor.saving') : '💾 ' + $t('editor.save') }}</button>
     </header>
 
     <!-- Grid-Einstellungen Panel -->
     <div v-if="showSettings" class="border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 px-4 py-3 flex items-center gap-6 text-sm flex-wrap">
       <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-        Spalten
+        {{ $t('editor.cols') }}
         <input v-model.number="config.grid_cols" type="number" min="4" max="48"
           class="w-16 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
       <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-        Zellbreite (px)
+        {{ $t('editor.cellWidth') }}
         <input v-model.number="config.grid_cell_width" type="number" min="40" max="300" step="5"
           class="w-20 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
       <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-        Zeilenhöhe (px)
+        {{ $t('editor.rowHeight') }}
         <input v-model.number="config.grid_row_height" type="number" min="40" max="300" step="5"
           class="w-20 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
       <span class="text-xs text-gray-400 dark:text-gray-600">
-        Zelle: {{ CELL_W }}×{{ CELL_H }}px · Grid: {{ canvasGridWidth }}px breit
+        {{ $t('editor.gridInfo', { w: CELL_W, h: CELL_H, total: canvasGridWidth }) }}
       </span>
     </div>
 
-    <div v-if="loading" class="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">Lade …</div>
+    <div v-if="loading" class="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">{{ $t('common.loading') }}</div>
     <div v-else-if="error" class="flex-1 flex items-center justify-center text-red-500 dark:text-red-400">{{ error }}</div>
 
     <div v-else class="flex-1 flex min-h-0">
 
       <!-- ── Widget-Palette (links) ───────────────────────────────────────── -->
       <aside class="w-48 flex-shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 overflow-y-auto">
-        <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider px-3 pt-3 pb-2">Widgets</p>
+        <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider px-3 pt-3 pb-2">{{ $t('editor.title') }}</p>
         <div class="space-y-0.5 px-2 pb-3">
           <button
             v-for="w in WidgetRegistry.all()"
@@ -430,10 +433,10 @@ const showSettings = ref(false)
           </button>
         </div>
         <div class="px-3 pt-2 pb-3 border-t border-gray-200 dark:border-gray-700">
-          <p class="text-xs text-gray-400 dark:text-gray-600">Klick → einfügen</p>
-          <p class="text-xs text-gray-400 dark:text-gray-600">Ziehen → verschieben</p>
-          <p class="text-xs text-gray-400 dark:text-gray-600">↘ Handle → Größe ändern</p>
-          <p class="text-xs text-gray-400 dark:text-gray-600">Entf → Widget löschen</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintClick') }}</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintDrag') }}</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintResize') }}</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintDelete') }}</p>
         </div>
       </aside>
 
@@ -488,7 +491,7 @@ const showSettings = ref(false)
             <div
               v-if="widgetHasError(w)"
               class="absolute top-1 right-7 z-20 flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white font-bold text-xs leading-none pointer-events-none shadow"
-              title="Mindestens ein Datenpunkt-Verweis wurde nicht gefunden"
+              :title="$t('editor.brokenDpRef')"
             >!</div>
 
             <!-- Widget-Label (nur sichtbar wenn selektiert oder hover) -->
@@ -523,7 +526,7 @@ const showSettings = ref(false)
             class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-gray-400 dark:text-gray-600 pointer-events-none"
           >
             <span class="text-5xl">📐</span>
-            <span class="text-sm">Widget aus der Palette links einfügen</span>
+            <span class="text-sm">{{ $t('editor.hintEmpty') }}</span>
           </div>
         </div>
       </div>
@@ -541,44 +544,44 @@ const showSettings = ref(false)
               class="text-xs text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
               @click="removeSelected"
             >
-              🗑 Entfernen
+              🗑 {{ $t('editor.removeWidget') }}
             </button>
           </div>
 
           <div class="p-4 space-y-5 flex-1">
             <!-- Widget-Name -->
             <div>
-              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Name</p>
+              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">{{ $t('editor.widgetName') }}</p>
               <input
                 v-model="selectedWidget.name"
                 type="text"
-                placeholder="z.B. Wohnzimmer Dimmer"
+                :placeholder="$t('editor.widgetNamePlaceholder')"
                 class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
               />
             </div>
 
             <!-- Position & Größe -->
             <div>
-              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Position & Größe</p>
+              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">{{ $t('editor.positionSize') }}</p>
               <div class="grid grid-cols-4 gap-1.5 text-xs">
                 <div>
-                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">X</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">{{ $t('editor.posX') }}</label>
                   <input v-model.number="selectedWidget.x" type="number" min="0"
                     :max="COLS - selectedWidget.w"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">Y</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">{{ $t('editor.posY') }}</label>
                   <input v-model.number="selectedWidget.y" type="number" min="0"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">B</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">{{ $t('editor.widthShort') }}</label>
                   <input v-model.number="selectedWidget.w" type="number" :min="selectedDef.minW" :max="COLS"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">H</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">{{ $t('editor.heightShort') }}</label>
                   <input v-model.number="selectedWidget.h" type="number" :min="selectedDef.minH"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
@@ -588,7 +591,7 @@ const showSettings = ref(false)
             <!-- Objekt (Schreib-/Lese-Objekt) -->
             <div v-if="!selectedDef.noDatapoint">
               <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
-                {{ selectedDef.supportsStatusDatapoint ? 'Schreib-Objekt' : 'Objekt' }}
+                {{ selectedDef.supportsStatusDatapoint ? $t('editor.writeDatapoint') : $t('editor.datapoint') }}
               </p>
               <DataPointPicker
                 :model-value="selectedWidget.datapoint_id"
@@ -596,17 +599,17 @@ const showSettings = ref(false)
                 @update:model-value="setDataPoint"
               />
               <p class="text-xs text-gray-400 dark:text-gray-600 mt-1">
-                Kompatibel: {{ selectedDef.compatibleTypes.join(', ') }}
+                {{ $t('editor.compatible', { types: selectedDef.compatibleTypes.join(', ') }) }}
               </p>
             </div>
 
             <!-- Status-Objekt (nur für schreibende Widgets) -->
             <div v-if="selectedDef.supportsStatusDatapoint">
               <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">
-                Status-Objekt
+                {{ $t('editor.statusDatapoint') }}
               </p>
               <p class="text-xs text-gray-400 dark:text-gray-600 mb-2">
-                Optional: separates Rückmelde-Objekt. Falls leer, wird das Schreib-Objekt für die Anzeige verwendet.
+                {{ $t('editor.statusDatapointHint') }}
               </p>
               <DataPointPicker
                 :model-value="selectedWidget.status_datapoint_id"
@@ -617,7 +620,7 @@ const showSettings = ref(false)
 
             <!-- Widget-Config -->
             <div>
-              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Konfiguration</p>
+              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">{{ $t('editor.configuration') }}</p>
               <component
                 :is="selectedDef.configComponent"
                 :key="selectedWidget.id"
@@ -632,9 +635,9 @@ const showSettings = ref(false)
         <!-- Kein Widget gewählt -->
         <div v-else class="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6">
           <span class="text-4xl text-gray-300 dark:text-gray-700">👆</span>
-          <p class="text-sm text-gray-400 dark:text-gray-500">Widget auf dem Canvas anklicken<br />oder aus der Palette einfügen</p>
+          <p class="text-sm text-gray-400 dark:text-gray-500">{{ $t('editor.hintNoSelection') }}</p>
           <p class="text-xs text-gray-400 dark:text-gray-600 mt-2">
-            {{ config.widgets.length }} Widget{{ config.widgets.length !== 1 ? 's' : '' }} auf dieser Seite
+            {{ config.widgets.length }} {{ config.widgets.length === 1 ? $t('editor.widgetCountSingular') : $t('editor.widgetCountPlural') }}
           </p>
         </div>
       </aside>

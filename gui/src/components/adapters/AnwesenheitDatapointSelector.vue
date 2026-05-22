@@ -4,15 +4,15 @@
     <div class="flex items-center justify-between">
       <div>
         <p class="text-sm text-slate-600 dark:text-slate-300 font-medium">
-          Simulierte Objekte
+          {{ $t('adapters.anwesenheit.simulatedObjects') }}
         </p>
         <p class="text-xs text-slate-400 mt-0.5">
-          Boolean- und Integer-Datenpunkte auswählen — Bindings werden automatisch erstellt/entfernt.
+          {{ $t('adapters.anwesenheit.simulatedObjectsHint') }}
         </p>
       </div>
       <button @click="load" class="btn-secondary btn-sm" :disabled="loading">
         <Spinner v-if="loading" size="xs" color="slate" />
-        Aktualisieren
+        {{ $t('adapters.anwesenheit.refresh') }}
       </button>
     </div>
 
@@ -27,7 +27,7 @@
       v-model="search"
       type="text"
       class="input text-sm"
-      placeholder="Datenpunkte suchen…"
+:placeholder="$t('common.searchDatapoints')"
     />
 
     <!-- List -->
@@ -41,9 +41,9 @@
             @change="toggleAll($event.target.checked)"
             class="w-4 h-4 rounded"
           />
-          <span class="text-slate-600 dark:text-slate-300">Alle auswählen</span>
+          <span class="text-slate-600 dark:text-slate-300">{{ $t('adapters.anwesenheit.selectAll') }}</span>
         </label>
-        <span class="text-slate-400 text-xs">{{ filteredItems.length }} Objekte</span>
+        <span class="text-slate-400 text-xs">{{ $t('adapters.anwesenheit.objectCount', { n: filteredItems.length }) }}</span>
       </div>
 
       <div class="max-h-80 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-700/50">
@@ -64,7 +64,7 @@
               <Badge :variant="item.data_type === 'BOOLEAN' ? 'success' : 'info'" size="xs">
                 {{ item.data_type }}
               </Badge>
-              <Badge v-if="item.has_binding" variant="muted" size="xs">verknüpft</Badge>
+              <Badge v-if="item.has_binding" variant="muted" size="xs">{{ $t('adapters.anwesenheit.linked') }}</Badge>
             </div>
           </div>
         </label>
@@ -72,7 +72,7 @@
     </div>
 
     <div v-else-if="!loading && !error" class="text-sm text-slate-400 text-center py-4">
-      Keine Boolean- oder Integer-Objekte gefunden.
+      {{ $t('adapters.anwesenheit.noObjects') }}
     </div>
 
     <!-- Save button -->
@@ -83,7 +83,7 @@
         :disabled="saving || !isDirty"
       >
         <Spinner v-if="saving" size="xs" color="white" />
-        Verknüpfungen speichern
+        {{ $t('adapters.anwesenheit.saveBindings') }}
       </button>
       <span v-if="saveResult" :class="saveResult.success ? 'text-green-400' : 'text-red-400'" class="text-sm">
         {{ saveResult.message }}
@@ -94,6 +94,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { adapterApi } from '@/api/client'
 import Badge   from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -102,6 +103,7 @@ const props = defineProps({
   instanceId: { type: String, required: true },
 })
 
+const { t } = useI18n()
 const items   = ref([])
 const search  = ref('')
 const loading = ref(false)
@@ -147,7 +149,7 @@ async function load() {
     serverBound.value = boundSet
     selected.value = new Set(boundSet)
   } catch (e) {
-    error.value = e.response?.data?.detail ?? 'Datenpunkte konnten nicht geladen werden'
+    error.value = e.response?.data?.detail ?? t('adapters.anwesenheit.loadError')
   } finally {
     loading.value = false
   }
@@ -176,13 +178,15 @@ async function save() {
     const { data } = await adapterApi.anwesenheitSyncBindings(props.instanceId, [...selected.value])
     saveResult.value = {
       success: true,
-      message: `${data.created} erstellt, ${data.removed} entfernt${data.errors.length ? ` (${data.errors.length} Fehler)` : ''}`,
+      message: data.errors.length
+        ? t('adapters.anwesenheit.saveResultErrors', { created: data.created, removed: data.removed, errors: data.errors.length })
+        : t('adapters.anwesenheit.saveResult', { created: data.created, removed: data.removed }),
     }
     await load()  // Refresh to reflect new server state
   } catch (e) {
     saveResult.value = {
       success: false,
-      message: e.response?.data?.detail ?? 'Speichern fehlgeschlagen',
+      message: e.response?.data?.detail ?? t('adapters.anwesenheit.saveFailed'),
     }
   } finally {
     saving.value = false

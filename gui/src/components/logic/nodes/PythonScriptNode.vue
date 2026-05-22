@@ -8,7 +8,7 @@
     <div class="gn-card">
       <div class="gn-header">
         <span class="gn-label">Python Script</span>
-        <button v-show="hovered" class="gn-delete nodrag" @click.stop="remove" title="Block löschen">✕</button>
+        <button v-show="hovered" class="gn-delete nodrag" @click.stop="remove" :title="$t('logic.deleteBlock')">✕</button>
       </div>
       <div class="gn-body">
         <pre class="script-preview">{{ shortScript }}</pre>
@@ -19,7 +19,7 @@
           <span class="gn-port-label">b</span>
           <span class="gn-port-label">c</span>
         </div>
-        <span class="gn-port-label" style="margin-left:auto;align-self:center;">Ergebnis</span>
+        <span class="gn-port-label" style="margin-left:auto;align-self:center;">{{ $t('logic.ports.result') }}</span>
       </div>
       <div v-if="data._dbg" class="gn-debug">{{ data._dbg }}</div>
     </div>

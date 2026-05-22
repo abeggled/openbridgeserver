@@ -3,7 +3,8 @@ import { reactive, watch } from 'vue'
 import DataPointPicker from '@/components/DataPointPicker.vue'
 import { TIME_RANGE_PRESETS, DEFAULT_TIME_RANGE } from './timeRangePresets'
 
-type Axis = 'left' | 'right'
+type Axis      = 'left' | 'right'
+type ChartType = 'line' | 'bar'
 
 interface Series {
   dp_id: string
@@ -15,6 +16,7 @@ interface Series {
 interface Cfg {
   label: string
   time_range: string
+  chart_type: ChartType
   primary_color: string
   primary_axis: Axis
   series: Series[]
@@ -41,16 +43,18 @@ function resolveTimeRange(raw: Record<string, unknown>): string {
 }
 
 const cfg = reactive<Cfg>({
-  label:         (props.modelValue.label         as string) ?? '',
+  label:         (props.modelValue.label         as string)    ?? '',
   time_range:    resolveTimeRange(props.modelValue),
-  primary_color: (props.modelValue.primary_color as string) ?? '#3b82f6',
-  primary_axis:  (props.modelValue.primary_axis  as Axis)   ?? 'left',
+  chart_type:    (props.modelValue.chart_type    as ChartType) ?? 'line',
+  primary_color: (props.modelValue.primary_color as string)    ?? '#3b82f6',
+  primary_axis:  (props.modelValue.primary_axis  as Axis)      ?? 'left',
   series:        normalizeSeries(props.modelValue.series),
 })
 
 watch(cfg, () => emit('update:modelValue', {
   label:         cfg.label,
   time_range:    cfg.time_range,
+  chart_type:    cfg.chart_type,
   primary_color: cfg.primary_color,
   primary_axis:  cfg.primary_axis,
   series:        cfg.series.map(s => ({ ...s })),
@@ -71,7 +75,7 @@ function removeSeries(i: number) {
 
     <!-- Beschriftung -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Beschriftung</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.common.label') }}</label>
       <input
         v-model="cfg.label"
         type="text"
@@ -80,20 +84,39 @@ function removeSeries(i: number) {
       />
     </div>
 
+    <!-- Diagramm-Typ -->
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">Diagramm-Typ</label>
+      <div class="flex gap-1">
+        <button
+          v-for="opt in [{ v: 'line', l: '〰 Linie' }, { v: 'bar', l: '▐ Balken' }]"
+          :key="opt.v"
+          type="button"
+          :class="[
+            'flex-1 py-1 text-xs rounded border',
+            cfg.chart_type === opt.v
+              ? 'border-blue-500 bg-blue-500/20 text-blue-300'
+              : 'border-gray-700 text-gray-400 hover:border-gray-500',
+          ]"
+          @click="cfg.chart_type = opt.v as ChartType"
+        >{{ opt.l }}</button>
+      </div>
+    </div>
+
     <!-- Zeitraum -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Standard-Zeitbereich</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.chart.defaultTimeRange') }}</label>
       <select
         v-model="cfg.time_range"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       >
-        <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ p.label }}</option>
+        <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ $t(p.label) }}</option>
       </select>
     </div>
 
     <!-- Primäre Reihe -->
     <div class="border-t border-gray-700 pt-3">
-      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Primäre Reihe</p>
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">{{ $t('widgets.chart.primarySeries') }}</p>
       <div class="flex gap-2 items-center">
         <input
           v-model="cfg.primary_color"
@@ -104,7 +127,7 @@ function removeSeries(i: number) {
         <!-- Achsen-Toggle -->
         <div class="flex gap-1 flex-1">
           <button
-            v-for="opt in [{ v: 'left', l: '◀ Links' }, { v: 'right', l: 'Rechts ▶' }]"
+            v-for="opt in [{ v: 'left', l: $t('widgets.chart.axisLeft') }, { v: 'right', l: $t('widgets.chart.axisRight') }]"
             :key="opt.v"
             type="button"
             :class="[
@@ -121,7 +144,7 @@ function removeSeries(i: number) {
 
     <!-- Weitere Reihen -->
     <div class="border-t border-gray-700 pt-3">
-      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Weitere Reihen</p>
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">{{ $t('widgets.chart.additionalSeries') }}</p>
 
       <div class="space-y-3">
         <div
@@ -141,7 +164,7 @@ function removeSeries(i: number) {
             <input
               v-model="s.label"
               type="text"
-              placeholder="Bezeichnung (optional)"
+              :placeholder="$t('widgets.chart.seriesLabel')"
               class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
             />
             <input
@@ -153,7 +176,7 @@ function removeSeries(i: number) {
             <button
               type="button"
               class="text-gray-500 hover:text-red-400 shrink-0 text-sm px-1"
-              title="Reihe entfernen"
+              :title="$t('widgets.chart.removeSeriesTitle')"
               @click="removeSeries(i)"
             >🗑</button>
           </div>
@@ -161,7 +184,7 @@ function removeSeries(i: number) {
           <!-- Achsen-Toggle -->
           <div class="flex gap-1">
             <button
-              v-for="opt in [{ v: 'left', l: '◀ Links' }, { v: 'right', l: 'Rechts ▶' }]"
+              v-for="opt in [{ v: 'left', l: $t('widgets.chart.axisLeft') }, { v: 'right', l: $t('widgets.chart.axisRight') }]"
               :key="opt.v"
               type="button"
               :class="[
@@ -180,7 +203,7 @@ function removeSeries(i: number) {
         type="button"
         class="mt-2 text-xs text-blue-400 hover:text-blue-300"
         @click="addSeries"
-      >+ Weitere Reihe hinzufügen</button>
+      >{{ $t('widgets.chart.addSeries') }}</button>
     </div>
 
   </div>

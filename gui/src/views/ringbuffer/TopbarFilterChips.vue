@@ -30,7 +30,7 @@
           type="button"
           :data-testid="`topbar-chip-toggle-${set.id}`"
           class="px-2 py-1 text-sm text-slate-600 dark:text-slate-300 hover:text-slate-800 dark:hover:text-white"
-          :title="set.is_active ? 'Aktiv — klicken zum Deaktivieren (nur für mich)' : 'Inaktiv — klicken zum Aktivieren (nur für mich)'"
+          :title="set.is_active ? $t('ringbuffer.topbar.activeTitle') : $t('ringbuffer.topbar.inactiveTitle')"
           @click.stop="onToggleActive(set)"
         >
           {{ set.is_active ? '●' : '○' }}
@@ -47,7 +47,7 @@
             v-if="isEmptyFilter(set.filter)"
             :data-testid="`topbar-chip-empty-${set.id}`"
             class="mr-1 text-amber-500"
-            title="Dieses Set hat keinen Filter konfiguriert — die Tabelle bleibt leer, solange das Set aktiv ist."
+            :title="$t('ringbuffer.topbar.emptyFilterWarning')"
           >⚠</span>
           {{ set.name }}
           <!-- Owner hint: visible for everyone (including admin) on every set
@@ -62,7 +62,7 @@
             :title="ownerTitle(set)"
           >
             <span v-if="set.created_by">@{{ set.created_by }}</span>
-            <span v-else class="italic">geteilt</span>
+            <span v-else class="italic">{{ $t('ringbuffer.topbar.shared') }}</span>
             <span
               v-if="!canEdit(set)"
               :data-testid="`topbar-chip-owner-lock-${set.id}`"
@@ -75,7 +75,7 @@
           type="button"
           :data-testid="`topbar-chip-remove-${set.id}`"
           class="px-2 py-1 text-xs text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
-          title="Aus Topbar entfernen"
+          :title="$t('ringbuffer.topbar.removeFromTopbar')"
           @click.stop="onRemoveFromTopbar(set)"
         >
           ×
@@ -116,7 +116,7 @@
           class="block w-full text-left px-3 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-700"
           @click="onCreateNew"
         >
-          + Neu …
+          {{ $t('ringbuffer.topbar.newFilter') }}
         </button>
 
         <!-- Search input -->
@@ -125,7 +125,7 @@
           v-model="addMenuQuery"
           type="search"
           data-testid="topbar-add-filter-search"
-          placeholder="Filter suchen …"
+          :placeholder="$t('ringbuffer.topbar.searchPlaceholder')"
           class="block w-full px-3 py-2 text-sm bg-transparent border-b border-slate-200 dark:border-slate-700 outline-none focus:border-blue-500"
         />
 
@@ -150,7 +150,7 @@
             data-testid="topbar-add-filter-empty"
             class="px-3 py-2 text-xs text-slate-500"
           >
-            {{ addMenuQuery ? 'Keine Treffer' : 'Keine weiteren Sets verfügbar' }}
+            {{ addMenuQuery ? $t('datapoints.noMatch') : $t('ringbuffer.topbar.noMoreSets') }}
           </div>
         </div>
       </div>
@@ -160,6 +160,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { VueDraggable } from 'vue-draggable-plus'
 import { ringbufferApi } from '@/api/client'
 import { isEmptyFilter } from '@/composables/useClientSideMatch'
@@ -167,6 +168,7 @@ import { useAuthStore } from '@/stores/auth'
 
 const emit = defineEmits(['edit-set', 'new-set', 'changed', 'export'])
 
+const { t } = useI18n()
 const auth = useAuthStore()
 const filtersets = ref([])
 const addMenuOpen = ref(false)
@@ -191,10 +193,10 @@ function isMine(set) {
 
 function ownerTitle(set) {
   if (!set) return ''
-  if (isMine(set)) return 'Eigenes Set — bearbeiten'
-  if (set.created_by == null) return 'Geteiltes Set (nur Admin darf bearbeiten)'
-  if (canEdit(set)) return `Eigentümer: ${set.created_by} — bearbeiten als Admin`
-  return `Eigentümer: ${set.created_by} — klicken um zu öffnen / zu klonen`
+  if (isMine(set)) return t('ringbuffer.topbar.ownSet')
+  if (set.created_by == null) return t('ringbuffer.topbar.sharedLegacy')
+  if (canEdit(set)) return t('ringbuffer.topbar.sharedOwnerEdit', { owner: set.created_by })
+  return t('ringbuffer.topbar.sharedOwner', { owner: set.created_by })
 }
 
 const activeSets = computed({

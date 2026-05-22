@@ -6,13 +6,14 @@ Keine echte ioBroker-Instanz erforderlich — Socket.IO-Client wird gemockt.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from obs.core.event_bus import AdapterStatusEvent, DataValueEvent
 from tests.adapters.conftest import make_binding
-from obs.adapters.iobroker.adapter import IoBrokerAdapter, _EngineIOQueueFilter, _coerce_iobroker_value
+from obs.adapters.iobroker.adapter import IoBrokerAdapter, IoBrokerAdapterConfig, _EngineIOQueueFilter, _coerce_iobroker_value
 
 
 @pytest.fixture
@@ -251,6 +252,34 @@ class TestSubscribe:
         assert status_events
         assert status_events[-1].connected is True
 
+    @pytest.mark.asyncio
+    async def test_initial_subscribe_failure_publishes_error_severity(self, adapter, mock_bus):
+        binding = make_binding({"state_id": "0_userdata.0.temp"})
+        adapter._state_map["0_userdata.0.temp"] = [binding]
+        adapter._socket.call = AsyncMock(side_effect=RuntimeError("subscribe failed"))
+
+        result = await adapter._subscribe_bound_states(force_publish_initial=True)
+
+        assert result is False
+        status_events = [call.args[0] for call in mock_bus.publish.await_args_list if isinstance(call.args[0], AdapterStatusEvent)]
+        assert status_events[-1].severity == "error"
+        assert status_events[-1].connected is False
+        assert status_events[-1].detail == "Subscribe fehlgeschlagen"
+
+    @pytest.mark.asyncio
+    async def test_watchdog_subscribe_failure_publishes_warning_severity(self, adapter, mock_bus):
+        binding = make_binding({"state_id": "0_userdata.0.temp"})
+        adapter._state_map["0_userdata.0.temp"] = [binding]
+        adapter._socket.call = AsyncMock(side_effect=RuntimeError("subscribe failed"))
+
+        result = await adapter._subscribe_bound_states(force_publish_initial=False)
+
+        assert result is False
+        status_events = [call.args[0] for call in mock_bus.publish.await_args_list if isinstance(call.args[0], AdapterStatusEvent)]
+        assert status_events[-1].severity == "warning"
+        assert status_events[-1].connected is True
+        assert "Subscription-Watchdog" in status_events[-1].detail
+
 
 class TestReconnect:
     def test_build_socket_disables_socketio_internal_reconnect(self, adapter):
@@ -391,6 +420,196 @@ class TestReconnect:
         await adapter._reconnect_loop()
 
         adapter._connect_socket.assert_not_called()
+
+
+class TestSeverityDiagnostics:
+    @staticmethod
+    def _status_events(mock_bus):
+        return [call.args[0] for call in mock_bus.publish.await_args_list if isinstance(call.args[0], AdapterStatusEvent)]
+
+    @staticmethod
+    def _severity_events(mock_bus, severity):
+        return [event for event in TestSeverityDiagnostics._status_events(mock_bus) if event.severity == severity]
+
+    def test_socket_instability_config_defaults(self):
+        cfg = IoBrokerAdapterConfig()
+
+        assert cfg.socket_instability_threshold == 3
+        assert cfg.socket_instability_window_s == 300
+
+    @pytest.mark.asyncio
+    async def test_disconnect_older_than_window_is_pruned(self, adapter, monkeypatch):
+        t0 = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
+        adapter._cfg = adapter.config_schema(
+            **{
+                **adapter._config,
+                "socket_instability_threshold": 3,
+                "socket_instability_window_s": 300,
+            }
+        )
+
+        monkeypatch.setattr(adapter, "_now", lambda: t0)
+        await adapter._record_disconnect()
+        monkeypatch.setattr(adapter, "_now", lambda: t0 + timedelta(seconds=301))
+        await adapter._record_disconnect()
+
+        assert list(adapter._disconnect_times) == [t0 + timedelta(seconds=301)]
+
+    @pytest.mark.asyncio
+    async def test_below_threshold_publishes_no_warning(self, adapter, mock_bus, monkeypatch):
+        t0 = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
+        adapter._cfg = adapter.config_schema(
+            **{
+                **adapter._config,
+                "socket_instability_threshold": 3,
+                "socket_instability_window_s": 300,
+            }
+        )
+
+        for offset in (0, 30):
+            monkeypatch.setattr(adapter, "_now", lambda offset=offset: t0 + timedelta(seconds=offset))
+            await adapter._record_disconnect()
+
+        assert self._severity_events(mock_bus, "warning") == []
+
+    @pytest.mark.asyncio
+    async def test_threshold_reached_publishes_single_warning(self, adapter, mock_bus, monkeypatch):
+        t0 = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
+        adapter._cfg = adapter.config_schema(
+            **{
+                **adapter._config,
+                "socket_instability_threshold": 3,
+                "socket_instability_window_s": 300,
+            }
+        )
+
+        for offset in (0, 30, 60, 90):
+            monkeypatch.setattr(adapter, "_now", lambda offset=offset: t0 + timedelta(seconds=offset))
+            await adapter._record_disconnect()
+
+        warnings = self._severity_events(mock_bus, "warning")
+        assert len(warnings) == 1
+        assert warnings[0].adapter_type == "IOBROKER"
+        assert warnings[0].severity == "warning"
+        assert "Socket.IO-Verbindung instabil" in warnings[0].detail
+
+    @pytest.mark.asyncio
+    async def test_reconnect_inside_window_keeps_warning_active(self, adapter, mock_bus, monkeypatch):
+        t0 = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
+        adapter._cfg = adapter.config_schema(
+            **{
+                **adapter._config,
+                "socket_instability_threshold": 3,
+                "socket_instability_window_s": 300,
+            }
+        )
+
+        for offset in (0, 30, 60):
+            monkeypatch.setattr(adapter, "_now", lambda offset=offset: t0 + timedelta(seconds=offset))
+            await adapter._record_disconnect()
+
+        monkeypatch.setattr(adapter, "_now", lambda: t0 + timedelta(seconds=90))
+        await adapter._publish_connected_status("Verbunden mit 192.168.1.50:8084")
+
+        assert adapter._instability_warning_active is True
+        assert self._status_events(mock_bus)[-1].severity == "warning"
+        assert self._status_events(mock_bus)[-1].connected is True
+
+    @pytest.mark.asyncio
+    async def test_reconnect_after_quiet_window_clears_warning(self, adapter, mock_bus, monkeypatch):
+        t0 = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
+        adapter._cfg = adapter.config_schema(
+            **{
+                **adapter._config,
+                "socket_instability_threshold": 3,
+                "socket_instability_window_s": 300,
+            }
+        )
+
+        for offset in (0, 30, 60):
+            monkeypatch.setattr(adapter, "_now", lambda offset=offset: t0 + timedelta(seconds=offset))
+            await adapter._record_disconnect()
+
+        monkeypatch.setattr(adapter, "_now", lambda: t0 + timedelta(seconds=400))
+        await adapter._publish_connected_status("Verbunden mit 192.168.1.50:8084")
+
+        assert adapter._instability_warning_active is False
+        assert self._status_events(mock_bus)[-1].severity == "ok"
+        assert self._status_events(mock_bus)[-1].connected is True
+        assert self._status_events(mock_bus)[-1].detail == "ioBroker Socket.IO-Verbindung stabil."
+
+    @pytest.mark.asyncio
+    async def test_connect_handler_subscribe_success_keeps_recovery_status(self, adapter, mock_bus, monkeypatch):
+        class FakeSocket:
+            connected = True
+
+            def __init__(self):
+                self.calls = []
+
+            def event(self, handler):
+                setattr(self, handler.__name__, handler)
+                return handler
+
+            def on(self, _event):
+                def decorator(handler):
+                    setattr(self, handler.__name__, handler)
+                    return handler
+
+                return decorator
+
+            async def call(self, event, *args, timeout=10.0):
+                self.calls.append((event, args, timeout))
+                if event == "subscribe":
+                    return [None, None]
+                if event == "getState":
+                    return [None, {"val": 22.0}]
+                raise AssertionError(f"unexpected ioBroker call: {event}")
+
+        t0 = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
+        adapter._cfg = adapter.config_schema(
+            **{
+                **adapter._config,
+                "socket_instability_threshold": 3,
+                "socket_instability_window_s": 300,
+            }
+        )
+        adapter._connect_url = "http://192.168.1.50:8084"
+        binding = make_binding({"state_id": "0_userdata.0.temp"})
+        adapter._state_map["0_userdata.0.temp"] = [binding]
+
+        socket = FakeSocket()
+        adapter._socket = socket
+        adapter._register_socket_handlers(socket)
+
+        for offset in (0, 30, 60):
+            monkeypatch.setattr(adapter, "_now", lambda offset=offset: t0 + timedelta(seconds=offset))
+            await adapter._record_disconnect()
+
+        monkeypatch.setattr(adapter, "_now", lambda: t0 + timedelta(seconds=400))
+        await socket.connect()
+
+        status_events = self._status_events(mock_bus)
+        data_events = [call.args[0] for call in mock_bus.publish.await_args_list if isinstance(call.args[0], DataValueEvent)]
+        assert status_events[-1].severity == "ok"
+        assert status_events[-1].connected is True
+        assert status_events[-1].detail == "ioBroker Socket.IO-Verbindung stabil."
+        assert socket.calls[0][0] == "subscribe"
+        assert socket.calls[0][1] == (["0_userdata.0.temp"],)
+        assert socket.calls[1][0] == "getState"
+        assert data_events[-1].value == pytest.approx(22.0)
+
+    @pytest.mark.asyncio
+    async def test_connect_failure_publishes_error_severity(self, mock_bus):
+        adapter = IoBrokerAdapter(event_bus=mock_bus, config={"host": "127.0.0.1", "port": 8084})
+        adapter._connect_socket = AsyncMock(return_value=False)
+        adapter._ensure_reconnect_task = MagicMock()
+
+        await adapter.connect()
+
+        status_events = self._status_events(mock_bus)
+        assert status_events[-1].severity == "error"
+        assert status_events[-1].connected is False
+        assert status_events[-1].detail == "Socket.IO Verbindung fehlgeschlagen"
 
 
 class TestBrowseStates:

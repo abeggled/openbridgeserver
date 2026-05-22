@@ -86,10 +86,10 @@
     <!-- Bottom: WS status + collapse toggle -->
     <div class="px-2 py-3 border-t border-slate-200 dark:border-slate-700/60 flex flex-col gap-2">
       <!-- WebSocket indicator -->
-      <div :class="['flex items-center gap-2 px-3 py-2 rounded-lg text-xs', collapsed ? 'justify-center' : '']" :title="ws.connected ? 'Live verbunden' : 'Getrennt'">
+      <div :class="['flex items-center gap-2 px-3 py-2 rounded-lg text-xs', collapsed ? 'justify-center' : '']" :title="ws.connected ? $t('sidebar.liveConnected') : $t('sidebar.disconnected')">
         <span :class="['w-2 h-2 rounded-full shrink-0', ws.connected ? 'bg-green-400 animate-pulse' : 'bg-red-500']" />
         <span v-if="!collapsed" :class="ws.connected ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'">
-          {{ ws.connected ? 'Live' : 'Offline' }}
+          {{ ws.connected ? $t('sidebar.live') : $t('sidebar.offline') }}
         </span>
       </div>
       <!-- Collapse button -->
@@ -105,6 +105,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useWebSocketStore } from '@/stores/websocket'
 import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
@@ -130,17 +131,18 @@ const adapterErrorCount = computed(
 )
 
 let adapterPoll = null
+const { t }    = useI18n()
 
-const navItems = [
-  { to: '/',           label: 'Übersicht',    icon: '&#9783;' },
-  { to: '/datapoints', label: 'Objekte',      icon: '&#9636;' },
-  { to: '/adapters',   label: 'Adapter',      icon: '&#9741;' },
-  { to: '/history',    label: 'Historie',     icon: '&#9685;' },
-  { to: '/ringbuffer', label: 'Monitor',      icon: '&#9706;' },
-  { to: '/logs',       label: 'Logs',         icon: '&#9783;' },
-  { to: '/logic',      label: 'Logikmodul',   icon: '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18" style="display:inline-block;vertical-align:middle"><circle cx="4" cy="7" r="2"/><circle cx="4" cy="13" r="2"/><circle cx="16" cy="10" r="2.5"/><line x1="6" y1="7.5" x2="13.5" y2="9.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="6" y1="12.5" x2="13.5" y2="10.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' },
-  { to: '/settings',   label: 'Einstellungen', icon: '&#9881;' },
-]
+const navItems = computed(() => [
+  { to: '/',           label: t('nav.dashboard'),  icon: '&#9783;' },
+  { to: '/datapoints', label: t('nav.datapoints'), icon: '&#9636;' },
+  { to: '/adapters',   label: t('nav.adapters'),   icon: '&#9741;' },
+  { to: '/history',    label: t('nav.history'),    icon: '&#9685;' },
+  { to: '/ringbuffer', label: t('nav.ringbuffer'), icon: '&#9706;' },
+  { to: '/logs',       label: t('nav.logs'),       icon: '&#9783;' },
+  { to: '/logic',      label: t('nav.logic'),      icon: '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18" style="display:inline-block;vertical-align:middle"><circle cx="4" cy="7" r="2"/><circle cx="4" cy="13" r="2"/><circle cx="16" cy="10" r="2.5"/><line x1="6" y1="7.5" x2="13.5" y2="9.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="6" y1="12.5" x2="13.5" y2="10.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' },
+  { to: '/settings',   label: t('nav.settings'),   icon: '&#9881;' },
+])
 
 // Nur laden wenn bereits eingeloggt — sonst triggert der 401 den Interceptor-Redirect
 onMounted(() => {

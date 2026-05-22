@@ -2,30 +2,30 @@
   <div class="flex flex-col gap-5">
     <div class="flex flex-wrap items-start gap-3">
       <div class="flex-1">
-        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Logs</h2>
-        <p class="text-sm text-slate-500 mt-0.5">Applikations-Logs — Live</p>
+        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('logs.title') }}</h2>
+        <p class="text-sm text-slate-500 mt-0.5">{{ $t('logs.subtitle') }}</p>
       </div>
-      <select v-model="logLevel" @change="setLevel" class="input w-36" title="Log-Level zur Laufzeit ändern">
+      <select v-model="logLevel" @change="setLevel" class="input w-36" :title="$t('logs.changeLevelRuntime')">
         <option value="DEBUG">DEBUG</option>
         <option value="INFO">INFO</option>
         <option value="WARNING">WARNING</option>
         <option value="ERROR">ERROR</option>
       </select>
-      <button @click="load" class="btn-secondary btn-sm">↻ Aktualisieren</button>
+      <button @click="load" class="btn-secondary btn-sm">{{ $t('logs.refresh') }}</button>
       <span :class="['inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium',
         wsConnected ? 'bg-teal-500/15 text-teal-600 dark:text-teal-400' : 'bg-slate-200/50 dark:bg-slate-700/50 text-slate-500']"
         data-testid="status-badge">
         <span :class="['w-1.5 h-1.5 rounded-full', wsConnected ? 'bg-teal-400 animate-pulse' : 'bg-slate-600']" />
-        {{ wsConnected ? 'Live' : 'Offline' }}
+        {{ wsConnected ? $t('sidebar.live') : $t('sidebar.offline') }}
       </span>
     </div>
 
     <!-- Filters -->
     <div class="flex flex-wrap gap-3">
       <input v-model="filters.q" type="text" class="input flex-1 min-w-40"
-        placeholder="Suche in Logger-Name oder Meldung …" @input="debouncedLoad" data-testid="input-filter" />
+        :placeholder="$t('logs.searchPlaceholder')" @input="debouncedLoad" data-testid="input-filter" />
       <select v-model="filters.level" class="input w-36" @change="load">
-        <option value="">Alle Level</option>
+        <option value="">{{ $t('logs.filterAllLevels') }}</option>
         <option value="DEBUG">DEBUG</option>
         <option value="INFO">INFO</option>
         <option value="WARNING">WARNING</option>
@@ -42,15 +42,15 @@
     <!-- Log table -->
     <div class="card overflow-hidden">
       <div v-if="loading" class="flex justify-center py-12"><Spinner size="lg" /></div>
-      <div v-else-if="!entries.length" class="text-center text-slate-500 text-sm py-12">Keine Log-Einträge vorhanden</div>
+      <div v-else-if="!entries.length" class="text-center text-slate-500 text-sm py-12">{{ $t('logs.noEntries') }}</div>
       <div v-else class="table-wrap max-h-[65vh] overflow-y-auto">
         <table class="table">
           <thead class="sticky top-0">
             <tr>
-              <th class="w-44">Zeitstempel</th>
-              <th class="w-24">Level</th>
-              <th class="w-56">Logger</th>
-              <th>Meldung</th>
+              <th class="w-44">{{ $t('logs.colTimestamp') }}</th>
+              <th class="w-24">{{ $t('logs.colLevel') }}</th>
+              <th class="w-56">{{ $t('logs.colLogger') }}</th>
+              <th>{{ $t('logs.colMessage') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -69,12 +69,14 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { logsApi } from '@/api/client'
 import { useTz } from '@/composables/useTz'
 import { useWebSocketStore } from '@/stores/websocket'
 import Badge   from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
+const { t } = useI18n()
 const { fmtDateTime } = useTz()
 const wsStore = useWebSocketStore()
 

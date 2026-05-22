@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { datapoints } from '@/api/client'
 import { useDatapointsStore } from '@/stores/datapoints'
 import type { DataPointValue } from '@/types'
@@ -21,6 +22,7 @@ const props = defineProps<{
   editorMode: boolean
   readonly?: boolean
 }>()
+const { t } = useI18n()
 
 const dpStore = useDatapointsStore()
 
@@ -46,10 +48,10 @@ const dpStatus2 = computed(() => (props.config.dp_status_2 as string) || null)
 const dpStatus3 = computed(() => (props.config.dp_status_3 as string) || null)
 const dpStatus4 = computed(() => (props.config.dp_status_4 as string) || null)
 
-const labelStatus1 = computed(() => (props.config.label_status_1 as string) || 'Manuelle Sperre')
-const labelStatus2 = computed(() => (props.config.label_status_2 as string) || 'Status 2')
-const labelStatus3 = computed(() => (props.config.label_status_3 as string) || 'Status 3')
-const labelStatus4 = computed(() => (props.config.label_status_4 as string) || 'Status 4')
+const labelStatus1 = computed(() => (props.config.label_status_1 as string) || t('widgets.rolladen.defaultStatus1'))
+const labelStatus2 = computed(() => (props.config.label_status_2 as string) || t('widgets.rolladen.defaultStatus2'))
+const labelStatus3 = computed(() => (props.config.label_status_3 as string) || t('widgets.rolladen.defaultStatus3'))
+const labelStatus4 = computed(() => (props.config.label_status_4 as string) || t('widgets.rolladen.defaultStatus4'))
 
 // ── Werte aus dem Store lesen ────────────────────────────────────────────────
 function toNumber(id: string | null): number | null {
@@ -284,10 +286,9 @@ const slatLines = computed(() => {
 })
 
 // ── Tooltip-Texte ────────────────────────────────────────────────────────────
-const tooltipUp   = 'Kurz: Stopp\nLang: Auffahren bis Endlage'
-const tooltipDown = 'Kurz: Stopp\nLang: Abfahren bis Endlage'
-
-const tooltipStop = 'Sofort stoppen'
+const tooltipUp = computed(() => t('widgets.rolladen.tooltipUp'))
+const tooltipDown = computed(() => t('widgets.rolladen.tooltipDown'))
+const tooltipStop = computed(() => t('widgets.rolladen.tooltipStop'))
 
 // ── Sicherheits-Cleanup ──────────────────────────────────────────────────────
 function onWindowPointerUp() {
@@ -395,7 +396,7 @@ onUnmounted(() => {
           <!-- Positionsregler -->
           <div>
             <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
-              <span>Position</span>
+              <span>{{ $t('widgets.rolladen.positionLabel') }}</span>
               <span class="tabular-nums font-medium text-gray-700 dark:text-gray-300">
                 {{ displayPosition !== null ? Math.round(shownPosition) + ' %' : '—' }}
               </span>
@@ -409,14 +410,14 @@ onUnmounted(() => {
               @change="onPositionChange"
             />
             <div class="flex justify-between text-xs text-gray-400 dark:text-gray-600 mt-0.5">
-              <span>auf</span><span>zu</span>
+              <span>{{ $t('widgets.rolladen.openShort') }}</span><span>{{ $t('widgets.rolladen.closedShort') }}</span>
             </div>
           </div>
 
           <!-- Lamellenregler (nur Jalousie) -->
           <div v-if="mode === 'jalousie'">
             <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
-              <span>Lamellen</span>
+              <span>{{ $t('widgets.rolladen.slatLabel') }}</span>
               <span class="tabular-nums font-medium text-gray-700 dark:text-gray-300">
                 {{ rawSlat !== null ? Math.round(shownSlat) + ' %' : '—' }}
               </span>
@@ -430,7 +431,7 @@ onUnmounted(() => {
               @change="onSlatChange"
             />
             <div class="flex justify-between text-xs text-gray-400 dark:text-gray-600 mt-0.5">
-              <span>offen</span><span>zu</span>
+              <span>{{ $t('widgets.rolladen.openLabel') }}</span><span>{{ $t('widgets.rolladen.closedShort') }}</span>
             </div>
           </div>
 
@@ -446,7 +447,7 @@ onUnmounted(() => {
                    bg-gray-200 dark:bg-gray-700
                    hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-40"
             :disabled="editorMode || readonly"
-            title="Sperre"
+            :title="$t('widgets.rolladen.lockTitle')"
             @click="toggleLock"
           >
             <span
@@ -526,7 +527,7 @@ onUnmounted(() => {
                  bg-gray-200 dark:bg-gray-700 text-yellow-500
                  hover:bg-amber-100 dark:hover:bg-amber-900 disabled:opacity-40"
           :disabled="editorMode || readonly || isLocked"
-          title="Lamellen öffnen (hell)"
+          :title="$t('widgets.rolladen.slatOpenTitle')"
           @click="slatStep('open')"
         >☀</button>
 
@@ -563,7 +564,7 @@ onUnmounted(() => {
                  bg-gray-200 dark:bg-gray-700 text-blue-400
                  hover:bg-blue-100 dark:hover:bg-blue-900 disabled:opacity-40"
           :disabled="editorMode || readonly || isLocked"
-          title="Lamellen schliessen (dunkel)"
+          :title="$t('widgets.rolladen.slatCloseTitle')"
           @click="slatStep('close')"
         >🌙</button>
       </div>

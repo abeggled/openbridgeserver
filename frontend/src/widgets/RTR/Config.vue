@@ -88,7 +88,7 @@ function toggleMode(value: number) {
     <!-- Beschriftung -->
     <div>
       <label class="block text-xs text-gray-400 mb-1">
-        Beschriftung <span class="text-gray-600 font-normal ml-1">(optional)</span>
+        {{ $t('widgets.common.label') }} <span class="text-gray-600 font-normal ml-1">(optional)</span>
       </label>
       <input
         v-model="cfg.label"
@@ -100,7 +100,7 @@ function toggleMode(value: number) {
 
     <!-- Akzentfarbe -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Akzentfarbe</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.rtr.accentColor') }}</label>
       <div class="flex items-center gap-2">
         <input
           v-model="cfg.color"
@@ -113,10 +113,10 @@ function toggleMode(value: number) {
 
     <!-- Temperaturbereich -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Temperaturbereich</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.rtr.tempRange') }}</label>
       <div class="grid grid-cols-4 gap-2">
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Min</label>
+          <label class="block text-xs text-gray-500 mb-1">{{ $t('widgets.rtr.min') }}</label>
           <input
             v-model.number="cfg.min_temp"
             type="number"
@@ -124,7 +124,7 @@ function toggleMode(value: number) {
           />
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Max</label>
+          <label class="block text-xs text-gray-500 mb-1">{{ $t('widgets.rtr.max') }}</label>
           <input
             v-model.number="cfg.max_temp"
             type="number"
@@ -132,7 +132,7 @@ function toggleMode(value: number) {
           />
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Schritt</label>
+          <label class="block text-xs text-gray-500 mb-1">{{ $t('widgets.rtr.step') }}</label>
           <input
             v-model.number="cfg.step"
             type="number"
@@ -142,7 +142,7 @@ function toggleMode(value: number) {
           />
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Dez.</label>
+          <label class="block text-xs text-gray-500 mb-1">{{ $t('widgets.rtr.dez') }}</label>
           <input
             v-model.number="cfg.decimals"
             type="number"
@@ -157,12 +157,12 @@ function toggleMode(value: number) {
     <!-- Korrekturen (Offset für Anzeige) -->
     <div>
       <label class="block text-xs text-gray-400 mb-1">
-        Anzeigekorrektur
-        <span class="text-gray-600 font-normal ml-1">(addiert auf den angezeigten Wert)</span>
+        {{ $t('widgets.rtr.displayCorrection') }}
+        <span class="text-gray-600 font-normal ml-1">{{ $t('widgets.rtr.displayCorrectionHint') }}</span>
       </label>
       <div class="grid grid-cols-2 gap-2">
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Soll-Korrektur</label>
+          <label class="block text-xs text-gray-500 mb-1">{{ $t('widgets.rtr.setpointCorrection') }}</label>
           <input
             v-model.number="cfg.setpoint_offset"
             type="number"
@@ -171,7 +171,7 @@ function toggleMode(value: number) {
           />
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Ist-Korrektur</label>
+          <label class="block text-xs text-gray-500 mb-1">{{ $t('widgets.rtr.actualCorrection') }}</label>
           <input
             v-model.number="cfg.actual_offset"
             type="number"
@@ -186,7 +186,7 @@ function toggleMode(value: number) {
     <div>
       <DataPointPicker
         :model-value="cfg.actual_temp_dp_id"
-        label="Isttemperatur-Objekt (optional)"
+        :label="$t('widgets.rtr.dpActualTemp')"
         :compatible-types="['FLOAT', 'INTEGER']"
         @update:model-value="(id) => (cfg.actual_temp_dp_id = id)"
       />
@@ -194,7 +194,7 @@ function toggleMode(value: number) {
 
     <!-- Steuerungsvariante -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Steuerungsvariante</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.rtr.variant') }}</label>
       <div class="flex gap-2">
         <button
           type="button"
@@ -205,7 +205,7 @@ function toggleMode(value: number) {
               : 'border-gray-700 text-gray-400 hover:border-gray-500',
           ]"
           @click="cfg.variant = 'heating'"
-        >Raumcontroller (Heizung)</button>
+        >{{ $t('widgets.rtr.variantHeating') }}</button>
         <button
           type="button"
           :class="[
@@ -215,7 +215,7 @@ function toggleMode(value: number) {
               : 'border-gray-700 text-gray-400 hover:border-gray-500',
           ]"
           @click="cfg.variant = 'ac'"
-        >Klimanlagensteuerung</button>
+        >{{ $t('widgets.rtr.variantAc') }}</button>
       </div>
     </div>
 
@@ -223,7 +223,7 @@ function toggleMode(value: number) {
     <div>
       <DataPointPicker
         :model-value="cfg.mode_dp_id"
-        label="Betriebsart-Objekt (optional)"
+        :label="$t('widgets.rtr.dpMode')"
         :compatible-types="['INTEGER']"
         @update:model-value="(id) => (cfg.mode_dp_id = id)"
       />
@@ -237,11 +237,11 @@ function toggleMode(value: number) {
           type="checkbox"
           class="w-4 h-4 rounded accent-blue-500"
         />
-        <span class="text-xs text-gray-300">Betriebsart-Buttons anzeigen</span>
+        <span class="text-xs text-gray-300">{{ $t('widgets.rtr.showModes') }}</span>
       </label>
 
       <div v-if="cfg.show_modes">
-        <label class="block text-xs text-gray-400 mb-1">Unterstützte Modi</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.rtr.supportedModes') }}</label>
         <div class="flex flex-wrap gap-1">
           <button
             v-for="m in currentAllModes"

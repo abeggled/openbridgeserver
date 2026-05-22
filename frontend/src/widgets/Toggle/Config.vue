@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { reactive, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import IconPicker from '@/components/IconPicker.vue'
 
 type DisplayMode = 'switch' | 'icon_only' | 'icon_text'
@@ -17,11 +18,15 @@ interface Cfg {
   off: StateRule
 }
 
-const MODES: { value: DisplayMode; label: string }[] = [
-  { value: 'switch',    label: 'Schalter' },
-  { value: 'icon_only', label: 'Nur Icon' },
-  { value: 'icon_text', label: 'Icon + Text' },
-]
+
+
+const { t } = useI18n()
+
+const MODES = computed(() => [
+  { value: 'switch'    as DisplayMode, label: t('widgets.toggle.modeSwitch') },
+  { value: 'icon_only' as DisplayMode, label: t('widgets.toggle.modeIconOnly') },
+  { value: 'icon_text' as DisplayMode, label: t('widgets.toggle.modeIconText') },
+])
 
 const props = defineProps<{ modelValue: Record<string, unknown> }>()
 const emit  = defineEmits<{ (e: 'update:modelValue', val: Record<string, unknown>): void }>()
@@ -38,8 +43,8 @@ function parseRule(raw: unknown, defaults: StateRule): StateRule {
 const cfg = reactive<Cfg>({
   label: (props.modelValue.label as string) ?? '',
   mode:  (props.modelValue.mode  as DisplayMode) ?? 'switch',
-  on:  parseRule(props.modelValue.on,  { icon: '', color: '#3b82f6', text: 'EIN' }),
-  off: parseRule(props.modelValue.off, { icon: '', color: '#6b7280', text: 'AUS' }),
+  on:  parseRule(props.modelValue.on,  { icon: '', color: '#3b82f6', text: t('common.on') }),
+  off: parseRule(props.modelValue.off, { icon: '', color: '#6b7280', text: t('common.off') }),
 })
 
 watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
@@ -50,18 +55,18 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Beschriftung -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Beschriftung</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.common.label') }}</label>
       <input
         v-model="cfg.label"
         type="text"
-        placeholder="z.B. Pumpe HK1"
+        :placeholder="$t('widgets.toggle.labelPlaceholder')"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       />
     </div>
 
     <!-- Modus -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Modus</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('common.mode') }}</label>
       <div class="flex gap-1">
         <button
           v-for="m in MODES"
@@ -80,31 +85,31 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- ── Zustandsregeln ─────────────────────────────────────────────────── -->
     <div class="space-y-2">
-      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Zustände</p>
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">{{ $t('widgets.toggle.states') }}</p>
 
       <!-- EIN (true) -->
       <div class="border border-gray-700 rounded p-2 space-y-2">
-        <p class="text-xs font-semibold text-blue-400">EIN (true)</p>
+        <p class="text-xs font-semibold text-blue-400">{{ $t('widgets.toggle.stateOn') }}</p>
 
         <!-- Icon + Farbe -->
         <div class="flex gap-2 items-center">
-          <span class="text-xs text-gray-500 w-8 shrink-0">Icon</span>
+          <span class="text-xs text-gray-500 w-8 shrink-0">{{ $t('widgets.toggle.iconLabel') }}</span>
           <IconPicker v-model="cfg.on.icon" :dark="true" />
           <input
             v-model="cfg.on.color"
             type="color"
             class="w-7 h-7 rounded cursor-pointer border border-gray-700 bg-transparent p-0.5 shrink-0"
-            title="Farbe"
+            :title="$t('widgets.toggle.colorTitle')"
           />
         </div>
 
         <!-- Text (nicht im Nur-Icon-Modus) -->
         <div v-if="cfg.mode !== 'icon_only'" class="flex gap-2 items-center">
-          <span class="text-xs text-gray-500 w-8 shrink-0">Text</span>
+          <span class="text-xs text-gray-500 w-8 shrink-0">{{ $t('widgets.toggle.textLabel') }}</span>
           <input
             v-model="cfg.on.text"
             type="text"
-            placeholder="EIN"
+            :placeholder="$t('common.on')"
             class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
           />
         </div>
@@ -112,27 +117,27 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
       <!-- AUS (false / default) -->
       <div class="border border-gray-700 rounded p-2 space-y-2">
-        <p class="text-xs font-semibold text-gray-400">AUS (false)</p>
+        <p class="text-xs font-semibold text-gray-400">{{ $t('widgets.toggle.stateOff') }}</p>
 
         <!-- Icon + Farbe -->
         <div class="flex gap-2 items-center">
-          <span class="text-xs text-gray-500 w-8 shrink-0">Icon</span>
+          <span class="text-xs text-gray-500 w-8 shrink-0">{{ $t('widgets.toggle.iconLabel') }}</span>
           <IconPicker v-model="cfg.off.icon" :dark="true" />
           <input
             v-model="cfg.off.color"
             type="color"
             class="w-7 h-7 rounded cursor-pointer border border-gray-700 bg-transparent p-0.5 shrink-0"
-            title="Farbe"
+            :title="$t('widgets.toggle.colorTitle')"
           />
         </div>
 
         <!-- Text (nicht im Nur-Icon-Modus) -->
         <div v-if="cfg.mode !== 'icon_only'" class="flex gap-2 items-center">
-          <span class="text-xs text-gray-500 w-8 shrink-0">Text</span>
+          <span class="text-xs text-gray-500 w-8 shrink-0">{{ $t('widgets.toggle.textLabel') }}</span>
           <input
             v-model="cfg.off.text"
             type="text"
-            placeholder="AUS"
+            :placeholder="$t('common.off')"
             class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
           />
         </div>

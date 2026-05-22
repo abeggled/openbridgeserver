@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter, useRoute } from 'vue-router'
 import { auth, setJwt } from '@/api/client'
 import { useVisuStore } from '@/stores/visu'
 import { useWebSocket } from '@/composables/useWebSocket'
 import { useThemeStore } from '@/stores/theme'
 
+const { t } = useI18n()
 const router = useRouter()
 const route  = useRoute()
 const store  = useVisuStore()
@@ -30,7 +32,7 @@ async function login() {
     const redirect = route.query.redirect as string | undefined
     router.push(redirect ?? { name: 'tree' })
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Login fehlgeschlagen'
+    error.value = e instanceof Error ? e.message : t('login.failed')
   } finally {
     loading.value = false
   }
@@ -74,12 +76,12 @@ async function login() {
           <text x="80" y="30" font-family="'DM Mono', monospace" font-size="28" font-weight="500" letter-spacing="-0.4" fill="#1a1a18">open bridge</text>
           <text x="81" y="48" font-family="'DM Mono', monospace" font-size="9.5" font-weight="300" letter-spacing="2.8" fill="#5F5E5A">MULTIPROTOCOL · AI SERVER</text>
         </svg>
-        <div class="text-sm text-gray-400 dark:text-gray-500">Visualisierung · Anmeldung</div>
+        <div class="text-sm text-gray-400 dark:text-gray-500">{{ $t('login.subtitle') }}</div>
       </div>
 
       <form @submit.prevent="login" class="space-y-4">
         <div>
-          <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Benutzername</label>
+          <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('login.username') }}</label>
           <input
             v-model="username"
             type="text"
@@ -89,7 +91,7 @@ async function login() {
           />
         </div>
         <div>
-          <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Passwort</label>
+          <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('login.password') }}</label>
           <input
             v-model="password"
             type="password"
@@ -105,7 +107,7 @@ async function login() {
           :disabled="loading || !username || !password"
           class="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg py-2.5 transition-colors"
         >
-          {{ loading ? 'Anmelden …' : 'Anmelden' }}
+          {{ loading ? $t('login.submitting') : $t('login.submit') }}
         </button>
       </form>
 
@@ -113,7 +115,7 @@ async function login() {
         class="mt-4 w-full text-sm text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
         @click="router.push({ name: 'tree' })"
       >
-        ← Zur Übersicht (ohne Login)
+        {{ $t('login.backWithoutLogin') }}
       </button>
     </div>
   </div>

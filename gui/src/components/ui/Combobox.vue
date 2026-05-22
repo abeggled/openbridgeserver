@@ -26,7 +26,7 @@
             class="ml-0.5 text-blue-700/70 hover:text-red-500 dark:text-blue-300/70 dark:hover:text-red-400 shrink-0"
             @click.stop="removeAt(i)"
             tabindex="-1"
-            aria-label="Entfernen"
+            :aria-label="$t('common.remove')"
           >
             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -72,9 +72,9 @@
       data-testid="combobox-dropdown"
       class="absolute z-50 mt-1 w-full bg-white dark:bg-surface-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl max-h-64 overflow-y-auto"
     >
-      <div v-if="loading" data-testid="combobox-loading" class="px-3 py-2 text-xs text-slate-500">Suche …</div>
+      <div v-if="loading" data-testid="combobox-loading" class="px-3 py-2 text-xs text-slate-500">{{ $t('common.searching') }}</div>
       <div v-else-if="noResults" data-testid="combobox-empty" class="px-3 py-2 text-xs text-slate-500">
-        {{ emptyText }}
+        {{ emptyText ?? $t('datapoints.noMatch') }}
       </div>
       <ul v-else>
         <li
@@ -110,7 +110,7 @@ const props = defineProps({
   placeholder: { type: String, default: '' },
   fetchSuggestions: { type: Function, required: true },
   displayItems: { type: Array, default: () => [] }, // chip labels for multi mode
-  emptyText: { type: String, default: 'Keine Treffer' },
+  emptyText: { type: String, default: null },
   debounceMs: { type: Number, default: 200 },
   wrapperClass: { type: String, default: '' },
 })

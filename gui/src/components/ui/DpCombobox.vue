@@ -2,10 +2,10 @@
   <Combobox
     :model-value="modelValue"
     :multi="multi"
-    :placeholder="placeholder"
+    :placeholder="effectivePlaceholder"
     :fetch-suggestions="fetchSuggestions"
     :display-items="displayItems"
-    empty-text="Keine Objekte gefunden"
+    :empty-text="$t('datapoints.noObjectsFound')"
     @update:modelValue="onUpdate"
     @select="onSelect"
   >
@@ -14,27 +14,32 @@
       <span class="text-xs text-slate-500 shrink-0">{{ item.data_type }}</span>
       <span v-if="item.unit" class="text-xs text-slate-600 shrink-0">{{ item.unit }}</span>
       <span v-if="selected" class="text-xs text-blue-500 shrink-0">·</span>
-      <span v-if="active" class="sr-only">aktiv</span>
+      <span v-if="active" class="sr-only">{{ $t('common.active') }}</span>
     </template>
   </Combobox>
 </template>
 
 <script setup>
 import { computed, ref, watch, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import Combobox from '@/components/ui/Combobox.vue'
 import { searchApi } from '@/api/client'
+
+const { t } = useI18n()
 
 const props = defineProps({
   // Single-mode: string DP id. Multi-mode: array of DP ids.
   modelValue: { type: [String, Array], default: '' },
   // Display name shown in the input when an item is selected (single-mode only).
   displayName: { type: String, default: '' },
-  placeholder: { type: String, default: 'Name, UUID, Konfiguration …' },
+  placeholder: { type: String, default: null },
   // Set to true to allow multi-selection. The model value type changes to
   // string[] in that case; the FilterEditor (#36) needs this.
   multi: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:modelValue', 'select'])
+
+const effectivePlaceholder = computed(() => props.placeholder ?? t('datapoints.searchPlaceholder'))
 
 // Cache of DPs we've seen — by id — so chip rendering in multi-mode has a
 // label even after the suggestion list closes. Single-mode also relies on

@@ -17,6 +17,7 @@ import { vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent, h, ref } from 'vue'
+import { createTestI18n } from './createTestI18n'
 
 export function makeRingbufferApiMock(overrides = {}) {
   return {
@@ -130,7 +131,7 @@ export async function mountRingBufferView({
 
   const wrapper = mount(RingBufferView, {
     global: {
-      plugins: [pinia],
+      plugins: [pinia, createTestI18n()],
       stubs: {
         RouterLink: defineComponent({
           name: 'RouterLink',

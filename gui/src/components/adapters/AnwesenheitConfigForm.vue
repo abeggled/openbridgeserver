@@ -3,13 +3,13 @@
 
     <!-- Historischer Versatz -->
     <div class="form-group">
-      <label class="label">Historischer Versatz</label>
+      <label class="label">{{ $t('adapters.anwesenheit.offsetLabel') }}</label>
       <div class="flex gap-2">
         <select v-model="offsetSelect" class="input" @change="onOffsetSelectChange">
-          <option value="1">1 Tag</option>
-          <option value="7">7 Tage</option>
-          <option value="14">14 Tage</option>
-          <option value="custom">Andere (1–30 Tage) …</option>
+          <option value="1">{{ $t('adapters.anwesenheit.offset1Day') }}</option>
+          <option value="7">{{ $t('adapters.anwesenheit.offset7Days') }}</option>
+          <option value="14">{{ $t('adapters.anwesenheit.offset14Days') }}</option>
+          <option value="custom">{{ $t('adapters.anwesenheit.offsetCustom') }}</option>
         </select>
         <input
           v-if="offsetSelect === 'custom'"
@@ -18,25 +18,24 @@
           min="1"
           max="30"
           class="input w-28"
-          placeholder="Tage"
+:placeholder="$t('adapters.anwesenheit.offsetDaysPlaceholder')"
           @input="emitOffsetCustom"
         />
       </div>
-      <p class="hint">Anzahl Tage in der Vergangenheit, deren Schaltzustände wiederholt werden.</p>
+      <p class="hint">{{ $t('adapters.anwesenheit.offsetHint') }}</p>
     </div>
 
     <!-- Steuerobjekt -->
     <div class="form-group">
-      <label class="label">Steuerobjekt</label>
+      <label class="label">{{ $t('adapters.anwesenheit.controlDp') }}</label>
       <DpCombobox
         :model-value="modelValue.control_dp_id ?? ''"
         :display-name="controlDpName"
-        placeholder="Objekt suchen (Boolean) …"
+:placeholder="$t('adapters.anwesenheit.controlDpPlaceholder')"
         @select="onControlDpSelect"
       />
       <p class="hint">
-        Boolean-Datenpunkt: Wert 1 = Anwesend (Simulation aus), Wert 0 = Abwesend (Simulation an).
-        Leer = Simulation immer aktiv.
+        {{ $t('adapters.anwesenheit.controlDpHint') }}
       </p>
     </div>
 
@@ -49,32 +48,32 @@
           @change="emit('update:modelValue', { ...modelValue, control_invert: $event.target.checked })"
           class="w-4 h-4 rounded"
         />
-        <span class="text-sm text-slate-600 dark:text-slate-300">Steuerobjekt invertieren</span>
+        <span class="text-sm text-slate-600 dark:text-slate-300">{{ $t('adapters.anwesenheit.controlInvert') }}</span>
       </label>
-      <p class="hint">Bei Aktivierung gilt: Wert 0 = Anwesend (Simulation aus).</p>
+      <p class="hint">{{ $t('adapters.anwesenheit.controlInvertHint') }}</p>
     </div>
 
     <!-- Verhalten bei Anwesenheit -->
     <div class="form-group">
-      <label class="label">Verhalten bei Anwesenheit</label>
+      <label class="label">{{ $t('adapters.anwesenheit.onPresence') }}</label>
       <select
         :value="modelValue.on_presence ?? 'behalten'"
         class="input"
         @change="emit('update:modelValue', { ...modelValue, on_presence: $event.target.value })"
       >
-        <option value="behalten">Wert behalten</option>
-        <option value="zuruecksetzen">Wert zurücksetzen (false / 0)</option>
-        <option value="setzen">Wert setzen auf …</option>
+        <option value="behalten">{{ $t('adapters.anwesenheit.onPresenceKeep') }}</option>
+        <option value="zuruecksetzen">{{ $t('adapters.anwesenheit.onPresenceReset') }}</option>
+        <option value="setzen">{{ $t('adapters.anwesenheit.onPresenceSet') }}</option>
       </select>
       <input
         v-if="(modelValue.on_presence ?? 'behalten') === 'setzen'"
         :value="modelValue.on_presence_value ?? ''"
         type="text"
         class="input mt-2"
-        placeholder="z.B. 0 / 1 / false / true / 21.5"
+:placeholder="$t('adapters.anwesenheit.onPresencePlaceholder')"
         @input="emit('update:modelValue', { ...modelValue, on_presence_value: $event.target.value })"
       />
-      <p class="hint">Was passiert mit den simulierten Objekten wenn Anwesenheit erkannt wird.</p>
+      <p class="hint">{{ $t('adapters.anwesenheit.onPresenceHint') }}</p>
     </div>
 
   </div>
@@ -82,12 +81,14 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { searchApi } from '@/api/client'
 import DpCombobox from '@/components/ui/DpCombobox.vue'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
 })
+const { t } = useI18n()
 const emit = defineEmits(['update:modelValue'])
 
 // ── Versatz ──────────────────────────────────────────────────────────────────

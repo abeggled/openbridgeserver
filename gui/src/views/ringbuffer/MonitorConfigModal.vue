@@ -1,30 +1,30 @@
 <template>
-  <Modal v-model="open" title="Monitor konfigurieren" max-width="md">
+  <Modal v-model="open" :title="$t('ringbuffer.configureTitle')" max-width="md">
     <form @submit.prevent="onSubmit" class="flex flex-col gap-4">
       <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-2" data-testid="rb-config-stats">
-        <h4 class="text-sm font-semibold">Ringbuffer Statistik</h4>
+        <h4 class="text-sm font-semibold">{{ $t('ringbuffer.statsTitle') }}</h4>
         <div class="text-xs text-slate-500 flex items-center justify-between">
-          <span>Einträge</span>
+          <span>{{ $t('ringbuffer.entries') }}</span>
           <span class="font-medium text-slate-700 dark:text-slate-200" data-testid="rb-config-stats-total">{{ stats?.total ?? '-' }}</span>
         </div>
         <div class="text-xs text-slate-500 flex items-center justify-between">
-          <span>Belegter Speicherplatz</span>
+          <span>{{ $t('ringbuffer.statsDiskUsage') }}</span>
           <span class="font-medium text-slate-700 dark:text-slate-200" data-testid="rb-config-stats-file-size">{{ formatBytes(stats?.file_size_bytes ?? 0) }}</span>
         </div>
         <div class="text-xs text-slate-500 flex items-center justify-between">
-          <span>Effektive Retention (ältester Eintrag)</span>
+          <span>{{ $t('ringbuffer.statsRetention') }}</span>
           <span class="font-medium text-slate-700 dark:text-slate-200" data-testid="rb-config-stats-retention">{{ formatRetention(stats?.effective_retention_seconds ?? null) }}</span>
         </div>
       </div>
 
       <div class="text-xs text-slate-500">
-        Speichermodell ist serverseitig fix: <span class="font-semibold">file-only</span>.
+        {{ $t('ringbuffer.storageFixed') }} <span class="font-semibold">file-only</span>.
       </div>
 
       <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-3">
         <div class="flex items-center gap-2">
           <input id="max-entries-enabled" type="checkbox" v-model="configForm.maxEntriesEnabled" data-testid="rb-config-max-entries-enabled" />
-          <label for="max-entries-enabled" class="text-sm font-medium">Max. Einträge</label>
+          <label for="max-entries-enabled" class="text-sm font-medium">{{ $t('ringbuffer.maxEntries') }}</label>
         </div>
         <input
           v-model.trim="configForm.maxEntriesValue"
@@ -42,7 +42,7 @@
       <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-3">
         <div class="flex items-center gap-2">
           <input id="max-size-enabled" type="checkbox" v-model="configForm.maxSizeEnabled" data-testid="rb-config-max-size-enabled" />
-          <label for="max-size-enabled" class="text-sm font-medium">Max. Speicherplatz auf Platte</label>
+          <label for="max-size-enabled" class="text-sm font-medium">{{ $t('ringbuffer.maxDisk') }}</label>
         </div>
         <div class="grid grid-cols-2 gap-2">
           <input
@@ -70,7 +70,7 @@
       <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-3">
         <div class="flex items-center gap-2">
           <input id="retention-enabled" type="checkbox" v-model="configForm.retentionEnabled" data-testid="rb-config-retention-enabled" />
-          <label for="retention-enabled" class="text-sm font-medium">Max. Retention</label>
+          <label for="retention-enabled" class="text-sm font-medium">{{ $t('ringbuffer.maxRetention') }}</label>
         </div>
         <div class="grid grid-cols-2 gap-2">
           <input
@@ -89,9 +89,9 @@
             :disabled="!configForm.retentionEnabled"
             data-testid="rb-config-retention-unit"
           >
-            <option value="days">Tage</option>
-            <option value="months">Monate</option>
-            <option value="years">Jahre</option>
+            <option value="days">{{ $t('ringbuffer.unitDays') }}</option>
+            <option value="months">{{ $t('ringbuffer.unitMonths') }}</option>
+            <option value="years">{{ $t('ringbuffer.unitYears') }}</option>
           </select>
         </div>
       </div>
@@ -100,10 +100,10 @@
         {{ configMsg.text }}
       </div>
       <div class="flex justify-end gap-3">
-        <button type="button" @click="open = false" class="btn-secondary">Schliessen</button>
+        <button type="button" @click="open = false" class="btn-secondary">{{ $t('common.close') }}</button>
         <button type="submit" class="btn-primary" :disabled="saving" data-testid="rb-config-save">
           <Spinner v-if="saving" size="sm" color="white" />
-          Speichern
+          {{ $t('common.save') }}
         </button>
       </div>
     </form>
@@ -123,10 +123,13 @@
  * and shows an inline success/error banner.
  */
 import { computed, onUnmounted, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
 import { formatDurationDeutsch } from '@/composables/useTimeFilterParser'
 import Modal from '@/components/ui/Modal.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+
+const { t } = useI18n()
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -230,17 +233,17 @@ function buildPayload() {
   const payload = { storage: 'file', max_entries: null, max_file_size_bytes: null, max_age: null }
   if (configForm.maxEntriesEnabled) {
     const maxEntries = parseNonNegativeInteger(configForm.maxEntriesValue)
-    if (maxEntries === null || maxEntries < 100) throw new Error('Max. Einträge muss mindestens 100 sein')
+    if (maxEntries === null || maxEntries < 100) throw new Error(t('ringbuffer.validationMinEntries'))
     payload.max_entries = maxEntries
   }
   if (configForm.maxSizeEnabled) {
     const sizeValue = parseNonNegativeInteger(configForm.maxSizeValue)
-    if (sizeValue === null || sizeValue <= 0) throw new Error('Max. Speicherplatz muss grösser als 0 sein')
+    if (sizeValue === null || sizeValue <= 0) throw new Error(t('ringbuffer.validationMinDisk'))
     payload.max_file_size_bytes = sizeValue * SIZE_UNIT_FACTORS[configForm.maxSizeUnit]
   }
   if (configForm.retentionEnabled) {
     const retentionValue = parseNonNegativeInteger(configForm.retentionValue)
-    if (retentionValue === null) throw new Error('Retention muss eine gültige Zahl sein')
+    if (retentionValue === null) throw new Error(t('ringbuffer.validationRetentionNaN'))
     payload.max_age = retentionValue * RETENTION_UNIT_SECONDS[configForm.retentionUnit]
   }
   return payload
@@ -268,14 +271,14 @@ async function onSubmit() {
     const { data } = await ringbufferApi.config(payload)
     stats.value = data
     hydrateForm(data)
-    configMsg.value = { ok: true, text: 'Monitor-Konfiguration gespeichert' }
+    configMsg.value = { ok: true, text: t('ringbuffer.configSavedModal') }
     closeTimer = setTimeout(() => {
       open.value = false
       configMsg.value = null
       closeTimer = null
     }, 2000)
   } catch (error) {
-    configMsg.value = { ok: false, text: error?.response?.data?.detail || error?.message || 'Speichern fehlgeschlagen' }
+    configMsg.value = { ok: false, text: error?.response?.data?.detail || error?.message || t('ringbuffer.saveFailed') }
   } finally {
     saving.value = false
   }

@@ -65,7 +65,7 @@
           :value="local[key] ?? ''"
           class="input"
           :data-testid="`config-field-${key}`"
-          :placeholder="isOptional(prop) ? '(leer = nicht gesetzt)' : defaultPlaceholder(prop)"
+          :placeholder="isOptional(prop) ? t('common.emptyNotSet') : defaultPlaceholder(prop)"
           @input="setString(key, $event.target.value, isOptional(prop))"
         />
 
@@ -76,7 +76,7 @@
           :value="local[key] ?? ''"
           class="input"
           :data-testid="`config-field-${key}`"
-          :placeholder="isOptional(prop) ? '(leer = nicht gesetzt)' : defaultPlaceholder(prop)"
+          :placeholder="isOptional(prop) ? t('common.emptyNotSet') : defaultPlaceholder(prop)"
           @input="setString(key, $event.target.value, isOptional(prop))"
         />
 
@@ -89,7 +89,9 @@
 
 <script setup>
 import { reactive, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
+const { t } = useI18n()
 const props = defineProps({
   schema:     { type: Object, required: true },
   modelValue: { type: Object, default: () => ({}) },
