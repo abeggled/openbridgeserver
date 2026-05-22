@@ -77,6 +77,21 @@ pytest tests/integration                          # mit Docker
 Wenn rot: nicht pushen, sondern fixen. Gilt für Haupt-Sessions **und** für Subagents — bitte
 explizit in den Subagent-Prompt schreiben, weil deren Kontext leer startet.
 
+Zusätzlich für i18n-Änderungen (Admin GUI + Visu) gilt ein harter Diff-Gate:
+
+```bash
+# Diff-basierter i18n Hard-Gate (Hardcoded user-facing strings + locale parity)
+./scripts/check-i18n-hardcoded-strings.sh
+```
+
+Optional als lokaler Push-Hook aktivieren:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Danach läuft der i18n-Gate automatisch vor jedem `git push`.
+
 ## Local Development Setup
 
 ### Prerequisites
@@ -263,9 +278,19 @@ When adding a new view, widget config, or significant UI component:
 5. Pure utility functions must return keys, not translated strings.
 6. Run `npm run build` in `gui/` (and `frontend/` if Visu was touched) — a missing key does not throw at dev time but will surface as `[namespace.key]` in production.
 
+#### Hard-Gate (local + CI)
+
+`./scripts/check-i18n-hardcoded-strings.sh` enforces two checks on the PR/push diff:
+
+1. Changed files under `gui/src` and `frontend/src` with extension `.vue`, `.js`, `.ts` are scanned file-wide for hardcoded user-facing strings outside `$t()` / `t()`.
+2. If locale files changed, `de.json` and `en.json` are compared pairwise (`gui/src/locales/` and `frontend/src/locales/`); missing counterpart keys fail the gate.
+
+Allowlisted technical literals are maintained in `scripts/i18n-allowlist.txt`. Keep the list minimal and reviewable.
+
 #### Known exception — `gui/src/utils/hierarchyDepthOptions.js`
 
 This utility builds option labels that mix tree node names (runtime data) with structural level names. It cannot cleanly return plain i18n keys because the labels are composite strings (e.g. `"1 — EG Test (nur \"Wohnzimmer\")"`). It currently uses hardcoded German strings. This is a known gap; do not copy this pattern for new utilities.
+The current gate allowlists only these specific legacy string patterns in `scripts/i18n-allowlist.txt`.
 
 #### E2E tests (Playwright) and locale
 
@@ -389,6 +414,22 @@ One file per external library. Each test verifies the exact import paths and API
 ## Release & CI
 
 ### Workflows
+
+PR/branch quality workflows:
+
+| Workflow | Purpose |
+|---|---|
+| `.github/workflows/lint.yml` | Ruff lint + format-check via `./tools/lint.sh --check` |
+| `.github/workflows/unittest.yml` | Python test matrix + coverage upload |
+| `.github/workflows/e2e.yml` | Full-stack Playwright E2E |
+| `.github/workflows/i18n-guard.yml` | Hard gate for i18n in changed frontend files + locale parity checks |
+
+GitHub CI enforcement (required for merge gate):
+
+1. Open `Settings` → `Branches` in `abeggled/openbridgeserver`.
+2. Edit the branch protection rule for `main`.
+3. Enable `Require status checks to pass before merging`.
+4. Add `i18n-guard` as a required status check.
 
 Two workflows run on every tag push (`push: tags: '*'`):
 
