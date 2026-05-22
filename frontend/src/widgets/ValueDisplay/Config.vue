@@ -171,13 +171,13 @@ function dupRule(i: number) {
     <!-- Label -->
     <div>
       <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.common.label') }}</label>
-      <input
-        v-model="cfg.label"
-        type="text"
-        placeholder="z.B. Raumtemperatur"
-        class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
-      />
-    </div>
+        <input
+          v-model="cfg.label"
+          type="text"
+          :placeholder="$t('widgets.valuedisplay.labelPlaceholder')"
+          class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+        />
+      </div>
 
     <!-- Mode -->
     <div>
@@ -219,13 +219,13 @@ function dupRule(i: number) {
 
               <!-- Icon + color row -->
               <div class="flex gap-2 items-center mb-2">
-                <span class="text-xs text-gray-500 w-8 shrink-0">Icon</span>
+                <span class="text-xs text-gray-500 w-8 shrink-0">{{ $t('widgets.valuedisplay.iconLabel') }}</span>
                 <IconPicker v-model="rule.icon" :dark="true" />
                 <input
                   v-model="rule.color"
                   type="color"
                   class="w-7 h-7 rounded cursor-pointer border border-gray-700 bg-transparent p-0.5 shrink-0"
-                  title="Farbe"
+                  :title="$t('widgets.valuedisplay.colorTitle')"
                 />
               </div>
 
@@ -250,7 +250,7 @@ function dupRule(i: number) {
                     <input
                       v-model="rule.prefix"
                       type="text"
-                      placeholder="Präfix"
+                      :placeholder="$t('widgets.valuedisplay.prefixPlaceholder')"
                       class="w-14 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
                     />
                     <select
@@ -262,7 +262,7 @@ function dupRule(i: number) {
                     <input
                       v-model="rule.postfix"
                       type="text"
-                      placeholder="Einheit / Postfix"
+                      :placeholder="$t('widgets.valuedisplay.postfixUnitPlaceholder')"
                       class="w-20 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
                     />
                   </template>
@@ -271,19 +271,19 @@ function dupRule(i: number) {
                     <input
                       v-model="rule.prefix"
                       type="text"
-                      placeholder="Präfix"
+                      :placeholder="$t('widgets.valuedisplay.prefixPlaceholder')"
                       class="w-14 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
                     />
                     <input
                       v-model="rule.text"
                       type="text"
-                      placeholder="Anzeigetext"
+                      :placeholder="$t('widgets.valuedisplay.displayTextPlaceholder')"
                       class="flex-1 min-w-20 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
                     />
                     <input
                       v-model="rule.postfix"
                       type="text"
-                      placeholder="Postfix"
+                      :placeholder="$t('widgets.valuedisplay.postfixPlaceholder')"
                       class="w-14 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
                     />
                   </template>
@@ -305,7 +305,7 @@ function dupRule(i: number) {
               <input
                 v-model="rule.threshold"
                 type="text"
-                placeholder="Wert"
+                :placeholder="$t('widgets.valuedisplay.valuePlaceholder')"
                 class="w-14 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500 font-mono shrink-0"
               />
               <div class="flex-1" />
@@ -314,7 +314,7 @@ function dupRule(i: number) {
                 v-model="rule.color"
                 type="color"
                 class="w-7 h-7 rounded cursor-pointer border border-gray-700 bg-transparent p-0.5 shrink-0"
-                title="Farbe"
+                :title="$t('widgets.valuedisplay.colorTitle')"
               />
               <button
                 type="button"
@@ -337,8 +337,8 @@ function dupRule(i: number) {
                   v-model="rule.output_type"
                   class="bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500"
                 >
-                  <option value="value">Wert</option>
-                  <option value="text">Text</option>
+                  <option value="value">{{ $t('widgets.valuedisplay.outputValue') }}</option>
+                  <option value="text">{{ $t('widgets.valuedisplay.outputText') }}</option>
                 </select>
 
                 <template v-if="rule.output_type === 'value'">
@@ -351,7 +351,7 @@ function dupRule(i: number) {
                   <input
                     v-model="rule.prefix"
                     type="text"
-                    placeholder="Präfix"
+                    :placeholder="$t('widgets.valuedisplay.prefixPlaceholder')"
                     class="w-14 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
                   />
                   <select
@@ -363,7 +363,7 @@ function dupRule(i: number) {
                   <input
                     v-model="rule.postfix"
                     type="text"
-                    placeholder="Einheit / Postfix"
+                    :placeholder="$t('widgets.valuedisplay.postfixUnitPlaceholder')"
                     class="w-20 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
                   />
                 </template>
@@ -372,19 +372,19 @@ function dupRule(i: number) {
                   <input
                     v-model="rule.prefix"
                     type="text"
-                    placeholder="Präfix"
+                    :placeholder="$t('widgets.valuedisplay.prefixPlaceholder')"
                     class="w-14 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
                   />
                   <input
                     v-model="rule.text"
                     type="text"
-                    placeholder="Anzeigetext"
+                    :placeholder="$t('widgets.valuedisplay.displayTextPlaceholder')"
                     class="flex-1 min-w-20 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
                   />
                   <input
                     v-model="rule.postfix"
                     type="text"
-                    placeholder="Postfix"
+                    :placeholder="$t('widgets.valuedisplay.postfixPlaceholder')"
                     class="w-14 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
                   />
                 </template>
@@ -413,18 +413,18 @@ function dupRule(i: number) {
         <div class="flex gap-2">
           <div class="flex-1">
             <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.valuedisplay.secondaryLabel') }}</label>
-            <input
-              v-model="cfg.secondary_label"
-              type="text"
-              placeholder="z.B. Soll"
-              class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
-            />
-          </div>
-          <div class="w-20">
-            <label class="block text-xs text-gray-400 mb-1">Dezimalst.</label>
-            <input
-              v-model.number="cfg.secondary_decimals"
-              type="number"
+              <input
+                v-model="cfg.secondary_label"
+                type="text"
+                :placeholder="$t('widgets.valuedisplay.secondaryLabelPlaceholder')"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+            <div class="w-20">
+              <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.valuedisplay.decimalsShort') }}</label>
+              <input
+                v-model.number="cfg.secondary_decimals"
+                type="number"
               min="0"
               max="4"
               class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
@@ -447,12 +447,12 @@ function dupRule(i: number) {
 
     <!-- ── Gauge settings (gauge_arc / gauge_circle only) ─────────────────── -->
     <div v-if="isGaugeMode(cfg.mode)" class="border-t border-gray-700 pt-3 space-y-3">
-      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Gauge Einstellungen</p>
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">{{ $t('widgets.valuedisplay.gaugeSettings') }}</p>
 
       <!-- Min / Max -->
       <div class="flex gap-2">
         <div class="flex-1">
-          <label class="block text-xs text-gray-400 mb-1">Minimum</label>
+          <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.valuedisplay.minimum') }}</label>
           <input
             v-model.number="cfg.gauge_min"
             type="number"
@@ -460,7 +460,7 @@ function dupRule(i: number) {
           />
         </div>
         <div class="flex-1">
-          <label class="block text-xs text-gray-400 mb-1">Maximum</label>
+          <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.valuedisplay.maximum') }}</label>
           <input
             v-model.number="cfg.gauge_max"
             type="number"
@@ -471,7 +471,7 @@ function dupRule(i: number) {
 
       <!-- Gradient colors -->
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Farbe / Farbverlauf (1–4 Farben, niedrig → hoch)</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.valuedisplay.gaugeColors') }}</label>
         <div class="flex items-center gap-2 flex-wrap">
           <input
             v-for="(_, i) in cfg.gauge_colors"
@@ -479,7 +479,7 @@ function dupRule(i: number) {
             v-model="cfg.gauge_colors[i]"
             type="color"
             class="w-8 h-8 rounded cursor-pointer border border-gray-700 bg-transparent p-0.5 shrink-0"
-            :title="`Farbe ${i + 1}`"
+            :title="$t('widgets.valuedisplay.colorIndex', { n: i + 1 })"
           />
           <button
             v-if="cfg.gauge_colors.length < 4"

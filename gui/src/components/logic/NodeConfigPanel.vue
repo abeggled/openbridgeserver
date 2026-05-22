@@ -77,7 +77,7 @@
 
           <div class="section-label mt-1">{{ $t('logic.nodeConfig.transform.mapSection') }}</div>
           <div class="form-group">
-            <label class="label">{{ $t('logic.nodeConfig.transform.mapSection') }} <span class="text-slate-500 font-normal text-xs">(optional)</span></label>
+            <label class="label">{{ $t('logic.nodeConfig.transform.mapSection') }} <span class="text-slate-500 font-normal text-xs">{{ $t('logic.nodeConfig.common.optional') }}</span></label>
             <select v-model="valueMapPreset" @change="onValueMapPresetChange" class="input text-xs"
               data-testid="value-map-preset">
               <option v-for="p in VALUE_MAP_PRESETS" :key="p.key" :value="p.key">{{ p.label }}</option>
@@ -289,7 +289,7 @@
 
         <!-- Standard request fields -->
         <div class="form-group">
-          <label class="label">URL</label>
+          <label class="label">{{ $t('logic.nodeConfig.apiClient.urlLabel') }}</label>
           <input v-model="localData.url" type="text" class="input text-sm" @change="emitUpdate"
             data-testid="api-client-url" />
         </div>
@@ -301,7 +301,7 @@
           </select>
         </div>
         <div class="form-group">
-          <label class="label">Request Content-Type</label>
+          <label class="label">{{ $t('logic.nodeConfig.apiClient.requestContentType') }}</label>
           <select v-model="localData.content_type" class="input text-sm" @change="emitUpdate">
             <option v-for="ct in ['application/json','text/plain','application/x-www-form-urlencoded']" :key="ct" :value="ct">{{ ct }}</option>
           </select>
@@ -335,9 +335,9 @@
           <select v-model="localData.auth_type" class="input text-sm" @change="emitUpdate"
             data-testid="api-client-auth-type">
             <option value="none">{{ $t('logic.nodeConfig.apiClient.authNone') }}</option>
-            <option value="basic">Basic Auth</option>
-            <option value="digest">Digest Auth</option>
-            <option value="bearer">Bearer Token</option>
+            <option value="basic">{{ $t('logic.nodeConfig.apiClient.authBasic') }}</option>
+            <option value="digest">{{ $t('logic.nodeConfig.apiClient.authDigest') }}</option>
+            <option value="bearer">{{ $t('logic.nodeConfig.apiClient.authBearer') }}</option>
           </select>
         </div>
         <template v-if="localData.auth_type === 'basic' || localData.auth_type === 'digest'">
@@ -354,7 +354,7 @@
         </template>
         <template v-if="localData.auth_type === 'bearer'">
           <div class="form-group" data-testid="api-client-auth-bearer">
-            <label class="label">Bearer Token</label>
+            <label class="label">{{ $t('logic.nodeConfig.apiClient.authBearer') }}</label>
             <input v-model="localData.auth_token" type="password" class="input text-sm"
               autocomplete="new-password" @change="emitUpdate" />
           </div>
@@ -511,10 +511,10 @@
           <!-- Legacy single-path: show upgrade banner -->
           <template v-if="localData.xml_path && !xmlPaths.length">
             <div class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-300">
-              <p class="font-semibold mb-1">Legacy-Konfiguration</p>
-              <p class="text-amber-400/80 mb-2">Pfad: <code class="font-mono">{{ localData.xml_path }}</code></p>
+              <p class="font-semibold mb-1">{{ $t('logic.nodeConfig.extractor.legacyConfig') }}</p>
+              <p class="text-amber-400/80 mb-2">{{ $t('logic.nodeConfig.extractor.pathLabel') }}: <code class="font-mono">{{ localData.xml_path }}</code></p>
               <button @click="migrateXmlToMultiPath" class="btn btn-sm bg-amber-600 hover:bg-amber-500 text-white text-xs px-2 py-1 rounded">
-                Zu mehreren Ausgängen upgraden
+                {{ $t('logic.nodeConfig.extractor.upgradeToMultipleOutputs') }}
               </button>
             </div>
           </template>
@@ -522,10 +522,10 @@
           <!-- Multi-path path picker dropdown (one shared, fills active row) -->
           <div v-if="extractorPaths.length" class="form-group">
             <label class="label">
-              Pfad wählen<span v-if="activeExtractorRow !== null" class="text-teal-400"> → Ausgang {{ activeExtractorRow + 1 }}</span>
+              {{ $t('logic.nodeConfig.extractor.choosePath') }}<span v-if="activeExtractorRow !== null" class="text-teal-400"> → {{ $t('logic.nodeConfig.extractor.outputN', { n: activeExtractorRow + 1 }) }}</span>
             </label>
             <select @change="onExtractorPathSelect" class="input text-sm" data-testid="extractor-path-select">
-              <option value="">— Pfad wählen —</option>
+              <option value="">{{ $t('logic.nodeConfig.extractor.pathPlaceholder') }}</option>
               <option v-for="p in extractorPaths" :key="p" :value="p">{{ p }}</option>
             </select>
           </div>
@@ -533,11 +533,11 @@
           <!-- Output rows -->
           <div class="form-group">
             <div class="flex items-center justify-between mb-1">
-              <span class="section-label">Ausgänge ({{ xmlPaths.length }})</span>
+              <span class="section-label">{{ $t('logic.nodeConfig.extractor.outputsCount', { n: xmlPaths.length }) }}</span>
               <button
                 @click="addXmlPath"
                 class="w-6 h-6 flex items-center justify-center rounded text-teal-400 hover:bg-teal-400/10 font-bold text-lg leading-none"
-                title="Ausgang hinzufügen"
+                :title="$t('logic.nodeConfig.extractor.addOutput')"
               >+</button>
             </div>
 
@@ -552,12 +552,12 @@
                   :value="entry.label"
                   @input="updateXmlPath(i, 'label', $event.target.value)"
                   class="input text-xs flex-1"
-                  placeholder="Bezeichnung"
+                  :placeholder="$t('logic.nodeConfig.extractor.labelPlaceholder')"
                 />
                 <button
                   @click="removeXmlPath(i)"
                   class="extractor-output-remove w-5 h-5 flex items-center justify-center rounded hover:bg-red-400/10 text-base leading-none shrink-0"
-                  title="Ausgang entfernen"
+                  :title="$t('logic.nodeConfig.extractor.removeOutput')"
                 >−</button>
               </div>
               <input
@@ -567,7 +567,7 @@
                 @blur="activeExtractorRow = null"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
-                placeholder="z.B. .//temperature"
+                :placeholder="$t('logic.nodeConfig.extractor.xmlPathPlaceholder')"
                 data-testid="extractor-path-input"
               />
               <p v-if="xmlPathPreview(i) !== null" class="text-xs text-teal-400">
@@ -576,7 +576,7 @@
             </div>
 
             <p v-if="!xmlPaths.length && !localData.xml_path" class="text-xs text-slate-500 mt-2 text-center py-2">
-              Klicke <strong>+</strong> um Ausgänge hinzuzufügen.
+              {{ $t('logic.nodeConfig.extractor.clickPlusToAddOutputs') }}
             </p>
           </div>
         </template>
@@ -605,7 +605,7 @@
           <div class="form-group">
             <label class="label">{{ $t('logic.nodeConfig.substr.searchLabel') }}</label>
             <input v-model="localData.search" @change="emitUpdate" class="input text-sm font-mono"
-              placeholder="z.B. :" data-testid="substr-search" />
+              :placeholder="$t('logic.nodeConfig.substr.searchPlaceholder')" data-testid="substr-search" />
           </div>
           <div class="form-group">
             <label class="label">{{ $t('logic.nodeConfig.substr.occurrenceLabel') }}</label>
@@ -621,12 +621,12 @@
           <div class="form-group">
             <label class="label">{{ $t('logic.nodeConfig.substr.startMarker') }}</label>
             <input v-model="localData.start_marker" @change="emitUpdate" class="input text-sm font-mono"
-              placeholder="z.B. [" data-testid="substr-start-marker" />
+              :placeholder="$t('logic.nodeConfig.substr.startMarkerPlaceholder')" data-testid="substr-start-marker" />
           </div>
           <div class="form-group">
             <label class="label">{{ $t('logic.nodeConfig.substr.endMarker') }}</label>
             <input v-model="localData.end_marker" @change="emitUpdate" class="input text-sm font-mono"
-              placeholder="z.B. ]" data-testid="substr-end-marker" />
+              :placeholder="$t('logic.nodeConfig.substr.endMarkerPlaceholder')" data-testid="substr-end-marker" />
           </div>
         </template>
 
@@ -655,7 +655,7 @@
               </a>
             </label>
             <input v-model="localData.pattern" @change="emitUpdate" class="input text-sm font-mono"
-              placeholder="z.B. (\d+\.\d+)" data-testid="substr-pattern" />
+              :placeholder="$t('logic.nodeConfig.substr.regexPlaceholder')" data-testid="substr-pattern" />
           </div>
           <div class="form-group">
             <label class="label">{{ $t('logic.nodeConfig.substr.flags') }}</label>
@@ -739,7 +739,7 @@
 
           <!-- Name -->
           <div class="form-group">
-            <label class="label">Name</label>
+            <label class="label">{{ $t('logic.nodeConfig.ical.nameLabel') }}</label>
             <input :value="flt.name" @input="icalUpdateFilter(i, 'name', $event.target.value)"
               @change="emitUpdate" type="text" class="input text-sm"
               :placeholder="$t('logic.nodeConfig.ical.namePlaceholder')" :data-testid="`ical-filter-name-${i}`" />
@@ -766,9 +766,9 @@
 
           <!-- Per-field patterns -->
           <div v-for="field in [
-              { key: 'summary_pattern',     label: 'Summary',     placeholder: 'z.B. Restmüll' },
-              { key: 'location_pattern',    label: 'Location',    placeholder: 'z.B. Strasse' },
-              { key: 'description_pattern', label: 'Description', placeholder: 'z.B. Biotonne' },
+              { key: 'summary_pattern',     label: t('logic.nodeConfig.ical.summaryLabel'),     placeholder: t('logic.nodeConfig.ical.summaryPlaceholder') },
+              { key: 'location_pattern',    label: t('logic.nodeConfig.ical.locationLabel'),    placeholder: t('logic.nodeConfig.ical.locationPlaceholder') },
+              { key: 'description_pattern', label: t('logic.nodeConfig.ical.descriptionLabel'), placeholder: t('logic.nodeConfig.ical.descriptionPlaceholder') },
             ]" :key="field.key" class="form-group">
             <label class="label text-slate-400">{{ field.label }}</label>
             <input
@@ -862,11 +862,11 @@ const valueMapCustomError = ref('')
 // ── Value Map Presets ──────────────────────────────────────────────────────
 const VALUE_MAP_PRESETS = computed(() => [
   { key: '',            label: t('logic.nodeConfig.transform.noMapping'),            map: null },
-  { key: 'num_invert',  label: '0 ↔ 1 (numerisch invertieren)',                      map: { '0': '1', '1': '0' } },
-  { key: 'bool_onoff',  label: 'true/false → on/off',                                map: { 'true': 'on', 'false': 'off' } },
-  { key: 'onoff_bool',  label: 'on/off → true/false',                                map: { 'on': 'true', 'off': 'false' } },
-  { key: 'num_onoff',   label: '0/1 → off/on',                                       map: { '0': 'off', '1': 'on' } },
-  { key: 'onoff_num',   label: 'off/on → 0/1',                                       map: { 'off': '0', 'on': '1' } },
+  { key: 'num_invert',  label: t('logic.nodeConfig.transform.mapPresetNumInvert'),   map: { '0': '1', '1': '0' } },
+  { key: 'bool_onoff',  label: t('logic.nodeConfig.transform.mapPresetBoolOnOff'),   map: { 'true': 'on', 'false': 'off' } },
+  { key: 'onoff_bool',  label: t('logic.nodeConfig.transform.mapPresetOnOffBool'),   map: { 'on': 'true', 'off': 'false' } },
+  { key: 'num_onoff',   label: t('logic.nodeConfig.transform.mapPresetNumOnOff'),    map: { '0': 'off', '1': 'on' } },
+  { key: 'onoff_num',   label: t('logic.nodeConfig.transform.mapPresetOnOffNum'),    map: { 'off': '0', 'on': '1' } },
   { key: 'custom',      label: t('logic.nodeConfig.transform.customJson'),            map: null },
 ])
 
@@ -1275,7 +1275,7 @@ function _saveXmlPaths(paths) {
 
 function addXmlPath() {
   const paths = xmlPaths.value.slice()
-  paths.push({ label: `Wert ${paths.length + 1}`, path: '' })
+  paths.push({ label: t('logic.nodeConfig.extractor.valueN', { n: paths.length + 1 }), path: '' })
   _saveXmlPaths(paths)
   activeExtractorRow.value = paths.length - 1
 }
@@ -1309,7 +1309,7 @@ function xmlPathPreview(i) {
 function migrateXmlToMultiPath() {
   const legacyPath = (localData.value.xml_path || '').trim()
   if (!legacyPath) return
-  localData.value.xml_paths = JSON.stringify([{ label: 'Wert 1', path: legacyPath }])
+  localData.value.xml_paths = JSON.stringify([{ label: t('logic.nodeConfig.extractor.valueN', { n: 1 }), path: legacyPath }])
   localData.value.xml_path = ''
   emitUpdate()
 }
@@ -1486,7 +1486,6 @@ function onExtractorPathSelect(e) {
   const pathList = isJson ? jsonPaths.value : xmlPaths.value
   const updateFn = isJson ? updateJsonPath : updateXmlPath
   const saveFn   = isJson ? _saveJsonPaths : _saveXmlPaths
-  const labelKey = isJson ? 'json_path' : 'xml_path'
 
   // Fill the active row, or last row, or add a new row
   let target = activeExtractorRow.value
@@ -1498,7 +1497,7 @@ function onExtractorPathSelect(e) {
     activeExtractorRow.value = target
   } else {
     // No rows yet — add one
-    saveFn([{ label: 'Wert 1', path }])
+    saveFn([{ label: t('logic.nodeConfig.extractor.valueN', { n: 1 }), path }])
     activeExtractorRow.value = 0
   }
   e.target.value = ''

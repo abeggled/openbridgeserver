@@ -354,7 +354,7 @@ const showSettings = ref(false)
     <!-- ── Toolbar ──────────────────────────────────────────────────────────── -->
     <header class="border-b border-gray-200 dark:border-gray-800 px-4 py-2 flex items-center gap-3 flex-shrink-0 bg-gray-50 dark:bg-gray-900">
       <Breadcrumb />
-      <span class="text-xs font-medium text-blue-500 dark:text-blue-400 bg-blue-500/10 dark:bg-blue-400/10 px-2 py-0.5 rounded">Editor</span>
+      <span class="text-xs font-medium text-blue-500 dark:text-blue-400 bg-blue-500/10 dark:bg-blue-400/10 px-2 py-0.5 rounded">{{ $t('editor.badge') }}</span>
       <input
         v-if="isNew"
         v-model="newPageName"
@@ -565,23 +565,23 @@ const showSettings = ref(false)
               <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">{{ $t('editor.positionSize') }}</p>
               <div class="grid grid-cols-4 gap-1.5 text-xs">
                 <div>
-                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">X</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">{{ $t('editor.posX') }}</label>
                   <input v-model.number="selectedWidget.x" type="number" min="0"
                     :max="COLS - selectedWidget.w"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">Y</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">{{ $t('editor.posY') }}</label>
                   <input v-model.number="selectedWidget.y" type="number" min="0"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">B</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">{{ $t('editor.widthShort') }}</label>
                   <input v-model.number="selectedWidget.w" type="number" :min="selectedDef.minW" :max="COLS"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">H</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">{{ $t('editor.heightShort') }}</label>
                   <input v-model.number="selectedWidget.h" type="number" :min="selectedDef.minH"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>

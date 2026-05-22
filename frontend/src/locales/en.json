@@ -79,7 +79,12 @@
     "brokenDpRef": "At least one datapoint reference was not found",
     "pageNamePlaceholder": "Page name …",
     "gridInfo": "Cell: {w}×{h}px · Grid: {total}px wide",
-    "paletteHeading": "Widgets"
+    "paletteHeading": "Widgets",
+    "badge": "Editor",
+    "posX": "X",
+    "posY": "Y",
+    "widthShort": "W",
+    "heightShort": "H"
   },
   "viewer": {
     "noVisuSelected": "No visu selected"
@@ -515,7 +520,9 @@
       "dpWStatus": "Read white (status, optional)"
     },
     "link": {
-      "targetPage": "Target page"
+      "targetPage": "Target page",
+      "defaultLabel": "Link",
+      "noTarget": "No target"
     },
     "qrcode": {
       "labelAbove": "Label (shown above)",
@@ -561,7 +568,22 @@
       "dpSlatSend": "Write slat angle",
       "dpSlatStatus": "Read slat angle (status, optional)",
       "dpLock": "🔒 Lock (output, switchable)",
-      "dpIndicatorRo": "Indicator {n} (input, read-only)"
+      "dpIndicatorRo": "Indicator {n} (input, read-only)",
+      "defaultStatus1": "Manual lock",
+      "defaultStatus2": "Status 2",
+      "defaultStatus3": "Status 3",
+      "defaultStatus4": "Status 4",
+      "tooltipUp": "Short: stop\nLong: move up to end position",
+      "tooltipDown": "Short: stop\nLong: move down to end position",
+      "tooltipStop": "Stop immediately",
+      "lockTitle": "Lock",
+      "slatOpenTitle": "Open slats (bright)",
+      "slatCloseTitle": "Close slats (dark)",
+      "positionLabel": "Position",
+      "slatLabel": "Slats",
+      "openShort": "open",
+      "openLabel": "open",
+      "closedShort": "closed"
     },
     "rtr": {
       "accentColor": "Accent colour",
@@ -623,7 +645,11 @@
       "stateOff": "OFF (false)",
       "modeSwitch": "Switch",
       "modeIconOnly": "Icon only",
-      "modeIconText": "Icon + Text"
+      "modeIconText": "Icon + Text",
+      "labelPlaceholder": "e.g. Pump HK1",
+      "iconLabel": "Icon",
+      "colorTitle": "Colour",
+      "textLabel": "Text"
     },
     "uhr": {
       "accentColor": "Accent colour",
@@ -669,7 +695,21 @@
       "period": "Period (hours)",
       "duplicateTitle": "Duplicate",
       "deleteTitle": "Delete",
-      "defaultHistoryRange": "Default history range"
+      "defaultHistoryRange": "Default history range",
+      "labelPlaceholder": "e.g. Room temperature",
+      "iconLabel": "Icon",
+      "colorTitle": "Colour",
+      "prefixPlaceholder": "Prefix",
+      "postfixUnitPlaceholder": "Unit / postfix",
+      "displayTextPlaceholder": "Display text",
+      "postfixPlaceholder": "Postfix",
+      "valuePlaceholder": "Value",
+      "secondaryLabelPlaceholder": "e.g. Setpoint",
+      "gaugeSettings": "Gauge settings",
+      "minimum": "Minimum",
+      "maximum": "Maximum",
+      "gaugeColors": "Colour / gradient (1–4 colours, low → high)",
+      "colorIndex": "Colour {n}"
     },
     "wetter": {
       "labelCity": "Label (location name)",
@@ -693,7 +733,15 @@
       "showForecast": "Show daily forecast",
       "forecastDays": "Number of days (1–7)",
       "precipitation": "Precipitation probability",
-      "showAlerts": "Show weather alerts"
+      "showAlerts": "Show weather alerts",
+      "configureApiUrl": "Configure weather API URL",
+      "defaultLabel": "Weather",
+      "previewLiveMode": "Preview in live mode",
+      "noApiUrl": "No API URL configured",
+      "loadingData": "Loading weather data …",
+      "reload": "Reload",
+      "refreshNow": "Refresh now",
+      "precipitationTitle": "Precipitation: {pct}"
     },
     "widgetref": {
       "sourcePage": "Source page",
@@ -778,6 +826,10 @@
       "keyboardHint": "Enter = close polygon · Esc = discard · Click first point = close",
       "defaultAreaName": "Area {n}",
       "datapoint": "Data point"
+    },
+    "missing": {
+      "title": "Unknown",
+      "ariaLabel": "Unknown widget type"
     }
   }
 }

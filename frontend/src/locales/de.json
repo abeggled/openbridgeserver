@@ -79,7 +79,12 @@
     "brokenDpRef": "Mindestens ein Datenpunkt-Verweis wurde nicht gefunden",
     "pageNamePlaceholder": "Seitenname …",
     "gridInfo": "Zelle: {w}×{h}px · Grid: {total}px breit",
-    "paletteHeading": "Widgets"
+    "paletteHeading": "Widgets",
+    "badge": "Editor",
+    "posX": "X",
+    "posY": "Y",
+    "widthShort": "B",
+    "heightShort": "H"
   },
   "viewer": {
     "noVisuSelected": "Keine Visu ausgewählt"
@@ -515,7 +520,9 @@
       "dpWStatus": "Weiss lesen (Status, optional)"
     },
     "link": {
-      "targetPage": "Ziel-Seite"
+      "targetPage": "Ziel-Seite",
+      "defaultLabel": "Link",
+      "noTarget": "Kein Ziel"
     },
     "qrcode": {
       "labelAbove": "Bezeichnung (erscheint oberhalb)",
@@ -561,7 +568,22 @@
       "dpSlatSend": "Lamellen schreiben",
       "dpSlatStatus": "Lamellen lesen (Status, optional)",
       "dpLock": "🔒 Sperre (Ausgang, schaltbar)",
-      "dpIndicatorRo": "Indikator {n} (Eingang, read-only)"
+      "dpIndicatorRo": "Indikator {n} (Eingang, read-only)",
+      "defaultStatus1": "Manuelle Sperre",
+      "defaultStatus2": "Status 2",
+      "defaultStatus3": "Status 3",
+      "defaultStatus4": "Status 4",
+      "tooltipUp": "Kurz: Stopp\nLang: Auffahren bis Endlage",
+      "tooltipDown": "Kurz: Stopp\nLang: Abfahren bis Endlage",
+      "tooltipStop": "Sofort stoppen",
+      "lockTitle": "Sperre",
+      "slatOpenTitle": "Lamellen öffnen (hell)",
+      "slatCloseTitle": "Lamellen schliessen (dunkel)",
+      "positionLabel": "Position",
+      "slatLabel": "Lamellen",
+      "openShort": "auf",
+      "openLabel": "offen",
+      "closedShort": "zu"
     },
     "rtr": {
       "accentColor": "Akzentfarbe",
@@ -623,7 +645,11 @@
       "stateOff": "AUS (false)",
       "modeSwitch": "Schalter",
       "modeIconOnly": "Nur Icon",
-      "modeIconText": "Icon + Text"
+      "modeIconText": "Icon + Text",
+      "labelPlaceholder": "z.B. Pumpe HK1",
+      "iconLabel": "Icon",
+      "colorTitle": "Farbe",
+      "textLabel": "Text"
     },
     "uhr": {
       "accentColor": "Akzentfarbe",
@@ -669,7 +695,21 @@
       "period": "Zeitraum (Stunden)",
       "duplicateTitle": "Duplizieren",
       "deleteTitle": "Löschen",
-      "defaultHistoryRange": "Standard-Verlaufszeitraum"
+      "defaultHistoryRange": "Standard-Verlaufszeitraum",
+      "labelPlaceholder": "z.B. Raumtemperatur",
+      "iconLabel": "Icon",
+      "colorTitle": "Farbe",
+      "prefixPlaceholder": "Präfix",
+      "postfixUnitPlaceholder": "Einheit / Postfix",
+      "displayTextPlaceholder": "Anzeigetext",
+      "postfixPlaceholder": "Postfix",
+      "valuePlaceholder": "Wert",
+      "secondaryLabelPlaceholder": "z.B. Soll",
+      "gaugeSettings": "Gauge Einstellungen",
+      "minimum": "Minimum",
+      "maximum": "Maximum",
+      "gaugeColors": "Farbe / Farbverlauf (1–4 Farben, niedrig → hoch)",
+      "colorIndex": "Farbe {n}"
     },
     "wetter": {
       "labelCity": "Bezeichnung (Ortname)",
@@ -693,7 +733,15 @@
       "showForecast": "Tagesvorhersage anzeigen",
       "forecastDays": "Anzahl Tage (1–7)",
       "precipitation": "Niederschlagswahrscheinlichkeit",
-      "showAlerts": "Wetterwarnungen anzeigen"
+      "showAlerts": "Wetterwarnungen anzeigen",
+      "configureApiUrl": "Wetter-API-URL konfigurieren",
+      "defaultLabel": "Wetter",
+      "previewLiveMode": "Vorschau im Live-Modus",
+      "noApiUrl": "Keine API-URL konfiguriert",
+      "loadingData": "Wetterdaten werden geladen …",
+      "reload": "Neu laden",
+      "refreshNow": "Jetzt aktualisieren",
+      "precipitationTitle": "Niederschlag: {pct}"
     },
     "widgetref": {
       "sourcePage": "Quell-Seite",
@@ -778,6 +826,10 @@
       "keyboardHint": "Enter = Polygon schliessen · Esc = verwerfen · Klick auf ersten Punkt = schliessen",
       "defaultAreaName": "Bereich {n}",
       "datapoint": "Datenpunkt"
+    },
+    "missing": {
+      "title": "Unbekannt",
+      "ariaLabel": "Unbekannter Widget-Typ"
     }
   }
 }

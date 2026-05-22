@@ -282,6 +282,80 @@
       "saveResult": "{created} erstellt, {removed} entfernt",
       "saveResultErrors": "{created} erstellt, {removed} entfernt ({errors} Fehler)",
       "saveFailed": "Speichern fehlgeschlagen"
+    },
+    "bindingForm": {
+      "adapterInstanceLabel": "Adapter-Instanz *",
+      "selectInstance": "Instanz wählen …",
+      "directionLabel": "Richtung *",
+      "directionRead": "Lesen (von Adapter)",
+      "directionWrite": "Schreiben (to adapter)",
+      "directionReadWrite": "Lesen/Schreiben (von/auf Adapter)",
+      "timerReadOnlyHint": "Die Zeitschaltuhr ist eine reine Quelle — nur Lesen möglich.",
+      "groupAddressLabel": "Gruppenadresse *",
+      "groupAddressPlaceholder": "z.B. 1/2/3 oder Name suchen …",
+      "selectDpt": "DPT wählen …",
+      "noValueMapping": "— keine Wertzuordnung —",
+      "valueMapNumInvert": "0 ↔ 1 (numerisch invertieren)",
+      "valueMapBoolOnOff": "true/false → on/off",
+      "valueMapOnOffBool": "on/off → true/false",
+      "valueMapNumOnOff": "0/1 → off/on",
+      "valueMapOnOffNum": "off/on → 0/1",
+      "customValueMapping": "Benutzerdefiniert (JSON) …",
+      "noForcedType": "— kein Typ erzwingen (Standard) —",
+      "jsonExtractKey": "JSON — Schlüssel extrahieren",
+      "xmlExtractPath": "XML — Element-Pfad extrahieren",
+      "compatible": "kompatibel",
+      "conversionRequired": "Konvertierung nötig",
+      "incompatible": "inkompatibel",
+      "errors": {
+        "holidaysLoadFailed": "Feiertage konnten nicht geladen werden",
+        "noTopicsReceived": "Keine Topics empfangen – Broker erreichbar?",
+        "topicsFetchFailed": "Fehler beim Abrufen der Topics",
+        "selectIoBrokerInstanceFirst": "Bitte zuerst eine ioBroker-Instanz wählen",
+        "noStatesFound": "Keine States gefunden",
+        "ioBrokerStatesLoadFailed": "ioBroker-States konnten nicht geladen werden",
+        "noOidsFound": "Keine OIDs gefunden",
+        "snmpWalkFailed": "SNMP Walk fehlgeschlagen",
+        "invalidJson": "Ungültiges JSON: {msg}",
+        "noPayloadReceived": "Kein Payload empfangen",
+        "invalidXml": "Kein gültiges XML: {msg}",
+        "noChildElementsFound": "Keine Kind-Elemente gefunden",
+        "sampleMustBeJsonObjectOrArray": "Sample muss ein JSON-Objekt oder Array sein",
+        "selectAdapterInstance": "Bitte eine Adapter-Instanz wählen"
+      },
+      "knxSection": "KNX Binding",
+      "dptLabel": "DPT *",
+      "respondToReadLabel": "Antworte auf Leseanfragen",
+      "respondToReadHint": "Sendet den aktuellen Wert als GroupValueResponse wenn eine Leseanfrage eingeht.",
+      "respondToReadPersistHint": "Erfordert aktiviertes „Letzten Wert speichern\" am Objekt.",
+      "modbusSection": "Modbus Binding",
+      "addressLabel": "Adresse *",
+      "registerTypeLabel": "Registertyp *",
+      "dataFormatLabel": "Datenformat *",
+      "unitIdLabel": "Unit ID",
+      "defaultN": "Standard: {n}",
+      "registerCountLabel": "Anz. Register",
+      "scaleLabel": "Skalierung",
+      "intervalSecondsLabel": "Intervall (s)",
+      "byteOrderLabel": "Byte-Reihenfolge",
+      "wordOrderLabel": "Word-Reihenfolge",
+      "mqttSection": "MQTT Binding",
+      "topicLabel": "Topic *",
+      "topicPlaceholder": "z.B. haus/wohnzimmer/temperatur",
+      "scanning": "Scannen …",
+      "browse": "Durchsuchen",
+      "topicHint": "Lesen/Lesen+Schreiben: abonniertes Topic; Schreiben: Publish-Topic",
+      "publishTopicLabel": "Publish-Topic",
+      "publishTopicPlaceholder": "z.B. …/set",
+      "publishTopicHint": "Topic für Schreiben — leer = Topic wird verwendet",
+      "retainLabel": "Retain",
+      "retainHint": "Broker speichert letzten Wert",
+      "payloadTemplateLabel": "Payload-Template",
+      "payloadTemplatePlaceholder": "z.B. {\"value\": \"###DP###\", \"unit\": \"°C\"}",
+      "payloadTemplateHint": "###DP### wird durch den Datenpunktwert ersetzt. Leer = Wert direkt als Payload.",
+      "sourceDataTypeLabel": "Quell-Datentyp",
+      "sourceDataTypeHint": "Wie der eingehende Payload interpretiert wird.",
+      "objectTypeLabel": "Objekt-Typ"
     }
   },
   "history": {
@@ -639,7 +713,12 @@
         "mapJsonHint": "JSON-Objekt — beliebig viele Einträge möglich.",
         "mapAfterFormula": "Wird nach der Formel angewendet.",
         "noMapping": "— keine Wertzuordnung —",
-        "customJson": "Benutzerdefiniert (JSON) …"
+        "customJson": "Benutzerdefiniert (JSON) …",
+        "mapPresetNumInvert": "0 ↔ 1 (numerisch invertieren)",
+        "mapPresetBoolOnOff": "true/false → on/off",
+        "mapPresetOnOffBool": "on/off → true/false",
+        "mapPresetNumOnOff": "0/1 → off/on",
+        "mapPresetOnOffNum": "off/on → 0/1"
       },
       "filter": {
         "timeSection": "Zeitlicher Filter",
@@ -751,7 +830,12 @@
         "authType": "Typ",
         "authNone": "Keine",
         "username": "Benutzername",
-        "password": "Passwort"
+        "password": "Passwort",
+        "urlLabel": "URL",
+        "requestContentType": "Request Content-Type",
+        "authBasic": "Basic Auth",
+        "authDigest": "Digest Auth",
+        "authBearer": "Bearer Token"
       },
       "stringConcat": {
         "inputCount": "Anzahl Eingänge",
@@ -767,7 +851,19 @@
         "selectPath": "Pfad aus Daten wählen",
         "pathPlaceholder": "— Pfad wählen —",
         "jsonPath": "JSON-Pfad",
-        "jsonPathPlaceholder": "z.B. data.temperature"
+        "jsonPathPlaceholder": "z.B. data.temperature",
+        "legacyConfig": "Legacy-Konfiguration",
+        "pathLabel": "Pfad",
+        "upgradeToMultipleOutputs": "Zu mehreren Ausgängen upgraden",
+        "choosePath": "Pfad wählen",
+        "outputN": "Ausgang {n}",
+        "addOutput": "Ausgang hinzufügen",
+        "removeOutput": "Ausgang entfernen",
+        "xmlPathPlaceholder": "z.B. .//temperature",
+        "clickPlusToAddOutputs": "Klicke + um Ausgänge hinzuzufügen.",
+        "valueN": "Wert {n}",
+        "outputsCount": "Ausgänge ({n})",
+        "labelPlaceholder": "Bezeichnung"
       },
       "substr": {
         "modeLabel": "Modus",
@@ -792,7 +888,11 @@
         "group": "Capture-Gruppe (0 = gesamter Treffer)",
         "testSection": "Test-Eingabe",
         "testPlaceholder": "Teststring eingeben oder Graph ausführen…",
-        "noMatch": "↳ kein Treffer"
+        "noMatch": "↳ kein Treffer",
+        "searchPlaceholder": "z.B. :",
+        "startMarkerPlaceholder": "z.B. [",
+        "endMarkerPlaceholder": "z.B. ]",
+        "regexPlaceholder": "z.B. (\\d+\\.\\d+)"
       },
       "ical": {
         "urlLabel": "iCal-URL",
@@ -811,9 +911,19 @@
         "ignoreEmpty": "(leer = ignorieren)",
         "reSyntax": "Python re-Syntax. Leer = Feld wird ignoriert.",
         "caseSensitive": "Gross-/Kleinschreibung beachten",
-        "outputs": "Ausgänge: f{i}_array · f{i}_next_date · f{i}_tomorrow · f{i}_today"
+        "outputs": "Ausgänge: f{i}_array · f{i}_next_date · f{i}_tomorrow · f{i}_today",
+        "nameLabel": "Name",
+        "summaryLabel": "Summary",
+        "locationLabel": "Location",
+        "descriptionLabel": "Description",
+        "summaryPlaceholder": "z.B. Restmüll",
+        "locationPlaceholder": "z.B. Strasse",
+        "descriptionPlaceholder": "z.B. Biotonne"
       },
-      "invalidJson": "Ungültiges JSON: {msg}"
+      "invalidJson": "Ungültiges JSON: {msg}",
+      "common": {
+        "optional": "(optional)"
+      }
     }
   },
   "settings": {
@@ -1141,7 +1251,21 @@
     "hierarchySearchPlaceholder": "Knoten suchen …",
     "searching": "Suche …",
     "iconPickerNoMatch": "Keine Treffer",
-    "iconPickerNoIcons": "Keine Icons importiert"
+    "iconPickerNoIcons": "Keine Icons importiert",
+    "months": {
+      "january": "Januar",
+      "february": "Februar",
+      "march": "März",
+      "april": "April",
+      "may": "Mai",
+      "june": "Juni",
+      "july": "Juli",
+      "august": "August",
+      "september": "September",
+      "october": "Oktober",
+      "november": "November",
+      "december": "Dezember"
+    }
   },
   "hierarchy": {
     "title": "Gerätestruktur",
