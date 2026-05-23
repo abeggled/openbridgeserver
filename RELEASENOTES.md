@@ -19,7 +19,7 @@
 * Backend: Possibility to migrate all objects of an adapter to a new one of the same type https://github.com/abeggled/openbridgeserver/issues/419
 * Backend: Log viewer with filtering options https://github.com/abeggled/openbridgeserver/issues/452
 * Backend: Hierarchy Manager use current names as example to better understand the changes https://github.com/abeggled/openbridgeserver/issues/467
-* Backend: Full internalization (i18n) of the gui and visu, currently supported languages are DE and EN https://github.com/abeggled/openbridgeserver/issues/351
+* Backend: Full internationalization (i18n) of the gui and visu, currently supported languages are DE and EN https://github.com/abeggled/openbridgeserver/issues/351
 * Logic engine: Option to disable a logic sheet https://github.com/abeggled/openbridgeserver/issues/422
 * Logic engine: Functional Block: "iCalendar" filtering by summary, location, and description. https://github.com/abeggled/openbridgeserver/issues/350
 * Logic engine: Functional Block: "XML Extractor" now has multiple outputs from single input https://github.com/abeggled/openbridgeserver/pull/469
