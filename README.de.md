@@ -18,6 +18,7 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 | **Mehrere Instanzen** | Beliebig viele Instanzen pro Protokoll (z. B. 2× KNX, 3× Modbus TCP) |
 | **Protokoll-Brücke** | Ein KNX-Wert wird automatisch in ein Modbus-Register geschrieben — und umgekehrt |
 | **Logik-Editor** | Visuelle Automatisierungslogik ohne Programmierung: 35+ Blocktypen, Zeitpläne, Formeln, Python-Skripte, Benachrichtigungen, HTTP-Anfragen, Sonnenstand |
+| **Plugin-Logikbausteine** | Eigene Blocktypen beim Start laden — als pip-Paket (`obs.logic_blocks` Entry Point) oder als `*.py`-Datei im konfigurierten `plugins/`-Verzeichnis |
 | **MQTT** | Stabiler UUID-Topic + lesbarer Alias-Topic; Retain-Unterstützung |
 | **Weboberfläche** | Vollständige Bedienung über den Browser — kein separates Programm nötig |
 | **Datenbank** | SQLite — keine externe Datenbank erforderlich |
@@ -45,6 +46,7 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 12. [Log-Viewer](#log-viewer)
 13. [Live-Verbindung (WebSocket)](#live-verbindung-websocket)
 14. [Logik-Editor](#logik-editor)
+   - [Plugin-Logikbausteine](#plugin-logikbausteine)
 15. [Adapter-Konfiguration](#adapter-konfiguration)
 16. [MQTT-Topics](#mqtt-topics)
 17. [Datentypen](#datentypen)
@@ -776,6 +778,13 @@ Zeigt berechnete Zwischenwerte direkt auf den Blöcken an — live und automatis
 | Zahl | `value=230.45` |
 | DP Schreiben | `→ 21.5` |
 | Kein Wert | `value=—` |
+
+
+### Plugin-Logikbausteine
+
+Eigene Blocktypen können dem Logik-Editor hinzugefügt werden, ohne den OBS-Quellcode zu ändern. Ein Plugin ist ein Python-Modul, das einen oder mehrere `LogicNodePlugin`-Unterklassen via `@register_node_type` registriert. Plugins werden einmalig beim Start geladen — entweder als pip-Paket (über den `obs.logic_blocks` Entry Point) oder als `*.py`-Datei in einem konfigurierten `plugins/`-Verzeichnis.
+
+Die vollständige Entwicklerdokumentation mit Interface-Referenz, Beispielen und Distributionshinweisen ist in [docs/logic-plugin-api.md](docs/logic-plugin-api.md) zu finden.
 
 ---
 

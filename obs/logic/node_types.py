@@ -864,13 +864,20 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
     ),
 ]
 
-# Dict lookup by type
+# Dict lookup by type (built-ins only — plugins are queried dynamically at call time)
 NODE_TYPE_REGISTRY: dict[str, NodeTypeDef] = {nt.type: nt for nt in BUILTIN_NODE_TYPES}
 
 
 def get_node_type(type_: str) -> NodeTypeDef | None:
-    return NODE_TYPE_REGISTRY.get(type_)
+    if type_ in NODE_TYPE_REGISTRY:
+        return NODE_TYPE_REGISTRY[type_]
+    from obs.logic.plugin_registry import get_plugin_node_type
+
+    cls = get_plugin_node_type(type_)
+    return cls.node_type_def() if cls is not None else None
 
 
 def list_node_types() -> list[NodeTypeDef]:
-    return BUILTIN_NODE_TYPES
+    from obs.logic.plugin_registry import get_all_plugin_node_type_defs
+
+    return BUILTIN_NODE_TYPES + get_all_plugin_node_type_defs()

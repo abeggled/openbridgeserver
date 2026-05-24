@@ -134,13 +134,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     await adapter_registry.start_all(bus, db, value_getter=registry.get_value)
 
-    # 9. Logic Engine
+    # 9. Plugin Blocks — entry points (pip-installed) + optional plugins_dir
+    from obs.logic.plugin_loader import load_plugins
+
+    _n_plugins = load_plugins(plugins_dir=settings.plugins_dir)
+    if _n_plugins:
+        logger.info("Logic block plugins loaded: %d", _n_plugins)
+
+    # 10. Logic Engine
     from obs.logic.manager import init_logic_manager
 
     logic_mgr = init_logic_manager(db=db, event_bus=bus, registry=registry)
     await logic_mgr.start()
 
-    # 10. Autobackup-Scheduler
+    # 11. Autobackup-Scheduler
     from obs.api.v1.autobackup import init_autobackup_scheduler
 
     autobackup_scheduler = init_autobackup_scheduler(db=db)

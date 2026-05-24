@@ -1050,6 +1050,15 @@ class GraphExecutor:
                 return out
 
             case _:
+                from obs.logic.plugin_registry import get_plugin_node_type
+
+                plugin_cls = get_plugin_node_type(t)
+                if plugin_cls is not None:
+                    node_state = self.hysteresis_state.setdefault(node.id, {})
+                    outputs, new_state = plugin_cls.evaluate(node.id, inputs, d, node_state)
+                    node_state.clear()
+                    node_state.update(new_state)
+                    return outputs
                 logger.debug("Unknown node type: %s", t)
                 return {}
 

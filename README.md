@@ -18,6 +18,7 @@ open bridge connects different building technology protocols into a unified syst
 | **Multiple instances** | Any number of instances per protocol (e.g. 2× KNX, 3× Modbus TCP) |
 | **Protocol bridge** | A KNX value is automatically written to a Modbus register — and vice versa |
 | **Logic editor** | Visual automation logic without programming: 35+ block types, schedules, formulas, Python scripts, notifications, HTTP requests, sun position |
+| **Plugin logic blocks** | Custom block types loaded at startup via Python entry points (`obs.logic_blocks`) or `plugins/` directory — distributable as regular Python packages |
 | **MQTT** | Stable UUID topic + readable alias topic; retain support |
 | **Web interface** | Full operation via browser — no separate application required |
 | **Database** | SQLite — no external database required |
@@ -45,6 +46,7 @@ open bridge connects different building technology protocols into a unified syst
 12. [Log viewer](#log-viewer)
 13. [Live connection (WebSocket)](#live-connection-websocket)
 14. [Logic editor](#logic-editor)
+   - [Plugin logic blocks](#plugin-logic-blocks)
 15. [Adapter configuration](#adapter-configuration)
 16. [MQTT topics](#mqtt-topics)
 17. [Data types](#data-types)
@@ -776,6 +778,13 @@ Shows calculated intermediate values directly on the blocks — live and automat
 | Number | `value=230.45` |
 | Write DP | `→ 21.5` |
 | No value | `value=—` |
+
+
+### Plugin logic blocks
+
+Custom block types can be added to the logic editor without modifying OBS source code. A plugin is a Python module that registers one or more `LogicNodePlugin` subclasses via `@register_node_type`. Plugins are loaded once at startup — either as pip-installable packages (via the `obs.logic_blocks` entry point) or as `*.py` files placed in a configured `plugins/` directory.
+
+For the full developer guide including interface reference, examples, and distribution instructions, see [docs/logic-plugin-api.md](docs/logic-plugin-api.md).
 
 ---
 

@@ -134,6 +134,9 @@ class Settings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     mosquitto: MosquittoSettings = Field(default_factory=MosquittoSettings)
     cors: CorsSettings = Field(default_factory=CorsSettings)
+    # Optional directory scanned for *.py plugin files at startup.
+    # Env override: OBS_PLUGINS_DIR=/path/to/plugins
+    plugins_dir: str | None = None
 
     @classmethod
     def settings_customise_sources(
