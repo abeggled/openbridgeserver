@@ -92,7 +92,7 @@ const NODE_DEFS = {
   math_formula: { label: 'Formel',      color: '#7c3aed', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}],  outputs: [{id:'result',label:'Erg.'}]      },
   math_map:     { label: 'Skalieren',   color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                       outputs: [{id:'result',label:'Erg.'}]      },
   timer_delay:  { label: 'Verzögerung', color: '#b45309', inputs: [{id:'trigger',label:'Trigger'}],                  outputs: [{id:'trigger',label:'Trigger'}]  },
-  timer_pulse:  { label: 'Impuls',      color: '#b45309', inputs: [{id:'trigger',label:'Trigger'}],                  outputs: [{id:'out',   label:'Out'}]       },
+  timer_pulse:  { label: 'Takt',        color: '#b45309', inputs: [],                                                outputs: [{id:'trigger',label:'Trigger'}]  },
   timer_cron:   { label: 'Trigger',     color: '#b45309', inputs: [],                                                outputs: [{id:'trigger',label:'Trigger'}]  },
   mcp_tool:     { label: 'MCP Tool',    color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'input', label:'Input'}], outputs: [{id:'result',label:'Erg.'},{id:'done',label:'Fertig'}] },
   python_script:{ label: 'Python',      color: '#be185d', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'},{id:'in3',label:'IN 3'}], outputs: [{id:'result',label:'Erg.'}] },
@@ -226,7 +226,7 @@ const summary = computed(() => {
   if (props.type === 'math_formula') return d.formula || 'a + b'
   if (props.type === 'math_map')     return `[${d.in_min ?? 0}‒${d.in_max ?? 100}] → [${d.out_min ?? 0}‒${d.out_max ?? 1}]`
   if (props.type === 'timer_delay')  return `${d.delay_s ?? 1} s`
-  if (props.type === 'timer_pulse')  return `${d.duration_s ?? 1} s`
+  if (props.type === 'timer_pulse')  return `${d.interval_s ?? 5} s`
   if (props.type === 'timer_cron')   return d.cron || '0 7 * * *'
   if (props.type === 'mcp_tool')     return d.tool_name || '—'
   if (props.type === 'astro_sun')       return `${d.latitude ?? 47.37}° N  ${d.longitude ?? 8.54}° E`

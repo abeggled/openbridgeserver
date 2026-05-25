@@ -593,7 +593,7 @@
       "min_max_tracker": "Min/Max Tracker",
       "consumption_counter": "Energy counter",
       "timer_delay": "Delay",
-      "timer_pulse": "Pulse",
+      "timer_pulse": "Tick",
       "timer_cron": "Trigger",
       "operating_hours": "Op. Hours",
       "python_script": "Python Script",

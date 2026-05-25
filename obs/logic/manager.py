@@ -172,6 +172,23 @@ class LogicManager:
                         node.id[:8],
                         refresh_min,
                     )
+                elif node.type == "timer_pulse":
+                    key = (graph_id, node.id)
+                    if key in self._cron_tasks and not self._cron_tasks[key].done():
+                        continue  # already running
+                    interval_s = max(1.0, float(node.data.get("interval_s") or 5.0))
+                    task = asyncio.create_task(
+                        self._pulse_loop(graph_id, node.id, interval_s),
+                        name=f"pulse-{graph_id[:8]}-{node.id[:8]}",
+                    )
+                    self._cron_tasks[key] = task
+                    logger.info(
+                        "Pulse scheduled: graph=%s (%s) node=%s interval=%.0fs",
+                        graph_id[:8],
+                        name,
+                        node.id[:8],
+                        interval_s,
+                    )
 
     async def _cron_loop(self, graph_id: str, node_id: str, cron_expr: str) -> None:
         """Fires a timer_cron graph node on its cron schedule — runs indefinitely."""
@@ -232,6 +249,28 @@ class LogicManager:
             except Exception as exc:
                 logger.error("iCal loop error graph=%s node=%s: %s", graph_id[:8], node_id[:8], exc)
                 await asyncio.sleep(60)  # back-off on unexpected errors
+
+    async def _pulse_loop(self, graph_id: str, node_id: str, interval_s: float) -> None:
+        """Fires a timer_pulse graph node every interval_s seconds — runs indefinitely."""
+        while True:
+            try:
+                await asyncio.sleep(interval_s)
+                entry = self._graphs.get(graph_id)
+                if entry and entry[1]:  # still exists and enabled
+                    g_name, _, flow = entry
+                    overrides = {node_id: {"trigger": True}}
+                    await self._execute_graph(graph_id, g_name, flow, overrides)
+                    logger.debug(
+                        "Pulse graph %s (%s) fired (interval=%.0fs)",
+                        graph_id[:8],
+                        g_name,
+                        interval_s,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("Pulse loop error graph=%s: %s", graph_id[:8], exc)
+                await asyncio.sleep(interval_s)  # back-off using same interval
 
     # ── Event Handler ─────────────────────────────────────────────────────
 

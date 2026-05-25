@@ -593,7 +593,7 @@
       "min_max_tracker": "Min/Max Tracker",
       "consumption_counter": "Verbrauchszähler",
       "timer_delay": "Verzögerung",
-      "timer_pulse": "Impuls",
+      "timer_pulse": "Takt",
       "timer_cron": "Trigger",
       "operating_hours": "Betriebsstd.",
       "python_script": "Python Script",

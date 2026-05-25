@@ -580,12 +580,12 @@ class GraphExecutor:
                 preview_str = raw_text[:20_000] if raw_text and len(raw_text) > 20_000 else raw_text
                 return {"value": value, "_preview": preview_str}
 
-            case "timer_cron":
+            case "timer_cron" | "timer_pulse":
                 # Fired by manager via input_overrides; pass trigger signal downstream
                 return {"trigger": inputs.get("trigger", False)}
 
-            case "timer_delay" | "timer_pulse":
-                # Async nodes — handled by manager, not executor
+            case "timer_delay":
+                # Async node — not yet implemented
                 return {}
 
             case "heating_circuit":
