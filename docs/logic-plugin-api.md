@@ -59,7 +59,39 @@ Or via environment variable:
 OBS_PLUGINS_DIR=/opt/obs/plugins
 ```
 
-Any `*.py` file in that directory (not starting with `_`) is imported at startup. Files are processed in alphabetical order. There is no hot-reload — a restart is required after adding or changing a plugin file.
+Any `*.py` file in that directory (not starting with `_`) is imported at startup. Files are processed in alphabetical order. When `plugins_dir` is configured, OBS also starts a background file-watcher so changes are picked up **without a restart** — see [Hot-reload](#hot-reload) below.
+
+---
+
+## Hot-reload
+
+When `plugins_dir` is configured, OBS watches the directory at runtime using `watchfiles`. File changes are picked up automatically — no server restart required.
+
+| Event | What happens |
+|---|---|
+| File **added** | Module is imported; new node types appear in the palette immediately |
+| File **modified** | Stale registrations for that file are removed, module is re-imported fresh |
+| File **deleted** | All node types contributed by that file are unregistered |
+
+Log output during a reload cycle:
+
+```
+INFO  obs.logic.plugin_loader: Plugin hot-reload active — watching /opt/obs/plugins
+INFO  obs.logic.plugin_loader: Plugin reloaded: shadow_control.py — types: ['shadow_control']
+INFO  obs.logic.plugin_loader: Plugin unloaded: shadow_control.py — removed types: ['shadow_control']
+```
+
+If the reloaded file has a syntax error or the class is missing `@register_node_type`, the load fails and the old registration is already gone:
+
+```
+WARNING obs.logic.plugin_loader: Plugin reload produced no types: shadow_control.py
+ERROR   obs.logic.plugin_loader: Plugin failed to load: shadow_control.py
+Traceback ...
+```
+
+Fix the file and save — the watcher fires again immediately.
+
+> **Note:** Hot-reload applies only to the `plugins/` directory. Pip-installed entry-point plugins require a full OBS restart to pick up changes.
 
 ---
 
@@ -389,14 +421,14 @@ Keep the state dict **JSON-serialisable** — use only `str`, `int`, `float`, `b
 **Verify the plugin loaded** — look for log lines at startup:
 
 ```
-INFO  obs.logic.plugin_loader: Plugin loaded (file): /opt/obs/plugins/shadow_control.py
+INFO  obs.logic.plugin_loader: Plugin loaded (file): shadow_control.py — types: ['shadow_control']
 INFO  obs.logic.plugin_loader: Plugin loaded (entry point): shadow_control = shadow_control.plugin
 ```
 
 If the block is missing from the palette, look for errors in the startup log:
 
 ```
-ERROR obs.logic.plugin_loader: Plugin failed to load (file): /opt/obs/plugins/shadow_control.py
+ERROR obs.logic.plugin_loader: Plugin failed to load: shadow_control.py
 Traceback (most recent call last): ...
 ```
 
@@ -414,7 +446,7 @@ The node returns `{}` on error, so downstream nodes receive `None` on all its ou
 
 ## Known limitations
 
-- **No hot-reload.** Plugins are loaded once at startup. After changing a plugin file or installing a new package, restart OBS (`systemctl restart obs`).
+- **Hot-reload is `plugins/` directory only.** Pip-installed entry-point plugins require a full OBS restart after installation or upgrade (`systemctl restart obs`).
 - **Synchronous only.** Do not perform blocking I/O inside `evaluate()`. For HTTP-based integrations, chain an `api_client` block in the graph and wire its response into your plugin block.
 - **No custom GUI components.** The config panel is rendered generically from `config_schema`. Custom Vue components are not supported.
 - **Minimal type validation.** OBS does not validate `inputs` or `config` values before calling `evaluate()`. Your code must handle `None` and unexpected types gracefully.

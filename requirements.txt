@@ -4,6 +4,7 @@
 # Web Framework
 fastapi>=0.136.1,<1       # pre-1.0; a 1.0 release may carry breaking changes
 uvicorn[standard]>=0.46.0
+watchfiles>=1.0,<2        # plugin hot-reload; also a transitive dep of uvicorn[standard]
 
 # Data Validation & Settings
 pydantic>=2.13.3,<3       # v3 would be a full API break (model_dump → ?, field_validator → ?)

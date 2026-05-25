@@ -27,6 +27,15 @@ def _register(cls: type[Any]) -> type[Any]:
     return cls
 
 
+def _unregister(type_name: str) -> bool:
+    """Remove a plugin type from the registry. Returns True if it existed."""
+    if type_name in _registry:
+        del _registry[type_name]
+        logger.debug("Unregistered plugin node type: %r", type_name)
+        return True
+    return False
+
+
 def get_plugin_node_type(type_name: str) -> type[Any] | None:
     return _registry.get(type_name)
 

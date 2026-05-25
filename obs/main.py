@@ -135,11 +135,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     await adapter_registry.start_all(bus, db, value_getter=registry.get_value)
 
     # 9. Plugin Blocks — entry points (pip-installed) + optional plugins_dir
-    from obs.logic.plugin_loader import load_plugins
+    from obs.logic.plugin_loader import load_plugins, watch_plugins_dir
 
     _n_plugins = load_plugins(plugins_dir=settings.plugins_dir)
     if _n_plugins:
         logger.info("Logic block plugins loaded: %d", _n_plugins)
+
+    _plugin_watcher = asyncio.create_task(watch_plugins_dir(settings.plugins_dir), name="plugin-watcher") if settings.plugins_dir else None
 
     # 10. Logic Engine
     from obs.logic.manager import init_logic_manager
@@ -161,6 +163,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     yield  # ← application running
 
     # Shutdown (reverse order)
+    if _plugin_watcher is not None:
+        _plugin_watcher.cancel()
     await autobackup_scheduler.stop()
     await logic_mgr.stop()
     await adapter_registry.stop_all()
