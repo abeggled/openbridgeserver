@@ -196,7 +196,7 @@ const _datapoint    = markRaw(DatapointNode)
 const _pythonScript = markRaw(PythonScriptNode)
 const _missing      = markRaw(MissingNode)
 
-const nodeTypeComponents = {
+const _builtinTypeComponents = {
   missing_node: _missing,
   // Constant
   const_value: _generic,
@@ -228,6 +228,15 @@ const nodeTypeComponents = {
   datapoint_write: _datapoint,
   python_script:   _pythonScript,
 }
+
+// Auto-register plugin node types not covered by the built-in mapping
+const nodeTypeComponents = computed(() => {
+  const result = { ..._builtinTypeComponents }
+  for (const nt of store.nodeTypes) {
+    if (!result[nt.type]) result[nt.type] = _generic
+  }
+  return result
+})
 
 // ── Active graph ───────────────────────────────────────────────────────────
 const activeGraphId = ref('')

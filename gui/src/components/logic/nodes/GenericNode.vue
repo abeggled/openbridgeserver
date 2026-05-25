@@ -69,9 +69,11 @@
 import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
+import { useLogicStore } from '@/stores/logic'
 
 const { updateNodeData } = useVueFlow()
 const { t, te } = useI18n()
+const logicStore = useLogicStore()
 
 const props = defineProps({
   id:   { type: String, required: true },
@@ -142,7 +144,11 @@ const isGateNode = computed(() =>
 
 // ── Computed def — expands gate + string_concat inputs dynamically
 const def = computed(() => {
-  const base = NODE_DEFS[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] }
+  const apiDef = NODE_DEFS[props.type] === undefined
+    ? logicStore.nodeTypes.find(t => t.type === props.type)
+    : undefined
+  const base = NODE_DEFS[props.type]
+    ?? (apiDef ? { label: apiDef.label, color: apiDef.color ?? '#6366f1', inputs: apiDef.inputs ?? [], outputs: apiDef.outputs ?? [] } : { label: props.type, color: '#475569', inputs: [], outputs: [] })
   const label = te(`logic.nodeTypes.${props.type}`) ? t(`logic.nodeTypes.${props.type}`) : base.label
   if (isGateNode.value) {
     const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
