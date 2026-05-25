@@ -1,5 +1,19 @@
 # Changes
 
+## 2026.7.0
+### Breaking changes 🚨
+* ...
+
+### New features 💡
+* Logic engine: Development of own logic blocks. https://github.com/abeggled/openbridgeserver/issues/446
+  
+### Fixes 🐞
+* ...
+
+### Known Issues 🔔
+* Some issues with KNX IP Secure interfaces: https://github.com/abeggled/openbridgeserver/issues/393
+
+
 ## 2026.6.0
 ### Breaking changes 🚨
 * none
