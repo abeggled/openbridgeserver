@@ -18,7 +18,7 @@ class _FakeWebSocket:
         self.messages: list[dict] = []
         self.accepted = False
 
-    async def accept(self) -> None:
+    async def accept(self, subprotocol: str | None = None) -> None:
         self.accepted = True
 
     async def send_json(self, msg: dict) -> None:
@@ -213,3 +213,72 @@ async def test_page_allowed_datapoints_collects_nested_config_strings():
 
     assert ids is not None
     assert nested_dp_id in ids
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_datapoints_includes_widgetref_target_datapoints():
+    target_dp_id = str(uuid4())
+    target_status_dp_id = str(uuid4())
+    nested_target_dp_id = str(uuid4())
+
+    page_config_main = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": str(uuid4()),
+                "name": "ref-host",
+                "type": "widget_ref",
+                "x": 0,
+                "y": 0,
+                "w": 2,
+                "h": 2,
+                "datapoint_id": None,
+                "status_datapoint_id": None,
+                "config": {
+                    "source_page_id": "page-target",
+                    "source_widget_name": "kitchen-widget",
+                },
+            },
+        ],
+    }
+
+    page_config_target = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": str(uuid4()),
+                "name": "kitchen-widget",
+                "type": "horizontal_bar",
+                "x": 0,
+                "y": 0,
+                "w": 2,
+                "h": 2,
+                "datapoint_id": target_dp_id,
+                "status_datapoint_id": target_status_dp_id,
+                "config": {
+                    "bars": [
+                        {"label": "A", "datapoint_id": nested_target_dp_id},
+                    ],
+                },
+            },
+        ],
+    }
+
+    class _DbStub:
+        async def fetchone(self, _sql, params):
+            if params[0] == "page-main":
+                return {"page_config": json.dumps(page_config_main)}
+            if params[0] == "page-target":
+                return {"page_config": json.dumps(page_config_target)}
+            return None
+
+    ids = await _page_allowed_datapoints(_DbStub(), "page-main")
+
+    assert ids is not None
+    assert target_dp_id in ids
+    assert target_status_dp_id in ids
+    assert nested_target_dp_id in ids

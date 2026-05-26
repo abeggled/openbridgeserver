@@ -48,8 +48,13 @@ class WebSocketManager:
         # concurrent asyncio.gather calls in EventBus would otherwise race.
         self._connections: dict[str, tuple[WebSocket, set[str], asyncio.Lock, set[str] | None]] = {}
 
-    async def connect(self, ws: WebSocket, allowed_dp_ids: set[str] | None = None) -> str:
-        await ws.accept()
+    async def connect(
+        self,
+        ws: WebSocket,
+        allowed_dp_ids: set[str] | None = None,
+        subprotocol: str | None = None,
+    ) -> str:
+        await ws.accept(subprotocol=subprotocol)
         conn_id = str(uuid.uuid4())
         self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids)
         logger.debug("WS client connected: %s  (total: %d)", conn_id[:8], len(self._connections))
@@ -186,13 +191,6 @@ class WebSocketManager:
 
 async def _page_allowed_datapoints(db: Database, page_id: str) -> set[str] | None:
     """Return datapoint IDs referenced by a PAGE node, or None if page does not exist."""
-    row = await db.fetchone("SELECT page_config FROM visu_nodes WHERE id = ? AND type = 'PAGE'", (page_id,))
-    if not row or not row["page_config"]:
-        return None
-    try:
-        page = PageConfig.model_validate_json(row["page_config"])
-    except Exception:
-        return None
 
     def _collect_strings(value: Any, out: set[str]) -> None:
         if isinstance(value, str):
@@ -206,14 +204,86 @@ async def _page_allowed_datapoints(db: Database, page_id: str) -> set[str] | Non
             for nested in value:
                 _collect_strings(nested, out)
 
-    ids: set[str] = set()
-    for widget in page.widgets:
+    def _non_empty_str(value: Any) -> str | None:
+        if isinstance(value, str) and value:
+            return value
+        return None
+
+    page_cache: dict[str, PageConfig | None] = {}
+
+    async def _load_page_config(target_page_id: str) -> PageConfig | None:
+        if target_page_id in page_cache:
+            return page_cache[target_page_id]
+        row = await db.fetchone("SELECT page_config FROM visu_nodes WHERE id = ? AND type = 'PAGE'", (target_page_id,))
+        if not row or not row["page_config"]:
+            page_cache[target_page_id] = None
+            return None
+        try:
+            parsed = PageConfig.model_validate_json(row["page_config"])
+        except Exception:
+            parsed = None
+        page_cache[target_page_id] = parsed
+        return parsed
+
+    async def _collect_widget_datapoints(
+        widget: Any,
+        out: set[str],
+        visited_refs: set[tuple[str, str]],
+    ) -> None:
         if widget.datapoint_id:
-            ids.add(widget.datapoint_id)
+            out.add(widget.datapoint_id)
         if widget.status_datapoint_id:
-            ids.add(widget.status_datapoint_id)
-        _collect_strings(widget.config, ids)
+            out.add(widget.status_datapoint_id)
+        _collect_strings(widget.config, out)
+
+        if widget.type != "widget_ref":
+            return
+
+        source_page_id = _non_empty_str(widget.config.get("source_page_id"))
+        source_widget_name = _non_empty_str(widget.config.get("source_widget_name"))
+        if not source_page_id or not source_widget_name:
+            return
+
+        ref_key = (source_page_id, source_widget_name)
+        if ref_key in visited_refs:
+            return
+        visited_refs.add(ref_key)
+
+        source_page = await _load_page_config(source_page_id)
+        if source_page is None:
+            return
+
+        target_widget = next(
+            (candidate for candidate in source_page.widgets if candidate.name == source_widget_name),
+            None,
+        )
+        if target_widget is None:
+            return
+        await _collect_widget_datapoints(target_widget, out, visited_refs)
+
+    page = await _load_page_config(page_id)
+    if page is None:
+        return None
+
+    ids: set[str] = set()
+    visited_refs: set[tuple[str, str]] = set()
+    for widget in page.widgets:
+        await _collect_widget_datapoints(widget, ids, visited_refs)
     return ids
+
+
+def _extract_subprotocol_token(ws: WebSocket) -> tuple[str | None, str | None]:
+    offered_subprotocols = ws.scope.get("subprotocols")
+    if not isinstance(offered_subprotocols, list):
+        return None, None
+
+    prefix = "obs.jwt."
+    for candidate in offered_subprotocols:
+        if isinstance(candidate, str) and candidate.startswith(prefix):
+            token = candidate.removeprefix(prefix)
+            if token:
+                return token, candidate
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -257,25 +327,36 @@ async def websocket_endpoint(
     from obs.api.v1.visu import _resolve_access_with_node
 
     resolved_token: str | None = None
+    selected_subprotocol: str | None = None
     auth_header = ws.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         resolved_token = auth_header[7:]
+    if resolved_token is None:
+        subprotocol_token, selected = _extract_subprotocol_token(ws)
+        if subprotocol_token:
+            resolved_token = subprotocol_token
+            selected_subprotocol = selected
     if resolved_token is None:
         query_token = ws.query_params.get("token")
         if query_token:
             resolved_token = query_token
 
+    page_id = ws.query_params.get("page_id")
     user: str | None = None
+    invalid_token = False
     if resolved_token is not None:
         try:
             user = decode_token(resolved_token)
         except Exception:
-            await ws.close(code=4001, reason="Invalid token")
-            return
+            invalid_token = True
+            user = None
+
+    if invalid_token and not page_id:
+        await ws.close(code=4001, reason="Invalid token")
+        return
 
     allowed_dp_ids: set[str] | None = None
     if user is None:
-        page_id = ws.query_params.get("page_id")
         if not page_id:
             await ws.close(code=4001, reason="Authentication required")
             return
@@ -301,7 +382,7 @@ async def websocket_endpoint(
             return
 
     manager = get_ws_manager()
-    conn_id = await manager.connect(ws, allowed_dp_ids=allowed_dp_ids)
+    conn_id = await manager.connect(ws, allowed_dp_ids=allowed_dp_ids, subprotocol=selected_subprotocol)
 
     try:
         while True:
