@@ -3,6 +3,7 @@
  * ZeitschaltuhrBindingModal — Inline-Editor für eine Zeitschaltuhr-Verknüpfung.
  */
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { datapoints as dpApi, adapters as adapterApi } from '@/api/client'
 import type { HolidayEntry } from '@/api/client'
 
@@ -15,6 +16,8 @@ const emit = defineEmits<{
   (e: 'close'): void
   (e: 'saved', enabled: boolean): void
 }>()
+
+const { t } = useI18n()
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -86,7 +89,7 @@ async function loadHolidays() {
   try {
     holidays.value = await adapterApi.zsuHolidays(instanceId.value)
   } catch {
-    holidaysError.value = 'Feiertage konnten nicht geladen werden'
+    holidaysError.value = t('zst.holidayLoadError')
   } finally {
     holidaysLoading.value = false
   }
@@ -107,12 +110,12 @@ interface WinEp {
   name:   string
 }
 
-const WINDOW_MONTHS = [
-  { v: 1,  l: 'Januar'    }, { v: 2,  l: 'Februar'   }, { v: 3,  l: 'März'      },
-  { v: 4,  l: 'April'     }, { v: 5,  l: 'Mai'        }, { v: 6,  l: 'Juni'      },
-  { v: 7,  l: 'Juli'      }, { v: 8,  l: 'August'     }, { v: 9,  l: 'September' },
-  { v: 10, l: 'Oktober'   }, { v: 11, l: 'November'   }, { v: 12, l: 'Dezember'  },
-]
+const WINDOW_MONTHS = computed(() => [
+  { v: 1,  l: t('zst.winMonthJan') }, { v: 2,  l: t('zst.winMonthFeb') }, { v: 3,  l: t('zst.winMonthMar') },
+  { v: 4,  l: t('zst.winMonthApr') }, { v: 5,  l: t('zst.winMonthMai') }, { v: 6,  l: t('zst.winMonthJun') },
+  { v: 7,  l: t('zst.winMonthJul') }, { v: 8,  l: t('zst.winMonthAug') }, { v: 9,  l: t('zst.winMonthSep') },
+  { v: 10, l: t('zst.winMonthOkt') }, { v: 11, l: t('zst.winMonthNov') }, { v: 12, l: t('zst.winMonthDez') },
+])
 
 const winFrom = reactive<WinEp>({ type: 'fixed', month: 1,  day: 1,  sign: '+', offset: 0, name: '' })
 const winTo   = reactive<WinEp>({ type: 'fixed', month: 12, day: 31, sign: '+', offset: 0, name: '' })
@@ -180,21 +183,24 @@ function parseWinExprInto(expr: string, ep: WinEp) {
 function describeWinEp(ep: WinEp): string {
   switch (ep.type) {
     case 'fixed': {
-      const mon = WINDOW_MONTHS.find(m => m.v === ep.month)?.l ?? String(ep.month)
+      const mon = WINDOW_MONTHS.value.find(m => m.v === ep.month)?.l ?? String(ep.month)
       return `${ep.day}. ${mon}`
     }
     case 'easter':
-      if (ep.offset === 0) return 'Ostersonntag'
-      return `Ostern ${ep.sign}${ep.offset} Tage`
+      if (ep.offset === 0) return t('zst.easterSunday')
+      return t('zst.easterOffset', { sign: ep.sign, offset: ep.offset })
     case 'advent': {
-      const presets: Record<string, string> = { '0': '1. Advent', '7': '2. Advent', '14': '3. Advent', '21': '4. Advent', '24': 'Heiligabend' }
+      const presets: Record<string, string> = {
+        '0': t('zst.advent1'), '7': t('zst.advent2'), '14': t('zst.advent3'),
+        '21': t('zst.advent4'), '24': t('zst.heiligabend'),
+      }
       if (ep.sign === '+' && presets[String(ep.offset)]) return presets[String(ep.offset)]
-      if (ep.offset === 0) return '1. Advent'
-      return `1. Advent ${ep.sign}${ep.offset} Tage`
+      if (ep.offset === 0) return t('zst.advent1')
+      return t('zst.adventOffset', { sign: ep.sign, offset: ep.offset })
     }
     case 'holiday_name':
       if (!ep.name) return '—'
-      return ep.offset === 0 ? ep.name : `${ep.name} ${ep.sign}${ep.offset} Tage`
+      return ep.offset === 0 ? ep.name : `${ep.name} ${ep.sign}${ep.offset} ${t('zst.days')}`
     default:
       return '—'
   }
@@ -214,7 +220,7 @@ async function loadBinding() {
   try {
     const bindings = await dpApi.listBindings(props.datapointId)
     const b = bindings.find((b) => b.id === props.bindingId)
-    if (!b) { errorMsg.value = 'Verknüpfung nicht gefunden.'; return }
+    if (!b) { errorMsg.value = t('zst.bindingNotFound'); return }
     bindingEnabled.value = b.enabled
     instanceId.value     = b.adapter_instance_id ?? ''
     Object.assign(cfg, DEFAULT_CFG, b.config)
@@ -229,7 +235,7 @@ async function loadBinding() {
       await loadHolidaysIfNeeded()
     }
   } catch {
-    errorMsg.value = 'Verknüpfung konnte nicht geladen werden.'
+    errorMsg.value = t('zst.bindingLoadError')
   } finally {
     loading.value = false
   }
@@ -255,7 +261,7 @@ async function save() {
     })
     emit('saved', bindingEnabled.value)
   } catch (e: unknown) {
-    errorMsg.value = e instanceof Error ? e.message : 'Fehler beim Speichern.'
+    errorMsg.value = e instanceof Error ? e.message : t('zst.bindingSaveError')
   } finally {
     saving.value = false
   }
@@ -263,8 +269,15 @@ async function save() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const WEEKDAY_LABELS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
-const MONTH_LABELS   = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
+const WEEKDAY_LABELS = computed(() => [
+  t('zst.weekdayMo'), t('zst.weekdayDi'), t('zst.weekdayMi'), t('zst.weekdayDo'),
+  t('zst.weekdayFr'), t('zst.weekdaySa'), t('zst.weekdaySo'),
+])
+const MONTH_LABELS = computed(() => [
+  t('zst.monthJan'), t('zst.monthFeb'), t('zst.monthMar'), t('zst.monthApr'),
+  t('zst.monthMai'), t('zst.monthJun'), t('zst.monthJul'), t('zst.monthAug'),
+  t('zst.monthSep'), t('zst.monthOkt'), t('zst.monthNov'), t('zst.monthDez'),
+])
 
 function toggleWeekday(idx: number) {
   const i = cfg.weekdays.indexOf(idx)
@@ -321,19 +334,19 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
     <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
 
       <div class="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-        <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">🕐 Verknüpfung bearbeiten</h2>
+        <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">🕐 {{ $t('zst.editBinding') }}</h2>
         <button class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-lg leading-none" @click="emit('close')">×</button>
       </div>
 
       <div class="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-        <div v-if="loading" class="text-sm text-gray-500 dark:text-gray-400 text-center py-6">Lade …</div>
+        <div v-if="loading" class="text-sm text-gray-500 dark:text-gray-400 text-center py-6">{{ $t('common.loading') }}</div>
 
         <template v-else-if="!errorMsg">
 
           <!-- Aktiviert -->
           <div class="flex items-center gap-2">
             <input id="zt-enabled" type="checkbox" v-model="bindingEnabled" class="w-4 h-4 rounded accent-blue-500" />
-            <label for="zt-enabled" class="text-sm text-gray-700 dark:text-gray-200">Verknüpfung aktiviert</label>
+            <label for="zt-enabled" class="text-sm text-gray-700 dark:text-gray-200">{{ $t('zst.bindingEnabled') }}</label>
           </div>
 
           <hr class="border-gray-200 dark:border-gray-700" />
@@ -341,33 +354,33 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
           <!-- Typ -->
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label :class="lCls">Typ</label>
+              <label :class="lCls">{{ $t('zst.timerType') }}</label>
               <select v-model="cfg.timer_type" :class="iCls" @change="onTimerTypeChange">
-                <option value="daily">Tagesschaltuhr (täglich/wöchentlich)</option>
-                <option value="annual">Jahresschaltuhr (monatlich/jährlich)</option>
-                <option value="holiday">Feiertagsschaltuhr (nur an Feiertagen)</option>
-                <option value="meta">Metadaten (Feiertag-/Ferienstatus)</option>
+                <option value="daily">{{ $t('zst.timerTypeDaily') }}</option>
+                <option value="annual">{{ $t('zst.timerTypeAnnual') }}</option>
+                <option value="holiday">{{ $t('zst.timerTypeHoliday') }}</option>
+                <option value="meta">{{ $t('zst.timerTypeMeta') }}</option>
               </select>
             </div>
             <div v-if="cfg.timer_type === 'meta'">
-              <label :class="lCls">Metadaten-Typ</label>
+              <label :class="lCls">{{ $t('zst.metaType') }}</label>
               <select v-model="cfg.meta_type" :class="iCls">
-                <optgroup label="Feiertage">
-                  <option value="holiday_today">Feiertag heute (bool)</option>
-                  <option value="holiday_tomorrow">Feiertag morgen (bool)</option>
-                  <option value="holiday_name_today">Feiertagsname heute (string)</option>
-                  <option value="holiday_name_tomorrow">Feiertagsname morgen (string)</option>
+                <optgroup :label="$t('zst.metaHolidayGroup')">
+                  <option value="holiday_today">{{ $t('zst.metaHolidayToday') }}</option>
+                  <option value="holiday_tomorrow">{{ $t('zst.metaHolidayTomorrow') }}</option>
+                  <option value="holiday_name_today">{{ $t('zst.metaHolidayNameToday') }}</option>
+                  <option value="holiday_name_tomorrow">{{ $t('zst.metaHolidayNameTomorrow') }}</option>
                 </optgroup>
-                <optgroup label="Ferienperioden">
-                  <option value="vacation_1">Ferienperiode 1 aktiv (bool)</option>
-                  <option value="vacation_2">Ferienperiode 2 aktiv (bool)</option>
-                  <option value="vacation_3">Ferienperiode 3 aktiv (bool)</option>
-                  <option value="vacation_4">Ferienperiode 4 aktiv (bool)</option>
-                  <option value="vacation_5">Ferienperiode 5 aktiv (bool)</option>
-                  <option value="vacation_6">Ferienperiode 6 aktiv (bool)</option>
+                <optgroup :label="$t('zst.metaVacationGroup')">
+                  <option value="vacation_1">{{ $t('zst.metaVacation1') }}</option>
+                  <option value="vacation_2">{{ $t('zst.metaVacation2') }}</option>
+                  <option value="vacation_3">{{ $t('zst.metaVacation3') }}</option>
+                  <option value="vacation_4">{{ $t('zst.metaVacation4') }}</option>
+                  <option value="vacation_5">{{ $t('zst.metaVacation5') }}</option>
+                  <option value="vacation_6">{{ $t('zst.metaVacation6') }}</option>
                 </optgroup>
               </select>
-              <p :class="hCls">Wird täglich um Mitternacht automatisch aktualisiert.</p>
+              <p :class="hCls">{{ $t('zst.metaTypeHint') }}</p>
             </div>
           </div>
 
@@ -376,11 +389,11 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
             <!-- Feiertagsschaltuhr: Feiertagsauswahl -->
             <template v-if="cfg.timer_type === 'holiday'">
               <div>
-                <label :class="lCls">Feiertage <span class="text-gray-400 dark:text-gray-600 font-normal">(leer = alle)</span></label>
-                <p :class="hCls" class="mb-2">Schaltet nur an den markierten Feiertagen.</p>
-                <div v-if="holidaysLoading" class="text-xs text-gray-400 py-2">Lade …</div>
+                <label :class="lCls">{{ $t('zst.holidaysLabel') }} <span class="text-gray-400 dark:text-gray-600 font-normal">{{ $t('zst.holidaysHint') }}</span></label>
+                <p :class="hCls" class="mb-2">{{ $t('zst.holidaysDesc') }}</p>
+                <div v-if="holidaysLoading" class="text-xs text-gray-400 py-2">{{ $t('common.loading') }}</div>
                 <div v-else-if="holidaysError" class="text-xs text-red-400 py-2">{{ holidaysError }}</div>
-                <div v-else-if="holidays.length === 0" class="text-xs text-gray-400 italic py-2">Keine Feiertage gefunden.</div>
+                <div v-else-if="holidays.length === 0" class="text-xs text-gray-400 italic py-2">{{ $t('zst.noHolidays') }}</div>
                 <div v-else class="space-y-0.5 max-h-52 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded p-2 bg-gray-50 dark:bg-gray-800/50">
                   <label v-for="h in holidays" :key="h.name" class="flex items-center gap-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700/40 px-1.5 py-1 rounded text-xs">
                     <input type="checkbox" :checked="cfg.selected_holidays.length === 0 || cfg.selected_holidays.includes(h.name)" class="w-3.5 h-3.5 rounded flex-shrink-0 accent-blue-500" @change="toggleHoliday(h.name)" />
@@ -389,42 +402,42 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
                   </label>
                 </div>
                 <div class="flex items-center gap-3 mt-1.5">
-                  <button type="button" class="text-xs text-gray-400 hover:text-blue-400" @click="cfg.selected_holidays = []">Alle (kein Filter)</button>
+                  <button type="button" class="text-xs text-gray-400 hover:text-blue-400" @click="cfg.selected_holidays = []">{{ $t('zst.allHolidays') }}</button>
                   <span class="text-xs text-gray-300 dark:text-gray-600">·</span>
-                  <span class="text-xs text-gray-400">{{ cfg.selected_holidays.length === 0 ? 'Alle Feiertage' : `${cfg.selected_holidays.length} ausgewählt` }}</span>
-                  <button type="button" class="text-xs text-gray-400 hover:text-blue-400 ml-auto" @click="loadHolidays">↻ Neu laden</button>
+                  <span class="text-xs text-gray-400">{{ cfg.selected_holidays.length === 0 ? $t('zst.allHolidaysLabel') : $t('zst.selectedCount', { count: cfg.selected_holidays.length }) }}</span>
+                  <button type="button" class="text-xs text-gray-400 hover:text-blue-400 ml-auto" @click="loadHolidays">{{ $t('zst.reloadHolidays') }}</button>
                 </div>
               </div>
             </template>
 
             <!-- Wochentage (nicht für Feiertagsschaltuhr) -->
             <div v-if="cfg.timer_type !== 'holiday'">
-              <label :class="lCls">Wochentage</label>
+              <label :class="lCls">{{ $t('zst.weekdays') }}</label>
               <div class="flex gap-1.5 flex-wrap">
                 <button v-for="(lbl, idx) in WEEKDAY_LABELS" :key="idx" type="button"
                   class="px-2.5 py-1 text-xs font-medium rounded border transition-colors"
                   :class="cfg.weekdays.includes(idx) ? 'bg-blue-600 border-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-blue-500'"
                   @click="toggleWeekday(idx)">{{ lbl }}</button>
-                <button type="button" class="ml-2 text-xs text-gray-400 hover:text-blue-400" @click="cfg.weekdays = [0,1,2,3,4,5,6]">Alle</button>
-                <button type="button" class="text-xs text-gray-400 hover:text-blue-400" @click="cfg.weekdays = [0,1,2,3,4]">Mo–Fr</button>
-                <button type="button" class="text-xs text-gray-400 hover:text-blue-400" @click="cfg.weekdays = [5,6]">Sa+So</button>
+                <button type="button" class="ml-2 text-xs text-gray-400 hover:text-blue-400" @click="cfg.weekdays = [0,1,2,3,4,5,6]">{{ $t('zst.weekdayAll') }}</button>
+                <button type="button" class="text-xs text-gray-400 hover:text-blue-400" @click="cfg.weekdays = [0,1,2,3,4]">{{ $t('zst.weekdayMoFr') }}</button>
+                <button type="button" class="text-xs text-gray-400 hover:text-blue-400" @click="cfg.weekdays = [5,6]">{{ $t('zst.weekdaySaSo') }}</button>
               </div>
             </div>
 
             <!-- Monate + Tag (nur Jahresschaltuhr) -->
             <template v-if="cfg.timer_type === 'annual'">
               <div>
-                <label :class="lCls">Monate <span class="text-gray-400 dark:text-gray-600">(leer = alle)</span></label>
+                <label :class="lCls">{{ $t('zst.months') }} <span class="text-gray-400 dark:text-gray-600">{{ $t('zst.monthsHint') }}</span></label>
                 <div class="flex gap-1 flex-wrap">
                   <button v-for="(lbl, idx) in MONTH_LABELS" :key="idx+1" type="button"
                     class="px-2 py-1 text-xs font-medium rounded border transition-colors"
                     :class="cfg.months.includes(idx+1) ? 'bg-blue-600 border-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-blue-500'"
                     @click="toggleMonth(idx + 1)">{{ lbl }}</button>
-                  <button type="button" class="ml-1 text-xs text-gray-400 hover:text-blue-400" @click="cfg.months = []">Alle</button>
+                  <button type="button" class="ml-1 text-xs text-gray-400 hover:text-blue-400" @click="cfg.months = []">{{ $t('zst.monthAll') }}</button>
                 </div>
               </div>
               <div class="w-36">
-                <label :class="lCls">Tag im Monat <span class="text-gray-400 dark:text-gray-600">(0 = alle)</span></label>
+                <label :class="lCls">{{ $t('zst.dayOfMonth') }} <span class="text-gray-400 dark:text-gray-600">{{ $t('zst.dayOfMonthHint') }}</span></label>
                 <input v-model.number="cfg.day_of_month" type="number" min="0" max="31" :class="iCls" />
               </div>
             </template>
@@ -432,36 +445,36 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
             <!-- Zeitreferenz -->
             <hr class="border-gray-200 dark:border-gray-700" />
             <div class="w-56">
-              <label :class="lCls">Zeitreferenz</label>
+              <label :class="lCls">{{ $t('zst.timeRef') }}</label>
               <select v-model="cfg.time_ref" :class="iCls">
-                <option value="absolute">Absolute Zeit</option>
-                <option value="sunrise">Sonnenaufgang + Offset</option>
-                <option value="sunset">Sonnenuntergang + Offset</option>
-                <option value="solar_noon">Sonnenmittag + Offset</option>
-                <option value="solar_altitude">Sonnenhöhenwinkel</option>
+                <option value="absolute">{{ $t('zst.timeRefAbsolute') }}</option>
+                <option value="sunrise">{{ $t('zst.timeRefSunrise') }}</option>
+                <option value="sunset">{{ $t('zst.timeRefSunset') }}</option>
+                <option value="solar_noon">{{ $t('zst.timeRefSolarNoon') }}</option>
+                <option value="solar_altitude">{{ $t('zst.timeRefSolarAltitude') }}</option>
               </select>
             </div>
 
             <div v-if="showAbsolute" class="grid grid-cols-2 gap-3">
-              <div><label :class="lCls">Stunde</label><input v-model.number="cfg.hour" type="number" min="0" max="23" :class="iCls" /></div>
-              <div><label :class="lCls">Minute</label><input v-model.number="cfg.minute" type="number" min="0" max="59" :class="iCls" /></div>
+              <div><label :class="lCls">{{ $t('zst.hour') }}</label><input v-model.number="cfg.hour" type="number" min="0" max="23" :class="iCls" /></div>
+              <div><label :class="lCls">{{ $t('zst.minute') }}</label><input v-model.number="cfg.minute" type="number" min="0" max="59" :class="iCls" /></div>
             </div>
             <div v-if="showOffset" class="w-44">
-              <label :class="lCls">Offset in Minuten</label>
+              <label :class="lCls">{{ $t('zst.offsetMinutes') }}</label>
               <input v-model.number="cfg.offset_minutes" type="number" :class="iCls" placeholder="0" />
-              <p :class="hCls">Positiv = danach, negativ = davor</p>
+              <p :class="hCls">{{ $t('zst.offsetMinutesHint') }}</p>
             </div>
             <div v-if="showSolar" class="grid grid-cols-2 gap-3">
               <div>
-                <label :class="lCls">Sonnenhöhenwinkel (°)</label>
+                <label :class="lCls">{{ $t('zst.solarAltitudeDeg') }}</label>
                 <input v-model.number="cfg.solar_altitude_deg" type="number" min="-18" max="90" step="0.5" :class="iCls" />
-                <p :class="hCls">−18° = naut. Dämmerung · 0° = Horizont</p>
+                <p :class="hCls">{{ $t('zst.solarAltitudeDegHint') }}</p>
               </div>
               <div>
-                <label :class="lCls">Sonnenrichtung</label>
+                <label :class="lCls">{{ $t('zst.sunDirection') }}</label>
                 <select v-model="cfg.sun_direction" :class="iCls">
-                  <option value="rising">Aufsteigend (morgens)</option>
-                  <option value="setting">Absteigend (abends)</option>
+                  <option value="rising">{{ $t('zst.sunDirRising') }}</option>
+                  <option value="setting">{{ $t('zst.sunDirSetting') }}</option>
                 </select>
               </div>
             </div>
@@ -472,20 +485,20 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
               <div class="flex items-center gap-2">
                 <input id="zt-every-minute" type="checkbox" v-model="cfg.every_minute" class="w-4 h-4 rounded accent-blue-500" />
                 <div>
-                  <label for="zt-every-minute" class="text-xs text-gray-600 dark:text-gray-300">Jede Minute schalten</label>
-                  <p :class="hCls">{{ cfg.timer_type === 'holiday' ? 'Nur an Feiertagen' : 'Wochentag-Filter gilt weiterhin' }}</p>
+                  <label for="zt-every-minute" class="text-xs text-gray-600 dark:text-gray-300">{{ $t('zst.everyMinute') }}</label>
+                  <p :class="hCls">{{ cfg.timer_type === 'holiday' ? $t('zst.everyMinuteHintHoliday') : $t('zst.everyMinuteHint') }}</p>
                 </div>
               </div>
               <div class="flex items-center gap-2">
                 <input id="zt-every-hour" type="checkbox" v-model="cfg.every_hour" class="w-4 h-4 rounded accent-blue-500" />
                 <div>
-                  <label for="zt-every-hour" class="text-xs text-gray-600 dark:text-gray-300">Jede Stunde schalten</label>
-                  <p :class="hCls">Zur eingestellten Minute</p>
+                  <label for="zt-every-hour" class="text-xs text-gray-600 dark:text-gray-300">{{ $t('zst.everyHour') }}</label>
+                  <p :class="hCls">{{ $t('zst.everyHourHint') }}</p>
                 </div>
               </div>
             </div>
             <div v-if="cfg.every_hour && !cfg.every_minute" class="w-32">
-              <label :class="lCls">Zur Minute</label>
+              <label :class="lCls">{{ $t('zst.atMinute') }}</label>
               <input v-model.number="cfg.minute" type="number" min="0" max="59" :class="iCls" />
             </div>
 
@@ -493,21 +506,21 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
             <hr class="border-gray-200 dark:border-gray-700" />
             <div class="grid grid-cols-2 gap-3">
               <div v-if="cfg.timer_type !== 'holiday'">
-                <label :class="lCls">Feiertagsbehandlung</label>
+                <label :class="lCls">{{ $t('zst.holidayMode') }}</label>
                 <select v-model="cfg.holiday_mode" :class="iCls">
-                  <option value="ignore">Ignorieren (wie Normaltage)</option>
-                  <option value="skip">Nicht schalten an Feiertagen</option>
-                  <option value="only">Nur an Feiertagen schalten</option>
-                  <option value="as_sunday">Feiertage wie Sonntag</option>
+                  <option value="ignore">{{ $t('zst.holidayModeIgnore') }}</option>
+                  <option value="skip">{{ $t('zst.holidayModeSkip') }}</option>
+                  <option value="only">{{ $t('zst.holidayModeOnly') }}</option>
+                  <option value="as_sunday">{{ $t('zst.holidayModeAsSunday') }}</option>
                 </select>
               </div>
               <div>
-                <label :class="lCls">Ferienbehandlung</label>
+                <label :class="lCls">{{ $t('zst.vacationMode') }}</label>
                 <select v-model="cfg.vacation_mode" :class="iCls">
-                  <option value="ignore">Ignorieren (wie Normaltage)</option>
-                  <option value="skip">Nicht schalten in Ferien</option>
-                  <option value="only">Nur in Ferien schalten</option>
-                  <option value="as_sunday">Ferientage wie Sonntag</option>
+                  <option value="ignore">{{ $t('zst.vacationModeIgnore') }}</option>
+                  <option value="skip">{{ $t('zst.vacationModeSkip') }}</option>
+                  <option value="only">{{ $t('zst.vacationModeOnly') }}</option>
+                  <option value="as_sunday">{{ $t('zst.vacationModeAsSunday') }}</option>
                 </select>
               </div>
             </div>
@@ -517,20 +530,20 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
             <div>
               <div class="flex items-center gap-2 mb-3">
                 <input id="zt-date-window" type="checkbox" v-model="cfg.date_window_enabled" class="w-4 h-4 rounded accent-blue-500" />
-                <label for="zt-date-window" class="text-xs font-medium text-gray-700 dark:text-gray-200">Datum-Fenster: nur innerhalb eines Zeitraums schalten</label>
+                <label for="zt-date-window" class="text-xs font-medium text-gray-700 dark:text-gray-200">{{ $t('zst.dateWindow') }}</label>
               </div>
 
               <template v-if="cfg.date_window_enabled">
                 <!-- Helper: reusable endpoint row -->
-                <template v-for="(ep, epLabel) in [{ ep: winFrom, label: 'Von' }, { ep: winTo, label: 'Bis (einschliesslich)' }]" :key="epLabel">
+                <template v-for="(ep, epLabel) in [{ ep: winFrom, label: $t('zst.windowFrom') }, { ep: winTo, label: $t('zst.windowTo') }]" :key="epLabel">
                   <div class="mb-3">
                     <label :class="lCls">{{ ep.label }}</label>
                     <div class="flex gap-2 flex-wrap items-center">
                       <select v-model="ep.ep.type" class="bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 w-40" @change="onWinTypeChange(ep.ep)">
-                        <option value="fixed">Festes Datum</option>
-                        <option value="easter">Relativ zu Ostern</option>
-                        <option value="advent">Relativ zu 1. Advent</option>
-                        <option value="holiday_name">Feiertag nach Name</option>
+                        <option value="fixed">{{ $t('zst.windowTypeFixed') }}</option>
+                        <option value="easter">{{ $t('zst.windowTypeEaster') }}</option>
+                        <option value="advent">{{ $t('zst.windowTypeAdvent') }}</option>
+                        <option value="holiday_name">{{ $t('zst.windowTypeHolidayName') }}</option>
                       </select>
                       <!-- Fixed -->
                       <template v-if="ep.ep.type === 'fixed'">
@@ -546,13 +559,13 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
                           <option value="-">−</option>
                         </select>
                         <input v-model.number="ep.ep.offset" type="number" min="0" max="400" class="bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 w-16" />
-                        <span class="text-xs text-gray-400">Tage</span>
+                        <span class="text-xs text-gray-400">{{ $t('zst.days') }}</span>
                       </template>
                       <!-- Holiday by name -->
                       <template v-else-if="ep.ep.type === 'holiday_name'">
-                        <div v-if="holidaysLoading" class="text-xs text-gray-400">Lade …</div>
+                        <div v-if="holidaysLoading" class="text-xs text-gray-400">{{ $t('common.loading') }}</div>
                         <select v-else v-model="ep.ep.name" class="bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 flex-1 min-w-0">
-                          <option value="">— Feiertag wählen —</option>
+                          <option value="">{{ $t('zst.pickHoliday') }}</option>
                           <option v-for="h in holidays" :key="h.name" :value="h.name">{{ h.date }} · {{ h.name }}</option>
                         </select>
                         <select v-model="ep.ep.sign" class="bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 w-12">
@@ -560,7 +573,7 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
                           <option value="-">−</option>
                         </select>
                         <input v-model.number="ep.ep.offset" type="number" min="0" max="400" placeholder="0" class="bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 w-16" />
-                        <span class="text-xs text-gray-400">Tage</span>
+                        <span class="text-xs text-gray-400">{{ $t('zst.days') }}</span>
                       </template>
                     </div>
                     <p :class="hCls">{{ describeWinEp(ep.ep) }}</p>
@@ -577,9 +590,9 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
             <!-- Ausgabewert -->
             <hr class="border-gray-200 dark:border-gray-700" />
             <div class="w-40">
-              <label :class="lCls">Schalt-Wert</label>
+              <label :class="lCls">{{ $t('zst.switchValue') }}</label>
               <input v-model="cfg.value" type="text" :class="iCls" placeholder="1" />
-              <p :class="hCls">z.B. 1 / 0 / true / false</p>
+              <p :class="hCls">{{ $t('zst.switchValueHint') }}</p>
             </div>
 
           </template><!-- /timer_type !== meta -->
@@ -591,12 +604,12 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
       </div>
 
       <div class="flex justify-end gap-2 px-5 py-3 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
-        <button class="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded" @click="emit('close')">Abbrechen</button>
+        <button class="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded" @click="emit('close')">{{ $t('common.cancel') }}</button>
         <button
           class="px-4 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white rounded disabled:opacity-50"
           :disabled="saving || loading || !!errorMsg"
           @click="save"
-        >{{ saving ? 'Speichern …' : 'Speichern' }}</button>
+        >{{ saving ? $t('common.save') + ' …' : $t('common.save') }}</button>
       </div>
 
     </div>

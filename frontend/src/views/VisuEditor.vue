@@ -13,8 +13,9 @@
  * - Keine externe Grid-Bibliothek (pure Vue + CSS)
  */
 import {
-  computed, onMounted, onUnmounted, ref, shallowRef, nextTick,
+  computed, onMounted, onUnmounted, ref, shallowRef, watch,
 } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 /** UUID-Generator mit Fallback für non-HTTPS Umgebungen */
 function newId(): string {
@@ -34,7 +35,18 @@ import MissingWidget from '@/widgets/MissingWidget.vue'
 import DataPointPicker from '@/components/DataPointPicker.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
 import AuthButton from '@/components/AuthButton.vue'
-import { datapoints as dpApi } from '@/api/client'
+import { datapoints as dpApi, visuBackgrounds as bgApi } from '@/api/client'
+import { useVisuBackgrounds } from '@/composables/useVisuBackgrounds'
+import {
+  cssBackgroundPosition,
+  cssBackgroundRepeat,
+  cssBackgroundSize,
+  parseBackgroundPresentation,
+  serializeCatalogBackground,
+  type BackgroundFitMode,
+  type BackgroundPositionMode,
+} from '@/utils/backgroundPresentation'
+import { getAutoContrastText } from '@/utils/colorContrast'
 import type { PageConfig, WidgetInstance } from '@/types'
 
 import '@/widgets/ValueDisplay/index'
@@ -57,8 +69,11 @@ import '@/widgets/Uhr/index'
 import '@/widgets/RTR/index'
 import '@/widgets/Wetter/index'
 import '@/widgets/Stufenschalter/index'
+import '@/widgets/Grundriss/index'
+import '@/widgets/HorizontalBar/index'
 
 // ── Props / Router / Store ────────────────────────────────────────────────────
+const { t } = useI18n()
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const store = useVisuStore()
@@ -66,7 +81,7 @@ const theme = useThemeStore()
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const isNew   = computed(() => props.id === 'new')
-const newPageName = ref('Neue Seite')
+const newPageName = ref('')
 
 const loading = ref(true)
 const saving  = ref(false)
@@ -83,6 +98,9 @@ const selectedWidget = computed(() =>
 const selectedDef = computed(() =>
   selectedWidget.value ? WidgetRegistry.get(selectedWidget.value.type) : null,
 )
+
+const showPaletteMobile = ref(false)
+const showConfigMobile = ref(false)
 
 // ── Datenpunkt-Validierung ────────────────────────────────────────────────────
 const brokenDpIds = ref<Set<string>>(new Set())
@@ -122,8 +140,6 @@ function widgetHasError(w: WidgetInstance): boolean {
 }
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
-const canvasEl = ref<HTMLElement | null>(null)
-
 const COLS   = computed(() => config.value.grid_cols)
 const CELL_H = computed(() => config.value.grid_row_height)
 // Feste Zellbreite in Pixeln — identisch mit Viewer (WYSIWYG)
@@ -133,21 +149,142 @@ const CELL_W = computed(() => config.value.grid_cell_width ?? 80)
 const canvasGridWidth = computed(() => COLS.value * CELL_W.value)
 
 // Canvas-Höhe: höchstes Widget + 8 leere Zeilen
-const canvasHeight = computed(() => {
+const dynamicCanvasHeight = computed(() => {
   const maxRow = config.value.widgets.reduce((m, w) => Math.max(m, w.y + w.h), 0)
   return (maxRow + 8) * CELL_H.value
 })
 
-// Grid-Linien als CSS-Hintergrund
-const gridBg = computed(() => {
+// Während Drag/Resize die Höhe einfrieren, damit Background-Scaling nicht mitschwimmt.
+const frozenCanvasHeight = ref<number | null>(null)
+const canvasHeight = computed(() => frozenCanvasHeight.value ?? dynamicCanvasHeight.value)
+
+// Grid-Layer separat halten, damit Background-Image sauber skaliert werden kann.
+const gridLayerX = computed(() => {
   const cw = CELL_W.value
+  const lineColor = theme.isDark ? '#1f2937' : '#e5e7eb'
+  return `repeating-linear-gradient(to right, ${lineColor} 0, ${lineColor} 1px, transparent 1px, transparent ${cw}px)`
+})
+
+const gridLayerY = computed(() => {
   const ch = CELL_H.value
   const lineColor = theme.isDark ? '#1f2937' : '#e5e7eb'
-  return `
-    repeating-linear-gradient(to right,  ${lineColor} 0, ${lineColor} 1px, transparent 1px, transparent ${cw}px),
-    repeating-linear-gradient(to bottom, ${lineColor} 0, ${lineColor} 1px, transparent 1px, transparent ${ch}px)
-  `
+  return `repeating-linear-gradient(to bottom, ${lineColor} 0, ${lineColor} 1px, transparent 1px, transparent ${ch}px)`
 })
+
+const {
+  items: backgroundItems,
+  loading: backgroundsLoading,
+  error: backgroundsError,
+  loadList: loadBackgrounds,
+  upload: uploadBackgrounds,
+  remove: removeBackground,
+} = useVisuBackgrounds()
+const backgroundSearch = ref('')
+const backgroundUploadError = ref('')
+const uploadingBackground = ref(false)
+const backgroundFileInput = ref<HTMLInputElement | null>(null)
+
+const parsedBackground = computed(() => parseBackgroundPresentation(config.value.background))
+const selectedBackgroundName = computed(() => parsedBackground.value.catalogName ?? '')
+const backgroundFit = ref<BackgroundFitMode>('cover')
+const backgroundPosition = ref<BackgroundPositionMode>('center')
+const backgroundFitOptions: BackgroundFitMode[] = ['cover', 'contain', 'width', 'height', 'stretch', 'tile']
+const backgroundPositionOptions: BackgroundPositionMode[] = [
+  'center', 'top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right',
+]
+const SELECTED_BG_TILE_COLOR = '#3b82f6'
+
+watch(
+  parsedBackground,
+  (bg) => {
+    backgroundFit.value = bg.fit
+    backgroundPosition.value = bg.position
+  },
+  { immediate: true },
+)
+
+const filteredBackgrounds = computed(() => {
+  const q = backgroundSearch.value.trim().toLowerCase()
+  if (!q) return backgroundItems.value
+  return backgroundItems.value.filter((b) => b.name.toLowerCase().includes(q))
+})
+
+const canvasImageLayer = computed(() => {
+  if (parsedBackground.value.kind === 'none') return ''
+  if (parsedBackground.value.kind === 'catalog' && parsedBackground.value.catalogName) {
+    return `url(${bgApi.publicUrl(parsedBackground.value.catalogName)})`
+  }
+  if (!parsedBackground.value.raw) return ''
+  return /^url\(/i.test(parsedBackground.value.raw) ? parsedBackground.value.raw : `url(${parsedBackground.value.raw})`
+})
+
+const canvasStyle = computed(() => {
+  const gridSize = `${CELL_W.value}px ${CELL_H.value}px`
+  if (!canvasImageLayer.value) {
+    return {
+      backgroundImage: `${gridLayerX.value}, ${gridLayerY.value}`,
+      backgroundSize: `${gridSize}, ${gridSize}`,
+      backgroundPosition: '0 0, 0 0',
+      backgroundRepeat: 'repeat, repeat',
+    }
+  }
+
+  return {
+    backgroundImage: `${canvasImageLayer.value}, ${gridLayerX.value}, ${gridLayerY.value}`,
+    backgroundSize: `${cssBackgroundSize(backgroundFit.value)}, ${gridSize}, ${gridSize}`,
+    backgroundPosition: `${cssBackgroundPosition(backgroundPosition.value)}, 0 0, 0 0`,
+    backgroundRepeat: `${cssBackgroundRepeat(backgroundFit.value)}, repeat, repeat`,
+  }
+})
+
+function applyCatalogBackground(name: string, fit = backgroundFit.value, pos = backgroundPosition.value) {
+  config.value.background = serializeCatalogBackground(name, fit, pos)
+}
+
+function updateBackgroundPresentation() {
+  if (!selectedBackgroundName.value) return
+  applyCatalogBackground(selectedBackgroundName.value)
+}
+
+function selectBackground(name: string) {
+  applyCatalogBackground(name)
+}
+
+function clearBackground() {
+  config.value.background = null
+}
+
+function openBackgroundFilePicker() {
+  backgroundFileInput.value?.click()
+}
+
+async function onBackgroundFiles(e: Event) {
+  const files = (e.target as HTMLInputElement).files
+  if (!files || files.length === 0) return
+  backgroundUploadError.value = ''
+  uploadingBackground.value = true
+  try {
+    await uploadBackgrounds(files)
+  } catch (err: unknown) {
+    backgroundUploadError.value = err instanceof Error ? err.message : t('common.saveError')
+  } finally {
+    uploadingBackground.value = false
+    ;(e.target as HTMLInputElement).value = ''
+  }
+}
+
+async function onDeleteBackground(name: string) {
+  if (selectedBackgroundName.value === name) clearBackground()
+  await removeBackground(name)
+}
+
+function backgroundTileLabelStyle(name: string) {
+  if (selectedBackgroundName.value !== name) return {}
+  return {
+    backgroundColor: SELECTED_BG_TILE_COLOR,
+    color: getAutoContrastText(SELECTED_BG_TILE_COLOR),
+  }
+}
 
 // ── Widget-Positionen ─────────────────────────────────────────────────────────
 function widgetStyle(w: WidgetInstance) {
@@ -173,6 +310,7 @@ function startDrag(e: MouseEvent, w: WidgetInstance) {
   if (e.button !== 0) return
   e.preventDefault()
   selectedId.value = w.id
+  frozenCanvasHeight.value = dynamicCanvasHeight.value
   drag.value = {
     type: 'move', widgetId: w.id,
     startMX: e.clientX, startMY: e.clientY,
@@ -185,6 +323,7 @@ function startResize(e: MouseEvent, w: WidgetInstance) {
   e.preventDefault()
   e.stopPropagation()
   selectedId.value = w.id
+  frozenCanvasHeight.value = dynamicCanvasHeight.value
   drag.value = {
     type: 'resize', widgetId: w.id,
     startMX: e.clientX, startMY: e.clientY,
@@ -214,6 +353,7 @@ function onMouseMove(e: MouseEvent) {
 
 function onMouseUp() {
   drag.value = null
+  frozenCanvasHeight.value = null
 }
 
 // ── Tastatur ──────────────────────────────────────────────────────────────────
@@ -247,8 +387,9 @@ onMounted(async () => {
       // Datenpunkt-Referenzen im Hintergrund validieren (non-blocking)
       validateDatapointRefs()
     }
+    await loadBackgrounds()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Fehler beim Laden'
+    error.value = e instanceof Error ? e.message : t('common.loadError')
   } finally {
     loading.value = false
   }
@@ -288,10 +429,6 @@ function insertWidget(type: string) {
   }
   config.value.widgets.push(w)
   selectedId.value = w.id
-
-  nextTick(() => {
-    canvasEl.value?.parentElement?.scrollTo({ top: py * CELL_H.value - 100, behavior: 'smooth' })
-  })
 }
 
 // ── Widget entfernen ──────────────────────────────────────────────────────────
@@ -322,7 +459,7 @@ async function save() {
   error.value = ''
   try {
     if (isNew.value) {
-      const node = await store.createNode({ name: newPageName.value.trim() || 'Neue Seite', type: 'PAGE', parent_id: null })
+      const node = await store.createNode({ name: newPageName.value.trim() || t('editor.newPage'), type: 'PAGE', parent_id: null })
       await store.savePage(node.id, config.value)
       router.push({ name: 'viewer', params: { id: node.id } })
     } else {
@@ -330,7 +467,7 @@ async function save() {
       router.push({ name: 'viewer', params: { id: props.id } })
     }
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Fehler beim Speichern'
+    error.value = e instanceof Error ? e.message : t('common.saveError')
   } finally {
     saving.value = false
   }
@@ -348,14 +485,22 @@ const showSettings = ref(false)
     @mouseleave="onMouseUp"
   >
     <!-- ── Toolbar ──────────────────────────────────────────────────────────── -->
-    <header class="border-b border-gray-200 dark:border-gray-800 px-4 py-2 flex items-center gap-3 flex-shrink-0 bg-gray-50 dark:bg-gray-900">
+    <header class="border-b border-gray-200 dark:border-gray-800 px-3 sm:px-4 py-2 flex items-center gap-2 sm:gap-3 flex-shrink-0 bg-gray-50 dark:bg-gray-900">
       <Breadcrumb />
-      <span class="text-xs font-medium text-blue-500 dark:text-blue-400 bg-blue-500/10 dark:bg-blue-400/10 px-2 py-0.5 rounded">Editor</span>
+      <span class="text-xs font-medium text-blue-500 dark:text-blue-400 bg-blue-500/10 dark:bg-blue-400/10 px-2 py-0.5 rounded">{{ $t('editor.badge') }}</span>
+      <button
+        class="lg:hidden text-xs text-gray-500 dark:text-gray-300 border border-gray-300 dark:border-gray-700 rounded px-2 py-1"
+        @click="showPaletteMobile = true"
+      >{{ $t('editor.paletteHeading') }}</button>
+      <button
+        class="lg:hidden text-xs text-gray-500 dark:text-gray-300 border border-gray-300 dark:border-gray-700 rounded px-2 py-1"
+        @click="showConfigMobile = true"
+      >⚙️</button>
       <input
         v-if="isNew"
         v-model="newPageName"
         type="text"
-        placeholder="Seitenname …"
+        :placeholder="$t('editor.pageNamePlaceholder')"
         class="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 w-48"
       />
       <div class="flex-1" />
@@ -363,7 +508,7 @@ const showSettings = ref(false)
       <!-- Hell/Dunkel -->
       <button
         class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded transition-colors"
-        :title="theme.isDark ? 'Heller Modus' : 'Dunkler Modus'"
+        :title="theme.isDark ? $t('common.darkMode') : $t('common.lightMode')"
         @click="theme.toggle()"
       >{{ theme.isDark ? '☀️' : '🌙' }}</button>
       <AuthButton />
@@ -372,51 +517,168 @@ const showSettings = ref(false)
       <button
         class="text-xs text-gray-400 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-1 rounded transition-colors"
         @click="showSettings = !showSettings"
-        title="Grid-Einstellungen"
+        :title="$t('editor.gridSettings')"
       >⚙️</button>
 
       <button
         class="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700"
         @click="router.push(isNew ? { name: 'tree' } : { name: 'viewer', params: { id } })"
-      >Abbrechen</button>
+      >{{ $t('common.cancel') }}</button>
 
       <button
         class="text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-lg transition-colors font-medium"
         :disabled="saving"
         @click="save"
-      >{{ saving ? 'Speichere …' : '💾 Speichern' }}</button>
+      >{{ saving ? $t('editor.saving') : '💾 ' + $t('editor.save') }}</button>
     </header>
 
     <!-- Grid-Einstellungen Panel -->
     <div v-if="showSettings" class="border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 px-4 py-3 flex items-center gap-6 text-sm flex-wrap">
       <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-        Spalten
+        {{ $t('editor.cols') }}
         <input v-model.number="config.grid_cols" type="number" min="4" max="48"
           class="w-16 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
       <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-        Zellbreite (px)
+        {{ $t('editor.cellWidth') }}
         <input v-model.number="config.grid_cell_width" type="number" min="40" max="300" step="5"
           class="w-20 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
       <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-        Zeilenhöhe (px)
+        {{ $t('editor.rowHeight') }}
         <input v-model.number="config.grid_row_height" type="number" min="40" max="300" step="5"
           class="w-20 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
+      <div class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
+        <span>{{ $t('editor.backgroundImage') }}</span>
+        <button
+          class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800"
+          :disabled="uploadingBackground"
+          @click="openBackgroundFilePicker"
+        >{{ uploadingBackground ? $t('editor.uploading') : $t('editor.uploadBackground') }}</button>
+        <button
+          class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800"
+          @click="clearBackground"
+        >{{ $t('editor.noBackground') }}</button>
+        <input
+          ref="backgroundFileInput"
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg"
+          class="hidden"
+          @change="onBackgroundFiles"
+        />
+      </div>
+      <div class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
+        <span>{{ $t('editor.backgroundFit') }}</span>
+        <div class="flex flex-col gap-1 min-w-[220px]">
+          <select
+            v-model="backgroundFit"
+            class="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-xs text-gray-900 dark:text-gray-100"
+            :disabled="!selectedBackgroundName"
+            @change="updateBackgroundPresentation"
+          >
+            <option v-for="mode in backgroundFitOptions" :key="mode" :value="mode">
+              {{ $t(`editor.backgroundFitMode.${mode}`) }}
+            </option>
+          </select>
+          <p class="pt-0.5 text-[11px] text-gray-400 dark:text-gray-500">
+            ℹ {{ $t(`editor.backgroundFitHint.${backgroundFit}`) }}
+          </p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
+        <span>{{ $t('editor.backgroundPosition') }}</span>
+        <select
+          v-model="backgroundPosition"
+          class="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-xs text-gray-900 dark:text-gray-100"
+          :disabled="!selectedBackgroundName"
+          @change="updateBackgroundPresentation"
+        >
+          <option v-for="pos in backgroundPositionOptions" :key="pos" :value="pos">
+            {{ $t(`editor.backgroundPosMode.${pos}`) }}
+          </option>
+        </select>
+      </div>
       <span class="text-xs text-gray-400 dark:text-gray-600">
-        Zelle: {{ CELL_W }}×{{ CELL_H }}px · Grid: {{ canvasGridWidth }}px breit
+        {{ $t('editor.gridInfo', { w: CELL_W, h: CELL_H, total: canvasGridWidth }) }}
       </span>
+      <span v-if="backgroundUploadError" class="text-xs text-red-500 dark:text-red-400">
+        {{ backgroundUploadError }}
+      </span>
+      <span v-if="backgroundsError" class="text-xs text-red-500 dark:text-red-400">
+        {{ backgroundsError }}
+      </span>
+      <div class="w-full border-t border-gray-200 dark:border-gray-800 pt-3 space-y-2">
+        <div class="flex items-center gap-2">
+          <input
+            v-model="backgroundSearch"
+            type="text"
+            :placeholder="$t('editor.searchBackground')"
+            class="w-full max-w-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
+          />
+          <span class="text-xs text-gray-400 dark:text-gray-600">
+            {{ backgroundsLoading ? $t('common.loading') : `${backgroundItems.length}` }}
+          </span>
+        </div>
+        <div v-if="filteredBackgrounds.length === 0" class="text-xs text-gray-400 dark:text-gray-600">
+          {{ $t('editor.noBackgrounds') }}
+        </div>
+        <div v-else class="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
+          <button
+            v-for="bg in filteredBackgrounds"
+            :key="bg.name"
+            type="button"
+            class="group w-24 rounded border text-left overflow-hidden"
+            :class="selectedBackgroundName === bg.name ? 'border-blue-500 ring-1 ring-blue-500' : 'border-gray-300 dark:border-gray-700'"
+            @click="selectBackground(bg.name)"
+          >
+            <div
+              class="h-12 bg-center bg-cover bg-no-repeat border-b border-gray-200 dark:border-gray-700"
+              :style="{ backgroundImage: `url(${bgApi.publicUrl(bg.name)})` }"
+            />
+            <div
+              class="px-1.5 py-1 flex items-center justify-between gap-1 transition-colors"
+              :style="backgroundTileLabelStyle(bg.name)"
+            >
+              <span
+                class="text-[10px] truncate"
+                :class="selectedBackgroundName === bg.name ? '' : 'text-gray-700 dark:text-gray-300'"
+              >{{ bg.name }}</span>
+              <span
+                class="text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                :class="selectedBackgroundName === bg.name ? 'text-current/90' : 'text-red-500 dark:text-red-400'"
+                @click.stop="onDeleteBackground(bg.name)"
+              >✕</span>
+            </div>
+          </button>
+        </div>
+      </div>
     </div>
 
-    <div v-if="loading" class="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">Lade …</div>
+    <div v-if="loading" class="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">{{ $t('common.loading') }}</div>
     <div v-else-if="error" class="flex-1 flex items-center justify-center text-red-500 dark:text-red-400">{{ error }}</div>
 
-    <div v-else class="flex-1 flex min-h-0">
+    <template v-else>
+      <div
+        v-if="showPaletteMobile || showConfigMobile"
+        class="lg:hidden fixed inset-0 bg-black/40 z-30"
+        @click="showPaletteMobile = false; showConfigMobile = false"
+      />
+
+      <div class="flex-1 flex min-h-0 relative">
 
       <!-- ── Widget-Palette (links) ───────────────────────────────────────── -->
-      <aside class="w-48 flex-shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 overflow-y-auto">
-        <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider px-3 pt-3 pb-2">Widgets</p>
+      <aside
+        class="w-48 flex-shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 overflow-y-auto
+               fixed lg:static inset-y-0 left-0 z-40 lg:z-auto transform transition-transform duration-200
+               lg:translate-x-0"
+        :class="showPaletteMobile ? 'translate-x-0 w-72' : '-translate-x-full lg:w-48'"
+      >
+        <div class="lg:hidden flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700">
+          <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">{{ $t('editor.paletteHeading') }}</span>
+          <button class="text-xs text-gray-500 dark:text-gray-300" @click="showPaletteMobile = false">✕</button>
+        </div>
+        <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider px-3 pt-3 pb-2">{{ $t('editor.title') }}</p>
         <div class="space-y-0.5 px-2 pb-3">
           <button
             v-for="w in WidgetRegistry.all()"
@@ -429,24 +691,22 @@ const showSettings = ref(false)
           </button>
         </div>
         <div class="px-3 pt-2 pb-3 border-t border-gray-200 dark:border-gray-700">
-          <p class="text-xs text-gray-400 dark:text-gray-600">Klick → einfügen</p>
-          <p class="text-xs text-gray-400 dark:text-gray-600">Ziehen → verschieben</p>
-          <p class="text-xs text-gray-400 dark:text-gray-600">↘ Handle → Größe ändern</p>
-          <p class="text-xs text-gray-400 dark:text-gray-600">Entf → Widget löschen</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintClick') }}</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintDrag') }}</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintResize') }}</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintDelete') }}</p>
         </div>
       </aside>
 
       <!-- ── Grid-Canvas (Mitte) ─────────────────────────────────────────── -->
       <div class="flex-1 overflow-auto bg-white dark:bg-gray-950">
         <div
-          ref="canvasEl"
           class="relative"
           :style="{
             width: canvasGridWidth + 'px',
             minWidth: '100%',
             height: canvasHeight + 'px',
-            backgroundImage: gridBg,
-            backgroundSize: `${CELL_W}px ${CELL_H}px`,
+            ...canvasStyle,
             cursor: drag ? (drag.type === 'move' ? 'grabbing' : 'se-resize') : 'default',
             userSelect: drag ? 'none' : 'auto',
           }"
@@ -464,6 +724,7 @@ const showSettings = ref(false)
               drag?.widgetId === w.id && drag?.type === 'move' ? 'opacity-90' : '',
             ]"
             :style="widgetStyle(w)"
+            :data-widget-id="w.id"
             @mousedown="startDrag($event, w)"
             @click.stop="selectedId = w.id"
           >
@@ -486,7 +747,7 @@ const showSettings = ref(false)
             <div
               v-if="widgetHasError(w)"
               class="absolute top-1 right-7 z-20 flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white font-bold text-xs leading-none pointer-events-none shadow"
-              title="Mindestens ein Datenpunkt-Verweis wurde nicht gefunden"
+              :title="$t('editor.brokenDpRef')"
             >!</div>
 
             <!-- Widget-Label (nur sichtbar wenn selektiert oder hover) -->
@@ -521,13 +782,22 @@ const showSettings = ref(false)
             class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-gray-400 dark:text-gray-600 pointer-events-none"
           >
             <span class="text-5xl">📐</span>
-            <span class="text-sm">Widget aus der Palette links einfügen</span>
+            <span class="text-sm">{{ $t('editor.hintEmpty') }}</span>
           </div>
         </div>
       </div>
 
       <!-- ── Config-Panel (rechts) ───────────────────────────────────────── -->
-      <aside class="w-72 flex-shrink-0 bg-gray-50 dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 overflow-y-auto flex flex-col">
+      <aside
+        class="w-72 flex-shrink-0 bg-gray-50 dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 overflow-y-auto flex flex-col
+               fixed lg:static inset-y-0 right-0 z-40 lg:z-auto transform transition-transform duration-200
+               lg:translate-x-0"
+        :class="showConfigMobile ? 'translate-x-0 w-80 max-w-[90vw]' : 'translate-x-full lg:w-72'"
+      >
+        <div class="lg:hidden flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700">
+          <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">{{ $t('editor.configuration') }}</span>
+          <button class="text-xs text-gray-500 dark:text-gray-300" @click="showConfigMobile = false">✕</button>
+        </div>
         <template v-if="selectedWidget && selectedDef">
           <!-- Header -->
           <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-100/50 dark:bg-gray-800/50">
@@ -539,44 +809,44 @@ const showSettings = ref(false)
               class="text-xs text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
               @click="removeSelected"
             >
-              🗑 Entfernen
+              🗑 {{ $t('editor.removeWidget') }}
             </button>
           </div>
 
           <div class="p-4 space-y-5 flex-1">
             <!-- Widget-Name -->
             <div>
-              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Name</p>
+              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">{{ $t('editor.widgetName') }}</p>
               <input
                 v-model="selectedWidget.name"
                 type="text"
-                placeholder="z.B. Wohnzimmer Dimmer"
+                :placeholder="$t('editor.widgetNamePlaceholder')"
                 class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
               />
             </div>
 
             <!-- Position & Größe -->
             <div>
-              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Position & Größe</p>
+              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">{{ $t('editor.positionSize') }}</p>
               <div class="grid grid-cols-4 gap-1.5 text-xs">
                 <div>
-                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">X</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">{{ $t('editor.posX') }}</label>
                   <input v-model.number="selectedWidget.x" type="number" min="0"
                     :max="COLS - selectedWidget.w"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">Y</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">{{ $t('editor.posY') }}</label>
                   <input v-model.number="selectedWidget.y" type="number" min="0"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">B</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">{{ $t('editor.widthShort') }}</label>
                   <input v-model.number="selectedWidget.w" type="number" :min="selectedDef.minW" :max="COLS"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">H</label>
+                  <label class="block text-gray-400 dark:text-gray-500 mb-0.5">{{ $t('editor.heightShort') }}</label>
                   <input v-model.number="selectedWidget.h" type="number" :min="selectedDef.minH"
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
                 </div>
@@ -586,7 +856,7 @@ const showSettings = ref(false)
             <!-- Objekt (Schreib-/Lese-Objekt) -->
             <div v-if="!selectedDef.noDatapoint">
               <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
-                {{ selectedDef.supportsStatusDatapoint ? 'Schreib-Objekt' : 'Objekt' }}
+                {{ selectedDef.supportsStatusDatapoint ? $t('editor.writeDatapoint') : $t('editor.datapoint') }}
               </p>
               <DataPointPicker
                 :model-value="selectedWidget.datapoint_id"
@@ -594,17 +864,17 @@ const showSettings = ref(false)
                 @update:model-value="setDataPoint"
               />
               <p class="text-xs text-gray-400 dark:text-gray-600 mt-1">
-                Kompatibel: {{ selectedDef.compatibleTypes.join(', ') }}
+                {{ $t('editor.compatible', { types: selectedDef.compatibleTypes.join(', ') }) }}
               </p>
             </div>
 
             <!-- Status-Objekt (nur für schreibende Widgets) -->
             <div v-if="selectedDef.supportsStatusDatapoint">
               <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">
-                Status-Objekt
+                {{ $t('editor.statusDatapoint') }}
               </p>
               <p class="text-xs text-gray-400 dark:text-gray-600 mb-2">
-                Optional: separates Rückmelde-Objekt. Falls leer, wird das Schreib-Objekt für die Anzeige verwendet.
+                {{ $t('editor.statusDatapointHint') }}
               </p>
               <DataPointPicker
                 :model-value="selectedWidget.status_datapoint_id"
@@ -615,11 +885,12 @@ const showSettings = ref(false)
 
             <!-- Widget-Config -->
             <div>
-              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Konfiguration</p>
+              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">{{ $t('editor.configuration') }}</p>
               <component
                 :is="selectedDef.configComponent"
                 :key="selectedWidget.id"
                 :model-value="selectedWidget.config"
+                :widget-id="selectedWidget.id"
                 @update:model-value="updateConfig"
               />
             </div>
@@ -629,13 +900,14 @@ const showSettings = ref(false)
         <!-- Kein Widget gewählt -->
         <div v-else class="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6">
           <span class="text-4xl text-gray-300 dark:text-gray-700">👆</span>
-          <p class="text-sm text-gray-400 dark:text-gray-500">Widget auf dem Canvas anklicken<br />oder aus der Palette einfügen</p>
+          <p class="text-sm text-gray-400 dark:text-gray-500">{{ $t('editor.hintNoSelection') }}</p>
           <p class="text-xs text-gray-400 dark:text-gray-600 mt-2">
-            {{ config.widgets.length }} Widget{{ config.widgets.length !== 1 ? 's' : '' }} auf dieser Seite
+            {{ config.widgets.length }} {{ config.widgets.length === 1 ? $t('editor.widgetCountSingular') : $t('editor.widgetCountPlural') }}
           </p>
         </div>
       </aside>
 
-    </div>
+      </div>
+    </template>
   </div>
 </template>

@@ -9,6 +9,7 @@ DELETE /api/v1/knxproj/group-addresses — alle GAs löschen
 from __future__ import annotations
 
 import json
+import logging
 import uuid as uuid_mod
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -28,8 +29,9 @@ from pydantic import BaseModel
 from obs.api.auth import get_current_user
 from obs.db.database import Database, get_db
 from obs.knxproj.csv_parser import parse_ga_csv
-from obs.knxproj.parser import parse_knxproj
+from obs.knxproj.parser import parse_knxproj, parse_knxproj_locations, parse_knxproj_trades
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["knxproj"])
 
 
@@ -42,6 +44,9 @@ class ImportResult(BaseModel):
     imported: int
     created: int = 0
     updated: int = 0
+    locations: int = 0
+    functions: int = 0
+    trades: int = 0
     message: str
 
 
@@ -292,22 +297,116 @@ async def import_knxproj_file(
     now = datetime.now(UTC).isoformat()
 
     await db.executemany(
-        """INSERT INTO knx_group_addresses (address, name, description, dpt, imported_at)
-           VALUES (?, ?, ?, ?, ?)
+        """INSERT INTO knx_group_addresses
+               (address, name, description, dpt, main_group_name, mid_group_name, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(address) DO UPDATE SET
-               name        = excluded.name,
-               description = excluded.description,
-               dpt         = excluded.dpt,
-               imported_at = excluded.imported_at""",
-        [(r.address, r.name, r.description, r.dpt, now) for r in records],
+               name            = excluded.name,
+               description     = excluded.description,
+               dpt             = excluded.dpt,
+               main_group_name = excluded.main_group_name,
+               mid_group_name  = excluded.mid_group_name,
+               imported_at     = excluded.imported_at""",
+        [(r.address, r.name, r.description, r.dpt, r.main_group_name, r.mid_group_name, now) for r in records],
     )
     await db.commit()
 
+    # Import Gebäude/Gewerke structure (locations + functions)
+    locations_count = 0
+    functions_count = 0
+    try:
+        loc_records, fn_records = parse_knxproj_locations(content, password or None)
+
+        if loc_records:
+            await db.execute_and_commit("DELETE FROM knx_locations")
+            await db.executemany(
+                """INSERT INTO knx_locations (id, parent_id, name, space_type, sort_order, imported_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                [(r.identifier, r.parent_id, r.name, r.space_type, r.sort_order, now) for r in loc_records],
+            )
+            await db.commit()
+            locations_count = len(loc_records)
+
+        if fn_records:
+            await db.execute_and_commit("DELETE FROM knx_functions")
+            await db.execute_and_commit("DELETE FROM knx_function_ga_links")
+            await db.executemany(
+                """INSERT INTO knx_functions (id, space_id, name, usage_text, imported_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [(r.identifier, r.space_id, r.name, r.usage_text, now) for r in fn_records],
+            )
+            ga_links = [(r.identifier, addr) for r in fn_records for addr in r.ga_addresses]
+            if ga_links:
+                await db.executemany(
+                    "INSERT OR IGNORE INTO knx_function_ga_links (function_id, ga_address) VALUES (?, ?)",
+                    ga_links,
+                )
+            await db.commit()
+            functions_count = len(fn_records)
+    except Exception as e:
+        logger.warning("Gebäude/Gewerke-Import fehlgeschlagen (wird ignoriert): %s", e)
+
+    # Import Trades (Gewerke) — direct ZIP/XML parsing, no xknxproject needed
+    trades_count = 0
+    try:
+        trade_records = parse_knxproj_trades(content)
+        if trade_records:
+            await db.execute_and_commit("DELETE FROM knx_trades")
+            await db.executemany(
+                "INSERT INTO knx_trades (id, name, parent_id, sort_order, imported_at) VALUES (?, ?, ?, ?, ?)",
+                [(r.identifier, r.name, r.parent_id, r.sort_order, now) for r in trade_records],
+            )
+            await db.commit()
+            trades_count = len(trade_records)
+
+            # Link functions to their trade:
+            # Primary: XML DeviceInstanceRef.Links (exact function ID match)
+            # Fallback: usage_text case-insensitive match against trade name
+            fn_to_trade: dict[str, str] = {}
+            for tr in trade_records:
+                for fn_id in tr.function_ids:
+                    fn_to_trade[fn_id] = tr.identifier
+
+            if fn_to_trade:
+                await db.executemany(
+                    "UPDATE knx_functions SET trade_id = ? WHERE id = ?",
+                    [(trade_id, fn_id) for fn_id, trade_id in fn_to_trade.items()],
+                )
+                await db.commit()
+            else:
+                # Fallback: match usage_text to trade name (works for German projects)
+                trade_name_map = {tr.name.lower().strip(): tr.identifier for tr in trade_records}
+                fn_rows = await db.fetchall("SELECT id, usage_text FROM knx_functions WHERE trade_id IS NULL")
+                updates = []
+                for fn in fn_rows:
+                    usage = (fn["usage_text"] or "").lower().strip()
+                    if usage and usage in trade_name_map:
+                        updates.append((trade_name_map[usage], fn["id"]))
+                if updates:
+                    await db.executemany(
+                        "UPDATE knx_functions SET trade_id = ? WHERE id = ?",
+                        updates,
+                    )
+                    await db.commit()
+    except Exception as e:
+        logger.warning("Trades-Import fehlgeschlagen (wird ignoriert): %s", e)
+
     # Ohne Adapter: nur GA-Tabelle → fertig
     if not adapter_name:
+        msg = f"{len(records)} Gruppenadressen importiert"
+        extra = []
+        if locations_count:
+            extra.append(f"{locations_count} Räume/Gebäude")
+        if trades_count:
+            extra.append(f"{trades_count} Gewerke")
+        if extra:
+            msg += ", " + ", ".join(extra)
         return ImportResult(
             imported=len(records),
-            message=f"{len(records)} Gruppenadressen erfolgreich importiert",
+            locations=locations_count,
+            functions=functions_count,
+            trades=trades_count,
+            message=msg,
         )
 
     # Mit Adapter: DataPoints + Bindings bulk anlegen
@@ -317,6 +416,9 @@ async def import_knxproj_file(
         imported=len(records),
         created=created,
         updated=updated,
+        locations=locations_count,
+        functions=functions_count,
+        trades=trades_count,
         message=f"{len(records)} Gruppenadressen importiert, {created} DataPoints neu erstellt, {updated} aktualisiert",
     )
 
@@ -370,14 +472,17 @@ async def import_ga_csv_file(
 
     # GA-Tabelle immer befüllen (für Vorschau / manuelle Bindung im GUI)
     await db.executemany(
-        """INSERT INTO knx_group_addresses (address, name, description, dpt, imported_at)
-           VALUES (?, ?, ?, ?, ?)
+        """INSERT INTO knx_group_addresses
+               (address, name, description, dpt, main_group_name, mid_group_name, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(address) DO UPDATE SET
-               name        = excluded.name,
-               description = excluded.description,
-               dpt         = excluded.dpt,
-               imported_at = excluded.imported_at""",
-        [(r.address, r.name, r.description, r.dpt, now) for r in records],
+               name            = excluded.name,
+               description     = excluded.description,
+               dpt             = excluded.dpt,
+               main_group_name = excluded.main_group_name,
+               mid_group_name  = excluded.mid_group_name,
+               imported_at     = excluded.imported_at""",
+        [(r.address, r.name, r.description, r.dpt, r.main_group_name, r.mid_group_name, now) for r in records],
     )
     await db.commit()
 

@@ -34,7 +34,10 @@ import base64
 import contextlib
 import json
 import logging
+import random
 import time
+from collections import deque
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -45,6 +48,24 @@ from obs.core.event_bus import DataValueEvent
 from obs.core.transformation import apply_source_type, apply_value_map
 
 logger = logging.getLogger(__name__)
+
+SOCKET_INSTABILITY_DETAIL = "ioBroker Socket.IO-Verbindung instabil: mehrere Disconnects in kurzer Zeit."
+SOCKET_STABLE_DETAIL = "ioBroker Socket.IO-Verbindung stabil."
+WATCHDOG_SUBSCRIBE_WARNING_DETAIL = "ioBroker Subscription-Watchdog konnte States nicht erneut abonnieren."
+
+
+class _EngineIOQueueFilter(logging.Filter):
+    """Suppresses the spurious 'packet queue is empty' ERROR from python-engineio.
+
+    When the server stops sending, the read loop times out and puts None into the
+    packet queue as a disconnect signal.  The write loop receives None, clears the
+    queue, but then loops back and waits again instead of exiting — after another
+    timeout it logs an ERROR 'packet queue is empty'.  This is an internal
+    clean-up artifact, not a real application error.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "packet queue is empty" not in record.getMessage()
 
 
 class IoBrokerAdapterConfig(BaseModel):
@@ -57,6 +78,9 @@ class IoBrokerAdapterConfig(BaseModel):
     access_token: str | None = Field(default=None, json_schema_extra={"format": "password"})
     resubscribe_interval_seconds: int = Field(default=60, ge=0)
     reconnect_interval_seconds: int = Field(default=5, ge=1)
+    reconnect_max_interval_seconds: int = Field(default=60, ge=1)
+    socket_instability_threshold: int = Field(default=3, ge=1)
+    socket_instability_window_s: int = Field(default=300, ge=1)
 
 
 class IoBrokerBindingConfig(BaseModel):
@@ -137,6 +161,12 @@ class IoBrokerAdapter(AdapterBase):
         self._socketio: Any | None = None
         self._connect_url: str | None = None
         self._connect_kwargs: dict[str, Any] = {}
+        self._disconnect_times: deque[datetime] = deque()
+        self._instability_warning_active = False
+
+    @staticmethod
+    def _now() -> datetime:
+        return datetime.now(UTC)
 
     def _socket_is_connected(self) -> bool:
         if self._socket is None:
@@ -157,7 +187,7 @@ class IoBrokerAdapter(AdapterBase):
             import socketio
         except ImportError:
             logger.error("python-socketio not installed — ioBroker adapter disabled")
-            await self._publish_status(False, "python-socketio nicht installiert")
+            await self._publish_status(False, "python-socketio nicht installiert", severity="error")
             return
         for noisy_logger in (
             "socketio",
@@ -166,6 +196,7 @@ class IoBrokerAdapter(AdapterBase):
             "engineio.client",
         ):
             logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+        logging.getLogger("engineio.client").addFilter(_EngineIOQueueFilter())
 
         self._socketio = socketio
         self._cfg = IoBrokerAdapterConfig(**self._config)
@@ -197,7 +228,7 @@ class IoBrokerAdapter(AdapterBase):
 
         connected = await self._connect_socket()
         if not connected:
-            await self._publish_status(False, "Socket.IO Verbindung fehlgeschlagen")
+            await self._publish_status(False, "Socket.IO Verbindung fehlgeschlagen", severity="error")
             self._ensure_reconnect_task()
 
         logger.info(
@@ -219,6 +250,8 @@ class IoBrokerAdapter(AdapterBase):
                 logger.exception("ioBroker Socket.IO disconnect failed")
             self._socket = None
 
+        self._disconnect_times.clear()
+        self._instability_warning_active = False
         self._state_map.clear()
         self._last_source_values.clear()
         self._source_filter_last_sent.clear()
@@ -284,6 +317,28 @@ class IoBrokerAdapter(AdapterBase):
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
+    async def _publish_warning_status(self, detail: str) -> None:
+        if self.connected:
+            self._connected = True
+        await self._publish_status(
+            self.connected,
+            detail,
+            severity="warning",
+        )
+
+    async def _close_socket(self, sio: Any | None) -> None:
+        if sio is None:
+            return
+        with contextlib.suppress(Exception):
+            await sio.disconnect()
+
+    async def _detach_and_close_socket(self, sio: Any | None) -> None:
+        if sio is None:
+            return
+        if self._socket is sio:
+            self._socket = None
+        await self._close_socket(sio)
+
     async def _subscription_watchdog(self) -> None:
         assert self._cfg is not None
         interval = self._cfg.resubscribe_interval_seconds
@@ -295,10 +350,14 @@ class IoBrokerAdapter(AdapterBase):
                 raise
             except Exception:
                 logger.exception("ioBroker subscription watchdog failed")
+                await self._publish_warning_status(WATCHDOG_SUBSCRIBE_WARNING_DETAIL)
 
     def _build_socket(self) -> Any:
         assert self._socketio is not None
-        sio = self._socketio.AsyncClient(reconnection=True, logger=False, engineio_logger=False)
+        # reconnection=False: OBS owns the full reconnect cycle via _reconnect_loop.
+        # Leaving reconnection=True would create a second parallel reconnect mechanism
+        # that races with _reconnect_loop and can produce double-connect attempts.
+        sio = self._socketio.AsyncClient(reconnection=False, logger=False, engineio_logger=False)
         self._register_socket_handlers(sio)
         return sio
 
@@ -309,15 +368,17 @@ class IoBrokerAdapter(AdapterBase):
                 return
             logger.info("ioBroker Socket.IO connected → %s", self._connect_url)
             if self._cfg is not None:
-                await self._publish_status(True, f"Verbunden mit {self._cfg.host}:{self._cfg.port}")
-            await self._subscribe_bound_states(force_publish_initial=True)
+                await self._publish_connected_status(f"Verbunden mit {self._cfg.host}:{self._cfg.port}")
+            await self._subscribe_bound_states(force_publish_initial=True, publish_connected_status=False)
 
         @sio.event
         async def disconnect():  # noqa: ANN202
             if self._socket is not sio:
                 return
             logger.info("ioBroker Socket.IO disconnected")
+            self._socket = None
             await self._publish_status(False, "Socket.IO getrennt")
+            await self._record_disconnect()
             self._ensure_reconnect_task()
 
         @sio.on("stateChange")
@@ -332,33 +393,118 @@ class IoBrokerAdapter(AdapterBase):
         async with self._connect_lock:
             if self._disconnect_requested:
                 return False
+            old_socket = self._socket
+            if old_socket is not None:
+                await self._detach_and_close_socket(old_socket)
             sio = self._build_socket()
             self._socket = sio
             try:
-                try:
-                    await sio.connect(self._connect_url, wait_timeout=10, **self._connect_kwargs)
-                except TypeError:
-                    v4_kwargs = dict(self._connect_kwargs)
-                    v4_kwargs.pop("auth", None)
-                    await sio.connect(self._connect_url, **v4_kwargs)
+                await self._connect_with_kwargs(sio, self._connect_kwargs)
                 return True
-            except Exception:
-                if self._socket is sio:
-                    self._socket = None
+            except Exception as exc:
+                if self._should_retry_with_websocket(exc):
+                    logger.warning("ioBroker Socket.IO polling handshake failed; retrying with websocket transport")
+                    fallback_kwargs = dict(self._connect_kwargs)
+                    fallback_kwargs["transports"] = ["websocket"]
+                    await self._detach_and_close_socket(sio)
+                    fallback_sio = self._build_socket()
+                    self._socket = fallback_sio
+                    try:
+                        await self._connect_with_kwargs(fallback_sio, fallback_kwargs)
+                        self._connect_kwargs = fallback_kwargs
+                        return True
+                    except Exception:
+                        await self._detach_and_close_socket(fallback_sio)
+                        logger.exception("ioBroker Socket.IO websocket fallback failed")
+                        return False
+                await self._detach_and_close_socket(sio)
                 logger.exception("ioBroker Socket.IO connection failed")
                 return False
 
+    async def _connect_with_kwargs(self, sio: Any, connect_kwargs: dict[str, Any]) -> None:
+        assert self._connect_url is not None
+        try:
+            await sio.connect(self._connect_url, wait_timeout=10, **connect_kwargs)
+        except TypeError:
+            v4_kwargs = dict(connect_kwargs)
+            v4_kwargs.pop("auth", None)
+            await sio.connect(self._connect_url, **v4_kwargs)
+
+    @staticmethod
+    def _should_retry_with_websocket(exc: Exception) -> bool:
+        return "OPEN packet not returned by server" in str(exc)
+
     async def _reconnect_loop(self) -> None:
         assert self._cfg is not None
+        base_delay = float(self._cfg.reconnect_interval_seconds)
+        max_delay = float(max(self._cfg.reconnect_max_interval_seconds, self._cfg.reconnect_interval_seconds))
+        attempt = 0
         while not self._disconnect_requested:
             if self._socket_is_connected():
                 return
             connected = await self._connect_socket()
             if connected:
                 return
-            await asyncio.sleep(self._cfg.reconnect_interval_seconds)
+            delay = min(max_delay, base_delay * (2**attempt))
+            jitter = random.uniform(-0.2 * delay, 0.2 * delay)
+            await asyncio.sleep(max(0.1, delay + jitter))
+            attempt += 1
 
-    async def _subscribe_bound_states(self, *, force_publish_initial: bool = True) -> bool:
+    def _prune_disconnects(self, now: datetime) -> None:
+        if self._cfg is not None:
+            window_s = self._cfg.socket_instability_window_s
+        else:
+            try:
+                window_s = int(self._config.get("socket_instability_window_s", 300))
+            except (TypeError, ValueError):
+                window_s = 300
+        cutoff = now.timestamp() - window_s
+        while self._disconnect_times and self._disconnect_times[0].timestamp() < cutoff:
+            self._disconnect_times.popleft()
+
+    def _disconnect_threshold(self) -> int:
+        if self._cfg is not None:
+            return self._cfg.socket_instability_threshold
+        try:
+            return int(self._config.get("socket_instability_threshold", 3))
+        except (TypeError, ValueError):
+            return 3
+
+    async def _record_disconnect(self) -> None:
+        now = self._now()
+        self._disconnect_times.append(now)
+        self._prune_disconnects(now)
+        if self._instability_warning_active:
+            return
+        if len(self._disconnect_times) < self._disconnect_threshold():
+            return
+        self._instability_warning_active = True
+        await self._publish_warning_status(SOCKET_INSTABILITY_DETAIL)
+        logger.warning(
+            "ioBroker Socket.IO instability suspected: %d disconnects in last %ss",
+            len(self._disconnect_times),
+            self._cfg.socket_instability_window_s if self._cfg is not None else self._config.get("socket_instability_window_s", 300),
+        )
+
+    async def _publish_connected_status(self, detail: str) -> None:
+        now = self._now()
+        self._prune_disconnects(now)
+        if self._instability_warning_active and self._disconnect_times:
+            self._connected = True
+            await self._publish_status(True, SOCKET_INSTABILITY_DETAIL, severity="warning")
+            return
+        if self._instability_warning_active:
+            self._instability_warning_active = False
+            await self._publish_status(True, SOCKET_STABLE_DETAIL)
+            return
+        await self._publish_status(True, detail)
+
+    async def _subscribe_bound_states(
+        self,
+        *,
+        force_publish_initial: bool = True,
+        publish_connected_status: bool = True,
+    ) -> bool:
         if not self._socket_is_connected() or not self._state_map:
             return self._socket_is_connected()
 
@@ -367,11 +513,14 @@ class IoBrokerAdapter(AdapterBase):
             try:
                 await self._call_socket("subscribe", states)
                 logger.info("ioBroker Socket.IO subscribed: %s", states)
-                if self._cfg is not None:
-                    await self._publish_status(True, f"Verbunden mit {self._cfg.host}:{self._cfg.port}")
+                if publish_connected_status and self._cfg is not None:
+                    await self._publish_connected_status(f"Verbunden mit {self._cfg.host}:{self._cfg.port}")
             except Exception:
                 logger.exception("ioBroker Socket.IO subscribe failed")
-                await self._publish_status(False, "Subscribe fehlgeschlagen")
+                if force_publish_initial:
+                    await self._publish_status(False, "Subscribe fehlgeschlagen", severity="error")
+                else:
+                    await self._publish_warning_status(WATCHDOG_SUBSCRIBE_WARNING_DETAIL)
                 return False
 
             # subscribe only reports future changes. After connect/reconnect we

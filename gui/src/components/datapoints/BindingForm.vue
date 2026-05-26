@@ -18,47 +18,48 @@
     <!-- ── TAB: Verbindung ── -->
     <div v-show="activeTab === 'conn'" class="flex flex-col gap-4">
 
-      <div class="grid grid-cols-2 gap-4">
+      <div class="grid gap-4" :class="selectedAdapterType === 'ANWESENHEITSSIMULATION' ? 'grid-cols-1' : 'grid-cols-2'">
         <div class="form-group">
-          <label class="label">Adapter-Instanz *</label>
+          <label class="label">{{ $t('adapters.bindingForm.adapterInstanceLabel') }}</label>
           <div v-if="props.initial" class="input bg-slate-100 dark:bg-slate-800/50 text-slate-400 cursor-not-allowed">
             {{ currentInstanceName }}
           </div>
-          <select v-else v-model="form.adapter_instance_id" class="input" required>
-            <option value="">Instanz wählen …</option>
+          <select v-else v-model="form.adapter_instance_id" class="input" required data-testid="select-adapter-instance">
+            <option value="">{{ $t('adapters.bindingForm.selectInstance') }}</option>
             <optgroup v-for="group in groupedInstances" :key="group.type" :label="group.type">
               <option v-for="inst in group.items" :key="inst.id" :value="inst.id">{{ inst.name }}</option>
             </optgroup>
           </select>
         </div>
-        <div class="form-group">
-          <label class="label">Richtung *</label>
+        <div v-if="selectedAdapterType !== 'ANWESENHEITSSIMULATION'" class="form-group">
+          <label class="label">{{ $t('adapters.bindingForm.directionLabel') }}</label>
           <select
             v-model="form.direction"
             class="input"
             :disabled="selectedAdapterType === 'ZEITSCHALTUHR'"
+            data-testid="select-direction"
           >
-            <option value="SOURCE">Lesen (von Adapter)</option>
-            <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR'" value="DEST">Schreiben (auf Adapter)</option>
-            <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR'" value="BOTH">Lesen/Schreiben (von/auf Adapter)</option>
+            <option value="SOURCE">{{ $t('adapters.bindingForm.directionRead') }}</option>
+            <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR'" value="DEST">{{ $t('adapters.bindingForm.directionWrite') }}</option>
+            <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR'" value="BOTH">{{ $t('adapters.bindingForm.directionReadWrite') }}</option>
           </select>
           <p v-if="selectedAdapterType === 'ZEITSCHALTUHR'" class="hint">
-            Die Zeitschaltuhr ist eine reine Quelle — nur Lesen möglich.
+            {{ $t('adapters.bindingForm.timerReadOnlyHint') }}
           </p>
         </div>
       </div>
 
       <!-- KNX -->
       <template v-if="selectedAdapterType === 'KNX'">
-        <div class="section-header">KNX Binding</div>
+        <div class="section-header">{{ $t('adapters.bindingForm.knxSection') }}</div>
         <div class="form-group">
-          <label class="label">Gruppenadresse *</label>
-          <GaCombobox v-model="cfg.group_address" placeholder="z.B. 1/2/3 oder Name suchen …" @select="onGaSelect" />
+          <label class="label">{{ $t('adapters.bindingForm.groupAddressLabel') }}</label>
+          <GaCombobox v-model="cfg.group_address" :placeholder="$t('adapters.bindingForm.groupAddressPlaceholder')" @select="onGaSelect" />
         </div>
         <div class="form-group">
-          <label class="label">DPT *</label>
+          <label class="label">{{ $t('adapters.bindingForm.dptLabel') }}</label>
           <select v-model="cfg.dpt_id" class="input" required>
-            <option value="">DPT wählen …</option>
+            <option value="">{{ $t('adapters.bindingForm.selectDpt') }}</option>
             <optgroup v-for="group in groupedDpts" :key="group.family" :label="group.label">
               <option v-for="dpt in group.dpts" :key="dpt.dpt_id" :value="dpt.dpt_id">
                 {{ dpt.dpt_id }} — {{ dpt.name }}<template v-if="dpt.unit"> [{{ dpt.unit }}]</template>
@@ -79,10 +80,10 @@
               for="respond_to_read"
               class="text-sm"
               :class="props.dpPersistValue ? 'text-slate-600 dark:text-slate-300' : 'text-slate-400 dark:text-slate-500 cursor-not-allowed'"
-            >Antworte auf Leseanfragen</label>
+            >{{ $t('adapters.bindingForm.respondToReadLabel') }}</label>
             <p class="hint">
-              Sendet den aktuellen Wert als GroupValueResponse wenn eine Leseanfrage eingeht.
-              <template v-if="!props.dpPersistValue"> Erfordert aktiviertes „Letzten Wert speichern" am Objekt.</template>
+              {{ $t('adapters.bindingForm.respondToReadHint') }}
+              <template v-if="!props.dpPersistValue"> {{ $t('adapters.bindingForm.respondToReadPersistHint') }}</template>
             </p>
           </div>
         </div>
@@ -90,14 +91,14 @@
 
       <!-- Modbus -->
       <template v-if="selectedAdapterType === 'MODBUS_TCP' || selectedAdapterType === 'MODBUS_RTU'">
-        <div class="section-header">Modbus Binding</div>
+        <div class="section-header">{{ $t('adapters.bindingForm.modbusSection') }}</div>
         <div class="grid grid-cols-3 gap-4">
           <div class="form-group">
-            <label class="label">Adresse *</label>
+            <label class="label">{{ $t('adapters.bindingForm.addressLabel') }}</label>
             <input v-model.number="cfg.address" type="number" min="0" max="65535" class="input" required />
           </div>
           <div class="form-group">
-            <label class="label">Registertyp *</label>
+            <label class="label">{{ $t('adapters.bindingForm.registerTypeLabel') }}</label>
             <select v-model="cfg.register_type" class="input">
               <option value="holding">Holding Register</option>
               <option value="input">Input Register</option>
@@ -106,7 +107,7 @@
             </select>
           </div>
           <div class="form-group">
-            <label class="label">Datenformat *</label>
+            <label class="label">{{ $t('adapters.bindingForm.dataFormatLabel') }}</label>
             <select v-model="cfg.data_format" class="input">
               <optgroup label="16-Bit">
                 <option value="uint16">UINT16</option>
@@ -124,39 +125,39 @@
             </select>
           </div>
         </div>
-        <div class="optional-divider">Optionale Einstellungen</div>
+        <div class="optional-divider">{{ $t('adapters.binding.optionalSettings') }}</div>
         <div class="grid grid-cols-4 gap-4">
           <div class="form-group">
-            <label class="label">Unit ID</label>
+            <label class="label">{{ $t('adapters.bindingForm.unitIdLabel') }}</label>
             <input v-model.number="cfg.unit_id" type="number" min="0" max="255" class="input" />
-            <p class="hint">Standard: 1</p>
+            <p class="hint">{{ $t('adapters.bindingForm.defaultN', { n: '1' }) }}</p>
           </div>
           <div class="form-group">
-            <label class="label">Anz. Register</label>
+            <label class="label">{{ $t('adapters.bindingForm.registerCountLabel') }}</label>
             <input v-model.number="cfg.count" type="number" min="1" max="125" class="input" />
-            <p class="hint">Standard: 1</p>
+            <p class="hint">{{ $t('adapters.bindingForm.defaultN', { n: '1' }) }}</p>
           </div>
           <div class="form-group">
-            <label class="label">Skalierung</label>
+            <label class="label">{{ $t('adapters.bindingForm.scaleLabel') }}</label>
             <input v-model.number="cfg.scale_factor" type="number" step="any" class="input" />
-            <p class="hint">Standard: 1.0</p>
+            <p class="hint">{{ $t('adapters.bindingForm.defaultN', { n: '1.0' }) }}</p>
           </div>
           <div class="form-group">
-            <label class="label">Intervall (s)</label>
+            <label class="label">{{ $t('adapters.bindingForm.intervalSecondsLabel') }}</label>
             <input v-model.number="cfg.poll_interval" type="number" step="0.1" min="0.1" class="input" />
-            <p class="hint">Standard: 1.0</p>
+            <p class="hint">{{ $t('adapters.bindingForm.defaultN', { n: '1.0' }) }}</p>
           </div>
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div class="form-group">
-            <label class="label">Byte-Reihenfolge</label>
+            <label class="label">{{ $t('adapters.bindingForm.byteOrderLabel') }}</label>
             <select v-model="cfg.byte_order" class="input">
               <option value="big">Big Endian</option>
               <option value="little">Little Endian</option>
             </select>
           </div>
           <div class="form-group">
-            <label class="label">Word-Reihenfolge</label>
+            <label class="label">{{ $t('adapters.bindingForm.wordOrderLabel') }}</label>
             <select v-model="cfg.word_order" class="input">
               <option value="big">Big Endian</option>
               <option value="little">Little Endian</option>
@@ -167,13 +168,13 @@
 
       <!-- MQTT -->
       <template v-if="selectedAdapterType === 'MQTT'">
-        <div class="section-header">MQTT Binding</div>
+        <div class="section-header">{{ $t('adapters.bindingForm.mqttSection') }}</div>
 
         <!-- Topic with browser -->
         <div class="form-group">
-          <label class="label">Topic *</label>
+          <label class="label">{{ $t('adapters.bindingForm.topicLabel') }}</label>
           <div class="flex gap-2">
-            <input v-model="cfg.topic" class="input flex-1" placeholder="z.B. haus/wohnzimmer/temperatur" required />
+            <input v-model="cfg.topic" class="input flex-1" :placeholder="$t('adapters.bindingForm.topicPlaceholder')" required data-testid="input-mqtt-topic" />
             <button
               type="button"
               class="btn-secondary px-3 text-sm whitespace-nowrap"
@@ -181,10 +182,10 @@
               @click="mqttBrowse"
             >
               <span v-if="mqttBrowseLoading" class="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1"></span>
-              {{ mqttBrowseLoading ? 'Scannen …' : 'Browse' }}
+              {{ mqttBrowseLoading ? $t('adapters.bindingForm.scanning') : $t('adapters.bindingForm.browse') }}
             </button>
           </div>
-          <p class="hint">Lesen/Lesen+Schreiben: abonniertes Topic; Schreiben: Publish-Topic</p>
+          <p class="hint">{{ $t('adapters.bindingForm.topicHint') }}</p>
 
           <!-- Browse results -->
           <div
@@ -202,40 +203,40 @@
           <p v-if="mqttBrowseError" class="text-xs text-red-400 mt-1">{{ mqttBrowseError }}</p>
         </div>
 
-        <div class="optional-divider">Optionale Einstellungen</div>
+        <div class="optional-divider">{{ $t('adapters.binding.optionalSettings') }}</div>
         <div class="grid grid-cols-2 gap-4">
           <!-- Publish-Topic: nur bei Lesen/Schreiben (BOTH) sichtbar -->
           <div v-if="form.direction === 'BOTH'" class="form-group">
-            <label class="label">Publish-Topic <span class="optional">(optional)</span></label>
-            <input v-model="cfg.publish_topic" class="input" placeholder="z.B. …/set" />
-            <p class="hint">Topic für Schreiben — leer = Topic wird verwendet</p>
+            <label class="label">{{ $t('adapters.bindingForm.publishTopicLabel') }} <span class="optional">{{ $t('logic.nodeConfig.common.optional') }}</span></label>
+            <input v-model="cfg.publish_topic" class="input" :placeholder="$t('adapters.bindingForm.publishTopicPlaceholder')" />
+            <p class="hint">{{ $t('adapters.bindingForm.publishTopicHint') }}</p>
           </div>
           <!-- Retain: nur bei Schreiben (DEST) oder Lesen/Schreiben (BOTH) -->
           <div v-if="form.direction === 'DEST' || form.direction === 'BOTH'" class="form-group flex flex-col justify-end">
             <div class="flex items-center gap-2 mt-6">
               <input type="checkbox" id="mqtt_retain" v-model="cfg.retain" class="w-4 h-4 rounded" />
-              <label for="mqtt_retain" class="text-sm text-slate-600 dark:text-slate-300">Retain</label>
+              <label for="mqtt_retain" class="text-sm text-slate-600 dark:text-slate-300">{{ $t('adapters.bindingForm.retainLabel') }}</label>
             </div>
-            <p class="hint">Broker speichert letzten Wert</p>
+            <p class="hint">{{ $t('adapters.bindingForm.retainHint') }}</p>
           </div>
         </div>
 
         <!-- Payload Template — only for DEST / BOTH -->
         <div v-if="form.direction === 'DEST' || form.direction === 'BOTH'" class="form-group">
-          <label class="label">Payload-Template <span class="optional">(optional)</span></label>
+          <label class="label">{{ $t('adapters.bindingForm.payloadTemplateLabel') }} <span class="optional">{{ $t('logic.nodeConfig.common.optional') }}</span></label>
           <input
             v-model="cfg.payload_template"
             class="input font-mono text-sm"
-            placeholder='z.B. {"value": "###DP###", "unit": "°C"}'
+            :placeholder="$t('adapters.bindingForm.payloadTemplatePlaceholder')"
           />
-          <p class="hint"><code class="text-blue-400">###DP###</code> wird durch den Datenpunktwert ersetzt. Leer = Wert direkt als Payload.</p>
+          <p class="hint">{{ $t('adapters.bindingForm.payloadTemplateHint') }}</p>
         </div>
 
         <!-- Source Data Type — SOURCE / BOTH only -->
         <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="form-group">
-          <label class="label">Quell-Datentyp <span class="optional">(optional)</span></label>
+          <label class="label">{{ $t('adapters.bindingForm.sourceDataTypeLabel') }} <span class="optional">{{ $t('logic.nodeConfig.common.optional') }}</span></label>
           <div class="flex gap-2 items-start">
-            <select v-model="cfg.source_data_type" class="input flex-1">
+            <select v-model="cfg.source_data_type" class="input flex-1" data-testid="select-source-data-type">
               <option v-for="t in MQTT_SOURCE_TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>
             </select>
             <span v-if="mqttTypeCompat" class="mt-1.5 shrink-0 text-xs px-2 py-1 rounded-full font-medium" :class="mqttTypeCompat.cls">
@@ -243,8 +244,8 @@
             </span>
           </div>
           <p class="hint">
-            Wie der eingehende Payload interpretiert wird.
-            Objekt-Typ: <code class="text-blue-400">{{ props.dpDataType }}</code>
+            {{ $t('adapters.bindingForm.sourceDataTypeHint') }}
+            {{ $t('adapters.bindingForm.objectTypeLabel') }}: <code class="text-blue-400">{{ props.dpDataType }}</code>
           </p>
 
           <!-- JSON key extraction panel -->
@@ -263,6 +264,7 @@
                 v-model="mqttJsonSample"
                 class="input font-mono text-xs h-20 resize-y"
                 placeholder='{"temperature": 22.5, "humidity": 65}'
+                data-testid="mqtt-json-sample"
                 @input="onMqttJsonSampleInput"
               />
               <p v-if="mqttJsonParseError" class="text-xs text-red-400 mt-0.5">{{ mqttJsonParseError }}</p>
@@ -273,12 +275,14 @@
                 <input
                   v-model="cfg.json_key"
                   class="input flex-1 font-mono text-sm"
-                  placeholder="z.B. temperature"
+                  placeholder="z.B. temperature oder channels.Temperature"
+                  data-testid="mqtt-json-key-input"
                 />
                 <select
                   v-if="mqttJsonKeys.length"
                   v-model="cfg.json_key"
                   class="input w-52 shrink-0"
+                  data-testid="mqtt-json-key-select"
                 >
                   <option value="">— aus Sample —</option>
                   <option v-for="k in mqttJsonKeys" :key="k.key" :value="k.key">
@@ -286,7 +290,7 @@
                   </option>
                 </select>
               </div>
-              <p class="hint">Schlüssel im JSON-Objekt, dessen Wert übernommen wird.</p>
+              <p class="hint">Schlüssel im JSON-Objekt (Dot-Notation für verschachtelte Werte, z.B. <code class="text-blue-400">channels.Temperature</code>).</p>
             </div>
           </div>
 
@@ -794,6 +798,168 @@
         </template><!-- /timer_type !== meta -->
       </template>
 
+      <!-- Anwesenheitssimulation — per-Binding Overrides -->
+      <template v-if="selectedAdapterType === 'ANWESENHEITSSIMULATION'">
+        <div class="section-header">Anwesenheitssimulation — Binding-Optionen</div>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="form-group">
+            <label class="label">Versatz überschreiben</label>
+            <div class="flex gap-2">
+              <select v-model="anwOffsetSelect" class="input" @change="onAnwOffsetSelectChange">
+                <option value="">Standard (Adapter)</option>
+                <option value="1">1 Tag</option>
+                <option value="7">7 Tage</option>
+                <option value="14">14 Tage</option>
+                <option value="custom">Andere (1–30 Tage) …</option>
+              </select>
+              <input
+                v-if="anwOffsetSelect === 'custom'"
+                v-model.number="cfg.offset_override"
+                type="number" min="1" max="30"
+                class="input w-24"
+                placeholder="Tage"
+                @input="onAnwOffsetCustomInput"
+              />
+            </div>
+            <p class="hint">Leer = Versatz aus der Adapter-Konfiguration verwenden.</p>
+          </div>
+          <div class="form-group">
+            <label class="label">Verhalten bei Anwesenheit</label>
+            <select v-model="cfg.on_presence_override" class="input">
+              <option :value="null">Standard (Adapter)</option>
+              <option value="behalten">Wert behalten</option>
+              <option value="zuruecksetzen">Wert zurücksetzen (false / 0)</option>
+              <option value="setzen">Wert setzen auf …</option>
+            </select>
+            <input
+              v-if="cfg.on_presence_override === 'setzen'"
+              v-model="cfg.on_presence_value"
+              type="text"
+              class="input mt-2"
+              placeholder="z.B. 0 / 1 / false / true / 21.5"
+            />
+            <p class="hint">Leer = Verhalten aus der Adapter-Konfiguration verwenden.</p>
+          </div>
+        </div>
+      </template>
+
+      <!-- SNMP -->
+      <template v-if="selectedAdapterType === 'SNMP'">
+        <div class="section-header">SNMP Binding</div>
+
+        <!-- Host + Port -->
+        <div class="grid grid-cols-3 gap-4">
+          <div class="form-group col-span-2">
+            <label class="label">Gerät (IP/DNS) *</label>
+            <input v-model="cfg.host" class="input" placeholder="z.B. 192.168.1.100 oder switch.local" required />
+          </div>
+          <div class="form-group">
+            <label class="label">UDP-Port</label>
+            <input v-model.number="cfg.port" type="number" min="1" max="65535" class="input" />
+            <p class="hint">Standard: 161</p>
+          </div>
+        </div>
+
+        <!-- OID with Walk -->
+        <div class="form-group">
+          <label class="label">OID *</label>
+          <div class="flex gap-2">
+            <input
+              v-model="cfg.oid"
+              class="input flex-1 font-mono text-sm"
+              placeholder="z.B. 1.3.6.1.2.1.1.1.0"
+              required
+            />
+          </div>
+          <!-- Walk root (independent from binding OID) -->
+          <div class="flex gap-2 mt-2">
+            <input
+              v-model="snmpWalkRoot"
+              class="input flex-1 font-mono text-xs"
+              placeholder="Walk ab OID, z.B. 1.3.6.1.2.1"
+            />
+            <button
+              type="button"
+              class="btn-secondary px-3 text-sm whitespace-nowrap"
+              :disabled="!cfg.host || !selectedInstanceId || snmpWalkLoading"
+              @click="snmpWalk"
+            >
+              <span v-if="snmpWalkLoading" class="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1"></span>
+              {{ snmpWalkLoading ? 'Walk …' : 'OID-Walk' }}
+            </button>
+          </div>
+          <!-- Walk results -->
+          <div
+            v-if="snmpWalkResults.length > 0"
+            class="mt-1 max-h-52 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800"
+          >
+            <button
+              v-for="entry in snmpWalkResults"
+              :key="entry.oid"
+              type="button"
+              class="w-full text-left px-3 py-1.5 text-xs hover:bg-slate-50 dark:hover:bg-slate-700/50 flex gap-2 items-baseline"
+              @click="cfg.oid = entry.oid"
+            >
+              <code class="text-blue-400 shrink-0">{{ entry.oid }}</code>
+              <span class="text-slate-400 shrink-0">[{{ entry.type }}]</span>
+              <span class="text-slate-600 dark:text-slate-300 truncate">{{ entry.value }}</span>
+            </button>
+          </div>
+          <button
+            v-if="snmpWalkHasMore && !snmpWalkLoading"
+            type="button"
+            class="mt-1 w-full text-xs text-center py-1 rounded border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+            @click="snmpWalk(true)"
+          >
+            {{ snmpWalkResults.length }} geladen — weitere 50 laden …
+          </button>
+          <p v-if="snmpWalkError" class="text-xs text-red-400 mt-1">{{ snmpWalkError }}</p>
+          <p class="hint">
+            Beispiele:
+            <code class="text-blue-400 cursor-pointer hover:underline" @click="cfg.oid='1.3.6.1.2.1.1.1.0'">1.3.6.1.2.1.1.1.0</code> (sysDescr) ·
+            <code class="text-blue-400 cursor-pointer hover:underline" @click="cfg.oid='1.3.6.1.2.1.1.3.0'">1.3.6.1.2.1.1.3.0</code> (sysUpTime) ·
+            <code class="text-blue-400 cursor-pointer hover:underline" @click="cfg.oid='1.3.6.1.4.1'">1.3.6.1.4.1</code> (enterprises)
+          </p>
+        </div>
+
+        <!-- Datentyp + Poll-Intervall -->
+        <div class="grid grid-cols-2 gap-4">
+          <div class="form-group">
+            <label class="label">Datentyp</label>
+            <select v-model="cfg.data_type" class="input">
+              <option value="auto">auto — automatisch erkennen</option>
+              <option value="int">int — Ganzzahl</option>
+              <option value="float">float — Gleitkomma</option>
+              <option value="string">string — Zeichenkette</option>
+              <option value="hex">hex — Hexadezimal</option>
+              <option value="counter">counter — Counter32/64</option>
+              <option value="gauge">gauge — Gauge32</option>
+              <option value="timeticks">timeticks — TimeTicks (1/100 s)</option>
+            </select>
+            <p class="hint">Bestimmt wie der Rohwert umgewandelt wird</p>
+          </div>
+          <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="form-group">
+            <label class="label">Poll-Intervall (s)</label>
+            <input v-model.number="cfg.poll_interval" type="number" min="1" step="1" class="input" />
+            <p class="hint">Standard: 30 s</p>
+          </div>
+        </div>
+
+        <div class="optional-divider">{{ $t('adapters.binding.advancedSettings') }}</div>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="form-group">
+            <label class="label">Timeout (s)</label>
+            <input v-model.number="cfg.timeout" type="number" min="0.5" max="30" step="0.5" class="input" />
+            <p class="hint">Standard: 5 s</p>
+          </div>
+          <div class="form-group">
+            <label class="label">Wiederholungen</label>
+            <input v-model.number="cfg.retries" type="number" min="0" max="5" class="input" />
+            <p class="hint">Standard: 1</p>
+          </div>
+        </div>
+      </template>
+
       <div v-if="!selectedAdapterType && !props.initial" class="p-3 bg-slate-100/80 dark:bg-slate-800/40 rounded-lg text-sm text-slate-500 text-center">
         Bitte zuerst eine Adapter-Instanz wählen
       </div>
@@ -914,10 +1080,10 @@
     <div v-if="error" class="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400">{{ error }}</div>
 
     <div class="flex justify-end gap-3">
-      <button type="button" @click="$emit('cancel')" class="btn-secondary">Abbrechen</button>
+      <button type="button" @click="$emit('cancel')" class="btn-secondary">{{ $t('common.cancel') }}</button>
       <button type="submit" class="btn-primary" :disabled="saving">
         <Spinner v-if="saving" size="sm" color="white" />
-        Speichern
+        {{ $t('common.save') }}
       </button>
     </div>
 
@@ -926,6 +1092,7 @@
 
 <script setup>
 import { ref, reactive, watch, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { dpApi, adapterApi } from '@/api/client'
 import Spinner    from '@/components/ui/Spinner.vue'
 import GaCombobox from '@/components/ui/GaCombobox.vue'
@@ -937,6 +1104,7 @@ const props = defineProps({
   dpDataType:     { type: String,  default: 'UNKNOWN' },  // DataPoint.data_type for compat check
 })
 const emit = defineEmits(['save', 'cancel'])
+const { t } = useI18n()
 
 const saving       = ref(false)
 const error        = ref(null)
@@ -944,6 +1112,7 @@ const allInstances = ref([])
 const allDpts      = ref([])
 const activeTab    = ref('conn')
 const showAdvancedTabs = ref(false)
+const anwOffsetSelect  = ref('')  // '' | '1' | '7' | '14' | 'custom'
 
 // ---------------------------------------------------------------------------
 // Form-State
@@ -968,13 +1137,13 @@ const form = reactive({
 })
 
 const VALUE_MAP_PRESETS = [
-  { key: '',            label: '— keine Wertzuordnung —',            map: null },
-  { key: 'num_invert',  label: '0 ↔ 1 (numerisch invertieren)',       map: { '0': '1', '1': '0' } },
-  { key: 'bool_onoff',  label: 'true/false → on/off',                 map: { 'true': 'on', 'false': 'off' } },
-  { key: 'onoff_bool',  label: 'on/off → true/false',                 map: { 'on': 'true', 'off': 'false' } },
-  { key: 'num_onoff',   label: '0/1 → off/on',                        map: { '0': 'off', '1': 'on' } },
-  { key: 'onoff_num',   label: 'off/on → 0/1',                        map: { 'off': '0', 'on': '1' } },
-  { key: 'custom',      label: 'Benutzerdefiniert (JSON) …',           map: null },
+  { key: '',            label: t('adapters.bindingForm.noValueMapping'),            map: null },
+  { key: 'num_invert',  label: t('adapters.bindingForm.valueMapNumInvert'),         map: { '0': '1', '1': '0' } },
+  { key: 'bool_onoff',  label: t('adapters.bindingForm.valueMapBoolOnOff'),         map: { 'true': 'on', 'false': 'off' } },
+  { key: 'onoff_bool',  label: t('adapters.bindingForm.valueMapOnOffBool'),         map: { 'on': 'true', 'off': 'false' } },
+  { key: 'num_onoff',   label: t('adapters.bindingForm.valueMapNumOnOff'),          map: { '0': 'off', '1': 'on' } },
+  { key: 'onoff_num',   label: t('adapters.bindingForm.valueMapOnOffNum'),          map: { 'off': '0', 'on': '1' } },
+  { key: 'custom',      label: t('adapters.bindingForm.customValueMapping'),         map: null },
 ]
 
 const cfg = reactive({
@@ -989,6 +1158,17 @@ const cfg = reactive({
   entity_id: '', attribute: '', service_domain: '', service_name: '', service_data_key: '',
   // IOBROKER
   state_id: '', command_state_id: '', ack: false,
+  // ANWESENHEITSSIMULATION
+  offset_override: null,
+  on_presence_override: null,
+  on_presence_value: '',
+  // SNMP
+  host: '192.168.1.1',
+  port: 161,
+  oid: '',
+  data_type: 'auto',
+  timeout: 5.0,
+  retries: 1,
   // ZEITSCHALTUHR
   timer_type: 'daily', meta_type: 'none',
   weekdays: [0,1,2,3,4,5,6], months: [], day_of_month: 0,
@@ -1005,13 +1185,13 @@ const cfg = reactive({
 
 // MQTT source data type constants + compatibility map
 const MQTT_SOURCE_TYPES = [
-  { value: '',       label: '— kein Typ erzwingen (Standard) —' },
+  { value: '',       label: t('adapters.bindingForm.noForcedType') },
   { value: 'string', label: 'string' },
   { value: 'int',    label: 'int' },
   { value: 'float',  label: 'float' },
   { value: 'bool',   label: 'bool' },
-  { value: 'json',   label: 'JSON — Schlüssel extrahieren' },
-  { value: 'xml',    label: 'XML — Element-Pfad extrahieren' },
+  { value: 'json',   label: t('adapters.bindingForm.jsonExtractKey') },
+  { value: 'xml',    label: t('adapters.bindingForm.xmlExtractPath') },
 ]
 
 // DataPoint type → which MQTT source types are ok / warn / bad
@@ -1049,6 +1229,13 @@ const iobrokerBrowseLoading = ref(false)
 const iobrokerBrowseError = ref(null)
 let iobrokerBrowseTimer = null
 
+// SNMP Walk state
+const snmpWalkResults = ref([])
+const snmpWalkLoading = ref(false)
+const snmpWalkError   = ref(null)
+const snmpWalkHasMore = ref(false)
+const snmpWalkRoot    = ref('1.3.6.1.2.1')
+
 // Zeitschaltuhr holiday list state (for Feiertagsschaltuhr)
 const ztHolidays = ref([])   // [{date, name}, …] sorted by date
 const ztHolidaysLoading = ref(false)
@@ -1056,10 +1243,10 @@ const ztHolidaysError = ref(null)
 
 // Date window UI state
 const WIN_MONTHS = [
-  { v: 1, l: 'Januar' }, { v: 2, l: 'Februar' }, { v: 3, l: 'März' },
-  { v: 4, l: 'April' }, { v: 5, l: 'Mai' }, { v: 6, l: 'Juni' },
-  { v: 7, l: 'Juli' }, { v: 8, l: 'August' }, { v: 9, l: 'September' },
-  { v: 10, l: 'Oktober' }, { v: 11, l: 'November' }, { v: 12, l: 'Dezember' },
+  { v: 1, l: t('common.months.january') }, { v: 2, l: t('common.months.february') }, { v: 3, l: t('common.months.march') },
+  { v: 4, l: t('common.months.april') }, { v: 5, l: t('common.months.may') }, { v: 6, l: t('common.months.june') },
+  { v: 7, l: t('common.months.july') }, { v: 8, l: t('common.months.august') }, { v: 9, l: t('common.months.september') },
+  { v: 10, l: t('common.months.october') }, { v: 11, l: t('common.months.november') }, { v: 12, l: t('common.months.december') },
 ]
 const winFrom = reactive({ type: 'fixed', month: 1,  day: 1,  sign: '+', offset: 0, name: '' })
 const winTo   = reactive({ type: 'fixed', month: 12, day: 31, sign: '+', offset: 0, name: '' })
@@ -1083,17 +1270,17 @@ const currentInstanceName = computed(() => {
 const selectedInstanceId = computed(() => props.initial?.adapter_instance_id || form.adapter_instance_id)
 
 const visibleTabs = computed(() => {
-  const tabs = [{ id: 'conn', label: 'Verbindung', badge: false }]
-  if (selectedAdapterType.value && selectedAdapterType.value !== 'ZEITSCHALTUHR') {
+  const tabs = [{ id: 'conn', label: t('logic.nodeConfig.tabs.connection'), badge: false }]
+  if (selectedAdapterType.value && selectedAdapterType.value !== 'ZEITSCHALTUHR' && selectedAdapterType.value !== 'ANWESENHEITSSIMULATION') {
     if (selectedAdapterType.value === 'IOBROKER' && !showAdvancedTabs.value) return tabs
     const hasFormula = !!form.value_formula?.trim() || !!form.value_map_preset
-    tabs.push({ id: 'transform', label: 'Transformation', badge: hasFormula })
+    tabs.push({ id: 'transform', label: t('logic.nodeConfig.tabs.transform'), badge: hasFormula })
     const canUseFilter = selectedAdapterType.value === 'IOBROKER'
       || form.direction === 'DEST' || form.direction === 'BOTH'
     if (canUseFilter) {
       const hasFilter = form.throttle_value > 0 || form.send_on_change
         || (form.send_min_delta ?? 0) > 0 || (form.send_min_delta_pct ?? 0) > 0
-      tabs.push({ id: 'filter', label: 'Filter', badge: hasFilter })
+      tabs.push({ id: 'filter', label: t('logic.nodeConfig.tabs.filter'), badge: hasFilter })
     }
   }
   return tabs
@@ -1142,10 +1329,10 @@ const mqttTypeCompat = computed(() => {
   const compat = MQTT_TYPE_COMPAT[dpType]
   if (!compat) return null                             // UNKNOWN → no badge
   if (compat.ok.includes(sdt))
-    return { cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400', label: 'kompatibel' }
+    return { cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400', label: t('adapters.bindingForm.compatible') }
   if (compat.warn.includes(sdt))
-    return { cls: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400', label: 'Konvertierung nötig' }
-  return { cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400', label: 'inkompatibel' }
+    return { cls: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400', label: t('adapters.bindingForm.conversionRequired') }
+  return { cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400', label: t('adapters.bindingForm.incompatible') }
 })
 
 // ---------------------------------------------------------------------------
@@ -1198,6 +1385,25 @@ watch(() => props.initial, val => {
   if (cfg.date_window_from) parseWinExprInto(cfg.date_window_from, winFrom)
   if (cfg.date_window_to)   parseWinExprInto(cfg.date_window_to,   winTo)
   if (cfg.value             == null) cfg.value             = '1'
+  // ANWESENHEITSSIMULATION defaults + select sync
+  if (cfg.offset_override      === undefined) cfg.offset_override      = null
+  if (cfg.on_presence_override === undefined) cfg.on_presence_override = null
+  if (cfg.on_presence_value    === undefined) cfg.on_presence_value    = ''
+  // SNMP defaults when loading
+  if (cfg.host     == null) cfg.host     = '192.168.1.1'
+  if (cfg.port     == null) cfg.port     = 161
+  if (cfg.oid      == null) cfg.oid      = ''
+  if (cfg.data_type == null) cfg.data_type = 'auto'
+  if (cfg.timeout  == null) cfg.timeout  = 5.0
+  if (cfg.retries  == null) cfg.retries  = 1
+  {
+    const ANW_PRESETS = ['1', '7', '14']
+    if (cfg.offset_override != null) {
+      anwOffsetSelect.value = ANW_PRESETS.includes(String(cfg.offset_override)) ? String(cfg.offset_override) : 'custom'
+    } else {
+      anwOffsetSelect.value = ''
+    }
+  }
   // Restore value_map UI state from top-level binding field
   if (val.value_map && typeof val.value_map === 'object') {
     const mapStr = JSON.stringify(val.value_map)
@@ -1243,7 +1449,7 @@ async function loadZsuHolidays() {
     const { data } = await adapterApi.getZsuHolidays(instanceId)
     ztHolidays.value = data
   } catch (e) {
-    ztHolidaysError.value = e.response?.data?.detail ?? 'Feiertage konnten nicht geladen werden'
+    ztHolidaysError.value = e.response?.data?.detail ?? t('adapters.bindingForm.errors.holidaysLoadFailed')
   } finally {
     ztHolidaysLoading.value = false
   }
@@ -1266,9 +1472,9 @@ async function mqttBrowse() {
   try {
     const res = await adapterApi.mqttBrowseTopics(form.adapter_instance_id)
     mqttBrowseTopics.value = res.data
-    if (res.data.length === 0) mqttBrowseError.value = 'Keine Topics empfangen – Broker erreichbar?'
+    if (res.data.length === 0) mqttBrowseError.value = t('adapters.bindingForm.errors.noTopicsReceived')
   } catch (e) {
-    mqttBrowseError.value = e.response?.data?.detail ?? 'Fehler beim Abrufen der Topics'
+    mqttBrowseError.value = e.response?.data?.detail ?? t('adapters.bindingForm.errors.topicsFetchFailed')
   } finally {
     mqttBrowseLoading.value = false
   }
@@ -1294,7 +1500,7 @@ function onIoBrokerStateInput() {
 async function browseIoBrokerStates() {
   const instanceId = selectedInstanceId.value
   if (!instanceId) {
-    iobrokerBrowseError.value = 'Bitte zuerst eine ioBroker-Instanz wählen'
+    iobrokerBrowseError.value = t('adapters.bindingForm.errors.selectIoBrokerInstanceFirst')
     return
   }
   iobrokerBrowseLoading.value = true
@@ -1302,9 +1508,9 @@ async function browseIoBrokerStates() {
   try {
     const { data } = await adapterApi.iobrokerBrowseStates(instanceId, cfg.state_id?.trim() ?? '', 50)
     iobrokerStates.value = data
-    if (data.length === 0) iobrokerBrowseError.value = 'Keine States gefunden'
+    if (data.length === 0) iobrokerBrowseError.value = t('adapters.bindingForm.errors.noStatesFound')
   } catch (e) {
-    iobrokerBrowseError.value = e.response?.data?.detail ?? 'ioBroker-States konnten nicht geladen werden'
+    iobrokerBrowseError.value = e.response?.data?.detail ?? t('adapters.bindingForm.errors.ioBrokerStatesLoadFailed')
   } finally {
     iobrokerBrowseLoading.value = false
   }
@@ -1323,6 +1529,34 @@ function selectIoBrokerState(state) {
   iobrokerBrowseError.value = null
 }
 
+async function snmpWalk(append = false) {
+  const instanceId = selectedInstanceId.value
+  if (!instanceId || !cfg.host) return
+  snmpWalkLoading.value = true
+  if (!append) {
+    snmpWalkError.value = null
+    snmpWalkResults.value = []
+  }
+  try {
+    const rootOid  = snmpWalkRoot.value?.trim() || '1.3.6.1.2.1'
+    const startOid = append && snmpWalkResults.value.length
+      ? snmpWalkResults.value[snmpWalkResults.value.length - 1].oid
+      : null
+    const { data } = await adapterApi.snmpWalk(instanceId, cfg.host, rootOid, cfg.port || 161, 50, 10, startOid)
+    if (append) {
+      snmpWalkResults.value = [...snmpWalkResults.value, ...data]
+    } else {
+      snmpWalkResults.value = data
+    }
+    if (snmpWalkResults.value.length === 0) snmpWalkError.value = t('adapters.bindingForm.errors.noOidsFound')
+    snmpWalkHasMore.value = data.length === 50
+  } catch (e) {
+    snmpWalkError.value = e.response?.data?.detail ?? t('adapters.bindingForm.errors.snmpWalkFailed')
+  } finally {
+    snmpWalkLoading.value = false
+  }
+}
+
 function onValueMapPresetChange() {
   if (form.value_map_preset !== 'custom') {
     form.value_map_custom = ''
@@ -1336,7 +1570,7 @@ function onValueMapCustomInput() {
   try {
     JSON.parse(form.value_map_custom)
   } catch (e) {
-    form.value_map_custom_error = `Ungültiges JSON: ${e.message}`
+    form.value_map_custom_error = t('adapters.bindingForm.errors.invalidJson', { msg: e.message })
   }
 }
 
@@ -1358,7 +1592,7 @@ async function loadMqttSample() {
       onMqttXmlSampleInput()
     }
   } catch (e) {
-    const msg = e.response?.data?.detail ?? 'Kein Payload empfangen'
+    const msg = e.response?.data?.detail ?? t('adapters.bindingForm.errors.noPayloadReceived')
     if (cfg.source_data_type === 'json') mqttJsonParseError.value = msg
     if (cfg.source_data_type === 'xml')  mqttXmlParseError.value  = msg
   } finally {
@@ -1378,6 +1612,7 @@ watch(selectedAdapterType, type => {
     activeTab.value = 'conn'
     showAdvancedTabs.value = false
   }
+  if (type === 'SNMP' && !cfg.poll_interval) cfg.poll_interval = 30.0
 })
 
 // Zeitschaltuhr helpers
@@ -1487,6 +1722,20 @@ async function onWinTypeChange(ep) {
   if (ep.type === 'holiday_name' && selectedInstanceId.value) await loadZsuHolidays()
 }
 
+function onAnwOffsetSelectChange() {
+  if (anwOffsetSelect.value === '') {
+    cfg.offset_override = null
+  } else if (anwOffsetSelect.value !== 'custom') {
+    cfg.offset_override = parseInt(anwOffsetSelect.value)
+  }
+}
+
+function onAnwOffsetCustomInput() {
+  if (cfg.offset_override != null) {
+    cfg.offset_override = Math.min(30, Math.max(1, cfg.offset_override || 1))
+  }
+}
+
 function collectXmlLeafPaths(el, prefix) {
   const result = []
 
@@ -1531,12 +1780,36 @@ function onMqttXmlSampleInput() {
   const doc = parser.parseFromString(s, 'application/xml')
   const parseErr = doc.querySelector('parsererror')
   if (parseErr) {
-    mqttXmlParseError.value = `Kein gültiges XML: ${parseErr.textContent.split('\n')[0].trim()}`
+    mqttXmlParseError.value = t('adapters.bindingForm.errors.invalidXml', { msg: parseErr.textContent.split('\n')[0].trim() })
     return
   }
   mqttXmlElements.value = collectXmlLeafPaths(doc.documentElement, '')
   if (mqttXmlElements.value.length === 0)
-    mqttXmlParseError.value = 'Keine Kind-Elemente gefunden'
+    mqttXmlParseError.value = t('adapters.bindingForm.errors.noChildElementsFound')
+}
+
+// Flatten all leaf paths from a JSON object/array to dot-notation (max depth 6)
+function _flattenJsonLeaves(obj, prefix = '', depth = 0) {
+  if (depth > 6 || obj === null || typeof obj !== 'object') {
+    return prefix ? [{ key: prefix, text: obj === null ? 'null' : String(obj) }] : []
+  }
+  const paths = []
+  if (Array.isArray(obj)) {
+    obj.forEach((item, i) => {
+      const key = `${prefix}[${i}]`
+      paths.push(..._flattenJsonLeaves(item, key, depth + 1))
+    })
+  } else {
+    for (const [k, v] of Object.entries(obj)) {
+      const key = prefix ? `${prefix}.${k}` : k
+      if (v !== null && typeof v === 'object') {
+        paths.push(..._flattenJsonLeaves(v, key, depth + 1))
+      } else {
+        paths.push({ key, text: v === null ? 'null' : String(v) })
+      }
+    }
+  }
+  return paths
 }
 
 function onMqttJsonSampleInput() {
@@ -1546,17 +1819,13 @@ function onMqttJsonSampleInput() {
   if (!s) return
   try {
     const obj = JSON.parse(s)
-    if (obj !== null && typeof obj === 'object' && !Array.isArray(obj)) {
-      mqttJsonKeys.value = Object.entries(obj).map(([k, v]) => ({
-        key: k,
-        type: v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v,
-        text: v === null ? 'null' : Array.isArray(v) || typeof v === 'object' ? JSON.stringify(v) : String(v),
-      }))
+    if (obj !== null && typeof obj === 'object') {
+      mqttJsonKeys.value = _flattenJsonLeaves(obj)
     } else {
-      mqttJsonParseError.value = 'Sample muss ein JSON-Objekt sein (kein Array / Primitivwert)'
+      mqttJsonParseError.value = t('adapters.bindingForm.errors.sampleMustBeJsonObjectOrArray')
     }
   } catch (e) {
-    mqttJsonParseError.value = `Kein gültiges JSON: ${e.message}`
+    mqttJsonParseError.value = t('adapters.bindingForm.errors.invalidJson', { msg: e.message })
   }
 }
 
@@ -1663,6 +1932,28 @@ function buildConfig() {
     }
     return c
   }
+  if (type === 'ANWESENHEITSSIMULATION') {
+    const c = {}
+    if (cfg.offset_override != null) c.offset_override = cfg.offset_override
+    if (cfg.on_presence_override != null) {
+      c.on_presence_override = cfg.on_presence_override
+      if (cfg.on_presence_override === 'setzen' && cfg.on_presence_value?.trim())
+        c.on_presence_value = cfg.on_presence_value.trim()
+    }
+    return c
+  }
+  if (type === 'SNMP') {
+    const c = {
+      host: cfg.host || '192.168.1.1',
+      oid:  cfg.oid  || '1.3.6.1.2.1.1.1.0',
+    }
+    if (cfg.port && cfg.port !== 161)            c.port        = cfg.port
+    if (cfg.data_type && cfg.data_type !== 'auto') c.data_type = cfg.data_type
+    if (cfg.poll_interval)                         c.poll_interval = cfg.poll_interval
+    if (cfg.timeout && cfg.timeout !== 5.0)        c.timeout    = cfg.timeout
+    if (cfg.retries !== undefined && cfg.retries !== 1) c.retries = cfg.retries
+    return c
+  }
   return {}
 }
 
@@ -1671,6 +1962,7 @@ async function submit() {
   saving.value = true
   try {
     const config     = buildConfig()
+    const effectiveDirection = selectedAdapterType.value === 'ANWESENHEITSSIMULATION' ? 'SOURCE' : form.direction
     const throttleMs = form.throttle_value > 0
       ? Math.round(form.throttle_value * THROTTLE_FACTORS[form.throttle_unit]) : null
     let resolvedValueMap = null
@@ -1689,20 +1981,20 @@ async function submit() {
     }
     if (props.initial) {
       await dpApi.updateBinding(props.dpId, props.initial.id, {
-        direction: form.direction, config, enabled: form.enabled, ...filterPayload,
+        direction: effectiveDirection, config, enabled: form.enabled, ...filterPayload,
       })
     } else {
       if (!form.adapter_instance_id) {
-        error.value = 'Bitte eine Adapter-Instanz wählen'; saving.value = false; return
+        error.value = t('adapters.bindingForm.errors.selectAdapterInstance'); saving.value = false; return
       }
       await dpApi.createBinding(props.dpId, {
         adapter_instance_id: form.adapter_instance_id,
-        direction: form.direction, config, enabled: form.enabled, ...filterPayload,
+        direction: effectiveDirection, config, enabled: form.enabled, ...filterPayload,
       })
     }
     emit('save')
   } catch (e) {
-    error.value = e.response?.data?.detail ?? 'Fehler beim Speichern'
+    error.value = e.response?.data?.detail ?? t('common.saveError')
   } finally {
     saving.value = false
   }

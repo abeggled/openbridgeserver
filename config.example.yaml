@@ -29,9 +29,10 @@ database:
 #   history.timescale_dsn   = postgresql://user:pass@timescaledb:5432/obs
 #   (requires: pip install asyncpg)
 
-ringbuffer:
-  storage: memory           # memory | disk
-  max_entries: 10000
+# RingBuffer settings (max_entries, max_file_size_bytes, max_age) are stored
+# in the database (app_settings table) and configured at runtime via the
+# Admin UI (Monitor → Konfiguration). Default when nothing is persisted yet:
+# unbounded entries/age, 10 MiB file-size cap.
 
 security:
   jwt_secret: changeme      # In Produktion: aus Env-Var OBS_SECURITY__JWT_SECRET

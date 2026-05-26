@@ -6,13 +6,18 @@ without the optional dependency.
 """
 
 from __future__ import annotations
+import asyncio
+from datetime import UTC, datetime, timedelta
+
+from xknx.core.connection_state import XknxConnectionState
 from xknx.dpt import DPTArray, DPTBinary
 from xknx.telegram import Telegram
 from xknx.telegram.address import GroupAddress
 from xknx.telegram.apci import GroupValueRead, GroupValueResponse, GroupValueWrite
 
-from obs.adapters.knx.adapter import KnxAdapter, KnxBindingConfig, _telegram_to_bytes
+from obs.adapters.knx.adapter import KnxAdapter, KnxAdapterConfig, KnxBindingConfig, _telegram_to_bytes
 from obs.adapters.knx.dpt_registry import DPTRegistry
+from obs.core.event_bus import AdapterStatusEvent
 
 
 import pytest
@@ -24,6 +29,146 @@ from tests.adapters.conftest import make_binding
 # ---------------------------------------------------------------------------
 
 xknx = pytest.importorskip("xknx", reason="xknx not installed")
+
+# ---------------------------------------------------------------------------
+# KnxAdapterConfig validation
+# ---------------------------------------------------------------------------
+
+
+class TestKnxAdapterConfig:
+    def test_defaults(self):
+        cfg = KnxAdapterConfig()
+        assert cfg.connection_type == "tunneling"
+        assert cfg.host == "192.168.1.100"
+        assert cfg.port == 3671
+        assert cfg.individual_address == "1.1.255"
+        assert cfg.local_ip is None
+        assert cfg.multicast_group == "224.0.23.12"
+        assert cfg.multicast_port == 3671
+        assert cfg.user_id == 2
+        assert cfg.user_password is None
+        assert cfg.device_authentication_password is None
+        assert cfg.backbone_key is None
+        assert cfg.knxkeys_file_path is None
+        assert cfg.knxkeys_password is None
+
+    def test_tunneling_secure_fields(self):
+        cfg = KnxAdapterConfig(
+            connection_type="tunneling_secure",
+            host="192.168.1.50",
+            user_id=3,
+            user_password="secret",
+            device_authentication_password="devauth",
+        )
+        assert cfg.connection_type == "tunneling_secure"
+        assert cfg.user_id == 3
+        assert cfg.user_password == "secret"
+        assert cfg.device_authentication_password == "devauth"
+
+    def test_routing_secure_fields(self):
+        cfg = KnxAdapterConfig(
+            connection_type="routing_secure",
+            backbone_key="0102030405060708090a0b0c0d0e0f10",
+        )
+        assert cfg.connection_type == "routing_secure"
+        assert cfg.backbone_key == "0102030405060708090a0b0c0d0e0f10"
+
+    def test_user_id_bounds(self):
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError):
+            KnxAdapterConfig(user_id=0)
+        with pytest.raises(pydantic.ValidationError):
+            KnxAdapterConfig(user_id=128)
+
+    def test_keyfile_fields(self):
+        cfg = KnxAdapterConfig(
+            connection_type="tunneling_secure",
+            host="192.168.1.50",
+            knxkeys_file_path="/data/knxkeys/abc.knxkeys",
+            knxkeys_password="geheim",
+            individual_address="1.1.100",
+        )
+        assert cfg.knxkeys_file_path == "/data/knxkeys/abc.knxkeys"
+        assert cfg.knxkeys_password == "geheim"
+        assert cfg.individual_address == "1.1.100"
+
+    def test_password_fields_in_json_schema(self):
+        """Passwort-Felder müssen format=password im JSON-Schema haben."""
+        schema = KnxAdapterConfig.model_json_schema()
+        props = schema["properties"]
+        for field_name in (
+            "user_password",
+            "device_authentication_password",
+            "backbone_key",
+            "knxkeys_password",
+        ):
+            assert props[field_name].get("format") == "password", f"{field_name} muss format=password im Schema haben"
+
+    def test_individual_address_default(self):
+        cfg = KnxAdapterConfig()
+        assert cfg.individual_address == "1.1.255"
+
+    def test_individual_address_custom(self):
+        cfg = KnxAdapterConfig(individual_address="2.3.10")
+        assert cfg.individual_address == "2.3.10"
+
+    def test_local_ip_for_routing(self):
+        cfg = KnxAdapterConfig(connection_type="routing", local_ip="192.168.1.5")
+        assert cfg.local_ip == "192.168.1.5"
+
+    def test_routing_multicast_defaults(self):
+        cfg = KnxAdapterConfig(connection_type="routing")
+        assert cfg.multicast_group == "224.0.23.12"
+        assert cfg.multicast_port == 3671
+
+    def test_routing_custom_multicast(self):
+        cfg = KnxAdapterConfig(connection_type="routing_secure", multicast_group="239.0.0.1")
+        assert cfg.multicast_group == "239.0.0.1"
+
+    def test_tunneling_tcp(self):
+        cfg = KnxAdapterConfig(connection_type="tunneling_tcp", host="10.0.0.1", port=3671)
+        assert cfg.connection_type == "tunneling_tcp"
+        assert cfg.host == "10.0.0.1"
+
+
+# ---------------------------------------------------------------------------
+# _do_connect — SecureConfig Aufbau (ohne echte Netzwerkverbindung)
+# ---------------------------------------------------------------------------
+
+
+class TestDoConnectSecure:
+    @pytest.mark.asyncio
+    async def test_routing_secure_missing_backbone_key_publishes_error(self, mock_bus):
+        """routing_secure ohne backbone_key → Status-Fehler, kein Absturz."""
+        adapter = KnxAdapter(
+            event_bus=mock_bus,
+            config={"connection_type": "routing_secure", "host": "239.0.0.1"},
+        )
+        await adapter._do_connect()
+
+        assert mock_bus.publish.called
+        event = mock_bus.publish.call_args[0][0]
+        assert event.connected is False
+        assert "backbone_key" in event.detail.lower() or "backbone" in event.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_routing_secure_invalid_backbone_key_publishes_error(self, mock_bus):
+        """routing_secure mit ungültigem Hex → Status-Fehler, kein Absturz."""
+        adapter = KnxAdapter(
+            event_bus=mock_bus,
+            config={
+                "connection_type": "routing_secure",
+                "host": "239.0.0.1",
+                "backbone_key": "KEIN-HEX",
+            },
+        )
+        await adapter._do_connect()
+
+        assert mock_bus.publish.called
+        event = mock_bus.publish.call_args[0][0]
+        assert event.connected is False
+
 
 # ---------------------------------------------------------------------------
 # Config validation
@@ -233,3 +378,198 @@ class TestDPTRegistry:
         dpt = DPTRegistry.get("DPT9.001")
         val = 21.5
         assert abs(dpt.decoder(dpt.encoder(val)) - val) < 0.1
+
+
+# ---------------------------------------------------------------------------
+# Tunnel-Pool overload detection — issue #466
+# ---------------------------------------------------------------------------
+
+
+def _warning_events(mock_bus) -> list[AdapterStatusEvent]:
+    return [c.args[0] for c in mock_bus.publish.call_args_list if isinstance(c.args[0], AdapterStatusEvent) and c.args[0].severity == "warning"]
+
+
+def _ok_status_events(mock_bus) -> list[AdapterStatusEvent]:
+    return [c.args[0] for c in mock_bus.publish.call_args_list if isinstance(c.args[0], AdapterStatusEvent) and c.args[0].severity == "ok"]
+
+
+class TestTunnelOverloadDetection:
+    """Issue #466: detect repeated KNX/IP tunnel disconnects (pool overload)
+    and surface them as a visible AdapterStatusEvent with severity=warning."""
+
+    def _make_adapter(self, mock_bus, *, threshold: int = 3, window_s: int = 300) -> KnxAdapter:
+        return KnxAdapter(
+            event_bus=mock_bus,
+            config={
+                "host": "127.0.0.1",
+                "tunnel_overload_threshold": threshold,
+                "tunnel_overload_window_s": window_s,
+            },
+        )
+
+    def _pin_now(self, monkeypatch, adapter: KnxAdapter, when: datetime) -> None:
+        monkeypatch.setattr(adapter, "_now", lambda: when)
+
+    # ------------------------------------------------------------------
+    # Config schema
+    # ------------------------------------------------------------------
+
+    def test_config_defaults_match_issue_spec(self):
+        cfg = KnxAdapterConfig()
+        assert cfg.tunnel_overload_threshold == 3
+        assert cfg.tunnel_overload_window_s == 300
+
+    def test_config_accepts_custom_values(self):
+        cfg = KnxAdapterConfig(tunnel_overload_threshold=5, tunnel_overload_window_s=600)
+        assert cfg.tunnel_overload_threshold == 5
+        assert cfg.tunnel_overload_window_s == 600
+
+    # ------------------------------------------------------------------
+    # Sliding window
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_disconnect_older_than_window_is_pruned(self, mock_bus, monkeypatch):
+        adapter = self._make_adapter(mock_bus, threshold=3, window_s=300)
+        t0 = datetime(2026, 5, 15, 12, 0, 0, tzinfo=UTC)
+
+        self._pin_now(monkeypatch, adapter, t0)
+        await adapter._record_disconnect()
+        self._pin_now(monkeypatch, adapter, t0 + timedelta(seconds=301))
+        await adapter._record_disconnect()
+
+        # The first event aged out — only the most recent one remains.
+        assert len(adapter._disconnect_times) == 1
+        assert adapter._disconnect_times[0] == t0 + timedelta(seconds=301)
+
+    # ------------------------------------------------------------------
+    # Warning publication
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_below_threshold_publishes_no_warning(self, mock_bus, monkeypatch):
+        adapter = self._make_adapter(mock_bus, threshold=3, window_s=300)
+        t0 = datetime(2026, 5, 15, 12, 0, 0, tzinfo=UTC)
+
+        for offset in (0, 30):
+            self._pin_now(monkeypatch, adapter, t0 + timedelta(seconds=offset))
+            await adapter._record_disconnect()
+
+        assert _warning_events(mock_bus) == []
+
+    @pytest.mark.asyncio
+    async def test_threshold_reached_publishes_warning_status(self, mock_bus, monkeypatch):
+        adapter = self._make_adapter(mock_bus, threshold=3, window_s=300)
+        t0 = datetime(2026, 5, 15, 12, 0, 0, tzinfo=UTC)
+
+        for offset in (0, 30, 60):
+            self._pin_now(monkeypatch, adapter, t0 + timedelta(seconds=offset))
+            await adapter._record_disconnect()
+
+        warnings = _warning_events(mock_bus)
+        assert len(warnings) == 1
+        evt = warnings[0]
+        assert evt.adapter_type == "KNX"
+        assert evt.severity == "warning"
+        # Issue #466 wording — the GUI/admin uses detail verbatim.
+        assert "Tunnel" in evt.detail
+        assert "anderem Client" in evt.detail or "anderer Client" in evt.detail
+
+    @pytest.mark.asyncio
+    async def test_further_disconnects_do_not_republish_warning(self, mock_bus, monkeypatch):
+        adapter = self._make_adapter(mock_bus, threshold=3, window_s=300)
+        t0 = datetime(2026, 5, 15, 12, 0, 0, tzinfo=UTC)
+
+        for offset in (0, 30, 60, 90, 120):
+            self._pin_now(monkeypatch, adapter, t0 + timedelta(seconds=offset))
+            await adapter._record_disconnect()
+
+        # Exactly one warning event — no spam while overload persists.
+        assert len(_warning_events(mock_bus)) == 1
+
+    # ------------------------------------------------------------------
+    # Recovery
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_connected_after_quiet_period_clears_warning(self, mock_bus, monkeypatch):
+        adapter = self._make_adapter(mock_bus, threshold=3, window_s=300)
+        t0 = datetime(2026, 5, 15, 12, 0, 0, tzinfo=UTC)
+
+        for offset in (0, 30, 60):
+            self._pin_now(monkeypatch, adapter, t0 + timedelta(seconds=offset))
+            await adapter._record_disconnect()
+        assert len(_warning_events(mock_bus)) == 1
+
+        # Window passes without further disconnects, then xknx reports CONNECTED.
+        self._pin_now(monkeypatch, adapter, t0 + timedelta(seconds=400))
+        await adapter._record_reconnect()
+
+        # A status event with severity="ok" must be published exactly once on recovery.
+        ok_events = _ok_status_events(mock_bus)
+        assert len(ok_events) >= 1
+        assert ok_events[-1].severity == "ok"
+        assert adapter._warning_active is False
+
+    @pytest.mark.asyncio
+    async def test_reconnect_during_active_window_does_not_clear_warning(self, mock_bus, monkeypatch):
+        adapter = self._make_adapter(mock_bus, threshold=3, window_s=300)
+        t0 = datetime(2026, 5, 15, 12, 0, 0, tzinfo=UTC)
+
+        for offset in (0, 30, 60):
+            self._pin_now(monkeypatch, adapter, t0 + timedelta(seconds=offset))
+            await adapter._record_disconnect()
+        ok_before = len(_ok_status_events(mock_bus))
+
+        # Ping-pong reconnect still inside the window — must NOT publish an ok event.
+        self._pin_now(monkeypatch, adapter, t0 + timedelta(seconds=90))
+        await adapter._record_reconnect()
+
+        assert adapter._warning_active is True
+        assert len(_ok_status_events(mock_bus)) == ok_before
+
+    # ------------------------------------------------------------------
+    # xknx callback wiring
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_xknx_disconnected_callback_records_event(self, mock_bus, monkeypatch):
+        adapter = self._make_adapter(mock_bus, threshold=3, window_s=300)
+        t0 = datetime(2026, 5, 15, 12, 0, 0, tzinfo=UTC)
+        self._pin_now(monkeypatch, adapter, t0)
+
+        # The xknx ConnectionManager calls the sync callback in the main event loop.
+        adapter._on_xknx_connection_state(XknxConnectionState.DISCONNECTED)
+        # Allow the scheduled async record task to run.
+        await asyncio.sleep(0)
+
+        assert len(adapter._disconnect_times) == 1
+
+    @pytest.mark.asyncio
+    async def test_xknx_connected_callback_runs_reconnect_handler(self, mock_bus, monkeypatch):
+        adapter = self._make_adapter(mock_bus, threshold=3, window_s=300)
+        t0 = datetime(2026, 5, 15, 12, 0, 0, tzinfo=UTC)
+
+        # First trip the warning, then advance time past the window.
+        for offset in (0, 30, 60):
+            self._pin_now(monkeypatch, adapter, t0 + timedelta(seconds=offset))
+            await adapter._record_disconnect()
+
+        self._pin_now(monkeypatch, adapter, t0 + timedelta(seconds=400))
+        adapter._on_xknx_connection_state(XknxConnectionState.CONNECTED)
+        await asyncio.sleep(0)
+
+        assert adapter._warning_active is False
+        assert any(e.severity == "ok" for e in _ok_status_events(mock_bus))
+
+    @pytest.mark.asyncio
+    async def test_xknx_connecting_callback_is_ignored(self, mock_bus, monkeypatch):
+        adapter = self._make_adapter(mock_bus, threshold=3, window_s=300)
+        t0 = datetime(2026, 5, 15, 12, 0, 0, tzinfo=UTC)
+        self._pin_now(monkeypatch, adapter, t0)
+
+        adapter._on_xknx_connection_state(XknxConnectionState.CONNECTING)
+        await asyncio.sleep(0)
+
+        assert len(adapter._disconnect_times) == 0
+        assert _warning_events(mock_bus) == []

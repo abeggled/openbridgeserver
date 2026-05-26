@@ -15,7 +15,7 @@ WidgetRegistry.register({
   configComponent: Config,
   defaultConfig: {
     label:             '',
-    color:             '#ef4444',
+    gradient_colors:   ['#ef4444'],
     min_temp:          5,
     max_temp:          35,
     step:              0.5,
@@ -25,7 +25,8 @@ WidgetRegistry.register({
     actual_temp_dp_id: null,
     mode_dp_id:        null,
     show_modes:        true,
-    supported_modes:   [0, 1, 3, 6],
+    supported_modes:   [0, 1, 2, 3, 4],
+    variant:           'heating',
   },
   compatibleTypes:         ['FLOAT', 'INTEGER'],
   supportsStatusDatapoint: true,

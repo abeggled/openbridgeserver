@@ -32,7 +32,7 @@
               v-if="isGateNode && def.inputs[r]"
               class="gn-port-negate nodrag"
               :class="{ 'gn-port-negate--active': !!data[`negate_${def.inputs[r].id}`] }"
-              :title="`${def.inputs[r].id} negieren`"
+              :title="$t('logic.negatePort', { id: def.inputs[r].id })"
               @click.stop="toggleNegate(def.inputs[r].id)"
             >{{ data[`negate_${def.inputs[r].id}`] ? `¬${def.inputs[r].label}` : def.inputs[r].label }}</button>
             <span v-else class="gn-port-left">{{ def.inputs[r]?.label }}</span>
@@ -42,7 +42,7 @@
               v-if="isGateNode && def.outputs[r]"
               class="gn-port-negate gn-port-negate--right nodrag"
               :class="{ 'gn-port-negate--active': !!data.negate_out }"
-              title="Ausgang negieren"
+              :title="$t('logic.negateOutput')"
               @click.stop="toggleNegate('out')"
             >{{ data.negate_out ? `¬${def.outputs[r].label}` : def.outputs[r].label }}</button>
             <span v-else class="gn-port-right">{{ def.outputs[r]?.label }}</span>
@@ -68,8 +68,10 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
+import { useI18n } from 'vue-i18n'
 
 const { updateNodeData } = useVueFlow()
+const { t, te } = useI18n()
 
 const props = defineProps({
   id:   { type: String, required: true },
@@ -130,6 +132,7 @@ const NODE_DEFS = {
   json_extractor:     { label: 'JSON Extraktor',     color: '#0369a1', inputs: [{id:'data',label:'Daten'}], outputs: [{id:'value',label:'Wert'}] },
   xml_extractor:      { label: 'XML Extraktor',      color: '#0369a1', inputs: [{id:'data',label:'Daten'}], outputs: [{id:'value',label:'Wert'}] },
   substring_extractor:{ label: 'Substring / RegEx',  color: '#0369a1', inputs: [{id:'data',label:'Daten'}], outputs: [{id:'value',label:'Wert'}] },
+  ical:               { label: 'iCalendar',          color: '#0369a1', inputs: [], outputs: [{id:'raw', label:'RAW'}] },
 }
 
 // ── Gate helpers ───────────────────────────────────────────────────────────
@@ -140,13 +143,14 @@ const isGateNode = computed(() =>
 // ── Computed def — expands gate + string_concat inputs dynamically
 const def = computed(() => {
   const base = NODE_DEFS[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] }
+  const label = te(`logic.nodeTypes.${props.type}`) ? t(`logic.nodeTypes.${props.type}`) : base.label
   if (isGateNode.value) {
     const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     const inputs = Array.from({ length: count }, (_, i) => ({
       id:    `in${i + 1}`,
       label: `IN ${i + 1}`,
     }))
-    return { ...base, inputs, outputs: [{ id: 'out', label: 'Out' }] }
+    return { ...base, label, inputs, outputs: [{ id: 'out', label: 'Out' }] }
   }
   if (props.type === 'string_concat') {
     const count = Math.max(2, Math.min(20, Number(props.data?.count) || 2))
@@ -154,7 +158,7 @@ const def = computed(() => {
       id:    `in_${i + 1}`,
       label: String(i + 1),
     }))
-    return { ...base, inputs, outputs: [{ id: 'result', label: 'Ergebnis' }] }
+    return { ...base, label, inputs, outputs: [{ id: 'result', label: t('logic.ports.result') }] }
   }
   if (props.type === 'avg_multi') {
     const count = Math.max(2, Math.min(20, Number(props.data?.input_count) || 2))
@@ -162,9 +166,49 @@ const def = computed(() => {
       id:    `in_${i + 1}`,
       label: `IN ${i + 1}`,
     }))
-    return { ...base, inputs }
+    return { ...base, label, inputs }
   }
-  return base
+  if (props.type === 'ical') {
+    const filterCount = Math.max(0, Math.min(20, Number(props.data?.filter_count) || 0))
+    let filters = []
+    try { filters = JSON.parse(props.data?.filters || '[]') } catch (_) { filters = [] }
+    const outputs = [{ id: 'raw', label: 'RAW' }]
+    for (let i = 0; i < filterCount; i++) {
+      const fname = (Array.isArray(filters) && filters[i]?.name) ? filters[i].name : `F${i + 1}`
+      outputs.push(
+        { id: `f${i}_array`,     label: `${fname}: Array`  },
+        { id: `f${i}_next_date`, label: `${fname}: Datum`  },
+        { id: `f${i}_tomorrow`,  label: `${fname}: Morgen` },
+        { id: `f${i}_today`,     label: `${fname}: Heute`  },
+      )
+    }
+    return { ...base, label, outputs }
+  }
+  if (props.type === 'json_extractor') {
+    let pathList = []
+    try { pathList = JSON.parse(props.data?.json_paths || '[]') } catch (_) { pathList = [] }
+    if (Array.isArray(pathList) && pathList.length > 0) {
+      const outputs = pathList.map((entry, i) => ({
+        id:    `out_${i + 1}`,
+        label: (entry?.label || `Wert ${i + 1}`),
+      }))
+      return { ...base, outputs }
+    }
+    return base
+  }
+  if (props.type === 'xml_extractor') {
+    let pathList = []
+    try { pathList = JSON.parse(props.data?.xml_paths || '[]') } catch (_) { pathList = [] }
+    if (Array.isArray(pathList) && pathList.length > 0) {
+      const outputs = pathList.map((entry, i) => ({
+        id:    `out_${i + 1}`,
+        label: (entry?.label || `Wert ${i + 1}`),
+      }))
+      return { ...base, outputs }
+    }
+    return base
+  }
+  return { ...base, label }
 })
 
 // ── Inline negation toggle (AND / OR / XOR) ────────────────────────────────
@@ -194,19 +238,34 @@ const summary = computed(() => {
   if (props.type === 'notify_sms')          return d.to || '—'
   if (props.type === 'avg_multi') {
     const count = Math.max(2, Math.min(20, Number(d.input_count) || 2))
-    return `${count} Eingänge`
+    return t('logic.summary.inputs', { n: count })
   }
   if (props.type === 'string_concat') {
     const count = Math.max(2, Math.min(20, Number(d.count) || 2))
     const sep = d.separator != null && d.separator !== '' ? `"${String(d.separator).slice(0, 6)}"` : null
-    return sep ? `${count} Teile · ${sep}` : `${count} Teile`
+    return sep ? `${t('logic.summary.parts', { n: count })} · ${sep}` : t('logic.summary.parts', { n: count })
+  }
+  if (props.type === 'ical') {
+    const count = Number(d.filter_count) || 0
+    const url = (d.url || '—').replace(/^https?:\/\//, '').slice(0, 22)
+    return `${url} · ${t('logic.summary.filters', { n: count })}`
   }
   if (props.type === 'api_client')          return `${d.method ?? 'GET'}  ${(d.url || '—').slice(0, 20)}`
-  if (props.type === 'json_extractor')      return d.json_path || '—'
-  if (props.type === 'xml_extractor')       return d.xml_path  || '—'
+  if (props.type === 'json_extractor') {
+    let pathList = []
+    try { pathList = JSON.parse(d.json_paths || '[]') } catch (_) { pathList = [] }
+    if (Array.isArray(pathList) && pathList.length > 0) return `${pathList.length} Ausgänge`
+    return d.json_path || '—'
+  }
+  if (props.type === 'xml_extractor') {
+    let pathList = []
+    try { pathList = JSON.parse(d.xml_paths || '[]') } catch (_) { pathList = [] }
+    if (Array.isArray(pathList) && pathList.length > 0) return `${pathList.length} Ausgänge`
+    return d.xml_path || '—'
+  }
   if (props.type === 'substring_extractor') {
-    const modeLabel = { links_von:'links von', rechts_von:'rechts von', zwischen:'zwischen', ausschneiden:'ausschneiden', regex:'regex' }
-    const m = modeLabel[d.mode] ?? d.mode ?? '—'
+    const MODES = ['links_von', 'rechts_von', 'zwischen', 'ausschneiden', 'regex']
+    const m = MODES.includes(d.mode) ? t(`logic.summary.modes.${d.mode}`) : (d.mode ?? '—')
     const hint = d.mode === 'regex' ? (d.pattern || '—') : d.mode === 'zwischen' ? `"${d.start_marker ?? ''}…${d.end_marker ?? ''}"` : d.mode === 'ausschneiden' ? `[${d.start ?? 0}:${d.length ?? -1}]` : (d.search || '—')
     return `${m}  ${hint}`
   }
@@ -214,12 +273,12 @@ const summary = computed(() => {
   if (props.type === 'min_max_tracker')     return null
   if (props.type === 'consumption_counter') return null
   if (props.type === 'gate') {
-    const behavior = d.closed_behavior === 'default_value' ? `→ ${d.default_value ?? 0}` : '→ halten'
-    return d.negate_enable ? `¬Freigabe  ${behavior}` : behavior
+    const behavior = d.closed_behavior === 'default_value' ? `→ ${d.default_value ?? 0}` : t('logic.summary.hold')
+    return d.negate_enable ? `${t('logic.summary.negateEnable')}  ${behavior}` : behavior
   }
   if (props.type === 'and' || props.type === 'or' || props.type === 'xor') {
     const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
-    return count > 2 ? `${count} Eingänge` : null
+    return count > 2 ? t('logic.summary.inputs', { n: count }) : null
   }
   return null
 })

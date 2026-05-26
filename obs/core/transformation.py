@@ -16,9 +16,29 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_nested(obj: Any, path: str) -> Any:
+    """Extract a value from a nested dict/list using dot-notation path.
+
+    Supports "key", "parent.child", "items.0.name", "a[0].b".
+    Raises KeyError / IndexError / TypeError on missing or invalid paths.
+    """
+    path = re.sub(r"\[(\d+)\]", r".\1", path)
+    parts = [p for p in path.split(".") if p]
+    current = obj
+    for part in parts:
+        if isinstance(current, dict):
+            current = current[part]
+        elif isinstance(current, (list, tuple)):
+            current = current[int(part)]
+        else:
+            raise TypeError(f"Cannot traverse {type(current).__name__} with key '{part}'")
+    return current
 
 
 def apply_source_type(
@@ -49,9 +69,16 @@ def apply_source_type(
     pub_value = auto_value
 
     if source_data_type == "json":
-        obj = auto_value if isinstance(auto_value, dict) else json.loads(raw)
+        obj = auto_value if isinstance(auto_value, (dict, list)) else json.loads(raw)
         if json_key:
-            pub_value = obj.get(json_key, pub_value) if isinstance(obj, dict) else pub_value
+            try:
+                pub_value = _extract_nested(obj, json_key)
+            except (KeyError, IndexError, TypeError, ValueError):
+                logger.warning(
+                    "Transformation JSON: path %r not found in payload for binding %s",
+                    json_key,
+                    binding_id,
+                )
         else:
             pub_value = obj
 

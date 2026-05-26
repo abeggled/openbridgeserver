@@ -1,32 +1,32 @@
 <template>
   <form @submit.prevent="submit" class="flex flex-col gap-4">
     <div class="form-group">
-      <label class="label">Name *</label>
-      <input v-model="form.name" type="text" class="input" placeholder="z.B. Wohnzimmer Temperatur" required autofocus data-testid="input-name" />
+      <label class="label">{{ $t('datapoints.form.name') }}</label>
+      <input v-model="form.name" type="text" class="input" :placeholder="$t('datapoints.form.namePlaceholder')" required autofocus data-testid="input-name" />
     </div>
 
     <div class="grid grid-cols-2 gap-4">
       <div class="form-group">
-        <label class="label">Datentyp *</label>
+        <label class="label">{{ $t('datapoints.form.datatype') }}</label>
         <select v-model="form.data_type" class="input" required data-testid="select-datatype">
           <option v-for="dt in datatypes" :key="dt.name" :value="dt.name">{{ dt.name }}</option>
         </select>
       </div>
       <div class="form-group">
-        <label class="label">Einheit</label>
+        <label class="label">{{ $t('datapoints.form.unit') }}</label>
         <select v-model="unitSelect" class="input" data-testid="select-unit">
-          <option value="">— keine —</option>
+          <option value="">{{ $t('datapoints.form.noUnit') }}</option>
           <optgroup v-for="cat in UNIT_CATEGORIES" :key="cat.label" :label="cat.label">
             <option v-for="u in cat.units" :key="u" :value="u">{{ u }}</option>
           </optgroup>
-          <option value="__other__">Andere (Freitext) …</option>
+          <option value="__other__">{{ $t('datapoints.form.otherUnit') }}</option>
         </select>
         <input
           v-if="unitSelect === '__other__'"
           v-model="unitCustom"
           type="text"
           class="input mt-1"
-          placeholder="Einheit eingeben …"
+          :placeholder="$t('datapoints.form.unitPlaceholder')"
           autofocus
           data-testid="input-unit-custom"
         />
@@ -34,23 +34,23 @@
     </div>
 
     <div class="form-group">
-      <label class="label">Tags <span class="text-slate-500 font-normal">(kommagetrennt)</span></label>
-      <input v-model="tagsInput" type="text" class="input" placeholder="heizung, eg, wohnzimmer" />
+      <label class="label">{{ $t('datapoints.form.tags') }} <span class="text-slate-500 font-normal">({{ $t('datapoints.form.tagsHint') }})</span></label>
+      <input v-model="tagsInput" type="text" class="input" :placeholder="$t('datapoints.form.tagsPlaceholder')" />
     </div>
 
     <div class="form-group">
-      <label class="label">MQTT Alias <span class="text-slate-500 font-normal">(optional)</span></label>
+      <label class="label">{{ $t('datapoints.form.mqttAlias') }} <span class="text-slate-500 font-normal">({{ $t('datapoints.form.optional') }})</span></label>
       <input v-model="form.mqtt_alias" type="text" class="input" placeholder="alias/eg/wohnzimmer/temperatur/value" />
     </div>
 
     <label class="flex items-center gap-2 cursor-pointer select-none">
       <input v-model="form.persist_value" type="checkbox" class="w-4 h-4 rounded accent-blue-500" />
-      <span class="text-sm text-slate-700 dark:text-slate-200">Letzten Wert speichern <span class="text-slate-500 font-normal">(nach Neustart sofort verfügbar)</span></span>
+      <span class="text-sm text-slate-700 dark:text-slate-200">{{ $t('datapoints.form.persistValue') }} <span class="text-slate-500 font-normal">({{ $t('datapoints.form.persistValueHint') }})</span></span>
     </label>
 
     <label class="flex items-center gap-2 cursor-pointer select-none" data-testid="label-record-history">
       <input v-model="form.record_history" type="checkbox" class="w-4 h-4 rounded accent-blue-500" data-testid="checkbox-record-history" />
-      <span class="text-sm text-slate-700 dark:text-slate-200">Historisierung aktiv <span class="text-slate-500 font-normal">(Werte in der Historie-DB speichern)</span></span>
+      <span class="text-sm text-slate-700 dark:text-slate-200">{{ $t('datapoints.form.recordHistory') }} <span class="text-slate-500 font-normal">({{ $t('datapoints.form.recordHistoryHint') }})</span></span>
     </label>
 
     <div v-if="error" class="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400">
@@ -58,10 +58,10 @@
     </div>
 
     <div class="flex justify-end gap-3 pt-2">
-      <button type="button" @click="$emit('cancel')" class="btn-secondary" data-testid="btn-cancel">Abbrechen</button>
+      <button type="button" @click="$emit('cancel')" class="btn-secondary" data-testid="btn-cancel">{{ $t('common.cancel') }}</button>
       <button type="submit" class="btn-primary" :disabled="saving" data-testid="btn-save">
         <Spinner v-if="saving" size="sm" color="white" />
-        {{ saving ? 'Speichern …' : 'Speichern' }}
+        {{ saving ? $t('common.saving') : $t('common.save') }}
       </button>
     </div>
   </form>
@@ -69,6 +69,7 @@
 
 <script setup>
 import { reactive, ref, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import Spinner from '@/components/ui/Spinner.vue'
 
 // ---------------------------------------------------------------------------
@@ -142,6 +143,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['cancel'])
 
+const { t } = useI18n()
 const saving    = ref(false)
 const error     = ref(null)
 const tagsInput = ref('')
@@ -211,7 +213,7 @@ async function submit() {
       record_history: form.record_history,
     })
   } catch (e) {
-    error.value = e.response?.data?.detail ?? e.message ?? 'Fehler beim Speichern'
+    error.value = e.response?.data?.detail ?? e.message ?? t('datapoints.form.saveError')
   } finally {
     saving.value = false
   }

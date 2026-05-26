@@ -51,6 +51,8 @@ class AdapterInstanceOut(BaseModel):
     registered: bool  # Typ-Klasse geladen?
     running: bool
     connected: bool
+    severity: str = "ok"  # "ok" | "warning" | "error" — last AdapterStatusEvent
+    status_detail: str = ""
     bindings: int
     created_at: str
     updated_at: str
@@ -62,6 +64,18 @@ class InstanceBindingEntry(BaseModel):
     datapoint_name: str
     enabled: bool
     config: dict
+
+
+class BindingMigrationRequest(BaseModel):
+    target_instance_id: uuid.UUID
+
+
+class BindingMigrationResult(BaseModel):
+    source_instance_id: uuid.UUID
+    target_instance_id: uuid.UUID
+    total_source_bindings: int
+    migrated: int
+    skipped: int
 
 
 class AdapterInstanceCreate(BaseModel):
@@ -162,6 +176,8 @@ def _instance_out(row: Any, instance: Any | None) -> AdapterInstanceOut:
         registered=cls is not None,
         running=instance is not None,
         connected=instance.connected if instance else False,
+        severity=getattr(instance, "last_severity", "ok") if instance else "ok",
+        status_detail=getattr(instance, "last_detail", "") if instance else "",
         bindings=len(instance.get_bindings()) if instance else 0,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -356,6 +372,11 @@ async def test_instance(
     test_instance = cls(event_bus=dummy_bus, config=config_dict)
     try:
         await test_instance.connect()
+        # Some adapters (e.g. MQTT) establish the connection in a background task
+        # started by connect(). Poll briefly so that task gets a chance to run.
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while not test_instance.connected and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.1)
         connected = test_instance.connected
         await test_instance.disconnect()
         if connected:
@@ -382,6 +403,73 @@ async def restart_instance_route(
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     instance = adapter_registry.get_instance_by_id(str(instance_id))
     return _instance_out(row, instance)
+
+
+@router.post("/instances/{source_instance_id}/bindings/migrate", response_model=BindingMigrationResult)
+async def migrate_instance_bindings(
+    source_instance_id: uuid.UUID,
+    body: BindingMigrationRequest,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> BindingMigrationResult:
+    source_id = str(source_instance_id)
+    target_id = str(body.target_instance_id)
+    if source_id == target_id:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Quell- und Ziel-Instanz dürfen nicht identisch sein")
+
+    source_row = await db.fetchone("SELECT id, adapter_type FROM adapter_instances WHERE id=?", (source_id,))
+    if source_row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Quell-Instanz nicht gefunden")
+
+    target_row = await db.fetchone("SELECT id, adapter_type FROM adapter_instances WHERE id=?", (target_id,))
+    if target_row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Ziel-Instanz nicht gefunden")
+
+    if source_row["adapter_type"] != target_row["adapter_type"]:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Migration ist nur zwischen Instanzen desselben Adapter-Typs erlaubt",
+        )
+
+    source_bindings = await db.fetchall(
+        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=? ORDER BY created_at",
+        (source_id,),
+    )
+    target_bindings = await db.fetchall(
+        "SELECT datapoint_id FROM adapter_bindings WHERE adapter_instance_id=?",
+        (target_id,),
+    )
+    target_datapoint_ids = {row["datapoint_id"] for row in target_bindings}
+
+    migrated = 0
+    skipped = 0
+    total_source_bindings = len(source_bindings)
+    now = datetime.now(UTC).isoformat()
+
+    for binding_row in source_bindings:
+        if binding_row["datapoint_id"] in target_datapoint_ids:
+            skipped += 1
+            continue
+        await db.execute(
+            "UPDATE adapter_bindings SET adapter_instance_id=?, updated_at=? WHERE id=?",
+            (target_id, now, binding_row["id"]),
+        )
+        target_datapoint_ids.add(binding_row["datapoint_id"])
+        migrated += 1
+
+    if migrated > 0:
+        await db.commit()
+
+    await adapter_registry.reload_instance_bindings(source_id, db)
+    await adapter_registry.reload_instance_bindings(target_id, db)
+
+    return BindingMigrationResult(
+        source_instance_id=source_instance_id,
+        target_instance_id=body.target_instance_id,
+        total_source_bindings=total_source_bindings,
+        migrated=migrated,
+        skipped=skipped,
+    )
 
 
 @router.get("/instances/{instance_id}/bindings", response_model=list[InstanceBindingEntry])
@@ -451,6 +539,19 @@ async def list_instance_holidays(
     return [HolidayEntry(date=h["date"], name=h["name"]) for h in holidays]
 
 
+def _build_tls_context(cfg: Any) -> Any:
+    """Return an ssl.SSLContext if cfg.tls is True, else None."""
+    if not getattr(cfg, "tls", False):
+        return None
+    import ssl
+
+    ctx = ssl.create_default_context()
+    if getattr(cfg, "tls_insecure", False):
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
 @router.get("/instances/{instance_id}/mqtt/browse", response_model=list[str])
 async def mqtt_browse_topics(
     instance_id: uuid.UUID,
@@ -481,6 +582,8 @@ async def mqtt_browse_topics(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "aiomqtt nicht installiert")
 
     scan_secs = min(max(timeout, 1), 10)
+    tls_context = _build_tls_context(cfg)
+    browse_id = f"obs-mqtt-{instance_id.hex[:8]}-browse"
     topics: set[str] = set()
     try:
         async with aiomqtt.Client(
@@ -488,6 +591,8 @@ async def mqtt_browse_topics(
             port=cfg.port,
             username=cfg.username,
             password=cfg.password,
+            identifier=browse_id,
+            tls_context=tls_context,
         ) as client:
             await client.subscribe("#")
             try:
@@ -536,12 +641,16 @@ async def mqtt_sample_payload(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "aiomqtt nicht installiert")
 
     scan_secs = min(max(timeout, 1), 10)
+    tls_context = _build_tls_context(cfg)
+    sample_id = f"obs-mqtt-{instance_id.hex[:8]}-sample"
     try:
         async with aiomqtt.Client(
             hostname=cfg.host,
             port=cfg.port,
             username=cfg.username,
             password=cfg.password,
+            identifier=sample_id,
+            tls_context=tls_context,
         ) as client:
             await client.subscribe(topic)
             try:
@@ -764,6 +873,307 @@ async def iobroker_import_states(
 
 
 # ---------------------------------------------------------------------------
+# Anwesenheitssimulation: Datenpunkt-Selektor + Binding-Sync
+# ---------------------------------------------------------------------------
+
+
+class AnwesenheitHealthResult(BaseModel):
+    healthy: bool
+    message: str
+    bindings_total: int = 0
+    bindings_with_data: int = 0
+
+
+@router.get("/instances/{instance_id}/anwesenheit/health", response_model=AnwesenheitHealthResult)
+async def anwesenheit_health(
+    instance_id: uuid.UUID,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> AnwesenheitHealthResult:
+    """Check whether history data is available for the configured offset window."""
+    from datetime import timedelta, timezone
+    from datetime import datetime as _dt
+
+    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "ANWESENHEITSSIMULATION":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEITSSIMULATION-Instanzen verfügbar")
+
+    raw_config = row["config"] or "{}"
+    config_dict = json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+
+    from obs.adapters.anwesenheit.adapter import AnwesenheitssimulationConfig
+
+    try:
+        cfg = AnwesenheitssimulationConfig(**config_dict)
+    except Exception as exc:
+        return AnwesenheitHealthResult(healthy=False, message=f"Config-Fehler: {exc}")
+
+    try:
+        from obs.history.factory import get_history_plugin
+
+        history = get_history_plugin()
+    except RuntimeError:
+        return AnwesenheitHealthResult(
+            healthy=False, message="History-Plugin nicht verfügbar — bitte History-Backend in den Einstellungen konfigurieren"
+        )
+
+    binding_rows = await db.fetchall(
+        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=? AND direction='SOURCE' AND enabled=1",
+        (str(instance_id),),
+    )
+    total = len(binding_rows)
+    if total == 0:
+        return AnwesenheitHealthResult(
+            healthy=False,
+            message="Keine aktiven Verknüpfungen konfiguriert — bitte zuerst Objekte über 'Objekte verwalten' hinzufügen",
+            bindings_total=0,
+            bindings_with_data=0,
+        )
+
+    now = _dt.now(tz=timezone.utc)
+    delta = timedelta(days=cfg.offset_days)
+    hist_from = now - delta - timedelta(hours=12)
+    hist_to = now - delta + timedelta(hours=12)
+
+    with_data = 0
+    for b_row in binding_rows:
+        try:
+            dp_id = uuid.UUID(b_row["datapoint_id"])
+            records = await history.query(dp_id, hist_from, hist_to, limit=1)
+            if records:
+                with_data += 1
+        except Exception:
+            pass
+
+    healthy = with_data > 0
+    if healthy:
+        msg = (
+            f"{with_data} von {total} Objekt(en) haben historische Daten für den Versatz von {cfg.offset_days} Tag(en). "
+            f"Die Simulation wird heute Ereignisse aus dem {cfg.offset_days}-Tage-Fenster wiedergeben."
+        )
+    else:
+        msg = (
+            f"Keine historischen Daten für den Versatz von {cfg.offset_days} Tag(en) gefunden. "
+            f"Stellen Sie sicher, dass für die verknüpften Objekte die Historisierung aktiviert ist "
+            f"und Aufzeichnungen aus dem Zeitraum vor {cfg.offset_days + 1} Tagen vorhanden sind."
+        )
+
+    return AnwesenheitHealthResult(
+        healthy=healthy,
+        message=msg,
+        bindings_total=total,
+        bindings_with_data=with_data,
+    )
+
+
+class AnwesenheitDatapointEntry(BaseModel):
+    id: str
+    name: str
+    data_type: str
+    has_binding: bool
+    binding_id: str | None
+
+
+class AnwesenheitSyncRequest(BaseModel):
+    datapoint_ids: list[str]
+
+
+class AnwesenheitSyncResult(BaseModel):
+    created: int = 0
+    removed: int = 0
+    errors: list[str] = []
+
+
+@router.get(
+    "/instances/{instance_id}/anwesenheit/datapoints",
+    response_model=list[AnwesenheitDatapointEntry],
+)
+async def anwesenheit_list_datapoints(
+    instance_id: uuid.UUID,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> list[AnwesenheitDatapointEntry]:
+    """List all Boolean/Integer DataPoints with their binding status for this instance."""
+    row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "ANWESENHEITSSIMULATION":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEIT-Instanzen verfügbar")
+
+    from obs.core.registry import get_registry
+
+    registry = get_registry()
+    all_dps = registry.all()
+
+    # Existing bindings for this instance
+    binding_rows = await db.fetchall(
+        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=?",
+        (str(instance_id),),
+    )
+    bound_map: dict[str, str] = {r["datapoint_id"]: r["id"] for r in binding_rows}
+
+    result: list[AnwesenheitDatapointEntry] = []
+    for dp in sorted(all_dps, key=lambda d: d.name.lower()):
+        if dp.data_type not in ("BOOLEAN", "INTEGER"):
+            continue
+        dp_id_str = str(dp.id)
+        result.append(
+            AnwesenheitDatapointEntry(
+                id=dp_id_str,
+                name=dp.name,
+                data_type=dp.data_type,
+                has_binding=dp_id_str in bound_map,
+                binding_id=bound_map.get(dp_id_str),
+            )
+        )
+    return result
+
+
+@router.post(
+    "/instances/{instance_id}/anwesenheit/sync-bindings",
+    response_model=AnwesenheitSyncResult,
+)
+async def anwesenheit_sync_bindings(
+    instance_id: uuid.UUID,
+    body: AnwesenheitSyncRequest,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> AnwesenheitSyncResult:
+    """Create missing bindings for selected DataPoints and remove bindings for deselected ones."""
+    row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "ANWESENHEITSSIMULATION":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEIT-Instanzen verfügbar")
+
+    from obs.api.v1.bindings import create_binding, delete_binding
+    from obs.models.binding import AdapterBindingCreate
+
+    # Current bindings for this instance
+    binding_rows = await db.fetchall(
+        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=?",
+        (str(instance_id),),
+    )
+    current: dict[str, str] = {r["datapoint_id"]: r["id"] for r in binding_rows}
+
+    desired_ids = set(body.datapoint_ids)
+    current_ids = set(current.keys())
+
+    result = AnwesenheitSyncResult()
+
+    # Create missing bindings
+    for dp_id_str in desired_ids - current_ids:
+        try:
+            dp_uuid = uuid.UUID(dp_id_str)
+            await create_binding(
+                dp_uuid,
+                AdapterBindingCreate(
+                    adapter_instance_id=instance_id,
+                    direction="SOURCE",
+                    config={},
+                    enabled=True,
+                ),
+                _user,
+                db,
+            )
+            result.created += 1
+        except Exception as exc:
+            result.errors.append(f"{dp_id_str}: {exc}")
+
+    # Remove bindings for deselected DataPoints
+    for dp_id_str in current_ids - desired_ids:
+        try:
+            binding_uuid = uuid.UUID(current[dp_id_str])
+            dp_uuid = uuid.UUID(dp_id_str)
+            await delete_binding(dp_uuid, binding_uuid, _user, db)
+            result.removed += 1
+        except Exception as exc:
+            result.errors.append(f"{dp_id_str}: {exc}")
+
+    # Reload adapter bindings if the instance is running
+    try:
+        inst = adapter_registry.get_instance_by_id(instance_id)
+        if inst is not None:
+            await adapter_registry.reload_instance_bindings(instance_id, db)
+    except Exception:
+        pass  # non-critical — bindings take effect on next restart
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# SNMP Walk (Discovery)
+# ---------------------------------------------------------------------------
+
+
+class SnmpWalkEntry(BaseModel):
+    oid: str
+    value: str
+    type: str
+
+
+@router.get("/instances/{instance_id}/snmp/walk", response_model=list[SnmpWalkEntry])
+async def snmp_walk(
+    instance_id: uuid.UUID,
+    host: str = Query(..., description="IP-Adresse oder DNS-Name des SNMP-Geräts"),
+    oid: str = Query(default="1.3.6.1.2.1", description="Subtree-Root OID"),
+    port: int = Query(default=161, ge=1, le=65535, description="UDP-Port"),
+    timeout: float = Query(default=5.0, ge=0.5, le=30.0, description="Timeout pro Request (s)"),
+    max_results: int = Query(default=50, ge=1, le=500, description="Einträge pro Seite"),
+    start_oid: str | None = Query(default=None, description="Cursor für Paginierung (letzter OID der Vorseite)"),
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> list[SnmpWalkEntry]:
+    """SNMP-Walk über einen OID-Teilbaum — nützlich für OID-Discovery beim Binding-Anlegen.
+
+    Paginierung: start_oid auf den letzten OID der Vorseite setzen um weitere Einträge zu laden.
+    """
+    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "SNMP":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für SNMP-Instanzen verfügbar")
+
+    instance = adapter_registry.get_instance_by_id(str(instance_id))
+    if instance is None or not instance.connected:
+        from obs.adapters.snmp.adapter import SnmpAdapter
+        from obs.core.event_bus import EventBus
+        import json as _json
+
+        raw_config = row["config"] or "{}"
+        config_dict = _json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+        dummy_bus = EventBus()
+        instance = SnmpAdapter(event_bus=dummy_bus, config=config_dict)
+        await instance.connect()
+        if not instance.connected:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "SNMP Adapter konnte nicht verbunden werden (pysnmp installiert?)",
+            )
+
+    if not hasattr(instance, "snmp_walk"):
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "snmp_walk nicht verfügbar")
+
+    try:
+        entries = await instance.snmp_walk(
+            host=host,
+            oid=oid,
+            port=port,
+            timeout=timeout,
+            max_results=max_results,
+            start_oid=start_oid,
+        )
+        return [SnmpWalkEntry(**e) for e in entries]
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"SNMP Walk fehlgeschlagen: {exc}",
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
 # Typ-Routen (unverändert — Schema-Abfragen + Legacy-Config)
 # ---------------------------------------------------------------------------
 
@@ -840,6 +1250,11 @@ async def test_adapter(
     test_instance = cls(event_bus=dummy_bus, config=body.config)
     try:
         await test_instance.connect()
+        # Some adapters (e.g. MQTT) establish the connection in a background task
+        # started by connect(). Poll briefly so that task gets a chance to run.
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while not test_instance.connected and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.1)
         connected = test_instance.connected
         await test_instance.disconnect()
         if connected:

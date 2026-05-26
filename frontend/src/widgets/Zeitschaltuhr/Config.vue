@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref, watch, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { adapters as adaptersApi, datapoints as datapointsApi } from '@/api/client'
 
 const props = defineProps<{
@@ -19,6 +20,8 @@ interface DpOption {
   id: string
   name: string
 }
+
+const { t } = useI18n()
 
 const instances = ref<ZSUInstance[]>([])
 const loadingInstances = ref(false)
@@ -49,7 +52,7 @@ onMounted(async () => {
       .filter((i) => i.adapter_type.toLowerCase() === 'zeitschaltuhr')
       .map((i) => ({ id: i.id, name: i.name }))
   } catch {
-    errorMsg.value = 'Zeitschaltuhr-Instanzen konnten nicht geladen werden.'
+    errorMsg.value = t('widgets.zeitschaltuhr.loadError')
   } finally {
     loadingInstances.value = false
   }
@@ -111,7 +114,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Beschriftung -->
     <div>
-      <label :class="lCls">Beschriftung</label>
+      <label :class="lCls">{{ $t('widgets.common.label') }}</label>
       <input
         v-model="cfg.label"
         type="text"
@@ -122,13 +125,13 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Widget-Modus als 3 Buttons -->
     <div>
-      <label :class="lCls">Widget-Modus</label>
+      <label :class="lCls">{{ $t('widgets.zeitschaltuhr.widgetMode') }}</label>
       <div class="flex gap-1">
         <button
           v-for="m in [
-            { value: 'full',       label: 'Vollzugriff',   title: 'Hinzufügen, bearbeiten, löschen' },
-            { value: 'restricted', label: 'Eingeschränkt', title: 'Nur bearbeiten und aktivieren' },
-            { value: 'minimal',    label: 'Minimal',       title: 'Nur aktivieren/deaktivieren' },
+            { value: 'full',       label: $t('widgets.zeitschaltuhr.modeFull'),       title: $t('widgets.zeitschaltuhr.modeFullTitle') },
+            { value: 'restricted', label: $t('widgets.zeitschaltuhr.modeRestricted'),  title: $t('widgets.zeitschaltuhr.modeRestrictedTitle') },
+            { value: 'minimal',    label: $t('widgets.zeitschaltuhr.modeMinimal'),     title: $t('widgets.zeitschaltuhr.modeMinimalTitle') },
           ]"
           :key="m.value"
           type="button"
@@ -144,10 +147,10 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Zeitschaltuhr-Instanz -->
     <div>
-      <label :class="lCls">Zeitschaltuhr</label>
+      <label :class="lCls">{{ $t('widgets.zeitschaltuhr.instanceLabel') }}</label>
       <select v-model="cfg.instance_id" :class="selCls">
         <option value="">
-          {{ loadingInstances ? 'Lade …' : instances.length === 0 ? 'Keine Zeitschaltuhr konfiguriert' : '— Zeitschaltuhr wählen —' }}
+          {{ loadingInstances ? $t('widgets.zeitschaltuhr.loadingInstances') : instances.length === 0 ? $t('widgets.zeitschaltuhr.noneConfigured') : $t('widgets.zeitschaltuhr.selectInstance') }}
         </option>
         <option v-for="inst in instances" :key="inst.id" :value="inst.id">
           {{ inst.name }}
@@ -166,7 +169,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
           <input
             v-model="dpQuery"
             type="text"
-            placeholder="Name eingeben …"
+            :placeholder="$t('widgets.zeitschaltuhr.namePlaceholder')"
             :class="[selCls, 'flex-1', cfg.datapoint_id ? 'border-blue-500' : '']"
             @input="onDpQueryInput"
             @focus="dpSearchOpen = dpResults.length > 0"
@@ -175,7 +178,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
             v-if="cfg.datapoint_id"
             type="button"
             class="px-2 text-gray-400 hover:text-red-400 text-sm"
-            title="Auswahl aufheben"
+            :title="$t('widgets.zeitschaltuhr.clearSelection')"
             @click="clearDp"
           >×</button>
         </div>
@@ -192,10 +195,8 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
             @click="selectDp(dp)"
           >{{ dp.name }}</button>
         </div>
-        <p v-if="dpSearchLoading" class="text-xs text-gray-400 mt-0.5">Suche …</p>
-        <p v-if="cfg.datapoint_id" class="text-xs text-blue-500 dark:text-blue-400 mt-0.5">
-          ✓ Ausgewählt
-        </p>
+        <p v-if="dpSearchLoading" class="text-xs text-gray-400 mt-0.5">{{ $t('widgets.zeitschaltuhr.searching') }}</p>
+        <p v-if="cfg.datapoint_id" class="text-xs text-blue-500 dark:text-blue-400 mt-0.5">{{ $t('widgets.zeitschaltuhr.selected') }}</p>
       </div>
     </template>
 

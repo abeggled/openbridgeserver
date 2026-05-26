@@ -2,4 +2,5 @@
 pytest
 pytest-cov
 pytest-asyncio
-ruff==0.15.12
+ruff==0.15.14
+wlc

@@ -99,4 +99,51 @@
   .table td    { @apply px-4 py-3 text-slate-700 dark:text-slate-200 border-b border-slate-200/60 dark:border-slate-700/40; }
   .table tr:last-child td { @apply border-b-0; }
   .table tr:hover td { @apply bg-slate-100/80 dark:bg-slate-800/50; }
+
 }
+
+/* Ringbuffer rows with a filter-set background (#437) — the row's inline
+   style sets background-color + auto-contrast text colour (chroma.contrast
+   picks white or dark for the highest WCAG ratio). These rules live
+   OUTSIDE @layer components on purpose: Tailwind v4 puts utility classes
+   like `text-slate-400` into @layer utilities, which beats @layer
+   components regardless of specificity. Unlayered styles, however, beat
+   every layer — so this is the only place the cell-text rules can win
+   without `!important`.
+     - the cell itself inherits the row colour (otherwise the per-td
+       Tailwind text-slate-* classes would mask it);
+     - direct children of cells (links, plain spans) also inherit so the
+       object-name link and the unit suffix follow the row colour;
+     - the Badge component wraps its text in `rounded-full` pills with
+       their own bg + text classes — we explicitly leave those alone so
+       the success/warning/info chips keep their identity;
+     - matched rows render at `font-medium` so the text has more presence
+       on top of the saturated background;
+     - the hover highlight is suppressed so users can still read the row
+       colour while scanning the table. */
+.table tr.ringbuffer-row-matched td { color: inherit; background-color: transparent; font-weight: 500; }
+.table tr.ringbuffer-row-matched td a,
+.table tr.ringbuffer-row-matched td span:not([class*="rounded-full"]) { color: inherit; }
+/* Badge pills (Quality column) sit ON TOP of the coloured row, so the
+   variant's low-opacity tint (bg-green-500/15 etc.) blends with the row
+   and the text-green-600 inside becomes unreadable. Give the Badge a
+   solid neutral background so the variant text colour can do its job;
+   Badge keeps its border + dot for variant identity. */
+.table tr.ringbuffer-row-matched td span.inline-flex.rounded-full {
+  background-color: rgba(255, 255, 255, 0.92);
+  border-color: rgba(15, 23, 42, 0.15);
+}
+.dark .table tr.ringbuffer-row-matched td span.inline-flex.rounded-full {
+  background-color: rgba(15, 23, 42, 0.88);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+.table tr.ringbuffer-row-matched:hover td { background-color: rgba(0, 0, 0, 0.08); }
+.dark .table tr.ringbuffer-row-matched:hover td { background-color: rgba(255, 255, 255, 0.08); }
+
+/* Live-push flash uses the row's current background-color so the animation
+   stays on-brand for the matched filter-set. */
+@keyframes ringbuffer-row-flash {
+  0%   { filter: brightness(1.25); }
+  100% { filter: brightness(1.0); }
+}
+.table tr.ringbuffer-row-matched { animation: ringbuffer-row-flash 600ms ease-out; }

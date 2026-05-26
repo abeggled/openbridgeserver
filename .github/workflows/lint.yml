@@ -30,8 +30,5 @@ jobs:
       - name: Install requirements
         run: python3 -m pip install -r requirements_dev.txt
 
-      - name: Lint
-        run: python3 -m ruff check .
-
-      - name: Format
-        run: python3 -m ruff format . --check
+      - name: Lint (CI parity script)
+        run: ./tools/lint.sh --check

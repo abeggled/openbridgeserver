@@ -33,14 +33,21 @@ jobs:
 
       - name: Set template metadata
         id: meta
+        env:
+          GITHUB_REF_SAFE: ${{ github.ref }}
+          GITHUB_REF_NAME_SAFE: ${{ github.ref_name }}
         run: |
           # On a tag push use the tag name directly; fall back for manual runs
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            VERSION="${{ github.ref_name }}"
+          if [[ "$GITHUB_REF_SAFE" == refs/tags/* ]]; then
+            VERSION="$GITHUB_REF_NAME_SAFE"
+            if ! [[ "$VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
+              echo "Invalid tag format: $VERSION" >&2
+              exit 1
+            fi
           else
             VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "0.0.0")
           fi
-          TEMPLATE_FILE="${{ env.BASE_OS }}-${{ env.TEMPLATE_NAME }}_${VERSION}_${{ matrix.arch }}.tar.zst"
+          TEMPLATE_FILE="${{ env.TEMPLATE_NAME }}-lxc_${VERSION}_${{ matrix.arch }}.tar.zst"
           APP_BUNDLE_FILE="${{ env.TEMPLATE_NAME }}-app-bundle_${VERSION}.tar.gz"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "template_file=$TEMPLATE_FILE" >> "$GITHUB_OUTPUT"
@@ -366,6 +373,7 @@ jobs:
           OBS_DATABASE__PATH=/data/obs.db
           OBS_CONFIG=/data/config.yaml
           EOF
+          chmod 600 /etc/obs.env
 
           cat > /etc/systemd/system/obs.service << 'EOF'
           [Unit]
@@ -418,6 +426,7 @@ jobs:
           set -euo pipefail
 
           MQTT_PASSWORD=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32)))")
+          JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
 
           mosquitto_passwd -c -b /etc/mosquitto/passwd obs "$MQTT_PASSWORD"
           chmod 640 /etc/mosquitto/passwd
@@ -432,7 +441,9 @@ jobs:
           OBS_MOSQUITTO__RELOAD_COMMAND=systemctl reload mosquitto
           OBS_MOSQUITTO__SERVICE_USERNAME=obs
           OBS_MOSQUITTO__SERVICE_PASSWORD=$MQTT_PASSWORD
+          OBS_SECURITY__JWT_SECRET=$JWT_SECRET
           EOF
+          chmod 600 /etc/obs.env
           FIRSTBOOT
           chmod +x /opt/obs/obs-first-boot.sh
 
@@ -529,18 +540,30 @@ jobs:
       - name: Upload LXC assets to existing release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPO: ${{ github.repository }}
         run: |
+          if ! [[ "$RELEASE_TAG" =~ ^[0-9A-Za-z._-]+$ ]]; then
+            echo "Invalid tag format: $RELEASE_TAG" >&2
+            exit 1
+          fi
           find artifacts/ -type f \( -name "*.tar.zst" -o -name "*.tar.gz" -o -name "*.sha512" \) \
-            | xargs gh release upload "${{ github.ref_name }}" \
-              --repo "${{ github.repository }}" \
+            | xargs gh release upload "$RELEASE_TAG" \
+              --repo "$RELEASE_REPO" \
               --clobber
 
       - name: Insert LXC checksums into release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPO: ${{ github.repository }}
         run: |
-          gh release view "${{ github.ref_name }}" \
-            --repo "${{ github.repository }}" --json body -q .body \
+          if ! [[ "$RELEASE_TAG" =~ ^[0-9A-Za-z._-]+$ ]]; then
+            echo "Invalid tag format: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          gh release view "$RELEASE_TAG" \
+            --repo "$RELEASE_REPO" --json body -q .body \
             > /tmp/release_body.txt
 
           python3 <<'PYEOF' > /tmp/new_body.txt
@@ -556,7 +579,7 @@ jobs:
           bundle_checksum = None
 
           for f in sorted(glob.glob('artifacts/**/*.sha512', recursive=True)):
-              content = read(f)
+              content = read(f).split()[0]
               name = os.path.basename(f).removesuffix('.sha512')
               if 'app-bundle' in name:
                   bundle_checksum = content
@@ -585,6 +608,6 @@ jobs:
           print(body.replace(marker, section), end='')
           PYEOF
 
-          gh release edit "${{ github.ref_name }}" \
-            --repo "${{ github.repository }}" \
+          gh release edit "$RELEASE_TAG" \
+            --repo "$RELEASE_REPO" \
             --notes-file /tmp/new_body.txt

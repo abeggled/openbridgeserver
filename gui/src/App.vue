@@ -1,7 +1,12 @@
 <template>
-  <component :is="layout">
-    <router-view />
-  </component>
+  <div class="min-h-screen">
+    <div v-if="showRuntimeStrip" :class="runtimeStripClass">
+      {{ runtimeStripText }}
+    </div>
+    <component :is="layout">
+      <router-view />
+    </component>
+  </div>
 </template>
 
 <script setup>
@@ -19,12 +24,29 @@ const ws       = useWebSocketStore()
 const settings = useSettingsStore()
 
 const layout = computed(() => route.meta.public ? PlainLayout : AppLayout)
+const instanceName = (import.meta.env.VITE_INSTANCE_NAME || '').trim()
+const instanceColor = (import.meta.env.VITE_INSTANCE_COLOR || 'amber').trim().toLowerCase()
+const showRuntimeStrip = computed(() => !!instanceName)
+
+const runtimeStripText = computed(() => showRuntimeStrip.value ? `Instanz: ${instanceName}` : '')
+
+const runtimeStripClass = computed(() => {
+  const base = 'w-full py-1 px-3 text-center text-xs font-semibold tracking-wide text-white'
+  if (instanceColor === 'red') return `${base} bg-red-700`
+  if (instanceColor === 'green' || instanceColor === 'emerald') return `${base} bg-emerald-700`
+  if (instanceColor === 'blue') return `${base} bg-blue-700`
+  if (instanceColor === 'orange' || instanceColor === 'amber') return `${base} bg-amber-700`
+  return `${base} bg-slate-700`
+})
 
 onMounted(async () => {
   if (auth.isLoggedIn) {
+    // Open the WebSocket first — it must not wait behind the loadMe/settings
+    // round-trips, otherwise live pushes that arrive during the handshake gap
+    // are lost (the server does not replay missed events).
+    ws.connect()
     await auth.loadMe()
     await settings.load()
-    ws.connect()
   }
 })
 
