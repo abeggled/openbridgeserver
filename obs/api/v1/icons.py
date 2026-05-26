@@ -251,6 +251,7 @@ async def import_icons(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Keine Dateien empfangen")
 
     icons_dir = _icons_dir()
+    pending_writes: dict[str, bytes] = {}
     imported: list[str] = []
     skipped = 0
 
@@ -280,7 +281,7 @@ async def import_icons(
                             if not name:
                                 skipped += 1
                                 continue
-                            (icons_dir / f"{name}.svg").write_bytes(_sanitize_svg(member_bytes))
+                            pending_writes[name] = _sanitize_svg(member_bytes)
                             if name not in imported:
                                 imported.append(name)
                         else:
@@ -301,9 +302,12 @@ async def import_icons(
             if not name:
                 skipped += 1
                 continue
-            (icons_dir / f"{name}.svg").write_bytes(_sanitize_svg(content))
+            pending_writes[name] = _sanitize_svg(content)
             if name not in imported:
                 imported.append(name)
+
+    for name, svg_bytes in pending_writes.items():
+        (icons_dir / f"{name}.svg").write_bytes(svg_bytes)
 
     return ImportResult(
         imported=len(imported),

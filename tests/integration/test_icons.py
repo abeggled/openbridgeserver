@@ -160,6 +160,23 @@ async def test_import_zip_skips_non_svg_members(client, auth_headers, icons_tmp)
 
 
 @pytest.mark.asyncio
+async def test_import_zip_is_atomic_on_sanitize_error(client, auth_headers, icons_tmp):
+    malformed_svg = b"<svg><path></svg"
+    zip_bytes = _make_zip(
+        ("ok.svg", _MINIMAL_SVG),
+        ("broken.svg", malformed_svg),
+    )
+    resp = await client.post(
+        "/api/v1/icons/import",
+        headers=auth_headers,
+        files=[("files", ("mixed-broken.zip", zip_bytes, "application/zip"))],
+    )
+    assert resp.status_code == 422
+    assert not (icons_tmp / "ok.svg").exists()
+    assert not (icons_tmp / "broken.svg").exists()
+
+
+@pytest.mark.asyncio
 async def test_import_invalid_zip(client, auth_headers, icons_tmp):
     resp = await client.post(
         "/api/v1/icons/import",
