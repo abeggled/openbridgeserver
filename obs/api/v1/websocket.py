@@ -1,7 +1,6 @@
 """WebSocket API — Phase 4
 
-Preferred auth: Authorization: Bearer {jwt}   (header — token not logged)
-Legacy fallback: WS /api/v1/ws?token={jwt}    (query param — avoid in production)
+Preferred auth: Authorization: Bearer {jwt}   (header; no URL token leakage)
 
 Client → Server:
   {"action": "subscribe",   "ids": ["uuid1", "uuid2"]}
@@ -22,7 +21,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +151,7 @@ class WebSocketManager:
                 "old_value": state.old_value if state else None,
                 "quality": event.quality,
                 "source_adapter": event.source_adapter,
+                "unit": dp.unit if dp else None,
             },
         }
         await self.broadcast(rb_msg)
@@ -194,7 +194,6 @@ def init_ws_manager() -> WebSocketManager:
 @router.websocket("/ws")
 async def websocket_endpoint(
     ws: WebSocket,
-    token: str | None = Query(None, description="JWT access token (legacy — prefer Authorization header)"),
 ) -> None:
     # Auth: optional — authenticated users get a user context, anonymous users
     # can still subscribe to public datapoints (read-only push channel).
@@ -203,9 +202,6 @@ async def websocket_endpoint(
     auth_header = ws.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         resolved_token: str | None = auth_header[7:]
-    elif token:
-        logger.debug("WS auth via query param — prefer Authorization header in production")
-        resolved_token = token
     else:
         resolved_token = None
 

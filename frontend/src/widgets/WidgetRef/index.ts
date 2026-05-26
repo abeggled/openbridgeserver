@@ -15,4 +15,5 @@ WidgetRegistry.register({
   compatibleTypes: ['*'],
   noDatapoint: true,
   supportsStatusDatapoint: false,
+  getExtraDatapointIds: () => [],
 })

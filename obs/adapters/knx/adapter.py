@@ -1,6 +1,6 @@
 """KNX Adapter — Phase 3
 
-Verbindet sich mit einem KNX/IP-Gateway (Tunneling oder Routing).
+Verbindet sich mit einem KNX/IP-Gateway (Tunneling, Routing oder IP Secure).
 Nutzt xknx für das Protokoll, eigenen DPTRegistry für Codierung.
 
 xknx ≥ 3.x: Device-dispatch läuft über _iter_remote_values() → GA-Map.
@@ -13,25 +13,39 @@ Binding-Konfiguration (pro AdapterBinding.config):
   state_group_address: str?  — Rückmelde-GA für DEST-Bindings (optional)
 
 Adapter-Konfiguration (adapter_configs.config in DB):
-  connection_type: "tunneling" | "routing"   (default: tunneling)
-  host:            str                        (KNX/IP Gateway IP)
-  port:            int                        (default: 3671)
-  individual_address: str                     (default: "1.1.255")
-  local_ip:        str?                       (für Routing/Multicast)
+  connection_type:   "tunneling" | "tunneling_tcp" | "tunneling_secure" |
+                     "routing" | "routing_secure"
+  --- Tunneling UDP / TCP ---
+  host:              str   (IP des KNX/IP-Interfaces)
+  port:              int   (default: 3671)
+  individual_address: str  (default: "1.1.255"; bei Keyfile: wählt Tunnel-Endpoint)
+  local_ip:          str?  (lokale IP zum Binden, optional)
+  --- Routing (multicast) ---
+  multicast_group:   str   (default: "224.0.23.12"; KNX-Standard-Multicastadresse)
+  multicast_port:    int   (default: 3671)
+  individual_address: str  (Quelladresse des Routers)
+  local_ip:          str?  (Netzwerkinterface für Multicast, optional)
+  --- KNX IP Secure — Keyfile-Modus (tunneling_secure / routing_secure) ---
+  knxkeys_file_path: str?  (Pfad zur gespeicherten .knxkeys Datei)
+  knxkeys_password:  str?  (Passwort-Feld)
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
+from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.knx.dpt_registry import DPTRegistry
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
+
+TUNNEL_OVERLOAD_DETAIL = "KNX-Tunnel-Slot wahrscheinlich von anderem Client belegt — Gateway-Pool überlastet."
 
 # Import APCI classes at module level so missing symbols fail loudly at startup
 try:
@@ -53,11 +67,46 @@ logger = logging.getLogger(__name__)
 
 
 class KnxAdapterConfig(BaseModel):
-    connection_type: Literal["tunneling", "routing"] = "tunneling"
+    connection_type: Literal[
+        "tunneling",
+        "tunneling_tcp",
+        "tunneling_secure",
+        "routing",
+        "routing_secure",
+    ] = "tunneling"
+    # Tunneling UDP/TCP: IP des KNX/IP-Interfaces
     host: str = "192.168.1.100"
     port: int = 3671
     individual_address: str = "1.1.255"
     local_ip: str | None = None
+    # Routing: Multicast-Gruppe (KNX-Standard: 224.0.23.12)
+    multicast_group: str = "224.0.23.12"
+    multicast_port: int = 3671
+    # KNX IP Secure — Keyfile-Modus
+    user_id: int = Field(default=2, ge=1, le=127)
+    knxkeys_file_path: str | None = None
+    knxkeys_password: str | None = Field(
+        default=None,
+        json_schema_extra={"format": "password", "writeOnly": True},
+    )
+    # KNX IP Secure — Manueller Modus (Fallback, nicht in GUI exponiert)
+    user_password: str | None = Field(
+        default=None,
+        json_schema_extra={"format": "password", "writeOnly": True},
+    )
+    device_authentication_password: str | None = Field(
+        default=None,
+        json_schema_extra={"format": "password", "writeOnly": True},
+    )
+    backbone_key: str | None = Field(
+        default=None,
+        json_schema_extra={"format": "password", "writeOnly": True},
+    )
+    # Issue #466: tunnel-pool overload detection.
+    # `threshold` disconnects within `window_s` seconds raise a visible warning
+    # on the adapter card without flipping the connected flag.
+    tunnel_overload_threshold: int = Field(default=3, ge=1)
+    tunnel_overload_window_s: int = Field(default=300, ge=1)
 
 
 class KnxBindingConfig(BaseModel):
@@ -87,6 +136,14 @@ class KnxAdapter(AdapterBase):
         self._value_getter: Any = None
         self._reconnect_task: asyncio.Task | None = None
         self._stopped: bool = False
+        # Tunnel-overload detection (issue #466)
+        self._disconnect_times: deque[datetime] = deque()
+        self._warning_active: bool = False
+
+    @staticmethod
+    def _now() -> datetime:
+        """Monkeypatch-able clock seam for deterministic tests."""
+        return datetime.now(UTC)
 
     def set_value_getter(self, getter: Any) -> None:
         """Set a callable that returns ValueState | None for a datapoint UUID."""
@@ -107,9 +164,10 @@ class KnxAdapter(AdapterBase):
         try:
             from xknx import XKNX
             from xknx.io import ConnectionConfig, ConnectionType
+            from xknx.telegram.address import IndividualAddress
         except ImportError:
             logger.error("xknx not installed — KNX adapter disabled")
-            await self._publish_status(False, "xknx not installed")
+            await self._publish_status(False, "xknx not installed", severity="error")
             return
 
         # Clean up any previous xknx instance before creating a new one
@@ -122,29 +180,104 @@ class KnxAdapter(AdapterBase):
             self._xknx = None
 
         cfg = KnxAdapterConfig(**self._config)
-        conn_type = ConnectionType.ROUTING if cfg.connection_type == "routing" else ConnectionType.TUNNELING
-        conn_cfg = ConnectionConfig(
-            connection_type=conn_type,
-            gateway_ip=cfg.host,
-            gateway_port=cfg.port,
-            local_ip=cfg.local_ip,
-        )
 
-        self._xknx = XKNX(connection_config=conn_cfg)
+        _conn_type_map = {
+            "tunneling": ConnectionType.TUNNELING,
+            "tunneling_tcp": ConnectionType.TUNNELING_TCP,
+            "tunneling_secure": ConnectionType.TUNNELING_TCP_SECURE,
+            "routing": ConnectionType.ROUTING,
+            "routing_secure": ConnectionType.ROUTING_SECURE,
+        }
+        conn_type = _conn_type_map.get(cfg.connection_type, ConnectionType.TUNNELING)
+
+        # Build SecureConfig for KNX IP Secure modes
+        secure_config = None
+        if cfg.connection_type in ("tunneling_secure", "routing_secure"):
+            try:
+                from xknx.io import SecureConfig
+
+                if cfg.knxkeys_file_path and cfg.knxkeys_password:
+                    # Keyfile-Modus (bevorzugt): xknx liest alle Credentials aus dem .knxkeys File.
+                    # individual_address in ConnectionConfig wählt den Tunnel aus.
+                    secure_config = SecureConfig(
+                        knxkeys_file_path=cfg.knxkeys_file_path,
+                        knxkeys_password=cfg.knxkeys_password,
+                    )
+                    logger.info("KNX IP Secure: Keyfile-Modus (%s)", cfg.knxkeys_file_path)
+                elif cfg.connection_type == "tunneling_secure":
+                    # Manueller Modus Tunneling: Credentials einzeln angeben
+                    secure_config = SecureConfig(
+                        device_authentication_password=cfg.device_authentication_password or "",
+                        user_id=cfg.user_id,
+                        user_password=cfg.user_password or "",
+                    )
+                    logger.info("KNX IP Secure: Manueller Modus (Tunneling)")
+                else:
+                    # Manueller Modus Routing: Backbone-Key
+                    if not cfg.backbone_key:
+                        await self._publish_status(
+                            False,
+                            "routing_secure erfordert backbone_key oder knxkeys_file_path",
+                            severity="error",
+                        )
+                        logger.error("KNX IP Secure (Routing): backbone_key und knxkeys_file_path fehlen")
+                        return
+                    backbone_hex = cfg.backbone_key.replace(":", "").replace(" ", "")
+                    bytes.fromhex(backbone_hex)  # Früh-Validierung: ValueError bei ungültigem Hex
+                    secure_config = SecureConfig(backbone_key=backbone_hex)
+                    logger.info("KNX IP Secure: Manueller Modus (Routing, backbone_key)")
+            except ValueError as exc:
+                await self._publish_status(False, f"KNX Backbone-Key ungültig (kein Hex-String): {exc}", severity="error")
+                logger.error("KNX IP Secure backbone_key Parse-Fehler: %s", exc)
+                return
+            except Exception as exc:
+                await self._publish_status(False, f"KNX IP Secure Konfigurationsfehler: {exc}", severity="error")
+                logger.error("KNX IP Secure Konfigurationsfehler: %s", exc)
+                return
+
+        is_routing = cfg.connection_type in ("routing", "routing_secure")
+
+        if is_routing:
+            conn_cfg = ConnectionConfig(
+                connection_type=conn_type,
+                multicast_group=cfg.multicast_group,
+                multicast_port=cfg.multicast_port,
+                local_ip=cfg.local_ip,
+                individual_address=IndividualAddress(cfg.individual_address),
+                secure_config=secure_config,
+            )
+        else:
+            conn_cfg = ConnectionConfig(
+                connection_type=conn_type,
+                gateway_ip=cfg.host,
+                gateway_port=cfg.port,
+                local_ip=cfg.local_ip,
+                individual_address=IndividualAddress(cfg.individual_address),
+                secure_config=secure_config,
+            )
+
+        self._xknx = XKNX(
+            connection_config=conn_cfg,
+            connection_state_changed_cb=self._on_xknx_connection_state,
+        )
 
         try:
             await self._xknx.start()
-            await self._publish_status(True, f"Connected to {cfg.host}:{cfg.port}")
-            logger.info(
-                "KNX adapter connected: %s:%d (%s)",
-                cfg.host,
-                cfg.port,
-                cfg.connection_type,
-            )
+            if is_routing:
+                await self._publish_status(True, f"Connected (routing {cfg.multicast_group}:{cfg.multicast_port})")
+                logger.info("KNX adapter connected: routing %s:%d", cfg.multicast_group, cfg.multicast_port)
+            else:
+                await self._publish_status(True, f"Connected to {cfg.host}:{cfg.port}")
+                logger.info(
+                    "KNX adapter connected: %s:%d (%s)",
+                    cfg.host,
+                    cfg.port,
+                    cfg.connection_type,
+                )
             # Rebuild sniffer on the new xknx instance
             await self._on_bindings_reloaded()
         except Exception as exc:
-            await self._publish_status(False, str(exc))
+            await self._publish_status(False, str(exc), severity="error")
             logger.warning("KNX connect failed: %s", exc)
 
     async def _reconnect_loop(self) -> None:
@@ -156,6 +289,72 @@ class KnxAdapter(AdapterBase):
             if not self._connected:
                 logger.info("KNX: not connected — attempting reconnect …")
                 await self._do_connect()
+
+    # ------------------------------------------------------------------
+    # Tunnel-pool overload detection — issue #466
+    # ------------------------------------------------------------------
+
+    def _prune_disconnects(self, now: datetime) -> None:
+        """Drop disconnect timestamps older than tunnel_overload_window_s."""
+        try:
+            window_s = int(self._config.get("tunnel_overload_window_s", 300))
+        except (TypeError, ValueError):
+            window_s = 300
+        cutoff = now.timestamp() - window_s
+        while self._disconnect_times and self._disconnect_times[0].timestamp() < cutoff:
+            self._disconnect_times.popleft()
+
+    async def _record_disconnect(self) -> None:
+        """Note a disconnect event; raise warning if it exceeds the threshold."""
+        try:
+            threshold = int(self._config.get("tunnel_overload_threshold", 3))
+        except (TypeError, ValueError):
+            threshold = 3
+        now = self._now()
+        self._disconnect_times.append(now)
+        self._prune_disconnects(now)
+
+        if not self._warning_active and len(self._disconnect_times) >= threshold:
+            self._warning_active = True
+            await self._publish_status(
+                connected=self._connected,
+                detail=TUNNEL_OVERLOAD_DETAIL,
+                severity="warning",
+            )
+            logger.warning(
+                "KNX tunnel-pool overload suspected: %d disconnects in last %ss",
+                len(self._disconnect_times),
+                self._config.get("tunnel_overload_window_s", 300),
+            )
+
+    async def _record_reconnect(self) -> None:
+        """Note a (re)connect event; clear warning once the window is quiet."""
+        now = self._now()
+        self._prune_disconnects(now)
+        if self._warning_active and not self._disconnect_times:
+            self._warning_active = False
+            await self._publish_status(
+                connected=self._connected,
+                detail="Tunnel-Pool wieder stabil.",
+                severity="ok",
+            )
+            logger.info("KNX tunnel-pool warning cleared (quiet window).")
+
+    def _on_xknx_connection_state(self, state: Any) -> None:
+        """Sync callback registered with xknx.connection_state_changed_cb.
+
+        xknx calls this from the main loop via call_soon_threadsafe, so the
+        actual async bookkeeping is scheduled via create_task.
+        """
+        try:
+            from xknx.core.connection_state import XknxConnectionState
+        except ImportError:
+            return
+        if state == XknxConnectionState.DISCONNECTED:
+            asyncio.ensure_future(self._record_disconnect())
+        elif state == XknxConnectionState.CONNECTED:
+            asyncio.ensure_future(self._record_reconnect())
+        # CONNECTING is a transient state — ignored.
 
     async def disconnect(self) -> None:
         self._stopped = True

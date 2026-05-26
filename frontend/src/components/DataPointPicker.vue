@@ -123,14 +123,14 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
       <span
         v-if="notFound"
         class="flex-shrink-0 inline-flex items-center justify-center w-4 h-4 rounded-full bg-red-500 text-white font-bold text-xs leading-none"
-        title="Objekt nicht gefunden"
+        :title="$t('picker.notFound')"
       >!</span>
       <span
         class="flex-1 text-sm truncate"
         :class="notFound ? 'text-red-500 dark:text-red-400' : (selectedName ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500')"
         :title="selectedName || undefined"
       >
-        {{ notFound ? 'Objekt nicht gefunden' : (selectedName || 'Objekt wählen …') }}
+        {{ notFound ? $t('picker.notFound') : (selectedName || $t('picker.placeholder')) }}
       </span>
       <button
         v-if="selectedName || notFound"
@@ -146,16 +146,16 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
         ref="inputEl"
         v-model="query"
         type="text"
-        placeholder="Name, UUID, Konfiguration …"
+        :placeholder="$t('picker.searchPlaceholder')"
         class="w-full bg-transparent px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none"
         @keydown.escape="open = false"
       />
 
       <!-- Ergebnisse -->
       <div class="max-h-52 overflow-y-auto border-t border-gray-200 dark:border-gray-700">
-        <div v-if="loading" class="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">Suche …</div>
+        <div v-if="loading" class="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">{{ $t('picker.searching') }}</div>
         <div v-else-if="query && results.length === 0" class="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">
-          Keine Treffer
+          {{ $t('picker.noResults') }}
         </div>
         <button
           v-for="dp in results"

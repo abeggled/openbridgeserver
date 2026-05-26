@@ -7,25 +7,30 @@
     "dev": "vite",
     "build": "vue-tsc && vite build",
     "preview": "vite preview --port 4174",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "chart.js": "^4.4.0",
+    "chroma-js": "^3.2.0",
     "gridstack": "^12.0.0",
     "marked": "^18.0.0",
     "pinia": "^3.0.0",
     "qrcode": "^1.5.4",
     "vue": "^3.4.0",
+    "vue-i18n": "^11.0.0",
     "vue-router": "^5.0.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/chroma-js": "^3.1.2",
     "@types/qrcode": "^1.5.5",
     "@vitejs/plugin-vue": "^6.0.0",
-    "@tailwindcss/postcss": "^4.0.0",
     "postcss": "^8.4.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^6.0.0",
     "vite": "^8.0.0",
+    "vitest": "^4.1.6",
     "vue-tsc": "^3.0.0"
   }
 }

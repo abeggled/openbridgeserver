@@ -1,0 +1,91 @@
+name: E2E
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # docker-compose.yml reads these for the obs + Mosquitto containers
+      OBS_HTTP_HOST_PORT: "8080"
+      OBS_MQTT_USERNAME: obs
+      OBS_MQTT_PASSWORD: ci-mqtt-pass
+      OBS_JWT_SECRET: ci-jwt-secret-min-32-chars-long-enough
+      OBS_LOG_LEVEL: WARNING
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Bring up the stack
+        run: docker compose up -d --build
+
+      - name: Wait for /system/health
+        run: |
+          for i in {1..60}; do
+            if curl -sf http://localhost:8080/api/v1/system/health >/dev/null; then
+              echo "stack healthy after ${i} attempts"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::stack did not become healthy in 120s"
+          docker compose ps
+          docker compose logs --no-color
+          exit 1
+
+      - name: Create demo user for demo-setup specs
+        run: |
+          set -euo pipefail
+          TOKEN=$(
+            curl -sS -X POST http://localhost:8080/api/v1/auth/login \
+              -H 'Content-Type: application/json' \
+              -d '{"username":"admin","password":"admin"}' \
+            | jq -r .access_token
+          )
+          curl -sS -X POST http://localhost:8080/api/v1/auth/users \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"demo","password":"demo","is_admin":false}' \
+            -o /dev/null -w 'create-demo-user: HTTP %{http_code}\n'
+
+      - name: Install Playwright dependencies
+        working-directory: tests/gui
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Run Playwright suite
+        working-directory: tests/gui
+        run: npx playwright test --reporter=line
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-results
+          path: |
+            tests/gui/test-results
+            tests/gui/playwright-report
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs --no-color

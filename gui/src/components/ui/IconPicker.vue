@@ -91,11 +91,11 @@ onMounted(loadList)
       <input
         v-model="search"
         type="text"
-        placeholder="Suchen …"
+        :placeholder="$t('common.searchPlaceholder')"
         class="input w-full text-sm"
       />
       <p v-if="filteredSvg.length === 0" class="text-xs py-2 text-center text-slate-400 dark:text-slate-500">
-        {{ search ? 'Keine Treffer' : 'Keine Icons importiert' }}
+        {{ search ? $t('common.iconPickerNoMatch') : $t('common.iconPickerNoIcons') }}
       </p>
       <div v-else class="flex flex-wrap gap-1 max-h-40 overflow-y-auto">
         <button

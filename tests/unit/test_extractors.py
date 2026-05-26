@@ -131,6 +131,90 @@ class TestJsonExtractor:
         assert out["j1"]["value"] is True
 
 
+class TestJsonExtractorMultiPath:
+    """Tests for multi-output mode (json_paths config key)."""
+
+    def _mnode(self, node_id: str, paths: list[dict]) -> dict:
+        return node(node_id, "json_extractor", {"json_paths": json.dumps(paths)})
+
+    def test_two_outputs(self):
+        payload = json.dumps({"temp": 21.5, "humidity": 65})
+        paths = [{"label": "Temp", "path": "temp"}, {"label": "Humidity", "path": "humidity"}]
+        nodes = [self._mnode("j1", paths)]
+        overrides = {"j1": {"data": payload}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["j1"]["out_1"] == 21.5
+        assert out["j1"]["out_2"] == 65
+
+    def test_nested_paths(self):
+        payload = json.dumps({"sensor": {"temp": 19, "hum": 50}})
+        paths = [{"label": "T", "path": "sensor.temp"}, {"label": "H", "path": "sensor.hum"}]
+        nodes = [self._mnode("j1", paths)]
+        overrides = {"j1": {"data": payload}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["j1"]["out_1"] == 19
+        assert out["j1"]["out_2"] == 50
+
+    def test_missing_path_returns_none(self):
+        payload = json.dumps({"a": 1})
+        paths = [{"label": "A", "path": "a"}, {"label": "B", "path": "missing"}]
+        nodes = [self._mnode("j1", paths)]
+        overrides = {"j1": {"data": payload}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["j1"]["out_1"] == 1
+        assert out["j1"]["out_2"] is None
+
+    def test_preview_populated(self):
+        payload = json.dumps({"x": 1})
+        paths = [{"label": "X", "path": "x"}]
+        nodes = [self._mnode("j1", paths)]
+        overrides = {"j1": {"data": payload}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["j1"]["_preview"] == payload
+
+    def test_no_value_key_in_multi_mode(self):
+        payload = json.dumps({"a": 1})
+        paths = [{"label": "A", "path": "a"}]
+        nodes = [self._mnode("j1", paths)]
+        overrides = {"j1": {"data": payload}}
+        out = _run(nodes, input_overrides=overrides)
+        assert "value" not in out["j1"]
+
+    def test_single_path_legacy_unchanged(self):
+        """Nodes with only json_path (no json_paths) still use the 'value' output."""
+        payload = json.dumps({"temp": 22})
+        nodes = [_jnode("j1", "temp")]
+        overrides = {"j1": {"data": payload}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["j1"]["value"] == 22
+        assert "out_1" not in out["j1"]
+
+    def test_array_bracket_in_multi_path(self):
+        payload = json.dumps({"sensors": [{"v": 10}, {"v": 20}]})
+        paths = [{"label": "S0", "path": "sensors[0].v"}, {"label": "S1", "path": "sensors[1].v"}]
+        nodes = [self._mnode("j1", paths)]
+        overrides = {"j1": {"data": payload}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["j1"]["out_1"] == 10
+        assert out["j1"]["out_2"] == 20
+
+    def test_empty_path_in_entry_returns_none(self):
+        payload = json.dumps({"a": 1})
+        paths = [{"label": "A", "path": "a"}, {"label": "Empty", "path": ""}]
+        nodes = [self._mnode("j1", paths)]
+        overrides = {"j1": {"data": payload}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["j1"]["out_1"] == 1
+        assert out["j1"]["out_2"] is None
+
+    def test_invalid_json_paths_falls_back_to_legacy(self):
+        """If json_paths is invalid JSON, executor falls back to single-path mode."""
+        payload = json.dumps({"a": 1})
+        n = node("j1", "json_extractor", {"json_paths": "not-json{{", "json_path": "a"})
+        out = _run([n], input_overrides={"j1": {"data": payload}})
+        assert out["j1"]["value"] == 1
+
+
 # ===========================================================================
 # xml_extractor
 # ===========================================================================
@@ -189,6 +273,88 @@ class TestXmlExtractor:
         overrides = {"x1": {"data": xml}}
         out = _run(nodes, input_overrides=overrides)
         assert out["x1"]["value"] == "hello"
+
+
+class TestXmlExtractorMultiPath:
+    """Tests for multi-output mode (xml_paths config key)."""
+
+    def _mnode(self, node_id: str, paths: list[dict]) -> dict:
+        return node(node_id, "xml_extractor", {"xml_paths": json.dumps(paths)})
+
+    def test_two_outputs(self):
+        xml = "<root><temperature>21.5</temperature><humidity>65</humidity></root>"
+        paths = [{"label": "Temp", "path": ".//temperature"}, {"label": "Humidity", "path": ".//humidity"}]
+        nodes = [self._mnode("x1", paths)]
+        overrides = {"x1": {"data": xml}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["x1"]["out_1"] == "21.5"
+        assert out["x1"]["out_2"] == "65"
+
+    def test_nested_paths(self):
+        xml = "<root><sensor><temp>19</temp><hum>50</hum></sensor></root>"
+        paths = [{"label": "T", "path": ".//temp"}, {"label": "H", "path": ".//hum"}]
+        nodes = [self._mnode("x1", paths)]
+        overrides = {"x1": {"data": xml}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["x1"]["out_1"] == "19"
+        assert out["x1"]["out_2"] == "50"
+
+    def test_missing_path_returns_none(self):
+        xml = "<root><a>1</a></root>"
+        paths = [{"label": "A", "path": ".//a"}, {"label": "B", "path": ".//missing"}]
+        nodes = [self._mnode("x1", paths)]
+        overrides = {"x1": {"data": xml}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["x1"]["out_1"] == "1"
+        assert out["x1"]["out_2"] is None
+
+    def test_preview_populated(self):
+        xml = "<root><x>1</x></root>"
+        paths = [{"label": "X", "path": ".//x"}]
+        nodes = [self._mnode("x1", paths)]
+        overrides = {"x1": {"data": xml}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["x1"]["_preview"] == xml
+
+    def test_no_value_key_in_multi_mode(self):
+        xml = "<root><a>1</a></root>"
+        paths = [{"label": "A", "path": ".//a"}]
+        nodes = [self._mnode("x1", paths)]
+        overrides = {"x1": {"data": xml}}
+        out = _run(nodes, input_overrides=overrides)
+        assert "value" not in out["x1"]
+
+    def test_single_path_legacy_unchanged(self):
+        """Nodes with only xml_path (no xml_paths) still use the 'value' output."""
+        xml = "<root><temperature>22</temperature></root>"
+        nodes = [_xnode("x1", ".//temperature")]
+        overrides = {"x1": {"data": xml}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["x1"]["value"] == "22"
+        assert "out_1" not in out["x1"]
+
+    def test_empty_path_in_entry_returns_none(self):
+        xml = "<root><a>1</a></root>"
+        paths = [{"label": "A", "path": ".//a"}, {"label": "Empty", "path": ""}]
+        nodes = [self._mnode("x1", paths)]
+        overrides = {"x1": {"data": xml}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["x1"]["out_1"] == "1"
+        assert out["x1"]["out_2"] is None
+
+    def test_invalid_xml_paths_falls_back_to_legacy(self):
+        """If xml_paths is invalid JSON, executor falls back to single-path mode."""
+        xml = "<root><a>1</a></root>"
+        n = node("x1", "xml_extractor", {"xml_paths": "not-json{{", "xml_path": ".//a"})
+        out = _run([n], input_overrides={"x1": {"data": xml}})
+        assert out["x1"]["value"] == "1"
+
+    def test_invalid_xml_returns_none_in_multi_mode(self):
+        paths = [{"label": "A", "path": ".//a"}]
+        nodes = [self._mnode("x1", paths)]
+        overrides = {"x1": {"data": "<<<invalid"}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["x1"]["out_1"] is None
 
 
 # ===========================================================================

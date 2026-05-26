@@ -32,6 +32,7 @@ from obs.logic.models import (
     LogicGraphOut,
     LogicGraphUpdate,
     LogicNode,
+    LogicUsageOut,
     NodeTypeDef,
 )
 from obs.logic.node_types import list_node_types
@@ -279,9 +280,11 @@ async def run_graph(
     _user: str = Depends(get_current_user),
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
-    row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (graph_id,))
+    row = await db.fetchone("SELECT id, enabled FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    if not bool(row["enabled"]):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Logikblatt ist deaktiviert")
     try:
         from obs.logic.manager import get_logic_manager
 
@@ -347,6 +350,44 @@ async def duplicate_graph(
         pass
     result = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (new_id,))
     return _row_to_out(result)
+
+
+@router.get("/datapoint/{dp_id}/usages", response_model=list[LogicUsageOut])
+async def get_datapoint_logic_usages(
+    dp_id: str,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> list[LogicUsageOut]:
+    """Return all logic graphs that reference a given DataPoint, with direction from the DP's perspective.
+
+    - datapoint_read node  → logic reads the DP   → direction SOURCE
+    - datapoint_write node → logic writes to the DP → direction DEST
+    """
+    rows = await db.fetchall("SELECT id, name, enabled, flow_data FROM logic_graphs")
+    usages: list[LogicUsageOut] = []
+    for row in rows:
+        raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
+        flow = FlowData.model_validate(raw)
+        for node in flow.nodes:
+            if node.data.get("datapoint_id") != dp_id:
+                continue
+            if node.type == "datapoint_read":
+                direction = "SOURCE"
+            elif node.type == "datapoint_write":
+                direction = "DEST"
+            else:
+                continue
+            usages.append(
+                LogicUsageOut(
+                    graph_id=row["id"],
+                    graph_name=row["name"],
+                    graph_enabled=bool(row["enabled"]),
+                    node_id=node.id,
+                    node_type=node.type,
+                    direction=direction,
+                )
+            )
+    return usages
 
 
 @router.get("/graphs/{graph_id}/export")

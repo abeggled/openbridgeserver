@@ -48,11 +48,6 @@ class DatabaseSettings(BaseModel):
     history_plugin: str = "sqlite"  # sqlite | influxdb | timescaledb | questdb
 
 
-class RingBufferSettings(BaseModel):
-    storage: str = "disk"  # memory | disk
-    max_entries: int = 10000
-
-
 class SecuritySettings(BaseModel):
     jwt_secret: str = "changeme"
     jwt_expire_minutes: int = 1440
@@ -125,11 +120,17 @@ def _import_legacy_env_vars() -> None:
     """Import OPENTWS_* variables as OBS_* when OBS_* is not set."""
     legacy_prefix = "OPENTWS_"
     new_prefix = "OBS_"
+
+    def _has_obs_override_case_insensitive(env_key: str) -> bool:
+        lookup = env_key.upper()
+        return any(existing.upper() == lookup for existing in os.environ)
+
     for key, value in list(os.environ.items()):
         if not key.startswith(legacy_prefix):
             continue
         mapped_key = f"{new_prefix}{key[len(legacy_prefix):]}"
-        os.environ.setdefault(mapped_key, value)
+        if not _has_obs_override_case_insensitive(mapped_key):
+            os.environ[mapped_key] = value
 
 
 def _resolve_default_db_path(default_path: str = "/data/obs.db") -> str:
@@ -142,14 +143,15 @@ def _resolve_default_db_path(default_path: str = "/data/obs.db") -> str:
 
 
 _import_legacy_env_vars()
-DatabaseSettings.model_fields["path"].default = _resolve_default_db_path()
 
 
 # ---------------------------------------------------------------------------
 # Main settings class
 # ---------------------------------------------------------------------------
 
-_CONFIG_PATH = Path(os.environ.get("OBS_CONFIG") or os.environ.get("OPENTWS_CONFIG", "config.yaml"))
+def _config_path() -> Path:
+    """Resolve the YAML config path at construction time."""
+    return Path(os.environ.get("OBS_CONFIG") or os.environ.get("OPENTWS_CONFIG", "config.yaml"))
 
 
 class Settings(BaseSettings):
@@ -161,8 +163,9 @@ class Settings(BaseSettings):
 
     server: ServerSettings = Field(default_factory=ServerSettings)
     mqtt: MqttSettings = Field(default_factory=MqttSettings)
-    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
-    ringbuffer: RingBufferSettings = Field(default_factory=RingBufferSettings)
+    database: DatabaseSettings = Field(
+        default_factory=lambda: DatabaseSettings(path=_resolve_default_db_path())
+    )
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     mosquitto: MosquittoSettings = Field(default_factory=MosquittoSettings)
     cors: CorsSettings = Field(default_factory=CorsSettings)
@@ -179,7 +182,7 @@ class Settings(BaseSettings):
         return (
             init_settings,
             env_settings,
-            YamlConfigSource(settings_cls, _CONFIG_PATH),
+            YamlConfigSource(settings_cls, _config_path()),
         )
 
 
