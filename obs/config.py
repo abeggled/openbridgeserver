@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -116,20 +116,32 @@ class YamlConfigSource(PydanticBaseSettingsSource):
 # ---------------------------------------------------------------------------
 
 
+def _has_env_key_case_insensitive(env_key: str) -> bool:
+    lookup = env_key.upper()
+    return any(existing.upper() == lookup for existing in os.environ)
+
+
+def _get_env_case_insensitive(*env_keys: str) -> str | None:
+    for key in env_keys:
+        if key in os.environ:
+            return os.environ[key]
+        upper_key = key.upper()
+        for existing, value in os.environ.items():
+            if existing.upper() == upper_key:
+                return value
+    return None
+
+
 def _import_legacy_env_vars() -> None:
     """Import OPENTWS_* variables as OBS_* when OBS_* is not set."""
     legacy_prefix = "OPENTWS_"
     new_prefix = "OBS_"
 
-    def _has_obs_override_case_insensitive(env_key: str) -> bool:
-        lookup = env_key.upper()
-        return any(existing.upper() == lookup for existing in os.environ)
-
     for key, value in list(os.environ.items()):
         if not key.startswith(legacy_prefix):
             continue
         mapped_key = f"{new_prefix}{key[len(legacy_prefix) :]}"
-        if not _has_obs_override_case_insensitive(mapped_key):
+        if not _has_env_key_case_insensitive(mapped_key):
             os.environ[mapped_key] = value
 
 
@@ -152,7 +164,7 @@ _import_legacy_env_vars()
 
 def _config_path() -> Path:
     """Resolve the YAML config path at construction time."""
-    return Path(os.environ.get("OBS_CONFIG") or os.environ.get("OPENTWS_CONFIG", "config.yaml"))
+    return Path(_get_env_case_insensitive("OBS_CONFIG", "OPENTWS_CONFIG") or "config.yaml")
 
 
 class Settings(BaseSettings):
@@ -168,6 +180,37 @@ class Settings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     mosquitto: MosquittoSettings = Field(default_factory=MosquittoSettings)
     cors: CorsSettings = Field(default_factory=CorsSettings)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _inject_database_path_fallback(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        result = dict(data)
+        database_key = next(
+            (key for key in result if isinstance(key, str) and key.lower() == "database"),
+            None,
+        )
+        default_path = _resolve_default_db_path()
+
+        if database_key is None:
+            result["database"] = {"path": default_path}
+            return result
+
+        database_value = result.get(database_key)
+        if database_value is None:
+            result[database_key] = {"path": default_path}
+            return result
+
+        if isinstance(database_value, dict):
+            has_path = any(isinstance(key, str) and key.lower() == "path" for key in database_value)
+            if not has_path:
+                merged_database = dict(database_value)
+                merged_database["path"] = default_path
+                result[database_key] = merged_database
+
+        return result
 
     @classmethod
     def settings_customise_sources(
