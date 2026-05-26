@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { reactive, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 type UhrModus = 'digital' | 'analog' | 'wortuhr'
 
@@ -12,11 +13,7 @@ interface UhrConfig {
   timezone:    string
 }
 
-const MODI: { value: UhrModus; label: string }[] = [
-  { value: 'digital', label: 'Digital' },
-  { value: 'analog',  label: 'Analog'  },
-  { value: 'wortuhr', label: 'Wortuhr' },
-]
+
 
 /** Häufig verwendete IANA-Zeitzonen als Vorschläge */
 const ZEITZONEN_VORSCHLÄGE = [
@@ -41,6 +38,14 @@ const ZEITZONEN_VORSCHLÄGE = [
   'UTC',
 ]
 
+const { t } = useI18n()
+
+const MODI = computed(() => [
+  { value: 'digital' as UhrModus, label: t('widgets.uhr.modeDigital') },
+  { value: 'analog'  as UhrModus, label: t('widgets.uhr.modeAnalog') },
+  { value: 'wortuhr' as UhrModus, label: t('widgets.uhr.modeWortuhr') },
+])
+
 const props = defineProps<{ modelValue: Record<string, unknown> }>()
 const emit  = defineEmits<{ (e: 'update:modelValue', val: Record<string, unknown>): void }>()
 
@@ -61,7 +66,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Modus -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Modus</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('common.mode') }}</label>
       <div class="flex gap-1">
         <button
           v-for="m in MODI"
@@ -80,7 +85,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Farbe -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Akzentfarbe</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.uhr.accentColor') }}</label>
       <div class="flex items-center gap-2">
         <input
           v-model="cfg.color"
@@ -100,7 +105,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
           type="checkbox"
           class="w-4 h-4 rounded accent-blue-500"
         />
-        <span class="text-xs text-gray-300">Sekunden anzeigen</span>
+        <span class="text-xs text-gray-300">{{ $t('widgets.uhr.showSeconds') }}</span>
       </label>
     </div>
 
@@ -112,15 +117,15 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
           type="checkbox"
           class="w-4 h-4 rounded accent-blue-500"
         />
-        <span class="text-xs text-gray-300">Datum anzeigen</span>
+        <span class="text-xs text-gray-300">{{ $t('widgets.uhr.showDate') }}</span>
       </label>
     </div>
 
     <!-- Zeitzone (nur analog) -->
     <div v-if="cfg.mode === 'analog'">
       <label class="block text-xs text-gray-400 mb-1">
-        Zeitzone
-        <span class="text-gray-600 font-normal ml-1">(optional, leer = lokal)</span>
+        {{ $t('widgets.uhr.timezone') }}
+        <span class="text-gray-600 font-normal ml-1">{{ $t('widgets.uhr.timezoneHint') }}</span>
       </label>
       <input
         v-model="cfg.timezone"
@@ -140,7 +145,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     <!-- Beschriftung -->
     <div>
       <label class="block text-xs text-gray-400 mb-1">
-        Beschriftung
+        {{ $t('widgets.common.label') }}
         <span class="text-gray-600 font-normal ml-1">(optional)</span>
       </label>
       <input

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { datapoints } from '@/api/client'
 import type { DataPointValue } from '@/types'
@@ -14,12 +15,12 @@ const props = defineProps<{
 }>()
 
 const dpStore = useDatapointsStore()
+const { t }   = useI18n()
 
 // ── Konfiguration ─────────────────────────────────────────────────────────────
 
-const label          = computed(() => (props.config.label           as string   | undefined) ?? '')
-const color          = computed(() => (props.config.color           as string   | undefined) ?? '#ef4444')
-const minTemp        = computed(() => (props.config.min_temp        as number   | undefined) ?? 5)
+const label   = computed(() => (props.config.label    as string | undefined) ?? '')
+const minTemp = computed(() => (props.config.min_temp as number | undefined) ?? 5)
 const maxTemp        = computed(() => (props.config.max_temp        as number   | undefined) ?? 35)
 const step           = computed(() => (props.config.step            as number   | undefined) ?? 0.5)
 const decimals       = computed(() => (props.config.decimals        as number   | undefined) ?? 1)
@@ -28,7 +29,8 @@ const actualOffset   = computed(() => (props.config.actual_offset   as number   
 const actualDpId     = computed(() => (props.config.actual_temp_dp_id as string | null | undefined) ?? null)
 const modeDpId       = computed(() => (props.config.mode_dp_id     as string   | null | undefined) ?? null)
 const showModes      = computed(() => (props.config.show_modes      as boolean  | undefined) ?? true)
-const supportedModes = computed(() => (props.config.supported_modes as number[] | undefined) ?? [0, 1, 3, 6])
+const supportedModes = computed(() => (props.config.supported_modes as number[] | undefined) ?? [0, 1, 2, 3, 4])
+const variant        = computed(() => (props.config.variant         as 'heating' | 'ac' | undefined) ?? 'heating')
 
 // ── Solltemperatur ────────────────────────────────────────────────────────────
 
@@ -104,15 +106,86 @@ async function setMode(mode: number) {
   } catch { /* ignore */ }
 }
 
-const ALL_MODES = [
-  { value: 0, label: 'Auto'   },
-  { value: 1, label: 'Heizen' },
-  { value: 3, label: 'Kühlen' },
-  { value: 6, label: 'Aus'    },
+const HEATING_MODES = [
+  { value: 0, label: 'widgets.rtr.modeAuto'        },
+  { value: 1, label: 'widgets.rtr.modeKomfort'     },
+  { value: 2, label: 'widgets.rtr.modeStandby'     },
+  { value: 3, label: 'widgets.rtr.modeEconomy'     },
+  { value: 4, label: 'widgets.rtr.modeFrostschutz' },
 ]
 
-const visibleModes      = computed(() => ALL_MODES.filter(m => supportedModes.value.includes(m.value)))
-const currentModeLabel  = computed(() => ALL_MODES.find(m => m.value === currentMode.value)?.label ?? null)
+const AC_MODES = [
+  { value:  0, label: 'widgets.rtr.modeAutomatik'   },
+  { value:  1, label: 'widgets.rtr.modeHeizen'      },
+  { value:  3, label: 'widgets.rtr.modeKuehlen'     },
+  { value:  6, label: 'widgets.rtr.modeAus'         },
+  { value:  9, label: 'widgets.rtr.modeNurLuefter'  },
+  { value: 14, label: 'widgets.rtr.modeEntfeuchten' },
+]
+
+const allModes         = computed(() => variant.value === 'ac' ? AC_MODES : HEATING_MODES)
+const visibleModes     = computed(() => allModes.value.filter(m => supportedModes.value.includes(m.value)))
+const currentModeLabel = computed(() => {
+  const key = allModes.value.find(m => m.value === currentMode.value)?.label ?? null
+  return key ? t(key) : null
+})
+
+// ── Farbverlauf ───────────────────────────────────────────────────────────────
+
+const gradientColors = computed<string[]>(() => {
+  const gc = props.config.gradient_colors as string[] | undefined
+  if (gc && gc.length > 0) return gc
+  return [(props.config.color as string | undefined) ?? '#ef4444']
+})
+
+const singleColor = computed(() => gradientColors.value.length === 1 ? gradientColors.value[0] : null)
+
+const setpointPercent = computed(() => {
+  const p = (shownSetpoint.value - minTemp.value) / (maxTemp.value - minTemp.value)
+  return Math.max(0, Math.min(1, p))
+})
+
+function lerpHex(c1: string, c2: string, t: number): string {
+  const toRgb = (c: string) => {
+    const h = c.replace('#', '')
+    const full = h.length === 3 ? h.split('').map(x => x + x).join('') : h
+    return [parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16)] as const
+  }
+  const [r1, g1, b1] = toRgb(c1)
+  const [r2, g2, b2] = toRgb(c2)
+  return `rgb(${Math.round(r1 + (r2 - r1) * t)},${Math.round(g1 + (g2 - g1) * t)},${Math.round(b1 + (b2 - b1) * t)})`
+}
+
+function interpolateGradient(colors: string[], t: number): string {
+  if (colors.length === 1) return colors[0]
+  const s = Math.max(0, Math.min(1, t)) * (colors.length - 1)
+  const i = Math.min(Math.floor(s), colors.length - 2)
+  return lerpHex(colors[i], colors[i + 1], s - i)
+}
+
+const activeColor = computed(() =>
+  singleColor.value ?? interpolateGradient(gradientColors.value, setpointPercent.value),
+)
+
+const rtrArcSegments = computed(() => {
+  const colors = gradientColors.value
+  if (colors.length <= 1 || setpointPercent.value <= 0) return []
+  const N = 60
+  const segs: Array<{ d: string; color: string }> = []
+  for (let i = 0; i < N; i++) {
+    const t0 = i / N
+    const t1 = (i + 1) / N
+    if (t0 >= setpointPercent.value) break
+    const tEnd = Math.min(t1, setpointPercent.value)
+    const a0 = (START_DEG + t0 * SWEEP_DEG) * (Math.PI / 180)
+    const a1 = (START_DEG + tEnd * SWEEP_DEG) * (Math.PI / 180)
+    segs.push({
+      d: `M ${(CX + R * Math.cos(a0)).toFixed(3)} ${(CY + R * Math.sin(a0)).toFixed(3)} A ${R} ${R} 0 0 1 ${(CX + R * Math.cos(a1)).toFixed(3)} ${(CY + R * Math.sin(a1)).toFixed(3)}`,
+      color: interpolateGradient(colors, (t0 + tEnd) / 2),
+    })
+  }
+  return segs
+})
 
 // ── Einheit ───────────────────────────────────────────────────────────────────
 
@@ -192,24 +265,36 @@ const actualMarker = computed(() => {
           stroke-linecap="round"
         />
 
-        <!-- Soll-Arc (eingefärbt) -->
+        <!-- Soll-Arc (eingefärbt, Einzelfarbe) -->
         <path
-          v-if="setpointArc"
+          v-if="setpointArc && singleColor"
           :d="setpointArc"
           fill="none"
-          :stroke="color"
+          :stroke="singleColor"
           stroke-width="6"
           stroke-linecap="round"
           data-testid="rtr-setpoint-arc"
         />
+        <!-- Soll-Arc (Farbverlauf, Bogensegmente) -->
+        <g v-else-if="rtrArcSegments.length" data-testid="rtr-setpoint-arc">
+          <path
+            v-for="(seg, idx) in rtrArcSegments"
+            :key="idx"
+            :d="seg.d"
+            fill="none"
+            :stroke="seg.color"
+            stroke-width="6"
+            stroke-linecap="round"
+          />
+        </g>
 
         <!-- Sollwert-Endmarke (gefüllter Kreis) -->
         <circle
-          v-if="setpointArc"
+          v-if="setpointArc || rtrArcSegments.length"
           :cx="setpointTip.x"
           :cy="setpointTip.y"
           r="5"
-          :fill="color"
+          :fill="activeColor"
         />
 
         <!-- Isttemperatur-Markierung (weißer Ring) -->
@@ -219,7 +304,7 @@ const actualMarker = computed(() => {
           :cy="actualMarker.y"
           r="4"
           fill="white"
-          :stroke="color"
+          :stroke="activeColor"
           stroke-width="2"
           opacity="0.85"
           data-testid="rtr-actual-marker"
@@ -249,7 +334,7 @@ const actualMarker = computed(() => {
           font-weight="700"
           text-anchor="middle"
           dominant-baseline="auto"
-          :fill="color"
+          :fill="activeColor"
           data-testid="rtr-setpoint-value"
         >{{ displaySetpoint }}</text>
 
@@ -325,10 +410,10 @@ const actualMarker = computed(() => {
             ? 'text-white border-transparent'
             : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-gray-500',
         ]"
-        :style="currentMode === m.value ? { backgroundColor: color } : {}"
+        :style="currentMode === m.value ? { backgroundColor: activeColor } : {}"
         :disabled="editorMode || readonly"
         @click="setMode(m.value)"
-      >{{ m.label }}</button>
+      >{{ $t(m.label) }}</button>
     </div>
 
   </div>

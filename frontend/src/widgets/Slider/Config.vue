@@ -18,28 +18,28 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 <template>
   <div class="space-y-3">
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Beschriftung</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.common.label') }}</label>
       <input v-model="cfg.label" type="text" placeholder="z.B. Solltemperatur"
         class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
     </div>
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Einheit</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.slider.unit') }}</label>
       <input v-model="cfg.unit" type="text" placeholder="z.B. °C"
         class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
     </div>
     <div class="grid grid-cols-3 gap-2">
       <div>
-        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Min</label>
+        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.slider.min') }}</label>
         <input v-model.number="cfg.min" type="number"
           class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
       </div>
       <div>
-        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Max</label>
+        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.slider.max') }}</label>
         <input v-model.number="cfg.max" type="number"
           class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
       </div>
       <div>
-        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Schritt</label>
+        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.slider.step') }}</label>
         <input v-model.number="cfg.step" type="number" min="0.01"
           class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500" />
       </div>

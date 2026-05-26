@@ -34,26 +34,26 @@ function login() {
   <span
     v-if="flash === 'out'"
     class="text-xs text-green-600 dark:text-green-400 flex items-center gap-1 px-2 py-1"
-  >✓ Abgemeldet</span>
+  >✓ {{ $t('auth.loggedOut') }}</span>
 
   <!-- Eingeloggt -->
   <template v-else-if="store.isLoggedIn">
     <span class="hidden sm:flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
       <span class="w-1.5 h-1.5 rounded-full bg-green-500 dark:bg-green-400 inline-block" />
-      Angemeldet
+      {{ $t('auth.loggedIn') }}
     </span>
     <button
       class="text-xs text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 transition-colors px-2 py-1 rounded"
-      title="Abmelden"
+      :title="$t('auth.logout')"
       @click="logout"
-    >Abmelden</button>
+    >{{ $t('auth.logout') }}</button>
   </template>
 
   <!-- Nicht eingeloggt -->
   <button
     v-else
     class="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 border border-blue-400/40 hover:border-blue-500 dark:hover:border-blue-400 px-3 py-1 rounded-lg transition-colors"
-    title="Anmelden"
+    :title="$t('auth.login')"
     @click="login"
-  >🔑 Anmelden</button>
+  >🔑 {{ $t('auth.login') }}</button>
 </template>

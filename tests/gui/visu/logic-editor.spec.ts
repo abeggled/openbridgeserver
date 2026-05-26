@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { apiPost, apiPut, apiGet, apiDelete, getToken } from '../helpers'
+import { INTERNAL_BASE_URL, apiPost, apiPut, apiGet, apiDelete, getToken } from '../helpers'
 
 
 /**
@@ -565,8 +565,7 @@ test('Logic-Editor Palette zeigt API Client Node an', async ({ page }) => {
 // ---------------------------------------------------------------------------
 test('api_client GET-Request gegen eigenen Server liefert success=true', async ({ page }) => {
   // Use the public health endpoint — no auth required, always returns 200
-  const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080'
-  const targetUrl = `${BASE_URL}/api/v1/system/health`
+  const targetUrl = `${INTERNAL_BASE_URL}/api/v1/system/health`
 
   const graph = await apiPost('/api/v1/logic/graphs', {
     name: `E2E-ApiClient-GET-${Date.now()}`,
@@ -619,8 +618,7 @@ test('api_client GET-Request gegen eigenen Server liefert success=true', async (
 test('api_client Bearer Auth sendet Authorization-Header', async ({ page }) => {
   // Use the real JWT token so the auth-protected endpoint returns 200.
   // This verifies the api_client node correctly forwards the Bearer header.
-  const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080'
-  const targetUrl = `${BASE_URL}/api/v1/logic/node-types`
+  const targetUrl = `${INTERNAL_BASE_URL}/api/v1/logic/node-types`
   const token = await getToken()
 
   const graph = await apiPost('/api/v1/logic/graphs', {
@@ -740,8 +738,7 @@ test('api_client Erfolg-Ausgang löst nachgelagerten Node aus bei HTTP 200', asy
   //        api_client.success + const_value(true) → and_gate
   // After the second-pass fix, and_gate.out must be true when HTTP returns 200.
   // Use the public health endpoint — no auth required.
-  const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080'
-  const targetUrl = `${BASE_URL}/api/v1/system/health`
+  const targetUrl = `${INTERNAL_BASE_URL}/api/v1/system/health`
 
   const graph = await apiPost('/api/v1/logic/graphs', {
     name: `E2E-ApiClient-Downstream-${Date.now()}`,
@@ -908,7 +905,7 @@ test('json_extractor Config-Panel zeigt Preview-Bereich und Pfad-Eingabe', async
           id: 'jx',
           type: 'json_extractor',
           position: { x: 100, y: 100 },
-          data: { json_path: 'temperature' },
+          data: { json_paths: JSON.stringify([{ label: 'Temperatur', path: 'temperature' }]) },
         },
       ],
       edges: [],
@@ -937,4 +934,104 @@ test('json_extractor Config-Panel zeigt Preview-Bereich und Pfad-Eingabe', async
   } finally {
     await apiDelete(`/api/v1/logic/graphs/${graphId}`)
   }
+})
+
+// ---------------------------------------------------------------------------
+// Logikblatt aktivieren/deaktivieren (issue #422)
+// ---------------------------------------------------------------------------
+test('Logikblatt-Toggle: Button zeigt Aktiv-Status und deaktiviert das Blatt', async ({ page }) => {
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-Toggle-${Date.now()}`,
+    description: 'Playwright: toggle enabled',
+    enabled: true,
+    flow_data: { nodes: [], edges: [] },
+  }) as { id: string }
+  const graphId = graph.id
+
+  try {
+    await page.goto('/logic')
+    await page.waitForLoadState('networkidle')
+    await page.selectOption('[data-testid="select-graph"]', graphId)
+    await page.waitForTimeout(500)
+
+    // Initially the graph is active — button must show "Aktiv"
+    const toggleBtn = page.locator('[data-testid="btn-toggle-enabled"]')
+    await expect(toggleBtn).toBeVisible({ timeout: 5_000 })
+    await expect(toggleBtn).toContainText('Aktiv')
+
+    // Click to deactivate
+    await toggleBtn.click()
+    await page.waitForTimeout(500)
+
+    // Button must now show "Deaktiviert"
+    await expect(toggleBtn).toContainText('Deaktiviert')
+
+    // Dropdown entry must show "(deaktiviert)" suffix
+    const option = page.locator(`[data-testid="select-graph"] option[value="${graphId}"]`)
+    await expect(option).toContainText('(deaktiviert)')
+
+    // Click again to re-activate
+    await toggleBtn.click()
+    await page.waitForTimeout(500)
+    await expect(toggleBtn).toContainText('Aktiv')
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})
+
+test('Deaktiviertes Logikblatt: Ausführen-Button ist disabled und Kanten sind gestrichelt', async ({ page }) => {
+  const graph = await apiPost('/api/v1/logic/graphs', {
+    name: `E2E-Disabled-Run-${Date.now()}`,
+    description: 'Playwright: disabled graph blocks run',
+    enabled: false,
+    flow_data: {
+      nodes: [
+        { id: 'c1', type: 'const_value', position: { x: 100, y: 100 }, data: { value: '1', data_type: 'number' } },
+        { id: 'c2', type: 'const_value', position: { x: 100, y: 200 }, data: { value: '2', data_type: 'number' } },
+      ],
+      edges: [
+        { id: 'e1', source: 'c1', target: 'c2', sourceHandle: 'value', targetHandle: 'value' },
+      ],
+    },
+  }) as { id: string }
+  const graphId = graph.id
+
+  try {
+    await page.goto('/logic')
+    await page.waitForLoadState('networkidle')
+    await page.selectOption('[data-testid="select-graph"]', graphId)
+    await page.waitForTimeout(800)
+
+    // Ausführen-Button muss disabled sein
+    const runBtn = page.locator('[data-testid="btn-run"]')
+    await expect(runBtn).toBeDisabled({ timeout: 5_000 })
+
+    // Toggle-Button zeigt "Deaktiviert"
+    const toggleBtn = page.locator('[data-testid="btn-toggle-enabled"]')
+    await expect(toggleBtn).toContainText('Deaktiviert')
+
+    // Kante muss stroke-dasharray haben (gestrichelt = nicht animiert)
+    const edgePath = page.locator('.vue-flow__edge-path').first()
+    await expect(edgePath).toBeVisible({ timeout: 5_000 })
+    const dasharray = await edgePath.getAttribute('style')
+    expect(dasharray).toContain('stroke-dasharray')
+  } finally {
+    await apiDelete(`/api/v1/logic/graphs/${graphId}`)
+  }
+})
+
+test('Logikblatt-Bezeichnung: Toolbar und Modals verwenden "Logikblatt" statt "Graph"', async ({ page }) => {
+  await page.goto('/logic')
+  await page.waitForLoadState('networkidle')
+
+  // Dropdown placeholder
+  const select = page.locator('[data-testid="select-graph"]')
+  await expect(select).toContainText('Logikblatt wählen')
+
+  // Empty-canvas hint
+  await expect(page.getByText('Logikblatt wählen oder neu erstellen')).toBeVisible({ timeout: 5_000 })
+
+  // New-graph modal title
+  await page.click('button:has-text("+ Neu")')
+  await expect(page.getByText('Neues Logikblatt')).toBeVisible({ timeout: 3_000 })
 })

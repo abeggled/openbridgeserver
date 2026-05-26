@@ -3,10 +3,13 @@
      Protected Knoten sind sichtbar, zeigen aber ein PIN-Badge. -->
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
 import type { VisuNode, AccessLevel } from '@/types'
 import VisuIcon from '@/components/VisuIcon.vue'
+
+const { t } = useI18n()
 
 const props = defineProps<{ nodeId: string }>()
 const router = useRouter()
@@ -44,16 +47,16 @@ function navigate(node: VisuNode) {
 
 function accessBadge(node: VisuNode): { icon: string; label: string; cls: string } | null {
   const access = effectiveAccess(node)
-  if (access === 'readonly')  return { icon: '👁', label: 'Nur ansehen', cls: 'bg-blue-500/20 text-blue-600 dark:text-blue-400' }
+  if (access === 'readonly')  return { icon: '👁', label: t('common.readonly'), cls: 'bg-blue-500/20 text-blue-600 dark:text-blue-400' }
   if (access === 'protected') return { icon: '🔐', label: 'PIN', cls: 'bg-amber-500/20 text-amber-600 dark:text-amber-400' }
-  if (access === 'user')      return { icon: '👤', label: 'Anmeldung', cls: 'bg-purple-500/20 text-purple-600 dark:text-purple-400' }
+  if (access === 'user')      return { icon: '👤', label: t('common.loginRequired'), cls: 'bg-purple-500/20 text-purple-600 dark:text-purple-400' }
   return null
 }
 </script>
 
 <template>
   <div v-if="children.length === 0" class="text-gray-500 text-sm text-center py-12">
-    Dieser Knoten hat keine untergeordneten Seiten.
+    {{ $t('nodeOverview.noChildren') }}
   </div>
   <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
     <button
@@ -75,7 +78,7 @@ function accessBadge(node: VisuNode): { icon: string; label: string; cls: string
         {{ child.name }}
       </span>
       <span class="text-xs text-gray-400 dark:text-gray-500">
-        {{ child.type === 'PAGE' ? 'Seite' : 'Bereich' }}
+        {{ child.type === 'PAGE' ? $t('nodeOverview.typePage') : $t('nodeOverview.typeArea') }}
       </span>
     </button>
   </div>

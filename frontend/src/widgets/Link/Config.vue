@@ -9,7 +9,6 @@ const props = defineProps<{ modelValue: Record<string, unknown> }>()
 const emit  = defineEmits<{ (e: 'update:modelValue', val: Record<string, unknown>): void }>()
 
 const store = useVisuStore()
-
 const cfg = reactive({
   label:          (props.modelValue.label          as string) ?? '',
   icon:           (props.modelValue.icon           as string) ?? '🔗',
@@ -90,7 +89,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
 
     <!-- Beschriftung -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Beschriftung</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.common.label') }}</label>
       <input
         v-model="cfg.label"
         type="text"
@@ -101,13 +100,13 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
 
     <!-- Icon-Auswahl -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Icon</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.stufenschalter.icon') }}</label>
       <IconPicker v-model="cfg.icon" />
     </div>
 
     <!-- Ziel-Seite (suchbarer Picker) -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Ziel-Seite</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.link.targetPage') }}</label>
       <div class="relative" ref="pickerEl">
 
         <!-- Anzeige: aktuell gewählte Seite -->
@@ -124,7 +123,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
             :class="selectedNode ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500'"
             :title="selectedNode ? nodePath(selectedNode) : undefined"
           >
-            {{ selectedNode ? nodePath(selectedNode) : 'Seite wählen …' }}
+            {{ selectedNode ? nodePath(selectedNode) : $t('widgets.common.selectPage') }}
           </span>
           <button
             v-if="selectedNode"
@@ -140,13 +139,13 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
             ref="searchInput"
             v-model="searchQuery"
             type="text"
-            placeholder="Seitenname suchen …"
+            :placeholder="$t('widgets.common.searchPage')"
             class="w-full bg-transparent px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none"
             @keydown.escape="pickerOpen = false"
           />
           <div class="max-h-52 overflow-y-auto border-t border-gray-200 dark:border-gray-700">
             <div v-if="filteredNodes.length === 0" class="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">
-              Keine Treffer
+              {{ $t('widgets.common.noResults') }}
             </div>
             <button
               v-for="{ node, path } in filteredNodes"
@@ -167,7 +166,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
               <span
                 class="flex-shrink-0 text-xs px-1.5 py-0.5 rounded"
                 :class="node.type === 'PAGE' ? 'text-blue-500 dark:text-blue-400' : 'text-purple-500 dark:text-purple-400'"
-              >{{ node.type === 'PAGE' ? 'Seite' : 'Bereich' }}</span>
+              >{{ node.type === 'PAGE' ? $t('widgets.common.nodeTypePage') : $t('widgets.common.nodeTypeArea') }}</span>
             </button>
           </div>
         </div>

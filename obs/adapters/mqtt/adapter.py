@@ -79,6 +79,9 @@ class MqttAdapterConfig(BaseModel):
     port: int = 1883
     username: str | None = None
     password: str | None = Field(default=None, json_schema_extra={"format": "password"})
+    client_id: str | None = None  # explicit base ID; auto-generated from instance UUID when None
+    tls: bool = False  # enable TLS/SSL (required for e.g. HiveMQ Cloud on port 8883)
+    tls_insecure: bool = False  # skip certificate verification (self-signed certs)
 
 
 class MqttBindingConfig(BaseModel):
@@ -110,6 +113,10 @@ class MqttAdapter(AdapterBase):
         self._publish_queue: asyncio.Queue = asyncio.Queue()
         # topic → list of SOURCE/BOTH bindings subscribed to it
         self._topic_map: dict[str, list[Any]] = {}
+        # set by connect(); two distinct IDs so pub + sub don't clash on the broker
+        self._pub_client_id: str | None = None
+        self._sub_client_id: str | None = None
+        self._tls_context: Any = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -124,8 +131,25 @@ class MqttAdapter(AdapterBase):
             return
 
         self._cfg = MqttAdapterConfig(**self._config)
+
+        # Derive stable, non-empty client IDs from the instance UUID so that brokers
+        # with allow_zero_length_clientid false (e.g. Mosquitto, HiveMQ) accept us.
+        base_id = self._cfg.client_id or f"obs-mqtt-{self._instance_id.hex[:8]}"
+        self._pub_client_id = f"{base_id}-pub"
+        self._sub_client_id = f"{base_id}-sub"
+
+        self._tls_context = None
+        if self._cfg.tls:
+            import ssl
+
+            ctx = ssl.create_default_context()
+            if self._cfg.tls_insecure:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            self._tls_context = ctx
+
         self._pub_task = asyncio.create_task(self._publisher_loop(), name="mqtt-adapter-pub")
-        await self._publish_status(True, f"Connected to {self._cfg.host}:{self._cfg.port}")
+        await self._publish_status(False, f"Connecting to {self._cfg.host}:{self._cfg.port}...")
         logger.info("MQTT adapter started → %s:%d", self._cfg.host, self._cfg.port)
 
     async def disconnect(self) -> None:
@@ -200,6 +224,8 @@ class MqttAdapter(AdapterBase):
                     port=cfg.port,
                     username=cfg.username,
                     password=cfg.password,
+                    identifier=self._sub_client_id,
+                    tls_context=self._tls_context,
                 ) as client:
                     for topic in self._topic_map:
                         await client.subscribe(topic)
@@ -284,7 +310,10 @@ class MqttAdapter(AdapterBase):
                     port=cfg.port,
                     username=cfg.username,
                     password=cfg.password,
+                    identifier=self._pub_client_id,
+                    tls_context=self._tls_context,
                 ) as client:
+                    await self._publish_status(True, f"Connected to {cfg.host}:{cfg.port}")
                     logger.info("MQTT adapter publisher connected")
                     while True:
                         topic, payload, retain = await self._publish_queue.get()
@@ -294,6 +323,7 @@ class MqttAdapter(AdapterBase):
                 raise
             except Exception:
                 logger.exception("MQTT adapter publisher error, reconnecting in 5 s")
+                await self._publish_status(False, f"Reconnecting to {cfg.host}:{cfg.port}...")
                 await asyncio.sleep(5)
 
     # ------------------------------------------------------------------

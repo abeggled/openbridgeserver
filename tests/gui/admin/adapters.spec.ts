@@ -228,3 +228,86 @@ test('HA Binding mit entity_id anlegen', async () => {
     await apiDelete(`/api/v1/adapters/instances/${instance.id}`)
   }
 })
+
+
+// ---------------------------------------------------------------------------
+// Test 8: Bindings per GUI von Instanz A nach B migrieren (Issue #419)
+// ---------------------------------------------------------------------------
+
+test('Bindings via GUI von Quelle nach Ziel migrieren', async ({ page }) => {
+  const sourceName = `E2E-Migrate-Src-${Date.now()}`
+  const targetName = `E2E-Migrate-Dst-${Date.now()}`
+  let sourceId: string | null = null
+  let targetId: string | null = null
+  let dp1Id: string | null = null
+  let dp2Id: string | null = null
+
+  try {
+    const source = await apiPost('/api/v1/adapters/instances', {
+      adapter_type: 'ANWESENHEITSSIMULATION',
+      name: sourceName,
+      config: {},
+      enabled: false,
+    }) as { id: string }
+    sourceId = source.id
+
+    const target = await apiPost('/api/v1/adapters/instances', {
+      adapter_type: 'ANWESENHEITSSIMULATION',
+      name: targetName,
+      config: {},
+      enabled: false,
+    }) as { id: string }
+    targetId = target.id
+
+    const dp1 = await apiPost('/api/v1/datapoints', {
+      name: `E2E-Migrate-DP1-${Date.now()}`,
+      data_type: 'BOOLEAN',
+      tags: [],
+    }) as { id: string }
+    dp1Id = dp1.id
+
+    const dp2 = await apiPost('/api/v1/datapoints', {
+      name: `E2E-Migrate-DP2-${Date.now()}`,
+      data_type: 'BOOLEAN',
+      tags: [],
+    }) as { id: string }
+    dp2Id = dp2.id
+
+    await apiPost(`/api/v1/datapoints/${dp1.id}/bindings`, {
+      adapter_instance_id: source.id,
+      direction: 'SOURCE',
+      config: {},
+      enabled: true,
+    })
+    await apiPost(`/api/v1/datapoints/${dp2.id}/bindings`, {
+      adapter_instance_id: source.id,
+      direction: 'SOURCE',
+      config: {},
+      enabled: true,
+    })
+
+    await page.goto('/adapters')
+    await page.waitForLoadState('networkidle')
+
+    const sourceRow = page.locator(`[data-testid="adapter-row-${source.id}"]`)
+    await expect(sourceRow).toBeVisible({ timeout: 8_000 })
+    await sourceRow.locator(`[data-testid="btn-expand-${source.id}"]`).click()
+
+    await sourceRow.locator(`[data-testid="btn-open-migrate-bindings-${source.id}"]`).click()
+    await expect(page.locator('[data-testid="select-migration-target"]')).toBeVisible({ timeout: 3_000 })
+    await page.selectOption('[data-testid="select-migration-target"]', target.id)
+    await page.click('[data-testid="btn-migrate-bindings-confirm"]')
+
+    await expect(page.locator('[data-testid="migration-result"]')).toContainText('2 Verknüpfungen migriert', { timeout: 5_000 })
+
+    const sourceBindings = await apiGet(`/api/v1/adapters/instances/${source.id}/bindings`) as Array<{ binding_id: string }>
+    const targetBindings = await apiGet(`/api/v1/adapters/instances/${target.id}/bindings`) as Array<{ binding_id: string }>
+    expect(sourceBindings).toHaveLength(0)
+    expect(targetBindings).toHaveLength(2)
+  } finally {
+    if (dp1Id) await apiDelete(`/api/v1/datapoints/${dp1Id}`)
+    if (dp2Id) await apiDelete(`/api/v1/datapoints/${dp2Id}`)
+    if (sourceId) await apiDelete(`/api/v1/adapters/instances/${sourceId}`)
+    if (targetId) await apiDelete(`/api/v1/adapters/instances/${targetId}`)
+  }
+})

@@ -1,0 +1,33 @@
+# Weblate CLI configuration for open bridge server
+# https://docs.weblate.org/en/latest/wlc.html
+#
+# Prerequisites:
+#   pip install wlc
+#   Configure credentials in ~/.config/weblate or set WLC_URL / WLC_KEY env vars.
+#
+# Usage:
+#   wlc push gui-admin          # push source strings (de.json) to Weblate
+#   wlc pull gui-admin          # pull all translated locale files
+#   wlc push frontend-visu
+#   wlc pull frontend-visu
+#
+# The community can translate via the Weblate project URL configured below.
+
+[weblate]
+url = https://hosted.weblate.org/api/
+
+[keys]
+# Set your API key here or in WLC_KEY env var:
+# https://hosted.weblate.org/api/
+# key = <your-api-key>
+
+[components.gui-admin]
+url = https://hosted.weblate.org/api/components/openbridgeserver/gui-admin/
+# Source file:  gui/src/locales/de.json
+# File filter:  gui/src/locales/*.json
+
+[components.frontend-visu]
+url = https://hosted.weblate.org/api/components/openbridgeserver/frontend-visu/
+# Source file:  frontend/src/locales/de.json
+# File filter:  frontend/src/locales/*.json
+

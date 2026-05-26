@@ -1,55 +1,55 @@
 <template>
   <div class="flex flex-col gap-5">
     <div>
-      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Historie</h2>
-      <p class="text-sm text-slate-500 mt-0.5">Historische Werte und Aggregationen</p>
+      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('history.title') }}</h2>
+      <p class="text-sm text-slate-500 mt-0.5">{{ $t('history.subtitle') }}</p>
     </div>
 
     <!-- Controls -->
     <div class="card p-4">
       <div class="flex flex-wrap gap-3 items-end">
         <div class="form-group min-w-64 flex-1">
-          <label class="label">Objekt</label>
+          <label class="label">{{ $t('history.objectLabel') }}</label>
           <DpCombobox
             v-model="selectedDp"
             :display-name="selectedDpName"
             @select="onDpSelect"
-            placeholder="Objekt suchen …"
+:placeholder="$t('history.objectPlaceholder')"
           />
         </div>
         <div class="form-group">
-          <label class="label">Von</label>
+          <label class="label">{{ $t('history.from') }}</label>
           <input v-model="fromTs" type="datetime-local" class="input" />
         </div>
         <div class="form-group">
-          <label class="label">Bis</label>
+          <label class="label">{{ $t('history.to') }}</label>
           <input v-model="toTs" type="datetime-local" class="input" />
         </div>
         <div class="form-group">
-          <label class="label">Modus</label>
+          <label class="label">{{ $t('history.mode') }}</label>
           <select v-model="mode" class="input">
-            <option value="raw">Raw</option>
-            <option value="aggregate">Aggregiert</option>
+            <option value="raw">{{ $t('history.modeRaw') }}</option>
+            <option value="aggregate">{{ $t('history.modeAggregate') }}</option>
           </select>
         </div>
         <div v-if="mode === 'aggregate'" class="form-group">
-          <label class="label">Funktion</label>
+          <label class="label">{{ $t('history.function') }}</label>
           <select v-model="aggFn" class="input">
-            <option value="avg">Ø Mittelwert</option>
-            <option value="min">Min</option>
-            <option value="max">Max</option>
-            <option value="last">Letzter</option>
+            <option value="avg">{{ $t('history.fnAvg') }}</option>
+            <option value="min">{{ $t('history.fnMin') }}</option>
+            <option value="max">{{ $t('history.fnMax') }}</option>
+            <option value="last">{{ $t('history.fnLast') }}</option>
           </select>
         </div>
         <div v-if="mode === 'aggregate'" class="form-group">
-          <label class="label">Intervall</label>
+          <label class="label">{{ $t('history.interval') }}</label>
           <select v-model="aggInterval" class="input">
             <option v-for="iv in intervals" :key="iv.v" :value="iv.v">{{ iv.l }}</option>
           </select>
         </div>
         <button @click="load" class="btn-primary" :disabled="!selectedDp || loading">
           <Spinner v-if="loading" size="sm" color="white" />
-          Laden
+          {{ $t('history.load') }}
         </button>
       </div>
     </div>
@@ -58,22 +58,22 @@
     <div class="card">
       <div class="card-header">
         <span class="text-sm font-semibold text-slate-800 dark:text-slate-100">{{ chartTitle }}</span>
-        <span class="text-xs text-slate-500">{{ points.length }} Punkte</span>
+        <span class="text-xs text-slate-500">{{ $t('history.points', { n: points.length }) }}</span>
       </div>
       <div class="card-body">
         <div v-if="loading" class="flex justify-center py-16"><Spinner size="lg" /></div>
-        <div v-else-if="!points.length && selectedDp" class="text-center text-slate-500 text-sm py-16">Keine Daten im gewählten Zeitraum</div>
-        <div v-else-if="!selectedDp" class="text-center text-slate-500 text-sm py-16">Objekt wählen und «Laden» klicken</div>
+        <div v-else-if="!points.length && selectedDp" class="text-center text-slate-500 text-sm py-16">{{ $t('history.noDataInRange') }}</div>
+        <div v-else-if="!selectedDp" class="text-center text-slate-500 text-sm py-16">{{ $t('history.selectObjectHint') }}</div>
         <canvas v-else ref="chartCanvas" class="max-h-80" />
       </div>
     </div>
 
     <!-- Raw table (raw mode only) -->
     <div v-if="mode === 'raw' && points.length" class="card overflow-hidden">
-      <div class="card-header"><span class="text-sm font-semibold text-slate-800 dark:text-slate-100">Rohdaten</span></div>
+      <div class="card-header"><span class="text-sm font-semibold text-slate-800 dark:text-slate-100">{{ $t('history.rawData') }}</span></div>
       <div class="table-wrap max-h-64 overflow-y-auto">
         <table class="table">
-          <thead><tr><th>Zeitstempel</th><th>Wert</th><th>Qualität</th><th>Adapter</th></tr></thead>
+          <thead><tr><th>{{ $t('history.colTimestamp') }}</th><th>{{ $t('history.colValue') }}</th><th>{{ $t('history.colQuality') }}</th><th>{{ $t('history.colAdapter') }}</th></tr></thead>
           <tbody>
             <tr v-for="(p, i) in points" :key="i">
               <td class="font-mono text-xs text-slate-400">{{ fmtDateTime(p.ts) }}</td>
@@ -90,6 +90,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { historyApi, dpApi } from '@/api/client'
 import { useTz } from '@/composables/useTz'
@@ -99,6 +100,7 @@ import DpCombobox  from '@/components/ui/DpCombobox.vue'
 import { Chart, LineController, LineElement, PointElement, LinearScale, TimeScale, Tooltip, Legend } from 'chart.js'
 import 'chart.js/auto'
 
+const { t } = useI18n()
 const { fmtDateTime, fmtChartLabel, toDatetimeLocal, fromDatetimeLocal, toUtcDate } = useTz()
 
 const route = useRoute()
@@ -128,14 +130,14 @@ const points      = ref([])
 const chartCanvas = ref(null)
 let   chartInstance = null
 
-const intervals = [
-  { v: '1m', l: '1 Minute' }, { v: '5m', l: '5 Minuten' }, { v: '15m', l: '15 Minuten' },
-  { v: '30m', l: '30 Minuten' }, { v: '1h', l: '1 Stunde' },
-  { v: '6h', l: '6 Stunden' }, { v: '12h', l: '12 Stunden' }, { v: '1d', l: '1 Tag' },
-]
+const intervals = computed(() => [
+  { v: '1m', l: t('history.intervals.1m') }, { v: '5m', l: t('history.intervals.5m') }, { v: '15m', l: t('history.intervals.15m') },
+  { v: '30m', l: t('history.intervals.30m') }, { v: '1h', l: t('history.intervals.1h') },
+  { v: '6h', l: t('history.intervals.6h') }, { v: '12h', l: t('history.intervals.12h') }, { v: '1d', l: t('history.intervals.1d') },
+])
 
 const chartTitle = computed(() => {
-  if (!selectedDp.value) return 'Verlauf'
+  if (!selectedDp.value) return t('history.chartTitleDefault')
   const name = selectedDpName.value || selectedDp.value
   return `${name} ${mode.value === 'aggregate' ? `(${aggFn.value} / ${aggInterval.value})` : '(raw)'}`
 })
@@ -177,7 +179,7 @@ async function load() {
 }
 
 function qualityLabel(q) {
-  return q === 'good' ? 'gut' : q === 'bad' ? 'schlecht' : q === 'uncertain' ? 'undefiniert' : q
+  return q === 'good' ? t('datapoints.quality.good') : q === 'bad' ? t('datapoints.quality.bad') : q === 'uncertain' ? t('datapoints.quality.uncertain') : q
 }
 
 function renderChart() {

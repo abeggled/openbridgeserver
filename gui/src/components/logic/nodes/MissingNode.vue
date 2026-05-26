@@ -2,9 +2,9 @@
   <div class="missing-node">
     <Handle v-for="h in inputs" :key="h.id" type="target" :id="h.id" :position="Position.Left" />
     <div class="missing-node__body">
-      <span class="missing-node__badge" aria-label="Unbekannter Block-Typ">!</span>
+      <span class="missing-node__badge" :aria-label="$t('logic.missingNode.ariaLabel')">!</span>
       <div>
-        <div class="missing-node__title">Unbekannter Block</div>
+        <div class="missing-node__title">{{ $t('logic.missingNode.title') }}</div>
         <div class="missing-node__type">{{ data.original_type ?? data.label }}</div>
       </div>
     </div>

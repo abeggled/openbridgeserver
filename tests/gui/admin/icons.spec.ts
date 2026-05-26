@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import * as path from 'path'
-import { getToken, apiDeleteWithBody } from '../helpers'
+import { BASE_URL, getToken, apiDeleteWithBody } from '../helpers'
 
 // Minimal inline SVG als Buffer für Datei-Uploads
 const MINIMAL_SVG = Buffer.from(
@@ -21,7 +21,7 @@ async function uploadIconViaApi(name: string): Promise<void> {
   const token = await getToken()
   const fd = new FormData()
   fd.append('files', new Blob([MINIMAL_SVG], { type: 'image/svg+xml' }), `${name}.svg`)
-  await fetch(`${process.env.BASE_URL ?? 'http://localhost:8080'}/api/v1/icons/import`, {
+  await fetch(`${BASE_URL}/api/v1/icons/import`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: fd,
