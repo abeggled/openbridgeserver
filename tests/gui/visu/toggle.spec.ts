@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { randomUUID } from 'crypto'
-import { apiPost, apiPut, apiDelete } from '../helpers'
+import { apiPost, apiPut, apiDelete, apiUploadIcon, apiDeleteIcons, getToken } from '../helpers'
 
 /**
  * E2E-Tests für das erweiterte Schalter-Widget (Issue #180).
@@ -61,6 +61,14 @@ async function buildTogglePage(
     ],
   })
 }
+
+const OBFUSCATED_JAVASCRIPT_SVG = `
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24 24">
+  <a href="java&#x09;script:alert(1)" xlink:href="data:text/html;base64,PHN2Zz48L3N2Zz4=">
+    <circle cx="12" cy="12" r="8" />
+  </a>
+</svg>
+`
 
 // ─── Test 1: Schalter-Modus – EIN/AUS-Standardtext ───────────────────────────
 
@@ -270,5 +278,56 @@ test('Schalter Rückwärtskompatibilität: alte Konfiguration {label} rendert fe
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
     await apiDelete(`/api/v1/datapoints/${dp.id}`)
+  }
+})
+
+test('Schalter SVG-Sanitizer: entfernt obfuskiertes javascript:/data: in href und xlink:href', async ({ page }) => {
+  const dp       = await createBoolDP('svg-sanitize-href')
+  const visuNode = await createVisuPage()
+  const pageId   = visuNode.id
+  const widgetId = randomUUID()
+  const iconName = `toggle-malicious-${Date.now()}`
+
+  await apiUploadIcon(iconName, OBFUSCATED_JAVASCRIPT_SVG)
+
+  await buildTogglePage(pageId, widgetId, dp.id, {
+    label: 'Security Toggle',
+    mode: 'icon_only',
+    on:  { icon: `svg:${iconName}`, color: '#00ff00', text: 'ON' },
+    off: { icon: `svg:${iconName}`, color: '#ff0000', text: 'OFF' },
+  })
+
+  try {
+    const token = await getToken()
+    await page.goto(`/visu/${pageId}`)
+    await page.evaluate((t) => localStorage.setItem('visu_jwt', t), token)
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    await pushBool(dp.id, true)
+
+    const widget = page.locator(`[data-widget-id="${widgetId}"] [data-testid="toggle-icon"]`)
+    await expect(widget.locator('svg')).toBeVisible({ timeout: 3_000 })
+
+    const dangerousUrls = await widget.locator('svg').evaluate((svg) => {
+      const urls: string[] = []
+      const normalize = (value: string) => value.toLowerCase().replace(/[\u0000-\u0020\u007f]+/g, '')
+      for (const el of Array.from(svg.querySelectorAll('*'))) {
+        for (const attr of Array.from(el.attributes)) {
+          const name = attr.name.toLowerCase()
+          if (name !== 'href' && name !== 'xlink:href') continue
+          const value = attr.value
+          const normalized = normalize(value)
+          if (normalized.startsWith('javascript:') || normalized.startsWith('data:')) {
+            urls.push(value)
+          }
+        }
+      }
+      return urls
+    })
+    expect(dangerousUrls).toEqual([])
+  } finally {
+    await apiDelete(`/api/v1/visu/nodes/${pageId}`)
+    await apiDelete(`/api/v1/datapoints/${dp.id}`)
+    await apiDeleteIcons([iconName])
   }
 })

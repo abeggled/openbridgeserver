@@ -105,8 +105,15 @@ function sanitizeSvg(svg: string): string {
     'script', 'foreignobject', 'iframe', 'object', 'embed', 'audio', 'video',
     'image', 'use', 'animate', 'animatemotion', 'animatetransform', 'set',
   ])
+  const normalizeSchemeValue = (value: string) => value
+    .toLowerCase()
+    .replace(/[\u0000-\u0020\u007f]+/g, '')
+  const isDangerousHref = (value: string) => {
+    const normalized = normalizeSchemeValue(value)
+    return normalized.startsWith('javascript:') || normalized.startsWith('data:')
+  }
 
-  const allNodes = Array.from(root.querySelectorAll('*'))
+  const allNodes = Array.from(root.getElementsByTagName('*'))
   for (const el of allNodes) {
     const tag = el.tagName.toLowerCase()
     if (blockedTags.has(tag)) {
@@ -120,7 +127,7 @@ function sanitizeSvg(svg: string): string {
         el.removeAttribute(attr.name)
         continue
       }
-      if ((name === 'href' || name === 'xlink:href') && (value.startsWith('javascript:') || value.startsWith('data:'))) {
+      if ((name === 'href' || name === 'xlink:href') && isDangerousHref(value)) {
         el.removeAttribute(attr.name)
       }
     }
