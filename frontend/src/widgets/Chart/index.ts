@@ -11,7 +11,7 @@ WidgetRegistry.register({
   defaultW: 6, defaultH: 4,
   component: Widget,
   configComponent: Config,
-  defaultConfig: { label: '', time_range: 'last_24h', primary_color: '#3b82f6', primary_axis: 'left', series: [] },
+  defaultConfig: { label: '', time_range: 'last_24h', chart_type: 'line', primary_color: '#3b82f6', primary_axis: 'left', series: [] },
   compatibleTypes: ['FLOAT', 'INTEGER'],
   getExtraDatapointIds: (config) => {
     const series = config.series as Array<{ dp_id?: string }> | undefined

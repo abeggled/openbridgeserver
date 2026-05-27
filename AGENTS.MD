@@ -10,7 +10,7 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Project Overview
 
-**open bridge server** is an open-source multiprotocol building automation server (MIT-licensed replacement for the proprietary Timberwolf Server). It bridges KNX, Modbus RTU/TCP, 1-Wire, MQTT, SNMP, Home Assistant, ioBroker, and Zeitschaltuhr into a unified system with a FastAPI REST/WebSocket API and a Vue-based admin GUI.
+**open bridge server** is an open-source multiprotocol building automation server (MIT-licensed replacement for the proprietary Timberwolf Server). It bridges KNX, Modbus RTU/TCP, 1-Wire, MQTT, SNMP, Home Assistant, ioBroker, Anwesenheitssimulation (presence simulation), and Zeitschaltuhr into a unified system with a FastAPI REST/WebSocket API and a Vue-based admin GUI.
 
 ## Common Commands
 
@@ -76,6 +76,21 @@ pytest tests/integration                          # mit Docker
 
 Wenn rot: nicht pushen, sondern fixen. Gilt für Haupt-Sessions **und** für Subagents — bitte
 explizit in den Subagent-Prompt schreiben, weil deren Kontext leer startet.
+
+Zusätzlich für i18n-Änderungen (Admin GUI + Visu) gilt ein harter Diff-Gate:
+
+```bash
+# Diff-basierter i18n Hard-Gate (Hardcoded user-facing strings + locale parity)
+./scripts/check-i18n-hardcoded-strings.sh
+```
+
+Optional als lokaler Push-Hook aktivieren:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Danach läuft der i18n-Gate automatisch vor jedem `git push`.
 
 ## Local Development Setup
 
@@ -150,11 +165,153 @@ Default login: `admin` / `admin`
 - `frontend/` — Visu SPA (Vue 3 + TypeScript), built to `frontend_dist/` (served by FastAPI at `/visu`)
 - Both proxy `/api` to `localhost:8080` during dev via `vite.config`
 
+### Internationalisation (i18n)
+
+Both frontends use **vue-i18n v9** (Composition API mode, `legacy: false`).
+
+| File | Purpose |
+|---|---|
+| `gui/src/i18n.js` | i18n instance; locale auto-detected from `localStorage` → browser language → fallback `de` |
+| `gui/src/locales/de.json` | German source strings (authoritative) |
+| `gui/src/locales/en.json` | English translations |
+| `gui/src/components/ui/LocaleSwitcher.vue` | Dropdown wired into Settings → Appearance |
+| `frontend/src/i18n.ts` | Same setup for the Visu SPA (TypeScript) |
+| `frontend/src/locales/{de,en}.json` | Visu locale files |
+| `.weblate` | Weblate CLI (`wlc`) config for community translations |
+
+#### Rules — every new feature must follow these
+
+**No hardcoded user-facing strings.** Any text visible to the user — labels, button text, placeholders, tooltips, error messages, badge text, empty-state messages — must go through `$t()` / `t()`. This includes strings returned from utility functions (`utils/`, composables) that end up rendered in a template.
+
+**`de.json` is the source of truth.** Always add new keys to both `de.json` (German) and `en.json` (English) in the same commit. Use Python (`json.dumps(..., ensure_ascii=False)`) when writing locale files programmatically — never shell heredocs, which strip non-ASCII characters.
+
+#### Key namespace conventions
+
+Admin GUI (`gui/src/locales/`):
+
+| Namespace | Used for |
+|---|---|
+| `nav.*` | Sidebar navigation labels; page titles in TopBar |
+| `topbar.*` | TopBar actions (e.g. `topbar.logout`) |
+| `sidebar.*` | Connection status labels |
+| `login.*` | Login view |
+| `dashboard.*` | Dashboard view (stats, adapter status, live values, warnings) |
+| `datapoints.*` | Data points list + detail view |
+| `adapters.*` | Adapter instances view; `adapters.status.*` for badge labels |
+| `history.*` | History view |
+| `ringbuffer.*` | Monitor / ring-buffer view |
+| `logs.*` | Log view |
+| `logic.*` | Logic engine view |
+| `settings.*` | Settings view |
+| `common.*` | Shared across views (save, cancel, delete, error, warning, …) |
+| `hierarchy.*` | Hierarchy manager |
+
+Visu SPA (`frontend/src/locales/`):
+
+| Namespace | Used for |
+|---|---|
+| `login.*`, `pin.*` | Auth views |
+| `common.*` | Shared UI strings |
+| `widgets.common.*` | Strings shared across widget configs |
+| `widgets.<name>.*` | Per-widget config strings |
+
+#### Usage patterns
+
+**Template-only** — no script import needed when `t()` is not called from JS:
+```vue
+<label>{{ $t('datapoints.form.name') }}</label>
+<input :placeholder="$t('datapoints.searchPlaceholder')" />
+<button :title="$t('common.delete')">…</button>
+```
+
+**Script usage** — import `useI18n` only when `t()` is called in `<script setup>`:
+```js
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
+
+// computed properties, functions, error messages:
+const label = computed(() => t('adapters.status.connected'))
+const msg = t('ringbuffer.queryFailed')
+```
+
+Do **not** add `const { t } = useI18n()` if the component only uses `$t()` in its template — TypeScript will flag `t` as declared but never used.
+
+**Parametrized strings** — use named placeholders in the JSON value, pass an object as the second argument:
+```json
+{ "bindings": "{n} Verknüpfungen", "areasCount": "{n} Bereiche" }
+```
+```vue
+{{ $t('dashboard.adapterStatus.bindings', { n: a.bindings }) }}
+{{ $t('widgets.grundriss.areasCount', { n: cfg.areas.length }) }}
+```
+
+**Reactive option arrays** — when an array of `{ label, value }` objects is used in a `v-for` select/radio, it must be `computed` so labels update when the locale changes:
+```js
+// Wrong — labels are frozen at component creation time
+const MODES = [{ value: 'a', label: t('key.a') }, …]
+
+// Correct — labels recompute on locale change
+const MODES = computed(() => [{ value: 'a', label: t('key.a') }, …])
+```
+
+**Pure utility functions** (`utils/`, plain `.js`/`.ts` files without a Vue setup context) cannot call `t()`. Instead, return locale key strings and translate at the callsite:
+```js
+// utils/adapterStatus.js
+export function adapterStatusLabel(a) {
+  if (!a.running) return 'adapters.status.inactive'
+  if (a.connected) return 'adapters.status.connected'
+  return 'adapters.status.running'
+}
+
+// In the template:
+{{ $t(adapterStatusLabel(a)) }}
+```
+
+#### Checklist for new features
+
+When adding a new view, widget config, or significant UI component:
+
+1. Add all user-facing strings to `gui/src/locales/de.json` **and** `en.json` under the appropriate namespace, in the same commit.
+2. Use `$t('namespace.key')` in templates; `t('namespace.key')` in script (after `const { t } = useI18n()`).
+3. Only add `useI18n()` to a component's script if `t()` is actually called there.
+4. Make option/select arrays `computed` if they contain translated labels.
+5. Pure utility functions must return keys, not translated strings.
+6. Run `npm run build` in `gui/` (and `frontend/` if Visu was touched) — a missing key does not throw at dev time but will surface as `[namespace.key]` in production.
+
+#### Hard-Gate (local + CI)
+
+`./scripts/check-i18n-hardcoded-strings.sh` enforces two checks on the PR/push diff:
+
+1. Changed files under `gui/src` and `frontend/src` with extension `.vue`, `.js`, `.ts` are scanned file-wide for hardcoded user-facing strings outside `$t()` / `t()`.
+2. If locale files changed, `de.json` and `en.json` are compared pairwise (`gui/src/locales/` and `frontend/src/locales/`); missing counterpart keys fail the gate.
+
+Allowlisted technical literals are maintained in `scripts/i18n-allowlist.txt`. Keep the list minimal and reviewable.
+
+#### Known exception — `gui/src/utils/hierarchyDepthOptions.js`
+
+This utility builds option labels that mix tree node names (runtime data) with structural level names. It cannot cleanly return plain i18n keys because the labels are composite strings (e.g. `"1 — EG Test (nur \"Wohnzimmer\")"`). It currently uses hardcoded German strings. This is a known gap; do not copy this pattern for new utilities.
+The current gate allowlists only these specific legacy string patterns in `scripts/i18n-allowlist.txt`.
+
+#### E2E tests (Playwright) and locale
+
+The Playwright suite lives in `tests/gui/` and requires a running full stack (backend + both frontends, typically via `docker compose up`). Run with `npx playwright test` from `tests/gui/`.
+
+**Locale requirement:** `tests/gui/playwright.config.ts` sets `locale: 'de'` in the global `use` config. This tells Playwright's Chromium to simulate a German browser (`navigator.language = 'de'`), so `detectLocale()` always picks German and all test assertions against German strings work. Do not remove this setting — without it every test that checks a translated string will fail when run on a machine with an English OS/browser.
+
+#### Adding a new locale
+
+1. Add `src/locales/<lang>.json` (copy `de.json` as a starting point)
+2. Import it in `i18n.js` / `i18n.ts` and add to `messages` + `SUPPORTED_LOCALES`
+3. Run `wlc push gui-admin` to upload source; community translates on Weblate; `wlc pull gui-admin` to pull back
+
+**Weblate** components are named `gui-admin` (Admin GUI) and `frontend-visu` (Visu SPA) under the `openbridgeserver` project on [hosted.weblate.org](https://hosted.weblate.org/projects/openbridgeserver/). Source language is `de`; file format is `JSON (simple)`. CLI tool: `pip install wlc`; credentials in `~/.config/weblate` or via `WLC_URL` / `WLC_KEY` env vars.
+
 ## Architecture
 
 ### Startup Sequence (`obs/main.py`)
 
 Services initialize in this fixed order (reverse-order shutdown):
+0. Log buffer (`LogBufferHandler.install`) — attached to root logger before the async startup; broadcasts all log records via WebSocket
 1. SQLite DB + migrations
 2. EventBus (async pub/sub)
 3. MQTT client (connects to Mosquitto)
@@ -258,6 +415,22 @@ One file per external library. Each test verifies the exact import paths and API
 ## Release & CI
 
 ### Workflows
+
+PR/branch quality workflows:
+
+| Workflow | Purpose |
+|---|---|
+| `.github/workflows/lint.yml` | Ruff lint + format-check via `./tools/lint.sh --check` |
+| `.github/workflows/unittest.yml` | Python test matrix + coverage upload |
+| `.github/workflows/e2e.yml` | Full-stack Playwright E2E |
+| `.github/workflows/i18n-guard.yml` | Hard gate for i18n in changed frontend files + locale parity checks |
+
+GitHub CI enforcement (required for merge gate):
+
+1. Open `Settings` → `Branches` in `abeggled/openbridgeserver`.
+2. Edit the branch protection rule for `main`.
+3. Enable `Require status checks to pass before merging`.
+4. Add `i18n-guard` as a required status check.
 
 Two workflows run on every tag push (`push: tags: '*'`):
 

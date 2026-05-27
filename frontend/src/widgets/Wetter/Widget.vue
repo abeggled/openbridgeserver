@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { DataPointValue } from '@/types'
 import { getJwt } from '@/api/client'
 
@@ -70,6 +71,7 @@ const props = defineProps<{
   statusValue: DataPointValue | null
   editorMode: boolean
 }>()
+const { locale } = useI18n()
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -134,11 +136,11 @@ function windDir(deg: number): string {
 }
 
 function fmtTime(unixTs: number): string {
-  return new Date(unixTs * 1000).toLocaleTimeString('de', { hour: '2-digit', minute: '2-digit' })
+  return new Date(unixTs * 1000).toLocaleTimeString(locale.value || 'de', { hour: '2-digit', minute: '2-digit' })
 }
 
 function fmtDay(unixTs: number): string {
-  return new Date(unixTs * 1000).toLocaleDateString('de', { weekday: 'short' })
+  return new Date(unixTs * 1000).toLocaleDateString(locale.value || 'de', { weekday: 'short' })
 }
 
 function fmtPercent(v: number): string {
@@ -236,7 +238,7 @@ const activeAlerts = computed(() => {
       class="flex-1 flex flex-col items-center justify-center text-gray-400 dark:text-gray-500 gap-2"
     >
       <span class="text-4xl">🌤️</span>
-      <span class="text-xs">Wetter-API-URL konfigurieren</span>
+      <span class="text-xs">{{ $t('widgets.wetter.configureApiUrl') }}</span>
     </div>
 
     <!-- ── Editor-Modus mit URL (kein Live-Fetch) ──────────────────────────── -->
@@ -245,8 +247,8 @@ const activeAlerts = computed(() => {
       class="flex-1 flex flex-col items-center justify-center text-gray-400 dark:text-gray-500 gap-1"
     >
       <span class="text-3xl">🌤️</span>
-      <span class="text-xs text-gray-500 dark:text-gray-400">{{ label || 'Wetter' }}</span>
-      <span class="text-xs text-gray-400 dark:text-gray-600">Vorschau im Live-Modus</span>
+      <span class="text-xs text-gray-500 dark:text-gray-400">{{ label || $t('widgets.wetter.defaultLabel') }}</span>
+      <span class="text-xs text-gray-400 dark:text-gray-600">{{ $t('widgets.wetter.previewLiveMode') }}</span>
     </div>
 
     <!-- ── Kein URL im Live-Modus ───────────────────────────────────────────── -->
@@ -254,7 +256,7 @@ const activeAlerts = computed(() => {
       v-else-if="!url"
       class="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-600 text-xs"
     >
-      Keine API-URL konfiguriert
+      {{ $t('widgets.wetter.noApiUrl') }}
     </div>
 
     <!-- ── Laden ────────────────────────────────────────────────────────────── -->
@@ -263,7 +265,7 @@ const activeAlerts = computed(() => {
       class="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500 text-xs gap-2"
     >
       <span class="animate-spin">⏳</span>
-      <span>Wetterdaten werden geladen …</span>
+      <span>{{ $t('widgets.wetter.loadingData') }}</span>
     </div>
 
     <!-- ── Fehler ────────────────────────────────────────────────────────────── -->
@@ -277,7 +279,7 @@ const activeAlerts = computed(() => {
         class="mt-1 px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-xs text-gray-700 dark:text-gray-200 transition-colors"
         @click="fetchWeather"
       >
-        Neu laden
+        {{ $t('widgets.wetter.reload') }}
       </button>
     </div>
 
@@ -294,7 +296,7 @@ const activeAlerts = computed(() => {
         </span>
         <button
           class="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors text-xs ml-2 shrink-0"
-          title="Jetzt aktualisieren"
+          :title="$t('widgets.wetter.refreshNow')"
           @click="fetchWeather"
         >
           ↺
@@ -368,7 +370,7 @@ const activeAlerts = computed(() => {
           <span
             v-if="showForecastPrecipitation && day.pop > 0"
             class="text-xs text-blue-600 dark:text-blue-400"
-            :title="`Niederschlag: ${fmtPercent(day.pop)}`"
+            :title="$t('widgets.wetter.precipitationTitle', { pct: fmtPercent(day.pop) })"
           >
             {{ fmtPercent(day.pop) }}
           </span>

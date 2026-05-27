@@ -2,7 +2,7 @@
   <Modal
     :model-value="modelValue"
     :soft-backdrop="softModal"
-    :title="setId ? 'Filterset bearbeiten' : 'Neues Filterset'"
+    :title="setId ? $t('ringbuffer.filterEditor.editTitle') : $t('ringbuffer.filterEditor.newTitle')"
     max-width="2xl"
     @update:model-value="onModalToggle"
   >
@@ -13,38 +13,38 @@
         data-testid="filter-editor-owner-line"
         class="text-xs text-slate-500 dark:text-slate-400"
       >
-        <span v-if="loadedSet.created_by === auth.username">Eigenes Set</span>
-        <span v-else-if="loadedSet.created_by">Eigentümer: <strong>{{ loadedSet.created_by }}</strong></span>
-        <span v-else>Geteiltes Set (vor #478 angelegt — nur Admin darf bearbeiten)</span>
-        <span v-if="!canEdit" class="ml-2 inline-flex items-center rounded bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">Nur lesend</span>
+        <span v-if="loadedSet.created_by === auth.username">{{ $t('ringbuffer.filterEditor.ownSet') }}</span>
+        <span v-else-if="loadedSet.created_by">{{ $t('ringbuffer.filterEditor.ownerLabel') }} <strong>{{ loadedSet.created_by }}</strong></span>
+        <span v-else>{{ $t('ringbuffer.filterEditor.sharedLegacy') }}</span>
+        <span v-if="!canEdit" class="ml-2 inline-flex items-center rounded bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">{{ $t('ringbuffer.filterEditor.readOnly') }}</span>
       </p>
 
       <!-- Set-Metadaten -->
       <section class="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div class="flex flex-col gap-1">
-          <label class="text-xs text-slate-500">Name</label>
+          <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.nameLabel') }}</label>
           <input
             v-model="form.name"
             class="input"
             data-testid="filter-editor-name"
-            placeholder="z. B. Heizung"
+            :placeholder="$t('ringbuffer.filterEditor.namePlaceholder')"
             @input="markDirty"
           />
         </div>
         <div class="flex flex-col gap-1">
-          <label class="text-xs text-slate-500">Beschreibung</label>
+          <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.descriptionLabel') }}</label>
           <input
             v-model="form.description"
             class="input"
             data-testid="filter-editor-description"
-            placeholder="Optionale Beschreibung"
+            :placeholder="$t('ringbuffer.filterEditor.descriptionPlaceholder')"
             @input="markDirty"
           />
         </div>
       </section>
 
       <section class="flex flex-col gap-1">
-        <label class="text-xs text-slate-500">Farbe</label>
+        <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.colorLabel') }}</label>
         <div class="flex flex-wrap items-center gap-1.5" data-testid="filter-editor-color-palette">
           <button
             v-for="color in COLOR_PALETTE"
@@ -63,7 +63,7 @@
 
       <!-- Hierarchy combobox with per-chip ⊞ expand -->
       <section class="flex flex-col gap-1">
-        <label class="text-xs text-slate-500">Hierarchy-Knoten</label>
+        <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.hierarchyLabel') }}</label>
         <HierarchyCombobox
           :model-value="hierarchyIds"
           data-testid="filter-editor-hierarchy"
@@ -77,7 +77,7 @@
               type="button"
               :data-testid="`hierarchy-expand-${index}`"
               class="ml-1 text-blue-700/80 hover:text-emerald-600 dark:text-blue-300/80 dark:hover:text-emerald-300"
-              title="Knoten auflösen: DPs als Chips materialisieren"
+              :title="$t('ringbuffer.filterEditor.expandChipTitle')"
               :disabled="expanding"
               @click.stop="expandHierarchyChip(item, index)"
             >
@@ -85,23 +85,23 @@
             </button>
           </template>
         </HierarchyCombobox>
-        <p class="text-xs text-slate-500">Live-Filter — auch zukünftige Objekte unter diesen Knoten.</p>
+        <p class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.liveFilterHint') }}</p>
       </section>
 
       <section class="flex flex-col gap-1">
-        <label class="text-xs text-slate-500">Datenpunkte</label>
+        <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.datapointsLabel') }}</label>
         <DpCombobox
           :multi="true"
           :model-value="form.datapoints"
           data-testid="filter-editor-dps"
           @update:model-value="onDpsChange"
         />
-        <p class="text-xs text-slate-500">Feste Auswahl.</p>
+        <p class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.fixedSelectionHint') }}</p>
       </section>
 
       <section class="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div class="flex flex-col gap-1">
-          <label class="text-xs text-slate-500">Tags</label>
+          <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.tagsLabel') }}</label>
           <TagCombobox
             :model-value="form.tags"
             data-testid="filter-editor-tags"
@@ -109,7 +109,7 @@
           />
         </div>
         <div class="flex flex-col gap-1">
-          <label class="text-xs text-slate-500">Adapter</label>
+          <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.adapterLabel') }}</label>
           <AdapterCombobox
             :model-value="form.adapters"
             data-testid="filter-editor-adapters"
@@ -119,49 +119,49 @@
       </section>
 
       <section class="flex flex-col gap-1">
-        <label class="text-xs text-slate-500">Volltextsuche (q)</label>
+        <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.fulltextLabel') }}</label>
         <input
           v-model="form.q"
           class="input"
           data-testid="filter-editor-q"
-          placeholder="z. B. Temperatur"
+          :placeholder="$t('ringbuffer.filterEditor.fulltextPlaceholder')"
           @input="markDirty"
         />
       </section>
 
       <!-- Wertfilter -->
       <section class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-2">
-        <h4 class="text-sm font-semibold">Wertfilter</h4>
+        <h4 class="text-sm font-semibold">{{ $t('ringbuffer.filterEditor.valueFilterTitle') }}</h4>
         <div class="grid grid-cols-1 md:grid-cols-4 gap-2">
           <div class="flex flex-col gap-1">
-            <label class="text-xs text-slate-500">Datentyp</label>
+            <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.datatypeLabel') }}</label>
             <select
               v-model="form.valueDataType"
               class="input"
               data-testid="filter-editor-value-type"
               @change="onValueTypeChange"
             >
-              <option value="number">Nummer</option>
-              <option value="string">String</option>
-              <option value="bool">Bool</option>
-              <option value="regex">Regex</option>
+              <option value="number">{{ $t('ringbuffer.filterEditor.typeNumber') }}</option>
+              <option value="string">{{ $t('ringbuffer.filterEditor.typeString') }}</option>
+              <option value="bool">{{ $t('ringbuffer.filterEditor.typeBool') }}</option>
+              <option value="regex">{{ $t('ringbuffer.filterEditor.typeRegex') }}</option>
             </select>
           </div>
           <div class="flex flex-col gap-1">
-            <label class="text-xs text-slate-500">Operator</label>
+            <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.operatorLabel') }}</label>
             <select
               v-model="form.valueOperator"
               class="input"
               data-testid="filter-editor-value-operator"
               @change="markDirty"
             >
-              <option value="">(kein)</option>
+              <option value="">{{ $t('ringbuffer.filterEditor.operatorNone') }}</option>
               <option v-for="op in operatorsFor(form.valueDataType)" :key="op" :value="op">{{ op }}</option>
             </select>
           </div>
           <template v-if="form.valueOperator === 'between'">
             <div class="flex flex-col gap-1">
-              <label class="text-xs text-slate-500">Untergrenze</label>
+              <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.lowerBound') }}</label>
               <input
                 v-model="form.valueLower"
                 class="input"
@@ -171,7 +171,7 @@
               />
             </div>
             <div class="flex flex-col gap-1">
-              <label class="text-xs text-slate-500">Obergrenze</label>
+              <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.upperBound') }}</label>
               <input
                 v-model="form.valueUpper"
                 class="input"
@@ -183,7 +183,7 @@
           </template>
           <template v-else-if="form.valueOperator === 'regex' || form.valueDataType === 'regex'">
             <div class="flex flex-col gap-1 md:col-span-2">
-              <label class="text-xs text-slate-500">Pattern</label>
+              <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.patternLabel') }}</label>
               <input
                 v-model="form.valuePattern"
                 class="input"
@@ -195,7 +195,7 @@
           </template>
           <template v-else-if="form.valueOperator">
             <div class="flex flex-col gap-1 md:col-span-2">
-              <label class="text-xs text-slate-500">Wert</label>
+              <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.valueLabel') }}</label>
               <input
                 v-model="form.valueInput"
                 class="input"
@@ -216,7 +216,7 @@
             data-testid="filter-editor-value-ignore-case"
             @change="markDirty"
           />
-          Regex ignore case
+          {{ $t('ringbuffer.filterEditor.ignoreCase') }}
         </label>
       </section>
 
@@ -227,10 +227,10 @@
       <p class="text-xs mr-auto self-center" data-testid="filter-editor-semantics-hint"
          :class="filterIsEmpty ? 'text-amber-600 dark:text-amber-400' : 'text-slate-500'">
         <span v-if="filterIsEmpty" data-testid="filter-editor-empty-hint">
-          ⚠ Mindestens ein Filterkriterium konfigurieren — sonst kann das Set nicht gespeichert werden.
+          {{ $t('ringbuffer.filterEditor.emptyFilterWarning') }}
         </span>
         <span v-else>
-          Innerhalb des Sets: Hierarchy OR DP, alle anderen Kriterien AND-verknüpft.
+          {{ $t('ringbuffer.filterEditor.semanticsHint') }}
         </span>
       </p>
       <button
@@ -238,36 +238,36 @@
         class="btn-danger btn-sm"
         :disabled="deleting || saving || !canEdit"
         data-testid="filter-editor-delete"
-        :title="canEdit ? 'Filter-Set unwiderruflich löschen' : 'Nur der Eigentümer oder ein Admin darf löschen'"
+        :title="canEdit ? $t('ringbuffer.filterEditor.deleteTitle') : $t('ringbuffer.filterEditor.deleteRestricted')"
         @click="onDelete"
       >
-        🗑 Löschen
+        🗑 {{ $t('common.delete') }}
       </button>
-      <button class="btn-secondary btn-sm" data-testid="filter-editor-cancel" @click="onCancel">Verwerfen</button>
+      <button class="btn-secondary btn-sm" data-testid="filter-editor-cancel" @click="onCancel">{{ $t('ringbuffer.filterEditor.discard') }}</button>
       <button
         class="btn-primary btn-sm"
         :disabled="saving || filterIsEmpty || deleting || !canEdit"
         data-testid="filter-editor-save-topbar"
-        :title="canEdit ? '' : 'Nur der Eigentümer oder ein Admin darf speichern'"
+        :title="canEdit ? '' : $t('ringbuffer.filterEditor.saveRestricted')"
         @click="onSave(true)"
       >
-        Speichern &amp; in Topleiste
+        {{ $t('ringbuffer.filterEditor.saveAndTopbar') }}
       </button>
     </template>
   </Modal>
 
   <ConfirmDialog
     v-model="confirmOpen"
-    title="Ungespeicherte Änderungen"
-    message="Editor wirklich schliessen und alle Änderungen verwerfen?"
-    confirm-label="Verwerfen"
+    :title="$t('ringbuffer.filterEditor.unsavedTitle')"
+    :message="$t('ringbuffer.filterEditor.unsavedMessage')"
+    :confirm-label="$t('ringbuffer.filterEditor.discard')"
     @confirm="confirmDiscard"
   />
   <ConfirmDialog
     v-model="confirmDeleteOpen"
-    title="Filter-Set löschen"
-    :message="`Das Filter-Set „${loadedSet?.name ?? ''}“ wirklich unwiderruflich löschen?`"
-    confirm-label="Löschen"
+    :title="$t('ringbuffer.filterEditor.deleteSetTitle')"
+    :message="deleteSetMessage"
+    :confirm-label="$t('common.delete')"
     :danger="true"
     @confirm="confirmDelete"
   />
@@ -275,6 +275,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ringbufferApi, searchApi, hierarchyApi } from '@/api/client'
 import Modal from '@/components/ui/Modal.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
@@ -285,6 +286,7 @@ import AdapterCombobox from '@/components/ui/AdapterCombobox.vue'
 import { isEmptyFilter } from '@/composables/useClientSideMatch'
 import { useAuthStore } from '@/stores/auth'
 
+const { t } = useI18n()
 const auth = useAuthStore()
 
 const props = defineProps({
@@ -375,6 +377,10 @@ const canEdit = computed(() => {
   if (auth.isAdmin) return true
   return owner != null && owner === auth.username
 })
+
+const deleteSetMessage = computed(() =>
+  t('ringbuffer.filterEditor.deleteSetMessage', { name: loadedSet.value?.name ?? '' }),
+)
 // Cache hierarchy node descendants by `${tree_id}:${node_id}` so we can
 // resolve descendants client-side without needing a dedicated backend route.
 const hierarchyTreeCache = new Map() // tree_id -> array of {id, parent_id}
@@ -594,7 +600,7 @@ async function loadSet(id) {
     const { data } = await ringbufferApi.getFilterset(id)
     hydrateForm(data)
   } catch (err) {
-    errorMsg.value = err?.response?.data?.detail || err?.message || 'Filterset konnte nicht geladen werden'
+    errorMsg.value = err?.response?.data?.detail || err?.message || t('ringbuffer.filterEditor.loadError')
   }
 }
 
@@ -656,7 +662,7 @@ async function expandHierarchyChip(item, index) {
     form.hierarchy_nodes = form.hierarchy_nodes.filter((n, i) => i !== index)
     markDirty()
   } catch (err) {
-    errorMsg.value = err?.response?.data?.detail || err?.message || 'Knoten konnten nicht aufgelöst werden'
+    errorMsg.value = err?.response?.data?.detail || err?.message || t('ringbuffer.filterEditor.expandError')
   } finally {
     expanding.value = false
   }
@@ -667,7 +673,7 @@ async function expandHierarchyChip(item, index) {
 async function onSave(addToTopbar) {
   errorMsg.value = ''
   if (!form.name.trim()) {
-    errorMsg.value = 'Name ist erforderlich'
+    errorMsg.value = t('ringbuffer.filterEditor.nameRequired')
     return
   }
   saving.value = true
@@ -686,14 +692,14 @@ async function onSave(addToTopbar) {
         await ringbufferApi.patchFiltersetTopbar(savedId, { topbar_active: true })
       } catch (err) {
         // Surface but don't block emit — the set itself was saved.
-        errorMsg.value = err?.response?.data?.detail || err?.message || 'Topbar-Update fehlgeschlagen'
+        errorMsg.value = err?.response?.data?.detail || err?.message || t('ringbuffer.filterEditor.topbarUpdateFailed')
       }
     }
     dirty.value = false
     emit('saved', { id: savedId, topbar: Boolean(addToTopbar) })
     emit('update:modelValue', false)
   } catch (err) {
-    errorMsg.value = err?.response?.data?.detail || err?.message || 'Speichern fehlgeschlagen'
+    errorMsg.value = err?.response?.data?.detail || err?.message || t('ringbuffer.filterEditor.saveFailed')
   } finally {
     saving.value = false
   }
@@ -723,7 +729,7 @@ async function confirmDelete() {
     dirty.value = false
     emit('update:modelValue', false)
   } catch (err) {
-    errorMsg.value = err?.response?.data?.detail || err?.message || 'Löschen fehlgeschlagen'
+    errorMsg.value = err?.response?.data?.detail || err?.message || t('ringbuffer.filterEditor.deleteFailed')
   } finally {
     deleting.value = false
   }

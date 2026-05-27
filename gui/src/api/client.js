@@ -114,6 +114,8 @@ export const adapterApi = {
   deleteInstance:  (id)         => api.delete(`/adapters/instances/${id}`),
   testInstance:       (id, config)      => api.post(`/adapters/instances/${id}/test`, { config }),
   restartInstance:    (id)              => api.post(`/adapters/instances/${id}/restart`),
+  migrateBindings:    (sourceId, targetInstanceId) =>
+    api.post(`/adapters/instances/${sourceId}/bindings/migrate`, { target_instance_id: targetInstanceId }),
   mqttBrowseTopics:   (id, timeout = 5) => api.get(`/adapters/instances/${id}/mqtt/browse`, { params: { timeout }, timeout: (timeout + 3) * 1000 }),
   mqttSamplePayload:  (id, topic, timeout = 5) => api.get(`/adapters/instances/${id}/mqtt/sample`, { params: { topic, timeout }, timeout: (timeout + 3) * 1000 }),
   iobrokerBrowseStates: (id, q = '', limit = 50) => api.get(`/adapters/instances/${id}/iobroker/states`, { params: { q, limit } }),

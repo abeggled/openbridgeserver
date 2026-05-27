@@ -28,37 +28,16 @@
  * (hover-only) styling.
  */
 import { ref } from 'vue'
-import chroma from 'chroma-js'
 import { ringbufferApi } from '@/api/client'
-
-const DARK_TEXT = '#0f172a'
-const LIGHT_TEXT = '#ffffff'
+import { getAutoContrastText, isValidColor } from '@/utils/colorContrast'
 
 // Module-level cache — shared across all callers of useSetColors().
 // Keys are set ids, values are the full set objects (only sets that are
 // topbar-active are stored).
 const topbarSets = ref(new Map())
 
-function isValidColor(value) {
-  if (value === null || value === undefined) return false
-  const trimmed = String(value).trim()
-  if (!trimmed) return false
-  try {
-    return chroma.valid(trimmed)
-  } catch {
-    return false
-  }
-}
-
 function getAccentText(color) {
-  if (!isValidColor(color)) return DARK_TEXT
-  try {
-    const cWhite = chroma.contrast(color, LIGHT_TEXT)
-    const cDark = chroma.contrast(color, DARK_TEXT)
-    return cWhite > cDark ? LIGHT_TEXT : DARK_TEXT
-  } catch {
-    return DARK_TEXT
-  }
+  return getAutoContrastText(color)
 }
 
 function setSets(sets) {

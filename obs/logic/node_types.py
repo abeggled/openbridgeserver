@@ -707,11 +707,12 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="json_extractor",
         label="JSON Extractor",
         category="integration",
-        description="Parst einen JSON-String und extrahiert einen Wert anhand eines Schlüsselpfades (Punkt-Notation, z.B. sensors.temperature). Empfangene Daten werden im Konfigurations-Panel zur Pfad-Auswahl angezeigt.",
+        description="Parst einen JSON-String und extrahiert einen oder mehrere Werte anhand von Schlüsselpfaden (Punkt-Notation, z.B. sensors.temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
         inputs=[_port("data", "Daten")],
-        outputs=[_port("value", "Wert")],
+        outputs=[_port("value", "Wert")],  # overridden dynamically when json_paths is set
         config_schema={
-            "json_path": {"type": "string", "default": "", "label": "Schlüsselpfad"},
+            "json_path": {"type": "string", "default": "", "label": "Schlüsselpfad (Legacy)"},
+            "json_paths": {"type": "string", "default": "", "label": "Ausgänge (JSON-Array)"},
         },
         color="#0369a1",
     ),
@@ -719,11 +720,12 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="xml_extractor",
         label="XML Extractor",
         category="integration",
-        description="Parst einen XML-String und extrahiert einen Wert anhand eines XPath-Ausdrucks (ElementTree-Syntax, z.B. ./sensor/temperature). Empfangene Daten werden im Konfigurations-Panel zur Pfad-Auswahl angezeigt.",
+        description="Parst einen XML-String und extrahiert einen oder mehrere Werte anhand von XPath-Ausdrücken (ElementTree-Syntax, z.B. .//temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
         inputs=[_port("data", "Daten")],
-        outputs=[_port("value", "Wert")],
+        outputs=[_port("value", "Wert")],  # overridden dynamically when xml_paths is set
         config_schema={
-            "xml_path": {"type": "string", "default": "", "label": "XPath-Ausdruck"},
+            "xml_path": {"type": "string", "default": "", "label": "XPath-Ausdruck (Legacy)"},
+            "xml_paths": {"type": "string", "default": "", "label": "Ausgänge (JSON-Array)"},
         },
         color="#0369a1",
     ),

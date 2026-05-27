@@ -7,6 +7,7 @@
  * mode="minimal"     — nur Aktivieren/Deaktivieren
  */
 import { ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { datapoints as dpApi } from '@/api/client'
 import type { BindingOut } from '@/api/client'
 import ZeitschaltuhrBindingModal from '@/components/ZeitschaltuhrBindingModal.vue'
@@ -20,6 +21,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void
 }>()
+
+const { t } = useI18n()
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -41,7 +44,7 @@ async function load() {
   try {
     bindings.value = await dpApi.listBindings(props.datapointId)
   } catch {
-    errorMsg.value = 'Verknüpfungen konnten nicht geladen werden.'
+    errorMsg.value = t('zst.loadError')
   } finally {
     loading.value = false
   }
@@ -57,7 +60,7 @@ async function toggleEnabled(b: BindingOut) {
     const idx = bindings.value.findIndex((x) => x.id === b.id)
     if (idx >= 0) bindings.value[idx] = updated
   } catch {
-    errorMsg.value = 'Fehler beim Ändern des Aktivierungsstatus.'
+    errorMsg.value = t('zst.toggleError')
   } finally {
     saving.value = false
   }
@@ -81,7 +84,7 @@ async function confirmDelete(b: BindingOut) {
     await dpApi.deleteBinding(props.datapointId, String(b.id))
     bindings.value = bindings.value.filter((x) => x.id !== b.id)
   } catch {
-    errorMsg.value = 'Fehler beim Löschen des Schaltpunkts.'
+    errorMsg.value = t('zst.deleteError')
   } finally {
     saving.value = false
   }
@@ -103,7 +106,7 @@ async function addBinding() {
     // Direkt den neuen Schaltpunkt zum Bearbeiten öffnen
     editingBinding.value = created
   } catch {
-    errorMsg.value = 'Fehler beim Erstellen des Schaltpunkts.'
+    errorMsg.value = t('zst.createError')
   } finally {
     saving.value = false
   }
@@ -139,11 +142,11 @@ function bindingLabel(b: BindingOut): string {
     const m = String((c.minute as number | undefined) ?? 0).padStart(2, '0')
     timeStr = `${h}:${m}`
   } else if (ref === 'sunrise')      timeStr = 'Sonnenaufgang'
-  else if (ref === 'sunset')         timeStr = 'Sonnenuntergang'
-  else if (ref === 'solar_noon')     timeStr = 'Sonnenmittag'
-  else if (ref === 'solar_altitude') timeStr = `Sonne ${c.solar_altitude_deg ?? '?'}°`
+  else if (ref === 'sunset')         timeStr = t('zst.labelSunset')
+  else if (ref === 'solar_noon')     timeStr = t('zst.labelSolarNoon')
+  else if (ref === 'solar_altitude') timeStr = t('zst.labelSolar', { deg: c.solar_altitude_deg ?? '?' })
 
-  const typeStr = type === 'meta' ? 'Meta' : type === 'annual' ? 'jährlich' : type === 'holiday' ? 'Feiertag' : 'täglich'
+  const typeStr = type === 'meta' ? t('zst.labelMeta') : type === 'annual' ? t('zst.labelAnnual') : type === 'holiday' ? t('zst.labelHoliday') : t('zst.labelDaily')
   return `${typeStr} ${timeStr} → ${val}`.trim()
 }
 
@@ -162,9 +165,9 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
       <!-- Header -->
       <div class="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
         <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">
-          🕐 Schaltpunkte
+          🕐 {{ $t('zst.title') }}
           <span class="ml-1 text-xs font-normal text-gray-400 dark:text-gray-500">
-            {{ mode === 'full' ? '(Vollzugriff)' : mode === 'restricted' ? '(Eingeschränkt)' : '(Minimal)' }}
+            {{ mode === 'full' ? '(' + $t('zst.modeFull') + ')' : mode === 'restricted' ? '(' + $t('zst.modeRestricted') + ')' : '(' + $t('zst.modeMinimal') + ')' }}
           </span>
         </h2>
         <button
@@ -176,7 +179,7 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
       <!-- Body -->
       <div class="flex-1 overflow-y-auto px-5 py-4 space-y-2">
 
-        <div v-if="loading" class="text-sm text-gray-500 dark:text-gray-400 text-center py-6">Lade …</div>
+        <div v-if="loading" class="text-sm text-gray-500 dark:text-gray-400 text-center py-6">{{ $t('common.loading') }}</div>
 
         <template v-else>
 
@@ -184,7 +187,7 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
             v-if="bindings.length === 0"
             class="text-sm text-gray-400 dark:text-gray-500 text-center py-4"
           >
-            Keine Schaltpunkte vorhanden.
+            {{ $t('zst.noBindings') }}
           </div>
 
           <!-- Binding-Liste -->
@@ -201,7 +204,7 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
               <!-- Enable/Disable toggle -->
               <button
                 type="button"
-                :title="b.enabled ? 'Deaktivieren' : 'Aktivieren'"
+                :title="b.enabled ? $t('zst.deactivate') : $t('zst.activate')"
                 class="w-7 h-7 flex items-center justify-center rounded-full flex-shrink-0 transition-colors"
                 :class="b.enabled
                   ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/70'
@@ -245,19 +248,19 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
             <!-- Bestätigungs-Zustand -->
             <div v-else class="flex items-center gap-2 px-3 py-2">
               <span class="flex-1 text-xs text-red-600 dark:text-red-400 font-medium truncate min-w-0">
-                Löschen: {{ bindingLabel(b) }}
+                {{ $t('zst.deleteConfirm', { label: bindingLabel(b) }) }}
               </span>
               <button
                 type="button"
                 :class="[btnBase, 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600']"
                 @click="cancelDelete"
-              >Nein</button>
+              >{{ $t('common.no') }}</button>
               <button
                 type="button"
                 :class="[btnBase, 'bg-red-600 hover:bg-red-500 text-white border border-red-600']"
                 :disabled="saving"
                 @click="confirmDelete(b)"
-              >Ja</button>
+              >{{ $t('common.yes') }}</button>
             </div>
           </div>
 
@@ -275,14 +278,14 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
           :disabled="saving || loading"
           @click="addBinding"
         >
-          {{ saving ? '…' : '+ Neuer Schaltpunkt' }}
+          {{ saving ? '…' : $t('zst.addBinding') }}
         </button>
         <span v-else />
 
         <button
           class="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded"
           @click="emit('close')"
-        >Schließen</button>
+        >{{ $t('common.close') }}</button>
       </div>
 
     </div>

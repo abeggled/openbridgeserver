@@ -2,10 +2,10 @@
   <Combobox
     :model-value="modelValue"
     :multi="true"
-    :placeholder="placeholder"
+    :placeholder="effectivePlaceholder"
     :fetch-suggestions="fetchSuggestions"
     :display-items="displayItems"
-    empty-text="Keine Knoten gefunden"
+    :empty-text="$t('common.noHierarchyNodes')"
     @update:modelValue="onUpdate"
   >
     <!-- Dropdown item: two-line (tree above path) -->
@@ -14,7 +14,7 @@
         <span class="text-[10px] uppercase tracking-wide text-slate-400">{{ item.tree_name }}</span>
         <PathLabel :segments="item.path" />
       </div>
-      <span v-if="item.is_leaf === false" class="text-xs text-slate-500 shrink-0">Knoten</span>
+      <span v-if="item.is_leaf === false" class="text-xs text-slate-500 shrink-0">{{ $t('common.hierarchyNodeType') }}</span>
     </template>
 
     <!-- Chip: forward the consumer's slot first (FilterEditor injects an
@@ -31,15 +31,20 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import Combobox from '@/components/ui/Combobox.vue'
 import PathLabel from '@/components/ui/PathLabel.vue'
 import { hierarchyApi } from '@/api/client'
 
+const { t } = useI18n()
+
 const props = defineProps({
   modelValue: { type: Array, default: () => [] },
-  placeholder: { type: String, default: 'Knoten suchen …' },
+  placeholder: { type: String, default: null },
 })
 const emit = defineEmits(['update:modelValue'])
+
+const effectivePlaceholder = computed(() => props.placeholder ?? t('common.hierarchySearchPlaceholder'))
 
 /** All known nodes, fully built with path + tree info. */
 const nodes = ref([])

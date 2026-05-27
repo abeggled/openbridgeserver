@@ -5,21 +5,21 @@
   <div class="flex flex-col gap-5 h-full min-h-0">
     <div class="flex flex-wrap items-start gap-3 shrink-0">
       <div class="flex-1">
-        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Monitor</h2>
-        <p class="text-sm text-slate-500 mt-0.5">Live Log</p>
+        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('ringbuffer.title') }}</h2>
+        <p class="text-sm text-slate-500 mt-0.5">{{ $t('ringbuffer.subtitle') }}</p>
       </div>
       <!-- Right cluster: aligns buttons + status chip + ringbuffer stats on a
            single baseline; status badge matches the button height. -->
       <div class="flex items-center gap-2">
-        <button @click="showConfig = true" class="btn-secondary btn-sm" data-testid="btn-open-monitor-config">⚙ Konfigurieren</button>
-        <button @click="applyFilters" class="btn-secondary btn-sm" data-testid="btn-refresh-ringbuffer">↻ Aktualisieren</button>
+        <button @click="showConfig = true" class="btn-secondary btn-sm" data-testid="btn-open-monitor-config">{{ $t('ringbuffer.configure') }}</button>
+        <button @click="applyFilters" class="btn-secondary btn-sm" data-testid="btn-refresh-ringbuffer">{{ $t('ringbuffer.refresh') }}</button>
         <button
           v-if="!paused"
           @click="pauseLive"
           class="btn-secondary btn-sm"
           data-testid="btn-live-pause"
         >
-          ⏸ Pause
+          {{ $t('ringbuffer.pause') }}
         </button>
         <button
           v-else
@@ -27,7 +27,7 @@
           class="btn-secondary btn-sm"
           data-testid="btn-live-resume"
         >
-          ▶ Resume
+          {{ $t('ringbuffer.resume') }}
         </button>
         <!-- Single, consolidated status indicator: WS-connection + pause-state.
              Same padding/height as btn-sm so the chip sits on the button
@@ -76,17 +76,17 @@
     <div class="card overflow-hidden flex-1 min-h-0 flex flex-col">
       <div v-if="loading" class="flex justify-center py-12"><Spinner size="lg" /></div>
       <div v-else-if="listError" class="px-4 py-6 text-sm text-red-500" data-testid="ringbuffer-error">{{ listError }}</div>
-      <div v-else-if="!entries.length" class="text-center text-slate-500 text-sm py-12" data-testid="ringbuffer-empty">Keine Einträge im Monitor</div>
+      <div v-else-if="!entries.length" class="text-center text-slate-500 text-sm py-12" data-testid="ringbuffer-empty">{{ $t('ringbuffer.noEntries') }}</div>
       <div v-else class="table-wrap flex-1 min-h-0 overflow-y-auto" ref="tableWrapRef" data-testid="ringbuffer-table-wrap">
         <table class="table">
           <thead class="sticky top-0">
             <tr>
-              <th>Zeitstempel</th>
-              <th>Objekt</th>
-              <th>Wert</th>
-              <th>Vorheriger Wert</th>
-              <th>Qualität</th>
-              <th>Adapter</th>
+              <th>{{ $t('ringbuffer.colTimestamp') }}</th>
+              <th>{{ $t('ringbuffer.colObject') }}</th>
+              <th>{{ $t('ringbuffer.colValue') }}</th>
+              <th>{{ $t('ringbuffer.colPrevValue') }}</th>
+              <th>{{ $t('ringbuffer.colQuality') }}</th>
+              <th>{{ $t('ringbuffer.colAdapter') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -121,6 +121,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
 import { useTz } from '@/composables/useTz'
 import { useSetColors } from '@/composables/useSetColors'
@@ -139,6 +140,7 @@ import MonitorConfigModal from '@/views/ringbuffer/MonitorConfigModal.vue'
 
 const DEFAULT_QUERY_LIMIT = 500
 
+const { t } = useI18n()
 const { fmtDateTime } = useTz()
 const wsStore = useWebSocketStore()
 const { getRowStyle, setSets, sets: topbarSetsRef } = useSetColors()
@@ -210,6 +212,7 @@ async function onTimeFilterChanged() {
 
 const tableWrapRef = ref(null)
 const filtersets = ref([])
+let liveIngressSeq = 0
 
 const { paused, queuedCount, enqueue: enqueueLive, pause: pauseLive, resume: resumeLive, clear: clearLiveQueue, dispose: disposeLiveQueue } =
   useLiveQueue(entries, {
@@ -220,12 +223,40 @@ const { paused, queuedCount, enqueue: enqueueLive, pause: pauseLive, resume: res
     },
   })
 
+function markAndEnqueueLive(entry) {
+  liveIngressSeq += 1
+  enqueueLive(entry)
+}
+
+function entryIdentity(entry) {
+  return [
+    entry?.datapoint_id ?? '',
+    entry?.ts ?? '',
+    entry?.source_adapter ?? '',
+    JSON.stringify(entry?.new_value ?? null),
+    JSON.stringify(entry?.old_value ?? null),
+  ].join('|')
+}
+
+function mergeEntriesKeepingLiveFirst(liveFirst, loaded) {
+  const merged = []
+  const seen = new Set()
+  for (const entry of [...liveFirst, ...loaded]) {
+    const key = entryIdentity(entry)
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(entry)
+    if (merged.length >= DEFAULT_QUERY_LIMIT) break
+  }
+  return merged
+}
+
 const wsConnected = computed(() => wsStore.connected)
 
 const statusBadgeText = computed(() => {
-  if (!wsConnected.value) return 'Offline'
-  if (paused.value) return `Pausiert (${queuedCount.value} wartend)`
-  return 'Live'
+  if (!wsConnected.value) return t('sidebar.offline')
+  if (paused.value) return t('ringbuffer.paused', { n: queuedCount.value })
+  return t('sidebar.live')
 })
 
 const statusBadgeClass = computed(() => {
@@ -241,9 +272,9 @@ const statusDotClass = computed(() => {
 })
 
 const statusBadgeTitle = computed(() => {
-  if (!wsConnected.value) return 'WebSocket offline'
-  if (paused.value) return 'Live-Updates pausiert — Resume klicken'
-  return 'Live — WebSocket verbunden, Updates aktiv'
+  if (!wsConnected.value) return t('ringbuffer.offlineTitle')
+  if (paused.value) return t('ringbuffer.pausedTitle')
+  return t('ringbuffer.liveTitle')
 })
 
 let unregisterRb = null
@@ -295,16 +326,16 @@ function onLiveEntry(entry) {
   const presetMatched = Array.isArray(entry?.matched_set_ids) ? entry.matched_set_ids : null
 
   if (activeSets.length === 0) {
-    enqueueLive({ ...entry, matched_set_ids: presetMatched ?? [] })
+    markAndEnqueueLive({ ...entry, matched_set_ids: presetMatched ?? [] })
     return
   }
   if (presetMatched && presetMatched.length > 0) {
-    enqueueLive({ ...entry, matched_set_ids: presetMatched })
+    markAndEnqueueLive({ ...entry, matched_set_ids: presetMatched })
     return
   }
   const ids = matchedSetIds(entry, activeSets)
   if (ids.length === 0) return
-  enqueueLive({ ...entry, matched_set_ids: ids })
+  markAndEnqueueLive({ ...entry, matched_set_ids: ids })
 }
 
 async function applyFilters() {
@@ -342,6 +373,7 @@ function activeTopbarSetIds() {
 async function load() {
   loading.value = true
   listError.value = ''
+  const liveSeqAtLoadStart = liveIngressSeq
   try {
     const setIds = activeTopbarSetIds()
     let data
@@ -358,18 +390,22 @@ async function load() {
       const resp = await ringbufferApi.queryV2(buildQueryV2())
       data = resp.data
     }
-    entries.value = data
+    const loadedEntries = Array.isArray(data) ? data : []
+    const liveArrivedDuringLoad = liveIngressSeq !== liveSeqAtLoadStart
+    entries.value = liveArrivedDuringLoad
+      ? mergeEntriesKeepingLiveFirst(entries.value, loadedEntries)
+      : loadedEntries
     await nextTick()
     if (!paused.value && tableWrapRef.value) tableWrapRef.value.scrollTop = 0
   } catch (error) {
     entries.value = []
-    listError.value = extractErrorMessage(error, 'Monitor-Abfrage fehlgeschlagen')
+    listError.value = extractErrorMessage(error, t('ringbuffer.queryFailed'))
   } finally {
     loading.value = false
   }
 }
 
 function qualityLabel(q) {
-  return q === 'good' ? 'gut' : q === 'bad' ? 'schlecht' : q === 'uncertain' ? 'undefiniert' : q
+  return q === 'good' ? t('datapoints.quality.good') : q === 'bad' ? t('datapoints.quality.bad') : q === 'uncertain' ? t('datapoints.quality.uncertain') : q
 }
 </script>

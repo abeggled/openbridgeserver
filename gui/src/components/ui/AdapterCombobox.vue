@@ -2,17 +2,17 @@
   <Combobox
     :model-value="modelValue"
     :multi="true"
-    :placeholder="placeholder"
+    :placeholder="effectivePlaceholder"
     :fetch-suggestions="fetchSuggestions"
     :display-items="displayItems"
-    empty-text="Keine konfigurierten Adapter"
+    :empty-text="$t('common.noConfiguredAdapters')"
     @update:modelValue="onUpdate"
   >
     <!-- Chip slot: flag adapter_types that are no longer configured. Remove
          (×) is rendered by the surrounding Combobox wrapper. -->
     <template #chip="{ item }">
       <span :class="['truncate', item.is_orphan ? 'line-through text-amber-500 dark:text-amber-400' : '']"
-            :title="item.is_orphan ? 'Adapter ist nicht (mehr) konfiguriert — Filter trifft auf neue Einträge nicht zu.' : ''">
+            :title="item.is_orphan ? $t('common.adapterOrphanTitle') : ''">
         {{ item.label || item.id }}
         <span v-if="item.is_orphan" class="ml-0.5">⚠</span>
       </span>
@@ -22,13 +22,18 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import Combobox from '@/components/ui/Combobox.vue'
 import { adapterApi } from '@/api/client'
 
+const { t } = useI18n()
+
 const props = defineProps({
   modelValue: { type: Array, default: () => [] },
-  placeholder: { type: String, default: 'Adapter wählen …' },
+  placeholder: { type: String, default: null },
 })
+
+const effectivePlaceholder = computed(() => props.placeholder ?? t('common.adapterSelectPlaceholder'))
 const emit = defineEmits(['update:modelValue'])
 
 // Adapter TYPES that have at least one configured INSTANCE. Earlier this used

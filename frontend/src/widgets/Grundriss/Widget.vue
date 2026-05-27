@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { WidgetRegistry } from '@/widgets/registry'
 import type { DataPointValue } from '@/types'
+import { imageToScreen as _imageToScreen } from './coords'
+import type { Rotation } from './coords'
 
 interface GrundrissArea {
   id: string
@@ -37,6 +39,7 @@ const props = defineProps<{
   value: DataPointValue | null
   statusValue: DataPointValue | null
   editorMode: boolean
+  readonly?: boolean
 }>()
 
 const router  = useRouter()
@@ -94,40 +97,28 @@ const innerStyle = computed(() => {
   }
 })
 
-// ── Letterbox / coordinate math ───────────────────────────────────────────────
-// The inner div (the rotated layer) has swapped dimensions for 90°/270°.
-// imgScale and offsets describe how the image lands inside that inner div.
+// ── Coordinate math ───────────────────────────────────────────────────────────
+// Delegates to the shared coords.ts utility (also used by Config.vue).
 
-const innerW = computed(() =>
-  (rotation.value === 90 || rotation.value === 270) ? wrapperH.value : wrapperW.value
-)
-const innerH = computed(() =>
-  (rotation.value === 90 || rotation.value === 270) ? wrapperW.value : wrapperH.value
-)
-const imgScale = computed(() =>
-  Math.min(innerW.value / naturalW.value, innerH.value / naturalH.value)
-)
-const imgOffX = computed(() => (innerW.value - naturalW.value * imgScale.value) / 2)
-const imgOffY = computed(() => (innerH.value - naturalH.value * imgScale.value) / 2)
-
-// Convert image-pixel coordinates to wrapper-relative screen coordinates.
-// These formulas are the closed-form result of: inner-div position → CSS rotation.
 function imageToScreen(px: number, py: number): [number, number] {
-  const s = imgScale.value
-  const ox = imgOffX.value
-  const oy = imgOffY.value
-  const W = wrapperW.value
-  const H = wrapperH.value
-  switch (rotation.value) {
-    case 90:  return [W - oy - py * s, ox + px * s]
-    case 180: return [W - ox - px * s, H - oy - py * s]
-    case 270: return [oy + py * s,     H - ox - px * s]
-    default:  return [ox + px * s,     oy + py * s]
-  }
+  return _imageToScreen(px, py, {
+    containerW: wrapperW.value,
+    containerH: wrapperH.value,
+    naturalW:   naturalW.value,
+    naturalH:   naturalH.value,
+    rotation:   rotation.value as Rotation,
+  })
 }
 
-// Label font size in screen pixels (proportional to rendered image width)
-const labelFontSz = computed(() => Math.max(8, naturalW.value * 0.018 * imgScale.value))
+// Label font size in screen pixels (proportional to rendered image width).
+// Recomputes the scale factor directly — same formula as coords.ts layoutInternals().
+const labelFontSz = computed(() => {
+  const r  = rotation.value
+  const innerW = (r === 90 || r === 270) ? wrapperH.value : wrapperW.value
+  const innerH = (r === 90 || r === 270) ? wrapperW.value : wrapperH.value
+  const s  = Math.min(innerW / naturalW.value, innerH / naturalH.value)
+  return Math.max(8, naturalW.value * 0.018 * s)
+})
 
 function labelStyle(area: GrundrissArea) {
   const [sx, sy] = imageToScreen(area.labelX, area.labelY)
@@ -252,6 +243,7 @@ function handleAreaClick(area: GrundrissArea) {
           :value="mw.datapointId ? dpStore.getValue(mw.datapointId) : null"
           :status-value="mw.statusDatapointId ? dpStore.getValue(mw.statusDatapointId) : null"
           :editor-mode="editorMode"
+          :readonly="props.readonly"
           :h="Math.round(mw.hPx / 80)"
         />
         <div v-else class="flex items-center justify-center h-full text-xs text-gray-500">

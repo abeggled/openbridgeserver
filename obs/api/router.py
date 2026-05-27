@@ -22,6 +22,7 @@ from obs.api.v1.logic import router as logic_router
 from obs.api.v1.ringbuffer import router as rb_router
 from obs.api.v1.search import router as search_router
 from obs.api.v1.system import router as system_router
+from obs.api.v1.visu_backgrounds import router as visu_backgrounds_router
 from obs.api.v1.visu import router as visu_router
 from obs.api.v1.hierarchy import router as hierarchy_router
 from obs.api.v1.weather import router as weather_router
@@ -44,6 +45,7 @@ router.include_router(knxproj_router, prefix="/knxproj")
 router.include_router(knxkeyfile_router, prefix="/knx")
 router.include_router(logic_router, prefix="/logic")
 router.include_router(visu_router, prefix="/visu")
+router.include_router(visu_backgrounds_router, prefix="/visu/backgrounds")
 router.include_router(icons_router, prefix="/icons")
 router.include_router(camera_router, prefix="/camera")
 router.include_router(weather_router, prefix="/weather")

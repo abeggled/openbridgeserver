@@ -11,3 +11,16 @@ if (typeof globalThis.matchMedia !== 'function') {
     removeListener: () => {},
   })
 }
+
+// Install vue-i18n globally for all Vue Test Utils mount() calls.
+// Components that use $t() / useI18n() require the plugin to be present;
+// without it they throw "Need to install with app.use".
+import { config } from '@vue/test-utils'
+import { createI18n } from 'vue-i18n'
+import de from '@/locales/de.json'
+import en from '@/locales/en.json'
+
+config.global.plugins = config.global.plugins ?? []
+config.global.plugins.push(
+  createI18n({ legacy: false, locale: 'de', fallbackLocale: 'de', messages: { de, en } }),
+)

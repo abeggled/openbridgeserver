@@ -72,12 +72,12 @@ watch([sourcePageId, sourceWidgetName], () => {
   <div class="space-y-3">
     <!-- Quell-Seite -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Quell-Seite</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.widgetref.sourcePage') }}</label>
       <select
         v-model="sourcePageId"
         class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
       >
-        <option value="">— Seite wählen —</option>
+        <option value="">{{ $t('widgets.widgetref.selectPage') }}</option>
         <option v-for="p in pages" :key="p.id" :value="p.id">
           {{ pagePath(p) }}
         </option>
@@ -86,14 +86,14 @@ watch([sourcePageId, sourceWidgetName], () => {
 
     <!-- Widget-Name -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Widget (Name)</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.widgetref.widget') }}</label>
       <select
         v-model="sourceWidgetName"
         :disabled="!sourcePageId || loadingWidgets"
         class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <option value="">
-          {{ loadingWidgets ? 'Lade …' : pageWidgetNames.length ? '— Widget wählen —' : '— keine benannten Widgets —' }}
+          {{ loadingWidgets ? $t('common.loading') : pageWidgetNames.length ? $t('widgets.widgetref.selectWidget') : $t('widgets.widgetref.noNamedWidgets') }}
         </option>
         <option v-for="name in pageWidgetNames" :key="name" :value="name">
           {{ name }}
@@ -105,7 +105,7 @@ watch([sourcePageId, sourceWidgetName], () => {
         v-if="sourcePageId && !loadingWidgets && pageWidgetNames.length === 0"
         class="text-xs text-amber-500 dark:text-amber-400 mt-1.5"
       >
-        ⚠ Auf dieser Seite hat kein Widget einen Namen. Namen im Editor vergeben.
+        {{ $t('widgets.widgetref.noNamedWidgetsHint') }}
       </p>
     </div>
 

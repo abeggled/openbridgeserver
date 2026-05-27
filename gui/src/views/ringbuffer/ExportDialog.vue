@@ -1,15 +1,15 @@
 <template>
-  <Modal v-model="openModel" title="Export" :soft-backdrop="true" max-width="lg">
+  <Modal v-model="openModel" :title="$t('ringbuffer.export.title')" :soft-backdrop="true" max-width="lg">
     <div class="flex flex-col gap-4">
       <!-- Delimiter / Quote / Escape -->
       <div class="form-group">
         <div class="flex items-center justify-between mb-1">
-          <label class="label">CSV-Format</label>
+          <label class="label">{{ $t('ringbuffer.export.csvFormat') }}</label>
           <button
             type="button"
             class="btn-secondary btn-sm"
             data-testid="export-reset-rfc4180"
-            title="Setzt Trennzeichen, Anführungszeichen und Escape-Zeichen auf die RFC-4180-Vorgabe."
+            :title="$t('ringbuffer.export.rfcResetTitle')"
             @click="resetToRfc4180"
           >
             ↺ RFC 4180
@@ -17,7 +17,7 @@
         </div>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div class="flex flex-col gap-1">
-            <label class="text-xs text-slate-500">Trennzeichen</label>
+            <label class="text-xs text-slate-500">{{ $t('ringbuffer.export.separator') }}</label>
             <div class="flex items-center gap-2">
               <input
                 v-model="form.delimiter"
@@ -31,16 +31,16 @@
                 type="button"
                 class="btn-secondary btn-sm"
                 data-testid="export-delimiter-tab"
-                title="Tabulator als Trennzeichen setzen (TSV)"
+                :title="$t('ringbuffer.export.tabButton')"
                 @click="form.delimiter = '\t'"
               >
                 ⇥ Tab
               </button>
-              <span v-if="form.delimiter === '\t'" class="text-xs text-slate-500">Tabulator</span>
+              <span v-if="form.delimiter === '\t'" class="text-xs text-slate-500">{{ $t('ringbuffer.export.tabLabel') }}</span>
             </div>
           </div>
           <div class="flex flex-col gap-1">
-            <label class="text-xs text-slate-500">Anführungszeichen</label>
+            <label class="text-xs text-slate-500">{{ $t('ringbuffer.export.quote') }}</label>
             <input
               v-model="form.quote_char"
               type="text"
@@ -51,7 +51,7 @@
             />
           </div>
           <div class="flex flex-col gap-1">
-            <label class="text-xs text-slate-500">Escape-Zeichen</label>
+            <label class="text-xs text-slate-500">{{ $t('ringbuffer.export.escape') }}</label>
             <input
               v-model="form.escape_char"
               type="text"
@@ -63,31 +63,33 @@
           </div>
         </div>
         <p class="text-xs text-slate-500 mt-1.5">
-          Dateiendung: <code class="font-mono">.{{ form.delimiter === '\t' ? 'tsv' : 'csv' }}</code>.
-          Escape-Zeichen leer = RFC 4180 (Anführungszeichen im Feld werden verdoppelt).
+          <i18n-t keypath="ringbuffer.export.fileExtHint" tag="span">
+            <template #ext><code class="font-mono">.{{ form.delimiter === '\t' ? 'tsv' : 'csv' }}</code></template>
+          </i18n-t>
+          {{ $t('ringbuffer.export.escapeHint') }}
         </p>
       </div>
 
       <!-- Encoding -->
       <div class="form-group">
-        <label class="label">Zeichenkodierung</label>
+        <label class="label">{{ $t('ringbuffer.export.encoding') }}</label>
         <select v-model="form.encoding" class="input" data-testid="export-encoding">
           <option value="utf8">UTF-8</option>
-          <option value="utf8-bom">UTF-8 mit BOM (für ältere Excel-Versionen)</option>
+          <option value="utf8-bom">{{ $t('ringbuffer.export.utf8Bom') }}</option>
         </select>
       </div>
 
       <!-- Optional columns -->
       <div class="form-group">
-        <label class="label">Zusätzliche Spalten</label>
+        <label class="label">{{ $t('ringbuffer.export.extraColumns') }}</label>
         <div class="flex flex-col gap-1.5">
           <label class="inline-flex items-center gap-2 text-sm">
             <input type="checkbox" v-model="form.include_unit" data-testid="export-include-unit" />
-            <span><code class="font-mono">unit</code> — Einheit aus dem Datapoint</span>
+            <span><code class="font-mono">unit</code> — {{ $t('ringbuffer.export.unitColumn') }}</span>
           </label>
           <label class="inline-flex items-center gap-2 text-sm">
             <input type="checkbox" v-model="form.include_matched_set_ids" data-testid="export-include-matched" />
-            <span><code class="font-mono">matched_set_ids</code> — IDs der Sets, die jede Zeile getroffen haben</span>
+            <span><code class="font-mono">matched_set_ids</code> — {{ $t('ringbuffer.export.matchedSetsColumn') }}</span>
           </label>
         </div>
       </div>
@@ -97,18 +99,19 @@
         class="rounded-md border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900"
         data-testid="export-warning"
       >
-        Dieser Export würde <strong>{{ pendingRowCount.toLocaleString('de-DE') }}</strong> Zeilen erzeugen.
-        Trotzdem fortfahren?
+        <i18n-t keypath="ringbuffer.export.rowWarning" tag="span">
+          <template #n><strong>{{ pendingRowCount.toLocaleString() }}</strong></template>
+        </i18n-t>
       </div>
 
       <p v-if="errorMsg" class="text-sm text-red-500" data-testid="export-error">{{ errorMsg }}</p>
     </div>
 
     <template #footer>
-      <button class="btn-secondary" data-testid="btn-export-cancel" @click="openModel = false">Abbrechen</button>
+      <button class="btn-secondary" data-testid="btn-export-cancel" @click="openModel = false">{{ $t('common.cancel') }}</button>
       <button class="btn-primary" :disabled="busy || !formValid" data-testid="btn-export-go" @click="onExport">
         <Spinner v-if="busy" size="sm" color="white" />
-        {{ pendingRowCount !== null ? 'Trotzdem exportieren' : 'Exportieren' }}
+        {{ pendingRowCount !== null ? $t('ringbuffer.export.exportAnyway') : $t('ringbuffer.export.export') }}
       </button>
     </template>
   </Modal>
@@ -116,9 +119,12 @@
 
 <script setup>
 import { ref, reactive, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
 import Modal from '@/components/ui/Modal.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+
+const { t } = useI18n()
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -255,7 +261,7 @@ async function onExport() {
     pendingRowCount.value = null
     openModel.value = false
   } catch (err) {
-    errorMsg.value = err?.response?.data?.detail || err?.message || 'Export fehlgeschlagen'
+    errorMsg.value = err?.response?.data?.detail || err?.message || t('ringbuffer.export.failed')
   } finally {
     busy.value = false
   }
