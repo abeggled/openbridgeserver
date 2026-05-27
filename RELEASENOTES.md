@@ -15,6 +15,7 @@
 * Visu: Duplication, Import, Export of visu sites
   
 ### Fixes:
+* Logicmodule Security (Upstream PR #PENDING): harden notify_pushover image_url fetching against DNS-rebinding SSRF bypass
 * General: Fix used tags at docker images
 * General: Implement contract tests for dependencies
 * Backend: History give only last 1000 entries now default 10'000 with amximum of 100'000

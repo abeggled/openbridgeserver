@@ -39,31 +39,52 @@ def _msg_to_str(v: object) -> str:
     return str(v)
 
 
-def _is_safe_image_url(url: str) -> bool:
-    """Allow only HTTPS URLs resolving to public IPs."""
-    from urllib.parse import urlparse
+async def _resolve_safe_image_url(url: str) -> tuple[str, str, str] | None:
+    """Return a DNS-pinned HTTPS request tuple for safe image downloads.
+
+    Returns:
+        (pinned_url, host_header, pinned_ip) or None if the URL is unsafe.
+    """
+    from urllib.parse import urlparse, urlunparse
 
     try:
         parsed = urlparse(url)
     except Exception:
-        return False
+        return None
     if parsed.scheme.lower() != "https" or not parsed.hostname:
-        return False
+        return None
+
     host = parsed.hostname
+    port = parsed.port or 443
+
     try:
-        infos = socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+        infos = await asyncio.to_thread(socket.getaddrinfo, host, port, 0, socket.SOCK_STREAM)
     except OSError:
-        return False
+        return None
+
+    resolved_ips: list[str] = []
     for info in infos:
         ip = info[4][0]
         try:
             addr = ipaddress.ip_address(ip)
         except ValueError:
-            return False
-        if any((addr.is_private, addr.is_loopback, addr.is_link_local, addr.is_multicast, addr.is_reserved, addr.is_unspecified)):
-            return False
-    return True
+            return None
+        if not addr.is_global:
+            return None
+        ip_str = str(addr)
+        if ip_str not in resolved_ips:
+            resolved_ips.append(ip_str)
 
+    if not resolved_ips:
+        return None
+
+    pinned_ip = resolved_ips[0]
+    pinned_host = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+    has_explicit_port = parsed.port is not None
+    netloc = f"{pinned_host}:{port}" if has_explicit_port else pinned_host
+    pinned_url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+    host_header = f"{host}:{port}" if has_explicit_port else host
+    return pinned_url, host_header, pinned_ip
 
 
 _THROTTLE_UNITS: dict[str, float] = {
@@ -549,9 +570,24 @@ class LogicManager:
                     if url_title:
                         payload["url_title"] = url_title
 
-                    if image_url and _is_safe_image_url(image_url):
+                    if image_url:
+                        resolved = await _resolve_safe_image_url(image_url)
+                        if resolved is None:
+                            raise ValueError("Unsafe image_url: only public HTTPS hosts are allowed")
+                        pinned_url, host_header, pinned_ip = resolved
                         # Download image and attach as multipart
-                        img_r = await client.get(image_url, timeout=10.0)
+                        img_r = await client.get(
+                            pinned_url,
+                            timeout=10.0,
+                            follow_redirects=False,
+                            headers={"Host": host_header},
+                            extensions={"sni_hostname": host_header.split(":", 1)[0]},
+                        )
+                        net_stream = img_r.extensions.get("network_stream")
+                        if net_stream is not None:
+                            server_addr = net_stream.get_extra_info("server_addr")
+                            if server_addr and server_addr[0] != pinned_ip:
+                                raise ValueError("Pushover image_url resolved to an unexpected target IP")
                         img_r.raise_for_status()
                         content_type = img_r.headers.get("content-type", "").split(";")[0].strip().lower()
                         content_len = int(img_r.headers.get("content-length", "0") or "0")
@@ -565,8 +601,6 @@ class LogicManager:
                             data=payload,
                             files={"attachment": (fname, img_r.content, content_type or "image/jpeg")},
                         )
-                    elif image_url:
-                        raise ValueError("Unsafe image_url: only public HTTPS hosts are allowed")
                     else:
                         r = await client.post(
                             "https://api.pushover.net/1/messages.json",
