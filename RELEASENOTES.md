@@ -22,7 +22,7 @@
 * Adapter: "Zeitschaltuhr" support for multiple "Schaltpunkte" and own public holidays
 * Logicmodule: Functional Block: Sommer/Winter Umschaltung nach DIN Functional Block does now work as expected
 * Logicmodule: Functional Block: Read object / Write object: Renamed objects will be reflected in the Logicmodule now
-* Logic Security (Upstream PR #PENDING): harden Pushover `image_url` fetch against non-global targets, event-loop DNS blocking, and DNS rebinding
+* Logic Security (Upstream PR #563): harden Pushover `image_url` fetch against non-global targets, event-loop DNS blocking, and DNS rebinding
 * Visu Widget: Enhancment Roof Window Widget (new Velux-Type), and new "Zweitürer (L/R)"
 * Visu Widget "Verlauf" has now the possibility to display multiple graphs with two units (left/right)
 * Visu Widget "Zeitschaltuhr" supports multiple "Schaltpunkte" and oother new functions of the adapter
