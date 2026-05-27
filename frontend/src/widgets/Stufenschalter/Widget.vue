@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { datapoints } from '@/api/client'
 import { useIcons } from '@/composables/useIcons'
 import type { DataPointValue } from '@/types'
@@ -92,44 +92,52 @@ async function advance() {
   }
 }
 
-// SVG-Icon laden und einfärben
-const svgContent = ref('')
+const svgBlobUrl = ref('')
+let iconLoadToken = 0
+
+function resetSvgBlobUrl() {
+  if (svgBlobUrl.value) {
+    URL.revokeObjectURL(svgBlobUrl.value)
+    svgBlobUrl.value = ''
+  }
+}
 
 watch(
   () => currentStep.value?.icon,
   async (icon) => {
-    if (!icon || !isSvgIcon(icon)) { svgContent.value = ''; return }
-    svgContent.value = await getSvg(svgIconName(icon))
+    const token = ++iconLoadToken
+    resetSvgBlobUrl()
+    if (!icon || !isSvgIcon(icon)) return
+    const svg = await getSvg(svgIconName(icon))
+    if (token !== iconLoadToken || !svg) return
+    svgBlobUrl.value = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
   },
   { immediate: true },
 )
 
-const coloredSvg = computed(() => {
-  if (!svgContent.value || !currentStep.value) return ''
-  const color = currentStep.value.color
-  const nonNoneFill = /\bfill\s*:\s*(?!none\b)/g
-  return svgContent.value
-    .replace(/<svg\b([^>]*)>/, (_, attrs: string) => {
-      const updated = /\bfill=/.test(attrs)
-        ? attrs.replace(/\bfill="(?!none\b)[^"]*"/, `fill="${color}"`)
-        : `${attrs} fill="${color}"`
-      return `<svg${updated}>`
-    })
-    .replace(/\bfill="(?!none\b)[^"]*"/g, `fill="${color}"`)
-    .replace(/\bstroke="(?!none\b)[^"]*"/g, `stroke="${color}"`)
-    .replace(/\bstyle="([^"]*)"/g, (_, s: string) =>
-      `style="${s
-        .replace(nonNoneFill, `fill:${color} `)
-        .replace(/\bstroke\s*:\s*(?!none\b)[^;"]*/g, `stroke:${color}`)}"`)
-    .replace(/(<style[^>]*>)([\s\S]*?)(<\/style>)/g, (_, open, css: string, close) =>
-      `${open}${css
-        .replace(nonNoneFill, `fill:${color} `)
-        .replace(/\bstroke\s*:\s*(?!none\b)[^;}\n]*/g, `stroke:${color}`)}${close}`)
+const svgMaskStyle = computed(() => {
+  if (!svgBlobUrl.value) return {}
+  return {
+    backgroundColor: currentStep.value?.color ?? '#6b7280',
+    WebkitMaskImage: `url(${svgBlobUrl.value})`,
+    maskImage: `url(${svgBlobUrl.value})`,
+    WebkitMaskRepeat: 'no-repeat',
+    maskRepeat: 'no-repeat',
+    WebkitMaskPosition: 'center',
+    maskPosition: 'center',
+    WebkitMaskSize: 'contain',
+    maskSize: 'contain',
+  }
 })
 
 const activeColor  = computed(() => currentStep.value?.color ?? '#6b7280')
 const activeIcon   = computed(() => currentStep.value?.icon  ?? '')
 const activeLabel  = computed(() => currentStep.value?.label ?? '—')
+
+onBeforeUnmount(() => {
+  iconLoadToken += 1
+  resetSvgBlobUrl()
+})
 </script>
 
 <template>
@@ -163,10 +171,9 @@ const activeLabel  = computed(() => currentStep.value?.label ?? '—')
 
       <!-- SVG-Icon -->
       <span
-        v-else-if="activeIcon && coloredSvg"
-        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
-        style="aspect-ratio: 1"
-        v-html="coloredSvg"
+        v-else-if="activeIcon && svgBlobUrl"
+        class="inline-block h-full max-w-full w-full"
+        :style="[svgMaskStyle, { aspectRatio: '1 / 1' }]"
       />
 
       <!-- Kein Icon: Fallback-Punkt in Aktivfarbe -->

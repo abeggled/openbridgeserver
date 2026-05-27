@@ -92,11 +92,8 @@ test('Link: importiertes SVG-Icon wird als <img src="blob:..."> gerendert', asyn
     await expect(iconSpan).toBeVisible()
 
     const svgImg = iconSpan.locator('img')
-    const fallback = iconSpan.locator('span')
-    await expect.poll(async () => (await svgImg.count()) + (await fallback.count()), { timeout: 10_000 }).toBeGreaterThan(0)
-    if (await svgImg.count()) {
-      await expect(svgImg).toHaveAttribute('src', /^blob:/)
-    }
+    await expect(svgImg).toBeVisible({ timeout: 10_000 })
+    await expect(svgImg).toHaveAttribute('src', /^blob:/)
     await expect(iconSpan.locator('svg')).toHaveCount(0)
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
