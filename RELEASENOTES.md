@@ -25,7 +25,7 @@
 * Visu Widget: Enhancment Roof Window Widget (new Velux-Type), and new "Zweitürer (L/R)"
 * Visu Widget "Verlauf" has now the possibility to display multiple graphs with two units (left/right)
 * Visu Widget "Zeitschaltuhr" supports multiple "Schaltpunkte" and oother new functions of the adapter
-* Visu Security (Upstream PR #PENDING): prevent stored XSS via SVG icon rendering (Visu)
+* Visu Security (Upstream PR #561): prevent stored XSS via SVG icon rendering (Visu)
 
 ### Breaking changes:
 * none
