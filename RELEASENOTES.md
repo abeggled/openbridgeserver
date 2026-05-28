@@ -20,6 +20,7 @@
 ### Fixes 🐞
 * General: Proxmox LXC, confusing checksum field content within release notes. https://github.com/abeggled/openbridgeserver/issues/375
 * Backend: The adapter page automatically reloaded every few seconds, making configuration difficult. https://github.com/abeggled/openbridgeserver/issues/394
+* Logicmodule Security (Upstream PR #PENDING): prevent SSRF/data exfiltration in iCal URL fetching by enforcing public-network URL validation and streamed size limits.
 * Logicmodule: The object selector now uses the entire available window space. https://github.com/abeggled/openbridgeserver/issues/345
 * Visu: History widget now updates automatically when new values arrive via WebSocket. https://github.com/abeggled/openbridgeserver/issues/408
 * Visu: RTR Widget now use correct values for room controller (heating) DPT 20.102 https://github.com/abeggled/openbridgeserver/issues/461

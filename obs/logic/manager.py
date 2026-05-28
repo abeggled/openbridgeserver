@@ -58,14 +58,28 @@ def _is_public_http_url(url: str) -> bool:
     if not parsed.hostname:
         return False
     try:
-        infos = socket.getaddrinfo(parsed.hostname, parsed.port, type=socket.SOCK_STREAM)
-    except OSError:
+        port = parsed.port
+    except ValueError:
+        return False
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
+    except (OSError, ValueError):
         return False
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+        if not ip.is_global:
             return False
     return True
+
+
+async def _read_limited_response_body(resp: httpx.Response, max_bytes: int) -> bytes:
+    body = bytearray()
+    async for chunk in resp.aiter_bytes():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            raise ValueError(f"iCal response too large: {len(body)} bytes")
+    return bytes(body)
+
 
 _manager: LogicManager | None = None
 
@@ -416,7 +430,7 @@ class LogicManager:
             url = (node.data.get("url") or "").strip()
             if not url:
                 continue
-            if not _is_public_http_url(url):
+            if not await asyncio.to_thread(_is_public_http_url, url):
                 logger.warning("Graph %s: blocked non-public iCal URL for node %s (%s)", graph_id[:8], node.id[:8], url)
                 continue
             refresh_min = float(node.data.get("refresh_interval_min") or 60)
@@ -427,36 +441,35 @@ class LogicManager:
             if needs_fetch:
                 try:
                     async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as _hclient:
-                        _resp = await _hclient.get(url)
-                        _resp.raise_for_status()
-                        _ct = _resp.headers.get("content-type", "").lower()
-                        if _ct and not any(t in _ct for t in _ICAL_ALLOWED_CONTENT_TYPES):
-                            raise ValueError(f"Unsupported iCal content-type: {_ct}")
-                        if len(_resp.content) > _ICAL_MAX_BYTES:
-                            raise ValueError(f"iCal response too large: {len(_resp.content)} bytes")
-                        # Decode with charset from Content-Type; many iCal servers
-                        # omit the charset and serve Latin-1 (e.g. c-trace.de).
-                        # Try strict UTF-8 first; fall back to Latin-1 which always
-                        # succeeds and covers ISO-8859-1 / CP-1252 content.
-                        _charset: str | None = None
-                        for _part in _ct.split(";"):
-                            _p = _part.strip()
-                            if _p.lower().startswith("charset="):
-                                _charset = _p[8:].strip().strip('"').strip("'")
-                                break
-                        if _charset:
-                            _raw_text = _resp.content.decode(_charset, errors="replace")
-                        else:
-                            try:
-                                _raw_text = _resp.content.decode("utf-8")
-                            except UnicodeDecodeError:
-                                _raw_text = _resp.content.decode("latin-1")
-                        if not _raw_text.lstrip().startswith("BEGIN:VCALENDAR"):
-                            raise ValueError(f"Response is not an iCal file (starts with {_raw_text[:60]!r})")
-                        hyst_node["raw"] = _raw_text
-                        hyst_node["fetched_url"] = url
-                        hyst_node["last_fetch_ts"] = execute_now.timestamp()
-                        logger.info("Graph %s: iCal fetched from %s (%d bytes)", graph_id[:8], url, len(_raw_text))
+                        async with _hclient.stream("GET", url) as _resp:
+                            _resp.raise_for_status()
+                            _ct = _resp.headers.get("content-type", "").lower()
+                            if _ct and not any(t in _ct for t in _ICAL_ALLOWED_CONTENT_TYPES):
+                                raise ValueError(f"Unsupported iCal content-type: {_ct}")
+                            _resp_bytes = await _read_limited_response_body(_resp, _ICAL_MAX_BYTES)
+                            # Decode with charset from Content-Type; many iCal servers
+                            # omit the charset and serve Latin-1 (e.g. c-trace.de).
+                            # Try strict UTF-8 first; fall back to Latin-1 which always
+                            # succeeds and covers ISO-8859-1 / CP-1252 content.
+                            _charset: str | None = None
+                            for _part in _ct.split(";"):
+                                _p = _part.strip()
+                                if _p.lower().startswith("charset="):
+                                    _charset = _p[8:].strip().strip('"').strip("'")
+                                    break
+                            if _charset:
+                                _raw_text = _resp_bytes.decode(_charset, errors="replace")
+                            else:
+                                try:
+                                    _raw_text = _resp_bytes.decode("utf-8")
+                                except UnicodeDecodeError:
+                                    _raw_text = _resp_bytes.decode("latin-1")
+                            if not _raw_text.lstrip().startswith("BEGIN:VCALENDAR"):
+                                raise ValueError(f"Response is not an iCal file (starts with {_raw_text[:60]!r})")
+                            hyst_node["raw"] = _raw_text
+                            hyst_node["fetched_url"] = url
+                            hyst_node["last_fetch_ts"] = execute_now.timestamp()
+                            logger.info("Graph %s: iCal fetched from %s (%d bytes)", graph_id[:8], url, len(_resp_bytes))
                 except Exception as _exc:
                     logger.warning("Graph %s: iCal fetch failed for node %s (%s): %s", graph_id[:8], node.id[:8], url, _exc)
 
