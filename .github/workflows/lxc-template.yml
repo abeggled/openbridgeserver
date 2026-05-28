@@ -191,19 +191,22 @@ jobs:
               exit 1
           fi
 
+          BUNDLE_FILENAME=$(basename "$BUNDLE_URL")
+          CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
+
           TMP=$(mktemp -d)
           trap "rm -rf $TMP" EXIT
 
           echo "Downloading $BUNDLE_URL ..."
-          curl -fL "$BUNDLE_URL" -o "$TMP/app-bundle.tar.gz"
+          curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"
           echo "Downloading $CHECKSUM_URL ..."
-          curl -fL "$CHECKSUM_URL" -o "$TMP/app-bundle.tar.gz.sha512"
+          curl -fL "$CHECKSUM_URL" -o "$TMP/$CHECKSUM_FILENAME"
 
-          (cd "$TMP" && sha512sum -c app-bundle.tar.gz.sha512)
+          (cd "$TMP" && sha512sum -c "$CHECKSUM_FILENAME")
 
           systemctl stop "$SERVICE"
 
-          tar -xzf "$TMP/app-bundle.tar.gz" -C "$INSTALL_DIR"
+          tar -xzf "$TMP/$BUNDLE_FILENAME" -C "$INSTALL_DIR"
           "$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
 
           # Self-update: replace this script with the version from the bundle

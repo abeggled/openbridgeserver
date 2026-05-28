@@ -17,6 +17,7 @@
 ### Fixes:
 * General: Fix used tags at docker images
 * General: Implement contract tests for dependencies
+* General Security (Upstream PR #PENDING): harden LXC updater by verifying app bundle checksums against the original release artifact filename
 * Backend: History give only last 1000 entries now default 10'000 with amximum of 100'000
 * Adapter ioBroker browse/import preview are blocked when the instance status lags behind the live socket connection
 * Adapter: "Zeitschaltuhr" support for multiple "Schaltpunkte" and own public holidays
