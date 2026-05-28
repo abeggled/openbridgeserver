@@ -15,12 +15,13 @@ function sanitizeSvg(raw: string): string {
   if (!svg || svg.tagName.toLowerCase() !== 'svg') return ''
 
   // Drop executable, externally embeddable, or dynamic mutation content.
-  doc.querySelectorAll('script,foreignObject,iframe,object,embed,audio,video,animate,set,animateMotion,animateTransform').forEach((el) => el.remove())
+  doc.querySelectorAll('script,style,foreignObject,iframe,object,embed,audio,video,animate,set,animateMotion,animateTransform').forEach((el) => el.remove())
 
   for (const el of [svg, ...Array.from(doc.querySelectorAll('*'))]) {
     for (const attr of Array.from(el.attributes)) {
       const name = attr.name.toLowerCase()
       const localName = (attr.localName || attr.name).toLowerCase()
+      const lowerValue = attr.value.toLowerCase()
       const normalizedValue = attr.value.toLowerCase().replace(/[\u0000-\u0020]+/g, '')
 
       if (el === svg && (name === 'width' || name === 'height')) {
@@ -33,7 +34,15 @@ function sanitizeSvg(raw: string): string {
         continue
       }
 
-      if ((localName === 'href' || localName === 'src') && BLOCKED_URL_SCHEMES.some((scheme) => normalizedValue.startsWith(scheme))) {
+      if (name === 'style' && (lowerValue.includes('url(') || lowerValue.includes('@import'))) {
+        el.removeAttribute(attr.name)
+        continue
+      }
+
+      if ((localName === 'href' || localName === 'src') && (
+        normalizedValue.startsWith('//') ||
+        BLOCKED_URL_SCHEMES.some((scheme) => normalizedValue.startsWith(scheme))
+      )) {
         el.removeAttribute(attr.name)
       }
     }
