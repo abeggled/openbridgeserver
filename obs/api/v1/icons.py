@@ -29,6 +29,7 @@ router = APIRouter(tags=["icons"])
 
 _SVG_RE = re.compile(rb"<svg[\s>]", re.IGNORECASE)
 _SVG_MAX_DEPTH = 256
+_SVG_DOCTYPE_RE = re.compile(r"<!DOCTYPE", re.IGNORECASE)
 
 
 def _secure_filename(filename: str) -> str:
@@ -113,6 +114,11 @@ def _sanitize_svg(content: bytes) -> bytes:
     """Remove executable/dangerous SVG constructs and return sanitized UTF-8 bytes."""
     try:
         decoded = content.decode("utf-8")
+        if _SVG_DOCTYPE_RE.search(decoded):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "Ungültiges SVG (DOCTYPE ist nicht erlaubt)",
+            )
         root = ET.fromstring(decoded)
     except (UnicodeDecodeError, ET.ParseError):
         raise HTTPException(
@@ -123,7 +129,17 @@ def _sanitize_svg(content: bytes) -> bytes:
     def local_name(tag: str) -> str:
         return tag.split("}", 1)[-1].lower()
 
-    blocked_tags = {"script", "foreignobject", "iframe", "object", "embed"}
+    blocked_tags = {
+        "script",
+        "foreignobject",
+        "iframe",
+        "object",
+        "embed",
+        "animate",
+        "animatemotion",
+        "animatetransform",
+        "set",
+    }
     stack: list[tuple[ET.Element | None, ET.Element, int]] = [(None, root, 0)]
 
     while stack:
