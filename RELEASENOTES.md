@@ -22,7 +22,7 @@
 * Adapter: "Zeitschaltuhr" support for multiple "Schaltpunkte" and own public holidays
 * Logicmodule: Functional Block: Sommer/Winter Umschaltung nach DIN Functional Block does now work as expected
 * Logicmodule: Functional Block: Read object / Write object: Renamed objects will be reflected in the Logicmodule now
-* Logicmodule Security (Upstream PR #PENDING): allow safe math constants (e.g. math.pi/math.e) in formula validation
+* Logicmodule Security (Upstream PR #573): allow safe math constants (e.g. math.pi/math.e) in formula validation
 * Visu Widget: Enhancment Roof Window Widget (new Velux-Type), and new "Zweitürer (L/R)"
 * Visu Widget "Verlauf" has now the possibility to display multiple graphs with two units (left/right)
 * Visu Widget "Zeitschaltuhr" supports multiple "Schaltpunkte" and oother new functions of the adapter
