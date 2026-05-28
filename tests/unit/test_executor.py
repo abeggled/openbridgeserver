@@ -128,6 +128,10 @@ class TestSafeEval:
         with pytest.raises(ExecutionError):
             GraphExecutor._safe_eval("([abs][0])(1)", {})
 
+    def test_keyword_arguments_allowed_for_safe_calls(self):
+        result = GraphExecutor._safe_eval("round(x, ndigits=1)", {"x": 21.15})
+        assert result == pytest.approx(21.2)
+
 
 # ===========================================================================
 # Single-node execution helpers

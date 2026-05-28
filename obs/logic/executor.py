@@ -1139,6 +1139,7 @@ class GraphExecutor:
             ast.Compare,
             ast.IfExp,
             ast.Call,
+            ast.keyword,
             ast.Name,
             ast.Load,
             ast.Constant,
