@@ -247,7 +247,8 @@ def _build_cookie_header(cookie_store: dict[tuple[str, str, str, bool], tuple[st
             cookie_secure=secure,
         ):
             continue
-        matched.append((name, value))
+        cookie_pair = (name, value)
+        matched.append(cookie_pair)
     return "; ".join(f"{name}={value}" for name, value in matched)
 
 
