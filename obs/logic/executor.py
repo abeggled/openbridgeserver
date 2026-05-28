@@ -1168,6 +1168,10 @@ class GraphExecutor:
             ast.LtE,
             ast.Gt,
             ast.GtE,
+            ast.Is,
+            ast.IsNot,
+            ast.In,
+            ast.NotIn,
         )
 
         for node in ast.walk(tree):

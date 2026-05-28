@@ -132,6 +132,14 @@ class TestSafeEval:
         result = GraphExecutor._safe_eval("round(x, ndigits=1)", {"x": 21.15})
         assert result == pytest.approx(21.2)
 
+    def test_is_none_comparison_allowed(self):
+        assert GraphExecutor._safe_eval("0 if x is None else x", {"x": None}) == 0
+        assert GraphExecutor._safe_eval("0 if x is None else x", {"x": 7}) == 7
+
+    def test_in_membership_comparison_allowed(self):
+        assert GraphExecutor._safe_eval("1 if x in [1, 2] else 0", {"x": 2}) == 1
+        assert GraphExecutor._safe_eval("1 if x in [1, 2] else 0", {"x": 5}) == 0
+
 
 # ===========================================================================
 # Single-node execution helpers

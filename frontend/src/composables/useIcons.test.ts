@@ -33,4 +33,13 @@ describe('useIcons sanitizeSvg', () => {
     expect(sanitized).not.toContain(' width="100"')
     expect(sanitized).not.toContain(' height="50"')
   })
+
+  it('removes SMIL animation elements that can mutate links', async () => {
+    const { getSvg } = await loadUseIconsWithSvg(
+      '<svg xmlns="http://www.w3.org/2000/svg"><a href="#"><animate attributeName="href" values="javascript:alert(1)"/></a></svg>',
+    )
+
+    const sanitized = await getSvg('test-icon')
+    expect(sanitized).not.toContain('<animate')
+  })
 })

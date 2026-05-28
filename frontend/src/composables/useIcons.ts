@@ -23,6 +23,8 @@ function sanitizeSvg(raw: string): string {
 
   // Remove executable or HTML-capable elements
   doc.querySelectorAll('script, foreignObject').forEach((el) => el.remove())
+  // Remove SMIL animation elements that can mutate attributes post-sanitization.
+  doc.querySelectorAll('animate, animateMotion, animateTransform, set').forEach((el) => el.remove())
 
   // Remove dangerous attributes and fixed dimensions
   for (const el of Array.from(doc.querySelectorAll('*'))) {
