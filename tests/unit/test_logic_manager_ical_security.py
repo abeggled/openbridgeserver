@@ -7,11 +7,13 @@ import socket
 import pytest
 
 from obs.logic.manager import (
+    _build_cookie_header,
     _build_ical_fetch_target,
     _build_ical_fetch_targets,
     _is_public_http_url,
     _preserve_same_origin_credentials,
     _read_limited_response_body,
+    _store_response_cookies,
 )
 
 
@@ -142,6 +144,19 @@ def test_preserve_same_origin_credentials_on_absolute_redirect() -> None:
 def test_preserve_same_origin_credentials_not_applied_cross_origin() -> None:
     preserved = _preserve_same_origin_credentials("https://user:pass@example.com/a", "https://other.example/b")
     assert preserved == "https://other.example/b"
+
+
+def test_logical_cookie_store_carries_domain_cookie_across_subdomain_redirect() -> None:
+    store: dict[tuple[str, str, str, bool], str] = {}
+    _store_response_cookies(store, ["sid=abc; Domain=.example.com; Path=/"], "https://auth.example.com/login")
+    assert _build_cookie_header(store, "https://calendar.example.com/feed.ics") == "sid=abc"
+
+
+def test_logical_cookie_store_keeps_host_only_cookie_scoped() -> None:
+    store: dict[tuple[str, str, str, bool], str] = {}
+    _store_response_cookies(store, ["sid=abc; Path=/"], "https://auth.example.com/login")
+    assert _build_cookie_header(store, "https://auth.example.com/feed.ics") == "sid=abc"
+    assert _build_cookie_header(store, "https://calendar.example.com/feed.ics") == ""
 
 
 def test_read_limited_response_body_raises_on_large_response() -> None:

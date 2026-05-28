@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import http.cookies
 import ipaddress
 import json
 import logging
@@ -75,9 +76,7 @@ def _resolve_public_http_host(hostname: str, port: int | None) -> list[str]:
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if not ip.is_global or (
-            isinstance(ip, ipaddress.IPv6Address)
-            and ip in _NAT64_WELL_KNOWN_PREFIX
-            and not ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF).is_global
+            isinstance(ip, ipaddress.IPv6Address) and ip in _NAT64_WELL_KNOWN_PREFIX and not ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF).is_global
         ):
             return []
         addresses.append(info[4][0])
@@ -144,6 +143,72 @@ def _build_http_host_header(hostname_ascii: str, scheme: str, port: int | None) 
         if port != default_port:
             host_header = f"{host_header}:{port}"
     return host_header
+
+
+def _cookie_domain_matches(hostname: str, cookie_domain: str) -> bool:
+    host = hostname.lower()
+    domain = cookie_domain.lower().lstrip(".")
+    return host == domain or host.endswith(f".{domain}")
+
+
+def _cookie_path_matches(request_path: str, cookie_path: str) -> bool:
+    req = request_path or "/"
+    path = cookie_path or "/"
+    if not req.startswith("/"):
+        req = f"/{req}"
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return req.startswith(path)
+
+
+def _store_response_cookies(
+    cookie_store: dict[tuple[str, str, str, bool], str],
+    set_cookie_headers: list[str],
+    logical_url: str,
+) -> None:
+    parsed = _parse_http_url(logical_url)
+    if not parsed or not parsed.hostname:
+        return
+    hostname = parsed.hostname.encode("idna").decode("ascii").lower()
+    default_path = parsed.path or "/"
+    if not default_path.startswith("/"):
+        default_path = f"/{default_path}"
+    for raw in set_cookie_headers:
+        jar = http.cookies.SimpleCookie()
+        try:
+            jar.load(raw)
+        except Exception:
+            continue
+        for morsel in jar.values():
+            name = morsel.key
+            value = morsel.value
+            raw_domain = (morsel["domain"] or "").strip().lower()
+            host_only = raw_domain == ""
+            domain = hostname if host_only else raw_domain.lstrip(".")
+            if not _cookie_domain_matches(hostname, domain):
+                continue
+            path = (morsel["path"] or default_path).strip() or "/"
+            if not path.startswith("/"):
+                path = f"/{path}"
+            cookie_store[(domain, path, name, host_only)] = value
+
+
+def _build_cookie_header(cookie_store: dict[tuple[str, str, str, bool], str], logical_url: str) -> str:
+    parsed = _parse_http_url(logical_url)
+    if not parsed or not parsed.hostname:
+        return ""
+    hostname = parsed.hostname.encode("idna").decode("ascii").lower()
+    req_path = parsed.path or "/"
+    matched: list[tuple[str, str]] = []
+    for (domain, path, name, host_only), value in cookie_store.items():
+        if host_only and hostname != domain:
+            continue
+        if not host_only and not _cookie_domain_matches(hostname, domain):
+            continue
+        if not _cookie_path_matches(req_path, path):
+            continue
+        matched.append((name, value))
+    return "; ".join(f"{name}={value}" for name, value in matched)
 
 
 def _build_ical_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
@@ -560,8 +625,12 @@ class LogicManager:
                 try:
                     current_url = url
                     active_origin: tuple[str, str, int] | None = None
+                    logical_cookie_store: dict[tuple[str, str, str, bool], str] = {}
                     for redirect_count in range(_ICAL_MAX_REDIRECTS + 1):
                         fetch_urls, headers, extensions = await asyncio.to_thread(_build_ical_fetch_targets, current_url)
+                        cookie_header = _build_cookie_header(logical_cookie_store, current_url)
+                        if cookie_header:
+                            headers = {**headers, "Cookie": cookie_header}
                         current_origin = _origin_tuple(_parse_http_url(current_url))
                         if current_origin != active_origin:
                             if active_client is not None:
@@ -581,9 +650,11 @@ class LogicManager:
                                         location = _resp.headers.get("location")
                                         if not location:
                                             raise ValueError("iCal redirect without Location header")
+                                        _store_response_cookies(logical_cookie_store, _resp.headers.get_list("set-cookie"), current_url)
                                         redirected_to = urljoin(current_url, location)
                                         break
                                     _resp.raise_for_status()
+                                    _store_response_cookies(logical_cookie_store, _resp.headers.get_list("set-cookie"), current_url)
                                     _ct = _resp.headers.get("content-type", "").lower()
                                     _resp_bytes = await _read_limited_response_body(_resp, _ICAL_MAX_BYTES)
                                     break
