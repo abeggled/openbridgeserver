@@ -563,7 +563,7 @@ const showSettings = ref(false)
         <input
           ref="backgroundFileInput"
           type="file"
-          accept="image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg"
+          accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
           class="hidden"
           @change="onBackgroundFiles"
         />

@@ -60,17 +60,13 @@ async def test_import_background_png(client, auth_headers, backgrounds_tmp):
 
 
 @pytest.mark.asyncio
-async def test_import_background_svg(client, auth_headers, backgrounds_tmp):
+async def test_import_background_rejects_svg(client, auth_headers, backgrounds_tmp):
     resp = await client.post(
         "/api/v1/visu/backgrounds/import",
         headers=auth_headers,
         files=[("files", ("blueprint.svg", _MINIMAL_SVG, "image/svg+xml"))],
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["imported"] == 1
-    assert body["names"] == ["blueprint"]
-    assert (backgrounds_tmp / "blueprint.svg").exists()
+    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
