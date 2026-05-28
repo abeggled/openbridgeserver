@@ -234,7 +234,7 @@ def _build_cookie_header(cookie_store: dict[tuple[str, str, str, bool], tuple[st
         return ""
     hostname = parsed.hostname.encode("idna").decode("ascii").lower()
     req_path = parsed.path or "/"
-    is_https = parsed.scheme == "https"
+    is_https_request = parsed.scheme.lower() == "https"
     matched: list[tuple[str, str]] = []
     for (domain, path, name, host_only), (value, secure) in cookie_store.items():
         if host_only and hostname != domain:
@@ -243,7 +243,8 @@ def _build_cookie_header(cookie_store: dict[tuple[str, str, str, bool], tuple[st
             continue
         if not _cookie_path_matches(req_path, path):
             continue
-        if secure and not is_https:
+        secure_only = bool(secure)
+        if secure_only and not is_https_request:
             continue
         matched.append((name, value))
     return "; ".join(f"{name}={value}" for name, value in matched)
