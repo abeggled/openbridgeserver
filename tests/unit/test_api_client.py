@@ -734,9 +734,7 @@ class TestNotifyPushoverImageUrlSecurity:
         mock_client.get = AsyncMock()
         mock_client.post = AsyncMock()
 
-        fake_loop = MagicMock()
-        fake_loop.getaddrinfo = AsyncMock(return_value=[(0, 0, 0, "", ("100.64.0.1", 443))])
-        with patch("obs.logic.manager.asyncio.get_running_loop", return_value=fake_loop):
+        with patch("obs.logic.manager.socket.getaddrinfo", return_value=[(0, 0, 0, "", ("100.64.0.1", 443))]):
             outputs = self._run_notify_pushover("https://example.com/image.png")
 
         mock_client.get.assert_not_called()
@@ -749,25 +747,33 @@ class TestNotifyPushoverImageUrlSecurity:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        img_resp = MagicMock()
+        img_resp = AsyncMock()
         img_resp.raise_for_status = MagicMock()
-        img_resp.headers = {"content-type": "image/png"}
-        img_resp.content = b"\x89PNG"
-        mock_client.get = AsyncMock(return_value=img_resp)
+        img_resp.headers = {"content-type": "image/png", "content-length": "4"}
+        img_resp.extensions = {"network_stream": MagicMock(get_extra_info=MagicMock(return_value=("93.184.216.34", 443)))}
+
+        async def _iter_bytes():
+            yield b"\x89PNG"
+
+        img_resp.aiter_bytes = _iter_bytes
+
+        stream_cm = AsyncMock()
+        stream_cm.__aenter__.return_value = img_resp
+        stream_cm.__aexit__.return_value = False
+        mock_client.stream = MagicMock(return_value=stream_cm)
 
         post_resp = MagicMock()
         post_resp.raise_for_status = MagicMock()
         mock_client.post = AsyncMock(return_value=post_resp)
 
-        fake_loop = MagicMock()
-        fake_loop.getaddrinfo = AsyncMock(return_value=[(0, 0, 0, "", ("93.184.216.34", 443))])
-        with patch("obs.logic.manager.asyncio.get_running_loop", return_value=fake_loop):
+        with patch("obs.logic.manager.socket.getaddrinfo", return_value=[(0, 0, 0, "", ("93.184.216.34", 443))]):
             outputs = self._run_notify_pushover("https://example.com/path/image.png?size=1")
 
         assert outputs["po"]["sent"] is True
-        assert mock_client.get.await_count == 1
-        get_call = mock_client.get.await_args
-        assert get_call.args[0] == "https://93.184.216.34/path/image.png?size=1"
+        assert mock_client.stream.call_count == 1
+        get_call = mock_client.stream.call_args
+        assert get_call.args[0] == "GET"
+        assert get_call.args[1] == "https://93.184.216.34/path/image.png?size=1"
         assert get_call.kwargs["headers"] == {"Host": "example.com"}
         assert get_call.kwargs["extensions"] == {"sni_hostname": "example.com"}
         assert get_call.kwargs["follow_redirects"] is False
