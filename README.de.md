@@ -2,6 +2,10 @@
 
 ![**open bridge server** Logo](logo/obs_logo_dark.svg)
 
+![Version](https://img.shields.io/github/v/release/abeggled/openbridgeserver?style=for-the-badge)
+[![Tests][tests-badge]][tests]
+[![Coverage][coverage-badge]][coverage]
+
 Go to the [English version](/README.md) version of the documentation.
 
 **Offene Gebäudeautomations-Plattform — verbindet KNX, Modbus, MQTT, Home Assistant und mehr**
@@ -1721,3 +1725,9 @@ Zukünftig möchten wir [Weblate](https://hosted.weblate.org/projects/open-bridg
 ## Lizenz
 
 MIT — kostenlos und quelloffen.
+
+[tests]: https://github.com/abeggled/openbridgeserver/actions/workflows/unittest.yml
+[tests-badge]: https://img.shields.io/github/actions/workflow/status/abeggled/openbridgeserver/unittest.yml?style=for-the-badge&logo=github&logoColor=ccc&label=Tests
+
+[coverage]: https://app.codecov.io/github/abeggled/openbridgeserver
+[coverage-badge]: https://img.shields.io/codecov/c/github/abeggled/openbridgeserver?style=for-the-badge&logo=codecov&logoColor=ccc&label=Coverage
