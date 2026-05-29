@@ -49,6 +49,7 @@
 * Logic: API client nodes can now load optional headers and bearer tokens from secret files. https://github.com/abeggled/openbridgeserver/pull/581
 
 ### Fixes 🐞
+* Visu Security (Upstream PR #565): prevent stored XSS via obfuscated `javascript:`/`data:` URLs in Toggle SVG icon rendering
 * General #375: Proxmox LXC, confusing checksum field content within release notes. https://github.com/abeggled/openbridgeserver/issues/375
 * Security: Preserve legacy `OPENTWS_*`/`OPENTWS_CONFIG` compatibility with case-insensitive `OBS_CONFIG` precedence and keep `opentws.db` fallback active even with partial `database.*` overrides to avoid unintended default-admin re-bootstrap on upgrades. https://github.com/abeggled/openbridgeserver/pull/554
 * Security: Require admin privileges for datapoint and logic mutations. https://github.com/abeggled/openbridgeserver/pull/456
