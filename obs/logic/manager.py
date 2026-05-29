@@ -16,6 +16,7 @@ import socket
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -23,6 +24,42 @@ from obs.logic.executor import GraphExecutor
 from obs.logic.models import FlowData
 
 logger = logging.getLogger(__name__)
+
+
+def _is_private_host(hostname: str) -> bool:
+    host = (hostname or "").strip().lower()
+    if not host:
+        return True
+    if host in {"localhost", "localhost.localdomain"}:
+        return False
+
+    def _blocked(addr: ipaddress._BaseAddress) -> bool:  # type: ignore[attr-defined]
+        return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_reserved or addr.is_unspecified
+
+    try:
+        host_ip = ipaddress.ip_address(host)
+        if host_ip.is_loopback:
+            return False
+        if _blocked(host_ip):
+            return True
+    except ValueError:
+        pass
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return True
+    for info in infos:
+        ip = info[4][0]
+        try:
+            resolved_ip = ipaddress.ip_address(ip)
+            if resolved_ip.is_loopback:
+                continue
+            if _blocked(resolved_ip):
+                return True
+        except ValueError:
+            return True
+    return False
 
 
 def _msg_to_str(v: object) -> str:
@@ -536,6 +573,11 @@ class LogicManager:
             url = (node.data.get("url") or "").strip()
             if not url:
                 continue
+            parsed_url = urlparse(url)
+            if parsed_url.scheme not in {"http", "https"} or _is_private_host(parsed_url.hostname or ""):
+                logger.warning("Graph %s: blocked api_client target %s", graph_id[:8], url)
+                outputs[node.id].update({"response": "Blocked URL target", "status": None, "success": False})
+                continue
             method = (node.data.get("method", "GET") or "GET").upper()
             content_type = node.data.get("content_type", "application/json")
             resp_type = node.data.get("response_type", "application/json")
@@ -599,13 +641,16 @@ class LogicManager:
                         }
                 async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
                     resp = await client.request(method, url, **req_kwargs)
+                    resp_text = resp.text
+                    if len(resp_text) > 1_000_000:
+                        resp_text = resp_text[:1_000_000]
                     if resp_type in ("json", "application/json"):
                         try:
                             resp_data: Any = resp.json()
                         except Exception:
-                            resp_data = resp.text
+                            resp_data = resp_text
                     else:
-                        resp_data = resp.text
+                        resp_data = resp_text
                     outputs[node.id].update(
                         {
                             "response": resp_data,
