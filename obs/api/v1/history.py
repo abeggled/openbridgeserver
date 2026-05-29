@@ -57,6 +57,20 @@ def _parse_ts(s: str | None, default: datetime) -> datetime:
         )
 
 
+async def _resolve_page_access(db: Database, node_id: str) -> str:
+    """Traversiert die parent_id-Kette und gibt das effektive Access-Level zurück."""
+    current_id: str | None = node_id
+    while current_id:
+        async with db.conn.execute("SELECT access, parent_id FROM visu_nodes WHERE id = ?", (current_id,)) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return "private"  # Unbekannter Knoten → sicher ablehnen
+        if row["access"] is not None:
+            return row["access"]
+        current_id = row["parent_id"]
+    return "public"
+
+
 async def _check_history_access(
     request: Request,
     user: str | None,
@@ -70,10 +84,7 @@ async def _check_history_access(
     if not page_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
-    async with db.conn.execute("SELECT access, parent_id FROM visu_nodes WHERE id = ?", (page_id,)) as cur:
-        row = await cur.fetchone()
-
-    access = row["access"] if row and row["access"] else "public"
+    access = await _resolve_page_access(db, page_id)
 
     if access in ("public", "readonly"):
         return  # Öffentliche Seite → History-Lesen erlaubt
