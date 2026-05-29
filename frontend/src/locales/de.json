@@ -58,6 +58,41 @@
     "cols": "Spalten",
     "cellWidth": "Zellbreite (px)",
     "rowHeight": "Zeilenhöhe (px)",
+    "backgroundImage": "Hintergrund",
+    "uploadBackground": "Bild hochladen",
+    "uploading": "Upload …",
+    "noBackground": "Kein Hintergrund",
+    "searchBackground": "Hintergründe suchen …",
+    "noBackgrounds": "Keine Hintergrundbilder vorhanden",
+    "backgroundFit": "Darstellung",
+    "backgroundPosition": "Ausrichtung",
+    "backgroundFitMode": {
+      "cover": "Cover (Zuschneiden)",
+      "contain": "Contain (Ganzes Bild)",
+      "width": "Volle Breite",
+      "height": "Volle Höhe",
+      "stretch": "Stretch (Verzerren)",
+      "tile": "Kacheln"
+    },
+    "backgroundFitHint": {
+      "cover": "Füllt die Fläche komplett, schneidet ggf. Ränder ab.",
+      "contain": "Zeigt das gesamte Bild, mit möglichen freien Rändern.",
+      "width": "Passt auf volle Breite, Höhe kann überstehen.",
+      "height": "Passt auf volle Höhe, Breite kann überstehen.",
+      "stretch": "Füllt exakt die Fläche, kann das Bild verzerren.",
+      "tile": "Wiederholt das Bild als Kachelmuster."
+    },
+    "backgroundPosMode": {
+      "center": "Mitte",
+      "top": "Oben",
+      "bottom": "Unten",
+      "left": "Links",
+      "right": "Rechts",
+      "top-left": "Oben links",
+      "top-right": "Oben rechts",
+      "bottom-left": "Unten links",
+      "bottom-right": "Unten rechts"
+    },
     "hintClick": "Klick → einfügen",
     "hintDrag": "Ziehen → verschieben",
     "hintResize": "↘ Handle → Größe ändern",
@@ -443,6 +478,9 @@
     },
     "iframe": {
       "url": "URL",
+      "labelPlaceholder": "z.B. Wetterkarte, Kalender …",
+      "configureUrl": "URL konfigurieren",
+      "noUrlConfigured": "Keine URL konfiguriert",
       "aspectRatio": "Seitenverhältnis",
       "aspectFree": "Frei (Höhe füllen)",
       "sandbox": "Sandbox-Berechtigungen",
@@ -586,7 +624,8 @@
       "closedShort": "zu"
     },
     "rtr": {
-      "accentColor": "Akzentfarbe",
+      "gradientColors": "Farbe / Farbverlauf (1–4 Farben, kalt → warm)",
+      "colorIndex": "Farbe {n}",
       "tempRange": "Temperaturbereich",
       "min": "Min",
       "max": "Max",
@@ -602,7 +641,20 @@
       "showModes": "Betriebsart-Buttons anzeigen",
       "supportedModes": "Unterstützte Modi",
       "dpActualTemp": "Isttemperatur-Objekt (optional)",
-      "dpMode": "Betriebsart-Objekt (optional)"
+      "dpMode": "Betriebsart-Objekt (optional)",
+      "modeAuto": "Auto",
+      "modeKomfort": "Komfort",
+      "modeStandby": "Standby",
+      "modeEconomy": "Economy",
+      "modeFrostschutz": "Frostschutz",
+      "modeAutomatik": "Automatik",
+      "modeHeizen": "Heizen",
+      "modeKuehlen": "Kühlen",
+      "modeAus": "Aus",
+      "modeNurLuefter": "Nur Lüfter",
+      "modeEntfeuchten": "Entfeuchten",
+      "optional": "(optional)",
+      "labelPlaceholder": "z.B. Wohnzimmer"
     },
     "slider": {
       "unit": "Einheit",
@@ -709,7 +761,11 @@
       "minimum": "Minimum",
       "maximum": "Maximum",
       "gaugeColors": "Farbe / Farbverlauf (1–4 Farben, niedrig → hoch)",
-      "colorIndex": "Farbe {n}"
+      "colorIndex": "Farbe {n}",
+      "clickForFullViewTitle": "Klicken für Vollansicht",
+      "qualityBadTitle": "Qualität: schlecht",
+      "qualityUncertainTitle": "Qualität: undefiniert",
+      "selectTimeRangeTitle": "Zeitbereich wählen"
     },
     "wetter": {
       "labelCity": "Bezeichnung (Ortname)",

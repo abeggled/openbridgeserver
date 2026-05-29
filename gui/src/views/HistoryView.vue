@@ -104,6 +104,7 @@ const { t } = useI18n()
 const { fmtDateTime, fmtChartLabel, toDatetimeLocal, fromDatetimeLocal, toUtcDate } = useTz()
 
 const route = useRoute()
+const DEFAULT_HISTORY_HOURS = 24 * 7
 
 const selectedDp     = ref(route.query.dp ?? '')
 const selectedDpName = ref('')
@@ -120,7 +121,7 @@ function onDpSelect(dp) {
     selectedDpUnit.value = ''
   }
 }
-const fromTs      = ref(toDatetimeLocal(new Date(Date.now() - 24 * 3600 * 1000)))
+const fromTs      = ref(toDatetimeLocal(new Date(Date.now() - DEFAULT_HISTORY_HOURS * 3600 * 1000)))
 const toTs        = ref(toDatetimeLocal(new Date()))
 const mode        = ref('aggregate')
 const aggFn       = ref('avg')

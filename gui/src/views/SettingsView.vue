@@ -375,14 +375,26 @@
             </select>
           </div>
 
+          <div class="form-group">
+            <label class="label">{{ $t('settings.history.defaultWindowHoursLabel') }}</label>
+            <input
+              v-model.number="histForm.default_window_hours"
+              type="number"
+              min="1"
+              max="8760"
+              class="input text-sm"
+            />
+            <p class="text-xs text-slate-500 mt-1">{{ $t('settings.history.defaultWindowHoursHint') }}</p>
+          </div>
+
           <!-- InfluxDB settings -->
           <template v-if="histForm.plugin === 'influxdb'">
             <div class="form-group">
               <label class="label">{{ $t('settings.history.version') }}</label>
               <select v-model.number="histForm.influx_version" class="input text-sm">
-                <option :value="1">InfluxDB 1.x</option>
-                <option :value="2">InfluxDB 2.x</option>
-                <option :value="3">InfluxDB 3.x</option>
+                <option :value="1">{{ $t('settings.history.influxV1') }}</option>
+                <option :value="2">{{ $t('settings.history.influxV2') }}</option>
+                <option :value="3">{{ $t('settings.history.influxV3') }}</option>
               </select>
             </div>
             <div class="form-group">
@@ -443,9 +455,9 @@
           <!-- TimescaleDB settings -->
           <template v-if="histForm.plugin === 'timescaledb'">
             <div class="form-group">
-              <label class="label">Connection DSN</label>
+              <label class="label">{{ $t('settings.history.connectionDsn') }}</label>
               <input v-model="histForm.timescale_dsn" type="text" class="input text-sm font-mono"
-                placeholder="postgresql://user:pass@localhost:5432/obs" autocomplete="off" />
+                :placeholder="$t('settings.history.connectionDsnPlaceholder')" autocomplete="off" />
 
             </div>
           </template>
@@ -672,7 +684,7 @@
           <div class="form-group">
             <label class="label">{{ $t('settings.icons.faNamesLabel') }}</label>
             <input v-model="faIconNames" type="text" class="input text-sm font-mono"
-              placeholder="home, star, user, arrow-right" data-testid="input-fa-names" />
+              :placeholder="$t('settings.icons.faNamesPlaceholder')" data-testid="input-fa-names" />
           </div>
           <div class="form-group">
             <label class="label">{{ $t('settings.icons.faStyleLabel') }}</label>
@@ -681,7 +693,7 @@
               <option value="regular">Regular</option>
               <option value="brands">Brands</option>
               <template v-if="faSavedKey || faApiKey.trim()">
-                <option disabled class="text-slate-500">── PRO ──</option>
+                <option disabled class="text-slate-500">{{ $t('settings.icons.faStylePro') }}</option>
                 <option value="light">Light</option>
                 <option value="thin">Thin</option>
                 <option value="duotone">Duotone</option>
@@ -1072,6 +1084,7 @@ const tabs = computed(() => [
 // ── History Backend ────────────────────────────────────────────────────────
 const histForm = reactive({
   plugin: 'sqlite',
+  default_window_hours: 168,
   influx_url: 'http://localhost:8086',
   influx_version: 2,
   influx_token: '',
@@ -1094,10 +1107,18 @@ async function loadHistorySettings() {
   } catch (_) { /* non-critical */ }
 }
 
+function historySettingsPayload() {
+  const hours = Number(histForm.default_window_hours)
+  return {
+    ...histForm,
+    default_window_hours: Number.isFinite(hours) ? hours : 168,
+  }
+}
+
 async function saveHistorySettings() {
   histSaving.value = true; histSaveMsg.value = null
   try {
-    await historySettingsApi.update({ ...histForm })
+    await historySettingsApi.update(historySettingsPayload())
     histSaveMsg.value = { ok: true, text: t('settings.history.saved') }
   } catch (e) {
     histSaveMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.saveError') }
@@ -1109,7 +1130,7 @@ async function saveHistorySettings() {
 async function testHistoryConnection() {
   histTesting.value = true; histTestResult.value = null
   try {
-    const { data } = await historySettingsApi.test({ ...histForm })
+    const { data } = await historySettingsApi.test(historySettingsPayload())
     histTestResult.value = data
   } catch (e) {
     histTestResult.value = { ok: false, message: e.response?.data?.detail ?? t('settings.history.testError') }
@@ -1172,7 +1193,13 @@ async function histFilterSetAll(enable) {
 const navLinksSaving  = ref(false)
 const navLinksMsg     = ref(null)
 const navLinkEditId   = ref(null)
-const navLinkForm     = reactive({ label: '', url: '', icon: '', sort_order: 0, open_new_tab: true })
+const navLinkForm     = reactive({
+  label: '',
+  url: '',
+  icon: '',
+  sort_order: 0,
+  open_new_tab: true,
+})
 const navLinkShowForm = ref(false)
 
 function openNavLinkForm(link = null) {
@@ -1181,7 +1208,13 @@ function openNavLinkForm(link = null) {
     Object.assign(navLinkForm, { label: link.label, url: link.url, icon: link.icon, sort_order: link.sort_order, open_new_tab: link.open_new_tab })
   } else {
     navLinkEditId.value = null
-    Object.assign(navLinkForm, { label: '', url: '', icon: '', sort_order: navStore.links.length, open_new_tab: true })
+    Object.assign(navLinkForm, {
+      label: '',
+      url: '',
+      icon: '',
+      sort_order: navStore.links.length,
+      open_new_tab: true,
+    })
   }
   navLinkShowForm.value = true
   navLinksMsg.value = null

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useIcons } from '@/composables/useIcons'
 
 const props = defineProps<{
@@ -10,29 +10,49 @@ const props = defineProps<{
 const { getSvg, isSvgIcon, svgIconName } = useIcons()
 
 const isSvg = computed(() => isSvgIcon(props.icon))
-const svgContent = ref('')
+const svgBlobUrl = ref('')
+let loadToken = 0
+
+function resetBlobUrl() {
+  if (svgBlobUrl.value) {
+    URL.revokeObjectURL(svgBlobUrl.value)
+    svgBlobUrl.value = ''
+  }
+}
 
 async function load() {
-  if (!isSvg.value) {
-    svgContent.value = ''
-    return
-  }
-  svgContent.value = await getSvg(svgIconName(props.icon))
+  const token = ++loadToken
+  resetBlobUrl()
+  if (!isSvg.value) return
+
+  const svgContent = await getSvg(svgIconName(props.icon))
+  if (token !== loadToken) return
+  if (!svgContent) return
+
+  const blob = new Blob([svgContent], { type: 'image/svg+xml' })
+  svgBlobUrl.value = URL.createObjectURL(blob)
 }
 
 onMounted(load)
 watch(() => props.icon, load)
+onBeforeUnmount(() => {
+  loadToken += 1
+  resetBlobUrl()
+})
 </script>
 
 <template>
   <!-- Emoji icon -->
   <span v-if="!isSvg" class="leading-none">{{ icon }}</span>
 
-  <!-- SVG icon: inline SVG scaled via CSS, black in light mode / white in dark mode -->
-  <span
-    v-else-if="svgContent"
-    class="inline-flex items-center justify-center w-[1em] h-[1em] [&>svg]:w-full [&>svg]:h-full brightness-0 dark:invert"
-    v-html="svgContent"
+  <!-- SVG icon rendered as image to avoid executing untrusted SVG scripts -->
+  <img
+    v-else-if="svgBlobUrl"
+    :src="svgBlobUrl"
+    alt=""
+    class="inline-block w-[1em] h-[1em] object-contain brightness-0 dark:invert"
+    loading="lazy"
+    decoding="async"
   />
 
   <!-- Placeholder while loading or on error -->

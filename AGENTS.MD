@@ -10,7 +10,7 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Project Overview
 
-**open bridge server** is an open-source multiprotocol building automation server (MIT-licensed replacement for the proprietary Timberwolf Server). It bridges KNX, Modbus RTU/TCP, 1-Wire, MQTT, SNMP, Home Assistant, ioBroker, and Zeitschaltuhr into a unified system with a FastAPI REST/WebSocket API and a Vue-based admin GUI.
+**open bridge server** is an open-source multiprotocol building automation server (MIT-licensed replacement for the proprietary Timberwolf Server). It bridges KNX, Modbus RTU/TCP, 1-Wire, MQTT, SNMP, Home Assistant, ioBroker, Anwesenheitssimulation (presence simulation), and Zeitschaltuhr into a unified system with a FastAPI REST/WebSocket API and a Vue-based admin GUI.
 
 ## Common Commands
 
@@ -311,6 +311,7 @@ The Playwright suite lives in `tests/gui/` and requires a running full stack (ba
 ### Startup Sequence (`obs/main.py`)
 
 Services initialize in this fixed order (reverse-order shutdown):
+0. Log buffer (`LogBufferHandler.install`) — attached to root logger before the async startup; broadcasts all log records via WebSocket
 1. SQLite DB + migrations
 2. EventBus (async pub/sub)
 3. MQTT client (connects to Mosquitto)

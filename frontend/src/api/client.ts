@@ -85,6 +85,7 @@ let _writeContext: WriteContext = {}
 
 export function setWriteContext(ctx: WriteContext): void { _writeContext = ctx }
 export function clearWriteContext(): void { _writeContext = {} }
+export function getWriteContext(): WriteContext { return _writeContext }
 
 // ── Request-Helper ────────────────────────────────────────────────────────────
 
@@ -357,6 +358,65 @@ export interface IconListOut {
 
 export const icons = {
   list: () => request<IconListOut>('/icons/'),
+}
+
+// ── VISU Backgrounds ─────────────────────────────────────────────────────────
+
+export interface BackgroundOut {
+  name: string
+  filename: string
+  size: number
+  mime_type: string
+  url: string
+}
+
+export interface BackgroundListOut {
+  total: number
+  backgrounds: BackgroundOut[]
+}
+
+export interface BackgroundImportOut {
+  imported: number
+  skipped: number
+  names: string[]
+  message: string
+}
+
+export const visuBackgrounds = {
+  list: () => request<BackgroundListOut>('/visu/backgrounds'),
+
+  import: async (files: File[]) => {
+    const formData = new FormData()
+    for (const file of files) formData.append('files', file, file.name)
+
+    const jwt = getJwt()
+    const headers: Record<string, string> = {}
+    if (jwt) headers['Authorization'] = `Bearer ${jwt}`
+
+    const res = await fetch(`${BASE}/visu/backgrounds/import`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+    if (res.status === 401) {
+      clearJwt()
+      window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+      throw new Error('Unauthorized')
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => null)
+      throw new Error(extractDetail(body, res.statusText))
+    }
+    return res.json() as Promise<BackgroundImportOut>
+  },
+
+  delete: (names: string[]) =>
+    request<{ deleted: number; names: string[]; not_found: string[] }>('/visu/backgrounds', {
+      method: 'DELETE',
+      body: JSON.stringify({ names }),
+    }),
+
+  publicUrl: (name: string) => `${BASE}/visu/backgrounds/${encodeURIComponent(name)}`,
 }
 
 // ── History ───────────────────────────────────────────────────────────────────

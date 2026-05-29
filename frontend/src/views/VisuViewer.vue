@@ -11,7 +11,13 @@ import MissingWidget from '@/widgets/MissingWidget.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
 import NodeOverview from '@/components/NodeOverview.vue'
 import AuthButton from '@/components/AuthButton.vue'
-import { getJwt, getSessionToken, setWriteContext, clearWriteContext } from '@/api/client'
+import { getJwt, getSessionToken, setWriteContext, clearWriteContext, visuBackgrounds as bgApi } from '@/api/client'
+import {
+  cssBackgroundPosition,
+  cssBackgroundRepeat,
+  cssBackgroundSize,
+  parseBackgroundPresentation,
+} from '@/utils/backgroundPresentation'
 import type { WidgetInstance } from '@/types'
 
 // Alle Widgets registrieren (self-registering via import)
@@ -167,6 +173,22 @@ const COLS   = computed(() => visuStore.pageConfig?.grid_cols       ?? 12)
 const ROW_H  = computed(() => visuStore.pageConfig?.grid_row_height ?? 80)
 const CELL_W = computed(() => visuStore.pageConfig?.grid_cell_width ?? 80)
 
+const viewerBackgroundStyle = computed(() => {
+  const parsed = parseBackgroundPresentation(visuStore.pageConfig?.background)
+  if (parsed.kind === 'none') return {}
+
+  const image = parsed.kind === 'catalog' && parsed.catalogName
+    ? `url(${bgApi.publicUrl(parsed.catalogName)})`
+    : (/^url\(/i.test(parsed.raw ?? '') ? (parsed.raw as string) : `url(${parsed.raw})`)
+
+  return {
+    backgroundImage: image,
+    backgroundPosition: cssBackgroundPosition(parsed.position),
+    backgroundRepeat: cssBackgroundRepeat(parsed.fit),
+    backgroundSize: cssBackgroundSize(parsed.fit),
+  }
+})
+
 function gridStyle(w: WidgetInstance) {
   return {
     gridColumn: `${w.x + 1} / span ${w.w}`,
@@ -219,7 +241,7 @@ function gridStyle(w: WidgetInstance) {
     </main>
 
     <!-- PAGE → Widget-Grid (feste Pixelbreite = Editor WYSIWYG) -->
-    <main v-else class="flex-1 p-4 overflow-auto">
+    <main v-else class="flex-1 p-4 overflow-auto" :style="viewerBackgroundStyle">
       <div
         class="grid"
         :style="{

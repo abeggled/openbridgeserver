@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from obs.logic.manager import LogicManager
+from obs.logic.manager import LogicManager, _read_secret_file
 from obs.logic.models import FlowData
 from tests.unit.conftest import edge, make_executor, node
 
@@ -47,6 +47,25 @@ def _mock_response(status_code: int, json_data: object | None = None, text: str 
     else:
         resp.json.side_effect = ValueError("no JSON")
     return resp
+
+
+class TestApiClientSecretFiles:
+    """Tests for api_client secret-file helpers."""
+
+    def test_read_secret_file_returns_stripped_content(self, tmp_path):
+        secret_file = tmp_path / "api-secret"
+        secret_file.write_text("  secret-value\n", encoding="utf-8")
+
+        assert _read_secret_file(str(secret_file)) == "secret-value"
+
+    def test_read_secret_file_empty_path_returns_empty_string(self):
+        assert _read_secret_file("") == ""
+
+    def test_read_secret_file_missing_path_returns_empty_string(self, tmp_path, caplog):
+        missing = tmp_path / "missing-secret"
+
+        assert _read_secret_file(str(missing)) == ""
+        assert "Could not read api_client secret file" in caplog.text
 
 
 # ===========================================================================
@@ -350,6 +369,138 @@ class TestApiClientAuthentication:
             asyncio.run(manager._execute_graph(graph_id, "t", flow, {"ac": {"trigger": True}}))
 
         assert "Authorization" not in captured_headers[0]
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_headers_secret_file_merges_headers(self, mock_client_cls):
+        captured_headers: list[dict] = []
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        async def _capture(method, url, **kwargs):
+            captured_headers.append(kwargs.get("headers", {}))
+            return _mock_response(200, {})
+
+        mock_client.request = _capture
+
+        manager = _make_manager()
+        data = {
+            "url": "http://example.com/",
+            "method": "GET",
+            "headers": '{"X-Static": "static"}',
+            "headers_secret_file": "/run/secrets/api-headers.json",
+        }
+        n = node("ac", "api_client", data)
+        flow = _flow([n])
+        graph_id = "g-headers-secret"
+        manager._graphs[graph_id] = ("t", True, flow)
+        manager._node_state[graph_id] = {}
+
+        with patch("obs.logic.manager._read_secret_file", return_value='{"hue-application-key": "secret"}'):
+            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+                asyncio.run(manager._execute_graph(graph_id, "t", flow, {"ac": {"trigger": True}}))
+
+        assert captured_headers[0]["X-Static"] == "static"
+        assert captured_headers[0]["hue-application-key"] == "secret"
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_headers_secret_file_overrides_inline_header(self, mock_client_cls):
+        captured_headers: list[dict] = []
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        async def _capture(method, url, **kwargs):
+            captured_headers.append(kwargs.get("headers", {}))
+            return _mock_response(200, {})
+
+        mock_client.request = _capture
+
+        manager = _make_manager()
+        data = {
+            "url": "http://example.com/",
+            "method": "GET",
+            "headers": '{"X-Token": "inline"}',
+            "headers_secret_file": "/run/secrets/api-headers.json",
+        }
+        n = node("ac", "api_client", data)
+        flow = _flow([n])
+        graph_id = "g-headers-secret-override"
+        manager._graphs[graph_id] = ("t", True, flow)
+        manager._node_state[graph_id] = {}
+
+        with patch("obs.logic.manager._read_secret_file", return_value='{"X-Token": "from-file"}'):
+            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+                asyncio.run(manager._execute_graph(graph_id, "t", flow, {"ac": {"trigger": True}}))
+
+        assert captured_headers[0]["X-Token"] == "from-file"
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_bearer_auth_token_file_sets_authorization_header(self, mock_client_cls):
+        captured_headers: list[dict] = []
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        async def _capture(method, url, **kwargs):
+            captured_headers.append(kwargs.get("headers", {}))
+            return _mock_response(200, {})
+
+        mock_client.request = _capture
+
+        manager = _make_manager()
+        data = {
+            "url": "http://example.com/",
+            "method": "GET",
+            "auth_type": "bearer",
+            "auth_token": "",
+            "auth_token_file": "/run/secrets/api-token",
+        }
+        n = node("ac", "api_client", data)
+        flow = _flow([n])
+        graph_id = "g-bearer-token-file"
+        manager._graphs[graph_id] = ("t", True, flow)
+        manager._node_state[graph_id] = {}
+
+        with patch("obs.logic.manager._read_secret_file", return_value="file-token-xyz"):
+            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+                asyncio.run(manager._execute_graph(graph_id, "t", flow, {"ac": {"trigger": True}}))
+
+        assert captured_headers[0]["Authorization"] == "Bearer file-token-xyz"
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_inline_bearer_token_takes_precedence_over_token_file(self, mock_client_cls):
+        captured_headers: list[dict] = []
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        async def _capture(method, url, **kwargs):
+            captured_headers.append(kwargs.get("headers", {}))
+            return _mock_response(200, {})
+
+        mock_client.request = _capture
+
+        manager = _make_manager()
+        data = {
+            "url": "http://example.com/",
+            "method": "GET",
+            "auth_type": "bearer",
+            "auth_token": "inline-token",
+            "auth_token_file": "/run/secrets/api-token",
+        }
+        n = node("ac", "api_client", data)
+        flow = _flow([n])
+        graph_id = "g-bearer-token-file-precedence"
+        manager._graphs[graph_id] = ("t", True, flow)
+        manager._node_state[graph_id] = {}
+
+        with patch("obs.logic.manager._read_secret_file") as read_secret:
+            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+                asyncio.run(manager._execute_graph(graph_id, "t", flow, {"ac": {"trigger": True}}))
+
+        read_secret.assert_not_called()
+        assert captured_headers[0]["Authorization"] == "Bearer inline-token"
 
     @patch("obs.logic.manager.httpx.AsyncClient")
     def test_none_auth_no_auth_object(self, mock_client_cls):

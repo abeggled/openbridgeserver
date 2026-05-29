@@ -9,7 +9,7 @@ import { apiPost, apiPut, apiDelete } from '../helpers'
  *   1. Standard-Zeitbereich aus Config wird im Dropdown angezeigt
  *   2. Dropdown enthält alle 18 Zeitbereich-Optionen
  *   3. Auswahl eines anderen Zeitbereichs aktualisiert das Chart (kein Absturz)
- *   4. Rückwärtskompatibilität: Widget ohne time_range (nur hours) zeigt last_24h
+ *   4. Rückwärtskompatibilität: Widget ohne time_range (nur hours) nutzt den Default last_7d
  */
 
 // ─── Hilfsfunktionen ─────────────────────────────────────────────────────────
@@ -194,7 +194,7 @@ test('Verlauf-Widget: Auswahl eines anderen Zeitbereichs aktualisiert Chart ohne
 
 // ─── Test 4: Rückwärtskompatibilität — alte Config ohne time_range ───────────
 
-test('Verlauf-Widget: alte Config ohne time_range fällt auf last_24h zurück', async ({ page }) => {
+test('Verlauf-Widget: alte Config ohne time_range fällt auf last_7d zurück', async ({ page }) => {
   const dp = await createFloatDP('compat')
   const visuNode = await createVisuPage()
   const pageId = visuNode.id
@@ -218,8 +218,8 @@ test('Verlauf-Widget: alte Config ohne time_range fällt auf last_24h zurück', 
     const select = page.locator('select[title="Zeitbereich wählen"]')
     await expect(select).toBeVisible()
 
-    // Fallback auf last_24h
-    await expect(select).toHaveValue('last_24h')
+    // Fallback auf Default last_7d
+    await expect(select).toHaveValue('last_7d')
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
     await apiDelete(`/api/v1/datapoints/${dp.id}`)

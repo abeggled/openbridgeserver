@@ -1,6 +1,25 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { DataPointValue } from '@/types'
+
+const SAFE_PROTOCOLS = new Set(['http:', 'https:'])
+const SAFE_SANDBOX_TOKENS = new Set([
+  'allow-popups',
+  'allow-forms',
+  'allow-popups-to-escape-sandbox',
+  'allow-top-navigation-by-user-activation',
+])
+const DEFAULT_SANDBOX = 'allow-popups allow-forms'
+
+function sanitizeSandbox(value: unknown): string {
+  if (value == null) return DEFAULT_SANDBOX
+  if (typeof value !== 'string') return ''
+  const tokens = value
+    .split(/\s+/)
+    .filter(token => SAFE_SANDBOX_TOKENS.has(token))
+  return Array.from(new Set(tokens)).join(' ')
+}
 
 const props = defineProps<{
   config: Record<string, unknown>
@@ -9,12 +28,27 @@ const props = defineProps<{
   statusValue: DataPointValue | null
   editorMode: boolean
 }>()
+const { t } = useI18n()
 
 const label           = computed(() => (props.config.label           as string)  ?? '')
-const url             = computed(() => (props.config.url             as string)  ?? '')
-const sandbox         = computed(() => (props.config.sandbox         as string)  ?? '')
+const urlRaw          = computed(() => (props.config.url             as string)  ?? '')
+const sandboxRaw      = computed(() => props.config.sandbox)
 const allowFullscreen = computed(() => (props.config.allowFullscreen as boolean) ?? false)
 const aspectRatio     = computed(() => (props.config.aspectRatio     as string)  ?? '16/9')
+
+const safeUrl = computed(() => {
+  if (!urlRaw.value) return ''
+  try {
+    const parsed = new URL(urlRaw.value)
+    return SAFE_PROTOCOLS.has(parsed.protocol) ? parsed.toString() : ''
+  } catch {
+    return ''
+  }
+})
+
+const safeSandbox = computed(() => {
+  return sanitizeSandbox(sandboxRaw.value)
+})
 
 const containerStyle = computed((): Record<string, string> => {
   if (aspectRatio.value === 'free') return {}
@@ -35,19 +69,19 @@ const containerStyle = computed((): Record<string, string> => {
 
     <!-- Editor-Platzhalter -->
     <div
-      v-if="editorMode && !url"
+      v-if="editorMode && !safeUrl"
       class="flex-1 flex flex-col items-center justify-center text-gray-500 gap-2 bg-gray-800/40"
     >
       <span class="text-4xl">🖼️</span>
-      <span class="text-xs">URL konfigurieren</span>
+      <span class="text-xs">{{ t('widgets.iframe.configureUrl') }}</span>
     </div>
 
     <!-- Kein URL im Live-Modus -->
     <div
-      v-else-if="!url"
+      v-else-if="!safeUrl"
       class="flex-1 flex items-center justify-center text-gray-600 text-xs bg-gray-900"
     >
-      Keine URL konfiguriert
+      {{ t('widgets.iframe.noUrlConfigured') }}
     </div>
 
     <!-- iFrame -->
@@ -62,8 +96,8 @@ const containerStyle = computed((): Record<string, string> => {
         class="absolute inset-0 z-10 cursor-default"
       />
       <iframe
-        :src="url"
-        :sandbox="sandbox || undefined"
+        :src="safeUrl"
+        :sandbox="safeSandbox"
         :allowfullscreen="allowFullscreen || undefined"
         referrerpolicy="no-referrer"
         class="w-full h-full border-0"

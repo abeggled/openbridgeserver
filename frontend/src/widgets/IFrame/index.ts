@@ -14,7 +14,7 @@ WidgetRegistry.register({
   defaultConfig: {
     label: '',
     url: '',
-    sandbox: 'allow-same-origin allow-scripts allow-popups allow-forms',
+    sandbox: 'allow-popups allow-forms',
     allowFullscreen: false,
     aspectRatio: '16/9',
   },

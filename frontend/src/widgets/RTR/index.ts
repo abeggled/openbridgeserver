@@ -15,7 +15,7 @@ WidgetRegistry.register({
   configComponent: Config,
   defaultConfig: {
     label:             '',
-    color:             '#ef4444',
+    gradient_colors:   ['#ef4444'],
     min_temp:          5,
     max_temp:          35,
     step:              0.5,

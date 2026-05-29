@@ -2,6 +2,10 @@
 
 ![**open bridge server** Logo](logo/obs_logo_dark.svg)
 
+![Version](https://img.shields.io/github/v/release/abeggled/openbridgeserver?style=for-the-badge)
+[![Tests][tests-badge]][tests]
+[![Coverage][coverage-badge]][coverage]
+
 Go to the [English version](/README.md) version of the documentation.
 
 **Offene Gebäudeautomations-Plattform — verbindet KNX, Modbus, MQTT, Home Assistant und mehr**
@@ -14,7 +18,7 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 
 | Funktion | Beschreibung |
 |---|---|
-| **Protokolle** | KNX/IP (Tunneling + Routing + KNX IP Secure), Modbus TCP, Modbus RTU, 1-Wire, externes MQTT, Home Assistant, Zeitschaltuhr |
+| **Protokolle** | KNX/IP (Tunneling + Routing + KNX IP Secure), Modbus TCP, Modbus RTU, 1-Wire, externes MQTT, Home Assistant, ioBroker, SNMP, Anwesenheitssimulation, Zeitschaltuhr |
 | **Mehrere Instanzen** | Beliebig viele Instanzen pro Protokoll (z. B. 2× KNX, 3× Modbus TCP) |
 | **Protokoll-Brücke** | Ein KNX-Wert wird automatisch in ein Modbus-Register geschrieben — und umgekehrt |
 | **Logik-Editor** | Visuelle Automatisierungslogik ohne Programmierung: 35+ Blocktypen, Zeitpläne, Formeln, Python-Skripte, Benachrichtigungen, HTTP-Anfragen, Sonnenstand |
@@ -42,17 +46,19 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 9. [Änderungsprotokoll (RingBuffer)](#änderungsprotokoll-ringbuffer)
 10. [Sicherung & Wiederherstellung](#sicherung--wiederherstellung)
 11. [Systemstatus](#systemstatus)
-12. [Live-Verbindung (WebSocket)](#live-verbindung-websocket)
-13. [Logik-Editor](#logik-editor)
-14. [Adapter-Konfiguration](#adapter-konfiguration)
-15. [MQTT-Topics](#mqtt-topics)
-16. [Datentypen](#datentypen)
-17. [Einstellungen](#einstellungen)
-18. [Hilfsskripte](#hilfsskripte)
-19. [Visualisierung (Visu)](#visualisierung-visu)
+12. [Log-Viewer](#log-viewer)
+13. [Live-Verbindung (WebSocket)](#live-verbindung-websocket)
+14. [Logik-Editor](#logik-editor)
+15. [Adapter-Konfiguration](#adapter-konfiguration)
+16. [MQTT-Topics](#mqtt-topics)
+17. [Datentypen](#datentypen)
+18. [Einstellungen](#einstellungen)
+19. [Hilfsskripte](#hilfsskripte)
+20. [Visualisierung (Visu)](#visualisierung-visu)
    - [Grundriss- und Anlagenschema-Widget](#grundriss--und-anlagenschema-widget)
-20. [Entwicklung](#entwicklung)
+21. [Entwicklung](#entwicklung)
    - [Lokale Entwicklung mit PyCharm](#lokale-entwicklung-mit-pycharm)
+   - [Lokale Git-Hooks (Pre-Push Gate)](#lokale-git-hooks-pre-push-gate)
 
 ---
 
@@ -449,6 +455,29 @@ PUT /api/v1/system/settings    # Systemeinstellungen ändern
 
 GET /api/v1/adapters/knx/dpts  # Alle registrierten KNX-DPT-Typen auflisten
 ```
+
+---
+
+## Log-Viewer
+
+Der Log-Viewer zeigt aktuelle Anwendungsmeldungen in Echtzeit. Die Admin-GUI zeigt die letzten 500 Einträge und streamt neue Einträge live via WebSocket.
+
+```
+GET /api/v1/system/logs?limit=N   # Aktuelle Log-Einträge (neueste zuerst, max. 500)
+GET /api/v1/system/log-level      # Aktuellen Log-Level lesen (nur Admin)
+PUT /api/v1/system/log-level      # Log-Level zur Laufzeit ändern (nur Admin)
+```
+
+Log-Einträge enthalten folgende Felder:
+
+| Feld | Beschreibung |
+|---|---|
+| `ts` | Zeitstempel (ISO 8601, UTC) |
+| `level` | Log-Level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `logger` | Logger-Name (Modulpfad) |
+| `message` | Log-Meldung |
+
+Der Log-Level kann ohne Neustart zur Laufzeit geändert werden (nur Admin). Der Puffer hält die letzten 500 Einträge und wird beim Neustart nicht gespeichert.
 
 ---
 
@@ -1193,6 +1222,65 @@ Entwicklungs- und Review-Notizen zur aktuellen Implementierung stehen in [`docs/
 
 ---
 
+### SNMP-Adapter
+
+Liest OID-Werte von SNMP-fähigen Geräten (SNMPv1, v2c, v3) und schreibt Werte per SNMP SET. Jedes Binding konfiguriert seinen eigenen Host und OID — keine persistente TCP-Verbindung, zustandsloses UDP pro Anfrage.
+
+**Instanz-Konfiguration:**
+
+| Feld | Standard | Beschreibung |
+|---|---|---|
+| `version` | `2c` | SNMP-Version: `1`, `2c` oder `3` |
+| `community` | `public` | Community-String (nur v1/v2c) |
+| `security_name` | — | Security-Name / Benutzername (nur v3) |
+| `security_level` | `noAuthNoPriv` | Sicherheitsstufe (v3): `noAuthNoPriv`, `authNoPriv`, `authPriv` |
+| `auth_protocol` | `MD5` | Authentifizierungsprotokoll (v3): `MD5`, `SHA`, `SHA256`, `SHA512` |
+| `auth_key` | — | Authentifizierungsschlüssel (v3, Passwort-Feld) |
+| `priv_protocol` | `DES` | Privacy-Protokoll (v3): `DES`, `3DES`, `AES128`, `AES192`, `AES256` |
+| `priv_key` | — | Privacy-Schlüssel (v3, Passwort-Feld) |
+
+**Verknüpfungs-Konfiguration:**
+
+| Feld | Standard | Beschreibung |
+|---|---|---|
+| `host` | `192.168.1.1` | IP-Adresse oder DNS-Name des SNMP-Geräts |
+| `port` | `161` | UDP-Port |
+| `oid` | `1.3.6.1.2.1.1.1.0` | Objekt-Identifier, z. B. `1.3.6.1.2.1.1.3.0` |
+| `data_type` | `auto` | Werttyp: `auto`, `int`, `float`, `string`, `hex`, `counter`, `gauge`, `timeticks` |
+| `poll_interval` | `30.0` | Abfrageintervall in Sekunden (SOURCE/BOTH) |
+| `timeout` | `5.0` | Timeout pro Anfrage in Sekunden |
+| `retries` | `1` | Wiederholungen bei Fehler |
+
+> **Hinweis:** `pysnmp` muss installiert sein (`pip install pysnmp`). Fehlt die Bibliothek, startet der Adapter ohne Fehlermeldung, kann aber keine Abfragen durchführen.
+
+---
+
+### Anwesenheitssimulation-Adapter
+
+Wiederholt historische Schaltzustände während der Abwesenheit, damit das Gebäude bewohnt wirkt. Wenn die Simulation aktiv ist, liest der Adapter die Verlaufs-Datenbank der letzten N Tage und löst jeden historischen Schaltvorgang zur gleichen Uhrzeit heute aus.
+
+**Instanz-Konfiguration:**
+
+| Feld | Standard | Beschreibung |
+|---|---|---|
+| `offset_days` | `7` | Anzahl Tage in der Vergangenheit, deren Schaltzustände wiederholt werden (1–30) |
+| `control_dp_id` | — | Optionaler Boolean-Datenpunkt: Wert `1` = Anwesend (Simulation aus), Wert `0` = Abwesend (Simulation an) |
+| `control_invert` | `false` | Steuerobjekt invertieren |
+| `on_presence` | `behalten` | Verhalten bei Anwesenheitserkennung: `behalten` (aktuellen Zustand beibehalten), `zuruecksetzen` (alle auf falsch/0 setzen), `setzen` (auf einen bestimmten Wert setzen) |
+| `on_presence_value` | — | Wert der gesetzt wird wenn `on_presence = setzen` |
+
+**Verknüpfungs-Konfiguration:**
+
+| Feld | Standard | Beschreibung |
+|---|---|---|
+| `offset_override` | — | Überschreibt `offset_days` für diesen Datenpunkt (1–30) |
+| `on_presence_override` | — | Überschreibt `on_presence` für diesen Datenpunkt |
+| `on_presence_value` | — | Überschreibt den Wert für diesen Datenpunkt wenn `on_presence_override = setzen` |
+
+> **Hinweis:** Nur SOURCE-Verknüpfungen sind gültig — der Adapter wiederholt historische Werte, akzeptiert aber keine eingehenden Schreibbefehle. DEST/BOTH-Verknüpfungen werden mit einer Warnung übersprungen.
+
+---
+
 ### Zeitschaltuhr-Adapter
 
 Erzeugt zeitgesteuerte Ereignisse ohne externe Hardware — für tageszeit- oder sonnenstandsbasierte Automatisierungen, Feiertags- und Ferienlogik.
@@ -1541,6 +1629,29 @@ pytest tests/
 ./tools/lint.sh --fix
 ```
 
+### Lokale Git-Hooks (Pre-Push Gate)
+
+Versionierte Hooks liegen in `.githooks/`. Um sie in einem Klon zu aktivieren, `core.hooksPath` einmalig setzen:
+
+```bash
+./tools/setup-git-hooks.sh
+```
+
+Bei jedem `git push` führt der Hook aus:
+
+- `./scripts/check-i18n-hardcoded-strings.sh`
+- `python3 -m ruff check .`
+- `python3 -m ruff format . --check`
+- `pytest tests/ -v --cov=obs --cov-report=xml --cov-report=term --junitxml="${TMPDIR:-/tmp}/openbridge-pre-push-junit.xml"`
+
+Einmalig umgehen:
+
+```bash
+git push --no-verify
+```
+
+---
+
 #### Übersetzungen (Weblate / wlc)
 
 Die GUI-Übersetzungen werden über [hosted.weblate.org](https://hosted.weblate.org/projects/openbridgeserver/) verwaltet. Quellsprache ist Deutsch (`de.json`); die Community übersetzt auf Weblate.
@@ -1608,9 +1719,15 @@ Die Datenbank wird automatisch aktualisiert — jede neue Version fügt fehlende
 
 ---
 
-## Translations
-We use [Weblate](https://hosted.weblate.org/projects/open-bridge-server)  to support language translations. Contributions are always welcome.
+## Übersetzungen
+Zukünftig möchten wir [Weblate](https://hosted.weblate.org/projects/open-bridge-server) für Community-Übersetzungen verwenden. Sobald das möglich ist, sind Beiträge sind jederzeit willkommen.
 
 ## Lizenz
 
 MIT — kostenlos und quelloffen.
+
+[tests]: https://github.com/abeggled/openbridgeserver/actions/workflows/unittest.yml
+[tests-badge]: https://img.shields.io/github/actions/workflow/status/abeggled/openbridgeserver/unittest.yml?style=for-the-badge&logo=github&logoColor=ccc&label=Tests
+
+[coverage]: https://app.codecov.io/github/abeggled/openbridgeserver
+[coverage-badge]: https://img.shields.io/codecov/c/github/abeggled/openbridgeserver?style=for-the-badge&logo=codecov&logoColor=ccc&label=Coverage

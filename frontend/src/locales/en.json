@@ -58,6 +58,41 @@
     "cols": "Columns",
     "cellWidth": "Cell width (px)",
     "rowHeight": "Row height (px)",
+    "backgroundImage": "Background",
+    "uploadBackground": "Upload image",
+    "uploading": "Uploading …",
+    "noBackground": "No background",
+    "searchBackground": "Search backgrounds …",
+    "noBackgrounds": "No background images available",
+    "backgroundFit": "Display mode",
+    "backgroundPosition": "Alignment",
+    "backgroundFitMode": {
+      "cover": "Cover (crop)",
+      "contain": "Contain (full image)",
+      "width": "Full width",
+      "height": "Full height",
+      "stretch": "Stretch (distort)",
+      "tile": "Tile"
+    },
+    "backgroundFitHint": {
+      "cover": "Fills the whole area and may crop edges.",
+      "contain": "Shows the full image, may leave empty margins.",
+      "width": "Fits full width, height may overflow.",
+      "height": "Fits full height, width may overflow.",
+      "stretch": "Fills exact area and may distort the image.",
+      "tile": "Repeats the image as a tiled pattern."
+    },
+    "backgroundPosMode": {
+      "center": "Center",
+      "top": "Top",
+      "bottom": "Bottom",
+      "left": "Left",
+      "right": "Right",
+      "top-left": "Top left",
+      "top-right": "Top right",
+      "bottom-left": "Bottom left",
+      "bottom-right": "Bottom right"
+    },
     "hintClick": "Click → insert",
     "hintDrag": "Drag → move",
     "hintResize": "↘ Handle → resize",
@@ -443,6 +478,9 @@
     },
     "iframe": {
       "url": "URL",
+      "labelPlaceholder": "e.g. weather map, calendar …",
+      "configureUrl": "Configure URL",
+      "noUrlConfigured": "No URL configured",
       "aspectRatio": "Aspect ratio",
       "aspectFree": "Free (fill height)",
       "sandbox": "Sandbox permissions",
@@ -586,7 +624,8 @@
       "closedShort": "closed"
     },
     "rtr": {
-      "accentColor": "Accent colour",
+      "gradientColors": "Colour / gradient (1–4 colours, cold → warm)",
+      "colorIndex": "Colour {n}",
       "tempRange": "Temperature range",
       "min": "Min",
       "max": "Max",
@@ -602,7 +641,20 @@
       "showModes": "Show mode buttons",
       "supportedModes": "Supported modes",
       "dpActualTemp": "Actual temperature object (optional)",
-      "dpMode": "Operating mode object (optional)"
+      "dpMode": "Operating mode object (optional)",
+      "modeAuto": "Auto",
+      "modeKomfort": "Comfort",
+      "modeStandby": "Standby",
+      "modeEconomy": "Economy",
+      "modeFrostschutz": "Frost protection",
+      "modeAutomatik": "Automatic",
+      "modeHeizen": "Heating",
+      "modeKuehlen": "Cooling",
+      "modeAus": "Off",
+      "modeNurLuefter": "Fan only",
+      "modeEntfeuchten": "Dehumidify",
+      "optional": "(optional)",
+      "labelPlaceholder": "e.g. living room"
     },
     "slider": {
       "unit": "Unit",
@@ -709,7 +761,11 @@
       "minimum": "Minimum",
       "maximum": "Maximum",
       "gaugeColors": "Colour / gradient (1–4 colours, low → high)",
-      "colorIndex": "Colour {n}"
+      "colorIndex": "Colour {n}",
+      "clickForFullViewTitle": "Click for full view",
+      "qualityBadTitle": "Quality: bad",
+      "qualityUncertainTitle": "Quality: uncertain",
+      "selectTimeRangeTitle": "Select time range"
     },
     "wetter": {
       "labelCity": "Label (location name)",

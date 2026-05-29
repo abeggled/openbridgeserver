@@ -41,6 +41,8 @@ const isDragging  = ref(false)
  */
 const pendingValue = ref<number | null>(null)
 let pendingTimer: ReturnType<typeof setTimeout> | null = null
+let lastSentValue: number | null = null
+let lastSentAt = 0
 
 function clearPending() {
   pendingValue.value = null
@@ -67,9 +69,9 @@ watch(displayValue, (v) => {
   }
 })
 
-// Sicherheits-Reset: falls pointerup ausserhalb des Elements endet
+// Sicherheits-Commit: falls pointerup ausserhalb des Elements endet
 function onWindowPointerUp() {
-  if (isDragging.value) isDragging.value = false
+  if (isDragging.value) commitValue()
 }
 onMounted(() => window.addEventListener('pointerup', onWindowPointerUp))
 onUnmounted(() => {
@@ -83,9 +85,13 @@ function onInput(e: Event) {
   localValue.value = Number((e.target as HTMLInputElement).value)
 }
 
-/** @change → feuert beim Loslassen → Wert optimistisch halten und senden */
-function onChange(e: Event) {
+function commitFromEvent(e: Event) {
   localValue.value = Number((e.target as HTMLInputElement).value)
+  commitValue()
+}
+
+/** Wert optimistisch halten und senden */
+function commitValue() {
   isDragging.value = false
 
   // Optimistisch anzeigen bis Status-Rückmeldung eintrifft (max. 5 s)
@@ -97,6 +103,10 @@ function onChange(e: Event) {
 
 async function sendValue() {
   if (props.editorMode || props.readonly || !props.datapointId) return
+  const now = Date.now()
+  if (lastSentValue === localValue.value && now - lastSentAt < 500) return
+  lastSentValue = localValue.value
+  lastSentAt = now
   try {
     await datapoints.write(props.datapointId, localValue.value)
   } catch {
@@ -121,7 +131,10 @@ async function sendValue() {
       :disabled="editorMode || readonly"
       class="w-full accent-blue-500 cursor-pointer disabled:cursor-default disabled:opacity-50"
       @input="onInput"
-      @change="onChange"
+      @change="commitFromEvent"
+      @pointerup="commitFromEvent"
+      @keyup.enter="commitFromEvent"
+      @keyup.space="commitFromEvent"
     />
     <div class="flex justify-between text-xs text-gray-400 dark:text-gray-500 mt-0.5">
       <span>{{ min }}</span>

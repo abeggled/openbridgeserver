@@ -177,31 +177,43 @@ jobs:
 
           echo "Installing $TARGET ..."
 
-          BUNDLE_URL=$(echo "$ALL_RELEASES" | python3 -c "
+          ASSET_INFO=$(echo "$ALL_RELEASES" | python3 -c "
           import sys, json
           target = '${TARGET}'
           releases = json.load(sys.stdin)
           r = next((r for r in releases if r['tag_name'] == target), None)
           if r:
-              a = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz')), None)
-              if a:
-                  print(a['browser_download_url'])
+              bundle = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz')), None)
+              checksum = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha512')), None)
+              if bundle and checksum:
+                  print(bundle['browser_download_url'])
+                  print(checksum['browser_download_url'])
           ")
 
-          if [[ -z "$BUNDLE_URL" ]]; then
-              echo "Error: no app-bundle asset found for $TARGET" >&2
+          BUNDLE_URL=$(echo "$ASSET_INFO" | sed -n '1p')
+          CHECKSUM_URL=$(echo "$ASSET_INFO" | sed -n '2p')
+
+          if [[ -z "$BUNDLE_URL" ]] || [[ -z "$CHECKSUM_URL" ]]; then
+              echo "Error: missing app-bundle or checksum asset for $TARGET" >&2
               exit 1
           fi
+
+          BUNDLE_FILENAME=$(basename "$BUNDLE_URL")
+          CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
 
           TMP=$(mktemp -d)
           trap "rm -rf $TMP" EXIT
 
           echo "Downloading $BUNDLE_URL ..."
-          curl -fL "$BUNDLE_URL" -o "$TMP/app-bundle.tar.gz"
+          curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"
+          echo "Downloading $CHECKSUM_URL ..."
+          curl -fL "$CHECKSUM_URL" -o "$TMP/$CHECKSUM_FILENAME"
+
+          (cd "$TMP" && sha512sum -c "$CHECKSUM_FILENAME")
 
           systemctl stop "$SERVICE"
 
-          tar -xzf "$TMP/app-bundle.tar.gz" -C "$INSTALL_DIR"
+          tar -xzf "$TMP/$BUNDLE_FILENAME" -C "$INSTALL_DIR"
           "$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
 
           # Self-update: replace this script with the version from the bundle
