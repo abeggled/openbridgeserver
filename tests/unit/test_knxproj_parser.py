@@ -12,8 +12,6 @@ Covers:
 from __future__ import annotations
 
 import io
-import os
-import textwrap
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
