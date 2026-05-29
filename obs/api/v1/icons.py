@@ -15,7 +15,6 @@ import re
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from xml.etree import ElementTree as ET
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -174,6 +173,7 @@ def _sanitize_svg(content: bytes) -> bytes:
     if root.tag.startswith("{"):
         ET.register_namespace("", root.tag.split("}", 1)[0][1:])
     return ET.tostring(root, encoding="utf-8", xml_declaration=False)
+
 
 def _safe_name(filename: str) -> str | None:
     """Return a sanitised icon name (stem only, alphanumeric + hyphen/underscore,
