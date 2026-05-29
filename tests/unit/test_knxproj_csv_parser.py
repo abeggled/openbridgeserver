@@ -17,6 +17,7 @@ from obs.knxproj.csv_parser import _decode_csv, _dpt_from_csv, parse_ga_csv
 # _dpt_from_csv
 # ---------------------------------------------------------------------------
 
+
 class TestDptFromCsv:
     def test_none_returns_none(self):
         assert _dpt_from_csv(None) is None
@@ -62,6 +63,7 @@ class TestDptFromCsv:
 # _decode_csv
 # ---------------------------------------------------------------------------
 
+
 class TestDecodeCsv:
     def test_utf8_plain(self):
         text = "Köche;1/2/3\n"
@@ -94,6 +96,7 @@ def _make_csv(*rows: str) -> bytes:
 # ---------------------------------------------------------------------------
 # parse_ga_csv — happy path
 # ---------------------------------------------------------------------------
+
 
 class TestParseGaCsv:
     def test_single_ga_row(self):
@@ -166,6 +169,7 @@ class TestParseGaCsv:
 # parse_ga_csv — error cases
 # ---------------------------------------------------------------------------
 
+
 class TestParseGaCsvErrors:
     def test_empty_file_raises(self):
         with pytest.raises(ValueError, match="leer|Header"):
@@ -187,4 +191,3 @@ class TestParseGaCsvErrors:
         csv_bytes = _HEADER.encode("utf-8") + row
         with pytest.raises(ValueError, match="dekodiert"):
             parse_ga_csv(csv_bytes)
-

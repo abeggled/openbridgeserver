@@ -43,6 +43,7 @@ _DEMO_BYTES = _DEMO_KNXPROJ.read_bytes() if _HAS_DEMO else b""
 # _dpt_from_xknxproject
 # ---------------------------------------------------------------------------
 
+
 class TestDptFromXknxproject:
     def test_none_returns_none(self):
         assert _dpt_from_xknxproject(None) is None
@@ -72,6 +73,7 @@ class TestDptFromXknxproject:
 # ---------------------------------------------------------------------------
 # _extract_group_names
 # ---------------------------------------------------------------------------
+
 
 class TestExtractGroupNames:
     def _make_dict_project(self):
@@ -125,6 +127,7 @@ class TestExtractGroupNames:
 # _collect_fi_to_fn
 # ---------------------------------------------------------------------------
 
+
 class TestCollectFiToFn:
     def _xml_root(self, xml: str):
         return ElementTree.fromstring(xml)
@@ -162,6 +165,7 @@ class TestCollectFiToFn:
 # ---------------------------------------------------------------------------
 # _walk_trade_el
 # ---------------------------------------------------------------------------
+
 
 class TestWalkTradeEl:
     def _make_trade_el(self, xml: str):
@@ -244,6 +248,7 @@ class TestWalkTradeEl:
 # parse_knxproj_trades — minimal ZIP
 # ---------------------------------------------------------------------------
 
+
 def _make_zip_with_xml(xml_content: str) -> bytes:
     """Build a minimal .knxproj ZIP containing a 0.xml at a known path."""
     buf = io.BytesIO()
@@ -314,6 +319,7 @@ class TestParseKnxprojTrades:
 # parse_knxproj + parse_knxproj_locations — real demo file
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not _HAS_DEMO, reason="Demo .knxproj not found")
 class TestParseKnxprojReal:
     def test_returns_list_of_records(self):
@@ -375,4 +381,3 @@ class TestParseKnxprojLocationsReal:
     def test_invalid_file_raises_value_error(self):
         with pytest.raises(ValueError):
             parse_knxproj_locations(b"garbage")
-
