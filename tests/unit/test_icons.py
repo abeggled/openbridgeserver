@@ -6,7 +6,7 @@ FastAPI app or database connection.
 
 from __future__ import annotations
 
-from obs.api.v1.icons import _is_svg, _safe_name, _sanitize_svg_content
+from obs.api.v1.icons import _is_svg, _safe_name, _sanitize_svg
 
 # ---------------------------------------------------------------------------
 # _is_svg
@@ -121,32 +121,59 @@ class TestSafeName:
         assert _safe_name(Path(member).name) == "home"
 
 
-class TestSanitizeSvgContent:
-    def test_preserves_svg_tag_names_without_ns0_prefix(self):
-        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1"/></svg>'
-        sanitized = _sanitize_svg_content(svg)
-        assert sanitized is not None
-        text = sanitized.decode("utf-8")
-        assert "<svg" in text
-        assert "<path" in text
-        assert "ns0:" not in text
+class TestSanitizeSvg:
+    def test_removes_event_handlers(self):
+        payload = b'<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><path d="M1 1"/></svg>'
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert "onload" not in out
 
-    def test_removes_javascript_href_with_encoded_whitespace(self):
-        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><a href="java&#x09;script:alert(1)">x</a></svg>'
-        sanitized = _sanitize_svg_content(svg)
-        assert sanitized is not None
-        text = sanitized.decode("utf-8").lower()
-        assert "javascript:" not in text
-        assert "href=" not in text
-
-    def test_removes_animate_targeting_href(self):
-        svg = (
-            b'<svg xmlns="http://www.w3.org/2000/svg">'
-            b'<a href="https://example.com">'
-            b'<animate attributeName="href" values="javascript:alert(1)" />'
-            b"</a></svg>"
+    def test_removes_script_and_foreignobject(self):
+        payload = (
+            b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><foreignObject><div>bad</div></foreignObject><path d="M1 1"/></svg>'
         )
-        sanitized = _sanitize_svg_content(svg)
-        assert sanitized is not None
-        text = sanitized.decode("utf-8").lower()
-        assert "<animate" not in text
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert "<script" not in out
+        assert "<foreignObject" not in out
+        assert "path" in out
+
+    def test_removes_smil_animation_elements(self):
+        payload = b'<svg xmlns="http://www.w3.org/2000/svg"><a><set attributeName="href" to="javascript:alert(1)" /></a><path d="M1 1"/></svg>'
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert "<set" not in out
+        assert "path" in out
+
+    def test_rejects_invalid_xml(self):
+        import pytest
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException):
+            _sanitize_svg(b"<svg><path></svg")
+
+    def test_rejects_doctype(self):
+        import pytest
+        from fastapi import HTTPException
+
+        payload = b'<!DOCTYPE svg [<!ENTITY x "abc">]><svg xmlns="http://www.w3.org/2000/svg"><text>&x;</text></svg>'
+        with pytest.raises(HTTPException) as exc_info:
+            _sanitize_svg(payload)
+        assert exc_info.value.status_code == 422
+
+    def test_strips_obfuscated_javascript_href(self):
+        payload = b'<svg xmlns="http://www.w3.org/2000/svg"><a href="java&#10;script:alert(1)"><path d="M1 1"/></a></svg>'
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert "href=" not in out
+
+    def test_rejects_too_deep_svg(self):
+        import pytest
+        from fastapi import HTTPException
+
+        deep = "<svg>" + ("<g>" * 300) + ("</g>" * 300) + "</svg>"
+        with pytest.raises(HTTPException) as exc_info:
+            _sanitize_svg(deep.encode("utf-8"))
+        assert exc_info.value.status_code == 422
+
+    def test_preserves_plain_svg_root_tag(self):
+        payload = b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1"/></svg>'
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert out.startswith("<svg")
+        assert "<ns0:svg" not in out
