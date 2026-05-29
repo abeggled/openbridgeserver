@@ -14,6 +14,7 @@ import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
 
 export const useWebSocketStore = defineStore('websocket', () => {
+  const WS_TOKEN_PROTOCOL_PREFIX = 'obs.jwt.'
   const connected    = ref(false)
   const liveValues   = ref({})   // { [datapoint_id]: { value, quality, ts } }
   const _ws          = shallowRef(null)
@@ -26,8 +27,11 @@ export const useWebSocketStore = defineStore('websocket', () => {
     if (_ws.value?.readyState === WebSocket.OPEN) return
 
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    const token = localStorage.getItem('access_token')
     const url   = `${proto}://${window.location.host}/api/v1/ws`
-    const ws    = new WebSocket(url)
+    const ws    = token
+      ? new WebSocket(url, [`${WS_TOKEN_PROTOCOL_PREFIX}${token}`])
+      : new WebSocket(url)
     _ws.value   = ws
 
     ws.onopen = () => {

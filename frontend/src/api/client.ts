@@ -85,6 +85,7 @@ let _writeContext: WriteContext = {}
 
 export function setWriteContext(ctx: WriteContext): void { _writeContext = ctx }
 export function clearWriteContext(): void { _writeContext = {} }
+export function getWriteContext(): WriteContext { return _writeContext }
 
 // ── Request-Helper ────────────────────────────────────────────────────────────
 
