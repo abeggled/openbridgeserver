@@ -57,7 +57,7 @@
 * Security: Prevent logic formula sandbox escape via custom round helper. https://github.com/abeggled/openbridgeserver/pull/504
 * Security: Validate imported binding formulas to prevent untrusted formula execution. https://github.com/abeggled/openbridgeserver/pull/505
 * Security: Bound write-router value cache to mitigate MQTT payload-retention DoS risk. https://github.com/abeggled/openbridgeserver/pull/524
-* Security: Harden SVG icon import sanitization (obfuscated javascript href, deep nesting guard, stable `<svg>` serialization), make ZIP imports atomic on sanitize errors, preserve API-key flows across username changes, and allow imports for authenticated users. https://github.com/abeggled/openbridgeserver/pull/555
+* Security: Harden SVG icon import sanitization (obfuscated javascript href, deep nesting guard, stable `<svg>` serialization, blocked SMIL animation tags, and DOCTYPE rejection), make ZIP imports atomic on sanitize errors, preserve API-key flows across username changes, and allow imports for authenticated users. https://github.com/abeggled/openbridgeserver/pull/555
 * Security: Harden LXC first-boot and release handling (per-container JWT secret, stricter env/tag handling). https://github.com/abeggled/openbridgeserver/pull/455 https://github.com/abeggled/openbridgeserver/pull/506 https://github.com/abeggled/openbridgeserver/pull/512
 * Backend: Complete remaining UI translation fixes after i18n rollout. https://github.com/abeggled/openbridgeserver/pull/542
 * Backend: Validate `DataValueEvent` payloads before bridge propagation. https://github.com/abeggled/openbridgeserver/pull/519
