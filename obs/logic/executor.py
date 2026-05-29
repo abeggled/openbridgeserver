@@ -1123,9 +1123,67 @@ class GraphExecutor:
         allowed.update(ctx)
         try:
             tree = ast.parse(expr, mode="eval")
+            GraphExecutor._validate_formula_ast(tree, set(allowed.keys()))
             return eval(compile(tree, "<formula>", "eval"), {"__builtins__": {}}, allowed)  # noqa: S307
         except Exception as exc:
             raise ExecutionError(f"Formula error: {exc}") from exc
+
+    @staticmethod
+    def _validate_formula_ast(tree: ast.AST, allowed_names: set[str]) -> None:
+        """Validate formula AST and reject unsafe Python constructs."""
+        allowed_nodes = (
+            ast.Expression,
+            ast.BinOp,
+            ast.UnaryOp,
+            ast.BoolOp,
+            ast.Compare,
+            ast.IfExp,
+            ast.Call,
+            ast.keyword,
+            ast.Name,
+            ast.Load,
+            ast.Constant,
+            ast.List,
+            ast.Tuple,
+            ast.Dict,
+            ast.Set,
+            ast.Subscript,
+            ast.Slice,
+            ast.Index,
+            ast.Add,
+            ast.Sub,
+            ast.Mult,
+            ast.Div,
+            ast.FloorDiv,
+            ast.Mod,
+            ast.Pow,
+            ast.UAdd,
+            ast.USub,
+            ast.And,
+            ast.Or,
+            ast.Not,
+            ast.Eq,
+            ast.NotEq,
+            ast.Lt,
+            ast.LtE,
+            ast.Gt,
+            ast.GtE,
+            ast.Is,
+            ast.IsNot,
+            ast.In,
+            ast.NotIn,
+        )
+
+        for node in ast.walk(tree):
+            if not isinstance(node, allowed_nodes):
+                raise ExecutionError(f"Disallowed expression element: {type(node).__name__}")
+            if isinstance(node, ast.Name) and node.id not in allowed_names:
+                raise ExecutionError(f"Unknown variable or function: {node.id}")
+            if isinstance(node, ast.Call):
+                if not isinstance(node.func, ast.Name):
+                    raise ExecutionError("Only direct function calls are allowed")
+                if node.func.id not in allowed_names:
+                    raise ExecutionError(f"Function not allowed: {node.func.id}")
 
     @staticmethod
     def _run_script(script: str, inputs: dict[str, Any]) -> Any:

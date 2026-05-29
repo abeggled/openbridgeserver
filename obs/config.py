@@ -121,6 +121,11 @@ def _has_env_key_case_insensitive(env_key: str) -> bool:
     return any(existing.upper() == lookup for existing in os.environ)
 
 
+def _get_existing_env_key_case_insensitive(env_key: str) -> str | None:
+    lookup = env_key.upper()
+    return next((existing for existing in os.environ if existing.upper() == lookup), None)
+
+
 def _get_env_case_insensitive(*env_keys: str) -> str | None:
     for key in env_keys:
         if key in os.environ:
@@ -133,17 +138,31 @@ def _get_env_case_insensitive(*env_keys: str) -> str | None:
 
 
 def _import_legacy_env_vars() -> None:
-    """Import OPENTWS_* variables as OBS_* when OBS_* is not set."""
+    """Import OPENTWS_* variables as OBS_* when OBS_* is not set.
+
+    Docker images may predefine OBS_* defaults. If those exact defaults are
+    present, prefer an explicitly supplied OPENTWS_* value for compatibility.
+    """
     legacy_prefix = "OPENTWS_"
     legacy_prefix_upper = legacy_prefix.upper()
     new_prefix = "OBS_"
+    docker_defaults = {
+        "OBS_CONFIG": "/data/config.yaml",
+        "OBS_DATABASE__PATH": "/data/obs.db",
+    }
 
     for key, value in list(os.environ.items()):
         if not key.upper().startswith(legacy_prefix_upper):
             continue
         mapped_key = f"{new_prefix}{key[len(legacy_prefix) :]}"
-        if not _has_env_key_case_insensitive(mapped_key):
+        existing_key = _get_existing_env_key_case_insensitive(mapped_key)
+        if existing_key is None:
             os.environ[mapped_key] = value
+            continue
+
+        expected_default = docker_defaults.get(mapped_key.upper())
+        if expected_default is not None and os.environ.get(existing_key) == expected_default:
+            os.environ[existing_key] = value
 
 
 def _resolve_default_db_path(default_path: str = "/data/obs.db") -> str:

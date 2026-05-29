@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { datapoints } from '@/api/client'
 import { useIcons } from '@/composables/useIcons'
 import type { DataPointValue } from '@/types'
@@ -83,38 +83,47 @@ const activeIcon   = computed(() => activeRule.value.icon)
 const activeColor  = computed(() => activeRule.value.color)
 const activeText   = computed(() => activeRule.value.text)
 
-// SVG-Icon laden und auf currentColor umfärben (gleiche Logik wie ValueDisplay)
-const svgContent = ref('')
+const svgBlobUrl = ref('')
+let iconLoadToken = 0
+
+function resetSvgBlobUrl() {
+  if (svgBlobUrl.value) {
+    URL.revokeObjectURL(svgBlobUrl.value)
+    svgBlobUrl.value = ''
+  }
+}
 
 watch(
   activeIcon,
   async (icon) => {
-    if (!isSvgIcon(icon)) { svgContent.value = ''; return }
-    svgContent.value = await getSvg(svgIconName(icon))
+    const token = ++iconLoadToken
+    resetSvgBlobUrl()
+    if (!isSvgIcon(icon)) return
+    const svg = await getSvg(svgIconName(icon))
+    if (token !== iconLoadToken || !svg) return
+    svgBlobUrl.value = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
   },
   { immediate: true },
 )
 
-const coloredSvg = computed(() => {
-  if (!svgContent.value) return ''
-  const nonNoneFill = /\bfill\s*:\s*(?!none\b)/g
-  return svgContent.value
-    .replace(/<svg\b([^>]*)>/, (_, attrs: string) => {
-      const updated = /\bfill=/.test(attrs)
-        ? attrs.replace(/\bfill="(?!none\b)[^"]*"/, 'fill="currentColor"')
-        : `${attrs} fill="currentColor"`
-      return `<svg${updated}>`
-    })
-    .replace(/\bfill="(?!none\b)[^"]*"/g, 'fill="currentColor"')
-    .replace(/\bstroke="(?!none\b)[^"]*"/g, 'stroke="currentColor"')
-    .replace(/\bstyle="([^"]*)"/g, (_, s: string) =>
-      `style="${s
-        .replace(nonNoneFill, 'fill:currentColor ')
-        .replace(/\bstroke\s*:\s*(?!none\b)[^;"]*/g, 'stroke:currentColor')}"`)
-    .replace(/(<style[^>]*>)([\s\S]*?)(<\/style>)/g, (_, open, css: string, close) =>
-      `${open}${css
-        .replace(nonNoneFill, 'fill:currentColor ')
-        .replace(/\bstroke\s*:\s*(?!none\b)[^;}\n]*/g, 'stroke:currentColor')}${close}`)
+const svgMaskStyle = computed(() => {
+  if (!svgBlobUrl.value) return {}
+  return {
+    backgroundColor: activeColor.value,
+    WebkitMaskImage: `url(${svgBlobUrl.value})`,
+    maskImage: `url(${svgBlobUrl.value})`,
+    WebkitMaskRepeat: 'no-repeat',
+    maskRepeat: 'no-repeat',
+    WebkitMaskPosition: 'center',
+    maskPosition: 'center',
+    WebkitMaskSize: 'contain',
+    maskSize: 'contain',
+  }
+})
+
+onBeforeUnmount(() => {
+  iconLoadToken += 1
+  resetSvgBlobUrl()
 })
 </script>
 
@@ -136,11 +145,7 @@ const coloredSvg = computed(() => {
       :style="{ color: activeColor }"
     >
       <span v-if="!isSvgIcon(activeIcon)" class="text-2xl leading-none">{{ activeIcon }}</span>
-      <span
-        v-else-if="coloredSvg"
-        class="w-8 h-8 [&>svg]:w-full [&>svg]:h-full"
-        v-html="coloredSvg"
-      />
+      <span v-else-if="svgBlobUrl" class="inline-block w-8 h-8" :style="svgMaskStyle" />
     </div>
 
     <!-- Toggle-Schalter -->
@@ -190,10 +195,9 @@ const coloredSvg = computed(() => {
         style="font-size: min(100%, 4rem)"
       >{{ activeIcon }}</span>
       <span
-        v-else-if="coloredSvg"
-        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
-        style="aspect-ratio: 1"
-        v-html="coloredSvg"
+        v-else-if="svgBlobUrl"
+        class="inline-block h-full max-w-full w-full"
+        :style="[svgMaskStyle, { aspectRatio: '1 / 1' }]"
       />
     </div>
 
@@ -225,10 +229,9 @@ const coloredSvg = computed(() => {
         style="font-size: min(100%, 4rem)"
       >{{ activeIcon }}</span>
       <span
-        v-else-if="coloredSvg"
-        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
-        style="aspect-ratio: 1"
-        v-html="coloredSvg"
+        v-else-if="svgBlobUrl"
+        class="inline-block h-full max-w-full w-full"
+        :style="[svgMaskStyle, { aspectRatio: '1 / 1' }]"
       />
     </div>
 

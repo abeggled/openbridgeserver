@@ -135,13 +135,16 @@ async def get_current_user(
 
     if api_key:
         key_hash = hash_api_key(api_key)
-        row = await db.fetchone("SELECT name FROM api_keys WHERE key_hash=?", (key_hash,))
+        row = await db.fetchone(
+            "SELECT COALESCE(NULLIF(owner, ''), name) AS subject FROM api_keys WHERE key_hash=?",
+            (key_hash,),
+        )
         if not row:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API key")
         # Update last_used_at
         now = datetime.now(UTC).isoformat()
         await db.execute_and_commit("UPDATE api_keys SET last_used_at=? WHERE key_hash=?", (now, key_hash))
-        return row["name"]
+        return row["subject"]
 
     raise HTTPException(
         status.HTTP_401_UNAUTHORIZED,
@@ -472,10 +475,16 @@ async def update_user(
     # Disabling mqtt_enabled clears the stored hash
     new_mqtt_hash = None if body.mqtt_enabled is False else target["mqtt_password_hash"]
 
-    await db.execute_and_commit(
+    await db.execute(
         "UPDATE users SET username=?, is_admin=?, mqtt_enabled=?, mqtt_password_hash=? WHERE id=?",
         (new_username, new_is_admin, new_mqtt_enabled, new_mqtt_hash, target["id"]),
     )
+    if body.username and body.username != username:
+        await db.execute(
+            "UPDATE api_keys SET owner=? WHERE owner=?",
+            (new_username, username),
+        )
+    await db.commit()
     if mqtt_changed:
         await _sync_mqtt(db)
     row = await db.fetchone(f"SELECT {_USER_COLS} FROM users WHERE id=?", (target["id"],))

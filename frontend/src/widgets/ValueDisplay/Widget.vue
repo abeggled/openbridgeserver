@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, getCurrentInstance, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Chart, LineController, LineElement, PointElement, LinearScale, Filler, Tooltip } from 'chart.js'
+import { useI18n } from 'vue-i18n'
 import { history } from '@/api/client'
 import { useIcons } from '@/composables/useIcons'
 import { useDatapointsStore } from '@/stores/datapoints'
@@ -35,6 +36,7 @@ const props = defineProps<{
   h?: number
 }>()
 
+const { t } = useI18n()
 const dpStore = useDatapointsStore()
 const { getSvg, isSvgIcon, svgIconName } = useIcons()
 
@@ -166,47 +168,42 @@ const gaugeCircleSegments = computed(() => {
 
 const activeIcon  = computed(() => activeRule.value?.icon ?? '')
 const activeColor = computed(() => activeRule.value?.color ?? '#6b7280')
-const svgContent  = ref('')
+const svgBlobUrl  = ref('')
+let iconLoadToken = 0
+
+function resetSvgBlobUrl() {
+  if (svgBlobUrl.value) {
+    URL.revokeObjectURL(svgBlobUrl.value)
+    svgBlobUrl.value = ''
+  }
+}
 
 watch(
   activeIcon,
   async (icon) => {
-    if (!isSvgIcon(icon)) { svgContent.value = ''; return }
-    svgContent.value = await getSvg(svgIconName(icon))
+    const token = ++iconLoadToken
+    resetSvgBlobUrl()
+    if (!isSvgIcon(icon)) return
+    const svg = await getSvg(svgIconName(icon))
+    if (token !== iconLoadToken || !svg) return
+    svgBlobUrl.value = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
   },
   { immediate: true },
 )
 
-// Tint the SVG with CSS `color` by funnelling all fill references through currentColor.
-// Handles four cases:
-//   1. Root <svg> fill attr (replace or add)
-//   2. Explicit fill="..." on child elements (except fill="none")
-//   3. fill:... inside inline style="" attrs (except fill:none)
-//   4. fill:... inside embedded <style> blocks (except fill:none)
-const coloredSvg = computed(() => {
-  if (!svgContent.value) return ''
-  const nonNoneFill = /\bfill\s*:\s*(?!none\b)/g
-  return svgContent.value
-    // 1. Root <svg>: replace existing non-none fill or add one
-    .replace(/<svg\b([^>]*)>/, (_, attrs: string) => {
-      const updated = /\bfill=/.test(attrs)
-        ? attrs.replace(/\bfill="(?!none\b)[^"]*"/, 'fill="currentColor"')
-        : `${attrs} fill="currentColor"`
-      return `<svg${updated}>`
-    })
-    // 2. Explicit fill attributes on child elements
-    .replace(/\bfill="(?!none\b)[^"]*"/g, 'fill="currentColor"')
-    // 3. fill + stroke inside inline style="" attributes
-    .replace(/\bstroke="(?!none\b)[^"]*"/g, 'stroke="currentColor"')
-    .replace(/\bstyle="([^"]*)"/g, (_, s: string) =>
-      `style="${s
-        .replace(nonNoneFill, 'fill:currentColor ')
-        .replace(/\bstroke\s*:\s*(?!none\b)[^;"]*/g, 'stroke:currentColor')}"`)
-    // 4. fill + stroke inside <style> blocks
-    .replace(/(<style[^>]*>)([\s\S]*?)(<\/style>)/g, (_, open, css: string, close) =>
-      `${open}${css
-        .replace(nonNoneFill, 'fill:currentColor ')
-        .replace(/\bstroke\s*:\s*(?!none\b)[^;}\n]*/g, 'stroke:currentColor')}${close}`)
+const svgMaskStyle = computed(() => {
+  if (!svgBlobUrl.value) return {}
+  return {
+    backgroundColor: activeColor.value,
+    WebkitMaskImage: `url(${svgBlobUrl.value})`,
+    maskImage: `url(${svgBlobUrl.value})`,
+    WebkitMaskRepeat: 'no-repeat',
+    maskRepeat: 'no-repeat',
+    WebkitMaskPosition: 'center',
+    maskPosition: 'center',
+    WebkitMaskSize: 'contain',
+    maskSize: 'contain',
+  }
 })
 
 // ── Display value ──────────────────────────────────────────────────────────────
@@ -391,6 +388,8 @@ watch(modalOpen, async (open) => {
 })
 
 onUnmounted(() => {
+  iconLoadToken += 1
+  resetSvgBlobUrl()
   wsOff?.()
   if (reloadTimer) { clearTimeout(reloadTimer); reloadTimer = null }
   miniChart?.destroy()
@@ -414,11 +413,9 @@ const quality = computed(() => props.value?.q ?? null)
         :style="{ color: activeColor }"
       >{{ activeIcon }}</span>
       <span
-        v-else-if="coloredSvg"
-        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
-        style="aspect-ratio: 1"
-        :style="{ color: activeColor }"
-        v-html="coloredSvg"
+        v-else-if="svgBlobUrl"
+        class="inline-block h-full max-w-full w-full"
+        :style="[svgMaskStyle, { aspectRatio: '1 / 1' }]"
       />
     </div>
 
@@ -434,8 +431,8 @@ const quality = computed(() => props.value?.q ?? null)
 
     <!-- Quality indicator -->
     <div class="flex justify-end w-full mt-0.5">
-      <span v-if="quality === 'bad'" class="w-2 h-2 rounded-full bg-red-500" title="Qualität: schlecht" />
-      <span v-else-if="quality === 'uncertain'" class="w-2 h-2 rounded-full bg-yellow-400" title="Qualität: undefiniert" />
+      <span v-if="quality === 'bad'" class="w-2 h-2 rounded-full bg-red-500" :title="t('widgets.valuedisplay.qualityBadTitle')" />
+      <span v-else-if="quality === 'uncertain'" class="w-2 h-2 rounded-full bg-yellow-400" :title="t('widgets.valuedisplay.qualityUncertainTitle')" />
     </div>
   </div>
 
@@ -452,11 +449,9 @@ const quality = computed(() => props.value?.q ?? null)
         :style="{ color: activeColor }"
       >{{ activeIcon }}</span>
       <span
-        v-else-if="coloredSvg"
-        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
-        style="aspect-ratio: 1"
-        :style="{ color: activeColor }"
-        v-html="coloredSvg"
+        v-else-if="svgBlobUrl"
+        class="inline-block h-full max-w-full w-full"
+        :style="[svgMaskStyle, { aspectRatio: '1 / 1' }]"
       />
     </div>
 
@@ -471,7 +466,7 @@ const quality = computed(() => props.value?.q ?? null)
     <div
       class="w-full min-h-0 cursor-pointer rounded overflow-hidden"
       style="flex: 2"
-      :title="editorMode ? '' : 'Klicken für Vollansicht'"
+        :title="editorMode ? '' : t('widgets.valuedisplay.clickForFullViewTitle')"
       @click="!editorMode && (modalOpen = true)"
     >
       <canvas v-if="!editorMode" ref="canvasEl" class="w-full h-full" />
@@ -511,8 +506,8 @@ const quality = computed(() => props.value?.q ?? null)
       </svg>
     </div>
     <div class="flex justify-end w-full mt-0.5">
-      <span v-if="quality === 'bad'" class="w-2 h-2 rounded-full bg-red-500" title="Qualität: schlecht" />
-      <span v-else-if="quality === 'uncertain'" class="w-2 h-2 rounded-full bg-yellow-400" title="Qualität: undefiniert" />
+      <span v-if="quality === 'bad'" class="w-2 h-2 rounded-full bg-red-500" :title="t('widgets.valuedisplay.qualityBadTitle')" />
+      <span v-else-if="quality === 'uncertain'" class="w-2 h-2 rounded-full bg-yellow-400" :title="t('widgets.valuedisplay.qualityUncertainTitle')" />
     </div>
   </div>
 
@@ -554,8 +549,8 @@ const quality = computed(() => props.value?.q ?? null)
       </svg>
     </div>
     <div class="flex justify-end w-full mt-0.5">
-      <span v-if="quality === 'bad'" class="w-2 h-2 rounded-full bg-red-500" title="Qualität: schlecht" />
-      <span v-else-if="quality === 'uncertain'" class="w-2 h-2 rounded-full bg-yellow-400" title="Qualität: undefiniert" />
+      <span v-if="quality === 'bad'" class="w-2 h-2 rounded-full bg-red-500" :title="t('widgets.valuedisplay.qualityBadTitle')" />
+      <span v-else-if="quality === 'uncertain'" class="w-2 h-2 rounded-full bg-yellow-400" :title="t('widgets.valuedisplay.qualityUncertainTitle')" />
     </div>
   </div>
 
@@ -574,11 +569,9 @@ const quality = computed(() => props.value?.q ?? null)
         :style="{ color: activeColor }"
       >{{ activeIcon }}</span>
       <span
-        v-else-if="coloredSvg"
-        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
-        style="aspect-ratio: 1"
-        :style="{ color: activeColor }"
-        v-html="coloredSvg"
+        v-else-if="svgBlobUrl"
+        class="inline-block h-full max-w-full w-full"
+        :style="[svgMaskStyle, { aspectRatio: '1 / 1' }]"
       />
     </div>
     <!-- Spacer bottom: 1 share -->
@@ -601,19 +594,14 @@ const quality = computed(() => props.value?.q ?? null)
               class="text-2xl leading-none select-none shrink-0"
               :style="{ color: activeColor }"
             >{{ activeIcon }}</span>
-            <span
-              v-else-if="coloredSvg"
-              class="w-6 h-6 [&>svg]:w-full [&>svg]:h-full shrink-0"
-              :style="{ color: activeColor }"
-              v-html="coloredSvg"
-            />
+            <span v-else-if="svgBlobUrl" class="inline-block w-6 h-6 shrink-0" :style="svgMaskStyle" />
             <span class="text-sm font-medium text-gray-700 dark:text-gray-200 truncate">{{ widgetLabel || 'Verlauf' }}</span>
           </div>
           <div class="flex items-center gap-2 shrink-0">
             <select
               v-model="modalTimeRange"
               class="text-xs bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer"
-              title="Zeitbereich wählen"
+              :title="t('widgets.valuedisplay.selectTimeRangeTitle')"
             >
               <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ p.label }}</option>
             </select>

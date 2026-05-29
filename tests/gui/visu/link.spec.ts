@@ -7,7 +7,7 @@ import { apiPost, apiPut, apiDelete, apiUploadIcon, apiDeleteIcons, getToken } f
  *
  * Getestete Szenarien:
  *   1. Widget zeigt Emoji-Icon korrekt an
- *   2. Widget zeigt importiertes SVG-Icon als <svg> inline an
+ *   2. Widget zeigt importiertes SVG-Icon als Blob-`img` an
  */
 
 async function createVisuPage(name: string) {
@@ -65,7 +65,7 @@ test('Link: Emoji-Icon wird als Text gerendert', async ({ page }) => {
 
 // ─── Test 2: SVG-Icon ─────────────────────────────────────────────────────────
 
-test('Link: importiertes SVG-Icon wird inline als <svg> gerendert', async ({ page }) => {
+test('Link: importiertes SVG-Icon wird als <img src="blob:..."> gerendert', async ({ page }) => {
   const iconName = `e2e-link-icon-${Date.now()}`
   const minimalSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20"/></svg>'
 
@@ -91,8 +91,10 @@ test('Link: importiertes SVG-Icon wird inline als <svg> gerendert', async ({ pag
     const iconSpan = widget.locator('[data-testid="link-icon"]')
     await expect(iconSpan).toBeVisible()
 
-    // VisuIcon renders the SVG inline — an <svg> element must appear inside the span
-    await expect(iconSpan.locator('svg')).toBeVisible({ timeout: 3_000 })
+    const svgImg = iconSpan.locator('img')
+    await expect(svgImg).toBeVisible({ timeout: 10_000 })
+    await expect(svgImg).toHaveAttribute('src', /^blob:/)
+    await expect(iconSpan.locator('svg')).toHaveCount(0)
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
     await apiDeleteIcons([iconName])

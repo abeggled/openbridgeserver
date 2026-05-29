@@ -16,7 +16,7 @@ import { apiPost, apiPut, apiDelete } from '../helpers'
  *   3. Modal: Dropdown enthält alle 18 Optionen
  *   4. Modal: Zeitbereichswechsel aktualisiert Chart ohne Fehler
  *   5. Modal: wird beim erneuten Öffnen auf Config-Default zurückgesetzt
- *   6. Rückwärtskompatibilität: Widget ohne history_time_range zeigt last_24h im Modal
+ *   6. Rückwärtskompatibilität: Widget ohne history_time_range zeigt Default last_7d im Modal
  *   7. Automatische Aktualisierung via WebSocket
  */
 
@@ -275,7 +275,7 @@ test('Wertanzeige-Verlauf: Modal-Dropdown wird beim erneuten Öffnen auf Config-
 
 // ─── Test 6: Rückwärtskompatibilität — alte Config ohne history_time_range ───
 
-test('Wertanzeige-Verlauf: alte Config ohne history_time_range zeigt last_24h im Modal', async ({ page }) => {
+test('Wertanzeige-Verlauf: alte Config ohne history_time_range zeigt last_7d im Modal', async ({ page }) => {
   const dp = await createFloatDP('compat')
   const visuNode = await createVisuPage()
   const pageId = visuNode.id
@@ -298,7 +298,7 @@ test('Wertanzeige-Verlauf: alte Config ohne history_time_range zeigt last_24h im
 
     const modalSelect = page.locator('[class*="fixed inset-0"] select[title="Zeitbereich wählen"]')
     await expect(modalSelect).toBeVisible()
-    await expect(modalSelect).toHaveValue('last_24h')
+    await expect(modalSelect).toHaveValue('last_7d')
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
     await apiDelete(`/api/v1/datapoints/${dp.id}`)

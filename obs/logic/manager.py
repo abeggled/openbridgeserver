@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
+import socket
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -37,12 +39,74 @@ def _msg_to_str(v: object) -> str:
     return str(v)
 
 
+async def _resolve_safe_image_url(url: str) -> tuple[str, str, str] | None:
+    """Return a DNS-pinned HTTPS request tuple for safe image downloads.
+
+    Returns:
+        (pinned_url, host_header, pinned_ip) or None if the URL is unsafe.
+    """
+    from urllib.parse import urlparse, urlunparse
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        return None
+
+    host = parsed.hostname
+    port = parsed.port or 443
+
+    try:
+        infos = await asyncio.to_thread(socket.getaddrinfo, host, port, 0, socket.SOCK_STREAM)
+    except OSError:
+        return None
+
+    resolved_ips: list[str] = []
+    for info in infos:
+        ip = info[4][0]
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return None
+        if not addr.is_global:
+            return None
+        ip_str = str(addr)
+        if ip_str not in resolved_ips:
+            resolved_ips.append(ip_str)
+
+    if not resolved_ips:
+        return None
+
+    pinned_ip = resolved_ips[0]
+    pinned_host = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+    has_explicit_port = parsed.port is not None
+    netloc = f"{pinned_host}:{port}" if has_explicit_port else pinned_host
+    pinned_url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+    host_header = f"{host}:{port}" if has_explicit_port else host
+    return pinned_url, host_header, pinned_ip
+
+
+def _read_secret_file(path: str) -> str:
+    """Read a small root-managed secret file without logging its content."""
+    clean_path = (path or "").strip()
+    if not clean_path:
+        return ""
+    try:
+        with open(clean_path, encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError as exc:
+        logger.warning("Could not read api_client secret file %s: %s", clean_path, exc)
+        return ""
+
+
 _THROTTLE_UNITS: dict[str, float] = {
     "ms": 1.0,
     "s": 1000.0,
     "min": 60_000.0,
     "h": 3_600_000.0,
 }
+_PUSHOVER_ATTACHMENT_MAX_BYTES = 5_000_000
 
 _manager: LogicManager | None = None
 
@@ -486,6 +550,14 @@ class LogicManager:
                     extra_headers = _json.loads(hdr_str)
                 except Exception:
                     pass
+            hdr_secret_file = (node.data.get("headers_secret_file") or "").strip()
+            if hdr_secret_file:
+                try:
+                    secret_headers = _json.loads(_read_secret_file(hdr_secret_file))
+                    if isinstance(secret_headers, dict):
+                        extra_headers = {**extra_headers, **secret_headers}
+                except Exception:
+                    logger.warning("api_client headers_secret_file did not contain a JSON object")
             body = out.get("_body")
             # ── Authentication ──────────────────────────────────────────
             auth_type = (node.data.get("auth_type") or "none").lower()
@@ -497,6 +569,9 @@ class LogicManager:
                     auth = httpx.BasicAuth(username, password) if auth_type == "basic" else httpx.DigestAuth(username, password)
             elif auth_type == "bearer":
                 token = (node.data.get("auth_token") or "").strip()
+                token_file = (node.data.get("auth_token_file") or "").strip()
+                if not token and token_file:
+                    token = _read_secret_file(token_file)
                 if token:
                     extra_headers = {
                         **extra_headers,
@@ -610,15 +685,48 @@ class LogicManager:
                         payload["url_title"] = url_title
 
                     if image_url:
-                        # Download image and attach as multipart
-                        img_r = await client.get(image_url, timeout=10.0)
-                        img_r.raise_for_status()
-                        content_type = img_r.headers.get("content-type", "image/jpeg")
+                        resolved = await _resolve_safe_image_url(image_url)
+                        if resolved is None:
+                            raise ValueError("Unsafe image_url: only public HTTPS hosts are allowed")
+                        pinned_url, host_header, pinned_ip = resolved
+                        # Stream attachment bytes and enforce max size while downloading.
+                        async with client.stream(
+                            "GET",
+                            pinned_url,
+                            timeout=10.0,
+                            follow_redirects=False,
+                            headers={"Host": host_header},
+                            extensions={"sni_hostname": host_header.split(":", 1)[0]},
+                        ) as img_r:
+                            net_stream = img_r.extensions.get("network_stream")
+                            if net_stream is not None:
+                                server_addr = net_stream.get_extra_info("server_addr")
+                                if server_addr and server_addr[0] != pinned_ip:
+                                    raise ValueError("Pushover image_url resolved to an unexpected target IP")
+                            img_r.raise_for_status()
+                            content_type = img_r.headers.get("content-type", "").split(";")[0].strip().lower()
+                            if not content_type.startswith("image/"):
+                                raise ValueError("Pushover image_url must return an image/* content type")
+
+                            content_len_raw = img_r.headers.get("content-length", "0") or "0"
+                            try:
+                                content_len = int(content_len_raw)
+                            except ValueError:
+                                content_len = 0
+                            if content_len > _PUSHOVER_ATTACHMENT_MAX_BYTES:
+                                raise ValueError("Pushover attachment too large (max 5 MB)")
+
+                            img_content = bytearray()
+                            async for chunk in img_r.aiter_bytes():
+                                img_content.extend(chunk)
+                                if len(img_content) > _PUSHOVER_ATTACHMENT_MAX_BYTES:
+                                    raise ValueError("Pushover attachment too large (max 5 MB)")
+
                         fname = image_url.split("?")[0].split("/")[-1] or "image.jpg"
                         r = await client.post(
                             "https://api.pushover.net/1/messages.json",
                             data=payload,
-                            files={"attachment": (fname, img_r.content, content_type)},
+                            files={"attachment": (fname, bytes(img_content), content_type or "image/jpeg")},
                         )
                     else:
                         r = await client.post(

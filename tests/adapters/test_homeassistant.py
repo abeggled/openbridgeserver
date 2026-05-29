@@ -296,6 +296,32 @@ class TestOnStateChangedValueMap:
 
 
 # ---------------------------------------------------------------------------
+# _on_bindings_reloaded — security regression
+# ---------------------------------------------------------------------------
+
+
+class TestBindingsReloaded:
+    @pytest.mark.asyncio
+    async def test_reloaded_starts_ws_without_initial_rest_read(self, adapter):
+        adapter._bindings = [make_binding({"entity_id": "sensor.temperature"}, direction="SOURCE")]
+        adapter._http_client.get = AsyncMock()
+
+        task_names: list[str | None] = []
+        fake_task = MagicMock()
+
+        def _fake_create_task(coro, *, name=None):
+            task_names.append(name)
+            coro.close()
+            return fake_task
+
+        with patch("obs.adapters.homeassistant.adapter.asyncio.create_task", side_effect=_fake_create_task):
+            await adapter._on_bindings_reloaded()
+
+        assert task_names == ["ha-adapter-ws"]
+        adapter._http_client.get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # write() — service call logic
 # ---------------------------------------------------------------------------
 

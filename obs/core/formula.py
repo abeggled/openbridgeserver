@@ -30,8 +30,8 @@ _ALLOWED_NODES = (
     ast.UnaryOp,
     ast.Constant,  # Python 3.8+
     ast.Name,  # für 'x' und math-Funktionen
-    ast.Attribute,  # für math.sqrt etc.
-    ast.Call,  # für abs(), round() etc.
+    ast.Attribute,  # nur math.<funktion>
+    ast.Call,  # nur erlaubte Funktionsaufrufe
     ast.Add,
     ast.Sub,
     ast.Mult,
@@ -43,6 +43,43 @@ _ALLOWED_NODES = (
     ast.USub,
     ast.Load,
 )
+
+
+_ALLOWED_FUNC_NAMES = {"abs", "round", "min", "max"}
+_ALLOWED_MATH_NAMES = {k for k in math.__dict__ if not k.startswith("_")}
+_ALLOWED_MATH_ATTRS = {k for k, v in math.__dict__.items() if not k.startswith("_") and callable(v)}
+
+
+def _is_allowed_call(node: ast.Call) -> bool:
+    if node.keywords:
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id in _ALLOWED_FUNC_NAMES or func.id in _ALLOWED_MATH_ATTRS
+    if isinstance(func, ast.Attribute):
+        return isinstance(func.value, ast.Name) and func.value.id == "math" and func.attr in _ALLOWED_MATH_ATTRS and not func.attr.startswith("_")
+    return False
+
+
+def _validate_tree(tree: ast.AST) -> str | None:
+    for node in ast.walk(tree):
+        if not isinstance(node, _ALLOWED_NODES):
+            return f"Nicht erlaubter Ausdruck: '{type(node).__name__}'"
+
+        if isinstance(node, ast.Name) and node.id not in {"x", "math", *_ALLOWED_FUNC_NAMES, *_ALLOWED_MATH_NAMES}:
+            return f"Nicht erlaubter Name: '{node.id}'"
+
+        if isinstance(node, ast.Attribute):
+            if not (
+                isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in _ALLOWED_MATH_NAMES and not node.attr.startswith("_")
+            ):
+                return "Nicht erlaubter Attributzugriff"
+
+        if isinstance(node, ast.Call) and not _is_allowed_call(node):
+            return "Nicht erlaubter Funktionsaufruf"
+
+    return None
+
 
 _SAFE_GLOBALS: dict[str, Any] = {
     "__builtins__": {},  # kein Zugriff auf builtins
@@ -77,10 +114,10 @@ def validate_formula(formula: str) -> str | None:
     except SyntaxError as exc:
         return f"Syntaxfehler: {exc.msg}"
 
-    # 2. Erlaubte Knoten prüfen
-    for node in ast.walk(tree):
-        if not isinstance(node, _ALLOWED_NODES):
-            return f"Nicht erlaubter Ausdruck: '{type(node).__name__}'"
+    # 2. Erlaubte Knoten/Funktionen prüfen
+    err = _validate_tree(tree)
+    if err:
+        return err
 
     # 3. Testlauf mit x=1 und x=0 (fängt offensichtliche Div-by-Zero)
     for test_val, label in ((1.0, "x=1"), (0.0, "x=0")):
@@ -106,6 +143,10 @@ def apply_formula(formula: str, value: Any) -> Any:
     try:
         locals_: dict[str, Any] = {**_SAFE_GLOBALS, "x": x}
         tree = ast.parse(formula, mode="eval")
+        err = _validate_tree(tree)
+        if err:
+            logger.warning("Formula '%s' rejected by AST validation: %s", formula, err)
+            return value
         code = compile(tree, "<formula>", "eval")
         result = eval(code, {"__builtins__": {}}, locals_)  # noqa: S307
 

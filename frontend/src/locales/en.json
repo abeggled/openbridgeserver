@@ -478,6 +478,9 @@
     },
     "iframe": {
       "url": "URL",
+      "labelPlaceholder": "e.g. weather map, calendar …",
+      "configureUrl": "Configure URL",
+      "noUrlConfigured": "No URL configured",
       "aspectRatio": "Aspect ratio",
       "aspectFree": "Free (fill height)",
       "sandbox": "Sandbox permissions",
@@ -758,7 +761,11 @@
       "minimum": "Minimum",
       "maximum": "Maximum",
       "gaugeColors": "Colour / gradient (1–4 colours, low → high)",
-      "colorIndex": "Colour {n}"
+      "colorIndex": "Colour {n}",
+      "clickForFullViewTitle": "Click for full view",
+      "qualityBadTitle": "Quality: bad",
+      "qualityUncertainTitle": "Quality: uncertain",
+      "selectTimeRangeTitle": "Select time range"
     },
     "wetter": {
       "labelCity": "Label (location name)",
