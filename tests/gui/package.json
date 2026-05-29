@@ -6,6 +6,7 @@
     "test:ui": "playwright test --ui"
   },
   "devDependencies": {
-    "@playwright/test": "^1.44.0"
+    "@playwright/test": "^1.44.0",
+    "dotenv": "^16.4.5"
   }
 }

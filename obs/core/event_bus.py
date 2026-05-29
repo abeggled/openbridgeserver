@@ -18,7 +18,9 @@ import uuid
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
+
+Severity = Literal["ok", "warning", "error"]
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +43,20 @@ class DataValueEvent:
 
 @dataclass
 class AdapterStatusEvent:
-    """Fired when an adapter connection state changes."""
+    """Fired when an adapter connection state changes.
+
+    `severity` lets the adapter signal degraded operation while still
+    technically connected (e.g. repeated KNX/IP tunnel disconnects in a
+    rolling window — see issue #466). The GUI renders ok/warning/error
+    differently in the adapter card, sidebar counter and dashboard tile.
+    """
 
     adapter_type: str
     connected: bool
     detail: str = ""
     instance_id: uuid.UUID | None = None
     instance_name: str = ""
+    severity: Severity = "ok"
     ts: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 

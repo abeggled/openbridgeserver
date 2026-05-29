@@ -8,24 +8,24 @@
 
     <div class="gn-card" ref="cardRef">
       <div class="gn-header">
-        <span class="gn-label">{{ isWrite ? 'Objekt schreiben' : 'Objekt lesen' }}</span>
-        <span v-if="hasFilter" class="gn-filter-badge" title="Filter / Transformation aktiv">⊘</span>
-        <button v-show="hovered" class="gn-delete nodrag" @click.stop="remove" title="Block löschen">✕</button>
+        <span class="gn-label">{{ isWrite ? $t('logic.nodeTypes.datapoint_write') : $t('logic.nodeTypes.datapoint_read') }}</span>
+        <span v-if="hasFilter" class="gn-filter-badge" :title="$t('logic.filterBadge')">⊘</span>
+        <button v-show="hovered" class="gn-delete nodrag" @click.stop="remove" :title="$t('logic.deleteBlock')">✕</button>
       </div>
       <div class="gn-body">
-        <div class="gn-sublabel">Objekt</div>
+        <div class="gn-sublabel">{{ $t('logic.ports.object') }}</div>
         <div class="dp-name" :class="data.datapoint_name ? 'active' : 'empty'">
-          {{ data.datapoint_name || '— nicht gewählt —' }}
+          {{ data.datapoint_name || $t('logic.notSelected') }}
         </div>
       </div>
       <div class="gn-ports">
         <div v-if="isWrite" class="gn-port-col">
-          <span ref="portRef1" class="gn-port-label">Wert</span>
-          <span ref="portRef2" class="gn-port-label">Trigger</span>
+          <span ref="portRef1" class="gn-port-label">{{ $t('logic.ports.value') }}</span>
+          <span ref="portRef2" class="gn-port-label">{{ $t('logic.ports.trigger') }}</span>
         </div>
         <div v-else class="gn-port-col" style="margin-left:auto;align-items:flex-end;">
-          <span ref="portRef1" class="gn-port-label">Wert</span>
-          <span ref="portRef2" class="gn-port-label">Geändert</span>
+          <span ref="portRef1" class="gn-port-label">{{ $t('logic.ports.value') }}</span>
+          <span ref="portRef2" class="gn-port-label">{{ $t('logic.ports.changed') }}</span>
         </div>
       </div>
       <div v-if="data._dbg" class="gn-debug" data-testid="debug-band">{{ data._dbg }}</div>

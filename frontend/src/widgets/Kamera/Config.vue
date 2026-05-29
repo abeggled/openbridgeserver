@@ -36,7 +36,7 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
 
     <!-- Label -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Bezeichnung</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.common.label') }}</label>
       <input
         v-model="cfg.label"
         type="text"
@@ -47,20 +47,20 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
 
     <!-- Stream-Typ -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Stream-Typ</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.streamType') }}</label>
       <select
         v-model="cfg.streamType"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       >
-        <option value="mjpeg">MJPEG (Motion JPEG)</option>
-        <option value="snapshot">JPEG Snapshot (Auto-Refresh)</option>
-        <option value="hls">HLS (.m3u8)</option>
+        <option value="mjpeg">{{ $t('widgets.kamera.streamMjpeg') }}</option>
+        <option value="snapshot">{{ $t('widgets.kamera.streamSnapshot') }}</option>
+        <option value="hls">{{ $t('widgets.kamera.streamHls') }}</option>
       </select>
     </div>
 
     <!-- URL -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Stream-URL</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.streamUrl') }}</label>
       <input
         v-model="cfg.url"
         type="text"
@@ -72,7 +72,7 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
     <!-- Snapshot Refresh-Intervall -->
     <div v-if="showRefresh">
       <label class="block text-xs text-gray-400 mb-1">
-        Aktualisierungsintervall (Sekunden)
+        {{ $t('widgets.kamera.refreshInterval') }}
       </label>
       <input
         v-model.number="cfg.refreshInterval"
@@ -85,14 +85,14 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
 
     <!-- Authentifizierung -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Authentifizierung</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.auth') }}</label>
       <select
         v-model="cfg.authType"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       >
-        <option value="none">Keine</option>
-        <option value="basic">Basic Auth (Benutzername / Passwort)</option>
-        <option value="apikey">API-Key (Query-Parameter)</option>
+        <option value="none">{{ $t('widgets.kamera.authNone') }}</option>
+        <option value="basic">{{ $t('widgets.kamera.authBasic') }}</option>
+        <option value="apikey">{{ $t('widgets.kamera.authApiKey') }}</option>
       </select>
     </div>
 
@@ -100,7 +100,7 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
     <template v-if="showBasicAuth">
       <div class="grid grid-cols-2 gap-2">
         <div>
-          <label class="block text-xs text-gray-400 mb-1">Benutzername</label>
+          <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.username') }}</label>
           <input
             v-model="cfg.username"
             type="text"
@@ -109,7 +109,7 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
           />
         </div>
         <div>
-          <label class="block text-xs text-gray-400 mb-1">Passwort</label>
+          <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.password') }}</label>
           <input
             v-model="cfg.password"
             type="password"
@@ -119,8 +119,7 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
         </div>
       </div>
       <p class="text-xs text-yellow-600">
-        Credentials werden in die URL eingebettet (http://user:pass@host/…).
-        Nur für interne Netzwerke empfohlen.
+        {{ $t('widgets.kamera.credentialWarning') }}
       </p>
     </template>
 
@@ -128,7 +127,7 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
     <template v-if="showApiKeyAuth">
       <div class="grid grid-cols-2 gap-2">
         <div>
-          <label class="block text-xs text-gray-400 mb-1">Parameter-Name</label>
+          <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.apiKeyParam') }}</label>
           <input
             v-model="cfg.apiKeyParam"
             type="text"
@@ -137,7 +136,7 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
           />
         </div>
         <div>
-          <label class="block text-xs text-gray-400 mb-1">API-Key</label>
+          <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.apiKey') }}</label>
           <input
             v-model="cfg.apiKeyValue"
             type="password"
@@ -157,7 +156,7 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
         class="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500"
       />
       <label for="cam-proxy" class="text-xs text-gray-300 cursor-pointer">
-        Via Server-Proxy laden
+        {{ $t('widgets.kamera.useProxy') }}
         <span class="text-gray-500 font-normal ml-1">(Mixed-Content / HTTPS → HTTP)</span>
       </label>
     </div>
@@ -165,26 +164,26 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
     <!-- Darstellung -->
     <div class="grid grid-cols-2 gap-2">
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Seitenverhältnis</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.aspectRatio') }}</label>
         <select
           v-model="cfg.aspectRatio"
           class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
         >
           <option value="16/9">16:9</option>
           <option value="4/3">4:3</option>
-          <option value="1/1">1:1 (Quadrat)</option>
-          <option value="free">Frei (Widget-Grösse)</option>
+          <option value="1/1">{{ $t('widgets.kamera.aspectSquare') }}</option>
+          <option value="free">{{ $t('widgets.kamera.aspectFree') }}</option>
         </select>
       </div>
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Bildanpassung</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.objectFit') }}</label>
         <select
           v-model="cfg.objectFit"
           class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
         >
-          <option value="contain">Einpassen (contain)</option>
-          <option value="cover">Füllen (cover)</option>
-          <option value="fill">Strecken (fill)</option>
+          <option value="contain">{{ $t('widgets.kamera.fitContain') }}</option>
+          <option value="cover">{{ $t('widgets.kamera.fitCover') }}</option>
+          <option value="fill">{{ $t('widgets.kamera.fitFill') }}</option>
         </select>
       </div>
     </div>

@@ -150,6 +150,7 @@ test('RTR: Betriebsart-Buttons erscheinen wenn mode_dp_id konfiguriert', async (
     decimals:        1,
     mode_dp_id:      dpMode.id,
     show_modes:      true,
+    variant:         'ac',
     supported_modes: [0, 1, 3, 6],
   })
 
@@ -222,6 +223,7 @@ test('RTR: Nur konfigurierte Modi werden als Buttons angezeigt', async ({ page }
     decimals:        1,
     mode_dp_id:      dpMode.id,
     show_modes:      true,
+    variant:         'ac',
     supported_modes: [1, 3],   // nur Heizen + Kühlen
   })
 

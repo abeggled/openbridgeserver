@@ -418,6 +418,7 @@ class GraphExecutor:
 
                 raw = inputs.get("data")
                 json_path = (d.get("json_path") or "").strip()
+                json_paths_raw = (d.get("json_paths") or "").strip()
 
                 # Parse raw input to Python object
                 if isinstance(raw, str):
@@ -430,17 +431,6 @@ class GraphExecutor:
                 else:
                     data_obj = None
 
-                # Extract value at dotted path
-                value: Any = None
-                if data_obj is not None:
-                    if json_path:
-                        try:
-                            value = self._json_extract(data_obj, json_path)
-                        except (KeyError, IndexError, TypeError, ValueError):
-                            value = None
-                    else:
-                        value = None  # No path configured — user must select one
-
                 # _preview: compact JSON snapshot for config-panel path picker (max 20 KB)
                 try:
                     preview = _json_mod.dumps(data_obj, default=str, ensure_ascii=False)
@@ -449,28 +439,79 @@ class GraphExecutor:
                 except Exception:
                     preview = str(data_obj) if data_obj is not None else None
 
+                # Multi-path mode: json_paths is a JSON array of {label, path} entries
+                if json_paths_raw:
+                    try:
+                        path_list = _json_mod.loads(json_paths_raw)
+                    except Exception:
+                        path_list = []
+
+                    if isinstance(path_list, list) and path_list:
+                        result: dict[str, Any] = {"_preview": preview}
+                        for i, entry in enumerate(path_list):
+                            p = (entry.get("path") or "").strip() if isinstance(entry, dict) else ""
+                            val: Any = None
+                            if data_obj is not None and p:
+                                try:
+                                    val = self._json_extract(data_obj, p)
+                                except (KeyError, IndexError, TypeError, ValueError):
+                                    val = None
+                            result[f"out_{i + 1}"] = val
+                        return result
+
+                # Legacy single-path mode
+                value: Any = None
+                if data_obj is not None and json_path:
+                    try:
+                        value = self._json_extract(data_obj, json_path)
+                    except (KeyError, IndexError, TypeError, ValueError):
+                        value = None
+
                 return {"value": value, "_preview": preview}
 
             case "xml_extractor":
+                import json as _json_xml  # noqa: PLC0415
                 import xml.etree.ElementTree as _ET  # noqa: PLC0415
 
                 raw_xml = inputs.get("data")
                 xml_path = (d.get("xml_path") or "").strip()
+                xml_paths_raw = (d.get("xml_paths") or "").strip()
 
-                value = None
+                _xml_root = None
                 preview_str: str | None = None
 
                 if isinstance(raw_xml, str) and raw_xml.strip():
                     preview_str = raw_xml[:20_000] if len(raw_xml) > 20_000 else raw_xml
                     try:
-                        root = _ET.fromstring(raw_xml.strip())
-                        if xml_path:
-                            el = root.find(xml_path)
-                            if el is not None:
-                                value = (el.text or "").strip()
-                        # no path → value stays None; user must select one
+                        _xml_root = _ET.fromstring(raw_xml.strip())
                     except _ET.ParseError:
                         pass
+
+                # Multi-path mode: xml_paths is a JSON array of {label, path} entries
+                if xml_paths_raw:
+                    try:
+                        path_list = _json_xml.loads(xml_paths_raw)
+                    except Exception:
+                        path_list = []
+
+                    if isinstance(path_list, list) and path_list:
+                        result: dict[str, Any] = {"_preview": preview_str}
+                        for i, entry in enumerate(path_list):
+                            p = (entry.get("path") or "").strip() if isinstance(entry, dict) else ""
+                            val: Any = None
+                            if _xml_root is not None and p:
+                                el = _xml_root.find(p)
+                                if el is not None:
+                                    val = (el.text or "").strip()
+                            result[f"out_{i + 1}"] = val
+                        return result
+
+                # Legacy single-path mode
+                value = None
+                if _xml_root is not None and xml_path:
+                    el = _xml_root.find(xml_path)
+                    if el is not None:
+                        value = (el.text or "").strip()
 
                 return {"value": value, "_preview": preview_str}
 
@@ -846,6 +887,168 @@ class GraphExecutor:
                     "prev_yearly": state["prev_yearly"],
                 }
 
+            case "ical":
+                # The raw iCal text is pre-fetched by LogicManager and stored in
+                # hysteresis_state[node.id]["raw"] before each executor run.
+                import json as _json_ic  # noqa: PLC0415
+                import re as _re_ic  # noqa: PLC0415
+
+                hyst_node = self.hysteresis_state.setdefault(node.id, {})
+                raw_text: str = hyst_node.get("raw", "")
+                filters_json = (d.get("filters") or "[]").strip()
+                try:
+                    filters: list[dict] = _json_ic.loads(filters_json) if filters_json else []
+                    if not isinstance(filters, list):
+                        filters = []
+                except Exception:
+                    filters = []
+
+                out: dict[str, Any] = {"raw": raw_text}
+
+                if not raw_text:
+                    for i in range(len(filters)):
+                        out[f"f{i}_array"] = []
+                        out[f"f{i}_next_date"] = None
+                        out[f"f{i}_tomorrow"] = False
+                        out[f"f{i}_today"] = False
+                    return out
+
+                try:
+                    import datetime as _dt_ic  # noqa: PLC0415
+                    from zoneinfo import ZoneInfo as _ZI  # noqa: PLC0415
+
+                    from icalendar import Calendar as _ICal  # noqa: PLC0415
+
+                    try:
+                        import recurring_ical_events as _rie  # noqa: PLC0415
+
+                        _HAS_RIE = True
+                    except ImportError:
+                        _HAS_RIE = False
+
+                    tz_name = self.app_config.get("timezone", "Europe/Zurich")
+                    tz = _ZI(tz_name)
+                    today = _dt_ic.datetime.now(tz).date()
+                    tomorrow = today + _dt_ic.timedelta(days=1)
+                    window_end = today + _dt_ic.timedelta(days=365)
+
+                    # Some generators produce malformed property names (e.g.
+                    # X-WR-TIMEZONE','EUROPE/BERLIN: from steffisburg.ch).
+                    # icalendar v7 is strict and raises on these lines.
+                    # Strip them so the rest of the file parses correctly.
+                    _clean_lines = []
+                    for _ln in raw_text.splitlines(keepends=True):
+                        _prop = _re_ic.split(r"[;:]", _ln, maxsplit=1)[0]
+                        if _re_ic.search(r"['\"]", _prop):
+                            logger.debug("ical node %s: skipping malformed line %r", node.id[:8], _ln.rstrip())
+                            continue
+                        _clean_lines.append(_ln)
+                    cal = _ICal.from_ical("".join(_clean_lines))
+
+                    if _HAS_RIE:
+                        raw_events = _rie.of(cal).between(today, window_end)
+                    else:
+                        raw_events = [c for c in cal.walk() if c.name == "VEVENT"]
+
+                    def _event_to_row(ev: Any) -> tuple[_dt_ic.date, list] | None:  # type: ignore[return]
+                        dtstart = ev.get("DTSTART")
+                        if dtstart is None:
+                            return None
+                        dtend = ev.get("DTEND")
+                        start_raw = dtstart.dt
+                        end_raw = dtend.dt if dtend else start_raw
+
+                        if isinstance(start_raw, _dt_ic.datetime):
+                            if start_raw.tzinfo is not None:
+                                start_raw = start_raw.astimezone(tz)
+                            event_date = start_raw.date()
+                            start_time = start_raw.strftime("%H:%M")
+                        else:
+                            event_date = start_raw
+                            start_time = ""
+
+                        if isinstance(end_raw, _dt_ic.datetime):
+                            if end_raw.tzinfo is not None:
+                                end_raw = end_raw.astimezone(tz)
+                            end_time = end_raw.strftime("%H:%M")
+                        else:
+                            end_time = ""
+
+                        summary = str(ev.get("SUMMARY", "") or "")
+                        location = str(ev.get("LOCATION", "") or "")
+                        description = str(ev.get("DESCRIPTION", "") or "")
+                        return event_date, [event_date.isoformat(), start_time, end_time, summary, location, description]
+
+                    event_rows: list[tuple[_dt_ic.date, list]] = []
+                    for ev in raw_events:
+                        r = _event_to_row(ev)
+                        if r:
+                            event_rows.append(r)
+                    event_rows.sort(key=lambda x: x[0])
+
+                    _FIELD_IDX = {"summary": 3, "location": 4, "description": 5}
+
+                    def _matches(row_data: list, flt: dict) -> bool:
+                        case_sensitive = bool(flt.get("case_sensitive", False))
+                        flags = 0 if case_sensitive else _re_ic.IGNORECASE
+                        field_logic = str(flt.get("field_logic", "or")).lower()
+
+                        def _pat_matches(pattern: str, text: str) -> bool:
+                            if not pattern:
+                                return True  # empty pattern = ignore this field
+                            try:
+                                return bool(_re_ic.search(pattern, text, flags))
+                            except _re_ic.error:
+                                needle = pattern if case_sensitive else pattern.lower()
+                                haystack = text if case_sensitive else text.lower()
+                                return needle in haystack
+
+                        # New format: per-field patterns
+                        if any(k in flt for k in ("summary_pattern", "location_pattern", "description_pattern")):
+                            checks = [
+                                (flt.get("summary_pattern") or "", row_data[3]),
+                                (flt.get("location_pattern") or "", row_data[4]),
+                                (flt.get("description_pattern") or "", row_data[5]),
+                            ]
+                            active = [(pat, val) for pat, val in checks if pat]
+                            if not active:
+                                return True  # all patterns empty = match all
+                            if field_logic == "and":
+                                return all(_pat_matches(p, v) for p, v in active)
+                            return any(_pat_matches(p, v) for p, v in active)
+
+                        # Legacy format: single pattern across selected fields
+                        pattern = str(flt.get("pattern") or "")
+                        if not pattern:
+                            return True
+                        fields = flt.get("fields") or ["summary"]
+                        match_all = bool(flt.get("match_all_fields", False))
+                        active_fields = [f for f in fields if f in _FIELD_IDX]
+                        if not active_fields:
+                            return False
+                        results = [_pat_matches(pattern, row_data[_FIELD_IDX[f]]) for f in active_fields]
+                        return all(results) if match_all else any(results)
+
+                    for i, flt in enumerate(filters):
+                        matching = [(ev_date, row) for ev_date, row in event_rows if _matches(row, flt)]
+                        future = [(ev_date, row) for ev_date, row in matching if ev_date >= today]
+                        out[f"f{i}_array"] = [row for _, row in future]
+                        out[f"f{i}_next_date"] = future[0][0].isoformat() if future else None
+                        out[f"f{i}_today"] = any(ev_date == today for ev_date, _ in matching)
+                        out[f"f{i}_tomorrow"] = any(ev_date == tomorrow for ev_date, _ in matching)
+
+                except ImportError as exc:
+                    logger.warning("ical node %s: missing library — %s", node.id[:8], exc)
+                except Exception as exc:
+                    logger.warning("ical node %s: parse error — %s", node.id[:8], exc)
+                    for i in range(len(filters)):
+                        out.setdefault(f"f{i}_array", [])
+                        out.setdefault(f"f{i}_next_date", None)
+                        out.setdefault(f"f{i}_today", False)
+                        out.setdefault(f"f{i}_tomorrow", False)
+
+                return out
+
             case _:
                 logger.debug("Unknown node type: %s", t)
                 return {}
@@ -920,9 +1123,67 @@ class GraphExecutor:
         allowed.update(ctx)
         try:
             tree = ast.parse(expr, mode="eval")
+            GraphExecutor._validate_formula_ast(tree, set(allowed.keys()))
             return eval(compile(tree, "<formula>", "eval"), {"__builtins__": {}}, allowed)  # noqa: S307
         except Exception as exc:
             raise ExecutionError(f"Formula error: {exc}") from exc
+
+    @staticmethod
+    def _validate_formula_ast(tree: ast.AST, allowed_names: set[str]) -> None:
+        """Validate formula AST and reject unsafe Python constructs."""
+        allowed_nodes = (
+            ast.Expression,
+            ast.BinOp,
+            ast.UnaryOp,
+            ast.BoolOp,
+            ast.Compare,
+            ast.IfExp,
+            ast.Call,
+            ast.keyword,
+            ast.Name,
+            ast.Load,
+            ast.Constant,
+            ast.List,
+            ast.Tuple,
+            ast.Dict,
+            ast.Set,
+            ast.Subscript,
+            ast.Slice,
+            ast.Index,
+            ast.Add,
+            ast.Sub,
+            ast.Mult,
+            ast.Div,
+            ast.FloorDiv,
+            ast.Mod,
+            ast.Pow,
+            ast.UAdd,
+            ast.USub,
+            ast.And,
+            ast.Or,
+            ast.Not,
+            ast.Eq,
+            ast.NotEq,
+            ast.Lt,
+            ast.LtE,
+            ast.Gt,
+            ast.GtE,
+            ast.Is,
+            ast.IsNot,
+            ast.In,
+            ast.NotIn,
+        )
+
+        for node in ast.walk(tree):
+            if not isinstance(node, allowed_nodes):
+                raise ExecutionError(f"Disallowed expression element: {type(node).__name__}")
+            if isinstance(node, ast.Name) and node.id not in allowed_names:
+                raise ExecutionError(f"Unknown variable or function: {node.id}")
+            if isinstance(node, ast.Call):
+                if not isinstance(node.func, ast.Name):
+                    raise ExecutionError("Only direct function calls are allowed")
+                if node.func.id not in allowed_names:
+                    raise ExecutionError(f"Function not allowed: {node.func.id}")
 
     @staticmethod
     def _run_script(script: str, inputs: dict[str, Any]) -> Any:

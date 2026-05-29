@@ -13,7 +13,7 @@ import { apiPost, apiPut, apiDelete } from '../helpers'
  *
  * Priorität mittel:
  *   5. Label-Text wird in der Kopfzeile angezeigt
- *   6. Kein sandbox-Attribut wenn Sandbox-String leer
+ *   6. Leerer Sandbox-String bleibt als restriktives sandbox=""
  */
 
 async function createVisuPage() {
@@ -90,7 +90,7 @@ test('iFrame: URL konfiguriert → <iframe> mit korrektem src-Attribut', async (
 
     const iframe = page.locator(`[data-widget-id="${widgetId}"] iframe`)
     await expect(iframe).toBeAttached({ timeout: 10_000 })
-    await expect(iframe).toHaveAttribute('src', frameUrl)
+    await expect(iframe).toHaveAttribute('src', new URL(frameUrl).toString())
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
   }
@@ -116,7 +116,7 @@ test('iFrame: Sandbox-Permissions werden als sandbox-Attribut am <iframe> gesetz
 
     const iframe = page.locator(`[data-widget-id="${widgetId}"] iframe`)
     await expect(iframe).toBeAttached({ timeout: 10_000 })
-    await expect(iframe).toHaveAttribute('sandbox', sandbox)
+    await expect(iframe).toHaveAttribute('sandbox', 'allow-popups')
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
   }
@@ -173,9 +173,9 @@ test('iFrame: konfiguriertes Label wird in Kopfzeile angezeigt', async ({ page }
   }
 })
 
-// ─── Test 6 (mittel): Leerer Sandbox-String → kein sandbox-Attribut ──────────
+// ─── Test 6 (mittel): Leerer Sandbox-String bleibt restriktiv ─────────────────
 
-test('iFrame: leerer Sandbox-String → kein sandbox-Attribut am <iframe>', async ({ page }) => {
+test('iFrame: leerer Sandbox-String → sandbox="" am <iframe>', async ({ page }) => {
   const visuNode = await createVisuPage()
   const pageId   = visuNode.id
   const widgetId = randomUUID()
@@ -192,8 +192,32 @@ test('iFrame: leerer Sandbox-String → kein sandbox-Attribut am <iframe>', asyn
 
     const iframe = page.locator(`[data-widget-id="${widgetId}"] iframe`)
     await expect(iframe).toBeAttached({ timeout: 10_000 })
-    const sandboxVal = await iframe.getAttribute('sandbox')
-    expect(sandboxVal).toBeNull()
+    await expect(iframe).toHaveAttribute('sandbox', '')
+  } finally {
+    await apiDelete(`/api/v1/visu/nodes/${pageId}`)
+  }
+})
+
+// ─── Test 7 (mittel): Nicht-String-Sandbox wird robust behandelt ─────────────
+
+test('iFrame: non-string sandbox konfiguriert → striktes sandbox="" ohne Render-Crash', async ({ page }) => {
+  const visuNode = await createVisuPage()
+  const pageId   = visuNode.id
+  const widgetId = randomUUID()
+
+  await buildIFramePage(pageId, widgetId, {
+    url: 'https://example.com',
+    sandbox: { invalid: true },
+    allowFullscreen: false,
+  })
+
+  try {
+    await page.goto(`/visu/${pageId}`)
+    await page.waitForLoadState('domcontentloaded')
+
+    const iframe = page.locator(`[data-widget-id="${widgetId}"] iframe`)
+    await expect(iframe).toBeAttached({ timeout: 10_000 })
+    await expect(iframe).toHaveAttribute('sandbox', '')
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
   }

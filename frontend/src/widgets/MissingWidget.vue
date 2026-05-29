@@ -1,14 +1,18 @@
 <template>
   <div class="missing-widget">
-    <span class="missing-widget__badge" aria-label="Unbekannter Widget-Typ">!</span>
+    <span class="missing-widget__badge" :aria-label="$t('widgets.missing.ariaLabel')">!</span>
     <div class="missing-widget__text">
-      <div class="missing-widget__title">Unbekannt</div>
+      <div class="missing-widget__title">{{ $t('widgets.missing.title') }}</div>
       <div class="missing-widget__type">{{ widgetType }}</div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+
+useI18n()
+
 defineProps<{ widgetType: string }>()
 </script>
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
 import { useThemeStore } from '@/stores/theme'
@@ -8,6 +9,7 @@ import { storeToRefs } from 'pinia'
 import AuthButton from '@/components/AuthButton.vue'
 import VisuIcon from '@/components/VisuIcon.vue'
 
+const { t } = useI18n()
 const store = useVisuStore()
 const { rootNodes, isAdmin } = storeToRefs(store)
 const router = useRouter()
@@ -18,7 +20,7 @@ onMounted(async () => {
   try {
     await store.loadTree()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Fehler beim Laden'
+    error.value = e instanceof Error ? e.message : t('common.loadError')
   } finally {
     loading.value = false
   }
@@ -50,14 +52,14 @@ function navigate(node: VisuNode) {
         </svg>
         <span class="font-semibold text-gray-800 dark:text-gray-100">open bridge server</span>
         <span class="text-gray-300 dark:text-gray-600">|</span>
-        <span class="text-gray-600 dark:text-gray-300">Visualisierung</span>
+        <span class="text-gray-600 dark:text-gray-300">{{ $t('tree.visualization') }}</span>
       </div>
       <div class="flex items-center gap-3">
         <!-- Hell/Dunkel-Umschalter -->
         <button
           class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 transition-colors px-2 py-1 rounded"
           @click="useThemeStore().toggle()"
-          :title="useThemeStore().isDark ? 'Heller Modus' : 'Dunkler Modus'"
+          :title="useThemeStore().isDark ? $t('common.darkMode') : $t('common.lightMode')"
         >{{ useThemeStore().isDark ? '☀️' : '🌙' }}</button>
         <AuthButton />
       </div>
@@ -65,17 +67,17 @@ function navigate(node: VisuNode) {
 
     <!-- Content -->
     <main class="max-w-5xl mx-auto px-6 py-8">
-      <h2 class="text-xl font-semibold mb-6">Übersicht</h2>
+      <h2 class="text-xl font-semibold mb-6">{{ $t('tree.overview') }}</h2>
 
-      <div v-if="loading" class="text-center text-gray-400 dark:text-gray-500 py-16">Lade …</div>
+      <div v-if="loading" class="text-center text-gray-400 dark:text-gray-500 py-16">{{ $t('common.loading') }}</div>
 
       <div v-else-if="error" class="text-red-500 dark:text-red-400 text-center py-16">{{ error }}</div>
 
       <div v-else-if="rootNodes.length === 0" class="text-gray-400 dark:text-gray-500 text-center py-16">
-        Noch keine Seiten vorhanden.<br />
+        {{ $t('tree.noPages') }}<br />
         <span v-if="isAdmin" class="text-sm">
           <router-link class="text-blue-500 dark:text-blue-400 hover:underline" to="/editor/new">
-            Erste Seite erstellen
+            {{ $t('tree.createFirstPage') }}
           </router-link>
         </span>
       </div>
@@ -94,15 +96,15 @@ function navigate(node: VisuNode) {
           <span
             v-if="node.access === 'readonly'"
             class="text-xs text-blue-500 dark:text-blue-400 flex items-center gap-1"
-          >👁 Nur ansehen</span>
+          >👁 {{ $t('common.readonly') }}</span>
           <span
             v-else-if="node.access === 'protected'"
             class="text-xs text-yellow-600 dark:text-yellow-500 flex items-center gap-1"
-          >🔐 PIN</span>
+          >🔐 {{ $t('login.pin') }}</span>
           <span
             v-else-if="node.access === 'user'"
             class="text-xs text-purple-500 dark:text-purple-400 flex items-center gap-1"
-          >👤 Anmeldung</span>
+          >👤 {{ $t('common.loginRequired') }}</span>
         </button>
       </div>
     </main>

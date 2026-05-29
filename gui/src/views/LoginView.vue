@@ -36,12 +36,12 @@
       <div class="card-body">
         <form @submit.prevent="submit" class="flex flex-col gap-4">
           <div class="form-group">
-            <label class="label">Benutzername</label>
+            <label class="label">{{ $t('login.username') }}</label>
             <input v-model="form.username" type="text" class="input" placeholder="admin" autocomplete="username" required autofocus data-testid="input-username" />
           </div>
 
           <div class="form-group">
-            <label class="label">Passwort</label>
+            <label class="label">{{ $t('login.password') }}</label>
             <input v-model="form.password" type="password" class="input" placeholder="••••••••" autocomplete="current-password" required data-testid="input-password" />
           </div>
 
@@ -52,7 +52,7 @@
 
           <button type="submit" class="btn-primary w-full justify-center py-2.5" :disabled="auth.loading" data-testid="btn-login">
             <Spinner v-if="auth.loading" size="sm" color="white" />
-            <span>{{ auth.loading ? 'Anmelden …' : 'Anmelden' }}</span>
+            <span>{{ auth.loading ? $t('login.submitting') : $t('login.submit') }}</span>
           </button>
         </form>
       </div>

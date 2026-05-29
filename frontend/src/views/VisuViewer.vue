@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
 import { useDatapointsStore } from '@/stores/datapoints'
@@ -10,7 +11,13 @@ import MissingWidget from '@/widgets/MissingWidget.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
 import NodeOverview from '@/components/NodeOverview.vue'
 import AuthButton from '@/components/AuthButton.vue'
-import { getJwt, getSessionToken, setWriteContext, clearWriteContext } from '@/api/client'
+import { getJwt, getSessionToken, setWriteContext, clearWriteContext, visuBackgrounds as bgApi } from '@/api/client'
+import {
+  cssBackgroundPosition,
+  cssBackgroundRepeat,
+  cssBackgroundSize,
+  parseBackgroundPresentation,
+} from '@/utils/backgroundPresentation'
 import type { WidgetInstance } from '@/types'
 
 // Alle Widgets registrieren (self-registering via import)
@@ -34,7 +41,10 @@ import '@/widgets/Uhr/index'
 import '@/widgets/RTR/index'
 import '@/widgets/Wetter/index'
 import '@/widgets/Stufenschalter/index'
+import '@/widgets/Grundriss/index'
+import '@/widgets/HorizontalBar/index'
 
+const { t } = useI18n()
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const visuStore = useVisuStore()
@@ -124,10 +134,11 @@ async function load() {
 
     if (currentNode?.type === 'PAGE') {
       await visuStore.loadPage(props.id)
-      // Write-Kontext für Backend-Autorisierung setzen (pageId + ggf. Session-Token)
+      // Write-Kontext für Backend-Autorisierung setzen (pageId + Session-Token + definingId)
       setWriteContext({
         pageId:       props.id,
         sessionToken: getSessionToken(definingId) ?? undefined,
+        definingId,
       })
       ws.connect()
       dpStore.subscribe(allDpIds.value)
@@ -135,20 +146,45 @@ async function load() {
       await dpStore.fetchInitialValues(allDpIds.value)
     }
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Fehler beim Laden'
+    error.value = e instanceof Error ? e.message : t('common.loadError')
   } finally {
     loading.value = false
   }
 }
 
-onMounted(load)
-onUnmounted(clearWriteContext)
+// Session abgelaufen (z.B. nach Server-Neustart) — erneut laden; load() leitet zu PIN-Auth weiter
+function onSessionExpired() { load() }
+
+onMounted(() => {
+  load()
+  window.addEventListener('visu:session-expired', onSessionExpired)
+})
+onUnmounted(() => {
+  window.removeEventListener('visu:session-expired', onSessionExpired)
+  clearWriteContext()
+})
 watch(() => props.id, load)
 
 // Grid-Geometrie — feste Pixel-Werte → 1:1 identisch mit Editor (WYSIWYG)
 const COLS   = computed(() => visuStore.pageConfig?.grid_cols       ?? 12)
 const ROW_H  = computed(() => visuStore.pageConfig?.grid_row_height ?? 80)
 const CELL_W = computed(() => visuStore.pageConfig?.grid_cell_width ?? 80)
+
+const viewerBackgroundStyle = computed(() => {
+  const parsed = parseBackgroundPresentation(visuStore.pageConfig?.background)
+  if (parsed.kind === 'none') return {}
+
+  const image = parsed.kind === 'catalog' && parsed.catalogName
+    ? `url(${bgApi.publicUrl(parsed.catalogName)})`
+    : (/^url\(/i.test(parsed.raw ?? '') ? (parsed.raw as string) : `url(${parsed.raw})`)
+
+  return {
+    backgroundImage: image,
+    backgroundPosition: cssBackgroundPosition(parsed.position),
+    backgroundRepeat: cssBackgroundRepeat(parsed.fit),
+    backgroundSize: cssBackgroundSize(parsed.fit),
+  }
+})
 
 function gridStyle(w: WidgetInstance) {
   return {
@@ -169,16 +205,16 @@ function gridStyle(w: WidgetInstance) {
           v-if="visuStore.isAdmin && isPage"
           class="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-500 dark:hover:text-blue-400 transition-colors px-2 py-1 rounded"
           @click="router.push({ name: 'editor', params: { id } })"
-        >✏️ Bearbeiten</button>
+        >✏️ {{ $t('common.edit') }}</button>
         <button
           v-if="visuStore.isAdmin"
           class="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-500 dark:hover:text-blue-400 transition-colors px-2 py-1 rounded"
           @click="router.push({ name: 'manage' })"
-        >🗂 Visu Verwaltung</button>
+        >🗂 {{ $t('tree.manage') }}</button>
         <!-- Hell/Dunkel-Umschalter -->
         <button
           class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 transition-colors px-2 py-1 rounded"
-          :title="theme.isDark ? 'Heller Modus' : 'Dunkler Modus'"
+          :title="theme.isDark ? $t('common.darkMode') : $t('common.lightMode')"
           @click="theme.toggle()"
         >{{ theme.isDark ? '☀️' : '🌙' }}</button>
         <AuthButton />
@@ -187,7 +223,7 @@ function gridStyle(w: WidgetInstance) {
 
     <!-- Loading -->
     <div v-if="loading" class="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">
-      Lade …
+      {{ $t('common.loading') }}
     </div>
 
     <!-- Error -->
@@ -202,7 +238,7 @@ function gridStyle(w: WidgetInstance) {
     </main>
 
     <!-- PAGE → Widget-Grid (feste Pixelbreite = Editor WYSIWYG) -->
-    <main v-else class="flex-1 p-4 overflow-auto">
+    <main v-else class="flex-1 p-4 overflow-auto" :style="viewerBackgroundStyle">
       <div
         class="grid"
         :style="{

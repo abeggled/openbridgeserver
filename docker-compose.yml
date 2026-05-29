@@ -39,8 +39,8 @@ services:
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
     ports:
-      - "1883:1883"     # MQTT plain
-      - "9001:9001"     # MQTT over WebSocket
+      - "${OBS_MQTT_HOST_PORT:-1883}:1883"     # MQTT plain
+      - "${OBS_MQTT_WS_HOST_PORT:-9001}:9001"  # MQTT over WebSocket
     healthcheck:
       test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck",
              "-u", "${OBS_MQTT_USERNAME:-obs}", "-P", "${OBS_MQTT_PASSWORD:-changeme}",
@@ -54,6 +54,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VITE_INSTANCE_NAME: ${OBS_INSTANCE_NAME:-}
+        VITE_INSTANCE_COLOR: ${OBS_INSTANCE_COLOR:-amber}
     restart: unless-stopped
     # Share Mosquitto's PID namespace → open bridge server can send SIGHUP to PID 1 (Mosquitto).
     pid: "service:mosquitto"
@@ -66,7 +69,7 @@ services:
       # Optional: mount a host config.yaml (overrides the one inside /data)
       # - ./config.yaml:/data/config.yaml:ro
     ports:
-      - "8080:8080"
+      - "${OBS_HTTP_HOST_PORT:-8080}:8080"
     environment:
       # ── MQTT service account (must match MQTT_SVC_USER/PASS above) ──────
       OBS_MQTT__HOST: mosquitto

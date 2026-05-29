@@ -9,6 +9,10 @@
 
 # ── Stage 1: build Vue Admin-GUI + Visu-Frontend ────────────────────────────
 FROM node:24-slim AS node-builder
+ARG VITE_INSTANCE_NAME=
+ARG VITE_INSTANCE_COLOR=amber
+ENV VITE_INSTANCE_NAME=${VITE_INSTANCE_NAME}
+ENV VITE_INSTANCE_COLOR=${VITE_INSTANCE_COLOR}
 
 # Admin-GUI (gui/ → ../gui_dist)
 WORKDIR /gui-src

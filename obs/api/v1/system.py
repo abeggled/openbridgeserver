@@ -12,6 +12,9 @@ GET    /api/v1/system/nav-links        list all custom nav links (auth required)
 POST   /api/v1/system/nav-links        create a custom nav link (admin only)
 PATCH  /api/v1/system/nav-links/{id}   update a custom nav link (admin only)
 DELETE /api/v1/system/nav-links/{id}   delete a custom nav link (admin only)
+GET    /api/v1/system/logs             recent log entries from in-memory buffer
+GET    /api/v1/system/log-level        read current root log level (admin only)
+PUT    /api/v1/system/log-level        change log level at runtime (admin only)
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi import status as http_status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from obs import __version__
 from obs.adapters import registry as adapter_registry
@@ -70,6 +73,7 @@ class AppSettingsIn(BaseModel):
 
 class HistorySettingsOut(BaseModel):
     plugin: str  # sqlite | influxdb | timescaledb
+    default_window_hours: int
     influx_url: str
     influx_version: int
     influx_token: str
@@ -83,6 +87,7 @@ class HistorySettingsOut(BaseModel):
 
 class HistorySettingsIn(BaseModel):
     plugin: str
+    default_window_hours: int = Field(168, ge=1, le=24 * 365)
     influx_url: str = "http://localhost:8086"
     influx_version: int = 2
     influx_token: str = ""
@@ -122,6 +127,21 @@ class NavLinkPatch(BaseModel):
     icon: str | None = None
     sort_order: int | None = None
     open_new_tab: bool | None = None
+
+
+class LogEntryOut(BaseModel):
+    ts: str
+    level: str
+    logger: str
+    message: str
+
+
+class LogLevelOut(BaseModel):
+    level: str
+
+
+class LogLevelIn(BaseModel):
+    level: str
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +256,7 @@ async def update_app_settings(
 
 _HISTORY_KEYS = [
     "plugin",
+    "default_window_hours",
     "influx_url",
     "influx_version",
     "influx_token",
@@ -249,6 +270,7 @@ _HISTORY_KEYS = [
 
 _HISTORY_DEFAULTS: dict[str, str] = {
     "plugin": "sqlite",
+    "default_window_hours": "168",
     "influx_url": "http://localhost:8086",
     "influx_version": "2",
     "influx_token": "",
@@ -280,6 +302,7 @@ async def get_history_settings(
     cfg = await _read_history_cfg(db)
     return HistorySettingsOut(
         plugin=cfg["plugin"],
+        default_window_hours=int(cfg["default_window_hours"]),
         influx_url=cfg["influx_url"],
         influx_version=int(cfg["influx_version"]),
         influx_token=cfg["influx_token"],
@@ -307,6 +330,7 @@ async def update_history_settings(
 
     data: dict[str, str] = {
         "plugin": body.plugin,
+        "default_window_hours": str(body.default_window_hours),
         "influx_url": body.influx_url,
         "influx_version": str(body.influx_version),
         "influx_token": body.influx_token,
@@ -337,6 +361,7 @@ async def update_history_settings(
 
     return HistorySettingsOut(
         plugin=body.plugin,
+        default_window_hours=body.default_window_hours,
         influx_url=body.influx_url,
         influx_version=body.influx_version,
         influx_token=body.influx_token,
@@ -503,3 +528,62 @@ async def delete_nav_link(
     if row is None:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Link not found")
     await db.execute_and_commit("DELETE FROM nav_links WHERE id = ?", (link_id,))
+
+
+# ---------------------------------------------------------------------------
+# Log buffer
+# ---------------------------------------------------------------------------
+
+_VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
+
+@router.get("/logs", response_model=list[LogEntryOut])
+async def get_logs(
+    level: str | None = None,
+    limit: int = 200,
+    _user: str = Depends(get_current_user),
+) -> list[LogEntryOut]:
+    """Recent log entries from the in-memory buffer, newest first.
+
+    Optional query params:
+    - level: filter by exact level name (INFO, WARNING, ERROR, CRITICAL)
+    - limit: max entries to return (default 200, max 500)
+    """
+    from obs.log_buffer import get_log_buffer
+
+    entries = get_log_buffer()
+    if level:
+        lvl = level.upper()
+        entries = [e for e in entries if e["level"] == lvl]
+    limit = max(1, min(limit, 500))
+    entries = entries[-limit:]
+    entries.reverse()
+    return [LogEntryOut(**e) for e in entries]
+
+
+@router.get("/log-level", response_model=LogLevelOut)
+async def get_log_level(
+    _admin: str = Depends(get_admin_user),
+) -> LogLevelOut:
+    """Return the current root log level. Admin only."""
+    import logging as _logging
+
+    lvl = _logging.getLevelName(_logging.getLogger().level)
+    return LogLevelOut(level=lvl)
+
+
+@router.put("/log-level", status_code=204)
+async def set_log_level(
+    body: LogLevelIn,
+    _admin: str = Depends(get_admin_user),
+) -> None:
+    """Change the root log level at runtime without restarting. Admin only."""
+    from obs.log_buffer import set_log_buffer_level
+
+    lvl = body.level.upper()
+    if lvl not in _VALID_LOG_LEVELS:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"level must be one of: {', '.join(sorted(_VALID_LOG_LEVELS))}",
+        )
+    set_log_buffer_level(lvl)

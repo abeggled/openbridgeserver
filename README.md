@@ -2,279 +2,233 @@
 
 ![**open bridge server** Logo](logo/obs_logo_dark.svg)
 
-**Offene Gebäudeautomations-Plattform — verbindet KNX, Modbus, MQTT, Home Assistant und mehr**
+![Version](https://img.shields.io/github/v/release/abeggled/openbridgeserver?style=for-the-badge)
+[![Tests][tests-badge]][tests]
+[![Coverage][coverage-badge]][coverage]
 
-open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitlichen System. Alle Werte lassen sich über eine Weboberfläche überwachen, per Logik verknüpfen und über MQTT weitergeben — ohne proprietäre Konfigurationsdateien.
+Gehe zur [deutschen Version](/README.de.md) der Dokumentation.
+
+**Open building automation platform — connects KNX, Modbus, MQTT, Home Assistant, and more**
+
+open bridge connects different building technology protocols into a unified system. All values can be monitored via a web interface, linked through logic, and forwarded via MQTT — without proprietary configuration files.
 
 ---
 
-## Was kann open bridge?
+## What can open bridge do?
 
-| Funktion | Beschreibung |
+| Feature | Description |
 |---|---|
-| **Protokolle** | KNX/IP (Tunneling + Routing), Modbus TCP, Modbus RTU, 1-Wire, externes MQTT, Home Assistant, Zeitschaltuhr |
-| **Mehrere Instanzen** | Beliebig viele Instanzen pro Protokoll (z. B. 2× KNX, 3× Modbus TCP) |
-| **Protokoll-Brücke** | Ein KNX-Wert wird automatisch in ein Modbus-Register geschrieben — und umgekehrt |
-| **Logik-Editor** | Visuelle Automatisierungslogik ohne Programmierung: 35+ Blocktypen, Zeitpläne, Formeln, Python-Skripte, Benachrichtigungen, HTTP-Anfragen, Sonnenstand |
-| **MQTT** | Stabiler UUID-Topic + lesbarer Alias-Topic; Retain-Unterstützung |
-| **Weboberfläche** | Vollständige Bedienung über den Browser — kein separates Programm nötig |
-| **Datenbank** | SQLite — keine externe Datenbank erforderlich |
-| **Verlauf** | Werteverlauf mit Diagramm, Aggregation nach Zeit (Std / Tag / Woche …); pro Datenpunkt konfigurierbar |
-| **Änderungsprotokoll** | Letzten N Wertänderungen einsehbar (RingBuffer) — aktualisiert sich live |
-| **Alles sofort** | Änderungen greifen ohne Neustart |
-| **Installation** | Docker Compose, direkt als Python-Programm oder als Proxmox LXC-Template |
-| **Lizenz** | MIT (kostenlos und quelloffen) |
+| **Protocols** | KNX/IP (Tunneling + Routing + KNX IP Secure), Modbus TCP, Modbus RTU, 1-Wire, external MQTT, Home Assistant, ioBroker, SNMP, presence simulation, scheduler |
+| **Multiple instances** | Any number of instances per protocol (e.g. 2× KNX, 3× Modbus TCP) |
+| **Protocol bridge** | A KNX value is automatically written to a Modbus register — and vice versa |
+| **Logic editor** | Visual automation logic without programming: 35+ block types, schedules, formulas, Python scripts, notifications, HTTP requests, sun position |
+| **MQTT** | Stable UUID topic + readable alias topic; retain support |
+| **Web interface** | Full operation via browser — no separate application required |
+| **Database** | SQLite — no external database required |
+| **History** | Value history with chart, time aggregation (hour / day / week …); configurable per data point |
+| **Change log** | Last N value changes viewable (RingBuffer) — updates live |
+| **Instant changes** | Changes take effect without restart |
+| **Installation** | Docker Compose, directly as Python application, or as Proxmox LXC template |
+| **License** | MIT (free and open source) |
 
 ---
 
-## Inhaltsverzeichnis
+## Table of Contents
 
-1. [Schnellstart — Docker](#schnellstart--docker)
-2. [Schnellstart — Proxmox LXC](#schnellstart--proxmox-lxc)
-3. [Schnellstart — Direkt](#schnellstart--direkt)
-4. [Konfiguration](#konfiguration)
-5. [Wie funktioniert open bridge?](#wie-funktioniert-open-bridge)
-6. [Datenpunkte](#datenpunkte)
-7. [Verknüpfungen (Bindings)](#verknüpfungen-bindings)
-8. [Suche](#suche)
-9. [Adapter](#adapter)
-10. [Verlauf (History)](#verlauf-history)
-11. [Änderungsprotokoll (RingBuffer)](#änderungsprotokoll-ringbuffer)
-12. [Sicherung & Wiederherstellung](#sicherung--wiederherstellung)
-13. [Systemstatus](#systemstatus)
-14. [Live-Verbindung (WebSocket)](#live-verbindung-websocket)
-15. [Logik-Editor](#logik-editor)
-16. [Adapter-Konfiguration](#adapter-konfiguration)
-17. [MQTT-Topics](#mqtt-topics)
-18. [Datentypen](#datentypen)
-19. [Einstellungen](#einstellungen)
-20. [Hilfsskripte](#hilfsskripte)
-21. [Entwicklung](#entwicklung)
-   - [Lokale Entwicklung mit PyCharm](#lokale-entwicklung-mit-pycharm)
-
----
-
-## Schnellstart — Docker
-
-```bash
-# 1. Herunterladen
-git clone https://github.com/abeggled/openbridgeserver
-cd openbridgeserver
-
-# 2. Zugangsdaten einrichten
-cp .env.example .env
-# .env öffnen und mindestens setzen:
-#   OBS_JWT_SECRET        → zufällige Zeichenkette, min. 32 Zeichen
-#   OBS_MQTT_PASSWORD     → Passwort für den internen MQTT-Dienst — BITTE ÄNDERN!
-
-# 3. Starten
-docker compose up -d
-
-# 4. Prüfen
-curl http://localhost:8080/api/v1/system/health
-# → {"status": "ok", "version": "0.1.0"}
-```
-
-**Standardzugang:** Benutzername `admin`, Passwort `admin`
-⚠️ Das Passwort sofort nach der ersten Anmeldung ändern (Einstellungen → Passwort).
-
-**Erreichbare Dienste:**
-
-| Dienst | Adresse | Protokoll |
-|---|---|---|
-| **open bridge server** Weboberfläche + API | http://localhost:8080 | HTTP |
-| Mosquitto MQTT (intern) | localhost:1883 | MQTT |
-| Mosquitto MQTT über WebSocket | localhost:9001 | MQTT/WS |
+1. [Quick start — Proxmox LXC](#quick-start--proxmox-lxc)
+2. [Configuration](#configuration)
+3. [How does open bridge work?](#how-does-open-bridge-work)
+4. [Data points](#data-points)
+5. [Bindings](#bindings)
+6. [Search](#search)
+7. [Adapters](#adapters)
+8. [History](#history)
+9. [Change log (RingBuffer)](#change-log-ringbuffer)
+10. [Backup & Restore](#backup--restore)
+11. [System status](#system-status)
+12. [Log viewer](#log-viewer)
+13. [Live connection (WebSocket)](#live-connection-websocket)
+14. [Logic editor](#logic-editor)
+15. [Adapter configuration](#adapter-configuration)
+16. [MQTT topics](#mqtt-topics)
+17. [Data types](#data-types)
+18. [Settings](#settings)
+19. [Helper scripts](#helper-scripts)
+20. [Visualization (Visu)](#visualization-visu)
+   - [Floor plan and system diagram widget](#floor-plan-and-system-diagram-widget)
+21. [Development](#development)
+   - [Local development with PyCharm](#local-development-with-pycharm)
+   - [Local Git Hooks (Pre-Push Gate)](#local-git-hooks-pre-push-gate)
 
 ---
 
-## Schnellstart — Proxmox LXC
+## Quick start — Proxmox LXC
 
-Das LXC-Template enthält ein vollständiges Ubuntu 26.04-System mit **open bridge server** und startet den Dienst automatisch beim Hochfahren des Containers.
+The LXC template contains a complete Ubuntu 26.04 system with **open bridge server** and starts the service automatically when the container boots.
 
-**Schritt 1 — Template herunterladen**
+**Step 1 — Download the template**
 
-1. Auf der [Release-Seite](../../releases/latest) die URL der `.tar.zst`-Datei sowie den SHA512-Hash aus dem Abschnitt **LXC Template** kopieren.
-2. In der Proxmox-Weboberfläche zu **Datacenter → Storage → local → CT Templates** navigieren.
-3. **Download from URL** klicken.
-4. Die kopierte URL einfügen und auf **Query URL** klicken.
-5. Als Hash-Algorithmus **SHA512** auswählen.
-6. Den kopierten Hash einfügen.
-7. Auf **Download** klicken.
+1. On the [releases page](../../releases/latest), copy the URL of the `.tar.zst` file and the SHA512 hash from the **LXC Template** section.
+2. In the Proxmox web interface, navigate to **Datacenter → Storage → local → CT Templates**.
+3. Click **Download from URL**.
+4. Paste the copied URL and click **Query URL**.
+5. Select **SHA512** as the hash algorithm.
+6. Paste the copied hash.
+7. Click **Download**.
 
 ![ProxmoxDownloadFromURL](docs/ProxmoxDownloadFromURL.png)
 
-**Schritt 2 — Container erstellen**
+**Step 2 — Create the container**
 
-1. Im Proxmox-Menü **Create CT** wählen.
-2. Als Template das gerade heruntergeladene `ubuntu-plucky-openbridgeserver_…` auswählen.
-3. Hostname, Passwort, CPU, RAM und Netzwerk nach Bedarf konfigurieren — empfohlen: mindestens 512 MB RAM.
-4. Container starten.
+1. In the Proxmox menu, select **Create CT**.
+2. Choose the just-downloaded `ubuntu-plucky-openbridgeserver_…` as the template.
+3. Configure hostname, password, CPU, RAM, and network as needed — recommended: at least 512 MB RAM.
+4. Start the container.
 
-**Schritt 3 — Zugriff**
+**Step 3 — Access**
 
-| Dienst | Adresse |
+| Service | Address |
 |---|---|
-| **open bridge server** Weboberfläche + API | `http://<container-ip>:8080` |
+| **open bridge server** web interface + API | `http://<container-ip>:8080` |
 
-**Standardzugang:** Benutzername `admin`, Passwort `admin`
-⚠️ Das Passwort sofort nach der ersten Anmeldung ändern (Einstellungen → Passwort).
+**Default credentials:** username `admin`, password `admin`
+⚠️ Change the password immediately after first login (Settings → Password).
 
-**Konfiguration anpassen** (optional):
+**Security configuration** (required):
 
 ```bash
-# Umgebungsvariablen in /etc/obs.env setzen, z. B.:
+# Set environment variables in /etc/obs.env, e.g.:
 OBS_MQTT__HOST=192.168.1.10
-OBS_SECURITY__JWT_SECRET=mein-geheimes-passwort
+# Set automatically in the LXC template on first boot (random, per container).
+# Only set if you need a manual override:
+OBS_SECURITY__JWT_SECRET=<at-least-32-random-characters>
 
-# Dienst neu starten
+# Restart the service
 systemctl restart obs
 ```
 
 ---
 
-## Schnellstart — Direkt
+## Configuration
 
-**Voraussetzungen:** Python 3.11 oder neuer, laufender Mosquitto-Broker (oder anderer MQTT-Broker)
+Configuration is loaded in this order (higher = precedence):
 
-```bash
-# 1. Herunterladen + virtuelle Umgebung anlegen
-git clone https://github.com/abeggled/openbridgeserver
-cd openbridgeserver
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-
-# 2. Abhängigkeiten installieren
-pip install -r requirements.txt
-
-# 3. Konfigurieren
-cp config.example.yaml config.yaml
-# config.yaml anpassen: mqtt.host und security.jwt_secret setzen
-
-# 4. Starten
-python -m obs
-```
-
----
-
-## Konfiguration
-
-Die Konfiguration wird in dieser Reihenfolge geladen (höher = Vorrang):
-
-1. Umgebungsvariablen (`OBS_<ABSCHNITT>__<SCHLÜSSEL>`)
-2. `config.yaml` (Pfad über `OBS_CONFIG`, Standard: `./config.yaml`)
-3. Eingebaute Standardwerte
+1. Environment variables (`OBS_<SECTION>__<KEY>`)
+2. `config.yaml` (path via `OBS_CONFIG`, default: `./config.yaml`)
+3. Built-in defaults
 
 ```yaml
 server:
-  host: 0.0.0.0               # Netzwerkschnittstelle
-  port: 8080                  # Port der Weboberfläche
-  log_level: INFO             # Protokollstufe: DEBUG|INFO|WARNING|ERROR
+  host: 0.0.0.0               # Network interface
+  port: 8080                  # Web interface port
+  log_level: INFO             # Log level: DEBUG|INFO|WARNING|ERROR
 
 mqtt:
-  host: localhost             # Interner Mosquitto-Broker
+  host: localhost             # Internal Mosquitto broker
   port: 1883
-  username: null              # Zugangsdaten für internen Broker
+  username: null              # Credentials for internal broker
   password: null
 
 database:
-  path: /data/obs.db      # Datenbankdatei
+  path: /data/obs.db      # Database file
 
 ringbuffer:
-  storage: disk               # Änderungsprotokoll: memory (RAM) oder disk (Datei)
-  max_entries: 10000          # Maximale Anzahl Einträge
+  storage: file               # Change log: file-only
+  max_entries: 10000          # Maximum number of entries
+  max_file_size_bytes: null   # Optional: hard file size limit for the ring buffer
+  max_age: null               # Optional: maximum entry age in seconds
 
 security:
-  jwt_secret: changeme        # Sitzungsschlüssel — unbedingt ändern!
-  jwt_expire_minutes: 1440    # Sitzungsdauer (Standard: 24 Stunden)
+  jwt_secret: changeme        # Session key — must be changed!
+  jwt_expire_minutes: 1440    # Session duration (default: 24 hours)
 ```
 
-> **Hinweis:** Der `mqtt`-Abschnitt betrifft den **internen** Mosquitto-Broker. Externe MQTT-Broker werden als separate Adapter-Instanzen eingerichtet (siehe [MQTT-Adapter](#mqtt-adapter-externer-broker)).
+> **Note:** The `mqtt` section refers to the **internal** Mosquitto broker. External MQTT brokers are set up as separate adapter instances (see [MQTT adapter](#mqtt-adapter-external-broker)).
 
 ---
 
-## Wie funktioniert open bridge?
+## How does open bridge work?
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                        open bridge server                    │
 │                                                              │
-│  ┌─────────────────────┐  Wertänderung  ┌─────────────────┐  │
-│  │   Adapter-Instanzen │ ─────────────▶ │   Ereignisbus   │  │
-│  │                     │ ◀── schreiben  │  (verteilt an   │  │
-│  │  KNX, Modbus,       │                │  alle Abnehmer) │  │
+│  ┌─────────────────────┐  value change  ┌─────────────────┐  │
+│  │   Adapter instances │ ─────────────▶ │   Event bus     │  │
+│  │                     │ ◀── write      │  (distributes   │  │
+│  │  KNX, Modbus,       │                │  to all subs)   │  │
 │  │  MQTT, 1-Wire …     │                └──┬──────┬───────┘  │
 │  └─────────────────────┘                   │      │          │
 │                                     ┌──────▼─┐ ┌──▼──────┐   │
-│                                     │ Werte- │ │ Verlauf │   │
-│                                     │ Abbild │ │ RingBuf │   │
+│                                     │ Value  │ │ History │   │
+│                                     │ store  │ │ RingBuf │   │
 │                                     │        │ │ MQTT    │   │
 │                                     └────────┘ │ WS      │   │
 │                                                └─────────┘   │
 │                                                              │
 │  ┌───────────────────────────────────────────────────────┐   │
-│  │                  Logik-Editor                         │   │
-│  │  Wertänderung → Graph ausführen → DataPoint schreiben │   │
+│  │                  Logic editor                         │   │
+│  │  Value change → run graph → write DataPoint           │   │
 │  └───────────────────────────────────────────────────────┘   │
 │                                                              │
 │  ┌───────────────────────────────────────────────────────┐   │
-│  │                   REST-API + WebSocket                │   │
+│  │                   REST API + WebSocket                │   │
 │  └───────────────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Kernprinzipien:**
-- **Adapter** lesen Werte aus dem Gebäude (KNX-Telegramm, Modbus-Register, MQTT-Nachricht, …) und melden sie an den Ereignisbus.
-- Der **Ereignisbus** verteilt jeden Wert gleichzeitig an: Werteabbild (aktueller Stand), Verlauf, Änderungsprotokoll, MQTT-Broker, WebSocket-Clients und den Logik-Editor.
-- Der **Logik-Editor** reagiert auf Wertänderungen, führt Automatisierungslogiken aus und schreibt Ergebnisse zurück in DataPoints.
-- **Protokoll-Brücke:** Wenn ein Wert über ein Protokoll empfangen wird, schreibt **open bridge server** ihn automatisch über alle anderen verknüpften Protokolle weiter — ohne zusätzliche Konfiguration.
+**Core principles:**
+- **Adapters** read values from the building (KNX telegram, Modbus register, MQTT message, …) and report them to the event bus.
+- The **event bus** distributes every value simultaneously to: the value store (current state), history, change log, MQTT broker, WebSocket clients, and the logic editor.
+- The **logic editor** reacts to value changes, executes automation logic, and writes results back to data points.
+- **Protocol bridge:** When a value is received via one protocol, **open bridge server** automatically writes it to all other linked protocols — without additional configuration.
 
 ---
 
-## Datenpunkte
+## Data points
 
-Ein Datenpunkt ist das zentrale Objekt in **open bridge server**. Jeder physische oder virtuelle Wert im System — eine Temperatur, ein Schaltzustand, ein Energiezähler — ist ein Datenpunkt.
+A data point is the central object in **open bridge server**. Every physical or virtual value in the system — a temperature, a switch state, an energy meter — is a data point.
 
 ```
-GET    /api/v1/datapoints?page=0&size=50       # Liste (seitenweise)
-POST   /api/v1/datapoints                      # Neu anlegen
-GET    /api/v1/datapoints/{id}                 # Einzelnen laden (inkl. aktueller Wert)
-PATCH  /api/v1/datapoints/{id}                 # Ändern
-DELETE /api/v1/datapoints/{id}                 # Löschen (entfernt auch alle Verknüpfungen)
-GET    /api/v1/datapoints/{id}/value           # Nur den aktuellen Wert
+GET    /api/v1/datapoints?page=0&size=50       # List (paginated)
+POST   /api/v1/datapoints                      # Create new
+GET    /api/v1/datapoints/{id}                 # Load single (incl. current value)
+PATCH  /api/v1/datapoints/{id}                 # Update
+DELETE /api/v1/datapoints/{id}                 # Delete (also removes all bindings)
+GET    /api/v1/datapoints/{id}/value           # Current value only
 ```
 
-**Felder:**
+**Fields:**
 
-| Feld | Beschreibung |
+| Field | Description |
 |---|---|
-| `name` | Lesbarer Name, z. B. „Wohnzimmer Temperatur" |
-| `data_type` | Datentyp: `BOOLEAN`, `INTEGER`, `FLOAT`, `STRING`, `DATE`, `TIME`, `DATETIME` |
-| `unit` | Einheit, z. B. `°C`, `%rH`, `kWh`, `lx`, `mm/h`, `nSv/h` |
-| `tags` | Schlagwörter zum Gruppieren und Filtern |
-| `persist_value` | Letzten Wert beim Neustart wiederherstellen (Standard: `true`) |
-| `record_history` | Werteverlauf in der Datenbank speichern (Standard: `true`). Auf `false` setzen um einen Datenpunkt von der History auszuschliessen. |
-| `mqtt_topic` | Automatisch vergeben: `dp/{uuid}/value` |
-| `mqtt_alias` | Lesbares Alias-Topic, z. B. `alias/klima/wohnzimmer/value` |
+| `name` | Human-readable name, e.g. "Living room temperature" |
+| `data_type` | Data type: `BOOLEAN`, `INTEGER`, `FLOAT`, `STRING`, `DATE`, `TIME`, `DATETIME` |
+| `unit` | Unit, e.g. `°C`, `%rH`, `kWh`, `lx`, `mm/h`, `nSv/h` |
+| `tags` | Keywords for grouping and filtering |
+| `persist_value` | Restore last value on restart (default: `true`) |
+| `record_history` | Save value history to database (default: `true`). Set to `false` to exclude a data point from history. |
+| `mqtt_topic` | Assigned automatically: `dp/{uuid}/value` |
+| `mqtt_alias` | Readable alias topic, e.g. `alias/climate/living-room/value` |
 
 ```bash
-# Temperatur-Datenpunkt anlegen
+# Create a temperature data point
 curl -X POST http://localhost:8080/api/v1/datapoints \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Wohnzimmer Temperatur",
+    "name": "Living room temperature",
     "data_type": "FLOAT",
     "unit": "°C",
-    "tags": ["klima", "wohnzimmer"]
+    "tags": ["climate", "living-room"]
   }'
 ```
 
 ---
 
-## Verknüpfungen (Bindings)
+## Bindings
 
-Eine Verknüpfung verbindet einen Datenpunkt mit einer Adapter-Instanz und einer Adresse (z. B. KNX-Gruppenadresse oder Modbus-Register).
+A binding connects a data point to an adapter instance and an address (e.g. KNX group address or Modbus register).
 
 ```
 GET    /api/v1/datapoints/{id}/bindings
@@ -283,70 +237,70 @@ PATCH  /api/v1/datapoints/{id}/bindings/{binding_id}
 DELETE /api/v1/datapoints/{id}/bindings/{binding_id}
 ```
 
-**Richtungen:**
+**Directions:**
 
-| Richtung | Bedeutung |
+| Direction | Meaning |
 |---|---|
-| `SOURCE` | Lesen: Adapter empfängt Werte und leitet sie an **open bridge server** weiter |
-| `DEST` | Schreiben: **open bridge server** sendet Werte an den Adapter |
-| `BOTH` | Beides gleichzeitig |
+| `SOURCE` | Read: adapter receives values and forwards them to **open bridge server** |
+| `DEST` | Write: **open bridge server** sends values to the adapter |
+| `BOTH` | Both simultaneously |
 
-**Wert-Transformation (`value_formula`):**
+**Value transformation (`value_formula`):**
 
-Optional: eine Formel, die auf den Wert angewendet wird, bevor er ins System eingeht (SOURCE) oder herausgeht (DEST). Die Variable ist immer `x`.
+Optional: a formula applied to the value before it enters the system (SOURCE) or leaves it (DEST). The variable is always `x`.
 
 ```json
 { "value_formula": "x / 10" }
 ```
 
-| Formel | Wirkung |
+| Formula | Effect |
 |---|---|
-| `x * 3600` | Stunden → Sekunden |
-| `x / 10` | Festkomma durch 10 |
-| `round(x, 2)` | Auf 2 Dezimalstellen runden |
-| `max(0, min(100, x))` | Auf 0–100 begrenzen |
+| `x * 3600` | Hours → seconds |
+| `x / 10` | Fixed-point divide by 10 |
+| `round(x, 2)` | Round to 2 decimal places |
+| `max(0, min(100, x))` | Clamp to 0–100 |
 
-Verfügbare Funktionen: `abs`, `round`, `min`, `max` und alle `math.*`-Funktionen. Division durch null und ungültige Ergebnisse werden abgefangen — der ursprüngliche Wert bleibt erhalten.
+Available functions: `abs`, `round`, `min`, `max`, and all `math.*` functions. Division by zero and invalid results are caught — the original value is preserved.
 
-> **Hinweis:** `round()` verwendet mathematisches Runden (0.5 → aufrunden), nicht das in der Programmierung übliche „Bankers Rounding".
+> **Note:** `round()` uses mathematical rounding (0.5 → round up), not the "banker's rounding" common in programming.
 
-**Wert-Zuordnung (`value_map`):**
+**Value mapping (`value_map`):**
 
-Optional: eine Tabelle, die Rohwerte auf andere Werte abbildet — nützlich z. B. bei Enumerationen oder Zustandstexten.
+Optional: a table that maps raw values to other values — useful for enumerations or status texts.
 
 ```json
-{ "value_map": { "0": "Aus", "1": "Ein", "2": "Standby" } }
+{ "value_map": { "0": "Off", "1": "On", "2": "Standby" } }
 ```
 
-Der Schlüssel ist immer ein String (der Rohwert wird intern umgewandelt). Gibt es keinen passenden Eintrag, wird der Originalwert unverändert weitergegeben. `value_map` wird nach `value_formula` angewendet.
+The key is always a string (the raw value is converted internally). If no matching entry exists, the original value is passed through unchanged. `value_map` is applied after `value_formula`.
 
-**Sendefilter** (nur für DEST/BOTH, werden der Reihe nach geprüft):
+**Send filters** (DEST/BOTH only, checked in order):
 
-| Filter | Beschreibung |
+| Filter | Description |
 |---|---|
-| `send_throttle_ms` | Mindestabstand zwischen zwei Schreibvorgängen in Millisekunden |
-| `send_on_change` | Nur senden wenn der Wert sich geändert hat |
-| `send_min_delta` | Nur senden wenn die Abweichung zum letzten Wert mindestens so gross ist (absolut) |
-| `send_min_delta_pct` | Nur senden wenn die Abweichung mindestens so gross ist (prozentual) |
+| `send_throttle_ms` | Minimum interval between two writes in milliseconds |
+| `send_on_change` | Only send if the value has changed |
+| `send_min_delta` | Only send if the deviation from the last value is at least this large (absolute) |
+| `send_min_delta_pct` | Only send if the deviation is at least this large (percentage) |
 
-**Beispiel: KNX-Temperatur → Modbus-Register**
+**Example: KNX temperature → Modbus register**
 
 ```bash
-# 1. Datenpunkt anlegen
+# 1. Create data point
 DP_ID=$(curl -s -X POST http://localhost:8080/api/v1/datapoints \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
-  -d '{"name":"Wohnzimmer Temperatur","data_type":"FLOAT","unit":"°C"}' \
+  -d '{"name":"Living room temperature","data_type":"FLOAT","unit":"°C"}' \
   | jq -r .id)
 
-# 2. KNX-Verknüpfung (Lesen von GA 1/2/3)
+# 2. KNX binding (read from GA 1/2/3)
 curl -X POST http://localhost:8080/api/v1/datapoints/$DP_ID/bindings \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
   -d '{"adapter_instance_id": "KNX-UUID", "direction": "SOURCE",
        "config": {"group_address": "1/2/3", "dpt_id": "DPT9.001"}}'
 
-# 3. Modbus-Verknüpfung (Schreiben in Register 100)
+# 3. Modbus binding (write to register 100)
 curl -X POST http://localhost:8080/api/v1/datapoints/$DP_ID/bindings \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
@@ -356,154 +310,191 @@ curl -X POST http://localhost:8080/api/v1/datapoints/$DP_ID/bindings \
 
 ---
 
-## Suche
+## Search
 
-Servergestützte Suche über alle Datenpunkte. Gibt nie den gesamten Datenbestand zurück.
+Server-side search across all data points. Never returns the entire dataset.
 
 ```
 GET /api/v1/search?q=&tag=&type=&adapter=&page=0&size=50
 ```
 
-| Parameter | Beschreibung |
+| Parameter | Description |
 |---|---|
-| `q` | Suche im Namen |
-| `tag` | Nach Schlagwort filtern |
-| `type` | Nach Datentyp filtern (z. B. `FLOAT`) |
-| `adapter` | Nach Protokoll filtern (z. B. `KNX`) |
+| `q` | Search in name |
+| `tag` | Filter by tag |
+| `type` | Filter by data type (e.g. `FLOAT`) |
+| `adapter` | Filter by protocol (e.g. `KNX`) |
 
 ---
 
-## Adapter
+## Adapters
 
-Jeder Adapter-Typ kann in mehreren unabhängigen Instanzen betrieben werden. Alle Instanzen werden über die Weboberfläche oder die API verwaltet.
+Each adapter type can run in multiple independent instances. All instances are managed via the web interface or the API.
 
-Die **Adapter-Konfiguration erfolgt vollständig über die Weboberfläche** — alle Felder werden aus dem JSON-Schema des jeweiligen Adapters dynamisch gerendert. Passwort-Felder erscheinen maskiert. Änderungen greifen sofort ohne Neustart.
+**Adapter configuration is done entirely through the web interface** — all fields are dynamically rendered from the JSON schema of the respective adapter. Password fields appear masked. Changes take effect immediately without restart.
 
 ```
-GET    /api/v1/adapters/instances              # Alle Instanzen mit Status
-POST   /api/v1/adapters/instances              # Neue Instanz anlegen
-PATCH  /api/v1/adapters/instances/{id}         # Konfiguration ändern + neu verbinden
-DELETE /api/v1/adapters/instances/{id}         # Stoppen + löschen
-POST   /api/v1/adapters/instances/{id}/restart # Neu verbinden
-POST   /api/v1/adapters/instances/{id}/test    # Verbindung testen
+GET    /api/v1/adapters/instances              # All instances with status
+POST   /api/v1/adapters/instances              # Create new instance
+PATCH  /api/v1/adapters/instances/{id}         # Change configuration + reconnect
+DELETE /api/v1/adapters/instances/{id}         # Stop + delete
+POST   /api/v1/adapters/instances/{id}/restart # Reconnect
+POST   /api/v1/adapters/instances/{id}/test    # Test connection
 
-GET    /api/v1/adapters/{type}/schema          # JSON-Schema der Instanz-Konfiguration
-GET    /api/v1/adapters/{type}/binding-schema  # JSON-Schema der Verknüpfungs-Konfiguration
+GET    /api/v1/adapters/{type}/schema          # JSON schema for instance configuration
+GET    /api/v1/adapters/{type}/binding-schema  # JSON schema for binding configuration
 ```
 
-### Anmeldung und Zugangsverwaltung
+### Authentication and access management
 
-**open bridge server** unterstützt zwei Anmeldemethoden:
+**open bridge server** supports two authentication methods:
 
-| Methode | Verwendung |
+| Method | Usage |
 |---|---|
-| Benutzername + Passwort → JWT-Token | Weboberfläche, Browser |
-| API-Schlüssel (`X-API-Key: obs_…`) | Skripte, Automatisierungen |
+| Username + password → JWT token | Web interface, browser |
+| API key (`X-API-Key: obs_…`) | Scripts, automations |
 
 ```
-POST   /api/v1/auth/login                              # Anmelden → Token erhalten
-POST   /api/v1/auth/refresh                            # Token erneuern
+POST   /api/v1/auth/login                              # Login → receive token
+POST   /api/v1/auth/refresh                            # Refresh token
 
-GET    /api/v1/auth/users                              # Alle Benutzer (nur Admin)
-POST   /api/v1/auth/users                              # Benutzer anlegen (nur Admin)
-DELETE /api/v1/auth/users/{username}                   # Benutzer löschen (nur Admin)
-POST   /api/v1/auth/me/change-password                 # Eigenes Passwort ändern
+GET    /api/v1/auth/users                              # All users (admin only)
+POST   /api/v1/auth/users                              # Create user (admin only)
+DELETE /api/v1/auth/users/{username}                   # Delete user (admin only)
+POST   /api/v1/auth/me/change-password                 # Change own password
 
-POST   /api/v1/auth/apikeys                            # API-Schlüssel anlegen
-DELETE /api/v1/auth/apikeys/{id}                       # API-Schlüssel widerrufen
+POST   /api/v1/auth/apikeys                            # Create API key
+DELETE /api/v1/auth/apikeys/{id}                       # Revoke API key
 
-POST   /api/v1/auth/users/{username}/mqtt-password     # MQTT-Zugang einrichten
-DELETE /api/v1/auth/users/{username}/mqtt-password     # MQTT-Zugang entziehen
+POST   /api/v1/auth/users/{username}/mqtt-password     # Set up MQTT access
+DELETE /api/v1/auth/users/{username}/mqtt-password     # Remove MQTT access
 ```
 
-**MQTT-Zugang:** Der interne Mosquitto-Broker ist passwortgeschützt. Jeder Benutzer kann einen separaten MQTT-Zugang (unabhängig vom Anmeldepasswort) erhalten, um sich direkt mit dem Broker zu verbinden.
+**MQTT access:** The internal Mosquitto broker is password-protected. Each user can receive a separate MQTT account (independent of the login password) to connect directly to the broker.
 
 ---
 
-## Verlauf (History)
+## History
 
-Werteverlauf eines Datenpunkts — roh oder als Zusammenfassung.
+Value history of a data point — raw or aggregated.
 
 ```
 GET /api/v1/history/{id}?from=&to=&limit=
 GET /api/v1/history/{id}/aggregate?fn=avg&interval=1h&from=&to=
 ```
 
-**Zusammenfassungsfunktionen:** `avg` (Durchschnitt), `min`, `max`, `last`
+**Aggregation functions:** `avg` (average), `min`, `max`, `last`
 
-**Zeitintervalle:** `1m`, `5m`, `15m`, `30m`, `1h`, `6h`, `12h`, `1d`
+**Time intervals:** `1m`, `5m`, `15m`, `30m`, `1h`, `6h`, `12h`, `1d`
 
-Alle Zeitangaben richten sich nach der in den Einstellungen konfigurierten Zeitzone.
+All timestamps follow the timezone configured in the settings.
 
-**Aufzeichnung steuern:** Das Feld `record_history` am Datenpunkt kontrolliert, ob Werte in den Verlauf geschrieben werden. Datenpunkte mit `record_history: false` werden vom History-Modul ignoriert. Die Verwaltung erfolgt unter Einstellungen → Verlauf.
-
----
-
-## Änderungsprotokoll (RingBuffer)
-
-Der RingBuffer speichert die letzten N Wertänderungen als Protokoll. In der Weboberfläche aktualisiert sich die Liste **sofort** (ohne Neuladen), da neue Einträge live über die WebSocket-Verbindung übertragen werden.
-
-```
-GET  /api/v1/ringbuffer?q=&adapter=&from=&limit=   # Einträge abfragen
-GET  /api/v1/ringbuffer/stats                       # Anzahl Einträge, Kapazität
-POST /api/v1/ringbuffer/config                      # Speicherart + Kapazität ändern
-```
-
-Der Parameter `q` durchsucht sowohl den Namen als auch die ID des Datenpunkts.
+**Control recording:** The `record_history` field on the data point controls whether values are written to the history. Data points with `record_history: false` are ignored by the history module. Management is done under Settings → History.
 
 ---
 
-## Sicherung & Wiederherstellung
+## Change log (RingBuffer)
 
-Vollständige Konfigurationssicherung und -wiederherstellung. Bestehende Einträge werden aktualisiert, fehlende neu angelegt.
-
-```
-GET  /api/v1/config/export    # Sicherungsdatei herunterladen (JSON)
-POST /api/v1/config/import    # Sicherungsdatei einspielen
-```
-
-Die Sicherung enthält: alle Datenpunkte, Verknüpfungen, Adapter-Instanzen und KNX-Gruppenadressen.
-
-**KNX-Projektdatei importieren:**
+The RingBuffer stores the last N value changes as a log. In the web interface, the list updates **immediately** (without reloading), since new entries are transmitted live via the WebSocket connection.
 
 ```
-POST /api/v1/knxproj/import   # .knxproj-Datei hochladen (multipart/form-data)
-GET  /api/v1/knxproj/ga       # Importierte Gruppenadressen anzeigen
-DELETE /api/v1/knxproj/ga     # Alle importierten Adressen löschen
+GET  /api/v1/ringbuffer?q=&adapter=&from=&limit=   # Query entries
+POST /api/v1/ringbuffer/query                       # v2 query DSL (filter groups + pagination + sorting)
+POST /api/v1/ringbuffer/export/csv                  # CSV export of complete filtered result set
+GET  /api/v1/ringbuffer/stats                       # Entry count, capacity
+POST /api/v1/ringbuffer/config                      # Change file-only + capacity
 ```
 
-Nach dem Import erscheinen die Gruppenadressen als Suchvorschläge im Verknüpfungs-Formular.
+The `q` parameter searches both the name and the ID of the data point.
+
+`POST /api/v1/ringbuffer/query` uses a filter DSL with clear semantics:
+- `filters.adapters.any_of`: OR within the adapter list.
+- `filters.values`: type-aware value filters (`eq/ne/gt/gte/lt/lte/between/contains/regex`) matching `data_type`.
+- `filters.metadata`: filterable snapshot metadata from DataPoint/Binding context (`tags`, `adapter_types`, `group_addresses`, `topics`, `entity_ids`, `register_types`, `register_addresses`).
+- Filter groups (`time`, `adapters`, `datapoints`, `values`, `metadata`, `q`) are combined with AND.
+- Time filters support open boundaries (`from` without `to`, `to` without `from`) and the combination of absolute bounds (`from`/`to`) plus relative offsets (`from_relative_seconds`/`to_relative_seconds`).
+- Pagination via `pagination.limit` + `pagination.offset`, sorting via `sort.field` (`id|ts`) and `sort.order` (`asc|desc`).
+- The versioned metadata model is documented in `docs/ringbuffer-metadata-model-v1.md` (`metadata_version: 1`).
+
+`POST /api/v1/ringbuffer/export/csv` uses the same request body as `/query`, but always exports the complete filtered result set (UI pagination is ignored).  
+CSV columns: `id`, `ts`, `datapoint_id`, `name`, `topic`, `old_value_json`, `new_value_json`, `source_adapter`, `quality`, `metadata_version`, `metadata_json`.
 
 ---
 
-## Systemstatus
+## Backup & Restore
+
+Complete configuration backup and restore. Existing entries are updated, missing ones are created.
 
 ```
-GET /api/v1/system/health      # Erreichbarkeit prüfen (kein Login nötig)
-GET /api/v1/system/adapters    # Adapter-Status + Anzahl Verknüpfungen
-GET /api/v1/system/datatypes   # Alle verfügbaren Datentypen
-GET /api/v1/system/settings    # Systemeinstellungen lesen (z. B. Zeitzone)
-PUT /api/v1/system/settings    # Systemeinstellungen ändern
+GET  /api/v1/config/export    # Download backup file (JSON)
+POST /api/v1/config/import    # Restore backup file
+```
 
-GET /api/v1/adapters/knx/dpts  # Alle registrierten KNX-DPT-Typen auflisten
+The backup contains: all data points, bindings, adapter instances, and KNX group addresses.
+
+**Import KNX project file:**
+
+```
+POST /api/v1/knxproj/import   # Upload .knxproj file (multipart/form-data)
+GET  /api/v1/knxproj/ga       # Show imported group addresses
+DELETE /api/v1/knxproj/ga     # Delete all imported addresses
+```
+
+After import, the group addresses appear as search suggestions in the binding form.
+
+---
+
+## System status
+
+```
+GET /api/v1/system/health      # Check reachability (no login required)
+GET /api/v1/system/adapters    # Adapter status + binding count
+GET /api/v1/system/datatypes   # All available data types
+GET /api/v1/system/settings    # Read system settings (e.g. timezone)
+PUT /api/v1/system/settings    # Update system settings
+
+GET /api/v1/adapters/knx/dpts  # List all registered KNX DPT types
 ```
 
 ---
 
-## Live-Verbindung (WebSocket)
+## Log viewer
 
-Über die WebSocket-Verbindung werden Wertänderungen und neue RingBuffer-Einträge sofort an alle verbundenen Browser übertragen — kein manuelles Neuladen nötig.
+The log viewer shows recent application log messages in real time. The admin GUI displays the last 500 entries and streams new entries live via WebSocket.
+
+```
+GET /api/v1/system/logs?limit=N   # Recent log entries (newest first, max 500)
+GET /api/v1/system/log-level      # Read current log level (admin only)
+PUT /api/v1/system/log-level      # Change log level at runtime (admin only)
+```
+
+Log entries have the following fields:
+
+| Field | Description |
+|---|---|
+| `ts` | Timestamp (ISO 8601, UTC) |
+| `level` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `logger` | Logger name (module path) |
+| `message` | Log message |
+
+The log level can be changed at runtime without a restart (admin only). The buffer holds the last 500 entries and is not persisted across restarts.
+
+---
+
+## Live connection (WebSocket)
+
+Via the WebSocket connection, value changes and new RingBuffer entries are immediately transmitted to all connected browsers — no manual reload required.
 
 ```
 WS /api/v1/ws?token={jwt}
 ```
 
-**Datenpunkt abonnieren:**
+**Subscribe to data point:**
 ```json
 {"action": "subscribe", "datapoint_ids": ["uuid-1", "uuid-2"]}
 ```
 
-**Eingehende Wertänderung:**
+**Incoming value change:**
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -514,14 +505,14 @@ WS /api/v1/ws?token={jwt}
 }
 ```
 
-**Neuer RingBuffer-Eintrag** (an alle Verbindungen, ohne Abo):
+**New RingBuffer entry** (to all connections, without subscription):
 ```json
 {
   "action": "ringbuffer_entry",
   "entry": {
     "ts": "2026-03-27T10:23:41.123Z",
     "datapoint_id": "550e8400-...",
-    "name": "Wohnzimmer Temperatur",
+    "name": "Living room temperature",
     "new_value": 21.4,
     "old_value": 21.1,
     "quality": "good",
@@ -530,844 +521,1018 @@ WS /api/v1/ws?token={jwt}
 }
 ```
 
-**Datenqualität (`q`):**
+**Data quality (`q`):**
 
-| Wert | Bedeutung |
+| Value | Meaning |
 |---|---|
-| `good` | Wert erfolgreich empfangen, Verbindung aktiv |
-| `bad` | Adapter getrennt oder Lesefehler |
-| `uncertain` | Verbindung wird wiederhergestellt oder Wert möglicherweise veraltet |
+| `good` | Value received successfully, connection active |
+| `bad` | Adapter disconnected or read error |
+| `uncertain` | Connection being restored or value possibly stale |
 
 ---
 
-## Logik-Editor
+## Logic editor
 
-### Übersicht
+### Overview
 
-Der Logik-Editor ermöglicht das visuelle Erstellen von Automatisierungsregeln — ohne Programmierkenntnisse. Blöcke werden per Drag & Drop auf einer Arbeitsfläche platziert und mit Verbindungslinien verknüpft.
+The logic editor enables visual creation of automation rules — without programming knowledge. Blocks are placed on a canvas by drag & drop and connected with lines.
 
-**Ablauf:**
-1. Ein **DP Lesen**-Block beobachtet einen Datenpunkt.
-2. Ändert sich der Wert, führt **open bridge server** den gesamten Graphen aus.
-3. Die Blöcke werden der Reihe nach berechnet.
-4. Ein **DP Schreiben**-Block schreibt das Ergebnis zurück — das löst automatisch alle Adapter, MQTT, den Verlauf und den RingBuffer aus.
-5. Der **Trigger**-Block löst den Graphen nach einem Zeitplan aus (z. B. täglich um 07:00 Uhr).
+**Flow:**
+1. A **Read DP** block monitors a data point.
+2. When the value changes, **open bridge server** executes the entire graph.
+3. Blocks are evaluated in sequence.
+4. A **Write DP** block writes the result back — this automatically triggers all adapters, MQTT, history, and the RingBuffer.
+5. The **Trigger** block fires the graph on a schedule (e.g. daily at 07:00).
 
-Der Graph kann auch manuell über den **▶ Ausführen**-Button gestartet werden.
+The graph can also be started manually via the **▶ Run** button.
 
-**Zustände** (Hysterese, Statistik, Betriebsstunden, Min/Max-Tracker, Verbrauchszähler) werden in der Datenbank gespeichert und überleben einen Neustart.
+**States** (hysteresis, statistics, operating hours, min/max tracker, consumption counter) are stored in the database and survive a restart.
 
 ---
 
-### Blocktypen
+### Block types
 
-#### Konstante
+#### Constant
 
-| Block | Ausgänge | Beschreibung |
+| Block | Outputs | Description |
 |---|---|---|
-| **Festwert** | Wert | Gibt einen festen Wert aus — Zahl, Ein/Aus oder Text. |
+| **Fixed value** | Value | Outputs a fixed value — number, on/off, or text. |
 
-#### Logik
+#### Logic
 
-| Block | Eingänge | Ausgänge | Beschreibung |
+| Block | Inputs | Outputs | Description |
 |---|---|---|---|
-| **UND** | A, B | Aus | Wahr wenn **alle** Eingänge wahr sind. |
-| **ODER** | A, B | Aus | Wahr wenn **mindestens ein** Eingang wahr ist. |
-| **NICHT** | Ein | Aus | Kehrt den Eingang um. |
-| **EXKLUSIV-ODER** | A, B | Aus | Wahr wenn **genau ein** Eingang wahr ist. |
-| **Vergleich** | A, B | Ergebnis | Vergleicht zwei Werte. Auswahl: `>` `<` `=` `>=` `<=` `≠` |
-| **Hysterese** | Wert | Aus | Schaltet ein wenn der Wert über „Schwelle EIN" steigt, und erst wieder aus wenn er unter „Schwelle AUS" fällt. Verhindert schnelles Hin- und Herschalten. |
+| **AND** | A, B | Out | True when **all** inputs are true. |
+| **OR** | A, B | Out | True when **at least one** input is true. |
+| **NOT** | In | Out | Inverts the input. |
+| **XOR** | A, B | Out | True when **exactly one** input is true. |
+| **Compare** | A, B | Result | Compares two values. Options: `>` `<` `=` `>=` `<=` `≠` |
+| **Hysteresis** | Value | Out | Switches on when the value exceeds "threshold ON", and switches off only when it falls below "threshold OFF". Prevents rapid toggling. |
 
-#### Datenpunkt
+#### Data point
 
-| Block | Eingänge | Ausgänge | Beschreibung |
+| Block | Inputs | Outputs | Description |
 |---|---|---|---|
-| **DP Lesen** | — | Wert, Geändert | Liest einen Datenpunkt. Löst den Graphen bei Wertänderung automatisch aus. Optionale Filter (Mindestabstand, Mindeständerung) und Wert-Transformation. |
-| **DP Schreiben** | Wert, Trigger | — | Schreibt einen Wert in einen Datenpunkt. Optionaler Trigger-Eingang: nur schreiben wenn Trigger wahr. Optionale Filter und Wert-Transformation. |
+| **Read DP** | — | Value, Changed | Reads a data point. Automatically triggers the graph on value change. Optional filters (minimum interval, minimum change) and value transformation. |
+| **Write DP** | Value, Trigger | — | Writes a value to a data point. Optional trigger input: only write when trigger is true. Optional filters and value transformation. |
 
-#### Mathematik
+#### Math
 
-| Block | Eingänge | Ausgänge | Beschreibung |
+| Block | Inputs | Outputs | Description |
 |---|---|---|---|
-| **Formel** | a, b | Ergebnis | Berechnet einen Ausdruck aus den Eingängen `a` und `b`. Optional: eine zweite Formel zur Transformation des Ergebnisses (Variable `x`). |
-| **Skalieren** | Wert | Ergebnis | Rechnet einen Wert von einem Bereich in einen anderen um, z. B. 0–255 → 0–100 %. |
-| **Begrenzer** | Wert | Ergebnis | Begrenzt den Wert auf einen Bereich [Min, Max]. Werte darunter oder darüber werden auf den Grenzwert gesetzt. |
-| **Statistik** | Wert, Zurücksetzen | Min, Max, Mittelwert, Anzahl | Führt eine laufende Statistik über alle empfangenen Werte. Reset setzt alles zurück. Ergebnisse werden gespeichert und überleben einen Neustart. |
-| **Min/Max-Tracker** | Wert | Min tägl., Max tägl., Min wöch., Max wöch., Min monatl., Max monatl., Min jährl., Max jährl., Min abs., Max abs. | Verfolgt Minimal- und Maximalwerte über verschiedene Zeiträume (täglich, wöchentlich, monatlich, jährlich, absolut). Setzt sich automatisch bei Periodengrenze zurück. |
-| **Verbrauchszähler** | Wert (Zählerstand) | Täglich, Wöchentlich, Monatlich, Jährlich, Vorheriger Tag, Vorherige Woche, Vorheriger Monat, Vorheriges Jahr | Berechnet Verbrauch aus einem kumulierten Zählerstand. Speichert Vorperiodenwerte für Vergleiche. |
-| **Sommer/Winter (DIN)** | Wert (Aussentemperatur) | Heizungsmodus, Tagesdurchschnitt, Monatsdurchschnitt | Steuert die Heizungsumschaltung nach DIN-Norm anhand von drei Tageswerten (T1 ≈ 07:00, T2 ≈ 14:00, T3 ≈ 22:00). Tagesdurchschnitt = (T1 + T2 + 2×T3) / 4. |
+| **Formula** | a, b | Result | Calculates an expression from inputs `a` and `b`. Optional: a second formula to transform the result (variable `x`). |
+| **Scale** | Value | Result | Converts a value from one range to another, e.g. 0–255 → 0–100%. |
+| **Limiter** | Value | Result | Clamps the value to a range [Min, Max]. Values below or above are set to the limit. |
+| **Statistics** | Value, Reset | Min, Max, Average, Count | Keeps running statistics over all received values. Reset clears everything. Results are saved and survive a restart. |
+| **Min/Max tracker** | Value | Daily min, Daily max, Weekly min, Weekly max, Monthly min, Monthly max, Yearly min, Yearly max, Absolute min, Absolute max | Tracks minimum and maximum values over various time periods (daily, weekly, monthly, yearly, absolute). Resets automatically at period boundaries. |
+| **Consumption counter** | Value (meter reading) | Daily, Weekly, Monthly, Yearly, Previous day, Previous week, Previous month, Previous year | Calculates consumption from a cumulative meter reading. Stores previous period values for comparison. |
+| **Summer/Winter (DIN)** | Value (outdoor temperature) | Heating mode, Daily average, Monthly average | Controls heating switchover per DIN standard using three daily readings (T1 ≈ 07:00, T2 ≈ 14:00, T3 ≈ 22:00). Daily average = (T1 + T2 + 2×T3) / 4. |
 
 #### Text
 
-| Block | Eingänge | Ausgänge | Beschreibung |
+| Block | Inputs | Outputs | Description |
 |---|---|---|---|
-| **Text verbinden** | 2–20 Eingänge (konfigurierbar) | Ergebnis | Verbindet mehrere Texte zu einem. Optionales Trennzeichen (z. B. `,` oder ` `). |
+| **Concatenate** | 2–20 inputs (configurable) | Result | Joins multiple texts into one. Optional separator (e.g. `,` or ` `). |
 
 #### Timer
 
-| Block | Eingänge | Ausgänge | Beschreibung |
+| Block | Inputs | Outputs | Description |
 |---|---|---|---|
-| **Verzögerung** | Trigger | Trigger | Verzögert ein Signal um N Sekunden. |
-| **Impuls** | Trigger | Aus | Gibt für N Sekunden „Wahr" aus, dann „Falsch". |
-| **Trigger** | — | Trigger | Löst den Graphen nach einem Zeitplan aus (Cron-Format). Konfigurierbar über Vorlagen, einen visuellen Editor (Min/Std/Tag/Mon/Wochentag) oder direkte Eingabe des Ausdrucks. |
-| **Betriebsstunden** | Aktiv, Zurücksetzen | Stunden | Zählt Betriebsstunden solange „Aktiv" wahr ist. Gespeicherter Zählerstand überlebt Neustarts. |
+| **Delay** | Trigger | Trigger | Delays a signal by N seconds. |
+| **Pulse** | Trigger | Out | Outputs "True" for N seconds, then "False". |
+| **Trigger** | — | Trigger | Fires the graph on a schedule (cron format). Configurable via templates, a visual editor (min/hour/day/month/weekday), or direct expression entry. |
+| **Operating hours** | Active, Reset | Hours | Counts operating hours while "Active" is true. Saved counter survives restarts. |
 
-#### Skript
+#### Script
 
-| Block | Eingänge | Ausgänge | Beschreibung |
+| Block | Inputs | Outputs | Description |
 |---|---|---|---|
-| **Python-Skript** | a, b, c | Ergebnis | Führt Python-Code aus. Eingangswerte sind über `inputs['a']`, `inputs['b']`, `inputs['c']` verfügbar. Das Ergebnis wird mit `result = …` gesetzt. Nur mathematische Funktionen erlaubt — kein Dateizugriff, kein Netzwerk. |
+| **Python script** | a, b, c | Result | Executes Python code. Input values are available via `inputs['a']`, `inputs['b']`, `inputs['c']`. The result is set with `result = …`. Only math functions allowed — no file access, no network. |
 
-#### KI
+#### AI
 
-| Block | Eingänge | Ausgänge | Beschreibung |
+| Block | Inputs | Outputs | Description |
 |---|---|---|---|
-| **KI-Logik** | Trigger | Ergebnis | Platzhalter für zukünftige KI-Integration. |
+| **AI logic** | Trigger | Result | Placeholder for future AI integration. |
 
 #### MCP
 
-| Block | Eingänge | Ausgänge | Beschreibung |
+| Block | Inputs | Outputs | Description |
 |---|---|---|---|
-| **MCP-Werkzeug** | Trigger, Eingabe | Ergebnis, Fertig | Ruft ein Werkzeug auf einem externen MCP-Server auf. |
+| **MCP tool** | Trigger, Input | Result, Done | Calls a tool on an external MCP server. |
 
 #### Astro
 
-| Block | Ausgänge | Beschreibung |
+| Block | Outputs | Description |
 |---|---|---|
-| **Astro Sonne** | Sonnenaufgang, Sonnenuntergang, Tagsüber | Berechnet Sonnenauf- und -untergang für den konfigurierten Standort. Gibt auch aus, ob es gerade hell ist. Konfiguration: Breitengrad, Längengrad. Berücksichtigt die eingestellte Zeitzone. |
+| **Astro sun** | Sunrise, Sunset, Daytime | Calculates sunrise and sunset for the configured location. Also outputs whether it is currently light. Configuration: latitude, longitude. Respects the configured timezone. |
 
-#### Benachrichtigung
+#### Notification
 
-| Block | Eingänge | Ausgänge | Beschreibung |
+| Block | Inputs | Outputs | Description |
 |---|---|---|---|
-| **Pushover** | Trigger, Nachricht | Gesendet | Sendet eine Push-Benachrichtigung auf das Handy via [Pushover](https://pushover.net). Konfiguration: App-Token, User-Key, Titel, Priorität. |
-| **SMS (seven.io)** | Trigger, Nachricht | Gesendet | Sendet eine SMS via [seven.io](https://seven.io). Konfiguration: API-Schlüssel, Empfänger, Absender. |
+| **Pushover** | Trigger, Message | Sent | Sends a push notification to the phone via [Pushover](https://pushover.net). Configuration: app token, user key, title, priority. |
+| **SMS (seven.io)** | Trigger, Message | Sent | Sends an SMS via [seven.io](https://seven.io). Configuration: API key, recipient, sender. |
 
 #### Integration
 
-| Block | Eingänge | Ausgänge | Beschreibung |
+| Block | Inputs | Outputs | Description |
 |---|---|---|---|
-| **API-Abfrage** | Trigger, Inhalt | Antwort, Statuscode, Erfolg | Sendet eine HTTP-Anfrage an eine externe Adresse. Methode wählbar (GET/POST/PUT/PATCH/DELETE). Antwortformat: JSON oder Text. SSL-Prüfung konfigurierbar. |
-| **JSON-Extraktor** | Daten (JSON-Text) | Wert | Parst einen JSON-String und extrahiert einen Wert anhand eines Pfads mit Punktnotation, z. B. `sensors.temperature`. |
-| **XML-Extraktor** | Daten (XML-Text) | Wert | Parst einen XML-String und extrahiert einen Wert per XPath-Ausdruck, z. B. `./sensor/temperature`. |
+| **API request** | Trigger, Body | Response, Status code, Success | Sends an HTTP request to an external address. Method selectable (GET/POST/PUT/PATCH/DELETE). Response format: JSON or text. SSL verification configurable. |
+| **JSON extractor** | Data (JSON text) | Value | Parses a JSON string and extracts a value using a dot-notation path, e.g. `sensors.temperature`. |
+| **XML extractor** | Data (XML text) | Value | Parses an XML string and extracts a value using an XPath expression, e.g. `./sensor/temperature`. |
 
 ---
 
-### Filter und Transformation bei DP-Blöcken
+### Filters and transformation for DP blocks
 
-Beide DataPoint-Blöcke haben drei Tabs: **Verbindung**, **Transformation** und **Filter**. Ein Punkt (•) erscheint im Tab wenn etwas aktiv ist.
+Both DataPoint blocks have three tabs: **Connection**, **Transformation**, and **Filter**. A dot (•) appears in the tab when something is active.
 
 #### Transformation
 
-Optionale Formel die auf den Wert angewendet wird. Variable: `x`
+Optional formula applied to the value. Variable: `x`
 
-Vordefinierte Vorlagen (Beispiele):
+Predefined templates (examples):
 
-| Vorlage | Formel |
+| Template | Formula |
 |---|---|
-| × 1.000 | `x * 1000` |
+| × 1,000 | `x * 1000` |
 | × 100 | `x * 100` |
 | ÷ 10 | `round(x / 10, 1)` |
 | ÷ 100 | `round(x / 100, 2)` |
-| Sekunden → Stunden | `x / 3600` |
-| Stunden → Sekunden | `x * 3600` |
+| Seconds → hours | `x / 3600` |
+| Hours → seconds | `x * 3600` |
 
-#### Filter bei DP Lesen
+#### Filters for Read DP
 
-| Filter | Beschreibung |
+| Filter | Description |
 |---|---|
-| Mindestabstand | Wie oft der Graph höchstens ausgelöst wird (z. B. maximal alle 10 Sekunden) |
-| Nur bei Änderung | Graph nur auslösen wenn der Wert sich wirklich geändert hat |
-| Mindeständerung (absolut) | Nur auslösen wenn der Wert sich um mindestens N geändert hat |
-| Mindeständerung (%) | Nur auslösen wenn die Änderung mindestens N Prozent beträgt |
+| Minimum interval | How often the graph can be triggered at most (e.g. at most every 10 seconds) |
+| Only on change | Only trigger the graph if the value actually changed |
+| Minimum change (absolute) | Only trigger if the value changed by at least N |
+| Minimum change (%) | Only trigger if the change is at least N percent |
 
-#### Filter bei DP Schreiben
+#### Filters for Write DP
 
-| Filter | Beschreibung |
+| Filter | Description |
 |---|---|
-| Mindestabstand | Wie oft höchstens geschrieben wird |
-| Nur bei Änderung | Nicht schreiben wenn der Wert gleich dem zuletzt geschriebenen ist |
-| Mindeständerung (absolut) | Nur schreiben wenn der Wert sich um mindestens N geändert hat |
+| Minimum interval | How often writing can occur at most |
+| Only on change | Do not write if the value is the same as the last written value |
+| Minimum change (absolute) | Only write if the value changed by at least N |
 
 ---
 
-### Zeitplan-Konfiguration (Trigger-Block)
+### Schedule configuration (Trigger block)
 
-Der **Trigger**-Block löst Graphen nach einem Zeitplan aus. Drei Eingabewege, die sich gegenseitig synchronisieren:
+The **Trigger** block fires graphs on a schedule. Three input methods that synchronize with each other:
 
-**1. Vorlagen** — über 30 vordefinierte Zeitpläne in 4 Gruppen (Minuten-Intervalle, Stunden-Intervalle, Täglich, Wöchentlich/Monatlich)
+**1. Templates** — over 30 predefined schedules in 4 groups (minute intervals, hour intervals, daily, weekly/monthly)
 
-**2. Visueller Editor** — fünf Felder: Minute / Stunde / Tag / Monat / Wochentag
+**2. Visual editor** — five fields: minute / hour / day / month / weekday
 
-**3. Direkteingabe** — Standard Cron-Ausdruck
+**3. Direct entry** — standard cron expression
 
 ```
-0 7 * * *         → täglich um 07:00
-*/15 * * * *      → alle 15 Minuten
-0 8 * * 1-5       → werktags um 08:00
-0 6,18 * * *      → täglich um 06:00 und 18:00
+0 7 * * *         → daily at 07:00
+*/15 * * * *      → every 15 minutes
+0 8 * * 1-5       → weekdays at 08:00
+0 6,18 * * *      → daily at 06:00 and 18:00
 ```
 
-Zur Überprüfung: [crontab.guru](https://crontab.guru) (Link direkt im Konfigurations-Panel)
+For reference: [crontab.guru](https://crontab.guru) (link directly in the configuration panel)
 
 ---
 
-### Formel-Referenz
+### Formula reference
 
-In **allen** Formelfeldern (DP Lesen, DP Schreiben, Formel-Block, Verknüpfungs-Transformation) gilt:
+In **all** formula fields (Read DP, Write DP, formula block, binding transformation):
 
-- Variable `x` = der eingehende Wert (immer als Zahl übergeben)
-- Kein Import nötig — alle Funktionen direkt verfügbar
-- `round()` verwendet mathematisches Runden (0.5 → aufrunden)
+- Variable `x` = the incoming value (always passed as a number)
+- No import needed — all functions directly available
+- `round()` uses mathematical rounding (0.5 → round up)
 
-| Funktion | Beispiel | Beschreibung |
+| Function | Example | Description |
 |---|---|---|
-| `abs(x)` | `abs(x - 50)` | Absolutbetrag (immer positiv) |
-| `round(x, n)` | `round(x, 2)` | Runden auf n Nachkommastellen |
-| `min(a, b)` | `min(x, 100)` | Kleinerer der beiden Werte |
-| `max(a, b)` | `max(x, 0)` | Grösserer der beiden Werte |
-| `sqrt(x)` | `sqrt(x)` | Quadratwurzel |
-| `floor(x)` | `floor(x)` | Abrunden auf ganze Zahl |
-| `ceil(x)` | `ceil(x)` | Aufrunden auf ganze Zahl |
-| `math.log(x)` | `math.log(x)` | Natürlicher Logarithmus |
-| `math.sin(x)` | `math.sin(x)` | Sinus |
-| `math.pi` | `x * math.pi / 180` | Kreiszahl π |
+| `abs(x)` | `abs(x - 50)` | Absolute value (always positive) |
+| `round(x, n)` | `round(x, 2)` | Round to n decimal places |
+| `min(a, b)` | `min(x, 100)` | Smaller of the two values |
+| `max(a, b)` | `max(x, 0)` | Larger of the two values |
+| `sqrt(x)` | `sqrt(x)` | Square root |
+| `floor(x)` | `floor(x)` | Round down to integer |
+| `ceil(x)` | `ceil(x)` | Round up to integer |
+| `math.log(x)` | `math.log(x)` | Natural logarithm |
+| `math.sin(x)` | `math.sin(x)` | Sine |
+| `math.pi` | `x * math.pi / 180` | Pi constant |
 
-**Praktische Beispiele:**
+**Practical examples:**
 
-| Ziel | Formel |
+| Goal | Formula |
 |---|---|
-| Auf 0–100 begrenzen | `max(0, min(100, x))` |
+| Clamp to 0–100 | `max(0, min(100, x))` |
 | Fahrenheit → Celsius | `(x - 32) * 5 / 9` |
 | Wh → kWh | `x / 1000` |
-| Auf halbe Stufen runden | `round(x * 2) / 2` |
-| Negativen Wert abschneiden | `max(0, x)` |
+| Round to half steps | `round(x * 2) / 2` |
+| Cut off negative values | `max(0, x)` |
 
-**Formel-Block** (Eingänge `a` und `b`):
+**Formula block** (inputs `a` and `b`):
 
 ```
-a * 2 + b              # Eingang a verdoppeln, b addieren
-max(a, b)              # Grösseren der beiden Werte nehmen
-round((a + b) / 2, 1)  # Mittelwert, 1 Nachkommastelle
-abs(a - b)             # Absolute Differenz
+a * 2 + b              # Double input a, add b
+max(a, b)              # Take the larger of the two values
+round((a + b) / 2, 1)  # Average, 1 decimal place
+abs(a - b)             # Absolute difference
 ```
 
-Zusätzlich kann eine **Ausgangs-Transformation** konfiguriert werden — eine zweite Formel (Variable `x`) die auf das berechnete Ergebnis angewendet wird.
+Additionally, an **output transformation** can be configured — a second formula (variable `x`) applied to the calculated result.
 
 ---
 
-### Automatische Typumwandlung
+### Automatic type conversion
 
-Die Logik-Engine wandelt Werte automatisch um:
+The logic engine converts values automatically:
 
-| Von | Nach | Regel |
+| From | To | Rule |
 |---|---|---|
-| `true`/`false` | Zahl | Wahr → 1.0, Falsch → 0.0 |
-| Zahl | Ein/Aus | 0 → Falsch, alles andere → Wahr |
-| Text `"123"` | Zahl | 123.0 |
-| Text `"true"`, `"on"`, `"1"` | Ein/Aus | Wahr |
-| Text `"false"`, `"off"`, `"0"` | Ein/Aus | Falsch |
-| Kein Wert | Zahl | 0.0 |
+| `true`/`false` | Number | True → 1.0, False → 0.0 |
+| Number | On/Off | 0 → False, anything else → True |
+| Text `"123"` | Number | 123.0 |
+| Text `"true"`, `"on"`, `"1"` | On/Off | True |
+| Text `"false"`, `"off"`, `"0"` | On/Off | False |
+| No value | Number | 0.0 |
 
-Verbindungen zwischen unterschiedlichen Blocktypen funktionieren damit immer.
+Connections between different block types always work.
 
 ---
 
-### Debug-Modus
+### Debug mode
 
-Zeigt berechnete Zwischenwerte direkt auf den Blöcken an — live und automatisch.
+Shows calculated intermediate values directly on the blocks — live and automatically.
 
-1. Graph öffnen
-2. **🔍 Debug**-Button in der Werkzeugleiste klicken
-3. Jeder Block zeigt ein gelbes Band mit seinen aktuellen Ausgangswerten
-4. Die Anzeige aktualisiert sich automatisch nach jeder Ausführung (Wertänderung, Zeitplan, manueller Start)
+1. Open the graph
+2. Click the **🔍 Debug** button in the toolbar
+3. Each block shows a yellow band with its current output values
+4. The display updates automatically after each execution (value change, schedule, manual start)
 
-| Typ | Darstellung |
+| Type | Display |
 |---|---|
-| Wahr | `out=✓` |
-| Falsch | `out=✗` |
-| Zahl | `value=230.45` |
-| DP Schreiben | `→ 21.5` |
-| Kein Wert | `value=—` |
+| True | `out=✓` |
+| False | `out=✗` |
+| Number | `value=230.45` |
+| Write DP | `→ 21.5` |
+| No value | `value=—` |
 
 ---
 
-## Adapter-Konfiguration
+## Adapter configuration
 
-### KNX-Adapter
+### KNX adapter
 
-**Instanz-Konfiguration:**
+**Instance configuration — basic parameters:**
 
-| Feld | Werte | Beschreibung |
+| Field | Values | Description |
 |---|---|---|
-| `connection_type` | `tunneling` / `routing` | Tunneling = direkte Verbindung zur Zentrale; Routing = IP-Multicast |
-| `host` | IP-Adresse | IP der KNX/IP-Zentrale (Tunneling) oder Multicast-Adresse (Routing) |
-| `port` | Standard `3671` | Port der KNX/IP-Zentrale (manche Geräte: `3674`) |
-| `individual_address` | z. B. `1.1.210` | Eigene KNX-Adresse (Tunneling) |
-| `local_ip` | IP-Adresse | Lokale Netzwerkschnittstelle (nur Routing, optional) |
+| `connection_type` | `tunneling` / `tunneling_secure` / `routing` / `routing_secure` | Connection type (see below) |
+| `host` | IP address | IP of the KNX/IP device (tunneling) or multicast address (routing) |
+| `port` | Default `3671` | Port of the KNX/IP device |
+| `individual_address` | e.g. `1.1.210` | Own KNX address of the open bridge server |
+| `local_ip` | IP address | Local network interface (optional). For routing/routing secure: selects the network card for multicast — **recommended** with multiple network cards. For tunneling/tunneling secure: binds the socket to a specific interface — usually only needed with multiple network cards. Leave empty = automatic selection. |
 
-**Verknüpfungs-Konfiguration:**
+**Connection types:**
 
-| Feld | Beschreibung |
+| `connection_type` | Description |
 |---|---|
-| `group_address` | KNX-Gruppenadresse (dreiteilig, z. B. `27/6/6`) |
-| `dpt_id` | DPT-Kennung — Tabelle unten |
-| `state_group_address` | Optionale Rückmelde-Adresse für DEST-Verknüpfungen |
-| `respond_to_read` | `true`: **open bridge server** beantwortet KNX-Leseanfragen (GroupValueRead) mit dem aktuellen Wert. Standard: `false` |
+| `tunneling` | UDP tunneling to KNX/IP device (default) |
+| `tunneling_secure` | KNX IP Secure tunneling (encrypted, TCP) |
+| `routing` | IP multicast routing |
+| `routing_secure` | KNX IP Secure routing (encrypted, multicast) |
 
-**Unterstützte DPTs:**
+**KNX IP Secure — keyfile mode (recommended)**
 
-**open bridge server** unterstützt über 85 KNX-Datentypen. Die vollständige Liste ist über `GET /api/v1/adapters/knx/dpts` abrufbar.
+The easiest way for KNX IP Secure is to import the `.knxkeys` file from ETS:
 
-**DPT 1 — 1-Bit Boolean**
+1. In ETS: **Security → Export key backup** → save `.knxkeys` file
+2. In open bridge server: **Settings → Adapter → Edit KNX instance → Upload keyfile**
+3. Enter keyfile password — open bridge server shows all available tunnels with PA, user ID, and number of secured group addresses
+4. Select desired tunnel → `individual_address` is set automatically
+5. Set `connection_type` to `tunneling_secure` (or `routing_secure`)
 
-| DPT | Typische Verwendung |
+| Field | Description |
 |---|---|
-| `DPT1.001` | Schalten (Ein/Aus) |
+| `knxkeys_file_path` | Set automatically after uploading the keyfile |
+| `knxkeys_password` | Password field — password for the `.knxkeys` file |
+| `individual_address` | PA of the selected tunnel (from the tunnel list) |
+
+**KNX IP Secure — manual mode** (only when no keyfile is available):
+
+For `tunneling_secure`:
+
+| Field | Values | Description |
+|---|---|---|
+| `user_id` | `1`–`127`, default `2` | User ID at the KNX/IP gateway |
+| `user_password` | Password field | User password |
+| `device_authentication_password` | Password field | Device authentication password |
+
+For `routing_secure`:
+
+| Field | Values | Description |
+|---|---|---|
+| `backbone_key` | Password field | 128-bit backbone key as hex string (32 characters, e.g. `0102030405060708090a0b0c0d0e0f10`; separators `:` and spaces are ignored) |
+
+> **Note:** If `knxkeys_file_path` and `knxkeys_password` are set, they take precedence over the manual fields. All password fields are masked in the web interface.
+
+**Keyfile API** (for custom integrations):
+
+```
+POST /api/v1/knx/keyfile   # Upload .knxkeys, return tunnel list
+DELETE /api/v1/knx/keyfile/{file_id}  # Delete keyfile
+```
+
+Response from the upload endpoint:
+```json
+{
+  "file_id": "uuid",
+  "file_path": "/data/knxkeys/uuid.knxkeys",
+  "project_name": "My KNX project",
+  "tunnels": [
+    { "individual_address": "1.1.100", "host": "1.1.50", "user_id": 2, "secure_ga_count": 15 },
+    { "individual_address": "1.1.101", "host": "1.1.50", "user_id": 3, "secure_ga_count": 15 }
+  ],
+  "backbone": null
+}
+```
+
+**Binding configuration:**
+
+| Field | Description |
+|---|---|
+| `group_address` | KNX group address (three-part, e.g. `27/6/6`) |
+| `dpt_id` | DPT identifier — table below |
+| `state_group_address` | Optional feedback address for DEST bindings |
+| `respond_to_read` | `true`: **open bridge server** responds to KNX read requests (GroupValueRead) with the current value. Default: `false` |
+
+**Supported DPTs:**
+
+**open bridge server** supports over 85 KNX data types. The complete list is available via `GET /api/v1/adapters/knx/dpts`.
+
+**DPT 1 — 1-bit Boolean**
+
+| DPT | Typical usage |
+|---|---|
+| `DPT1.001` | Switching (on/off) |
 | `DPT1.002` | Boolean |
-| `DPT1.003` | Freigabe (Enable) |
-| `DPT1.007` | Schritt/Richtung |
-| `DPT1.008` | Auf/Ab |
-| `DPT1.009` | Öffnen/Schliessen |
-| `DPT1.010` | Start/Stopp |
-| `DPT1.011` | Zustandsanzeige |
-| `DPT1.017` | Auslöser (Trigger) |
-| `DPT1.018` | Anwesenheit |
-| `DPT1.019` | Fenster/Tür |
-| `DPT1.021` | Szene A/B |
-| `DPT1.022` | Jalousie-Modus |
-| `DPT1.023` | Tag/Nacht |
-| *(weitere DPT1.x)* | *1-Bit Steuerungen* |
+| `DPT1.003` | Enable |
+| `DPT1.007` | Step/direction |
+| `DPT1.008` | Up/down |
+| `DPT1.009` | Open/close |
+| `DPT1.010` | Start/stop |
+| `DPT1.011` | State indicator |
+| `DPT1.017` | Trigger |
+| `DPT1.018` | Occupancy |
+| `DPT1.019` | Window/door |
+| `DPT1.021` | Scene A/B |
+| `DPT1.022` | Shutter mode |
+| `DPT1.023` | Day/night |
+| *(further DPT1.x)* | *1-bit controls* |
 
-**DPT 2 — 2-Bit Gesteuerter Wert**
+**DPT 2 — 2-bit controlled value**
 
-| DPT | Typische Verwendung |
+| DPT | Typical usage |
 |---|---|
-| `DPT2.001` | Schaltsteuerung (Priorität + Wert) |
-| `DPT2.002` | Boolsche Steuerung |
+| `DPT2.001` | Switch control (priority + value) |
+| `DPT2.002` | Boolean control |
 
-**DPT 3 — 4-Bit Relativer Steuerwert**
+**DPT 3 — 4-bit relative control value**
 
-| DPT | Typische Verwendung |
+| DPT | Typical usage |
 |---|---|
-| `DPT3.007` | Dimmen (Richtung + Geschwindigkeit) |
-| `DPT3.008` | Jalousie (Richtung + Geschwindigkeit) |
+| `DPT3.007` | Dimming (direction + speed) |
+| `DPT3.008` | Shutter (direction + speed) |
 
-**DPT 4 — 1-Byte Zeichen**
+**DPT 4 — 1-byte character**
 
-| DPT | Grösse | Typ | Typische Verwendung |
+| DPT | Size | Type | Typical usage |
 |---|---|---|---|
-| `DPT4.001` | 1 Byte | Text | ASCII-Zeichen |
-| `DPT4.002` | 1 Byte | Text | ISO-8859-1-Zeichen |
+| `DPT4.001` | 1 byte | Text | ASCII character |
+| `DPT4.002` | 1 byte | Text | ISO-8859-1 character |
 
-**DPT 5 — 8-Bit Vorzeichenlos**
+**DPT 5 — 8-bit unsigned**
 
-| DPT | Grösse | Typ | Typische Verwendung |
+| DPT | Size | Type | Typical usage |
 |---|---|---|---|
-| `DPT5.001` | 1 Byte | Zahl (0–100 %) | Dimmen / Jalousie-Position |
-| `DPT5.003` | 1 Byte | Zahl (0–360°) | Winkel |
-| `DPT5.004` | 1 Byte | Ganzzahl (0–255) | Prozent (unsigned) |
-| `DPT5.010` | 1 Byte | Ganzzahl | Zählerwert |
+| `DPT5.001` | 1 byte | Number (0–100%) | Dimming / shutter position |
+| `DPT5.003` | 1 byte | Number (0–360°) | Angle |
+| `DPT5.004` | 1 byte | Integer (0–255) | Percentage (unsigned) |
+| `DPT5.010` | 1 byte | Integer | Counter value |
 
-**DPT 6 — 8-Bit Vorzeichenbehaftet**
+**DPT 6 — 8-bit signed**
 
-| DPT | Grösse | Typ | Typische Verwendung |
+| DPT | Size | Type | Typical usage |
 |---|---|---|---|
-| `DPT6.001` | 1 Byte | Ganzzahl (−128…127) | Relativer Wert (%) |
-| `DPT6.010` | 1 Byte | Ganzzahl | Impulszähler (vorzeichenbehaftet) |
+| `DPT6.001` | 1 byte | Integer (−128…127) | Relative value (%) |
+| `DPT6.010` | 1 byte | Integer | Pulse counter (signed) |
 
-**DPT 7 — 16-Bit Vorzeichenlos**
+**DPT 7 — 16-bit unsigned**
 
-| DPT | Grösse | Typ | Typische Verwendung |
+| DPT | Size | Type | Typical usage |
 |---|---|---|---|
-| `DPT7.001` | 2 Byte | Ganzzahl (0–65535) | Impulszähler |
-| `DPT7.002` | 2 Byte | Ganzzahl | Zeitraum (ms) |
-| `DPT7.003` | 2 Byte | Ganzzahl | Zeitraum (10 ms) |
-| `DPT7.004` | 2 Byte | Ganzzahl | Zeitraum (100 ms) |
-| `DPT7.005` | 2 Byte | Ganzzahl | Zeitraum (s) |
-| `DPT7.006` | 2 Byte | Ganzzahl | Zeitraum (min) |
-| `DPT7.007` | 2 Byte | Ganzzahl | Zeitraum (h) |
-| `DPT7.011` | 2 Byte | Ganzzahl | Länge (mm) |
-| `DPT7.012` | 2 Byte | Ganzzahl | Stromstärke (mA) |
-| `DPT7.013` | 2 Byte | Ganzzahl | Helligkeit (lx) |
-| `DPT7.600` | 2 Byte | Ganzzahl | Farbtemperatur (K) |
+| `DPT7.001` | 2 bytes | Integer (0–65535) | Pulse counter |
+| `DPT7.002` | 2 bytes | Integer | Time period (ms) |
+| `DPT7.003` | 2 bytes | Integer | Time period (10 ms) |
+| `DPT7.004` | 2 bytes | Integer | Time period (100 ms) |
+| `DPT7.005` | 2 bytes | Integer | Time period (s) |
+| `DPT7.006` | 2 bytes | Integer | Time period (min) |
+| `DPT7.007` | 2 bytes | Integer | Time period (h) |
+| `DPT7.011` | 2 bytes | Integer | Length (mm) |
+| `DPT7.012` | 2 bytes | Integer | Current (mA) |
+| `DPT7.013` | 2 bytes | Integer | Brightness (lx) |
+| `DPT7.600` | 2 bytes | Integer | Color temperature (K) |
 
-**DPT 8 — 16-Bit Vorzeichenbehaftet**
+**DPT 8 — 16-bit signed**
 
-| DPT | Grösse | Typ | Typische Verwendung |
+| DPT | Size | Type | Typical usage |
 |---|---|---|---|
-| `DPT8.001` | 2 Byte | Ganzzahl | Impulszähler (vorzeichenbehaftet) |
-| `DPT8.002` | 2 Byte | Ganzzahl | Zeitraum (ms) |
-| `DPT8.005` | 2 Byte | Ganzzahl | Zeitraum (s) |
-| `DPT8.010` | 2 Byte | Ganzzahl | Drehzahl-Differenz (1/min) |
-| `DPT8.011` | 2 Byte | Ganzzahl | Prozent-Differenz |
-| `DPT8.012` | 2 Byte | Ganzzahl | Rotationswinkel (°) |
+| `DPT8.001` | 2 bytes | Integer | Pulse counter (signed) |
+| `DPT8.002` | 2 bytes | Integer | Time period (ms) |
+| `DPT8.005` | 2 bytes | Integer | Time period (s) |
+| `DPT8.010` | 2 bytes | Integer | Speed difference (1/min) |
+| `DPT8.011` | 2 bytes | Integer | Percentage difference |
+| `DPT8.012` | 2 bytes | Integer | Rotation angle (°) |
 
-**DPT 9 — 2-Byte KNX-Gleitkomma (EIS5)**
+**DPT 9 — 2-byte KNX floating point (EIS5)**
 
-| DPT | Typische Verwendung |
+| DPT | Typical usage |
 |---|---|
-| `DPT9.001` | Temperatur (°C) |
-| `DPT9.002` | Temperaturdifferenz (K) |
-| `DPT9.003` | Kelvin/Stunde (K/h) |
-| `DPT9.004` | Windgeschwindigkeit (m/s) |
-| `DPT9.005` | Luftdruck (Pa) |
-| `DPT9.006` | Luftfeuchtigkeit (%) |
-| `DPT9.007` | Luftfeuchtigkeit (% rH) |
-| `DPT9.008` | CO₂-Konzentration (ppm) |
-| `DPT9.009` | Spannung (mV) |
-| `DPT9.010` | Leistung (W) |
-| `DPT9.011` | Zeit (s) |
-| `DPT9.020` | Spannung (mV) |
-| `DPT9.021` | Strom (mA) |
-| `DPT9.024` | Leistung (kW) |
-| `DPT9.025` | Volumenfluss (l/h) |
-| `DPT9.026` | Niederschlag (l/m²) |
-| `DPT9.027` | Luftdruck (Pa) |
-| `DPT9.028` | Windgeschwindigkeit (km/h) |
-| `DPT9.029` | Absolute Luftfeuchtigkeit (g/m³) |
-| `DPT9.030` | Einstrahlungsdichte (W/m²) |
+| `DPT9.001` | Temperature (°C) |
+| `DPT9.002` | Temperature difference (K) |
+| `DPT9.003` | Kelvin/hour (K/h) |
+| `DPT9.004` | Wind speed (m/s) |
+| `DPT9.005` | Air pressure (Pa) |
+| `DPT9.006` | Humidity (%) |
+| `DPT9.007` | Humidity (% rH) |
+| `DPT9.008` | CO₂ concentration (ppm) |
+| `DPT9.009` | Voltage (mV) |
+| `DPT9.010` | Power (W) |
+| `DPT9.011` | Time (s) |
+| `DPT9.020` | Voltage (mV) |
+| `DPT9.021` | Current (mA) |
+| `DPT9.024` | Power (kW) |
+| `DPT9.025` | Volume flow (l/h) |
+| `DPT9.026` | Precipitation (l/m²) |
+| `DPT9.027` | Air pressure (Pa) |
+| `DPT9.028` | Wind speed (km/h) |
+| `DPT9.029` | Absolute humidity (g/m³) |
+| `DPT9.030` | Irradiance (W/m²) |
 
-**DPT 10, 11 — Uhrzeit und Datum**
+**DPT 10, 11 — Time and date**
 
-| DPT | Grösse | Typ | Typische Verwendung |
+| DPT | Size | Type | Typical usage |
 |---|---|---|---|
-| `DPT10.001` | 3 Byte | Text `HH:MM:SS` | Uhrzeit (inkl. Wochentag) |
-| `DPT11.001` | 3 Byte | Text `JJJJ-MM-TT` | Datum |
+| `DPT10.001` | 3 bytes | Text `HH:MM:SS` | Time (incl. weekday) |
+| `DPT11.001` | 3 bytes | Text `YYYY-MM-DD` | Date |
 
-**DPT 12, 13 — 32-Bit Integer**
+**DPT 12, 13 — 32-bit integer**
 
-| DPT | Grösse | Typ | Typische Verwendung |
+| DPT | Size | Type | Typical usage |
 |---|---|---|---|
-| `DPT12.001` | 4 Byte | Ganzzahl (0–4 Mrd.) | Energiezähler (vorzeichenlos) |
-| `DPT13.001` | 4 Byte | Ganzzahl (±2 Mrd.) | Impulszähler (vorzeichenbehaftet) |
-| `DPT13.010` | 4 Byte | Ganzzahl | Wirkenergie (Wh) |
-| `DPT13.013` | 4 Byte | Ganzzahl | Wirkenergie (kWh) |
+| `DPT12.001` | 4 bytes | Integer (0–4 billion) | Energy counter (unsigned) |
+| `DPT13.001` | 4 bytes | Integer (±2 billion) | Pulse counter (signed) |
+| `DPT13.010` | 4 bytes | Integer | Active energy (Wh) |
+| `DPT13.013` | 4 bytes | Integer | Active energy (kWh) |
 
-**DPT 14 — 32-Bit IEEE-754-Gleitkomma (physikalische Grössen)**
+**DPT 14 — 32-bit IEEE-754 floating point (physical quantities)**
 
-| DPT | Typische Verwendung |
+| DPT | Typical usage |
 |---|---|
-| `DPT14.000` | Beschleunigung (m/s²) |
-| `DPT14.005` | Winkelgeschwindigkeit (rad/s) |
-| `DPT14.007` | Fläche (m²) |
-| `DPT14.012` | Kapazität (F) |
-| `DPT14.017` | Dichte (kg/m³) |
-| `DPT14.019` | Elektrischer Strom (A) |
-| `DPT14.020` | Elektrische Feldstärke (V/m) |
-| `DPT14.023` | Elektrisches Potential (V) |
-| `DPT14.024` | Elektrische Spannung (V) |
-| `DPT14.027` | Energie (J) |
-| `DPT14.028` | Kraft (N) |
-| `DPT14.029` | Frequenz (Hz) |
-| `DPT14.033` | Wärmestrom (W) |
-| `DPT14.039` | Länge (m) |
-| `DPT14.046` | Lichtstrom (lm) |
-| `DPT14.050` | Masse (kg) |
-| `DPT14.055` | Leistung (W) |
-| `DPT14.056` | Leistungsfaktor |
-| `DPT14.058` | Druck (Pa) |
-| `DPT14.065` | Widerstand (Ω) |
-| `DPT14.066` | Winkelauflösung (°) |
-| `DPT14.067` | Drehzahl (1/min) |
-| `DPT14.068` | Geschwindigkeit (m/s) |
-| `DPT14.069` | Drehmoment (Nm) |
-| `DPT14.070` | Volumen (m³) |
-| `DPT14.071` | Volumenfluss (m³/s) |
-| `DPT14.075` | Scheinleistung (VA) |
-| *(weitere DPT14.x)* | *Physikalische Mess­grössen* |
+| `DPT14.000` | Acceleration (m/s²) |
+| `DPT14.005` | Angular velocity (rad/s) |
+| `DPT14.007` | Area (m²) |
+| `DPT14.012` | Capacitance (F) |
+| `DPT14.017` | Density (kg/m³) |
+| `DPT14.019` | Electric current (A) |
+| `DPT14.020` | Electric field strength (V/m) |
+| `DPT14.023` | Electric potential (V) |
+| `DPT14.024` | Electric voltage (V) |
+| `DPT14.027` | Energy (J) |
+| `DPT14.028` | Force (N) |
+| `DPT14.029` | Frequency (Hz) |
+| `DPT14.033` | Heat flow rate (W) |
+| `DPT14.039` | Length (m) |
+| `DPT14.046` | Luminous flux (lm) |
+| `DPT14.050` | Mass (kg) |
+| `DPT14.055` | Power (W) |
+| `DPT14.056` | Power factor |
+| `DPT14.058` | Pressure (Pa) |
+| `DPT14.065` | Resistance (Ω) |
+| `DPT14.066` | Angular resolution (°) |
+| `DPT14.067` | Speed (1/min) |
+| `DPT14.068` | Velocity (m/s) |
+| `DPT14.069` | Torque (Nm) |
+| `DPT14.070` | Volume (m³) |
+| `DPT14.071` | Volume flow (m³/s) |
+| `DPT14.075` | Apparent power (VA) |
+| *(further DPT14.x)* | *Physical measurement quantities* |
 
-**DPT 16, 17, 18, 19 — Text, Szenen, Datum/Zeit**
+**DPT 16, 17, 18, 19 — Text, scenes, date/time**
 
-| DPT | Grösse | Typ | Typische Verwendung |
+| DPT | Size | Type | Typical usage |
 |---|---|---|---|
-| `DPT16.000` | 14 Byte | Text | ASCII-Text (14 Zeichen) |
-| `DPT16.001` | 14 Byte | Text | ISO-8859-1-Text (14 Zeichen) |
-| `DPT17.001` | 1 Byte | Ganzzahl | Szenennummer (0–63) |
-| `DPT18.001` | 1 Byte | Ganzzahl | Szenen-Steuerung (inkl. Lernmodus) |
-| `DPT19.001` | 8 Byte | ISO-8601-Text | Datum und Uhrzeit |
+| `DPT16.000` | 14 bytes | Text | ASCII text (14 characters) |
+| `DPT16.001` | 14 bytes | Text | ISO-8859-1 text (14 characters) |
+| `DPT17.001` | 1 byte | Integer | Scene number (0–63) |
+| `DPT18.001` | 1 byte | Integer | Scene control (incl. learn mode) |
+| `DPT19.001` | 8 bytes | ISO-8601 text | Date and time |
 
-**DPT 20 — 1-Byte Enum/Modus**
+**DPT 20 — 1-byte enum/mode**
 
-| DPT | Typische Verwendung |
+| DPT | Typical usage |
 |---|---|
-| `DPT20.001` | HVAC-Modus (Auto/Komfort/Standby/Nacht/Schutz) |
-| `DPT20.002` | HVAC-Brennermodus |
-| `DPT20.003` | HVAC-Gebläsemodus |
-| `DPT20.004` | HVAC-Mastermodus |
-| `DPT20.005` | HVAC-Statusmeldung |
-| `DPT20.006` | HVAC-Positionswert |
-| `DPT20.007` | DALI-Verblend-Modus |
-| `DPT20.008` | Steuerungsverhalten |
-| `DPT20.011` | Priorität |
-| `DPT20.012` | Lichtsteuermodus |
-| `DPT20.013` | Heizungsregelungsmodus |
-| `DPT20.017` | Belüftungsmodus |
-| `DPT20.020` | Alarmschwere |
-| `DPT20.021` | Testmodus |
-| `DPT20.100` | Gebäude-Betriebsmodus |
-| `DPT20.102` | Aktiver Grundmodus |
-| `DPT20.105` | Warmwasser-Modus (DHW) |
-| `DPT20.111` | Heizklima-Modus |
-| `DPT20.113` | Zeitprogramm |
-| `DPT20.600` | Ventilator-Modus |
-| `DPT20.601` | Heizungstyp |
-| `DPT20.602` | Klappenventil-Modus |
-| `DPT20.603` | Heizkreis-Modus |
-| `DPT20.604` | Heizkörpermodus |
-| *(weitere DPT20.x)* | *1-Byte Enums/Modi* |
+| `DPT20.001` | HVAC mode (Auto/Comfort/Standby/Night/Protection) |
+| `DPT20.002` | HVAC burner mode |
+| `DPT20.003` | HVAC fan mode |
+| `DPT20.004` | HVAC master mode |
+| `DPT20.005` | HVAC status message |
+| `DPT20.006` | HVAC position value |
+| `DPT20.007` | DALI fade mode |
+| `DPT20.008` | Control behavior |
+| `DPT20.011` | Priority |
+| `DPT20.012` | Light control mode |
+| `DPT20.013` | Heating control mode |
+| `DPT20.017` | Ventilation mode |
+| `DPT20.020` | Alarm severity |
+| `DPT20.021` | Test mode |
+| `DPT20.100` | Building operation mode |
+| `DPT20.102` | Active basic mode |
+| `DPT20.105` | Domestic hot water mode (DHW) |
+| `DPT20.111` | Heating climate mode |
+| `DPT20.113` | Time program |
+| `DPT20.600` | Fan mode |
+| `DPT20.601` | Heating type |
+| `DPT20.602` | Damper/valve mode |
+| `DPT20.603` | Heating circuit mode |
+| `DPT20.604` | Radiator mode |
+| *(further DPT20.x)* | *1-byte enums/modes* |
 
-**DPT 29 — 64-Bit Integer (Smart Metering)**
+**DPT 29 — 64-bit integer (Smart Metering)**
 
-| DPT | Grösse | Typ | Typische Verwendung |
+| DPT | Size | Type | Typical usage |
 |---|---|---|---|
-| `DPT29.010` | 8 Byte | Ganzzahl | Wirkenergie (Wh), hochauflösend |
-| `DPT29.011` | 8 Byte | Ganzzahl | Scheinenergie (VAh) |
-| `DPT29.012` | 8 Byte | Ganzzahl | Blindenergie (VARh) |
+| `DPT29.010` | 8 bytes | Integer | Active energy (Wh), high-resolution |
+| `DPT29.011` | 8 bytes | Integer | Apparent energy (VAh) |
+| `DPT29.012` | 8 bytes | Integer | Reactive energy (VARh) |
 
-**DPT 219, 240 — Spezielle Typen**
+**DPT 219, 240 — Special types**
 
-| DPT | Grösse | Typ | Typische Verwendung |
+| DPT | Size | Type | Typical usage |
 |---|---|---|---|
-| `DPT219.001` | 2 Byte | Ganzzahl | AlarmInfo (Modus + Statusbits) |
-| `DPT240.800` | 3 Byte | JSON-Text | Jalousie-Kombination (Höhe % + Lamellen %) |
+| `DPT219.001` | 2 bytes | Integer | AlarmInfo (mode + status bits) |
+| `DPT240.800` | 3 bytes | JSON text | Shutter combination (height % + slat %) |
 
-> **Hinweis für KNX-Dimmer:** Zwei separate Verknüpfungen anlegen — eine DEST für die Schreib-Adresse, eine SOURCE für die Rückmelde-Adresse.
+> **Note for KNX dimmers:** Create two separate bindings — one DEST for the write address, one SOURCE for the feedback address.
 
 ---
 
-### Modbus-TCP-Adapter
+### Modbus TCP adapter
 
-**Instanz-Konfiguration:**
+**Instance configuration:**
 
-| Feld | Standard | Beschreibung |
+| Field | Default | Description |
 |---|---|---|
-| `host` | — | IP-Adresse der Modbus-Gegenstelle |
-| `port` | `502` | TCP-Port |
-| `timeout` | `3.0` | Verbindungs-Timeout in Sekunden |
+| `host` | — | IP address of the Modbus device |
+| `port` | `502` | TCP port |
+| `timeout` | `3.0` | Connection timeout in seconds |
 
-**Verknüpfungs-Konfiguration:**
+**Binding configuration:**
 
-| Feld | Werte | Beschreibung |
+| Field | Values | Description |
 |---|---|---|
-| `unit_id` | `1` | Modbus-Slave-ID (Geräteadresse) |
-| `register_type` | `holding`, `input`, `coil`, `discrete_input` | Registertyp |
-| `address` | Ganzzahl | Registeradresse (0-basiert) |
-| `count` | `1` | Anzahl zu lesender Register |
-| `data_format` | `uint16`, `int16`, `uint32`, `int32`, `float32`, `uint64`, `int64` | Datenformat |
-| `scale_factor` | `1.0` | Rohwert × Faktor = Messwert |
-| `byte_order` | `big` / `little` | Byte-Reihenfolge im Register |
-| `word_order` | `big` / `little` | Wort-Reihenfolge bei 32/64-Bit-Werten |
-| `poll_interval` | `1.0` | Abfrageintervall in Sekunden (nur SOURCE/BOTH) |
+| `unit_id` | `1` | Modbus slave ID (device address) |
+| `register_type` | `holding`, `input`, `coil`, `discrete_input` | Register type |
+| `address` | Integer | Register address (0-based) |
+| `count` | `1` | Number of registers to read |
+| `data_format` | `uint16`, `int16`, `uint32`, `int32`, `float32`, `uint64`, `int64` | Data format |
+| `scale_factor` | `1.0` | Raw value × factor = measured value |
+| `byte_order` | `big` / `little` | Byte order in the register |
+| `word_order` | `big` / `little` | Word order for 32/64-bit values |
+| `poll_interval` | `1.0` | Poll interval in seconds (SOURCE/BOTH only) |
 
-> **Praxistipp:** Die meisten Steuerungen (Siemens, Beckhoff …) verwenden `big`/`big`. Bei offensichtlich falschem Wert zuerst `word_order` auf `little` wechseln.
-
----
-
-### Modbus-RTU-Adapter
-
-Gleiche Verknüpfungs-Konfiguration wie TCP. Zusätzliche Instanz-Felder: `port` (z. B. `/dev/ttyUSB0`), `baudrate`, `parity`, `stopbits`, `bytesize`, `timeout`.
+> **Practical tip:** Most controllers (Siemens, Beckhoff …) use `big`/`big`. If the value is obviously wrong, try changing `word_order` to `little` first.
 
 ---
 
-### 1-Wire-Adapter
+### Modbus RTU adapter
 
-Liest Temperatursensoren über den Linux-Systemordner (`/sys/bus/w1/…`). Auf Windows funktioniert der Adapter nicht, startet aber ohne Fehlermeldung.
+Same binding configuration as TCP. Additional instance fields: `port` (e.g. `/dev/ttyUSB0`), `baudrate`, `parity`, `stopbits`, `bytesize`, `timeout`.
 
-**Instanz-Konfiguration:**
+---
 
-| Feld | Standard | Beschreibung |
+### 1-Wire adapter
+
+Reads temperature sensors via the Linux system folder (`/sys/bus/w1/…`). The adapter does not work on Windows but starts without an error message.
+
+**Instance configuration:**
+
+| Field | Default | Description |
 |---|---|---|
-| `poll_interval` | `30.0` | Abfrageintervall in Sekunden |
-| `w1_path` | `/sys/bus/w1/devices` | Pfad zum 1-Wire-Systemordner |
+| `poll_interval` | `30.0` | Poll interval in seconds |
+| `w1_path` | `/sys/bus/w1/devices` | Path to the 1-Wire system folder |
 
-**Verknüpfungs-Konfiguration:**
+**Binding configuration:**
 
-| Feld | Beschreibung |
+| Field | Description |
 |---|---|
-| `sensor_id` | Sensor-ID, z. B. `28-0000012345ab` |
-| `sensor_type` | Sensortyp, z. B. `DS18B20` (Standard) |
+| `sensor_id` | Sensor ID, e.g. `28-0000012345ab` |
+| `sensor_type` | Sensor type, e.g. `DS18B20` (default) |
 
-Verfügbare Sensor-IDs können über den Verbindungstest abgerufen werden.
+Available sensor IDs can be retrieved via the connection test.
 
 ---
 
-### MQTT-Adapter (externer Broker)
+### MQTT adapter (external broker)
 
-Verbindet sich mit einem **externen** MQTT-Broker (getrennt vom internen Mosquitto).
+Connects to an **external** MQTT broker (separate from the internal Mosquitto).
 
-**Instanz-Konfiguration:** `host`, `port`, `username`, `password`
+**Instance configuration:** `host`, `port`, `username`, `password`
 
-**Verknüpfungs-Konfiguration:**
+**Binding configuration:**
 
-| Feld | Beschreibung |
+| Field | Description |
 |---|---|
-| `topic` | Topic zum Empfangen (SOURCE/BOTH) |
-| `publish_topic` | Topic zum Senden (DEST/BOTH) — Standard: gleich wie `topic` |
-| `retain` | Retain-Flag beim Senden setzen |
+| `topic` | Topic to receive on (SOURCE/BOTH) |
+| `publish_topic` | Topic to publish to (DEST/BOTH) — default: same as `topic` |
+| `retain` | Set retain flag when publishing |
 
 ---
 
-### Home-Assistant-Adapter
+### Home Assistant adapter
 
-Verbindet **open bridge server** bidirektional mit einer Home-Assistant-Instanz. Empfängt Zustandsänderungen in Echtzeit über WebSocket (`state_changed`-Ereignisse) und schreibt Werte über die HA-REST-API (Dienst-Aufrufe).
+Connects **open bridge server** bidirectionally to a Home Assistant instance. Receives state changes in real time via WebSocket (`state_changed` events) and writes values via the HA REST API (service calls).
 
-**Instanz-Konfiguration:**
+**Instance configuration:**
 
-| Feld | Standard | Beschreibung |
+| Field | Default | Description |
 |---|---|---|
-| `host` | `homeassistant.local` | Hostname oder IP-Adresse der HA-Instanz |
-| `port` | `8123` | Port der HA-Weboberfläche |
-| `token` | — | Long-Lived Access Token (Passwort-Feld) |
-| `ssl` | `false` | HTTPS/WSS verwenden |
+| `host` | `homeassistant.local` | Hostname or IP address of the HA instance |
+| `port` | `8123` | Port of the HA web interface |
+| `token` | — | Long-lived access token (password field) |
+| `ssl` | `false` | Use HTTPS/WSS |
 
-**Verknüpfungs-Konfiguration:**
+**Binding configuration:**
 
-| Feld | Beschreibung |
+| Field | Description |
 |---|---|
-| `entity_id` | Home-Assistant-Entity-ID, z. B. `sensor.wohnzimmer_temperatur` |
-| `attribute` | Optionales Attribut statt dem Hauptzustand, z. B. `unit_of_measurement` |
-| `service_domain` | Dienst-Domain für Schreibbefehle, wird automatisch aus der Entity abgeleitet wenn leer |
-| `service_name` | Dienst-Name: Standard `turn_on`/`turn_off` für Boolean, `set_value` sonst |
-| `service_data_key` | Schlüssel für den Wert im Dienst-Aufruf, z. B. `brightness` oder `value` |
+| `entity_id` | Home Assistant entity ID, e.g. `sensor.living_room_temperature` |
+| `attribute` | Optional attribute instead of the main state, e.g. `unit_of_measurement` |
+| `service_domain` | Service domain for write commands, derived automatically from the entity if empty |
+| `service_name` | Service name: default `turn_on`/`turn_off` for Boolean, `set_value` otherwise |
+| `service_data_key` | Key for the value in the service call, e.g. `brightness` or `value` |
 
-Textzustände wie `"on"`/`"off"`, `"true"`/`"false"` werden automatisch in Boolean-Werte umgewandelt. Numerische Texte werden als Zahl übergeben.
+Text states such as `"on"`/`"off"`, `"true"`/`"false"` are automatically converted to Boolean values. Numeric texts are passed as numbers.
 
 ---
 
-### ioBroker-Adapter
+### ioBroker adapter
 
-Verbindet **open bridge server** bidirektional mit einer ioBroker-Instanz über Socket.IO. Werte werden beim Verknüpfen initial gelesen und danach in Echtzeit über `stateChange`-Ereignisse aktualisiert; Schreibbefehle werden per `setState` an ioBroker gesendet.
+Connects **open bridge server** bidirectionally to an ioBroker instance via Socket.IO. Values are initially read when binding and then updated in real time via `stateChange` events; write commands are sent to ioBroker via `setState`.
 
-**Instanz-Konfiguration:**
+**Instance configuration:**
 
-| Feld | Standard | Beschreibung |
+| Field | Default | Description |
 |---|---|---|
-| `host` | `iobroker.local` | Hostname oder IP-Adresse der ioBroker-Instanz |
-| `port` | `8084` | Port des ioBroker Socket.IO/Web-Adapters |
-| `username` | — | Optionaler Benutzername |
-| `password` | — | Optionales Passwort (Passwort-Feld) |
-| `ssl` | `false` | HTTPS verwenden |
-| `path` | `/socket.io` | Socket.IO-Pfad |
-| `access_token` | — | Optionaler Bearer/OAuth-Token (Passwort-Feld) |
+| `host` | `iobroker.local` | Hostname or IP address of the ioBroker instance |
+| `port` | `8084` | Port of the ioBroker Socket.IO/web adapter |
+| `username` | — | Optional username |
+| `password` | — | Optional password (password field) |
+| `ssl` | `false` | Use HTTPS |
+| `path` | `/socket.io` | Socket.IO path |
+| `access_token` | — | Optional Bearer/OAuth token (password field) |
 
-**Verknüpfungs-Konfiguration:**
+**Binding configuration:**
 
-| Feld | Beschreibung |
+| Field | Description |
 |---|---|
-| `state_id` | ioBroker-State-ID, z. B. `0_userdata.0.wohnzimmer.temperatur` |
-| `command_state_id` | Optional abweichender State für Schreibbefehle, z. B. ein `.SET`-State |
-| `ack` | Ack-Flag beim Schreiben (`false` = Befehl, `true` = bestätigter Status) |
-| `source_data_type` | Optionaler Datentyp für eingehende Werte: `string`, `int`, `float`, `bool`, `json` |
-| `json_key` | Optionaler Schlüssel zum Extrahieren eines Werts aus JSON |
+| `state_id` | ioBroker state ID, e.g. `0_userdata.0.living_room.temperature` |
+| `command_state_id` | Optional separate state for write commands, e.g. a `.SET` state |
+| `ack` | Ack flag when writing (`false` = command, `true` = confirmed status) |
+| `source_data_type` | Optional data type for incoming values: `string`, `int`, `float`, `bool`, `json` |
+| `json_key` | Optional key to extract a value from JSON |
 
-Textzustände wie `"on"`/`"off"`, `"true"`/`"false"` werden automatisch in Boolean-Werte umgewandelt. Numerische Texte werden als Zahl übergeben. Für getrennte Status- und Befehlsobjekte kann `state_id` auf den Status und `command_state_id` auf den Befehls-State zeigen.
+Text states such as `"on"`/`"off"`, `"true"`/`"false"` are automatically converted to Boolean values. Numeric texts are passed as numbers. For separate status and command objects, `state_id` can point to the status and `command_state_id` to the command state.
 
-Entwicklungs- und Review-Notizen zur aktuellen Implementierung stehen in [`docs/iobroker-adapter.md`](docs/iobroker-adapter.md).
+Development and review notes on the current implementation are in [`docs/iobroker-adapter.md`](docs/iobroker-adapter.md).
 
 ---
 
-### Zeitschaltuhr-Adapter
+### SNMP adapter
 
-Erzeugt zeitgesteuerte Ereignisse ohne externe Hardware — für tageszeit- oder sonnenstandsbasierte Automatisierungen, Feiertags- und Ferienlogik.
+Polls OID values from SNMP-capable devices (SNMPv1, v2c, v3) and writes values via SNMP SET. Each binding configures its own host and OID — no persistent TCP connection, stateless UDP per request.
 
-**Instanz-Konfiguration:**
+**Instance configuration:**
 
-| Feld | Standard | Beschreibung |
+| Field | Default | Description |
 |---|---|---|
-| `latitude` | `47.5` | Breitengrad für Sonnenstandsberechnung |
-| `longitude` | `8.0` | Längengrad für Sonnenstandsberechnung |
-| `altitude` | `400.0` | Höhe über NN in Metern |
-| `timezone` | (App-Zeitzone) | IANA-Zeitzone; leer = Systemzeitzone von **open bridge server** verwenden |
-| `holiday_country` | `CH` | ISO-3166-Ländercode für Feiertagskalender |
-| `holiday_subdivision` | — | Kanton/Bundesland, z. B. `ZH` oder `BY` |
-| `holiday_language` | `de` | Sprache für Feiertagsnamen |
-| `vacation_1_start` … `vacation_6_end` | — | Bis zu 6 Ferienperioden im Format `JJJJ-MM-TT` |
+| `version` | `2c` | SNMP version: `1`, `2c`, or `3` |
+| `community` | `public` | Community string (v1/v2c only) |
+| `security_name` | — | Security name / username (v3 only) |
+| `security_level` | `noAuthNoPriv` | Security level (v3): `noAuthNoPriv`, `authNoPriv`, `authPriv` |
+| `auth_protocol` | `MD5` | Authentication protocol (v3): `MD5`, `SHA`, `SHA256`, `SHA512` |
+| `auth_key` | — | Authentication key (v3, password field) |
+| `priv_protocol` | `DES` | Privacy protocol (v3): `DES`, `3DES`, `AES128`, `AES192`, `AES256` |
+| `priv_key` | — | Privacy key (v3, password field) |
 
-**Verknüpfungs-Konfiguration:**
+**Binding configuration:**
 
-| Feld | Werte | Beschreibung |
+| Field | Default | Description |
 |---|---|---|
-| `timer_type` | `daily`, `annual`, `meta` | `daily` = täglich wiederkehrend; `annual` = einmaliges Datum; `meta` = Metadaten-Ausgang (Feiertag, Ferien) |
-| `meta_type` | `holiday_today`, `holiday_tomorrow`, `holiday_name_today`, `holiday_name_tomorrow`, `vacation_1`…`vacation_6` | Für `timer_type = meta`: welcher Metadatenwert ausgegeben wird |
-| `time_ref` | `absolute`, `sunrise`, `sunset`, `solar_noon`, `solar_altitude` | Zeitreferenz |
-| `hour` / `minute` | `0`–`23` / `0`–`59` | Absolute Uhrzeit oder Offset zur Zeitreferenz |
-| `offset_minutes` | Ganzzahl | Versatz zur Zeitreferenz in Minuten (positiv = später) |
-| `solar_altitude_deg` | `-18`–`90` | Sonnenstand-Schwellwert in Grad (nur `solar_altitude`) |
-| `sun_direction` | `rising`, `setting` | Aufsteigende oder absteigende Sonnenbahn (nur `solar_altitude`) |
-| `weekdays` | Liste `[0–6]` | Wochentage (0 = Montag). Leer = alle. |
-| `months` | Liste `[1–12]` | Monate. Leer = alle. |
-| `day_of_month` | `0`–`31` | Tag im Monat; `0` = alle. |
-| `every_hour` | `true`/`false` | Jede Stunde zur konfigurierten Minute auslösen |
-| `every_minute` | `true`/`false` | Jede Minute auslösen |
-| `holiday_mode` | `ignore`, `skip`, `only`, `as_sunday` | Verhalten an Feiertagen |
-| `vacation_mode` | `ignore`, `skip`, `only`, `as_sunday` | Verhalten in Ferienperioden |
-| `value` | Text | Wert der beim Auslösen geschrieben wird (Standard: `"1"`) |
+| `host` | `192.168.1.1` | IP address or DNS name of the SNMP device |
+| `port` | `161` | UDP port |
+| `oid` | `1.3.6.1.2.1.1.1.0` | Object identifier, e.g. `1.3.6.1.2.1.1.3.0` |
+| `data_type` | `auto` | Value type: `auto`, `int`, `float`, `string`, `hex`, `counter`, `gauge`, `timeticks` |
+| `poll_interval` | `30.0` | Poll interval in seconds (SOURCE/BOTH) |
+| `timeout` | `5.0` | Timeout per request in seconds |
+| `retries` | `1` | Retries on error |
 
-**Feiertagsmodi:**
-
-| Modus | Verhalten |
-|---|---|
-| `ignore` | Feiertage/Ferien werden wie normale Tage behandelt |
-| `skip` | An diesen Tagen wird nicht ausgelöst |
-| `only` | Auslösen nur an Feiertagen/Ferien |
-| `as_sunday` | Feiertag/Ferientag wird für die Wochentagsprüfung als Sonntag (6) behandelt |
+> **Note:** `pysnmp` must be installed (`pip install pysnmp`). If the library is not present, the adapter starts without error but cannot poll.
 
 ---
 
-## MQTT-Topics
+### Presence simulation adapter
 
-**open bridge server** verwendet zwei parallele Topic-Strategien:
+Replays historical switch states during absence so the building appears occupied. When the simulation is active, the adapter queries the history database for the past N days and fires each historical event at the corresponding time today.
 
-| Topic | Beschreibung |
+**Instance configuration:**
+
+| Field | Default | Description |
+|---|---|---|
+| `offset_days` | `7` | Number of days in the past whose switch states are replayed (1–30) |
+| `control_dp_id` | — | Optional boolean data point: value `1` = home (simulation off), value `0` = away (simulation on) |
+| `control_invert` | `false` | Invert the control data point logic |
+| `on_presence` | `behalten` | Action when presence is detected: `behalten` (keep current state), `zuruecksetzen` (set all to false/0), `setzen` (set to a specific value) |
+| `on_presence_value` | — | Value to write when `on_presence = setzen` |
+
+**Binding configuration:**
+
+| Field | Default | Description |
+|---|---|---|
+| `offset_override` | — | Override the adapter-level `offset_days` for this data point (1–30) |
+| `on_presence_override` | — | Override the adapter-level `on_presence` for this data point |
+| `on_presence_value` | — | Override value when `on_presence_override = setzen` |
+
+> **Note:** Only SOURCE bindings are valid — the adapter replays historical values but does not accept writes. DEST/BOTH bindings are skipped with a warning.
+
+---
+
+### Scheduler adapter
+
+Generates time-controlled events without external hardware — for time-of-day or sun-position based automations, holiday and vacation logic.
+
+**Instance configuration:**
+
+| Field | Default | Description |
+|---|---|---|
+| `latitude` | `47.5` | Latitude for sun position calculation |
+| `longitude` | `8.0` | Longitude for sun position calculation |
+| `altitude` | `400.0` | Altitude above sea level in meters |
+| `timezone` | (app timezone) | IANA timezone; empty = use **open bridge server** system timezone |
+| `holiday_country` | `CH` | ISO-3166 country code for holiday calendar |
+| `holiday_subdivision` | — | State/province, e.g. `ZH` or `BY` |
+| `holiday_language` | `de` | Language for holiday names |
+| `vacation_1_start` … `vacation_6_end` | — | Up to 6 vacation periods in `YYYY-MM-DD` format |
+
+**Binding configuration:**
+
+| Field | Values | Description |
+|---|---|---|
+| `timer_type` | `daily`, `annual`, `meta` | `daily` = recurring daily; `annual` = one-time date; `meta` = metadata output (holiday, vacation) |
+| `meta_type` | `holiday_today`, `holiday_tomorrow`, `holiday_name_today`, `holiday_name_tomorrow`, `vacation_1`…`vacation_6` | For `timer_type = meta`: which metadata value is output |
+| `time_ref` | `absolute`, `sunrise`, `sunset`, `solar_noon`, `solar_altitude` | Time reference |
+| `hour` / `minute` | `0`–`23` / `0`–`59` | Absolute time or offset from time reference |
+| `offset_minutes` | Integer | Offset from time reference in minutes (positive = later) |
+| `solar_altitude_deg` | `-18`–`90` | Sun position threshold in degrees (only `solar_altitude`) |
+| `sun_direction` | `rising`, `setting` | Rising or setting sun (only `solar_altitude`) |
+| `weekdays` | List `[0–6]` | Weekdays (0 = Monday). Empty = all. |
+| `months` | List `[1–12]` | Months. Empty = all. |
+| `day_of_month` | `0`–`31` | Day of month; `0` = all. |
+| `every_hour` | `true`/`false` | Trigger every hour at the configured minute |
+| `every_minute` | `true`/`false` | Trigger every minute |
+| `holiday_mode` | `ignore`, `skip`, `only`, `as_sunday` | Behavior on holidays |
+| `vacation_mode` | `ignore`, `skip`, `only`, `as_sunday` | Behavior during vacation periods |
+| `value` | Text | Value written when triggered (default: `"1"`) |
+
+**Holiday modes:**
+
+| Mode | Behavior |
 |---|---|
-| `dp/{uuid}/value` | Stabil — ändert sich nie, sicher für Automatisierungen. Mit Retain gespeichert. |
-| `dp/{uuid}/set` | Auf diesen Topic schreiben um einen Wert zu setzen |
-| `dp/{uuid}/status` | Verbindungsstatus des Adapters (mit Retain) |
-| `alias/{tag}/{name}/value` | Lesbar und durchsuchbar (nur wenn `mqtt_alias` gesetzt) |
+| `ignore` | Holidays/vacations are treated like normal days |
+| `skip` | No triggering on these days |
+| `only` | Trigger only on holidays/vacations |
+| `as_sunday` | Holiday/vacation day is treated as Sunday (6) for the weekday check |
 
-**Nachrichtenformat (`dp/{uuid}/value`):**
+---
+
+## MQTT topics
+
+**open bridge server** uses two parallel topic strategies:
+
+| Topic | Description |
+|---|---|
+| `dp/{uuid}/value` | Stable — never changes, safe for automations. Stored with retain. |
+| `dp/{uuid}/set` | Write to this topic to set a value |
+| `dp/{uuid}/status` | Adapter connection status (with retain) |
+| `alias/{tag}/{name}/value` | Human-readable and searchable (only when `mqtt_alias` is set) |
+
+**Message format (`dp/{uuid}/value`):**
 
 ```json
 { "v": 21.4, "u": "°C", "t": "2026-03-27T10:23:41.123Z", "q": "good" }
 ```
 
-| Schlüssel | Bedeutung |
+| Key | Meaning |
 |---|---|
-| `v` | Wert |
-| `u` | Einheit |
-| `t` | Zeitstempel (ISO 8601) |
-| `q` | Qualität: `good` / `bad` / `uncertain` |
+| `v` | Value |
+| `u` | Unit |
+| `t` | Timestamp (ISO 8601) |
+| `q` | Quality: `good` / `bad` / `uncertain` |
 
-**Wert setzen:**
+**Set a value:**
 ```bash
 mosquitto_pub -t "dp/550e8400-.../set" -m '{"v": 22.5}'
 ```
 
 ---
 
-## Datentypen
+## Data types
 
-| Typ | Beschreibung | MQTT-Format |
+| Type | Description | MQTT format |
 |---|---|---|
-| `BOOLEAN` | Ein/Aus | `true` / `false` |
-| `INTEGER` | Ganze Zahl | Zahl |
-| `FLOAT` | Dezimalzahl | Zahl |
-| `STRING` | Text | Zeichenkette |
-| `DATE` | Datum | `JJJJ-MM-TT` |
-| `TIME` | Uhrzeit | `HH:MM:SS` |
-| `DATETIME` | Datum und Uhrzeit | ISO 8601 mit Zeitzone |
-| `UNKNOWN` | Unbekannt | Hexadezimal-Text |
+| `BOOLEAN` | On/Off | `true` / `false` |
+| `INTEGER` | Whole number | Number |
+| `FLOAT` | Decimal number | Number |
+| `STRING` | Text | String |
+| `DATE` | Date | `YYYY-MM-DD` |
+| `TIME` | Time | `HH:MM:SS` |
+| `DATETIME` | Date and time | ISO 8601 with timezone |
+| `UNKNOWN` | Unknown | Hexadecimal text |
 
-Typumwandlungen sind verlustfrei wo möglich — bei Verlust wird eine Meldung ins Protokoll geschrieben.
+Type conversions are lossless where possible — on loss, a message is written to the log.
 
 ---
 
-## Einstellungen
+## Settings
 
-Die Einstellungen sind über die Weboberfläche erreichbar (⚙ in der Seitenleiste).
+Settings are accessible via the web interface (⚙ in the sidebar).
 
-**Allgemein:**
-- **Zeitzone** — alle Zeitangaben in der Oberfläche werden in dieser Zeitzone dargestellt (Verlauf, RingBuffer, History-Suche, Astro-Block)
-- **KNX-Projektdatei importieren** — ETS-Projektdatei (`.knxproj`) hochladen, um Gruppenadressen als Suchvorschläge im Verknüpfungs-Formular zu nutzen
+**General:**
+- **Timezone** — all timestamps in the interface are displayed in this timezone (history, RingBuffer, history search, astro block)
+- **Import KNX project file** — upload ETS project file (`.knxproj`) to use group addresses as search suggestions in the binding form
 
-**Verlauf:** Übersicht aller Datenpunkte mit History-Aufzeichnung. Datenpunkte mit deaktivierter Aufzeichnung (`record_history: false`) werden zuerst angezeigt. Aufzeichnung per Datenpunkt ein- und ausschalten.
+**History:** Overview of all data points with history recording. Data points with disabled recording (`record_history: false`) are shown first. Toggle recording per data point.
 
-**Passwort:** Eigenes Anmeldepasswort ändern
+**Password:** Change own login password
 
-**Benutzer** (nur Administratoren): Benutzer anlegen, löschen, MQTT-Zugang verwalten
+**Users** (administrators only): Create, delete users, manage MQTT access
 
-**API-Schlüssel:** Schlüssel für die Anbindung externer Systeme erstellen und widerrufen
+**API keys:** Create and revoke keys for connecting external systems
 
-**Sicherung:** Vollständige Konfiguration herunterladen oder einspielen
+**Backup:** Download or restore complete configuration
 
 ---
 
-## Hilfsskripte
+## Helper scripts
 
-### Import-EtsGaCsv.ps1 — ETS-GA-Export importieren
+### Import-EtsGaCsv.ps1 — Import ETS GA export
 
-Das Skript `scripts/Import-EtsGaCsv.ps1` liest einen ETS-GA-CSV-Export und legt je Gruppenadresse
-automatisch einen DataPoint mit passendem Typ und Einheit an. Anschliessend wird eine
-Verknüpfung zur angegebenen KNX-Adapter-Instanz erstellt.
+The script `scripts/Import-EtsGaCsv.ps1` reads an ETS GA CSV export and automatically creates a DataPoint with matching type and unit for each group address. It then creates a binding to the specified KNX adapter instance.
 
-**Voraussetzungen:** PowerShell 5.1 oder neuer, erreichbare **open bridge server**-Instanz, gültiger API-Schlüssel.
+**Prerequisites:** PowerShell 5.1 or newer, reachable **open bridge server** instance, valid API key.
 
-**Parameter:**
+**Parameters:**
 
-| Parameter | Pflicht | Beschreibung |
+| Parameter | Required | Description |
 |---|---|---|
-| `-Url` | ja | Basis-URL der **open bridge server**-Instanz, z.B. `http://localhost:8080` |
-| `-ApiKey` | ja | API-Schlüssel (`obs_…`) |
-| `-File` | ja | Pfad zur ETS-GA-CSV-Datei |
-| `-Adapter` | ja | Name der KNX-Adapter-Instanz in **open bridge server** |
-| `-LogFile` | nein | Pfad für Fehlerprotokoll; ohne Angabe werden Fehler auf der Konsole ausgegeben |
-| `-Direction` | nein | Verknüpfungsrichtung: `SOURCE` (Standard), `DEST` oder `BOTH` |
-| `-Encoding` | nein | Zeichenkodierung der CSV-Datei: `UTF8` (Standard) oder `Default` (ANSI/Windows-1252). ETS 5 exportiert i.d.R. ANSI, ETS 6 UTF-8. |
+| `-Url` | yes | Base URL of the **open bridge server** instance, e.g. `http://localhost:8080` |
+| `-ApiKey` | yes | API key (`obs_…`) |
+| `-File` | yes | Path to the ETS GA CSV file |
+| `-Adapter` | yes | Name of the KNX adapter instance in **open bridge server** |
+| `-LogFile` | no | Path for error log; without this, errors are printed to the console |
+| `-Direction` | no | Binding direction: `SOURCE` (default), `DEST`, or `BOTH` |
+| `-Encoding` | no | Character encoding of the CSV file: `UTF8` (default) or `Default` (ANSI/Windows-1252). ETS 5 typically exports ANSI, ETS 6 UTF-8. |
 
-**CSV-Format (ETS 5/6 GA-Export):**
+**CSV format (ETS 5/6 GA export):**
 
-Der Export erfolgt in ETS über *Gruppenadressliste exportieren → CSV*. Das Skript erkennt Semikolon- und
-Komma-Trennzeichen sowie deutschsprachige und englischsprachige Spaltenköpfe automatisch.
+The export is done in ETS via *Export group address list → CSV*. The script automatically recognizes semicolon and comma separators as well as German and English column headers.
 
 ```
 "Group name";"Address";"Central";"Unfiltered";"Description";"Comment";"DatapointType";"Security"
-"Wohnzimmer Temperatur";"1/1/1";"";"";"";"";DPST-9-1;Auto
-"Wohnzimmer Helligkeit";"1/1/2";"";"";"";"";DPST-9-2;Auto
-"Rolllade EG Auf/Ab";"1/2/1";"";"";"";"";DPST-1-8;Auto
+"Living room temperature";"1/1/1";"";"";"";"";DPST-9-1;Auto
+"Living room brightness";"1/1/2";"";"";"";"";DPST-9-2;Auto
+"Roller shutter GF up/down";"1/2/1";"";"";"";"";DPST-1-8;Auto
 ```
 
-DPT-Angaben im Format `DPST-X-Y` (Haupt- und Subtyp) oder `DPT-X` (nur Haupttyp) werden
-automatisch in das **open bridge server**-Format (`DPT9.001`) umgewandelt und der passende Datentyp (`FLOAT`,
-`INTEGER`, `BOOLEAN`, `STRING`) sowie die Einheit werden gesetzt. Fehlt der DPT, wird `FLOAT`
-ohne Einheit verwendet.
+DPT specifications in `DPST-X-Y` format (main and subtype) or `DPT-X` (main type only) are automatically converted to **open bridge server** format (`DPT9.001`) and the appropriate data type (`FLOAT`, `INTEGER`, `BOOLEAN`, `STRING`) and unit are set. If the DPT is missing, `FLOAT` without unit is used.
 
-**Beispiel:**
+**Example:**
 
 ```powershell
 .\scripts\Import-EtsGaCsv.ps1 `
     -Url    http://localhost:8080 `
     -ApiKey obs_abc123 `
-    -File   C:\Projekte\GA_Export.csv `
+    -File   C:\Projects\GA_Export.csv `
     -Adapter "KNX/IP"
 ```
 
-ETS 5 (ANSI-Kodierung):
+ETS 5 (ANSI encoding):
 
 ```powershell
 .\scripts\Import-EtsGaCsv.ps1 `
     -Url      http://localhost:8080 `
     -ApiKey   obs_abc123 `
-    -File     C:\Projekte\GA_Export.csv `
+    -File     C:\Projects\GA_Export.csv `
     -Adapter  "KNX/IP" `
     -Encoding Default
 ```
 
-Mit Fehlerprotokoll:
+With error log:
 
 ```powershell
 .\scripts\Import-EtsGaCsv.ps1 `
     -Url     http://localhost:8080 `
     -ApiKey  obs_abc123 `
-    -File    C:\Projekte\GA_Export.csv `
+    -File    C:\Projects\GA_Export.csv `
     -Adapter "KNX/IP" `
-    -LogFile C:\Projekte\import_errors.log
+    -LogFile C:\Projects\import_errors.log
 ```
 
-Das Skript läuft bei Einzelfehlern durch. Am Ende werden Anzahl der erfolgreich importierten,
-übersprungenen (Zeilen ohne Adresse) und fehlgeschlagenen GAs ausgegeben.
+The script continues on individual errors. At the end, the number of successfully imported, skipped (rows without address), and failed GAs is displayed.
 
 ---
 
-## Entwicklung
+## Visualization (Visu)
 
-### Lokale Entwicklung mit PyCharm
+The Visu interface is a separate single-page app (accessible at `/visu/`), with which interactive control panels — called **Visu pages** — can be created and displayed in full-screen mode on displays or tablets. Each page consists of freely positionable widgets that display or control data points.
 
-Das Repository enthält vorkonfigurierte [PyCharm](https://www.jetbrains.com/de-de/pycharm/)-Startkonfigurationen im Verzeichnis `.run/`. Nach dem Öffnen des Projekts stehen sie direkt in der Run-Auswahl zur Verfügung.
+### Floor plan and system diagram widget
 
-#### Einmalige Einrichtung
+The **floor plan widget** allows you to embed a building floor plan or system diagram as an interactive background in a Visu page. Areas (polygons) can be defined, labeled, and linked to actions on the image — as well as mini-widgets placed directly on the plan.
 
-**1. Python-Umgebung anlegen**
+#### Embedding an image
+
+In the widget's configuration panel, an image can be uploaded (SVG, PNG, or JPG). The image is stored as a Base64 data URL directly in the config JSON — no separate upload endpoint needed. For files over 2 MB, a notice appears; **SVG is recommended** for floor plans as it scales without loss.
+
+The **rotation** of the image can be set in 90° steps (0° / 90° / 180° / 270°), to use landscape graphics directly in portrait mode.
+
+#### Drawing areas (polygons)
+
+With the polygon tool in the full-screen canvas, areas can be drawn on the floor plan:
+
+1. Click **New area** in the configuration panel — the full-screen canvas opens.
+2. Click on the canvas to set corner points of the polygon.
+3. Close the polygon by clicking the first point again or pressing **Enter**.
+
+Each area can be assigned the following properties:
+
+| Property | Description |
+|---|---|
+| **Name** | Label for the area (e.g. "Living room") |
+| **Show label** | Toggle the text label on the plan on/off |
+| **Label color** | Text color of the area label |
+| **Label position** | Freely positionable by clicking on the area in the canvas |
+| **Action on click** | `None` or `Navigation` — for navigation: select the target Visu page |
+
+#### Navigation between pages
+
+When **Navigation** is selected as the click action, a page selector opens. The selected Visu page is opened directly when clicking on the area in the viewer. This allows, for example, floor plans to be linked — clicking a room opens a detail view.
+
+#### Placing mini-widgets
+
+Any **mini-widgets** (e.g. switch, temperature display, dimmer) can be positioned directly on the floor plan:
+
+1. Click **Add mini-widget** in the configuration panel and choose the widget type.
+2. Click **Position** — the full-screen canvas opens.
+3. Drag the mini-widget to the desired position on the plan via **drag & drop**.
+
+For each mini-widget, the following can be configured:
+
+| Property | Description |
+|---|---|
+| **Widget type** | Any Visu widget type (switch, display, dimmer, …) |
+| **Data point** | Controls the widget's value (main data point) |
+| **Status data point** | Optional second data point for the display status |
+| **Width / Height** | Size of the mini-widget in pixels |
+| **Visible** | Show or hide the widget in the viewer |
+
+Mini-widgets do not rotate when the floor plan is rotated — they always remain upright and are correctly positioned over the floor plan based on image coordinates.
+
+---
+
+## Development
+
+### Local development with PyCharm
+
+The repository contains preconfigured [PyCharm](https://www.jetbrains.com/pycharm/) run configurations in the `.run/` directory. After opening the project, they are available directly in the run selector.
+
+#### One-time setup
+
+**1. Create Python environment**
 
 ```bash
 cd openbridgeserver
@@ -1376,110 +1541,186 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt -r requirements_dev.txt
 ```
 
-In PyCharm unter **Settings → Project → Python Interpreter** den Interpreter `.venv/bin/python` auswählen.
+In PyCharm under **Settings → Project → Python Interpreter**, select the interpreter `.venv/bin/python`.
 
-**2. Frontend-Abhängigkeiten installieren**
+**2. Install frontend dependencies**
 
 ```bash
 cd gui && npm install
 ```
 
-**3. Konfigurationsdatei anlegen**
+**3. Create configuration file**
 
 ```bash
 cp config.example.yaml config.yaml
 ```
 
-Folgende Werte in `config.yaml` anpassen:
+Adjust the following values in `config.yaml`:
 
 ```yaml
 mqtt:
   username: obs
-  password: change-this-mqtt-service-password   # muss mit .env übereinstimmen
+  password: change-this-mqtt-service-password   # must match .env
 
 database:
-  path: /absoluter/pfad/zum/projekt/data/obs.db  # lokaler Pfad, kein /data
+  path: /absolute/path/to/project/data/obs.db  # local path, not /data
 
 mosquitto:
-  passwd_file: /absoluter/pfad/zum/projekt/data/mosquitto/passwd
+  passwd_file: /absolute/path/to/project/data/mosquitto/passwd
   reload_pid: null
   reload_command: null
   service_username: obs
   service_password: change-this-mqtt-service-password
 ```
 
-**4. Umgebungsvariablen einrichten**
+**4. Set up environment variables**
 
 ```bash
-cp .env.example .env   # falls noch nicht vorhanden
+cp .env.example .env   # if not already present
 ```
 
-Die `.env`-Datei enthält das MQTT-Passwort, mit dem der Docker-Mosquitto initialisiert wird — dieser Wert muss mit `mqtt.password` in `config.yaml` übereinstimmen.
+The `.env` file contains the MQTT password with which the Docker Mosquitto is initialized — this value must match `mqtt.password` in `config.yaml`.
 
-#### Starten
+#### Starting
 
-| Run-Konfiguration | Beschreibung |
+| Run configuration | Description |
 |---|---|
-| **OBS Mosquitto (Docker)** | Startet den MQTT-Broker via Docker |
-| **OBS Backend** | Startet den FastAPI-Server auf `localhost:8080` |
-| **OBS GUI (Admin)** | Startet den Vite-Dev-Server auf `localhost:5173` |
-| **OBS Full Dev Stack** | Startet alle drei gleichzeitig (Compound) |
+| **OBS Mosquitto (Docker)** | Starts the MQTT broker via Docker |
+| **OBS Backend** | Starts the FastAPI server on `localhost:8080` |
+| **OBS GUI (Admin)** | Starts the Vite dev server on `localhost:5173` |
+| **OBS Full Dev Stack** | Starts all three at once (compound) |
 
-> **Voraussetzung:** Docker Desktop muss laufen (für den Mosquitto-Broker).
+> **Prerequisite:** Docker Desktop must be running (for the Mosquitto broker).
 
-#### Erreichbare Dienste im Dev-Modus
+#### Services in dev mode
 
-| Dienst | Adresse |
+| Service | Address |
 |---|---|
-| Admin-GUI | http://localhost:5173 |
+| Admin GUI | http://localhost:5173 |
 | API (Swagger) | http://localhost:8080/docs |
 | MQTT | localhost:1883 |
 
-**Standardzugang:** `admin` / `admin`
+**Default credentials:** `admin` / `admin`
 
-#### Tests ausführen
+#### Running tests
 
 ```bash
-# Nur Unit- und Adapter-Tests (kein Docker nötig)
+# Unit and adapter tests only (no Docker needed)
 pytest tests/unit/ tests/adapters/
 
-# Alle Tests inkl. Integration (Docker muss laufen)
+# All tests incl. integration (Docker must be running)
 pytest tests/
 ```
 
----
-
-### Starten ohne Docker
+#### Lint locally (identical to GitHub CI)
 
 ```bash
-# Mosquitto (temporär)
+# Check only (same behavior as CI job)
+./tools/lint.sh --check
+
+# With auto-fix
+./tools/lint.sh --fix
+```
+
+### Local Git Hooks (Pre-Push Gate)
+
+Versioned hooks live in `.githooks/`. To activate them in a clone, set `core.hooksPath` once:
+
+```bash
+./tools/setup-git-hooks.sh
+```
+
+On each `git push`, the hook runs:
+
+- `./scripts/check-i18n-hardcoded-strings.sh`
+- `python3 -m ruff check .`
+- `python3 -m ruff format . --check`
+- `pytest tests/ -v --cov=obs --cov-report=xml --cov-report=term --junitxml="${TMPDIR:-/tmp}/openbridge-pre-push-junit.xml"`
+
+To bypass once:
+
+```bash
+git push --no-verify
+```
+
+---
+
+#### Translations (Weblate / wlc)
+
+GUI translations are managed via [hosted.weblate.org](https://hosted.weblate.org/projects/openbridgeserver/). The source language is German (`de.json`); the community translates on Weblate.
+
+**Prerequisite:** `wlc` is already included in `requirements_dev.txt` and is installed during the normal setup.
+
+Set up credentials — either in `~/.config/weblate`:
+
+```ini
+[weblate]
+url = https://hosted.weblate.org/api/
+
+[keys]
+https://hosted.weblate.org/api/ = <your-api-key>
+```
+
+or via environment variables: `WLC_URL` / `WLC_KEY`.
+
+**Upload source strings** (after changes to `de.json`):
+
+```bash
+wlc push gui-admin       # Admin GUI  (gui/src/locales/de.json)
+wlc push frontend-visu   # Visu SPA   (frontend/src/locales/de.json)
+```
+
+**Download translations** (after community translations on Weblate):
+
+```bash
+wlc pull gui-admin
+wlc pull frontend-visu
+```
+
+The Weblate project configuration is in `.weblate` in the project root directory.
+
+---
+
+### Running without Docker
+
+```bash
+# Mosquitto (temporary)
 docker run -d -p 1883:1883 eclipse-mosquitto:2
 
-# Konfiguration
+# Configuration
 cp config.example.yaml config.yaml
 
-# Server mit automatischem Neustart bei Codeänderungen
+# Server with automatic restart on code changes
 uvicorn obs.main:create_app --factory --reload --host 0.0.0.0 --port 8080
 ```
 
-### Datenbankstruktur
+### Database structure
 
-Die Datenbank wird automatisch aktualisiert — jede neue Version fügt fehlende Tabellen und Spalten hinzu, ohne bestehende Daten zu verlieren. Aktuelle Version: **V21**.
+The database is updated automatically — each new version adds missing tables and columns without losing existing data. Current version: **V21**.
 
-| Tabelle | Inhalt |
+| Table | Contents |
 |---|---|
-| `datapoints` | Alle Datenpunkte (inkl. `persist_value`- und `record_history`-Flag) |
-| `adapter_bindings` | Verknüpfungen zwischen Datenpunkten und Adaptern (inkl. `value_map`) |
-| `adapter_instances` | Adapter-Instanzen |
-| `users` | Benutzerkonten |
-| `api_keys` | API-Schlüssel (nur als Hashwert gespeichert) |
-| `history_values` | Werteverlauf (inkl. `source_adapter`) |
-| `logic_graphs` | Logik-Graphen (inkl. gespeichertem Block-Zustand) |
-| `app_settings` | Systemeinstellungen (z. B. Zeitzone) |
-| `datapoint_last_values` | Letzter bekannter Wert je Datenpunkt — wird beim Start wiederhergestellt |
+| `datapoints` | All data points (incl. `persist_value` and `record_history` flags) |
+| `adapter_bindings` | Bindings between data points and adapters (incl. `value_map`) |
+| `adapter_instances` | Adapter instances |
+| `users` | User accounts |
+| `api_keys` | API keys (stored as hash only) |
+| `history_values` | Value history (incl. `source_adapter`) |
+| `logic_graphs` | Logic graphs (incl. saved block state) |
+| `app_settings` | System settings (e.g. timezone) |
+| `datapoint_last_values` | Last known value per data point — restored on startup |
 
 ---
 
-## Lizenz
+## Translations
+We'd like to use [Weblate](https://hosted.weblate.org/projects/open-bridge-server) to support language translations. As soon as this is set up, ontributions would be very much welcome.
 
-MIT — kostenlos und quelloffen.
+## License
+
+MIT — free and open source.
+
+[tests]: https://github.com/abeggled/openbridgeserver/actions/workflows/unittest.yml
+[tests-badge]: https://img.shields.io/github/actions/workflow/status/abeggled/openbridgeserver/unittest.yml?style=for-the-badge&logo=github&logoColor=ccc&label=Tests
+
+[coverage]: https://app.codecov.io/github/abeggled/openbridgeserver
+[coverage-badge]: https://img.shields.io/codecov/c/github/abeggled/openbridgeserver?style=for-the-badge&logo=codecov&logoColor=ccc&label=Coverage

@@ -39,7 +39,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Beschriftung -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Beschriftung</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.common.label') }}</label>
       <input
         v-model="cfg.label"
         type="text"
@@ -50,39 +50,39 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Modus -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Typ</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.licht.type') }}</label>
       <select
         v-model="cfg.mode"
         class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
       >
-        <option value="on_off">Ein/Aus</option>
-        <option value="dimm">Ein/Aus + Dimmen</option>
-        <option value="tw">Ein/Aus + Dimmen + Tunable White</option>
-        <option value="rgb">Ein/Aus + Dimmen + RGB</option>
-        <option value="rgbw">Ein/Aus + Dimmen + RGBW</option>
+        <option value="on_off">{{ $t('widgets.licht.typeOnOff') }}</option>
+        <option value="dimm">{{ $t('widgets.licht.typeDimm') }}</option>
+        <option value="tw">{{ $t('widgets.licht.typeTw') }}</option>
+        <option value="rgb">{{ $t('widgets.licht.typeRgb') }}</option>
+        <option value="rgbw">{{ $t('widgets.licht.typeRgbw') }}</option>
       </select>
     </div>
 
     <hr class="border-gray-200 dark:border-gray-700" />
 
     <!-- Schalten -->
-    <p class="text-xs font-medium text-gray-600 dark:text-gray-400">Schalten (BOOLEAN)</p>
+    <p class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ $t('widgets.licht.switch') }}</p>
 
     <DataPointPicker
       v-model="cfg.dp_switch"
-      label="Ein/Aus schreiben"
+      :label="$t('widgets.licht.dpSwitchSend')"
       :compatible-types="['BOOLEAN']"
     />
     <DataPointPicker
       v-model="cfg.dp_switch_status"
-      label="Ein/Aus lesen (Status, optional)"
+      :label="$t('widgets.licht.dpSwitchStatus')"
       :compatible-types="['BOOLEAN']"
     />
 
     <!-- Dimmen -->
     <template v-if="hasDim">
       <hr class="border-gray-200 dark:border-gray-700" />
-      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">Helligkeit (0–100 %)</p>
+      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ $t('widgets.licht.brightness') }}</p>
 
       <DataPointPicker
         v-model="cfg.dp_dim"
@@ -99,11 +99,11 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     <!-- Tunable White -->
     <template v-if="hasTw">
       <hr class="border-gray-200 dark:border-gray-700" />
-      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">Farbtemperatur / Tunable White (Kelvin)</p>
+      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ $t('widgets.licht.colorTemp') }}</p>
 
       <div class="flex gap-2">
         <div class="flex-1">
-          <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Warm (K)</label>
+          <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.licht.warmK') }}</label>
           <input
             v-model.number="cfg.tw_warm_k"
             type="number" min="1000" max="10000" step="100"
@@ -112,7 +112,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
           />
         </div>
         <div class="flex-1">
-          <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Kalt (K)</label>
+          <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.licht.coldK') }}</label>
           <input
             v-model.number="cfg.tw_cold_k"
             type="number" min="1000" max="10000" step="100"
@@ -137,21 +137,21 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     <!-- RGB -->
     <template v-if="hasColor">
       <hr class="border-gray-200 dark:border-gray-700" />
-      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">RGB (je 0–255)</p>
+      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ $t('widgets.licht.rgb') }}</p>
 
-      <DataPointPicker v-model="cfg.dp_r" label="Rot schreiben"  :compatible-types="['FLOAT', 'INTEGER']" />
-      <DataPointPicker v-model="cfg.dp_g" label="Grün schreiben" :compatible-types="['FLOAT', 'INTEGER']" />
-      <DataPointPicker v-model="cfg.dp_b" label="Blau schreiben" :compatible-types="['FLOAT', 'INTEGER']" />
+      <DataPointPicker v-model="cfg.dp_r" :label="$t('widgets.licht.dpRSend')"  :compatible-types="['FLOAT', 'INTEGER']" />
+      <DataPointPicker v-model="cfg.dp_g" :label="$t('widgets.licht.dpGSend')" :compatible-types="['FLOAT', 'INTEGER']" />
+      <DataPointPicker v-model="cfg.dp_b" :label="$t('widgets.licht.dpBSend')" :compatible-types="['FLOAT', 'INTEGER']" />
 
-      <DataPointPicker v-model="cfg.dp_r_status" label="Rot lesen (Status, optional)"  :compatible-types="['FLOAT', 'INTEGER']" />
-      <DataPointPicker v-model="cfg.dp_g_status" label="Grün lesen (Status, optional)" :compatible-types="['FLOAT', 'INTEGER']" />
-      <DataPointPicker v-model="cfg.dp_b_status" label="Blau lesen (Status, optional)" :compatible-types="['FLOAT', 'INTEGER']" />
+      <DataPointPicker v-model="cfg.dp_r_status" :label="$t('widgets.licht.dpRStatus')"  :compatible-types="['FLOAT', 'INTEGER']" />
+      <DataPointPicker v-model="cfg.dp_g_status" :label="$t('widgets.licht.dpGStatus')" :compatible-types="['FLOAT', 'INTEGER']" />
+      <DataPointPicker v-model="cfg.dp_b_status" :label="$t('widgets.licht.dpBStatus')" :compatible-types="['FLOAT', 'INTEGER']" />
     </template>
 
     <!-- White channel (RGBW) -->
     <template v-if="hasWhite">
       <hr class="border-gray-200 dark:border-gray-700" />
-      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">Weisskanal (0–255)</p>
+      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ $t('widgets.licht.white') }}</p>
 
       <DataPointPicker
         v-model="cfg.dp_w"

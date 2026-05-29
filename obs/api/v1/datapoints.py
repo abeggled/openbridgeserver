@@ -22,6 +22,7 @@ from obs.api.v1.sessions import validate_session
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
 from obs.models.datapoint import DataPointCreate, DataPointUpdate
+from obs.models.visu import PageConfig
 
 router = APIRouter(tags=["datapoints"])
 
@@ -29,6 +30,25 @@ router = APIRouter(tags=["datapoints"])
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
+
+
+class NodePathSegment(BaseModel):
+    node_id: str
+    node_name: str
+
+
+class HierarchyNodeRef(BaseModel):
+    node_id: str
+    node_name: str
+    tree_id: str
+    tree_name: str
+    # Upstream PR #462 introduced the object form (node_id + node_name per
+    # segment) and a display_depth hint per tree; the epic's earlier flat
+    # `path: list[str]` is dropped in favour of this richer schema — IDs in
+    # each segment make path-elements addressable (clickable drill-down,
+    # stable identity across renames).
+    node_path: list[NodePathSegment] = []
+    display_depth: int = 0
 
 
 class DataPointOut(BaseModel):
@@ -46,6 +66,8 @@ class DataPointOut(BaseModel):
     # Runtime
     value: Any = None
     quality: str | None = None
+    # Hierarchy (populated by search endpoint, empty elsewhere)
+    hierarchy_nodes: list[HierarchyNodeRef] = []
 
     model_config = {"from_attributes": True}
 
@@ -112,6 +134,12 @@ _SORT_KEYS = {
     "created_at": lambda dp: dp.created_at.isoformat(),
     "updated_at": lambda dp: dp.updated_at.isoformat(),
 }
+
+
+@router.get("/tags", response_model=list[str])
+async def list_tags(_user: str = Depends(get_current_user)) -> list[str]:
+    reg = get_registry()
+    return sorted({t for dp in reg.all() for t in dp.tags})
 
 
 @router.get("/", response_model=DataPointPage)
@@ -199,12 +227,36 @@ async def delete_datapoint(
 @router.get("/{dp_id}/value", response_model=ValueOut)
 async def get_value(
     dp_id: uuid.UUID,
-    _user: str | None = Depends(optional_current_user),
+    request: Request,
+    user: str | None = Depends(optional_current_user),
+    db: Database = Depends(get_db),
 ) -> ValueOut:
     reg = get_registry()
     dp = reg.get(dp_id)
     if dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+
+    if user is None:
+        # Unauthentisiert: Seitenkontext prüfen (analog zum POST-Handler)
+        page_id = request.headers.get("X-Page-Id")
+        if not page_id:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+        if not await _page_has_datapoint(db, page_id, dp_id):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Datapoint is not part of the page")
+
+        from obs.api.v1.visu import _resolve_access_with_node
+
+        access, defining_node_id = await _resolve_access_with_node(db, page_id)
+        if access == "protected":
+            session_token = request.headers.get("X-Session-Token")
+            validate_id = defining_node_id or page_id
+            if not session_token or not validate_session(session_token, validate_id):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Valid session token required")
+        elif access == "user":
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+        elif access not in ("public", "readonly"):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
     state = reg.get_value(dp_id)
     return ValueOut(
         id=dp_id,
@@ -215,18 +267,33 @@ async def get_value(
     )
 
 
-async def _resolve_page_access(db: Database, node_id: str) -> str:
-    """Traversiert die parent_id-Kette und gibt das effektive Access-Level zurück."""
-    current_id: str | None = node_id
-    while current_id:
-        async with db.conn.execute("SELECT access, parent_id FROM visu_nodes WHERE id = ?", (current_id,)) as cur:
-            row = await cur.fetchone()
-        if not row:
-            return "private"  # Unbekannter Knoten → sicher ablehnen
-        if row["access"] is not None:
-            return row["access"]
-        current_id = row["parent_id"]
-    return "public"
+async def _page_has_datapoint(db: Database, page_id: str, dp_id: uuid.UUID) -> bool:
+    """Return True if the page contains a widget bound to this datapoint.
+
+    Checks both the formal datapoint_id / status_datapoint_id fields and any
+    additional datapoint IDs stored inside widget.config (used by Rolladen,
+    Licht, RTR and other multi-channel widgets).
+    """
+    row = await db.fetchone("SELECT page_config FROM visu_nodes WHERE id = ? AND type = 'PAGE'", (page_id,))
+    if not row:
+        return False
+
+    raw = row["page_config"]
+    if not raw:
+        return False
+
+    try:
+        page = PageConfig.model_validate_json(raw)
+    except Exception:
+        return False
+
+    dp_id_str = str(dp_id)
+    for widget in page.widgets:
+        if widget.datapoint_id == dp_id_str or widget.status_datapoint_id == dp_id_str:
+            return True
+        if any(v == dp_id_str for v in widget.config.values() if isinstance(v, str)):
+            return True
+    return False
 
 
 @router.post("/{dp_id}/value", status_code=status.HTTP_204_NO_CONTENT)
@@ -240,7 +307,7 @@ async def write_value(
     """Write a value to a DataPoint via the internal EventBus.
 
     Zugriffslogik:
-    - JWT vorhanden → immer erlaubt (Admin)
+    - JWT vorhanden (eingeloggter Benutzer) → immer erlaubt
     - X-Page-Id Header + Seite ist 'public' → erlaubt
     - X-Page-Id Header + Seite ist 'protected' + gültiger X-Session-Token → erlaubt
     - Seite ist 'readonly' → 403 (auch mit Page-Header)
@@ -257,29 +324,24 @@ async def write_value(
         page_id = request.headers.get("X-Page-Id")
         if not page_id:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+        if not await _page_has_datapoint(db, page_id, dp_id):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Datapoint is not part of the page")
 
-        access = await _resolve_page_access(db, page_id)
+        from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
 
+        access, defining_node_id = await _resolve_access_with_node(db, page_id)
         if access == "readonly":
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Page is read-only")
-        if access == "public":
-            pass  # Erlaubt — keine weitere Prüfung nötig
-        elif access == "protected":
+        if access == "protected":
             session_token = request.headers.get("X-Session-Token")
-            if not session_token or not validate_session(session_token, page_id):
+            validate_id = defining_node_id or page_id
+            if not session_token or not validate_session(session_token, validate_id):
                 raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Valid session token required")
-        else:  # user, unbekannt oder sonstige → 401
+        elif access == "user":
+            if not await _check_user_access(db, page_id, user):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+        elif access not in ("public",):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-    else:
-        # Benutzer ist eingeloggt — prüfe ob er Zugang zur Seite hat
-        page_id = request.headers.get("X-Page-Id")
-        if page_id:
-            access = await _resolve_page_access(db, page_id)
-            if access == "user":
-                from obs.api.v1.visu import _check_user_access
-
-                if not await _check_user_access(db, page_id, user):
-                    raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
     event = DataValueEvent(
         datapoint_id=dp_id,

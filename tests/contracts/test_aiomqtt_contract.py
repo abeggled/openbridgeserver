@@ -41,6 +41,20 @@ class TestClientClass:
         sig = inspect.signature(aiomqtt.Client.__init__)
         assert "password" in sig.parameters
 
+    def test_client_constructor_accepts_identifier(self):
+        sig = inspect.signature(aiomqtt.Client.__init__)
+        assert "identifier" in sig.parameters, (
+            "aiomqtt.Client no longer accepts 'identifier'. "
+            "obs/adapters/mqtt/adapter.py and obs/core/mqtt_client.py pass 'identifier=...' "
+            "to avoid zero-length client IDs being rejected by strict brokers."
+        )
+
+    def test_client_constructor_accepts_tls_context(self):
+        sig = inspect.signature(aiomqtt.Client.__init__)
+        assert "tls_context" in sig.parameters, (
+            "aiomqtt.Client no longer accepts 'tls_context'. obs/adapters/mqtt/adapter.py passes 'tls_context=...' for TLS-enabled brokers."
+        )
+
 
 class TestClientMethods:
     def test_client_has_publish(self):

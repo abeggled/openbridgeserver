@@ -85,7 +85,8 @@ def _full_rtr_config(actual_dp: str | None = None, mode_dp: str | None = None) -
         "actual_temp_dp_id": actual_dp,
         "mode_dp_id": mode_dp,
         "show_modes": True,
-        "supported_modes": [0, 1, 3, 6],
+        "supported_modes": [0, 1, 2, 3, 4],
+        "variant": "heating",
     }
 
 
@@ -140,7 +141,8 @@ async def test_rtr_page_config_roundtrip(client, auth_headers):
         assert c["actual_temp_dp_id"] == dp_actual
         assert c["mode_dp_id"] == dp_mode
         assert c["show_modes"] is True
-        assert c["supported_modes"] == [0, 1, 3, 6]
+        assert c["supported_modes"] == [0, 1, 2, 3, 4]
+        assert c["variant"] == "heating"
     finally:
         await _delete(client, auth_headers, f"/api/v1/visu/nodes/{page_id}")
         await _delete(client, auth_headers, f"/api/v1/datapoints/{dp_soll}")

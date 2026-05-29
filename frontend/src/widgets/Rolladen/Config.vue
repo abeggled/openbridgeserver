@@ -39,7 +39,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
   <div class="space-y-3">
     <!-- Beschriftung -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Beschriftung</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.common.label') }}</label>
       <input
         v-model="cfg.label"
         type="text"
@@ -50,13 +50,13 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Modus -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Typ</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.common.type') }}</label>
       <select
         v-model="cfg.mode"
         class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
       >
-        <option value="rolladen">Rollladen</option>
-        <option value="jalousie">Jalousie (mit Lamellen)</option>
+        <option value="rolladen">{{ $t('widgets.rolladen.typeRollo') }}</option>
+        <option value="jalousie">{{ $t('widgets.rolladen.typeJalousie') }}</option>
       </select>
     </div>
 
@@ -69,74 +69,74 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
         class="rounded accent-blue-500"
       />
       <label for="cfg-invert" class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
-        Position invertieren (0 % = geschlossen)
+        {{ $t('widgets.rolladen.invertPos') }}
       </label>
     </div>
 
     <hr class="border-gray-200 dark:border-gray-700" />
 
     <!-- Steuer-Datenpunkte -->
-    <p class="text-xs font-medium text-gray-600 dark:text-gray-400">Steuerbefehle (BOOLEAN)</p>
+    <p class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ $t('widgets.rolladen.commands') }}</p>
 
     <DataPointPicker
       v-model="cfg.dp_move_up"
-      label="Hoch fahren"
+      :label="$t('widgets.rolladen.dpUp')"
       :compatible-types="['BOOLEAN']"
     />
     <div class="flex items-center gap-2 pl-1">
       <input id="cfg-inv-up" v-model="cfg.invert_move_up" type="checkbox" class="rounded accent-blue-500" />
       <label for="cfg-inv-up" class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
-        Invertieren — aktivieren wenn Langdruck in die falsche Richtung fährt
+        {{ $t('widgets.rolladen.invertDirWarn') }}
       </label>
     </div>
 
     <DataPointPicker
       v-model="cfg.dp_move_down"
-      label="Runter fahren"
+      :label="$t('widgets.rolladen.dpDown')"
       :compatible-types="['BOOLEAN']"
     />
     <div class="flex items-center gap-2 pl-1">
       <input id="cfg-inv-down" v-model="cfg.invert_move_down" type="checkbox" class="rounded accent-blue-500" />
       <label for="cfg-inv-down" class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
-        Invertieren — aktivieren wenn Langdruck in die falsche Richtung fährt
+        {{ $t('widgets.rolladen.invertDirWarn') }}
       </label>
     </div>
 
     <DataPointPicker
       v-model="cfg.dp_stop"
-      label="Stop"
+      :label="$t('widgets.rolladen.dpStop')"
       :compatible-types="['BOOLEAN']"
     />
 
     <hr class="border-gray-200 dark:border-gray-700" />
 
     <!-- Positions-Datenpunkte -->
-    <p class="text-xs font-medium text-gray-600 dark:text-gray-400">Position (0–100 %)</p>
+    <p class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ $t('widgets.rolladen.positionSection') }}</p>
 
     <DataPointPicker
       v-model="cfg.dp_position"
-      label="Position schreiben"
+      :label="$t('widgets.rolladen.dpPosSend')"
       :compatible-types="['FLOAT', 'INTEGER']"
     />
     <DataPointPicker
       v-model="cfg.dp_position_status"
-      label="Position lesen (Status, optional)"
+      :label="$t('widgets.rolladen.dpPosStatus')"
       :compatible-types="['FLOAT', 'INTEGER']"
     />
 
     <!-- Lamellen (nur Jalousie) -->
     <template v-if="isJalousie">
       <hr class="border-gray-200 dark:border-gray-700" />
-      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">Lamellenwinkel (0–100 %)</p>
+      <p class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ $t('widgets.rolladen.slatSection') }}</p>
 
       <DataPointPicker
         v-model="cfg.dp_slat"
-        label="Lamellen schreiben"
+        :label="$t('widgets.rolladen.dpSlatSend')"
         :compatible-types="['FLOAT', 'INTEGER']"
       />
       <DataPointPicker
         v-model="cfg.dp_slat_status"
-        label="Lamellen lesen (Status, optional)"
+        :label="$t('widgets.rolladen.dpSlatStatus')"
         :compatible-types="['FLOAT', 'INTEGER']"
       />
     </template>
@@ -144,18 +144,18 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     <hr class="border-gray-200 dark:border-gray-700" />
 
     <!-- Sperre & Statusindikatoren -->
-    <p class="text-xs font-medium text-gray-600 dark:text-gray-400">Sperre &amp; Statusindikatoren</p>
+    <p class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ $t('widgets.rolladen.lockStatus') }}</p>
 
     <!-- Sperre (Ausgang) -->
     <DataPointPicker
       v-model="cfg.dp_lock"
-      label="🔒 Sperre (Ausgang, schaltbar)"
+      :label="$t('widgets.rolladen.dpLock')"
       :compatible-types="['BOOLEAN']"
     />
 
     <!-- Status 1 -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Indikator 1 — Bezeichnung</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{ $t('widgets.rolladen.indicatorLabel', { n: 1 }) }</label>
       <input
         v-model="cfg.label_status_1"
         type="text"
@@ -165,13 +165,13 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     </div>
     <DataPointPicker
       v-model="cfg.dp_status_1"
-      label="Indikator 1 (Eingang, read-only)"
+      :label="$t('widgets.rolladen.dpIndicatorRo', { n: 1 })"
       :compatible-types="['BOOLEAN']"
     />
 
     <!-- Status 2 -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Indikator 2 — Bezeichnung</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{ $t('widgets.rolladen.indicatorLabel', { n: 2 }) }</label>
       <input
         v-model="cfg.label_status_2"
         type="text"
@@ -181,13 +181,13 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     </div>
     <DataPointPicker
       v-model="cfg.dp_status_2"
-      label="Indikator 2 (Eingang, read-only)"
+      :label="$t('widgets.rolladen.dpIndicatorRo', { n: 2 })"
       :compatible-types="['BOOLEAN']"
     />
 
     <!-- Status 3 -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Indikator 3 — Bezeichnung</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{ $t('widgets.rolladen.indicatorLabel', { n: 3 }) }</label>
       <input
         v-model="cfg.label_status_3"
         type="text"
@@ -197,13 +197,13 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     </div>
     <DataPointPicker
       v-model="cfg.dp_status_3"
-      label="Indikator 3 (Eingang, read-only)"
+      :label="$t('widgets.rolladen.dpIndicatorRo', { n: 3 })"
       :compatible-types="['BOOLEAN']"
     />
 
     <!-- Status 4 -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Indikator 4 — Bezeichnung</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{ $t('widgets.rolladen.indicatorLabel', { n: 4 }) }</label>
       <input
         v-model="cfg.label_status_4"
         type="text"
@@ -213,7 +213,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     </div>
     <DataPointPicker
       v-model="cfg.dp_status_4"
-      label="Indikator 4 (Eingang, read-only)"
+      :label="$t('widgets.rolladen.dpIndicatorRo', { n: 4 })"
       :compatible-types="['BOOLEAN']"
     />
   </div>

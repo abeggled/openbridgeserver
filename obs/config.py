@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -46,11 +46,6 @@ class MqttSettings(BaseModel):
 class DatabaseSettings(BaseModel):
     path: str = "/data/obs.db"
     history_plugin: str = "sqlite"  # sqlite | influxdb | timescaledb | questdb
-
-
-class RingBufferSettings(BaseModel):
-    storage: str = "disk"  # memory | disk
-    max_entries: int = 10000
 
 
 class SecuritySettings(BaseModel):
@@ -117,10 +112,78 @@ class YamlConfigSource(PydanticBaseSettingsSource):
 
 
 # ---------------------------------------------------------------------------
+# Backward-compatibility helpers
+# ---------------------------------------------------------------------------
+
+
+def _has_env_key_case_insensitive(env_key: str) -> bool:
+    lookup = env_key.upper()
+    return any(existing.upper() == lookup for existing in os.environ)
+
+
+def _get_existing_env_key_case_insensitive(env_key: str) -> str | None:
+    lookup = env_key.upper()
+    return next((existing for existing in os.environ if existing.upper() == lookup), None)
+
+
+def _get_env_case_insensitive(*env_keys: str) -> str | None:
+    for key in env_keys:
+        if key in os.environ:
+            return os.environ[key]
+        upper_key = key.upper()
+        for existing, value in os.environ.items():
+            if existing.upper() == upper_key:
+                return value
+    return None
+
+
+def _import_legacy_env_vars() -> None:
+    """Import OPENTWS_* variables as OBS_* when OBS_* is not set.
+
+    Docker images may predefine OBS_* defaults. If those exact defaults are
+    present, prefer an explicitly supplied OPENTWS_* value for compatibility.
+    """
+    legacy_prefix = "OPENTWS_"
+    new_prefix = "OBS_"
+    docker_defaults = {
+        "OBS_CONFIG": "/data/config.yaml",
+        "OBS_DATABASE__PATH": "/data/obs.db",
+    }
+
+    for key, value in list(os.environ.items()):
+        if not key.startswith(legacy_prefix):
+            continue
+        mapped_key = f"{new_prefix}{key[len(legacy_prefix) :]}"
+        existing_key = _get_existing_env_key_case_insensitive(mapped_key)
+        if existing_key is None:
+            os.environ[mapped_key] = value
+            continue
+
+        expected_default = docker_defaults.get(mapped_key.upper())
+        if expected_default is not None and os.environ.get(existing_key) == expected_default:
+            os.environ[existing_key] = value
+
+
+def _resolve_default_db_path(default_path: str = "/data/obs.db") -> str:
+    """Prefer legacy DB path if new default file does not exist yet."""
+    new_path = Path(default_path)
+    legacy_path = new_path.with_name("opentws.db")
+    if not new_path.exists() and legacy_path.exists():
+        return str(legacy_path)
+    return default_path
+
+
+_import_legacy_env_vars()
+
+
+# ---------------------------------------------------------------------------
 # Main settings class
 # ---------------------------------------------------------------------------
 
-_CONFIG_PATH = Path(os.environ.get("OBS_CONFIG", "config.yaml"))
+
+def _config_path() -> Path:
+    """Resolve the YAML config path at construction time."""
+    return Path(_get_env_case_insensitive("OBS_CONFIG", "OPENTWS_CONFIG") or "config.yaml")
 
 
 class Settings(BaseSettings):
@@ -132,11 +195,41 @@ class Settings(BaseSettings):
 
     server: ServerSettings = Field(default_factory=ServerSettings)
     mqtt: MqttSettings = Field(default_factory=MqttSettings)
-    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
-    ringbuffer: RingBufferSettings = Field(default_factory=RingBufferSettings)
+    database: DatabaseSettings = Field(default_factory=lambda: DatabaseSettings(path=_resolve_default_db_path()))
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     mosquitto: MosquittoSettings = Field(default_factory=MosquittoSettings)
     cors: CorsSettings = Field(default_factory=CorsSettings)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _inject_database_path_fallback(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        result = dict(data)
+        database_key = next(
+            (key for key in result if isinstance(key, str) and key.lower() == "database"),
+            None,
+        )
+        default_path = _resolve_default_db_path()
+
+        if database_key is None:
+            result["database"] = {"path": default_path}
+            return result
+
+        database_value = result.get(database_key)
+        if database_value is None:
+            result[database_key] = {"path": default_path}
+            return result
+
+        if isinstance(database_value, dict):
+            has_path = any(isinstance(key, str) and key.lower() == "path" for key in database_value)
+            if not has_path:
+                merged_database = dict(database_value)
+                merged_database["path"] = default_path
+                result[database_key] = merged_database
+
+        return result
 
     @classmethod
     def settings_customise_sources(
@@ -150,7 +243,7 @@ class Settings(BaseSettings):
         return (
             init_settings,
             env_settings,
-            YamlConfigSource(settings_cls, _CONFIG_PATH),
+            YamlConfigSource(settings_cls, _config_path()),
         )
 
 

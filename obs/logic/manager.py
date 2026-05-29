@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
+import socket
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -37,12 +39,74 @@ def _msg_to_str(v: object) -> str:
     return str(v)
 
 
+async def _resolve_safe_image_url(url: str) -> tuple[str, str, str] | None:
+    """Return a DNS-pinned HTTPS request tuple for safe image downloads.
+
+    Returns:
+        (pinned_url, host_header, pinned_ip) or None if the URL is unsafe.
+    """
+    from urllib.parse import urlparse, urlunparse
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        return None
+
+    host = parsed.hostname
+    port = parsed.port or 443
+
+    try:
+        infos = await asyncio.to_thread(socket.getaddrinfo, host, port, 0, socket.SOCK_STREAM)
+    except OSError:
+        return None
+
+    resolved_ips: list[str] = []
+    for info in infos:
+        ip = info[4][0]
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return None
+        if not addr.is_global:
+            return None
+        ip_str = str(addr)
+        if ip_str not in resolved_ips:
+            resolved_ips.append(ip_str)
+
+    if not resolved_ips:
+        return None
+
+    pinned_ip = resolved_ips[0]
+    pinned_host = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+    has_explicit_port = parsed.port is not None
+    netloc = f"{pinned_host}:{port}" if has_explicit_port else pinned_host
+    pinned_url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+    host_header = f"{host}:{port}" if has_explicit_port else host
+    return pinned_url, host_header, pinned_ip
+
+
+def _read_secret_file(path: str) -> str:
+    """Read a small root-managed secret file without logging its content."""
+    clean_path = (path or "").strip()
+    if not clean_path:
+        return ""
+    try:
+        with open(clean_path, encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError as exc:
+        logger.warning("Could not read api_client secret file %s: %s", clean_path, exc)
+        return ""
+
+
 _THROTTLE_UNITS: dict[str, float] = {
     "ms": 1.0,
     "s": 1000.0,
     "min": 60_000.0,
     "h": 3_600_000.0,
 }
+_PUSHOVER_ATTACHMENT_MAX_BYTES = 5_000_000
 
 _manager: LogicManager | None = None
 
@@ -124,35 +188,54 @@ class LogicManager:
     # ── Cron Scheduler ────────────────────────────────────────────────────
 
     def _start_cron_tasks(self) -> None:
-        """Start asyncio tasks for all timer_cron nodes in enabled graphs."""
+        """Start asyncio tasks for all timer_cron and ical nodes in enabled graphs."""
+        _has_croniter = True
         try:
             import croniter as _croniter_check  # noqa: F401
         except ImportError:
             logger.warning("croniter not installed — timer_cron nodes will not auto-execute. Install with: pip install croniter")
-            return
+            _has_croniter = False
 
         for graph_id, (name, enabled, flow) in self._graphs.items():
             if not enabled:
                 continue
             for node in flow.nodes:
-                if node.type != "timer_cron":
-                    continue
-                key = (graph_id, node.id)
-                if key in self._cron_tasks and not self._cron_tasks[key].done():
-                    continue  # already running
-                cron_expr = node.data.get("cron", "0 7 * * *")
-                task = asyncio.create_task(
-                    self._cron_loop(graph_id, node.id, cron_expr),
-                    name=f"cron-{graph_id[:8]}-{node.id[:8]}",
-                )
-                self._cron_tasks[key] = task
-                logger.info(
-                    "Cron scheduled: graph=%s (%s) node=%s expr=%r",
-                    graph_id[:8],
-                    name,
-                    node.id[:8],
-                    cron_expr,
-                )
+                if node.type == "timer_cron":
+                    if not _has_croniter:
+                        continue
+                    key = (graph_id, node.id)
+                    if key in self._cron_tasks and not self._cron_tasks[key].done():
+                        continue  # already running
+                    cron_expr = node.data.get("cron", "0 7 * * *")
+                    task = asyncio.create_task(
+                        self._cron_loop(graph_id, node.id, cron_expr),
+                        name=f"cron-{graph_id[:8]}-{node.id[:8]}",
+                    )
+                    self._cron_tasks[key] = task
+                    logger.info(
+                        "Cron scheduled: graph=%s (%s) node=%s expr=%r",
+                        graph_id[:8],
+                        name,
+                        node.id[:8],
+                        cron_expr,
+                    )
+                elif node.type == "ical":
+                    key = (graph_id, node.id)
+                    if key in self._cron_tasks and not self._cron_tasks[key].done():
+                        continue  # already running
+                    refresh_min = max(1.0, float(node.data.get("refresh_interval_min") or 60))
+                    task = asyncio.create_task(
+                        self._ical_loop(graph_id, node.id, refresh_min),
+                        name=f"ical-{graph_id[:8]}-{node.id[:8]}",
+                    )
+                    self._cron_tasks[key] = task
+                    logger.info(
+                        "iCal scheduled: graph=%s (%s) node=%s interval=%.0fmin",
+                        graph_id[:8],
+                        name,
+                        node.id[:8],
+                        refresh_min,
+                    )
 
     async def _cron_loop(self, graph_id: str, node_id: str, cron_expr: str) -> None:
         """Fires a timer_cron graph node on its cron schedule — runs indefinitely."""
@@ -188,6 +271,30 @@ class LogicManager:
                 raise
             except Exception as exc:
                 logger.error("Cron loop error graph=%s: %s", graph_id[:8], exc)
+                await asyncio.sleep(60)  # back-off on unexpected errors
+
+    async def _ical_loop(self, graph_id: str, node_id: str, refresh_min: float) -> None:
+        """Triggers the graph containing an ical node on its refresh schedule.
+
+        Fires once immediately (to populate outputs on startup), then every
+        refresh_min minutes.  The actual HTTP fetch is throttled inside
+        _execute_graph via the last_fetch_ts timestamp, so redundant calls are
+        cheap.
+        """
+        while True:
+            try:
+                entry = self._graphs.get(graph_id)
+                if entry and entry[1]:  # still exists and enabled
+                    g_name, _, flow = entry
+                    await self._execute_graph(graph_id, g_name, flow, {})
+                    logger.debug("iCal graph %s (%s) node %s refreshed", graph_id[:8], g_name, node_id[:8])
+
+                await asyncio.sleep(refresh_min * 60)
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("iCal loop error graph=%s node=%s: %s", graph_id[:8], node_id[:8], exc)
                 await asyncio.sleep(60)  # back-off on unexpected errors
 
     # ── Event Handler ─────────────────────────────────────────────────────
@@ -295,6 +402,8 @@ class LogicManager:
         if not entry:
             raise KeyError(f"Graph {graph_id} not in cache")
         name, enabled, flow = entry
+        if not enabled:
+            raise ValueError(f"Graph {graph_id} ist deaktiviert")
         return await self._execute_graph(graph_id, name, flow, {})
 
     async def _execute_graph(
@@ -342,7 +451,51 @@ class LogicManager:
                     "_computed_hours": round(acc, 6),
                 }
 
+        # ── Pre-fetch iCal URLs (refresh only when cache is stale) ───────────
         hyst = self._hysteresis.setdefault(graph_id, {})
+        for node in flow.nodes:
+            if node.type != "ical":
+                continue
+            url = (node.data.get("url") or "").strip()
+            if not url:
+                continue
+            refresh_min = float(node.data.get("refresh_interval_min") or 60)
+            hyst_node = hyst.setdefault(node.id, {})
+            last_fetch: float | None = hyst_node.get("last_fetch_ts")
+            url_changed = hyst_node.get("fetched_url") != url
+            needs_fetch = url_changed or last_fetch is None or (execute_now.timestamp() - last_fetch) >= refresh_min * 60
+            if needs_fetch:
+                try:
+                    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _hclient:
+                        _resp = await _hclient.get(url)
+                        _resp.raise_for_status()
+                        # Decode with charset from Content-Type; many iCal servers
+                        # omit the charset and serve Latin-1 (e.g. c-trace.de).
+                        # Try strict UTF-8 first; fall back to Latin-1 which always
+                        # succeeds and covers ISO-8859-1 / CP-1252 content.
+                        _ct = _resp.headers.get("content-type", "")
+                        _charset: str | None = None
+                        for _part in _ct.split(";"):
+                            _p = _part.strip()
+                            if _p.lower().startswith("charset="):
+                                _charset = _p[8:].strip().strip('"').strip("'")
+                                break
+                        if _charset:
+                            _raw_text = _resp.content.decode(_charset, errors="replace")
+                        else:
+                            try:
+                                _raw_text = _resp.content.decode("utf-8")
+                            except UnicodeDecodeError:
+                                _raw_text = _resp.content.decode("latin-1")
+                        if not _raw_text.lstrip().startswith("BEGIN:VCALENDAR"):
+                            raise ValueError(f"Response is not an iCal file (starts with {_raw_text[:60]!r})")
+                        hyst_node["raw"] = _raw_text
+                        hyst_node["fetched_url"] = url
+                        hyst_node["last_fetch_ts"] = execute_now.timestamp()
+                        logger.info("Graph %s: iCal fetched from %s (%d bytes)", graph_id[:8], url, len(_raw_text))
+                except Exception as _exc:
+                    logger.warning("Graph %s: iCal fetch failed for node %s (%s): %s", graph_id[:8], node.id[:8], url, _exc)
+
         executor = GraphExecutor(flow, hyst, self._app_config)
         try:
             outputs = executor.execute(aug_overrides)
@@ -397,6 +550,14 @@ class LogicManager:
                     extra_headers = _json.loads(hdr_str)
                 except Exception:
                     pass
+            hdr_secret_file = (node.data.get("headers_secret_file") or "").strip()
+            if hdr_secret_file:
+                try:
+                    secret_headers = _json.loads(_read_secret_file(hdr_secret_file))
+                    if isinstance(secret_headers, dict):
+                        extra_headers = {**extra_headers, **secret_headers}
+                except Exception:
+                    logger.warning("api_client headers_secret_file did not contain a JSON object")
             body = out.get("_body")
             # ── Authentication ──────────────────────────────────────────
             auth_type = (node.data.get("auth_type") or "none").lower()
@@ -408,6 +569,9 @@ class LogicManager:
                     auth = httpx.BasicAuth(username, password) if auth_type == "basic" else httpx.DigestAuth(username, password)
             elif auth_type == "bearer":
                 token = (node.data.get("auth_token") or "").strip()
+                token_file = (node.data.get("auth_token_file") or "").strip()
+                if not token and token_file:
+                    token = _read_secret_file(token_file)
                 if token:
                     extra_headers = {
                         **extra_headers,
@@ -521,15 +685,48 @@ class LogicManager:
                         payload["url_title"] = url_title
 
                     if image_url:
-                        # Download image and attach as multipart
-                        img_r = await client.get(image_url, timeout=10.0)
-                        img_r.raise_for_status()
-                        content_type = img_r.headers.get("content-type", "image/jpeg")
+                        resolved = await _resolve_safe_image_url(image_url)
+                        if resolved is None:
+                            raise ValueError("Unsafe image_url: only public HTTPS hosts are allowed")
+                        pinned_url, host_header, pinned_ip = resolved
+                        # Stream attachment bytes and enforce max size while downloading.
+                        async with client.stream(
+                            "GET",
+                            pinned_url,
+                            timeout=10.0,
+                            follow_redirects=False,
+                            headers={"Host": host_header},
+                            extensions={"sni_hostname": host_header.split(":", 1)[0]},
+                        ) as img_r:
+                            net_stream = img_r.extensions.get("network_stream")
+                            if net_stream is not None:
+                                server_addr = net_stream.get_extra_info("server_addr")
+                                if server_addr and server_addr[0] != pinned_ip:
+                                    raise ValueError("Pushover image_url resolved to an unexpected target IP")
+                            img_r.raise_for_status()
+                            content_type = img_r.headers.get("content-type", "").split(";")[0].strip().lower()
+                            if not content_type.startswith("image/"):
+                                raise ValueError("Pushover image_url must return an image/* content type")
+
+                            content_len_raw = img_r.headers.get("content-length", "0") or "0"
+                            try:
+                                content_len = int(content_len_raw)
+                            except ValueError:
+                                content_len = 0
+                            if content_len > _PUSHOVER_ATTACHMENT_MAX_BYTES:
+                                raise ValueError("Pushover attachment too large (max 5 MB)")
+
+                            img_content = bytearray()
+                            async for chunk in img_r.aiter_bytes():
+                                img_content.extend(chunk)
+                                if len(img_content) > _PUSHOVER_ATTACHMENT_MAX_BYTES:
+                                    raise ValueError("Pushover attachment too large (max 5 MB)")
+
                         fname = image_url.split("?")[0].split("/")[-1] or "image.jpg"
                         r = await client.post(
                             "https://api.pushover.net/1/messages.json",
                             data=payload,
-                            files={"attachment": (fname, img_r.content, content_type)},
+                            files={"attachment": (fname, bytes(img_content), content_type or "image/jpeg")},
                         )
                     else:
                         r = await client.post(

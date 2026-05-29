@@ -36,46 +36,43 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Bezeichnung -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Bezeichnung (Ortname)</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.wetter.labelCity') }}</label>
       <input
         v-model="cfg.label"
         type="text"
         placeholder="z.B. Zürich, Garten, Berghaus …"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       />
-      <p class="text-xs text-gray-600 mt-1">Leer lassen → Timezone aus API-Antwort wird verwendet</p>
+      <p class="text-xs text-gray-600 mt-1">{{ $t('widgets.wetter.labelHint') }}</p>
     </div>
 
     <!-- API-URL -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Wetter-API-URL</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.wetter.apiUrl') }}</label>
       <input
         v-model="cfg.url"
         type="text"
         placeholder="https://api.openweathermap.org/data/3.0/onecall?lat=47.37&lon=8.54&appid=…&units=metric&lang=de"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 font-mono focus:outline-none focus:border-blue-500"
       />
-      <p class="text-xs text-gray-600 mt-1">
-        OpenWeatherMap One Call API 3.0 empfohlen. Der API-Key wird als Teil der URL übergeben
-        (<code class="text-gray-500">appid=…</code>).
-      </p>
+      <p class="text-xs text-gray-600 mt-1">{{ $t('widgets.wetter.apiUrlHint') }} (<code class="text-gray-500">appid=…</code>)</p>
     </div>
 
     <!-- Einheiten & Aktualisierung -->
     <div class="grid grid-cols-2 gap-2">
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Einheiten</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.wetter.units') }}</label>
         <select
           v-model="cfg.units"
           class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
         >
-          <option value="metric">Metrisch (°C, m/s)</option>
-          <option value="imperial">Imperial (°F, mph)</option>
+          <option value="metric">{{ $t('widgets.wetter.unitsMetric') }}</option>
+          <option value="imperial">{{ $t('widgets.wetter.unitsImperial') }}</option>
         </select>
-        <p class="text-xs text-gray-600 mt-1">Muss mit <code class="text-gray-500">units=</code> in der URL übereinstimmen</p>
+        <p class="text-xs text-gray-600 mt-1">{{ $t('widgets.wetter.unitsHint') }}</p>
       </div>
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Aktualisierung (Sekunden)</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.wetter.refresh') }}</label>
         <input
           v-model.number="cfg.refreshInterval"
           type="number"
@@ -88,39 +85,39 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
     <!-- Aktuelle Werte -->
     <div>
-      <p class="text-xs text-gray-400 mb-2 font-medium">Aktuelle Wetterwerte anzeigen</p>
+      <p class="text-xs text-gray-400 mb-2 font-medium">{{ $t('widgets.wetter.showCurrent') }}</p>
       <div class="grid grid-cols-2 gap-1.5">
         <label class="flex items-center gap-2 cursor-pointer">
           <input v-model="cfg.show_feels_like" type="checkbox" class="rounded border-gray-600 bg-gray-800 text-blue-500" />
-          <span class="text-xs text-gray-300">Gefühlt wie</span>
+          <span class="text-xs text-gray-300">{{ $t('widgets.wetter.feelsLike') }}</span>
         </label>
         <label class="flex items-center gap-2 cursor-pointer">
           <input v-model="cfg.show_humidity" type="checkbox" class="rounded border-gray-600 bg-gray-800 text-blue-500" />
-          <span class="text-xs text-gray-300">Luftfeuchtigkeit</span>
+          <span class="text-xs text-gray-300">{{ $t('widgets.wetter.humidity') }}</span>
         </label>
         <label class="flex items-center gap-2 cursor-pointer">
           <input v-model="cfg.show_wind" type="checkbox" class="rounded border-gray-600 bg-gray-800 text-blue-500" />
-          <span class="text-xs text-gray-300">Wind</span>
+          <span class="text-xs text-gray-300">{{ $t('widgets.wetter.wind') }}</span>
         </label>
         <label class="flex items-center gap-2 cursor-pointer">
           <input v-model="cfg.show_pressure" type="checkbox" class="rounded border-gray-600 bg-gray-800 text-blue-500" />
-          <span class="text-xs text-gray-300">Luftdruck</span>
+          <span class="text-xs text-gray-300">{{ $t('widgets.wetter.pressure') }}</span>
         </label>
         <label class="flex items-center gap-2 cursor-pointer">
           <input v-model="cfg.show_uvi" type="checkbox" class="rounded border-gray-600 bg-gray-800 text-blue-500" />
-          <span class="text-xs text-gray-300">UV-Index</span>
+          <span class="text-xs text-gray-300">{{ $t('widgets.wetter.uvi') }}</span>
         </label>
         <label class="flex items-center gap-2 cursor-pointer">
           <input v-model="cfg.show_clouds" type="checkbox" class="rounded border-gray-600 bg-gray-800 text-blue-500" />
-          <span class="text-xs text-gray-300">Bewölkung</span>
+          <span class="text-xs text-gray-300">{{ $t('widgets.wetter.clouds') }}</span>
         </label>
         <label class="flex items-center gap-2 cursor-pointer">
           <input v-model="cfg.show_visibility" type="checkbox" class="rounded border-gray-600 bg-gray-800 text-blue-500" />
-          <span class="text-xs text-gray-300">Sichtweite</span>
+          <span class="text-xs text-gray-300">{{ $t('widgets.wetter.visibility') }}</span>
         </label>
         <label class="flex items-center gap-2 cursor-pointer">
           <input v-model="cfg.show_sunrise_sunset" type="checkbox" class="rounded border-gray-600 bg-gray-800 text-blue-500" />
-          <span class="text-xs text-gray-300">Sonnenauf/-untergang</span>
+          <span class="text-xs text-gray-300">{{ $t('widgets.wetter.sunriseSunset') }}</span>
         </label>
       </div>
     </div>
@@ -129,11 +126,11 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     <div>
       <label class="flex items-center gap-2 cursor-pointer mb-2">
         <input v-model="cfg.show_forecast" type="checkbox" class="rounded border-gray-600 bg-gray-800 text-blue-500" />
-        <span class="text-xs text-gray-300 font-medium">Tagesvorhersage anzeigen</span>
+        <span class="text-xs text-gray-300 font-medium">{{ $t('widgets.wetter.showForecast') }}</span>
       </label>
       <div v-if="cfg.show_forecast" class="pl-4 space-y-2">
         <div>
-          <label class="block text-xs text-gray-400 mb-1">Anzahl Tage (1–7)</label>
+          <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.wetter.forecastDays') }}</label>
           <input
             v-model.number="cfg.forecast_days"
             type="number"
@@ -144,7 +141,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
         </div>
         <label class="flex items-center gap-2 cursor-pointer">
           <input v-model="cfg.show_forecast_precipitation" type="checkbox" class="rounded border-gray-600 bg-gray-800 text-blue-500" />
-          <span class="text-xs text-gray-300">Niederschlagswahrscheinlichkeit</span>
+          <span class="text-xs text-gray-300">{{ $t('widgets.wetter.precipitation') }}</span>
         </label>
       </div>
     </div>
@@ -152,7 +149,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     <!-- Warnungen -->
     <label class="flex items-center gap-2 cursor-pointer">
       <input v-model="cfg.show_alerts" type="checkbox" class="rounded border-gray-600 bg-gray-800 text-blue-500" />
-      <span class="text-xs text-gray-300">Wetterwarnungen anzeigen</span>
+      <span class="text-xs text-gray-300">{{ $t('widgets.wetter.showAlerts') }}</span>
     </label>
 
   </div>

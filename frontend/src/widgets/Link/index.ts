@@ -14,4 +14,5 @@ WidgetRegistry.register({
   defaultConfig: { label: '', icon: '🔗', target_node_id: '' },
   compatibleTypes: ['*'],
   noDatapoint: true,
+  getExtraDatapointIds: () => [],
 })

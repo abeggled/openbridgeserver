@@ -1,38 +1,38 @@
 <template>
   <div class="flex flex-col gap-5">
     <div>
-      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Einstellungen</h2>
-      <p class="text-sm text-slate-500 mt-0.5">Benutzer, API Keys, Passwort, Sicherung</p>
+      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('settings.title') }}</h2>
+      <p class="text-sm text-slate-500 mt-0.5">{{ $t('settings.subtitle') }}</p>
     </div>
 
     <!-- Tabs -->
     <div class="flex gap-1 border-b border-slate-200 dark:border-slate-700/60">
-      <button v-for="t in tabs" :key="t.id" @click="activeTab = t.id"
+      <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id"
         :class="['px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px',
-          activeTab === t.id && t.id === 'dangerzone' ? 'text-red-500 dark:text-red-400 border-red-500' :
-          activeTab === t.id ? 'text-blue-500 dark:text-blue-400 border-blue-500' :
-          t.id === 'dangerzone' ? 'text-red-400/70 dark:text-red-400/60 border-transparent hover:text-red-400' :
+          activeTab === tab.id && tab.id === 'dangerzone' ? 'text-red-500 dark:text-red-400 border-red-500' :
+          activeTab === tab.id ? 'text-blue-500 dark:text-blue-400 border-blue-500' :
+          tab.id === 'dangerzone' ? 'text-red-400/70 dark:text-red-400/60 border-transparent hover:text-red-400' :
           'text-slate-500 dark:text-slate-400 border-transparent hover:text-slate-700 dark:hover:text-slate-200']">
-        {{ t.label }}
+        {{ tab.label }}
       </button>
     </div>
 
     <!-- Demo-Modus Banner -->
-    <div v-if="isDemo && activeTab !== 'general'" class="flex items-center gap-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-sm text-amber-600 dark:text-amber-400">
+    <div v-if="isDemo" class="flex items-center gap-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-sm text-amber-600 dark:text-amber-400">
       <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M12 3a9 9 0 110 18A9 9 0 0112 3z"/></svg>
-      Demo-Modus — dieser Bereich ist schreibgeschützt/gesperrt.
+      {{ $t('common.demoMode') }}
     </div>
 
     <!-- ── Allgemein ── -->
     <div v-if="activeTab === 'general'" class="flex flex-col gap-4 max-w-md">
 
       <!-- Zeitzone -->
-      <div v-if="!isDemo" class="card">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Allgemeine Einstellungen</h3></div>
+      <div class="card" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
+        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.general.title') }}</h3></div>
         <div class="card-body flex flex-col gap-4">
           <div class="form-group">
-            <label class="label">Zeitzone</label>
-            <p class="text-xs text-slate-500 mb-2">Alle Zeitangaben im System werden in dieser Zeitzone dargestellt.</p>
+            <label class="label">{{ $t('settings.general.timezone') }}</label>
+            <p class="text-xs text-slate-500 mb-2">{{ $t('settings.general.timezoneHint') }}</p>
             <!-- Custom dropdown trigger -->
             <div class="relative" ref="tzDropdownRef">
               <button type="button" @click="tzDropdownOpen = !tzDropdownOpen"
@@ -49,7 +49,7 @@
                 <div class="p-2 border-b border-slate-200 dark:border-slate-700">
                   <input ref="tzSearchInputRef" v-model="tzSearch" type="text"
                     class="input text-sm w-full"
-                    placeholder="Suchen … z.B. Zurich, Berlin, UTC"
+                    :placeholder="$t('settings.general.timezonePlaceholder')"
                     @keydown.escape="tzDropdownOpen = false"
                     @keydown.enter.prevent="selectFirstTz" />
                 </div>
@@ -60,7 +60,7 @@
                       tz === tzSelected ? 'text-teal-600 dark:text-teal-400 bg-slate-100/80 dark:bg-slate-700/50' : 'text-slate-600 dark:text-slate-300']">
                     {{ tz }}
                   </button>
-                  <div v-if="!filteredTimezones.length" class="px-3 py-3 text-xs text-slate-500 text-center">Keine Treffer</div>
+                  <div v-if="!filteredTimezones.length" class="px-3 py-3 text-xs text-slate-500 text-center">{{ $t('settings.general.noResults') }}</div>
                 </div>
               </div>
             </div>
@@ -68,7 +68,7 @@
           <div v-if="tzMsg" :class="['p-3 rounded-lg text-sm', tzMsg.ok ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30']">{{ tzMsg.text }}</div>
           <button @click="saveTz" class="btn-primary" :disabled="tzSaving">
             <Spinner v-if="tzSaving" size="sm" color="white" />
-            Speichern
+            {{ $t('settings.general.save') }}
           </button>
         </div>
       </div>
@@ -76,10 +76,10 @@
       <!-- Erscheinungsbild -->
       <div class="card">
         <div class="card-header">
-          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Erscheinungsbild</h3>
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.general.appearance') }}</h3>
         </div>
         <div class="card-body flex flex-col gap-3">
-          <p class="text-sm text-slate-500">Wähle, wie die Benutzeroberfläche dargestellt werden soll.</p>
+          <p class="text-sm text-slate-500">{{ $t('settings.general.appearanceHint') }}</p>
           <div class="flex flex-col gap-2">
             <label v-for="opt in themeOptions" :key="opt.value"
               :class="[
@@ -95,57 +95,61 @@
               </div>
             </label>
           </div>
+          <!-- Language switcher -->
+          <div class="pt-2 border-t border-slate-200 dark:border-slate-700/60">
+            <LocaleSwitcher />
+          </div>
         </div>
       </div>
     </div>
 
     <!-- ── Passwort ── -->
-    <div v-if="activeTab === 'password' && !isDemo" class="card max-w-md">
-      <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Passwort ändern</h3></div>
+    <div v-if="activeTab === 'password'" class="card max-w-md" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
+      <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.password.title') }}</h3></div>
       <div class="card-body">
         <form @submit.prevent="changePassword" class="flex flex-col gap-4">
           <div class="form-group">
-            <label class="label">Aktuelles Passwort</label>
+            <label class="label">{{ $t('settings.password.currentPassword') }}</label>
             <input v-model="pwForm.current" type="password" class="input" required autocomplete="current-password" />
           </div>
           <div class="form-group">
-            <label class="label">Neues Passwort</label>
+            <label class="label">{{ $t('settings.password.newPassword') }}</label>
             <input v-model="pwForm.new1" type="password" class="input" required autocomplete="new-password" />
           </div>
           <div class="form-group">
-            <label class="label">Neues Passwort wiederholen</label>
+            <label class="label">{{ $t('settings.password.confirmPassword') }}</label>
             <input v-model="pwForm.new2" type="password" class="input" required autocomplete="new-password" />
           </div>
           <div v-if="pwMsg" :class="['p-3 rounded-lg text-sm', pwMsg.ok ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30']">{{ pwMsg.text }}</div>
           <button type="submit" class="btn-primary" :disabled="pwSaving">
             <Spinner v-if="pwSaving" size="sm" color="white" />
-            Passwort ändern
+            {{ $t('settings.password.save') }}
           </button>
         </form>
       </div>
     </div>
 
     <!-- ── Benutzer (Admin only) ── -->
-    <div v-if="activeTab === 'users' && auth.isAdmin && !isDemo">
+    <div v-if="activeTab === 'users' && (auth.isAdmin || isDemo)" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="flex items-center gap-3 mb-4">
-        <span class="flex-1 text-sm text-slate-400">{{ users.length }} Benutzer</span>
-        <button @click="openCreateUser" class="btn-primary btn-sm">+ Benutzer</button>
+        <span class="flex-1 text-sm text-slate-400">{{ $t('settings.users.count', { n: users.length }) }}</span>
+        <button @click="openCreateUser" class="btn-primary btn-sm">{{ $t('settings.users.addButton') }}</button>
       </div>
       <div class="card overflow-hidden">
         <div v-if="usersLoading" class="flex justify-center py-8"><Spinner /></div>
         <table v-else class="table">
-          <thead><tr><th>Benutzername</th><th>Admin</th><th>MQTT</th><th>Erstellt</th><th class="w-20"></th></tr></thead>
+          <thead><tr><th>{{ $t('settings.users.colUsername') }}</th><th>{{ $t('settings.users.colAdmin') }}</th><th>{{ $t('settings.users.colMqtt') }}</th><th>{{ $t('settings.users.colCreated') }}</th><th class="w-20"></th></tr></thead>
           <tbody>
             <tr v-for="u in users" :key="u.id">
               <td class="font-medium">{{ u.username }}</td>
               <td><Badge :variant="u.is_admin ? 'warning' : 'muted'" size="xs">{{ u.is_admin ? 'Admin' : 'User' }}</Badge></td>
               <td>
                 <div class="flex items-center gap-1">
-                  <Badge :variant="u.mqtt_enabled ? 'success' : 'muted'" size="xs">{{ u.mqtt_enabled ? 'Aktiv' : 'Aus' }}</Badge>
-                  <button @click="openMqttPassword(u)" class="btn-icon text-slate-400 hover:text-blue-400" title="MQTT-Passwort setzen">
+                  <Badge :variant="u.mqtt_enabled ? 'success' : 'muted'" size="xs">{{ u.mqtt_enabled ? $t('settings.users.mqttActive') : $t('settings.users.mqttOff') }}</Badge>
+                  <button @click="openMqttPassword(u)" class="btn-icon text-slate-400 hover:text-blue-400" :title="$t('settings.users.mqttSetTitle')">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z"/></svg>
                   </button>
-                  <button v-if="u.mqtt_enabled" @click="doDeleteMqttPassword(u)" class="btn-icon text-red-400 hover:text-red-300" title="MQTT deaktivieren">
+                  <button v-if="u.mqtt_enabled" @click="doDeleteMqttPassword(u)" class="btn-icon text-red-400 hover:text-red-300" :title="$t('settings.users.mqttDisableTitle')">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                   </button>
                 </div>
@@ -163,15 +167,15 @@
     </div>
 
     <!-- ── API Keys ── -->
-    <div v-if="activeTab === 'apikeys' && !isDemo">
+    <div v-if="activeTab === 'apikeys'" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="flex items-center gap-3 mb-4">
-        <span class="flex-1 text-sm text-slate-400">{{ apiKeys.length }} API Keys</span>
-        <button @click="createApiKey" class="btn-primary btn-sm">+ API Key</button>
+        <span class="flex-1 text-sm text-slate-400">{{ $t('settings.apikeys.count', { n: apiKeys.length }) }}</span>
+        <button @click="createApiKey" class="btn-primary btn-sm">{{ $t('settings.apikeys.addButton') }}</button>
       </div>
       <div class="card overflow-hidden mb-4">
         <div v-if="keysLoading" class="flex justify-center py-8"><Spinner /></div>
         <table v-else class="table">
-          <thead><tr><th>Name</th><th>Erstellt</th><th class="w-20"></th></tr></thead>
+          <thead><tr><th>{{ $t('settings.apikeys.colName') }}</th><th>{{ $t('settings.apikeys.colCreated') }}</th><th class="w-20"></th></tr></thead>
           <tbody>
             <tr v-for="k in apiKeys" :key="k.id">
               <td class="font-medium">{{ k.name }}</td>
@@ -183,71 +187,157 @@
       </div>
       <!-- New key secret display -->
       <div v-if="newKeySecret" class="p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
-        <p class="text-sm text-green-400 font-medium mb-2">⚠ Key nur jetzt sichtbar — jetzt kopieren!</p>
+        <p class="text-sm text-green-400 font-medium mb-2">{{ $t('settings.apikeys.newKeySecret') }}</p>
         <code class="font-mono text-xs text-green-700 dark:text-green-300 break-all select-all">{{ newKeySecret }}</code>
       </div>
     </div>
 
     <!-- ── Datenmanagement ── -->
-    <div v-if="activeTab === 'importexport' && !isDemo" class="flex flex-col gap-4 max-w-lg">
+    <div v-if="activeTab === 'importexport'" class="flex flex-col gap-4 max-w-lg" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
+
+      <!-- Sicherung erstellen (download) -->
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Konfiguration sichern</h3>
-        <p class="text-sm text-slate-400">Alle Objekte, Verknüpfungen, Adapter-Instanzen, KNX-Gruppenadressen, Logikblätter, Icons und den FontAwesome API Key als JSON-Datei sichern.</p>
-        <button @click="doExport" class="btn-secondary">JSON herunterladen</button>
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.exportTitle') }}</h3>
+        <p class="text-sm text-slate-400">{{ $t('settings.importexport.exportDesc') }}</p>
+        <button @click="doExport" class="btn-secondary">{{ $t('settings.importexport.exportButton') }}</button>
       </div>
+
+      <!-- Sicherung wiederherstellen (upload) -->
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Datenbank sichern</h3>
-        <p class="text-sm text-slate-400">Vollständige SQLite-Datenbank (inkl. Historiendaten) als Datei sichern.</p>
-        <button @click="doExportDb" class="btn-secondary">SQLite herunterladen</button>
-      </div>
-      <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Sicherung wiederherstellen</h3>
-        <p class="text-sm text-slate-400">Sicherungsdatei einspielen. Bestehende Einträge werden aktualisiert, fehlende neu angelegt. Icons und FontAwesome API Key werden ebenfalls wiederhergestellt.</p>
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.importTitle') }}</h3>
+        <p class="text-sm text-slate-400">{{ $t('settings.importexport.importDesc') }}</p>
         <input type="file" accept=".json" @change="onImportFile" class="text-sm text-slate-400 file:btn-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:text-xs file:border-0 file:cursor-pointer" />
         <div v-if="importResult" :class="['p-3 rounded-lg text-sm', importResult.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">{{ importResult.text }}</div>
+      </div>
+
+      <!-- Datenbanksicherung erstellen (download) -->
+      <div class="card p-5 flex flex-col gap-3">
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.dbExportTitle') }}</h3>
+        <p class="text-sm text-slate-400">{{ $t('settings.importexport.dbExportDesc') }}</p>
+        <button @click="doExportDb" class="btn-secondary">{{ $t('settings.importexport.dbExportButton') }}</button>
+      </div>
+
+      <!-- Datenbank wiederherstellen (upload) -->
+      <div class="card p-5 flex flex-col gap-3">
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.dbImportTitle') }}</h3>
+        <p class="text-sm text-slate-400">{{ $t('settings.importexport.dbImportDesc') }}</p>
+        <div class="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-sm text-amber-600 dark:text-amber-400 flex flex-col gap-1">
+          <p class="font-semibold">{{ $t('settings.importexport.dbImportWarning') }}</p>
+          <ul class="list-disc list-inside text-xs mt-1 space-y-0.5">
+            <li>{{ $t('settings.importexport.dbImportWarning1') }}</li>
+            <li>{{ $t('settings.importexport.dbImportWarning2') }}</li>
+            <li>{{ $t('settings.importexport.dbImportWarning3') }}</li>
+            <li>{{ $t('settings.importexport.dbImportWarning4') }}</li>
+          </ul>
+        </div>
+        <input type="file" accept=".sqlite,.db" @change="onImportDbFile" class="text-sm text-slate-400 file:btn-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:text-xs file:border-0 file:cursor-pointer" />
+        <div v-if="importDbResult" :class="['p-3 rounded-lg text-sm', importDbResult.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">{{ importDbResult.text }}</div>
+      </div>
+
+      <!-- Autobackup -->
+      <div class="card p-5 flex flex-col gap-3">
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.autobackupTitle') }}</h3>
+        <p class="text-sm text-slate-400">{{ $t('settings.importexport.autobackupDesc') }}</p>
+        <div class="flex flex-col gap-3">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" v-model="autobackupCfg.enabled" @change="saveAutobackupConfig" class="w-4 h-4 rounded accent-blue-500" />
+            <span class="text-sm text-slate-600 dark:text-slate-300">{{ $t('settings.importexport.autobackupEnable') }}</span>
+          </label>
+          <div v-if="autobackupCfg.enabled" class="flex flex-col gap-2 pl-6 border-l-2 border-blue-500/30">
+            <div class="form-group">
+              <label class="label">{{ $t('settings.importexport.autobackupTime') }}</label>
+              <select v-model.number="autobackupCfg.hour" @change="saveAutobackupConfig" class="input text-sm">
+                <option v-for="h in 24" :key="h-1" :value="h-1">{{ String(h-1).padStart(2,'0') }}:00 {{ $t('settings.importexport.autobackupUhr') }}</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="label">{{ $t('settings.importexport.autobackupRetention') }}</label>
+              <select v-model.number="autobackupCfg.retention_days" @change="saveAutobackupConfig" class="input text-sm">
+                <option v-for="d in 30" :key="d" :value="d">{{ d }} {{ d === 1 ? $t('settings.importexport.retentionDay') : $t('settings.importexport.retentionDays') }}</option>
+              </select>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button @click="runAutobackupNow" :disabled="autobackupRunning" class="btn-secondary btn-sm">
+              <Spinner v-if="autobackupRunning" size="sm" />
+              {{ $t('settings.importexport.autobackupNow') }}
+            </button>
+          </div>
+          <div v-if="autobackupMsg" :class="['p-3 rounded-lg text-sm', autobackupMsg.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">{{ autobackupMsg.text }}</div>
+        </div>
+      </div>
+
+      <!-- Autobackup wiederherstellen -->
+      <div class="card p-5 flex flex-col gap-3">
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.autobackupRestoreTitle') }}</h3>
+        <p class="text-sm text-slate-400">{{ $t('settings.importexport.autobackupRestoreDesc') }}</p>
+        <div v-if="autobackupList.length === 0" class="text-sm text-slate-500 italic">{{ $t('settings.importexport.autobackupNone') }}</div>
+        <div v-else class="flex flex-col gap-2">
+          <div class="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-sm text-amber-600 dark:text-amber-400 flex flex-col gap-1">
+            <p class="font-semibold">{{ $t('settings.importexport.autobackupRestoreWarning') }}</p>
+            <ul class="list-disc list-inside text-xs mt-1 space-y-0.5">
+              <li>{{ $t('settings.importexport.autobackupRestoreWarning1') }}</li>
+              <li>{{ $t('settings.importexport.autobackupRestoreWarning2') }}</li>
+              <li>{{ $t('settings.importexport.autobackupRestoreWarning3') }}</li>
+            </ul>
+          </div>
+          <div class="form-group">
+            <label class="label">{{ $t('settings.importexport.autobackupSelect') }}</label>
+            <select v-model="selectedAutobackup" class="input text-sm">
+              <option value="">{{ $t('common.pleaseSelect') }}</option>
+              <option v-for="entry in autobackupList" :key="entry.name" :value="entry.name">
+                {{ formatAutobackupName(entry.name) }} ({{ formatBytes(entry.size_bytes) }})
+              </option>
+            </select>
+          </div>
+          <div class="flex items-center gap-2">
+            <button @click="restoreAutobackup" :disabled="!selectedAutobackup || autobackupRestoring" class="btn-primary btn-sm">
+              <Spinner v-if="autobackupRestoring" size="sm" color="white" />
+              {{ $t('settings.importexport.autobackupRestore') }}
+            </button>
+          </div>
+        </div>
+        <div v-if="autobackupRestoreMsg" :class="['p-3 rounded-lg text-sm', autobackupRestoreMsg.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">{{ autobackupRestoreMsg.text }}</div>
       </div>
 
       <!-- KNX Projekt Import -->
       <div class="card p-5 flex flex-col gap-3">
         <div class="flex items-center gap-2">
-          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">KNX Projekt importieren</h3>
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.knxTitle') }}</h3>
           <span class="text-xs text-slate-500 bg-slate-700/50 px-2 py-0.5 rounded">.knxproj</span>
         </div>
-        <p class="text-sm text-slate-400">
-          ETS-Projektdatei importieren. Alle Gruppenadressen (GA, Name, DPT) werden gespeichert,
-          stehen im Binding-Formular als Suchvorschläge zur Verfügung und werden in der Sicherung mitgesichert.
-        </p>
+        <p class="text-sm text-slate-400">{{ $t('settings.importexport.knxDesc') }}</p>
         <div class="flex flex-col gap-2">
           <input type="file" accept=".knxproj" @change="onKnxprojFile"
             class="text-sm text-slate-400 file:btn-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:text-xs file:border-0 file:cursor-pointer" />
           <div class="form-group">
-            <label class="label">Projektpasswort <span class="text-slate-600 font-normal">(optional)</span></label>
-            <input v-model="knxPassword" type="password" class="input text-sm" placeholder="Nur bei passwortgeschützten Projekten" autocomplete="off" />
+            <label class="label">{{ $t('settings.importexport.knxPassword') }} <span class="text-slate-600 font-normal">{{ $t('common.optional') }}</span></label>
+            <input v-model="knxPassword" type="password" class="input text-sm" :placeholder="$t('settings.importexport.knxPasswordPlaceholder')" autocomplete="off" />
           </div>
 
           <!-- DataPoints anlegen -->
           <label class="flex items-center gap-2 cursor-pointer select-none mt-1">
             <input type="checkbox" v-model="knxCreateDps" class="w-4 h-4 rounded accent-blue-500" />
-            <span class="text-sm text-slate-600 dark:text-slate-300">Objekte anlegen / aktualisieren</span>
+            <span class="text-sm text-slate-600 dark:text-slate-300">{{ $t('settings.importexport.knxCreateDps') }}</span>
           </label>
 
           <div v-if="knxCreateDps" class="flex flex-col gap-2 pl-6 border-l-2 border-blue-500/30">
             <div class="form-group">
-              <label class="label">KNX-Adapter Instanz</label>
+              <label class="label">{{ $t('settings.importexport.knxAdapterInstance') }}</label>
               <select v-model="knxAdapterName" class="input text-sm">
-                <option value="">— bitte wählen —</option>
+                <option value="">{{ $t('common.pleaseSelect') }}</option>
                 <option v-for="inst in knxAdapterInstances" :key="inst.name" :value="inst.name">{{ inst.name }}</option>
               </select>
               <p v-if="knxAdapterInstances.length === 0" class="text-xs text-amber-400 mt-1">
-                Keine KNX-Adapter-Instanz gefunden. Bitte zuerst einen KNX-Adapter anlegen.
+                {{ $t('settings.importexport.knxNoAdapter') }}
               </p>
             </div>
             <div class="form-group">
-              <label class="label">Richtung</label>
+              <label class="label">{{ $t('settings.importexport.knxDirection') }}</label>
               <select v-model="knxDirection" class="input text-sm">
-                <option value="BOTH">Lesen/Schreiben (von/auf Adapter)</option>
-                <option value="SOURCE">Lesen (von Adapter)</option>
-                <option value="DEST">Schreiben (auf Adapter)</option>
+                <option value="BOTH">{{ $t('settings.importexport.knxDirectionBoth') }}</option>
+                <option value="SOURCE">{{ $t('settings.importexport.knxDirectionSource') }}</option>
+                <option value="DEST">{{ $t('settings.importexport.knxDirectionDest') }}</option>
               </select>
             </div>
           </div>
@@ -256,7 +346,7 @@
             <button @click="doKnxImport" class="btn-primary btn-sm"
               :disabled="!knxFile || knxImporting || (knxCreateDps && !knxAdapterName)">
               <Spinner v-if="knxImporting" size="sm" color="white" />
-              Importieren
+              {{ $t('settings.importexport.knxImport') }}
             </button>
           </div>
         </div>
@@ -267,39 +357,48 @@
     </div>
 
     <!-- ── History Backend ── -->
-    <div v-if="activeTab === 'history' && !isDemo" class="flex flex-col gap-4 max-w-2xl">
+    <div v-if="activeTab === 'history'" class="flex flex-col gap-4 max-w-2xl" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="card">
         <div class="card-header">
-          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Historie DB</h3>
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.history.dbTitle') }}</h3>
         </div>
         <div class="card-body flex flex-col gap-4">
-          <p class="text-sm text-slate-500">
-            Wähle, wo historische Werte gespeichert werden sollen.
-            Änderungen werden sofort übernommen (kein Neustart nötig).
-          </p>
+          <p class="text-sm text-slate-500">{{ $t('settings.history.dbDesc') }}</p>
 
           <!-- Plugin selector -->
           <div class="form-group">
-            <label class="label">Datenbank</label>
+            <label class="label">{{ $t('settings.history.dbLabel') }}</label>
             <select v-model="histForm.plugin" class="input text-sm">
-              <option value="sqlite">SQLite (intern, Standard)</option>
-              <option value="influxdb">InfluxDB (v1 / v2 / v3)</option>
-              <option value="timescaledb">PostgreSQL / TimescaleDB</option>
+              <option value="sqlite">{{ $t('settings.history.sqlite') }}</option>
+              <option value="influxdb">{{ $t('settings.history.influxdb') }}</option>
+              <option value="timescaledb">{{ $t('settings.history.timescaledb') }}</option>
             </select>
+          </div>
+
+          <div class="form-group">
+            <label class="label">{{ $t('settings.history.defaultWindowHoursLabel') }}</label>
+            <input
+              v-model.number="histForm.default_window_hours"
+              type="number"
+              min="1"
+              max="8760"
+              class="input text-sm"
+            />
+            <p class="text-xs text-slate-500 mt-1">{{ $t('settings.history.defaultWindowHoursHint') }}</p>
           </div>
 
           <!-- InfluxDB settings -->
           <template v-if="histForm.plugin === 'influxdb'">
             <div class="form-group">
-              <label class="label">Version</label>
+              <label class="label">{{ $t('settings.history.version') }}</label>
               <select v-model.number="histForm.influx_version" class="input text-sm">
-                <option :value="1">InfluxDB 1.x</option>
-                <option :value="2">InfluxDB 2.x</option>
-                <option :value="3">InfluxDB 3.x</option>
+                <option :value="1">{{ $t('settings.history.influxV1') }}</option>
+                <option :value="2">{{ $t('settings.history.influxV2') }}</option>
+                <option :value="3">{{ $t('settings.history.influxV3') }}</option>
               </select>
             </div>
             <div class="form-group">
-              <label class="label">URL</label>
+              <label class="label">{{ $t('settings.history.url') }}</label>
               <input v-model="histForm.influx_url" type="text" class="input text-sm font-mono"
                 placeholder="http://localhost:8086" />
             </div>
@@ -308,16 +407,16 @@
             <template v-if="histForm.influx_version === 1">
               <div class="grid grid-cols-2 gap-3">
                 <div class="form-group">
-                  <label class="label">Benutzername</label>
+                  <label class="label">{{ $t('settings.history.username') }}</label>
                   <input v-model="histForm.influx_username" type="text" class="input text-sm" autocomplete="off" />
                 </div>
                 <div class="form-group">
-                  <label class="label">Passwort</label>
+                  <label class="label">{{ $t('settings.history.password') }}</label>
                   <input v-model="histForm.influx_password" type="password" class="input text-sm" autocomplete="new-password" />
                 </div>
               </div>
               <div class="form-group">
-                <label class="label">Datenbank</label>
+                <label class="label">{{ $t('settings.history.database') }}</label>
                 <input v-model="histForm.influx_database" type="text" class="input text-sm font-mono" placeholder="obs" />
               </div>
             </template>
@@ -325,16 +424,16 @@
             <!-- v2: token + org + bucket -->
             <template v-if="histForm.influx_version === 2">
               <div class="form-group">
-                <label class="label">API Token</label>
+                <label class="label">{{ $t('settings.history.apiToken') }}</label>
                 <input v-model="histForm.influx_token" type="password" class="input text-sm font-mono" autocomplete="new-password" />
               </div>
               <div class="grid grid-cols-2 gap-3">
                 <div class="form-group">
-                  <label class="label">Organisation</label>
+                  <label class="label">{{ $t('settings.history.organization') }}</label>
                   <input v-model="histForm.influx_org" type="text" class="input text-sm font-mono" placeholder="my-org" />
                 </div>
                 <div class="form-group">
-                  <label class="label">Bucket</label>
+                  <label class="label">{{ $t('settings.history.bucket') }}</label>
                   <input v-model="histForm.influx_bucket" type="text" class="input text-sm font-mono" placeholder="obs" />
                 </div>
               </div>
@@ -343,11 +442,11 @@
             <!-- v3: token + database -->
             <template v-if="histForm.influx_version === 3">
               <div class="form-group">
-                <label class="label">API Token</label>
+                <label class="label">{{ $t('settings.history.apiToken') }}</label>
                 <input v-model="histForm.influx_token" type="password" class="input text-sm font-mono" autocomplete="new-password" />
               </div>
               <div class="form-group">
-                <label class="label">Datenbank</label>
+                <label class="label">{{ $t('settings.history.database') }}</label>
                 <input v-model="histForm.influx_database" type="text" class="input text-sm font-mono" placeholder="obs" />
               </div>
             </template>
@@ -356,9 +455,9 @@
           <!-- TimescaleDB settings -->
           <template v-if="histForm.plugin === 'timescaledb'">
             <div class="form-group">
-              <label class="label">Connection DSN</label>
+              <label class="label">{{ $t('settings.history.connectionDsn') }}</label>
               <input v-model="histForm.timescale_dsn" type="text" class="input text-sm font-mono"
-                placeholder="postgresql://user:pass@localhost:5432/obs" autocomplete="off" />
+                :placeholder="$t('settings.history.connectionDsnPlaceholder')" autocomplete="off" />
 
             </div>
           </template>
@@ -374,11 +473,11 @@
           <div class="flex items-center gap-3">
             <button @click="testHistoryConnection" class="btn-secondary" :disabled="histTesting">
               <Spinner v-if="histTesting" size="sm" />
-              Verbindung testen
+              {{ $t('settings.history.testButton') }}
             </button>
             <button @click="saveHistorySettings" class="btn-primary" :disabled="histSaving">
               <Spinner v-if="histSaving" size="sm" color="white" />
-              Speichern &amp; aktivieren
+              {{ $t('settings.history.saveButton') }}
             </button>
           </div>
         </div>
@@ -387,21 +486,18 @@
       <!-- Objekt-Filter -->
       <div class="card" data-testid="history-filter-card">
         <div class="card-header">
-          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Objekt-Filter</h3>
-          <span class="text-xs text-slate-500">{{ histFilterExcludedCount }} von {{ histAllDps.length }} Objekt(e) ausgeschlossen</span>
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.history.filterTitle') }}</h3>
+          <span class="text-xs text-slate-500">{{ $t('settings.history.filterCount', { excluded: histFilterExcludedCount, total: histAllDps.length }) }}</span>
         </div>
         <div class="card-body flex flex-col gap-3">
-          <p class="text-sm text-slate-500">
-            Objekte, für die die Historisierung deaktiviert ist, werden nicht in der Historie-DB gespeichert.
-            Typische Kandidaten: Zeit, Datum, Systemwerte ohne historische Relevanz.
-          </p>
+          <p class="text-sm text-slate-500">{{ $t('settings.history.filterDesc') }}</p>
 
           <!-- Search -->
           <input
             v-model="histFilterSearch"
             type="text"
             class="input text-sm"
-            placeholder="Objekte suchen…"
+            :placeholder="$t('settings.history.filterSearch')"
             data-testid="input-history-filter-search"
           />
 
@@ -410,7 +506,7 @@
 
           <!-- Empty state -->
           <div v-else-if="histFilteredDps.length === 0" class="text-sm text-slate-500 text-center py-4" data-testid="history-filter-empty">
-            Keine Objekte gefunden.
+            {{ $t('settings.history.filterEmpty') }}
           </div>
 
           <!-- DataPoint list -->
@@ -431,7 +527,7 @@
                   'shrink-0 relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none',
                   dp.record_history ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-600'
                 ]"
-                :title="dp.record_history ? 'Historisierung aktiv – klicken zum Deaktivieren' : 'Historisierung deaktiviert – klicken zum Aktivieren'"
+                :title="dp.record_history ? $t('settings.history.filterEnableTitle') : $t('settings.history.filterDisableTitle')"
                 :data-testid="`toggle-history-${dp.id}`"
               >
                 <span
@@ -446,32 +542,41 @@
 
           <!-- Schnellauswahl -->
           <div class="flex items-center gap-2 pt-1">
-            <button @click="histFilterSetAll(true)" class="btn-secondary btn-sm" data-testid="btn-history-filter-enable-all">Alle aktivieren</button>
-            <button @click="histFilterSetAll(false)" class="btn-secondary btn-sm" data-testid="btn-history-filter-disable-all">Alle deaktivieren</button>
+            <button @click="histFilterSetAll(true)" class="btn-secondary btn-sm" data-testid="btn-history-filter-enable-all">{{ $t('settings.history.filterEnableAll') }}</button>
+            <button @click="histFilterSetAll(false)" class="btn-secondary btn-sm" data-testid="btn-history-filter-disable-all">{{ $t('settings.history.filterDisableAll') }}</button>
           </div>
         </div>
       </div>
     </div>
 
+    <!-- ── Hierarchie ── -->
+    <div v-if="activeTab === 'hierarchy'" class="flex flex-col gap-4" data-testid="hierarchy-tab">
+      <div class="card">
+        <div class="card-body" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
+          <HierarchyManager />
+        </div>
+      </div>
+    </div>
+
     <!-- ── Icons Library ── -->
-    <div v-if="activeTab === 'icons' && !isDemo" class="flex flex-col gap-4" data-testid="icons-tab">
+    <div v-if="activeTab === 'icons'" class="flex flex-col gap-4" data-testid="icons-tab" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
 
       <!-- Toolbar -->
       <div class="flex flex-wrap items-center gap-3">
-        <span class="text-sm text-slate-400" data-testid="icons-count">{{ iconsFiltered.length }} Icon(s)</span>
+        <span class="text-sm text-slate-400" data-testid="icons-count">{{ $t('settings.icons.count', { n: iconsFiltered.length }) }}</span>
         <div class="flex-1" />
         <button v-if="iconsSelected.size > 0" @click="doIconsExport" class="btn-secondary btn-sm" data-testid="btn-icons-export">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/></svg>
-          {{ iconsSelected.size }} exportieren
+          {{ $t('settings.icons.export', { n: iconsSelected.size }) }}
         </button>
         <button v-if="iconsSelected.size > 0" @click="doIconsDelete" class="btn-danger btn-sm" data-testid="btn-icons-delete">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7h6m-7 0a1 1 0 011-1h4a1 1 0 011 1m-7 0h8"/></svg>
-          {{ iconsSelected.size }} löschen
+          {{ $t('settings.icons.delete', { n: iconsSelected.size }) }}
         </button>
         <button v-if="icons.length > 0" @click="iconsSelectAll" class="btn-secondary btn-sm" data-testid="btn-icons-select-all">
-          {{ iconsSelected.size === icons.length ? 'Alle abwählen' : 'Alle wählen' }}
+          {{ iconsSelected.size === icons.length ? $t('settings.icons.deselectAll') : $t('settings.icons.selectAll') }}
         </button>
-        <input v-model="iconsSearch" type="text" class="input text-sm w-40" placeholder="Suchen…" data-testid="input-icons-search" />
+        <input v-model="iconsSearch" type="text" class="input text-sm w-40" :placeholder="$t('settings.icons.search')" data-testid="input-icons-search" />
       </div>
 
       <!-- Feedback -->
@@ -483,7 +588,7 @@
       <!-- Icon Grid -->
       <div v-if="iconsLoading" class="flex justify-center py-10"><Spinner /></div>
       <div v-else-if="icons.length === 0" class="text-center text-sm text-slate-500 py-10" data-testid="icons-empty">
-        Noch keine Icons installiert. Lade SVG-Dateien hoch, um zu beginnen.
+        {{ $t('settings.icons.empty') }}
       </div>
       <div v-else class="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-3" data-testid="icons-grid">
         <label v-for="icon in iconsFiltered" :key="icon.name" :title="icon.name"
@@ -510,9 +615,9 @@
 
       <!-- Upload area -->
       <div class="card">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">SVG Icons importieren</h3></div>
+        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.icons.importTitle') }}</h3></div>
         <div class="card-body flex flex-col gap-4">
-          <p class="text-sm text-slate-400">SVG-Dateien oder ein ZIP-Archiv mit SVG-Icons hochladen. Jede Datei wird auf gültiges SVG-Format geprüft, unabhängig von der Dateiendung.</p>
+          <p class="text-sm text-slate-400">{{ $t('settings.icons.importDesc') }}</p>
 
           <!-- Drag & Drop Zone -->
           <div
@@ -530,8 +635,8 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
               </svg>
               <div>
-                <p class="text-sm text-slate-600 dark:text-slate-300 font-medium">SVG oder ZIP hier ablegen</p>
-                <p class="text-xs text-slate-400 mt-0.5">oder klicken zum Auswählen</p>
+                <p class="text-sm text-slate-600 dark:text-slate-300 font-medium">{{ $t('settings.icons.dropzone') }}</p>
+                <p class="text-xs text-slate-400 mt-0.5">{{ $t('settings.icons.dropzoneClick') }}</p>
               </div>
             </div>
             <input ref="iconsFileInput" type="file" accept=".svg,.zip" multiple class="sr-only"
@@ -541,7 +646,7 @@
 
           <div v-if="iconsUploading" class="flex items-center gap-2 text-sm text-slate-500">
             <Spinner size="sm" />
-            Importiere…
+            {{ $t('settings.icons.uploading') }}
           </div>
         </div>
       </div>
@@ -549,50 +654,46 @@
       <!-- FontAwesome Import -->
       <div class="card">
         <div class="card-header">
-          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">FontAwesome importieren</h3>
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.icons.faTitle') }}</h3>
         </div>
         <div class="card-body flex flex-col gap-4">
-          <p class="text-sm text-slate-400">
-            Icons direkt von FontAwesome 7 Free importieren. Ohne API Key werden kostenlose Icons verwendet,
-            mit API Key stehen PRO-Icons und zusätzliche Styles zur Verfügung.
-            Der Dateiname enthält automatisch den Style (z.&nbsp;B. <code class="font-mono bg-blue-500/10 px-1 rounded">abacus-solid.svg</code>).
-          </p>
+          <p class="text-sm text-slate-400">{{ $t('settings.icons.faDesc') }}</p>
           <!-- API Key speichern -->
           <div class="form-group">
             <label class="label flex items-center gap-2">
-              FontAwesome API Key (PRO)
-              <span v-if="faSavedKey" class="text-xs font-normal px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 border border-green-500/30">Gespeichert</span>
+              {{ $t('settings.icons.faApiKeyLabel') }}
+              <span v-if="faSavedKey" class="text-xs font-normal px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 border border-green-500/30">{{ $t('settings.icons.faApiKeySaved') }}</span>
             </label>
             <div class="flex gap-2">
               <input v-model="faApiKey" type="password" class="input text-sm font-mono flex-1"
-                :placeholder="faSavedKey ? '••••••••••••••••••••••••••••••••••••' : 'Leer = Free Tier'"
+                :placeholder="faSavedKey ? '••••••••••••••••••••••••••••••••••••' : $t('settings.icons.faApiKeyPlaceholder')"
                 autocomplete="new-password" data-testid="input-fa-apikey" />
               <button @click="doSaveFaKey" class="btn-secondary btn-sm whitespace-nowrap"
-                :disabled="!faApiKey.trim()" title="API Key speichern">
-                Speichern
+                :disabled="!faApiKey.trim()" :title="$t('settings.apikeys.save')">
+                {{ $t('common.save') }}
               </button>
               <button v-if="faSavedKey" @click="doDeleteFaKey" class="btn-danger btn-sm whitespace-nowrap"
-                title="Gespeicherten API Key löschen">
-                Löschen
+                :title="$t('settings.apikeys.delete')">
+                {{ $t('common.delete') }}
               </button>
             </div>
-            <p class="text-xs text-slate-500 mt-1">Der Key wird persistent gespeichert und bei jedem Import automatisch verwendet.</p>
+            <p class="text-xs text-slate-500 mt-1">{{ $t('settings.icons.faApiKeyHint') }}</p>
           </div>
 
           <!-- Icon-Namen + Stil -->
           <div class="form-group">
-            <label class="label">Icon-Namen (kommagetrennt)</label>
+            <label class="label">{{ $t('settings.icons.faNamesLabel') }}</label>
             <input v-model="faIconNames" type="text" class="input text-sm font-mono"
-              placeholder="home, star, user, arrow-right" data-testid="input-fa-names" />
+              :placeholder="$t('settings.icons.faNamesPlaceholder')" data-testid="input-fa-names" />
           </div>
           <div class="form-group">
-            <label class="label">Stil</label>
+            <label class="label">{{ $t('settings.icons.faStyleLabel') }}</label>
             <select v-model="faStyle" class="input text-sm" data-testid="select-fa-style">
               <option value="solid">Solid</option>
               <option value="regular">Regular</option>
               <option value="brands">Brands</option>
               <template v-if="faSavedKey || faApiKey.trim()">
-                <option disabled class="text-slate-500">── PRO ──</option>
+                <option disabled class="text-slate-500">{{ $t('settings.icons.faStylePro') }}</option>
                 <option value="light">Light</option>
                 <option value="thin">Thin</option>
                 <option value="duotone">Duotone</option>
@@ -608,29 +709,29 @@
           </div>
           <button @click="doFaImport" class="btn-primary btn-sm w-fit" :disabled="faImporting || !faIconNames.trim()" data-testid="btn-fa-import">
             <Spinner v-if="faImporting" size="sm" color="white" />
-            Icons importieren
+            {{ $t('settings.icons.faImport') }}
           </button>
         </div>
       </div>
     </div>
 
     <!-- ── Links ── -->
-    <div v-if="activeTab === 'links' && auth.isAdmin && !isDemo" class="flex flex-col gap-4 max-w-lg" data-testid="links-tab">
+    <div v-if="activeTab === 'links'" class="flex flex-col gap-4 max-w-lg" data-testid="links-tab" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="card">
         <div class="card-header flex items-center justify-between">
           <div>
-            <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">Eigene Links</h3>
-            <p class="text-xs text-slate-500 mt-0.5">Erscheinen in der Seitennavigation (für alle Benutzer sichtbar).</p>
+            <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.links.title') }}</h3>
+            <p class="text-xs text-slate-500 mt-0.5">{{ $t('settings.links.desc') }}</p>
           </div>
           <button @click="openNavLinkForm()" class="btn-primary btn-sm" data-testid="btn-add-nav-link">
-            + Link hinzufügen
+            {{ $t('settings.links.addButton') }}
           </button>
         </div>
         <div class="card-body flex flex-col gap-2">
 
           <!-- Leer-Zustand -->
           <div v-if="!navStore.loading && navStore.links.length === 0" class="text-sm text-slate-500 py-4 text-center" data-testid="nav-links-empty">
-            Noch keine Links vorhanden.
+            {{ $t('settings.links.empty') }}
           </div>
 
           <!-- Link-Liste -->
@@ -642,11 +743,11 @@
               <div class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">{{ link.label }}</div>
               <div class="text-xs text-slate-500 truncate">{{ link.url }}</div>
             </div>
-            <span v-if="link.open_new_tab" class="text-xs px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-500 shrink-0">neues Tab</span>
-            <button @click="openNavLinkForm(link)" class="btn-ghost btn-sm text-slate-400 hover:text-blue-500 shrink-0" title="Bearbeiten">
+            <span v-if="link.open_new_tab" class="text-xs px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-500 shrink-0">{{ $t('settings.links.newTab') }}</span>
+            <button @click="openNavLinkForm(link)" class="btn-ghost btn-sm text-slate-400 hover:text-blue-500 shrink-0" :title="$t('settings.links.editButtonTitle')">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 012.828 2.828L11.828 15.828a2 2 0 01-2.828 0L7 13.657 9 13zm-4 8h4l9-9-4-4-9 9v4z"/></svg>
             </button>
-            <button @click="deleteNavLink(link.id)" class="btn-ghost btn-sm text-slate-400 hover:text-red-500 shrink-0" title="Löschen" :data-testid="'btn-delete-nav-link-' + link.id">
+            <button @click="deleteNavLink(link.id)" class="btn-ghost btn-sm text-slate-400 hover:text-red-500 shrink-0" :title="$t('settings.links.deleteButtonTitle')" :data-testid="'btn-delete-nav-link-' + link.id">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4h6v3M4 7h16"/></svg>
             </button>
           </div>
@@ -660,39 +761,39 @@
       <!-- Link-Formular -->
       <div v-if="navLinkShowForm" class="card" data-testid="nav-link-form">
         <div class="card-header">
-          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ navLinkEditId ? 'Link bearbeiten' : 'Neuer Link' }}</h3>
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ navLinkEditId ? $t('settings.links.editTitle') : $t('settings.links.createTitle') }}</h3>
         </div>
         <div class="card-body flex flex-col gap-4">
           <div class="form-group">
-            <label class="label">Bezeichnung <span class="text-red-400">*</span></label>
-            <input v-model="navLinkForm.label" type="text" class="input" placeholder="z.B. Grafana Dashboard" data-testid="input-nav-link-label" />
+            <label class="label">{{ $t('settings.links.label') }} <span class="text-red-400">*</span></label>
+            <input v-model="navLinkForm.label" type="text" class="input" :placeholder="$t('settings.links.labelPlaceholder')" data-testid="input-nav-link-label" />
           </div>
           <div class="form-group">
-            <label class="label">URL <span class="text-red-400">*</span></label>
-            <input v-model="navLinkForm.url" type="url" class="input" placeholder="https://beispiel.ch" data-testid="input-nav-link-url" />
+            <label class="label">{{ $t('settings.links.urlLabel') }} <span class="text-red-400">*</span></label>
+            <input v-model="navLinkForm.url" type="url" class="input" :placeholder="$t('settings.links.urlPlaceholder')" data-testid="input-nav-link-url" />
           </div>
           <div class="form-group">
-            <label class="label">Icon</label>
+            <label class="label">{{ $t('settings.links.icon') }}</label>
             <div class="p-3 rounded-lg border border-slate-200 dark:border-slate-700/60 bg-slate-50 dark:bg-slate-800/40">
               <IconPicker v-model="navLinkForm.icon" data-testid="input-nav-link-icon" />
             </div>
           </div>
           <div class="form-group">
-            <label class="label">Reihenfolge</label>
+            <label class="label">{{ $t('settings.links.order') }}</label>
             <input v-model.number="navLinkForm.sort_order" type="number" min="0" class="input w-24" data-testid="input-nav-link-order" />
           </div>
           <label class="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" v-model="navLinkForm.open_new_tab" class="w-4 h-4 rounded accent-blue-500" data-testid="check-nav-link-new-tab" />
-            <span class="text-sm text-slate-700 dark:text-slate-300">In neuem Tab öffnen</span>
+            <span class="text-sm text-slate-700 dark:text-slate-300">{{ $t('settings.links.openNewTab') }}</span>
           </label>
           <div v-if="navLinksMsg" :class="['p-3 rounded-lg text-sm border', navLinksMsg.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
             {{ navLinksMsg.text }}
           </div>
           <div class="flex justify-end gap-3">
-            <button type="button" @click="cancelNavLinkForm" class="btn-secondary" data-testid="btn-cancel-nav-link">Abbrechen</button>
+            <button type="button" @click="cancelNavLinkForm" class="btn-secondary" data-testid="btn-cancel-nav-link">{{ $t('common.cancel') }}</button>
             <button type="button" @click="saveNavLink" class="btn-primary" :disabled="navLinksSaving" data-testid="btn-save-nav-link">
               <Spinner v-if="navLinksSaving" size="sm" color="white" />
-              Speichern
+              {{ $t('common.save') }}
             </button>
           </div>
         </div>
@@ -700,68 +801,68 @@
     </div>
 
     <!-- ── Danger Zone ── -->
-    <div v-if="activeTab === 'dangerzone' && auth.isAdmin && !isDemo" class="flex flex-col gap-4 max-w-lg">
+    <div v-if="activeTab === 'dangerzone'" class="flex flex-col gap-4 max-w-lg" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="rounded-lg border border-red-500/40 bg-red-500/5 overflow-hidden">
         <div class="px-5 py-3 border-b border-red-500/30 flex items-center gap-2">
           <svg class="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
           </svg>
-          <h3 class="font-semibold text-sm text-red-400">Danger Zone</h3>
+          <h3 class="font-semibold text-sm text-red-400">{{ $t('settings.dangerzone.title') }}</h3>
         </div>
         <div class="divide-y divide-red-500/20">
 
           <!-- Verknüpfungen -->
           <div class="p-5 flex items-start justify-between gap-4">
             <div>
-              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle Verknüpfungen löschen</p>
-              <p class="text-xs text-slate-500 mt-1">Löscht alle Verknüpfungen. Objekte und Adapter-Instanzen bleiben erhalten.</p>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.bindings.label') }}</p>
+              <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.bindings.desc') }}</p>
             </div>
-            <button @click="showConfirm('bindings')" class="btn-danger btn-sm shrink-0">Löschen</button>
+            <button @click="showConfirm('bindings')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- DataPoints -->
           <div class="p-5 flex items-start justify-between gap-4">
             <div>
-              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle Objekte löschen</p>
-              <p class="text-xs text-slate-500 mt-1">Löscht alle Objekte und deren Verknüpfungen unwiderruflich.</p>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.datapoints.label') }}</p>
+              <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.datapoints.desc') }}</p>
             </div>
-            <button @click="showConfirm('datapoints')" class="btn-danger btn-sm shrink-0">Löschen</button>
+            <button @click="showConfirm('datapoints')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- Logic -->
           <div class="p-5 flex items-start justify-between gap-4">
             <div>
-              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle Logikblätter löschen</p>
-              <p class="text-xs text-slate-500 mt-1">Löscht alle Logikblätter und stoppt die Logik-Engine.</p>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.logic.label') }}</p>
+              <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.logic.desc') }}</p>
             </div>
-            <button @click="showConfirm('logic')" class="btn-danger btn-sm shrink-0">Löschen</button>
+            <button @click="showConfirm('logic')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- Adapters -->
           <div class="p-5 flex items-start justify-between gap-4">
             <div>
-              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Alle Adapter löschen</p>
-              <p class="text-xs text-slate-500 mt-1">Stoppt und löscht alle Adapter-Instanzen und deren Verknüpfungen.</p>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.adapters.label') }}</p>
+              <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.adapters.desc') }}</p>
             </div>
-            <button @click="showConfirm('adapters')" class="btn-danger btn-sm shrink-0">Löschen</button>
+            <button @click="showConfirm('adapters')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- KNX Group Addresses -->
           <div class="p-5 flex items-start justify-between gap-4">
             <div>
-              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">KNX-Gruppenadressen löschen</p>
-              <p class="text-xs text-slate-500 mt-1">Löscht alle importierten KNX-Gruppenadressen ({{ knxGaCount }} GAs).</p>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.knxga.label') }}</p>
+              <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.knxga.desc', { n: knxGaCount }) }}</p>
             </div>
-            <button @click="showConfirm('knxga')" :disabled="knxGaCount === 0" class="btn-danger btn-sm shrink-0">Löschen</button>
+            <button @click="showConfirm('knxga')" :disabled="knxGaCount === 0" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- Factory Reset -->
           <div class="p-5 flex items-start justify-between gap-4">
             <div>
-              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Zurücksetzen auf Werkseinstellungen</p>
-              <p class="text-xs text-slate-500 mt-1">Löscht alles — Objekte, Verknüpfungen, Adapter, KNX-GAs, Logikblätter, Icons und den FontAwesome API Key. Benutzerkonten bleiben erhalten.</p>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.factory.label') }}</p>
+              <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.factory.desc') }}</p>
             </div>
-            <button @click="showConfirm('all')" class="btn-danger btn-sm shrink-0">Alles löschen</button>
+            <button @click="showConfirm('all')" class="btn-danger btn-sm shrink-0">{{ $t('settings.dangerzone.factory.confirmLabel') }}</button>
           </div>
 
           <!-- Feedback -->
@@ -775,69 +876,69 @@
     </div>
 
     <!-- Modals -->
-    <Modal v-model="showCreateUser" title="Neuer Benutzer" max-width="sm">
+    <Modal v-model="showCreateUser" :title="$t('settings.users.createTitle')" max-width="sm">
       <form @submit.prevent="doCreateUser" class="flex flex-col gap-4">
         <div class="form-group">
-          <label class="label">Benutzername</label>
+          <label class="label">{{ $t('settings.users.colUsername') }}</label>
           <input v-model="userForm.username" type="text" class="input" required />
         </div>
         <div class="form-group">
-          <label class="label">Passwort</label>
+          <label class="label">{{ $t('login.password') }}</label>
           <input v-model="userForm.password" type="password" class="input" required autocomplete="new-password" />
         </div>
         <div class="flex items-center gap-2">
           <input type="checkbox" id="isAdmin" v-model="userForm.is_admin" class="w-4 h-4 rounded" />
-          <label for="isAdmin" class="text-sm text-slate-600 dark:text-slate-300">Admin-Rechte</label>
+          <label for="isAdmin" class="text-sm text-slate-600 dark:text-slate-300">{{ $t('settings.users.isAdmin') }}</label>
         </div>
         <div class="flex items-center gap-2">
           <input type="checkbox" id="mqttEnabled" v-model="userForm.mqtt_enabled" class="w-4 h-4 rounded" />
-          <label for="mqttEnabled" class="text-sm text-slate-600 dark:text-slate-300">MQTT aktivieren</label>
+          <label for="mqttEnabled" class="text-sm text-slate-600 dark:text-slate-300">{{ $t('settings.users.mqttEnable') }}</label>
         </div>
         <div v-if="userForm.mqtt_enabled" class="form-group">
-          <label class="label">MQTT-Passwort</label>
-          <input v-model="userForm.mqtt_password" type="password" class="input" autocomplete="new-password" placeholder="Leer = kein MQTT-Passwort" />
+          <label class="label">{{ $t('settings.users.mqttPassword') }}</label>
+          <input v-model="userForm.mqtt_password" type="password" class="input" autocomplete="new-password" :placeholder="$t('common.noMqttPassword')" />
         </div>
         <div class="flex justify-end gap-3">
-          <button type="button" @click="showCreateUser = false" class="btn-secondary">Abbrechen</button>
-          <button type="submit" class="btn-primary">Erstellen</button>
+          <button type="button" @click="showCreateUser = false" class="btn-secondary">{{ $t('common.cancel') }}</button>
+          <button type="submit" class="btn-primary">{{ $t('settings.users.create') }}</button>
         </div>
       </form>
     </Modal>
 
-    <Modal v-model="showMqttPassword" title="MQTT-Passwort setzen" max-width="sm">
+    <Modal v-model="showMqttPassword" :title="$t('settings.users.mqttPasswordTitle')" max-width="sm">
       <form @submit.prevent="doSetMqttPassword" class="flex flex-col gap-4">
-        <p class="text-sm text-slate-400">Benutzer: <span class="text-slate-700 dark:text-slate-200 font-medium">{{ mqttTarget?.username }}</span></p>
+        <p class="text-sm text-slate-400">{{ $t('settings.users.mqttFor', { username: mqttTarget?.username }) }}</p>
         <div class="form-group">
-          <label class="label">Neues MQTT-Passwort</label>
+          <label class="label">{{ $t('settings.users.newMqttPassword') }}</label>
           <input v-model="mqttPasswordInput" type="password" class="input" required autocomplete="new-password" />
         </div>
         <div v-if="mqttMsg" :class="['p-3 rounded-lg text-sm', mqttMsg.ok ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30']">{{ mqttMsg.text }}</div>
         <div class="flex justify-end gap-3">
-          <button type="button" @click="showMqttPassword = false" class="btn-secondary">Abbrechen</button>
+          <button type="button" @click="showMqttPassword = false" class="btn-secondary">{{ $t('common.cancel') }}</button>
           <button type="submit" class="btn-primary" :disabled="mqttSaving">
             <Spinner v-if="mqttSaving" size="sm" color="white" />
-            Speichern
+            {{ $t('common.save') }}
           </button>
         </div>
       </form>
     </Modal>
 
-    <Modal v-model="showNewKeyName" title="API Key Name" max-width="sm">
+    <Modal v-model="showNewKeyName" :title="$t('settings.apikeys.modalTitle')" max-width="sm">
       <form @submit.prevent="doCreateKey" class="flex flex-col gap-4">
         <div class="form-group">
-          <label class="label">Beschreibung / Name</label>
-          <input v-model="newKeyName" type="text" class="input" placeholder="z.B. Home Assistant" required />
+          <label class="label">{{ $t('settings.apikeys.nameLabel') }}</label>
+          <input v-model="newKeyName" type="text" class="input" :placeholder="$t('settings.apikeys.namePlaceholder')" required />
         </div>
         <div class="flex justify-end gap-3">
-          <button type="button" @click="showNewKeyName = false" class="btn-secondary">Abbrechen</button>
-          <button type="submit" class="btn-primary">Erstellen</button>
+          <button type="button" @click="showNewKeyName = false" class="btn-secondary">{{ $t('common.cancel') }}</button>
+          <button type="submit" class="btn-primary">{{ $t('settings.apikeys.create') }}</button>
         </div>
       </form>
     </Modal>
 
-    <ConfirmDialog v-model="showUserConfirm" title="Benutzer löschen"
-      :message="`Benutzer '${deleteUserTarget?.username}' wirklich löschen?`"
-      confirm-label="Löschen" @confirm="doDeleteUser" />
+    <ConfirmDialog v-model="showUserConfirm" :title="$t('settings.users.deleteUser')"
+      :message="$t('settings.users.deleteUserConfirm', { name: deleteUserTarget?.username })"
+      :confirm-label="$t('common.delete')" @confirm="doDeleteUser" />
 
     <ConfirmDialog v-model="showDzConfirm" :title="dzConfirmTitle"
       :message="dzConfirmMessage" :confirm-label="dzConfirmLabel" @confirm="doDzAction" />
@@ -846,18 +947,22 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { authApi, adapterApi, configApi, knxprojApi, historySettingsApi, iconsApi, dpApi } from '@/api/client'
+import { authApi, adapterApi, configApi, autobackupApi, knxprojApi, historySettingsApi, iconsApi, dpApi } from '@/api/client'
+import { useI18n } from 'vue-i18n'
 import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
 import { useTz } from '@/composables/useTz'
-import Badge          from '@/components/ui/Badge.vue'
-import Spinner        from '@/components/ui/Spinner.vue'
+import Badge            from '@/components/ui/Badge.vue'
+import Spinner          from '@/components/ui/Spinner.vue'
+import HierarchyManager from '@/components/HierarchyManager.vue'
 import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import IconPicker     from '@/components/ui/IconPicker.vue'
 import VisuIcon       from '@/components/ui/VisuIcon.vue'
+import LocaleSwitcher from '@/components/ui/LocaleSwitcher.vue'
 
+const { t }    = useI18n()
 const auth     = useAuthStore()
 const settings = useSettingsStore()
 const navStore = useNavLinksStore()
@@ -939,7 +1044,7 @@ onMounted(async () => {
 })
 
 watch(activeTab, (tab) => {
-  if (tab === 'history' && auth.isAdmin) {
+  if (tab === 'history') {
     loadHistorySettings()
     loadHistoryFilterDps()
   }
@@ -955,29 +1060,31 @@ async function saveTz() {
   tzSaving.value = true; tzMsg.value = null
   try {
     await settings.save(tzSelected.value)
-    tzMsg.value = { ok: true, text: `Zeitzone auf «${tzSelected.value}» gesetzt` }
+    tzMsg.value = { ok: true, text: t('settings.general.tzSaved', { tz: tzSelected.value }) }
   } catch (e) {
-    tzMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Speichern' }
+    tzMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.saveError') }
   } finally {
     tzSaving.value = false
   }
 }
 
 const tabs = computed(() => [
-  { id: 'general',      label: 'Allgemein' },
-  { id: 'password',     label: 'Passwort' },
-  ...(auth.isAdmin ? [{ id: 'users', label: 'Benutzer' }] : []),
-  { id: 'apikeys',      label: 'API Keys' },
-  ...(auth.isAdmin && !isDemo.value ? [{ id: 'links', label: 'Links' }] : []),
-  { id: 'importexport', label: 'Datenmanagement' },
-  { id: 'icons',        label: 'Icons' },
-  ...(auth.isAdmin ? [{ id: 'history', label: 'Historie DB' }] : []),
-  ...(auth.isAdmin ? [{ id: 'dangerzone', label: 'Danger Zone' }] : []),
+  { id: 'general',      label: t('settings.tabs.general') },
+  { id: 'password',     label: t('settings.tabs.password') },
+  ...(auth.isAdmin || isDemo.value ? [{ id: 'users', label: t('settings.tabs.users') }] : []),
+  { id: 'apikeys',      label: t('settings.tabs.apikeys') },
+  { id: 'links',        label: t('settings.tabs.links') },
+  { id: 'hierarchy',    label: t('settings.tabs.hierarchy') },
+  { id: 'importexport', label: t('settings.tabs.importexport') },
+  { id: 'icons',        label: t('settings.tabs.icons') },
+  { id: 'history',      label: t('settings.tabs.history') },
+  { id: 'dangerzone',   label: t('settings.tabs.dangerzone') },
 ])
 
 // ── History Backend ────────────────────────────────────────────────────────
 const histForm = reactive({
   plugin: 'sqlite',
+  default_window_hours: 168,
   influx_url: 'http://localhost:8086',
   influx_version: 2,
   influx_token: '',
@@ -1000,13 +1107,21 @@ async function loadHistorySettings() {
   } catch (_) { /* non-critical */ }
 }
 
+function historySettingsPayload() {
+  const hours = Number(histForm.default_window_hours)
+  return {
+    ...histForm,
+    default_window_hours: Number.isFinite(hours) ? hours : 168,
+  }
+}
+
 async function saveHistorySettings() {
   histSaving.value = true; histSaveMsg.value = null
   try {
-    await historySettingsApi.update({ ...histForm })
-    histSaveMsg.value = { ok: true, text: 'Historie DB gespeichert und aktiviert.' }
+    await historySettingsApi.update(historySettingsPayload())
+    histSaveMsg.value = { ok: true, text: t('settings.history.saved') }
   } catch (e) {
-    histSaveMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Speichern' }
+    histSaveMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.saveError') }
   } finally {
     histSaving.value = false
   }
@@ -1015,10 +1130,10 @@ async function saveHistorySettings() {
 async function testHistoryConnection() {
   histTesting.value = true; histTestResult.value = null
   try {
-    const { data } = await historySettingsApi.test({ ...histForm })
+    const { data } = await historySettingsApi.test(historySettingsPayload())
     histTestResult.value = data
   } catch (e) {
-    histTestResult.value = { ok: false, message: e.response?.data?.detail ?? 'Fehler beim Testen' }
+    histTestResult.value = { ok: false, message: e.response?.data?.detail ?? t('settings.history.testError') }
   } finally {
     histTesting.value = false
   }
@@ -1078,7 +1193,13 @@ async function histFilterSetAll(enable) {
 const navLinksSaving  = ref(false)
 const navLinksMsg     = ref(null)
 const navLinkEditId   = ref(null)
-const navLinkForm     = reactive({ label: '', url: '', icon: '', sort_order: 0, open_new_tab: true })
+const navLinkForm     = reactive({
+  label: '',
+  url: '',
+  icon: '',
+  sort_order: 0,
+  open_new_tab: true,
+})
 const navLinkShowForm = ref(false)
 
 function openNavLinkForm(link = null) {
@@ -1087,7 +1208,13 @@ function openNavLinkForm(link = null) {
     Object.assign(navLinkForm, { label: link.label, url: link.url, icon: link.icon, sort_order: link.sort_order, open_new_tab: link.open_new_tab })
   } else {
     navLinkEditId.value = null
-    Object.assign(navLinkForm, { label: '', url: '', icon: '', sort_order: navStore.links.length, open_new_tab: true })
+    Object.assign(navLinkForm, {
+      label: '',
+      url: '',
+      icon: '',
+      sort_order: navStore.links.length,
+      open_new_tab: true,
+    })
   }
   navLinkShowForm.value = true
   navLinksMsg.value = null
@@ -1101,7 +1228,7 @@ function cancelNavLinkForm() {
 
 async function saveNavLink() {
   if (!navLinkForm.label.trim() || !navLinkForm.url.trim()) {
-    navLinksMsg.value = { ok: false, text: 'Bezeichnung und URL sind Pflichtfelder.' }
+    navLinksMsg.value = { ok: false, text: t('settings.links.requiredFields') }
     return
   }
   navLinksSaving.value = true; navLinksMsg.value = null
@@ -1114,7 +1241,7 @@ async function saveNavLink() {
     navLinkShowForm.value = false
     navLinkEditId.value = null
   } catch (e) {
-    navLinksMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Speichern' }
+    navLinksMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.saveError') }
   } finally {
     navLinksSaving.value = false
   }
@@ -1124,16 +1251,16 @@ async function deleteNavLink(id) {
   try {
     await navStore.remove(id)
   } catch (e) {
-    navLinksMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Löschen' }
+    navLinksMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.deleteError') }
   }
 }
 
 // ── Theme ──────────────────────────────────────────────────────────────────
-const themeOptions = [
-  { value: 'system', label: 'System',  desc: 'Folgt der Betriebssystem-Einstellung' },
-  { value: 'light',  label: 'Hell',    desc: 'Helles Erscheinungsbild' },
-  { value: 'dark',   label: 'Dunkel',  desc: 'Dunkles Erscheinungsbild' },
-]
+const themeOptions = computed(() => [
+  { value: 'system', label: t('settings.general.themeSystem'), desc: t('settings.general.themeSystemDesc') },
+  { value: 'light',  label: t('settings.general.themeLight'),  desc: t('settings.general.themeLightDesc') },
+  { value: 'dark',   label: t('settings.general.themeDark'),   desc: t('settings.general.themeDarkDesc') },
+])
 const selectedTheme = computed({
   get: () => settings.theme,
   set: (v) => settings.setTheme(v),
@@ -1145,14 +1272,14 @@ const pwSaving = ref(false)
 const pwMsg    = ref(null)
 
 async function changePassword() {
-  if (pwForm.new1 !== pwForm.new2) { pwMsg.value = { ok: false, text: 'Passwörter stimmen nicht überein' }; return }
+  if (pwForm.new1 !== pwForm.new2) { pwMsg.value = { ok: false, text: t('settings.password.mismatch') }; return }
   pwSaving.value = true; pwMsg.value = null
   try {
     await authApi.changePassword(pwForm.current, pwForm.new1)
-    pwMsg.value = { ok: true, text: 'Passwort erfolgreich geändert' }
+    pwMsg.value = { ok: true, text: t('settings.password.success') }
     pwForm.current = ''; pwForm.new1 = ''; pwForm.new2 = ''
   } catch (e) {
-    pwMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler' }
+    pwMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.error') }
   } finally {
     pwSaving.value = false
   }
@@ -1203,11 +1330,11 @@ async function doSetMqttPassword() {
   mqttSaving.value = true; mqttMsg.value = null
   try {
     await authApi.setMqttPassword(mqttTarget.value.username, mqttPasswordInput.value)
-    mqttMsg.value = { ok: true, text: 'MQTT-Passwort gesetzt' }
+    mqttMsg.value = { ok: true, text: t('settings.users.mqttPasswordSet') }
     await loadUsers()
     setTimeout(() => { showMqttPassword.value = false }, 800)
   } catch (e) {
-    mqttMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler' }
+    mqttMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.error') }
   } finally {
     mqttSaving.value = false
   }
@@ -1239,7 +1366,8 @@ async function doCreateKey() {
 async function deleteApiKey(id) { await authApi.deleteApiKey(id); await loadKeys() }
 
 // ── Sicherung / Wiederherstellung ──────────────────────────────────────────
-const importResult = ref(null)
+const importResult   = ref(null)
+const importDbResult = ref(null)
 
 function _ts() {
   const now = new Date()
@@ -1261,23 +1389,94 @@ async function doExportDb() {
   const a = document.createElement('a'); a.href = url; a.download = `obs_DB_${_ts()}.sqlite`; a.click()
   URL.revokeObjectURL(url)
 }
+
 async function onImportFile(e) {
   const file = e.target.files[0]; if (!file) return
   const text = await file.text()
   try {
     const payload = JSON.parse(text)
     const { data } = await configApi.import(payload)
-    const gaInfo    = data.knx_group_addresses_upserted > 0 ? `, ${data.knx_group_addresses_upserted} KNX-GAs` : ''
+    const gaInfo    = data.knx_group_addresses_upserted > 0 ? t('settings.importexport.importResultKnx', { n: data.knx_group_addresses_upserted }) : ''
     const lgTotal   = (data.logic_graphs_created ?? 0) + (data.logic_graphs_updated ?? 0)
-    const lgInfo    = lgTotal > 0 ? `, ${lgTotal} Logikblätter` : ''
-    const iconInfo  = (data.icons_imported ?? 0) > 0 ? `, ${data.icons_imported} Icons` : ''
-    importResult.value = { ok: true, text: `Wiederherstellung OK: ${data.datapoints_created + data.datapoints_updated} Objekte, ${data.bindings_created + data.bindings_updated} Verknüpfungen${gaInfo}${lgInfo}${iconInfo}` }
-    // FA API Key und Icons nach Wiederherstellung neu laden
+    const lgInfo    = lgTotal > 0 ? t('settings.importexport.importResultLogic', { n: lgTotal }) : ''
+    const iconInfo  = (data.icons_imported ?? 0) > 0 ? t('settings.importexport.importResultIcons', { n: data.icons_imported }) : ''
+    const visuInfo  = (data.visu_nodes_upserted ?? 0) > 0 ? t('settings.importexport.importResultVisu', { n: data.visu_nodes_upserted }) : ''
+    importResult.value = { ok: true, text: t('settings.importexport.importResultOk', { objects: data.datapoints_created + data.datapoints_updated, bindings: data.bindings_created + data.bindings_updated }) + gaInfo + lgInfo + iconInfo + visuInfo }
     await loadFaSettings()
     if ((data.icons_imported ?? 0) > 0) await loadIcons()
   } catch (err) {
-    importResult.value = { ok: false, text: err.response?.data?.detail ?? 'Import fehlgeschlagen' }
+    importResult.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.importFailed') }
   }
+}
+
+async function onImportDbFile(e) {
+  const file = e.target.files[0]; if (!file) return
+  importDbResult.value = null
+  try {
+    const { data } = await configApi.importDb(file)
+    importDbResult.value = { ok: true, text: t('settings.importexport.dbImportResultOk', { message: data.message ?? '', adapters: data.adapters_restarted ?? 0 }) }
+  } catch (err) {
+    importDbResult.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.dbImportFailed') }
+  }
+}
+
+// ── Autobackup ──────────────────────────────────────────────────────────────
+const autobackupCfg        = ref({ enabled: false, hour: 3, retention_days: 7 })
+const autobackupList       = ref([])
+const selectedAutobackup   = ref('')
+const autobackupRunning    = ref(false)
+const autobackupRestoring  = ref(false)
+const autobackupMsg        = ref(null)
+const autobackupRestoreMsg = ref(null)
+
+async function loadAutobackupConfig() {
+  try { const { data } = await autobackupApi.getConfig(); autobackupCfg.value = data } catch {}
+}
+
+async function loadAutobackupList() {
+  try { const { data } = await autobackupApi.list(); autobackupList.value = data } catch {}
+}
+
+async function saveAutobackupConfig() {
+  try { await autobackupApi.setConfig(autobackupCfg.value) } catch {}
+}
+
+async function runAutobackupNow() {
+  autobackupRunning.value = true; autobackupMsg.value = null
+  try {
+    const { data } = await autobackupApi.runNow()
+    autobackupMsg.value = { ok: true, text: t('settings.importexport.autobackupCreated', { name: formatAutobackupName(data.name) }) }
+    await loadAutobackupList()
+  } catch (err) {
+    autobackupMsg.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.autobackupFailed') }
+  } finally { autobackupRunning.value = false }
+}
+
+async function restoreAutobackup() {
+  if (!selectedAutobackup.value) return
+  autobackupRestoring.value = true; autobackupRestoreMsg.value = null
+  try {
+    const { data } = await autobackupApi.restore(selectedAutobackup.value)
+    const errInfo = data.errors?.length ? ` ${t('settings.importexport.autobackupRestoreWarnSuffix', { n: data.errors.length })}` : ''
+    autobackupRestoreMsg.value = { ok: true, text: t('settings.importexport.autobackupRestoreOk', { objects: data.datapoints, bindings: data.bindings, visu: data.visu_nodes }) + errInfo }
+    await loadFaSettings()
+    await loadIcons()
+  } catch (err) {
+    autobackupRestoreMsg.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.autobackupRestoreFailed') }
+  } finally { autobackupRestoring.value = false }
+}
+
+function formatAutobackupName(name) {
+  // "20240506-0300" → "06.05.2024 03:00"
+  const m = name.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})$/)
+  if (!m) return name
+  return `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]} Uhr`
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 // ── KNX Projekt Import ──────────────────────────────────────────────────────
@@ -1342,6 +1541,8 @@ onMounted(async () => {
   await loadKeys()
   await loadKnxGaCount()
   await loadKnxAdapterInstances()
+  await loadAutobackupConfig()
+  await loadAutobackupList()
 })
 // Note: timezone onMounted is defined above (merged there)
 
@@ -1352,71 +1553,53 @@ const resetResult     = ref(null)
 
 const DZ_CONFIG = {
   bindings: {
-    title:   'Alle Verknüpfungen löschen',
-    message: 'Alle Verknüpfungen werden unwiderruflich gelöscht. Objekte und Adapter-Instanzen bleiben erhalten. Fortfahren?',
-    label:   'Löschen',
-    action:  async () => {
+    action: async () => {
       const { data } = await configApi.resetBindings()
-      return `${data.deleted} Verknüpfungen gelöscht.`
+      return t('settings.dangerzone.bindings.result', { n: data.deleted })
     },
     after: () => {},
   },
   datapoints: {
-    title:   'Alle Objekte löschen',
-    message: 'Alle Objekte und deren Verknüpfungen werden unwiderruflich gelöscht. Fortfahren?',
-    label:   'Löschen',
-    action:  async () => {
+    action: async () => {
       const { data } = await configApi.resetDatapoints()
-      return `${data.deleted} Objekte und ${data.bindings_deleted} Verknüpfungen gelöscht.`
+      return t('settings.dangerzone.datapoints.result', { dp: data.deleted, bindings: data.bindings_deleted })
     },
     after: () => {},
   },
   logic: {
-    title:   'Alle Logikblätter löschen',
-    message: 'Alle Logikblätter werden unwiderruflich gelöscht. Fortfahren?',
-    label:   'Löschen',
-    action:  async () => {
+    action: async () => {
       const { data } = await configApi.resetLogic()
-      return `${data.deleted} Logikblätter gelöscht.`
+      return t('settings.dangerzone.logic.result', { n: data.deleted })
     },
     after: () => {},
   },
   adapters: {
-    title:   'Alle Adapter löschen',
-    message: 'Alle Adapter-Instanzen und deren Verknüpfungen werden unwiderruflich gelöscht. Fortfahren?',
-    label:   'Löschen',
-    action:  async () => {
+    action: async () => {
       const { data } = await configApi.resetAdapters()
-      return `${data.deleted} Adapter-Instanzen und ${data.bindings_deleted} Verknüpfungen gelöscht.`
+      return t('settings.dangerzone.adapters.result', { adapters: data.deleted, bindings: data.bindings_deleted })
     },
     after: () => {},
   },
   knxga: {
-    title:   'KNX-Gruppenadressen löschen',
-    message: 'Alle importierten KNX-Gruppenadressen werden gelöscht. Fortfahren?',
-    label:   'Löschen',
-    action:  async () => {
+    action: async () => {
       await knxprojApi.clearGA()
-      return 'Alle KNX-Gruppenadressen gelöscht.'
+      return t('settings.dangerzone.knxga.result')
     },
     after: () => { knxGaCount.value = 0 },
   },
   all: {
-    title:   'Zurücksetzen auf Werkseinstellungen',
-    message: 'Alle Objekte, Verknüpfungen, Adapter-Instanzen, KNX-Gruppenadressen, Logikblätter, Icons und der FontAwesome API Key werden unwiderruflich gelöscht. Benutzerkonten bleiben erhalten. Fortfahren?',
-    label:   'Alles löschen',
-    action:  async () => {
+    action: async () => {
       const { data } = await configApi.reset()
-      const iconInfo = (data.icons_deleted ?? 0) > 0 ? `, ${data.icons_deleted} Icons` : ''
-      return `Zurückgesetzt: ${data.datapoints_deleted} Objekte, ${data.bindings_deleted} Verknüpfungen, ${data.adapter_instances_deleted} Adapter, ${data.knx_group_addresses_deleted} KNX-GAs, ${data.logic_graphs_deleted} Logikblätter${iconInfo} gelöscht.`
+      const iconInfo = (data.icons_deleted ?? 0) > 0 ? t('settings.dangerzone.factory.resultIcons', { n: data.icons_deleted }) : ''
+      return t('settings.dangerzone.factory.result', { dp: data.datapoints_deleted, bindings: data.bindings_deleted, adapters: data.adapter_instances_deleted, knxga: data.knx_group_addresses_deleted, logic: data.logic_graphs_deleted }) + iconInfo
     },
     after: () => { knxGaCount.value = 0; faSavedKey.value = null; icons.value = [] },
   },
 }
 
-const dzConfirmTitle   = computed(() => DZ_CONFIG[dzTarget.value]?.title ?? '')
-const dzConfirmMessage = computed(() => DZ_CONFIG[dzTarget.value]?.message ?? '')
-const dzConfirmLabel   = computed(() => DZ_CONFIG[dzTarget.value]?.label ?? 'Löschen')
+const dzConfirmTitle   = computed(() => dzTarget.value ? t(`settings.dangerzone.${dzTarget.value}.confirmTitle`) : '')
+const dzConfirmMessage = computed(() => dzTarget.value ? t(`settings.dangerzone.${dzTarget.value}.confirmMessage`) : '')
+const dzConfirmLabel   = computed(() => dzTarget.value ? t(`settings.dangerzone.${dzTarget.value}.confirmLabel`) : t('common.delete'))
 
 function showConfirm(target) {
   dzTarget.value = target
@@ -1432,7 +1615,7 @@ async function doDzAction() {
     cfg.after()
     resetResult.value = { ok: true, text }
   } catch (err) {
-    resetResult.value = { ok: false, text: err.response?.data?.detail ?? 'Fehler beim Löschen' }
+    resetResult.value = { ok: false, text: err.response?.data?.detail ?? t('common.deleteError') }
   }
 }
 
@@ -1467,9 +1650,9 @@ async function doSaveFaKey() {
     await iconsApi.saveSettings({ fa_api_key: key })
     faSavedKey.value = key
     faApiKey.value = ''
-    faMsg.value = { ok: true, text: 'API Key gespeichert.', debug: [] }
+    faMsg.value = { ok: true, text: t('settings.icons.faSaved'), debug: [] }
   } catch (e) {
-    faMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Speichern', debug: [] }
+    faMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.saveError'), debug: [] }
   }
 }
 
@@ -1478,9 +1661,9 @@ async function doDeleteFaKey() {
     await iconsApi.saveSettings({ fa_api_key: null })
     faSavedKey.value = null
     faApiKey.value = ''
-    faMsg.value = { ok: true, text: 'API Key gelöscht.', debug: [] }
+    faMsg.value = { ok: true, text: t('settings.icons.faDeleted'), debug: [] }
   } catch (e) {
-    faMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Löschen', debug: [] }
+    faMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.deleteError'), debug: [] }
   }
 }
 
@@ -1501,7 +1684,7 @@ async function loadIcons() {
     const names = new Set(icons.value.map(i => i.name))
     iconsSelected.value = new Set([...iconsSelected.value].filter(n => names.has(n)))
   } catch (e) {
-    iconsMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Laden der Icons' }
+    iconsMsg.value = { ok: false, text: e.response?.data?.detail ?? t('settings.icons.loadError') }
   } finally {
     iconsLoading.value = false
   }
@@ -1556,10 +1739,10 @@ async function doIconsDelete() {
     const names = [...iconsSelected.value]
     await iconsApi.delete(names)
     iconsSelected.value = new Set()
-    iconsMsg.value = { ok: true, text: `${names.length} Icon(s) gelöscht` }
+    iconsMsg.value = { ok: true, text: t('settings.icons.deleted', { n: names.length }) }
     await loadIcons()
   } catch (e) {
-    iconsMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Löschen' }
+    iconsMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.deleteError') }
   }
 }
 
@@ -1573,7 +1756,7 @@ async function doIconsExport() {
     a.href = url; a.download = 'obs_icons.zip'; a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
-    iconsMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Fehler beim Exportieren' }
+    iconsMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.deleteError') }
   }
 }
 
@@ -1589,7 +1772,7 @@ async function doFaImport() {
     if (data.imported > 0) faIconNames.value = ''
     await loadIcons()
   } catch (e) {
-    faMsg.value = { ok: false, text: e.response?.data?.detail ?? 'FontAwesome Import fehlgeschlagen', debug: [] }
+    faMsg.value = { ok: false, text: e.response?.data?.detail ?? t('settings.icons.faImportFailed'), debug: [] }
   } finally {
     faImporting.value = false
   }
