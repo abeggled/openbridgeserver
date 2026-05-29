@@ -45,6 +45,9 @@
 * Visu: Gauge mode for value display widget (arc/circle variants). https://github.com/abeggled/openbridgeserver/pull/421
 * Visu: Bar chart mode for history/chart widget. https://github.com/abeggled/openbridgeserver/pull/444
   
+### Improvements ✨
+* Logic: API client nodes can now load optional headers and bearer tokens from secret files. https://github.com/abeggled/openbridgeserver/pull/581
+
 ### Fixes 🐞
 * General #375: Proxmox LXC, confusing checksum field content within release notes. https://github.com/abeggled/openbridgeserver/issues/375
 * Security: Preserve legacy `OPENTWS_*`/`OPENTWS_CONFIG` compatibility with case-insensitive `OBS_CONFIG` precedence and keep `opentws.db` fallback active even with partial `database.*` overrides to avoid unintended default-admin re-bootstrap on upgrades. https://github.com/abeggled/openbridgeserver/pull/554
@@ -129,3 +132,4 @@
 ### Breaking changes:
 * none
   
+
