@@ -92,6 +92,30 @@ git config core.hooksPath .githooks
 
 Danach läuft der i18n-Gate automatisch vor jedem `git push`.
 
+## Test Coverage Gate (verbindlich)
+
+**Coverage darf durch neuen Code nie sinken.** Jede neue Python-Datei oder -Funktion in `obs/`
+muss mit Tests abgedeckt sein, die die Gesamtabdeckung mindestens auf dem Niveau vor der Änderung
+halten. Konkret:
+
+- **Neuer Code → neue Tests.** Wer eine neue API-Route, einen neuen Adapter oder eine neue
+  Hilfsfunktion hinzufügt, liefert zugehörige Tests (Unit oder Integration) im selben Commit.
+- **Refactorings** dürfen die Coverage nicht senken.
+- **Vor jedem Push mit Backend-Änderungen** Coverage prüfen:
+
+```bash
+# Baseline messen (vor der Änderung):
+pytest tests/unit tests/adapters tests/contracts --cov=obs --cov-report=term-missing
+
+# Nach der Änderung nochmals — Gesamtprozentsatz muss ≥ Baseline sein:
+pytest tests/unit tests/adapters tests/contracts --cov=obs --cov-report=term-missing
+# mit Docker auch:
+pytest tests/integration --cov=obs --cov-append --cov-report=term-missing
+```
+
+Wenn der Coverage-Prozentsatz gefallen ist: Tests ergänzen, nicht pushen.
+Gilt für Haupt-Sessions **und** für Subagents — bitte explizit in den Subagent-Prompt schreiben.
+
 ## Local Development Setup
 
 ### Prerequisites
