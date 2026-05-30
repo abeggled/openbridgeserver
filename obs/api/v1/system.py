@@ -22,12 +22,13 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi import status as http_status
 from pydantic import BaseModel, Field
 
 from obs import __version__
 from obs.adapters import registry as adapter_registry
+from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.models.types import DataTypeRegistry
@@ -282,7 +283,6 @@ _HISTORY_DEFAULTS: dict[str, str] = {
     "timescale_dsn": "",
 }
 
-
 async def _read_history_cfg(db: Database) -> dict[str, str]:
     rows = await db.fetchall("SELECT key, value FROM app_settings WHERE key LIKE 'history.%'")
     cfg = dict(_HISTORY_DEFAULTS)
@@ -317,9 +317,10 @@ async def get_history_settings(
 
 @router.put("/history/settings", response_model=HistorySettingsOut)
 async def update_history_settings(
+    request: Request,
     body: HistorySettingsIn,
     db: Database = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
+    admin_user: str = Depends(get_admin_user),
 ) -> HistorySettingsOut:
     """Update history backend configuration and hot-reload the plugin. Admin only."""
     if body.plugin not in ("sqlite", "influxdb", "timescaledb"):
@@ -358,6 +359,29 @@ async def update_history_settings(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Settings saved but plugin reload failed: {exc}",
         )
+
+    audit_writer = AuditLogWriter(
+        db=db,
+        context=build_audit_context(request=request, current_user=admin_user),
+    )
+    await audit_writer.write(
+        action="system.history.settings.updated",
+        resource_type="history_settings",
+        resource_id="global",
+        details={
+            "plugin": body.plugin,
+            "default_window_hours": body.default_window_hours,
+            "influx_url": body.influx_url,
+            "influx_version": body.influx_version,
+            "influx_org": body.influx_org,
+            "influx_bucket": body.influx_bucket,
+            "influx_database": body.influx_database,
+            "influx_username": body.influx_username,
+            "has_influx_token": bool(body.influx_token),
+            "has_influx_password": bool(body.influx_password),
+            "has_timescale_dsn": bool(body.timescale_dsn),
+        },
+    )
 
     return HistorySettingsOut(
         plugin=body.plugin,

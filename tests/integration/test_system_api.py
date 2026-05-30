@@ -212,6 +212,38 @@ async def test_put_history_settings_sqlite_roundtrip(client, auth_headers):
     )
 
 
+async def test_put_history_settings_writes_audit_log_entry(client, auth_headers):
+    from obs.db.database import get_db
+
+    resp = await client.put(
+        "/api/v1/system/history/settings",
+        json={"plugin": "sqlite", "default_window_hours": 96},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+
+    row = await get_db().fetchone(
+        """
+        SELECT actor, action, resource_type, resource_id, details_json
+        FROM audit_log_entries
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+    assert row is not None
+    assert row["actor"] == "admin"
+    assert row["action"] == "system.history.settings.updated"
+    assert row["resource_type"] == "history_settings"
+    assert row["resource_id"] == "global"
+    assert "sqlite" in row["details_json"]
+
+    await client.put(
+        "/api/v1/system/history/settings",
+        json={"plugin": "sqlite", "default_window_hours": 168},
+        headers=auth_headers,
+    )
+
+
 # ---------------------------------------------------------------------------
 # POST /history/test
 # ---------------------------------------------------------------------------
