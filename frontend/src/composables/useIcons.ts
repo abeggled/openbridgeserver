@@ -5,34 +5,54 @@ import { icons as iconsApi } from '@/api/client'
 const iconNames = ref<string[]>([])
 const svgCache: Record<string, string> = {}  // name → normalised SVG string
 let listPromise: Promise<void> | null = null
+const BLOCKED_URL_SCHEMES = ['javascript:', 'data:', 'http:', 'https:', 'vbscript:', 'file:']
+const URL_FUNCTION_ATTRIBUTES = new Set([
+  'fill',
+  'stroke',
+  'filter',
+  'clip-path',
+  'mask',
+  'marker-start',
+  'marker-mid',
+  'marker-end',
+  'cursor',
+])
 
-function isDangerousHref(raw: string): boolean {
-  // Normalize obfuscated schemes like "java\nscript:" before checking.
-  const normalized = raw
-    .trim()
-    .toLowerCase()
-    .replace(/[\u0000-\u001f\u007f\s]+/g, '')
-  return normalized.startsWith('javascript:')
+function stripAsciiControlsAndWhitespace(raw: string): string {
+  return raw.toLowerCase().replace(/[\u0000-\u0020\u007f-\u009f]+/g, '')
+}
+
+function isBlockedUrlReference(rawValue: string): boolean {
+  const normalized = stripAsciiControlsAndWhitespace(rawValue)
+  return normalized.startsWith('//') || BLOCKED_URL_SCHEMES.some((scheme) => normalized.startsWith(scheme))
+}
+
+function hasBlockedCssUrlFunction(value: string): boolean {
+  for (const match of value.matchAll(/url\(([^)]*)\)/gi)) {
+    const rawRef = (match[1] || '').trim().replace(/^['"]|['"]$/g, '')
+    if (isBlockedUrlReference(rawRef)) return true
+  }
+  return false
 }
 
 function sanitizeSvg(raw: string): string {
   const parser = new DOMParser()
   const doc = parser.parseFromString(raw, 'image/svg+xml')
   const svg = doc.documentElement
+
   if (!svg || svg.tagName.toLowerCase() !== 'svg') return ''
 
-  // Remove executable or HTML-capable elements
-  doc.querySelectorAll('script, foreignObject').forEach((el) => el.remove())
-  // Remove SMIL animation elements that can mutate attributes post-sanitization.
-  doc.querySelectorAll('animate, animateMotion, animateTransform, set').forEach((el) => el.remove())
+  // Drop executable, externally embeddable, or dynamic mutation content.
+  doc.querySelectorAll('script,style,foreignObject,iframe,object,embed,audio,video,animate,set,animateMotion,animateTransform').forEach((el) => el.remove())
 
-  // Remove dangerous attributes and fixed dimensions
-  for (const el of Array.from(doc.querySelectorAll('*'))) {
+  for (const el of [svg, ...Array.from(doc.querySelectorAll('*'))]) {
     for (const attr of Array.from(el.attributes)) {
       const name = attr.name.toLowerCase()
-      const value = attr.value
+      const localName = (attr.localName || attr.name).toLowerCase()
+      const lowerValue = attr.value.toLowerCase()
+      const normalizedValue = stripAsciiControlsAndWhitespace(attr.value)
 
-      if (name === 'width' || name === 'height') {
+      if (el === svg && (name === 'width' || name === 'height')) {
         el.removeAttribute(attr.name)
         continue
       }
@@ -42,7 +62,20 @@ function sanitizeSvg(raw: string): string {
         continue
       }
 
-      if ((name === 'href' || name === 'xlink:href') && isDangerousHref(value)) {
+      if (name === 'style' && (lowerValue.includes('url(') || lowerValue.includes('@import'))) {
+        el.removeAttribute(attr.name)
+        continue
+      }
+
+      if ((localName === 'href' || localName === 'src') && (
+        normalizedValue.startsWith('//') ||
+        BLOCKED_URL_SCHEMES.some((scheme) => normalizedValue.startsWith(scheme))
+      )) {
+        el.removeAttribute(attr.name)
+        continue
+      }
+
+      if (URL_FUNCTION_ATTRIBUTES.has(localName) && hasBlockedCssUrlFunction(attr.value)) {
         el.removeAttribute(attr.name)
       }
     }

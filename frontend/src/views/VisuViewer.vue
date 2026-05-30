@@ -140,7 +140,10 @@ async function load() {
         sessionToken: getSessionToken(definingId) ?? undefined,
         definingId,
       })
-      ws.connect()
+      ws.connect({
+        pageId: props.id,
+        sessionToken: getSessionToken(definingId) ?? undefined,
+      })
       dpStore.subscribe(allDpIds.value)
       // Sofort aktuelle Werte per HTTP laden (unabhängig von WS-Status)
       await dpStore.fetchInitialValues(allDpIds.value)

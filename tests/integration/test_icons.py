@@ -144,6 +144,17 @@ async def test_import_rejects_non_svg(client, auth_headers, icons_tmp):
 
 
 @pytest.mark.asyncio
+async def test_import_rejects_svg_with_unsupported_xml_encoding(client, auth_headers, icons_tmp):
+    bad_encoded_svg = b'<?xml version="1.0" encoding="nope"?><svg xmlns="http://www.w3.org/2000/svg"></svg>'
+    resp = await client.post(
+        "/api/v1/icons/import",
+        headers=auth_headers,
+        files=[("files", ("bad-encoding.svg", bad_encoded_svg, "image/svg+xml"))],
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_import_zip_skips_non_svg_members(client, auth_headers, icons_tmp):
     zip_bytes = _make_zip(
         ("home.svg", _MINIMAL_SVG),
@@ -243,6 +254,19 @@ async def test_get_icon(client, auth_headers, icons_tmp):
     assert resp.status_code == 200
     assert b"<svg" in resp.content
     assert resp.headers["content-type"].startswith("image/svg+xml")
+
+
+@pytest.mark.asyncio
+async def test_get_icon_sanitizes_legacy_svg_from_disk(client, auth_headers, icons_tmp):
+    (icons_tmp / "legacy.svg").write_bytes(
+        b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><a href="javascript:alert(2)">x</a></svg>'
+    )
+
+    resp = await client.get("/api/v1/icons/legacy", headers=auth_headers)
+    assert resp.status_code == 200
+    text = resp.text.lower()
+    assert "<script" not in text
+    assert "javascript:" not in text
 
 
 @pytest.mark.asyncio

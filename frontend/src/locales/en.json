@@ -689,8 +689,9 @@
       "alignLeft": "Left",
       "alignCenter": "Centre",
       "alignRight": "Right",
-      "markdownRef": "Markdown quick reference"
-    },
+    "markdownRef": "Markdown quick reference",
+    "noText": "No text"
+  },
     "toggle": {
       "states": "States",
       "stateOn": "ON (true)",
