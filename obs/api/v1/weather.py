@@ -19,10 +19,8 @@ import socket
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import JSONResponse
-
-from obs.api.auth import decode_token
 
 router = APIRouter(tags=["weather"])
 
@@ -93,35 +91,12 @@ async def _check_ssrf(url: str) -> None:
                 )
 
 
-# ── Authentifizierung ──────────────────────────────────────────────────────────
-
-
-async def _weather_auth(
-    request: Request,
-    _token: str = Query("", alias="_token", description="JWT als Query-Parameter"),
-) -> str:
-    """Akzeptiert JWT entweder als 'Authorization: Bearer …'-Header
-    oder als URL-Query-Parameter '?_token=…'.
-    """
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        return decode_token(auth_header[7:])
-    if _token:
-        return decode_token(_token)
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Provide Authorization: Bearer {token} or ?_token=",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
 # ── Fetch-Endpunkt ─────────────────────────────────────────────────────────────
 
 
 @router.get("/fetch")
 async def fetch_weather(
     url: str = Query(..., description="Vollständige Wetter-API-URL (inkl. API-Key)"),
-    _user: str = Depends(_weather_auth),
 ) -> JSONResponse:
     """Holt Wetterdaten von der konfigurierten API-URL und gibt sie als JSON zurück.
     Der API-Key wird als Teil der URL übergeben (z.B. OpenWeatherMap appid=…).

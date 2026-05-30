@@ -3,8 +3,8 @@
 GET /api/v1/weather/fetch
 
 Abgedeckt:
-  1.  Kein Token → 401
-  2.  Ungültiger Token → 401
+  1.  Public: Kein Token nötig
+  2.  Public: Ungültiger _token wird ignoriert
   3.  Ungültiges URL-Schema (ftp://) → 400
   4.  Wetter-API erreichbar → 200, JSON-Daten weitergeleitet
   5.  Wetter-API nicht erreichbar → 502
@@ -119,16 +119,26 @@ class _MockWeatherServer:
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 
-# 1. Kein Token
-async def test_fetch_no_auth_returns_401(client):
-    resp = await client.get("/api/v1/weather/fetch?url=http://example.com/weather")
-    assert resp.status_code == 401
+# 1. Public: Kein Token nötig
+async def test_fetch_no_auth_required(client, bypass_ssrf):
+    srv = _MockWeatherServer()
+    try:
+        resp = await client.get(f"/api/v1/weather/fetch?url={srv.base_url}/weather")
+        assert resp.status_code == 200
+    finally:
+        srv.shutdown()
 
 
-# 2. Ungültiger Token
-async def test_fetch_invalid_token_returns_401(client):
-    resp = await client.get("/api/v1/weather/fetch?url=http://example.com/weather&_token=not.valid.jwt")
-    assert resp.status_code == 401
+# 2. Public: Ungültiger _token wird ignoriert
+async def test_fetch_invalid_token_is_ignored_for_public_route(client, bypass_ssrf):
+    srv = _MockWeatherServer()
+    try:
+        resp = await client.get(
+            f"/api/v1/weather/fetch?url={srv.base_url}/weather&_token=not.valid.jwt",
+        )
+        assert resp.status_code == 200
+    finally:
+        srv.shutdown()
 
 
 # 3. Ungültiges URL-Schema

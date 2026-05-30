@@ -15,7 +15,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user
+from obs.api.v1.redaction import redact_sensitive_fields
 from obs.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ def _parse_keyring(path: Path, password: str) -> Any:
 async def scan_knx_gateways(
     timeout: float = 4.0,
     local_ip: str | None = None,
-    _user: str = Depends(get_current_user),
+    _admin: str = Depends(get_admin_user),
 ) -> list[GatewayScanResult]:
     """KNX/IP-Geräte im lokalen Netzwerk suchen (GatewayScanner).
 
@@ -148,7 +149,7 @@ async def scan_knx_gateways(
 async def upload_keyfile(
     file: UploadFile = File(...),
     password: str = Form(...),
-    _user: str = Depends(get_current_user),
+    _admin: str = Depends(get_admin_user),
 ) -> KeyfileParseResult:
     """.knxkeys Datei hochladen, entschlüsseln und verfügbare Tunnel zurückgeben.
 
@@ -213,19 +214,23 @@ async def upload_keyfile(
         file_id,
     )
 
-    return KeyfileParseResult(
-        file_id=file_id,
-        file_path=str(keyfile_path),
-        project_name=keyring.project_name,
-        tunnels=tunnels,
-        backbone=backbone,
+    payload = redact_sensitive_fields(
+        {
+            "file_id": file_id,
+            "file_path": str(keyfile_path),
+            "project_name": keyring.project_name,
+            "tunnels": tunnels,
+            "backbone": backbone,
+        },
+        ("file_path",),
     )
+    return KeyfileParseResult(**payload)
 
 
 @router.delete("/keyfile/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_keyfile(
     file_id: str,
-    _user: str = Depends(get_current_user),
+    _admin: str = Depends(get_admin_user),
 ) -> None:
     """Gespeichertes .knxkeys File löschen."""
     # Nur UUID-artige file_ids erlauben (Pfad-Traversal verhindern)

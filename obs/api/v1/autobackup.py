@@ -115,7 +115,7 @@ async def _create_backup_now(db: Database) -> str:
     from obs.api.v1.config import export_config
 
     # Export-Funktion direkt aufrufen (ohne HTTP-Request)
-    export = await export_config(_user="autobackup", db=db)
+    export = await export_config(_admin="autobackup", db=db)
 
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M")
     backup_path = _autobackup_dir() / f"{ts}.json"
@@ -202,7 +202,7 @@ async def restore_autobackup(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Sicherungsformat ungültig: {exc}") from exc
 
-    result: ImportResult = await import_config(body=body, _user="autobackup-restore", db=db)
+    result: ImportResult = await import_config(body=body, _admin="autobackup-restore", db=db)
     return {
         "ok": True,
         "name": safe_name,

@@ -17,8 +17,28 @@ Covers endpoints not tested by test_nav_links.py:
 from __future__ import annotations
 
 import pytest
+from obs.api.auth import create_access_token
 
 pytestmark = pytest.mark.integration
+
+
+async def _create_non_admin_headers(client, auth_headers) -> tuple[dict, str]:
+    import uuid
+
+    username = f"sys-user-{uuid.uuid4().hex[:8]}"
+    password = "pw-12345678"
+    resp = await client.post(
+        "/api/v1/auth/users",
+        json={
+            "username": username,
+            "password": password,
+            "is_admin": False,
+            "mqtt_enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return {"Authorization": f"Bearer {create_access_token(username)}"}, username
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +403,15 @@ async def test_get_log_level_requires_auth(client):
     assert resp.status_code == 401
 
 
+async def test_get_log_level_non_admin_forbidden(client, auth_headers):
+    user_headers, username = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.get("/api/v1/system/log-level", headers=user_headers)
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 async def test_get_log_level_returns_level(client, auth_headers):
     resp = await client.get("/api/v1/system/log-level", headers=auth_headers)
     assert resp.status_code == 200
@@ -399,6 +428,15 @@ async def test_get_log_level_returns_level(client, auth_headers):
 async def test_put_log_level_requires_auth(client):
     resp = await client.put("/api/v1/system/log-level", json={"level": "INFO"})
     assert resp.status_code == 401
+
+
+async def test_put_log_level_non_admin_forbidden(client, auth_headers):
+    user_headers, username = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.put("/api/v1/system/log-level", json={"level": "INFO"}, headers=user_headers)
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_put_log_level_valid(client, auth_headers):
