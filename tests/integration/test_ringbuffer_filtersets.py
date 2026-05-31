@@ -555,7 +555,7 @@ async def test_non_admin_cannot_clone_filterset(client, auth_headers):
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
-async def test_non_admin_cannot_patch_filterset_topbar(client, auth_headers):
+async def test_non_admin_can_patch_filterset_topbar(client, auth_headers):
     created = await _create_filterset(
         client,
         auth_headers,
@@ -569,13 +569,14 @@ async def test_non_admin_cannot_patch_filterset_topbar(client, auth_headers):
             json={"topbar_active": True},
             headers=user_headers,
         )
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["topbar_active"] is True
     finally:
         await _delete_filterset(client, auth_headers, created["id"])
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
-async def test_non_admin_cannot_patch_filterset_order(client, auth_headers):
+async def test_non_admin_can_patch_filterset_order(client, auth_headers):
     created = await _create_filterset(
         client,
         auth_headers,
@@ -589,7 +590,9 @@ async def test_non_admin_cannot_patch_filterset_order(client, auth_headers):
             json={"items": [{"id": created["id"], "topbar_order": 5}]},
             headers=user_headers,
         )
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 200, resp.text
+        by_id = {row["id"]: row for row in resp.json()}
+        assert by_id[created["id"]]["topbar_order"] == 5
     finally:
         await _delete_filterset(client, auth_headers, created["id"])
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)

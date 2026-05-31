@@ -1183,7 +1183,7 @@ async def clone_ringbuffer_filterset(
 @router.patch("/filtersets/order", response_model=list[RingBufferFiltersetOut])
 async def patch_ringbuffer_filtersets_order(
     body: RingBufferFiltersetOrderPatch,
-    current_user: str = Depends(get_admin_user),
+    current_user: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ) -> list[RingBufferFiltersetOut]:
     """Persist a new topbar order for several sets in one batch — per-user.
@@ -1226,7 +1226,7 @@ async def patch_ringbuffer_filtersets_order(
 async def patch_ringbuffer_filterset_topbar(
     filterset_id: str,
     body: RingBufferFiltersetTopbarPatch,
-    current_user: str = Depends(get_admin_user),
+    current_user: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ) -> RingBufferFiltersetOut:
     """Update the per-user view (``is_active``, ``topbar_active``, ``topbar_order``).
