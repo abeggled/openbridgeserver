@@ -418,7 +418,10 @@
         "last_week": "Last week",
         "last_month": "Last month"
       },
-      "defaultTimeRange": "Default time range"
+      "defaultTimeRange": "Default time range",
+      "selectTimeRange": "Select time range",
+      "editorPlaceholder": "History chart",
+      "seriesFallback": "Series {n}"
     },
     "energiefluss": {
       "titleLabel": "Title (optional)",

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   Chart,
   LineController, LineElement, PointElement,
@@ -26,6 +27,7 @@ const props = defineProps<{
   editorMode: boolean
 }>()
 
+const { t } = useI18n()
 const ws = useWebSocket()
 
 const label = computed(() => (props.config.label as string | undefined) ?? '—')
@@ -212,7 +214,7 @@ async function loadData() {
       })
       return {
         yAxisID:         s.axis,
-        label:           s.label || (hasMultiple ? `Serie ${i + 1}` : ''),
+        label:           s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''),
         data,
         backgroundColor: s.color + 'cc',
         borderWidth:     0,
@@ -223,7 +225,7 @@ async function loadData() {
     chart.data.labels   = undefined
     chart.data.datasets = defs.map((s, i) => ({
       yAxisID:         s.axis,
-      label:           s.label || (hasMultiple ? `Serie ${i + 1}` : ''),
+      label:           s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''),
       data:            results[i].map(d => ({ x: new Date(d.ts).getTime(), y: Number(d.v) })),
       borderColor:     s.color,
       backgroundColor: s.color + '1a',
@@ -307,15 +309,15 @@ onUnmounted(() => {
         v-if="!editorMode"
         v-model="selectedTimeRange"
         class="shrink-0 text-xs bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer"
-        title="Zeitbereich wählen"
+        :title="$t('widgets.chart.selectTimeRange')"
       >
-        <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ p.label }}</option>
+        <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ $t(p.label) }}</option>
       </select>
     </div>
     <div class="flex-1 min-h-0">
       <canvas v-if="!editorMode" ref="canvas" />
       <div v-else class="flex items-center justify-center h-full text-gray-600 text-sm">
-        Verlaufs-Chart
+        {{ $t('widgets.chart.editorPlaceholder') }}
       </div>
     </div>
   </div>
