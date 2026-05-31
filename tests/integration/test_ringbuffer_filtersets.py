@@ -9,7 +9,10 @@ shim that emits :class:`DeprecationWarning` (removed in #438).
 
 from __future__ import annotations
 
+import json
 import uuid
+
+from datetime import UTC, datetime
 
 import pytest
 
@@ -41,6 +44,79 @@ async def _write_value(client, auth_headers, dp_id: str, value: object) -> None:
         headers=auth_headers,
     )
     assert resp.status_code == 204, resp.text
+
+
+async def _insert_binding(dp_id: str, adapter_type: str, config: dict) -> None:
+    from obs.db.database import get_db
+
+    db = get_db()
+    now = datetime.now(UTC).isoformat()
+    await db.execute_and_commit(
+        """INSERT INTO adapter_bindings
+               (id, datapoint_id, adapter_type, direction, config, enabled, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            str(uuid.uuid4()),
+            dp_id,
+            adapter_type,
+            "SOURCE",
+            json.dumps(config),
+            1,
+            now,
+            now,
+        ),
+    )
+
+
+async def _seed_knx_pa_ga_link(pa: str, ga: str) -> None:
+    """Ensure a minimal PA->GA mapping schema exists for ringbuffer device filter tests."""
+    from obs.db.database import get_db
+
+    db = get_db()
+    co_id = str(uuid.uuid4())
+    imported_at = datetime.now(UTC).isoformat()
+
+    devices_cols = {row["name"] for row in await db.fetchall("PRAGMA table_info(knx_devices)")}
+    co_cols = {row["name"] for row in await db.fetchall("PRAGMA table_info(knx_comm_objects)")}
+    link_cols = {row["name"] for row in await db.fetchall("PRAGMA table_info(knx_co_ga_links)")}
+
+    # Preferred path: use the real V34 schema when present.
+    if {"id", "individual_address", "imported_at"} <= devices_cols and {"id", "device_id", "imported_at"} <= co_cols:
+        device_id = str(uuid.uuid4())
+        await db.execute(
+            """INSERT INTO knx_devices
+                   (id, individual_address, name, description, product_name, product_refid, hardware2program_refid, imported_at)
+               VALUES (?, ?, '', '', '', '', '', ?)""",
+            (device_id, pa, imported_at),
+        )
+        await db.execute(
+            """INSERT INTO knx_comm_objects
+                   (id, device_id, number, name, text, function_text, datapoint_type, imported_at)
+               VALUES (?, ?, '', '', '', '', '', ?)""",
+            (co_id, device_id, imported_at),
+        )
+        ga_column = "ga_address" if "ga_address" in link_cols else "group_address"
+        await db.execute(
+            "INSERT OR IGNORE INTO knx_group_addresses (address) VALUES (?)",
+            (ga,),
+        )
+        await db.execute(
+            f"INSERT INTO knx_co_ga_links (comm_object_id, {ga_column}) VALUES (?, ?)",
+            (co_id, ga),
+        )
+    else:
+        # Fallback for pre-V34 or reduced local schemas.
+        await db.execute("CREATE TABLE IF NOT EXISTS knx_comm_objects (id TEXT PRIMARY KEY, physical_address TEXT NOT NULL)")
+        await db.execute("CREATE TABLE IF NOT EXISTS knx_co_ga_links (comm_object_id TEXT NOT NULL, group_address TEXT NOT NULL)")
+        await db.execute(
+            "INSERT INTO knx_comm_objects (id, physical_address) VALUES (?, ?)",
+            (co_id, pa),
+        )
+        await db.execute(
+            "INSERT INTO knx_co_ga_links (comm_object_id, group_address) VALUES (?, ?)",
+            (co_id, ga),
+        )
+    await db.commit()
 
 
 async def _create_filterset(client, auth_headers, payload: dict) -> dict:
@@ -473,6 +549,108 @@ async def test_single_set_query_returns_matching_entries(client, auth_headers):
         rows = resp.json()
         assert rows
         assert all(row["datapoint_id"] == dp["id"] for row in rows)
+    finally:
+        await _delete_filterset(client, auth_headers, created["id"])
+
+
+async def test_filterset_query_maps_devices_pa_to_group_address_match(client, auth_headers):
+    pa = "1.1.10"
+    ga_match = "1/2/10"
+    ga_other = "1/2/11"
+
+    dp_match = await _create_dp(client, auth_headers, f"RB device-match {uuid.uuid4()}")
+    dp_other = await _create_dp(client, auth_headers, f"RB device-other {uuid.uuid4()}")
+
+    await _insert_binding(dp_match["id"], "knx", {"group_address": ga_match})
+    await _insert_binding(dp_other["id"], "knx", {"group_address": ga_other})
+    await _seed_knx_pa_ga_link(pa, ga_match)
+
+    await _write_value(client, auth_headers, dp_match["id"], 21.0)
+    await _write_value(client, auth_headers, dp_other["id"], 22.0)
+
+    created = await _create_filterset(
+        client,
+        auth_headers,
+        {
+            "name": f"RB device-filter {uuid.uuid4()}",
+            "filter": {"devices": [pa]},
+        },
+    )
+    try:
+        resp = await client.post(
+            "/api/v1/ringbuffer/filtersets/query",
+            json={"set_ids": [created["id"]], "limit": 100},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()
+        assert rows
+        ids = {row["datapoint_id"] for row in rows}
+        assert dp_match["id"] in ids
+        assert dp_other["id"] not in ids
+    finally:
+        await _delete_filterset(client, auth_headers, created["id"])
+
+
+async def test_filterset_query_unknown_device_pa_matches_nothing(client, auth_headers):
+    dp = await _create_dp(client, auth_headers, f"RB device-unknown {uuid.uuid4()}")
+    await _insert_binding(dp["id"], "knx", {"group_address": "1/3/1"})
+    await _write_value(client, auth_headers, dp["id"], 10.0)
+
+    created = await _create_filterset(
+        client,
+        auth_headers,
+        {
+            "name": f"RB device-unknown-filter {uuid.uuid4()}",
+            "filter": {"devices": ["9.9.9"]},
+        },
+    )
+    try:
+        resp = await client.post(
+            "/api/v1/ringbuffer/filtersets/query",
+            json={"set_ids": [created["id"]], "limit": 100},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == []
+    finally:
+        await _delete_filterset(client, auth_headers, created["id"])
+
+
+async def test_filterset_query_combines_devices_with_other_criteria_using_and(client, auth_headers):
+    pa = "1.1.20"
+    ga = "1/4/20"
+
+    dp_match = await _create_dp(client, auth_headers, f"RB device-and-match {uuid.uuid4()}", tags=["zone-a"])
+    dp_wrong_tag = await _create_dp(client, auth_headers, f"RB device-and-wrong-tag {uuid.uuid4()}", tags=["zone-b"])
+
+    await _insert_binding(dp_match["id"], "knx", {"group_address": ga})
+    await _insert_binding(dp_wrong_tag["id"], "knx", {"group_address": ga})
+    await _seed_knx_pa_ga_link(pa, ga)
+
+    await _write_value(client, auth_headers, dp_match["id"], 31.0)
+    await _write_value(client, auth_headers, dp_wrong_tag["id"], 32.0)
+
+    created = await _create_filterset(
+        client,
+        auth_headers,
+        {
+            "name": f"RB device-and-filter {uuid.uuid4()}",
+            "filter": {"devices": [pa], "tags": ["zone-a"]},
+        },
+    )
+    try:
+        resp = await client.post(
+            "/api/v1/ringbuffer/filtersets/query",
+            json={"set_ids": [created["id"]], "limit": 100},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()
+        assert rows
+        ids = {row["datapoint_id"] for row in rows}
+        assert dp_match["id"] in ids
+        assert dp_wrong_tag["id"] not in ids
     finally:
         await _delete_filterset(client, auth_headers, created["id"])
 

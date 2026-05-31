@@ -74,6 +74,7 @@ describe('isEmptyFilter helper', () => {
 
   it('returns false when any criterion is populated', () => {
     expect(isEmptyFilter({ datapoints: ['dp-1'] })).toBe(false)
+    expect(isEmptyFilter({ devices: ['1.1.10'] })).toBe(false)
     expect(isEmptyFilter({ adapters: ['knx'] })).toBe(false)
     expect(isEmptyFilter({ tags: ['heizung'] })).toBe(false)
     expect(isEmptyFilter({ q: 'temp' })).toBe(false)
@@ -192,6 +193,19 @@ describe('matchEntry — hierarchy-only filters', () => {
   it('matches when hierarchy_nodes is set alongside a client-evaluable criterion that accepts the entry', () => {
     expect(matchEntry(makeEntry({ source_adapter: 'knx' }), {
       hierarchy_nodes: [{ tree_id: 't', node_id: 'n', include_descendants: true }],
+      adapters: ['knx'],
+    })).toBe(true)
+  })
+})
+
+describe('matchEntry — device-only filters', () => {
+  it('returns false when only devices is populated (no client-evaluable constraint)', () => {
+    expect(matchEntry(makeEntry(), { devices: ['1.1.10'] })).toBe(false)
+  })
+
+  it('does not block match when devices is set alongside a client-evaluable passing criterion', () => {
+    expect(matchEntry(makeEntry({ source_adapter: 'knx' }), {
+      devices: ['1.1.10'],
       adapters: ['knx'],
     })).toBe(true)
   })

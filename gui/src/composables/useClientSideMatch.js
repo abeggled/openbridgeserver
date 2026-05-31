@@ -6,6 +6,7 @@
  *
  * Field semantics (mirroring `FilterCriteria` from obs/api/v1/ringbuffer.py):
  *   - datapoints[]  — OR over entry.datapoint_id
+ *   - devices[]     — server-resolved KNX physical addresses; pass-through
  *   - adapters[]    — OR over entry.source_adapter
  *   - tags[]        — OR over entry.metadata.tags
  *   - q             — substring (case-insensitive) over name | datapoint_id | source_adapter
@@ -30,6 +31,7 @@ export function isEmptyFilter(criteria) {
   const hasList = (key) => Array.isArray(criteria[key]) && criteria[key].length > 0
   if (hasList('hierarchy_nodes')) return false
   if (hasList('datapoints')) return false
+  if (hasList('devices')) return false
   if (hasList('tags')) return false
   if (hasList('adapters')) return false
   if (typeof criteria.q === 'string' && criteria.q.trim().length > 0) return false
@@ -75,12 +77,10 @@ function _matchValueFilter(entryValue, vf) {
  *
  * Empty / null / undefined criteria match NOTHING (Phase-2 UX feedback).
  *
- * Hierarchy-only filters also match NOTHING on the client: the frontend has
- * no hierarchy resolver, and silently accepting every entry would colour
- * unrelated rows (e.g. a Wetterstation push would inherit a hierarchy set's
- * colour). The REST OR-union already does the right thing using the server's
- * recursive node-DP resolution, so the next refresh shows real matches; live
- * pushes for hierarchy-only sets stay uncoloured until then.
+ * Hierarchy-only/device-only filters also match NOTHING on the client: the
+ * frontend has no resolver for those server-side mappings. The REST OR-union
+ * remains authoritative; live pushes for non-client-evaluable-only sets stay
+ * uncoloured until the next refresh.
  */
 export function matchEntry(entry, criteria) {
   if (!criteria || typeof criteria !== 'object') return false
@@ -131,6 +131,7 @@ export function matchEntry(entry, criteria) {
   }
 
   // hierarchy_nodes is pass-through on the client side.
+  // devices is pass-through on the client side.
   return true
 }
 

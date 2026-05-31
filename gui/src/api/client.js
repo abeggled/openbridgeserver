@@ -143,6 +143,9 @@ export const knxKeyfileApi = {
 export const knxprojApi = {
   import:  (formData, params = {}) => api.post('/knxproj/import', formData, { headers: { 'Content-Type': 'multipart/form-data' }, params }),
   listGA:  (params)   => api.get('/knxproj/group-addresses', { params }),
+  listDevices: (params) => api.get('/knxproj/devices', { params }),
+  getDevice: (pa)      => api.get(`/knxproj/devices/${encodeURIComponent(pa)}`),
+  listGaDevices: (ga, params) => api.get(`/knxproj/group-addresses/${encodeURIComponent(ga)}/devices`, { params }),
   clearGA: ()         => api.delete('/knxproj/group-addresses'),
 }
 

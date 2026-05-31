@@ -425,6 +425,48 @@ _MIGRATION_V29 = """
 ALTER TABLE hierarchy_trees ADD COLUMN display_depth INTEGER NOT NULL DEFAULT 0;
 """
 
+_MIGRATION_V34 = """
+CREATE TABLE IF NOT EXISTS knx_devices (
+    id                       TEXT PRIMARY KEY,
+    individual_address       TEXT NOT NULL UNIQUE,
+    name                     TEXT NOT NULL DEFAULT '',
+    description              TEXT NOT NULL DEFAULT '',
+    product_name             TEXT NOT NULL DEFAULT '',
+    product_refid            TEXT NOT NULL DEFAULT '',
+    hardware2program_refid   TEXT NOT NULL DEFAULT '',
+    imported_at              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_knx_devices_pa ON knx_devices(individual_address);
+CREATE INDEX IF NOT EXISTS idx_knx_devices_product_refid ON knx_devices(product_refid);
+
+CREATE TABLE IF NOT EXISTS knx_comm_objects (
+    id              TEXT PRIMARY KEY,
+    device_id       TEXT NOT NULL REFERENCES knx_devices(id) ON DELETE CASCADE,
+    number          TEXT NOT NULL DEFAULT '',
+    name            TEXT NOT NULL DEFAULT '',
+    text            TEXT NOT NULL DEFAULT '',
+    function_text   TEXT NOT NULL DEFAULT '',
+    datapoint_type  TEXT NOT NULL DEFAULT '',
+    imported_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_knx_co_device ON knx_comm_objects(device_id);
+CREATE INDEX IF NOT EXISTS idx_knx_co_dpt ON knx_comm_objects(datapoint_type);
+
+CREATE TABLE IF NOT EXISTS knx_co_ga_links (
+    comm_object_id  TEXT NOT NULL REFERENCES knx_comm_objects(id) ON DELETE CASCADE,
+    ga_address      TEXT NOT NULL REFERENCES knx_group_addresses(address) ON DELETE CASCADE,
+    PRIMARY KEY (comm_object_id, ga_address)
+);
+CREATE INDEX IF NOT EXISTS idx_knx_coga_ga ON knx_co_ga_links(ga_address);
+
+CREATE TABLE IF NOT EXISTS knx_space_device_links (
+    space_id   TEXT NOT NULL REFERENCES knx_locations(id) ON DELETE CASCADE,
+    device_id  TEXT NOT NULL REFERENCES knx_devices(id) ON DELETE CASCADE,
+    PRIMARY KEY (space_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS idx_knx_space_device_device ON knx_space_device_links(device_id);
+"""
+
 
 async def _migration_v32(conn: aiosqlite.Connection) -> None:
     """Consolidated flat-filterset schema (was epic V29+V30+V31) plus a
@@ -590,6 +632,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     # see V32 as the next applicable migration.
     (32, _migration_v32),
     (33, _migration_v33),
+    (34, _MIGRATION_V34),
 ]
 
 
