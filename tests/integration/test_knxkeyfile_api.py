@@ -64,7 +64,7 @@ async def test_knx_keyfile_delete_non_admin_forbidden(client, auth_headers):
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
-async def test_knx_keyfile_upload_redacts_file_path(client, auth_headers, monkeypatch, tmp_path: Path):
+async def test_knx_keyfile_upload_returns_usable_file_path(client, auth_headers, monkeypatch, tmp_path: Path):
     monkeypatch.setattr(_knxkeyfile_module, "_keyfiles_dir", lambda: tmp_path)
 
     keyring = SimpleNamespace(
@@ -90,7 +90,7 @@ async def test_knx_keyfile_upload_redacts_file_path(client, auth_headers, monkey
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["file_path"] == "[redacted]"
     assert body["file_id"]
+    assert body["file_path"] == str(tmp_path / f"{body['file_id']}.knxkeys")
     stored = tmp_path / f"{body['file_id']}.knxkeys"
     assert stored.exists()

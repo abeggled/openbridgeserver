@@ -16,7 +16,6 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from pydantic import BaseModel
 
 from obs.api.auth import get_admin_user
-from obs.api.v1.redaction import redact_sensitive_fields
 from obs.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -214,17 +213,13 @@ async def upload_keyfile(
         file_id,
     )
 
-    payload = redact_sensitive_fields(
-        {
-            "file_id": file_id,
-            "file_path": str(keyfile_path),
-            "project_name": keyring.project_name,
-            "tunnels": tunnels,
-            "backbone": backbone,
-        },
-        ("file_path",),
+    return KeyfileParseResult(
+        file_id=file_id,
+        file_path=str(keyfile_path),
+        project_name=keyring.project_name,
+        tunnels=tunnels,
+        backbone=backbone,
     )
-    return KeyfileParseResult(**payload)
 
 
 @router.delete("/keyfile/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
