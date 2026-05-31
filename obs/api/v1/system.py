@@ -30,7 +30,7 @@ from obs import __version__
 from obs.adapters import registry as adapter_registry
 from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.auth import get_admin_user, get_current_user
-from obs.api.v1.redaction import redact_sensitive_fields
+from obs.api.v1.redaction import REDACTED, redact_sensitive_fields
 from obs.db.database import Database, get_db
 from obs.models.types import DataTypeRegistry
 
@@ -350,6 +350,14 @@ async def update_history_settings(
         "influx_password": body.influx_password,
         "timescale_dsn": body.timescale_dsn,
     }
+
+    # UI submits redacted marker unchanged when a secret is already configured.
+    # Preserve persisted values instead of storing the marker literal.
+    if any(data[field] == REDACTED for field in _HISTORY_SENSITIVE_FIELDS):
+        existing_cfg = await _read_history_cfg(db)
+        for field in _HISTORY_SENSITIVE_FIELDS:
+            if data[field] == REDACTED:
+                data[field] = existing_cfg[field]
 
     for k, v in data.items():
         await db.execute_and_commit(

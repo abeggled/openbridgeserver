@@ -302,6 +302,61 @@ async def test_history_settings_redacts_sensitive_fields_in_responses(client, au
         )
 
 
+async def test_put_history_settings_preserves_existing_secrets_on_redacted_marker(client, auth_headers):
+    from obs.db.database import get_db
+
+    secret_token = "tok_keep_me_123"
+    secret_password = "pass_keep_me_123"
+    secret_dsn = "postgresql://obs:secret@db.local/obs"
+
+    try:
+        seed = await client.put(
+            "/api/v1/system/history/settings",
+            json={
+                "plugin": "sqlite",
+                "default_window_hours": 48,
+                "influx_token": secret_token,
+                "influx_password": secret_password,
+                "timescale_dsn": secret_dsn,
+            },
+            headers=auth_headers,
+        )
+        assert seed.status_code == 200, seed.text
+
+        preserve = await client.put(
+            "/api/v1/system/history/settings",
+            json={
+                "plugin": "sqlite",
+                "default_window_hours": 49,
+                "influx_token": "[redacted]",
+                "influx_password": "[redacted]",
+                "timescale_dsn": "[redacted]",
+            },
+            headers=auth_headers,
+        )
+        assert preserve.status_code == 200, preserve.text
+
+        db = get_db()
+        token_row = await db.fetchone("SELECT value FROM app_settings WHERE key='history.influx_token'")
+        password_row = await db.fetchone("SELECT value FROM app_settings WHERE key='history.influx_password'")
+        dsn_row = await db.fetchone("SELECT value FROM app_settings WHERE key='history.timescale_dsn'")
+        assert token_row["value"] == secret_token
+        assert password_row["value"] == secret_password
+        assert dsn_row["value"] == secret_dsn
+    finally:
+        await client.put(
+            "/api/v1/system/history/settings",
+            json={
+                "plugin": "sqlite",
+                "default_window_hours": 168,
+                "influx_token": "",
+                "influx_password": "",
+                "timescale_dsn": "",
+            },
+            headers=auth_headers,
+        )
+
+
 # ---------------------------------------------------------------------------
 # POST /history/test
 # ---------------------------------------------------------------------------
