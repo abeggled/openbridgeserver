@@ -356,6 +356,66 @@
       "sourceDataTypeLabel": "Source data type",
       "sourceDataTypeHint": "How incoming payload is interpreted.",
       "objectTypeLabel": "Object type"
+    },
+    "knx": {
+      "scan": {
+        "title": "Search KNX/IP devices",
+        "button": "Search",
+        "noResultsDocker": "No devices found via multicast (typical in Docker networks) — please configure Connection Type and Host below manually.",
+        "resultCount": "{n} device(s) — select to apply:",
+        "physAddr": "PA:",
+        "badge": {
+          "udp": "UDP",
+          "tcp": "TCP",
+          "routing": "Routing",
+          "secure": "Secure",
+          "secureRequired": "Secure required"
+        },
+        "failed": "Scan failed"
+      },
+      "form": {
+        "connectionTypeLabel": "Connection Type",
+        "connectionTypeUdp": "Tunneling UDP",
+        "connectionTypeTcp": "Tunneling TCP",
+        "connectionTypeSecure": "Tunneling Secure (TCP)",
+        "connectionTypeRouting": "Routing (Multicast)",
+        "connectionTypeRoutingSecure": "Routing Secure (Multicast)",
+        "hostLabel": "Host",
+        "hostHint": "IP address of the KNX/IP interface",
+        "portLabel": "Port",
+        "localIpLabel": "Local IP",
+        "localIpOptional": "optional",
+        "localIpPlaceholder": "empty = not set",
+        "localIpTunnelingHint": "Local socket interface (optional)",
+        "localIpRoutingHint": "Network interface for multicast (optional)",
+        "individualAddressLabel": "Individual Address",
+        "individualAddressSourceHint": "Source address",
+        "multicastGroupLabel": "Multicast group",
+        "multicastGroupHint": "KNX default: 224.0.23.12"
+      },
+      "docker": {
+        "warningTitle": "Docker network notice",
+        "warningDescription": "In a Docker bridge network, xknx selects the container IP instead of the host LAN IP. KNX IP Secure (TCP) still sends UDP requests during connection setup that cannot be answered without host networking. Solution: set network_mode: host in docker-compose.yml."
+      },
+      "keyfile": {
+        "reupload": "Re-upload",
+        "savedHint": "Keyfile saved. Upload a new one to change it.",
+        "fromKeyfileHint": "from keyfile",
+        "change": "Change",
+        "noTunnels": "No tunneling interfaces found in keyfile.",
+        "selectTunnel": "Select tunnel",
+        "physAddrCol": "PA:",
+        "userIdCol": "User:",
+        "secureGAsCol": "Secure GAs:",
+        "noBackbone": "No backbone found in keyfile.",
+        "backboneInfo": "Backbone: {addr} · Latency: {ms} ms",
+        "uploadHint": "Upload ETS key backup (.knxkeys)",
+        "fileLabel": "Keyfile",
+        "passwordLabel": "Password",
+        "passwordPlaceholder": "Keyfile password",
+        "uploadButton": "Upload & Parse",
+        "uploadFailed": "Upload failed"
+      }
     }
   },
   "history": {

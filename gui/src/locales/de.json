@@ -356,6 +356,66 @@
       "sourceDataTypeLabel": "Quell-Datentyp",
       "sourceDataTypeHint": "Wie der eingehende Payload interpretiert wird.",
       "objectTypeLabel": "Objekt-Typ"
+    },
+    "knx": {
+      "scan": {
+        "title": "KNX/IP-Geräte suchen",
+        "button": "Suchen",
+        "noResultsDocker": "Keine Geräte per Multicast gefunden (typisch bei Docker-Netzwerk) — bitte Connection Type und Host unten manuell konfigurieren.",
+        "resultCount": "{n} Gerät(e) — auswählen zum Übernehmen:",
+        "physAddr": "PA:",
+        "badge": {
+          "udp": "UDP",
+          "tcp": "TCP",
+          "routing": "Routing",
+          "secure": "Secure",
+          "secureRequired": "Secure required"
+        },
+        "failed": "Scan fehlgeschlagen"
+      },
+      "form": {
+        "connectionTypeLabel": "Connection Type",
+        "connectionTypeUdp": "Tunneling UDP",
+        "connectionTypeTcp": "Tunneling TCP",
+        "connectionTypeSecure": "Tunneling Secure (TCP)",
+        "connectionTypeRouting": "Routing (Multicast)",
+        "connectionTypeRoutingSecure": "Routing Secure (Multicast)",
+        "hostLabel": "Host",
+        "hostHint": "IP des KNX/IP-Interfaces",
+        "portLabel": "Port",
+        "localIpLabel": "Local IP",
+        "localIpOptional": "optional",
+        "localIpPlaceholder": "leer = nicht gesetzt",
+        "localIpTunnelingHint": "Netzwerkinterface für lokalen Socket (optional)",
+        "localIpRoutingHint": "Netzwerkinterface für Multicast (optional)",
+        "individualAddressLabel": "Individual Address",
+        "individualAddressSourceHint": "Quelladresse",
+        "multicastGroupLabel": "Multicast-Gruppe",
+        "multicastGroupHint": "KNX-Standard: 224.0.23.12"
+      },
+      "docker": {
+        "warningTitle": "Docker-Netzwerk-Hinweis",
+        "warningDescription": "Im Docker-Bridge-Netzwerk wählt xknx die Container-IP statt der Host-LAN-IP. KNX IP Secure (TCP) sendet trotzdem UDP-Anfragen beim Verbindungsaufbau, die ohne Host-Netzwerk nicht beantwortet werden. Lösung: network_mode: host in docker-compose.yml setzen."
+      },
+      "keyfile": {
+        "reupload": "Neu hochladen",
+        "savedHint": "Keyfile gespeichert. Zum Ändern ein neues hochladen.",
+        "fromKeyfileHint": "aus Keyfile",
+        "change": "Ändern",
+        "noTunnels": "Keine Tunneling-Interfaces im Keyfile gefunden.",
+        "selectTunnel": "Tunnel auswählen",
+        "physAddrCol": "PA:",
+        "userIdCol": "User:",
+        "secureGAsCol": "Secure GAs:",
+        "noBackbone": "Kein Backbone im Keyfile gefunden.",
+        "backboneInfo": "Backbone: {addr} · Latenz: {ms} ms",
+        "uploadHint": "ETS-Schlüsselbackup (.knxkeys) hochladen",
+        "fileLabel": "Keyfile",
+        "passwordLabel": "Passwort",
+        "passwordPlaceholder": "Keyfile-Passwort",
+        "uploadButton": "Hochladen & Parsen",
+        "uploadFailed": "Upload fehlgeschlagen"
+      }
     }
   },
   "history": {
