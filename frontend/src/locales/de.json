@@ -418,7 +418,10 @@
         "last_week": "Letzte Woche",
         "last_month": "Letzter Monat"
       },
-      "defaultTimeRange": "Standard-Zeitbereich"
+      "defaultTimeRange": "Standard-Zeitbereich",
+      "selectTimeRange": "Zeitbereich wählen",
+      "editorPlaceholder": "Verlaufs-Chart",
+      "seriesFallback": "Serie {n}"
     },
     "energiefluss": {
       "titleLabel": "Titel (optional)",

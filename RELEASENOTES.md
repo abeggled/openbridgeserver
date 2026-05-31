@@ -87,6 +87,7 @@ GUI: Fixed MQTT binding edit/create dialog becoming blank when switching to writ
 * Visu: RTR Widget now use correct values for room controller (heating) DPT 20.102 https://github.com/abeggled/openbridgeserver/issues/461
 * Visu: Floorplan Widget: positioning broken if floorplan is rotated https://github.com/abeggled/openbridgeserver/issues/440
 * Visu: Slider widget values are now written on pointer release and keyboard commit, avoiding missed writes in browsers that do not reliably fire change after dragging. https://github.com/abeggled/openbridgeserver/pull/559
+* Visu: History widget displays translated labels instead of variable name
 
 ### Known Issues 🔔
 * none
