@@ -14,7 +14,6 @@ import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
 
 export const useWebSocketStore = defineStore('websocket', () => {
-  const WS_TOKEN_PROTOCOL_PREFIX = 'obs.jwt.'
   const connected    = ref(false)
   const liveValues   = ref({})   // { [datapoint_id]: { value, quality, ts } }
   const _ws          = shallowRef(null)
@@ -22,16 +21,20 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const _rbHandlers  = []        // ringbuffer entry listeners
   const _logHandlers = []        // log_entry listeners
   let   _pingInterval = null
+  let   _reconnectTimer = null
+  let   _shouldReconnect = true
 
   function connect() {
     if (_ws.value?.readyState === WebSocket.OPEN) return
 
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const token = localStorage.getItem('access_token')
+    if (!token) return
+
+    _shouldReconnect = true
+
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const url   = `${proto}://${window.location.host}/api/v1/ws`
-    const ws    = token
-      ? new WebSocket(url, [`${WS_TOKEN_PROTOCOL_PREFIX}${token}`])
-      : new WebSocket(url)
+    const ws    = new WebSocket(url, [`obs.jwt.${token}`])
     _ws.value   = ws
 
     ws.onopen = () => {
@@ -77,12 +80,16 @@ export const useWebSocketStore = defineStore('websocket', () => {
       } catch { /* ignore malformed */ }
     }
 
-    ws.onclose = () => {
+    ws.onclose = (evt) => {
       connected.value = false
       clearInterval(_pingInterval)
+      _ws.value = null
+      if (evt?.code === 4001) _shouldReconnect = false
       // Reconnect after 5 s
-      setTimeout(() => {
-        if (localStorage.getItem('access_token')) connect()
+      if (!_shouldReconnect) return
+      _reconnectTimer = setTimeout(() => {
+        _reconnectTimer = null
+        if (_shouldReconnect) connect()
       }, 5000)
     }
 
@@ -90,6 +97,11 @@ export const useWebSocketStore = defineStore('websocket', () => {
   }
 
   function disconnect() {
+    _shouldReconnect = false
+    if (_reconnectTimer) {
+      clearTimeout(_reconnectTimer)
+      _reconnectTimer = null
+    }
     clearInterval(_pingInterval)
     _ws.value?.close()
     _ws.value   = null

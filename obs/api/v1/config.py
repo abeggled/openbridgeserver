@@ -765,20 +765,21 @@ async def import_config(
 
     # --- Icons ---
     if body.icons:
-        from obs.api.v1.icons import _icons_dir, _is_svg, _safe_name
+        from obs.api.v1.icons import _icons_dir, _safe_name, _sanitize_svg
 
         icons_dir = _icons_dir()
         for icon in body.icons:
             try:
                 raw = base64.b64decode(icon.content_b64)
-                if not _is_svg(raw):
-                    result.errors.append(f"Icon '{icon.name}': kein gültiges SVG, übersprungen")
+                sanitized = _sanitize_svg(raw)
+                if sanitized is None:
+                    result.errors.append(f"Icon '{icon.name}': kein gültiges/sicheres SVG, übersprungen")
                     continue
                 safe = _safe_name(f"{icon.name}.svg")
                 if not safe:
                     result.errors.append(f"Icon '{icon.name}': ungültiger Name, übersprungen")
                     continue
-                (icons_dir / f"{safe}.svg").write_bytes(raw)
+                (icons_dir / f"{safe}.svg").write_bytes(sanitized)
                 result.icons_imported += 1
             except Exception as exc:
                 result.errors.append(f"Icon '{icon.name}': {exc}")

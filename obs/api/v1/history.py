@@ -20,6 +20,9 @@ from obs.db.database import Database, get_db
 from obs.history.factory import get_history_plugin
 
 router = APIRouter(tags=["history"])
+DEFAULT_HISTORY_WINDOW_HOURS = 24 * 7
+MIN_HISTORY_WINDOW_HOURS = 1
+MAX_HISTORY_WINDOW_HOURS = 24 * 365
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +58,18 @@ def _parse_ts(s: str | None, default: datetime) -> datetime:
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"Invalid timestamp: {s!r}",
         )
+
+
+async def _get_default_history_window_hours(db: Database) -> int:
+    """Read configurable default window from app_settings."""
+    row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'history.default_window_hours'")
+    if not row or row["value"] is None:
+        return DEFAULT_HISTORY_WINDOW_HOURS
+    try:
+        hours = int(row["value"])
+    except (TypeError, ValueError):
+        return DEFAULT_HISTORY_WINDOW_HOURS
+    return max(MIN_HISTORY_WINDOW_HOURS, min(hours, MAX_HISTORY_WINDOW_HOURS))
 
 
 async def _resolve_page_access(db: Database, node_id: str) -> str:
@@ -117,7 +132,8 @@ async def query_history(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
 
     now = datetime.now(UTC)
-    from_dt = _parse_ts(from_ts, now - timedelta(hours=24))
+    window_hours = await _get_default_history_window_hours(db)
+    from_dt = _parse_ts(from_ts, now - timedelta(hours=window_hours))
     to_dt = _parse_ts(to_ts, now)
 
     plugin = get_history_plugin()
@@ -146,7 +162,8 @@ async def aggregate_history(
         )
 
     now = datetime.now(UTC)
-    from_dt = _parse_ts(from_ts, now - timedelta(hours=24))
+    window_hours = await _get_default_history_window_hours(db)
+    from_dt = _parse_ts(from_ts, now - timedelta(hours=window_hours))
     to_dt = _parse_ts(to_ts, now)
 
     plugin = get_history_plugin()

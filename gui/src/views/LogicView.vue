@@ -561,14 +561,16 @@ function onNodeDataUpdate(newData) {
 // ── WebSocket — live debug updates ────────────────────────────────────────
 let _ws = null
 let _wsTimer = null
+let _wsShouldReconnect = true
 
 function _wsConnect() {
   const token = localStorage.getItem('access_token')
   if (!token) return
+  _wsShouldReconnect = true
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const url   = `${proto}://${window.location.host}/api/v1/ws?token=${encodeURIComponent(token)}`
+  const url   = `${proto}://${window.location.host}/api/v1/ws`
   try {
-    _ws = new WebSocket(url)
+    _ws = new WebSocket(url, [`obs.jwt.${token}`])
   } catch { return }
 
   _ws.onmessage = (ev) => {
@@ -584,8 +586,10 @@ function _wsConnect() {
     } catch { /* ignore parse errors */ }
   }
 
-  _ws.onclose = () => {
+  _ws.onclose = (ev) => {
     _ws = null
+    if (ev?.code === 4001) _wsShouldReconnect = false
+    if (!_wsShouldReconnect) return
     _wsTimer = setTimeout(_wsConnect, 4000)   // auto-reconnect
   }
   _ws.onerror = () => { try { _ws?.close() } catch { /* ignore */ } }

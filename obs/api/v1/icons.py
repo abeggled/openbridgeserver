@@ -113,14 +113,15 @@ def _is_svg(content: bytes) -> bool:
 def _sanitize_svg(content: bytes) -> bytes:
     """Remove executable/dangerous SVG constructs and return sanitized UTF-8 bytes."""
     try:
-        decoded = content.decode("utf-8")
-        if _SVG_DOCTYPE_RE.search(decoded):
+        decoded_probe = content.decode("utf-8", errors="ignore")
+        if _SVG_DOCTYPE_RE.search(decoded_probe):
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Ungültiges SVG (DOCTYPE ist nicht erlaubt)",
             )
-        root = ET.fromstring(decoded)
-    except (UnicodeDecodeError, ET.ParseError):
+        parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=False))
+        root = ET.fromstring(content, parser=parser)
+    except (ET.ParseError, LookupError, UnicodeError):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Ungültiges SVG (XML konnte nicht gelesen werden)",
@@ -242,11 +243,15 @@ async def list_icons(
     for svg_file in sorted(icons_dir.glob("*.svg")):
         try:
             raw = svg_file.read_bytes()
+            try:
+                sanitized = _sanitize_svg(raw)
+            except HTTPException:
+                sanitized = b""
             items.append(
                 IconOut(
                     name=svg_file.stem,
                     size=len(raw),
-                    content=raw.decode("utf-8", errors="replace"),
+                    content=sanitized.decode("utf-8", errors="replace"),
                 ),
             )
         except OSError:
@@ -484,7 +489,9 @@ async def get_icon(
             status.HTTP_404_NOT_FOUND,
             f"Icon '{name}' nicht gefunden",
         )
-    return Response(content=svg_file.read_bytes(), media_type="image/svg+xml")
+    raw = svg_file.read_bytes()
+    sanitized = _sanitize_svg(raw)
+    return Response(content=sanitized, media_type="image/svg+xml")
 
 
 _FA_GRAPHQL_URL = "https://api.fontawesome.com"

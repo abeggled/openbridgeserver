@@ -689,8 +689,9 @@
       "alignLeft": "Links",
       "alignCenter": "Zentriert",
       "alignRight": "Rechts",
-      "markdownRef": "Markdown-Kurzreferenz"
-    },
+    "markdownRef": "Markdown-Kurzreferenz",
+    "noText": "Kein Text"
+  },
     "toggle": {
       "states": "Zustände",
       "stateOn": "EIN (true)",

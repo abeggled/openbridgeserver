@@ -218,3 +218,22 @@ class TestEdgeCases:
 
     def test_unknown_format_falls_back_to_first_register(self):
         assert decode_registers([99], "mystery_format") == 99
+
+
+class TestEncodeInt32:
+    def test_negative_value(self):
+        regs = encode_value(-1, "int32")
+        assert len(regs) == 2
+        assert decode_registers(regs, "int32") == -1
+
+    def test_positive_value(self):
+        regs = encode_value(100_000, "int32")
+        assert decode_registers(regs, "int32") == 100_000
+
+
+class TestEncodeUnknownFormatFallback:
+    def test_unknown_format_returns_single_register(self):
+        assert encode_value(42, "bogus_format") == [42]
+
+    def test_unknown_format_with_large_value_masks_to_uint16(self):
+        assert encode_value(65538, "bogus_format") == [2]

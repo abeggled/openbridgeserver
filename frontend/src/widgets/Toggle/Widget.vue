@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { datapoints } from '@/api/client'
 import { useIcons } from '@/composables/useIcons'
 import type { DataPointValue } from '@/types'
@@ -83,47 +83,85 @@ const activeIcon   = computed(() => activeRule.value.icon)
 const activeColor  = computed(() => activeRule.value.color)
 const activeText   = computed(() => activeRule.value.text)
 
-const svgBlobUrl = ref('')
-let iconLoadToken = 0
-
-function resetSvgBlobUrl() {
-  if (svgBlobUrl.value) {
-    URL.revokeObjectURL(svgBlobUrl.value)
-    svgBlobUrl.value = ''
-  }
-}
+// SVG-Icon laden und auf currentColor umfärben (gleiche Logik wie ValueDisplay)
+const svgContent = ref('')
 
 watch(
   activeIcon,
   async (icon) => {
-    const token = ++iconLoadToken
-    resetSvgBlobUrl()
-    if (!isSvgIcon(icon)) return
-    const svg = await getSvg(svgIconName(icon))
-    if (token !== iconLoadToken || !svg) return
-    svgBlobUrl.value = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+    if (!isSvgIcon(icon)) { svgContent.value = ''; return }
+    svgContent.value = await getSvg(svgIconName(icon))
   },
   { immediate: true },
 )
 
-const svgMaskStyle = computed(() => {
-  if (!svgBlobUrl.value) return {}
-  return {
-    backgroundColor: activeColor.value,
-    WebkitMaskImage: `url(${svgBlobUrl.value})`,
-    maskImage: `url(${svgBlobUrl.value})`,
-    WebkitMaskRepeat: 'no-repeat',
-    maskRepeat: 'no-repeat',
-    WebkitMaskPosition: 'center',
-    maskPosition: 'center',
-    WebkitMaskSize: 'contain',
-    maskSize: 'contain',
-  }
-})
+function sanitizeSvg(svg: string): string {
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(svg, 'image/svg+xml')
+  const root = doc.documentElement
+  if (!root || root.tagName.toLowerCase() !== 'svg') return ''
 
-onBeforeUnmount(() => {
-  iconLoadToken += 1
-  resetSvgBlobUrl()
+  const blockedTags = new Set([
+    'script', 'foreignobject', 'iframe', 'object', 'embed', 'audio', 'video',
+    'image', 'use', 'animate', 'animatemotion', 'animatetransform', 'set',
+  ])
+  const normalizeSchemeValue = (value: string) => value
+    .toLowerCase()
+    .replace(/[\u0000-\u0020\u007f]+/g, '')
+  const isDangerousHref = (value: string) => {
+    const normalized = normalizeSchemeValue(value)
+    return normalized.startsWith('javascript:') || normalized.startsWith('data:')
+  }
+
+  const allNodes = Array.from(root.getElementsByTagName('*'))
+  for (const el of allNodes) {
+    const tag = el.tagName.toLowerCase()
+    if (blockedTags.has(tag)) {
+      el.remove()
+      continue
+    }
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase()
+      const value = attr.value.trim().toLowerCase()
+      if (name.startsWith('on')) {
+        el.removeAttribute(attr.name)
+        continue
+      }
+      if ((name === 'href' || name === 'xlink:href') && isDangerousHref(value)) {
+        el.removeAttribute(attr.name)
+      }
+    }
+  }
+
+  for (const attr of Array.from(root.attributes)) {
+    if (attr.name.toLowerCase().startsWith('on')) root.removeAttribute(attr.name)
+  }
+
+  return new XMLSerializer().serializeToString(root)
+}
+
+const coloredSvg = computed(() => {
+  if (!svgContent.value) return ''
+  const nonNoneFill = /\bfill\s*:\s*(?!none\b)/g
+  const safeSvg = sanitizeSvg(svgContent.value)
+  if (!safeSvg) return ''
+  return safeSvg
+    .replace(/<svg\b([^>]*)>/, (_, attrs: string) => {
+      const updated = /\bfill=/.test(attrs)
+        ? attrs.replace(/\bfill="(?!none\b)[^"]*"/, 'fill="currentColor"')
+        : `${attrs} fill="currentColor"`
+      return `<svg${updated}>`
+    })
+    .replace(/\bfill="(?!none\b)[^"]*"/g, 'fill="currentColor"')
+    .replace(/\bstroke="(?!none\b)[^"]*"/g, 'stroke="currentColor"')
+    .replace(/\bstyle="([^"]*)"/g, (_, s: string) =>
+      `style="${s
+        .replace(nonNoneFill, 'fill:currentColor ')
+        .replace(/\bstroke\s*:\s*(?!none\b)[^;"]*/g, 'stroke:currentColor')}"`)
+    .replace(/(<style[^>]*>)([\s\S]*?)(<\/style>)/g, (_, open, css: string, close) =>
+      `${open}${css
+        .replace(nonNoneFill, 'fill:currentColor ')
+        .replace(/\bstroke\s*:\s*(?!none\b)[^;}\n]*/g, 'stroke:currentColor')}${close}`)
 })
 </script>
 
@@ -145,7 +183,11 @@ onBeforeUnmount(() => {
       :style="{ color: activeColor }"
     >
       <span v-if="!isSvgIcon(activeIcon)" class="text-2xl leading-none">{{ activeIcon }}</span>
-      <span v-else-if="svgBlobUrl" class="inline-block w-8 h-8" :style="svgMaskStyle" />
+      <span
+        v-else-if="coloredSvg"
+        class="w-8 h-8 [&>svg]:w-full [&>svg]:h-full"
+        v-html="coloredSvg"
+      />
     </div>
 
     <!-- Toggle-Schalter -->
@@ -195,9 +237,10 @@ onBeforeUnmount(() => {
         style="font-size: min(100%, 4rem)"
       >{{ activeIcon }}</span>
       <span
-        v-else-if="svgBlobUrl"
-        class="inline-block h-full max-w-full w-full"
-        :style="[svgMaskStyle, { aspectRatio: '1 / 1' }]"
+        v-else-if="coloredSvg"
+        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
+        style="aspect-ratio: 1"
+        v-html="coloredSvg"
       />
     </div>
 
@@ -229,9 +272,10 @@ onBeforeUnmount(() => {
         style="font-size: min(100%, 4rem)"
       >{{ activeIcon }}</span>
       <span
-        v-else-if="svgBlobUrl"
-        class="inline-block h-full max-w-full w-full"
-        :style="[svgMaskStyle, { aspectRatio: '1 / 1' }]"
+        v-else-if="coloredSvg"
+        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
+        style="aspect-ratio: 1"
+        v-html="coloredSvg"
       />
     </div>
 

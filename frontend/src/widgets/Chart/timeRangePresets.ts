@@ -24,7 +24,7 @@ export const TIME_RANGE_PRESETS: TimeRangePreset[] = [
   { value: 'last_month', label: 'widgets.chart.timeRange.last_month' },
 ]
 
-export const DEFAULT_TIME_RANGE = 'last_24h'
+export const DEFAULT_TIME_RANGE = 'last_7d'
 
 export function resolveTimeRange(preset: string): { from: Date; to: Date } {
   const now = new Date()
@@ -93,6 +93,6 @@ export function resolveTimeRange(preset: string): { from: Date; to: Date } {
     }
 
     default:
-      return { from: new Date(now.getTime() - 24 * 3_600_000), to: now }
+      return { from: new Date(now.getTime() - 7 * 86_400_000), to: now }
   }
 }
