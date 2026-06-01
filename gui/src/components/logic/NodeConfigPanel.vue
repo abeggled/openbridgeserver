@@ -88,7 +88,7 @@
                 @input="onValueMapCustomInput"
                 @change="onValueMapCustomChange"
                 class="input text-xs font-mono h-24 resize-y"
-                placeholder='{"0": "Aus", "1": "Init", "2": "Aktiv", "3": "Fehler"}'
+                :placeholder="$t('logic.nodeConfig.transform.valuemapExample')"
                 data-testid="value-map-custom"
               />
               <p v-if="valueMapCustomError" class="text-xs text-red-400 mt-0.5">{{ valueMapCustomError }}</p>
@@ -461,7 +461,7 @@
               <button
                 @click="addJsonPath"
                 class="w-6 h-6 flex items-center justify-center rounded text-teal-400 hover:bg-teal-400/10 font-bold text-lg leading-none"
-                title="Ausgang hinzufügen"
+                :title="$t('logic.nodeConfig.extractor.addOutput')"
               >+</button>
             </div>
 
@@ -476,12 +476,12 @@
                   :value="entry.label"
                   @input="updateJsonPath(i, 'label', $event.target.value)"
                   class="input text-xs flex-1"
-                  placeholder="Bezeichnung"
+                  :placeholder="$t('logic.nodeConfig.extractor.labelPlaceholder')"
                 />
                 <button
                   @click="removeJsonPath(i)"
                   class="extractor-output-remove w-5 h-5 flex items-center justify-center rounded hover:bg-red-400/10 text-base leading-none shrink-0"
-                  title="Ausgang entfernen"
+                  :title="$t('logic.nodeConfig.extractor.removeOutput')"
                 >−</button>
               </div>
               <input
@@ -491,7 +491,7 @@
                 @blur="activeExtractorRow = null"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
-                placeholder="z.B. data.temperature"
+                :placeholder="$t('logic.nodeConfig.extractor.pathExample')"
                 data-testid="extractor-path-input"
               />
               <p v-if="jsonPathPreview(i) !== null" class="text-xs text-teal-400">
@@ -801,10 +801,10 @@
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-        <p v-if="nodeDef?.description" class="text-xs text-slate-500">{{ nodeDef.description }}</p>
+        <p v-if="nodeDef?.description" class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
         <template v-if="nodeDef?.config_schema">
           <div v-for="(schema, key) in configFields" :key="key" class="form-group">
-            <label class="label">{{ schema.label ?? key }}</label>
+            <label class="label">{{ fieldLabel(nodeDef?.type, key, schema.label) }}</label>
             <textarea v-if="schema.type === 'string' && key === 'script'"
               v-model="localData[key]" rows="6"
               class="input text-xs font-mono resize-y" @change="emitUpdate" />
@@ -1215,7 +1215,7 @@ function _saveJsonPaths(paths) {
 
 function addJsonPath() {
   const paths = jsonPaths.value.slice()
-  paths.push({ label: `Wert ${paths.length + 1}`, path: '' })
+  paths.push({ label: t('logic.nodeConfig.extractor.valueN', { n: paths.length + 1 }), path: '' })
   _saveJsonPaths(paths)
   activeExtractorRow.value = paths.length - 1
 }
@@ -1254,7 +1254,7 @@ function jsonPathPreview(i) {
 function migrateJsonToMultiPath() {
   const legacyPath = (localData.value.json_path || '').trim()
   if (!legacyPath) return
-  localData.value.json_paths = JSON.stringify([{ label: 'Wert 1', path: legacyPath }])
+  localData.value.json_paths = JSON.stringify([{ label: t('logic.nodeConfig.extractor.valueN', { n: 1 }), path: legacyPath }])
   localData.value.json_path = ''
   emitUpdate()
 }
@@ -1414,6 +1414,17 @@ function boolVal(key) {
 }
 function setBool(key, val) {
   localData.value[key] = val
+}
+
+function nodeDescription(def) {
+  if (!def?.type) return def?.description ?? ''
+  const key = `logic.nodeDescriptions.${def.type}`
+  return te(key) ? t(key) : (def.description ?? '')
+}
+
+function fieldLabel(nodeType, fieldKey, fallback) {
+  const key = `logic.nodeConfig.${nodeType}.${fieldKey}`
+  return te(key) ? t(key) : (fallback ?? fieldKey)
 }
 
 // ── Watchers ───────────────────────────────────────────────────────────────

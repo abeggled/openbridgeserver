@@ -19,8 +19,15 @@ CSV
 UUID
 MQTT
 KNX
-# DataPointHierarchyCard.vue — dynamic :title binding (computed path expression, not a string)
+# Dynamic :title bindings — computed expressions, not string literals
 re:^nodeFullPath\(
+re:^ownerTitle\(
+re:^f\.label
+# Technical placeholders / examples in NodeConfigPanel (formulas, JSON examples, external URLs)
+a + b
+crontab.guru ↗
+re:^x \* 100$
+re:^\{"X-Api-Key"
 
 # GenericNode.vue — NODE_DEFS static node-type labels (first label: per entry).
 # Port labels are now fully translated via t(); the node-type labels below are

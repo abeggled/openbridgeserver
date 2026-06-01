@@ -1078,7 +1078,8 @@
         "mapPresetBoolOnOff": "true/false → on/off",
         "mapPresetOnOffBool": "on/off → true/false",
         "mapPresetNumOnOff": "0/1 → off/on",
-        "mapPresetOnOffNum": "off/on → 0/1"
+        "mapPresetOnOffNum": "off/on → 0/1",
+        "valuemapExample": "{\"0\": \"Aus\", \"1\": \"Init\", \"2\": \"Aktiv\", \"3\": \"Fehler\"}"
       },
       "filter": {
         "timeSection": "Zeitlicher Filter",
@@ -1223,7 +1224,8 @@
         "clickPlusToAddOutputs": "Klicke + um Ausgänge hinzuzufügen.",
         "valueN": "Wert {n}",
         "outputsCount": "Ausgänge ({n})",
-        "labelPlaceholder": "Bezeichnung"
+        "labelPlaceholder": "Bezeichnung",
+        "pathExample": "z.B. data.temperature"
       },
       "substr": {
         "modeLabel": "Modus",
@@ -1255,34 +1257,164 @@
         "regexPlaceholder": "z.B. (\\d+\\.\\d+)"
       },
       "ical": {
-        "urlLabel": "iCal-URL",
-        "refreshLabel": "Aktualisierungsintervall (Minuten)",
-        "refreshHint": "Kalender wird höchstens alle N Minuten neu geladen.",
-        "rawInfo": "Der RAW-Ausgang liefert immer den rohen iCal-Text. Für erweiterte Auswertungen können Filter hinzugefügt werden.",
-        "filtersSection": "Filter / Instanzen",
-        "addFilter": "+ Filter hinzufügen",
-        "noFilters": "Noch keine Filter. Pro Filter gibt es 4 Ausgänge: Array, Nächstes Datum, Morgen, Heute.",
-        "filterN": "Filter {n}",
-        "remove": "✕ Entfernen",
-        "linkLogic": "Verknüpfung:",
-        "or": "ODER",
-        "and": "UND",
-        "namePlaceholder": "z.B. Müll, Ferien …",
-        "ignoreEmpty": "(leer = ignorieren)",
-        "reSyntax": "Python re-Syntax. Leer = Feld wird ignoriert.",
-        "caseSensitive": "Gross-/Kleinschreibung beachten",
-        "outputs": "Ausgänge: f{i}_array · f{i}_next_date · f{i}_tomorrow · f{i}_today",
-        "nameLabel": "Name",
-        "summaryLabel": "Summary",
-        "locationLabel": "Location",
-        "descriptionLabel": "Description",
-        "summaryPlaceholder": "z.B. Restmüll",
-        "locationPlaceholder": "z.B. Strasse",
-        "descriptionPlaceholder": "z.B. Biotonne"
+        "url": "iCal-URL",
+        "refresh_interval_min": "Aktualisierungsintervall (Minuten)",
+        "filter_count": "Anzahl Filter",
+        "filters": "Filter (JSON)"
       },
       "invalidJson": "Ungültiges JSON: {msg}",
       "common": {
         "optional": "(optional)"
+      },
+      "const_value": {
+        "value": "Wert",
+        "data_type": "Datentyp"
+      },
+      "and": {
+        "input_count": "Anzahl Eingänge"
+      },
+      "or": {
+        "input_count": "Anzahl Eingänge"
+      },
+      "xor": {
+        "input_count": "Anzahl Eingänge"
+      },
+      "gate": {
+        "closed_behavior": "Verhalten (gesperrt)",
+        "default_value": "Standardwert (bei gesperrt)",
+        "negate_enable": "Freigabe invertieren",
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
+      "hysteresis": {
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
+      "compare": {
+        "operator": "Operator"
+      },
+      "clamp": {
+        "min": "Minimum",
+        "max": "Maximum"
+      },
+      "random_value": {
+        "data_type": "Datentyp",
+        "min": "Minimum",
+        "max": "Maximum",
+        "decimal_places": "Nachkommastellen (nur float)"
+      },
+      "statistics": {
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
+      "avg_multi": {
+        "input_count": "Anzahl Eingänge",
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
+      "string_concat": {
+        "count": "Anzahl Eingänge",
+        "separator": "Trennzeichen"
+      },
+      "heating_circuit": {
+        "threshold_temp": "Grenztemperatur °C (Heizen EIN unterhalb)",
+        "hysteresis": "Hysterese °C (Heizen AUS ab Grenztemperatur + Hysterese)",
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
+      "min_max_tracker": {
+        "init_abs_min": "Startwert Min absolut",
+        "init_abs_max": "Startwert Max absolut",
+        "init_day_min": "Startwert Min täglich",
+        "init_day_max": "Startwert Max täglich",
+        "init_month_min": "Startwert Min monatlich",
+        "init_month_max": "Startwert Max monatlich",
+        "init_year_min": "Startwert Min jährlich",
+        "init_year_max": "Startwert Max jährlich",
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
+      "consumption_counter": {
+        "init_meter": "Startwert Zählerstand",
+        "init_daily": "Startwert täglich",
+        "init_weekly": "Startwert wöchentlich",
+        "init_monthly": "Startwert monatlich",
+        "init_yearly": "Startwert jährlich",
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
+      "timer_delay": {
+        "delay_s": "Verzögerung (s)"
+      },
+      "timer_pulse": {
+        "duration_s": "Dauer (s)"
+      },
+      "timer_cron": {
+        "cron": "Cron-Ausdruck"
+      },
+      "operating_hours": {
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
+      "python_script": {
+        "script": "Skript"
+      },
+      "astro_sun": {
+        "latitude": "Breitengrad",
+        "longitude": "Längengrad"
+      },
+      "notify_pushover": {
+        "app_token": "App-Token",
+        "user_key": "User-Key",
+        "title": "Titel",
+        "message": "Nachricht (Fallback)",
+        "priority": "Priorität (-1=leise, 0=normal, 1=hoch)",
+        "url": "URL (optional)",
+        "url_title": "URL-Titel (optional)",
+        "image_url": "Bild-URL (optional)"
+      },
+      "notify_sms": {
+        "api_key": "API-Key",
+        "to": "Empfänger (+41…)",
+        "sender": "Absender (max 11 Zeichen)",
+        "message": "Nachricht (Fallback)"
+      },
+      "json_extractor": {
+        "json_path": "Schlüsselpfad (Legacy)",
+        "json_paths": "Ausgänge (JSON-Array)"
+      },
+      "xml_extractor": {
+        "xml_path": "XPath-Ausdruck (Legacy)",
+        "xml_paths": "Ausgänge (JSON-Array)"
+      },
+      "substring_extractor": {
+        "mode": "Modus",
+        "search": "Suchbegriff (links_von / rechts_von)",
+        "occurrence": "Vorkommen (erstes / letztes)",
+        "start_marker": "Start-Markierung (zwischen)",
+        "end_marker": "End-Markierung (zwischen)",
+        "start": "Startposition (ausschneiden, 0-basiert)",
+        "length": "Länge (ausschneiden, -1 = bis Ende)",
+        "pattern": "RegEx-Muster",
+        "flags": "Flags (z.B. i für case-insensitive)",
+        "group": "Capture-Gruppe (0 = gesamter Treffer)"
+      },
+      "api_client": {
+        "url": "URL",
+        "method": "Methode",
+        "content_type": "Request Content-Type",
+        "response_type": "Response Content-Typ",
+        "verify_ssl": "SSL-Zertifikat prüfen",
+        "headers": "Header (JSON-Objekt, optional)",
+        "headers_secret_file": "Header aus Secret-Datei (JSON-Objekt, optional)",
+        "timeout_s": "Timeout (s)",
+        "auth_type": "Authentifizierung",
+        "auth_username": "Benutzername (Basic/Digest)",
+        "auth_password": "Passwort (Basic/Digest)",
+        "auth_token": "Bearer Token",
+        "auth_token_file": "Bearer Token aus Secret-Datei"
+      },
+      "math_formula": {
+        "formula": "Formel",
+        "output_formula": "Ausgangs-Formel"
+      },
+      "math_map": {
+        "in_min": "Eingang Min",
+        "in_max": "Eingang Max",
+        "out_min": "Ausgang Min",
+        "out_max": "Ausgang Max"
       }
     },
     "portLabels": {
@@ -1329,6 +1461,41 @@
       "icalDate": "Datum",
       "icalTomorrow": "Morgen",
       "icalToday": "Heute"
+    },
+    "nodeDescriptions": {
+      "const_value": "Gibt einen festen Wert aus — Zahl, Bool oder Text. Nützlich als Schwellwert oder Referenz.",
+      "and": "Ausgang ist true wenn ALLE Eingänge true sind. Eingänge (2–30) und Ausgang einzeln negierbar.",
+      "or": "Ausgang ist true wenn MINDESTENS EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
+      "not": "Invertiert den Eingang",
+      "xor": "Ausgang ist true wenn GENAU EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
+      "gate": "Signal-Tor: lässt den Eingang durch wenn Freigabe=true, sperrt sonst. Verhalten bei gesperrtem Tor: letzten Wert halten (retain) oder Standardwert ausgeben.",
+      "compare": "Vergleicht zwei Werte (>, <, =, >=, <=, !=)",
+      "hysteresis": "Schaltet bei Überschreitung ON, erst bei Unterschreitung OFF",
+      "datapoint_read": "Gibt den aktuellen Wert eines DataPoints aus. Triggert bei Wertänderung.",
+      "datapoint_write": "Schreibt einen Wert in einen DataPoint",
+      "math_formula": "Berechnet einen Ausdruck. Variablen: a (= IN 1), b (= IN 2)",
+      "math_map": "Skaliert einen Wert von einem Bereich in einen anderen",
+      "clamp": "Begrenzt den Eingangswert auf [Min, Max]. Werte außerhalb werden auf den Grenzwert gesetzt.",
+      "random_value": "Gibt bei jedem Trigger-Signal einen zufälligen Wert zwischen Min und Max aus. Typ 'int' liefert eine Ganzzahl (random.randint), Typ 'float' liefert eine Gleitkommazahl mit konfigurierbaren Nachkommastellen.",
+      "statistics": "Berechnet Min/Max/Mittelwert laufend über alle empfangenen Werte. Reset-Eingang setzt zurück.",
+      "avg_multi": "Berechnet den Mittelwert von 2–20 Eingängen (aktuell) und gleitende Mittelwerte über Zeitfenster: 1 min, 1 h, 1 Tag, 7/14/30/180/365 Tage. Jeder neue Wert wird mit Zeitstempel gespeichert. Die Zeitfensterwerte bleiben nach einem Neustart erhalten (konfigurierbar).",
+      "string_concat": "Verkettet 2–20 Texte zu einem Ergebnis. Jeder Eingang kann dynamisch verbunden oder statisch vorbelegt sein. Ist ein Eingang verbunden, hat er Vorrang vor dem statischen Text.",
+      "heating_circuit": "Sommer/Winter-Umschaltung nach DIN (Mannheimer Methode). Eingang: Aussentemperatur. Messzeitpunkte (Erste-Kreuzung): T1 = anliegender Wert ab 07:00, T2 = ab 14:00, T3 = ab 21:00. Funktioniert auch wenn der Sensor die Messstunden nicht exakt trifft. Jeder Slot wird pro Tag nur einmal erfasst. Tagesmittel: T_avg = (T1 + T2 + 2×T3) / 4. Monatsmittel: gleitender Mittelwert der letzten 31 Tagesmittel. Heizmodus EIN wenn T_avg < Grenztemperatur, AUS wenn T_avg ≥ Grenztemperatur + Hysterese. Fehlende Slots werden beim Start aus der Historie ergänzt. Zustand bleibt über Neustarts erhalten.",
+      "min_max_tracker": "Verfolgt Minimum und Maximum über Zeitperioden (täglich, wöchentlich, monatlich, jährlich, absolut). Periodenwerte werden automatisch am Tages-/Wochen-/Monats-/Jahreswechsel zurückgesetzt.",
+      "consumption_counter": "Berechnet Verbrauchswerte (täglich, wöchentlich, monatlich, jährlich) aus einem fortlaufenden Zählerwert. Speichert zusätzlich den Verbrauch der Vorperiode für Vergleiche.",
+      "timer_delay": "Verzögert ein Signal um N Sekunden",
+      "timer_pulse": "Gibt einen Impuls für N Sekunden aus",
+      "timer_cron": "Löst automatisch nach einem Cron-Zeitplan aus (Minute Stunde Tag Monat Wochentag).",
+      "operating_hours": "Zählt Betriebsstunden solange 'Aktiv' wahr ist. Reset setzt den Zähler zurück.",
+      "python_script": "Führt ein Python-Skript aus. Verfügbar: inputs dict → return value",
+      "astro_sun": "Berechnet Sonnenauf- und -untergang basierend auf Breitengrad/Längengrad. Benötigt: pip install astral",
+      "notify_pushover": "Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
+      "notify_sms": "Sendet eine SMS via seven.io Gateway (gateway.seven.io). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
+      "json_extractor": "Parst einen JSON-String und extrahiert einen oder mehrere Werte anhand von Schlüsselpfaden (Punkt-Notation, z.B. sensors.temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
+      "xml_extractor": "Parst einen XML-String und extrahiert einen oder mehrere Werte anhand von XPath-Ausdrücken (ElementTree-Syntax, z.B. .//temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
+      "substring_extractor": "Extrahiert Text aus einem String per Substring-Operation oder regulärem Ausdruck. Modi: links_von / rechts_von (erstes oder letztes Vorkommen), zwischen (zwei Markierungen), ausschneiden (Position + Länge), regex (Python re-Syntax, Gruppen wählbar).",
+      "ical": "Lädt ein iCal-/ICS-File von einer URL und wertet Termine aus. RAW-Ausgang liefert den rohen Kalendertext. Pro Filter gibt es 4 Ausgänge: Array (alle Termine), Nächstes Datum, Morgen (Bool), Heute (Bool). Filter können auf Summary, Location und/oder Description angewendet werden.",
+      "api_client": "Sendet HTTP-Anfragen (GET/POST/PUT…) an externe APIs. Trigger-Eingang steuert die Ausführung."
     }
   },
   "settings": {

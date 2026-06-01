@@ -1078,7 +1078,8 @@
         "mapPresetBoolOnOff": "true/false → on/off",
         "mapPresetOnOffBool": "on/off → true/false",
         "mapPresetNumOnOff": "0/1 → off/on",
-        "mapPresetOnOffNum": "off/on → 0/1"
+        "mapPresetOnOffNum": "off/on → 0/1",
+        "valuemapExample": "{\"0\": \"Off\", \"1\": \"Init\", \"2\": \"Active\", \"3\": \"Error\"}"
       },
       "filter": {
         "timeSection": "Time Filter",
@@ -1223,7 +1224,8 @@
         "clickPlusToAddOutputs": "Click + to add outputs.",
         "valueN": "Value {n}",
         "outputsCount": "Outputs ({n})",
-        "labelPlaceholder": "Label"
+        "labelPlaceholder": "Label",
+        "pathExample": "e.g. data.temperature"
       },
       "substr": {
         "modeLabel": "Mode",
@@ -1255,34 +1257,164 @@
         "regexPlaceholder": "e.g. (\\d+\\.\\d+)"
       },
       "ical": {
-        "urlLabel": "iCal URL",
-        "refreshLabel": "Refresh interval (minutes)",
-        "refreshHint": "Calendar is reloaded at most every N minutes.",
-        "rawInfo": "The RAW output always delivers the raw iCal text. Filters can be added for extended analysis.",
-        "filtersSection": "Filters / Instances",
-        "addFilter": "+ Add filter",
-        "noFilters": "No filters yet. Each filter provides 4 outputs: Array, Next Date, Tomorrow, Today.",
-        "filterN": "Filter {n}",
-        "remove": "✕ Remove",
-        "linkLogic": "Logic:",
-        "or": "OR",
-        "and": "AND",
-        "namePlaceholder": "e.g. Waste, Holidays …",
-        "ignoreEmpty": "(empty = ignore)",
-        "reSyntax": "Python re syntax. Empty = field is ignored.",
-        "caseSensitive": "Case sensitive",
-        "outputs": "Outputs: f{i}_array · f{i}_next_date · f{i}_tomorrow · f{i}_today",
-        "nameLabel": "Name",
-        "summaryLabel": "Summary",
-        "locationLabel": "Location",
-        "descriptionLabel": "Description",
-        "summaryPlaceholder": "e.g. residual waste",
-        "locationPlaceholder": "e.g. street",
-        "descriptionPlaceholder": "e.g. organic bin"
+        "url": "iCal URL",
+        "refresh_interval_min": "Refresh interval (minutes)",
+        "filter_count": "Filter count",
+        "filters": "Filters (JSON)"
       },
       "invalidJson": "Invalid JSON: {msg}",
       "common": {
         "optional": "(optional)"
+      },
+      "const_value": {
+        "value": "Value",
+        "data_type": "Data type"
+      },
+      "and": {
+        "input_count": "Input count"
+      },
+      "or": {
+        "input_count": "Input count"
+      },
+      "xor": {
+        "input_count": "Input count"
+      },
+      "gate": {
+        "closed_behavior": "Behavior (closed)",
+        "default_value": "Default value (when closed)",
+        "negate_enable": "Invert enable",
+        "persist_state": "Restore state on restart"
+      },
+      "hysteresis": {
+        "persist_state": "Restore state on restart"
+      },
+      "compare": {
+        "operator": "Operator"
+      },
+      "clamp": {
+        "min": "Minimum",
+        "max": "Maximum"
+      },
+      "random_value": {
+        "data_type": "Data type",
+        "min": "Minimum",
+        "max": "Maximum",
+        "decimal_places": "Decimal places (float only)"
+      },
+      "statistics": {
+        "persist_state": "Restore state on restart"
+      },
+      "avg_multi": {
+        "input_count": "Input count",
+        "persist_state": "Restore state on restart"
+      },
+      "string_concat": {
+        "count": "Input count",
+        "separator": "Separator"
+      },
+      "heating_circuit": {
+        "threshold_temp": "Threshold °C (heating ON below)",
+        "hysteresis": "Hysteresis °C (heating OFF at threshold + hysteresis)",
+        "persist_state": "Restore state on restart"
+      },
+      "min_max_tracker": {
+        "init_abs_min": "Initial abs. min",
+        "init_abs_max": "Initial abs. max",
+        "init_day_min": "Initial daily min",
+        "init_day_max": "Initial daily max",
+        "init_month_min": "Initial monthly min",
+        "init_month_max": "Initial monthly max",
+        "init_year_min": "Initial yearly min",
+        "init_year_max": "Initial yearly max",
+        "persist_state": "Restore state on restart"
+      },
+      "consumption_counter": {
+        "init_meter": "Initial counter value",
+        "init_daily": "Initial daily value",
+        "init_weekly": "Initial weekly value",
+        "init_monthly": "Initial monthly value",
+        "init_yearly": "Initial yearly value",
+        "persist_state": "Restore state on restart"
+      },
+      "timer_delay": {
+        "delay_s": "Delay (s)"
+      },
+      "timer_pulse": {
+        "duration_s": "Duration (s)"
+      },
+      "timer_cron": {
+        "cron": "Cron expression"
+      },
+      "operating_hours": {
+        "persist_state": "Restore state on restart"
+      },
+      "python_script": {
+        "script": "Script"
+      },
+      "astro_sun": {
+        "latitude": "Latitude",
+        "longitude": "Longitude"
+      },
+      "notify_pushover": {
+        "app_token": "App token",
+        "user_key": "User key",
+        "title": "Title",
+        "message": "Message (fallback)",
+        "priority": "Priority (-1=quiet, 0=normal, 1=high)",
+        "url": "URL (optional)",
+        "url_title": "URL title (optional)",
+        "image_url": "Image URL (optional)"
+      },
+      "notify_sms": {
+        "api_key": "API key",
+        "to": "Recipient (+41…)",
+        "sender": "Sender (max 11 chars)",
+        "message": "Message (fallback)"
+      },
+      "json_extractor": {
+        "json_path": "Key path (legacy)",
+        "json_paths": "Outputs (JSON array)"
+      },
+      "xml_extractor": {
+        "xml_path": "XPath expression (legacy)",
+        "xml_paths": "Outputs (JSON array)"
+      },
+      "substring_extractor": {
+        "mode": "Mode",
+        "search": "Search term (left_of / right_of)",
+        "occurrence": "Occurrence (first / last)",
+        "start_marker": "Start marker (between)",
+        "end_marker": "End marker (between)",
+        "start": "Start position (cut, 0-based)",
+        "length": "Length (cut, -1 = to end)",
+        "pattern": "RegEx pattern",
+        "flags": "Flags (e.g. i for case-insensitive)",
+        "group": "Capture group (0 = full match)"
+      },
+      "api_client": {
+        "url": "URL",
+        "method": "Method",
+        "content_type": "Request Content-Type",
+        "response_type": "Response Content-Type",
+        "verify_ssl": "Verify SSL certificate",
+        "headers": "Headers (JSON object, optional)",
+        "headers_secret_file": "Headers from secret file (optional)",
+        "timeout_s": "Timeout (s)",
+        "auth_type": "Authentication",
+        "auth_username": "Username (Basic/Digest)",
+        "auth_password": "Password (Basic/Digest)",
+        "auth_token": "Bearer token",
+        "auth_token_file": "Bearer token from secret file"
+      },
+      "math_formula": {
+        "formula": "Formula",
+        "output_formula": "Output formula"
+      },
+      "math_map": {
+        "in_min": "Input min",
+        "in_max": "Input max",
+        "out_min": "Output min",
+        "out_max": "Output max"
       }
     },
     "portLabels": {
@@ -1329,6 +1461,41 @@
       "icalDate": "Date",
       "icalTomorrow": "Tomorrow",
       "icalToday": "Today"
+    },
+    "nodeDescriptions": {
+      "const_value": "Outputs a fixed value — number, bool or text. Useful as threshold or reference.",
+      "and": "Output is true when ALL inputs are true. Inputs (2–30) and output can be individually negated.",
+      "or": "Output is true when AT LEAST ONE input is true. Inputs (2–30) and output can be individually negated.",
+      "not": "Inverts the input",
+      "xor": "Output is true when EXACTLY ONE input is true. Inputs (2–30) and output can be individually negated.",
+      "gate": "Signal gate: passes the input when enable=true, blocks otherwise. Behavior when closed: hold the last value (retain) or output a default value.",
+      "compare": "Compares two values (>, <, =, >=, <=, !=)",
+      "hysteresis": "Switches ON when threshold is exceeded, OFF only when it falls below",
+      "datapoint_read": "Outputs the current value of a DataPoint. Triggers on value change.",
+      "datapoint_write": "Writes a value to a DataPoint",
+      "math_formula": "Evaluates an expression. Variables: a (= IN 1), b (= IN 2)",
+      "math_map": "Scales a value from one range to another",
+      "clamp": "Limits the input value to [Min, Max]. Values outside the range are clamped to the boundary.",
+      "random_value": "Outputs a random value between Min and Max on each trigger signal. Type 'int' returns an integer (random.randint), type 'float' returns a floating-point number with configurable decimal places.",
+      "statistics": "Continuously calculates Min/Max/Average over all received values. Reset input resets the statistics.",
+      "avg_multi": "Calculates the average of 2–20 inputs (current) and moving averages over time windows: 1 min, 1 h, 1 day, 7/14/30/180/365 days. Each new value is stored with a timestamp. Time window values are retained after restart (configurable).",
+      "string_concat": "Concatenates 2–20 texts into one result. Each input can be dynamically connected or statically preset. A connected input takes precedence over the static text.",
+      "heating_circuit": "Summer/winter switching according to DIN (Mannheim method). Input: outdoor temperature. Measurement times (first crossing): T1 = value from 07:00, T2 = from 14:00, T3 = from 21:00. Works even if the sensor does not hit the measurement hours exactly. Each slot is recorded only once per day. Daily average: T_avg = (T1 + T2 + 2×T3) / 4. Monthly average: moving average of the last 31 daily averages. Heating mode ON when T_avg < threshold, OFF when T_avg ≥ threshold + hysteresis. Missing slots are filled from history on startup. State is retained across restarts.",
+      "min_max_tracker": "Tracks minimum and maximum over time periods (daily, weekly, monthly, yearly, absolute). Period values are automatically reset at day/week/month/year boundaries.",
+      "consumption_counter": "Calculates consumption values (daily, weekly, monthly, yearly) from a continuously incrementing counter value. Also stores the previous period's consumption for comparisons.",
+      "timer_delay": "Delays a signal by N seconds",
+      "timer_pulse": "Outputs a pulse for N seconds",
+      "timer_cron": "Fires automatically on a cron schedule (minute hour day month weekday).",
+      "operating_hours": "Counts operating hours while 'Active' is true. Reset clears the counter.",
+      "python_script": "Executes a Python script. Available: inputs dict → return value",
+      "astro_sun": "Calculates sunrise and sunset based on latitude/longitude. Requires: pip install astral",
+      "notify_pushover": "Sends a push notification via the Pushover API (api.pushover.net). Triggered automatically when a message arrives at the input.",
+      "notify_sms": "Sends an SMS via the seven.io gateway (gateway.seven.io). Triggered automatically when a message arrives at the input.",
+      "json_extractor": "Parses a JSON string and extracts one or more values by key paths (dot notation, e.g. sensors.temperature). Multiple outputs configurable via + in the config panel.",
+      "xml_extractor": "Parses an XML string and extracts one or more values by XPath expressions (ElementTree syntax, e.g. .//temperature). Multiple outputs configurable via + in the config panel.",
+      "substring_extractor": "Extracts text from a string using substring operations or regular expressions. Modes: left_of / right_of (first or last occurrence), between (two markers), cut (position + length), regex (Python re syntax, capture groups selectable).",
+      "ical": "Loads an iCal/ICS file from a URL and evaluates events. The RAW output delivers the raw calendar text. Each filter provides 4 outputs: Array (all events), Next date, Tomorrow (bool), Today (bool). Filters can be applied to Summary, Location and/or Description.",
+      "api_client": "Sends HTTP requests (GET/POST/PUT…) to external APIs. The trigger input controls execution."
     }
   },
   "settings": {
