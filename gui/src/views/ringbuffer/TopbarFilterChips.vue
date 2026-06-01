@@ -93,9 +93,10 @@
       ↓ Export
     </button>
 
-    <!-- + Filter dropdown -->
+    <!-- + Filter dropdown — teleported to <body> so overflow:hidden parents can't clip it -->
     <div class="relative">
       <button
+        ref="addMenuBtnRef"
         type="button"
         data-testid="topbar-add-filter-btn"
         class="btn-secondary btn-sm"
@@ -103,57 +104,60 @@
       >
         + Filter ▾
       </button>
-      <div
-        v-if="addMenuOpen"
-        data-testid="topbar-add-filter-menu"
-        class="absolute right-0 mt-1 w-72 z-40 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg overflow-hidden"
-        @click.stop
-      >
-        <!-- pinned "+ Neu" as the first option (#36 UX) -->
-        <button
-          type="button"
-          data-testid="topbar-add-filter-new"
-          class="block w-full text-left px-3 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-700"
-          @click="onCreateNew"
+      <Teleport to="body">
+        <div
+          v-if="addMenuOpen"
+          :style="addMenuStyle"
+          data-testid="topbar-add-filter-menu"
+          class="fixed w-72 z-50 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg overflow-hidden"
+          @click.stop
         >
-          {{ $t('ringbuffer.topbar.newFilter') }}
-        </button>
-
-        <!-- Search input -->
-        <input
-          ref="searchInputRef"
-          v-model="addMenuQuery"
-          type="search"
-          data-testid="topbar-add-filter-search"
-          :placeholder="$t('ringbuffer.topbar.searchPlaceholder')"
-          class="block w-full px-3 py-2 text-sm bg-transparent border-b border-slate-200 dark:border-slate-700 outline-none focus:border-blue-500"
-        />
-
-        <!-- Filtered list -->
-        <div class="max-h-64 overflow-y-auto">
+          <!-- pinned "+ Neu" as the first option (#36 UX) -->
           <button
-            v-for="set in filteredAvailableSets"
-            :key="set.id"
             type="button"
-            :data-testid="`topbar-add-filter-item-${set.id}`"
-            class="block w-full text-left px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
-            @click="onAddToTopbar(set)"
+            data-testid="topbar-add-filter-new"
+            class="block w-full text-left px-3 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-700"
+            @click="onCreateNew"
           >
-            <span
-              class="inline-block w-2 h-2 rounded-full mr-2 align-middle"
-              :style="{ backgroundColor: set.color || '#94a3b8' }"
-            />
-            {{ set.name }}
+            {{ $t('ringbuffer.topbar.newFilter') }}
           </button>
-          <div
-            v-if="!filteredAvailableSets.length"
-            data-testid="topbar-add-filter-empty"
-            class="px-3 py-2 text-xs text-slate-500"
-          >
-            {{ addMenuQuery ? $t('datapoints.noMatch') : $t('ringbuffer.topbar.noMoreSets') }}
+
+          <!-- Search input -->
+          <input
+            ref="searchInputRef"
+            v-model="addMenuQuery"
+            type="search"
+            data-testid="topbar-add-filter-search"
+            :placeholder="$t('ringbuffer.topbar.searchPlaceholder')"
+            class="block w-full px-3 py-2 text-sm bg-transparent border-b border-slate-200 dark:border-slate-700 outline-none focus:border-blue-500"
+          />
+
+          <!-- Filtered list -->
+          <div class="max-h-64 overflow-y-auto">
+            <button
+              v-for="set in filteredAvailableSets"
+              :key="set.id"
+              type="button"
+              :data-testid="`topbar-add-filter-item-${set.id}`"
+              class="block w-full text-left px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+              @click="onAddToTopbar(set)"
+            >
+              <span
+                class="inline-block w-2 h-2 rounded-full mr-2 align-middle"
+                :style="{ backgroundColor: set.color || '#94a3b8' }"
+              />
+              {{ set.name }}
+            </button>
+            <div
+              v-if="!filteredAvailableSets.length"
+              data-testid="topbar-add-filter-empty"
+              class="px-3 py-2 text-xs text-slate-500"
+            >
+              {{ addMenuQuery ? $t('datapoints.noMatch') : $t('ringbuffer.topbar.noMoreSets') }}
+            </div>
           </div>
         </div>
-      </div>
+      </Teleport>
     </div>
   </div>
 </template>
@@ -174,6 +178,8 @@ const filtersets = ref([])
 const addMenuOpen = ref(false)
 const addMenuQuery = ref('')
 const searchInputRef = ref(null)
+const addMenuBtnRef = ref(null)
+const addMenuStyle = ref({})
 
 // Admin can edit every set; non-admin users only the sets they created
 // themselves (#478). All per-user state (is_active toggle, topbar pinning,
@@ -284,11 +290,34 @@ async function onDragEnd() {
   }
 }
 
+// Approximate max height of the dropdown (New button + search + list items).
+const ADD_MENU_MAX_H = 340
+
 function toggleAddMenu() {
   addMenuOpen.value = !addMenuOpen.value
   if (addMenuOpen.value) {
     addMenuQuery.value = ''
-    nextTick(() => searchInputRef.value?.focus())
+    nextTick(() => {
+      const rect = addMenuBtnRef.value?.getBoundingClientRect()
+      if (rect) {
+        const spaceBelow = window.innerHeight - rect.bottom
+        const distFromRight = window.innerWidth - rect.right
+        if (spaceBelow >= ADD_MENU_MAX_H || spaceBelow >= 120) {
+          // Enough room below — open downward
+          addMenuStyle.value = {
+            top: `${rect.bottom + 4}px`,
+            right: `${distFromRight}px`,
+          }
+        } else {
+          // Not enough room — open upward
+          addMenuStyle.value = {
+            bottom: `${window.innerHeight - rect.top + 4}px`,
+            right: `${distFromRight}px`,
+          }
+        }
+      }
+      searchInputRef.value?.focus()
+    })
   }
 }
 
@@ -307,13 +336,22 @@ function onDocumentClick(event) {
   addMenuQuery.value = ''
 }
 
+function onDocumentScroll() {
+  if (addMenuOpen.value) {
+    addMenuOpen.value = false
+    addMenuQuery.value = ''
+  }
+}
+
 onMounted(() => {
   document.addEventListener('mousedown', onDocumentClick)
+  document.addEventListener('scroll', onDocumentScroll, true)
   void load()
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onDocumentClick)
+  document.removeEventListener('scroll', onDocumentScroll, true)
 })
 
 defineExpose({ reload: load })

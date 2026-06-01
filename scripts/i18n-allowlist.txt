@@ -19,21 +19,15 @@ CSV
 UUID
 MQTT
 KNX
-re:^0 — \$\{name\} \(Hierarchiename\)$
-re:^\$\{level\} — \$\{levelLabel\}$
-re:^\$\{level\} — \$\{levelLabel\} \$\{suffix\}$
+# DataPointHierarchyCard.vue — dynamic :title binding (computed path expression, not a string)
+re:^nodeFullPath\(
 
-# GenericNode.vue — NODE_DEFS static port/node labels.
-# These are logic-editor canvas labels (abbreviations / technical identifiers),
-# not user-configurable strings.  Allowlisted here until a full NODE_DEFS i18n
-# refactor is done in a dedicated PR.
-re:^IN \d+$
-re:^T\d \(dbg\)$
+# GenericNode.vue — NODE_DEFS static node-type labels (first label: per entry).
+# Port labels are now fully translated via t(); the node-type labels below are
+# either single-word technical tokens (auto-passed) or require an allowlist entry.
 re:^(Max|Min)∞$
 re:^(JSON|XML) Extraktor$
 re:^SMS \(seven\.io\)$
-re:^IN \$\{i \+ 1\}$
-re:^\$\{fname\}: (Array|Datum|Morgen|Heute)$
 re:^∅
 Verzögerung
 MCP Tool

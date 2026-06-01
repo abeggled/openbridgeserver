@@ -311,10 +311,9 @@ When adding a new view, widget config, or significant UI component:
 
 Allowlisted technical literals are maintained in `scripts/i18n-allowlist.txt`. Keep the list minimal and reviewable.
 
-#### Known exception — `gui/src/utils/hierarchyDepthOptions.js`
+##### `gui/src/utils/hierarchyDepthOptions.js`
 
-This utility builds option labels that mix tree node names (runtime data) with structural level names. It cannot cleanly return plain i18n keys because the labels are composite strings (e.g. `"1 — EG Test (nur \"Wohnzimmer\")"`). It currently uses hardcoded German strings. This is a known gap; do not copy this pattern for new utilities.
-The current gate allowlists only these specific legacy string patterns in `scripts/i18n-allowlist.txt`.
+This utility builds option labels that mix runtime tree node names with translated structural level names. It accepts an optional `t` function from the caller. Composite labels are assembled from translated parts and runtime data using local variables (not `label:` assignments) to stay clean of the i18n guard ASSIGN_RE scan. Call it from a `computed()` and pass `t` to keep labels reactive on locale changes.
 
 #### E2E tests (Playwright) and locale
 

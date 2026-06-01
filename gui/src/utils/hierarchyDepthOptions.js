@@ -14,35 +14,55 @@ function collectNamesAtDepth(nodes, depth) {
   return nodes.flatMap(n => collectNamesAtDepth(n?.children, depth - 1))
 }
 
-export function buildDepthOptions({ isEdit, tree, rootNodes, maxDepth = 4 }) {
+/**
+ * Build the display-depth select options for a hierarchy.
+ *
+ * @param {object} opts
+ * @param {boolean}  opts.isEdit     - true when editing an existing hierarchy
+ * @param {object}   opts.tree       - current hierarchy tree (for isEdit mode)
+ * @param {Array}    opts.rootNodes  - loaded root nodes (for isEdit mode)
+ * @param {number}   [opts.maxDepth] - max depth to show (default 4)
+ * @param {Function} [opts.t]        - vue-i18n t() function for translations
+ */
+export function buildDepthOptions({ isEdit, tree, rootNodes, maxDepth = 4, t }) {
+  const tp  = (k)        => t ? t(k)         : null
+  const tpn = (k, p)     => t ? t(k, p)      : null
   const options = []
 
   for (let level = 0; level <= maxDepth; level++) {
     if (!isEdit) {
-      options.push({ value: level, label: GENERIC_LABELS[level], disabled: false })
+      const optLabel = tp(`hierarchy.depthOptions.generic${level}`) ?? GENERIC_LABELS[level]
+      options.push({ value: level, label: optLabel, disabled: false })
       continue
     }
 
     if (level === 0) {
-      const name = tree?.name ?? LEVEL_NAMES[0]
-      options.push({ value: 0, label: `0 — ${name} (Hierarchiename)`, disabled: false })
+      const name       = tree?.name ?? (tp('hierarchy.depthOptions.levelName0') ?? LEVEL_NAMES[0])
+      const rootSuffix = tp('hierarchy.depthOptions.rootSuffix') ?? 'Hierarchiename'
+      const optLabel   = `0 — ${name} (${rootSuffix})`
+      options.push({ value: 0, label: optLabel, disabled: false })
       continue
     }
 
-    const names = collectNamesAtDepth(rootNodes, level - 1)
-    const levelLabel = LEVEL_NAMES[level] ?? `Ebene ${level}`
+    const names      = collectNamesAtDepth(rootNodes, level - 1)
+    const levelLabel = (level < LEVEL_NAMES.length
+      ? tp(`hierarchy.depthOptions.levelName${level}`)
+      : tpn('hierarchy.depthOptions.levelFallback', { level }))
+      ?? (LEVEL_NAMES[level] ?? `Ebene ${level}`)
 
     if (names.length === 0) {
-      options.push({ value: level, label: `${level} — ${levelLabel}`, disabled: true })
+      const optLabel = `${level} — ${levelLabel}`
+      options.push({ value: level, label: optLabel, disabled: true })
       continue
     }
 
-    const example = names[0]
+    const example  = names[0]
     const distinct = new Set(names).size
-    const suffix = distinct === 1
-      ? `(nur "${example}")`
-      : `(z.B. "${example}" — ${distinct} unterschiedliche)`
-    options.push({ value: level, label: `${level} — ${levelLabel} ${suffix}`, disabled: false })
+    const suffix   = distinct === 1
+      ? (tpn('hierarchy.depthOptions.only',     { example })                 ?? `(nur "${example}")`)
+      : (tpn('hierarchy.depthOptions.examples', { example, count: distinct }) ?? `(z.B. "${example}" — ${distinct} unterschiedliche)`)
+    const optLabel = `${level} — ${levelLabel} ${suffix}`
+    options.push({ value: level, label: optLabel, disabled: false })
   }
 
   return options

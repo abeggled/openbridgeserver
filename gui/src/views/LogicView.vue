@@ -528,7 +528,6 @@ function onDrop(event) {
     type,
     position: pos,
     data: {
-      label: nt?.label ?? type,
       ...(nt?.config_schema
         ? Object.fromEntries(
             Object.entries(nt.config_schema).map(([k, v]) => [k, v.default ?? ''])
