@@ -28,7 +28,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.ringbuffer.persisted_config import persist_ringbuffer_config
 from obs.ringbuffer.ringbuffer import get_ringbuffer
@@ -1038,7 +1038,7 @@ async def list_ringbuffer_filtersets(
 @router.post("/filtersets", response_model=RingBufferFiltersetOut, status_code=status.HTTP_201_CREATED)
 async def create_ringbuffer_filterset(
     request: Request,
-    current_user: str = Depends(get_current_user),
+    current_user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> RingBufferFiltersetOut:
     raw = await _read_json_body(request)
@@ -1067,7 +1067,7 @@ async def get_ringbuffer_filterset(
 async def update_ringbuffer_filterset(
     filterset_id: str,
     request: Request,
-    current_user: str = Depends(get_current_user),
+    current_user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> RingBufferFiltersetOut:
     current = await _require_filterset_ownership(db, filterset_id, current_user)
@@ -1139,7 +1139,7 @@ async def update_ringbuffer_filterset(
 @router.delete("/filtersets/{filterset_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_ringbuffer_filterset(
     filterset_id: str,
-    current_user: str = Depends(get_current_user),
+    current_user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> None:
     await _require_filterset_ownership(db, filterset_id, current_user)
@@ -1150,7 +1150,7 @@ async def delete_ringbuffer_filterset(
 async def clone_ringbuffer_filterset(
     filterset_id: str,
     body: RingBufferFiltersetCloneRequest,
-    current_user: str = Depends(get_current_user),
+    current_user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> RingBufferFiltersetOut:
     # Cloning stays open for everyone — that's how a non-admin gets a writable

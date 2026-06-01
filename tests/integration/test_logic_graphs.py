@@ -40,6 +40,25 @@ async def _create_graph(client, auth_headers, name: str = "", enabled: bool = Tr
     return resp.json()
 
 
+async def _create_non_admin_user_and_headers(client, auth_headers, username: str, password: str) -> dict:
+    resp = await client.post(
+        "/api/v1/auth/users",
+        json={
+            "username": username,
+            "password": password,
+            "is_admin": False,
+            "mqtt_enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+    from obs.api.auth import create_access_token
+
+    token = create_access_token(username)
+    return {"Authorization": f"Bearer {token}"}
+
+
 # ---------------------------------------------------------------------------
 # GET /logic/graphs
 # ---------------------------------------------------------------------------
@@ -102,6 +121,25 @@ async def test_create_graph_disabled(client, auth_headers):
     assert graph["enabled"] is False
 
 
+async def test_create_graph_non_admin_forbidden(client, auth_headers):
+    username = f"logic-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        resp = await client.post(
+            "/api/v1/logic/graphs",
+            json={
+                "name": f"LG-Create-NA-{uuid.uuid4().hex[:6]}",
+                "description": "desc",
+                "enabled": True,
+                "flow_data": _EMPTY_FLOW,
+            },
+            headers=user_headers,
+        )
+        assert resp.status_code == 403, resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 # ---------------------------------------------------------------------------
 # GET /logic/graphs/{id}
 # ---------------------------------------------------------------------------
@@ -158,6 +196,21 @@ async def test_full_update_graph_success(client, auth_headers):
     assert body["description"] == "updated desc"
 
 
+async def test_full_update_graph_non_admin_forbidden(client, auth_headers):
+    graph = await _create_graph(client, auth_headers)
+    username = f"logic-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        resp = await client.put(
+            f"/api/v1/logic/graphs/{graph['id']}",
+            json={"name": "x", "description": "", "enabled": True, "flow_data": _EMPTY_FLOW},
+            headers=user_headers,
+        )
+        assert resp.status_code == 403, resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 # ---------------------------------------------------------------------------
 # PATCH /logic/graphs/{id}  (partial update)
 # ---------------------------------------------------------------------------
@@ -203,6 +256,21 @@ async def test_partial_update_graph_persists(client, auth_headers):
     assert resp.json()["name"] == new_name
 
 
+async def test_partial_update_graph_non_admin_forbidden(client, auth_headers):
+    graph = await _create_graph(client, auth_headers)
+    username = f"logic-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        resp = await client.patch(
+            f"/api/v1/logic/graphs/{graph['id']}",
+            json={"enabled": False},
+            headers=user_headers,
+        )
+        assert resp.status_code == 403, resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 # ---------------------------------------------------------------------------
 # DELETE /logic/graphs/{id}
 # ---------------------------------------------------------------------------
@@ -224,6 +292,20 @@ async def test_delete_graph_success(client, auth_headers):
     assert resp.status_code == 204
     get_resp = await client.get(f"/api/v1/logic/graphs/{graph['id']}", headers=auth_headers)
     assert get_resp.status_code == 404
+
+
+async def test_delete_graph_non_admin_forbidden(client, auth_headers):
+    graph = await _create_graph(client, auth_headers)
+    username = f"logic-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        resp = await client.delete(
+            f"/api/v1/logic/graphs/{graph['id']}",
+            headers=user_headers,
+        )
+        assert resp.status_code == 403, resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +334,17 @@ async def test_run_disabled_graph_returns_422(client, auth_headers):
     graph = await _create_graph(client, auth_headers, enabled=False)
     resp = await client.post(f"/api/v1/logic/graphs/{graph['id']}/run", headers=auth_headers)
     assert resp.status_code == 422
+
+
+async def test_run_graph_non_admin_forbidden(client, auth_headers):
+    graph = await _create_graph(client, auth_headers, enabled=True)
+    username = f"logic-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        resp = await client.post(f"/api/v1/logic/graphs/{graph['id']}/run", headers=user_headers)
+        assert resp.status_code == 403, resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +379,17 @@ async def test_duplicate_graph_new_id(client, auth_headers):
     ids = {g["id"] for g in graphs}
     assert copy["id"] in ids
     assert original["id"] in ids
+
+
+async def test_duplicate_graph_non_admin_forbidden(client, auth_headers):
+    original = await _create_graph(client, auth_headers)
+    username = f"logic-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        resp = await client.post(f"/api/v1/logic/graphs/{original['id']}/duplicate", headers=user_headers)
+        assert resp.status_code == 403, resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 # ---------------------------------------------------------------------------
@@ -351,3 +455,17 @@ async def test_import_graph_success(client, auth_headers):
     imported = resp.json()
     assert imported["name"] == original["name"]
     assert imported["id"] != original["id"]
+
+
+async def test_import_graph_non_admin_forbidden(client, auth_headers):
+    original = await _create_graph(client, auth_headers, name=f"ToImport-{uuid.uuid4().hex[:6]}")
+    export_resp = await client.get(f"/api/v1/logic/graphs/{original['id']}/export", headers=auth_headers)
+    export_body = export_resp.json()
+
+    username = f"logic-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        resp = await client.post("/api/v1/logic/graphs/import", json=export_body, headers=user_headers)
+        assert resp.status_code == 403, resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)

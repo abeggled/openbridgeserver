@@ -21,7 +21,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from obs.api.auth import get_admin_user, get_current_user
+from obs.api.auth import get_admin_user
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
@@ -211,7 +211,7 @@ class ClearResult(BaseModel):
 
 @router.get("/export", response_model=ConfigExport)
 async def export_config(
-    _user: str = Depends(get_current_user),
+    _admin: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> ConfigExport:
     reg = get_registry()
@@ -516,7 +516,7 @@ async def import_db(
 @router.post("/import", response_model=ImportResult, status_code=status.HTTP_200_OK)
 async def import_config(
     body: ConfigExport,
-    _user: str = Depends(get_current_user),
+    _admin: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> ImportResult:
     result = ImportResult(

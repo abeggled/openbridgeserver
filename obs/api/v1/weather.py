@@ -19,10 +19,10 @@ import socket
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
-from obs.api.auth import decode_token
+from obs.api.auth import optional_current_user
 
 router = APIRouter(tags=["weather"])
 
@@ -43,13 +43,20 @@ _BLOCKED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
     ipaddress.ip_network("::ffff:0:0/96"),
 ]
 
+_PRIVATE_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+]
 
-async def _check_ssrf(url: str) -> None:
+
+async def _check_ssrf(url: str, *, allow_private_networks: bool) -> None:
     """Löst den Hostnamen der URL auf und verwirft alle Adressen, die in
     einem gesperrten Netzwerk liegen (SSRF-Prävention).
 
-    Private Netzwerke (192.168.x.x, 10.x.x.x) sind bewusst erlaubt,
-    da Wetter-Datenquellen auch im lokalen Netz betrieben werden können.
+    Private Netzwerke (192.168.x.x, 10.x.x.x) sind nur für authentifizierte
+    Requests erlaubt. Public Requests dürfen ausschließlich externe Ziele aufrufen.
 
     Raises:
         HTTPException 400 — ungültige URL oder gesperrte Ziel-IP
@@ -79,40 +86,22 @@ async def _check_ssrf(url: str) -> None:
             detail=f"Hostname '{hostname}' nicht auflösbar: {exc}",
         ) from exc
 
+    blocked_networks = list(_BLOCKED_NETWORKS)
+    if not allow_private_networks:
+        blocked_networks.extend(_PRIVATE_NETWORKS)
+
     for *_, sockaddr in addr_infos:
         ip_str = sockaddr[0]
         try:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        for net in _BLOCKED_NETWORKS:
+        for net in blocked_networks:
             if ip in net:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=(f"URL-Ziel nicht erlaubt: die aufgelöste Adresse {ip} liegt in einem gesperrten Netzwerkbereich"),
                 )
-
-
-# ── Authentifizierung ──────────────────────────────────────────────────────────
-
-
-async def _weather_auth(
-    request: Request,
-    _token: str = Query("", alias="_token", description="JWT als Query-Parameter"),
-) -> str:
-    """Akzeptiert JWT entweder als 'Authorization: Bearer …'-Header
-    oder als URL-Query-Parameter '?_token=…'.
-    """
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        return decode_token(auth_header[7:])
-    if _token:
-        return decode_token(_token)
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Provide Authorization: Bearer {token} or ?_token=",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
 
 
 # ── Fetch-Endpunkt ─────────────────────────────────────────────────────────────
@@ -121,7 +110,7 @@ async def _weather_auth(
 @router.get("/fetch")
 async def fetch_weather(
     url: str = Query(..., description="Vollständige Wetter-API-URL (inkl. API-Key)"),
-    _user: str = Depends(_weather_auth),
+    current_user: str | None = Depends(optional_current_user),
 ) -> JSONResponse:
     """Holt Wetterdaten von der konfigurierten API-URL und gibt sie als JSON zurück.
     Der API-Key wird als Teil der URL übergeben (z.B. OpenWeatherMap appid=…).
@@ -136,7 +125,7 @@ async def fetch_weather(
             detail="Nur HTTP/HTTPS-URLs erlaubt",
         )
 
-    await _check_ssrf(url)
+    await _check_ssrf(url, allow_private_networks=current_user is not None)
 
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as hc:

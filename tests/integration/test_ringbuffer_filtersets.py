@@ -478,412 +478,121 @@ async def test_single_set_query_returns_matching_entries(client, auth_headers):
 
 
 # ---------------------------------------------------------------------------
-# Access control (#478) — fine-grained ownership: admin can do everything,
-# non-admin users may only edit/delete sets they themselves created.
+# Access control hardening (#590): filterset mutation routes are admin-only.
 # ---------------------------------------------------------------------------
 
 
-async def test_create_filterset_sets_created_by_to_current_user(client, auth_headers):
-    """POST /filtersets stamps created_by with the calling user's username."""
-    username = f"rb-owner-{uuid.uuid4().hex[:8]}"
+async def test_non_admin_cannot_create_filterset(client, auth_headers):
+    username = f"rb-na-{uuid.uuid4().hex[:8]}"
     user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
-    created_id = None
     try:
         resp = await client.post(
             "/api/v1/ringbuffer/filtersets",
             json={"name": f"Owned by user {uuid.uuid4()}", "filter": {"adapters": ["api"]}},
             headers=user_headers,
         )
-        assert resp.status_code == 201, resp.text
-        body = resp.json()
-        created_id = body["id"]
-        assert body["created_by"] == username
-    finally:
-        if created_id:
-            await _delete_filterset(client, auth_headers, created_id)
-        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
-
-
-async def test_admin_can_mutate_any_filterset(client, auth_headers):
-    """Admin can rename and delete a set created by another user."""
-    username = f"rb-other-{uuid.uuid4().hex[:8]}"
-    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
-    created_id = None
-    try:
-        create_resp = await client.post(
-            "/api/v1/ringbuffer/filtersets",
-            json={"name": f"Owned by {username}", "filter": {"adapters": ["api"]}},
-            headers=user_headers,
-        )
-        assert create_resp.status_code == 201, create_resp.text
-        created_id = create_resp.json()["id"]
-
-        # Admin renames the user's set.
-        put_resp = await client.put(
-            f"/api/v1/ringbuffer/filtersets/{created_id}",
-            json={"name": "renamed by admin", "filter": {"adapters": ["api"]}},
-            headers=auth_headers,
-        )
-        assert put_resp.status_code == 200, put_resp.text
-
-        # Admin deletes it.
-        del_resp = await client.delete(
-            f"/api/v1/ringbuffer/filtersets/{created_id}",
-            headers=auth_headers,
-        )
-        assert del_resp.status_code == 204, del_resp.text
-        created_id = None
-    finally:
-        if created_id:
-            await _delete_filterset(client, auth_headers, created_id)
-        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
-
-
-async def test_user_can_mutate_own_filterset(client, auth_headers):
-    """Non-admin users may rename and delete sets they themselves created."""
-    username = f"rb-self-{uuid.uuid4().hex[:8]}"
-    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
-    created_id = None
-    try:
-        create_resp = await client.post(
-            "/api/v1/ringbuffer/filtersets",
-            json={"name": f"Self-owned {uuid.uuid4()}", "filter": {"adapters": ["api"]}},
-            headers=user_headers,
-        )
-        assert create_resp.status_code == 201, create_resp.text
-        created_id = create_resp.json()["id"]
-
-        put_resp = await client.put(
-            f"/api/v1/ringbuffer/filtersets/{created_id}",
-            json={"name": "renamed by owner", "filter": {"adapters": ["api"]}},
-            headers=user_headers,
-        )
-        assert put_resp.status_code == 200, put_resp.text
-
-        del_resp = await client.delete(
-            f"/api/v1/ringbuffer/filtersets/{created_id}",
-            headers=user_headers,
-        )
-        assert del_resp.status_code == 204, del_resp.text
-        created_id = None
-    finally:
-        if created_id:
-            await _delete_filterset(client, auth_headers, created_id)
-        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
-
-
-async def test_user_cannot_update_others_filterset(client, auth_headers):
-    """A non-admin trying to PUT another user's filterset must get 403."""
-    owner = f"rb-owner-{uuid.uuid4().hex[:8]}"
-    intruder = f"rb-intruder-{uuid.uuid4().hex[:8]}"
-    owner_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=owner, password="pw-12345678")
-    intruder_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=intruder, password="pw-12345678")
-    created_id = None
-    try:
-        create_resp = await client.post(
-            "/api/v1/ringbuffer/filtersets",
-            json={"name": f"Owner's set {uuid.uuid4()}", "filter": {"adapters": ["api"]}},
-            headers=owner_headers,
-        )
-        assert create_resp.status_code == 201, create_resp.text
-        created_id = create_resp.json()["id"]
-
-        resp = await client.put(
-            f"/api/v1/ringbuffer/filtersets/{created_id}",
-            json={"name": "hijacked", "filter": {"adapters": ["api"]}},
-            headers=intruder_headers,
-        )
         assert resp.status_code == 403, resp.text
     finally:
-        if created_id:
-            await _delete_filterset(client, auth_headers, created_id)
-        await client.delete(f"/api/v1/auth/users/{owner}", headers=auth_headers)
-        await client.delete(f"/api/v1/auth/users/{intruder}", headers=auth_headers)
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
-async def test_user_cannot_delete_others_filterset(client, auth_headers):
-    """A non-admin trying to DELETE another user's filterset must get 403."""
-    owner = f"rb-owner-{uuid.uuid4().hex[:8]}"
-    intruder = f"rb-intruder-{uuid.uuid4().hex[:8]}"
-    owner_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=owner, password="pw-12345678")
-    intruder_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=intruder, password="pw-12345678")
-    created_id = None
-    try:
-        create_resp = await client.post(
-            "/api/v1/ringbuffer/filtersets",
-            json={"name": f"Owner's set {uuid.uuid4()}", "filter": {"adapters": ["api"]}},
-            headers=owner_headers,
-        )
-        assert create_resp.status_code == 201, create_resp.text
-        created_id = create_resp.json()["id"]
-
-        resp = await client.delete(
-            f"/api/v1/ringbuffer/filtersets/{created_id}",
-            headers=intruder_headers,
-        )
-        assert resp.status_code == 403, resp.text
-
-        # Owner still sees their set.
-        check = await client.get(f"/api/v1/ringbuffer/filtersets/{created_id}", headers=owner_headers)
-        assert check.status_code == 200, check.text
-    finally:
-        if created_id:
-            await _delete_filterset(client, auth_headers, created_id)
-        await client.delete(f"/api/v1/auth/users/{owner}", headers=auth_headers)
-        await client.delete(f"/api/v1/auth/users/{intruder}", headers=auth_headers)
-
-
-async def test_user_can_clone_others_filterset_and_owns_clone(client, auth_headers):
-    """Cloning stays open for everyone; the clone's created_by is the cloning user."""
-    owner = f"rb-owner-{uuid.uuid4().hex[:8]}"
-    cloner = f"rb-cloner-{uuid.uuid4().hex[:8]}"
-    owner_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=owner, password="pw-12345678")
-    cloner_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=cloner, password="pw-12345678")
-    source_id = None
-    clone_id = None
-    try:
-        create_resp = await client.post(
-            "/api/v1/ringbuffer/filtersets",
-            json={"name": f"Original by {owner}", "filter": {"adapters": ["api"]}},
-            headers=owner_headers,
-        )
-        assert create_resp.status_code == 201, create_resp.text
-        source_id = create_resp.json()["id"]
-
-        clone_resp = await client.post(
-            f"/api/v1/ringbuffer/filtersets/{source_id}/clone",
-            json={"name": f"Clone by {cloner}"},
-            headers=cloner_headers,
-        )
-        assert clone_resp.status_code == 201, clone_resp.text
-        clone = clone_resp.json()
-        clone_id = clone["id"]
-        assert clone["created_by"] == cloner
-
-        # The cloner can now edit their clone …
-        edit_resp = await client.put(
-            f"/api/v1/ringbuffer/filtersets/{clone_id}",
-            json={"name": "renamed clone", "filter": {"adapters": ["api"]}},
-            headers=cloner_headers,
-        )
-        assert edit_resp.status_code == 200, edit_resp.text
-
-        # … but they still cannot edit the source.
-        forbid = await client.put(
-            f"/api/v1/ringbuffer/filtersets/{source_id}",
-            json={"name": "hijack source", "filter": {"adapters": ["api"]}},
-            headers=cloner_headers,
-        )
-        assert forbid.status_code == 403, forbid.text
-    finally:
-        if clone_id:
-            await _delete_filterset(client, auth_headers, clone_id)
-        if source_id:
-            await _delete_filterset(client, auth_headers, source_id)
-        await client.delete(f"/api/v1/auth/users/{owner}", headers=auth_headers)
-        await client.delete(f"/api/v1/auth/users/{cloner}", headers=auth_headers)
-
-
-async def test_legacy_set_without_owner_is_admin_only(client, auth_headers):
-    """Migration leaves existing rows with created_by=NULL.
-
-    Such "shared" sets must remain visible to everyone (read-only) but only
-    admins may mutate them; non-admins get 403 on PUT/DELETE.
-    """
-    from obs.db.database import get_db
-
-    db = get_db()
-    legacy_id = str(uuid.uuid4())
-    now = "2025-01-01T00:00:00Z"
-    await db.execute_and_commit(
-        """INSERT INTO ringbuffer_filtersets
-           (id, name, description, dsl_version, is_active, color,
-            topbar_active, topbar_order, filter_json, created_at, updated_at, created_by)
-           VALUES (?, 'Legacy set', '', 2, 1, '#3b82f6', 0, 0,
-                   '{"adapters":["api"]}', ?, ?, NULL)""",
-        (legacy_id, now, now),
+async def test_non_admin_cannot_update_filterset(client, auth_headers):
+    created = await _create_filterset(
+        client,
+        auth_headers,
+        {"name": f"admin-owned {uuid.uuid4()}", "filter": {"adapters": ["api"]}},
     )
-    username = f"rb-noowner-{uuid.uuid4().hex[:8]}"
+    username = f"rb-na-{uuid.uuid4().hex[:8]}"
     user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
     try:
-        # User can read it.
-        get_resp = await client.get(f"/api/v1/ringbuffer/filtersets/{legacy_id}", headers=user_headers)
-        assert get_resp.status_code == 200, get_resp.text
-        assert get_resp.json()["created_by"] is None
-
-        # User cannot edit it.
-        put_resp = await client.put(
-            f"/api/v1/ringbuffer/filtersets/{legacy_id}",
-            json={"name": "user-renamed", "filter": {"adapters": ["api"]}},
+        resp = await client.put(
+            f"/api/v1/ringbuffer/filtersets/{created['id']}",
+            json={"name": "hijacked", "filter": {"adapters": ["api"]}},
             headers=user_headers,
         )
-        assert put_resp.status_code == 403, put_resp.text
-
-        # Admin can edit it.
-        admin_put = await client.put(
-            f"/api/v1/ringbuffer/filtersets/{legacy_id}",
-            json={"name": "admin-renamed", "filter": {"adapters": ["api"]}},
-            headers=auth_headers,
-        )
-        assert admin_put.status_code == 200, admin_put.text
+        assert resp.status_code == 403, resp.text
     finally:
-        await db.execute_and_commit("DELETE FROM ringbuffer_filtersets WHERE id=?", (legacy_id,))
+        await _delete_filterset(client, auth_headers, created["id"])
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
-# ---------------------------------------------------------------------------
-# Per-user topbar state (#478)
-# ---------------------------------------------------------------------------
-
-
-async def test_topbar_state_is_per_user(client, auth_headers):
-    """user A pins a set; user B must NOT see it as pinned."""
-    user_a = f"rb-a-{uuid.uuid4().hex[:8]}"
-    user_b = f"rb-b-{uuid.uuid4().hex[:8]}"
-    headers_a = await _create_non_admin_user_and_headers(client, auth_headers, username=user_a, password="pw-12345678")
-    headers_b = await _create_non_admin_user_and_headers(client, auth_headers, username=user_b, password="pw-12345678")
-    created_id = None
+async def test_non_admin_cannot_delete_filterset(client, auth_headers):
+    created = await _create_filterset(
+        client,
+        auth_headers,
+        {"name": f"admin-owned {uuid.uuid4()}", "filter": {"adapters": ["api"]}},
+    )
+    username = f"rb-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
     try:
-        # User A creates a set (and pins it on creation).
-        create_resp = await client.post(
-            "/api/v1/ringbuffer/filtersets",
-            json={"name": f"per-user topbar {uuid.uuid4()}", "filter": {"adapters": ["api"]}, "topbar_active": True},
-            headers=headers_a,
+        resp = await client.delete(
+            f"/api/v1/ringbuffer/filtersets/{created['id']}",
+            headers=user_headers,
         )
-        assert create_resp.status_code == 201, create_resp.text
-        created_id = create_resp.json()["id"]
-        # A sees it pinned.
-        assert create_resp.json()["topbar_active"] is True
-
-        # User B reads the same set: must see it un-pinned.
-        get_b = await client.get(f"/api/v1/ringbuffer/filtersets/{created_id}", headers=headers_b)
-        assert get_b.status_code == 200, get_b.text
-        assert get_b.json()["topbar_active"] is False
-
-        # User B pins it for himself.
-        patch_b = await client.patch(
-            f"/api/v1/ringbuffer/filtersets/{created_id}/topbar",
-            json={"topbar_active": True},
-            headers=headers_b,
-        )
-        assert patch_b.status_code == 200, patch_b.text
-        assert patch_b.json()["topbar_active"] is True
-
-        # User B un-pins it again — must not flip A's view.
-        patch_b_off = await client.patch(
-            f"/api/v1/ringbuffer/filtersets/{created_id}/topbar",
-            json={"topbar_active": False},
-            headers=headers_b,
-        )
-        assert patch_b_off.status_code == 200, patch_b_off.text
-
-        get_a = await client.get(f"/api/v1/ringbuffer/filtersets/{created_id}", headers=headers_a)
-        assert get_a.status_code == 200, get_a.text
-        assert get_a.json()["topbar_active"] is True
+        assert resp.status_code == 403, resp.text
     finally:
-        if created_id:
-            await _delete_filterset(client, auth_headers, created_id)
-        await client.delete(f"/api/v1/auth/users/{user_a}", headers=auth_headers)
-        await client.delete(f"/api/v1/auth/users/{user_b}", headers=auth_headers)
+        await _delete_filterset(client, auth_headers, created["id"])
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
-async def test_is_active_is_per_user_and_open_to_everyone(client, auth_headers):
-    """``is_active`` is a per-user override too: every authenticated user may
-    toggle their own active state on any set without Owner / Admin restriction
-    (#478 — corrected). User A deactivating a set must not affect user B's view.
-    """
-    owner = f"rb-act-owner-{uuid.uuid4().hex[:8]}"
-    other = f"rb-act-other-{uuid.uuid4().hex[:8]}"
-    headers_owner = await _create_non_admin_user_and_headers(client, auth_headers, username=owner, password="pw-12345678")
-    headers_other = await _create_non_admin_user_and_headers(client, auth_headers, username=other, password="pw-12345678")
-    created_id = None
+async def test_non_admin_cannot_clone_filterset(client, auth_headers):
+    created = await _create_filterset(
+        client,
+        auth_headers,
+        {"name": f"admin-owned {uuid.uuid4()}", "filter": {"adapters": ["api"]}},
+    )
+    username = f"rb-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
     try:
-        # Owner creates the set, active by default.
-        create = await client.post(
-            "/api/v1/ringbuffer/filtersets",
-            json={"name": f"per-user is_active {uuid.uuid4()}", "filter": {"adapters": ["api"]}},
-            headers=headers_owner,
+        resp = await client.post(
+            f"/api/v1/ringbuffer/filtersets/{created['id']}/clone",
+            json={"name": "forbidden clone"},
+            headers=user_headers,
         )
-        assert create.status_code == 201, create.text
-        created_id = create.json()["id"]
-        assert create.json()["is_active"] is True
-
-        # User "other" deactivates it for themselves — must succeed (no 403).
-        patch = await client.patch(
-            f"/api/v1/ringbuffer/filtersets/{created_id}/topbar",
-            json={"is_active": False},
-            headers=headers_other,
-        )
-        assert patch.status_code == 200, patch.text
-        assert patch.json()["is_active"] is False
-
-        # Owner's view is unaffected.
-        get_owner = await client.get(f"/api/v1/ringbuffer/filtersets/{created_id}", headers=headers_owner)
-        assert get_owner.status_code == 200, get_owner.text
-        assert get_owner.json()["is_active"] is True
-
-        # And the owner can flip their own is_active too.
-        patch_owner = await client.patch(
-            f"/api/v1/ringbuffer/filtersets/{created_id}/topbar",
-            json={"is_active": False},
-            headers=headers_owner,
-        )
-        assert patch_owner.status_code == 200, patch_owner.text
-        assert patch_owner.json()["is_active"] is False
+        assert resp.status_code == 403, resp.text
     finally:
-        if created_id:
-            await _delete_filterset(client, auth_headers, created_id)
-        await client.delete(f"/api/v1/auth/users/{owner}", headers=auth_headers)
-        await client.delete(f"/api/v1/auth/users/{other}", headers=auth_headers)
+        await _delete_filterset(client, auth_headers, created["id"])
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
-async def test_topbar_order_is_per_user(client, auth_headers):
-    """PATCH /filtersets/order writes per-user ordering, not the global default."""
-    user_a = f"rb-ord-a-{uuid.uuid4().hex[:8]}"
-    user_b = f"rb-ord-b-{uuid.uuid4().hex[:8]}"
-    headers_a = await _create_non_admin_user_and_headers(client, auth_headers, username=user_a, password="pw-12345678")
-    headers_b = await _create_non_admin_user_and_headers(client, auth_headers, username=user_b, password="pw-12345678")
-    a_id = None
-    b_id = None
+async def test_non_admin_can_patch_filterset_topbar(client, auth_headers):
+    created = await _create_filterset(
+        client,
+        auth_headers,
+        {"name": f"admin-owned {uuid.uuid4()}", "filter": {"adapters": ["api"]}},
+    )
+    username = f"rb-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
     try:
-        a = (
-            await client.post(
-                "/api/v1/ringbuffer/filtersets",
-                json={"name": f"Order A {uuid.uuid4()}", "filter": {"tags": ["rb-order-per-user"]}},
-                headers=headers_a,
-            )
-        ).json()
-        a_id = a["id"]
-        b = (
-            await client.post(
-                "/api/v1/ringbuffer/filtersets",
-                json={"name": f"Order B {uuid.uuid4()}", "filter": {"tags": ["rb-order-per-user"]}},
-                headers=headers_a,
-            )
-        ).json()
-        b_id = b["id"]
-
-        # User A orders A=5, B=2 …
         resp = await client.patch(
-            "/api/v1/ringbuffer/filtersets/order",
-            json={"items": [{"id": a_id, "topbar_order": 5}, {"id": b_id, "topbar_order": 2}]},
-            headers=headers_a,
+            f"/api/v1/ringbuffer/filtersets/{created['id']}/topbar",
+            json={"topbar_active": True},
+            headers=user_headers,
         )
         assert resp.status_code == 200, resp.text
-        by_id_a = {row["id"]: row for row in resp.json()}
-        assert by_id_a[a_id]["topbar_order"] == 5
-        assert by_id_a[b_id]["topbar_order"] == 2
-
-        # User B sees the defaults (0/0) — A's order must not leak.
-        list_b = await client.get("/api/v1/ringbuffer/filtersets", headers=headers_b)
-        assert list_b.status_code == 200, list_b.text
-        by_id_b = {row["id"]: row for row in list_b.json() if row["id"] in (a_id, b_id)}
-        assert by_id_b[a_id]["topbar_order"] == 0
-        assert by_id_b[b_id]["topbar_order"] == 0
+        assert resp.json()["topbar_active"] is True
     finally:
-        if a_id:
-            await _delete_filterset(client, auth_headers, a_id)
-        if b_id:
-            await _delete_filterset(client, auth_headers, b_id)
-        await client.delete(f"/api/v1/auth/users/{user_a}", headers=auth_headers)
-        await client.delete(f"/api/v1/auth/users/{user_b}", headers=auth_headers)
+        await _delete_filterset(client, auth_headers, created["id"])
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
+async def test_non_admin_can_patch_filterset_order(client, auth_headers):
+    created = await _create_filterset(
+        client,
+        auth_headers,
+        {"name": f"admin-owned {uuid.uuid4()}", "filter": {"adapters": ["api"]}},
+    )
+    username = f"rb-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        resp = await client.patch(
+            "/api/v1/ringbuffer/filtersets/order",
+            json={"items": [{"id": created["id"], "topbar_order": 5}]},
+            headers=user_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        by_id = {row["id"]: row for row in resp.json()}
+        assert by_id[created["id"]]["topbar_order"] == 5
+    finally:
+        await _delete_filterset(client, auth_headers, created["id"])
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)

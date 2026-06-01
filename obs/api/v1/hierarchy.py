@@ -29,7 +29,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.datapoints import NodePathSegment
 from obs.db.database import Database, get_db
 
@@ -221,7 +221,7 @@ async def list_trees(
 @router.post("/trees", response_model=HierarchyTree, status_code=status.HTTP_201_CREATED)
 async def create_tree(
     body: HierarchyTreeCreate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> HierarchyTree:
     now = _now()
@@ -238,7 +238,7 @@ async def create_tree(
 async def update_tree(
     tree_id: str,
     body: HierarchyTreeUpdate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> HierarchyTree:
     row = await db.fetchone("SELECT * FROM hierarchy_trees WHERE id=?", (tree_id,))
@@ -259,7 +259,7 @@ async def update_tree(
 @router.delete("/trees/{tree_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_tree(
     tree_id: str,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> None:
     row = await db.fetchone("SELECT id FROM hierarchy_trees WHERE id=?", (tree_id,))
@@ -294,7 +294,7 @@ async def get_tree_nodes(
 @router.post("/nodes", response_model=HierarchyNode, status_code=status.HTTP_201_CREATED)
 async def create_node(
     body: HierarchyNodeCreate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> HierarchyNode:
     # Baum muss existieren
@@ -323,7 +323,7 @@ async def create_node(
 async def update_node(
     node_id: str,
     body: HierarchyNodeUpdate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> HierarchyNode:
     row = await db.fetchone("SELECT * FROM hierarchy_nodes WHERE id=?", (node_id,))
@@ -346,7 +346,7 @@ async def update_node(
 async def move_node(
     node_id: str,
     body: HierarchyNodeMove,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> HierarchyNode:
     row = await db.fetchone("SELECT * FROM hierarchy_nodes WHERE id=?", (node_id,))
@@ -374,7 +374,7 @@ async def move_node(
 @router.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_node(
     node_id: str,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> None:
     row = await db.fetchone("SELECT id FROM hierarchy_nodes WHERE id=?", (node_id,))
@@ -467,7 +467,7 @@ async def get_datapoint_nodes(
 @router.post("/links", status_code=status.HTTP_201_CREATED)
 async def create_link(
     body: HierarchyLinkCreate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> dict:
     node = await db.fetchone("SELECT id FROM hierarchy_nodes WHERE id=?", (body.node_id,))
@@ -497,7 +497,7 @@ async def create_link(
 async def delete_link(
     node_id: str = Query(...),
     datapoint_id: str = Query(...),
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> None:
     await db.execute_and_commit(
@@ -570,7 +570,7 @@ async def search_nodes(
 @router.post("/import-from-ets", response_model=ImportResult, status_code=status.HTTP_201_CREATED)
 async def import_from_ets(
     body: EtsImportRequest,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> ImportResult:
     """Erzeugt einen neuen Hierarchiebaum aus importierten ETS-Gruppenadressen.

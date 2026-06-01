@@ -12,8 +12,28 @@ Covers:
 from __future__ import annotations
 
 import pytest
+from obs.api.auth import create_access_token
 
 pytestmark = pytest.mark.integration
+
+
+async def _create_non_admin_headers(client, auth_headers) -> tuple[dict, str]:
+    import uuid
+
+    username = f"backup-user-{uuid.uuid4().hex[:8]}"
+    password = "pw-12345678"
+    resp = await client.post(
+        "/api/v1/auth/users",
+        json={
+            "username": username,
+            "password": password,
+            "is_admin": False,
+            "mqtt_enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return {"Authorization": f"Bearer {create_access_token(username)}"}, username
 
 
 # ---------------------------------------------------------------------------
@@ -24,6 +44,15 @@ pytestmark = pytest.mark.integration
 async def test_get_autobackup_config_requires_auth(client):
     resp = await client.get("/api/v1/config/autobackup/config")
     assert resp.status_code == 401
+
+
+async def test_get_autobackup_config_non_admin_forbidden(client, auth_headers):
+    user_headers, username = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.get("/api/v1/config/autobackup/config", headers=user_headers)
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_get_autobackup_config_returns_defaults(client, auth_headers):
