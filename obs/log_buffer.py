@@ -19,7 +19,7 @@ from typing import Any
 
 _buffer: deque[dict[str, Any]] = deque(maxlen=500)
 _loop: asyncio.AbstractEventLoop | None = None
-_NON_PROPAGATING_LOGGER_NAMES = ("uvicorn.access", "uvicorn.error")
+_NON_PROPAGATING_LOGGER_NAMES = ("uvicorn.error",)
 
 
 def get_log_buffer() -> list[dict[str, Any]]:
