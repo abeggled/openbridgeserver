@@ -336,11 +336,14 @@ function onDocumentClick(event) {
   addMenuQuery.value = ''
 }
 
-function onDocumentScroll() {
-  if (addMenuOpen.value) {
-    addMenuOpen.value = false
-    addMenuQuery.value = ''
-  }
+function onDocumentScroll(e) {
+  if (!addMenuOpen.value) return
+  // Ignore scroll events that originate inside the teleported menu itself
+  // (e.g. the user scrolling through a long filterset list).
+  const menu = document.querySelector('[data-testid="topbar-add-filter-menu"]')
+  if (menu && menu.contains(e.target)) return
+  addMenuOpen.value = false
+  addMenuQuery.value = ''
 }
 
 onMounted(() => {

@@ -1942,7 +1942,9 @@
     "etsMode": {
       "groups": "Topologie",
       "buildings": "Gebäude",
-      "trades": "Gewerke"
+      "trades": "Gewerke",
+      "mid": "Mittelgruppen",
+      "flat": "Flach (nur GA)"
     }
   },
   "topbar": {
