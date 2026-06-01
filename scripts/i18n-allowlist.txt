@@ -22,3 +22,25 @@ KNX
 re:^0 — \$\{name\} \(Hierarchiename\)$
 re:^\$\{level\} — \$\{levelLabel\}$
 re:^\$\{level\} — \$\{levelLabel\} \$\{suffix\}$
+
+# GenericNode.vue — NODE_DEFS static port/node labels.
+# These are logic-editor canvas labels (abbreviations / technical identifiers),
+# not user-configurable strings.  Allowlisted here until a full NODE_DEFS i18n
+# refactor is done in a dedicated PR.
+re:^IN \d+$
+re:^T\d \(dbg\)$
+re:^(Max|Min)∞$
+re:^(JSON|XML) Extraktor$
+re:^SMS \(seven\.io\)$
+re:^IN \$\{i \+ 1\}$
+re:^\$\{fname\}: (Array|Datum|Morgen|Heute)$
+re:^∅
+Verzögerung
+MCP Tool
+Astro Sonne
+Tagsüber
+Temp °C
+Zähler
+String Verketten
+API Client
+Substring / RegEx

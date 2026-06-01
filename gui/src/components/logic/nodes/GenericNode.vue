@@ -269,7 +269,11 @@ const summary = computed(() => {
     const hint = d.mode === 'regex' ? (d.pattern || '—') : d.mode === 'zwischen' ? `"${d.start_marker ?? ''}…${d.end_marker ?? ''}"` : d.mode === 'ausschneiden' ? `[${d.start ?? 0}:${d.length ?? -1}]` : (d.search || '—')
     return `${m}  ${hint}`
   }
-  if (props.type === 'heating_circuit')     return `W≤${d.temp_winter ?? 15} °C  S≥${d.temp_summer ?? 20} °C`
+  if (props.type === 'heating_circuit') {
+    const thr = d.threshold_temp ?? d.temp_winter ?? 14
+    const hys = d.hysteresis ?? (d.temp_winter != null && d.temp_summer != null ? d.temp_summer - d.temp_winter : 2)
+    return `Grenze ${thr} °C  +${hys} °C`
+  }
   if (props.type === 'min_max_tracker')     return null
   if (props.type === 'consumption_counter') return null
   if (props.type === 'gate') {

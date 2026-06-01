@@ -869,6 +869,97 @@ class LogicManager:
                     if active_client is not None:
                         await active_client.aclose()
 
+        # ── Pre-fill heating_circuit missing slots from history ───────────────────────
+        # For each heating_circuit node: when a slot (T1/T2/T3) is missing for today
+        # and the clock has already passed the slot's threshold hour, query the history
+        # for the last value at or before that hour and inject it as _history_{slot}.
+        # This covers restarts where the slot would otherwise stay empty all day.
+        import datetime as _hc_dt  # noqa: PLC0415
+        import zoneinfo as _hc_zi  # noqa: PLC0415
+
+        _hc_tz = _hc_zi.ZoneInfo(self._app_config.get("timezone", "Europe/Zurich"))
+        _hc_now = _hc_dt.datetime.now(tz=_hc_tz)
+        _hc_today = _hc_now.date().isoformat()
+        _HC_SLOTS = (("t1", 7), ("t2", 14), ("t3", 21))
+
+        for node in flow.nodes:
+            if node.type != "heating_circuit":
+                continue
+            # Find the datapoint_id and datapoint_read node via graph edges
+            _hc_dp_id_str: str | None = None
+            _hc_dp_read_node = None
+            for edge in flow.edges:
+                if edge.target != node.id:
+                    continue
+                _src = next((n for n in flow.nodes if n.id == edge.source), None)
+                if _src and _src.type == "datapoint_read":
+                    _hc_dp_id_str = _src.data.get("datapoint_id")
+                    _hc_dp_read_node = _src
+                    break
+            if not _hc_dp_id_str:
+                continue
+            _hc_node_state = hyst.setdefault(node.id, {})
+            _hc_node_aug = aug_overrides.setdefault(node.id, {})
+            # Always inject app-timezone date so executor uses the same date as the manager;
+            # without this, system clock vs. app timezone differences around midnight can
+            # cause slots to be tagged with the wrong date and re-filled on every run.
+            _hc_node_aug["_date"] = _hc_today
+            try:
+                from obs.history.factory import get_history_plugin as _get_hp  # noqa: PLC0415
+
+                _hc_dp_id = uuid.UUID(_hc_dp_id_str)
+                _hc_plugin = _get_hp()
+                for _hc_slot, _hc_hour in _HC_SLOTS:
+                    if _hc_node_state.get(f"{_hc_slot}_date") == _hc_today:
+                        continue  # already captured today
+                    if _hc_now.hour < _hc_hour:
+                        continue  # not yet past slot time
+                    # Query last known value at or before the slot's threshold time
+                    _slot_dt = _hc_now.replace(hour=_hc_hour, minute=0, second=0, microsecond=0)
+                    _from_dt = (_slot_dt - _hc_dt.timedelta(hours=24)).astimezone(UTC)
+                    _to_dt = _slot_dt.astimezone(UTC)
+                    _rows = await _hc_plugin.query(_hc_dp_id, _from_dt, _to_dt, limit=1)
+                    if _rows:
+                        # Keep raw value; float() is deferred until after transforms so that
+                        # value_map can handle non-numeric stored values (e.g. "on" → 22.5).
+                        _hist_val: Any = _rows[0]["v"]
+                        # Apply the same transforms as live datapoint_read execution
+                        if _hc_dp_read_node:
+                            _hc_formula = (_hc_dp_read_node.data.get("value_formula") or "").strip()
+                            if _hc_formula:
+                                try:
+                                    from obs.logic.executor import GraphExecutor as _GE  # noqa: PLC0415
+
+                                    _hist_val = _GE._safe_eval(_hc_formula, {"x": float(_hist_val)})
+                                except Exception:
+                                    pass
+                            _hc_vmap = _hc_dp_read_node.data.get("value_map")
+                            if _hc_vmap:
+                                try:
+                                    from obs.core.transformation import apply_value_map as _avm  # noqa: PLC0415
+
+                                    _hist_val = _avm(_hist_val, _hc_vmap)
+                                except Exception:
+                                    pass
+                        try:
+                            _hc_node_aug[f"_history_{_hc_slot}"] = float(_hist_val)
+                            logger.debug(
+                                "Graph %s: heating_circuit %s: %s filled from history: %.1f",
+                                graph_id[:8],
+                                node.id[:8],
+                                _hc_slot,
+                                float(_hc_node_aug[f"_history_{_hc_slot}"]),
+                            )
+                        except (TypeError, ValueError):
+                            logger.debug(
+                                "Graph %s: heating_circuit %s: %s history value not numeric after transforms, skipping",
+                                graph_id[:8],
+                                node.id[:8],
+                                _hc_slot,
+                            )
+            except Exception as _hc_exc:
+                logger.debug("Graph %s: heating_circuit history pre-fill failed: %s", graph_id[:8], _hc_exc)
+
         executor = GraphExecutor(flow, hyst, self._app_config)
         try:
             outputs = executor.execute(aug_overrides)
