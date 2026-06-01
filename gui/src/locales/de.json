@@ -1744,6 +1744,12 @@
       "assigned": "{treeName} › {nodeName} zugeordnet",
       "errorAssign": "Fehler beim Zuordnen",
       "errorRemove": "Fehler beim Entfernen"
+    },
+    "etsImportDesc": "Importiert aus ETS ({mode})",
+    "etsMode": {
+      "groups": "Topologie",
+      "buildings": "Gebäude",
+      "trades": "Gewerke"
     }
   },
   "topbar": {

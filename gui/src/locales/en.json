@@ -1744,6 +1744,12 @@
       "assigned": "{treeName} › {nodeName} assigned",
       "errorAssign": "Error assigning",
       "errorRemove": "Error removing"
+    },
+    "etsImportDesc": "Imported from ETS ({mode})",
+    "etsMode": {
+      "groups": "Topology",
+      "buildings": "Buildings",
+      "trades": "Trades"
     }
   },
   "topbar": {

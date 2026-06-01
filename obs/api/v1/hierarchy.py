@@ -788,7 +788,7 @@ async def import_from_ets(
 
     await db.execute_and_commit(
         "INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)",
-        (tree_id, body.tree_name, f"Importiert aus ETS ({body.mode})", now, now),
+        (tree_id, body.tree_name, f"ets_import:{body.mode}", now, now),
     )
 
     if node_inserts:

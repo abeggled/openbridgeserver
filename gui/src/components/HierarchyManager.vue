@@ -47,7 +47,7 @@
             class="font-semibold text-sm text-slate-800 dark:text-slate-100 flex-1 cursor-pointer hover:text-blue-500 dark:hover:text-blue-400 transition-colors select-none">
             {{ tree.name }}
           </span>
-          <span v-if="tree.description" class="text-xs text-slate-400 hidden sm:block">{{ tree.description }}</span>
+          <span v-if="tree.description" class="text-xs text-slate-400 hidden sm:block">{{ formatTreeDescription(tree.description) }}</span>
           <button @click="toggleTree(tree.id)" class="btn-secondary btn-xs" :data-testid="`btn-expand-${tree.id}`">
             <svg class="w-3 h-3 transition-transform" :class="expandedTrees.has(tree.id) ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
@@ -251,6 +251,16 @@ const msg         = ref(null)
 
 const treeNameInput = ref(null)
 const nodeNameInput = ref(null)
+
+function formatTreeDescription(desc) {
+  if (!desc) return ''
+  if (desc.startsWith('ets_import:')) {
+    const mode = desc.slice('ets_import:'.length)
+    const modeLabel = t(`hierarchy.etsMode.${mode}`, mode)
+    return t('hierarchy.etsImportDesc', { mode: modeLabel })
+  }
+  return desc
+}
 
 const treeModal = reactive({ open: false, isEdit: false, id: null, name: '', description: '', display_depth: 0, saving: false, msg: null })
 
