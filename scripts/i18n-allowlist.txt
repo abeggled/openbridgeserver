@@ -19,6 +19,9 @@ CSV
 UUID
 MQTT
 KNX
+# DataPointHierarchyCard.vue — dynamic :title binding (computed path expression, not a string)
+re:^nodeFullPath\(
+
 # GenericNode.vue — NODE_DEFS static node-type labels (first label: per entry).
 # Port labels are now fully translated via t(); the node-type labels below are
 # either single-word technical tokens (auto-passed) or require an allowlist entry.
