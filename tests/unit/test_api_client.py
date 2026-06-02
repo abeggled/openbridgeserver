@@ -55,11 +55,14 @@ class TestApiClientSsrfHostGuard:
     def test_empty_host_is_blocked(self):
         assert _is_private_host("") is True
 
-    def test_localhost_localdomain_is_allowed(self):
-        assert _is_private_host("localhost.localdomain") is False
+    def test_localhost_localdomain_is_blocked(self):
+        assert _is_private_host("localhost.localdomain") is True
 
-    def test_direct_loopback_ip_is_allowed(self):
-        assert _is_private_host("127.0.0.1") is False
+    def test_localhost_is_blocked(self):
+        assert _is_private_host("localhost") is True
+
+    def test_direct_loopback_ip_is_blocked(self):
+        assert _is_private_host("127.0.0.1") is True
 
     @patch("obs.logic.manager.socket.getaddrinfo", side_effect=OSError("dns fail"))
     def test_dns_failure_is_blocked(self, _mock_getaddrinfo):
@@ -70,8 +73,8 @@ class TestApiClientSsrfHostGuard:
         assert _is_private_host("example.com") is True
 
     @patch("obs.logic.manager.socket.getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 0))])
-    def test_loopback_dns_answer_is_allowed(self, _mock_getaddrinfo):
-        assert _is_private_host("example.com") is False
+    def test_loopback_dns_answer_is_blocked(self, _mock_getaddrinfo):
+        assert _is_private_host("example.com") is True
 
 
 # ===========================================================================
@@ -105,7 +108,7 @@ class TestApiClientExecutorPlaceholder:
 
     def test_downstream_receives_false_before_manager(self):
         """Without the second-pass fix, downstream sees success=False from placeholder."""
-        ac = node("ac", "api_client", {"url": "http://x.com"})
+        ac = node("ac", "api_client", {"url": "http://93.184.216.34"})
         cv = node("cv", "const_value", {"value": "true", "data_type": "bool"})
         exc = make_executor(
             [cv, ac],
@@ -127,7 +130,7 @@ class TestApiClientManagerHttp:
     def _build_graph(self, method: str = "GET", extra_data: dict | None = None) -> tuple[str, FlowData]:
         """Return (node_id, flow) for a single api_client node with trigger=True."""
         data = {
-            "url": "http://example.com/api",
+            "url": "http://93.184.216.34/api",
             "method": method,
             **(extra_data or {}),
         }
@@ -273,8 +276,8 @@ class TestApiClientManagerHttp:
         assert len(outputs["ac"]["response"]) == 1_000_000
 
     @patch("obs.logic.manager.httpx.AsyncClient")
-    def test_localhost_target_is_allowed(self, mock_client_cls):
-        """localhost targets stay allowed for local/self-hosted use-cases."""
+    def test_localhost_target_is_blocked(self, mock_client_cls):
+        """localhost targets must be blocked to prevent loopback SSRF."""
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -285,9 +288,10 @@ class TestApiClientManagerHttp:
         with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
             outputs = self._run(manager, flow)
 
-        mock_client.request.assert_called_once()
-        assert outputs["ac"]["success"] is True
-        assert outputs["ac"]["status"] == 200
+        mock_client.request.assert_not_called()
+        assert outputs["ac"]["response"] == "Blocked URL target"
+        assert outputs["ac"]["status"] is None
+        assert outputs["ac"]["success"] is False
 
 
 # ===========================================================================
@@ -316,7 +320,7 @@ class TestApiClientAuthentication:
             async def request(self, method, url, **kwargs):
                 return self._resp
 
-        data = {"url": "http://example.com/", "method": "GET", **auth_data}
+        data = {"url": "http://93.184.216.34/", "method": "GET", **auth_data}
         n = node("ac", "api_client", data)
         flow = _flow([n])
 
@@ -383,7 +387,7 @@ class TestApiClientAuthentication:
 
         manager = _make_manager()
         data = {
-            "url": "http://example.com/",
+            "url": "http://93.184.216.34/",
             "method": "GET",
             "auth_type": "bearer",
             "auth_token": "my-token-xyz",
@@ -415,7 +419,7 @@ class TestApiClientAuthentication:
 
         manager = _make_manager()
         data = {
-            "url": "http://example.com/",
+            "url": "http://93.184.216.34/",
             "method": "GET",
             "auth_type": "bearer",
             "auth_token": "",
@@ -439,7 +443,7 @@ class TestApiClientAuthentication:
         mock_client.request = AsyncMock(return_value=_mock_response(200, {}))
 
         manager = _make_manager()
-        data = {"url": "http://example.com/", "method": "GET", "auth_type": "none"}
+        data = {"url": "http://93.184.216.34/", "method": "GET", "auth_type": "none"}
         n = node("ac", "api_client", data)
         flow = _flow([n])
         graph_id = "g3"
@@ -479,7 +483,7 @@ class TestApiClientDownstreamPropagation:
         nodes = [
             node("cv_trig", "const_value", {"value": "true", "data_type": "bool"}),
             node("cv_true", "const_value", {"value": "true", "data_type": "bool"}),
-            node("ac", "api_client", {"url": "http://x.com", "method": "GET"}),
+            node("ac", "api_client", {"url": "http://93.184.216.34", "method": "GET"}),
             node("gate", "and", {"input_count": 2}),
         ]
         edges = [
@@ -514,7 +518,7 @@ class TestApiClientDownstreamPropagation:
         nodes = [
             node("cv_trig", "const_value", {"value": "true", "data_type": "bool"}),
             node("cv_true", "const_value", {"value": "true", "data_type": "bool"}),
-            node("ac", "api_client", {"url": "http://x.com"}),
+            node("ac", "api_client", {"url": "http://93.184.216.34"}),
             node("gate", "and", {"input_count": 2}),
         ]
         edges = [
@@ -557,7 +561,7 @@ class TestApiClientWsBroadcast:
         mock_ws_manager.broadcast = AsyncMock(side_effect=lambda p: ws_payloads.append(p))
 
         manager = _make_manager()
-        n = node("ac", "api_client", {"url": "http://x.com", "method": "GET"})
+        n = node("ac", "api_client", {"url": "http://93.184.216.34", "method": "GET"})
         flow = _flow([n])
         graph_id = "g"
         manager._graphs[graph_id] = ("t", True, flow)
@@ -589,7 +593,7 @@ class TestApiClientResponseType:
             "ac",
             "api_client",
             {
-                "url": "http://example.com/api",
+                "url": "http://93.184.216.34/api",
                 "method": "GET",
                 "response_type": response_type,
             },

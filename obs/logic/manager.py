@@ -33,16 +33,12 @@ def _is_private_host(hostname: str) -> bool:
     host = (hostname or "").strip().lower()
     if not host:
         return True
-    if host in {"localhost", "localhost.localdomain"}:
-        return False
 
     def _blocked(addr: ipaddress._BaseAddress) -> bool:  # type: ignore[attr-defined]
         return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_reserved or addr.is_unspecified
 
     try:
         host_ip = ipaddress.ip_address(host)
-        if host_ip.is_loopback:
-            return False
         if _blocked(host_ip):
             return True
     except ValueError:
@@ -56,8 +52,6 @@ def _is_private_host(hostname: str) -> bool:
         ip = info[4][0]
         try:
             resolved_ip = ipaddress.ip_address(ip)
-            if resolved_ip.is_loopback:
-                continue
             if _blocked(resolved_ip):
                 return True
         except ValueError:
