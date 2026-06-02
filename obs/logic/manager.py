@@ -15,9 +15,12 @@ import http.cookies
 import ipaddress
 import json
 import logging
+import os
 import socket
+import stat
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
 
@@ -79,19 +82,6 @@ def _msg_to_str(v: object) -> str:
     return str(v)
 
 
-def _read_secret_file(path: str) -> str:
-    """Read a small root-managed secret file without logging its content."""
-    clean_path = (path or "").strip()
-    if not clean_path:
-        return ""
-    try:
-        with open(clean_path, encoding="utf-8") as handle:
-            return handle.read().strip()
-    except OSError as exc:
-        logger.warning("Could not read api_client secret file %s: %s", clean_path, exc)
-        return ""
-
-
 _THROTTLE_UNITS: dict[str, float] = {
     "ms": 1.0,
     "s": 1000.0,
@@ -104,6 +94,47 @@ _ICAL_MAX_REDIRECTS = 5
 _ICAL_ALLOWED_CONTENT_TYPES = ("text/calendar", "application/ics", "application/octet-stream", "text/plain")
 _NAT64_WELL_KNOWN_PREFIX = ipaddress.IPv6Network("64:ff9b::/96")
 _PUSHOVER_ATTACHMENT_MAX_BYTES = 5_000_000
+_SECRET_FILE_MAX_BYTES = 8192
+_SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
+
+
+def _secret_file_root() -> Path:
+    return Path(os.environ.get("OBS_SECRET_FILE_DIR", _SECRET_FILE_DEFAULT_ROOT)).resolve()
+
+
+def _read_secret_file(path: str) -> str:
+    secret_path_raw = (path or "").strip()
+    if not secret_path_raw:
+        return ""
+
+    try:
+        secret_root = _secret_file_root()
+        secret_path = Path(secret_path_raw).resolve(strict=True)
+        if not secret_path.is_relative_to(secret_root):
+            logger.warning("Refusing to read secret file outside %s: %s", secret_root, secret_path)
+            return ""
+
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(secret_path, flags)
+        try:
+            file_stat = os.fstat(fd)
+            if not stat.S_ISREG(file_stat.st_mode):
+                logger.warning("Refusing to read non-regular secret file: %s", secret_path)
+                return ""
+            if file_stat.st_size > _SECRET_FILE_MAX_BYTES:
+                logger.warning("Refusing to read oversized secret file: %s", secret_path)
+                return ""
+            data = os.read(fd, _SECRET_FILE_MAX_BYTES + 1)
+        finally:
+            os.close(fd)
+
+        if len(data) > _SECRET_FILE_MAX_BYTES:
+            logger.warning("Refusing to read oversized secret file: %s", secret_path)
+            return ""
+        return data.decode("utf-8").strip()
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        logger.warning("Could not read secret file %s: %s", secret_path_raw, exc)
+        return ""
 
 
 def _parse_http_url(url: str) -> Any | None:
@@ -1019,14 +1050,15 @@ class LogicManager:
                     extra_headers = _json.loads(hdr_str)
                 except Exception:
                     pass
-            hdr_secret_file = (node.data.get("headers_secret_file") or "").strip()
-            if hdr_secret_file:
+            hdr_file = (node.data.get("headers_secret_file") or "").strip()
+            if hdr_file:
                 try:
-                    secret_headers = _json.loads(_read_secret_file(hdr_secret_file))
-                    if isinstance(secret_headers, dict):
-                        extra_headers = {**extra_headers, **secret_headers}
+                    extra_headers = {
+                        **extra_headers,
+                        **_json.loads(_read_secret_file(hdr_file)),
+                    }
                 except Exception:
-                    logger.warning("api_client headers_secret_file did not contain a JSON object")
+                    pass
             body = out.get("_body")
             # ── Authentication ──────────────────────────────────────────
             auth_type = (node.data.get("auth_type") or "none").lower()
@@ -1038,9 +1070,8 @@ class LogicManager:
                     auth = httpx.BasicAuth(username, password) if auth_type == "basic" else httpx.DigestAuth(username, password)
             elif auth_type == "bearer":
                 token = (node.data.get("auth_token") or "").strip()
-                token_file = (node.data.get("auth_token_file") or "").strip()
-                if not token and token_file:
-                    token = _read_secret_file(token_file)
+                if not token:
+                    token = _read_secret_file(node.data.get("auth_token_file") or "")
                 if token:
                     extra_headers = {
                         **extra_headers,

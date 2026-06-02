@@ -34,7 +34,7 @@
 * Logic engine: Functional Block: "iCalendar" filtering by summary, location, and description. https://github.com/abeggled/openbridgeserver/issues/350
 * Logic engine: Functional Block: "XML Extractor" now has multiple outputs from single input https://github.com/abeggled/openbridgeserver/pull/469
 * Logic engine: Functional Block: "JSON Extractor" now has multiple outputs from single input https://github.com/abeggled/openbridgeserver/pull/468
-* Logic engine: Functional Block: API client nodes can now load optional headers and bearer tokens from secret files. https://github.com/abeggled/openbridgeserver/pull/581
+* Logic engine: API client nodes can load optional headers and bearer tokens from secret files. https://github.com/abeggled/openbridgeserver/pull/581
 * Visu: Add background images https://github.com/abeggled/openbridgeserver/issues/481
 * Visu: Floor plan widget with the ability to place mini widgets on the floor plan https://github.com/abeggled/openbridgeserver/issues/228
 * Visu: History widget: select time period direct from widget https://github.com/abeggled/openbridgeserver/issues/413
@@ -48,6 +48,7 @@
 * Visu: Widgets können per Drag & Drop aus der Palette direkt an eine bestimmte Position auf der Seite gezogen werden; eine blaue Vorschau zeigt die Zielposition. Klick auf ein Widget fügt es weiterhin automatisch an der ersten freien Position ein. Die Widget-Liste ist jetzt sprachspezifisch alphabetisch sortiert. https://github.com/abeggled/openbridgeserver/issues/667
 
 ### Fixes 🐞
+* Logic Security (Upstream PR #686): API client secret-file paths are restricted to a configured secret directory with bounded regular-file reads.
 * Adapter: KNX IP Secure now works correctly in Docker bridge networks — credentials are extracted directly from the .knxkeys file and passed explicitly to xknx, bypassing the internal UDP DescriptionRequest that fails without host networking. Connection errors now include actionable hints (Docker network mode, gateway tunnel-slot exhaustion). https://github.com/abeggled/openbridgeserver/issues/393
 * Backend: Complete remaining UI translation fixes after i18n rollout. https://github.com/abeggled/openbridgeserver/pull/542
 * Backend: Validate `DataValueEvent` payloads before bridge propagation. https://github.com/abeggled/openbridgeserver/pull/519

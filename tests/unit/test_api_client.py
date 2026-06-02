@@ -11,9 +11,10 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from obs.logic.manager import LogicManager, _is_private_host
+from obs.logic.manager import LogicManager, _is_private_host, _read_secret_file
 from obs.logic.models import FlowData
 from tests.unit.conftest import edge, make_executor, node
 
@@ -72,6 +73,64 @@ class TestApiClientSsrfHostGuard:
     @patch("obs.logic.manager.socket.getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 0))])
     def test_loopback_dns_answer_is_allowed(self, _mock_getaddrinfo):
         assert _is_private_host("example.com") is False
+
+
+class TestApiClientSecretFileGuard:
+    """Unit tests for bounded API client secret-file reads."""
+
+    def test_reads_file_from_configured_secret_root(self, tmp_path, monkeypatch):
+        root = tmp_path / "secrets"
+        root.mkdir()
+        secret_file = root / "api-token"
+        secret_file.write_text(" secret-token \n", encoding="utf-8")
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
+
+        assert _read_secret_file(str(secret_file)) == "secret-token"
+
+    def test_rejects_file_outside_secret_root(self, tmp_path, monkeypatch):
+        root = tmp_path / "secrets"
+        root.mkdir()
+        outside_file = tmp_path / "outside-token"
+        outside_file.write_text("outside", encoding="utf-8")
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
+
+        assert _read_secret_file(str(outside_file)) == ""
+
+    def test_rejects_non_regular_file(self, tmp_path, monkeypatch):
+        root = tmp_path / "secrets"
+        root.mkdir()
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
+
+        assert _read_secret_file(str(root)) == ""
+
+    def test_rejects_fifo_without_blocking(self, tmp_path, monkeypatch):
+        if not hasattr(os, "mkfifo"):
+            return
+        root = tmp_path / "secrets"
+        root.mkdir()
+        secret_pipe = root / "api-token-pipe"
+        os.mkfifo(secret_pipe)
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
+
+        assert _read_secret_file(str(secret_pipe)) == ""
+
+    def test_rejects_oversized_file(self, tmp_path, monkeypatch):
+        root = tmp_path / "secrets"
+        root.mkdir()
+        secret_file = root / "large-token"
+        secret_file.write_text("x" * 8193, encoding="utf-8")
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
+
+        assert _read_secret_file(str(secret_file)) == ""
+
+    def test_rejects_invalid_utf8(self, tmp_path, monkeypatch):
+        root = tmp_path / "secrets"
+        root.mkdir()
+        secret_file = root / "binary-token"
+        secret_file.write_bytes(b"\xff")
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
+
+        assert _read_secret_file(str(secret_file)) == ""
 
 
 # ===========================================================================
@@ -271,6 +330,48 @@ class TestApiClientManagerHttp:
         assert outputs["ac"]["success"] is True
         assert isinstance(outputs["ac"]["response"], str)
         assert len(outputs["ac"]["response"]) == 1_000_000
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_secret_files_supply_headers_and_bearer_token(self, mock_client_cls, tmp_path, monkeypatch):
+        """Secret-file fields are honored when paths stay inside the configured secret root."""
+        captured_headers: list[dict] = []
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        async def _capture(method, url, **kwargs):
+            captured_headers.append(kwargs.get("headers", {}))
+            return _mock_response(200, {})
+
+        mock_client.request = _capture
+
+        root = tmp_path / "secrets"
+        root.mkdir()
+        headers_file = root / "api-headers.json"
+        token_file = root / "api-token"
+        headers_file.write_text('{"X-Secret": "from-file"}', encoding="utf-8")
+        token_file.write_text("file-token", encoding="utf-8")
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
+
+        manager = _make_manager()
+        _, flow = self._build_graph(
+            extra_data={
+                "headers": '{"X-Base": "inline"}',
+                "auth_type": "bearer",
+                "auth_token": "",
+                "auth_token_file": str(token_file),
+                "headers_secret_file": str(headers_file),
+            },
+        )
+        with patch("obs.logic.manager._is_private_host", return_value=False):
+            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+                outputs = self._run(manager, flow)
+
+        assert outputs["ac"]["success"] is True
+        assert len(captured_headers) == 1
+        assert captured_headers[0]["X-Base"] == "inline"
+        assert captured_headers[0]["X-Secret"] == "from-file"
+        assert captured_headers[0]["Authorization"] == "Bearer file-token"
 
     @patch("obs.logic.manager.httpx.AsyncClient")
     def test_localhost_target_is_allowed(self, mock_client_cls):

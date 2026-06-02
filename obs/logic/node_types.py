@@ -839,7 +839,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             "headers_secret_file": {
                 "type": "string",
                 "default": "",
-                "label": "Header aus Secret-Datei (JSON-Objekt, optional)",
+                "label": "Header-Datei (/run/secrets)",
             },
             "timeout_s": {"type": "number", "default": 10, "label": "Timeout (s)"},
             "auth_type": {
@@ -868,7 +868,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             "auth_token_file": {
                 "type": "string",
                 "default": "",
-                "label": "Bearer Token aus Secret-Datei",
+                "label": "Bearer-Token-Datei (/run/secrets)",
             },
         },
         color="#0e7490",
