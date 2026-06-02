@@ -1660,6 +1660,9 @@
       "importResultIcons": ", {n} icons",
       "importResultVisu": ", {n} Visu nodes",
       "importFailed": "Import failed",
+      "error_INVALID_PASSWORD": "Wrong password or file is encrypted.",
+      "error_NO_GROUP_ADDRESSES": "No group addresses found. Please export the correct ETS project.",
+      "error_PARSE_ERROR": "Error parsing the .knxproj file.",
       "dbImportResultOk": "Database restore OK: {message} ({adapters} adapters restarted). Please reload the page.",
       "dbImportFailed": "Database restore failed"
     },

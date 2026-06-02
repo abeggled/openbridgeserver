@@ -1660,6 +1660,9 @@
       "importResultIcons": ", {n} Icons",
       "importResultVisu": ", {n} Visu-Knoten",
       "importFailed": "Import fehlgeschlagen",
+      "error_INVALID_PASSWORD": "Falsches Passwort oder Datei ist verschlüsselt.",
+      "error_NO_GROUP_ADDRESSES": "Keine Gruppenadressen gefunden. Bitte das richtige ETS-Projekt exportieren.",
+      "error_PARSE_ERROR": "Fehler beim Parsen der .knxproj-Datei.",
       "dbImportResultOk": "Datenbankwiederherstellung OK: {message} ({adapters} Adapter neu gestartet). Bitte Seite neu laden.",
       "dbImportFailed": "Datenbankwiederherstellung fehlgeschlagen"
     },

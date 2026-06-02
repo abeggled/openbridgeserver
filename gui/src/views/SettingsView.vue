@@ -990,7 +990,7 @@ import IconPicker     from '@/components/ui/IconPicker.vue'
 import VisuIcon       from '@/components/ui/VisuIcon.vue'
 import LocaleSwitcher from '@/components/ui/LocaleSwitcher.vue'
 
-const { t }    = useI18n()
+const { t, te } = useI18n()
 const auth     = useAuthStore()
 const settings = useSettingsStore()
 const navStore = useNavLinksStore()
@@ -1563,7 +1563,12 @@ async function doKnxImport() {
     knxResult.value = { ok: true, text: data.message }
     await loadKnxGaCount()
   } catch (err) {
-    knxResult.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.importFailed') }
+    const resp = err.response?.data
+    const code = resp?.error_code
+    const text = code && te(`settings.importexport.error_${code}`)
+      ? t(`settings.importexport.error_${code}`)
+      : (typeof resp?.detail === 'string' ? resp.detail : null) ?? t('settings.importexport.importFailed')
+    knxResult.value = { ok: false, text }
   } finally {
     knxImporting.value = false
   }

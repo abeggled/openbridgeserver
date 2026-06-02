@@ -967,10 +967,12 @@ class TestImportKnxprojFile:
         upload.filename = "project.knxproj"
         upload.read = AsyncMock(return_value=b"garbage")
         db = _make_db()
-        with patch("obs.api.v1.knxproj.parse_knxproj", side_effect=ValueError("bad format")):
-            with pytest.raises(HTTPException) as exc:
-                await import_knxproj_file(file=upload, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
-        assert exc.value.status_code == 400
+        with (
+            patch("obs.api.v1.knxproj.parse_knxproj", side_effect=ValueError("bad format")),
+            patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
+        ):
+            result = await import_knxproj_file(file=upload, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
+        assert result.status_code == 400
 
     @pytest.mark.asyncio
     async def test_no_records_raises_422(self):
@@ -978,10 +980,12 @@ class TestImportKnxprojFile:
         upload.filename = "project.knxproj"
         upload.read = AsyncMock(return_value=b"data")
         db = _make_db()
-        with patch("obs.api.v1.knxproj.parse_knxproj", return_value=[]):
-            with pytest.raises(HTTPException) as exc:
-                await import_knxproj_file(file=upload, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
-        assert exc.value.status_code == 422
+        with (
+            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[]),
+            patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
+        ):
+            result = await import_knxproj_file(file=upload, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
+        assert result.status_code == 422
 
     @pytest.mark.asyncio
     async def test_successful_import_without_adapter(self):
