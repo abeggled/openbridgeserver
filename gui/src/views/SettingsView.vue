@@ -990,7 +990,7 @@ import IconPicker     from '@/components/ui/IconPicker.vue'
 import VisuIcon       from '@/components/ui/VisuIcon.vue'
 import LocaleSwitcher from '@/components/ui/LocaleSwitcher.vue'
 
-const { t }    = useI18n()
+const { t, te } = useI18n()
 const auth     = useAuthStore()
 const settings = useSettingsStore()
 const navStore = useNavLinksStore()
@@ -1560,10 +1560,20 @@ async function doKnxImport() {
       params.direction    = knxDirection.value
     }
     const { data } = await knxprojApi.import(fd, params)
-    knxResult.value = { ok: true, text: data.message }
+    let msg = t('settings.importexport.knxImportResultOk', { n: data.imported })
+    if (data.created  > 0) msg += t('settings.importexport.knxImportResultCreated',   { n: data.created })
+    if (data.updated  > 0) msg += t('settings.importexport.knxImportResultUpdated',   { n: data.updated })
+    if (data.locations > 0) msg += t('settings.importexport.knxImportResultLocations', { n: data.locations })
+    if (data.trades   > 0) msg += t('settings.importexport.knxImportResultTrades',    { n: data.trades })
+    knxResult.value = { ok: true, text: msg }
     await loadKnxGaCount()
   } catch (err) {
-    knxResult.value = { ok: false, text: err.response?.data?.detail ?? 'Import fehlgeschlagen' }
+    const resp = err.response?.data
+    const code = resp?.error_code
+    const text = code && te(`settings.importexport.error_${code}`)
+      ? t(`settings.importexport.error_${code}`)
+      : (typeof resp?.detail === 'string' ? resp.detail : null) ?? t('settings.importexport.importFailed')
+    knxResult.value = { ok: false, text }
   } finally {
     knxImporting.value = false
   }

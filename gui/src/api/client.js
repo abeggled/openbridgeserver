@@ -141,7 +141,7 @@ export const knxKeyfileApi = {
 
 // ── KNX Project Import ────────────────────────────────────────────────────
 export const knxprojApi = {
-  import:  (formData, params = {}) => api.post('/knxproj/import', formData, { headers: { 'Content-Type': 'multipart/form-data' }, params }),
+  import:  (formData, params = {}) => api.post('/knxproj/import', formData, { headers: { 'Content-Type': 'multipart/form-data' }, params, timeout: 300_000 }),
   listGA:  (params)   => api.get('/knxproj/group-addresses', { params }),
   clearGA: ()         => api.delete('/knxproj/group-addresses'),
 }

@@ -57,6 +57,7 @@
 * Backend: Fix view permissions of Demo User https://github.com/abeggled/openbridgeserver/issues/471
 * Backend: History default window changed from 24h to 7d and is now configurable via `history.default_window_hours` (Settings → Historie DB). https://github.com/abeggled/openbridgeserver/pull/582
 * Backend: KNX UF Iconset import — one-click import of all 940 KNX UF icons from ha-knx-uf-iconset directly into the icon library (prefix `kuf_`); re-import overwrites existing icons. https://github.com/abeggled/openbridgeserver/issues/677
+* Backend: ETS import of password-protected .knxproj files now works correctly: Gewerke (trades) are parsed from the decrypted inner ZIP, ETS6 wrong-password errors ("Bad HMAC check") are properly reported as password errors, GA and location parsing run in parallel (non-blocking), frontend timeout raised to 300 s for large files, and error messages are fully localized via error codes. https://github.com/abeggled/openbridgeserver/issues/679
 * Backend: Fixed MQTT binding edit/create dialog becoming blank when switching to write direction; adapter-type resolution and i18n handling in BindingForm were hardened. https://github.com/abeggled/openbridgeserver/issues/656
 * Visu: History (Chart) widget and Value Display widget time-range dropdowns now show translated labels instead of raw i18n key strings. https://github.com/abeggled/openbridgeserver/issues/662
 * General #375: Proxmox LXC, confusing checksum field content within release notes. https://github.com/abeggled/openbridgeserver/issues/375
