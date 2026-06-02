@@ -51,6 +51,8 @@ class AdapterInstanceOut(BaseModel):
     registered: bool  # Typ-Klasse geladen?
     running: bool
     connected: bool
+    severity: str = "ok"  # "ok" | "warning" | "error" — last AdapterStatusEvent
+    status_detail: str = ""
     bindings: int
     created_at: str
     updated_at: str
@@ -62,6 +64,18 @@ class InstanceBindingEntry(BaseModel):
     datapoint_name: str
     enabled: bool
     config: dict
+
+
+class BindingMigrationRequest(BaseModel):
+    target_instance_id: uuid.UUID
+
+
+class BindingMigrationResult(BaseModel):
+    source_instance_id: uuid.UUID
+    target_instance_id: uuid.UUID
+    total_source_bindings: int
+    migrated: int
+    skipped: int
 
 
 class AdapterInstanceCreate(BaseModel):
@@ -162,6 +176,8 @@ def _instance_out(row: Any, instance: Any | None) -> AdapterInstanceOut:
         registered=cls is not None,
         running=instance is not None,
         connected=instance.connected if instance else False,
+        severity=getattr(instance, "last_severity", "ok") if instance else "ok",
+        status_detail=getattr(instance, "last_detail", "") if instance else "",
         bindings=len(instance.get_bindings()) if instance else 0,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -387,6 +403,73 @@ async def restart_instance_route(
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     instance = adapter_registry.get_instance_by_id(str(instance_id))
     return _instance_out(row, instance)
+
+
+@router.post("/instances/{source_instance_id}/bindings/migrate", response_model=BindingMigrationResult)
+async def migrate_instance_bindings(
+    source_instance_id: uuid.UUID,
+    body: BindingMigrationRequest,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> BindingMigrationResult:
+    source_id = str(source_instance_id)
+    target_id = str(body.target_instance_id)
+    if source_id == target_id:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Quell- und Ziel-Instanz dürfen nicht identisch sein")
+
+    source_row = await db.fetchone("SELECT id, adapter_type FROM adapter_instances WHERE id=?", (source_id,))
+    if source_row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Quell-Instanz nicht gefunden")
+
+    target_row = await db.fetchone("SELECT id, adapter_type FROM adapter_instances WHERE id=?", (target_id,))
+    if target_row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Ziel-Instanz nicht gefunden")
+
+    if source_row["adapter_type"] != target_row["adapter_type"]:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Migration ist nur zwischen Instanzen desselben Adapter-Typs erlaubt",
+        )
+
+    source_bindings = await db.fetchall(
+        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=? ORDER BY created_at",
+        (source_id,),
+    )
+    target_bindings = await db.fetchall(
+        "SELECT datapoint_id FROM adapter_bindings WHERE adapter_instance_id=?",
+        (target_id,),
+    )
+    target_datapoint_ids = {row["datapoint_id"] for row in target_bindings}
+
+    migrated = 0
+    skipped = 0
+    total_source_bindings = len(source_bindings)
+    now = datetime.now(UTC).isoformat()
+
+    for binding_row in source_bindings:
+        if binding_row["datapoint_id"] in target_datapoint_ids:
+            skipped += 1
+            continue
+        await db.execute(
+            "UPDATE adapter_bindings SET adapter_instance_id=?, updated_at=? WHERE id=?",
+            (target_id, now, binding_row["id"]),
+        )
+        target_datapoint_ids.add(binding_row["datapoint_id"])
+        migrated += 1
+
+    if migrated > 0:
+        await db.commit()
+
+    await adapter_registry.reload_instance_bindings(source_id, db)
+    await adapter_registry.reload_instance_bindings(target_id, db)
+
+    return BindingMigrationResult(
+        source_instance_id=source_instance_id,
+        target_instance_id=body.target_instance_id,
+        total_source_bindings=total_source_bindings,
+        migrated=migrated,
+        skipped=skipped,
+    )
 
 
 @router.get("/instances/{instance_id}/bindings", response_model=list[InstanceBindingEntry])

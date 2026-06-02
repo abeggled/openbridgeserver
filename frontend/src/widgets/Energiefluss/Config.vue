@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { reactive, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import DataPointPicker from '@/components/DataPointPicker.vue'
 import IconPicker from '@/components/IconPicker.vue'
 
@@ -26,11 +27,15 @@ const emit = defineEmits<{
 
 const MAX_ENTITIES = 8
 
-const DIRECTION_OPTIONS: { value: FlowDirection; label: string; title: string }[] = [
-  { value: 'to_house',      label: '→ 🏠',  title: 'Nur vom Knoten zum Haus' },
-  { value: 'bidirectional', label: '⇄',      title: 'Bidirektional (Vorzeichen entscheidet)' },
-  { value: 'from_house',    label: '🏠 →',  title: 'Nur vom Haus zum Knoten' },
-]
+
+
+const { t } = useI18n()
+
+const DIRECTION_OPTIONS = computed(() => [
+  { value: 'to_house'      as FlowDirection, label: '→ 🏠',  title: t('widgets.energiefluss.dirToHouse') },
+  { value: 'bidirectional' as FlowDirection, label: '⇄',      title: t('widgets.energiefluss.dirBidir') },
+  { value: 'from_house'   as FlowDirection, label: '🏠 →',  title: t('widgets.energiefluss.dirFromHouse') },
+])
 
 function makeEntity(src?: Partial<EntityConfig>): EntityConfig {
   return {
@@ -76,7 +81,7 @@ watch(
   <div class="space-y-3">
     <!-- Widget-Beschriftung -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Titel (optional)</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.energiefluss.titleLabel') }}</label>
       <input
         v-model="cfg.label"
         type="text"
@@ -87,15 +92,13 @@ watch(
 
     <!-- Hinweis -->
     <p class="text-xs text-gray-500 leading-relaxed">
-      Farbe und Flussrichtung werden pro Knoten konfiguriert.<br />
-      Bei «Bidirektional» bestimmt das Vorzeichen die Richtung (positiv → Haus, negativ → weg).
-      «Vorzeichen umkehren» dreht diese Logik um.
+      {{ $t('widgets.energiefluss.hint') }}
     </p>
 
     <!-- Hausverbrauch (Zentrum) -->
     <div class="border border-gray-700 rounded p-2 space-y-2">
       <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-        Hausverbrauch (Zentrum, optional)
+        {{ $t('widgets.energiefluss.center') }}
       </p>
       <!-- Haus-Icon -->
       <div>
@@ -110,7 +113,7 @@ watch(
       <template v-if="cfg.house_dp">
         <div class="flex gap-2">
           <div class="flex-1">
-            <label class="block text-xs text-gray-400 mb-1">Einheit (leer = vom Objekt)</label>
+            <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.energiefluss.unitFromObject') }}</label>
             <input
               v-model="cfg.house_unit"
               type="text"
@@ -119,7 +122,7 @@ watch(
             />
           </div>
           <div class="w-20">
-            <label class="block text-xs text-gray-400 mb-1">Dezimalst.</label>
+            <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.energiefluss.decimalsShort') }}</label>
             <input
               v-model.number="cfg.house_decimals"
               type="number"
@@ -135,7 +138,7 @@ watch(
     <!-- Energieknoten -->
     <div class="pt-1">
       <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
-        Energieknoten (max. {{ MAX_ENTITIES }})
+        {{ $t('widgets.energiefluss.nodes', { max: MAX_ENTITIES }) }}
       </p>
 
       <div
@@ -150,7 +153,7 @@ watch(
             class="w-2.5 h-2.5 rounded-full shrink-0"
             :style="entity.id ? `background: ${entity.color}` : 'background: #4b5563'"
           />
-          <p class="text-xs text-gray-500">Energieknoten {{ i + 1 }}</p>
+          <p class="text-xs text-gray-500">{{ $t('widgets.energiefluss.nodeN', { n: i + 1 }) }}</p>
         </div>
 
         <DataPointPicker
@@ -163,7 +166,7 @@ watch(
           <!-- Farbe -->
           <div class="flex items-center gap-3">
             <div>
-              <label class="block text-xs text-gray-400 mb-1">Farbe</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.energiefluss.color') }}</label>
               <input
                 v-model="entity.color"
                 type="color"
@@ -173,7 +176,7 @@ watch(
 
             <!-- Flussrichtung -->
             <div class="flex-1">
-              <label class="block text-xs text-gray-400 mb-1">Flussrichtung</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.energiefluss.flowDirection') }}</label>
               <div class="flex gap-1">
                 <button
                   v-for="opt in DIRECTION_OPTIONS"
@@ -209,7 +212,7 @@ watch(
           <!-- Einheit + Dezimalstellen -->
           <div class="flex gap-2">
             <div class="flex-1">
-              <label class="block text-xs text-gray-400 mb-1">Einheit (leer = vom Objekt)</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.energiefluss.unitFromObject') }}</label>
               <input
                 v-model="entity.unit"
                 type="text"
@@ -218,7 +221,7 @@ watch(
               />
             </div>
             <div class="w-20">
-              <label class="block text-xs text-gray-400 mb-1">Dezimalst.</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.energiefluss.decimalsShort') }}</label>
               <input
                 v-model.number="entity.decimals"
                 type="number"
@@ -236,7 +239,7 @@ watch(
               type="checkbox"
               class="rounded border-gray-600 text-blue-500 focus:ring-blue-500 focus:ring-offset-gray-900"
             />
-            <span class="text-xs text-gray-300">Vorzeichen umkehren</span>
+            <span class="text-xs text-gray-300">{{ $t('widgets.energiefluss.invertSign') }}</span>
           </label>
         </template>
       </div>

@@ -55,7 +55,7 @@ watch(
   <div class="space-y-3">
     <!-- Hauptwert -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Beschriftung</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.common.label') }}</label>
       <input
         v-model="cfg.label"
         type="text"
@@ -64,7 +64,7 @@ watch(
       />
     </div>
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Einheit (überschreibt Objekt-Einheit)</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.info.unitOverride') }}</label>
       <input
         v-model="cfg.unit"
         type="text"
@@ -73,7 +73,7 @@ watch(
       />
     </div>
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Dezimalstellen</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.info.decimals') }}</label>
       <input
         v-model.number="cfg.decimals"
         type="number"
@@ -86,14 +86,14 @@ watch(
     <!-- Extra-Objekte -->
     <div class="pt-1">
       <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
-        Zusätzliche Werte (max. {{ MAX_EXTRA }})
+        $t('widgets.info.additionalValues', { max: MAX_EXTRA })
       </p>
       <div
         v-for="(extra, i) in cfg.extra_datapoints"
         :key="i"
         class="border border-gray-700 rounded p-2 space-y-2 mb-2"
       >
-        <p class="text-xs text-gray-500">Wert {{ i + 1 }}</p>
+        <p class="text-xs text-gray-500">{{ $t('widgets.info.valueN', { n: i + 1 }) }}</p>
         <DataPointPicker
           :model-value="extra.id || null"
           :compatible-types="['*']"
@@ -103,13 +103,13 @@ watch(
           <input
             v-model="extra.label"
             type="text"
-            placeholder="Beschriftung"
+            :placeholder="$t('widgets.info.placeholderLabel')"
             class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
           />
           <input
             v-model="extra.unit"
             type="text"
-            placeholder="Einheit"
+            :placeholder="$t('widgets.info.placeholderUnit')"
             class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
           />
           <input
@@ -117,7 +117,7 @@ watch(
             type="number"
             min="0"
             max="6"
-            placeholder="Dezimalstellen"
+            :placeholder="$t('widgets.info.placeholderDecimals')"
             class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
           />
         </div>

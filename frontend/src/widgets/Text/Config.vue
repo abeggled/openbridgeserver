@@ -23,8 +23,8 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     <!-- Inhalt -->
     <div>
       <label class="block text-xs text-gray-400 mb-1">
-        Inhalt
-        <span class="text-gray-600 font-normal ml-1">(Markdown unterstützt)</span>
+        {{ $t('widgets.text.content') }}
+        <span class="text-gray-600 font-normal ml-1">{{ $t('widgets.text.markdownSupported') }}</span>
       </label>
       <textarea
         v-model="cfg.content"
@@ -37,35 +37,35 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     <!-- Schriftgrösse + Ausrichtung -->
     <div class="grid grid-cols-2 gap-2">
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Schriftgrösse</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.text.fontSize') }}</label>
         <select
           v-model="cfg.fontSize"
           class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
         >
-          <option value="xs">Sehr klein</option>
-          <option value="sm">Klein</option>
-          <option value="base">Normal</option>
-          <option value="lg">Gross</option>
-          <option value="xl">Sehr gross</option>
-          <option value="2xl">Riesig</option>
+          <option value="xs">{{ $t('widgets.text.sizeXs') }}</option>
+          <option value="sm">{{ $t('widgets.text.sizeSm') }}</option>
+          <option value="base">{{ $t('widgets.text.sizeBase') }}</option>
+          <option value="lg">{{ $t('widgets.text.sizeLg') }}</option>
+          <option value="xl">{{ $t('widgets.text.sizeXl') }}</option>
+          <option value="2xl">{{ $t('widgets.text.size2xl') }}</option>
         </select>
       </div>
       <div>
-        <label class="block text-xs text-gray-400 mb-1">Ausrichtung</label>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.text.alignment') }}</label>
         <select
           v-model="cfg.align"
           class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
         >
-          <option value="left">Links</option>
-          <option value="center">Zentriert</option>
-          <option value="right">Rechts</option>
+          <option value="left">{{ $t('widgets.text.alignLeft') }}</option>
+          <option value="center">{{ $t('widgets.text.alignCenter') }}</option>
+          <option value="right">{{ $t('widgets.text.alignRight') }}</option>
         </select>
       </div>
     </div>
 
     <!-- Markdown-Hilfe -->
     <div class="text-xs text-gray-600 border border-gray-700 rounded p-2 space-y-0.5">
-      <p class="text-gray-500 font-semibold mb-1">Markdown-Kurzreferenz</p>
+      <p class="text-gray-500 font-semibold mb-1">{{ $t('widgets.text.markdownRef') }}</p>
       <p><code class="text-gray-400"># Überschrift 1</code>  <code class="text-gray-400">## Überschrift 2</code></p>
       <p><code class="text-gray-400">**fett**</code>  <code class="text-gray-400">*kursiv*</code></p>
       <p><code class="text-gray-400">[Link](https://…)</code></p>

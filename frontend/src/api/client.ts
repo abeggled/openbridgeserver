@@ -75,11 +75,17 @@ export function setSessionToken(nodeId: string, token: string, expiresIn = 3600)
 // ── Write-Kontext ─────────────────────────────────────────────────────────────
 // Wird von VisuViewer gesetzt bevor Widgets rendern; automatisch bei Write mitgeschickt.
 
-interface WriteContext { pageId?: string; sessionToken?: string }
+interface WriteContext {
+  pageId?: string
+  sessionToken?: string
+  /** Knoten, der das Access-Level definiert (für Session-Token-Verwaltung bei Ablauf) */
+  definingId?: string
+}
 let _writeContext: WriteContext = {}
 
 export function setWriteContext(ctx: WriteContext): void { _writeContext = ctx }
 export function clearWriteContext(): void { _writeContext = {} }
+export function getWriteContext(): WriteContext { return _writeContext }
 
 // ── Request-Helper ────────────────────────────────────────────────────────────
 
@@ -254,10 +260,14 @@ export const datapoints = {
 
   get: (id: string) => request<DataPoint>(`/datapoints/${id}`),
 
-  getValue: (id: string, silent401 = false) =>
-    request<{ value: unknown; unit: string | null; ts: string | null; quality: string }>(
-      `/datapoints/${id}/value`, { silent401 }
-    ),
+  getValue: (id: string, silent401 = false) => {
+    const headers: Record<string, string> = {}
+    if (_writeContext.pageId)       headers['X-Page-Id']       = _writeContext.pageId
+    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    return request<{ value: unknown; unit: string | null; ts: string | null; quality: string }>(
+      `/datapoints/${id}/value`, { silent401, headers }
+    )
+  },
 
   listBindings: (dpId: string) =>
     request<BindingOut[]>(`/datapoints/${dpId}/bindings`),
@@ -277,15 +287,25 @@ export const datapoints = {
   deleteBinding: (dpId: string, bindingId: string) =>
     request<void>(`/datapoints/${dpId}/bindings/${bindingId}`, { method: 'DELETE' }),
 
-  write: (id: string, value: unknown) => {
+  write: async (id: string, value: unknown) => {
     const headers: Record<string, string> = {}
     if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
     if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
-    return request<void>(`/datapoints/${id}/value`, {
-      method: 'POST',
-      body: JSON.stringify({ value }),
-      headers,
-    })
+    try {
+      return await request<void>(`/datapoints/${id}/value`, {
+        method: 'POST',
+        body: JSON.stringify({ value }),
+        headers,
+      })
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message === 'Valid session token required') {
+        // Session abgelaufen (z.B. nach Server-Neustart) — Token löschen und Re-Auth auslösen
+        const defId = _writeContext.definingId
+        if (defId) sessionStorage.removeItem(`session_${defId}`)
+        window.dispatchEvent(new CustomEvent('visu:session-expired'))
+      }
+      throw err
+    }
   },
 }
 
@@ -338,6 +358,65 @@ export interface IconListOut {
 
 export const icons = {
   list: () => request<IconListOut>('/icons/'),
+}
+
+// ── VISU Backgrounds ─────────────────────────────────────────────────────────
+
+export interface BackgroundOut {
+  name: string
+  filename: string
+  size: number
+  mime_type: string
+  url: string
+}
+
+export interface BackgroundListOut {
+  total: number
+  backgrounds: BackgroundOut[]
+}
+
+export interface BackgroundImportOut {
+  imported: number
+  skipped: number
+  names: string[]
+  message: string
+}
+
+export const visuBackgrounds = {
+  list: () => request<BackgroundListOut>('/visu/backgrounds'),
+
+  import: async (files: File[]) => {
+    const formData = new FormData()
+    for (const file of files) formData.append('files', file, file.name)
+
+    const jwt = getJwt()
+    const headers: Record<string, string> = {}
+    if (jwt) headers['Authorization'] = `Bearer ${jwt}`
+
+    const res = await fetch(`${BASE}/visu/backgrounds/import`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+    if (res.status === 401) {
+      clearJwt()
+      window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+      throw new Error('Unauthorized')
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => null)
+      throw new Error(extractDetail(body, res.statusText))
+    }
+    return res.json() as Promise<BackgroundImportOut>
+  },
+
+  delete: (names: string[]) =>
+    request<{ deleted: number; names: string[]; not_found: string[] }>('/visu/backgrounds', {
+      method: 'DELETE',
+      body: JSON.stringify({ names }),
+    }),
+
+  publicUrl: (name: string) => `${BASE}/visu/backgrounds/${encodeURIComponent(name)}`,
 }
 
 // ── History ───────────────────────────────────────────────────────────────────

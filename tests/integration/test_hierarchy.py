@@ -32,7 +32,7 @@ pytestmark = pytest.mark.integration
 # ---------------------------------------------------------------------------
 
 
-async def _create_tree(client, auth_headers, name="Gebäude", desc="Test-Ast") -> dict:
+async def _create_tree(client, auth_headers, name="Gebäude", desc="Test-Hierarchie") -> dict:
     resp = await client.post(
         "/api/v1/hierarchy/trees",
         json={"name": name, "description": desc},
@@ -291,6 +291,8 @@ async def test_link_deleted_when_datapoint_deleted(client, auth_headers):
 
 
 async def test_import_from_ets_no_gas(client, auth_headers):
+    # Ensure no GAs exist so the endpoint returns 422 (pre-condition for this test)
+    await client.request("DELETE", "/api/v1/knxproj/group-addresses", headers=auth_headers)
     resp = await client.post(
         "/api/v1/hierarchy/import-from-ets",
         json={"tree_name": "ETS Test", "mode": "groups"},

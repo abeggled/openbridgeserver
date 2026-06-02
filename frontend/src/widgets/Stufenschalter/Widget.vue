@@ -23,13 +23,22 @@ const props = defineProps<{
 const { getSvg, isSvgIcon, svgIconName } = useIcons()
 
 const label = computed(() => (props.config.label as string | undefined) ?? '')
+
+function sanitizeColor(value: unknown, fallback = '#6b7280'): string {
+  if (typeof value !== 'string') return fallback
+  const color = value.trim()
+  if (/^#[0-9a-fA-F]{3}$/.test(color)) return color
+  if (/^#[0-9a-fA-F]{6}$/.test(color)) return color
+  return fallback
+}
+
 const steps = computed<Step[]>(() => {
   const raw = props.config.steps as Partial<Step>[] | undefined
   return (raw ?? []).map((s) => ({
     label: s.label ?? '',
     value: String(s.value ?? ''),
     icon:  s.icon  ?? '',
-    color: s.color ?? '#6b7280',
+    color: sanitizeColor(s.color),
   }))
 })
 
@@ -106,7 +115,7 @@ watch(
 
 const coloredSvg = computed(() => {
   if (!svgContent.value || !currentStep.value) return ''
-  const color = currentStep.value.color
+  const color = sanitizeColor(currentStep.value.color)
   const nonNoneFill = /\bfill\s*:\s*(?!none\b)/g
   return svgContent.value
     .replace(/<svg\b([^>]*)>/, (_, attrs: string) => {
@@ -127,7 +136,7 @@ const coloredSvg = computed(() => {
         .replace(/\bstroke\s*:\s*(?!none\b)[^;}\n]*/g, `stroke:${color}`)}${close}`)
 })
 
-const activeColor  = computed(() => currentStep.value?.color ?? '#6b7280')
+const activeColor  = computed(() => sanitizeColor(currentStep.value?.color))
 const activeIcon   = computed(() => currentStep.value?.icon  ?? '')
 const activeLabel  = computed(() => currentStep.value?.label ?? '—')
 </script>

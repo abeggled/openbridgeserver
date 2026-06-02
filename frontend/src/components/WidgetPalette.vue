@@ -30,13 +30,13 @@ const groups = computed(() => {
 
 <template>
   <aside class="w-52 flex-shrink-0 bg-gray-900 border-r border-gray-700 overflow-y-auto p-3">
-    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Widgets</p>
+    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">{{ $t('editor.paletteHeading') }}</p>
     <div
       v-for="([group, widgets]) in groups"
       :key="group"
       class="mb-4"
     >
-      <p class="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1 px-1">{{ group }}</p>
+      <p class="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1 px-1">{{ ($t as any)('widgetGroups.' + group, group) }}</p>
       <div class="space-y-1">
         <button
           v-for="w in widgets"

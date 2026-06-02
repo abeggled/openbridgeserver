@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { reactive, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   modelValue: Record<string, unknown>
@@ -9,10 +10,27 @@ const emit = defineEmits<{
   (e: 'update:modelValue', val: Record<string, unknown>): void
 }>()
 
+const SAFE_SANDBOX_TOKENS = new Set([
+  'allow-popups',
+  'allow-forms',
+  'allow-popups-to-escape-sandbox',
+  'allow-top-navigation-by-user-activation',
+])
+const DEFAULT_SANDBOX = 'allow-popups allow-forms'
+
+function sanitizeSandbox(value: unknown): string {
+  if (value == null) return DEFAULT_SANDBOX
+  if (typeof value !== 'string') return DEFAULT_SANDBOX
+  const tokens = value
+    .split(/\s+/)
+    .filter(token => SAFE_SANDBOX_TOKENS.has(token))
+  return Array.from(new Set(tokens)).join(' ')
+}
+
 const cfg = reactive({
   label:           (props.modelValue.label           as string)  ?? '',
   url:             (props.modelValue.url             as string)  ?? '',
-  sandbox:         (props.modelValue.sandbox         as string)  ?? 'allow-same-origin allow-scripts allow-popups allow-forms',
+  sandbox:         sanitizeSandbox(props.modelValue.sandbox),
   allowFullscreen: (props.modelValue.allowFullscreen as boolean) ?? false,
   aspectRatio:     (props.modelValue.aspectRatio     as string)  ?? '16/9',
 })
@@ -20,44 +38,49 @@ const cfg = reactive({
 watch(() => props.modelValue, (v) => {
   cfg.label           = (v.label           as string)  ?? ''
   cfg.url             = (v.url             as string)  ?? ''
-  cfg.sandbox         = (v.sandbox         as string)  ?? 'allow-same-origin allow-scripts allow-popups allow-forms'
+  cfg.sandbox         = sanitizeSandbox(v.sandbox)
   cfg.allowFullscreen = (v.allowFullscreen as boolean) ?? false
   cfg.aspectRatio     = (v.aspectRatio     as string)  ?? '16/9'
 })
 
 watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
-const SANDBOX_OPTIONS = [
-  { key: 'allow-same-origin',              label: 'Same-Origin (Cookies, localStorage)' },
-  { key: 'allow-scripts',                  label: 'Skripte (JavaScript)' },
-  { key: 'allow-popups',                   label: 'Popups & Links' },
-  { key: 'allow-forms',                    label: 'Formulare' },
-  { key: 'allow-popups-to-escape-sandbox', label: 'Popups aus Sandbox entlassen' },
-  { key: 'allow-top-navigation-by-user-activation', label: 'Navigation (nur bei Nutzerinteraktion)' },
-]
+const { t } = useI18n()
+
+const SANDBOX_OPTIONS = computed(() => [
+  { key: 'allow-popups',                   label: t('widgets.iframe.sandboxPopups') },
+  { key: 'allow-forms',                    label: t('widgets.iframe.sandboxForms') },
+  { key: 'allow-popups-to-escape-sandbox', label: t('widgets.iframe.sandboxEscape') },
+  { key: 'allow-top-navigation-by-user-activation', label: t('widgets.iframe.sandboxNav') },
+])
 
 function hasSandbox(key: string): boolean {
-  return cfg.sandbox.split(' ').includes(key)
+  return cfg.sandbox.split(/\s+/).includes(key)
 }
 
 function toggleSandbox(key: string) {
-  const parts = cfg.sandbox ? cfg.sandbox.split(' ').filter(Boolean) : []
+  const parts = cfg.sandbox ? cfg.sandbox.split(/\s+/).filter(Boolean) : []
   const idx = parts.indexOf(key)
   if (idx >= 0) parts.splice(idx, 1)
   else parts.push(key)
-  cfg.sandbox = parts.join(' ')
+  cfg.sandbox = sanitizeSandbox(parts.join(' '))
 }
 
-const ASPECT_RATIOS = [
+const ASPECT_RATIOS = computed(() => [
   { value: '16/9', label: '16:9' },
   { value: '4/3',  label: '4:3'  },
   { value: '1/1',  label: '1:1'  },
-  { value: 'free', label: 'Frei (Höhe füllen)' },
-]
+  { value: 'free', label: t('widgets.iframe.aspectFree') },
+])
 
 const isValidUrl = computed(() => {
   if (!cfg.url) return true
-  try { new URL(cfg.url); return true } catch { return false }
+  try {
+    const parsed = new URL(cfg.url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
 })
 </script>
 
@@ -66,11 +89,11 @@ const isValidUrl = computed(() => {
 
     <!-- Bezeichnung -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Bezeichnung</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.common.label') }}</label>
       <input
         v-model="cfg.label"
         type="text"
-        placeholder="z.B. Wetterkarte, Kalender …"
+        :placeholder="$t('widgets.iframe.labelPlaceholder')"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       />
     </div>
@@ -85,12 +108,12 @@ const isValidUrl = computed(() => {
         class="w-full bg-gray-800 border rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
         :class="isValidUrl ? 'border-gray-700' : 'border-red-500'"
       />
-      <p v-if="!isValidUrl" class="mt-1 text-xs text-red-400">Ungültige URL</p>
+      <p v-if="!isValidUrl" class="mt-1 text-xs text-red-400">{{ $t('widgets.iframe.invalidUrl') }}</p>
     </div>
 
     <!-- Seitenverhältnis -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Seitenverhältnis</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.iframe.aspectRatio') }}</label>
       <select
         v-model="cfg.aspectRatio"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
@@ -101,7 +124,7 @@ const isValidUrl = computed(() => {
 
     <!-- Sandbox-Berechtigungen -->
     <div>
-      <label class="block text-xs text-gray-400 mb-2">Sandbox-Berechtigungen</label>
+      <label class="block text-xs text-gray-400 mb-2">{{ $t('widgets.iframe.sandbox') }}</label>
       <div class="space-y-1.5">
         <label
           v-for="opt in SANDBOX_OPTIONS"
@@ -127,15 +150,14 @@ const isValidUrl = computed(() => {
           type="checkbox"
           class="accent-blue-500"
         />
-        <span class="text-xs text-gray-300">Vollbildmodus erlauben</span>
+        <span class="text-xs text-gray-300">{{ $t('widgets.iframe.allowFullscreen') }}</span>
       </label>
     </div>
 
     <!-- Sicherheitshinweis -->
     <div class="rounded bg-yellow-900/30 border border-yellow-700/50 px-3 py-2">
       <p class="text-xs text-yellow-300">
-        Nur vertrauenswürdige URLs einbetten. Sandbox-Berechtigungen erhöhen den Funktionsumfang,
-        jedoch auch das Sicherheitsrisiko.
+        {{ $t('widgets.iframe.securityWarning') }}
       </p>
     </div>
 

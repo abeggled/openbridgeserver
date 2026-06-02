@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from obs.logic.manager import LogicManager
+from obs.logic.manager import LogicManager, _is_private_host
 from obs.logic.models import FlowData
 from tests.unit.conftest import edge, make_executor, node
 
@@ -47,6 +47,31 @@ def _mock_response(status_code: int, json_data: object | None = None, text: str 
     else:
         resp.json.side_effect = ValueError("no JSON")
     return resp
+
+
+class TestApiClientSsrfHostGuard:
+    """Unit tests for low-level host classification in SSRF guard."""
+
+    def test_empty_host_is_blocked(self):
+        assert _is_private_host("") is True
+
+    def test_localhost_localdomain_is_allowed(self):
+        assert _is_private_host("localhost.localdomain") is False
+
+    def test_direct_loopback_ip_is_allowed(self):
+        assert _is_private_host("127.0.0.1") is False
+
+    @patch("obs.logic.manager.socket.getaddrinfo", side_effect=OSError("dns fail"))
+    def test_dns_failure_is_blocked(self, _mock_getaddrinfo):
+        assert _is_private_host("example.com") is True
+
+    @patch("obs.logic.manager.socket.getaddrinfo", return_value=[(None, None, None, None, ("not-an-ip", 0))])
+    def test_invalid_dns_answer_is_blocked(self, _mock_getaddrinfo):
+        assert _is_private_host("example.com") is True
+
+    @patch("obs.logic.manager.socket.getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 0))])
+    def test_loopback_dns_answer_is_allowed(self, _mock_getaddrinfo):
+        assert _is_private_host("example.com") is False
 
 
 # ===========================================================================
@@ -208,6 +233,61 @@ class TestApiClientManagerHttp:
 
         assert "content" not in captured
         assert "data" not in captured
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    @patch("obs.logic.manager._is_private_host", return_value=True)
+    def test_blocked_target_sets_blocked_output(self, _mock_private_host, mock_client_cls):
+        """Blocked target must set explicit error output and skip HTTP call."""
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.request = AsyncMock()
+
+        manager = _make_manager()
+        _, flow = self._build_graph()
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = self._run(manager, flow)
+
+        mock_client.request.assert_not_called()
+        assert outputs["ac"]["response"] == "Blocked URL target"
+        assert outputs["ac"]["status"] is None
+        assert outputs["ac"]["success"] is False
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_text_response_is_truncated_to_1mb(self, mock_client_cls):
+        """Large text responses must be truncated before storing node output."""
+        big = "x" * 1_500_000
+        resp = _mock_response(200, text=big)
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.request = AsyncMock(return_value=resp)
+
+        manager = _make_manager()
+        _, flow = self._build_graph(extra_data={"response_type": "text/plain"})
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = self._run(manager, flow)
+
+        assert outputs["ac"]["success"] is True
+        assert isinstance(outputs["ac"]["response"], str)
+        assert len(outputs["ac"]["response"]) == 1_000_000
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_localhost_target_is_allowed(self, mock_client_cls):
+        """localhost targets stay allowed for local/self-hosted use-cases."""
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.request = AsyncMock(return_value=_mock_response(200, {"ok": True}))
+
+        manager = _make_manager()
+        _, flow = self._build_graph(extra_data={"url": "http://localhost:8080/api/v1/system/health"})
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = self._run(manager, flow)
+
+        mock_client.request.assert_called_once()
+        assert outputs["ac"]["success"] is True
+        assert outputs["ac"]["status"] == 200
 
 
 # ===========================================================================
@@ -548,3 +628,81 @@ class TestApiClientResponseType:
         resp = _mock_response(200, text="plain text")
         outputs = self._run_with_response_type("text", resp)
         assert outputs["ac"]["response"] == "plain text"
+
+
+# ===========================================================================
+# Manager: notify_pushover image_url security hardening
+# ===========================================================================
+
+
+class TestNotifyPushoverImageUrlSecurity:
+    def _run_notify_pushover(self, image_url: str) -> dict:
+        manager = _make_manager()
+        n = node(
+            "po",
+            "notify_pushover",
+            {
+                "app_token": "app-token",
+                "user_key": "user-key",
+                "message": "hello",
+                "image_url": image_url,
+            },
+        )
+        flow = _flow([n])
+        graph_id = "g-po"
+        manager._graphs[graph_id] = ("notify", True, flow)
+        manager._node_state[graph_id] = {}
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            return asyncio.run(manager._execute_graph(graph_id, "notify", flow, {"po": {"trigger": True}}))
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_rejects_non_global_resolved_ip(self, mock_client_cls):
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock()
+        mock_client.post = AsyncMock()
+
+        with patch("obs.logic.manager.socket.getaddrinfo", return_value=[(0, 0, 0, "", ("100.64.0.1", 443))]):
+            outputs = self._run_notify_pushover("https://example.com/image.png")
+
+        mock_client.get.assert_not_called()
+        mock_client.post.assert_not_called()
+        assert outputs["po"]["sent"] is False
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_binds_fetch_to_validated_ip_with_host_and_sni(self, mock_client_cls):
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        img_resp = AsyncMock()
+        img_resp.raise_for_status = MagicMock()
+        img_resp.headers = {"content-type": "image/png", "content-length": "4"}
+        img_resp.extensions = {"network_stream": MagicMock(get_extra_info=MagicMock(return_value=("93.184.216.34", 443)))}
+
+        async def _iter_bytes():
+            yield b"\x89PNG"
+
+        img_resp.aiter_bytes = _iter_bytes
+
+        stream_cm = AsyncMock()
+        stream_cm.__aenter__.return_value = img_resp
+        stream_cm.__aexit__.return_value = False
+        mock_client.stream = MagicMock(return_value=stream_cm)
+
+        post_resp = MagicMock()
+        post_resp.raise_for_status = MagicMock()
+        mock_client.post = AsyncMock(return_value=post_resp)
+
+        with patch("obs.logic.manager.socket.getaddrinfo", return_value=[(0, 0, 0, "", ("93.184.216.34", 443))]):
+            outputs = self._run_notify_pushover("https://example.com/path/image.png?size=1")
+
+        assert outputs["po"]["sent"] is True
+        assert mock_client.stream.call_count == 1
+        get_call = mock_client.stream.call_args
+        assert get_call.args[0] == "GET"
+        assert get_call.args[1] == "https://93.184.216.34/path/image.png?size=1"
+        assert get_call.kwargs["headers"] == {"Host": "example.com"}
+        assert get_call.kwargs["extensions"] == {"sni_hostname": "example.com"}
+        assert get_call.kwargs["follow_redirects"] is False

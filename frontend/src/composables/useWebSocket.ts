@@ -11,11 +11,14 @@ import { ref, readonly } from 'vue'
 import { getJwt } from '@/api/client'
 
 type MessageHandler = (data: Record<string, unknown>) => void
+type ConnectContext = {
+  pageId?: string
+  sessionToken?: string
+}
 
 const WS_URL = () => {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  const jwt = getJwt()
-  return `${proto}://${location.host}/api/v1/ws${jwt ? `?token=${jwt}` : ''}`
+  return `${proto}://${location.host}/api/v1/ws`
 }
 
 // ── Singleton-State ───────────────────────────────────────────────────────────
@@ -27,6 +30,7 @@ const MAX_DELAY = 30_000
 
 const connected = ref(false)
 const handlers = new Set<MessageHandler>()
+let connectContext: ConnectContext = {}
 
 // Puffert alle aktuell abonnierten IDs → wird beim (Re-)Connect gesendet
 const subscribedIds = new Set<string>()
@@ -39,13 +43,23 @@ function send(data: unknown) {
   }
 }
 
-function connect() {
+function connect(nextContext: ConnectContext = {}) {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
     return
   }
 
-  const url = WS_URL()
-  socket = new WebSocket(url)
+  connectContext = nextContext
+  const jwt = getJwt()
+  let url = WS_URL()
+  if (jwt) {
+    socket = new WebSocket(url, [`obs.jwt.${jwt}`])
+  } else {
+    if (!connectContext.pageId) return
+    const params = new URLSearchParams({ page_id: connectContext.pageId })
+    if (connectContext.sessionToken) params.set('session_token', connectContext.sessionToken)
+    url = `${url}?${params.toString()}`
+    socket = new WebSocket(url)
+  }
 
   socket.onopen = () => {
     connected.value = true
@@ -60,9 +74,10 @@ function connect() {
     }
   }
 
-  socket.onclose = () => {
+  socket.onclose = (event) => {
     connected.value = false
     socket = null
+    if (event.code === 4001) return
     scheduleReconnect()
   }
 
@@ -85,7 +100,7 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_DELAY)
-    connect()
+    connect(connectContext)
   }, reconnectDelay)
 }
 
@@ -101,6 +116,7 @@ export function useWebSocket() {
     /** Verbindung trennen und Reconnect verhindern */
     disconnect() {
       subscribedIds.clear()
+      connectContext = {}
       if (reconnectTimer) {
         clearTimeout(reconnectTimer)
         reconnectTimer = null

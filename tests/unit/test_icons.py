@@ -6,7 +6,7 @@ FastAPI app or database connection.
 
 from __future__ import annotations
 
-from obs.api.v1.icons import _is_svg, _safe_name
+from obs.api.v1.icons import _build_knxuf_svg, _is_svg, _parse_knxuf_js, _safe_name, _sanitize_svg
 
 # ---------------------------------------------------------------------------
 # _is_svg
@@ -119,3 +119,135 @@ class TestSafeName:
         # _safe_name(member) — dadurch wird der Slash vorher entfernt.
         member = "folder/home.svg"
         assert _safe_name(Path(member).name) == "home"
+
+
+class TestSanitizeSvg:
+    def test_removes_event_handlers(self):
+        payload = b'<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><path d="M1 1"/></svg>'
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert "onload" not in out
+
+    def test_removes_script_and_foreignobject(self):
+        payload = (
+            b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><foreignObject><div>bad</div></foreignObject><path d="M1 1"/></svg>'
+        )
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert "<script" not in out
+        assert "<foreignObject" not in out
+        assert "path" in out
+
+    def test_removes_smil_animation_elements(self):
+        payload = b'<svg xmlns="http://www.w3.org/2000/svg"><a><set attributeName="href" to="javascript:alert(1)" /></a><path d="M1 1"/></svg>'
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert "<set" not in out
+        assert "path" in out
+
+    def test_rejects_invalid_xml(self):
+        import pytest
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException):
+            _sanitize_svg(b"<svg><path></svg")
+
+    def test_rejects_doctype(self):
+        import pytest
+        from fastapi import HTTPException
+
+        payload = b'<!DOCTYPE svg [<!ENTITY x "abc">]><svg xmlns="http://www.w3.org/2000/svg"><text>&x;</text></svg>'
+        with pytest.raises(HTTPException) as exc_info:
+            _sanitize_svg(payload)
+        assert exc_info.value.status_code == 422
+
+    def test_strips_obfuscated_javascript_href(self):
+        payload = b'<svg xmlns="http://www.w3.org/2000/svg"><a href="java&#10;script:alert(1)"><path d="M1 1"/></a></svg>'
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert "href=" not in out
+
+    def test_rejects_too_deep_svg(self):
+        import pytest
+        from fastapi import HTTPException
+
+        deep = "<svg>" + ("<g>" * 300) + ("</g>" * 300) + "</svg>"
+        with pytest.raises(HTTPException) as exc_info:
+            _sanitize_svg(deep.encode("utf-8"))
+        assert exc_info.value.status_code == 422
+
+    def test_preserves_plain_svg_root_tag(self):
+        payload = b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1"/></svg>'
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert out.startswith("<svg")
+        assert "<ns0:svg" not in out
+
+
+# ---------------------------------------------------------------------------
+# _parse_knxuf_js
+# ---------------------------------------------------------------------------
+
+
+class TestParseKnxufJs:
+    def test_parses_single_icon(self):
+        js = "const ICONS = {\n\t'audio_audio': 'M 10,10 L 20,20 Z'\n};"
+        result = _parse_knxuf_js(js)
+        assert result == {"audio_audio": "M 10,10 L 20,20 Z"}
+
+    def test_parses_multiple_icons(self):
+        js = "const ICONS = {\n\t'icon_a': 'M 0 0',\n\t'icon_b': 'M 1 1',\n};"
+        result = _parse_knxuf_js(js)
+        assert result == {"icon_a": "M 0 0", "icon_b": "M 1 1"}
+
+    def test_empty_content_returns_empty(self):
+        assert _parse_knxuf_js("") == {}
+
+    def test_no_icons_object_returns_empty(self):
+        assert _parse_knxuf_js("const ICONSET_NAME = 'kuf';") == {}
+
+    def test_skips_empty_path_data(self):
+        js = "const ICONS = {\n\t'icon_a': '',\n\t'icon_b': 'M 1 1',\n};"
+        result = _parse_knxuf_js(js)
+        assert "icon_a" not in result
+        assert result["icon_b"] == "M 1 1"
+
+    def test_real_format_sample(self):
+        js = (
+            'const ICONSET_NAME = "kuf";\n'
+            "const ICONS = {\n"
+            "\t'audio_audio': 'm 256,69 -68,38 z',\n"
+            "\t'audio_desync': 'm 209,255 c -0.4,3 -4,2 -6,2 z',\n"
+            "};\n"
+        )
+        result = _parse_knxuf_js(js)
+        assert len(result) == 2
+        assert "audio_audio" in result
+        assert "audio_desync" in result
+
+
+# ---------------------------------------------------------------------------
+# _build_knxuf_svg
+# ---------------------------------------------------------------------------
+
+
+class TestBuildKnxufSvg:
+    def test_produces_valid_svg_bytes(self):
+        svg = _build_knxuf_svg("M 10,10 L 20,20 Z")
+        assert _is_svg(svg)
+
+    def test_contains_correct_viewbox(self):
+        svg = _build_knxuf_svg("M 0 0").decode("utf-8")
+        assert 'viewBox="50 50 260 260"' in svg
+
+    def test_contains_path_data(self):
+        path_data = "M 10,10 L 20,20 Z"
+        svg = _build_knxuf_svg(path_data).decode("utf-8")
+        assert path_data in svg
+
+    def test_path_data_with_special_xml_chars_is_escaped(self):
+        path_data = 'M 0 0 L "10" 10'
+        svg_bytes = _build_knxuf_svg(path_data)
+        assert _is_svg(svg_bytes)
+        svg_str = svg_bytes.decode("utf-8")
+        assert "&quot;" in svg_str or '"10"' not in svg_str
+
+    def test_survives_sanitize(self):
+        svg = _build_knxuf_svg("M 10,10 L 20,20 Z")
+        sanitized = _sanitize_svg(svg)
+        assert _is_svg(sanitized)

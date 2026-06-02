@@ -2,5 +2,17 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "Group monitor phase-2 frontend deps in a single PR (added in #428 ahead of #430/#435/#437).",
+      "matchManagers": ["npm"],
+      "matchPackageNames": [
+        "@floating-ui/vue",
+        "chroma-js",
+        "vue-draggable-plus"
+      ],
+      "groupName": "frontend-deps (monitor phase 2)"
+    }
   ]
 }

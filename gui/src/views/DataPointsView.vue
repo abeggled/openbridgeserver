@@ -4,14 +4,14 @@
     <!-- Header -->
     <div class="flex flex-wrap items-center gap-3">
       <div class="flex-1">
-        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Objekte</h2>
-        <p class="text-sm text-slate-500 mt-0.5">{{ store.total }} Einträge</p>
+        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('datapoints.title') }}</h2>
+        <p class="text-sm text-slate-500 mt-0.5">{{ $t('datapoints.subtitle', { count: store.total }) }}</p>
       </div>
       <button @click="openCreate" class="btn-primary" data-testid="btn-new-datapoint">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
         </svg>
-        Neu
+        {{ $t('datapoints.new') }}
       </button>
     </div>
 
@@ -28,7 +28,7 @@
           @input="onSearch"
           type="text"
           class="input pl-9 w-full"
-          placeholder="Name, UUID, Konfiguration …"
+          :placeholder="$t('datapoints.searchPlaceholder')"
           data-testid="input-search"
         />
         <button v-if="filters.q" @click="clearFilter('q')"
@@ -47,7 +47,7 @@
           <select v-model="filters.type" @change="onSearch"
             :class="['input text-sm pr-7 appearance-none', filters.type ? 'border-blue-500 bg-blue-500/5 text-blue-600 dark:text-blue-400 font-medium' : '']"
             data-testid="select-type" style="min-width: 130px">
-            <option value="">Alle Typen</option>
+            <option value="">{{ $t('datapoints.allTypes') }}</option>
             <option v-for="dt in store.datatypes" :key="dt.name" :value="dt.name">{{ dt.name }}</option>
           </select>
           <button v-if="filters.type" @click="clearFilter('type')"
@@ -56,6 +56,15 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
             </svg>
           </button>
+        </div>
+
+        <!-- Adapter (Multi-Select) -->
+        <div class="min-w-56" data-testid="adapter-filter">
+          <AdapterCombobox
+            :model-value="filters.adapters"
+            :placeholder="$t('datapoints.allAdapters')"
+            @update:modelValue="setAdapterFilter"
+          />
         </div>
 
         <!-- Tag (Multi-Select) -->
@@ -67,9 +76,9 @@
             <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a2 2 0 014-4z"/>
             </svg>
-            <span v-if="!filters.tags.length" class="text-slate-400 flex-1 text-left">Alle Tags</span>
+            <span v-if="!filters.tags.length" class="text-slate-400 flex-1 text-left">{{ $t('datapoints.allTags') }}</span>
             <span v-else class="text-blue-600 dark:text-blue-400 font-medium flex-1 text-left">
-              {{ filters.tags.length === 1 ? filters.tags[0] : `${filters.tags.length} Tags` }}
+              {{ filters.tags.length === 1 ? filters.tags[0] : $t('datapoints.nTags', { n: filters.tags.length }) }}
             </span>
             <svg class="w-3 h-3 text-slate-400 shrink-0 transition-transform" :class="tagDropOpen ? 'rotate-180' : ''"
               fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -81,7 +90,7 @@
           <div v-if="tagDropOpen"
             class="absolute z-20 left-0 mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl overflow-hidden"
             style="min-width: 160px">
-            <div v-if="!store.allTags.length" class="text-xs text-slate-500 text-center py-3">Keine Tags vorhanden</div>
+            <div v-if="!store.allTags.length" class="text-xs text-slate-500 text-center py-3">{{ $t('datapoints.noTags') }}</div>
             <div v-else class="max-h-60 overflow-y-auto py-1">
               <button v-for="t in store.allTags" :key="t"
                 @click="toggleTag(t)"
@@ -100,7 +109,7 @@
             <div v-if="filters.tags.length" class="border-t border-slate-100 dark:border-slate-700 p-1.5">
               <button @click="clearFilter('tags')"
                 class="w-full text-xs text-center text-slate-500 hover:text-red-500 transition-colors py-1">
-                Auswahl aufheben
+                {{ $t('datapoints.clearSelection') }}
               </button>
             </div>
           </div>
@@ -128,8 +137,9 @@
             <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7h18M3 12h12M3 17h8"/>
             </svg>
-            <span v-if="!filters.node_ids.length && !filters.tree_ids.length" class="text-slate-400 flex-1 text-left">Hierarchieknoten …</span>
-            <span v-else class="text-blue-600 dark:text-blue-400 font-medium flex-1 text-left text-xs truncate">
+            <span v-if="!filters.node_ids.length && !filters.tree_ids.length" class="text-slate-400 flex-1 text-left">{{ $t('datapoints.hierarchyNodes') }}</span>
+            <span v-else class="text-blue-600 dark:text-blue-400 font-medium flex-1 text-left text-xs truncate"
+              data-testid="node-filter-summary">
               {{ hierarchyFilterLabel }}
             </span>
             <svg class="w-3 h-3 text-slate-400 shrink-0 transition-transform" :class="nodeDropOpen ? 'rotate-180' : ''"
@@ -151,14 +161,14 @@
                 @click.stop
                 type="text"
                 class="w-full input text-sm py-1.5"
-                placeholder="Knoten suchen …"
+                :placeholder="$t('datapoints.nodeSearch')"
               />
             </div>
 
             <!-- Currently selected trees + nodes (shown when no search text) -->
             <div v-if="(filters.tree_ids.length || filters.node_ids.length) && !nodeSearchQ"
               class="border-b border-slate-100 dark:border-slate-700">
-              <div class="px-3 py-1 text-xs text-slate-400 font-medium uppercase tracking-wide">Ausgewählt</div>
+              <div class="px-3 py-1 text-xs text-slate-400 font-medium uppercase tracking-wide">{{ $t('datapoints.selected') }}</div>
               <!-- Selected trees -->
               <button v-for="t in filters.tree_ids" :key="t.tree_id"
                 @click="toggleTreeFilter(t)"
@@ -172,12 +182,13 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7h18M3 12h12M3 17h8"/>
                 </svg>
                 <span class="text-blue-600 dark:text-blue-400 font-medium truncate">{{ t.tree_name }}</span>
-                <span class="text-xs text-slate-400 ml-auto shrink-0">Ganzer Ast</span>
+                <span class="text-xs text-slate-400 ml-auto shrink-0">{{ $t('datapoints.wholeTree') }}</span>
               </button>
               <!-- Selected nodes -->
               <button v-for="n in filters.node_ids" :key="n.node_id"
                 @click="toggleNode(n)"
-                class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
+                data-testid="node-filter-selected-item">
                 <span class="flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center bg-blue-500 border-blue-500">
                   <svg class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
@@ -187,18 +198,21 @@
                 <svg class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                 </svg>
-                <span class="text-blue-600 dark:text-blue-400 font-medium truncate">{{ n.node_name }}</span>
+                <span class="text-blue-600 dark:text-blue-400 font-medium min-w-0 flex-1">
+                  <PathLabel :segments="n.path && n.path.length ? n.path : [n.node_name]" />
+                </span>
               </button>
             </div>
 
             <!-- Search results -->
             <div class="max-h-52 overflow-y-auto">
               <div v-if="nodeSearchLoading" class="flex justify-center py-3"><Spinner size="sm" /></div>
-              <div v-else-if="nodeResults.length === 0 && nodeSearchQ" class="text-xs text-slate-500 text-center py-3">Keine Treffer</div>
-              <div v-else-if="nodeResults.length === 0 && !nodeSearchQ" class="text-xs text-slate-500 text-center py-3">Tippe zum Suchen …</div>
+              <div v-else-if="nodeResults.length === 0 && nodeSearchQ" class="text-xs text-slate-500 text-center py-3">{{ $t('datapoints.noMatch') }}</div>
+              <div v-else-if="nodeResults.length === 0 && !nodeSearchQ" class="text-xs text-slate-500 text-center py-3">{{ $t('datapoints.typeToSearch') }}</div>
               <button v-else v-for="node in nodeResults" :key="node.node_id"
                 @click="toggleNode(node)"
-                class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
+                data-testid="node-filter-result-item">
                 <span :class="['flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors',
                   isNodeSelected(node.node_id) ? 'bg-blue-500 border-blue-500' : 'border-slate-300 dark:border-slate-600']">
                   <svg v-if="isNodeSelected(node.node_id)" class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -209,15 +223,16 @@
                 <svg class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                 </svg>
-                <span :class="isNodeSelected(node.node_id) ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-700 dark:text-slate-200'"
-                  class="truncate">{{ node.node_name }}</span>
+                <span :class="[isNodeSelected(node.node_id) ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-700 dark:text-slate-200', 'min-w-0 flex-1']">
+                  <PathLabel :segments="node.path && node.path.length ? node.path : [node.node_name]" />
+                </span>
               </button>
             </div>
 
             <div v-if="filters.node_ids.length || filters.tree_ids.length" class="border-t border-slate-100 dark:border-slate-700 p-1.5">
               <button @click="clearHierarchyFilters"
                 class="w-full text-xs text-center text-slate-500 hover:text-red-500 transition-colors py-1">
-                Auswahl aufheben
+                {{ $t('datapoints.clearSelection') }}
               </button>
             </div>
           </div>
@@ -230,7 +245,7 @@
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
-          Alle Filter zurücksetzen
+          {{ $t('datapoints.clearAllFilters') }}
         </button>
       </div>
     </div>
@@ -241,21 +256,21 @@
         <Spinner size="lg" />
       </div>
       <div v-else-if="!store.items.length" class="text-center text-slate-500 py-12 text-sm">
-        Keine Objekte gefunden
+        {{ $t('datapoints.noObjectsFound') }}
       </div>
       <div v-else class="table-wrap">
         <table class="table" data-testid="datapoint-list">
           <thead>
             <tr>
               <th @click="store.setSort('name')" class="cursor-pointer select-none hover:text-blue-500 transition-colors">
-                Name <SortIcon col="name" :active="store.sortCol" :dir="store.sortDir" />
+                {{ $t('datapoints.table.name') }} <SortIcon col="name" :active="store.sortCol" :dir="store.sortDir" />
               </th>
               <th @click="store.setSort('data_type')" class="cursor-pointer select-none hover:text-blue-500 transition-colors">
-                Typ <SortIcon col="data_type" :active="store.sortCol" :dir="store.sortDir" />
+                {{ $t('datapoints.table.type') }} <SortIcon col="data_type" :active="store.sortCol" :dir="store.sortDir" />
               </th>
-              <th>Tags</th>
-              <th>Wert</th>
-              <th>Qualität</th>
+              <th>{{ $t('datapoints.table.tags') }}</th>
+              <th>{{ $t('datapoints.table.value') }}</th>
+              <th>{{ $t('datapoints.table.quality') }}</th>
               <th class="w-24"></th>
             </tr>
           </thead>
@@ -334,12 +349,12 @@
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.5 6.5l4-4a4.95 4.95 0 017 7l-4 4m-10 4l-4 4a4.95 4.95 0 01-7-7l4-4m5.5 3.5l5-5"/>
                     </svg>
                   </RouterLink>
-                  <button @click="openEdit(dp)" class="btn-icon" title="Bearbeiten">
+                  <button @click="openEdit(dp)" class="btn-icon" :title="$t('common.edit')">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                     </svg>
                   </button>
-                  <button @click="confirmDelete(dp)" class="btn-icon text-red-400" title="Löschen">
+                  <button @click="confirmDelete(dp)" class="btn-icon text-red-400" :title="$t('common.delete')">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                     </svg>
@@ -364,31 +379,34 @@
     <!-- End of list -->
     <div v-if="!store.hasMore && store.items.length > 0 && !store.loading"
       class="text-center text-slate-400 text-xs py-2">
-      Alle {{ store.total }} Einträge geladen
+      {{ $t('datapoints.allLoaded', { count: store.total }) }}
     </div>
 
     <!-- Create / Edit Modal -->
-    <Modal v-model="showForm" :title="editTarget ? 'Objekt bearbeiten' : 'Neues Objekt'">
+    <Modal v-model="showForm" :title="editTarget ? $t('datapoints.form.editTitle') : $t('datapoints.createModal')">
       <DataPointForm :initial="editTarget" :datatypes="store.datatypes" :save-handler="onSave" @cancel="showForm = false" />
     </Modal>
 
     <!-- Delete confirm -->
-    <ConfirmDialog v-model="showConfirm" title="Objekt löschen"
-      :message="`'${deleteTarget?.name}' und alle Verknüpfungen löschen?`"
-      confirm-label="Löschen" @confirm="doDelete" />
+    <ConfirmDialog v-model="showConfirm" :title="$t('datapoints.deleteTitle')"
+      :message="$t('datapoints.deleteWithBindings', { name: deleteTarget?.name })"
+      :confirm-label="$t('common.delete')" @confirm="doDelete" />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
 import { hierarchyApi } from '@/api/client'
 import Badge         from '@/components/ui/Badge.vue'
 import Spinner       from '@/components/ui/Spinner.vue'
 import Modal         from '@/components/ui/Modal.vue'
+import PathLabel     from '@/components/ui/PathLabel.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
+import AdapterCombobox from '@/components/ui/AdapterCombobox.vue'
 import DataPointForm from '@/components/datapoints/DataPointForm.vue'
 
 // Inline sort-indicator
@@ -401,16 +419,17 @@ const SortIcon = {
   </span>`,
 }
 
-const qualityOptions = [
-  { value: 'good',      label: 'Gut',       dot: 'bg-green-500',  activeClass: 'border-green-500 bg-green-500/10 text-green-600 dark:text-green-400' },
-  { value: 'uncertain', label: 'Unbekannt', dot: 'bg-amber-400',  activeClass: 'border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400' },
-  { value: 'bad',       label: 'Schlecht',  dot: 'bg-red-500',    activeClass: 'border-red-500 bg-red-500/10 text-red-600 dark:text-red-400' },
-]
+const qualityOptions = computed(() => [
+  { value: 'good',      label: t('datapoints.quality.good'),      dot: 'bg-green-500',  activeClass: 'border-green-500 bg-green-500/10 text-green-600 dark:text-green-400' },
+  { value: 'uncertain', label: t('datapoints.quality.uncertain'), dot: 'bg-amber-400',  activeClass: 'border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400' },
+  { value: 'bad',       label: t('datapoints.quality.bad'),       dot: 'bg-red-500',    activeClass: 'border-red-500 bg-red-500/10 text-red-600 dark:text-red-400' },
+])
 
+const { t } = useI18n()
 const store = useDatapointStore()
 const ws    = useWebSocketStore()
 
-const filters      = ref({ q: '', tags: [], quality: '', type: '', node_ids: [], tree_ids: [] })
+const filters      = ref({ q: '', tags: [], adapters: [], quality: '', type: '', node_ids: [], tree_ids: [] })
 const showForm     = ref(false)
 const showConfirm  = ref(false)
 const editTarget   = ref(null)
@@ -432,7 +451,15 @@ let observer      = null
 let unsubWs       = null
 
 const hasActiveFilters = computed(() =>
-  !!(filters.value.q || filters.value.tags.length || filters.value.quality || filters.value.type || filters.value.node_ids.length || filters.value.tree_ids.length)
+  !!(
+    filters.value.q
+    || filters.value.tags.length
+    || filters.value.adapters.length
+    || filters.value.quality
+    || filters.value.type
+    || filters.value.node_ids.length
+    || filters.value.tree_ids.length
+  )
 )
 
 const hierarchyFilterLabel = computed(() => {
@@ -444,7 +471,7 @@ const hierarchyFilterLabel = computed(() => {
     if (trees.length === 1) return trees[0].tree_name
     return `${nodes[0].tree_name} › ${nodes[0].node_name}`
   }
-  return `${total} Filter`
+  return t('datapoints.nFilters', { n: total })
 })
 
 // --------------------------------------------------------------------------
@@ -459,6 +486,7 @@ onMounted(async () => {
     Object.assign(filters.value, {
       ...saved.filters,
       tags:     saved.filters?.tags     ?? [],
+      adapters: saved.filters?.adapters ?? [],
       node_ids: saved.filters?.node_ids ?? [],
       tree_ids: saved.filters?.tree_ids ?? [],
     })
@@ -526,6 +554,7 @@ function apiFilters() {
   return {
     q:       filters.value.q,
     tag:     filters.value.tags.join(','),
+    adapter: filters.value.adapters.join(','),
     quality: filters.value.quality,
     type:    filters.value.type,
     node_id: filters.value.node_ids.map(n => n.node_id).join(','),
@@ -557,6 +586,11 @@ function setTagFilter(tag) {
   }
 }
 
+function setAdapterFilter(adapters) {
+  filters.value.adapters = Array.isArray(adapters) ? adapters : []
+  onSearch()
+}
+
 function clearFilter(key) {
   if (key === 'node_ids' || key === 'node_id') {
     filters.value.node_ids = []
@@ -566,6 +600,8 @@ function clearFilter(key) {
     filters.value.tree_ids = []
   } else if (key === 'tags') {
     filters.value.tags = []
+  } else if (key === 'adapters') {
+    filters.value.adapters = []
   } else {
     filters.value[key] = ''
   }
@@ -573,7 +609,7 @@ function clearFilter(key) {
 }
 
 function clearAllFilters() {
-  filters.value = { q: '', tags: [], quality: '', type: '', node_ids: [], tree_ids: [] }
+  filters.value = { q: '', tags: [], adapters: [], quality: '', type: '', node_ids: [], tree_ids: [] }
   nodeSearchQ.value = ''
   nodeResults.value = []
   onSearch()
@@ -693,6 +729,6 @@ function qualityVariant(q) {
   return q === 'good' ? 'success' : q === 'bad' ? 'danger' : q === 'uncertain' ? 'warning' : 'muted'
 }
 function qualityLabel(q) {
-  return q === 'good' ? 'Gut' : q === 'bad' ? 'Schlecht' : q === 'uncertain' ? 'Unbekannt' : q
+  return q === 'good' ? t('datapoints.quality.good') : q === 'bad' ? t('datapoints.quality.bad') : q === 'uncertain' ? t('datapoints.quality.uncertain') : q
 }
 </script>

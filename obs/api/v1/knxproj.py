@@ -8,6 +8,7 @@ DELETE /api/v1/knxproj/group-addresses — alle GAs löschen
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid as uuid_mod
@@ -24,6 +25,8 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from obs.api.auth import get_current_user
@@ -275,23 +278,51 @@ async def import_knxproj_file(
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Datei ist leer")
 
+    pwd = password or None
+
+    # Parse GAs and locations in parallel — large files can take 10+ s each,
+    # parallel execution halves the wall time and keeps the event loop free.
+    async def _safe_parse_locations() -> tuple:
+        try:
+            return await run_in_threadpool(parse_knxproj_locations, content, pwd)
+        except Exception as exc:
+            logger.warning("Gebäude/Gewerke-Import fehlgeschlagen (wird ignoriert): %s", exc)
+            return [], []
+
     try:
-        records = parse_knxproj(content, password or None)
+        records, (loc_records, fn_records) = await asyncio.gather(
+            run_in_threadpool(parse_knxproj, content, pwd),
+            _safe_parse_locations(),
+        )
     except ValueError as e:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
-    except Exception as e:
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            f"Unerwarteter Fehler beim Parsen: {e}",
+        msg = str(e)
+        code = "INVALID_PASSWORD" if ("passwort" in msg.lower() or "verschl" in msg.lower()) else "PARSE_ERROR"
+        logger.warning("Fehler beim Parsen der .knxproj-Datei", exc_info=True)
+        detail = (
+            "Die .knxproj-Datei konnte nicht verarbeitet werden. Bitte prüfe Datei und Passwort."
+            if code == "INVALID_PASSWORD"
+            else "Die .knxproj-Datei konnte nicht verarbeitet werden."
+        )
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": detail, "error_code": code})
+    except Exception:
+        logger.exception("Unerwarteter Fehler beim Parsen der .knxproj-Datei")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Unerwarteter Fehler beim Parsen.", "error_code": "PARSE_ERROR"},
         )
 
     if not records:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "Keine Gruppenadressen gefunden. "
-            "Bitte prüfe ob du das richtige ETS-Projekt exportiert hast: "
-            "In ETS unter 'Datei → Speichern unter' oder 'Projekt exportieren'. "
-            "Eine Produktdatenbank (nur M-XXXX/ Ordner) enthält keine Gruppenadressen.",
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content={
+                "detail": (
+                    "Keine Gruppenadressen gefunden. "
+                    "Bitte prüfe ob du das richtige ETS-Projekt exportiert hast: "
+                    "In ETS unter 'Datei → Speichern unter' oder 'Projekt exportieren'. "
+                    "Eine Produktdatenbank (nur M-XXXX/ Ordner) enthält keine Gruppenadressen."
+                ),
+                "error_code": "NO_GROUP_ADDRESSES",
+            },
         )
 
     now = datetime.now(UTC).isoformat()
@@ -311,12 +342,10 @@ async def import_knxproj_file(
     )
     await db.commit()
 
-    # Import Gebäude/Gewerke structure (locations + functions)
+    # Import Gebäude/Gewerke structure — already parsed in parallel above
     locations_count = 0
     functions_count = 0
     try:
-        loc_records, fn_records = parse_knxproj_locations(content, password or None)
-
         if loc_records:
             await db.execute_and_commit("DELETE FROM knx_locations")
             await db.executemany(
@@ -346,10 +375,10 @@ async def import_knxproj_file(
     except Exception as e:
         logger.warning("Gebäude/Gewerke-Import fehlgeschlagen (wird ignoriert): %s", e)
 
-    # Import Trades (Gewerke) — direct ZIP/XML parsing, no xknxproject needed
+    # Import Trades (Gewerke) — direct ZIP/XML parsing; password forwarded for protected files
     trades_count = 0
     try:
-        trade_records = parse_knxproj_trades(content)
+        trade_records = await run_in_threadpool(parse_knxproj_trades, content, pwd)
         if trade_records:
             await db.execute_and_commit("DELETE FROM knx_trades")
             await db.executemany(

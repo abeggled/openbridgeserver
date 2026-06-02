@@ -38,14 +38,14 @@ const router = createRouter({
       path: '/manage',
       name: 'manage',
       component: () => import('@/views/TreeManager.vue'),
-      meta: { requiresAuth: true, requiresAdmin: true },
+      meta: { requiresAuth: true },
     },
     {
       path: '/editor/:id',
       name: 'editor',
       component: () => import('@/views/VisuEditor.vue'),
       props: true,
-      meta: { requiresAuth: true, requiresAdmin: true },
+      meta: { requiresAuth: true },
     },
     // Viewer muss nach /editor/:id stehen (sonst matcht /:id zuerst)
     {

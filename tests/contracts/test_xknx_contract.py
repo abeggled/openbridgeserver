@@ -8,6 +8,7 @@ xknx = pytest.importorskip("xknx", reason="xknx not installed")
 
 from xknx.dpt import DPTArray, DPTBinary
 from xknx.io import ConnectionConfig, ConnectionType, SecureConfig
+from xknx.secure.keyring import InterfaceType, sync_load_keyring
 from xknx.telegram import Telegram
 from xknx.telegram.address import GroupAddress, IndividualAddress
 from xknx.telegram.apci import GroupValueRead, GroupValueResponse, GroupValueWrite
@@ -167,3 +168,47 @@ class TestTelegramConstruction:
     def test_payload_value_access_dpt_array(self):
         w = GroupValueWrite(DPTArray([0x0C, 0x7A]))
         assert isinstance(w.value, DPTArray)
+
+
+class TestKeyringSurface:
+    """Verify xknx keyring API used by _secure_config_from_keyfile (Issue #393)."""
+
+    def test_sync_load_keyring_is_callable(self):
+        assert callable(sync_load_keyring)
+
+    def test_interface_type_tunneling_exists(self):
+        assert hasattr(InterfaceType, "TUNNELING")
+
+    def test_individual_address_usable_as_lookup_key(self):
+        ia = IndividualAddress("1.1.100")
+        assert str(ia) == "1.1.100"
+
+    def test_secure_config_with_explicit_credentials(self):
+        """SecureConfig accepts explicit user_id + passwords (no keyfile path needed)."""
+        sc = SecureConfig(
+            device_authentication_password="devauth",
+            user_id=2,
+            user_password="userpass",
+        )
+        assert sc is not None
+        assert sc.knxkeys_file_path is None
+
+    def test_secure_config_accepts_keyring_object(self):
+        """SecureConfig accepts a pre-loaded keyring for data_secure_init."""
+        from unittest.mock import MagicMock
+
+        fake_keyring = MagicMock()
+        sc = SecureConfig(
+            device_authentication_password="devauth",
+            user_id=2,
+            user_password="userpass",
+            keyring=fake_keyring,
+        )
+        assert sc.keyring is fake_keyring
+        assert sc.knxkeys_file_path is None
+
+    def test_secure_config_with_backbone_key_hex(self):
+        """SecureConfig accepts a hex backbone_key (extracted from keyfile bytes)."""
+        backbone_bytes = bytes(range(16))
+        sc = SecureConfig(backbone_key=backbone_bytes.hex())
+        assert sc is not None

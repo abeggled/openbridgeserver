@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from obs.api.auth import get_admin_user, get_current_user
+from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
 from obs.models.datapoint import DataPoint
@@ -628,6 +629,11 @@ async def import_config(
     for b_data in body.bindings:
         try:
             b_id = b_data.id
+            formula = (b_data.value_formula or "").strip() or None
+            if formula:
+                err = validate_formula(formula)
+                if err:
+                    raise ValueError(f"Ungültige Formel: {err}")
             row = await db.fetchone("SELECT id FROM adapter_bindings WHERE id=?", (b_id,))
             if row:
                 await db.execute_and_commit(
@@ -641,7 +647,7 @@ async def import_config(
                         b_data.direction,
                         json.dumps(b_data.config),
                         int(b_data.enabled),
-                        b_data.value_formula,
+                        formula,
                         b_data.send_throttle_ms,
                         int(b_data.send_on_change),
                         b_data.send_min_delta,
@@ -668,7 +674,7 @@ async def import_config(
                         b_data.direction,
                         json.dumps(b_data.config),
                         int(b_data.enabled),
-                        b_data.value_formula,
+                        formula,
                         b_data.send_throttle_ms,
                         int(b_data.send_on_change),
                         b_data.send_min_delta,
@@ -759,20 +765,21 @@ async def import_config(
 
     # --- Icons ---
     if body.icons:
-        from obs.api.v1.icons import _icons_dir, _is_svg, _safe_name
+        from obs.api.v1.icons import _icons_dir, _safe_name, _sanitize_svg
 
         icons_dir = _icons_dir()
         for icon in body.icons:
             try:
                 raw = base64.b64decode(icon.content_b64)
-                if not _is_svg(raw):
-                    result.errors.append(f"Icon '{icon.name}': kein gültiges SVG, übersprungen")
+                sanitized = _sanitize_svg(raw)
+                if sanitized is None:
+                    result.errors.append(f"Icon '{icon.name}': kein gültiges/sicheres SVG, übersprungen")
                     continue
                 safe = _safe_name(f"{icon.name}.svg")
                 if not safe:
                     result.errors.append(f"Icon '{icon.name}': ungültiger Name, übersprungen")
                     continue
-                (icons_dir / f"{safe}.svg").write_bytes(raw)
+                (icons_dir / f"{safe}.svg").write_bytes(sanitized)
                 result.icons_imported += 1
             except Exception as exc:
                 result.errors.append(f"Icon '{icon.name}': {exc}")

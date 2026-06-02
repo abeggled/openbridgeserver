@@ -371,14 +371,15 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         label="Sommer/Winter (DIN)",
         category="math",
         description=(
-            "Sommer/Winter-Umschaltung nach DIN. Eingang: Aussentemperatur. "
-            "Messungen werden exakten Tageszeitpunkten zugeordnet: "
-            "T1 = Messung um 07:00 Uhr (Stunde 7), T2 = Messung um 12:00 Uhr (Stunde 12), T3 = Messung um 22:00 Uhr (Stunde 22). "
-            "Messungen zu anderen Uhrzeiten werden verworfen. Jeder Slot wird pro Tag nur einmal erfasst. "
+            "Sommer/Winter-Umschaltung nach DIN (Mannheimer Methode). Eingang: Aussentemperatur. "
+            "Messzeitpunkte (Erste-Kreuzung): T1 = anliegender Wert ab 07:00, T2 = ab 14:00, T3 = ab 21:00. "
+            "Funktioniert auch wenn der Sensor die Messstunden nicht exakt trifft. "
+            "Jeder Slot wird pro Tag nur einmal erfasst. "
             "Tagesmittel: T_avg = (T1 + T2 + 2×T3) / 4. "
             "Monatsmittel: gleitender Mittelwert der letzten 31 Tagesmittel. "
-            "Heizmodus ON wenn Mittelwert < Temp. Winter, bleibt ON bis Mittelwert > Temp. Sommer (Hysterese). "
-            "Ohne gespeicherte Historik wird der Modus sofort aus der aktuellen Temperatur abgeleitet."
+            "Heizmodus EIN wenn T_avg < Grenztemperatur, AUS wenn T_avg ≥ Grenztemperatur + Hysterese. "
+            "Fehlende Slots werden beim Start aus der Historie ergänzt. "
+            "Zustand bleibt über Neustarts erhalten."
         ),
         inputs=[
             _port("value", "Temp °C"),
@@ -387,20 +388,20 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             _port("heating_mode", "Heizmodus"),
             _port("daily_avg", "Tagesmittel"),
             _port("monthly_avg", "Monatsmittel"),
-            _port("t1", "T1 (debug)"),
-            _port("t2", "T2 (debug)"),
-            _port("t3", "T3 (debug)"),
+            _port("t1", "T1 07:00 (debug)"),
+            _port("t2", "T2 14:00 (debug)"),
+            _port("t3", "T3 21:00 (debug)"),
         ],
         config_schema={
-            "temp_winter": {
+            "threshold_temp": {
                 "type": "number",
-                "default": 15.0,
-                "label": "Temp. Winter °C (Heizen EIN)",
+                "default": 14.0,
+                "label": "Grenztemperatur °C (Heizen EIN unterhalb)",
             },
-            "temp_summer": {
+            "hysteresis": {
                 "type": "number",
-                "default": 20.0,
-                "label": "Temp. Sommer °C (Heizen AUS)",
+                "default": 2.0,
+                "label": "Hysterese °C (Heizen AUS ab Grenztemperatur + Hysterese)",
             },
             "persist_state": {
                 "type": "boolean",
@@ -707,11 +708,12 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="json_extractor",
         label="JSON Extractor",
         category="integration",
-        description="Parst einen JSON-String und extrahiert einen Wert anhand eines Schlüsselpfades (Punkt-Notation, z.B. sensors.temperature). Empfangene Daten werden im Konfigurations-Panel zur Pfad-Auswahl angezeigt.",
+        description="Parst einen JSON-String und extrahiert einen oder mehrere Werte anhand von Schlüsselpfaden (Punkt-Notation, z.B. sensors.temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
         inputs=[_port("data", "Daten")],
-        outputs=[_port("value", "Wert")],
+        outputs=[_port("value", "Wert")],  # overridden dynamically when json_paths is set
         config_schema={
-            "json_path": {"type": "string", "default": "", "label": "Schlüsselpfad"},
+            "json_path": {"type": "string", "default": "", "label": "Schlüsselpfad (Legacy)"},
+            "json_paths": {"type": "string", "default": "", "label": "Ausgänge (JSON-Array)"},
         },
         color="#0369a1",
     ),
@@ -719,11 +721,12 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="xml_extractor",
         label="XML Extractor",
         category="integration",
-        description="Parst einen XML-String und extrahiert einen Wert anhand eines XPath-Ausdrucks (ElementTree-Syntax, z.B. ./sensor/temperature). Empfangene Daten werden im Konfigurations-Panel zur Pfad-Auswahl angezeigt.",
+        description="Parst einen XML-String und extrahiert einen oder mehrere Werte anhand von XPath-Ausdrücken (ElementTree-Syntax, z.B. .//temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
         inputs=[_port("data", "Daten")],
-        outputs=[_port("value", "Wert")],
+        outputs=[_port("value", "Wert")],  # overridden dynamically when xml_paths is set
         config_schema={
-            "xml_path": {"type": "string", "default": "", "label": "XPath-Ausdruck"},
+            "xml_path": {"type": "string", "default": "", "label": "XPath-Ausdruck (Legacy)"},
+            "xml_paths": {"type": "string", "default": "", "label": "Ausgänge (JSON-Array)"},
         },
         color="#0369a1",
     ),
@@ -833,6 +836,11 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
                 "default": "",
                 "label": "Header (JSON-Objekt, optional)",
             },
+            "headers_secret_file": {
+                "type": "string",
+                "default": "",
+                "label": "Header aus Secret-Datei (JSON-Objekt, optional)",
+            },
             "timeout_s": {"type": "number", "default": 10, "label": "Timeout (s)"},
             "auth_type": {
                 "type": "string",
@@ -856,6 +864,11 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
                 "default": "",
                 "label": "Bearer Token",
                 "subtype": "password",
+            },
+            "auth_token_file": {
+                "type": "string",
+                "default": "",
+                "label": "Bearer Token aus Secret-Datei",
             },
         },
         color="#0e7490",

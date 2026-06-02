@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+cd "$REPO_ROOT"
+
+echo "[pre-push] i18n hard gate"
+./scripts/check-i18n-hardcoded-strings.sh
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "pre-push gate: python3 not found" >&2
+  exit 1
+fi
+
+if ! command -v pytest >/dev/null 2>&1; then
+  echo "pre-push gate: pytest not found" >&2
+  echo "Install development dependencies first:" >&2
+  echo "  pip install -r requirements.txt -r requirements_dev.txt" >&2
+  exit 1
+fi
+
+echo "[gate] ruff check"
+python3 -m ruff check .
+
+echo "[gate] ruff format --check"
+python3 -m ruff format . --check
+
+echo "[gate] pytest (CI parity)"
+pytest tests/ -v --cov=obs --cov-report=xml --cov-report=term --junitxml="${TMPDIR:-/tmp}/openbridge-pre-push-junit.xml"

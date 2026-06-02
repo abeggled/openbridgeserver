@@ -42,17 +42,22 @@ class LogBufferHandler(logging.Handler):
         if record.name in _IGNORED_LOGGER_NAMES:
             return
 
-        entry: dict[str, Any] = {
-            "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-        }
-        _buffer.append(entry)
+        try:
+            entry: dict[str, Any] = {
+                "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+            }
+            _buffer.append(entry)
 
-        # Fire-and-forget WS broadcast — must never block the logging call.
-        if _loop is not None and _loop.is_running():
-            _loop.call_soon_threadsafe(_broadcast_nowait, entry)
+            # Fire-and-forget WS broadcast — must never block the logging call.
+            if _loop is not None and _loop.is_running():
+                _loop.call_soon_threadsafe(_broadcast_nowait, entry)
+        except Exception:
+            # During interpreter shutdown sys.meta_path is None and imports/loop
+            # operations raise — a logging handler must never crash its caller.
+            pass
 
     @classmethod
     def install(cls, loop: asyncio.AbstractEventLoop, level: int = logging.INFO) -> None:

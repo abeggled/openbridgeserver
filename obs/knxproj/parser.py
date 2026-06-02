@@ -10,14 +10,19 @@ https://github.com/XKNX/xknxproject
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import logging
 import os
+import re
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from typing import Any
 from xml.etree import ElementTree
+
+import pyzipper
 
 logger = logging.getLogger(__name__)
 
@@ -194,10 +199,28 @@ def _walk_trade_el(
             _walk_trade_el(child, tid, records, sort_counter, fi_to_fn)
 
 
-def parse_knxproj_trades(file_bytes: bytes) -> list[TradeRecord]:
+def _parse_trades_from_xml(xml_bytes: bytes) -> list[TradeRecord]:
+    """Parse <Trades> section from raw 0.xml bytes."""
+    records: list[TradeRecord] = []
+    root = ElementTree.fromstring(xml_bytes)
+    fi_to_fn = _collect_fi_to_fn(root)
+    sort_counter = [0]
+    for el in root.iter():
+        etag = el.tag.split("}")[-1] if "}" in el.tag else el.tag
+        if etag == "Trades":
+            for child in el:
+                ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                if ctag == "Trade":
+                    _walk_trade_el(child, None, records, sort_counter, fi_to_fn)
+            break
+    return records
+
+
+def parse_knxproj_trades(file_bytes: bytes, password: str | None = None) -> list[TradeRecord]:
     """Parse <Trades><Trade .../></Trades> directly from the .knxproj ZIP.
 
     xknxproject does not expose this section. Supports:
+    - Unprotected and password-protected .knxproj files (ETS5 / ETS6 AES)
     - Nested <Trade> elements (sub-categories) → parent_id is set accordingly
     - DeviceInstanceRef.Links → resolves FunctionInstance IDs to Function IDs
 
@@ -206,26 +229,67 @@ def parse_knxproj_trades(file_bytes: bytes) -> list[TradeRecord]:
     records: list[TradeRecord] = []
     try:
         with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
-            candidates = [n for n in zf.namelist() if n.endswith("0.xml") and "/" in n]
-            if not candidates:
-                logger.warning("parse_knxproj_trades: no 0.xml found in archive")
+            names = zf.namelist()
+            # Unprotected: 0.xml is directly inside P-XXXX/ in the outer ZIP
+            candidates = [n for n in names if n.endswith("0.xml") and "/" in n]
+            if candidates:
+                xml_bytes = zf.read(candidates[0])
+                records = _parse_trades_from_xml(xml_bytes)
+                logger.info("parse_knxproj_trades: %d Gewerke gefunden", len(records))
                 return records
 
-            xml_bytes = zf.read(candidates[0])
-            root = ElementTree.fromstring(xml_bytes)
+            # Password-protected: 0.xml is inside an inner P-XXXX.zip
+            inner_zips = [n for n in names if n.endswith(".zip") and "/" not in n]
+            if not inner_zips:
+                logger.debug("parse_knxproj_trades: no 0.xml and no inner ZIP found")
+                return records
 
-            fi_to_fn = _collect_fi_to_fn(root)
+            if not password:
+                logger.debug("parse_knxproj_trades: inner ZIP found but no password — skipping trades")
+                return records
 
-            # Find top-level <Trades> container and walk direct <Trade> children
-            sort_counter = [0]
-            for el in root.iter():
-                etag = el.tag.split("}")[-1] if "}" in el.tag else el.tag
-                if etag == "Trades":
-                    for child in el:
-                        ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-                        if ctag == "Trade":
-                            _walk_trade_el(child, None, records, sort_counter, fi_to_fn)
-                    break  # only the first <Trades> element
+            inner_zip_bytes = zf.read(inner_zips[0])
+
+        # Determine ETS version from knx_master.xml to choose decryption method
+        ets6_schema_version = 21
+        schema_version = ets6_schema_version  # default: try ETS6 first
+        try:
+            with zipfile.ZipFile(io.BytesIO(file_bytes)) as outer:
+                if "knx_master.xml" in outer.namelist():
+                    master = outer.read("knx_master.xml").decode("utf-8", errors="ignore")
+                    m = re.search(r'xmlns="http://knx\.org/xml/project/(\d+)"', master)
+                    if m:
+                        schema_version = int(m.group(1))
+        except Exception:
+            pass
+
+        if schema_version < ets6_schema_version:
+            # ETS5: standard ZIP password (UTF-8)
+            with zipfile.ZipFile(io.BytesIO(inner_zip_bytes)) as inner:
+                inner.setpassword(password.encode("utf-8"))
+                inner_names = inner.namelist()
+                zero_xml = next((n for n in inner_names if n.endswith("0.xml")), None)
+                if zero_xml:
+                    xml_bytes = inner.read(zero_xml)
+                    records = _parse_trades_from_xml(xml_bytes)
+        else:
+            # ETS6: AES-256 via PBKDF2
+            aes_pwd = base64.b64encode(
+                hashlib.pbkdf2_hmac(
+                    hash_name="sha256",
+                    password=password.encode("utf-16-le"),
+                    salt=b"21.project.ets.knx.org",
+                    iterations=65536,
+                    dklen=32,
+                )
+            )
+            with pyzipper.AESZipFile(io.BytesIO(inner_zip_bytes)) as inner:
+                inner.setpassword(aes_pwd)
+                inner_names = inner.namelist()
+                zero_xml = next((n for n in inner_names if n.endswith("0.xml")), None)
+                if zero_xml:
+                    xml_bytes = inner.read(zero_xml)
+                    records = _parse_trades_from_xml(xml_bytes)
 
     except Exception as e:
         logger.warning("parse_knxproj_trades failed (ignored): %s", e)
@@ -332,10 +396,10 @@ def parse_knxproj_locations(
         knxproject = XKNXProj(tmp_path, password=password)
         project = knxproject.parse()
     except Exception as e:
-        msg = str(e)
-        if "password" in msg.lower() or "decrypt" in msg.lower():
+        msg = str(e).lower()
+        if any(kw in msg for kw in ("password", "decrypt", "hmac", "bad zip", "invalid password")):
             raise ValueError("Falsches Passwort oder Datei ist verschlüsselt.") from e
-        raise ValueError(f"Fehler beim Parsen: {msg}") from e
+        raise ValueError(f"Fehler beim Parsen: {str(e)}") from e
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -391,10 +455,10 @@ def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupA
         project = knxproject.parse()
 
     except Exception as e:
-        msg = str(e)
-        if "password" in msg.lower() or "decrypt" in msg.lower() or "bad password" in msg.lower():
+        msg = str(e).lower()
+        if any(kw in msg for kw in ("password", "decrypt", "bad password", "hmac", "bad zip", "invalid password")):
             raise ValueError("Falsches Passwort oder Datei ist verschlüsselt.") from e
-        raise ValueError(f"Fehler beim Parsen der .knxproj Datei: {msg}") from e
+        raise ValueError(f"Fehler beim Parsen der .knxproj Datei: {str(e)}") from e
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)

@@ -6,7 +6,7 @@ Server-side filtered search over DataPoints.
   q       — substring match on name OR UUID OR any binding config field (case-insensitive)
   tag     — exact tag match
   type    — data_type match (e.g. FLOAT)
-  adapter — at least one binding with this adapter_type
+  adapter — comma-separated adapter_type list (OR logic), at least one binding required
   quality — runtime quality filter: good | bad | uncertain
   sort    — sort column: name | data_type | created_at | updated_at  (default: name)
   order   — sort direction: asc | desc                               (default: asc)
@@ -35,7 +35,12 @@ class SearchPage(BaseModel):
 
 
 async def _add_hierarchy(items: list[DataPointOut], db: Database) -> None:
-    """Batch-query hierarchy node links and inject into items in-place."""
+    """Batch-query hierarchy node links and inject into items in-place.
+
+    Also computes each node's ancestor path (root → leaf, excluding tree name)
+    so the frontend can disambiguate same-named leaves under different parents
+    (e.g. "Gebäude › EG › Küche" vs "Gebäude › OG › Küche") — see #433.
+    """
     if not items:
         return
     dp_ids = [str(item.id) for item in items]
@@ -50,8 +55,12 @@ async def _add_hierarchy(items: list[DataPointOut], db: Database) -> None:
             ORDER BY ht.name, hn.name""",
         dp_ids,
     )
-
-    # Build ancestor paths for all linked nodes via recursive CTE
+    # Build ancestor paths for all linked nodes via recursive CTE (upstream
+    # PR #462) — produces the richer node_path schema (objects with stable
+    # node_id + node_name per segment) that the epic switched to during the
+    # merge. The epic's earlier in-memory walker over a full hierarchy_nodes
+    # SELECT is dropped: the CTE scales with the actual matched node set
+    # instead of the whole tree.
     node_ids = list({r["node_id"] for r in rows})
     node_paths: dict[str, list[NodePathSegment]] = {}
     if node_ids:
@@ -92,7 +101,10 @@ async def search(
     q: str = Query("", description="Substring match on name, UUID, or binding config fields"),
     tag: str = Query("", description="Comma-separated tag list — OR logic (e.g. 'heating,lighting')"),
     type: str = Query("", description="data_type match"),
-    adapter: str = Query("", description="Has binding with this adapter_type"),
+    adapter: str = Query(
+        "",
+        description="Comma-separated adapter_type list — OR logic (e.g. 'KNX,MQTT')",
+    ),
     quality: str = Query("", description="Runtime quality filter: good | bad | uncertain"),
     node_id: str = Query("", description="Comma-separated node IDs — OR logic"),
     tree_id: str = Query("", description="Comma-separated tree IDs — matches any node in these trees"),
@@ -115,14 +127,17 @@ async def search(
         tag_list = [t.strip() for t in tag.split(",") if t.strip()]
         results = [dp for dp in results if any(t in dp.tags for t in tag_list)]
 
-    # 3. adapter filter (one DB query)
+    # 3. adapter filter (one DB query) — comma-separated, OR logic
     if adapter:
-        rows = await db.fetchall(
-            "SELECT DISTINCT datapoint_id FROM adapter_bindings WHERE adapter_type=?",
-            (adapter,),
-        )
-        matched_ids = {r["datapoint_id"] for r in rows}
-        results = [dp for dp in results if str(dp.id) in matched_ids]
+        adapter_list = [a.strip() for a in adapter.split(",") if a.strip()]
+        if adapter_list:
+            placeholders = ",".join("?" * len(adapter_list))
+            rows = await db.fetchall(
+                f"SELECT DISTINCT datapoint_id FROM adapter_bindings WHERE adapter_type IN ({placeholders})",
+                adapter_list,
+            )
+            matched_ids = {r["datapoint_id"] for r in rows}
+            results = [dp for dp in results if str(dp.id) in matched_ids]
 
     # 4. q filter: all-token match on name, UUID, or binding config text (one DB query)
     #

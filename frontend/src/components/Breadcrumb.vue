@@ -56,7 +56,7 @@ function accessIcon(node: VisuNode): string {
     <!-- Haus-Icon -->
     <button
       class="hover:text-gray-900 dark:hover:text-gray-200 transition-colors flex items-center"
-      title="Startseite"
+      :title="$t('common.home')"
       @click="router.push({ name: 'tree' })"
     >
       <svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20" fill="currentColor">
@@ -87,7 +87,7 @@ function accessIcon(node: VisuNode): string {
           <button
             class="px-1 text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 transition-colors rounded"
             :class="{ 'text-blue-500 dark:text-blue-400': open }"
-            :title="`${children.length} Unterseite${children.length !== 1 ? 'n' : ''}`"
+            :title="`${children.length} ${children.length === 1 ? $t('breadcrumb.subpageSingular') : $t('breadcrumb.subpagePlural')}`"
             @click="toggle"
           >
             <span class="text-xs" :class="open ? 'inline-block rotate-180' : 'inline-block'">▾</span>

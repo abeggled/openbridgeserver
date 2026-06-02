@@ -2,38 +2,48 @@
   <div class="flex flex-col h-full" style="height: calc(100vh - 4rem)">
     <!-- Toolbar -->
     <div class="flex items-center gap-3 px-4 py-2 bg-surface-800 border-b border-slate-200 dark:border-slate-700/60 flex-shrink-0">
-      <h2 class="text-sm font-bold text-slate-800 dark:text-slate-100">Logikmodul</h2>
+      <h2 class="text-sm font-bold text-slate-800 dark:text-slate-100">{{ $t('logic.title') }}</h2>
       <div class="flex-1" />
-      <!-- Graph selector -->
+      <!-- Logikblatt selector -->
       <select v-model="activeGraphId" @change="loadGraph"
         class="input text-xs py-1 px-2 max-w-[200px]" data-testid="select-graph">
-        <option value="">— Graph wählen —</option>
-        <option v-for="g in store.graphs" :key="g.id" :value="g.id">{{ g.name }}</option>
+        <option value="">{{ $t('logic.selectGraph') }}</option>
+        <option v-for="g in store.graphs" :key="g.id" :value="g.id">{{ g.name }}{{ g.enabled ? '' : $t('logic.graphDisabledSuffix') }}</option>
       </select>
-      <button @click="newGraph" class="btn-primary btn-sm">+ Neu</button>
+      <button @click="newGraph" class="btn-primary btn-sm">{{ $t('logic.newGraphBtn') }}</button>
       <button v-if="activeGraphId" @click="saveGraph" class="btn-secondary btn-sm" :disabled="saving">
         <Spinner v-if="saving" size="sm" color="white" />
-        Speichern
+        {{ $t('common.save') }}
       </button>
-      <button v-if="activeGraphId" @click="runGraph" class="btn-secondary btn-sm text-green-400" data-testid="btn-run">
-        &#9654; Ausführen
+      <button v-if="activeGraphId" @click="runGraph"
+        :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
+        :disabled="!activeGraph?.enabled"
+        :title="activeGraph?.enabled ? $t('logic.runTitle') : $t('logic.runDisabledTitle')"
+        data-testid="btn-run">
+        &#9654; {{ $t('logic.run') }}
       </button>
       <button v-if="activeGraphId" @click="toggleDebug"
         :class="['btn-secondary btn-sm', debugMode ? 'text-amber-400 ring-1 ring-amber-400/50' : 'text-slate-400']"
-        title="Debug-Modus: zeigt Werte nach Ausführen" data-testid="btn-debug">
-        &#128270; Debug
+        :title="$t('logic.debugMode')" data-testid="btn-debug">
+        &#128270; {{ $t('logic.debugBtn') }}
       </button>
-      <button v-if="activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm" title="Graph umbenennen" data-testid="btn-rename">
-        ✏ Umbenennen
+      <button v-if="activeGraphId" @click="doToggleEnabled"
+        :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-orange-400 ring-1 ring-orange-400/50']"
+        :title="activeGraph?.enabled ? $t('logic.toggleActiveTitle') : $t('logic.toggleDisabledTitle')"
+        data-testid="btn-toggle-enabled">
+        {{ activeGraph?.enabled ? $t('logic.toggleActive') : $t('logic.toggleDisabled') }}
       </button>
-      <button v-if="activeGraphId" @click="doDuplicateGraph" class="btn-secondary btn-sm" title="Graph duplizieren" data-testid="btn-duplicate">
-        ⧉ Duplizieren
+      <button v-if="activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm" :title="$t('logic.renameGraph')" data-testid="btn-rename">
+        ✏ {{ $t('logic.rename') }}
       </button>
-      <button v-if="activeGraphId" @click="doExportGraph" class="btn-secondary btn-sm" title="Graph als JSON exportieren" data-testid="btn-export">
-        ↓ Exportieren
+      <button v-if="activeGraphId" @click="doDuplicateGraph" class="btn-secondary btn-sm" :title="$t('logic.duplicateGraph')" data-testid="btn-duplicate">
+        ⧉ {{ $t('logic.duplicate') }}
       </button>
-      <label class="btn-secondary btn-sm cursor-pointer" title="Graph aus JSON importieren" data-testid="btn-import">
-        ↑ Importieren
+      <button v-if="activeGraphId" @click="doExportGraph" class="btn-secondary btn-sm" :title="$t('logic.exportJson')" data-testid="btn-export">
+        ↓ {{ $t('logic.export') }}
+      </button>
+      <label class="btn-secondary btn-sm cursor-pointer" :title="$t('logic.importJson')" data-testid="btn-import">
+        ↑ {{ $t('logic.import') }}
         <input type="file" accept=".json" class="hidden" @change="onImportFile" data-testid="input-import-file" />
       </label>
       <button v-if="activeGraphId" @click="confirmDeleteGraph" class="btn-icon text-red-400">
@@ -62,7 +72,7 @@
           v-model:nodes="nodes"
           v-model:edges="edges"
           :node-types="nodeTypeComponents"
-          :default-edge-options="{ type: 'smoothstep', animated: true, interactionWidth: 20, style: { stroke: '#475569', strokeWidth: 2 } }"
+          :default-edge-options="defaultEdgeOptions"
           :delete-key-code="['Backspace', 'Delete']"
           fit-view-on-init
           class="logic-canvas"
@@ -78,7 +88,7 @@
           <svg class="w-16 h-16 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M13 10V3L4 14h7v7l9-11h-7z"/>
           </svg>
-          <p class="text-sm">Graph wählen oder neu erstellen</p>
+          <p class="text-sm">{{ $t('logic.emptyHint') }}</p>
         </div>
       </div>
 
@@ -94,45 +104,45 @@
     </div>
 
     <!-- New Graph Modal -->
-    <Modal v-model="showNewGraph" title="Neuer Logic Graph" max-width="sm">
+    <Modal v-model="showNewGraph" :title="$t('logic.newGraphModal')" max-width="sm">
       <form @submit.prevent="doCreateGraph" class="flex flex-col gap-4">
         <div class="form-group">
-          <label class="label">Name</label>
-          <input v-model="newGraphName" type="text" class="input" required placeholder="z.B. Licht Erdgeschoss" />
+          <label class="label">{{ $t('logic.name') }}</label>
+          <input v-model="newGraphName" type="text" class="input" required :placeholder="$t('logic.newGraphPlaceholder')" />
         </div>
         <div class="form-group">
-          <label class="label">Beschreibung <span class="text-slate-600 font-normal">(optional)</span></label>
+          <label class="label">{{ $t('logic.description') }} <span class="text-slate-600 font-normal">{{ $t('logic.optional') }}</span></label>
           <input v-model="newGraphDesc" type="text" class="input" />
         </div>
         <div class="flex justify-end gap-3">
-          <button type="button" @click="showNewGraph = false" class="btn-secondary">Abbrechen</button>
-          <button type="submit" class="btn-primary">Erstellen</button>
+          <button type="button" @click="showNewGraph = false" class="btn-secondary">{{ $t('common.cancel') }}</button>
+          <button type="submit" class="btn-primary">{{ $t('logic.create') }}</button>
         </div>
       </form>
     </Modal>
 
     <!-- Rename Graph Modal -->
-    <Modal v-model="showRenameGraph" title="Graph umbenennen" max-width="sm">
+    <Modal v-model="showRenameGraph" :title="$t('logic.renameGraph')" max-width="sm">
       <form @submit.prevent="doRenameGraph" class="flex flex-col gap-4">
         <div class="form-group">
-          <label class="label">Name</label>
+          <label class="label">{{ $t('logic.name') }}</label>
           <input v-model="renameGraphName" type="text" class="input" required autofocus />
         </div>
         <div class="form-group">
-          <label class="label">Beschreibung <span class="text-slate-600 font-normal">(optional)</span></label>
+          <label class="label">{{ $t('logic.description') }} <span class="text-slate-600 font-normal">{{ $t('logic.optional') }}</span></label>
           <input v-model="renameGraphDesc" type="text" class="input" />
         </div>
         <div class="flex justify-end gap-3">
-          <button type="button" @click="showRenameGraph = false" class="btn-secondary">Abbrechen</button>
-          <button type="submit" class="btn-primary" data-testid="btn-rename-confirm">Speichern</button>
+          <button type="button" @click="showRenameGraph = false" class="btn-secondary">{{ $t('common.cancel') }}</button>
+          <button type="submit" class="btn-primary" data-testid="btn-rename-confirm">{{ $t('common.save') }}</button>
         </div>
       </form>
     </Modal>
 
     <ConfirmDialog v-model="showDeleteConfirm"
-      title="Logic Graph löschen"
-      message="Dieser Graph wird unwiderruflich gelöscht."
-      confirm-label="Löschen"
+      :title="$t('logic.deleteGraph')"
+      :message="$t('logic.deleteGraphConfirm')"
+      :confirm-label="$t('common.delete')"
       @confirm="doDeleteGraph" />
   </div>
 </template>
@@ -140,6 +150,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, markRaw } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { VueFlow, useVueFlow, addEdge } from '@vue-flow/core'
 import { Background }           from '@vue-flow/background'
 import { Controls }             from '@vue-flow/controls'
@@ -165,6 +176,7 @@ import PythonScriptNode from '@/components/logic/nodes/PythonScriptNode.vue'
 import MissingNode      from '@/components/logic/nodes/MissingNode.vue'
 
 // ── Store ──────────────────────────────────────────────────────────────────
+const { t }    = useI18n()
 const route    = useRoute()
 const store    = useLogicStore()
 const settings = useSettingsStore()
@@ -219,6 +231,36 @@ const nodeTypeComponents = {
 
 // ── Active graph ───────────────────────────────────────────────────────────
 const activeGraphId = ref('')
+const activeGraph   = computed(() => store.graphs.find(g => g.id === activeGraphId.value))
+
+// ── Edge options — animated only when graph is enabled ─────────────────────
+const defaultEdgeOptions = computed(() => {
+  const enabled = activeGraph.value?.enabled !== false
+  return {
+    type: 'smoothstep',
+    animated: enabled,
+    interactionWidth: 20,
+    style: {
+      stroke: enabled ? '#475569' : '#64748b',
+      strokeDasharray: enabled ? undefined : '8 5',
+      strokeWidth: 2,
+    },
+  }
+})
+
+// Update existing edges reactively when enabled state changes
+watch(() => activeGraph.value?.enabled, (enabled) => {
+  const isEnabled = enabled !== false
+  edges.value = edges.value.map(e => ({
+    ...e,
+    animated: isEnabled,
+    style: {
+      stroke: isEnabled ? '#475569' : '#64748b',
+      strokeDasharray: isEnabled ? undefined : '8 5',
+      strokeWidth: 2,
+    },
+  }))
+})
 const saving        = ref(false)
 const statusMsg     = ref(null)
 const canvasWrapper = ref(null)
@@ -256,9 +298,9 @@ async function saveGraph() {
         sourceHandle: e.sourceHandle, targetHandle: e.targetHandle
       })),
     })
-    showStatus(true, 'Graph gespeichert')
+    showStatus(true, t('logic.saved'))
   } catch (err) {
-    showStatus(false, err.response?.data?.detail ?? 'Fehler beim Speichern')
+    showStatus(false, err.response?.data?.detail ?? t('logic.errorSave'))
   } finally {
     saving.value = false
   }
@@ -335,12 +377,12 @@ async function runGraph() {
   try {
     const { data } = await logicApi.runGraph(activeGraphId.value)
     const evalCount = Object.keys(data.outputs || {}).length
-    showStatus(true, `Graph ausgeführt — ${evalCount} Nodes evaluiert`)
+    showStatus(true, t('logic.runResult', { count: evalCount }))
     // Always update lastRunOutputs (needed for extractor config panels)
     lastRunOutputs.value = data.outputs || {}
     if (debugMode.value) applyDebugValues(data.outputs || {})
   } catch (err) {
-    showStatus(false, err.response?.data?.detail ?? 'Fehler')
+    showStatus(false, err.response?.data?.detail ?? t('common.error'))
   }
 }
 
@@ -355,6 +397,17 @@ async function doCreateGraph() {
   showNewGraph.value = false
   activeGraphId.value = g.id
   nodes.value = []; edges.value = []
+}
+
+// ── Toggle enabled ─────────────────────────────────────────────────────────
+async function doToggleEnabled() {
+  if (!activeGraphId.value) return
+  try {
+    const updated = await store.toggleEnabled(activeGraphId.value)
+    showStatus(true, updated.enabled ? t('logic.activated') : t('logic.deactivated'))
+  } catch (err) {
+    showStatus(false, err.response?.data?.detail ?? t('logic.errorToggle'))
+  }
 }
 
 // ── Delete graph ───────────────────────────────────────────────────────────
@@ -373,9 +426,9 @@ async function doDuplicateGraph() {
     const copy = await store.duplicateGraph(activeGraphId.value)
     activeGraphId.value = copy.id
     await loadGraph()
-    showStatus(true, `Graph dupliziert als „${copy.name}"`)
+    showStatus(true, t('logic.duplicated', { name: copy.name }))
   } catch (err) {
-    showStatus(false, err.response?.data?.detail ?? 'Fehler beim Duplizieren')
+    showStatus(false, err.response?.data?.detail ?? t('logic.errorDuplicate'))
   }
 }
 
@@ -394,7 +447,7 @@ async function doExportGraph() {
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
   } catch (err) {
-    showStatus(false, err.response?.data?.detail ?? 'Fehler beim Exportieren')
+    showStatus(false, err.response?.data?.detail ?? t('logic.errorExport'))
   }
 }
 
@@ -415,9 +468,9 @@ async function doRenameGraph() {
   try {
     await store.renameGraph(activeGraphId.value, renameGraphName.value.trim(), renameGraphDesc.value)
     showRenameGraph.value = false
-    showStatus(true, 'Graph umbenannt')
+    showStatus(true, t('logic.renamed'))
   } catch (err) {
-    showStatus(false, err.response?.data?.detail ?? 'Fehler beim Umbenennen')
+    showStatus(false, err.response?.data?.detail ?? t('logic.errorRename'))
   }
 }
 
@@ -438,22 +491,23 @@ async function onImportFile(event) {
       renameGraphName.value = imported.name
       renameGraphDesc.value = imported.description ?? ''
       showRenameGraph.value = true
-      showStatus(true, `Graph importiert – bitte umbenennen (Name bereits vorhanden)`)
+      showStatus(true, t('logic.importedRename'))
     } else {
-      showStatus(true, `Graph „${imported.name}" importiert`)
+      showStatus(true, t('logic.imported', { name: imported.name }))
     }
   } catch (err) {
-    showStatus(false, err?.response?.data?.detail ?? 'Ungültige oder fehlerhafte Export-Datei')
+    showStatus(false, err?.response?.data?.detail ?? t('logic.errorImport'))
   }
 }
 
 // ── Connect handler — REQUIRED to actually create edges ────────────────────
 function onConnect(params) {
+  const opts = defaultEdgeOptions.value
   edges.value = addEdge({
     ...params,
-    type: 'smoothstep',
-    animated: true,
-    style: { stroke: '#475569', strokeWidth: 2 },
+    type: opts.type,
+    animated: opts.animated,
+    style: opts.style,
   }, edges.value)
 }
 
@@ -474,7 +528,6 @@ function onDrop(event) {
     type,
     position: pos,
     data: {
-      label: nt?.label ?? type,
       ...(nt?.config_schema
         ? Object.fromEntries(
             Object.entries(nt.config_schema).map(([k, v]) => [k, v.default ?? ''])
@@ -507,14 +560,16 @@ function onNodeDataUpdate(newData) {
 // ── WebSocket — live debug updates ────────────────────────────────────────
 let _ws = null
 let _wsTimer = null
+let _wsShouldReconnect = true
 
 function _wsConnect() {
   const token = localStorage.getItem('access_token')
   if (!token) return
+  _wsShouldReconnect = true
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const url   = `${proto}://${window.location.host}/api/v1/ws?token=${encodeURIComponent(token)}`
+  const url   = `${proto}://${window.location.host}/api/v1/ws`
   try {
-    _ws = new WebSocket(url)
+    _ws = new WebSocket(url, [`obs.jwt.${token}`])
   } catch { return }
 
   _ws.onmessage = (ev) => {
@@ -530,8 +585,10 @@ function _wsConnect() {
     } catch { /* ignore parse errors */ }
   }
 
-  _ws.onclose = () => {
+  _ws.onclose = (ev) => {
     _ws = null
+    if (ev?.code === 4001) _wsShouldReconnect = false
+    if (!_wsShouldReconnect) return
     _wsTimer = setTimeout(_wsConnect, 4000)   // auto-reconnect
   }
   _ws.onerror = () => { try { _ws?.close() } catch { /* ignore */ } }

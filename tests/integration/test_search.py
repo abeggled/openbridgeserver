@@ -58,7 +58,7 @@ async def _write_value(client, auth_headers, dp_id: str, value) -> None:
     assert resp.status_code == 204, f"write failed: {resp.text}"
 
 
-async def _insert_binding(dp_id: str, config: dict) -> None:
+async def _insert_binding(dp_id: str, config: dict, adapter_type: str = "KNX") -> None:
     """Insert a raw adapter binding row directly into the DB.
 
     Used to avoid the adapter-instance requirement of the binding API.
@@ -75,7 +75,7 @@ async def _insert_binding(dp_id: str, config: dict) -> None:
         (
             str(uuid.uuid4()),
             dp_id,
-            "KNX",
+            adapter_type,
             "SOURCE",
             json.dumps(config),
             1,
@@ -197,7 +197,8 @@ async def test_search_type_filter(client, auth_headers):
     dp_float = await _create(client, auth_headers, f"SRH-Type-F-{suffix}", data_type="FLOAT")
     dp_bool = await _create(client, auth_headers, f"SRH-Type-B-{suffix}", data_type="BOOLEAN")
     try:
-        body = await _search(client, auth_headers, type="BOOLEAN")
+        # Use the shared suffix as name filter to avoid pagination issues in the shared test DB
+        body = await _search(client, auth_headers, q=suffix, type="BOOLEAN")
         assert dp_bool["id"] in _ids(body)
         assert dp_float["id"] not in _ids(body)
     finally:
@@ -224,6 +225,48 @@ async def test_search_tag_filter(client, auth_headers):
 
 
 # ---------------------------------------------------------------------------
+# Adapter filter
+# ---------------------------------------------------------------------------
+
+
+async def test_search_adapter_filter_single(client, auth_headers):
+    suffix = uuid.uuid4().hex[:6]
+    dp_knx = await _create(client, auth_headers, f"SRH-Adapter-KNX-{suffix}")
+    dp_mqtt = await _create(client, auth_headers, f"SRH-Adapter-MQTT-{suffix}")
+    try:
+        await _insert_binding(dp_knx["id"], {"group_address": "1/2/3"}, adapter_type="KNX")
+        await _insert_binding(dp_mqtt["id"], {"topic": "obs/test"}, adapter_type="MQTT")
+
+        body = await _search(client, auth_headers, adapter="KNX")
+        assert dp_knx["id"] in _ids(body)
+        assert dp_mqtt["id"] not in _ids(body)
+    finally:
+        await _delete(client, auth_headers, dp_knx["id"])
+        await _delete(client, auth_headers, dp_mqtt["id"])
+
+
+async def test_search_adapter_filter_multiple_or_logic(client, auth_headers):
+    suffix = uuid.uuid4().hex[:6]
+    dp_knx = await _create(client, auth_headers, f"SRH-Adapter-KNX2-{suffix}")
+    dp_mqtt = await _create(client, auth_headers, f"SRH-Adapter-MQTT2-{suffix}")
+    dp_modbus = await _create(client, auth_headers, f"SRH-Adapter-MODBUS-{suffix}")
+    try:
+        await _insert_binding(dp_knx["id"], {"group_address": "1/2/4"}, adapter_type="KNX")
+        await _insert_binding(dp_mqtt["id"], {"topic": "obs/test2"}, adapter_type="MQTT")
+        await _insert_binding(dp_modbus["id"], {"address": 42}, adapter_type="MODBUS_TCP")
+
+        body = await _search(client, auth_headers, adapter="KNX,MQTT")
+        ids = _ids(body)
+        assert dp_knx["id"] in ids
+        assert dp_mqtt["id"] in ids
+        assert dp_modbus["id"] not in ids
+    finally:
+        await _delete(client, auth_headers, dp_knx["id"])
+        await _delete(client, auth_headers, dp_mqtt["id"])
+        await _delete(client, auth_headers, dp_modbus["id"])
+
+
+# ---------------------------------------------------------------------------
 # Quality filter
 # ---------------------------------------------------------------------------
 
@@ -233,7 +276,7 @@ async def test_search_quality_good(client, auth_headers):
     dp = await _create(client, auth_headers, f"SRH-Qual-Good-{uuid.uuid4().hex[:6]}")
     try:
         await _write_value(client, auth_headers, dp["id"], 42.0)
-        body = await _search(client, auth_headers, quality="good")
+        body = await _search(client, auth_headers, q=dp["name"], quality="good")
         assert dp["id"] in _ids(body)
     finally:
         await _delete(client, auth_headers, dp["id"])
@@ -244,7 +287,7 @@ async def test_search_quality_good_excludes_uncertain(client, auth_headers):
     dp = await _create(client, auth_headers, f"SRH-Qual-Unc-{uuid.uuid4().hex[:6]}")
     try:
         # Do NOT write a value — quality stays uncertain
-        body = await _search(client, auth_headers, quality="good")
+        body = await _search(client, auth_headers, q=dp["name"], quality="good")
         assert dp["id"] not in _ids(body)
     finally:
         await _delete(client, auth_headers, dp["id"])
@@ -254,7 +297,7 @@ async def test_search_quality_uncertain(client, auth_headers):
     """A DP with no value written must appear in quality=uncertain search."""
     dp = await _create(client, auth_headers, f"SRH-Qual-Unc2-{uuid.uuid4().hex[:6]}")
     try:
-        body = await _search(client, auth_headers, quality="uncertain")
+        body = await _search(client, auth_headers, q=dp["name"], quality="uncertain")
         assert dp["id"] in _ids(body)
     finally:
         await _delete(client, auth_headers, dp["id"])

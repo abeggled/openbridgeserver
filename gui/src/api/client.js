@@ -114,6 +114,8 @@ export const adapterApi = {
   deleteInstance:  (id)         => api.delete(`/adapters/instances/${id}`),
   testInstance:       (id, config)      => api.post(`/adapters/instances/${id}/test`, { config }),
   restartInstance:    (id)              => api.post(`/adapters/instances/${id}/restart`),
+  migrateBindings:    (sourceId, targetInstanceId) =>
+    api.post(`/adapters/instances/${sourceId}/bindings/migrate`, { target_instance_id: targetInstanceId }),
   mqttBrowseTopics:   (id, timeout = 5) => api.get(`/adapters/instances/${id}/mqtt/browse`, { params: { timeout }, timeout: (timeout + 3) * 1000 }),
   mqttSamplePayload:  (id, topic, timeout = 5) => api.get(`/adapters/instances/${id}/mqtt/sample`, { params: { topic, timeout }, timeout: (timeout + 3) * 1000 }),
   iobrokerBrowseStates: (id, q = '', limit = 50) => api.get(`/adapters/instances/${id}/iobroker/states`, { params: { q, limit } }),
@@ -139,7 +141,7 @@ export const knxKeyfileApi = {
 
 // ── KNX Project Import ────────────────────────────────────────────────────
 export const knxprojApi = {
-  import:  (formData, params = {}) => api.post('/knxproj/import', formData, { headers: { 'Content-Type': 'multipart/form-data' }, params }),
+  import:  (formData, params = {}) => api.post('/knxproj/import', formData, { headers: { 'Content-Type': 'multipart/form-data' }, params, timeout: 300_000 }),
   listGA:  (params)   => api.get('/knxproj/group-addresses', { params }),
   clearGA: ()         => api.delete('/knxproj/group-addresses'),
 }
@@ -208,8 +210,26 @@ export const logsApi = {
 // ── RingBuffer ────────────────────────────────────────────────────────────
 export const ringbufferApi = {
   query:  (params)                  => api.get('/ringbuffer/', { params }),
+  queryV2:(body)                    => api.post('/ringbuffer/query', body),
+  exportCsv: (body)                 => api.post('/ringbuffer/export/csv', body, { responseType: 'blob' }),
   stats:  ()                        => api.get('/ringbuffer/stats'),
-  config: (storage, max_entries)    => api.post('/ringbuffer/config', { storage, max_entries }),
+  config: (body)                    => api.post('/ringbuffer/config', body),
+  listFiltersets: ()                => api.get('/ringbuffer/filtersets'),
+  getFilterset: (id)                => api.get(`/ringbuffer/filtersets/${id}`),
+  createFilterset: (body)           => api.post('/ringbuffer/filtersets', body),
+  updateFilterset: (id, body)       => api.put(`/ringbuffer/filtersets/${id}`, body),
+  deleteFilterset: (id)             => api.delete(`/ringbuffer/filtersets/${id}`),
+  cloneFilterset: (id, name = null) => api.post(`/ringbuffer/filtersets/${id}/clone`, name ? { name } : {}),
+  queryFilterset: (id)              => api.post(`/ringbuffer/filtersets/${id}/query`, {}),
+  // #431 — flat filterset schema, multi-active topbar
+  patchFiltersetTopbar: (id, body)  => api.patch(`/ringbuffer/filtersets/${id}/topbar`, body),
+  patchFiltersetOrder: (items)      => api.patch('/ringbuffer/filtersets/order', { items }),
+  queryMultiFiltersets: (body)      => api.post('/ringbuffer/filtersets/query', body),
+  // #427 — multi-set CSV/TSV export + persisted format defaults
+  exportMultiCsv: (body)            => api.post('/ringbuffer/filtersets/export/csv', body, { responseType: 'blob' }),
+  countExportRows: (body)           => api.post('/ringbuffer/filtersets/export/count', body),
+  getExportSettings: ()             => api.get('/ringbuffer/export/settings'),
+  putExportSettings: (body)         => api.put('/ringbuffer/export/settings', body),
 }
 
 // ── Config Import/Export ──────────────────────────────────────────────────
@@ -246,6 +266,7 @@ export const iconsApi = {
   delete:         (names)                  => api.delete('/icons/', { data: { names } }),
   export:         (names = [])             => api.post('/icons/export', { names }, { responseType: 'blob' }),
   importFa:       (data)                   => api.post('/icons/fontawesome', data),
+  importKnxuf:    ()                       => api.post('/icons/knxuf'),
   getSettings:    ()                       => api.get('/icons/settings'),
   saveSettings:   (data)                   => api.put('/icons/settings', data),
 }
