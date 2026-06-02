@@ -494,6 +494,10 @@ async def get_icon(
     return Response(content=sanitized, media_type="image/svg+xml")
 
 
+_KNXUF_URL = "https://raw.githubusercontent.com/mampfes/ha-knx-uf-iconset/refs/heads/master/dist/ha-knx-uf-iconset.js"
+_KNXUF_VIEWBOX = "50 50 260 260"
+_KNXUF_ICONS_RE = re.compile(r"'([^']+)'\s*:\s*'([^']+)'")
+
 _FA_GRAPHQL_URL = "https://api.fontawesome.com"
 _FA_CDN = "https://unpkg.com/@fortawesome/fontawesome-free@7.2.0/svgs"
 
@@ -750,4 +754,97 @@ async def import_fontawesome(
         names=imported,
         debug=[],  # debug=dbg  ← Debug-Ausgabe bei Bedarf wieder aktivieren
         message=(f"{len(imported)} FontAwesome Icon(s) importiert" + (f", {skipped} nicht gefunden/übersprungen" if skipped else "")),
+    )
+
+
+# ---------------------------------------------------------------------------
+# KNX UF Iconset
+# ---------------------------------------------------------------------------
+
+
+def _parse_knxuf_js(content: str) -> dict[str, str]:
+    """Extract icon name → SVG path data pairs from ha-knx-uf-iconset.js.
+
+    The file stores icons as JS object literals:
+        const ICONS = { 'icon_name': 'M ...', ... };
+    Returns only entries whose path data is non-empty.
+    """
+    return {name: path_data for name, path_data in _KNXUF_ICONS_RE.findall(content) if name and path_data}
+
+
+def _build_knxuf_svg(path_data: str) -> bytes:
+    """Wrap a KNX UF path string in a minimal SVG element."""
+    import xml.etree.ElementTree as ET  # noqa: PLC0415 (local import for clarity)
+
+    root = ET.Element("svg")
+    root.set("xmlns", "http://www.w3.org/2000/svg")
+    root.set("viewBox", _KNXUF_VIEWBOX)
+    path_el = ET.SubElement(root, "path")
+    path_el.set("d", path_data)
+    return ET.tostring(root, encoding="utf-8", xml_declaration=False)
+
+
+@router.post("/knxuf", response_model=ImportResult)
+async def import_knxuf(
+    _user: str = Depends(get_current_user),
+) -> ImportResult:
+    """KNX UF Iconset aus dem ha-knx-uf-iconset GitHub-Repository importieren.
+
+    Lädt die JS-Bundle-Datei herunter, extrahiert alle Icons und speichert sie
+    mit dem Präfix kuf_ in der Icon-Bibliothek. Bereits vorhandene kuf_-Icons
+    werden überschrieben.
+    """
+    icons_dir = _icons_dir()
+    icons_dir_resolved = icons_dir.resolve()
+
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as http:
+        try:
+            resp = await http.get(_KNXUF_URL)
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"Download fehlgeschlagen: {exc}",
+            )
+
+    raw_icons = _parse_knxuf_js(resp.text)
+    if not raw_icons:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Keine Icons in der Quelldatei gefunden",
+        )
+
+    imported: list[str] = []
+    skipped = 0
+
+    for icon_name, path_data in raw_icons.items():
+        safe = _safe_name(icon_name)
+        if not safe:
+            skipped += 1
+            continue
+
+        stored_name = f"kuf_{safe}"
+        svg_bytes = _build_knxuf_svg(path_data)
+
+        try:
+            sanitized = _sanitize_svg(svg_bytes)
+        except HTTPException:
+            skipped += 1
+            continue
+
+        target_path = (icons_dir / f"{stored_name}.svg").resolve()
+        try:
+            target_path.relative_to(icons_dir_resolved)
+        except ValueError:
+            skipped += 1
+            continue
+
+        target_path.write_bytes(sanitized)
+        imported.append(stored_name)
+
+    return ImportResult(
+        imported=len(imported),
+        skipped=skipped,
+        names=imported,
+        message=(f"{len(imported)} KNX UF Icon(s) importiert" + (f", {skipped} übersprungen" if skipped else "")),
     )

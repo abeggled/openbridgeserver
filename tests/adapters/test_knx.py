@@ -8,6 +8,7 @@ without the optional dependency.
 from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from xknx.core.connection_state import XknxConnectionState
 from xknx.dpt import DPTArray, DPTBinary
@@ -15,7 +16,14 @@ from xknx.telegram import Telegram
 from xknx.telegram.address import GroupAddress
 from xknx.telegram.apci import GroupValueRead, GroupValueResponse, GroupValueWrite
 
-from obs.adapters.knx.adapter import KnxAdapter, KnxAdapterConfig, KnxBindingConfig, _telegram_to_bytes
+from obs.adapters.knx.adapter import (
+    KnxAdapter,
+    KnxAdapterConfig,
+    KnxBindingConfig,
+    _knx_connect_error_detail,
+    _secure_config_from_keyfile,
+    _telegram_to_bytes,
+)
 from obs.adapters.knx.dpt_registry import DPTRegistry
 from obs.core.event_bus import AdapterStatusEvent
 
@@ -719,8 +727,12 @@ class TestKnxAdapterConnectDisconnect:
         )
         mock_xknx_instance = self._make_mock_xknx()
         mock_secure_config = MagicMock()
+        mock_secure_config.knxkeys_file_path = None
 
-        with patch("xknx.XKNX", return_value=mock_xknx_instance), patch("xknx.io.SecureConfig", return_value=mock_secure_config):
+        with (
+            patch("xknx.XKNX", return_value=mock_xknx_instance),
+            patch("obs.adapters.knx.adapter._secure_config_from_keyfile", return_value=(mock_secure_config, "1.1.100")),
+        ):
             await adapter._do_connect()
 
         assert mock_xknx_instance.start.called
@@ -1651,3 +1663,374 @@ class TestReconnectLoop:
             await adapter._reconnect_loop()
 
         assert not reconnect_called  # connected → no reconnect
+
+
+# ---------------------------------------------------------------------------
+# _knx_connect_error_detail — Docker bridge / interface resolution hint
+# Issue #393
+# ---------------------------------------------------------------------------
+
+
+class TestKnxConnectErrorDetail:
+    def test_gateway_unreachable_adds_docker_hint(self):
+        """'Could not fetch gateway info' gets the Docker bridge hint appended."""
+        exc = Exception("Could not fetch gateway info from 192.168.1.152:3671")
+        detail = _knx_connect_error_detail(exc)
+        assert "192.168.1.152" in detail
+        assert "Docker" in detail or "docker" in detail
+        assert "network_mode" in detail
+
+    def test_did_not_respond_adds_docker_hint(self):
+        """'did not respond in time' also triggers the Docker hint."""
+        exc = Exception("KNX bus did not respond in time (2 secs) to request of type 'DescriptionQuery'")
+        detail = _knx_connect_error_detail(exc)
+        assert "Docker" in detail or "docker" in detail
+        assert "network_mode" in detail
+
+    def test_description_query_case_insensitive(self):
+        exc = Exception("DescriptionQuery timeout for 192.168.1.100")
+        detail = _knx_connect_error_detail(exc)
+        assert "network_mode" in detail
+
+    def test_no_more_connections_adds_hint(self):
+        """E_NO_MORE_CONNECTIONS gets the 'all tunnel slots occupied' hint."""
+        inner = Exception("ConnectRequest failed. Status code: ErrorCode.E_NO_MORE_CONNECTIONS")
+        exc = Exception("Tunnel connection could not be established")
+        exc.__cause__ = inner
+        detail = _knx_connect_error_detail(exc)
+        assert "E_NO_MORE_CONNECTIONS" in detail
+        assert "Tunnel-Verbindungsplätze" in detail or "belegt" in detail
+
+    def test_unrelated_error_unchanged(self):
+        """Errors not matching any known pattern are returned unchanged."""
+        exc = Exception("Connection refused by host")
+        detail = _knx_connect_error_detail(exc)
+        assert detail == "Connection refused by host"
+        assert "Docker" not in detail
+
+    def test_detail_starts_with_original_message(self):
+        """The original xknx message must appear verbatim at the start."""
+        original = "Could not fetch gateway info from 10.0.0.1:3671"
+        exc = Exception(original)
+        detail = _knx_connect_error_detail(exc)
+        assert detail.startswith(original)
+
+    @pytest.mark.asyncio
+    async def test_do_connect_publishes_docker_hint_on_gateway_timeout(self, mock_bus, monkeypatch):
+        """_do_connect() emits the Docker hint in the status detail on gateway timeout."""
+        adapter = KnxAdapter(
+            event_bus=mock_bus,
+            config={"connection_type": "tunneling_secure", "host": "192.168.1.152"},
+        )
+
+        class _FakeXKNX:
+            async def start(self):
+                raise Exception("Could not fetch gateway info from 192.168.1.152:3671")
+
+            async def stop(self):
+                pass
+
+        import xknx as _xknx_mod
+
+        monkeypatch.setattr(_xknx_mod, "XKNX", lambda **kw: _FakeXKNX())
+
+        await adapter._do_connect()
+
+        events = [c.args[0] for c in mock_bus.publish.call_args_list]
+        error_events = [e for e in events if hasattr(e, "connected") and not e.connected]
+        assert error_events, "expected at least one error status event"
+        assert "network_mode" in error_events[-1].detail
+
+
+# ---------------------------------------------------------------------------
+# _secure_config_from_keyfile — bypasses UDP DescriptionRequest (Issue #393)
+# ---------------------------------------------------------------------------
+
+
+class TestSecureConfigFromKeyfile:
+    """_secure_config_from_keyfile() must extract credentials from a .knxkeys file
+    so that xknx receives explicit user_id/user_password/device_auth and skips
+    the internal UDP DescriptionRequest that fails in Docker bridge networks."""
+
+    def _make_keyring_mock(self, *, user_id: int = 2, individual_address: str = "1.1.100") -> Any:
+        from unittest.mock import MagicMock
+        from xknx.secure.keyring import InterfaceType
+
+        iface = MagicMock()
+        iface.type = InterfaceType.TUNNELING
+        iface.individual_address = MagicMock()
+        iface.individual_address.__str__ = lambda self, ia=individual_address: ia
+        iface.individual_address.__eq__ = lambda self, other: str(self) == str(other)
+        iface.user_id = user_id
+        iface.decrypted_password = "tunnelpass"
+        iface.decrypted_authentication = "devauth"
+
+        keyring = MagicMock()
+        keyring.interfaces = [iface]
+        keyring.get_tunnel_interface_by_individual_address = lambda ia: iface if str(ia) == individual_address else None
+        keyring.backbone = None
+        return keyring, iface
+
+    def _make_backbone_keyring_mock(self) -> Any:
+        from unittest.mock import MagicMock
+
+        backbone = MagicMock()
+        backbone.decrypted_key = bytes.fromhex("0102030405060708090a0b0c0d0e0f10")
+
+        keyring = MagicMock()
+        keyring.interfaces = []
+        keyring.backbone = backbone
+        return keyring
+
+    def test_tunneling_secure_returns_explicit_credentials(self, monkeypatch):
+        """For tunneling_secure the result must carry user_id, user_password, device_auth
+        AND the keyring object (for data_secure_init) but NOT a keyfile path."""
+        from xknx.io import SecureConfig
+
+        keyring, iface = self._make_keyring_mock()
+        monkeypatch.setattr(
+            "obs.adapters.knx.adapter.sync_load_keyring",
+            lambda path, pw: keyring,
+        )
+
+        result = _secure_config_from_keyfile(
+            "/data/knxkeys/test.knxkeys",
+            "secret",
+            "tunneling_secure",
+            "1.1.100",
+        )
+
+        assert result is not None
+        sc, resolved_ia = result
+        assert isinstance(sc, SecureConfig)
+        assert sc.user_id == 2
+        assert sc.user_password == "tunnelpass"
+        assert sc.device_authentication_password == "devauth"
+        # keyring must be present so xknx can do data_secure_init
+        assert sc.keyring is keyring
+        # but no file path — that would re-trigger UDP DescriptionRequest
+        assert sc.knxkeys_file_path is None
+        # resolved address must match the keyfile interface's address
+        assert resolved_ia == "1.1.100"
+
+    def test_tunneling_secure_no_keyfile_path_in_result(self, monkeypatch):
+        """The returned SecureConfig must NOT contain the keyfile path — that would
+        re-trigger xknx's UDP DescriptionRequest on the first connection attempt."""
+        keyring, _ = self._make_keyring_mock()
+        monkeypatch.setattr(
+            "obs.adapters.knx.adapter.sync_load_keyring",
+            lambda path, pw: keyring,
+        )
+
+        result = _secure_config_from_keyfile("/data/knxkeys/test.knxkeys", "pw", "tunneling_secure", "1.1.100")
+        assert result is not None
+        sc, _ = result
+        assert sc.knxkeys_file_path is None
+
+    def test_tunneling_secure_fallback_when_ia_not_found(self, monkeypatch):
+        """If the individual_address isn't in the keyfile, fall back to the first tunnel."""
+        keyring, iface = self._make_keyring_mock(individual_address="1.1.100")
+        monkeypatch.setattr(
+            "obs.adapters.knx.adapter.sync_load_keyring",
+            lambda path, pw: keyring,
+        )
+
+        result = _secure_config_from_keyfile("/data/knxkeys/test.knxkeys", "pw", "tunneling_secure", "9.9.9")
+        # Should still return a SecureConfig using the first available interface
+        assert result is not None
+        sc, resolved_ia = result
+        assert sc.user_id == iface.user_id
+        # resolved address must be the fallback interface's address, not the configured "9.9.9"
+        assert resolved_ia == "1.1.100"
+
+    def test_tunneling_secure_returns_none_when_no_tunnels(self, monkeypatch):
+        """Returns None when keyfile has no tunneling interfaces."""
+        from unittest.mock import MagicMock
+
+        keyring = MagicMock()
+        keyring.interfaces = []
+        keyring.backbone = None
+        keyring.get_tunnel_interface_by_individual_address.return_value = None
+        monkeypatch.setattr(
+            "obs.adapters.knx.adapter.sync_load_keyring",
+            lambda path, pw: keyring,
+        )
+
+        result = _secure_config_from_keyfile("/data/knxkeys/test.knxkeys", "pw", "tunneling_secure", "1.1.100")
+        assert result is None
+
+    def test_routing_secure_extracts_backbone_key(self, monkeypatch):
+        """For routing_secure the result carries a hex backbone_key."""
+        from xknx.io import SecureConfig
+
+        keyring = self._make_backbone_keyring_mock()
+        monkeypatch.setattr(
+            "obs.adapters.knx.adapter.sync_load_keyring",
+            lambda path, pw: keyring,
+        )
+
+        result = _secure_config_from_keyfile("/data/knxkeys/test.knxkeys", "pw", "routing_secure", "1.1.255")
+        assert result is not None
+        sc, resolved_ia = result
+        assert isinstance(sc, SecureConfig)
+        # SecureConfig.backbone_key stores bytes internally (converts from hex)
+        expected_bytes = bytes.fromhex("0102030405060708090a0b0c0d0e0f10")
+        assert sc.backbone_key == expected_bytes
+        # keyring must be passed for data_secure_init
+        assert sc.keyring is keyring
+        # routing keeps the configured individual_address unchanged
+        assert resolved_ia == "1.1.255"
+
+    def test_routing_secure_returns_none_when_no_backbone(self, monkeypatch):
+        """Returns None when keyfile has no backbone."""
+        from unittest.mock import MagicMock
+
+        keyring = MagicMock()
+        keyring.interfaces = []
+        keyring.backbone = None
+        monkeypatch.setattr(
+            "obs.adapters.knx.adapter.sync_load_keyring",
+            lambda path, pw: keyring,
+        )
+
+        result = _secure_config_from_keyfile("/data/knxkeys/test.knxkeys", "pw", "routing_secure", "1.1.255")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_do_connect_tunneling_secure_uses_explicit_credentials(self, mock_bus, monkeypatch):
+        """_do_connect() with keyfile calls _secure_config_from_keyfile — no keyfile
+        path reaches xknx, so no UDP DescriptionRequest is triggered."""
+        from unittest.mock import MagicMock
+        from xknx.io import SecureConfig
+
+        # Return a SecureConfig with explicit credentials (no keyfile path)
+        explicit_sc = SecureConfig(
+            device_authentication_password="devauth",
+            user_id=2,
+            user_password="tunnelpass",
+        )
+        monkeypatch.setattr(
+            "obs.adapters.knx.adapter._secure_config_from_keyfile",
+            lambda *a, **kw: (explicit_sc, "1.1.100"),
+        )
+
+        captured_conn_cfg = {}
+
+        class _FakeXKNX:
+            def __init__(self, **kw):
+                captured_conn_cfg.update(kw)
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                pass
+
+            devices = MagicMock()
+            devices.__iter__ = lambda self: iter([])
+            devices.__len__ = lambda self: 0
+            telegrams = MagicMock()
+
+        import xknx as _xknx_mod
+
+        monkeypatch.setattr(_xknx_mod, "XKNX", lambda **kw: _FakeXKNX(**kw))
+
+        adapter = KnxAdapter(
+            event_bus=mock_bus,
+            config={
+                "connection_type": "tunneling_secure",
+                "host": "192.168.1.152",
+                "knxkeys_file_path": "/data/knxkeys/test.knxkeys",
+                "knxkeys_password": "secret",
+                "individual_address": "1.1.100",
+            },
+        )
+        await adapter._do_connect()
+
+        # Verify the connection_config passed to xknx has NO keyfile path
+        conn_cfg = captured_conn_cfg.get("connection_config")
+        assert conn_cfg is not None
+        sc = conn_cfg.secure_config
+        assert sc is not None
+        assert sc.knxkeys_file_path is None
+        assert sc.user_id == 2
+        # individual_address in ConnectionConfig must come from the resolved keyfile address
+        assert str(conn_cfg.individual_address) == "1.1.100"
+
+    @pytest.mark.asyncio
+    async def test_do_connect_uses_fallback_individual_address(self, mock_bus, monkeypatch):
+        """When _secure_config_from_keyfile falls back to the first tunnel interface,
+        _do_connect() must use the fallback's individual_address in ConnectionConfig,
+        not the stale configured value (e.g. '1.1.255')."""
+        from unittest.mock import MagicMock
+        from xknx.io import SecureConfig
+
+        fallback_sc = SecureConfig(device_authentication_password="devauth", user_id=3, user_password="pw")
+        # Simulate fallback: configured address was "1.1.255", keyfile resolved to "1.1.50"
+        monkeypatch.setattr(
+            "obs.adapters.knx.adapter._secure_config_from_keyfile",
+            lambda *a, **kw: (fallback_sc, "1.1.50"),
+        )
+
+        captured_conn_cfg = {}
+
+        class _FakeXKNX:
+            def __init__(self, **kw):
+                captured_conn_cfg.update(kw)
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                pass
+
+            devices = MagicMock()
+            devices.__iter__ = lambda self: iter([])
+            devices.__len__ = lambda self: 0
+            telegrams = MagicMock()
+
+        import xknx as _xknx_mod
+
+        monkeypatch.setattr(_xknx_mod, "XKNX", lambda **kw: _FakeXKNX(**kw))
+
+        adapter = KnxAdapter(
+            event_bus=mock_bus,
+            config={
+                "connection_type": "tunneling_secure",
+                "host": "192.168.1.152",
+                "knxkeys_file_path": "/data/knxkeys/test.knxkeys",
+                "knxkeys_password": "secret",
+                "individual_address": "1.1.255",  # stale/default — keyfile overrides to 1.1.50
+            },
+        )
+        await adapter._do_connect()
+
+        conn_cfg = captured_conn_cfg.get("connection_config")
+        assert conn_cfg is not None
+        # Must use fallback address from keyfile, not the configured "1.1.255"
+        assert str(conn_cfg.individual_address) == "1.1.50"
+
+    @pytest.mark.asyncio
+    async def test_do_connect_routing_secure_no_backbone_shows_backbone_error(self, mock_bus, monkeypatch):
+        """When routing_secure keyfile has no backbone, error message must mention backbone,
+        not individual_address (which is irrelevant for routing)."""
+        monkeypatch.setattr(
+            "obs.adapters.knx.adapter._secure_config_from_keyfile",
+            lambda *a, **kw: None,
+        )
+
+        adapter = KnxAdapter(
+            event_bus=mock_bus,
+            config={
+                "connection_type": "routing_secure",
+                "knxkeys_file_path": "/data/knxkeys/test.knxkeys",
+                "knxkeys_password": "secret",
+            },
+        )
+        await adapter._do_connect()
+
+        events = [c.args[0] for c in mock_bus.publish.call_args_list]
+        error_events = [e for e in events if hasattr(e, "connected") and not e.connected]
+        assert error_events
+        assert "Backbone" in error_events[-1].detail or "backbone" in error_events[-1].detail.lower()
+        assert "Individual Address" not in error_events[-1].detail

@@ -28,9 +28,11 @@
  *     Always drops zero segments except when seconds === 0 ("0s").
  *     Negative input is treated as |input|.
  *
- *   formatTimeFilter({ mode, from, to, point, span }) → string
- *     Topbar label, e.g. 'Letzte 1h', 'Bereich -1h … -5min', '13:50 ± 10min'.
- *     Returns 'aus' when no meaningful values are present.
+ *   formatTimeFilter({ mode, from, to, point, span }, t?) → string
+ *     Topbar label, e.g. 'Last 1h', 'Range -1h … -5min', '13:50 ± 10min'.
+ *     Pass the vue-i18n t() function to get a translated label; without it the
+ *     label falls back to German strings for backwards compatibility.
+ *     Returns t('ringbuffer.filter.off') (or 'aus') when no values are present.
  */
 
 // ---- duration -------------------------------------------------------------
@@ -215,11 +217,14 @@ function formatBound(x) {
  * @param {{ mode?: 'range'|'point', from?: any, to?: any, point?: any, span?: any } | null} filter
  * @returns {string}
  */
-export function formatTimeFilter(filter) {
-  if (!filter || typeof filter !== 'object') return 'aus'
+export function formatTimeFilter(filter, t) {
+  const tp = (key, params) => (t ? t(key, params) : null)
+  const off = tp('ringbuffer.filter.off') ?? 'aus'
+
+  if (!filter || typeof filter !== 'object') return off
   const { mode, from, to, point, span } = filter
   if (mode === 'point') {
-    if (!isDate(point) && !isDuration(point)) return 'aus'
+    if (!isDate(point) && !isDuration(point)) return off
     const pointLabel = isDate(point)
       ? `${String(point.getHours()).padStart(2, '0')}:${String(point.getMinutes()).padStart(2, '0')}`
       : formatBound(point)
@@ -231,13 +236,20 @@ export function formatTimeFilter(filter) {
   // mode === 'range' (default)
   const hasFrom = isDuration(from) || isDate(from)
   const hasTo = isDuration(to) || isDate(to)
-  if (!hasFrom && !hasTo) return 'aus'
+  if (!hasFrom && !hasTo) return off
   if (hasFrom && !hasTo && isDuration(from) && from.sign === -1) {
-    return `Letzte ${formatDurationDeutsch(from.seconds)}`
+    const duration = formatDurationDeutsch(from.seconds)
+    return tp('ringbuffer.filter.last', { duration }) ?? `Letzte ${duration}`
   }
   if (hasFrom && hasTo) {
-    return `Bereich ${formatBound(from)} … ${formatBound(to)}`
+    const fromStr = formatBound(from)
+    const toStr = formatBound(to)
+    return tp('ringbuffer.filter.range', { from: fromStr, to: toStr }) ?? `Bereich ${fromStr} … ${toStr}`
   }
-  if (hasFrom) return `Ab ${formatBound(from)}`
-  return `Bis ${formatBound(to)}`
+  if (hasFrom) {
+    const fromStr = formatBound(from)
+    return tp('ringbuffer.filter.fromShort', { from: fromStr }) ?? `Ab ${fromStr}`
+  }
+  const toStr = formatBound(to)
+  return tp('ringbuffer.filter.toShort', { to: toStr }) ?? `Bis ${toStr}`
 }

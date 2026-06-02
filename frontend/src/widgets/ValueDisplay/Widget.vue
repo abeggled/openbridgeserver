@@ -595,7 +595,7 @@ const quality = computed(() => props.value?.q ?? null)
               :style="{ color: activeColor }"
             >{{ activeIcon }}</span>
             <span v-else-if="svgBlobUrl" class="inline-block w-6 h-6 shrink-0" :style="svgMaskStyle" />
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-200 truncate">{{ widgetLabel || 'Verlauf' }}</span>
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-200 truncate">{{ widgetLabel || $t('widgets.valuedisplay.historyFallback') }}</span>
           </div>
           <div class="flex items-center gap-2 shrink-0">
             <select
@@ -603,7 +603,7 @@ const quality = computed(() => props.value?.q ?? null)
               class="text-xs bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer"
               :title="t('widgets.valuedisplay.selectTimeRangeTitle')"
             >
-              <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ p.label }}</option>
+              <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ $t(p.label) }}</option>
             </select>
             <button
               class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none"

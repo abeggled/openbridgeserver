@@ -13,7 +13,7 @@
          :style="{ borderTopColor: def.color, background: def.color + '12', minHeight: cardH + 'px' }">
 
       <div class="gn-header" :style="{ background: def.color + '28' }">
-        <span class="gn-title">{{ data.label || def.label }}</span>
+        <span class="gn-title">{{ def.label }}</span>
         <button class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
       </div>
 
@@ -80,60 +80,60 @@ const props = defineProps({
 })
 
 // ── Node definitions ───────────────────────────────────────────────────────
-const NODE_DEFS = {
-  const_value:  { label: 'Festwert',    color: '#475569', inputs: [],                                                outputs: [{id:'value', label:'Wert'}]       },
-  and:          { label: 'AND',         color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}], outputs: [{id:'out',   label:'Out'}]       },
-  or:           { label: 'OR',          color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}], outputs: [{id:'out',   label:'Out'}]       },
-  not:          { label: 'NOT',         color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'}],                         outputs: [{id:'out',   label:'Out'}]       },
-  xor:          { label: 'XOR',         color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}], outputs: [{id:'out',   label:'Out'}]       },
-  gate:         { label: 'TOR',         color: '#1d4ed8', inputs: [{id:'in',label:'Eingang'},{id:'enable',label:'Freigabe'}], outputs: [{id:'out', label:'Ausgang'}]  },
-  compare:      { label: 'Vergleich',   color: '#1d4ed8', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}], outputs: [{id:'out',   label:'Erg.'}]      },
-  hysteresis:   { label: 'Hysterese',   color: '#1d4ed8', inputs: [{id:'value',label:'Wert'}],                       outputs: [{id:'out',   label:'Out'}]       },
-  math_formula: { label: 'Formel',      color: '#7c3aed', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'}],  outputs: [{id:'result',label:'Erg.'}]      },
-  math_map:     { label: 'Skalieren',   color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                       outputs: [{id:'result',label:'Erg.'}]      },
-  timer_delay:  { label: 'Verzögerung', color: '#b45309', inputs: [{id:'trigger',label:'Trigger'}],                  outputs: [{id:'trigger',label:'Trigger'}]  },
-  timer_pulse:  { label: 'Impuls',      color: '#b45309', inputs: [{id:'trigger',label:'Trigger'}],                  outputs: [{id:'out',   label:'Out'}]       },
-  timer_cron:   { label: 'Trigger',     color: '#b45309', inputs: [],                                                outputs: [{id:'trigger',label:'Trigger'}]  },
-  mcp_tool:     { label: 'MCP Tool',    color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'input', label:'Input'}], outputs: [{id:'result',label:'Erg.'},{id:'done',label:'Fertig'}] },
-  python_script:{ label: 'Python',      color: '#be185d', inputs: [{id:'in1',label:'IN 1'},{id:'in2',label:'IN 2'},{id:'in3',label:'IN 3'}], outputs: [{id:'result',label:'Erg.'}] },
+const NODE_DEFS = computed(() => ({
+  const_value:  { label: 'Festwert',    color: '#475569', inputs: [],                                                                                                  outputs: [{id:'value',      label:t('logic.ports.value')}]       },
+  and:          { label: 'AND',         color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
+  or:           { label: 'OR',          color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
+  not:          { label: 'NOT',         color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})}],                                                      outputs: [{id:'out',        label:t('logic.ports.out')}]         },
+  xor:          { label: 'XOR',         color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
+  gate:         { label: 'TOR',         color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'enable',label:t('logic.ports.enable')}],                 outputs: [{id:'out',        label:t('logic.ports.output')}]      },
+  compare:      { label: 'Vergleich',   color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.portLabels.resultShort')}] },
+  hysteresis:   { label: 'Hysterese',   color: '#1d4ed8', inputs: [{id:'value',label:t('logic.ports.value')}],                                                         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
+  math_formula: { label: 'Formel',      color: '#7c3aed', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],          outputs: [{id:'result',     label:t('logic.portLabels.resultShort')}] },
+  math_map:     { label: 'Skalieren',   color: '#7c3aed', inputs: [{id:'value',label:t('logic.ports.value')}],                                                         outputs: [{id:'result',     label:t('logic.portLabels.resultShort')}] },
+  timer_delay:  { label: 'Verzögerung', color: '#b45309', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                                     outputs: [{id:'trigger',    label:t('logic.ports.trigger')}]     },
+  timer_pulse:  { label: 'Impuls',      color: '#b45309', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                                     outputs: [{id:'out',        label:t('logic.ports.out')}]         },
+  timer_cron:   { label: 'Trigger',     color: '#b45309', inputs: [],                                                                                                  outputs: [{id:'trigger',    label:t('logic.ports.trigger')}]     },
+  mcp_tool:     { label: 'MCP Tool',    color: '#0e7490', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'input',label:t('logic.ports.input')}],            outputs: [{id:'result',     label:t('logic.portLabels.resultShort')},{id:'done',label:t('logic.ports.done')}] },
+  python_script:{ label: 'Python',      color: '#be185d', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})},{id:'in3',label:t('logic.ports.in_n',{n:3})}], outputs: [{id:'result',label:t('logic.portLabels.resultShort')}] },
   // Astro
-  astro_sun:          { label: 'Astro Sonne',    color: '#d97706', inputs: [],                                                                         outputs: [{id:'sunrise',label:'Aufgang'},{id:'sunset',label:'Untergang'},{id:'is_day',label:'Tagsüber'}] },
+  astro_sun:          { label: 'Astro Sonne',    color: '#d97706', inputs: [],                                                                                          outputs: [{id:'sunrise',    label:t('logic.portLabels.sunrise')},{id:'sunset',label:t('logic.portLabels.sunset')},{id:'is_day',label:t('logic.portLabels.isDay')}] },
   // Math (extended)
-  clamp:              { label: 'Begrenzer',      color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                                                outputs: [{id:'result',label:'Erg.'}]      },
-  random_value:       { label: 'Zufallswert',    color: '#7c3aed', inputs: [{id:'trigger',label:'Trigger'}],                                           outputs: [{id:'value', label:'Wert'}]      },
-  statistics:         { label: 'Statistik',      color: '#7c3aed', inputs: [{id:'value',label:'Wert'},{id:'reset',label:'Reset'}],                      outputs: [{id:'min',label:'Min'},{id:'max',label:'Max'},{id:'avg',label:'∅'},{id:'count',label:'N'}] },
-  heating_circuit:    { label: 'Sommer/Winter', color: '#7c3aed', inputs: [{id:'value',label:'Temp °C'}], outputs: [{id:'heating_mode',label:'Heizmodus'},{id:'daily_avg',label:'Tagesmittel'},{id:'monthly_avg',label:'Monatsmittel'},{id:'t1',label:'T1 (dbg)'},{id:'t2',label:'T2 (dbg)'},{id:'t3',label:'T3 (dbg)'}] },
-  min_max_tracker:    { label: 'Min/Max',        color: '#7c3aed', inputs: [{id:'value',label:'Wert'}],                                                outputs: [{id:'min_daily',label:'Min/d'},{id:'max_daily',label:'Max/d'},{id:'min_weekly',label:'Min/w'},{id:'max_weekly',label:'Max/w'},{id:'min_monthly',label:'Min/m'},{id:'max_monthly',label:'Max/m'},{id:'min_yearly',label:'Min/y'},{id:'max_yearly',label:'Max/y'},{id:'min_abs',label:'Min∞'},{id:'max_abs',label:'Max∞'}] },
-  consumption_counter:{ label: 'Verbrauch',      color: '#7c3aed', inputs: [{id:'value',label:'Zähler'}],                                              outputs: [{id:'daily',label:'Tag'},{id:'weekly',label:'Woche'},{id:'monthly',label:'Monat'},{id:'yearly',label:'Jahr'},{id:'prev_daily',label:'Vortag'},{id:'prev_weekly',label:'Vorwoche'},{id:'prev_monthly',label:'Vormonat'},{id:'prev_yearly',label:'Vorjahr'}] },
+  clamp:              { label: 'Begrenzer',      color: '#7c3aed', inputs: [{id:'value',label:t('logic.ports.value')}],                                                 outputs: [{id:'result',     label:t('logic.portLabels.resultShort')}] },
+  random_value:       { label: 'Zufallswert',    color: '#7c3aed', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                            outputs: [{id:'value',      label:t('logic.ports.value')}]       },
+  statistics:         { label: 'Statistik',      color: '#7c3aed', inputs: [{id:'value',label:t('logic.ports.value')},{id:'reset',label:t('logic.ports.reset')}],       outputs: [{id:'min',label:t('logic.ports.min')},{id:'max',label:t('logic.ports.max')},{id:'avg',label:t('logic.ports.avg')},{id:'count',label:t('logic.ports.count')}] },
+  heating_circuit:    { label: 'Sommer/Winter',  color: '#7c3aed', inputs: [{id:'value',label:t('logic.portLabels.tempC')}],                                            outputs: [{id:'heating_mode',label:t('logic.portLabels.heizmode')},{id:'daily_avg',label:t('logic.portLabels.dailyAvg')},{id:'monthly_avg',label:t('logic.portLabels.monthlyAvg')},{id:'t1',label:t('logic.portLabels.tDebug',{n:1})},{id:'t2',label:t('logic.portLabels.tDebug',{n:2})},{id:'t3',label:t('logic.portLabels.tDebug',{n:3})}] },
+  min_max_tracker:    { label: 'Min/Max',        color: '#7c3aed', inputs: [{id:'value',label:t('logic.ports.value')}],                                                 outputs: [{id:'min_daily',label:t('logic.portLabels.minDaily')},{id:'max_daily',label:t('logic.portLabels.maxDaily')},{id:'min_weekly',label:t('logic.portLabels.minWeekly')},{id:'max_weekly',label:t('logic.portLabels.maxWeekly')},{id:'min_monthly',label:t('logic.portLabels.minMonthly')},{id:'max_monthly',label:t('logic.portLabels.maxMonthly')},{id:'min_yearly',label:t('logic.portLabels.minYearly')},{id:'max_yearly',label:t('logic.portLabels.maxYearly')},{id:'min_abs',label:t('logic.portLabels.minAbs')},{id:'max_abs',label:t('logic.portLabels.maxAbs')}] },
+  consumption_counter:{ label: 'Verbrauch',      color: '#7c3aed', inputs: [{id:'value',label:t('logic.portLabels.counter')}],                                          outputs: [{id:'daily',label:t('logic.portLabels.daily')},{id:'weekly',label:t('logic.portLabels.weekly')},{id:'monthly',label:t('logic.portLabels.monthly')},{id:'yearly',label:t('logic.portLabels.yearly')},{id:'prev_daily',label:t('logic.portLabels.prevDaily')},{id:'prev_weekly',label:t('logic.portLabels.prevWeekly')},{id:'prev_monthly',label:t('logic.portLabels.prevMonthly')},{id:'prev_yearly',label:t('logic.portLabels.prevYearly')}] },
   // Timer (extended)
-  operating_hours:    { label: 'Betriebsstd.',   color: '#b45309', inputs: [{id:'active',label:'Aktiv'},{id:'reset',label:'Reset'}],                   outputs: [{id:'hours',label:'Std.'}]       },
+  operating_hours:    { label: 'Betriebsstd.',   color: '#b45309', inputs: [{id:'active',label:t('logic.ports.active')},{id:'reset',label:t('logic.ports.reset')}],     outputs: [{id:'hours',      label:t('logic.ports.hours')}]       },
   // Notification
-  notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'},{id:'url',label:'URL'},{id:'url_title',label:'URL-Titel'},{id:'image_url',label:'Bild-URL'}], outputs: [{id:'sent',label:'Gesendet'}] },
-  notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:'Trigger'},{id:'message',label:'Nachricht'}],           outputs: [{id:'sent',label:'Gesendet'}]    },
+  notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:'URL'},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
+  notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',     label:t('logic.ports.sent')}]        },
   // Math — avg_multi (dynamic inputs, fixed outputs)
   avg_multi: { label: 'Mittelwert', color: '#7c3aed',
-    inputs: [{id:'in_1',label:'IN 1'},{id:'in_2',label:'IN 2'}],
+    inputs: [{id:'in_1',label:t('logic.ports.in_n',{n:1})},{id:'in_2',label:t('logic.ports.in_n',{n:2})}],
     outputs: [
-      {id:'avg',     label:'∅ aktuell'},
-      {id:'avg_1m',  label:'∅ 1 min'},
-      {id:'avg_1h',  label:'∅ 1 h'},
-      {id:'avg_1d',  label:'∅ 1 Tag'},
-      {id:'avg_7d',  label:'∅ 7 Tage'},
-      {id:'avg_14d', label:'∅ 14 Tage'},
-      {id:'avg_30d', label:'∅ 30 Tage'},
-      {id:'avg_180d',label:'∅ 180 Tage'},
-      {id:'avg_365d',label:'∅ 365 Tage'},
+      {id:'avg',      label:t('logic.portLabels.avgNow')},
+      {id:'avg_1m',   label:t('logic.portLabels.avg1m')},
+      {id:'avg_1h',   label:t('logic.portLabels.avg1h')},
+      {id:'avg_1d',   label:t('logic.portLabels.avg1d')},
+      {id:'avg_7d',   label:t('logic.portLabels.avg7d')},
+      {id:'avg_14d',  label:t('logic.portLabels.avg14d')},
+      {id:'avg_30d',  label:t('logic.portLabels.avg30d')},
+      {id:'avg_180d', label:t('logic.portLabels.avg180d')},
+      {id:'avg_365d', label:t('logic.portLabels.avg365d')},
     ]
   },
   // String
-  string_concat:      { label: 'String Verketten', color: '#0891b2', inputs: [{id:'in_1',label:'1'},{id:'in_2',label:'2'}], outputs: [{id:'result',label:'Ergebnis'}] },
+  string_concat:      { label: 'String Verketten', color: '#0891b2', inputs: [{id:'in_1',label:'1'},{id:'in_2',label:'2'}], outputs: [{id:'result',label:t('logic.ports.result')}] },
   // Integration
-  api_client:         { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:'Trigger'},{id:'body',label:'Body'}],                  outputs: [{id:'response',label:'Antwort'},{id:'status',label:'Status'},{id:'success',label:'OK'}] },
-  json_extractor:     { label: 'JSON Extraktor',     color: '#0369a1', inputs: [{id:'data',label:'Daten'}], outputs: [{id:'value',label:'Wert'}] },
-  xml_extractor:      { label: 'XML Extraktor',      color: '#0369a1', inputs: [{id:'data',label:'Daten'}], outputs: [{id:'value',label:'Wert'}] },
-  substring_extractor:{ label: 'Substring / RegEx',  color: '#0369a1', inputs: [{id:'data',label:'Daten'}], outputs: [{id:'value',label:'Wert'}] },
-  ical:               { label: 'iCalendar',          color: '#0369a1', inputs: [], outputs: [{id:'raw', label:'RAW'}] },
-}
+  api_client:         { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'body',label:t('logic.ports.body')}],     outputs: [{id:'response',   label:t('logic.ports.response')},{id:'status',label:t('logic.ports.status')},{id:'success',label:t('logic.ports.success')}] },
+  json_extractor:     { label: 'JSON Extraktor',     color: '#0369a1', inputs: [{id:'data',label:t('logic.ports.data')}], outputs: [{id:'value',label:t('logic.ports.value')}] },
+  xml_extractor:      { label: 'XML Extraktor',      color: '#0369a1', inputs: [{id:'data',label:t('logic.ports.data')}], outputs: [{id:'value',label:t('logic.ports.value')}] },
+  substring_extractor:{ label: 'Substring / RegEx',  color: '#0369a1', inputs: [{id:'data',label:t('logic.ports.data')}], outputs: [{id:'value',label:t('logic.ports.value')}] },
+  ical:               { label: 'iCalendar',          color: '#0369a1', inputs: [], outputs: [{id:'raw', label:t('logic.ports.raw')}] },
+}))
 
 // ── Gate helpers ───────────────────────────────────────────────────────────
 const isGateNode = computed(() =>
@@ -142,15 +142,15 @@ const isGateNode = computed(() =>
 
 // ── Computed def — expands gate + string_concat inputs dynamically
 const def = computed(() => {
-  const base = NODE_DEFS[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] }
+  const base = NODE_DEFS.value[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] }
   const label = te(`logic.nodeTypes.${props.type}`) ? t(`logic.nodeTypes.${props.type}`) : base.label
   if (isGateNode.value) {
     const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     const inputs = Array.from({ length: count }, (_, i) => ({
       id:    `in${i + 1}`,
-      label: `IN ${i + 1}`,
+      label: t('logic.ports.in_n', { n: i + 1 }),
     }))
-    return { ...base, label, inputs, outputs: [{ id: 'out', label: 'Out' }] }
+    return { ...base, label, inputs, outputs: [{ id: 'out', label: t('logic.ports.out') }] }
   }
   if (props.type === 'string_concat') {
     const count = Math.max(2, Math.min(20, Number(props.data?.count) || 2))
@@ -164,7 +164,7 @@ const def = computed(() => {
     const count = Math.max(2, Math.min(20, Number(props.data?.input_count) || 2))
     const inputs = Array.from({ length: count }, (_, i) => ({
       id:    `in_${i + 1}`,
-      label: `IN ${i + 1}`,
+      label: t('logic.ports.in_n', { n: i + 1 }),
     }))
     return { ...base, label, inputs }
   }
@@ -172,14 +172,18 @@ const def = computed(() => {
     const filterCount = Math.max(0, Math.min(20, Number(props.data?.filter_count) || 0))
     let filters = []
     try { filters = JSON.parse(props.data?.filters || '[]') } catch (_) { filters = [] }
-    const outputs = [{ id: 'raw', label: 'RAW' }]
+    const outputs = [{ id: 'raw', label: t('logic.ports.raw') }]
     for (let i = 0; i < filterCount; i++) {
       const fname = (Array.isArray(filters) && filters[i]?.name) ? filters[i].name : `F${i + 1}`
+      const lArr  = `${fname}: ${t('logic.portLabels.icalArray')}`
+      const lDate = `${fname}: ${t('logic.portLabels.icalDate')}`
+      const lTom  = `${fname}: ${t('logic.portLabels.icalTomorrow')}`
+      const lTod  = `${fname}: ${t('logic.portLabels.icalToday')}`
       outputs.push(
-        { id: `f${i}_array`,     label: `${fname}: Array`  },
-        { id: `f${i}_next_date`, label: `${fname}: Datum`  },
-        { id: `f${i}_tomorrow`,  label: `${fname}: Morgen` },
-        { id: `f${i}_today`,     label: `${fname}: Heute`  },
+        { id: `f${i}_array`,     label: lArr  },
+        { id: `f${i}_next_date`, label: lDate },
+        { id: `f${i}_tomorrow`,  label: lTom  },
+        { id: `f${i}_today`,     label: lTod  },
       )
     }
     return { ...base, label, outputs }
@@ -190,11 +194,11 @@ const def = computed(() => {
     if (Array.isArray(pathList) && pathList.length > 0) {
       const outputs = pathList.map((entry, i) => ({
         id:    `out_${i + 1}`,
-        label: (entry?.label || `Wert ${i + 1}`),
+        label: (entry?.label || t('logic.nodeConfig.extractor.valueN', { n: i + 1 })),
       }))
-      return { ...base, outputs }
+      return { ...base, label, outputs }
     }
-    return base
+    return { ...base, label }
   }
   if (props.type === 'xml_extractor') {
     let pathList = []
@@ -202,11 +206,11 @@ const def = computed(() => {
     if (Array.isArray(pathList) && pathList.length > 0) {
       const outputs = pathList.map((entry, i) => ({
         id:    `out_${i + 1}`,
-        label: (entry?.label || `Wert ${i + 1}`),
+        label: (entry?.label || t('logic.nodeConfig.extractor.valueN', { n: i + 1 })),
       }))
-      return { ...base, outputs }
+      return { ...base, label, outputs }
     }
-    return base
+    return { ...base, label }
   }
   return { ...base, label }
 })
@@ -269,7 +273,11 @@ const summary = computed(() => {
     const hint = d.mode === 'regex' ? (d.pattern || '—') : d.mode === 'zwischen' ? `"${d.start_marker ?? ''}…${d.end_marker ?? ''}"` : d.mode === 'ausschneiden' ? `[${d.start ?? 0}:${d.length ?? -1}]` : (d.search || '—')
     return `${m}  ${hint}`
   }
-  if (props.type === 'heating_circuit')     return `W≤${d.temp_winter ?? 15} °C  S≥${d.temp_summer ?? 20} °C`
+  if (props.type === 'heating_circuit') {
+    const thr = d.threshold_temp ?? d.temp_winter ?? 14
+    const hys = d.hysteresis ?? (d.temp_winter != null && d.temp_summer != null ? d.temp_summer - d.temp_winter : 2)
+    return `Grenze ${thr} °C  +${hys} °C`
+  }
   if (props.type === 'min_max_tracker')     return null
   if (props.type === 'consumption_counter') return null
   if (props.type === 'gate') {

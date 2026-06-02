@@ -1,14 +1,14 @@
 <template>
   <div class="card">
     <div class="card-header">
-      <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">Hierarchie-Zuordnungen</h3>
+      <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('hierarchy.card.title') }}</h3>
     </div>
     <div class="card-body flex flex-col gap-4">
 
       <!-- Aktuelle Zuordnungen -->
       <div v-if="linkedLoading" class="flex justify-center py-3"><Spinner size="sm" /></div>
       <div v-else-if="linked.length === 0" class="text-sm text-slate-500">
-        Noch keinen Hierarchieknoten zugeordnet.
+        {{ $t('hierarchy.card.noAssignment') }}
       </div>
       <div v-else class="flex flex-wrap gap-2">
         <div
@@ -29,7 +29,7 @@
           <button
             @click="removeLink(ref)"
             class="ml-0.5 text-blue-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
-            title="Zuordnung entfernen">
+            :title="$t('hierarchy.card.removeLink')">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
             </svg>
@@ -47,7 +47,7 @@
             v-model="searchQ"
             type="text"
             class="input text-sm pl-8"
-            placeholder="Knoten suchen — z.B. Raum, Heizung …"
+            :placeholder="$t('hierarchy.card.searchPlaceholder')"
             @input="onSearchInput"
           />
         </div>
@@ -55,7 +55,7 @@
         <!-- Suchergebnisse -->
         <div v-if="searchLoading" class="flex justify-center py-2"><Spinner size="sm" /></div>
         <div v-else-if="searchQ && results.length === 0" class="text-xs text-slate-500 text-center py-2">
-          Keine Knoten gefunden.
+          {{ $t('hierarchy.card.noResults') }}
         </div>
         <div v-else-if="results.length" class="flex flex-col gap-0.5 max-h-52 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg">
           <button
@@ -92,8 +92,11 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { hierarchyApi } from '@/api/client.js'
 import Spinner from '@/components/ui/Spinner.vue'
+
+const { t } = useI18n()
 
 const props = defineProps({
   dpId: { type: String, required: true },
@@ -101,12 +104,12 @@ const props = defineProps({
 
 // ── State ────────────────────────────────────────────────────────────────
 
-const linked       = ref([])   // NodeRef[]
+const linked        = ref([])
 const linkedLoading = ref(false)
-const searchQ      = ref('')
-const results      = ref([])   // NodeSearchResult[]
+const searchQ       = ref('')
+const results       = ref([])
 const searchLoading = ref(false)
-const feedback     = ref(null)
+const feedback      = ref(null)
 
 let debounceTimer = null
 
@@ -155,9 +158,9 @@ async function addLink(node) {
   try {
     await hierarchyApi.createLink({ node_id: node.node_id, datapoint_id: props.dpId })
     await loadLinked()
-    showFeedback(`${node.tree_name} › ${node.node_name} zugeordnet`, true)
+    showFeedback(t('hierarchy.card.assigned', { treeName: node.tree_name, nodeName: node.node_name }), true)
   } catch (e) {
-    showFeedback(e.response?.data?.detail || 'Fehler beim Zuordnen', false)
+    showFeedback(e.response?.data?.detail || t('hierarchy.card.errorAssign'), false)
   }
 }
 
@@ -166,7 +169,7 @@ async function removeLink(ref) {
     await hierarchyApi.deleteLink(ref.node_id, props.dpId)
     await loadLinked()
   } catch {
-    showFeedback('Fehler beim Entfernen', false)
+    showFeedback(t('hierarchy.card.errorRemove'), false)
   }
 }
 

@@ -206,7 +206,11 @@
       <div class="card p-5 flex flex-col gap-3">
         <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.importTitle') }}</h3>
         <p class="text-sm text-slate-400">{{ $t('settings.importexport.importDesc') }}</p>
-        <input type="file" accept=".json" @change="onImportFile" class="text-sm text-slate-400 file:btn-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:text-xs file:border-0 file:cursor-pointer" />
+        <div class="flex items-center gap-3">
+          <button type="button" class="btn-secondary btn-sm" @click="importFileInput.click()">{{ $t('common.chooseFile') }}</button>
+          <span class="text-sm text-slate-400">{{ importFileName || $t('common.noFileSelected') }}</span>
+          <input ref="importFileInput" type="file" accept=".json" @change="onImportFile" class="hidden" />
+        </div>
         <div v-if="importResult" :class="['p-3 rounded-lg text-sm', importResult.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">{{ importResult.text }}</div>
       </div>
 
@@ -230,7 +234,11 @@
             <li>{{ $t('settings.importexport.dbImportWarning4') }}</li>
           </ul>
         </div>
-        <input type="file" accept=".sqlite,.db" @change="onImportDbFile" class="text-sm text-slate-400 file:btn-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:text-xs file:border-0 file:cursor-pointer" />
+        <div class="flex items-center gap-3">
+          <button type="button" class="btn-secondary btn-sm" @click="importDbFileInput.click()">{{ $t('common.chooseFile') }}</button>
+          <span class="text-sm text-slate-400">{{ importDbFileName || $t('common.noFileSelected') }}</span>
+          <input ref="importDbFileInput" type="file" accept=".sqlite,.db" @change="onImportDbFile" class="hidden" />
+        </div>
         <div v-if="importDbResult" :class="['p-3 rounded-lg text-sm', importDbResult.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">{{ importDbResult.text }}</div>
       </div>
 
@@ -308,8 +316,11 @@
         </div>
         <p class="text-sm text-slate-400">{{ $t('settings.importexport.knxDesc') }}</p>
         <div class="flex flex-col gap-2">
-          <input type="file" accept=".knxproj" @change="onKnxprojFile"
-            class="text-sm text-slate-400 file:btn-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:text-xs file:border-0 file:cursor-pointer" />
+          <div class="flex items-center gap-3">
+            <button type="button" class="btn-secondary btn-sm" @click="$refs.knxFileInput.click()">{{ $t('common.chooseFile') }}</button>
+            <span class="text-sm text-slate-400">{{ knxFile?.name || $t('common.noFileSelected') }}</span>
+            <input ref="knxFileInput" type="file" accept=".knxproj" @change="onKnxprojFile" class="hidden" />
+          </div>
           <div class="form-group">
             <label class="label">{{ $t('settings.importexport.knxPassword') }} <span class="text-slate-600 font-normal">{{ $t('common.optional') }}</span></label>
             <input v-model="knxPassword" type="password" class="input text-sm" :placeholder="$t('settings.importexport.knxPasswordPlaceholder')" autocomplete="off" />
@@ -651,6 +662,23 @@
         </div>
       </div>
 
+      <!-- KNX UF Iconset Import -->
+      <div class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.icons.knxufTitle') }}</h3>
+        </div>
+        <div class="card-body flex flex-col gap-4">
+          <p class="text-sm text-slate-400">{{ $t('settings.icons.knxufDesc') }}</p>
+          <div v-if="knxufMsg" :class="['p-3 rounded-lg text-sm border', knxufMsg.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
+            {{ knxufMsg.text }}
+          </div>
+          <button @click="doKnxufImport" class="btn-primary btn-sm w-fit" :disabled="knxufImporting" data-testid="btn-knxuf-import">
+            <Spinner v-if="knxufImporting" size="sm" color="white" />
+            {{ knxufImporting ? $t('settings.icons.knxufImporting') : $t('settings.icons.knxufButton') }}
+          </button>
+        </div>
+      </div>
+
       <!-- FontAwesome Import -->
       <div class="card">
         <div class="card-header">
@@ -962,7 +990,7 @@ import IconPicker     from '@/components/ui/IconPicker.vue'
 import VisuIcon       from '@/components/ui/VisuIcon.vue'
 import LocaleSwitcher from '@/components/ui/LocaleSwitcher.vue'
 
-const { t }    = useI18n()
+const { t, te } = useI18n()
 const auth     = useAuthStore()
 const settings = useSettingsStore()
 const navStore = useNavLinksStore()
@@ -1366,8 +1394,12 @@ async function doCreateKey() {
 async function deleteApiKey(id) { await authApi.deleteApiKey(id); await loadKeys() }
 
 // ── Sicherung / Wiederherstellung ──────────────────────────────────────────
-const importResult   = ref(null)
-const importDbResult = ref(null)
+const importResult    = ref(null)
+const importDbResult  = ref(null)
+const importFileName  = ref('')
+const importDbFileName = ref('')
+const importFileInput  = ref(null)
+const importDbFileInput = ref(null)
 
 function _ts() {
   const now = new Date()
@@ -1392,6 +1424,7 @@ async function doExportDb() {
 
 async function onImportFile(e) {
   const file = e.target.files[0]; if (!file) return
+  importFileName.value = file.name
   const text = await file.text()
   try {
     const payload = JSON.parse(text)
@@ -1411,6 +1444,7 @@ async function onImportFile(e) {
 
 async function onImportDbFile(e) {
   const file = e.target.files[0]; if (!file) return
+  importDbFileName.value = file.name
   importDbResult.value = null
   try {
     const { data } = await configApi.importDb(file)
@@ -1526,10 +1560,20 @@ async function doKnxImport() {
       params.direction    = knxDirection.value
     }
     const { data } = await knxprojApi.import(fd, params)
-    knxResult.value = { ok: true, text: data.message }
+    let msg = t('settings.importexport.knxImportResultOk', { n: data.imported })
+    if (data.created  > 0) msg += t('settings.importexport.knxImportResultCreated',   { n: data.created })
+    if (data.updated  > 0) msg += t('settings.importexport.knxImportResultUpdated',   { n: data.updated })
+    if (data.locations > 0) msg += t('settings.importexport.knxImportResultLocations', { n: data.locations })
+    if (data.trades   > 0) msg += t('settings.importexport.knxImportResultTrades',    { n: data.trades })
+    knxResult.value = { ok: true, text: msg }
     await loadKnxGaCount()
   } catch (err) {
-    knxResult.value = { ok: false, text: err.response?.data?.detail ?? 'Import fehlgeschlagen' }
+    const resp = err.response?.data
+    const code = resp?.error_code
+    const text = code && te(`settings.importexport.error_${code}`)
+      ? t(`settings.importexport.error_${code}`)
+      : (typeof resp?.detail === 'string' ? resp.detail : null) ?? t('settings.importexport.importFailed')
+    knxResult.value = { ok: false, text }
   } finally {
     knxImporting.value = false
   }
@@ -1627,6 +1671,23 @@ const iconsSelected = ref(new Set())
 const iconsSearch   = ref('')
 const iconsMsg      = ref(null)
 const iconsDragOver = ref(false)
+
+// KNX UF Iconset
+const knxufImporting = ref(false)
+const knxufMsg       = ref(null)
+
+async function doKnxufImport() {
+  knxufImporting.value = true; knxufMsg.value = null
+  try {
+    const { data } = await iconsApi.importKnxuf()
+    knxufMsg.value = { ok: data.imported > 0, text: data.message }
+    if (data.imported > 0) await loadIcons()
+  } catch (e) {
+    knxufMsg.value = { ok: false, text: e.response?.data?.detail ?? t('settings.icons.knxufFailed') }
+  } finally {
+    knxufImporting.value = false
+  }
+}
 
 // FontAwesome form
 const faIconNames = ref('')

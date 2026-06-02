@@ -2,7 +2,8 @@
 
 Covers:
   POST   /api/v1/knxproj/import          wrong extension → 400, empty → 400,
-                                          valid .knxproj → 200, with adapter_name
+                                          valid .knxproj → 200, with adapter_name,
+                                          password-protected ETS6 → correct/wrong/missing password
   POST   /api/v1/knxproj/import-csv      wrong extension → 400, empty → 400,
                                           invalid format → 400, valid CSV → 200,
                                           valid CSV + adapter_name → creates DPs+bindings,
@@ -13,7 +14,11 @@ Covers:
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import io
 import uuid
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -438,3 +443,108 @@ async def test_delete_group_addresses_clears_all(client, auth_headers):
 
     list_resp = await client.get("/api/v1/knxproj/group-addresses", headers=auth_headers)
     assert list_resp.json()["total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# POST /knxproj/import — password-protected ETS6 files
+# ---------------------------------------------------------------------------
+
+_PROTECTED_PWD = "IntegrationTestPassword"
+_PROTECTED_SALT = b"21.project.ets.knx.org"
+
+
+def _make_protected_ets6_knxproj(password: str) -> bytes:
+    """Build a minimal ETS6-style password-protected .knxproj with one group address."""
+    import pyzipper  # type: ignore[import-untyped]
+
+    aes_pwd = base64.b64encode(
+        hashlib.pbkdf2_hmac(
+            hash_name="sha256",
+            password=password.encode("utf-16-le"),
+            salt=_PROTECTED_SALT,
+            iterations=65536,
+            dklen=32,
+        )
+    )
+    project_xml = b"""<?xml version="1.0" encoding="utf-8"?>
+<KNX xmlns="http://knx.org/xml/project/21">
+    <Project Id="P-0001">
+        <Installations>
+            <Installation Name="Test">
+                <GroupAddresses>
+                    <GroupRanges>
+                        <GroupRange Id="P-0001-0_GR-1" RangeStart="0" RangeEnd="2047" Name="Lights" Puid="1">
+                            <GroupRange Id="P-0001-0_GR-2" RangeStart="0" RangeEnd="255" Name="EG" Puid="2">
+                                <GroupAddress Id="P-0001-0_GA-1" Address="1" Name="Test GA"
+                                              DatapointType="DPST-1-1" Puid="3" Description="" Comment=""/>
+                            </GroupRange>
+                        </GroupRange>
+                    </GroupRanges>
+                </GroupAddresses>
+            </Installation>
+        </Installations>
+    </Project>
+</KNX>"""
+    inner_buf = io.BytesIO()
+    with pyzipper.AESZipFile(inner_buf, "w", compression=zipfile.ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as inner_zf:
+        inner_zf.setpassword(aes_pwd)
+        inner_zf.writestr("0.xml", project_xml)
+        inner_zf.writestr("project.xml", b'<KNX xmlns="http://knx.org/xml/project/21"><Project Id="P-0001"/></KNX>')
+
+    outer_buf = io.BytesIO()
+    with zipfile.ZipFile(outer_buf, "w") as outer_zf:
+        outer_zf.writestr("knx_master.xml", b'<KNX xmlns="http://knx.org/xml/project/21"><MasterData /></KNX>')
+        outer_zf.writestr("P-0001.signature", b"")
+        outer_zf.writestr("P-0001.zip", inner_buf.getvalue())
+    return outer_buf.getvalue()
+
+
+_PROTECTED_BYTES = _make_protected_ets6_knxproj(_PROTECTED_PWD)
+
+
+async def test_import_password_protected_correct_password(client, auth_headers):
+    resp = await client.post(
+        "/api/v1/knxproj/import",
+        files={"file": ("protected.knxproj", _PROTECTED_BYTES, "application/octet-stream")},
+        data={"password": _PROTECTED_PWD},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["imported"] > 0
+    assert "message" in body
+
+
+async def test_import_password_protected_no_password_returns_400(client, auth_headers):
+    resp = await client.post(
+        "/api/v1/knxproj/import",
+        files={"file": ("protected.knxproj", _PROTECTED_BYTES, "application/octet-stream")},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"].lower()
+    assert "passwort" in detail or "verschl" in detail
+
+
+async def test_import_password_protected_wrong_password_returns_400(client, auth_headers):
+    resp = await client.post(
+        "/api/v1/knxproj/import",
+        files={"file": ("protected.knxproj", _PROTECTED_BYTES, "application/octet-stream")},
+        data={"password": "WrongPassword"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"].lower()
+    assert "passwort" in detail or "verschl" in detail
+
+
+async def test_import_password_protected_result_shape(client, auth_headers):
+    resp = await client.post(
+        "/api/v1/knxproj/import",
+        files={"file": ("protected.knxproj", _PROTECTED_BYTES, "application/octet-stream")},
+        data={"password": _PROTECTED_PWD},
+        headers=auth_headers,
+    )
+    body = resp.json()
+    for field in ("imported", "created", "updated", "locations", "trades", "message"):
+        assert field in body, f"missing: {field}"

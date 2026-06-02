@@ -139,6 +139,70 @@ function widgetHasError(w: WidgetInstance): boolean {
   return collectWidgetDpIds(w).some(id => brokenDpIds.value.has(id))
 }
 
+// ── Palette: alphabetisch sortierte Widgets ───────────────────────────────────
+const { locale } = useI18n()
+const sortedWidgets = computed(() =>
+  WidgetRegistry.all().slice().sort((a, b) =>
+    a.label.localeCompare(b.label, locale.value, { sensitivity: 'base' })
+  )
+)
+
+// ── Palette Drag & Drop: Widget aus Palette auf Canvas ziehen ─────────────────
+const canvasRef = ref<HTMLElement | null>(null)
+const paletteDragType = ref<string | null>(null)
+const paletteDropPreview = ref<{ x: number; y: number } | null>(null)
+
+function onPaletteDragStart(e: DragEvent, type: string) {
+  paletteDragType.value = type
+  e.dataTransfer!.setData('text/plain', type)
+  e.dataTransfer!.effectAllowed = 'copy'
+}
+
+function onCanvasDragOver(e: DragEvent) {
+  if (!paletteDragType.value) return
+  e.preventDefault()
+  e.dataTransfer!.dropEffect = 'copy'
+  const pos = canvasGridPos(e)
+  if (pos) paletteDropPreview.value = pos
+}
+
+function onCanvasDragLeave() {
+  paletteDropPreview.value = null
+}
+
+function onCanvasDrop(e: DragEvent) {
+  e.preventDefault()
+  const type = e.dataTransfer?.getData('text/plain') || paletteDragType.value
+  paletteDropPreview.value = null
+  paletteDragType.value = null
+  if (!type) return
+  const def = WidgetRegistry.get(type)
+  if (!def) return
+  const pos = canvasGridPos(e)
+  if (!pos) return
+  insertWidgetAt(type, Math.max(0, Math.min(pos.x, COLS.value - def.defaultW)), Math.max(0, pos.y))
+}
+
+function onPaletteDragEnd() {
+  paletteDragType.value = null
+  paletteDropPreview.value = null
+}
+
+/** Liefert die Grid-Koordinaten (x/y in Zellen) einer DragEvent-Position.
+ *  getBoundingClientRect() liefert bereits viewport-relative Koordinaten;
+ *  ein zusätzliches scrollLeft/scrollTop würde den Scroll-Offset doppelt zählen.
+ */
+function canvasGridPos(e: DragEvent): { x: number; y: number } | null {
+  if (!canvasRef.value) return null
+  const rect = canvasRef.value.getBoundingClientRect()
+  const rawX = e.clientX - rect.left
+  const rawY = e.clientY - rect.top
+  return {
+    x: Math.max(0, Math.floor(rawX / CELL_W.value)),
+    y: Math.max(0, Math.floor(rawY / CELL_H.value)),
+  }
+}
+
 // ── Canvas ────────────────────────────────────────────────────────────────────
 const COLS   = computed(() => config.value.grid_cols)
 const CELL_H = computed(() => config.value.grid_row_height)
@@ -396,10 +460,31 @@ onMounted(async () => {
 })
 
 // ── Widget einfügen ───────────────────────────────────────────────────────────
+
+/** Erzeugt eine WidgetInstance mit Standard-Config und fügt sie dem Grid hinzu. */
+function createAndAddWidget(type: string, px: number, py: number) {
+  const def = WidgetRegistry.get(type)
+  if (!def) return
+  const w: WidgetInstance = {
+    id: newId(),
+    name: '',
+    type,
+    datapoint_id: null,
+    status_datapoint_id: null,
+    x: px, y: py,
+    w: def.defaultW, h: def.defaultH,
+    config: { ...def.defaultConfig },
+  }
+  config.value.widgets.push(w)
+  selectedId.value = w.id
+}
+
+/**
+ * Klick aus Palette: erste freie Position automatisch suchen und Widget einfügen.
+ */
 function insertWidget(type: string) {
   const def = WidgetRegistry.get(type)
   if (!def) return
-
   const existingXY = new Set(
     config.value.widgets.flatMap(w =>
       Array.from({ length: w.w * w.h }, (_, i) =>
@@ -416,19 +501,14 @@ function insertWidget(type: string) {
       if (fits) break outer
     }
   }
+  createAndAddWidget(type, px, py)
+}
 
-  const w: WidgetInstance = {
-    id: newId(),
-    name: '',
-    type,
-    datapoint_id: null,
-    status_datapoint_id: null,
-    x: px, y: py,
-    w: def.defaultW, h: def.defaultH,
-    config: { ...def.defaultConfig },
-  }
-  config.value.widgets.push(w)
-  selectedId.value = w.id
+/**
+ * Drop aus Palette: Widget direkt an der Abwurf-Position einfügen.
+ */
+function insertWidgetAt(type: string, px: number, py: number) {
+  createAndAddWidget(type, px, py)
 }
 
 // ── Widget entfernen ──────────────────────────────────────────────────────────
@@ -681,10 +761,13 @@ const showSettings = ref(false)
         <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider px-3 pt-3 pb-2">{{ $t('editor.title') }}</p>
         <div class="space-y-0.5 px-2 pb-3">
           <button
-            v-for="w in WidgetRegistry.all()"
+            v-for="w in sortedWidgets"
             :key="w.type"
-            class="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white transition-colors text-left"
+            class="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white transition-colors text-left cursor-grab active:cursor-grabbing"
+            draggable="true"
             @click="insertWidget(w.type)"
+            @dragstart="onPaletteDragStart($event, w.type)"
+            @dragend="onPaletteDragEnd"
           >
             <span class="text-lg leading-none w-6 text-center">{{ w.icon }}</span>
             <span class="text-sm">{{ w.label }}</span>
@@ -692,6 +775,7 @@ const showSettings = ref(false)
         </div>
         <div class="px-3 pt-2 pb-3 border-t border-gray-200 dark:border-gray-700">
           <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintClick') }}</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintPaletteDrag') }}</p>
           <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintDrag') }}</p>
           <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintResize') }}</p>
           <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintDelete') }}</p>
@@ -701,6 +785,7 @@ const showSettings = ref(false)
       <!-- ── Grid-Canvas (Mitte) ─────────────────────────────────────────── -->
       <div class="flex-1 overflow-auto bg-white dark:bg-gray-950">
         <div
+          ref="canvasRef"
           class="relative"
           :style="{
             width: canvasGridWidth + 'px',
@@ -711,7 +796,28 @@ const showSettings = ref(false)
             userSelect: drag ? 'none' : 'auto',
           }"
           @click.self="selectedId = null"
+          @dragover="onCanvasDragOver"
+          @dragleave="onCanvasDragLeave"
+          @drop="onCanvasDrop"
         >
+          <!-- Drop-Vorschau beim Ziehen aus der Palette -->
+          <div
+            v-if="paletteDropPreview && paletteDragType"
+            class="absolute pointer-events-none rounded-xl border-2 border-dashed border-blue-400 bg-blue-400/10 z-50 transition-none"
+            :style="(() => {
+              const def = WidgetRegistry.get(paletteDragType)
+              const dw  = def?.defaultW ?? 2
+              const dh  = def?.defaultH ?? 2
+              const cx  = Math.max(0, Math.min(paletteDropPreview.x, COLS - dw))
+              const cy  = Math.max(0, paletteDropPreview.y)
+              return {
+                left:   `${cx * CELL_W}px`,
+                top:    `${cy * CELL_H}px`,
+                width:  `${dw * CELL_W}px`,
+                height: `${dh * CELL_H}px`,
+              }
+            })()"
+          />
           <!-- Widgets -->
           <div
             v-for="w in config.widgets"

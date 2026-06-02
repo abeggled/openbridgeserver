@@ -961,28 +961,31 @@ class TestGateNode:
 
 
 class TestHeatingCircuit:
-    """Tests for the heating_circuit node (Sommer/Winter DIN).
+    """Tests for the heating_circuit node (Sommer/Winter DIN, Mannheimer Methode).
 
     Single 'value' input.  Slot assignment uses fixed time points:
       T1 = first measurement at hour >= 7
-      T2 = first measurement at hour >= 12
-      T3 = first measurement at hour >= 22
-    Each slot is filled ONCE per day; subsequent readings in the same
-    time range are discarded.
+      T2 = first measurement at hour >= 14
+      T3 = first measurement at hour >= 21
+    Each slot is filled ONCE per day using first-crossing semantics:
+    the value captured is the one already on the bus (last_value) when
+    the threshold is crossed, not the triggering measurement.
 
     Test overrides injected via the inputs dict:
-      _slot  – bypass time logic and force a specific slot (t1/t2/t3)
-      _hour  – override wall-clock hour for time-based slot assignment
-      _date  – override wall-clock date (ISO string) for multi-day scenarios
+      _slot        – bypass time logic and force a specific slot (t1/t2/t3)
+      _hour        – override wall-clock hour for time-based slot assignment
+      _date        – override wall-clock date (ISO string) for multi-day scenarios
+      _history_t1/t2/t3 – simulate manager history pre-fill for missing slots
 
-    Hysteresis: ON when ref_temp < temp_winter, OFF when > temp_summer,
-    unchanged between thresholds.
+    Hysteresis: ON when daily_avg < threshold_temp, OFF when daily_avg >= threshold_temp + hysteresis.
     Without historical data the first measurement initialises heating_mode
-    directly: < temp_winter → ON, >= temp_winter → OFF.
+    directly: < threshold_temp → ON, >= threshold_temp → OFF.
+    Slots are NOT reset after daily_avg computation — debug ports always show
+    the last captured values.
     """
 
-    # Default: heating ON below 15 °C, OFF above 20 °C
-    _CFG = {"temp_winter": 15.0, "temp_summer": 20.0}
+    # Default: heating ON below 14 °C, OFF at or above 16 °C (14 + 2 hysteresis)
+    _CFG = {"threshold_temp": 14.0, "hysteresis": 2.0}
 
     @staticmethod
     def _d(day: int) -> str:
@@ -1031,46 +1034,49 @@ class TestHeatingCircuit:
         out, _ = self._run_full_day(10, 12, 8)
         assert out["daily_avg"] == pytest.approx(9.5)
 
-    def test_heating_on_below_temp_winter(self):
-        # daily_avg = (5+6+2*4)/4 = 4.75 < temp_winter=15 → ON
+    def test_heating_on_below_threshold(self):
+        # daily_avg = (5+6+2*4)/4 = 4.75 < threshold=14 → ON
         out, _ = self._run_full_day(5, 6, 4)
         assert out["heating_mode"] == 1
 
-    def test_heating_off_above_temp_summer(self):
-        # daily_avg = (22+24+2*22)/4 = 22.5 > temp_summer=20 → OFF
+    def test_heating_off_above_threshold_plus_hysteresis(self):
+        # daily_avg = (22+24+2*22)/4 = 22.5 >= threshold+hysteresis=16 → OFF
         out, _ = self._run_full_day(22, 24, 22)
         assert out["heating_mode"] == 0
 
     # ── Hysterese ─────────────────────────────────────────────────────────────
 
     def test_hysteresis_stays_on_between_thresholds(self):
-        """Once ON, heating stays ON when temp is between winter and summer."""
+        """Once ON, heating stays ON when daily_avg is between threshold and threshold+hysteresis."""
         state = {}
-        self._run_full_day(5, 6, 4, state=state, date=self._d(0))  # cold → ON
-        out, _ = self._run_full_day(17, 18, 17, state=state, date=self._d(1))  # mild → stays ON
+        self._run_full_day(5, 6, 4, state=state, date=self._d(0))  # daily_avg=4.75 < 14 → ON
+        # Mild day: daily_avg = (14+15+2*14.5)/4 = 14.5 → between 14 and 16 → stays ON
+        out, _ = self._run_full_day(14, 15, 14.5, state=state, date=self._d(1))
         assert out["heating_mode"] == 1
 
     def test_hysteresis_stays_off_between_thresholds(self):
-        """Once OFF, heating stays OFF when temp is between thresholds."""
+        """Once OFF, heating stays OFF when daily_avg is between thresholds."""
+        state = {}
+        self._run_full_day(22, 24, 22, state=state, date=self._d(0))  # daily_avg=22.5 >= 16 → OFF
+        # Mild day: daily_avg = 14.5 → between 14 and 16 → stays OFF
+        out, _ = self._run_full_day(14, 15, 14.5, state=state, date=self._d(1))
+        assert out["heating_mode"] == 0
+
+    def test_hysteresis_turns_on_below_threshold(self):
+        """Heating turns ON once daily_avg drops below threshold_temp."""
         state = {}
         self._run_full_day(22, 24, 22, state=state, date=self._d(0))  # warm → OFF
-        out, _ = self._run_full_day(17, 18, 17, state=state, date=self._d(1))  # mild → stays OFF
-        assert out["heating_mode"] == 0
+        out, _ = self._run_full_day(5, 6, 4, state=state, date=self._d(1))  # cold → ON
+        assert out["heating_mode"] == 1
 
-    def test_hysteresis_turns_off_above_temp_summer(self):
-        """Heating turns OFF once monthly_avg rises above temp_summer.
-
-        1 cold day (avg=4.75) + 9 warm days (avg=22.5):
-        monthly_avg after day 10 = (4.75 + 9×22.5) / 10 = 20.725 > 20 → OFF.
-        """
+    def test_hysteresis_turns_off_above_threshold_plus_hysteresis(self):
+        """Heating turns OFF once daily_avg reaches or exceeds threshold+hysteresis."""
         state = {}
         self._run_full_day(5, 6, 4, state=state, date=self._d(0))  # cold → ON
-        for i in range(9):
-            self._run_full_day(22, 24, 22, state=state, date=self._d(i + 1))
-        out, _ = self._run_full_day(22, 24, 22, state=state, date=self._d(10))
+        out, _ = self._run_full_day(22, 24, 22, state=state, date=self._d(1))  # warm → OFF
         assert out["heating_mode"] == 0
 
-    # ── Anliegender Wert / exakte Zeitpunkte (gemeldeter Bug) ────────────────
+    # ── Anliegender Wert / exakte Zeitpunkte ─────────────────────────────────
 
     def test_value_at_0600_updates_last_value_only(self):
         """A measurement before 07:00 updates last_value but fills no slot."""
@@ -1099,15 +1105,15 @@ class TestHeatingCircuit:
         out, _ = self._run_at_hour(7, 10.0, state=state)
         assert out["t1"] == pytest.approx(10.0)
 
-    def test_t1_not_captured_at_hour_9(self):
-        """Measurement at hour 9 must NOT fill T1 (the reported bug).
+    def test_t1_captured_at_hour_9_when_no_prior_slot(self):
+        """Measurement at hour 9 fills T1 when no earlier measurement exists (Issue #548).
 
-        The old implementation used a window 5–10 h, so 09:50 could overwrite
-        the 07:00 value.  With exact time-point logic only hour==7 triggers T1.
+        "Erste-Kreuzung"-Semantik: T1 = last_value beim ersten Wert ab Stunde ≥ 7.
+        Kein last_value vorhanden → fval (9:00-Wert) wird als beste Näherung verwendet.
         """
         state = {}
         out, _ = self._run_at_hour(9, 15.0, state=state)
-        assert out["t1"] is None
+        assert out["t1"] == pytest.approx(15.0)
 
     def test_t1_not_overwritten_by_second_reading_at_hour_7(self):
         """Once T1 is captured, a further reading during hour 7 is ignored."""
@@ -1116,55 +1122,85 @@ class TestHeatingCircuit:
         out, _ = self._run_at_hour(7, 15.0, state=state)  # same hour → no change
         assert out["t1"] == pytest.approx(10.0)
 
-    def test_t2_uses_last_value_at_1200_boundary(self):
-        """T2 = value present at 12:00 (last_value from hour 11)."""
+    def test_t2_uses_last_value_at_1400_boundary(self):
+        """T2 = value present at 14:00 (last_value from hour 13)."""
         state = {}
         self._run_at_hour(7, 5.0, state=state)  # T1 captured; last_value=5.0
-        self._run_at_hour(11, 12.0, state=state)  # 11:xx → no slot, last_value=12.0
-        out, _ = self._run_at_hour(12, 12.5, state=state)  # 12:xx crosses target
-        assert out["t2"] == pytest.approx(12.0)  # last_value (11:xx), NOT 12.5
-
-    def test_t2_not_captured_at_hour_11(self):
-        """Measurement at hour 11 must not fill T2."""
-        state = {}
-        out, _ = self._run_at_hour(11, 13.0, state=state)
-        assert out["t2"] is None
+        self._run_at_hour(13, 12.0, state=state)  # 13:xx → no T2 slot, last_value=12.0
+        out, _ = self._run_at_hour(14, 12.5, state=state)  # 14:xx crosses T2 target
+        assert out["t2"] == pytest.approx(12.0)  # last_value (13:xx), NOT 12.5
 
     def test_t2_not_captured_at_hour_13(self):
-        """Measurement at hour 13 must not fill T2 (only hour==12 is valid)."""
+        """Measurement at hour 13 must not fill T2 (threshold is 14:00)."""
         state = {}
         out, _ = self._run_at_hour(13, 13.0, state=state)
         assert out["t2"] is None
 
-    def test_t3_uses_last_value_at_2200_boundary(self):
-        """T3 = value present at 22:00 (last_value from earlier)."""
+    def test_t1_captured_at_hour_13_but_not_t2(self):
+        """Measurement at hour 13 fills T1 (≥7) but NOT T2 (threshold 14)."""
         state = {}
-        self._run_at_hour(21, 7.0, state=state)  # 21:xx → no slot, last_value=7.0
-        out, _ = self._run_at_hour(22, 7.5, state=state)  # 22:xx crosses target
-        assert out["t3"] == pytest.approx(7.0)  # last_value (21:xx), NOT 7.5
+        out, _ = self._run_at_hour(13, 13.0, state=state)
+        assert out["t1"] == pytest.approx(13.0)
+        assert out["t2"] is None
 
-    def test_t3_not_captured_at_hour_21(self):
-        """Measurement at hour 21 must not fill T3."""
+    def test_t2_captured_at_hour_14_with_crossing(self):
+        """Measurement at hour 14 with no prior T2 fills both T1 and T2 in one shot (Issue #548)."""
         state = {}
-        out, _ = self._run_at_hour(21, 8.0, state=state)
+        out, _ = self._run_at_hour(14, 14.0, state=state)
+        assert out["t1"] == pytest.approx(14.0)
+        assert out["t2"] == pytest.approx(14.0)
+
+    def test_t3_uses_last_value_at_2100_boundary(self):
+        """T3 = value present at 21:00 (last_value from earlier).
+
+        T1/T2 are pre-set via _slot override.  A reading at 20:xx stores
+        last_value=7.0.  When 21:xx arrives, T3 = 7.0 (last_value), not 7.5.
+        daily_avg = (5.0 + 12.0 + 2×7.0) / 4 = 7.75.
+        """
+        state = {}
+        self._run_slot("t1", 5.0, state=state)  # T1 = 5.0
+        self._run_slot("t2", 12.0, state=state)  # T2 = 12.0
+        self._run_at_hour(20, 7.0, state=state)  # last_value = 7.0 (before T3 time)
+        out, _ = self._run_at_hour(21, 7.5, state=state)  # T3 = 7.0 (last_value), daily_avg fires
+        assert out["t3"] == pytest.approx(7.0)  # last_value, NOT 7.5
+        assert out["daily_avg"] == pytest.approx(7.75)
+        assert out["t3"] is not None  # slots persist after daily_avg computation
+
+    def test_t3_not_captured_at_hour_20(self):
+        """Measurement at hour 20 must not fill T3 (threshold is 21:00)."""
+        state = {}
+        out, _ = self._run_at_hour(20, 8.0, state=state)
         assert out["t3"] is None
 
+    def test_t3_captured_at_hour_21(self):
+        """Measurement at hour 21 fills T3 (threshold hour >= 21)."""
+        state = {}
+        out, _ = self._run_at_hour(21, 8.0, state=state)
+        assert out["t3"] is not None
+
     def test_full_day_via_exact_time_points_computes_daily_avg(self):
-        """Full day: last_value at 07:00, 12:00, 22:00 → daily_avg computed.
+        """Full day: last_value at 07:00, 14:00, 21:00 → daily_avg computed.
 
         Pre-07:00 value = 10.0, triggers at 07:xx with 10.5 → T1=10.0
-        Pre-12:00 value = 14.0, triggers at 12:xx with 14.2 → T2=14.0
-        Pre-22:00 value = 8.0,  triggers at 22:xx with 8.1  → T3=8.0
+        Pre-14:00 value = 14.0, triggers at 14:xx with 14.2 → T2=14.0
+        Pre-21:00 value = 8.0,  triggers at 21:xx with 8.1  → T3=8.0
         daily_avg = (10.0 + 14.0 + 2×8.0) / 4 = 10.0
         """
         state = {}
         self._run_at_hour(6, 10.0, state=state)  # last_value before T1
         self._run_at_hour(7, 10.5, state=state)  # T1 = 10.0 (last_value)
-        self._run_at_hour(11, 14.0, state=state)  # last_value before T2
-        self._run_at_hour(12, 14.2, state=state)  # T2 = 14.0 (last_value)
-        self._run_at_hour(21, 8.0, state=state)  # last_value before T3
-        out, _ = self._run_at_hour(22, 8.1, state=state)  # T3 = 8.0, daily computed
+        self._run_at_hour(13, 14.0, state=state)  # last_value before T2
+        self._run_at_hour(14, 14.2, state=state)  # T2 = 14.0 (last_value)
+        self._run_at_hour(20, 8.0, state=state)  # last_value before T3
+        out, _ = self._run_at_hour(21, 8.1, state=state)  # T3 = 8.0, daily computed
         assert out["daily_avg"] == pytest.approx(10.0)
+
+    def test_slots_persist_after_daily_avg_computation(self):
+        """T1/T2/T3 debug ports retain their values after daily_avg is computed."""
+        out, _ = self._run_full_day(10, 12, 8)
+        assert out["t1"] == pytest.approx(10.0)
+        assert out["t2"] == pytest.approx(12.0)
+        assert out["t3"] == pytest.approx(8.0)
 
     def test_no_double_daily_avg_same_day(self):
         """After the daily avg is computed for a date, further readings on the
@@ -1179,22 +1215,22 @@ class TestHeatingCircuit:
 
     # ── Initialzustand ohne Historik ──────────────────────────────────────────
 
-    def test_initial_heating_mode_below_winter_threshold(self):
-        """With no historical data, first measurement below temp_winter → ON."""
+    def test_initial_heating_mode_below_threshold(self):
+        """With no daily_avg yet, first measurement below threshold_temp → ON."""
         state = {}
-        out, _ = self._run_slot("t1", 5.0, state=state)  # 5 < 15
+        out, _ = self._run_slot("t1", 5.0, state=state)  # 5 < 14
         assert out["heating_mode"] == 1
 
-    def test_initial_heating_mode_above_winter_threshold(self):
-        """With no historical data, first measurement >= temp_winter → OFF."""
+    def test_initial_heating_mode_above_threshold(self):
+        """With no daily_avg yet, first measurement >= threshold_temp → OFF."""
         state = {}
-        out, _ = self._run_slot("t1", 18.0, state=state)  # 18 >= 15
+        out, _ = self._run_slot("t1", 18.0, state=state)  # 18 >= 14
         assert out["heating_mode"] == 0
 
-    def test_initial_heating_mode_exactly_at_winter_threshold(self):
-        """Exactly at temp_winter (15 °C) → summer mode (no heating needed)."""
+    def test_initial_heating_mode_exactly_at_threshold(self):
+        """Exactly at threshold_temp (14 °C) → summer mode (no heating needed)."""
         state = {}
-        out, _ = self._run_slot("t1", 15.0, state=state)
+        out, _ = self._run_slot("t1", 14.0, state=state)
         assert out["heating_mode"] == 0
 
     # ── Mehrere Tage / Debug-Ausgaben ─────────────────────────────────────────
@@ -1216,14 +1252,23 @@ class TestHeatingCircuit:
         out, _ = self._run_full_day(8, 10, 6, state=state, date=self._d(1))
         assert out["monthly_avg"] == pytest.approx(5.5)
 
-    def test_heating_mode_uses_monthly_avg(self):
-        """When monthly_avg is available it drives heating_mode, not daily_avg."""
+    def test_heating_mode_uses_daily_avg(self):
+        """Heating mode is driven by daily_avg, not monthly_avg."""
         state = {}
         for i in range(3):
-            self._run_full_day(22, 24, 22, state=state, date=self._d(i))  # daily_avg ≈ 22.5
-        # Cold day: daily_avg < temp_winter, but monthly_avg is warm → stays OFF
+            self._run_full_day(22, 24, 22, state=state, date=self._d(i))  # daily_avg = 22.5 → OFF
+        # Cold day: daily_avg = 4.75 < threshold (14) → ON, regardless of monthly_avg
         out, _ = self._run_full_day(5, 6, 4, state=state, date=self._d(3))
-        assert out["heating_mode"] == 0
+        assert out["heating_mode"] == 1
+
+    def test_monthly_avg_is_debug_output_only(self):
+        """monthly_avg accumulates correctly as a diagnostic output."""
+        state = {}
+        # Day 1: daily_avg = (4+6+2*2)/4 = 3.5
+        self._run_full_day(4, 6, 2, state=state, date=self._d(0))
+        # Day 2: daily_avg = (8+10+2*6)/4 = 7.5; monthly_avg = (3.5+7.5)/2 = 5.5
+        out, _ = self._run_full_day(8, 10, 6, state=state, date=self._d(1))
+        assert out["monthly_avg"] == pytest.approx(5.5)
 
     def test_no_input_returns_default_heating_mode(self):
         state = {}
@@ -1238,6 +1283,123 @@ class TestHeatingCircuit:
         for i in range(40):
             self._run_full_day(10, 12, 8, state=state, date=self._d(i))
         assert len(state["h"]["daily_temps"]) <= 31
+
+    # ── History-Fallback ──────────────────────────────────────────────────────
+
+    def test_history_fallback_fills_missing_t1(self):
+        """_history_t1 from manager pre-fill is used when T1 is missing for today."""
+        state = {}
+        n1 = node("h", "heating_circuit", self._CFG)
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"h": {"_history_t1": 8.0, "_date": "2025-01-01"}})["h"]
+        assert out["t1"] == pytest.approx(8.0)
+
+    def test_history_fallback_does_not_overwrite_existing_slot(self):
+        """_history_t1 is ignored when T1 is already captured for today."""
+        state = {}
+        self._run_slot("t1", 10.0, state=state, date="2025-01-01")
+        n1 = node("h", "heating_circuit", self._CFG)
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"h": {"_history_t1": 5.0, "_date": "2025-01-01"}})["h"]
+        assert out["t1"] == pytest.approx(10.0)  # live-captured value preserved
+
+    def test_history_fallback_completes_daily_avg(self):
+        """All three history slots trigger daily_avg computation (simulates post-restart fill)."""
+        state = {}
+        n1 = node("h", "heating_circuit", self._CFG)
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute(
+            {
+                "h": {
+                    "_history_t1": 10.0,
+                    "_history_t2": 12.0,
+                    "_history_t3": 8.0,
+                    "_date": "2025-01-01",
+                }
+            }
+        )["h"]
+        # daily_avg = (10 + 12 + 2*8) / 4 = 9.5
+        assert out["daily_avg"] == pytest.approx(9.5)
+        assert out["heating_mode"] == 1  # 9.5 < threshold=14
+
+    # ── Issue #548: Erste-Kreuzung — Sensor trifft Stunden nicht exakt ────────
+
+    def test_single_measurement_at_hour_22_fills_all_slots(self):
+        """A single daily measurement at hour 22 fills T1, T2, and T3 in one shot
+        and immediately triggers the daily_avg computation.
+
+        Reproduces Issue #548: sensors with 4h intervals may never hit hours 7 or 14 exactly.
+        With crossing semantics, the 22:00 reading (22 >= 21) sets T1=T2=T3=last_value.
+        Slots are NOT reset after computation; debug ports retain values.
+        """
+        state = {}
+        self._run_at_hour(6, 25.0, state=state)  # last_value = 25.0
+        out, _ = self._run_at_hour(22, 26.0, state=state)  # T1=T2=T3=25 → daily_avg computed
+        assert out["daily_avg"] == pytest.approx(25.0)  # (25+25+2×25)/4 = 25
+        assert out["monthly_avg"] == pytest.approx(25.0)
+        # Slots retain their values after daily_avg computation (no reset)
+        assert out["t1"] == pytest.approx(25.0)
+        assert out["t2"] == pytest.approx(25.0)
+        assert out["t3"] == pytest.approx(25.0)
+
+    def test_sparse_sensor_4h_interval_computes_daily_avg(self):
+        """Sensor sending every 4 h starting at 2:00 (2/6/10/14/18/22) fills all slots.
+
+        With crossing semantics:
+          T1 captured at 10:00 (10 >= 7) using last_value from 6:00 = 21.0
+          T2 captured at 14:00 (14 >= 14) using last_value from 10:00 = 25.0
+          T3 captured at 22:00 (22 >= 21) using last_value from 18:00 = 26.0
+        daily_avg = (21 + 25 + 2×26) / 4 = 98/4 = 24.5
+        """
+        state = {}
+        temps = {2: 20.0, 6: 21.0, 10: 25.0, 14: 28.0, 18: 26.0, 22: 22.0}
+        out = None
+        for hour in sorted(temps):
+            out, _ = self._run_at_hour(hour, temps[hour], state=state)
+        assert out["daily_avg"] == pytest.approx(24.5)
+        assert out["monthly_avg"] == pytest.approx(24.5)
+        # 24.5 >= threshold+hysteresis (16) → heating OFF
+        assert out["heating_mode"] == 0
+
+    def test_issue_548_heating_turns_off_after_one_warm_day_with_sparse_sensor(self):
+        """Issue #548 scenario: heating was ON from winter, sensor uses 4h intervals.
+
+        With crossing semantics daily_avg is computed even without hitting exact slot hours.
+        A warm day (daily_avg >= threshold+hysteresis) immediately turns heating OFF.
+        """
+        state = {}
+        self._run_full_day(5, 6, 4, state=state, date=self._d(0))
+        assert state["h"]["heating_mode"] == 1  # cold → ON
+
+        temps_day1 = {2: 25.0, 6: 26.0, 10: 28.0, 14: 30.0, 18: 27.0, 22: 24.0}
+        out = None
+        for hour in sorted(temps_day1):
+            out, _ = self._run_at_hour(hour, temps_day1[hour], state=state, date=self._d(1))
+
+        # daily_avg was computed via crossing semantics
+        assert out["daily_avg"] is not None, "daily_avg must be computed with crossing semantics"
+        # Warm day: daily_avg well above threshold+hysteresis → OFF
+        assert out["heating_mode"] == 0
+
+    # ── Legacy config migration ───────────────────────────────────────────────
+
+    def test_legacy_temp_winter_temp_summer_honoured(self):
+        """Existing graphs with temp_winter/temp_summer still work after config rename."""
+        legacy_cfg = {"temp_winter": 12.0, "temp_summer": 18.0}
+        state = {}
+        # Cold day: daily_avg = 4.75 < temp_winter (12) → ON
+        out, _ = self._run_full_day(5, 6, 4, config=legacy_cfg, state=state, date=self._d(0))
+        assert out["heating_mode"] == 1
+        # Warm day: daily_avg = 22.5 >= temp_winter + (temp_summer - temp_winter) = 18 → OFF
+        out2, _ = self._run_full_day(22, 24, 22, config=legacy_cfg, state=state, date=self._d(1))
+        assert out2["heating_mode"] == 0
+
+    def test_legacy_fields_ignored_when_new_fields_present(self):
+        """When new config keys are present, legacy fields are ignored."""
+        mixed_cfg = {"threshold_temp": 14.0, "hysteresis": 2.0, "temp_winter": 5.0, "temp_summer": 6.0}
+        out, _ = self._run_full_day(10, 12, 8, config=mixed_cfg)
+        # daily_avg = 9.5 < threshold=14 → ON (uses new key, not legacy temp_winter=5)
+        assert out["heating_mode"] == 1
 
 
 # ===========================================================================

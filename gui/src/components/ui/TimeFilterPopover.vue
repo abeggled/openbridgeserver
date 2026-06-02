@@ -20,19 +20,19 @@
         data-testid="range-section"
       >
         <div class="flex items-center justify-between">
-          <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500">Bereich</h4>
+          <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500">{{ $t('ringbuffer.filter.rangeSection') }}</h4>
           <span v-if="pointModeActive" class="text-xs text-amber-500" data-testid="range-overridden">
-            wird durch Zeitpunkt-Eingabe überschrieben
+            {{ $t('ringbuffer.filter.rangeOverridden') }}
           </span>
         </div>
         <div class="flex flex-col gap-1">
-          <label class="text-xs text-slate-500">Ab</label>
+          <label class="text-xs text-slate-500">{{ $t('ringbuffer.filter.from') }}</label>
           <input
             v-model="form.fromText"
             type="text"
             class="input"
             data-testid="input-from"
-            placeholder="-1h 10min, 14:30, 2026-05-11 14:30"
+            :placeholder="$t('ringbuffer.filter.fromPlaceholder')"
             :disabled="pointModeActive"
           />
           <span :class="['text-xs', fromPreview.error ? 'text-red-500' : 'text-slate-400']" data-testid="preview-from">
@@ -40,13 +40,13 @@
           </span>
         </div>
         <div class="flex flex-col gap-1">
-          <label class="text-xs text-slate-500">Bis</label>
+          <label class="text-xs text-slate-500">{{ $t('ringbuffer.filter.to') }}</label>
           <input
             v-model="form.toText"
             type="text"
             class="input"
             data-testid="input-to"
-            placeholder="-5min, 14:50, leer = jetzt"
+            :placeholder="$t('ringbuffer.filter.toPlaceholder')"
             :disabled="pointModeActive"
           />
           <span :class="['text-xs', toPreview.error ? 'text-red-500' : 'text-slate-400']" data-testid="preview-to">
@@ -59,28 +59,28 @@
 
       <!-- Modus 2: Zeitpunkt ± Spanne -->
       <section class="flex flex-col gap-2" data-testid="point-section">
-        <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500">Zeitpunkt ± Spanne</h4>
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500">{{ $t('ringbuffer.filter.pointSection') }}</h4>
         <div class="flex flex-col gap-1">
-          <label class="text-xs text-slate-500">Um</label>
+          <label class="text-xs text-slate-500">{{ $t('ringbuffer.filter.at') }}</label>
           <input
             v-model="form.pointText"
             type="text"
             class="input"
             data-testid="input-point"
-            placeholder="-1h, 14:00, 2026-05-11 14:00"
+            :placeholder="$t('ringbuffer.filter.pointPlaceholder')"
           />
           <span :class="['text-xs', pointPreview.error ? 'text-red-500' : 'text-slate-400']" data-testid="preview-point">
             {{ pointPreview.label }}
           </span>
         </div>
         <div class="flex flex-col gap-1">
-          <label class="text-xs text-slate-500">±</label>
+          <label class="text-xs text-slate-500">{{ $t('ringbuffer.filter.span') }}</label>
           <input
             v-model="form.spanText"
             type="text"
             class="input"
             data-testid="input-span"
-            placeholder="10min, 1h"
+            :placeholder="$t('ringbuffer.filter.spanPlaceholder')"
           />
           <span :class="['text-xs', spanPreview.error ? 'text-red-500' : 'text-slate-400']" data-testid="preview-span">
             {{ spanPreview.label }}
@@ -90,10 +90,10 @@
 
       <div class="flex justify-between pt-2">
         <button type="button" class="btn-ghost btn-sm" data-testid="btn-reset" @click="reset">
-          Filter aus
+          {{ $t('ringbuffer.filter.clear') }}
         </button>
         <button type="button" class="btn-primary btn-sm" data-testid="btn-apply" @click="apply">
-          Anwenden
+          {{ $t('ringbuffer.filter.apply') }}
         </button>
       </div>
     </div>
@@ -102,11 +102,14 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   parseDurationToken,
   parseTimePointToken,
   formatTimeFilter,
 } from '@/composables/useTimeFilterParser'
+
+const { t } = useI18n()
 
 const props = defineProps({
   modelValue: { type: Object, default: null },
@@ -188,21 +191,24 @@ function previewBound(text) {
   if (!raw) return { value: null, label: '', error: false }
   if (raw.startsWith('-') || raw.startsWith('+')) {
     const d = parseDurationToken(raw)
-    if (!d) return { value: null, label: 'ungültig', error: true }
+    if (!d) return { value: null, label: t('ringbuffer.filter.invalid'), error: true }
     const target = new Date(Date.now() + d.sign * d.seconds * 1000)
-    return { value: d, label: `→ ${labelDate(target)}`, error: false }
+    const preview = `→ ${labelDate(target)}`
+    return { value: d, label: preview, error: false }
   }
   const dt = parseTimePointToken(raw)
-  if (!dt) return { value: null, label: 'ungültig', error: true }
-  return { value: dt, label: `→ ${labelDate(dt)}`, error: false }
+  if (!dt) return { value: null, label: t('ringbuffer.filter.invalid'), error: true }
+  const preview = `→ ${labelDate(dt)}`
+  return { value: dt, label: preview, error: false }
 }
 
 function previewDuration(text) {
   const raw = String(text || '').trim()
   if (!raw) return { value: null, label: '', error: false }
   const d = parseDurationToken(raw)
-  if (!d) return { value: null, label: 'ungültig', error: true }
-  return { value: { ...d, sign: 1 }, label: `→ ± ${formatDurationLocal(d.seconds)}`, error: false }
+  if (!d) return { value: null, label: t('ringbuffer.filter.invalid'), error: true }
+  const preview = `→ ± ${formatDurationLocal(d.seconds)}`
+  return { value: { ...d, sign: 1 }, label: preview, error: false }
 }
 
 function labelDate(d) {
@@ -217,7 +223,7 @@ const spanPreview = computed(() => previewDuration(form.spanText))
 
 const pointModeActive = computed(() => Boolean(pointPreview.value.value) && Boolean(spanPreview.value.value))
 
-const triggerLabel = computed(() => formatTimeFilter(props.modelValue))
+const triggerLabel = computed(() => formatTimeFilter(props.modelValue, t))
 
 function resolveToDate(b) {
   if (b instanceof Date) return b

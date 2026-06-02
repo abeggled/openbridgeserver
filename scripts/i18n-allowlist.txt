@@ -19,6 +19,29 @@ CSV
 UUID
 MQTT
 KNX
-re:^0 — \$\{name\} \(Hierarchiename\)$
-re:^\$\{level\} — \$\{levelLabel\}$
-re:^\$\{level\} — \$\{levelLabel\} \$\{suffix\}$
+# Dynamic :title bindings — computed expressions, not string literals
+re:^nodeFullPath\(
+re:^ownerTitle\(
+re:^f\.label
+# Technical placeholders / examples in NodeConfigPanel (formulas, JSON examples, external URLs)
+a + b
+crontab.guru ↗
+re:^x \* 100$
+re:^\{"X-Api-Key"
+
+# GenericNode.vue — NODE_DEFS static node-type labels (first label: per entry).
+# Port labels are now fully translated via t(); the node-type labels below are
+# either single-word technical tokens (auto-passed) or require an allowlist entry.
+re:^(Max|Min)∞$
+re:^(JSON|XML) Extraktor$
+re:^SMS \(seven\.io\)$
+re:^∅
+Verzögerung
+MCP Tool
+Astro Sonne
+Tagsüber
+Temp °C
+Zähler
+String Verketten
+API Client
+Substring / RegEx

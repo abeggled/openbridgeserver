@@ -184,7 +184,6 @@ def test_install_attaches_to_root_logger():
     for h in list(root.handlers):
         if isinstance(h, LogBufferHandler):
             root.removeHandler(h)
-    loop.close()
 
 
 def test_set_log_buffer_level_updates_installed_handler():
@@ -213,33 +212,69 @@ def test_set_log_buffer_level_updates_installed_handler():
     assert "captured after runtime level change" in entries[0]["message"]
 
     root.setLevel(old_level)
-    loop.close()
 
 
-def test_install_attaches_to_non_propagating_uvicorn_loggers():
+def test_install_attaches_to_non_propagating_uvicorn_error_logger_only():
     import asyncio
 
     from obs.log_buffer import LogBufferHandler, get_log_buffer
 
     access_logger = logging.getLogger("uvicorn.access")
-    old_propagate = access_logger.propagate
-    old_level = access_logger.level
+    error_logger = logging.getLogger("uvicorn.error")
+
+    old_access_propagate = access_logger.propagate
+    old_error_propagate = error_logger.propagate
+    old_access_level = access_logger.level
+    old_error_level = error_logger.level
+
     access_logger.propagate = False
+    error_logger.propagate = False
+    access_logger.setLevel(logging.INFO)
+    error_logger.setLevel(logging.INFO)
+
+    loop = asyncio.new_event_loop()
+    LogBufferHandler.install(loop, level=logging.INFO)
+
+    assert not any(isinstance(h, LogBufferHandler) for h in access_logger.handlers)
+    assert any(isinstance(h, LogBufferHandler) for h in error_logger.handlers)
+
+    access_logger.info('127.0.0.1:1234 - "GET /api/v1/system/logs HTTP/1.1" 200 OK')
+    error_logger.info("startup complete")
+
+    entries = get_log_buffer()
+    assert len(entries) == 1
+    assert entries[0]["logger"] == "uvicorn.error"
+    assert "startup complete" in entries[0]["message"]
+
+    access_logger.propagate = old_access_propagate
+    error_logger.propagate = old_error_propagate
+    access_logger.setLevel(old_access_level)
+    error_logger.setLevel(old_error_level)
+
+    loop.close()
+
+
+def test_handler_ignores_propagating_uvicorn_access_records():
+    import asyncio
+
+    from obs.log_buffer import LogBufferHandler, get_log_buffer
+
+    access_logger = logging.getLogger("uvicorn.access")
+    old_access_propagate = access_logger.propagate
+    old_access_level = access_logger.level
+
+    access_logger.propagate = True
     access_logger.setLevel(logging.INFO)
 
     loop = asyncio.new_event_loop()
     LogBufferHandler.install(loop, level=logging.INFO)
 
-    assert any(isinstance(h, LogBufferHandler) for h in access_logger.handlers)
+    access_logger.info('127.0.0.1:1234 - "GET /api/v1/ws?token=secret HTTP/1.1" 101 Switching Protocols')
 
-    access_logger.info('127.0.0.1:1234 - "GET /api/v1/system/logs HTTP/1.1" 200 OK')
-    entries = get_log_buffer()
-    assert len(entries) == 1
-    assert entries[0]["logger"] == "uvicorn.access"
-    assert "GET /api/v1/system/logs" in entries[0]["message"]
+    assert get_log_buffer() == []
 
-    access_logger.propagate = old_propagate
-    access_logger.setLevel(old_level)
+    access_logger.propagate = old_access_propagate
+    access_logger.setLevel(old_access_level)
     loop.close()
 
 

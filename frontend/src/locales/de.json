@@ -93,7 +93,7 @@
       "bottom-left": "Unten links",
       "bottom-right": "Unten rechts"
     },
-    "hintClick": "Klick → einfügen",
+    "hintClick": "Klick → einfügen (erste freie Position)",
     "hintDrag": "Ziehen → verschieben",
     "hintResize": "↘ Handle → Größe ändern",
     "hintDelete": "Entf → Widget löschen",
@@ -119,7 +119,8 @@
     "posX": "X",
     "posY": "Y",
     "widthShort": "B",
-    "heightShort": "H"
+    "heightShort": "H",
+    "hintPaletteDrag": "Aus Palette ziehen → direkt platzieren"
   },
   "viewer": {
     "noVisuSelected": "Keine Visu ausgewählt"
@@ -418,7 +419,10 @@
         "last_week": "Letzte Woche",
         "last_month": "Letzter Monat"
       },
-      "defaultTimeRange": "Standard-Zeitbereich"
+      "defaultTimeRange": "Standard-Zeitbereich",
+      "selectTimeRange": "Zeitbereich wählen",
+      "editorPlaceholder": "Verlaufs-Chart",
+      "seriesFallback": "Serie {n}"
     },
     "energiefluss": {
       "titleLabel": "Titel (optional)",
@@ -689,9 +693,9 @@
       "alignLeft": "Links",
       "alignCenter": "Zentriert",
       "alignRight": "Rechts",
-    "markdownRef": "Markdown-Kurzreferenz",
-    "noText": "Kein Text"
-  },
+      "markdownRef": "Markdown-Kurzreferenz",
+      "noText": "Kein Text"
+    },
     "toggle": {
       "states": "Zustände",
       "stateOn": "EIN (true)",
@@ -766,7 +770,8 @@
       "clickForFullViewTitle": "Klicken für Vollansicht",
       "qualityBadTitle": "Qualität: schlecht",
       "qualityUncertainTitle": "Qualität: undefiniert",
-      "selectTimeRangeTitle": "Zeitbereich wählen"
+      "selectTimeRangeTitle": "Zeitbereich wählen",
+      "historyFallback": "Verlauf"
     },
     "wetter": {
       "labelCity": "Bezeichnung (Ortname)",

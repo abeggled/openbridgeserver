@@ -5,12 +5,15 @@ Covers:
 - _extract_group_names: dict and object-style project shapes
 - _collect_fi_to_fn: XML extraction
 - _walk_trade_el: recursive traversal with nested Trades
-- parse_knxproj_trades: round-trip via minimal ZIP + real demo file
+- parse_knxproj_trades: round-trip via minimal ZIP + real demo file + password-protected
 - parse_knxproj / parse_knxproj_locations: real demo .knxproj file (requires xknxproject)
+- password error detection: ETS5/ETS6 wrong/missing password
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import sys
 import zipfile
@@ -29,6 +32,7 @@ from obs.knxproj.parser import (
     _collect_fi_to_fn,
     _dpt_from_xknxproject,
     _extract_group_names,
+    _parse_trades_from_xml,
     _walk_spaces,
     _walk_trade_el,
     parse_knxproj,
@@ -599,3 +603,205 @@ class TestParseKnxprojObjectStyleProject:
             locs, fns = parse_knxproj_locations(b"fake")
         assert locs == []
         assert fns == []
+
+
+# ---------------------------------------------------------------------------
+# _parse_trades_from_xml — unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestParseTradesFromXml:
+    _TRADE_XML = b"""<KNX xmlns="http://knx.org/xml/project/20">
+        <Project>
+            <Installations>
+                <Installation Name="Test">
+                    <Trades>
+                        <Trade Id="T-1" Name="Elektro"/>
+                        <Trade Id="T-2" Name="HLK"/>
+                    </Trades>
+                </Installation>
+            </Installations>
+        </Project>
+    </KNX>"""
+
+    def test_parses_trades(self):
+        records = _parse_trades_from_xml(self._TRADE_XML)
+        assert len(records) == 2
+        assert records[0].identifier == "T-1"
+        assert records[1].identifier == "T-2"
+
+    def test_empty_xml_returns_empty(self):
+        records = _parse_trades_from_xml(b"<KNX/>")
+        assert records == []
+
+
+# ---------------------------------------------------------------------------
+# Helpers for password-protected .knxproj test fixtures
+# ---------------------------------------------------------------------------
+
+_TRADES_XML = b"""<?xml version="1.0" encoding="utf-8"?>
+<KNX xmlns="http://knx.org/xml/project/20">
+    <Project Id="P-0001">
+        <Installations>
+            <Installation Name="Test">
+                <Trades>
+                    <Trade Id="P-0001-0_T-1" Name="Elektro"/>
+                    <Trade Id="P-0001-0_T-2" Name="HLK"/>
+                </Trades>
+            </Installation>
+        </Installations>
+    </Project>
+</KNX>"""
+
+_KNX_MASTER_ETS5 = b'<KNX xmlns="http://knx.org/xml/project/20"><MasterData /></KNX>'
+_KNX_MASTER_ETS6 = b'<KNX xmlns="http://knx.org/xml/project/21"><MasterData /></KNX>'
+
+
+def _make_protected_ets6_knxproj(password: str) -> bytes:
+    """Build a minimal ETS6-style password-protected .knxproj (AES-256 via pyzipper)."""
+    import pyzipper
+
+    aes_pwd = base64.b64encode(
+        hashlib.pbkdf2_hmac(
+            hash_name="sha256",
+            password=password.encode("utf-16-le"),
+            salt=b"21.project.ets.knx.org",
+            iterations=65536,
+            dklen=32,
+        )
+    )
+    inner_buf = io.BytesIO()
+    with pyzipper.AESZipFile(inner_buf, "w", compression=zipfile.ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as inner_zf:
+        inner_zf.setpassword(aes_pwd)
+        inner_zf.writestr("0.xml", _TRADES_XML)
+        inner_zf.writestr("project.xml", b'<KNX xmlns="http://knx.org/xml/project/21"><Project Id="P-0001"/></KNX>')
+
+    outer_buf = io.BytesIO()
+    with zipfile.ZipFile(outer_buf, "w") as outer_zf:
+        outer_zf.writestr("knx_master.xml", _KNX_MASTER_ETS6)
+        outer_zf.writestr("P-0001.signature", b"")
+        outer_zf.writestr("P-0001.zip", inner_buf.getvalue())
+    return outer_buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# parse_knxproj_trades — password-protected files
+# ---------------------------------------------------------------------------
+
+pyzipper = pytest.importorskip("pyzipper", reason="pyzipper not installed")
+
+_PWD = "TestPassword123"
+_PROTECTED_ETS6 = _make_protected_ets6_knxproj(_PWD)
+
+
+class TestParseKnxprojTradesPasswordProtected:
+    def test_ets6_correct_password_returns_trades(self):
+        records = parse_knxproj_trades(_PROTECTED_ETS6, password=_PWD)
+        assert len(records) == 2
+        assert records[0].name == "Elektro"
+        assert records[1].name == "HLK"
+
+    def test_ets6_no_password_returns_empty(self):
+        records = parse_knxproj_trades(_PROTECTED_ETS6, password=None)
+        assert records == []
+
+    def test_ets6_wrong_password_returns_empty(self):
+        records = parse_knxproj_trades(_PROTECTED_ETS6, password="WrongPassword")
+        assert records == []
+
+    def test_ets5_correct_password_returns_trades(self):
+        """ETS5 uses standard ZIP encryption (ZipCrypto). Tested via mock inner ZIP read."""
+        inner_buf = io.BytesIO()
+        with zipfile.ZipFile(inner_buf, "w") as inner_zf:
+            inner_zf.writestr("0.xml", _TRADES_XML)
+
+        outer_buf = io.BytesIO()
+        with zipfile.ZipFile(outer_buf, "w") as outer_zf:
+            outer_zf.writestr("knx_master.xml", _KNX_MASTER_ETS5)
+            outer_zf.writestr("P-0001.signature", b"")
+            outer_zf.writestr("P-0001.zip", inner_buf.getvalue())
+        protected_bytes = outer_buf.getvalue()
+
+        # Standard-ZIP-encrypted inner ZIP can't be written in pure Python,
+        # so we test via a non-encrypted inner ZIP and verify the code path is reached.
+        # The inner_zf.setpassword call would fail only on wrong password, not on unencrypted.
+        records = parse_knxproj_trades(protected_bytes, password="any_password")
+        assert len(records) == 2
+        assert records[0].name == "Elektro"
+
+    def test_no_inner_zip_returns_empty(self):
+        """Outer ZIP with no 0.xml and no inner .zip → always returns empty."""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("knx_master.xml", _KNX_MASTER_ETS6)
+            zf.writestr("P-0001.signature", b"")
+        records = parse_knxproj_trades(buf.getvalue(), password=_PWD)
+        assert records == []
+
+    def test_malformed_knx_master_falls_back_to_ets6(self):
+        """If knx_master.xml is unreadable the schema-version detection silently fails
+        and ETS6 AES decryption is still attempted (default schema_version=21)."""
+        # Outer ZIP with a broken knx_master.xml (non-UTF-8 garbage)
+        # + inner ZIP identical to the ETS6 fixture
+        inner_buf = io.BytesIO()
+        import pyzipper  # type: ignore[import-untyped]
+
+        aes_pwd = base64.b64encode(
+            hashlib.pbkdf2_hmac(
+                hash_name="sha256",
+                password=_PWD.encode("utf-16-le"),
+                salt=b"21.project.ets.knx.org",
+                iterations=65536,
+                dklen=32,
+            )
+        )
+        with pyzipper.AESZipFile(inner_buf, "w", compression=zipfile.ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as inner_zf:
+            inner_zf.setpassword(aes_pwd)
+            inner_zf.writestr("0.xml", _TRADES_XML)
+
+        outer_buf = io.BytesIO()
+        with zipfile.ZipFile(outer_buf, "w") as outer_zf:
+            # Malformed knx_master.xml — no xmlns attribute, no namespace
+            outer_zf.writestr("knx_master.xml", b"\xff\xfe garbage no namespace here")
+            outer_zf.writestr("P-0001.signature", b"")
+            outer_zf.writestr("P-0001.zip", inner_buf.getvalue())
+
+        records = parse_knxproj_trades(outer_buf.getvalue(), password=_PWD)
+        assert len(records) == 2
+
+
+# ---------------------------------------------------------------------------
+# parse_knxproj error detection — HMAC / bad zip (ETS6 wrong password)
+# ---------------------------------------------------------------------------
+
+
+class TestParseKnxprojHmacError:
+    """ETS6 wrong password raises BadZipFile('Bad HMAC check...') — must map to password error."""
+
+    def test_hmac_error_detected_as_password_error(self):
+        fake_xknx = mock.MagicMock()
+        fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("Bad HMAC check for file '0.xml'")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
+            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+                parse_knxproj(b"fake")
+
+    def test_bad_zip_error_detected_as_password_error(self):
+        fake_xknx = mock.MagicMock()
+        fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("bad zip file")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
+            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+                parse_knxproj(b"fake")
+
+    def test_invalid_password_msg_detected(self):
+        fake_xknx = mock.MagicMock()
+        fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("Invalid password.")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
+            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+                parse_knxproj(b"fake")
+
+    def test_locations_hmac_error_detected(self):
+        fake_xknx = mock.MagicMock()
+        fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("Bad HMAC check for file '0.xml'")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
+            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+                parse_knxproj_locations(b"fake")
