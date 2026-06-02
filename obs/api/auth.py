@@ -72,7 +72,10 @@ def verify_password(plain: str, stored: str) -> bool:
 
 
 def hash_api_key(key: str) -> str:
-    return hashlib.sha256(key.encode()).hexdigest()
+    # SHA-256 is appropriate for API key tokens: they are 32-byte random values
+    # (256 bits of entropy), so speed-based brute-force attacks are infeasible.
+    # This is intentionally NOT a password hash — do not replace with bcrypt/PBKDF2.
+    return hashlib.sha256(key.encode()).hexdigest()  # nosec B324
 
 
 def generate_api_key() -> str:

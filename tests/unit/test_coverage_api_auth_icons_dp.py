@@ -262,10 +262,7 @@ class TestGetCurrentUser:
 
     @pytest.mark.asyncio
     async def test_with_valid_api_key(self):
-        from obs.api.auth import hash_api_key
-
         api_key = "obs_" + "a" * 64
-        _ = hash_api_key(api_key)
         row = _make_row(subject="alice")
         db = _DbStub(fetchone_result=row)
         result = await auth_module.get_current_user(credentials=None, api_key=api_key, db=db)
