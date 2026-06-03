@@ -34,6 +34,8 @@ export function makeRingbufferApiMock(overrides = {}) {
         max_file_size_bytes: null,
         max_age: null,
         file_size_bytes: 0,
+        last_recovery_at: null,
+        last_recovery_file_count: 0,
       },
     }),
     config: vi.fn().mockResolvedValue({ data: {} }),

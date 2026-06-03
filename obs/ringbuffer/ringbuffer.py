@@ -126,6 +126,8 @@ class RingBuffer:
         self._max_age = max_age
         self._conn: aiosqlite.Connection | None = None
         self._last_values: dict[str, Any] = {}  # dp_id → last recorded value
+        self._last_recovery_at: str | None = None
+        self._last_recovery_files: list[str] = []
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -768,6 +770,8 @@ class RingBuffer:
                 "max_file_size_bytes": self._max_file_size_bytes,
                 "max_age": self._max_age,
                 "file_size_bytes": 0,
+                "last_recovery_at": self._last_recovery_at,
+                "last_recovery_file_count": len(self._last_recovery_files),
             }
         try:
             async with self._conn.execute("SELECT COUNT(*) AS c, MIN(ts) AS oldest, MAX(ts) AS newest FROM ringbuffer") as cur:
@@ -790,6 +794,8 @@ class RingBuffer:
             "max_file_size_bytes": self._max_file_size_bytes,
             "max_age": self._max_age,
             "file_size_bytes": await self._current_storage_bytes(),
+            "last_recovery_at": self._last_recovery_at,
+            "last_recovery_file_count": len(self._last_recovery_files),
         }
 
     async def _persist_metadata_indexes(self, entry_id: int, metadata: dict[str, Any]) -> None:
@@ -867,6 +873,8 @@ class RingBuffer:
         self._cleanup_quarantine_files()
         await self._open_connection_locked()
         self._last_values.clear()
+        self._last_recovery_at = _isoformat_utc(datetime.now(UTC))
+        self._last_recovery_files = moved_paths
         logger.warning("RingBuffer recovered with empty database; quarantined files=%s", moved_paths)
 
     def _quarantine_storage_files(self) -> list[str]:

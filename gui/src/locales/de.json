@@ -744,6 +744,7 @@
     "liveTitle": "Live — WebSocket verbunden, Updates aktiv",
     "offlineTitle": "WebSocket offline",
     "queryFailed": "Monitor-Abfrage fehlgeschlagen",
+    "recoveryNotice": "Monitor-Self-Healing wurde um {ts} ausgeführt. Der bisherige Monitor-Puffer wurde verworfen; {n} beschädigte Datei(en) wurden isoliert.",
     "pause": "⏸ Pause",
     "resume": "▶ Resume",
     "statsTitle": "Ringbuffer Statistik",

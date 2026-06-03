@@ -66,6 +66,14 @@
       @deleted="onFilterEditorDeleted"
     />
 
+    <div
+      v-if="recoveryNotice"
+      class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300"
+      data-testid="ringbuffer-recovery-notice"
+    >
+      {{ recoveryNotice }}
+    </div>
+
     <!-- Soft-modal CSV/TSV export dialog (#427) -->
     <ExportDialog
       v-model="showExportDialog"
@@ -163,6 +171,7 @@ const showFilterEditor = ref(false)
 const showExportDialog = ref(false)
 const editorTargetId = ref(null)
 const topbarChipsRef = ref(null)
+const recoveryNotice = ref('')
 
 function onEditSet(id) {
   editorTargetId.value = id
@@ -295,6 +304,22 @@ async function loadFiltersets() {
   }
 }
 
+async function loadRecoveryNotice() {
+  try {
+    const { data } = await ringbufferApi.stats()
+    if (!data?.last_recovery_at) {
+      recoveryNotice.value = ''
+      return
+    }
+    recoveryNotice.value = t('ringbuffer.recoveryNotice', {
+      ts: fmtDateTime(data.last_recovery_at),
+      n: Number(data.last_recovery_file_count ?? 0),
+    })
+  } catch {
+    recoveryNotice.value = ''
+  }
+}
+
 function buildQueryV2() {
   const payload = {
     filters: {},
@@ -401,6 +426,7 @@ async function load() {
     entries.value = []
     listError.value = extractErrorMessage(error, t('ringbuffer.queryFailed'))
   } finally {
+    await loadRecoveryNotice()
     loading.value = false
   }
 }

@@ -51,8 +51,11 @@ async def test_file_storage_recovers_malformed_database_on_start(tmp_path: Path)
     try:
         await _record_value(rb, 1, "2026-01-01T00:00:00.000Z")
         entries = await rb.query(q="dp-storage-v2", limit=10)
+        stats = await rb.stats()
 
         assert [entry.new_value for entry in entries] == [1]
+        assert stats["last_recovery_at"]
+        assert stats["last_recovery_file_count"] == 1
         assert list(tmp_path.glob("ringbuffer-malformed-start.db.corrupt-*"))
     finally:
         await rb.stop()
