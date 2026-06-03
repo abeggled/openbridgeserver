@@ -726,7 +726,7 @@
       "valuePlaceholder": "true, false, 1 ...",
       "reset": "Rückfall",
       "resetValue": "Rückfallwert",
-      "resetDelay": "Delay (ms)",
+      "resetDelay": "Verzögerung (ms)",
       "sent": "Gesendet",
       "error": "Fehler",
       "empty": "Keine Tasten konfiguriert.",

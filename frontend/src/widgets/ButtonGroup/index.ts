@@ -18,7 +18,7 @@ WidgetRegistry.register({
     buttons: [
       {
         id: 'button-1',
-        label: '',
+        label: 'widgets.buttongroup.defaultButton',
         icon: '',
         color: '#3b82f6',
         value: 'true',

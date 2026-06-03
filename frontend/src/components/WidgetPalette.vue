@@ -1,21 +1,17 @@
 <!-- Widget-Palette für den Editor: zeigt alle registrierten Widgets, gruppiert nach Kategorie -->
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { useLocalizedText } from '@/composables/useLocalizedText'
 import { WidgetRegistry } from '@/widgets/registry'
 
 const emit = defineEmits<{
   (e: 'insert', type: string): void
 }>()
 
-const { t, te, locale } = useI18n()
+const { locale, widgetLabel, widgetGroupLabel } = useLocalizedText()
 
 const GROUP_ORDER = ['Steuerung', 'Anzeige', 'Medien & Sonstiges']
 const DEFAULT_GROUP = 'Sonstiges'
-
-function widgetLabel(label: string): string {
-  return te(label) ? t(label) : label
-}
 
 const groups = computed(() => {
   const map = new Map<string, ReturnType<typeof WidgetRegistry.all>>()
@@ -35,7 +31,7 @@ const groups = computed(() => {
     if (ia !== -1 && ib !== -1) return ia - ib
     if (ia !== -1) return -1
     if (ib !== -1) return 1
-    return a.localeCompare(b)
+    return widgetGroupLabel(a).localeCompare(widgetGroupLabel(b), locale.value, { sensitivity: 'base' })
   })
 })
 </script>
@@ -48,7 +44,7 @@ const groups = computed(() => {
       :key="group"
       class="mb-4"
     >
-      <p class="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1 px-1">{{ ($t as any)('widgetGroups.' + group, group) }}</p>
+      <p class="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1 px-1">{{ widgetGroupLabel(group) }}</p>
       <div class="space-y-1">
         <button
           v-for="w in widgets"

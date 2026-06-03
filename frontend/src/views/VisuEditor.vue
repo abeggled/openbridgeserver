@@ -36,6 +36,7 @@ import DataPointPicker from '@/components/DataPointPicker.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
 import AuthButton from '@/components/AuthButton.vue'
 import { datapoints as dpApi, visuBackgrounds as bgApi } from '@/api/client'
+import { useLocalizedText } from '@/composables/useLocalizedText'
 import { useVisuBackgrounds } from '@/composables/useVisuBackgrounds'
 import {
   cssBackgroundPosition,
@@ -74,7 +75,8 @@ import '@/widgets/Grundriss/index'
 import '@/widgets/HorizontalBar/index'
 
 // ── Props / Router / Store ────────────────────────────────────────────────────
-const { t, locale, te } = useI18n()
+const { t } = useI18n()
+const { locale, widgetLabel } = useLocalizedText()
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const store = useVisuStore()
@@ -99,10 +101,6 @@ const selectedWidget = computed(() =>
 const selectedDef = computed(() =>
   selectedWidget.value ? WidgetRegistry.get(selectedWidget.value.type) : null,
 )
-
-function widgetLabel(label: string): string {
-  return te(label) ? t(label) : label
-}
 
 const showPaletteMobile = ref(false)
 const showConfigMobile = ref(false)
@@ -145,13 +143,9 @@ function widgetHasError(w: WidgetInstance): boolean {
 }
 
 // ── Palette: alphabetisch sortierte Widgets ───────────────────────────────────
-function widgetSortLabel(label: string): string {
-  return widgetLabel(label)
-}
-
 const sortedWidgets = computed(() =>
   WidgetRegistry.all().slice().sort((a, b) =>
-    widgetSortLabel(a.label).localeCompare(widgetSortLabel(b.label), locale.value, { sensitivity: 'base' })
+    widgetLabel(a.label).localeCompare(widgetLabel(b.label), locale.value, { sensitivity: 'base' })
   )
 )
 
