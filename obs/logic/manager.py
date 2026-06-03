@@ -267,7 +267,7 @@ def _build_http_host_header(hostname_ascii: str, scheme: str, port: int | None) 
     return host_header
 
 
-def _build_api_client_fetch_target(url: str) -> tuple[str, dict[str, str], dict[str, str]]:
+def _build_api_client_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
     parsed = _parse_http_url(url)
     if not parsed:
         raise ValueError("Invalid URL target")
@@ -284,13 +284,21 @@ def _build_api_client_fetch_target(url: str) -> tuple[str, dict[str, str], dict[
     if not addresses:
         raise ValueError("Blocked URL target")
 
-    pinned_ip = addresses[0]
-    pinned_host = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
-    netloc = f"{pinned_host}:{port}" if port is not None else pinned_host
-    pinned_url = parsed._replace(netloc=netloc).geturl()
+    auth_prefix = ""
+    if parsed.username is not None:
+        username = quote(unquote(parsed.username), safe="")
+        password = None if parsed.password is None else quote(unquote(parsed.password), safe="")
+        auth = username if password is None else f"{username}:{password}"
+        auth_prefix = f"{auth}@"
+
+    pinned_urls: list[str] = []
+    for pinned_ip in dict.fromkeys(addresses):
+        pinned_host = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+        netloc = f"{auth_prefix}{pinned_host}:{port}" if port is not None else f"{auth_prefix}{pinned_host}"
+        pinned_urls.append(parsed._replace(netloc=netloc).geturl())
     headers = {"Host": _build_http_host_header(hostname_ascii, parsed.scheme, port)}
     extensions = {"sni_hostname": hostname_ascii} if parsed.scheme == "https" else {}
-    return pinned_url, headers, extensions
+    return pinned_urls, headers, extensions
 
 
 def _cookie_domain_matches(hostname: str, cookie_domain: str) -> bool:
@@ -1052,7 +1060,7 @@ class LogicManager:
             if not url:
                 continue
             try:
-                request_url, pinned_headers, request_extensions = _build_api_client_fetch_target(url)
+                request_urls, pinned_headers, request_extensions = _build_api_client_fetch_targets(url)
             except ValueError as exc:
                 logger.warning("Graph %s: blocked api_client target %s: %s", graph_id[:8], url, exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
@@ -1122,33 +1130,43 @@ class LogicManager:
                 req_kwargs["headers"] = {**req_headers, **pinned_headers}
                 if request_extensions:
                     req_kwargs["extensions"] = request_extensions
+                last_transport_error: Exception = ValueError(f"Could not fetch API target after trying {len(request_urls)} address(es)")
+                resp: httpx.Response | Any | None = None
                 async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
-                    resp = await client.request(method, request_url, **req_kwargs)
-                    resp_text = resp.text
-                    if len(resp_text) > 1_000_000:
-                        resp_text = resp_text[:1_000_000]
-                    if resp_type in ("json", "application/json"):
+                    for request_url in request_urls:
                         try:
-                            resp_data: Any = resp.json()
-                        except Exception:
-                            resp_data = resp_text
-                    else:
+                            resp = await client.request(method, request_url, **req_kwargs)
+                            break
+                        except httpx.RequestError as req_exc:
+                            last_transport_error = req_exc
+                            continue
+                if resp is None:
+                    raise last_transport_error
+                resp_text = resp.text
+                if len(resp_text) > 1_000_000:
+                    resp_text = resp_text[:1_000_000]
+                if resp_type in ("json", "application/json"):
+                    try:
+                        resp_data: Any = resp.json()
+                    except Exception:
                         resp_data = resp_text
-                    outputs[node.id].update(
-                        {
-                            "response": resp_data,
-                            "status": resp.status_code,
-                            "success": 200 <= resp.status_code < 300,
-                        },
-                    )
-                    logger.info(
-                        "Graph %s: API %s %s → %d",
-                        graph_id[:8],
-                        method,
-                        url,
-                        resp.status_code,
-                    )
-                    triggered_api_clients.add(node.id)
+                else:
+                    resp_data = resp_text
+                outputs[node.id].update(
+                    {
+                        "response": resp_data,
+                        "status": resp.status_code,
+                        "success": 200 <= resp.status_code < 300,
+                    },
+                )
+                logger.info(
+                    "Graph %s: API %s %s → %d",
+                    graph_id[:8],
+                    method,
+                    url,
+                    resp.status_code,
+                )
+                triggered_api_clients.add(node.id)
             except Exception as exc:
                 logger.warning("Graph %s: api_client failed: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
