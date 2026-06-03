@@ -706,6 +706,100 @@ class TestDataPointRegistryLoadFromDb:
         assert state.value == pytest.approx(22.5)
         assert state.quality == "good"
 
+    @pytest.mark.asyncio
+    async def test_load_from_db_restores_time_value_as_datetime_time(self):
+        import datetime as _dt
+
+        from obs.core.registry import DataPointRegistry
+
+        dp_id = uuid.uuid4()
+        now = datetime.now(UTC).isoformat()
+        dp_rows = [
+            _row(
+                id=str(dp_id),
+                name="Time DP",
+                data_type="TIME",
+                unit="",
+                tags="[]",
+                mqtt_topic=f"dp/{dp_id}/value",
+                mqtt_alias=None,
+                persist_value=1,
+                record_history=0,
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+        last_val_rows = [
+            _row(
+                datapoint_id=str(dp_id),
+                value='"10:30:00"',
+                unit="",
+                ts=now,
+            )
+        ]
+
+        class _DbWithTime(_DbStub):
+            async def fetchall(self, query, params=()):
+                if "datapoint_last_values" in query:
+                    return last_val_rows
+                return dp_rows
+
+        reg = DataPointRegistry.__new__(DataPointRegistry)
+        reg._db = _DbWithTime(rows=dp_rows)
+        reg._mqtt = AsyncMock()
+        reg._bus = AsyncMock()
+        reg._points = {}
+        reg._values = {}
+        await reg.load_from_db()
+        state = reg._values[dp_id]
+        assert state.value == _dt.time(10, 30, 0)
+
+    @pytest.mark.asyncio
+    async def test_load_from_db_time_invalid_string_leaves_as_string(self):
+        from obs.core.registry import DataPointRegistry
+
+        dp_id = uuid.uuid4()
+        now = datetime.now(UTC).isoformat()
+        dp_rows = [
+            _row(
+                id=str(dp_id),
+                name="Time DP Bad",
+                data_type="TIME",
+                unit="",
+                tags="[]",
+                mqtt_topic=f"dp/{dp_id}/value",
+                mqtt_alias=None,
+                persist_value=1,
+                record_history=0,
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+        last_val_rows = [
+            _row(
+                datapoint_id=str(dp_id),
+                value='"not-a-time"',
+                unit="",
+                ts=now,
+            )
+        ]
+
+        class _DbWithBadTime(_DbStub):
+            async def fetchall(self, query, params=()):
+                if "datapoint_last_values" in query:
+                    return last_val_rows
+                return dp_rows
+
+        reg = DataPointRegistry.__new__(DataPointRegistry)
+        reg._db = _DbWithBadTime(rows=dp_rows)
+        reg._mqtt = AsyncMock()
+        reg._bus = AsyncMock()
+        reg._points = {}
+        reg._values = {}
+        await reg.load_from_db()
+        state = reg._values[dp_id]
+        assert state.value == "not-a-time"
+
 
 class TestDataPointRegistryCRUD:
     @pytest.mark.asyncio

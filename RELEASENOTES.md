@@ -34,7 +34,7 @@
 * Logic engine: Functional Block: "iCalendar" filtering by summary, location, and description. https://github.com/abeggled/openbridgeserver/issues/350
 * Logic engine: Functional Block: "XML Extractor" now has multiple outputs from single input https://github.com/abeggled/openbridgeserver/pull/469
 * Logic engine: Functional Block: "JSON Extractor" now has multiple outputs from single input https://github.com/abeggled/openbridgeserver/pull/468
-* Logic engine: Functional Block: API client nodes can now load optional headers and bearer tokens from secret files. https://github.com/abeggled/openbridgeserver/pull/581
+* Logic engine: API client nodes can load optional headers and bearer tokens from secret files. https://github.com/abeggled/openbridgeserver/pull/581
 * Visu: Add background images https://github.com/abeggled/openbridgeserver/issues/481
 * Visu: Floor plan widget with the ability to place mini widgets on the floor plan https://github.com/abeggled/openbridgeserver/issues/228
 * Visu: History widget: select time period direct from widget https://github.com/abeggled/openbridgeserver/issues/413
@@ -45,13 +45,18 @@
 * Visu: RTR widget: color gradient added https://github.com/abeggled/openbridgeserver/issues/465
 * Visu: Gauge mode for value display widget (arc/circle variants). https://github.com/abeggled/openbridgeserver/pull/421
 * Visu: Bar chart mode for history/chart widget. https://github.com/abeggled/openbridgeserver/pull/444
+* Visu: Added configurable ButtonGroup widget for one-shot actions, scene triggers, and grouped command buttons. https://github.com/abeggled/openbridgeserver/issues/675
 * Visu: Widgets können per Drag & Drop aus der Palette direkt an eine bestimmte Position auf der Seite gezogen werden; eine blaue Vorschau zeigt die Zielposition. Klick auf ein Widget fügt es weiterhin automatisch an der ersten freien Position ein. Die Widget-Liste ist jetzt sprachspezifisch alphabetisch sortiert. https://github.com/abeggled/openbridgeserver/issues/667
 
 ### Fixes 🐞
+* Logic Security (Upstream PR #686): API client secret-file paths are restricted to a configured secret directory with bounded regular-file reads.
+* GUI: Settings → History DB no longer opens as an empty tab when the TimescaleDB DSN placeholder is rendered; the `@` in the PostgreSQL example is escaped for vue-i18n. https://github.com/abeggled/openbridgeserver/issues/690
 * Adapter: KNX IP Secure now works correctly in Docker bridge networks — credentials are extracted directly from the .knxkeys file and passed explicitly to xknx, bypassing the internal UDP DescriptionRequest that fails without host networking. Connection errors now include actionable hints (Docker network mode, gateway tunnel-slot exhaustion). https://github.com/abeggled/openbridgeserver/issues/393
+* Adapter: KNX DPT10.001 (Time of Day) values are now decoded as Python `datetime.time` objects, matching the OBS `TIME` datapoint type. Persisted values are correctly restored on restart. JSON/WebSocket/MQTT/History boundaries serialize them as ISO strings; MQTT output bindings without payload template keep the backward-compatible raw payload form such as `10:30:00`. https://github.com/abeggled/openbridgeserver/pull/688
 * Backend: Complete remaining UI translation fixes after i18n rollout. https://github.com/abeggled/openbridgeserver/pull/542
 * Backend: Validate `DataValueEvent` payloads before bridge propagation. https://github.com/abeggled/openbridgeserver/pull/519
 * Backend: Ringbuffer pause/resume race condition stabilized. https://github.com/abeggled/openbridgeserver/pull/509
+* Backend: Monitor/RingBuffer now recovers automatically from a malformed SQLite database by quarantining the corrupted monitor DB/WAL/SHM files and recreating an empty RingBuffer, preventing repeated EventBus errors and Monitor API failures. https://github.com/abeggled/openbridgeserver/issues/689
 * Backend: InfluxDB v3 writes now use correct `db` query parameter. https://github.com/abeggled/openbridgeserver/pull/511
 * Backend: The adapter page automatically reloaded every few seconds, making configuration difficult. https://github.com/abeggled/openbridgeserver/issues/394
 * Backend: Fix view permissions of Demo User https://github.com/abeggled/openbridgeserver/issues/471
@@ -65,6 +70,7 @@
 * Logic engine: Sommer/Winter (DIN) block now fills T1/T2/T3 slots correctly when sensors report at intervals that do not hit hours 7, 12, or 22 exactly (e.g. every 2 or 4 hours). "First-crossing" semantics: each slot is captured on the first measurement at or after its target hour, so daily_avg is always computed and heating mode switches reliably. https://github.com/abeggled/openbridgeserver/issues/548
 * GUI: Missing i18n in several areas of the Admin GUI: all port and node labels in the Logic Engine node canvas are now fully translated and react to locale switching; the Hierarchy Manager dialog has been fully internationalised (all hardcoded German strings replaced). https://github.com/abeggled/openbridgeserver/issues/668
 * Logic engine: Functional Block "Sommer/Winter (DIN)" completely rewritten: measurement times corrected to DIN Mannheimer standard (T1 = 07:00, T2 = 14:00, T3 = 21:00); single configurable threshold temperature (default 14 °C) with hysteresis (default 2 °C) replaces separate summer/winter thresholds; heating decision based on daily average; debug ports T1/T2/T3 now persist their values after the daily average is computed; missing slots are automatically recovered from history after a server restart. https://github.com/abeggled/openbridgeserver/issues/665
+* Backend Security (Upstream PR #683): prevent Uvicorn access logs from being exposed through the in-memory log stream.
 * Security (Upstream PR #576): prevent SSRF/data exfiltration in iCal URL fetching by enforcing public-network URL validation and streamed size limits.
 * Security (Upstream PR #563): harden Pushover `image_url` fetch against non-global targets, event-loop DNS blocking, and DNS rebinding
 * Security: Preserve legacy `OPENTWS_*`/`OPENTWS_CONFIG` compatibility with case-insensitive `OBS_CONFIG` precedence and keep `opentws.db` fallback active even with partial `database.*` overrides to avoid unintended default-admin re-bootstrap on upgrades. https://github.com/abeggled/openbridgeserver/pull/554
@@ -87,14 +93,17 @@
 * Security: (Upstream PR #565): prevent stored XSS via obfuscated `javascript:`/`data:` URLs in Toggle SVG icon rendering
 * Security: (Upstream PR #572): prevent stored XSS by rejecting SVG uploads in the background catalog.
 * Security: (Upstream PR #551): sanitize markdown HTML rendering in Text widget to prevent stored XSS.
+* Security: (Upstream PR #684): prevent stored XSS via `data:` SVG href rendering in icon sanitization.
 * Security: (Upstream PR #685): prevent api_client loopback SSRF by blocking localhost, direct loopback IPs, and loopback DNS answers.
 * Test stability: Monitor/Ringbuffer E2E scenarios stabilized. https://github.com/abeggled/openbridgeserver/pull/494
 * Visu: Internal API base URL usage fixed for E2E/runtime alignment. https://github.com/abeggled/openbridgeserver/pull/484
 * Visu: History widget now updates automatically when new values arrive via WebSocket. https://github.com/abeggled/openbridgeserver/issues/408
+* Visu: History widget now uses aggregated history buckets for multi-day ranges, so periods up to "last 90 days" remain complete and render efficiently instead of only showing the newest 24 hours. https://github.com/abeggled/openbridgeserver/issues/692
 * Visu: RTR Widget now use correct values for room controller (heating) DPT 20.102 https://github.com/abeggled/openbridgeserver/issues/461
 * Visu: Floorplan Widget: positioning broken if floorplan is rotated https://github.com/abeggled/openbridgeserver/issues/440
 * Visu: Slider widget values are now written on pointer release and keyboard commit, avoiding missed writes in browsers that do not reliably fire change after dragging. https://github.com/abeggled/openbridgeserver/pull/559
 * Visu: History widget displays translated labels instead of variable name
+* Visu: Fixed-width Visu pages are now centered horizontally in the viewer. https://github.com/abeggled/openbridgeserver/pull/672
 
 ### Known Issues 🔔
 * none

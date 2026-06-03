@@ -41,6 +41,7 @@ class HistoryPoint(BaseModel):
 class AggregatedPoint(BaseModel):
     bucket: str
     v: Any
+    n: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +59,23 @@ def _parse_ts(s: str | None, default: datetime) -> datetime:
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"Invalid timestamp: {s!r}",
         )
+
+
+def _format_utc_bucket(bucket: Any) -> str:
+    """Return aggregate bucket timestamps as UTC ISO strings matching raw history."""
+    if isinstance(bucket, datetime):
+        dt = bucket
+    else:
+        try:
+            dt = datetime.fromisoformat(str(bucket).replace("Z", "+00:00"))
+        except ValueError:
+            return str(bucket)
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    else:
+        dt = dt.astimezone(UTC)
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 async def _get_default_history_window_hours(db: Database) -> int:
@@ -168,4 +186,4 @@ async def aggregate_history(
 
     plugin = get_history_plugin()
     rows = await plugin.aggregate(dp_id, fn, interval, from_dt, to_dt)
-    return [AggregatedPoint(**r) for r in rows]
+    return [AggregatedPoint(bucket=_format_utc_bucket(r.get("bucket")), v=r.get("v"), n=r.get("n")) for r in rows]

@@ -6,6 +6,7 @@ gemockt. Direkte Tests von _on_state_changed() und write().
 
 from __future__ import annotations
 
+import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -372,6 +373,28 @@ class TestWrite:
         payload = call_args[1]["json"]
         assert payload["entity_id"] == "input_number.heating"
         assert payload["value"] == 21.5
+
+    @pytest.mark.asyncio
+    async def test_write_time_with_service_data_key_serializes_for_json(self, adapter):
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        adapter._http_client.post = AsyncMock(return_value=mock_response)
+
+        binding = make_binding(
+            {
+                "entity_id": "input_datetime.alarm_time",
+                "service_domain": "input_datetime",
+                "service_name": "set_datetime",
+                "service_data_key": "time",
+            },
+        )
+        await adapter.write(binding, datetime.time(10, 30, 0))
+
+        call_args = adapter._http_client.post.call_args
+        assert call_args[0][0] == "/api/services/input_datetime/set_datetime"
+        payload = call_args[1]["json"]
+        assert payload["entity_id"] == "input_datetime.alarm_time"
+        assert payload["time"] == "10:30:00"
 
     @pytest.mark.asyncio
     async def test_write_with_explicit_service_name(self, adapter):

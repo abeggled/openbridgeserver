@@ -1217,6 +1217,24 @@ class TestOnTelegramEdgeCases:
         assert event.quality == "uncertain"
 
     @pytest.mark.asyncio
+    async def test_invalid_dpt10_telegram_publishes_uncertain_event(self, mock_bus):
+        adapter = self._make_adapter(mock_bus)
+        dpt = DPTRegistry.get("DPT10.001")
+        binding = make_binding({"group_address": "1/2/3", "dpt_id": "DPT10.001"})
+        adapter._ga_source_map["1/2/3"] = [(binding, dpt)]
+
+        telegram = Telegram(
+            destination_address=GroupAddress("1/2/3"),
+            payload=GroupValueWrite(DPTArray([0x1F, 0x00, 0x00])),
+        )
+        await adapter._on_telegram(telegram)
+
+        assert mock_bus.publish.called
+        event = mock_bus.publish.call_args[0][0]
+        assert event.value == "1f0000"
+        assert event.quality == "uncertain"
+
+    @pytest.mark.asyncio
     async def test_value_formula_is_applied(self, mock_bus):
         adapter = self._make_adapter(mock_bus)
         dpt = DPTRegistry.get("DPT9.001")

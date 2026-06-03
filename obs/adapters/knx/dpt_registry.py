@@ -29,6 +29,7 @@ Implementierte DPTs:
 
 from __future__ import annotations
 
+import datetime
 import struct
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -234,17 +235,14 @@ def _dpt3_encode(v: Any) -> bytes:
 # --- DPT 10.x — Time of Day (3 bytes) ----------------------------------------
 # Byte0: DoW(7..5)|Hour(4..0)  Byte1: Minutes(5..0)  Byte2: Seconds(5..0)
 # DoW: 1=Mon…7=Sun, 0=any day
-# Rückgabe als ISO-String "HH:MM:SS" (JSON-serialisierbar)
-def _dpt10_decode(b: bytes) -> str:
-    import datetime
-
-    try:
-        hour = b[0] & 0x1F
-        minute = b[1] & 0x3F
-        second = b[2] & 0x3F
-        return datetime.time(hour, minute, second).isoformat()
-    except Exception:
-        return "00:00:00"
+# Return datetime.time to match the OBS TIME datapoint type.
+def _dpt10_decode(b: bytes) -> datetime.time:
+    if len(b) < 3:
+        raise ValueError("DPT10 payload must contain 3 bytes")
+    hour = b[0] & 0x1F
+    minute = b[1] & 0x3F
+    second = b[2] & 0x3F
+    return datetime.time(hour, minute, second)
 
 
 def _dpt10_encode(v: Any) -> bytes:
@@ -268,18 +266,15 @@ def _dpt10_encode(v: Any) -> bytes:
 # --- DPT 11.x — Date (3 bytes) -----------------------------------------------
 # Byte0: Day(4..0)  Byte1: Month(3..0)  Byte2: Year(6..0)
 # Jahr 0..89 → 2000+Y,  Jahr 90..99 → 1900+Y  (KNX-Spec)
-# Rückgabe als ISO-String "YYYY-MM-DD" (JSON-serialisierbar)
-def _dpt11_decode(b: bytes) -> str:
-    import datetime
-
-    try:
-        day = b[0] & 0x1F
-        month = b[1] & 0x0F
-        yr = b[2] & 0x7F
-        year = 2000 + yr if yr < 90 else 1900 + yr
-        return datetime.date(year, month, day).isoformat()
-    except Exception:
-        return "2000-01-01"
+# Return datetime.date to match the OBS DATE datapoint type.
+def _dpt11_decode(b: bytes) -> datetime.date:
+    if len(b) < 3:
+        raise ValueError("DPT11 payload must contain 3 bytes")
+    day = b[0] & 0x1F
+    month = b[1] & 0x0F
+    yr = b[2] & 0x7F
+    year = 2000 + yr if yr < 90 else 1900 + yr
+    return datetime.date(year, month, day)
 
 
 def _dpt11_encode(v: Any) -> bytes:

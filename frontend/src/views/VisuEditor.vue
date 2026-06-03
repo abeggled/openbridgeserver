@@ -36,6 +36,7 @@ import DataPointPicker from '@/components/DataPointPicker.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
 import AuthButton from '@/components/AuthButton.vue'
 import { datapoints as dpApi, visuBackgrounds as bgApi } from '@/api/client'
+import { useLocalizedText } from '@/composables/useLocalizedText'
 import { useVisuBackgrounds } from '@/composables/useVisuBackgrounds'
 import {
   cssBackgroundPosition,
@@ -51,6 +52,7 @@ import type { PageConfig, WidgetInstance } from '@/types'
 
 import '@/widgets/ValueDisplay/index'
 import '@/widgets/Toggle/index'
+import '@/widgets/ButtonGroup/index'
 import '@/widgets/Slider/index'
 import '@/widgets/Chart/index'
 import '@/widgets/Link/index'
@@ -74,6 +76,7 @@ import '@/widgets/HorizontalBar/index'
 
 // ── Props / Router / Store ────────────────────────────────────────────────────
 const { t } = useI18n()
+const { locale, widgetLabel } = useLocalizedText()
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const store = useVisuStore()
@@ -140,10 +143,9 @@ function widgetHasError(w: WidgetInstance): boolean {
 }
 
 // ── Palette: alphabetisch sortierte Widgets ───────────────────────────────────
-const { locale } = useI18n()
 const sortedWidgets = computed(() =>
   WidgetRegistry.all().slice().sort((a, b) =>
-    a.label.localeCompare(b.label, locale.value, { sensitivity: 'base' })
+    widgetLabel(a.label).localeCompare(widgetLabel(b.label), locale.value, { sensitivity: 'base' })
   )
 )
 
@@ -770,7 +772,7 @@ const showSettings = ref(false)
             @dragend="onPaletteDragEnd"
           >
             <span class="text-lg leading-none w-6 text-center">{{ w.icon }}</span>
-            <span class="text-sm">{{ w.label }}</span>
+            <span class="text-sm">{{ widgetLabel(w.label) }}</span>
           </button>
         </div>
         <div class="px-3 pt-2 pb-3 border-t border-gray-200 dark:border-gray-700">
@@ -862,7 +864,7 @@ const showSettings = ref(false)
               :class="{ '!opacity-100': selectedId === w.id }"
             >
               <span class="text-xs text-gray-700 dark:text-gray-300 font-medium">
-                {{ w.name || (WidgetRegistry.get(w.type)?.label ?? w.type) }}
+                {{ w.name || (WidgetRegistry.get(w.type)?.label ? widgetLabel(WidgetRegistry.get(w.type)!.label) : w.type) }}
               </span>
               <button
                 class="text-xs text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 transition-colors ml-2"
@@ -909,7 +911,7 @@ const showSettings = ref(false)
           <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-100/50 dark:bg-gray-800/50">
             <div class="flex items-center gap-2">
               <span class="text-lg">{{ selectedDef.icon }}</span>
-              <span class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ selectedDef.label }}</span>
+              <span class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ widgetLabel(selectedDef.label) }}</span>
             </div>
             <button
               class="text-xs text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"

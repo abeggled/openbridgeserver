@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime
 
+import pytest
 
 from obs.adapters.knx.dpt_registry import DPTRegistry, _UNKNOWN_DPT
 
@@ -358,14 +359,17 @@ class TestDPT10Codecs:
     def setup_method(self):
         self.dpt = DPTRegistry.get("DPT10.001")
 
-    def test_decode_returns_iso_string(self):
+    def test_decode_returns_time_object(self):
         result = self.dpt.decoder(bytes([10, 30, 0]))
-        assert result == "10:30:00"
+        assert result == datetime.time(10, 30, 0)
 
-    def test_decode_invalid_hour_returns_fallback(self):
-        # hour=31 is invalid for datetime.time → fallback
-        result = self.dpt.decoder(bytes([0x1F, 0x00, 0x00]))
-        assert result == "00:00:00"
+    def test_decode_invalid_hour_raises(self):
+        with pytest.raises(ValueError):
+            self.dpt.decoder(bytes([0x1F, 0x00, 0x00]))
+
+    def test_decode_short_payload_raises(self):
+        with pytest.raises(ValueError):
+            self.dpt.decoder(bytes([10, 30]))
 
     def test_encode_from_time_object(self):
         t = datetime.time(14, 45, 30)
@@ -396,7 +400,7 @@ class TestDPT10Codecs:
         original = "09:15:45"
         raw = self.dpt.encoder(original)
         result = self.dpt.decoder(raw)
-        assert result == original
+        assert result == datetime.time(9, 15, 45)
 
 
 # ---------------------------------------------------------------------------
@@ -408,19 +412,22 @@ class TestDPT11Codecs:
     def setup_method(self):
         self.dpt = DPTRegistry.get("DPT11.001")
 
-    def test_decode_returns_iso_string(self):
+    def test_decode_returns_date_object(self):
         # Day=15, Month=6, Year=25 → 2025-06-15
         result = self.dpt.decoder(bytes([15, 6, 25]))
-        assert result == "2025-06-15"
+        assert result == datetime.date(2025, 6, 15)
 
     def test_decode_year_90s_maps_to_1990s(self):
         result = self.dpt.decoder(bytes([1, 1, 90]))
-        assert result == "1990-01-01"
+        assert result == datetime.date(1990, 1, 1)
 
-    def test_decode_invalid_returns_fallback(self):
-        # Day=0 is invalid for datetime.date
-        result = self.dpt.decoder(bytes([0, 0, 0]))
-        assert result == "2000-01-01"
+    def test_decode_invalid_raises(self):
+        with pytest.raises(ValueError):
+            self.dpt.decoder(bytes([0, 0, 0]))
+
+    def test_decode_short_payload_raises(self):
+        with pytest.raises(ValueError):
+            self.dpt.decoder(bytes([1, 1]))
 
     def test_encode_from_date_object(self):
         d = datetime.date(2025, 3, 15)
@@ -449,7 +456,7 @@ class TestDPT11Codecs:
         original = "2024-07-04"
         raw = self.dpt.encoder(original)
         result = self.dpt.decoder(raw)
-        assert result == original
+        assert result == datetime.date(2024, 7, 4)
 
 
 # ---------------------------------------------------------------------------

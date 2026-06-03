@@ -163,7 +163,7 @@ def _sanitize_svg(content: bytes) -> bytes:
             normalized_scheme = re.sub(r"[\x00-\x20]+", "", value).lower()
             if attr_name.startswith("on"):
                 del elem.attrib[attr]
-            elif attr_name in {"href", "xlink:href"} and normalized_scheme.startswith("javascript:"):
+            elif attr_name in {"href", "xlink:href"} and normalized_scheme.startswith(("javascript:", "data:")):
                 del elem.attrib[attr]
 
         for child in list(elem):

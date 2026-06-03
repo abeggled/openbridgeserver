@@ -11,7 +11,13 @@ import {
 import { history } from '@/api/client'
 import { useWebSocket } from '@/composables/useWebSocket'
 import type { DataPointValue } from '@/types'
-import { TIME_RANGE_PRESETS, DEFAULT_TIME_RANGE, resolveTimeRange } from './timeRangePresets'
+import { aggregateBucketEndTimestamp, sortedUniqueTimestamps, weightedAverage, weightedValuesByTimestamp } from './aggregation'
+import {
+  TIME_RANGE_PRESETS,
+  DEFAULT_TIME_RANGE,
+  historyRequestPlanForRange,
+  resolveTimeRange,
+} from './timeRangePresets'
 
 Chart.register(
   LineController, LineElement, PointElement,
@@ -49,6 +55,7 @@ watch(() => props.config.time_range, () => {
 
 // 'y' = linke Achse, 'y1' = rechte Achse (Chart.js Achsen-IDs)
 interface SeriesDef { id: string; label: string; color: string; axis: 'y' | 'y1' }
+interface HistoryChartPoint { ts: string; v: unknown; u: string | null; q: string; n?: number }
 
 const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316']
 
@@ -180,12 +187,28 @@ async function loadData() {
   if (defs.length === 0 || !chart) return
 
   const { from: fromDate, to: toDate } = resolveTimeRange(selectedTimeRange.value)
+  const fromIso = fromDate.toISOString()
+  const toIso = toDate.toISOString()
+  const requestPlan = historyRequestPlanForRange(fromDate, toDate)
 
-  const results = await Promise.all(
-    defs.map(s => history.query(s.id, fromDate.toISOString(), toDate.toISOString())),
-  )
+  let results: HistoryChartPoint[][]
+  let units: string[]
 
-  seriesUnits.value = results.map(r => r[0]?.u ?? '')
+  if (requestPlan.mode === 'aggregate') {
+    const [aggregatedRows, unitRows] = await Promise.all([
+      Promise.all(defs.map(s => history.aggregate(s.id, fromIso, toIso, requestPlan.interval, requestPlan.fn))),
+      Promise.all(defs.map(s => history.query(s.id, fromIso, toIso, 1))),
+    ])
+    results = aggregatedRows.map(rows => rows.map(r => ({ ts: r.bucket, v: r.v, u: null, q: '', n: r.n ?? 1 })))
+    units = unitRows.map(r => r[0]?.u ?? '')
+  } else {
+    results = await Promise.all(
+      defs.map(s => history.query(s.id, fromIso, toIso, requestPlan.limit)),
+    )
+    units = results.map(r => r[0]?.u ?? '')
+  }
+
+  seriesUnits.value = units
 
   const hasMultiple = defs.length > 1
   const hasRight    = defs.some(s => s.axis === 'y1')
@@ -195,38 +218,56 @@ async function loadData() {
   const rightUnit = defs.reduce<string>((u, s, i) => u || (s.axis === 'y1' ? (seriesUnits.value[i] ?? '') : ''), '')
 
   if (isBar) {
-    // Daten in gleich breite Zeitbuckets aggregieren (Durchschnitt je Bucket).
-    // Alle Serien teilen dieselben Bucket-Mittelpunkte → korrekte Gruppierung.
-    const durationHours = (toDate.getTime() - fromDate.getTime()) / 3_600_000
-    const numBuckets    = Math.min(Math.max(Math.round(durationHours * 2), 24), 96)
-    const buckets       = buildBuckets(fromDate.getTime(), toDate.getTime(), numBuckets)
-
-    chart.data.labels   = buckets.map(b => fmtMs(b.mid))
-    chart.data.datasets = defs.map((s, i) => {
-      const raw = results[i]
-      const data = buckets.map(b => {
-        const pts = raw.filter(d => {
-          const ts = new Date(d.ts).getTime()
-          return ts >= b.start && ts < b.end
-        })
-        if (pts.length === 0) return null
-        return pts.reduce((sum, p) => sum + Number(p.v), 0) / pts.length
-      })
-      return {
+    if (requestPlan.mode === 'aggregate') {
+      const bucketTimestamps = sortedUniqueTimestamps(results)
+      chart.data.labels = bucketTimestamps.map(fmtMs)
+      chart.data.datasets = defs.map((s, i) => ({
         yAxisID:         s.axis,
         label:           s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''),
-        data,
+        data:            weightedValuesByTimestamp(results[i], bucketTimestamps),
         backgroundColor: s.color + 'cc',
         borderWidth:     0,
         borderRadius:    2,
-      }
-    })
+      }))
+    } else {
+      // Daten in gleich breite Zeitbuckets aggregieren (Durchschnitt je Bucket).
+      // Alle Serien teilen dieselben Bucket-Mittelpunkte → korrekte Gruppierung.
+      const durationHours = (toDate.getTime() - fromDate.getTime()) / 3_600_000
+      const numBuckets    = Math.min(Math.max(Math.round(durationHours * 2), 24), 96)
+      const buckets       = buildBuckets(fromDate.getTime(), toDate.getTime(), numBuckets)
+
+      chart.data.labels   = buckets.map(b => fmtMs(b.mid))
+      chart.data.datasets = defs.map((s, i) => {
+        const raw = results[i]
+        const data = buckets.map(b => {
+          const pts = raw.filter(d => {
+            const ts = new Date(d.ts).getTime()
+            return ts >= b.start && ts < b.end
+          })
+          if (pts.length === 0) return null
+          return weightedAverage(pts)
+        })
+        return {
+          yAxisID:         s.axis,
+          label:           s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''),
+          data,
+          backgroundColor: s.color + 'cc',
+          borderWidth:     0,
+          borderRadius:    2,
+        }
+      })
+    }
   } else {
     chart.data.labels   = undefined
     chart.data.datasets = defs.map((s, i) => ({
       yAxisID:         s.axis,
       label:           s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''),
-      data:            results[i].map(d => ({ x: new Date(d.ts).getTime(), y: Number(d.v) })),
+      data:            results[i].map(d => ({
+        x: requestPlan.mode === 'aggregate'
+          ? aggregateBucketEndTimestamp(d.ts, requestPlan.interval, fromDate.getTime(), toDate.getTime())
+          : new Date(d.ts).getTime(),
+        y: Number(d.v),
+      })),
       borderColor:     s.color,
       backgroundColor: s.color + '1a',
       borderWidth:     1.5,

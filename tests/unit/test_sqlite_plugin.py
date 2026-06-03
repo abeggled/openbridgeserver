@@ -17,6 +17,7 @@ from obs.history.sqlite_plugin import (
     _aggregate_python,
     _bucket_key,
     _safe_loads,
+    _sqlite_bucket_expr,
     _to_sqlite_ts,
 )
 
@@ -112,6 +113,14 @@ class TestBucketKey:
         result = _bucket_key("bad-ts-string-xyz", 5)
         # Falls back to ts[:16]
         assert result == "bad-ts-string-xy"
+
+
+class TestSqliteBucketExpr:
+    def test_6h_bucket_expr(self):
+        assert "strftime('%H'" in _sqlite_bucket_expr("%Y-%m-%dT%H:00:00", 360)
+
+    def test_1h_bucket_expr(self):
+        assert _sqlite_bucket_expr("%Y-%m-%dT%H:00:00", 60) == "strftime('%Y-%m-%dT%H:00:00', ts)"
 
 
 class TestAggregatePython:
@@ -280,6 +289,7 @@ class TestSQLiteAggregate:
         result = await plugin.aggregate(dp_id, "avg", "1h", _ts(-1), _ts(60))
         assert len(result) == 1
         assert result[0]["v"] == pytest.approx(15.0)
+        assert result[0]["n"] == 2
 
     async def test_aggregate_min_1h(self, plugin):
         dp_id = uuid.uuid4()
@@ -307,12 +317,37 @@ class TestSQLiteAggregate:
         result = await plugin.aggregate(dp_id, "avg", "5m", _ts(-1), _ts(10))
         assert len(result) == 1
         assert result[0]["v"] == pytest.approx(15.0)
+        assert result[0]["n"] == 2
 
     async def test_aggregate_sub_hourly_last(self, plugin):
         dp_id = uuid.uuid4()
         await self._write_series(plugin, dp_id, [(0, 5.0), (2, 8.0)])
         result = await plugin.aggregate(dp_id, "last", "5m", _ts(-1), _ts(10))
         assert result[0]["v"] == pytest.approx(8.0)
+
+    async def test_aggregate_6h_groups_into_requested_width(self, plugin):
+        dp_id = uuid.uuid4()
+        await self._write_series(plugin, dp_id, [(0, 10.0), (300, 20.0), (360, 30.0)])
+        result = await plugin.aggregate(dp_id, "avg", "6h", _ts(-1), _ts(420))
+        assert [r["bucket"] for r in result] == ["2024-01-01T12:00:00", "2024-01-01T18:00:00"]
+        assert result[0]["v"] == pytest.approx(15.0)
+        assert result[0]["n"] == 2
+
+    async def test_aggregate_12h_groups_into_requested_width(self, plugin):
+        dp_id = uuid.uuid4()
+        await self._write_series(plugin, dp_id, [(-720, 10.0), (-60, 20.0), (0, 30.0), (660, 40.0)])
+        result = await plugin.aggregate(dp_id, "avg", "12h", _ts(-721), _ts(720))
+        assert [r["bucket"] for r in result] == ["2024-01-01T00:00:00", "2024-01-01T12:00:00"]
+        assert result[0]["v"] == pytest.approx(15.0)
+        assert result[1]["v"] == pytest.approx(35.0)
+
+    async def test_aggregate_last_6h_uses_requested_width(self, plugin):
+        dp_id = uuid.uuid4()
+        await self._write_series(plugin, dp_id, [(0, 10.0), (300, 20.0), (360, 30.0)])
+        result = await plugin.aggregate(dp_id, "last", "6h", _ts(-1), _ts(420))
+        assert [r["bucket"] for r in result] == ["2024-01-01T12:00:00", "2024-01-01T18:00:00"]
+        assert result[0]["v"] == pytest.approx(20.0)
+        assert result[1]["v"] == pytest.approx(30.0)
 
     async def test_aggregate_unknown_interval_falls_back_to_1h(self, plugin):
         dp_id = uuid.uuid4()

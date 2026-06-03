@@ -5,6 +5,7 @@ No broker connection; uses mocked bus and direct method calls.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import unittest.mock as mock
 
 import pytest
@@ -248,6 +249,27 @@ class TestWrite:
 
         _, payload, _ = await adapter._publish_queue.get()
         assert payload == '{"brightness": 75}'
+
+    @pytest.mark.asyncio
+    async def test_write_publishes_raw_time_value_without_json_quotes(self, adapter):
+        binding = make_binding({"topic": "clock/time"})
+        await adapter.write(binding, datetime.time(10, 30, 0))
+
+        _, payload, _ = await adapter._publish_queue.get()
+        assert payload == "10:30:00"
+
+    @pytest.mark.asyncio
+    async def test_write_payload_template_serializes_time_value(self, adapter):
+        binding = make_binding(
+            {
+                "topic": "clock/time",
+                "payload_template": '{"time": ###DP###}',
+            },
+        )
+        await adapter.write(binding, datetime.time(10, 30, 0))
+
+        _, payload, _ = await adapter._publish_queue.get()
+        assert payload == '{"time": "10:30:00"}'
 
     @pytest.mark.asyncio
     async def test_write_passes_through_pretransformed_value(self, adapter):

@@ -18,6 +18,8 @@ Covers:
 
 from __future__ import annotations
 
+import datetime
+
 from obs.adapters.knx.dpt_registry import DPTDefinition, DPTRegistry
 
 # ===========================================================================
@@ -341,6 +343,28 @@ class TestDPT9:
             # All registered DPT9 must be FLOAT, unknowns return UNKNOWN fallback
             if d.dpt_id != "UNKNOWN":
                 assert d.data_type == "FLOAT", f"{dpt_id} should be FLOAT"
+
+
+# ===========================================================================
+# DPT 10 — Time of day
+# ===========================================================================
+
+
+class TestDPT10:
+    def test_decode_returns_time_object(self):
+        value = decode("DPT10.001", bytes([0x14, 0x28, 0x17]))
+
+        assert value == datetime.time(20, 40, 23)
+
+    def test_encode_accepts_iso_time_string(self):
+        raw = encode("DPT10.001", "20:40:23")
+
+        assert raw == bytes([0x14, 0x28, 0x17])
+
+    def test_roundtrip_time_object(self):
+        value = datetime.time(7, 8, 9)
+
+        assert decode("DPT10.001", encode("DPT10.001", value)) == value
 
 
 # ===========================================================================

@@ -111,6 +111,8 @@ class RingBufferStats(BaseModel):
     max_file_size_bytes: int | None
     max_age: int | None
     file_size_bytes: int
+    last_recovery_at: str | None = None
+    last_recovery_file_count: int = 0
 
 
 class RingBufferConfig(BaseModel):

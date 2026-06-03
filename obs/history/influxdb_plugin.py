@@ -32,6 +32,7 @@ from typing import Any
 
 import httpx
 
+from obs.core.json import json_dumps
 from obs.history.base import HistoryPlugin
 
 logger = logging.getLogger(__name__)
@@ -147,7 +148,7 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
         ts_ns = int(ts.timestamp() * 1_000_000_000)
 
         dp_tag = self._escape_tag(str(datapoint_id))
-        raw_str = self._escape_field_str(json.dumps(value))
+        raw_str = self._escape_field_str(json_dumps(value))
         unit_str = self._escape_field_str(unit or "")
         quality_str = self._escape_field_str(quality)
 
@@ -192,9 +193,11 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
                 out.append({"ts": ts, "v": v, "u": u or None, "q": q or ""})
             else:
                 # Aggregate row: time + aggregated value
-                val_col = [c for c in columns if c != "time"][0] if len(columns) > 1 else "mean"
+                value_columns = [c for c in columns if c not in ("time", "count")]
+                val_col = value_columns[0] if value_columns else "mean"
                 v = row[col_idx.get(val_col, 1)] if val_col in col_idx else None
-                out.append({"bucket": ts, "v": v})
+                n = row[col_idx["count"]] if "count" in col_idx else None
+                out.append({"bucket": ts, "v": v, "n": n})
         return out
 
     async def _run_influxql(self, q: str) -> dict:
@@ -279,7 +282,7 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
         dp = str(datapoint_id)
 
         q = (
-            f'SELECT {influx_fn}(v) FROM "obs" '
+            f'SELECT {influx_fn}(v), COUNT(v) FROM "obs" '
             f"WHERE dp_id='{dp}' "
             f"AND time >= '{from_rfc}' AND time <= '{to_rfc}' "
             f"GROUP BY time({influx_interval}) fill(none)"

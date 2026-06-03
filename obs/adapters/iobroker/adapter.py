@@ -45,6 +45,7 @@ from pydantic import BaseModel, Field
 from obs.adapters.base import AdapterBase
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
+from obs.core.json import json_dumps, jsonable
 from obs.core.transformation import apply_source_type, apply_value_map
 
 logger = logging.getLogger(__name__)
@@ -727,7 +728,7 @@ class IoBrokerAdapter(AdapterBase):
     ) -> None:
         try:
             bc = IoBrokerBindingConfig(**binding.config)
-            raw = value if isinstance(value, str) else json.dumps(value)
+            raw = value if isinstance(value, str) else json_dumps(value)
             auto_value = _coerce_iobroker_value(value)
             pub_value = apply_source_type(
                 raw,
@@ -879,6 +880,7 @@ class IoBrokerAdapter(AdapterBase):
         try:
             bc = IoBrokerBindingConfig(**binding.config)
             mapped = apply_value_map(value, binding.value_map)
+            mapped = jsonable(mapped)
             state_id = bc.command_state_id or bc.state_id
             await self._call_socket("setState", state_id, {"val": mapped, "ack": bc.ack})
             logger.info(

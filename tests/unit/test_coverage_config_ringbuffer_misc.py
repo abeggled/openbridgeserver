@@ -1182,6 +1182,18 @@ def test_parse_ts_invalid_raises_422():
     assert exc_info.value.status_code == 422
 
 
+def test_format_utc_bucket_treats_naive_timestamp_as_utc():
+    assert history_api._format_utc_bucket("2026-06-03T12:00:00") == "2026-06-03T12:00:00Z"
+
+
+def test_format_utc_bucket_converts_offset_timestamp_to_utc():
+    assert history_api._format_utc_bucket("2026-06-03T14:00:00+02:00") == "2026-06-03T12:00:00Z"
+
+
+def test_format_utc_bucket_keeps_unparseable_bucket():
+    assert history_api._format_utc_bucket("bucket-1") == "bucket-1"
+
+
 @pytest.mark.asyncio
 async def test_get_default_history_window_hours_missing(monkeypatch):
     """_get_default_history_window_hours returns default when key missing."""

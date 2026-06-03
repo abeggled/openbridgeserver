@@ -163,6 +163,21 @@ class TestSanitizeSvg:
         out = _sanitize_svg(payload).decode("utf-8")
         assert "href=" not in out
 
+    def test_strips_data_href(self):
+        payload = b'<svg xmlns="http://www.w3.org/2000/svg"><use href="data:image/svg+xml,%3Csvg%20id%3D%22x%22%3E%3C/svg%3E#x" /></svg>'
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert "data:image" not in out
+        assert "href=" not in out
+
+    def test_strips_namespaced_data_href(self):
+        payload = (
+            b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">'
+            b'<use xlink:href="data:image/svg+xml,%3Csvg%20id%3D%22x%22%3E%3C/svg%3E#x" /></svg>'
+        )
+        out = _sanitize_svg(payload).decode("utf-8")
+        assert "data:image" not in out
+        assert "href=" not in out
+
     def test_rejects_too_deep_svg(self):
         import pytest
         from fastapi import HTTPException
