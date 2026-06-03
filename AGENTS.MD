@@ -169,6 +169,19 @@ Do not run `pip install ...` in issue or PR worktrees. Install or update Python 
 in the shared project venv, then let worktrees resolve that environment through `.venv` or
 `OBS_VENV`.
 
+### GUI Node dependencies for agents and worktrees
+
+Do not run `npm install` or `npm ci` in issue or PR worktrees. GUI dependencies are shared from the
+main worktree through a local `gui/node_modules` symlink:
+
+```bash
+tools/link-worktree-node-modules
+```
+
+The pre-push hook runs this linker automatically before GUI Vitest gates if `gui/node_modules` is
+missing. If the main worktree dependencies are missing or stale, update them in the main worktree,
+not in the issue/PR worktree.
+
 ### config.yaml — required local overrides
 
 The defaults assume a Docker deployment (`/data/obs.db`, `/mosquitto/passwd/passwd`).

@@ -51,7 +51,13 @@ if [ -n "$GUI_CHANGED_FILES" ]; then
     exit 1
   fi
   if [ ! -d gui/node_modules ]; then
-    echo "pre-push gate: gui/node_modules missing; run npm ci in gui first" >&2
+    if [ -x tools/link-worktree-node-modules ]; then
+      tools/link-worktree-node-modules >/dev/null || true
+    fi
+  fi
+  if [ ! -d gui/node_modules ]; then
+    echo "pre-push gate: gui/node_modules missing" >&2
+    echo "Run tools/link-worktree-node-modules, or update shared GUI dependencies in the main worktree." >&2
     exit 1
   fi
   (cd gui && npm run test)
