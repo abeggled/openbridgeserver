@@ -157,6 +157,25 @@ async def test_reconfigure_model_switch_restarts_empty_without_migration(tmp_pat
         await rb.stop()
 
 
+async def test_reconfigure_model_switch_recovers_malformed_file_storage(tmp_path: Path):
+    db_path = tmp_path / "ringbuffer-reconfigure-malformed.db"
+    db_path.write_bytes(b"not a sqlite database")
+    rb = RingBuffer(storage="memory", max_entries=100, disk_path=str(db_path))
+    await rb.start()
+    try:
+        await rb.reconfigure("file", 100)
+        await _record_value(rb, 1, "2026-01-01T00:00:00.000Z")
+
+        entries = await rb.query(q="dp-storage-v2", limit=10)
+        stats = await rb.stats()
+
+        assert [entry.new_value for entry in entries] == [1]
+        assert stats["storage"] == "file"
+        assert list(tmp_path.glob("ringbuffer-reconfigure-malformed.db.corrupt-*"))
+    finally:
+        await rb.stop()
+
+
 async def test_reconfigure_same_model_keeps_entries(tmp_path: Path):
     db_path = tmp_path / "ringbuffer-same-model.db"
     rb = RingBuffer(storage="file", max_entries=100, disk_path=str(db_path))

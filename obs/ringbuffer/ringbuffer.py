@@ -211,7 +211,12 @@ class RingBuffer:
             self._max_age = int(resolved_max_age) if resolved_max_age is not None else None
 
             # Open new connection
-            await self._open_connection_locked()
+            try:
+                await self._open_connection_locked()
+            except Exception as exc:
+                if not self._can_recover_from(exc):
+                    raise
+                await self._recover_corrupt_storage_locked(exc)
             await self._conn.execute("DELETE FROM ringbuffer")
             await self._conn.commit()
             self._last_values.clear()
