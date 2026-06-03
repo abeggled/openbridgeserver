@@ -69,6 +69,7 @@ Typen) Ende-zu-Ende — Schwächen, die Vitest-Mocks verdecken können, fallen e
 ./tools/lint.sh --check
 cd gui && npm run build     # validiert reale Abhängigkeiten/Imports, was Vitest nicht tut
 cd gui && npm run test
+cd gui && npm run test:coverage
 # bei Backend-Änderungen zusätzlich:
 pytest tests/unit tests/adapters tests/contracts  # ohne Docker
 pytest tests/integration                          # mit Docker
@@ -83,6 +84,17 @@ Zusätzlich für i18n-Änderungen (Admin GUI + Visu) gilt ein harter Diff-Gate:
 # Diff-basierter i18n Hard-Gate (Hardcoded user-facing strings + locale parity)
 ./scripts/check-i18n-hardcoded-strings.sh
 ```
+
+Für GUI-Änderungen gilt zusätzlich ein weicher Coverage-Nachzieh-Hinweis:
+
+```bash
+node tools/gui-coverage-summary.mjs --changed-only --threshold=70
+```
+
+Wenn geänderte Dateien unter dem Schwellwert liegen, im Abschlussbericht konkret nennen
+und möglichst passende Vitests ergänzen. Der Hinweis ist bewusst kein lokaler Hard-Fail;
+`npm run test` und `npm run test:coverage` bleiben dagegen verpflichtende Gates und
+brechen bei Fehlern ab.
 
 Optional als lokaler Push-Hook aktivieren:
 
