@@ -2,7 +2,7 @@
 
 ## 2026.6.0
 ### Breaking changes 🚨
-* none
+* Security: Backend URL fetches from logic API-client nodes, the camera proxy, and the weather API now block private/local network targets by default unless they are explicitly allowlisted. Migration: existing installations using LAN cameras such as `http://192.168.x.x/...` or a local weather endpoint must allowlist the target under Settings → Security → URL Target Allowlist, or in the YAML file configured by `security.url_target_allowlist_path` (default: `/data/secrets/url-target-allowlist.yaml`, for example `192.168.1.23/32`). Until the target is allowlisted, affected camera widgets, weather widgets, or logic API-client calls are intentionally blocked. https://github.com/abeggled/openbridgeserver/pull/700
 
 ### New features ✨
 * Adapter: The KNX adapter now also supports TCP tunneling mode and Secure support via import of the .knxkeys file. https://github.com/abeggled/openbridgeserver/issues/14
@@ -48,6 +48,7 @@
 * Visu: Widgets können per Drag & Drop aus der Palette direkt an eine bestimmte Position auf der Seite gezogen werden; eine blaue Vorschau zeigt die Zielposition. Klick auf ein Widget fügt es weiterhin automatisch an der ersten freien Position ein. Die Widget-Liste ist jetzt sprachspezifisch alphabetisch sortiert. https://github.com/abeggled/openbridgeserver/issues/667
 
 ### Fixes 🐞
+* Security: Logic API-client nodes, camera proxy requests, and weather API requests now share an admin-managed URL target allowlist for deliberate access to internal destinations while keeping SSRF protection active. https://github.com/abeggled/openbridgeserver/pull/700
 * Logic Security (Upstream PR #686): API client secret-file paths are restricted to a configured secret directory with bounded regular-file reads.
 * GUI: Settings → History DB no longer opens as an empty tab when the TimescaleDB DSN placeholder is rendered; the `@` in the PostgreSQL example is escaped for vue-i18n. https://github.com/abeggled/openbridgeserver/issues/690
 * Adapter: KNX IP Secure now works correctly in Docker bridge networks — credentials are extracted directly from the .knxkeys file and passed explicitly to xknx, bypassing the internal UDP DescriptionRequest that fails without host networking. Connection errors now include actionable hints (Docker network mode, gateway tunnel-slot exhaustion). https://github.com/abeggled/openbridgeserver/issues/393
