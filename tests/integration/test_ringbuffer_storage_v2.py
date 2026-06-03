@@ -58,6 +58,23 @@ async def test_file_storage_recovers_malformed_database_on_start(tmp_path: Path)
         await rb.stop()
 
 
+async def test_file_storage_limits_quarantined_database_files(tmp_path: Path):
+    db_path = tmp_path / "ringbuffer-quarantine-limit.db"
+    for index in range(5):
+        (tmp_path / f"ringbuffer-quarantine-limit.db.corrupt-20260101T00000{index}000000Z").write_bytes(b"old")
+    db_path.write_bytes(b"not a sqlite database")
+
+    rb = RingBuffer(storage="file", max_entries=100, disk_path=str(db_path))
+    await rb.start()
+    try:
+        quarantined = sorted(tmp_path.glob("ringbuffer-quarantine-limit.db.corrupt-*"))
+
+        assert len(quarantined) == 3
+        assert any(path.read_bytes() == b"not a sqlite database" for path in quarantined)
+    finally:
+        await rb.stop()
+
+
 async def test_file_storage_recovers_malformed_database_during_record(tmp_path: Path, monkeypatch):
     db_path = tmp_path / "ringbuffer-malformed-record.db"
     rb = RingBuffer(storage="file", max_entries=100, disk_path=str(db_path))
@@ -80,6 +97,45 @@ async def test_file_storage_recovers_malformed_database_during_record(tmp_path: 
         assert calls["count"] == 2
         assert [entry.new_value for entry in entries] == [1]
         assert list(tmp_path.glob("ringbuffer-malformed-record.db.corrupt-*"))
+    finally:
+        await rb.stop()
+
+
+async def test_file_storage_recovery_retry_failure_propagates(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "ringbuffer-retry-fails.db"
+    rb = RingBuffer(storage="file", max_entries=100, disk_path=str(db_path))
+    await rb.start()
+    try:
+        await _record_value(rb, 1, "2026-01-01T00:00:00.000Z")
+
+        async def _always_malformed(*args, **kwargs):
+            raise aiosqlite.DatabaseError("database disk image is malformed")
+
+        monkeypatch.setattr(rb, "_fetchall", _always_malformed)
+
+        with pytest.raises(aiosqlite.DatabaseError, match="database disk image is malformed"):
+            await rb.query(q="dp-storage-v2", limit=10)
+
+        assert list(tmp_path.glob("ringbuffer-retry-fails.db.corrupt-*"))
+    finally:
+        await rb.stop()
+
+
+async def test_memory_storage_does_not_attempt_corruption_recovery(monkeypatch):
+    rb = RingBuffer(storage="memory", max_entries=100)
+    await rb.start()
+    try:
+        async def _always_malformed(*args, **kwargs):
+            raise aiosqlite.DatabaseError("database disk image is malformed")
+
+        async def _fail_if_called(*args, **kwargs):
+            raise AssertionError("memory storage should not run file recovery")
+
+        monkeypatch.setattr(rb, "_fetchall", _always_malformed)
+        monkeypatch.setattr(rb, "_recover_corrupt_storage_locked", _fail_if_called)
+
+        with pytest.raises(aiosqlite.DatabaseError, match="database disk image is malformed"):
+            await rb.query(q="dp-storage-v2", limit=10)
     finally:
         await rb.stop()
 

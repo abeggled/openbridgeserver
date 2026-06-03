@@ -36,6 +36,7 @@ _SQLITE_CORRUPTION_MARKERS = (
     "file is not a database",
     "integrity_check failed",
 )
+_MAX_QUARANTINE_FILES_PER_STORAGE_FILE = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ringbuffer (
@@ -717,8 +718,9 @@ class RingBuffer:
         except Exception as exc:
             if not self._can_recover_from(exc):
                 raise
-            await self._recover_corrupt_storage(exc)
-            rows = await self._fetchall(sql, params)
+            async with self._lock:
+                await self._recover_corrupt_storage_locked(exc)
+                rows = await self._fetchall(sql, params)
 
         entries = [
             RingBufferEntry(
@@ -773,9 +775,10 @@ class RingBuffer:
         except Exception as exc:
             if not self._can_recover_from(exc):
                 raise
-            await self._recover_corrupt_storage(exc)
-            async with self._conn.execute("SELECT COUNT(*) AS c, MIN(ts) AS oldest, MAX(ts) AS newest FROM ringbuffer") as cur:
-                row = await cur.fetchone()
+            async with self._lock:
+                await self._recover_corrupt_storage_locked(exc)
+                async with self._conn.execute("SELECT COUNT(*) AS c, MIN(ts) AS oldest, MAX(ts) AS newest FROM ringbuffer") as cur:
+                    row = await cur.fetchone()
         oldest_ts = row[1] if row else None
         return {
             "total": row[0] if row else 0,
@@ -857,21 +860,11 @@ class RingBuffer:
             await self._conn.close()
             self._conn = None
 
-    async def _recover_corrupt_storage(self, exc: Exception) -> None:
-        async with self._lock:
-            await self._recover_corrupt_storage_locked(exc)
-
     async def _recover_corrupt_storage_locked(self, exc: Exception) -> None:
-        if self._storage == "memory":
-            logger.warning("RingBuffer in-memory SQLite connection is corrupt; recreating empty database: %s", exc)
-            await self._close_connection()
-            await self._open_connection_locked()
-            self._last_values.clear()
-            return
-
         logger.warning("RingBuffer SQLite database is corrupt; quarantining and recreating empty database: %s", exc)
         await self._close_connection()
         moved_paths = self._quarantine_storage_files()
+        self._cleanup_quarantine_files()
         await self._open_connection_locked()
         self._last_values.clear()
         logger.warning("RingBuffer recovered with empty database; quarantined files=%s", moved_paths)
@@ -887,8 +880,27 @@ class RingBuffer:
             moved.append(target)
         return moved
 
+    def _cleanup_quarantine_files(self) -> None:
+        for path in (self._disk_path, f"{self._disk_path}-wal", f"{self._disk_path}-shm"):
+            directory = os.path.dirname(path) or "."
+            prefix = f"{os.path.basename(path)}.corrupt-"
+            try:
+                candidates = [
+                    os.path.join(directory, name)
+                    for name in os.listdir(directory)
+                    if name.startswith(prefix)
+                ]
+            except FileNotFoundError:
+                continue
+            stale = sorted(candidates, reverse=True)[_MAX_QUARANTINE_FILES_PER_STORAGE_FILE:]
+            for candidate in stale:
+                try:
+                    os.remove(candidate)
+                except FileNotFoundError:
+                    pass
+
     def _can_recover_from(self, exc: Exception) -> bool:
-        return self._storage in {"disk", "file", "memory"} and _is_sqlite_corruption(exc)
+        return self._storage in {"disk", "file"} and _is_sqlite_corruption(exc)
 
 
 def _safe_loads(s: str | None) -> Any:
