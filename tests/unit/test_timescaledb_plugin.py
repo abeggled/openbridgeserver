@@ -111,7 +111,12 @@ class TestConnect:
         p = _plugin()
         with mock.patch.dict(__import__("sys").modules, {"asyncpg": asyncpg}):
             await p.connect()
-        asyncpg.create_pool.assert_awaited_once()
+        asyncpg.create_pool.assert_awaited_once_with(
+            "postgresql://test/test",
+            min_size=1,
+            max_size=5,
+            server_settings={"timezone": "UTC"},
+        )
         assert p._pool is pool
 
     async def test_connect_detects_timescaledb(self):
@@ -265,10 +270,10 @@ class TestTimescaleQuery:
 # ---------------------------------------------------------------------------
 
 
-def _make_agg_row(bucket_dt, v):
+def _make_agg_row(bucket_dt, v, n=1):
     row = mock.MagicMock()
-    row.__getitem__ = lambda self, k: {"bucket": bucket_dt, "v": v}[k]
-    row.get = lambda k, d=None: {"bucket": bucket_dt, "v": v}.get(k, d)
+    row.__getitem__ = lambda self, k: {"bucket": bucket_dt, "v": v, "n": n}[k]
+    row.get = lambda k, d=None: {"bucket": bucket_dt, "v": v, "n": n}.get(k, d)
     return row
 
 
@@ -281,10 +286,11 @@ class TestTimescaleAggregate:
         return result, conn
 
     async def test_aggregate_avg_timescaledb(self):
-        row = _make_agg_row(_ts(), 10.0)
+        row = _make_agg_row(_ts(), 10.0, n=3)
         p = _plugin()
         result, _ = await self._run(p, fn="avg", rows=[row])
         assert result[0]["v"] == pytest.approx(10.0)
+        assert result[0]["n"] == 3
 
     async def test_aggregate_unknown_interval_falls_back(self):
         p = _plugin()
@@ -338,13 +344,14 @@ class TestTimescaleAggregate:
     async def test_aggregate_bucket_no_isoformat(self):
         """Bucket without isoformat (plain str) falls back to str()."""
         row = mock.MagicMock()
-        row.__getitem__ = lambda self, k: {"bucket": "2024-06-01", "v": 1.0}[k]
+        row.__getitem__ = lambda self, k: {"bucket": "2024-06-01", "v": 1.0, "n": 2}[k]
         pool, conn = _make_pool_mock(rows=[row])
         p = _plugin()
         p._pool = pool
         p._has_timescaledb = True
         result = await p.aggregate(uuid.uuid4(), "avg", "1h", _ts(0), _ts(2))
         assert result[0]["bucket"] == "2024-06-01"
+        assert result[0]["n"] == 2
 
     async def test_aggregate_requires_pool(self):
         p = _plugin()

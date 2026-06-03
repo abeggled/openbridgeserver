@@ -431,4 +431,13 @@ export const history = {
       { headers, silent401: true },
     )
   },
+  aggregate: (id: string, from: string, to: string, interval: string, fn = 'avg') => {
+    const headers: Record<string, string> = {}
+    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
+    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    return request<{ bucket: string; v: unknown; n?: number | null }[]>(
+      `/history/${id}/aggregate?fn=${fn}&interval=${interval}&from=${from}&to=${to}`,
+      { headers, silent401: true },
+    )
+  },
 }

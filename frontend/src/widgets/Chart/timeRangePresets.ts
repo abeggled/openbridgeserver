@@ -25,6 +25,28 @@ export const TIME_RANGE_PRESETS: TimeRangePreset[] = [
 ]
 
 export const DEFAULT_TIME_RANGE = 'last_7d'
+export const DEFAULT_HISTORY_QUERY_LIMIT = 10000
+
+export type HistoryAggregateInterval = '1m' | '5m' | '15m' | '30m' | '1h' | '6h' | '12h' | '1d'
+
+export type HistoryRequestPlan =
+  | { mode: 'raw'; limit: number }
+  | { mode: 'aggregate'; fn: 'avg'; interval: HistoryAggregateInterval }
+
+export const DAY_MS = 24 * 60 * 60_000
+
+export function historyRequestPlanForRange(from: Date, to: Date): HistoryRequestPlan {
+  const durationMs = to.getTime() - from.getTime()
+  if (!Number.isFinite(durationMs) || durationMs <= DAY_MS) {
+    return { mode: 'raw', limit: DEFAULT_HISTORY_QUERY_LIMIT }
+  }
+
+  // Use intervals >= 1h for multi-day views so all history backends can compress before transport.
+  if (durationMs <= 7 * DAY_MS) return { mode: 'aggregate', fn: 'avg', interval: '1h' }
+  if (durationMs <= 31 * DAY_MS) return { mode: 'aggregate', fn: 'avg', interval: '6h' }
+  if (durationMs <= 90 * DAY_MS) return { mode: 'aggregate', fn: 'avg', interval: '12h' }
+  return { mode: 'aggregate', fn: 'avg', interval: '1d' }
+}
 
 export function resolveTimeRange(preset: string): { from: Date; to: Date } {
   const now = new Date()
@@ -38,10 +60,10 @@ export function resolveTimeRange(preset: string): { from: Date; to: Date } {
     case 'last_6h':  return { from: new Date(now.getTime() -  6 * 3_600_000), to: now }
     case 'last_12h': return { from: new Date(now.getTime() - 12 * 3_600_000), to: now }
     case 'last_24h': return { from: new Date(now.getTime() - 24 * 3_600_000), to: now }
-    case 'last_2d':  return { from: new Date(now.getTime() -  2 * 86_400_000), to: now }
-    case 'last_7d':  return { from: new Date(now.getTime() -  7 * 86_400_000), to: now }
-    case 'last_30d': return { from: new Date(now.getTime() - 30 * 86_400_000), to: now }
-    case 'last_90d': return { from: new Date(now.getTime() - 90 * 86_400_000), to: now }
+    case 'last_2d':  return { from: new Date(now.getTime() -  2 * DAY_MS), to: now }
+    case 'last_7d':  return { from: new Date(now.getTime() -  7 * DAY_MS), to: now }
+    case 'last_30d': return { from: new Date(now.getTime() - 30 * DAY_MS), to: now }
+    case 'last_90d': return { from: new Date(now.getTime() - 90 * DAY_MS), to: now }
 
     case 'today': {
       const from = new Date(now)
@@ -93,6 +115,6 @@ export function resolveTimeRange(preset: string): { from: Date; to: Date } {
     }
 
     default:
-      return { from: new Date(now.getTime() - 7 * 86_400_000), to: now }
+      return { from: new Date(now.getTime() - 7 * DAY_MS), to: now }
   }
 }
