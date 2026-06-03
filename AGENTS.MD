@@ -54,6 +54,12 @@ docker compose up -d
 # Docker Compose (Mosquitto only — for local dev outside Docker)
 docker compose up -d mosquitto
 
+# Build release artifacts locally (only requires Docker)
+./tools/build-local.sh docker    # Docker image (via docker compose build obs + version stamp)
+./tools/build-local.sh lxc       # Proxmox LXC template (.tar.zst); rootfs cached in ~/.cache/obs-lxc-builder/
+./tools/build-local.sh bundle    # app bundle only, no rootfs (fast)
+./tools/build-local.sh all       # docker + lxc
+
 # Admin GUI dev server (proxies /api to localhost:8080)
 cd gui && npm run dev
 ```
