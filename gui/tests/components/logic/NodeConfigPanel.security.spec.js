@@ -74,7 +74,6 @@ describe('NodeConfigPanel api_client URL target policy', () => {
 
     expect(checkUrlTarget).toHaveBeenCalledWith({
       url: 'http://10.38.113.23/api/v1/status',
-      allow_loopback: true,
     })
     expect(wrapper.text()).toContain('Dieses Ziel wird blockiert')
     expect(wrapper.text()).toContain('10.38.113.23/32')
