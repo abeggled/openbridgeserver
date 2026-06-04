@@ -108,6 +108,31 @@ def test_rejects_url_target_without_hostname(tmp_path):
         raise AssertionError("URL without hostname should be rejected")
 
 
+@pytest.mark.parametrize(
+    "target",
+    [
+        "not a host",
+        "*.internal.example",
+        "-internal.example",
+        "internal-.example",
+        "internal..example",
+        "10.38.113.23/33",
+        "999.999.999.999",
+        "http://exa mple.local/status",
+        "http://internal.example:99999/status",
+        "http://[broken/status",
+    ],
+)
+def test_rejects_invalid_allowlist_target_values(tmp_path, target):
+    allowlist = tmp_path / "allow.yaml"
+    override_settings(_settings_for(allowlist))
+
+    with pytest.raises(ValueError):
+        add_allowed_url_target(target, reason="invalid")
+
+    assert not allowlist.exists()
+
+
 def test_legacy_string_allowlist_entries_are_loaded(tmp_path):
     allowlist = tmp_path / "allow.yaml"
     allowlist.write_text("- 10.38.113.23\n", encoding="utf-8")
@@ -392,6 +417,25 @@ def test_evaluate_rejects_empty_dns_answer(tmp_path):
     assert decision.reason == "Hostname did not resolve to any usable address"
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://not a host/status",
+        "http://*.internal.example/status",
+        "http://999.999.999.999/status",
+        "http://internal.example:99999/status",
+        "http://[broken/status",
+    ],
+)
+def test_evaluate_rejects_invalid_url_host_values(tmp_path, url):
+    override_settings(_settings_for(tmp_path / "allow.yaml"))
+
+    decision = evaluate_url_target(url)
+
+    assert decision.allowed is False
+    assert decision.reason.startswith("Invalid URL")
+
+
 def test_resolve_url_target_returns_dns_pinned_target(tmp_path):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
 
@@ -401,6 +445,15 @@ def test_resolve_url_target_returns_dns_pinned_target(tmp_path):
     assert target.scheme == "https"
     assert target.hostname_ascii == "example.com"
     assert target.port == 8443
+    assert target.addresses == ["93.184.216.34"]
+
+
+def test_resolve_url_target_accepts_public_ip_literal(tmp_path):
+    override_settings(_settings_for(tmp_path / "allow.yaml"))
+
+    target = resolve_url_target("https://93.184.216.34/status", require_https=True)
+
+    assert target.hostname_ascii == "93.184.216.34"
     assert target.addresses == ["93.184.216.34"]
 
 
@@ -454,6 +507,19 @@ async def test_security_api_rejects_invalid_create_target(tmp_path):
         await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target=" "), admin="admin")
 
     assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["not a host", "10.38.113.23/33", "http://internal.example:99999/status"])
+async def test_security_api_rejects_nonsense_create_targets(tmp_path, target):
+    allowlist = tmp_path / "allow.yaml"
+    override_settings(_settings_for(allowlist))
+
+    with pytest.raises(HTTPException) as exc:
+        await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target=target), admin="admin")
+
+    assert exc.value.status_code == 400
+    assert not allowlist.exists()
 
 
 @pytest.mark.asyncio

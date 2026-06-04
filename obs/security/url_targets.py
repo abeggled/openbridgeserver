@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import os
+import re
 import socket
 import tempfile
 from dataclasses import dataclass
@@ -87,6 +88,29 @@ def _entry_id(target: str) -> str:
     return hashlib.sha256(target.encode("utf-8")).hexdigest()[:16]
 
 
+def _normalise_hostname(raw: str) -> str:
+    host = (raw or "").strip().lower()
+    if not host:
+        raise ValueError("target must contain a hostname")
+    try:
+        host_ascii = host.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise ValueError("target must be an IP/CIDR, hostname, or URL with hostname") from exc
+    host_ascii = host_ascii.rstrip(".")
+    if not host_ascii or len(host_ascii) > 253:
+        raise ValueError("target must contain a valid hostname")
+    if re.fullmatch(r"\d+(?:\.\d+){3}", host_ascii):
+        raise ValueError("target must contain a valid IP address")
+    for label in host_ascii.split("."):
+        if not label or len(label) > 63:
+            raise ValueError("target must contain a valid hostname")
+        if label.startswith("-") or label.endswith("-"):
+            raise ValueError("target must contain a valid hostname")
+        if not all(char.isalnum() or char == "-" for char in label):
+            raise ValueError("target must contain a valid hostname")
+    return host_ascii
+
+
 def _normalise_target(raw: str) -> str:
     value = (raw or "").strip().lower()
     if not value:
@@ -99,9 +123,17 @@ def _normalise_target(raw: str) -> str:
         return str(ipaddress.ip_address(value))
     except ValueError:
         pass
-    parsed = urlparse(value if "://" in value else f"//{value}")
-    if parsed.hostname:
-        value = parsed.hostname.lower()
+    is_url = "://" in value
+    if not is_url and "/" in value and re.match(r"^\d+(?:\.\d+){3}/", value):
+        raise ValueError("target must be an IP/CIDR, hostname, or URL with hostname")
+    parsed = urlparse(value if is_url else f"//{value}")
+    try:
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("target must contain a valid hostname and port") from exc
+    if hostname:
+        value = hostname.lower()
         try:
             return str(ipaddress.ip_network(value, strict=False))
         except ValueError:
@@ -110,12 +142,10 @@ def _normalise_target(raw: str) -> str:
             return str(ipaddress.ip_address(value))
         except ValueError:
             pass
-    elif "://" in value:
+        return _normalise_hostname(value)
+    if is_url:
         raise ValueError("URL target must contain a hostname")
-    try:
-        return value.encode("idna").decode("ascii")
-    except UnicodeError as exc:
-        raise ValueError("target must be an IP/CIDR, hostname, or URL with hostname") from exc
+    return _normalise_hostname(value)
 
 
 def _read_allowlist_document(path: Path | None = None, *, strict: bool = False) -> dict[str, Any]:
@@ -276,15 +306,26 @@ def evaluate_url_target(
     allowed_schemes = {"https"} if require_https else {"http", "https"}
     if parsed.scheme.lower() not in allowed_schemes:
         scheme_msg = "HTTPS" if require_https else "HTTP/HTTPS"
-        return UrlTargetDecision(False, url, parsed.hostname or "", [], [], f"Only {scheme_msg} URLs are allowed")
-    if not parsed.hostname:
+        try:
+            host = parsed.hostname or ""
+        except ValueError:
+            host = ""
+        return UrlTargetDecision(False, url, host, [], [], f"Only {scheme_msg} URLs are allowed")
+    try:
+        parsed_hostname = parsed.hostname
+    except ValueError as exc:
+        return UrlTargetDecision(False, url, "", [], [], f"Invalid URL host or port: {exc}")
+    if not parsed_hostname:
         return UrlTargetDecision(False, url, "", [], [], "URL has no hostname")
 
     try:
-        hostname_ascii = parsed.hostname.encode("idna").decode("ascii")
+        try:
+            hostname_ascii = str(ipaddress.ip_address(parsed_hostname))
+        except ValueError:
+            hostname_ascii = _normalise_hostname(parsed_hostname)
         port = parsed.port
     except (UnicodeError, ValueError) as exc:
-        return UrlTargetDecision(False, url, parsed.hostname, [], [], f"Invalid URL host or port: {exc}")
+        return UrlTargetDecision(False, url, parsed_hostname, [], [], f"Invalid URL host or port: {exc}")
 
     if allow_loopback and hostname_ascii.lower() in {"localhost", "localhost.localdomain"}:
         return UrlTargetDecision(True, url, hostname_ascii, ["127.0.0.1"], [], "Loopback target is allowed")
@@ -348,7 +389,11 @@ def resolve_url_target(
     if not decision.allowed:
         raise ValueError(decision.reason)
     parsed = urlparse(url)
-    hostname_ascii = (parsed.hostname or "").encode("idna").decode("ascii")
+    parsed_hostname = parsed.hostname or ""
+    try:
+        hostname_ascii = str(ipaddress.ip_address(parsed_hostname))
+    except ValueError:
+        hostname_ascii = _normalise_hostname(parsed_hostname)
     return ResolvedUrlTarget(
         original_url=url,
         scheme=parsed.scheme.lower(),

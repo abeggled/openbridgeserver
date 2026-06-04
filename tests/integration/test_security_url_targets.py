@@ -83,6 +83,25 @@ async def test_url_target_allowlist_fqdn_suggested_ip_flow(client, auth_headers)
         assert allowed_body["allowlisted_by"] == "10.38.113.23/32"
 
 
+async def test_url_target_allowlist_rejects_invalid_target_values(client, auth_headers):
+    before = await client.get("/api/v1/security/url-target-allowlist", headers=auth_headers)
+    assert before.status_code == 200
+    before_entries = before.json()["entries"]
+
+    for target in ["not a host", "10.38.113.23/33", "http://internal.example:99999/status"]:
+        created = await client.post(
+            "/api/v1/security/url-target-allowlist",
+            json={"target": target, "reason": "invalid integration test"},
+            headers=auth_headers,
+        )
+        assert created.status_code == 400
+        assert created.json()["detail"]
+
+    listed = await client.get("/api/v1/security/url-target-allowlist", headers=auth_headers)
+    assert listed.status_code == 200
+    assert listed.json()["entries"] == before_entries
+
+
 async def test_url_target_check_allows_authenticated_non_admin_but_not_allowlist_write(client):
     headers = _headers_for("graph-editor")
 
