@@ -58,6 +58,7 @@ jobs:
           tags: |
             type=raw,value=nightly
             type=raw,value=nightly-${{ steps.nightly.outputs.date }}
+            type=raw,value=nightly-${{ steps.nightly.outputs.short_sha }}
             type=raw,value=${{ steps.nightly.outputs.version }}
 
       - name: Build and push image

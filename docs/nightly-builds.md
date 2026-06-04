@@ -10,6 +10,7 @@ The nightly Docker workflow publishes these tags:
 
 - `nightly`: moving pointer to the newest successful nightly build
 - `nightly-YYYYMMDD`: date based build tag
+- `nightly-<short-sha>`: commit based build tag without the date
 - `nightly-YYYYMMDD-<short-sha>`: traceable build tag for debugging
 
 Stable release tags are untouched. The cleanup step only runs after the image was built and pushed successfully, only considers package versions with nightly tags, and keeps the newest 14 nightly container versions. This keeps GHCR from accumulating old preview images while still leaving enough history for short-term rollback and issue reproduction. A failed nightly never prunes previously published nightlies.
