@@ -112,6 +112,7 @@ def test_rejects_url_target_without_hostname(tmp_path):
     "target",
     [
         "not a host",
+        "Gugeseli",
         "*.internal.example",
         "-internal.example",
         "internal-.example",
@@ -129,6 +130,17 @@ def test_rejects_invalid_allowlist_target_values(tmp_path, target):
 
     with pytest.raises(ValueError):
         add_allowed_url_target(target, reason="invalid")
+
+    assert not allowlist.exists()
+
+
+def test_rejects_unresolvable_fqdn_allowlist_target(tmp_path):
+    allowlist = tmp_path / "allow.yaml"
+    override_settings(_settings_for(allowlist))
+
+    with patch("obs.security.url_targets.socket.getaddrinfo", side_effect=OSError("dns down")):
+        with pytest.raises(ValueError, match="FQDN target must resolve"):
+            add_allowed_url_target("internal.example", reason="invalid")
 
     assert not allowlist.exists()
 
@@ -240,7 +252,8 @@ def test_remove_missing_allowlist_entry_returns_false(tmp_path):
 
 def test_hostname_allowlist_does_not_allow_dns_failure(tmp_path):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
-    add_allowed_url_target("http://internal.example/path")
+    with patch("obs.security.url_targets.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 0))]):
+        add_allowed_url_target("http://internal.example/path")
 
     with patch("obs.security.url_targets.socket.getaddrinfo", side_effect=OSError("dns down")):
         decision = evaluate_url_target("http://internal.example/status")
@@ -253,7 +266,8 @@ def test_hostname_allowlist_does_not_allow_dns_failure(tmp_path):
 
 def test_hostname_allowlist_does_not_allow_empty_dns_answer(tmp_path):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
-    add_allowed_url_target("internal.example")
+    with patch("obs.security.url_targets.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 0))]):
+        add_allowed_url_target("internal.example")
 
     with patch("obs.security.url_targets.socket.getaddrinfo", return_value=[]):
         decision = evaluate_url_target("http://internal.example/status")
@@ -264,7 +278,8 @@ def test_hostname_allowlist_does_not_allow_empty_dns_answer(tmp_path):
 
 def test_exact_hostname_allowlist_does_not_override_resolved_private_ip(tmp_path):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
-    add_allowed_url_target("internal.example")
+    with patch("obs.security.url_targets.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 0))]):
+        add_allowed_url_target("internal.example")
 
     with patch("obs.security.url_targets.socket.getaddrinfo", return_value=[(None, None, None, None, ("10.38.113.23", 0))]):
         decision = evaluate_url_target("http://internal.example/status")
@@ -277,7 +292,8 @@ def test_exact_hostname_allowlist_does_not_override_resolved_private_ip(tmp_path
 
 def test_hostname_allowlist_entry_is_skipped_for_resolved_public_ip(tmp_path):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
-    add_allowed_url_target("other.example")
+    with patch("obs.security.url_targets.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 0))]):
+        add_allowed_url_target("other.example")
 
     with patch("obs.security.url_targets.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 0))]):
         decision = evaluate_url_target("http://internal.example/status")
@@ -288,7 +304,8 @@ def test_hostname_allowlist_entry_is_skipped_for_resolved_public_ip(tmp_path):
 
 def test_hostname_allowlist_match_tolerates_unencodable_hostname(tmp_path):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
-    add_allowed_url_target("internal.example")
+    with patch("obs.security.url_targets.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 0))]):
+        add_allowed_url_target("internal.example")
 
     assert _match_allowlist("\udcff") is None
 
@@ -309,8 +326,9 @@ def test_url_ip_literal_allowlist_entry_is_canonicalized(tmp_path):
 def test_bare_hostname_url_target_entry_is_canonicalized(tmp_path):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
 
-    first = add_allowed_url_target("internal.example:8443/status", reason="bare")
-    second = add_allowed_url_target("https://internal.example/api", reason="url")
+    with patch("obs.security.url_targets.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 0))]):
+        first = add_allowed_url_target("internal.example:8443/status", reason="bare")
+        second = add_allowed_url_target("https://internal.example/api", reason="url")
 
     entries = list_allowed_url_targets()
     assert first.target == "internal.example"
@@ -510,7 +528,7 @@ async def test_security_api_rejects_invalid_create_target(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("target", ["not a host", "10.38.113.23/33", "http://internal.example:99999/status"])
+@pytest.mark.parametrize("target", ["not a host", "Gugeseli", "10.38.113.23/33", "http://internal.example:99999/status"])
 async def test_security_api_rejects_nonsense_create_targets(tmp_path, target):
     allowlist = tmp_path / "allow.yaml"
     override_settings(_settings_for(allowlist))
@@ -519,6 +537,20 @@ async def test_security_api_rejects_nonsense_create_targets(tmp_path, target):
         await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target=target), admin="admin")
 
     assert exc.value.status_code == 400
+    assert not allowlist.exists()
+
+
+@pytest.mark.asyncio
+async def test_security_api_rejects_unresolvable_fqdn_create_target(tmp_path):
+    allowlist = tmp_path / "allow.yaml"
+    override_settings(_settings_for(allowlist))
+
+    with patch("obs.security.url_targets.socket.getaddrinfo", side_effect=OSError("dns down")):
+        with pytest.raises(HTTPException) as exc:
+            await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target="internal.example"), admin="admin")
+
+    assert exc.value.status_code == 400
+    assert "FQDN target must resolve" in exc.value.detail
     assert not allowlist.exists()
 
 

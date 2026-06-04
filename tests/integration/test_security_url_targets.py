@@ -88,7 +88,7 @@ async def test_url_target_allowlist_rejects_invalid_target_values(client, auth_h
     assert before.status_code == 200
     before_entries = before.json()["entries"]
 
-    for target in ["not a host", "10.38.113.23/33", "http://internal.example:99999/status"]:
+    for target in ["not a host", "Gugeseli", "10.38.113.23/33", "http://internal.example:99999/status"]:
         created = await client.post(
             "/api/v1/security/url-target-allowlist",
             json={"target": target, "reason": "invalid integration test"},
@@ -96,6 +96,15 @@ async def test_url_target_allowlist_rejects_invalid_target_values(client, auth_h
         )
         assert created.status_code == 400
         assert created.json()["detail"]
+
+    with patch("obs.security.url_targets.socket.getaddrinfo", side_effect=OSError("dns down")):
+        unresolved = await client.post(
+            "/api/v1/security/url-target-allowlist",
+            json={"target": "internal.example", "reason": "unresolved integration test"},
+            headers=auth_headers,
+        )
+    assert unresolved.status_code == 400
+    assert "FQDN target must resolve" in unresolved.json()["detail"]
 
     listed = await client.get("/api/v1/security/url-target-allowlist", headers=auth_headers)
     assert listed.status_code == 200

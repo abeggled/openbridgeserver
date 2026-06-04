@@ -88,7 +88,7 @@ def _entry_id(target: str) -> str:
     return hashlib.sha256(target.encode("utf-8")).hexdigest()[:16]
 
 
-def _normalise_hostname(raw: str) -> str:
+def _normalise_hostname(raw: str, *, require_fqdn: bool = False) -> str:
     host = (raw or "").strip().lower()
     if not host:
         raise ValueError("target must contain a hostname")
@@ -101,6 +101,8 @@ def _normalise_hostname(raw: str) -> str:
         raise ValueError("target must contain a valid hostname")
     if re.fullmatch(r"\d+(?:\.\d+){3}", host_ascii):
         raise ValueError("target must contain a valid IP address")
+    if require_fqdn and "." not in host_ascii:
+        raise ValueError("target must be an IP/CIDR or FQDN")
     for label in host_ascii.split("."):
         if not label or len(label) > 63:
             raise ValueError("target must contain a valid hostname")
@@ -142,10 +144,29 @@ def _normalise_target(raw: str) -> str:
             return str(ipaddress.ip_address(value))
         except ValueError:
             pass
-        return _normalise_hostname(value)
+        return _normalise_hostname(value, require_fqdn=True)
     if is_url:
         raise ValueError("URL target must contain a hostname")
-    return _normalise_hostname(value)
+    return _normalise_hostname(value, require_fqdn=True)
+
+
+def _is_ip_or_network_target(target: str) -> bool:
+    try:
+        ipaddress.ip_network(target, strict=False)
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_fqdn_target_resolves(target: str) -> None:
+    if _is_ip_or_network_target(target):
+        return
+    try:
+        infos = socket.getaddrinfo(target, None, type=socket.SOCK_STREAM)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"FQDN target must resolve: {exc}") from exc
+    if not infos:
+        raise ValueError("FQDN target must resolve")
 
 
 def _read_allowlist_document(path: Path | None = None, *, strict: bool = False) -> dict[str, Any]:
@@ -238,6 +259,7 @@ def _write_allowlist(entries: list[UrlTargetAllowEntry]) -> None:
 
 def add_allowed_url_target(target: str, reason: str = "", created_by: str = "") -> UrlTargetAllowEntry:
     normalised = _normalise_target(target)
+    _validate_fqdn_target_resolves(normalised)
     entries = [entry for entry in list_allowed_url_targets(strict=True) if entry.target != normalised]
     entry = UrlTargetAllowEntry(
         id=_entry_id(normalised),
