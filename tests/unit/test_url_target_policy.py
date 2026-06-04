@@ -157,6 +157,21 @@ def test_malformed_allowlist_yaml_blocks_writes_without_overwrite(tmp_path):
     assert allowlist.read_text(encoding="utf-8") == broken_yaml
 
 
+def test_invalid_allowlist_structure_blocks_writes_without_overwrite(tmp_path):
+    allowlist = tmp_path / "allow.yaml"
+    invalid_yaml = "version: 1\nallowed_targets: nope\n"
+    allowlist.write_text(invalid_yaml, encoding="utf-8")
+    override_settings(_settings_for(allowlist))
+
+    with pytest.raises(UrlTargetAllowlistReadError):
+        add_allowed_url_target("10.38.113.23/32", reason="unit")
+
+    with pytest.raises(UrlTargetAllowlistReadError):
+        remove_allowed_url_target("10.38.113.23/32")
+
+    assert allowlist.read_text(encoding="utf-8") == invalid_yaml
+
+
 def test_allowlist_read_errors_are_ignored(tmp_path):
     allowlist = tmp_path / "allow.yaml"
     allowlist.write_bytes(b"\xff\xfe\x00")

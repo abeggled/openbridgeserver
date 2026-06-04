@@ -1451,6 +1451,21 @@ class TestSecuritySettingsValidator:
 
         assert settings.security.url_target_allowlist_path == str(custom_path)
 
+    def test_explicit_builtin_url_target_allowlist_path_is_preserved(self, tmp_path, monkeypatch):
+        from obs.config import DatabaseSettings, SecuritySettings, Settings
+
+        monkeypatch.delenv("OBS_SECRET_FILE_DIR", raising=False)
+
+        settings = Settings(
+            database=DatabaseSettings(path=str(tmp_path / "obs.db")),
+            security=SecuritySettings(
+                jwt_secret="unit-test-secret-32-chars-xxx",
+                url_target_allowlist_path="/data/secrets/url-target-allowlist.yaml",
+            ),
+        )
+
+        assert settings.security.url_target_allowlist_path == "/data/secrets/url-target-allowlist.yaml"
+
 
 class TestHelperFunctions:
     def test_has_env_key_case_insensitive(self, monkeypatch):

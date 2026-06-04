@@ -124,17 +124,23 @@ def _read_allowlist_document(path: Path | None = None, *, strict: bool = False) 
         return {"version": 1, "allowed_targets": []}
     try:
         with open(target_path, encoding="utf-8") as handle:
-            raw = yaml.safe_load(handle) or {}
+            raw = yaml.safe_load(handle)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         if strict:
             raise UrlTargetAllowlistReadError(f"Could not read URL target allowlist {target_path}: {exc}") from exc
         return {"version": 1, "allowed_targets": []}
+    if raw is None:
+        return {"version": 1, "allowed_targets": []}
     if isinstance(raw, list):
         return {"version": 1, "allowed_targets": raw}
     if not isinstance(raw, dict):
+        if strict:
+            raise UrlTargetAllowlistReadError(f"Invalid URL target allowlist structure in {target_path}")
         return {"version": 1, "allowed_targets": []}
     allowed = raw.get("allowed_targets")
     if not isinstance(allowed, list):
+        if strict and "allowed_targets" in raw:
+            raise UrlTargetAllowlistReadError(f"Invalid URL target allowlist structure in {target_path}")
         raw["allowed_targets"] = []
     raw.setdefault("version", 1)
     return raw

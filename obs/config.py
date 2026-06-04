@@ -217,6 +217,22 @@ class Settings(BaseSettings):
     mosquitto: MosquittoSettings = Field(default_factory=MosquittoSettings)
     cors: CorsSettings = Field(default_factory=CorsSettings)
 
+    @staticmethod
+    def _database_path_from_input(result: dict[str, Any], database_key: str | None, default_path: str) -> str:
+        if database_key is None:
+            return default_path
+        database_value = result.get(database_key)
+        if isinstance(database_value, DatabaseSettings):
+            return database_value.path
+        if isinstance(database_value, dict):
+            path_key = next(
+                (key for key in database_value if isinstance(key, str) and key.lower() == "path"),
+                None,
+            )
+            if path_key is not None and isinstance(database_value.get(path_key), str):
+                return database_value[path_key]
+        return default_path
+
     @model_validator(mode="before")
     @classmethod
     def _inject_database_path_fallback(cls, data: Any) -> Any:
@@ -232,12 +248,12 @@ class Settings(BaseSettings):
 
         if database_key is None:
             result["database"] = {"path": default_path}
-            return result
+            database_key = "database"
 
         database_value = result.get(database_key)
         if database_value is None:
             result[database_key] = {"path": default_path}
-            return result
+            database_value = result[database_key]
 
         if isinstance(database_value, dict):
             path_key = next(
@@ -255,13 +271,34 @@ class Settings(BaseSettings):
                     merged_database[path_key] = default_path
                     result[database_key] = merged_database
 
-        return result
+        database_path = cls._database_path_from_input(result, database_key, default_path)
+        allowlist_path = _resolve_default_url_target_allowlist_path(database_path)
+        security_key = next(
+            (key for key in result if isinstance(key, str) and key.lower() == "security"),
+            None,
+        )
 
-    @model_validator(mode="after")
-    def _derive_url_target_allowlist_path(self) -> Settings:
-        if _is_builtin_default_url_target_allowlist_path(self.security.url_target_allowlist_path):
-            self.security.url_target_allowlist_path = _resolve_default_url_target_allowlist_path(self.database.path)
-        return self
+        if security_key is None or result.get(security_key) is None:
+            result["security"] = {"url_target_allowlist_path": allowlist_path}
+            return result
+
+        security_value = result[security_key]
+        if isinstance(security_value, SecuritySettings):
+            if "url_target_allowlist_path" not in security_value.model_fields_set:
+                result[security_key] = security_value.model_copy(update={"url_target_allowlist_path": allowlist_path})
+            return result
+
+        if isinstance(security_value, dict):
+            path_key = next(
+                (key for key in security_value if isinstance(key, str) and key.lower() == "url_target_allowlist_path"),
+                None,
+            )
+            if path_key is None:
+                merged_security = dict(security_value)
+                merged_security["url_target_allowlist_path"] = allowlist_path
+                result[security_key] = merged_security
+
+        return result
 
     @classmethod
     def settings_customise_sources(
