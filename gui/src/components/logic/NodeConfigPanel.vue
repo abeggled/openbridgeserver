@@ -1596,8 +1596,13 @@ async function checkApiClientUrlTarget() {
   urlTargetDecision.value = null
   urlTargetMsg.value = null
   try {
+    const checkedUrl = normaliseUrlTargetInput(localData.value.url)
+    if (checkedUrl !== localData.value.url) {
+      localData.value.url = checkedUrl
+      emitUpdate()
+    }
     const { data } = await securityApi.checkUrlTarget({
-      url: normaliseUrlTargetInput(localData.value.url),
+      url: checkedUrl,
     })
     urlTargetDecision.value = data
   } catch (e) {

@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from obs.api.auth import create_access_token
+
+
+def _headers_for(username: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {create_access_token(username)}"}
+
 
 async def test_url_target_allowlist_admin_flow(client, auth_headers):
     blocked = await client.post(
@@ -75,3 +81,24 @@ async def test_url_target_allowlist_fqdn_suggested_ip_flow(client, auth_headers)
         assert allowed_body["allowed"] is True
         assert allowed_body["host"] == "internal.example"
         assert allowed_body["allowlisted_by"] == "10.38.113.23/32"
+
+
+async def test_url_target_check_allows_authenticated_non_admin_but_not_allowlist_write(client):
+    headers = _headers_for("graph-editor")
+
+    with patch("obs.security.url_targets.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 0))]):
+        checked = await client.post(
+            "/api/v1/security/url-target-check",
+            json={"url": "http://example.com/status"},
+            headers=headers,
+        )
+
+    assert checked.status_code == 200
+    assert checked.json()["allowed"] is True
+
+    created = await client.post(
+        "/api/v1/security/url-target-allowlist",
+        json={"target": "10.38.113.23/32", "reason": "non-admin must not write"},
+        headers=headers,
+    )
+    assert created.status_code == 403

@@ -13,7 +13,7 @@ import pytest
 # obs/api/v1/camera.py — _check_ssrf, _camera_auth
 # ===========================================================================
 
-from obs.api.v1.camera import _check_ssrf, _camera_auth
+from obs.api.v1.camera import _build_fetch_targets as _check_ssrf, _camera_auth
 from fastapi import HTTPException
 from obs.security.url_targets import UrlTargetDecision
 
@@ -43,14 +43,8 @@ def _url_decision(
 @pytest.mark.asyncio
 async def test_check_ssrf_blocks_metadata_ip(monkeypatch):
     monkeypatch.setattr(
-        "obs.api.v1.camera.evaluate_url_target",
-        lambda url: _url_decision(
-            allowed=False,
-            url=url,
-            host="metadata.internal",
-            resolved_ips=["169.254.169.254"],
-            blocked_ips=["169.254.169.254"],
-        ),
+        "obs.api.v1.camera.build_pinned_url_targets",
+        lambda url: (_ for _ in ()).throw(ValueError("Blocked URL target")),
     )
     with pytest.raises(HTTPException) as exc_info:
         await _check_ssrf("http://metadata.internal/secret")
@@ -60,14 +54,8 @@ async def test_check_ssrf_blocks_metadata_ip(monkeypatch):
 @pytest.mark.asyncio
 async def test_check_ssrf_allows_private_ip(monkeypatch):
     monkeypatch.setattr(
-        "obs.api.v1.camera.evaluate_url_target",
-        lambda url: _url_decision(
-            allowed=True,
-            url=url,
-            host="camera.local",
-            resolved_ips=["192.168.1.10"],
-            allowlisted_by="192.168.1.10/32",
-        ),
+        "obs.api.v1.camera.build_pinned_url_targets",
+        lambda url: ([url], {}, {}),
     )
     await _check_ssrf("http://camera.local/stream")  # should not raise
 
@@ -75,13 +63,8 @@ async def test_check_ssrf_allows_private_ip(monkeypatch):
 @pytest.mark.asyncio
 async def test_check_ssrf_dns_failure(monkeypatch):
     monkeypatch.setattr(
-        "obs.api.v1.camera.evaluate_url_target",
-        lambda url: _url_decision(
-            allowed=False,
-            url=url,
-            host="nonexistent.invalid",
-            reason="Hostname could not be resolved: Name or service not known",
-        ),
+        "obs.api.v1.camera.build_pinned_url_targets",
+        lambda url: (_ for _ in ()).throw(ValueError("Hostname could not be resolved: Name or service not known")),
     )
     with pytest.raises(HTTPException) as exc_info:
         await _check_ssrf("http://nonexistent.invalid/")
@@ -441,7 +424,7 @@ from obs.api.v1.camera import proxy_camera
 
 @pytest.mark.asyncio
 async def test_proxy_camera_rejects_non_http(monkeypatch):
-    monkeypatch.setattr("obs.api.v1.camera._check_ssrf", AsyncMock())
+    monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
     with pytest.raises(HTTPException) as exc_info:
         await proxy_camera(
             url="ftp://camera.local/stream",
@@ -456,7 +439,7 @@ async def test_proxy_camera_rejects_non_http(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_proxy_camera_head_returns_redirect(monkeypatch):
-    monkeypatch.setattr("obs.api.v1.camera._check_ssrf", AsyncMock())
+    monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
     mock_head = MagicMock(status_code=301, headers={})
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -477,7 +460,7 @@ async def test_proxy_camera_head_returns_redirect(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_proxy_camera_head_returns_401(monkeypatch):
-    monkeypatch.setattr("obs.api.v1.camera._check_ssrf", AsyncMock())
+    monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
     mock_head = MagicMock(status_code=401, headers={})
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -500,7 +483,7 @@ async def test_proxy_camera_head_returns_401(monkeypatch):
 async def test_proxy_camera_head_request_error(monkeypatch):
     import httpx
 
-    monkeypatch.setattr("obs.api.v1.camera._check_ssrf", AsyncMock())
+    monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -522,7 +505,7 @@ async def test_proxy_camera_head_request_error(monkeypatch):
 async def test_proxy_camera_success_returns_streaming_response(monkeypatch):
     from fastapi.responses import StreamingResponse
 
-    monkeypatch.setattr("obs.api.v1.camera._check_ssrf", AsyncMock())
+    monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
     mock_head = MagicMock(status_code=200, headers={"content-type": "video/mjpeg"})
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -546,7 +529,7 @@ async def test_proxy_camera_head_405_optimistic(monkeypatch):
     """405 from HEAD → optimistic continue, use octet-stream."""
     from fastapi.responses import StreamingResponse
 
-    monkeypatch.setattr("obs.api.v1.camera._check_ssrf", AsyncMock())
+    monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
     mock_head = MagicMock(status_code=405, headers={})
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)

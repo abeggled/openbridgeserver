@@ -1943,11 +1943,11 @@ class TestCheckSsrf:
     async def test_loopback_address_blocked(self, monkeypatch):
         from fastapi import HTTPException
 
-        from obs.api.v1.weather import _check_ssrf
+        from obs.api.v1.weather import _build_fetch_targets as _check_ssrf
 
         monkeypatch.setattr(
-            "obs.api.v1.weather.evaluate_url_target",
-            lambda url: _url_decision(allowed=False, url=url, resolved_ips=["127.0.0.1"], blocked_ips=["127.0.0.1"]),
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: (_ for _ in ()).throw(ValueError("Blocked URL target")),
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -1956,11 +1956,11 @@ class TestCheckSsrf:
 
     @pytest.mark.asyncio
     async def test_public_address_allowed(self, monkeypatch):
-        from obs.api.v1.weather import _check_ssrf
+        from obs.api.v1.weather import _build_fetch_targets as _check_ssrf
 
         monkeypatch.setattr(
-            "obs.api.v1.weather.evaluate_url_target",
-            lambda url: _url_decision(allowed=True, url=url, resolved_ips=["93.184.216.34"]),
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
         )
 
         # Should not raise
@@ -1970,11 +1970,11 @@ class TestCheckSsrf:
     async def test_dns_failure_raises_502(self, monkeypatch):
         from fastapi import HTTPException
 
-        from obs.api.v1.weather import _check_ssrf
+        from obs.api.v1.weather import _build_fetch_targets as _check_ssrf
 
         monkeypatch.setattr(
-            "obs.api.v1.weather.evaluate_url_target",
-            lambda url: _url_decision(allowed=False, url=url, reason="Hostname could not be resolved: Name not found"),
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: (_ for _ in ()).throw(ValueError("Hostname could not be resolved: Name not found")),
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -1985,7 +1985,7 @@ class TestCheckSsrf:
     async def test_no_hostname_raises_400(self):
         from fastapi import HTTPException
 
-        from obs.api.v1.weather import _check_ssrf
+        from obs.api.v1.weather import _build_fetch_targets as _check_ssrf
 
         with pytest.raises(HTTPException) as exc_info:
             await _check_ssrf("http:///no-host")
@@ -1995,16 +1995,11 @@ class TestCheckSsrf:
     async def test_link_local_blocked(self, monkeypatch):
         from fastapi import HTTPException
 
-        from obs.api.v1.weather import _check_ssrf
+        from obs.api.v1.weather import _build_fetch_targets as _check_ssrf
 
         monkeypatch.setattr(
-            "obs.api.v1.weather.evaluate_url_target",
-            lambda url: _url_decision(
-                allowed=False,
-                url=url,
-                resolved_ips=["169.254.169.254"],
-                blocked_ips=["169.254.169.254"],
-            ),
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: (_ for _ in ()).throw(ValueError("Blocked URL target")),
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -2030,8 +2025,8 @@ class TestFetchWeather:
         from obs.api.v1.weather import fetch_weather
 
         monkeypatch.setattr(
-            "obs.api.v1.weather.evaluate_url_target",
-            lambda url: _url_decision(allowed=True, url=url, resolved_ips=["93.184.216.34"]),
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
         )
 
         # Mock httpx response
@@ -2047,7 +2042,7 @@ class TestFetchWeather:
             async def __aexit__(self, *args):
                 pass
 
-            async def get(self, url):
+            async def get(self, url, **kwargs):
                 return mock_response
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
@@ -2063,8 +2058,8 @@ class TestFetchWeather:
         from obs.api.v1.weather import fetch_weather
 
         monkeypatch.setattr(
-            "obs.api.v1.weather.evaluate_url_target",
-            lambda url: _url_decision(allowed=True, url=url, resolved_ips=["93.184.216.34"]),
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
         )
 
         mock_response = MagicMock()
@@ -2078,7 +2073,7 @@ class TestFetchWeather:
             async def __aexit__(self, *args):
                 pass
 
-            async def get(self, url):
+            async def get(self, url, **kwargs):
                 return mock_response
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
@@ -2095,8 +2090,8 @@ class TestFetchWeather:
         from obs.api.v1.weather import fetch_weather
 
         monkeypatch.setattr(
-            "obs.api.v1.weather.evaluate_url_target",
-            lambda url: _url_decision(allowed=True, url=url, resolved_ips=["93.184.216.34"]),
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
         )
 
         mock_response = MagicMock()
@@ -2109,7 +2104,7 @@ class TestFetchWeather:
             async def __aexit__(self, *args):
                 pass
 
-            async def get(self, url):
+            async def get(self, url, **kwargs):
                 return mock_response
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
@@ -2126,8 +2121,8 @@ class TestFetchWeather:
         from obs.api.v1.weather import fetch_weather
 
         monkeypatch.setattr(
-            "obs.api.v1.weather.evaluate_url_target",
-            lambda url: _url_decision(allowed=True, url=url, resolved_ips=["93.184.216.34"]),
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
         )
 
         mock_response = MagicMock()
@@ -2140,7 +2135,7 @@ class TestFetchWeather:
             async def __aexit__(self, *args):
                 pass
 
-            async def get(self, url):
+            async def get(self, url, **kwargs):
                 return mock_response
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
@@ -2157,8 +2152,8 @@ class TestFetchWeather:
         from obs.api.v1.weather import fetch_weather
 
         monkeypatch.setattr(
-            "obs.api.v1.weather.evaluate_url_target",
-            lambda url: _url_decision(allowed=True, url=url, resolved_ips=["93.184.216.34"]),
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
         )
 
         class _FakeHttpxClient:
@@ -2168,7 +2163,7 @@ class TestFetchWeather:
             async def __aexit__(self, *args):
                 pass
 
-            async def get(self, url):
+            async def get(self, url, **kwargs):
                 raise httpx.RequestError("connection refused")
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
@@ -2185,8 +2180,8 @@ class TestFetchWeather:
         from obs.api.v1.weather import fetch_weather
 
         monkeypatch.setattr(
-            "obs.api.v1.weather.evaluate_url_target",
-            lambda url: _url_decision(allowed=True, url=url, resolved_ips=["93.184.216.34"]),
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
         )
 
         mock_response = MagicMock()
@@ -2199,7 +2194,7 @@ class TestFetchWeather:
             async def __aexit__(self, *args):
                 pass
 
-            async def get(self, url):
+            async def get(self, url, **kwargs):
                 return mock_response
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())

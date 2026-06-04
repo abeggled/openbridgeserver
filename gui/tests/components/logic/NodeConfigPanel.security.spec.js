@@ -32,7 +32,7 @@ async function mountApiClientPanel() {
       node: {
         id: 'ac',
         type: 'api_client',
-        data: { url: 'http://internal.example/api/v1/status', auth_type: 'none' },
+        data: { url: 'internal.example/api/v1/status', auth_type: 'none' },
       },
       nodeTypes: [{ type: 'api_client', label: 'API Client', description: 'HTTP client' }],
       nodeOutputs: {},
@@ -75,6 +75,7 @@ describe('NodeConfigPanel api_client URL target policy', () => {
     expect(checkUrlTarget).toHaveBeenCalledWith({
       url: 'http://internal.example/api/v1/status',
     })
+    expect(wrapper.emitted('update').at(-1)[0].url).toBe('http://internal.example/api/v1/status')
     expect(wrapper.text()).toContain('Dieses Ziel wird blockiert')
     expect(wrapper.text()).toContain('10.38.113.23/32')
 

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import yaml
 
@@ -69,6 +69,16 @@ class ResolvedUrlTarget:
     decision: UrlTargetDecision
 
 
+class UrlTargetAllowlistReadError(OSError):
+    pass
+
+
+class UrlTargetBlockedError(ValueError):
+    def __init__(self, decision: UrlTargetDecision) -> None:
+        super().__init__(decision.reason)
+        self.decision = decision
+
+
 def allowlist_path() -> Path:
     return Path(get_settings().security.url_target_allowlist_path)
 
@@ -108,14 +118,16 @@ def _normalise_target(raw: str) -> str:
         raise ValueError("target must be an IP/CIDR, hostname, or URL with hostname") from exc
 
 
-def _read_allowlist_document(path: Path | None = None) -> dict[str, Any]:
+def _read_allowlist_document(path: Path | None = None, *, strict: bool = False) -> dict[str, Any]:
     target_path = path or allowlist_path()
     if not target_path.exists():
         return {"version": 1, "allowed_targets": []}
     try:
         with open(target_path, encoding="utf-8") as handle:
             raw = yaml.safe_load(handle) or {}
-    except (OSError, UnicodeError, yaml.YAMLError):
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        if strict:
+            raise UrlTargetAllowlistReadError(f"Could not read URL target allowlist {target_path}: {exc}") from exc
         return {"version": 1, "allowed_targets": []}
     if isinstance(raw, list):
         return {"version": 1, "allowed_targets": raw}
@@ -128,8 +140,8 @@ def _read_allowlist_document(path: Path | None = None) -> dict[str, Any]:
     return raw
 
 
-def list_allowed_url_targets() -> list[UrlTargetAllowEntry]:
-    doc = _read_allowlist_document()
+def list_allowed_url_targets(*, strict: bool = False) -> list[UrlTargetAllowEntry]:
+    doc = _read_allowlist_document(strict=strict)
     entries: list[UrlTargetAllowEntry] = []
     for item in doc.get("allowed_targets", []):
         if isinstance(item, str):
@@ -190,7 +202,7 @@ def _write_allowlist(entries: list[UrlTargetAllowEntry]) -> None:
 
 def add_allowed_url_target(target: str, reason: str = "", created_by: str = "") -> UrlTargetAllowEntry:
     normalised = _normalise_target(target)
-    entries = [entry for entry in list_allowed_url_targets() if entry.target != normalised]
+    entries = [entry for entry in list_allowed_url_targets(strict=True) if entry.target != normalised]
     entry = UrlTargetAllowEntry(
         id=_entry_id(normalised),
         target=normalised,
@@ -205,7 +217,7 @@ def add_allowed_url_target(target: str, reason: str = "", created_by: str = "") 
 
 def remove_allowed_url_target(target: str) -> bool:
     normalised = _normalise_target(target)
-    entries = list_allowed_url_targets()
+    entries = list_allowed_url_targets(strict=True)
     remaining = [entry for entry in entries if entry.target != normalised]
     if len(remaining) == len(entries):
         return False
@@ -340,3 +352,49 @@ def resolve_url_target(
         addresses=decision.resolved_ips,
         decision=decision,
     )
+
+
+def _build_http_host_header(hostname_ascii: str, scheme: str, port: int | None) -> str:
+    host_header = hostname_ascii
+    if ":" in host_header and not host_header.startswith("["):
+        host_header = f"[{host_header}]"
+    if port is not None:
+        default_port = 443 if scheme == "https" else 80
+        if port != default_port:
+            host_header = f"{host_header}:{port}"
+    return host_header
+
+
+def build_pinned_url_targets(
+    url: str,
+    *,
+    require_https: bool = False,
+    preserve_userinfo: bool = True,
+) -> tuple[list[str], dict[str, str], dict[str, str]]:
+    decision = evaluate_url_target(url, require_https=require_https)
+    if not decision.allowed:
+        raise UrlTargetBlockedError(decision)
+    addresses = decision.resolved_ips
+    if not addresses:
+        raise ValueError("Blocked unresolved URL target")
+
+    parsed = urlparse(url)
+    hostname_ascii = (parsed.hostname or "").encode("idna").decode("ascii")
+    port = parsed.port
+    scheme = parsed.scheme.lower()
+    auth_prefix = ""
+    if preserve_userinfo and parsed.username is not None:
+        username = quote(unquote(parsed.username), safe="")
+        password = None if parsed.password is None else quote(unquote(parsed.password), safe="")
+        auth = username if password is None else f"{username}:{password}"
+        auth_prefix = f"{auth}@"
+
+    pinned_urls: list[str] = []
+    for pinned_ip in dict.fromkeys(addresses):
+        pinned_host = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+        netloc = f"{auth_prefix}{pinned_host}:{port}" if port is not None else f"{auth_prefix}{pinned_host}"
+        pinned_urls.append(parsed._replace(netloc=netloc).geturl())
+
+    headers = {"Host": _build_http_host_header(hostname_ascii, scheme, port)}
+    extensions = {"sni_hostname": hostname_ascii} if scheme == "https" else {}
+    return pinned_urls, headers, extensions

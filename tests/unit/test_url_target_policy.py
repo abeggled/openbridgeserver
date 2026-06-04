@@ -15,9 +15,11 @@ from obs.api.v1.security import (
 )
 from obs.config import SecuritySettings, Settings, override_settings
 from obs.security.url_targets import (
+    UrlTargetAllowlistReadError,
     UrlTargetDecision,
     _match_allowlist,
     add_allowed_url_target,
+    build_pinned_url_targets,
     evaluate_url_target,
     list_allowed_url_targets,
     remove_allowed_url_target,
@@ -143,6 +145,18 @@ def test_malformed_allowlist_yaml_is_ignored(tmp_path):
     assert decision.blocked_ips == ["10.38.113.23"]
 
 
+def test_malformed_allowlist_yaml_blocks_writes_without_overwrite(tmp_path):
+    allowlist = tmp_path / "allow.yaml"
+    broken_yaml = "version: 1\nallowed_targets:\n  - [broken\n"
+    allowlist.write_text(broken_yaml, encoding="utf-8")
+    override_settings(_settings_for(allowlist))
+
+    with pytest.raises(UrlTargetAllowlistReadError):
+        add_allowed_url_target("10.38.113.23/32", reason="unit")
+
+    assert allowlist.read_text(encoding="utf-8") == broken_yaml
+
+
 def test_allowlist_read_errors_are_ignored(tmp_path):
     allowlist = tmp_path / "allow.yaml"
     allowlist.write_bytes(b"\xff\xfe\x00")
@@ -153,6 +167,16 @@ def test_allowlist_read_errors_are_ignored(tmp_path):
     allowlist.write_text("version: 1\nallowed_targets: []\n", encoding="utf-8")
     with patch("builtins.open", side_effect=OSError("permission denied")):
         assert list_allowed_url_targets() == []
+
+
+def test_allowlist_read_errors_block_writes(tmp_path):
+    allowlist = tmp_path / "allow.yaml"
+    allowlist.write_text("version: 1\nallowed_targets: []\n", encoding="utf-8")
+    override_settings(_settings_for(allowlist))
+
+    with patch("builtins.open", side_effect=OSError("permission denied")):
+        with pytest.raises(UrlTargetAllowlistReadError):
+            add_allowed_url_target("10.38.113.23/32", reason="unit")
 
 
 def test_invalid_allowlist_items_are_skipped(tmp_path):
@@ -365,6 +389,17 @@ def test_resolve_url_target_returns_dns_pinned_target(tmp_path):
     assert target.addresses == ["93.184.216.34"]
 
 
+def test_build_pinned_url_targets_sets_host_and_sni(tmp_path):
+    override_settings(_settings_for(tmp_path / "allow.yaml"))
+
+    with patch("obs.security.url_targets.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 0))]):
+        pinned_urls, headers, extensions = build_pinned_url_targets("https://example.com:8443/status?x=1")
+
+    assert pinned_urls == ["https://93.184.216.34:8443/status?x=1"]
+    assert headers == {"Host": "example.com:8443"}
+    assert extensions == {"sni_hostname": "example.com"}
+
+
 def test_resolve_url_target_raises_for_blocked_target(tmp_path):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
 
@@ -435,7 +470,7 @@ async def test_security_api_happy_paths(tmp_path):
 
     checked = await check_url_target(
         UrlTargetCheckIn(url="http://10.38.113.23/api/v1/status"),
-        _admin="admin",
+        _user="admin",
     )
     assert checked.allowed is True
     assert checked.allowlisted_by == "10.38.113.23/32"
@@ -460,7 +495,7 @@ async def test_security_api_check_runs_target_evaluation_off_event_loop(tmp_path
 
         checked = await check_url_target(
             UrlTargetCheckIn(url="http://example.com/status", require_https=True, allow_loopback=True),
-            _admin="admin",
+            _user="editor",
         )
 
     mock_to_thread.assert_awaited_once_with(

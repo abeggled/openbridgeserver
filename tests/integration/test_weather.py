@@ -32,7 +32,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 import obs.api.v1.weather as _weather_module
-from obs.security.url_targets import UrlTargetDecision
 
 pytestmark = pytest.mark.integration
 
@@ -44,15 +43,8 @@ def bypass_ssrf():
     """
     with unittest.mock.patch.object(
         _weather_module,
-        "evaluate_url_target",
-        return_value=UrlTargetDecision(
-            allowed=True,
-            url="http://127.0.0.1",
-            host="127.0.0.1",
-            resolved_ips=["127.0.0.1"],
-            blocked_ips=[],
-            reason="test bypass",
-        ),
+        "build_pinned_url_targets",
+        side_effect=lambda url: ([url], {}, {}),
     ):
         yield
 

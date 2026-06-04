@@ -20,15 +20,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 
 from obs.api.auth import decode_token
-from obs.security.url_targets import evaluate_url_target
+from obs.security.url_targets import UrlTargetBlockedError, build_pinned_url_targets
 
 router = APIRouter(tags=["weather"])
 
 
-async def _check_ssrf(url: str) -> None:
-    decision = await asyncio.to_thread(evaluate_url_target, url)
-    if not decision.allowed:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=decision.api_detail())
+async def _build_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
+    try:
+        return await asyncio.to_thread(build_pinned_url_targets, url)
+    except UrlTargetBlockedError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.decision.api_detail()) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 # ── Authentifizierung ──────────────────────────────────────────────────────────
@@ -74,11 +77,24 @@ async def fetch_weather(
             detail="Nur HTTP/HTTPS-URLs erlaubt",
         )
 
-    await _check_ssrf(url)
+    request_urls, pinned_headers, request_extensions = await _build_fetch_targets(url)
 
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as hc:
-            resp = await hc.get(url)
+            last_error: httpx.RequestError | None = None
+            for request_url in request_urls:
+                try:
+                    resp = await hc.get(
+                        request_url,
+                        headers=pinned_headers,
+                        extensions=request_extensions,
+                    )
+                    break
+                except httpx.RequestError as exc:
+                    last_error = exc
+            else:
+                assert last_error is not None
+                raise last_error
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

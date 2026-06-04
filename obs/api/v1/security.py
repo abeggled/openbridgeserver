@@ -7,7 +7,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from obs.api.auth import get_admin_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.security.url_targets import (
     add_allowed_url_target,
     allowlist_path,
@@ -100,7 +100,7 @@ async def delete_url_target_allowlist_entry(
 
 
 @router.post("/url-target-check", response_model=UrlTargetDecisionOut)
-async def check_url_target(body: UrlTargetCheckIn, _admin: str = Depends(get_admin_user)) -> UrlTargetDecisionOut:
+async def check_url_target(body: UrlTargetCheckIn, _user: str = Depends(get_current_user)) -> UrlTargetDecisionOut:
     decision = await asyncio.to_thread(
         evaluate_url_target,
         body.url,

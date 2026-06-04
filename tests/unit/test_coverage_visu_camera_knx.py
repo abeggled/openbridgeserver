@@ -388,7 +388,7 @@ class TestImportBackgrounds:
 # ===========================================================================
 
 
-from obs.api.v1.camera import _check_ssrf
+from obs.api.v1.camera import _build_fetch_targets as _check_ssrf
 
 
 class TestCheckSsrf:
@@ -401,8 +401,8 @@ class TestCheckSsrf:
     @pytest.mark.asyncio
     async def test_loopback_blocked(self):
         with patch(
-            "obs.api.v1.camera.evaluate_url_target",
-            return_value=_url_decision(allowed=False, resolved_ips=["127.0.0.1"], blocked_ips=["127.0.0.1"]),
+            "obs.api.v1.camera.build_pinned_url_targets",
+            side_effect=ValueError("Blocked URL target"),
         ):
             with pytest.raises(HTTPException) as exc:
                 await _check_ssrf("http://localhost/stream")
@@ -412,12 +412,8 @@ class TestCheckSsrf:
     async def test_metadata_blocked(self):
         # 169.254.169.254 is the cloud metadata address
         with patch(
-            "obs.api.v1.camera.evaluate_url_target",
-            return_value=_url_decision(
-                allowed=False,
-                resolved_ips=["169.254.169.254"],
-                blocked_ips=["169.254.169.254"],
-            ),
+            "obs.api.v1.camera.build_pinned_url_targets",
+            side_effect=ValueError("Blocked URL target"),
         ):
             with pytest.raises(HTTPException) as exc:
                 await _check_ssrf("http://metadata.internal/")
@@ -427,12 +423,8 @@ class TestCheckSsrf:
     async def test_private_network_allowed(self):
         # Private 192.168.x.x cameras are allowed only after an explicit allowlist decision.
         with patch(
-            "obs.api.v1.camera.evaluate_url_target",
-            return_value=_url_decision(
-                allowed=True,
-                resolved_ips=["192.168.1.100"],
-                allowlisted_by="192.168.1.100/32",
-            ),
+            "obs.api.v1.camera.build_pinned_url_targets",
+            return_value=(["http://192.168.1.100/stream"], {}, {}),
         ):
             # Should not raise
             await _check_ssrf("http://192.168.1.100/stream")
@@ -440,8 +432,8 @@ class TestCheckSsrf:
     @pytest.mark.asyncio
     async def test_dns_failure_raises_502(self):
         with patch(
-            "obs.api.v1.camera.evaluate_url_target",
-            return_value=_url_decision(allowed=False, reason="Hostname could not be resolved: no address"),
+            "obs.api.v1.camera.build_pinned_url_targets",
+            side_effect=ValueError("Hostname could not be resolved: no address"),
         ):
             with pytest.raises(HTTPException) as exc:
                 await _check_ssrf("http://nonexistent.local/stream")
@@ -450,8 +442,8 @@ class TestCheckSsrf:
     @pytest.mark.asyncio
     async def test_ipv6_loopback_blocked(self):
         with patch(
-            "obs.api.v1.camera.evaluate_url_target",
-            return_value=_url_decision(allowed=False, resolved_ips=["::1"], blocked_ips=["::1"]),
+            "obs.api.v1.camera.build_pinned_url_targets",
+            side_effect=ValueError("Blocked URL target"),
         ):
             with pytest.raises(HTTPException) as exc:
                 await _check_ssrf("http://[::1]/stream")

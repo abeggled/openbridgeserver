@@ -33,7 +33,6 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 import obs.api.v1.camera as _camera_module
-from obs.security.url_targets import UrlTargetDecision
 
 pytestmark = pytest.mark.integration
 
@@ -45,15 +44,8 @@ def bypass_ssrf():
     """
     with unittest.mock.patch.object(
         _camera_module,
-        "evaluate_url_target",
-        return_value=UrlTargetDecision(
-            allowed=True,
-            url="http://127.0.0.1",
-            host="127.0.0.1",
-            resolved_ips=["127.0.0.1"],
-            blocked_ips=[],
-            reason="test bypass",
-        ),
+        "build_pinned_url_targets",
+        side_effect=lambda url: ([url], {}, {}),
     ):
         yield
 
