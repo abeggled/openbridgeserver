@@ -185,6 +185,10 @@ async function mountEditor({ props = {}, ringbufferApi, searchApi, hierarchyApi,
   vi.doMock('@/components/ui/TagCombobox.vue', () => ({ default: stubCombobox('TagCombobox', true) }))
   vi.doMock('@/components/ui/AdapterCombobox.vue', () => ({ default: stubCombobox('AdapterCombobox', true) }))
 
+  const { useAuthStore } = await import('@/stores/auth')
+  const auth = useAuthStore()
+  auth.user = { username: 'tester', is_admin: true }
+
   const mod = await import('@/views/ringbuffer/FilterEditor.vue')
   const FilterEditor = mod.default
 

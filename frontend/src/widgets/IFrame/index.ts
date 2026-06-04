@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'IFrame',
-  label: 'iFrame',
+  label: 'widgets.iframe.title',
   icon: '🖼️',
   group: 'Medien & Sonstiges',
   minW: 3, minH: 2,

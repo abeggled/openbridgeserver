@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'Toggle',
-  label: 'Schalter',
+  label: 'widgets.toggle.title',
   icon: '🔘',
   group: 'Steuerung',
   minW: 2, minH: 2,

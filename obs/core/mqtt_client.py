@@ -21,11 +21,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+
+from obs.core.json import json_dumps
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 def build_payload(value: Any, unit: str | None, quality: str, ts: datetime | None = None) -> str:
     """Serialize a DataPoint value to the standard MQTT JSON payload."""
-    return json.dumps(
+    return json_dumps(
         {
             "v": value,
             "u": unit,

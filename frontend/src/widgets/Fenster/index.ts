@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'Fenster',
-  label: 'Fenster / Türe',
+  label: 'widgets.fenster.title',
   icon: '🚪',
   group: 'Anzeige',
   minW: 2, minH: 2,

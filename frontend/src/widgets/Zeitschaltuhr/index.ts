@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'Zeitschaltuhr',
-  label: 'Zeitschaltuhr',
+  label: 'widgets.zeitschaltuhr.title',
   icon: '🕐',
   group: 'Steuerung',
   minW: 2, minH: 2,

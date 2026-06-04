@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'Kamera',
-  label: 'Kamera',
+  label: 'widgets.kamera.title',
   icon: '📷',
   group: 'Medien & Sonstiges',
   minW: 3, minH: 2,

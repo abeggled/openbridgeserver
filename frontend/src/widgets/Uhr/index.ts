@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type:    'Uhr',
-  label:   'Uhr',
+  label:   'widgets.uhr.title',
   icon:    '🕐',
   group:   'Anzeige',
   minW:    2,

@@ -1509,10 +1509,7 @@ class TestWriteValue:
         bus_mock = MagicMock()
         bus_mock.publish = AsyncMock()
 
-        # write_value imports get_event_bus locally, so patch at source module
-        import obs.core.event_bus as event_bus_mod
-
-        monkeypatch.setattr(event_bus_mod, "get_event_bus", lambda: bus_mock)
+        monkeypatch.setattr(dp_api, "get_event_bus", lambda: bus_mock)
 
         request = MagicMock()
         db = _DbStub()
@@ -2198,3 +2195,82 @@ class TestAddHierarchy:
         await search_api._add_hierarchy([item], db)
         assert len(item.hierarchy_nodes) == 1
         assert item.hierarchy_nodes[0].node_name == "Wohnzimmer"
+
+
+# ---------------------------------------------------------------------------
+# _coerce_value_for_type
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceValueForType:
+    def setup_method(self):
+        from obs.api.v1.datapoints import _coerce_value_for_type
+
+        self.coerce = _coerce_value_for_type
+
+    def test_unknown_passes_through(self):
+        assert self.coerce("anything", "UNKNOWN") == "anything"
+
+    def test_float_from_int(self):
+        assert self.coerce(3, "FLOAT") == 3.0
+        assert isinstance(self.coerce(3, "FLOAT"), float)
+
+    def test_float_passthrough(self):
+        assert self.coerce(1.5, "FLOAT") == 1.5
+
+    def test_int_from_lossless_float(self):
+        assert self.coerce(5.0, "INTEGER") == 5
+        assert isinstance(self.coerce(5.0, "INTEGER"), int)
+
+    def test_int_from_lossy_float_raises(self):
+        with pytest.raises(ValueError):
+            self.coerce(5.7, "INTEGER")
+
+    def test_string_mismatch_raises(self):
+        with pytest.raises(ValueError):
+            self.coerce("foo", "INTEGER")
+
+    def test_boolean_from_int(self):
+        assert self.coerce(1, "BOOLEAN") is True
+        assert self.coerce(0, "BOOLEAN") is False
+
+    def test_boolean_passthrough(self):
+        assert self.coerce(True, "BOOLEAN") is True
+
+    def test_string_passthrough(self):
+        assert self.coerce("hello", "STRING") == "hello"
+
+    def test_date_from_iso_string(self):
+        import datetime
+
+        result = self.coerce("2025-01-15", "DATE")
+        assert result == datetime.date(2025, 1, 15)
+
+    def test_date_invalid_string_raises(self):
+        with pytest.raises(ValueError):
+            self.coerce("not-a-date", "DATE")
+
+    def test_time_from_iso_string(self):
+        import datetime
+
+        result = self.coerce("10:30:00", "TIME")
+        assert result == datetime.time(10, 30, 0)
+
+    def test_time_invalid_string_raises(self):
+        with pytest.raises(ValueError):
+            self.coerce("not-a-time", "TIME")
+
+    def test_datetime_from_iso_string(self):
+        import datetime
+
+        result = self.coerce("2025-01-15T10:30:00+00:00", "DATETIME")
+        assert result == datetime.datetime(2025, 1, 15, 10, 30, 0, tzinfo=datetime.timezone.utc)
+
+    def test_datetime_invalid_string_raises(self):
+        with pytest.raises(ValueError):
+            self.coerce("not-a-datetime", "DATETIME")
+
+    def test_bool_on_integer_coerced_to_int(self):
+        assert self.coerce(True, "INTEGER") == 1
+        assert isinstance(self.coerce(True, "INTEGER"), int)
+        assert not isinstance(self.coerce(True, "INTEGER"), bool)

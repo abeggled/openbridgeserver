@@ -47,6 +47,7 @@ from pydantic import BaseModel, Field
 from obs.adapters.base import AdapterBase
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
+from obs.core.json import jsonable
 from obs.core.transformation import apply_value_map
 
 logger = logging.getLogger(__name__)
@@ -404,7 +405,7 @@ class HomeAssistantAdapter(AdapterBase):
             # Build service data
             service_data: dict = {"entity_id": bc.entity_id}
             if bc.service_data_key and not isinstance(value, bool):
-                service_data[bc.service_data_key] = value
+                service_data[bc.service_data_key] = jsonable(value)
 
             resp = await self._http_client.post(
                 f"/api/services/{domain}/{service}",

@@ -51,6 +51,7 @@ class DatabaseSettings(BaseModel):
 class SecuritySettings(BaseModel):
     jwt_secret: str = "changeme"
     jwt_expire_minutes: int = 1440
+    url_target_allowlist_path: str = "/data/secrets/url-target-allowlist.yaml"
 
     @field_validator("jwt_secret")
     @classmethod
@@ -178,6 +179,17 @@ def _is_builtin_default_db_path(path: str) -> bool:
     return Path(path).as_posix() == "/data/obs.db"
 
 
+def _is_builtin_default_url_target_allowlist_path(path: str) -> bool:
+    return Path(path).as_posix() == "/data/secrets/url-target-allowlist.yaml"
+
+
+def _resolve_default_url_target_allowlist_path(database_path: str) -> str:
+    secret_root = _get_env_case_insensitive("OBS_SECRET_FILE_DIR", "OPENTWS_SECRET_FILE_DIR")
+    if secret_root:
+        return str(Path(secret_root) / "url-target-allowlist.yaml")
+    return str(Path(database_path).parent / "secrets" / "url-target-allowlist.yaml")
+
+
 _import_legacy_env_vars()
 
 
@@ -205,6 +217,22 @@ class Settings(BaseSettings):
     mosquitto: MosquittoSettings = Field(default_factory=MosquittoSettings)
     cors: CorsSettings = Field(default_factory=CorsSettings)
 
+    @staticmethod
+    def _database_path_from_input(result: dict[str, Any], database_key: str | None, default_path: str) -> str:
+        if database_key is None:
+            return default_path
+        database_value = result.get(database_key)
+        if isinstance(database_value, DatabaseSettings):
+            return database_value.path
+        if isinstance(database_value, dict):
+            path_key = next(
+                (key for key in database_value if isinstance(key, str) and key.lower() == "path"),
+                None,
+            )
+            if path_key is not None and isinstance(database_value.get(path_key), str):
+                return database_value[path_key]
+        return default_path
+
     @model_validator(mode="before")
     @classmethod
     def _inject_database_path_fallback(cls, data: Any) -> Any:
@@ -220,12 +248,12 @@ class Settings(BaseSettings):
 
         if database_key is None:
             result["database"] = {"path": default_path}
-            return result
+            database_key = "database"
 
         database_value = result.get(database_key)
         if database_value is None:
             result[database_key] = {"path": default_path}
-            return result
+            database_value = result[database_key]
 
         if isinstance(database_value, dict):
             path_key = next(
@@ -242,6 +270,33 @@ class Settings(BaseSettings):
                     merged_database = dict(database_value)
                     merged_database[path_key] = default_path
                     result[database_key] = merged_database
+
+        database_path = cls._database_path_from_input(result, database_key, default_path)
+        allowlist_path = _resolve_default_url_target_allowlist_path(database_path)
+        security_key = next(
+            (key for key in result if isinstance(key, str) and key.lower() == "security"),
+            None,
+        )
+
+        if security_key is None or result.get(security_key) is None:
+            result["security"] = {"url_target_allowlist_path": allowlist_path}
+            return result
+
+        security_value = result[security_key]
+        if isinstance(security_value, SecuritySettings):
+            if "url_target_allowlist_path" not in security_value.model_fields_set:
+                result[security_key] = security_value.model_copy(update={"url_target_allowlist_path": allowlist_path})
+            return result
+
+        if isinstance(security_value, dict):
+            path_key = next(
+                (key for key in security_value if isinstance(key, str) and key.lower() == "url_target_allowlist_path"),
+                None,
+            )
+            if path_key is None:
+                merged_security = dict(security_value)
+                merged_security["url_target_allowlist_path"] = allowlist_path
+                result[security_key] = merged_security
 
         return result
 

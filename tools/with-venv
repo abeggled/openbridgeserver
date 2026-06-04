@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -eq 0 ]; then
+  echo "Usage: $(basename "$0") <command> [args...]" >&2
+  exit 2
+fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if REPO_ROOT="$(git -C "$SCRIPT_DIR/.." rev-parse --show-toplevel 2>/dev/null)"; then
+  :
+else
+  REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+fi
+
+venv_has_python() {
+  [ -n "${1:-}" ] && [ -x "$1/bin/python" ]
+}
+
+print_path() {
+  cd -- "$1" && pwd -P
+}
+
+MAIN_WORKTREE=""
+while IFS= read -r line; do
+  case "$line" in
+    worktree\ *)
+      MAIN_WORKTREE="${line#worktree }"
+      break
+      ;;
+  esac
+done < <(git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null || true)
+
+if [ -n "${OBS_VENV:-}" ]; then
+  if venv_has_python "$OBS_VENV"; then
+    VENV_DIR="$(print_path "$OBS_VENV")"
+  else
+    echo "tools/with-venv: OBS_VENV is set but is not a usable venv: $OBS_VENV" >&2
+    exit 1
+  fi
+elif venv_has_python "$REPO_ROOT/.venv"; then
+  VENV_DIR="$(print_path "$REPO_ROOT/.venv")"
+elif [ -n "$MAIN_WORKTREE" ] && venv_has_python "$MAIN_WORKTREE/.venv"; then
+  VENV_DIR="$(print_path "$MAIN_WORKTREE/.venv")"
+else
+  cat >&2 <<EOF
+tools/with-venv: no usable Python venv found.
+
+Checked:
+  OBS_VENV=${OBS_VENV:-<unset>}
+  $REPO_ROOT/.venv
+  ${MAIN_WORKTREE:-<unknown main worktree>}/.venv
+
+Create or symlink .venv, or set OBS_VENV to the shared project venv.
+Do not install dependencies into this worktree.
+EOF
+  exit 1
+fi
+
+export VIRTUAL_ENV="$VENV_DIR"
+export PATH="$VENV_DIR/bin:$PATH"
+unset PYTHONHOME
+
+exec "$@"

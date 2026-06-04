@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from obs.ringbuffer import ringbuffer as rb_mod
-from obs.ringbuffer.ringbuffer import RingBuffer, _safe_loads, get_ringbuffer, reset_ringbuffer
+from obs.ringbuffer.ringbuffer import RingBuffer, _is_sqlite_corruption, _safe_loads, get_ringbuffer, reset_ringbuffer
 
 
 @pytest.mark.asyncio
@@ -138,3 +138,11 @@ def test_safe_loads_and_singleton_guard_paths():
     rb_mod.reset_ringbuffer()
     with pytest.raises(RuntimeError, match="RingBuffer not initialized"):
         rb_mod.get_ringbuffer()
+
+
+def test_sqlite_corruption_detector_only_matches_sqlite_corruption_errors():
+    assert _is_sqlite_corruption(rb_mod.aiosqlite.OperationalError("database disk image is malformed")) is True
+    assert _is_sqlite_corruption(rb_mod.aiosqlite.DatabaseError("file is not a database")) is True
+    assert _is_sqlite_corruption(rb_mod.aiosqlite.DatabaseError("SQLite integrity_check failed: bad page")) is True
+    assert _is_sqlite_corruption(rb_mod.aiosqlite.OperationalError("database is locked")) is False
+    assert _is_sqlite_corruption(RuntimeError("database disk image is malformed")) is False

@@ -18,7 +18,14 @@ beforeEach(() => {
   })
   countExportRows = vi.fn().mockResolvedValue({ data: { row_count: 42 } })
   getExportSettings = vi.fn().mockResolvedValue({
-    data: { format: 'csv', encoding: 'utf8', include_unit: true, include_matched_set_ids: false },
+    data: {
+      delimiter: ',',
+      quote_char: '"',
+      escape_char: '',
+      encoding: 'utf8',
+      include_unit: true,
+      include_matched_set_ids: false,
+    },
   })
   putExportSettings = vi.fn().mockResolvedValue({ data: {} })
 
@@ -68,12 +75,19 @@ async function mountDialog(props = {}) {
 describe('ExportDialog', () => {
   it('hydrates form from getExportSettings on open', async () => {
     getExportSettings.mockResolvedValueOnce({
-      data: { format: 'tsv', encoding: 'utf8-bom', include_unit: false, include_matched_set_ids: true },
+      data: {
+        delimiter: '\t',
+        quote_char: '"',
+        escape_char: '',
+        encoding: 'utf8-bom',
+        include_unit: false,
+        include_matched_set_ids: true,
+      },
     })
     const wrapper = await mountDialog()
     await flushPromises()
     expect(getExportSettings).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('[data-testid="export-format-tsv"]').element.checked).toBe(true)
+    expect(wrapper.find('[data-testid="export-delimiter"]').element.value).toBe('\t')
     expect(wrapper.find('[data-testid="export-encoding"]').element.value).toBe('utf8-bom')
     expect(wrapper.find('[data-testid="export-include-unit"]').element.checked).toBe(false)
     expect(wrapper.find('[data-testid="export-include-matched"]').element.checked).toBe(true)
@@ -84,7 +98,7 @@ describe('ExportDialog', () => {
     getExportSettings.mockRejectedValueOnce(new Error('boom'))
     const wrapper = await mountDialog()
     await flushPromises()
-    expect(wrapper.find('[data-testid="export-format-csv"]').element.checked).toBe(true)
+    expect(wrapper.find('[data-testid="export-delimiter"]').element.value).toBe(',')
     expect(wrapper.find('[data-testid="export-encoding"]').element.value).toBe('utf8')
     wrapper.unmount()
   })
@@ -93,19 +107,19 @@ describe('ExportDialog', () => {
     const wrapper = await mountDialog({ setIds: ['set-a', 'set-b'], time: { from: '2026-05-01T00:00:00Z' } })
     await flushPromises()
 
-    await wrapper.find('[data-testid="export-format-tsv"]').setValue(true)
+    await wrapper.find('[data-testid="export-delimiter-tab"]').trigger('click')
     await wrapper.find('[data-testid="export-include-matched"]').setValue(true)
     await wrapper.find('[data-testid="btn-export-go"]').trigger('click')
     await flushPromises()
 
     expect(putExportSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ format: 'tsv', include_matched_set_ids: true }),
+      expect.objectContaining({ delimiter: '\t', include_matched_set_ids: true }),
     )
     expect(exportMultiCsv).toHaveBeenCalledWith(
       expect.objectContaining({
         set_ids: ['set-a', 'set-b'],
         time: { from: '2026-05-01T00:00:00Z' },
-        format: 'tsv',
+        delimiter: '\t',
         include_matched_set_ids: true,
       }),
     )
@@ -172,7 +186,7 @@ describe('ExportDialog', () => {
     expect(exportMultiCsv).not.toHaveBeenCalled()
     const warning = wrapper.find('[data-testid="export-warning"]')
     expect(warning.exists()).toBe(true)
-    expect(warning.text()).toContain('5.234')
+    expect(warning.text()).toMatch(/5[.,]234/)
     // Button label flips to the confirm wording
     expect(wrapper.find('[data-testid="btn-export-go"]').text()).toContain('Trotzdem exportieren')
     wrapper.unmount()

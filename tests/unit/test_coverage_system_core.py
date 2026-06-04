@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from obs.security.url_targets import UrlTargetDecision
+
 # ===========================================================================
 # Helpers / stubs
 # ===========================================================================
@@ -27,6 +29,28 @@ class _Row(dict):
 
 def _row(**kwargs):
     return _Row(**kwargs)
+
+
+def _url_decision(
+    *,
+    allowed: bool,
+    url: str = "http://example.test/",
+    host: str = "example.test",
+    resolved_ips: list[str] | None = None,
+    blocked_ips: list[str] | None = None,
+    reason: str = "test decision",
+    allowlisted_by: str | None = None,
+) -> UrlTargetDecision:
+    return UrlTargetDecision(
+        allowed=allowed,
+        url=url,
+        host=host,
+        resolved_ips=resolved_ips or [],
+        blocked_ips=blocked_ips or [],
+        reason=reason,
+        allowlisted_by=allowlisted_by,
+        suggested_target=(blocked_ips or [None])[0],
+    )
 
 
 class _DbStub:
@@ -706,6 +730,100 @@ class TestDataPointRegistryLoadFromDb:
         assert state.value == pytest.approx(22.5)
         assert state.quality == "good"
 
+    @pytest.mark.asyncio
+    async def test_load_from_db_restores_time_value_as_datetime_time(self):
+        import datetime as _dt
+
+        from obs.core.registry import DataPointRegistry
+
+        dp_id = uuid.uuid4()
+        now = datetime.now(UTC).isoformat()
+        dp_rows = [
+            _row(
+                id=str(dp_id),
+                name="Time DP",
+                data_type="TIME",
+                unit="",
+                tags="[]",
+                mqtt_topic=f"dp/{dp_id}/value",
+                mqtt_alias=None,
+                persist_value=1,
+                record_history=0,
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+        last_val_rows = [
+            _row(
+                datapoint_id=str(dp_id),
+                value='"10:30:00"',
+                unit="",
+                ts=now,
+            )
+        ]
+
+        class _DbWithTime(_DbStub):
+            async def fetchall(self, query, params=()):
+                if "datapoint_last_values" in query:
+                    return last_val_rows
+                return dp_rows
+
+        reg = DataPointRegistry.__new__(DataPointRegistry)
+        reg._db = _DbWithTime(rows=dp_rows)
+        reg._mqtt = AsyncMock()
+        reg._bus = AsyncMock()
+        reg._points = {}
+        reg._values = {}
+        await reg.load_from_db()
+        state = reg._values[dp_id]
+        assert state.value == _dt.time(10, 30, 0)
+
+    @pytest.mark.asyncio
+    async def test_load_from_db_time_invalid_string_leaves_as_string(self):
+        from obs.core.registry import DataPointRegistry
+
+        dp_id = uuid.uuid4()
+        now = datetime.now(UTC).isoformat()
+        dp_rows = [
+            _row(
+                id=str(dp_id),
+                name="Time DP Bad",
+                data_type="TIME",
+                unit="",
+                tags="[]",
+                mqtt_topic=f"dp/{dp_id}/value",
+                mqtt_alias=None,
+                persist_value=1,
+                record_history=0,
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+        last_val_rows = [
+            _row(
+                datapoint_id=str(dp_id),
+                value='"not-a-time"',
+                unit="",
+                ts=now,
+            )
+        ]
+
+        class _DbWithBadTime(_DbStub):
+            async def fetchall(self, query, params=()):
+                if "datapoint_last_values" in query:
+                    return last_val_rows
+                return dp_rows
+
+        reg = DataPointRegistry.__new__(DataPointRegistry)
+        reg._db = _DbWithBadTime(rows=dp_rows)
+        reg._mqtt = AsyncMock()
+        reg._bus = AsyncMock()
+        reg._points = {}
+        reg._values = {}
+        await reg.load_from_db()
+        state = reg._values[dp_id]
+        assert state.value == "not-a-time"
+
 
 class TestDataPointRegistryCRUD:
     @pytest.mark.asyncio
@@ -1291,6 +1409,63 @@ class TestSecuritySettingsValidator:
             sec = SecuritySettings(jwt_secret="a" * 32)
         assert sec.jwt_secret == "a" * 32
 
+    def test_default_url_target_allowlist_path_uses_database_secret_dir(self, tmp_path, monkeypatch):
+        from obs.config import DatabaseSettings, SecuritySettings, Settings
+
+        monkeypatch.delenv("OBS_SECRET_FILE_DIR", raising=False)
+        db_path = tmp_path / "obs.db"
+
+        settings = Settings(
+            database=DatabaseSettings(path=str(db_path)),
+            security=SecuritySettings(jwt_secret="unit-test-secret-32-chars-xxx"),
+        )
+
+        assert settings.security.url_target_allowlist_path == str(tmp_path / "secrets" / "url-target-allowlist.yaml")
+
+    def test_default_url_target_allowlist_path_uses_configured_secret_root(self, tmp_path, monkeypatch):
+        from obs.config import DatabaseSettings, SecuritySettings, Settings
+
+        secret_root = tmp_path / "configured-secrets"
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(secret_root))
+
+        settings = Settings(
+            database=DatabaseSettings(path=str(tmp_path / "obs.db")),
+            security=SecuritySettings(jwt_secret="unit-test-secret-32-chars-xxx"),
+        )
+
+        assert settings.security.url_target_allowlist_path == str(secret_root / "url-target-allowlist.yaml")
+
+    def test_custom_url_target_allowlist_path_is_preserved(self, tmp_path, monkeypatch):
+        from obs.config import DatabaseSettings, SecuritySettings, Settings
+
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(tmp_path / "configured-secrets"))
+        custom_path = tmp_path / "custom" / "allow.yaml"
+
+        settings = Settings(
+            database=DatabaseSettings(path=str(tmp_path / "obs.db")),
+            security=SecuritySettings(
+                jwt_secret="unit-test-secret-32-chars-xxx",
+                url_target_allowlist_path=str(custom_path),
+            ),
+        )
+
+        assert settings.security.url_target_allowlist_path == str(custom_path)
+
+    def test_explicit_builtin_url_target_allowlist_path_is_preserved(self, tmp_path, monkeypatch):
+        from obs.config import DatabaseSettings, SecuritySettings, Settings
+
+        monkeypatch.delenv("OBS_SECRET_FILE_DIR", raising=False)
+
+        settings = Settings(
+            database=DatabaseSettings(path=str(tmp_path / "obs.db")),
+            security=SecuritySettings(
+                jwt_secret="unit-test-secret-32-chars-xxx",
+                url_target_allowlist_path="/data/secrets/url-target-allowlist.yaml",
+            ),
+        )
+
+        assert settings.security.url_target_allowlist_path == "/data/secrets/url-target-allowlist.yaml"
+
 
 class TestHelperFunctions:
     def test_has_env_key_case_insensitive(self, monkeypatch):
@@ -1781,17 +1956,14 @@ class TestGetDefaultHistoryWindowHours:
 class TestCheckSsrf:
     @pytest.mark.asyncio
     async def test_loopback_address_blocked(self, monkeypatch):
-        import socket
-
         from fastapi import HTTPException
 
-        from obs.api.v1.weather import _check_ssrf
+        from obs.api.v1.weather import _build_fetch_targets as _check_ssrf
 
-        # Mock DNS resolution to return loopback
-        async def fake_to_thread(fn, *args):
-            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0))]
-
-        monkeypatch.setattr("asyncio.to_thread", fake_to_thread)
+        monkeypatch.setattr(
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: (_ for _ in ()).throw(ValueError("Blocked URL target")),
+        )
 
         with pytest.raises(HTTPException) as exc_info:
             await _check_ssrf("http://evil.example.com/test")
@@ -1799,40 +1971,36 @@ class TestCheckSsrf:
 
     @pytest.mark.asyncio
     async def test_public_address_allowed(self, monkeypatch):
-        import socket
+        from obs.api.v1.weather import _build_fetch_targets as _check_ssrf
 
-        from obs.api.v1.weather import _check_ssrf
-
-        async def fake_to_thread(fn, *args):
-            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
-
-        monkeypatch.setattr("asyncio.to_thread", fake_to_thread)
+        monkeypatch.setattr(
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
+        )
 
         # Should not raise
         await _check_ssrf("http://example.com/weather")
 
     @pytest.mark.asyncio
     async def test_dns_failure_raises_502(self, monkeypatch):
-        import socket
-
         from fastapi import HTTPException
 
-        from obs.api.v1.weather import _check_ssrf
+        from obs.api.v1.weather import _build_fetch_targets as _check_ssrf
 
-        async def fake_to_thread_raises(fn, *args):
-            raise socket.gaierror("Name not found")
-
-        monkeypatch.setattr("asyncio.to_thread", fake_to_thread_raises)
+        monkeypatch.setattr(
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: (_ for _ in ()).throw(ValueError("Hostname could not be resolved: Name not found")),
+        )
 
         with pytest.raises(HTTPException) as exc_info:
             await _check_ssrf("http://nonexistent-host-xyz.invalid/")
-        assert exc_info.value.status_code == 502
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_no_hostname_raises_400(self):
         from fastapi import HTTPException
 
-        from obs.api.v1.weather import _check_ssrf
+        from obs.api.v1.weather import _build_fetch_targets as _check_ssrf
 
         with pytest.raises(HTTPException) as exc_info:
             await _check_ssrf("http:///no-host")
@@ -1840,16 +2008,14 @@ class TestCheckSsrf:
 
     @pytest.mark.asyncio
     async def test_link_local_blocked(self, monkeypatch):
-        import socket
-
         from fastapi import HTTPException
 
-        from obs.api.v1.weather import _check_ssrf
+        from obs.api.v1.weather import _build_fetch_targets as _check_ssrf
 
-        async def fake_to_thread(fn, *args):
-            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("169.254.169.254", 0))]
-
-        monkeypatch.setattr("asyncio.to_thread", fake_to_thread)
+        monkeypatch.setattr(
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: (_ for _ in ()).throw(ValueError("Blocked URL target")),
+        )
 
         with pytest.raises(HTTPException) as exc_info:
             await _check_ssrf("http://metadata.internal/latest")
@@ -1869,17 +2035,14 @@ class TestFetchWeather:
 
     @pytest.mark.asyncio
     async def test_successful_fetch_returns_json(self, monkeypatch):
-        import socket
-
         import httpx
 
         from obs.api.v1.weather import fetch_weather
 
-        # Mock SSRF check (public IP)
-        async def fake_to_thread(fn, *args):
-            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
-
-        monkeypatch.setattr("asyncio.to_thread", fake_to_thread)
+        monkeypatch.setattr(
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
+        )
 
         # Mock httpx response
         mock_response = MagicMock()
@@ -1894,7 +2057,7 @@ class TestFetchWeather:
             async def __aexit__(self, *args):
                 pass
 
-            async def get(self, url):
+            async def get(self, url, **kwargs):
                 return mock_response
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
@@ -1904,17 +2067,15 @@ class TestFetchWeather:
 
     @pytest.mark.asyncio
     async def test_non_json_content_type_raises_502(self, monkeypatch):
-        import socket
-
         import httpx
         from fastapi import HTTPException
 
         from obs.api.v1.weather import fetch_weather
 
-        async def fake_to_thread(fn, *args):
-            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
-
-        monkeypatch.setattr("asyncio.to_thread", fake_to_thread)
+        monkeypatch.setattr(
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
+        )
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -1927,7 +2088,7 @@ class TestFetchWeather:
             async def __aexit__(self, *args):
                 pass
 
-            async def get(self, url):
+            async def get(self, url, **kwargs):
                 return mock_response
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
@@ -1938,17 +2099,15 @@ class TestFetchWeather:
 
     @pytest.mark.asyncio
     async def test_upstream_401_raises_502(self, monkeypatch):
-        import socket
-
         import httpx
         from fastapi import HTTPException
 
         from obs.api.v1.weather import fetch_weather
 
-        async def fake_to_thread(fn, *args):
-            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
-
-        monkeypatch.setattr("asyncio.to_thread", fake_to_thread)
+        monkeypatch.setattr(
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
+        )
 
         mock_response = MagicMock()
         mock_response.status_code = 401
@@ -1960,7 +2119,7 @@ class TestFetchWeather:
             async def __aexit__(self, *args):
                 pass
 
-            async def get(self, url):
+            async def get(self, url, **kwargs):
                 return mock_response
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
@@ -1971,17 +2130,15 @@ class TestFetchWeather:
 
     @pytest.mark.asyncio
     async def test_redirect_raises_400(self, monkeypatch):
-        import socket
-
         import httpx
         from fastapi import HTTPException
 
         from obs.api.v1.weather import fetch_weather
 
-        async def fake_to_thread(fn, *args):
-            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
-
-        monkeypatch.setattr("asyncio.to_thread", fake_to_thread)
+        monkeypatch.setattr(
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
+        )
 
         mock_response = MagicMock()
         mock_response.status_code = 301
@@ -1993,7 +2150,7 @@ class TestFetchWeather:
             async def __aexit__(self, *args):
                 pass
 
-            async def get(self, url):
+            async def get(self, url, **kwargs):
                 return mock_response
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
@@ -2004,17 +2161,15 @@ class TestFetchWeather:
 
     @pytest.mark.asyncio
     async def test_request_error_raises_502(self, monkeypatch):
-        import socket
-
         import httpx
         from fastapi import HTTPException
 
         from obs.api.v1.weather import fetch_weather
 
-        async def fake_to_thread(fn, *args):
-            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
-
-        monkeypatch.setattr("asyncio.to_thread", fake_to_thread)
+        monkeypatch.setattr(
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
+        )
 
         class _FakeHttpxClient:
             async def __aenter__(self):
@@ -2023,7 +2178,7 @@ class TestFetchWeather:
             async def __aexit__(self, *args):
                 pass
 
-            async def get(self, url):
+            async def get(self, url, **kwargs):
                 raise httpx.RequestError("connection refused")
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
@@ -2034,17 +2189,15 @@ class TestFetchWeather:
 
     @pytest.mark.asyncio
     async def test_upstream_500_raises_502(self, monkeypatch):
-        import socket
-
         import httpx
         from fastapi import HTTPException
 
         from obs.api.v1.weather import fetch_weather
 
-        async def fake_to_thread(fn, *args):
-            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
-
-        monkeypatch.setattr("asyncio.to_thread", fake_to_thread)
+        monkeypatch.setattr(
+            "obs.api.v1.weather.build_pinned_url_targets",
+            lambda url: ([url], {}, {}),
+        )
 
         mock_response = MagicMock()
         mock_response.status_code = 500
@@ -2056,7 +2209,7 @@ class TestFetchWeather:
             async def __aexit__(self, *args):
                 pass
 
-            async def get(self, url):
+            async def get(self, url, **kwargs):
                 return mock_response
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())

@@ -4,14 +4,18 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'Link',
-  label: 'Link',
+  label: 'widgets.link.title',
   icon: '🔗',
   group: 'Medien & Sonstiges',
   minW: 2, minH: 2,
   defaultW: 2, defaultH: 2,
   component: Widget,
   configComponent: Config,
-  defaultConfig: { label: '', icon: '🔗', target_node_id: '' },
+  defaultConfig: {
+    label: '',
+    icon: '🔗',
+    target_node_id: '',
+  },
   compatibleTypes: ['*'],
   noDatapoint: true,
   getExtraDatapointIds: () => [],

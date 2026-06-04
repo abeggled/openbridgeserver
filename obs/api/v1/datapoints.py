@@ -11,6 +11,7 @@ POST   /api/v1/datapoints/{id}/value write value (fires DataValueEvent)
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from typing import Any
 
@@ -19,6 +20,7 @@ from pydantic import BaseModel, field_serializer
 
 from obs.api.auth import get_current_user, optional_current_user
 from obs.api.v1.sessions import validate_session
+from obs.core.event_bus import DataValueEvent, get_event_bus
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
 from obs.models.datapoint import DataPointCreate, DataPointUpdate
@@ -101,6 +103,48 @@ class WriteValueIn(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _coerce_value_for_type(value: Any, data_type: str) -> Any:
+    """Coerce *value* to the Python type declared for *data_type*.
+
+    Raises ValueError when the value is incompatible so callers can return 422.
+    UNKNOWN datapoints accept any value unchanged.
+    """
+    from obs.models.types import DataTypeRegistry
+
+    defn = DataTypeRegistry.get(data_type)
+    if defn.name == "UNKNOWN":
+        return value
+
+    py_type = defn.python_type
+
+    if isinstance(value, py_type) and not (py_type is int and isinstance(value, bool)):
+        return value
+    if py_type is int and isinstance(value, bool):
+        return int(value)
+    if py_type is float and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if py_type is int and isinstance(value, float) and not isinstance(value, bool) and value == int(value):
+        return int(value)
+    if py_type is bool and isinstance(value, int) and not isinstance(value, bool):
+        return bool(value)
+    if py_type is datetime.date and isinstance(value, str):
+        try:
+            return datetime.date.fromisoformat(value)
+        except ValueError:
+            pass
+    if py_type is datetime.time and isinstance(value, str):
+        try:
+            return datetime.time.fromisoformat(value)
+        except ValueError:
+            pass
+    if py_type is datetime.datetime and isinstance(value, str):
+        try:
+            return datetime.datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    raise ValueError(f"Value {value!r} ({type(value).__name__}) is not compatible with data_type '{data_type}'")
 
 
 def _enrich(dp: Any) -> DataPointOut:
@@ -199,8 +243,11 @@ async def update_datapoint(
     _user: str = Depends(get_current_user),
 ) -> DataPointOut:
     reg = get_registry()
-    if reg.get(dp_id) is None:
+    current_dp = reg.get(dp_id)
+    if current_dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+
+    # --- Validation phase (no side effects) ---
     if body.data_type is not None:
         from obs.models.types import DataTypeRegistry
 
@@ -209,7 +256,36 @@ async def update_datapoint(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"Unknown data_type '{body.data_type}'",
             )
-    dp = await reg.update(dp_id, body)
+
+    coerced: Any = None
+    quality: str | None = None
+    if "value" in body.model_fields_set:
+        if body.value is not None:
+            # Use the incoming data_type when it changes in the same request.
+            effective_type = body.data_type if body.data_type is not None else current_dp.data_type
+            try:
+                coerced = _coerce_value_for_type(body.value, effective_type)
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
+            quality = "good"
+        else:
+            quality = "uncertain"
+
+    # --- Mutation phase (all validation passed) ---
+    # value=None in model_copy ensures exclude_none=True in reg.update() drops it —
+    # DataPoint has no value field.
+    dp = await reg.update(dp_id, body.model_copy(update={"value": None}))
+
+    if "value" in body.model_fields_set:
+        await get_event_bus().publish(
+            DataValueEvent(
+                datapoint_id=dp_id,
+                value=coerced,
+                quality=quality,
+                source_adapter="api",
+            )
+        )
+
     return _enrich(dp)
 
 
@@ -314,8 +390,6 @@ async def write_value(
     - Seite ist 'private' ohne JWT → 401
     - Kein Auth-Kontext → 401
     """
-    from obs.core.event_bus import DataValueEvent, get_event_bus
-
     reg = get_registry()
     if reg.get(dp_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")

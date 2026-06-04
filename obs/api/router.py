@@ -21,6 +21,7 @@ from obs.api.v1.knxproj import router as knxproj_router
 from obs.api.v1.logic import router as logic_router
 from obs.api.v1.ringbuffer import router as rb_router
 from obs.api.v1.search import router as search_router
+from obs.api.v1.security import router as security_router
 from obs.api.v1.system import router as system_router
 from obs.api.v1.visu_backgrounds import router as visu_backgrounds_router
 from obs.api.v1.visu import router as visu_router
@@ -34,6 +35,7 @@ router.include_router(auth_router)
 router.include_router(dp_router, prefix="/datapoints")
 router.include_router(bindings_router, prefix="/datapoints")
 router.include_router(search_router, prefix="/search")
+router.include_router(security_router, prefix="/security")
 router.include_router(adapters_router, prefix="/adapters")
 router.include_router(system_router, prefix="/system")
 router.include_router(ws_router)

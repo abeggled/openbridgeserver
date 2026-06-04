@@ -128,6 +128,34 @@ def validate_formula(formula: str) -> str | None:
     return None
 
 
+class _PreciseInt(int):
+    """int subclass that uses exact Fraction arithmetic for true division.
+
+    When a Counter64 value (Python int) is divided by a float literal inside a
+    formula (e.g. ``x / 1_000_000_000.0``), Python normally converts the large
+    int to float first, losing precision for values > 2^53. This wrapper
+    overrides ``__truediv__`` / ``__rtruediv__`` to compute the exact rational
+    quotient via ``fractions.Fraction`` and convert only the (typically small)
+    result to float, preserving adjacent-value distinguishability.
+    """
+
+    def __truediv__(self, other: Any) -> float:
+        from fractions import Fraction
+
+        try:
+            return float(Fraction(int(self)) / Fraction(other))
+        except (ValueError, ZeroDivisionError, TypeError):
+            return NotImplemented  # type: ignore[return-value]
+
+    def __rtruediv__(self, other: Any) -> float:
+        from fractions import Fraction
+
+        try:
+            return float(Fraction(other) / Fraction(int(self)))
+        except (ValueError, ZeroDivisionError, TypeError):
+            return NotImplemented  # type: ignore[return-value]
+
+
 def apply_formula(formula: str, value: Any) -> Any:
     """Wendet die Formel auf *value* an.
     Bei Division durch Null oder anderen Fehlern wird der Originalwert zurückgegeben.
@@ -136,7 +164,20 @@ def apply_formula(formula: str, value: Any) -> Any:
     if not formula:
         return value
     try:
-        x = float(value)
+        if isinstance(value, bool):
+            x: _PreciseInt | float = float(value)
+        elif isinstance(value, int):
+            # Wrap in _PreciseInt so that integer arithmetic (%, //, +, *)
+            # stays exact for large Counter64 values (> 2^53), and that true
+            # division (x / float_literal) uses exact Fraction arithmetic
+            # instead of converting the large int to float first.
+            # Note: float64 has an inherent limit — adjacent Counter64 values
+            # at 2^60 range after dividing by 10^9 may still be indistinguishable
+            # (~10^-9 difference, but result ULP ≈ 10^-7). Use x//divisor for
+            # formulas where the WriteRouter must detect every counter increment.
+            x = _PreciseInt(value)
+        else:
+            x = float(value)
     except (TypeError, ValueError):
         return value  # Nicht-numerisch → unverändert
 

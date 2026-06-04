@@ -2,5 +2,5 @@
 pytest
 pytest-cov
 pytest-asyncio
-ruff==0.15.15
+ruff==0.15.16
 wlc

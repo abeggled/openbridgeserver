@@ -25,6 +25,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from obs.api.v1 import sessions as sessions_api
+from obs.core.json import jsonable
 from obs.db.database import Database, get_db
 from obs.models.visu import PageConfig
 
@@ -154,11 +155,11 @@ class WebSocketManager:
         # ── 1. Per-subscription DP value events ──────────────────────────
         dp_msg = {
             "id": dp_id_str,
-            "v": event.value,
+            "v": jsonable(event.value),
             "u": dp.unit if dp else None,
             "t": ts_str,
             "q": event.quality,
-            "old_v": state.old_value if state else None,
+            "old_v": jsonable(state.old_value) if state else None,
         }
         dead: list[str] = []
         for conn_id, (_, subs, _lock, _allowed_ids) in list(self._connections.items()):
@@ -176,8 +177,8 @@ class WebSocketManager:
                 "ts": ts_str,
                 "datapoint_id": dp_id_str,
                 "name": dp.name if dp else None,
-                "new_value": event.value,
-                "old_value": state.old_value if state else None,
+                "new_value": jsonable(event.value),
+                "old_value": jsonable(state.old_value) if state else None,
                 "quality": event.quality,
                 "source_adapter": event.source_adapter,
                 "unit": dp.unit if dp else None,

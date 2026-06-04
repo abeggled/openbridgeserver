@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import uuid
 
 import pytest
@@ -40,6 +41,18 @@ async def _write_value(client, auth_headers, dp_id: str, value: float) -> None:
         headers=auth_headers,
     )
     assert resp.status_code == 204, resp.text
+
+
+async def _seed_history_value(dp_id: str, ts: datetime.datetime, value: float) -> None:
+    from obs.db.database import get_db
+
+    db = get_db()
+    ts_str = ts.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    await db.execute_and_commit(
+        """INSERT INTO history_values (datapoint_id, value, unit, quality, ts)
+           VALUES (?,?,?,?,?)""",
+        (dp_id, json.dumps(value), "°C", "good", ts_str),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +113,30 @@ async def test_aggregate_avg_fn(client, auth_headers):
     if buckets:
         assert "bucket" in buckets[0]
         assert "v" in buckets[0]
+
+
+async def test_aggregate_bucket_is_returned_as_utc_iso_timestamp(client, auth_headers):
+    dp = await _create_dp(client, auth_headers)
+    dp_id = dp["id"]
+    await _seed_history_value(dp_id, datetime.datetime(2026, 6, 3, 12, 34, tzinfo=datetime.UTC), 12.0)
+
+    resp = await client.get(
+        f"/api/v1/history/{dp_id}/aggregate",
+        params={
+            "fn": "avg",
+            "interval": "1h",
+            "from": "2026-06-03T12:00:00Z",
+            "to": "2026-06-03T13:00:00Z",
+        },
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    buckets = resp.json()
+    assert buckets
+    assert buckets[0]["bucket"] == "2026-06-03T12:00:00Z"
+    assert buckets[0]["n"] == 1
+    assert datetime.datetime.fromisoformat(buckets[0]["bucket"].replace("Z", "+00:00")).tzinfo is not None
 
 
 async def test_aggregate_min_fn(client, auth_headers):

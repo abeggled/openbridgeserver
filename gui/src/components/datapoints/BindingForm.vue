@@ -50,912 +50,117 @@
       </div>
 
       <!-- KNX -->
-      <template v-if="selectedAdapterType === 'KNX'">
-        <div class="section-header">{{ $t('adapters.bindingForm.knxSection') }}</div>
-        <div class="form-group">
-          <label class="label">{{ $t('adapters.bindingForm.groupAddressLabel') }}</label>
-          <GaCombobox v-model="cfg.group_address" :placeholder="$t('adapters.bindingForm.groupAddressPlaceholder')" @select="onGaSelect" />
-        </div>
-        <div class="form-group">
-          <label class="label">{{ $t('adapters.bindingForm.dptLabel') }}</label>
-          <select v-model="cfg.dpt_id" class="input" required>
-            <option value="">{{ $t('adapters.bindingForm.selectDpt') }}</option>
-            <optgroup v-for="group in groupedDpts" :key="group.family" :label="group.label">
-              <option v-for="dpt in group.dpts" :key="dpt.dpt_id" :value="dpt.dpt_id">
-                {{ dpt.dpt_id }} — {{ dpt.name }}<template v-if="dpt.unit"> [{{ dpt.unit }}]</template>
-              </option>
-            </optgroup>
-          </select>
-        </div>
-        <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="flex items-start gap-2">
-          <input
-            type="checkbox"
-            id="respond_to_read"
-            v-model="cfg.respond_to_read"
-            :disabled="!props.dpPersistValue"
-            class="w-4 h-4 rounded mt-0.5"
-          />
-          <div>
-            <label
-              for="respond_to_read"
-              class="text-sm"
-              :class="props.dpPersistValue ? 'text-slate-600 dark:text-slate-300' : 'text-slate-400 dark:text-slate-500 cursor-not-allowed'"
-            >{{ $t('adapters.bindingForm.respondToReadLabel') }}</label>
-            <p class="hint">
-              {{ $t('adapters.bindingForm.respondToReadHint') }}
-              <template v-if="!props.dpPersistValue"> {{ $t('adapters.bindingForm.respondToReadPersistHint') }}</template>
-            </p>
-          </div>
-        </div>
-      </template>
+      <BindingFormKnx
+        v-if="selectedAdapterType === 'KNX'"
+          :cfg="cfg"
+          :form="form"
+          :grouped-dpts="groupedDpts"
+          :dp-persist-value="props.dpPersistValue"
+          @ga-select="onGaSelect"
+        />
 
       <!-- Modbus -->
-      <template v-if="selectedAdapterType === 'MODBUS_TCP' || selectedAdapterType === 'MODBUS_RTU'">
-        <div class="section-header">{{ $t('adapters.bindingForm.modbusSection') }}</div>
-        <div class="grid grid-cols-3 gap-4">
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.addressLabel') }}</label>
-            <input v-model.number="cfg.address" type="number" min="0" max="65535" class="input" required />
-          </div>
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.registerTypeLabel') }}</label>
-            <select v-model="cfg.register_type" class="input">
-              <option value="holding">{{ $t('adapters.bindingForm.modbusHoldingRegister') }}</option>
-              <option value="input">{{ $t('adapters.bindingForm.modbusInputRegister') }}</option>
-              <option value="coil">Coil</option>
-              <option value="discrete_input">{{ $t('adapters.bindingForm.modbusDiscreteInput') }}</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.dataFormatLabel') }}</label>
-            <select v-model="cfg.data_format" class="input">
-              <optgroup label="16-Bit">
-                <option value="uint16">UINT16</option>
-                <option value="int16">INT16</option>
-              </optgroup>
-              <optgroup label="32-Bit">
-                <option value="uint32">UINT32</option>
-                <option value="int32">INT32</option>
-                <option value="float32">FLOAT32</option>
-              </optgroup>
-              <optgroup label="64-Bit">
-                <option value="uint64">UINT64</option>
-                <option value="int64">INT64</option>
-              </optgroup>
-            </select>
-          </div>
-        </div>
-        <div class="optional-divider">{{ $t('adapters.binding.optionalSettings') }}</div>
-        <div class="grid grid-cols-4 gap-4">
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.unitIdLabel') }}</label>
-            <input v-model.number="cfg.unit_id" type="number" min="0" max="255" class="input" />
-            <p class="hint">{{ $t('adapters.bindingForm.defaultN', { n: '1' }) }}</p>
-          </div>
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.registerCountLabel') }}</label>
-            <input v-model.number="cfg.count" type="number" min="1" max="125" class="input" />
-            <p class="hint">{{ $t('adapters.bindingForm.defaultN', { n: '1' }) }}</p>
-          </div>
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.scaleLabel') }}</label>
-            <input v-model.number="cfg.scale_factor" type="number" step="any" class="input" />
-            <p class="hint">{{ $t('adapters.bindingForm.defaultN', { n: '1.0' }) }}</p>
-          </div>
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.intervalSecondsLabel') }}</label>
-            <input v-model.number="cfg.poll_interval" type="number" step="0.1" min="0.1" class="input" />
-            <p class="hint">{{ $t('adapters.bindingForm.defaultN', { n: '1.0' }) }}</p>
-          </div>
-        </div>
-        <div class="grid grid-cols-2 gap-4">
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.byteOrderLabel') }}</label>
-            <select v-model="cfg.byte_order" class="input">
-              <option value="big">{{ $t('adapters.bindingForm.bigEndian') }}</option>
-              <option value="little">{{ $t('adapters.bindingForm.littleEndian') }}</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.wordOrderLabel') }}</label>
-            <select v-model="cfg.word_order" class="input">
-              <option value="big">{{ $t('adapters.bindingForm.bigEndian') }}</option>
-              <option value="little">{{ $t('adapters.bindingForm.littleEndian') }}</option>
-            </select>
-          </div>
-        </div>
-      </template>
+      <BindingFormModbus
+        v-if="selectedAdapterType === 'MODBUS_TCP' || selectedAdapterType === 'MODBUS_RTU'"
+          :cfg="cfg"
+        />
 
       <!-- MQTT -->
-      <template v-if="selectedAdapterType === 'MQTT'">
-        <div class="section-header">{{ $t('adapters.bindingForm.mqttSection') }}</div>
-
-        <!-- Topic with browser -->
-        <div class="form-group">
-          <label class="label">{{ $t('adapters.bindingForm.topicLabel') }}</label>
-          <div class="flex gap-2">
-            <input v-model="cfg.topic" class="input flex-1" :placeholder="$t('adapters.bindingForm.topicPlaceholder')" required data-testid="input-mqtt-topic" />
-            <button
-              type="button"
-              class="btn-secondary px-3 text-sm whitespace-nowrap"
-              :disabled="!form.adapter_instance_id || mqttBrowseLoading"
-              @click="mqttBrowse"
-            >
-              <span v-if="mqttBrowseLoading" class="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1"></span>
-              {{ mqttBrowseLoading ? $t('adapters.bindingForm.scanning') : $t('adapters.bindingForm.browse') }}
-            </button>
-          </div>
-          <p class="hint">{{ $t('adapters.bindingForm.topicHint') }}</p>
-
-          <!-- Browse results -->
-          <div
-            v-if="mqttBrowseTopics.length > 0"
-            class="mt-1 max-h-44 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800"
-          >
-            <button
-              v-for="t in mqttBrowseTopics"
-              :key="t"
-              type="button"
-              class="w-full text-left px-3 py-1.5 text-sm font-mono hover:bg-slate-50 dark:hover:bg-slate-700/50 truncate"
-              @click="selectMqttTopic(t)"
-            >{{ t }}</button>
-          </div>
-          <p v-if="mqttBrowseError" class="text-xs text-red-400 mt-1">{{ mqttBrowseError }}</p>
-        </div>
-
-        <div class="optional-divider">{{ $t('adapters.binding.optionalSettings') }}</div>
-        <div class="grid grid-cols-2 gap-4">
-          <!-- Publish-Topic: nur bei Lesen/Schreiben (BOTH) sichtbar -->
-          <div v-if="form.direction === 'BOTH'" class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.publishTopicLabel') }} <span class="optional">{{ $t('logic.nodeConfig.common.optional') }}</span></label>
-            <input v-model="cfg.publish_topic" class="input" :placeholder="$t('adapters.bindingForm.publishTopicPlaceholder')" />
-            <p class="hint">{{ $t('adapters.bindingForm.publishTopicHint') }}</p>
-          </div>
-          <!-- Retain: nur bei Schreiben (DEST) oder Lesen/Schreiben (BOTH) -->
-          <div v-if="form.direction === 'DEST' || form.direction === 'BOTH'" class="form-group flex flex-col justify-end">
-            <div class="flex items-center gap-2 mt-6">
-              <input type="checkbox" id="mqtt_retain" v-model="cfg.retain" class="w-4 h-4 rounded" />
-              <label for="mqtt_retain" class="text-sm text-slate-600 dark:text-slate-300">{{ $t('adapters.bindingForm.retainLabel') }}</label>
-            </div>
-            <p class="hint">{{ $t('adapters.bindingForm.retainHint') }}</p>
-          </div>
-        </div>
-
-        <!-- Payload Template — only for DEST / BOTH -->
-        <div v-if="form.direction === 'DEST' || form.direction === 'BOTH'" class="form-group">
-          <label class="label">{{ $t('adapters.bindingForm.payloadTemplateLabel') }} <span class="optional">{{ $t('logic.nodeConfig.common.optional') }}</span></label>
-          <input
-            v-model="cfg.payload_template"
-            class="input font-mono text-sm"
-            :placeholder="$t('adapters.bindingForm.payloadTemplatePlaceholder')"
-          />
-          <p class="hint">{{ $t('adapters.bindingForm.payloadTemplateHint') }}</p>
-        </div>
-
-        <!-- Source Data Type — SOURCE / BOTH only -->
-        <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="form-group">
-          <label class="label">{{ $t('adapters.bindingForm.sourceDataTypeLabel') }} <span class="optional">{{ $t('logic.nodeConfig.common.optional') }}</span></label>
-          <div class="flex gap-2 items-start">
-            <select v-model="cfg.source_data_type" class="input flex-1" data-testid="select-source-data-type">
-              <option v-for="t in MQTT_SOURCE_TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>
-            </select>
-            <span v-if="mqttTypeCompat" class="mt-1.5 shrink-0 text-xs px-2 py-1 rounded-full font-medium" :class="mqttTypeCompat.cls">
-              {{ mqttTypeCompat.label }}
-            </span>
-          </div>
-          <p class="hint">
-            {{ $t('adapters.bindingForm.sourceDataTypeHint') }}
-            {{ $t('adapters.bindingForm.objectTypeLabel') }}: <code class="text-blue-400">{{ props.dpDataType }}</code>
-          </p>
-
-          <!-- JSON key extraction panel -->
-          <div v-if="cfg.source_data_type === 'json'" class="mt-3 flex flex-col gap-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50">
-            <div class="form-group">
-              <div class="flex justify-between items-center mb-1">
-                <label class="text-xs font-medium text-slate-500">{{ $t('adapters.bindingForm.samplePayloadLabel') }}</label>
-                <button
-                  type="button"
-                  class="text-xs text-blue-500 hover:text-blue-400 disabled:opacity-40"
-                  :disabled="!cfg.topic || mqttSampleLoading"
-                  @click="loadMqttSample"
-                >{{ mqttSampleLoading ? $t('adapters.bindingForm.loadingShort') : $t('adapters.bindingForm.loadFromTopic') }}</button>
-              </div>
-              <textarea
-                v-model="mqttJsonSample"
-                class="input font-mono text-xs h-20 resize-y"
-                :placeholder="$t('adapters.bindingForm.jsonSamplePlaceholder')"
-                data-testid="mqtt-json-sample"
-                @input="onMqttJsonSampleInput"
-              />
-              <p v-if="mqttJsonParseError" class="text-xs text-red-400 mt-0.5">{{ mqttJsonParseError }}</p>
-            </div>
-            <div class="form-group">
-              <label class="text-xs font-medium text-slate-500 mb-1 block">{{ $t('adapters.bindingForm.jsonKeyLabel') }}</label>
-              <div class="flex gap-2">
-                <input
-                  v-model="cfg.json_key"
-                  class="input flex-1 font-mono text-sm"
-                  :placeholder="$t('adapters.bindingForm.jsonKeyPlaceholder')"
-                  data-testid="mqtt-json-key-input"
-                />
-                <select
-                  v-if="mqttJsonKeys.length"
-                  v-model="cfg.json_key"
-                  class="input w-52 shrink-0"
-                  data-testid="mqtt-json-key-select"
-                >
-                  <option value="">{{ $t('adapters.bindingForm.fromSampleOption') }}</option>
-                  <option v-for="k in mqttJsonKeys" :key="k.key" :value="k.key">
-                    {{ k.key }}<template v-if="k.text"> = {{ k.text }}</template>
-                  </option>
-                </select>
-              </div>
-              <p class="hint">{{ $t('adapters.bindingForm.jsonKeyHint') }}</p>
-            </div>
-          </div>
-
-          <!-- XML element-path extraction panel -->
-          <div v-if="cfg.source_data_type === 'xml'" class="mt-3 flex flex-col gap-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50">
-            <div class="form-group">
-              <div class="flex justify-between items-center mb-1">
-                <label class="text-xs font-medium text-slate-500">{{ $t('adapters.bindingForm.samplePayloadLabel') }}</label>
-                <button
-                  type="button"
-                  class="text-xs text-blue-500 hover:text-blue-400 disabled:opacity-40"
-                  :disabled="!cfg.topic || mqttSampleLoading"
-                  @click="loadMqttSample"
-                >{{ mqttSampleLoading ? $t('adapters.bindingForm.loadingShort') : $t('adapters.bindingForm.loadFromTopic') }}</button>
-              </div>
-              <textarea
-                v-model="mqttXmlSample"
-                class="input font-mono text-xs h-20 resize-y"
-                :placeholder="$t('adapters.bindingForm.xmlSamplePlaceholder')"
-                @input="onMqttXmlSampleInput"
-              />
-              <p v-if="mqttXmlParseError" class="text-xs text-red-400 mt-0.5">{{ mqttXmlParseError }}</p>
-            </div>
-            <div class="form-group">
-              <label class="text-xs font-medium text-slate-500 mb-1 block">{{ $t('adapters.bindingForm.xmlPathLabel') }}</label>
-              <div class="flex gap-2">
-                <input
-                  v-model="cfg.xml_path"
-                  class="input flex-1 font-mono text-sm"
-                  :placeholder="$t('adapters.bindingForm.xmlPathPlaceholder')"
-                />
-                <select
-                  v-if="mqttXmlElements.length"
-                  v-model="cfg.xml_path"
-                  class="input w-52 shrink-0"
-                >
-                  <option value="">{{ $t('adapters.bindingForm.fromSampleOption') }}</option>
-                  <option v-for="el in mqttXmlElements" :key="el.path" :value="el.path">
-                    {{ el.path }}<template v-if="el.text"> = {{ el.text }}</template>
-                  </option>
-                </select>
-              </div>
-              <p class="hint">{{ $t('adapters.bindingForm.xmlPathHint') }}</p>
-            </div>
-          </div>
-        </div>
-
-      </template>
+      <BindingFormMqtt
+        v-if="selectedAdapterType === 'MQTT'"
+          :cfg="cfg"
+          :form="form"
+          :mqtt-source-types="MQTT_SOURCE_TYPES"
+          :mqtt-type-compat="mqttTypeCompat"
+          :dp-data-type="props.dpDataType"
+          :mqtt-browse-topics="mqttBrowseTopics"
+          :mqtt-browse-loading="mqttBrowseLoading"
+          :mqtt-browse-error="mqttBrowseError"
+          v-model:mqtt-json-sample="mqttJsonSample"
+          :mqtt-json-keys="mqttJsonKeys"
+          :mqtt-json-parse-error="mqttJsonParseError"
+          v-model:mqtt-xml-sample="mqttXmlSample"
+          :mqtt-xml-elements="mqttXmlElements"
+          :mqtt-xml-parse-error="mqttXmlParseError"
+          :mqtt-sample-loading="mqttSampleLoading"
+          @mqtt-browse="mqttBrowse"
+          @select-mqtt-topic="selectMqttTopic"
+          @load-mqtt-sample="loadMqttSample"
+          @mqtt-json-sample-input="onMqttJsonSampleInput"
+          @mqtt-xml-sample-input="onMqttXmlSampleInput"
+        />
 
       <!-- 1-Wire -->
-      <template v-if="selectedAdapterType === 'ONEWIRE'">
-        <div class="section-header">{{ $t('adapters.bindingForm.onewireSection') }}</div>
-        <div class="grid grid-cols-2 gap-4">
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.onewireSensorIdLabel') }}</label>
-            <input v-model="cfg.sensor_id" class="input" :placeholder="$t('adapters.bindingForm.onewireSensorIdPlaceholder')" required />
-          </div>
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.onewireSensorTypeLabel') }}</label>
-            <input v-model="cfg.sensor_type" class="input" :placeholder="$t('adapters.bindingForm.onewireSensorTypePlaceholder')" />
-            <p class="hint">{{ $t('adapters.bindingForm.onewireSensorTypeHint') }}</p>
-          </div>
-        </div>
-      </template>
+      <BindingFormOnewire
+        v-if="selectedAdapterType === 'ONEWIRE'"
+          :cfg="cfg"
+        />
 
       <!-- Home Assistant -->
-      <template v-if="selectedAdapterType === 'HOME_ASSISTANT'">
-        <div class="section-header">{{ $t('adapters.bindingForm.haSection') }}</div>
-        <div class="form-group">
-          <label class="label">{{ $t('adapters.bindingForm.haEntityIdLabel') }}</label>
-          <input
-            v-model="cfg.entity_id"
-            class="input"
-            :placeholder="$t('adapters.bindingForm.haEntityIdPlaceholder')"
-            data-testid="config-field-entity_id"
-            required
-          />
-          <p class="hint">{{ $t('adapters.bindingForm.haEntityIdHint') }}</p>
-        </div>
-        <div class="form-group">
-          <label class="label">{{ $t('adapters.bindingForm.haAttributeLabel') }} <span class="optional">{{ $t('adapters.bindingForm.haAttributeOptional') }}</span></label>
-          <input
-            v-model="cfg.attribute"
-            class="input"
-            :placeholder="$t('adapters.bindingForm.haAttributePlaceholder')"
-            data-testid="config-field-attribute"
-          />
-          <p class="hint">{{ $t('adapters.bindingForm.haAttributeHint') }}</p>
-        </div>
-        <div class="optional-divider">{{ $t('adapters.bindingForm.haWriteSection') }}</div>
-        <div class="grid grid-cols-2 gap-4">
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.haServiceDomainLabel') }} <span class="optional">{{ $t('adapters.bindingForm.haServiceDomainOptional') }}</span></label>
-            <input
-              v-model="cfg.service_domain"
-              class="input"
-              :placeholder="$t('adapters.bindingForm.haServiceDomainPlaceholder')"
-              data-testid="config-field-service_domain"
-            />
-          </div>
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.haServiceNameLabel') }} <span class="optional">{{ $t('adapters.bindingForm.haServiceNameOptional') }}</span></label>
-            <input
-              v-model="cfg.service_name"
-              class="input"
-              :placeholder="$t('adapters.bindingForm.haServiceNamePlaceholder')"
-              data-testid="config-field-service_name"
-            />
-          </div>
-        </div>
-        <div class="form-group" style="max-width:280px">
-          <label class="label">{{ $t('adapters.bindingForm.haServiceDataKeyLabel') }} <span class="optional">{{ $t('adapters.bindingForm.haServiceDataKeyOptional') }}</span></label>
-          <input
-            v-model="cfg.service_data_key"
-            class="input"
-            :placeholder="$t('adapters.bindingForm.haServiceDataKeyPlaceholder')"
-            data-testid="config-field-service_data_key"
-          />
-          <p class="hint">{{ $t('adapters.bindingForm.haServiceDataKeyHint') }}</p>
-        </div>
-      </template>
+      <BindingFormHomeAssistant
+        v-if="selectedAdapterType === 'HOME_ASSISTANT'"
+          :cfg="cfg"
+        />
 
       <!-- ioBroker -->
-      <template v-if="selectedAdapterType === 'IOBROKER'">
-        <div class="section-header">{{ $t('adapters.bindingForm.iobSection') }}</div>
-        <div class="form-group">
-          <label class="label">{{ $t('adapters.bindingForm.iobStateIdLabel') }}</label>
-          <div class="flex gap-2">
-            <input
-              v-model="cfg.state_id"
-              class="input font-mono text-sm flex-1"
-              :placeholder="$t('adapters.bindingForm.iobStateIdPlaceholder')"
-              data-testid="config-field-state_id"
-              required
-              @input="onIoBrokerStateInput"
-            />
-            <button
-              type="button"
-              class="btn-secondary px-3 text-sm whitespace-nowrap"
-              :disabled="!selectedInstanceId || iobrokerBrowseLoading"
-              @click="browseIoBrokerStates"
-            >
-              <span v-if="iobrokerBrowseLoading" class="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1"></span>
-              {{ iobrokerBrowseLoading ? $t('adapters.bindingForm.loading') : $t('adapters.bindingForm.browse') }}
-            </button>
-          </div>
-          <p class="hint">{{ $t('adapters.bindingForm.iobStateHint') }}</p>
-
-          <div
-            v-if="iobrokerStates.length > 0"
-            class="mt-2 max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800"
-          >
-            <button
-              v-for="state in iobrokerStates"
-              :key="state.id"
-              type="button"
-              class="w-full text-left px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-700/50"
-              @click="selectIoBrokerState(state)"
-            >
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="font-mono text-sm text-slate-700 dark:text-slate-100 truncate">{{ state.id }}</span>
-                <span class="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-500 shrink-0">{{ state.type || $t('adapters.bindingForm.iobAutoType') }}</span>
-                <span v-if="state.write" class="text-[11px] px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 shrink-0">{{ $t('adapters.bindingForm.iobWriteTag') }}</span>
-              </div>
-              <div class="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
-                <span class="truncate">{{ state.name || '—' }}</span>
-                <span v-if="state.role" class="shrink-0">{{ state.role }}</span>
-                <span v-if="state.value !== null && state.value !== undefined" class="font-mono shrink-0">= {{ state.value }}</span>
-              </div>
-            </button>
-          </div>
-          <p v-if="iobrokerBrowseError" class="text-xs text-red-400 mt-1">{{ iobrokerBrowseError }}</p>
-        </div>
-
-        <div class="grid grid-cols-2 gap-4">
-          <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.iobDataTypeLabel') }}</label>
-            <select v-model="cfg.source_data_type" class="input">
-              <option value="">{{ $t('adapters.bindingForm.iobAutoTypeLabel') }}</option>
-              <option value="bool">{{ $t('adapters.bindingForm.iobTypeBool') }}</option>
-              <option value="float">{{ $t('adapters.bindingForm.iobTypeFloat') }}</option>
-              <option value="int">{{ $t('adapters.bindingForm.iobTypeInt') }}</option>
-              <option value="string">{{ $t('adapters.bindingForm.iobTypeString') }}</option>
-              <option value="json">{{ $t('adapters.bindingForm.iobTypeJson') }}</option>
-            </select>
-            <p class="hint">{{ $t('adapters.bindingForm.iobDataTypeHint') }}</p>
-          </div>
-          <div v-if="cfg.source_data_type === 'json' && (form.direction === 'SOURCE' || form.direction === 'BOTH')" class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.iobJsonKeyLabel') }}</label>
-            <input v-model="cfg.json_key" class="input" :placeholder="$t('adapters.bindingForm.iobJsonKeyPlaceholder')" />
-            <p class="hint">{{ $t('adapters.bindingForm.iobJsonKeyHint') }}</p>
-          </div>
-        </div>
-
-        <div v-if="form.direction === 'DEST' || form.direction === 'BOTH'" class="optional-divider">{{ $t('adapters.bindingForm.iobWriteSection') }}</div>
-        <div v-if="form.direction === 'DEST' || form.direction === 'BOTH'" class="grid grid-cols-2 gap-4">
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.iobCommandStateLabel') }} <span class="optional">{{ $t('adapters.bindingForm.iobOptional') }}</span></label>
-            <input
-              v-model="cfg.command_state_id"
-              class="input font-mono text-sm"
-              :placeholder="$t('adapters.bindingForm.iobCommandStatePlaceholder')"
-            />
-            <p class="hint">{{ $t('adapters.bindingForm.iobCommandStateHint') }}</p>
-          </div>
-          <div class="form-group flex flex-col justify-end">
-            <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 mt-6">
-              <input type="checkbox" v-model="cfg.ack" class="w-4 h-4 rounded" />
-              {{ $t('adapters.bindingForm.iobWriteWithAckLabel') }}
-            </label>
-            <p class="hint">{{ $t('adapters.bindingForm.iobWriteWithAckHint') }}</p>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          class="text-sm text-blue-500 hover:text-blue-400 self-start"
-          @click="showAdvancedTabs = !showAdvancedTabs"
-        >
-          {{ showAdvancedTabs ? $t('adapters.bindingForm.hideAdvancedOptions') : $t('adapters.bindingForm.showAdvancedOptions') }}
-        </button>
-      </template>
+      <BindingFormIoBroker
+        v-if="selectedAdapterType === 'IOBROKER'"
+          :cfg="cfg"
+          :form="form"
+          :selected-instance-id="selectedInstanceId"
+          :iobroker-states="iobrokerStates"
+          :iobroker-browse-loading="iobrokerBrowseLoading"
+          :iobroker-browse-error="iobrokerBrowseError"
+          :show-advanced-tabs="showAdvancedTabs"
+          @iobroker-state-input="onIoBrokerStateInput"
+          @browse-iobroker-states="browseIoBrokerStates"
+          @select-iobroker-state="selectIoBrokerState"
+          @toggle-advanced-tabs="showAdvancedTabs = !showAdvancedTabs"
+        />
 
       <!-- Zeitschaltuhr -->
-      <template v-if="selectedAdapterType === 'ZEITSCHALTUHR'">
-        <div class="section-header">{{ $t('adapters.bindingForm.ztSection') }}</div>
-
-        <!-- Typ -->
-        <div class="grid grid-cols-2 gap-4">
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.ztTypeLabel') }}</label>
-            <select v-model="cfg.timer_type" class="input">
-              <option value="daily">{{ $t('adapters.bindingForm.ztTypeDaily') }}</option>
-              <option value="annual">{{ $t('adapters.bindingForm.ztTypeAnnual') }}</option>
-              <option value="holiday">{{ $t('adapters.bindingForm.ztTypeHoliday') }}</option>
-              <option value="meta">{{ $t('adapters.bindingForm.ztTypeMeta') }}</option>
-            </select>
-          </div>
-          <div v-if="cfg.timer_type === 'meta'" class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.ztMetaTypeLabel') }}</label>
-            <select v-model="cfg.meta_type" class="input">
-              <optgroup :label="$t('adapters.bindingForm.ztMetaHolidayGroup')">
-                <option value="holiday_today">{{ $t('adapters.bindingForm.ztMetaHolidayToday') }}</option>
-                <option value="holiday_tomorrow">{{ $t('adapters.bindingForm.ztMetaHolidayTomorrow') }}</option>
-                <option value="holiday_name_today">{{ $t('adapters.bindingForm.ztMetaHolidayNameToday') }}</option>
-                <option value="holiday_name_tomorrow">{{ $t('adapters.bindingForm.ztMetaHolidayNameTomorrow') }}</option>
-              </optgroup>
-              <optgroup :label="$t('adapters.bindingForm.ztMetaVacationGroup')">
-                <option value="vacation_1">{{ $t('adapters.bindingForm.ztMetaVacation1') }}</option>
-                <option value="vacation_2">{{ $t('adapters.bindingForm.ztMetaVacation2') }}</option>
-                <option value="vacation_3">{{ $t('adapters.bindingForm.ztMetaVacation3') }}</option>
-                <option value="vacation_4">{{ $t('adapters.bindingForm.ztMetaVacation4') }}</option>
-                <option value="vacation_5">{{ $t('adapters.bindingForm.ztMetaVacation5') }}</option>
-                <option value="vacation_6">{{ $t('adapters.bindingForm.ztMetaVacation6') }}</option>
-              </optgroup>
-            </select>
-            <p class="hint">{{ $t('adapters.bindingForm.ztMetaHint') }}</p>
-          </div>
-        </div>
-
-        <template v-if="cfg.timer_type !== 'meta'">
-
-          <!-- Feiertagsschaltuhr: Feiertagsauswahl -->
-          <template v-if="cfg.timer_type === 'holiday'">
-            <div class="form-group">
-              <label class="label">{{ $t('adapters.bindingForm.ztHolidaysLabel') }} <span class="optional">{{ $t('adapters.bindingForm.ztHolidaysOptional') }}</span></label>
-              <p class="hint mb-2">{{ $t('adapters.bindingForm.ztHolidaysHint') }}</p>
-              <div v-if="ztHolidaysLoading" class="text-xs text-slate-400 py-2">{{ $t('adapters.bindingForm.ztHolidaysLoading') }}</div>
-              <div v-else-if="ztHolidaysError" class="text-xs text-red-400 py-2">{{ ztHolidaysError }}</div>
-              <div v-else-if="ztHolidays.length === 0" class="text-xs text-slate-400 italic py-2">{{ $t('adapters.bindingForm.ztHolidaysEmpty') }}</div>
-              <div v-else class="space-y-0.5 max-h-56 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded p-2 bg-white dark:bg-slate-800/50">
-                <label
-                  v-for="h in ztHolidays"
-                  :key="h.name"
-                  class="flex items-center gap-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/40 px-1.5 py-1 rounded text-xs"
-                >
-                  <input
-                    type="checkbox"
-                    :checked="cfg.selected_holidays.length === 0 || cfg.selected_holidays.includes(h.name)"
-                    class="w-3.5 h-3.5 rounded flex-shrink-0"
-                    @change="ztToggleHoliday(h.name)"
-                  />
-                  <span class="font-mono text-slate-400 dark:text-slate-500 flex-shrink-0">{{ h.date }}</span>
-                  <span class="text-slate-700 dark:text-slate-200 truncate">{{ h.name }}</span>
-                </label>
-              </div>
-              <div class="flex gap-3 mt-1.5 items-center">
-                <button type="button" class="text-xs text-slate-400 hover:text-blue-400" @click="cfg.selected_holidays = []">{{ $t('adapters.bindingForm.ztHolidaysAllNoFilter') }}</button>
-                <span class="text-xs text-slate-300 dark:text-slate-600">·</span>
-                <span class="text-xs text-slate-400">
-                  {{ cfg.selected_holidays.length === 0 ? $t('adapters.bindingForm.ztHolidaysAllSelected') : $t('adapters.bindingForm.ztHolidaysCount', { n: cfg.selected_holidays.length }) }}
-                </span>
-                <button type="button" class="text-xs text-slate-400 hover:text-blue-400 ml-auto" @click="loadZsuHolidays()">{{ $t('adapters.bindingForm.ztReload') }}</button>
-              </div>
-            </div>
-          </template>
-
-          <!-- Wochentage (nicht für Feiertagsschaltuhr) -->
-          <div v-if="cfg.timer_type !== 'holiday'" class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.ztWeekdaysLabel') }}</label>
-            <div class="flex gap-1.5 flex-wrap">
-              <button
-                v-for="(label, idx) in WEEKDAY_SHORTS"
-                :key="idx"
-                type="button"
-                @click="ztToggleWeekday(idx)"
-                class="px-3 py-1.5 text-xs font-medium rounded-md border transition-colors"
-                :class="cfg.weekdays.includes(idx)
-                  ? 'bg-blue-500 border-blue-500 text-white'
-                  : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-blue-400'"
-              >{{ label }}</button>
-              <button type="button" class="ml-2 text-xs text-slate-400 hover:text-blue-400" @click="cfg.weekdays = [0,1,2,3,4,5,6]">{{ $t('adapters.bindingForm.ztAll') }}</button>
-              <button type="button" class="text-xs text-slate-400 hover:text-blue-400" @click="cfg.weekdays = [0,1,2,3,4]">{{ $t('adapters.bindingForm.ztWeekdaysWorkweek') }}</button>
-              <button type="button" class="text-xs text-slate-400 hover:text-blue-400" @click="cfg.weekdays = [5,6]">{{ $t('adapters.bindingForm.ztWeekdaysWeekend') }}</button>
-            </div>
-          </div>
-
-          <!-- Monate + Tag (nur Jahresschaltuhr, nicht bei Feiertagsschaltuhr) -->
-          <template v-if="cfg.timer_type === 'annual'">
-            <div class="form-group">
-              <label class="label">{{ $t('adapters.bindingForm.ztMonthsLabel') }} <span class="optional">{{ $t('adapters.bindingForm.ztMonthsOptional') }}</span></label>
-              <div class="flex gap-1.5 flex-wrap">
-                <button
-                  v-for="(label, idx) in MONTH_SHORTS"
-                  :key="idx+1"
-                  type="button"
-                  @click="ztToggleMonth(idx+1)"
-                  class="px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors"
-                  :class="cfg.months.includes(idx+1)
-                    ? 'bg-blue-500 border-blue-500 text-white'
-                    : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-blue-400'"
-                >{{ label }}</button>
-                <button type="button" class="ml-2 text-xs text-slate-400 hover:text-blue-400" @click="cfg.months = []">{{ $t('adapters.bindingForm.ztAll') }}</button>
-              </div>
-            </div>
-            <div class="form-group" style="max-width:160px">
-              <label class="label">{{ $t('adapters.bindingForm.ztDayOfMonthLabel') }} <span class="optional">{{ $t('adapters.bindingForm.ztDayOfMonthOptional') }}</span></label>
-              <input v-model.number="cfg.day_of_month" type="number" min="0" max="31" class="input" />
-            </div>
-          </template>
-
-          <!-- Zeitreferenz -->
-          <div class="optional-divider">{{ $t('adapters.bindingForm.ztTimepointDivider') }}</div>
-          <div class="grid grid-cols-2 gap-4">
-            <div class="form-group">
-              <label class="label">{{ $t('adapters.bindingForm.ztTimeRefLabel') }}</label>
-              <select v-model="cfg.time_ref" class="input">
-                <option value="absolute">{{ $t('adapters.bindingForm.ztTimeRefAbsolute') }}</option>
-                <option value="sunrise">{{ $t('adapters.bindingForm.ztTimeRefSunrise') }}</option>
-                <option value="sunset">{{ $t('adapters.bindingForm.ztTimeRefSunset') }}</option>
-                <option value="solar_noon">{{ $t('adapters.bindingForm.ztTimeRefSolarNoon') }}</option>
-                <option value="solar_altitude">{{ $t('adapters.bindingForm.ztTimeRefSolarAltitude') }}</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Absolute Zeit -->
-          <div v-if="cfg.time_ref === 'absolute'" class="grid grid-cols-2 gap-4">
-            <div class="form-group">
-              <label class="label">{{ $t('adapters.bindingForm.ztHourLabel') }}</label>
-              <input v-model.number="cfg.hour" type="number" min="0" max="23" class="input" />
-            </div>
-            <div class="form-group">
-              <label class="label">{{ $t('adapters.bindingForm.ztMinuteLabel') }}</label>
-              <input v-model.number="cfg.minute" type="number" min="0" max="59" class="input" />
-            </div>
-          </div>
-
-          <!-- Offset (bei allen nicht-absoluten Zeitreferenzen) -->
-          <div v-if="cfg.time_ref !== 'absolute'" class="form-group" style="max-width:200px">
-            <label class="label">{{ $t('adapters.bindingForm.ztOffsetMinutesLabel') }}</label>
-            <input v-model.number="cfg.offset_minutes" type="number" class="input" placeholder="0" />
-            <p class="hint">{{ $t('adapters.bindingForm.ztOffsetMinutesHint') }}</p>
-          </div>
-
-          <!-- Sonnenhöhenwinkel -->
-          <div v-if="cfg.time_ref === 'solar_altitude'" class="grid grid-cols-2 gap-4">
-            <div class="form-group">
-              <label class="label">{{ $t('adapters.bindingForm.ztSolarAltitudeLabel') }}</label>
-              <input v-model.number="cfg.solar_altitude_deg" type="number" min="-18" max="90" step="0.5" class="input" />
-              <p class="hint">{{ $t('adapters.bindingForm.ztSolarAltitudeHint') }}</p>
-            </div>
-            <div class="form-group">
-              <label class="label">{{ $t('adapters.bindingForm.ztSunDirectionLabel') }}</label>
-              <select v-model="cfg.sun_direction" class="input">
-                <option value="rising">{{ $t('adapters.bindingForm.ztSunDirectionRising') }}</option>
-                <option value="setting">{{ $t('adapters.bindingForm.ztSunDirectionSetting') }}</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Takt -->
-          <div class="optional-divider">{{ $t('adapters.bindingForm.ztTickDivider') }} <span class="font-normal text-slate-400">{{ $t('adapters.bindingForm.ztTickDividerHint') }}</span></div>
-          <div class="grid grid-cols-2 gap-4">
-            <div class="flex items-start gap-2">
-              <input type="checkbox" id="zt_every_minute" v-model="cfg.every_minute" class="w-4 h-4 rounded mt-0.5" />
-              <div>
-                <label for="zt_every_minute" class="text-sm text-slate-600 dark:text-slate-300">{{ $t('adapters.bindingForm.ztEveryMinuteLabel') }}</label>
-                <p class="hint">{{ $t('adapters.bindingForm.ztEveryMinuteHint') }}</p>
-              </div>
-            </div>
-            <div class="flex items-start gap-2">
-              <input type="checkbox" id="zt_every_hour" v-model="cfg.every_hour" class="w-4 h-4 rounded mt-0.5" />
-              <div>
-                <label for="zt_every_hour" class="text-sm text-slate-600 dark:text-slate-300">{{ $t('adapters.bindingForm.ztEveryHourLabel') }}</label>
-                <p class="hint">{{ $t('adapters.bindingForm.ztEveryHourHint') }}</p>
-              </div>
-            </div>
-          </div>
-          <div v-if="cfg.every_hour && !cfg.every_minute" class="form-group" style="max-width:160px">
-            <label class="label">{{ $t('adapters.bindingForm.ztAtMinuteLabel') }}</label>
-            <input v-model.number="cfg.minute" type="number" min="0" max="59" class="input" />
-          </div>
-
-          <!-- Feiertag / Ferien -->
-          <div class="optional-divider">{{ $t('adapters.bindingForm.ztHolidayVacationDivider') }}</div>
-          <div class="grid grid-cols-2 gap-4">
-            <div v-if="cfg.timer_type !== 'holiday'" class="form-group">
-              <label class="label">{{ $t('adapters.bindingForm.ztHolidayModeLabel') }}</label>
-              <select v-model="cfg.holiday_mode" class="input">
-                <option value="ignore">{{ $t('adapters.bindingForm.ztModeIgnore') }}</option>
-                <option value="skip">{{ $t('adapters.bindingForm.ztHolidayModeSkip') }}</option>
-                <option value="only">{{ $t('adapters.bindingForm.ztHolidayModeOnly') }}</option>
-                <option value="as_sunday">{{ $t('adapters.bindingForm.ztHolidayModeAsSunday') }}</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="label">{{ $t('adapters.bindingForm.ztVacationModeLabel') }}</label>
-              <select v-model="cfg.vacation_mode" class="input">
-                <option value="ignore">{{ $t('adapters.bindingForm.ztModeIgnore') }}</option>
-                <option value="skip">{{ $t('adapters.bindingForm.ztVacationModeSkip') }}</option>
-                <option value="only">{{ $t('adapters.bindingForm.ztVacationModeOnly') }}</option>
-                <option value="as_sunday">{{ $t('adapters.bindingForm.ztVacationModeAsSunday') }}</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Datum-Fenster -->
-          <div class="optional-divider">{{ $t('adapters.bindingForm.ztDateWindowDivider') }}</div>
-          <div class="flex items-start gap-2">
-            <input type="checkbox" id="zt_date_window" v-model="cfg.date_window_enabled" class="w-4 h-4 rounded mt-0.5" />
-            <div>
-              <label for="zt_date_window" class="text-sm text-slate-600 dark:text-slate-300">{{ $t('adapters.bindingForm.ztDateWindowEnableLabel') }}</label>
-              <p class="hint">{{ $t('adapters.bindingForm.ztDateWindowEnableHint') }}</p>
-            </div>
-          </div>
-          <template v-if="cfg.date_window_enabled">
-            <template v-for="(ep, epLabel) in [{ ep: winFrom, label: $t('adapters.bindingForm.ztDateWindowFrom') }, { ep: winTo, label: $t('adapters.bindingForm.ztDateWindowTo') }]" :key="epLabel">
-              <div class="form-group">
-                <label class="label">{{ ep.label }}</label>
-                <div class="flex gap-2 flex-wrap items-center">
-                  <select v-model="ep.ep.type" class="input text-xs" style="width:160px" @change="onWinTypeChange(ep.ep)">
-                    <option value="fixed">{{ $t('adapters.bindingForm.ztDateTypeFixed') }}</option>
-                    <option value="easter">{{ $t('adapters.bindingForm.ztDateTypeEaster') }}</option>
-                    <option value="advent">{{ $t('adapters.bindingForm.ztDateTypeAdvent') }}</option>
-                    <option value="holiday_name">{{ $t('adapters.bindingForm.ztDateTypeHolidayName') }}</option>
-                  </select>
-                  <template v-if="ep.ep.type === 'fixed'">
-                    <select v-model.number="ep.ep.month" class="input text-xs" style="width:110px">
-                      <option v-for="m in WIN_MONTHS" :key="m.v" :value="m.v">{{ m.l }}</option>
-                    </select>
-                    <input v-model.number="ep.ep.day" type="number" min="1" max="31" class="input text-xs" style="width:56px" />
-                  </template>
-                  <template v-else-if="ep.ep.type === 'easter' || ep.ep.type === 'advent'">
-                    <select v-model="ep.ep.sign" class="input text-xs" style="width:48px">
-                      <option value="+">+</option>
-                      <option value="-">−</option>
-                    </select>
-                    <input v-model.number="ep.ep.offset" type="number" min="0" max="400" class="input text-xs" style="width:64px" />
-                    <span class="text-xs text-slate-400">{{ $t('adapters.bindingForm.ztDaysLabel') }}</span>
-                  </template>
-                  <template v-else-if="ep.ep.type === 'holiday_name'">
-                    <div v-if="ztHolidaysLoading" class="text-xs text-slate-400">{{ $t('adapters.bindingForm.loading') }}</div>
-                    <select v-else v-model="ep.ep.name" class="input text-xs flex-1" style="min-width:0">
-                      <option value="">{{ $t('adapters.bindingForm.ztSelectHoliday') }}</option>
-                      <option v-for="h in ztHolidays" :key="h.name" :value="h.name">{{ h.date }} · {{ h.name }}</option>
-                    </select>
-                    <select v-model="ep.ep.sign" class="input text-xs" style="width:48px">
-                      <option value="+">+</option>
-                      <option value="-">−</option>
-                    </select>
-                    <input v-model.number="ep.ep.offset" type="number" min="0" max="400" placeholder="0" class="input text-xs" style="width:64px" />
-                    <span class="text-xs text-slate-400">{{ $t('adapters.bindingForm.ztDaysLabel') }}</span>
-                  </template>
-                </div>
-                <p class="hint">{{ describeWinEp(ep.ep) }}</p>
-              </div>
-            </template>
-            <div v-if="buildWinExpr(winFrom) && buildWinExpr(winTo)" class="text-xs font-mono text-blue-500 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded px-2 py-1">
-              {{ buildWinExpr(winFrom) }} → {{ buildWinExpr(winTo) }}
-            </div>
-          </template>
-
-          <!-- Ausgabewert -->
-          <div class="optional-divider">{{ $t('adapters.bindingForm.ztOutputDivider') }}</div>
-          <div class="form-group" style="max-width:200px">
-            <label class="label">{{ $t('adapters.bindingForm.ztOutputValueLabel') }}</label>
-            <input v-model="cfg.value" class="input" placeholder="1" />
-            <p class="hint">{{ $t('adapters.bindingForm.ztOutputValueHint') }}</p>
-          </div>
-
-        </template><!-- /timer_type !== meta -->
-      </template>
+      <BindingFormTimer
+        v-if="selectedAdapterType === 'ZEITSCHALTUHR'"
+          :cfg="cfg"
+          :zt-holidays="ztHolidays"
+          :zt-holidays-loading="ztHolidaysLoading"
+          :zt-holidays-error="ztHolidaysError"
+          :weekday-shorts="WEEKDAY_SHORTS"
+          :month-shorts="MONTH_SHORTS"
+          :win-months="WIN_MONTHS"
+          :win-from="winFrom"
+          :win-to="winTo"
+          :build-win-expr="buildWinExpr"
+          :describe-win-ep="describeWinEp"
+          @zt-toggle-holiday="ztToggleHoliday"
+          @load-zsu-holidays="loadZsuHolidays"
+          @zt-toggle-weekday="ztToggleWeekday"
+          @zt-toggle-month="ztToggleMonth"
+          @win-type-change="onWinTypeChange"
+        />
 
       <!-- Anwesenheitssimulation — per-Binding Overrides -->
-      <template v-if="selectedAdapterType === 'ANWESENHEITSSIMULATION'">
-        <div class="section-header">{{ $t('adapters.bindingForm.anwSection') }}</div>
-        <div class="grid grid-cols-2 gap-4">
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.anwOffsetOverrideLabel') }}</label>
-            <div class="flex gap-2">
-              <select v-model="anwOffsetSelect" class="input" @change="onAnwOffsetSelectChange">
-                <option value="">{{ $t('adapters.bindingForm.anwDefaultAdapter') }}</option>
-                <option value="1">{{ $t('adapters.bindingForm.anwOneDay') }}</option>
-                <option value="7">{{ $t('adapters.bindingForm.anwSevenDays') }}</option>
-                <option value="14">{{ $t('adapters.bindingForm.anwFourteenDays') }}</option>
-                <option value="custom">{{ $t('adapters.bindingForm.anwCustomDays') }}</option>
-              </select>
-              <input
-                v-if="anwOffsetSelect === 'custom'"
-                v-model.number="cfg.offset_override"
-                type="number" min="1" max="30"
-                class="input w-24"
-                :placeholder="$t('adapters.bindingForm.ztDaysLabel')"
-                @input="onAnwOffsetCustomInput"
-              />
-            </div>
-            <p class="hint">{{ $t('adapters.bindingForm.anwOffsetOverrideHint') }}</p>
-          </div>
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.anwOnPresenceLabel') }}</label>
-            <select v-model="cfg.on_presence_override" class="input">
-              <option :value="null">{{ $t('adapters.bindingForm.anwDefaultAdapter') }}</option>
-              <option value="behalten">{{ $t('adapters.bindingForm.anwKeepValue') }}</option>
-              <option value="zuruecksetzen">{{ $t('adapters.bindingForm.anwResetValue') }}</option>
-              <option value="setzen">{{ $t('adapters.bindingForm.anwSetValue') }}</option>
-            </select>
-            <input
-              v-if="cfg.on_presence_override === 'setzen'"
-              v-model="cfg.on_presence_value"
-              type="text"
-              class="input mt-2"
-              :placeholder="$t('adapters.bindingForm.anwSetValuePlaceholder')"
-            />
-            <p class="hint">{{ $t('adapters.bindingForm.anwOnPresenceHint') }}</p>
-          </div>
-        </div>
-      </template>
+      <BindingFormPresenceSimulation
+        v-if="selectedAdapterType === 'ANWESENHEITSSIMULATION'"
+          :cfg="cfg"
+          v-model:anw-offset-select="anwOffsetSelect"
+          @anw-offset-select-change="onAnwOffsetSelectChange"
+          @anw-offset-custom-input="onAnwOffsetCustomInput"
+        />
 
       <!-- SNMP -->
-      <template v-if="selectedAdapterType === 'SNMP'">
-        <div class="section-header">{{ $t('adapters.bindingForm.snmpSection') }}</div>
-
-        <!-- Host + Port -->
-        <div class="grid grid-cols-3 gap-4">
-          <div class="form-group col-span-2">
-            <label class="label">{{ $t('adapters.bindingForm.snmpHostLabel') }}</label>
-            <input v-model="cfg.host" class="input" :placeholder="$t('adapters.bindingForm.snmpHostPlaceholder')" required />
-          </div>
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.snmpPortLabel') }}</label>
-            <input v-model.number="cfg.port" type="number" min="1" max="65535" class="input" />
-            <p class="hint">{{ $t('adapters.bindingForm.defaultN', { n: '161' }) }}</p>
-          </div>
-        </div>
-
-        <!-- OID with Walk -->
-        <div class="form-group">
-          <label class="label">{{ $t('adapters.bindingForm.snmpOidLabel') }}</label>
-          <div class="flex gap-2">
-            <input
-              v-model="cfg.oid"
-              class="input flex-1 font-mono text-sm"
-              :placeholder="$t('adapters.bindingForm.snmpOidPlaceholder')"
-              required
-            />
-          </div>
-          <!-- Walk root (independent from binding OID) -->
-          <div class="flex gap-2 mt-2">
-            <input
-              v-model="snmpWalkRoot"
-              class="input flex-1 font-mono text-xs"
-              :placeholder="$t('adapters.bindingForm.snmpWalkRootPlaceholder')"
-            />
-            <button
-              type="button"
-              class="btn-secondary px-3 text-sm whitespace-nowrap"
-              :disabled="!cfg.host || !selectedInstanceId || snmpWalkLoading"
-              @click="snmpWalk"
-            >
-              <span v-if="snmpWalkLoading" class="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1"></span>
-              {{ snmpWalkLoading ? $t('adapters.bindingForm.snmpWalkLoading') : $t('adapters.bindingForm.snmpWalkButton') }}
-            </button>
-          </div>
-          <!-- Walk results -->
-          <div
-            v-if="snmpWalkResults.length > 0"
-            class="mt-1 max-h-52 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800"
-          >
-            <button
-              v-for="entry in snmpWalkResults"
-              :key="entry.oid"
-              type="button"
-              class="w-full text-left px-3 py-1.5 text-xs hover:bg-slate-50 dark:hover:bg-slate-700/50 flex gap-2 items-baseline"
-              @click="cfg.oid = entry.oid"
-            >
-              <code class="text-blue-400 shrink-0">{{ entry.oid }}</code>
-              <span class="text-slate-400 shrink-0">[{{ entry.type }}]</span>
-              <span class="text-slate-600 dark:text-slate-300 truncate">{{ entry.value }}</span>
-            </button>
-          </div>
-          <button
-            v-if="snmpWalkHasMore && !snmpWalkLoading"
-            type="button"
-            class="mt-1 w-full text-xs text-center py-1 rounded border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
-            @click="snmpWalk(true)"
-          >
-            {{ $t('adapters.bindingForm.snmpLoadMore', { n: snmpWalkResults.length }) }}
-          </button>
-          <p v-if="snmpWalkError" class="text-xs text-red-400 mt-1">{{ snmpWalkError }}</p>
-          <p class="hint">
-            {{ $t('adapters.bindingForm.snmpExamples') }}:
-            <code class="text-blue-400 cursor-pointer hover:underline" @click="cfg.oid='1.3.6.1.2.1.1.1.0'">1.3.6.1.2.1.1.1.0</code> (sysDescr) ·
-            <code class="text-blue-400 cursor-pointer hover:underline" @click="cfg.oid='1.3.6.1.2.1.1.3.0'">1.3.6.1.2.1.1.3.0</code> (sysUpTime) ·
-            <code class="text-blue-400 cursor-pointer hover:underline" @click="cfg.oid='1.3.6.1.4.1'">1.3.6.1.4.1</code> (enterprises)
-          </p>
-        </div>
-
-        <!-- Datentyp + Poll-Intervall -->
-        <div class="grid grid-cols-2 gap-4">
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.snmpDataTypeLabel') }}</label>
-            <select v-model="cfg.data_type" class="input">
-              <option value="auto">{{ $t('adapters.bindingForm.snmpTypeAuto') }}</option>
-              <option value="int">{{ $t('adapters.bindingForm.snmpTypeInt') }}</option>
-              <option value="float">{{ $t('adapters.bindingForm.snmpTypeFloat') }}</option>
-              <option value="string">{{ $t('adapters.bindingForm.snmpTypeString') }}</option>
-              <option value="hex">{{ $t('adapters.bindingForm.snmpTypeHex') }}</option>
-              <option value="counter">{{ $t('adapters.bindingForm.snmpTypeCounter') }}</option>
-              <option value="gauge">{{ $t('adapters.bindingForm.snmpTypeGauge') }}</option>
-              <option value="timeticks">{{ $t('adapters.bindingForm.snmpTypeTimeticks') }}</option>
-            </select>
-            <p class="hint">{{ $t('adapters.bindingForm.snmpDataTypeHint') }}</p>
-          </div>
-          <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.snmpPollIntervalLabel') }}</label>
-            <input v-model.number="cfg.poll_interval" type="number" min="1" step="1" class="input" />
-            <p class="hint">{{ $t('adapters.bindingForm.defaultN', { n: '30 s' }) }}</p>
-          </div>
-        </div>
-
-        <div class="optional-divider">{{ $t('adapters.binding.advancedSettings') }}</div>
-        <div class="grid grid-cols-2 gap-4">
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.snmpTimeoutLabel') }}</label>
-            <input v-model.number="cfg.timeout" type="number" min="0.5" max="30" step="0.5" class="input" />
-            <p class="hint">{{ $t('adapters.bindingForm.defaultN', { n: '5 s' }) }}</p>
-          </div>
-          <div class="form-group">
-            <label class="label">{{ $t('adapters.bindingForm.snmpRetriesLabel') }}</label>
-            <input v-model.number="cfg.retries" type="number" min="0" max="5" class="input" />
-            <p class="hint">{{ $t('adapters.bindingForm.defaultN', { n: '1' }) }}</p>
-          </div>
-        </div>
-      </template>
+      <BindingFormSnmp
+        v-if="selectedAdapterType === 'SNMP'"
+          :cfg="cfg"
+          :form="form"
+          :selected-instance-id="selectedInstanceId"
+          v-model:snmp-walk-root="snmpWalkRoot"
+          :snmp-walk-results="snmpWalkResults"
+          :snmp-walk-loading="snmpWalkLoading"
+          :snmp-walk-error="snmpWalkError"
+          :snmp-walk-has-more="snmpWalkHasMore"
+          @snmp-walk="snmpWalk"
+        />
 
       <div v-if="!selectedAdapterType && !props.initial" class="p-3 bg-slate-100/80 dark:bg-slate-800/40 rounded-lg text-sm text-slate-500 text-center">
         {{ $t('adapters.bindingForm.selectAdapterInstanceFirst') }}
@@ -1005,8 +210,8 @@
           />
         </div>
         <p class="hint mt-1">
-          {{ $t('adapters.bindingForm.formulaHintPrefix') }} <code class="text-blue-400">abs round min max sqrt floor ceil</code>
-          {{ $t('adapters.bindingForm.formulaHintSuffix') }} <code class="text-blue-400">math.*</code>{{ $t('adapters.bindingForm.formulaHintEnd') }}
+          {{ $t('adapters.bindingForm.formulaHintPrefix') }} <code class="text-blue-400">{{ $t('adapters.bindingForm.formulaFunctions') }}</code>
+          {{ $t('adapters.bindingForm.formulaHintSuffix') }} <code class="text-blue-400">{{ $t('adapters.bindingForm.formulaMathNamespace') }}</code>{{ $t('adapters.bindingForm.formulaHintEnd') }}
         </p>
       </div>
 
@@ -1092,7 +297,15 @@ import { ref, reactive, watch, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { dpApi, adapterApi } from '@/api/client'
 import Spinner    from '@/components/ui/Spinner.vue'
-import GaCombobox from '@/components/ui/GaCombobox.vue'
+import BindingFormKnx from '@/components/datapoints/binding-form/BindingFormKnx.vue'
+import BindingFormModbus from '@/components/datapoints/binding-form/BindingFormModbus.vue'
+import BindingFormMqtt from '@/components/datapoints/binding-form/BindingFormMqtt.vue'
+import BindingFormOnewire from '@/components/datapoints/binding-form/BindingFormOnewire.vue'
+import BindingFormHomeAssistant from '@/components/datapoints/binding-form/BindingFormHomeAssistant.vue'
+import BindingFormIoBroker from '@/components/datapoints/binding-form/BindingFormIoBroker.vue'
+import BindingFormTimer from '@/components/datapoints/binding-form/BindingFormTimer.vue'
+import BindingFormPresenceSimulation from '@/components/datapoints/binding-form/BindingFormPresenceSimulation.vue'
+import BindingFormSnmp from '@/components/datapoints/binding-form/BindingFormSnmp.vue'
 
 const props = defineProps({
   dpId:           { type: String,  required: true },
@@ -2041,6 +1254,10 @@ async function submit() {
 .tab-active {
   @apply text-blue-500 dark:text-blue-400 border-blue-500 dark:border-blue-400 font-medium;
 }
+</style>
+
+<style>
+@reference "tailwindcss";
 .section-header {
   @apply text-xs font-semibold uppercase tracking-wider text-blue-500 dark:text-blue-400 border-b border-slate-200 dark:border-slate-700 pb-1;
 }

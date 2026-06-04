@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -7,8 +8,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from obs.adapters import registry as adapter_registry
+from obs.adapters.mqtt.adapter import MqttAdapter
+from obs.core.event_bus import DataValueEvent
 from obs.core import write_router
 from obs.core.write_router import WriteRouter
+from tests.adapters.conftest import make_binding
 
 
 class _FakeDb:
@@ -189,3 +193,30 @@ async def test_handle_uses_json_fallback_when_deserializer_fails(monkeypatch):
 
     await router.handle(dp_id, '{"n": 7}')
     router._write_to_dest_bindings.assert_awaited_once_with(dp_id, {"n": 7}, skip_binding_id=None)
+
+
+@pytest.mark.asyncio
+async def test_time_value_event_routes_to_mqtt_raw_payload_without_template(monkeypatch):
+    dp_id = uuid.uuid4()
+    binding = make_binding({"topic": "clock/time"}, direction="DEST")
+    binding.datapoint_id = dp_id
+    binding.adapter_type = "MQTT"
+    adapter = MqttAdapter(event_bus=AsyncMock(), config={"host": "localhost", "port": 1883})
+    router = _make_router([{"id": str(binding.id)}])
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Clock", data_type="TIME"))
+    _patch_registry(monkeypatch, binding, adapter)
+
+    await router.handle_value_event(
+        DataValueEvent(
+            datapoint_id=dp_id,
+            value=datetime.time(10, 30, 0),
+            quality="good",
+            source_adapter="KNX",
+            binding_id=uuid.uuid4(),
+        )
+    )
+
+    topic, payload, retain = await adapter._publish_queue.get()
+    assert topic == "clock/time"
+    assert payload == "10:30:00"
+    assert retain is False

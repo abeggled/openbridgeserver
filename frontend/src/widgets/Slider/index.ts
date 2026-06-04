@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'Slider',
-  label: 'Schieberegler',
+  label: 'widgets.slider.title',
   icon: '🎚️',
   group: 'Steuerung',
   minW: 3, minH: 2,

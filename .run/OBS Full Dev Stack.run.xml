@@ -1,0 +1,9 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="OBS Full Dev Stack" type="CompoundRunConfigurationType">
+    <toRun name="OBS Backend" type="PythonConfigurationType" />
+    <toRun name="OBS Admin GUI" type="ShConfigurationType" />
+    <toRun name="OBS Mosquitto" type="ShConfigurationType" />
+    <toRun name="OBS Visu" type="ShConfigurationType" />
+    <method v="2" />
+  </configuration>
+</component>

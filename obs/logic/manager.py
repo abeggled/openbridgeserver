@@ -16,7 +16,6 @@ import ipaddress
 import json
 import logging
 import os
-import socket
 import stat
 import uuid
 from datetime import UTC, datetime
@@ -28,44 +27,9 @@ import httpx
 
 from obs.logic.executor import GraphExecutor
 from obs.logic.models import FlowData
+from obs.security.url_targets import resolve_url_target
 
 logger = logging.getLogger(__name__)
-
-
-def _is_private_host(hostname: str) -> bool:
-    host = (hostname or "").strip().lower()
-    if not host:
-        return True
-    if host in {"localhost", "localhost.localdomain"}:
-        return False
-
-    def _blocked(addr: ipaddress._BaseAddress) -> bool:  # type: ignore[attr-defined]
-        return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_reserved or addr.is_unspecified
-
-    try:
-        host_ip = ipaddress.ip_address(host)
-        if host_ip.is_loopback:
-            return False
-        if _blocked(host_ip):
-            return True
-    except ValueError:
-        pass
-
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except Exception:
-        return True
-    for info in infos:
-        ip = info[4][0]
-        try:
-            resolved_ip = ipaddress.ip_address(ip)
-            if resolved_ip.is_loopback:
-                continue
-            if _blocked(resolved_ip):
-                return True
-        except ValueError:
-            return True
-    return False
 
 
 def _msg_to_str(v: object) -> str:
@@ -92,10 +56,10 @@ _THROTTLE_UNITS: dict[str, float] = {
 _ICAL_MAX_BYTES = 1_048_576
 _ICAL_MAX_REDIRECTS = 5
 _ICAL_ALLOWED_CONTENT_TYPES = ("text/calendar", "application/ics", "application/octet-stream", "text/plain")
-_NAT64_WELL_KNOWN_PREFIX = ipaddress.IPv6Network("64:ff9b::/96")
 _PUSHOVER_ATTACHMENT_MAX_BYTES = 5_000_000
 _SECRET_FILE_MAX_BYTES = 8192
 _SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
+_API_CLIENT_RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 def _secret_file_root() -> Path:
@@ -156,59 +120,21 @@ async def _resolve_safe_image_url(url: str) -> tuple[str, str, str] | None:
         (pinned_url, host_header, pinned_ip) or None if the URL is unsafe.
     """
     try:
-        parsed = urlparse(url)
-    except Exception:
+        target = await asyncio.to_thread(resolve_url_target, url, require_https=True)
+    except ValueError:
         return None
-    if parsed.scheme.lower() != "https" or not parsed.hostname:
-        return None
-
-    host = parsed.hostname
-    port = parsed.port or 443
-
-    try:
-        infos = await asyncio.to_thread(socket.getaddrinfo, host, port, 0, socket.SOCK_STREAM)
-    except OSError:
+    if not target.addresses:
         return None
 
-    resolved_ips: list[str] = []
-    for info in infos:
-        ip = info[4][0]
-        try:
-            addr = ipaddress.ip_address(ip)
-        except ValueError:
-            return None
-        if not addr.is_global:
-            return None
-        ip_str = str(addr)
-        if ip_str not in resolved_ips:
-            resolved_ips.append(ip_str)
-
-    if not resolved_ips:
-        return None
-
-    pinned_ip = resolved_ips[0]
+    parsed = urlparse(url)
+    port = target.port or 443
+    pinned_ip = target.addresses[0]
     pinned_host = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
-    has_explicit_port = parsed.port is not None
+    has_explicit_port = target.port is not None
     netloc = f"{pinned_host}:{port}" if has_explicit_port else pinned_host
     pinned_url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
-    host_header = f"{host}:{port}" if has_explicit_port else host
+    host_header = f"{target.hostname_ascii}:{port}" if has_explicit_port else target.hostname_ascii
     return pinned_url, host_header, pinned_ip
-
-
-def _resolve_public_http_host(hostname: str, port: int | None) -> list[str]:
-    try:
-        infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
-    except (OSError, ValueError):
-        return []
-    addresses: list[str] = []
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global or (
-            isinstance(ip, ipaddress.IPv6Address) and ip in _NAT64_WELL_KNOWN_PREFIX and not ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF).is_global
-        ):
-            return []
-        addresses.append(info[4][0])
-    return addresses
 
 
 def _origin_tuple(parsed: Any) -> tuple[str, str, int] | None:
@@ -271,6 +197,44 @@ def _build_http_host_header(hostname_ascii: str, scheme: str, port: int | None) 
         if port != default_port:
             host_header = f"{host_header}:{port}"
     return host_header
+
+
+def _build_api_client_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
+    parsed = _parse_http_url(url)
+    if not parsed:
+        raise ValueError("Invalid URL target")
+    try:
+        hostname_ascii = parsed.hostname.encode("idna").decode("ascii")
+    except UnicodeError:
+        raise ValueError("Invalid URL target") from None
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError("Invalid URL target") from None
+
+    try:
+        target = resolve_url_target(url)
+    except ValueError as exc:
+        raise ValueError(f"Blocked URL target: {exc}") from exc
+    addresses = target.addresses
+    if not addresses:
+        raise ValueError("Blocked unresolved URL target")
+
+    auth_prefix = ""
+    if parsed.username is not None:
+        username = quote(unquote(parsed.username), safe="")
+        password = None if parsed.password is None else quote(unquote(parsed.password), safe="")
+        auth = username if password is None else f"{username}:{password}"
+        auth_prefix = f"{auth}@"
+
+    pinned_urls: list[str] = []
+    for pinned_ip in dict.fromkeys(addresses):
+        pinned_host = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+        netloc = f"{auth_prefix}{pinned_host}:{port}" if port is not None else f"{auth_prefix}{pinned_host}"
+        pinned_urls.append(parsed._replace(netloc=netloc).geturl())
+    headers = {"Host": _build_http_host_header(hostname_ascii, parsed.scheme, port)}
+    extensions = {"sni_hostname": hostname_ascii} if parsed.scheme == "https" else {}
+    return pinned_urls, headers, extensions
 
 
 def _cookie_domain_matches(hostname: str, cookie_domain: str) -> bool:
@@ -411,9 +375,13 @@ def _build_ical_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dict
         port = parsed.port
     except ValueError:
         raise ValueError(f"Invalid iCal URL port: {url}") from None
-    addresses = _resolve_public_http_host(hostname_ascii, port)
+    try:
+        target = resolve_url_target(url)
+    except ValueError as exc:
+        raise ValueError(f"Blocked iCal URL target: {url}") from exc
+    addresses = target.addresses
     if not addresses:
-        raise ValueError(f"Blocked non-public iCal URL: {url}")
+        raise ValueError(f"Blocked unresolved iCal URL target: {url}")
     headers = {"Host": _build_http_host_header(hostname_ascii, parsed.scheme, port)}
     if parsed.username is not None:
         username = unquote(parsed.username)
@@ -1031,10 +999,11 @@ class LogicManager:
             url = (node.data.get("url") or "").strip()
             if not url:
                 continue
-            parsed_url = urlparse(url)
-            if parsed_url.scheme not in {"http", "https"} or _is_private_host(parsed_url.hostname or ""):
-                logger.warning("Graph %s: blocked api_client target %s", graph_id[:8], url)
-                outputs[node.id].update({"response": "Blocked URL target", "status": None, "success": False})
+            try:
+                request_urls, pinned_headers, request_extensions = _build_api_client_fetch_targets(url)
+            except ValueError as exc:
+                logger.warning("Graph %s: blocked api_client target %s: %s", graph_id[:8], url, exc)
+                outputs[node.id].update({"response": str(exc), "status": None, "success": False})
                 continue
             method = (node.data.get("method", "GET") or "GET").upper()
             content_type = node.data.get("content_type", "application/json")
@@ -1097,33 +1066,49 @@ class LogicManager:
                             **extra_headers,
                             "Content-Type": "text/plain",
                         }
+                req_headers = {key: value for key, value in req_kwargs.get("headers", {}).items() if key.lower() != "host"}
+                req_kwargs["headers"] = {**req_headers, **pinned_headers}
+                if request_extensions:
+                    req_kwargs["extensions"] = request_extensions
+                last_transport_error: Exception = ValueError(f"Could not fetch API target after trying {len(request_urls)} address(es)")
+                resp: httpx.Response | Any | None = None
                 async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
-                    resp = await client.request(method, url, **req_kwargs)
-                    resp_text = resp.text
-                    if len(resp_text) > 1_000_000:
-                        resp_text = resp_text[:1_000_000]
-                    if resp_type in ("json", "application/json"):
+                    for request_url in request_urls:
                         try:
-                            resp_data: Any = resp.json()
-                        except Exception:
-                            resp_data = resp_text
-                    else:
+                            resp = await client.request(method, request_url, **req_kwargs)
+                            break
+                        except httpx.RequestError as req_exc:
+                            last_transport_error = req_exc
+                            if method not in _API_CLIENT_RETRYABLE_METHODS:
+                                break
+                            continue
+                if resp is None:
+                    raise last_transport_error
+                resp_text = resp.text
+                if len(resp_text) > 1_000_000:
+                    resp_text = resp_text[:1_000_000]
+                if resp_type in ("json", "application/json"):
+                    try:
+                        resp_data: Any = resp.json()
+                    except Exception:
                         resp_data = resp_text
-                    outputs[node.id].update(
-                        {
-                            "response": resp_data,
-                            "status": resp.status_code,
-                            "success": 200 <= resp.status_code < 300,
-                        },
-                    )
-                    logger.info(
-                        "Graph %s: API %s %s → %d",
-                        graph_id[:8],
-                        method,
-                        url,
-                        resp.status_code,
-                    )
-                    triggered_api_clients.add(node.id)
+                else:
+                    resp_data = resp_text
+                outputs[node.id].update(
+                    {
+                        "response": resp_data,
+                        "status": resp.status_code,
+                        "success": 200 <= resp.status_code < 300,
+                    },
+                )
+                logger.info(
+                    "Graph %s: API %s %s → %d",
+                    graph_id[:8],
+                    method,
+                    url,
+                    resp.status_code,
+                )
+                triggered_api_clients.add(node.id)
             except Exception as exc:
                 logger.warning("Graph %s: api_client failed: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
@@ -1190,7 +1175,7 @@ class LogicManager:
                     if image_url:
                         resolved = await _resolve_safe_image_url(image_url)
                         if resolved is None:
-                            raise ValueError("Unsafe image_url: only public HTTPS hosts are allowed")
+                            raise ValueError("Unsafe image_url: only validated HTTPS targets are allowed")
                         pinned_url, host_header, pinned_ip = resolved
                         # Stream attachment bytes and enforce max size while downloading.
                         async with client.stream(

@@ -17,23 +17,56 @@ interface Cfg {
 
 const MIN_STEPS = 2
 const MAX_STEPS = 10
+const DEFAULT_OFF_LABEL = 'widgets.stufenschalter.defaultOffLabel'
+const DEFAULT_STEP_LABEL = 'widgets.stufenschalter.defaultStepLabel'
 
 const props = defineProps<{ modelValue: Record<string, unknown> }>()
 const emit  = defineEmits<{ (e: 'update:modelValue', val: Record<string, unknown>): void }>()
 
 const { t } = useI18n()
 
+function defaultStepLabelForValue(value: unknown, index: number): string {
+  return t(defaultStepLabelKeyForValue(value, index), defaultStepLabelParamsForValue(value, index))
+}
+
+function defaultStepLabelKeyForValue(value: unknown, index: number): string {
+  const numericValue = Number(value)
+  if (String(value ?? '') === '0') return DEFAULT_OFF_LABEL
+  if (Number.isInteger(numericValue) && numericValue > 0) return DEFAULT_STEP_LABEL
+  return index === 0 ? DEFAULT_OFF_LABEL : DEFAULT_STEP_LABEL
+}
+
+function defaultStepLabelParamsForValue(value: unknown, index: number): Record<string, number> {
+  const numericValue = Number(value)
+  if (Number.isInteger(numericValue) && numericValue > 0) return { n: numericValue }
+  return { n: index + 1 }
+}
+
+function defaultStepLabelKey(index: number, value?: unknown): string {
+  return index === 0 && String(value ?? '') === '0' ? DEFAULT_OFF_LABEL : DEFAULT_STEP_LABEL
+}
+
+function normalizeStepLabel(raw: unknown, index: number, value?: unknown): string {
+  const defaultKey = defaultStepLabelKey(index, value)
+  if (typeof raw !== 'string') return defaultKey
+  const label = raw.trim()
+  if (!label || label === DEFAULT_STEP_LABEL || label === DEFAULT_OFF_LABEL || label === defaultStepLabelForValue(value, index)) {
+    return defaultKey
+  }
+  return raw
+}
+
 function parseSteps(raw: unknown): Step[] {
   const arr = raw as Partial<Step>[] | undefined
   if (!Array.isArray(arr) || arr.length < MIN_STEPS) {
     return [
-      { label: t('widgets.stufenschalter.defaultStepLabel', { n: 1 }), value: '0', icon: '', color: '#6b7280' },
-      { label: t('widgets.stufenschalter.defaultStepLabel', { n: 2 }), value: '1', icon: '', color: '#3b82f6' },
-      { label: t('widgets.stufenschalter.defaultStepLabel', { n: 3 }), value: '2', icon: '', color: '#10b981' },
+      { label: DEFAULT_OFF_LABEL, value: '0', icon: '', color: '#6b7280' },
+      { label: DEFAULT_STEP_LABEL, value: '1', icon: '', color: '#3b82f6' },
+      { label: DEFAULT_STEP_LABEL, value: '2', icon: '', color: '#10b981' },
     ]
   }
-  return arr.map((s) => ({
-    label: s.label ?? '',
+  return arr.map((s, index) => ({
+    label: normalizeStepLabel(s.label, index, s.value),
     value: String(s.value ?? ''),
     icon:  s.icon  ?? '',
     color: s.color ?? '#6b7280',
@@ -45,11 +78,31 @@ const cfg = reactive<Cfg>({
   steps: parseSteps(props.modelValue.steps),
 })
 
-watch(cfg, () => emit('update:modelValue', { ...cfg, steps: [...cfg.steps] }), { deep: true })
+function serializedConfig(): Record<string, unknown> {
+  return {
+    ...cfg,
+    steps: cfg.steps.map((step, index) => ({
+      ...step,
+      label: normalizeStepLabel(step.label, index, step.value),
+    })),
+  }
+}
+
+watch(cfg, () => emit('update:modelValue', serializedConfig()), { deep: true })
+
+function displayStepLabel(step: Step, index: number): string {
+  const label = normalizeStepLabel(step.label, index, step.value)
+  return label === DEFAULT_OFF_LABEL || label === DEFAULT_STEP_LABEL ? defaultStepLabelForValue(step.value, index) : step.label
+}
+
+function updateStepLabel(step: Step, index: number, event: Event) {
+  const value = (event.target as HTMLInputElement).value
+  step.label = normalizeStepLabel(value, index, step.value)
+}
 
 function addStep() {
   if (cfg.steps.length >= MAX_STEPS) return
-  cfg.steps.push({ label: t('widgets.stufenschalter.defaultStepLabel', { n: cfg.steps.length + 1 }), value: String(cfg.steps.length), icon: '', color: '#6b7280' })
+  cfg.steps.push({ label: DEFAULT_STEP_LABEL, value: String(cfg.steps.length), icon: '', color: '#6b7280' })
 }
 
 function removeStep(i: number) {
@@ -77,7 +130,7 @@ function moveDown(i: number) {
       <input
         v-model="cfg.label"
         type="text"
-        placeholder="z.B. Lüfterstufe"
+        :placeholder="$t('widgets.stufenschalter.labelPlaceholder')"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       />
     </div>
@@ -93,7 +146,7 @@ function moveDown(i: number) {
           :disabled="cfg.steps.length >= MAX_STEPS"
           class="text-xs px-2 py-1 rounded border border-dashed border-gray-600 text-gray-400 hover:border-blue-500 hover:text-blue-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           @click="addStep"
-        >+ Stufe</button>
+        >{{ $t('widgets.stufenschalter.addStep') }}</button>
       </div>
 
       <p class="text-xs text-gray-600 mb-2">
@@ -142,7 +195,7 @@ function moveDown(i: number) {
               v-model="step.color"
               type="color"
               class="w-7 h-7 rounded cursor-pointer border border-gray-700 bg-transparent p-0.5 shrink-0"
-              title="Farbe"
+              :title="$t('widgets.stufenschalter.color')"
             />
           </div>
 
@@ -151,10 +204,11 @@ function moveDown(i: number) {
             <div class="flex-1">
               <label class="block text-xs text-gray-500 mb-0.5">{{ $t('widgets.stufenschalter.name') }}</label>
               <input
-                v-model="step.label"
+                :value="displayStepLabel(step, i)"
                 type="text"
-                :placeholder="$t('widgets.stufenschalter.defaultStepLabel', { n: i + 1 })"
+                :placeholder="$t(defaultStepLabelKeyForValue(step.value, i), defaultStepLabelParamsForValue(step.value, i))"
                 class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
+                @input="updateStepLabel(step, i, $event)"
               />
             </div>
             <div class="w-24">

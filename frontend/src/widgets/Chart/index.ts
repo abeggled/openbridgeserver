@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'Chart',
-  label: 'Verlauf',
+  label: 'widgets.chart.title',
   icon: '📈',
   group: 'Anzeige',
   minW: 4, minH: 3,

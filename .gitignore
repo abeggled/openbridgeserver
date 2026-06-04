@@ -11,6 +11,7 @@ build/
 .eggs/
 
 # Virtual environment
+.venv
 .venv/
 venv/
 env/
@@ -47,10 +48,13 @@ htmlcov/
 coverage.xml
 
 # Node
+node_modules
 node_modules/
+gui/node_modules
 gui/coverage/
 
 # Node.js dependencies
+node_modules
 node_modules/
 
 # Frontend build artefacts (built by vite / docker)

@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'Text',
-  label: 'Text',
+  label: 'widgets.text.title',
   icon: '📝',
   group: 'Medien & Sonstiges',
   minW: 2, minH: 1,

@@ -11,7 +11,7 @@ interface MiniWidgetEntry {
 
 WidgetRegistry.register({
   type: 'Grundriss',
-  label: 'Grundriss / Schema',
+  label: 'widgets.grundriss.title',
   icon: '🗺️',
   group: 'Anzeige',
   minW: 4, minH: 3,

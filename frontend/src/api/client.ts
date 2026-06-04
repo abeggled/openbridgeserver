@@ -287,10 +287,10 @@ export const datapoints = {
   deleteBinding: (dpId: string, bindingId: string) =>
     request<void>(`/datapoints/${dpId}/bindings/${bindingId}`, { method: 'DELETE' }),
 
-  write: async (id: string, value: unknown) => {
+  write: async (id: string, value: unknown, context: WriteContext = _writeContext) => {
     const headers: Record<string, string> = {}
-    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
-    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    if (context.pageId)      headers['X-Page-Id']       = context.pageId
+    if (context.sessionToken) headers['X-Session-Token'] = context.sessionToken
     try {
       return await request<void>(`/datapoints/${id}/value`, {
         method: 'POST',
@@ -300,7 +300,7 @@ export const datapoints = {
     } catch (err: unknown) {
       if (err instanceof Error && err.message === 'Valid session token required') {
         // Session abgelaufen (z.B. nach Server-Neustart) — Token löschen und Re-Auth auslösen
-        const defId = _writeContext.definingId
+        const defId = context.definingId
         if (defId) sessionStorage.removeItem(`session_${defId}`)
         window.dispatchEvent(new CustomEvent('visu:session-expired'))
       }
@@ -428,6 +428,15 @@ export const history = {
     if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
     return request<{ ts: string; v: unknown; u: string | null; q: string }[]>(
       `/history/${id}?from=${from}&to=${to}&limit=${limit}`,
+      { headers, silent401: true },
+    )
+  },
+  aggregate: (id: string, from: string, to: string, interval: string, fn = 'avg') => {
+    const headers: Record<string, string> = {}
+    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
+    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    return request<{ bucket: string; v: unknown; n?: number | null }[]>(
+      `/history/${id}/aggregate?fn=${fn}&interval=${interval}&from=${from}&to=${to}`,
       { headers, silent401: true },
     )
   },

@@ -23,6 +23,7 @@ import type { WidgetInstance } from '@/types'
 // Alle Widgets registrieren (self-registering via import)
 import '@/widgets/ValueDisplay/index'
 import '@/widgets/Toggle/index'
+import '@/widgets/ButtonGroup/index'
 import '@/widgets/Slider/index'
 import '@/widgets/Chart/index'
 import '@/widgets/Link/index'

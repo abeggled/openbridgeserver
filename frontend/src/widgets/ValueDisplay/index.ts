@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'ValueDisplay',
-  label: 'Wertanzeige',
+  label: 'widgets.valuedisplay.title',
   icon: '🔢',
   group: 'Anzeige',
   minW: 2, minH: 2,

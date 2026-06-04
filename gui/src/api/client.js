@@ -207,6 +207,14 @@ export const logsApi = {
   setLevel: (level)  => api.put('/system/log-level', { level }),
 }
 
+// ── Security ─────────────────────────────────────────────────────────────
+export const securityApi = {
+  listUrlTargets:  ()       => api.get('/security/url-target-allowlist'),
+  addUrlTarget:    (data)   => api.post('/security/url-target-allowlist', data),
+  deleteUrlTarget: (target) => api.delete('/security/url-target-allowlist', { params: { target } }),
+  checkUrlTarget:  (data)   => api.post('/security/url-target-check', data),
+}
+
 // ── RingBuffer ────────────────────────────────────────────────────────────
 export const ringbufferApi = {
   query:  (params)                  => api.get('/ringbuffer/', { params }),

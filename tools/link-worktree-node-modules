@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git -C "$SCRIPT_DIR/.." rev-parse --show-toplevel)"
+MODE="all"
+
+case "${1:-}" in
+  --current)
+    MODE="current"
+    shift
+    ;;
+  "")
+    ;;
+  *)
+    echo "Usage: $(basename "$0") [--current]" >&2
+    exit 2
+    ;;
+esac
+
+if [ "$#" -ne 0 ]; then
+  echo "Usage: $(basename "$0") [--current]" >&2
+  exit 2
+fi
+
+MAIN_WORKTREE=""
+while IFS= read -r line; do
+  case "$line" in
+    worktree\ *)
+      MAIN_WORKTREE="${line#worktree }"
+      break
+      ;;
+  esac
+done < <(git -C "$REPO_ROOT" worktree list --porcelain)
+
+if [ -z "$MAIN_WORKTREE" ]; then
+  echo "link-worktree-node-modules: could not determine main worktree" >&2
+  exit 1
+fi
+
+MAIN_NODE_MODULES="$MAIN_WORKTREE/gui/node_modules"
+if [ ! -d "$MAIN_NODE_MODULES" ]; then
+  cat >&2 <<EOF
+link-worktree-node-modules: main worktree GUI dependencies are missing:
+  $MAIN_NODE_MODULES
+
+Install or update GUI dependencies in the shared main worktree, then rerun this command:
+  cd "$MAIN_WORKTREE/gui" && npm ci
+EOF
+  exit 1
+fi
+
+link_worktree_node_modules() {
+  local worktree="$1"
+  [ "$worktree" = "$MAIN_WORKTREE" ] && return 0
+  [ -d "$worktree/gui" ] || return 0
+
+  local target="$worktree/gui/node_modules"
+  if [ -f "$MAIN_WORKTREE/gui/package-lock.json" ] && [ -f "$worktree/gui/package-lock.json" ] &&
+    ! cmp -s "$MAIN_WORKTREE/gui/package-lock.json" "$worktree/gui/package-lock.json"; then
+    if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+      cat >&2 <<EOF
+link-worktree-node-modules: package-lock differs from main worktree, refusing shared GUI dependencies:
+  $worktree
+
+Install matching dependencies in the main worktree first, or use a worktree-local gui/node_modules.
+EOF
+      return 1
+    fi
+  fi
+
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    printf 'skip existing gui/node_modules: %s\n' "$worktree"
+    return 0
+  fi
+
+  ln -s "$MAIN_NODE_MODULES" "$target"
+  printf 'linked gui/node_modules: %s\n' "$worktree"
+}
+
+if [ "$MODE" = "current" ]; then
+  link_worktree_node_modules "$REPO_ROOT"
+  exit
+fi
+
+status=0
+while IFS= read -r worktree; do
+  link_worktree_node_modules "$worktree" || status=1
+done < <(git -C "$REPO_ROOT" worktree list --porcelain | awk '/^worktree /{print substr($0,10)}')
+
+exit "$status"

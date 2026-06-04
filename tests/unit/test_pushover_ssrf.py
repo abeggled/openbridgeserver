@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from obs.logic.manager import LogicManager, _resolve_safe_image_url
 from obs.logic.models import FlowData
+from obs.security.url_targets import ResolvedUrlTarget, UrlTargetDecision
 from tests.unit.conftest import node
 
 
@@ -22,21 +23,49 @@ def _make_manager() -> LogicManager:
     return LogicManager(db, event_bus, registry)
 
 
+def _resolved_target(
+    *,
+    url: str = "https://example.com/path.png",
+    host: str = "example.com",
+    ip: str = "93.184.216.34",
+    addresses: list[str] | None = None,
+) -> ResolvedUrlTarget:
+    resolved_ips = addresses if addresses is not None else [ip]
+    return ResolvedUrlTarget(
+        original_url=url,
+        scheme="https",
+        hostname=host,
+        hostname_ascii=host,
+        port=None,
+        addresses=resolved_ips,
+        decision=UrlTargetDecision(
+            allowed=True,
+            url=url,
+            host=host,
+            resolved_ips=resolved_ips,
+            blocked_ips=[],
+            reason="URL target is allowed",
+        ),
+    )
+
+
 class TestResolveSafeImageUrl:
     @patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock)
     async def test_uses_async_dns_resolution(self, mock_to_thread):
-        mock_to_thread.return_value = [
-            (2, 1, 6, "", ("93.184.216.34", 443)),
-        ]
+        mock_to_thread.return_value = _resolved_target()
         resolved = await _resolve_safe_image_url("https://example.com/path.png")
         assert resolved is not None
         mock_to_thread.assert_awaited_once()
 
     @patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock)
     async def test_rejects_non_global_ip_ranges(self, mock_to_thread):
-        mock_to_thread.return_value = [
-            (2, 1, 6, "", ("100.64.0.1", 443)),
-        ]
+        mock_to_thread.side_effect = ValueError("URL target resolves to a non-public address")
+        resolved = await _resolve_safe_image_url("https://example.com/path.png")
+        assert resolved is None
+
+    @patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock)
+    async def test_rejects_allowed_target_without_resolved_addresses(self, mock_to_thread):
+        mock_to_thread.return_value = _resolved_target(addresses=[])
         resolved = await _resolve_safe_image_url("https://example.com/path.png")
         assert resolved is None
 

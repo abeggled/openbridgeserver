@@ -314,8 +314,8 @@ class TestInfluxDBAggregate:
                 {
                     "series": [
                         {
-                            "columns": ["time", "mean"],
-                            "values": [["2024-01-01T00:00:00Z", 10.0]],
+                            "columns": ["time", "mean", "count"],
+                            "values": [["2024-01-01T00:00:00Z", 10.0, 4]],
                         }
                     ]
                 }
@@ -328,6 +328,7 @@ class TestInfluxDBAggregate:
             result = await _plugin().aggregate(uuid.uuid4(), "avg", "1h", _ts(0), _ts(1))
         assert len(result) == 1
         assert result[0]["v"] == pytest.approx(10.0)
+        assert result[0]["n"] == 4
 
     async def test_aggregate_unknown_interval_falls_back_to_1h(self):
         ctx, client = _make_httpx_mock(status=200, json_body=self._agg_response())

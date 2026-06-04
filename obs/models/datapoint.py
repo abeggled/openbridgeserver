@@ -1,6 +1,7 @@
 """DataPoint Pydantic model — Phase 1."""
 
 from __future__ import annotations
+from typing import Any
 
 import datetime
 import uuid
@@ -46,3 +47,4 @@ class DataPointUpdate(BaseModel):
     mqtt_alias: str | None = None
     persist_value: bool | None = None
     record_history: bool | None = None
+    value: Any | None = None  # Allow setting the datapoint value via PATCH

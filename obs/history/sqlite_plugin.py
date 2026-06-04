@@ -15,6 +15,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from obs.core.json import json_dumps
 from obs.history.base import HistoryPlugin
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ class SQLiteHistoryPlugin(HistoryPlugin):
                VALUES (?,?,?,?,?,?)""",
             (
                 str(datapoint_id),
-                json.dumps(value),
+                json_dumps(value),
                 unit,
                 quality,
                 ts_str,
@@ -118,26 +119,26 @@ class SQLiteHistoryPlugin(HistoryPlugin):
             interval = "1h"
 
         fmt, minutes = _INTERVALS[interval]
+        bucket_expr = _sqlite_bucket_expr(fmt, minutes)
 
         if fn == "last":
-            return await self._aggregate_last(datapoint_id, fmt, minutes, from_ts, to_ts)
+            return await self._aggregate_last(datapoint_id, bucket_expr, minutes, from_ts, to_ts)
 
         sql_fn = {"avg": "AVG", "min": "MIN", "max": "MAX"}.get(fn, "AVG")
 
         if minutes >= 60:
-            # SQLite can truncate to hour or day
-            sql_fmt = fmt
             rows = await self._db.fetchall(
                 f"""SELECT
-                       strftime('{sql_fmt}', ts) AS bucket,
-                       {sql_fn}(CAST(value AS REAL)) AS v
+                       {bucket_expr} AS bucket,
+                       {sql_fn}(CAST(value AS REAL)) AS v,
+                       COUNT(*) AS n
                     FROM history_values
                     WHERE datapoint_id=? AND ts >= ? AND ts <= ?
                     GROUP BY bucket
                     ORDER BY bucket""",
                 (str(datapoint_id), _to_sqlite_ts(from_ts), _to_sqlite_ts(to_ts)),
             )
-            return [{"bucket": r["bucket"], "v": r["v"]} for r in rows]
+            return [{"bucket": r["bucket"], "v": r["v"], "n": r["n"]} for r in rows]
         # Sub-hourly: fetch raw, group in Python
         rows = await self._db.fetchall(
             """SELECT ts, value FROM history_values
@@ -150,7 +151,7 @@ class SQLiteHistoryPlugin(HistoryPlugin):
     async def _aggregate_last(
         self,
         datapoint_id: uuid.UUID,
-        fmt: str,
+        bucket_expr: str,
         minutes: int,
         from_ts: datetime,
         to_ts: datetime,
@@ -158,7 +159,7 @@ class SQLiteHistoryPlugin(HistoryPlugin):
         """Return the last value in each bucket."""
         if minutes >= 60:
             rows = await self._db.fetchall(
-                f"""SELECT strftime('{fmt}', ts) AS bucket, value
+                f"""SELECT {bucket_expr} AS bucket, value
                     FROM history_values
                     WHERE datapoint_id=? AND ts >= ? AND ts <= ?
                     GROUP BY bucket
@@ -214,6 +215,17 @@ def _safe_loads(s: str | None) -> Any:
         return s
 
 
+def _sqlite_bucket_expr(fmt: str, minutes: int) -> str:
+    if minutes == 60 or minutes >= 1440:
+        return f"strftime('{fmt}', ts)"
+
+    if minutes > 60 and minutes % 60 == 0:
+        hours = minutes // 60
+        return f"strftime('%Y-%m-%dT', ts) || printf('%02d:00:00', CAST(CAST(strftime('%H', ts) AS INTEGER) / {hours} AS INTEGER) * {hours})"
+
+    return f"strftime('{fmt}', ts)"
+
+
 def _bucket_key(ts_str: str, minutes: int) -> str:
     """Round ts_str down to the nearest *minutes* bucket."""
     try:
@@ -243,13 +255,13 @@ def _aggregate_python(rows: list, fn: str, minutes: int) -> list[dict]:
         bucket_last[bucket] = val
 
     if fn == "last":
-        return [{"bucket": b, "v": bucket_last[b]} for b in sorted(bucket_last)]
+        return [{"bucket": b, "v": bucket_last[b], "n": len(buckets[b])} for b in sorted(bucket_last)]
     if fn == "avg":
-        return [{"bucket": b, "v": sum(vs) / len(vs)} for b, vs in sorted(buckets.items())]
+        return [{"bucket": b, "v": sum(vs) / len(vs), "n": len(vs)} for b, vs in sorted(buckets.items())]
     if fn == "min":
-        return [{"bucket": b, "v": min(vs)} for b, vs in sorted(buckets.items())]
+        return [{"bucket": b, "v": min(vs), "n": len(vs)} for b, vs in sorted(buckets.items())]
     if fn == "max":
-        return [{"bucket": b, "v": max(vs)} for b, vs in sorted(buckets.items())]
+        return [{"bucket": b, "v": max(vs), "n": len(vs)} for b, vs in sorted(buckets.items())]
     return []
 
 

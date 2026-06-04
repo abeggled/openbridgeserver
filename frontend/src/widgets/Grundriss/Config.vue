@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useVisuStore } from '@/stores/visu'
 import { WidgetRegistry } from '@/widgets/registry'
 import DataPointPicker from '@/components/DataPointPicker.vue'
+import { useLocalizedText } from '@/composables/useLocalizedText'
 import type { VisuNode } from '@/types'
 import { imageToScreen as _imageToScreen, screenToImage as _screenToImage } from './coords'
 
@@ -46,6 +47,7 @@ const store = useVisuStore()
 onMounted(async () => { if (!store.treeLoaded) await store.loadTree() })
 
 const { t } = useI18n()
+const { widgetLabel } = useLocalizedText()
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -405,7 +407,7 @@ function addMiniWidget(type: string) {
   if (!def) return
   const mw: GrundrissMiniWidget = {
     id:                newId(),
-    label:             def.label,
+    label:             widgetLabel(def.label),
     widgetType:        type,
     config:            { ...def.defaultConfig },
     datapointId:       null,
@@ -420,6 +422,11 @@ function addMiniWidget(type: string) {
   selectedMwId.value   = mw.id
   selectedAreaId.value = null
   typePicker.value     = false
+}
+
+function widgetTypeLabel(type: string): string {
+  const def = WidgetRegistry.get(type)
+  return def ? widgetLabel(def.label) : type
 }
 
 function updateMwConfig(id: string, newConfig: Record<string, unknown>) {
@@ -760,7 +767,7 @@ function openPlacement(mwId: string) {
             <!-- Widget type badge -->
             <div class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
               <span v-html="WidgetRegistry.get(mw.widgetType)?.icon ?? '?'" />
-              <span>{{ WidgetRegistry.get(mw.widgetType)?.label ?? mw.widgetType }}</span>
+              <span>{{ widgetTypeLabel(mw.widgetType) }}</span>
             </div>
 
             <!-- Datenpunkt -->
@@ -854,7 +861,7 @@ function openPlacement(mwId: string) {
             @click="addMiniWidget(def.type)"
           >
             <span class="text-base leading-none" v-html="def.icon" />
-            <span class="text-xs text-gray-700 dark:text-gray-300 text-center leading-tight mt-0.5">{{ def.label }}</span>
+            <span class="text-xs text-gray-700 dark:text-gray-300 text-center leading-tight mt-0.5">{{ widgetLabel(def.label) }}</span>
           </button>
         </div>
         <button
@@ -1032,4 +1039,3 @@ function openPlacement(mwId: string) {
     </div>
   </Teleport>
 </template>
-

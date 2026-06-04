@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'Stufenschalter',
-  label: 'Stufenschalter',
+  label: 'widgets.stufenschalter.title',
   icon: '📶',
   group: 'Steuerung',
   minW: 2, minH: 2,
@@ -14,9 +14,9 @@ WidgetRegistry.register({
   defaultConfig: {
     label: '',
     steps: [
-      { label: 'Aus',    value: '0', icon: '', color: '#6b7280' },
-      { label: 'Stufe 1', value: '1', icon: '', color: '#3b82f6' },
-      { label: 'Stufe 2', value: '2', icon: '', color: '#10b981' },
+      { label: 'widgets.stufenschalter.defaultOffLabel', value: '0', icon: '', color: '#6b7280' },
+      { label: 'widgets.stufenschalter.defaultStepLabel', value: '1', icon: '', color: '#3b82f6' },
+      { label: 'widgets.stufenschalter.defaultStepLabel', value: '2', icon: '', color: '#10b981' },
     ],
   },
   compatibleTypes: ['*'],

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { INTERNAL_BASE_URL, apiPost, apiPut, apiGet, apiDelete, getToken } from '../helpers'
+import { apiPost, apiPut, apiGet, apiDelete, getToken } from '../helpers'
 
 
 /**
@@ -561,15 +561,14 @@ test('Logic-Editor Palette zeigt API Client Node an', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// api_client: GET request to local server endpoint returns success=True
+// api_client: loopback GET request is blocked by SSRF guard
 // ---------------------------------------------------------------------------
-test('api_client GET-Request gegen eigenen Server liefert success=true', async ({ page }) => {
-  // Use the public health endpoint — no auth required, always returns 200
-  const targetUrl = `${INTERNAL_BASE_URL}/api/v1/system/health`
+test('api_client GET-Request gegen Loopback-Ziel wird blockiert', async ({ page }) => {
+  const targetUrl = 'http://localhost:8080/api/v1/system/health'
 
   const graph = await apiPost('/api/v1/logic/graphs', {
     name: `E2E-ApiClient-GET-${Date.now()}`,
-    description: 'Playwright: api_client GET 200',
+    description: 'Playwright: api_client loopback blocked',
     enabled: true,
     flow_data: {
       nodes: [
@@ -604,26 +603,24 @@ test('api_client GET-Request gegen eigenen Server liefert success=true', async (
       outputs: Record<string, Record<string, unknown>>
     }
     expect(result.outputs['ac']).toBeDefined()
-    expect(result.outputs['ac']['success']).toBe(true)
-    expect(result.outputs['ac']['status']).toBe(200)
-    expect(result.outputs['ac']['response']).not.toBeNull()
+    expect(result.outputs['ac']['success']).toBe(false)
+    expect(result.outputs['ac']['status']).toBeNull()
+    expect(result.outputs['ac']['response']).toContain('Blocked URL target')
   } finally {
     await apiDelete(`/api/v1/logic/graphs/${graphId}`)
   }
 })
 
 // ---------------------------------------------------------------------------
-// api_client: Bearer Auth adds Authorization header — tested via API result
+// api_client: loopback target is blocked before Bearer request is sent
 // ---------------------------------------------------------------------------
-test('api_client Bearer Auth sendet Authorization-Header', async ({ page }) => {
-  // Use the real JWT token so the auth-protected endpoint returns 200.
-  // This verifies the api_client node correctly forwards the Bearer header.
-  const targetUrl = `${INTERNAL_BASE_URL}/api/v1/logic/node-types`
+test('api_client Bearer Auth gegen Loopback-Ziel wird blockiert', async ({ page }) => {
+  const targetUrl = 'http://localhost:8080/api/v1/logic/node-types'
   const token = await getToken()
 
   const graph = await apiPost('/api/v1/logic/graphs', {
     name: `E2E-ApiClient-Bearer-${Date.now()}`,
-    description: 'Playwright: api_client Bearer auth',
+    description: 'Playwright: api_client Bearer loopback blocked',
     enabled: true,
     flow_data: {
       nodes: [
@@ -657,10 +654,11 @@ test('api_client Bearer Auth sendet Authorization-Header', async ({ page }) => {
     const result = await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {}) as {
       outputs: Record<string, Record<string, unknown>>
     }
-    // Node must have executed (not skipped) and returned a valid HTTP status
+    // Node must be blocked by the SSRF guard before any HTTP request is sent.
     expect(result.outputs['ac']).toBeDefined()
-    expect(result.outputs['ac']['status']).toBe(200)
-    expect(result.outputs['ac']['success']).toBe(true)
+    expect(result.outputs['ac']['status']).toBeNull()
+    expect(result.outputs['ac']['success']).toBe(false)
+    expect(result.outputs['ac']['response']).toContain('Blocked URL target')
   } finally {
     await apiDelete(`/api/v1/logic/graphs/${graphId}`)
   }
@@ -731,18 +729,17 @@ test('api_client Config-Panel zeigt Auth-Felder korrekt an', async ({ page }) =>
 })
 
 // ---------------------------------------------------------------------------
-// api_client: downstream success trigger fires when HTTP call returns 200
+// api_client: blocked loopback target does not fire a positive success path
 // ---------------------------------------------------------------------------
-test('api_client Erfolg-Ausgang löst nachgelagerten Node aus bei HTTP 200', async ({ page }) => {
+test('api_client blockiertes Loopback-Ziel löst keinen positiven Erfolgspfad aus', async ({ page }) => {
   // Graph: const_value(true) → api_client.trigger
   //        api_client.success + const_value(true) → and_gate
-  // After the second-pass fix, and_gate.out must be true when HTTP returns 200.
-  // Use the public health endpoint — no auth required.
-  const targetUrl = `${INTERNAL_BASE_URL}/api/v1/system/health`
+  // The SSRF guard must keep api_client.success=false for loopback targets.
+  const targetUrl = 'http://localhost:8080/api/v1/system/health'
 
   const graph = await apiPost('/api/v1/logic/graphs', {
     name: `E2E-ApiClient-Downstream-${Date.now()}`,
-    description: 'Playwright: api_client downstream trigger',
+    description: 'Playwright: api_client blocked downstream path',
     enabled: true,
     flow_data: {
       nodes: [
@@ -767,10 +764,11 @@ test('api_client Erfolg-Ausgang löst nachgelagerten Node aus bei HTTP 200', asy
     const result = await apiPost(`/api/v1/logic/graphs/${graphId}/run`, {}) as {
       outputs: Record<string, Record<string, unknown>>
     }
-    // api_client must show success
-    expect(result.outputs['ac']['success']).toBe(true)
-    // AND gate must have received success=true from the second-pass re-execution
-    expect(result.outputs['gate']['out']).toBe(true)
+    // api_client must show blocked failure.
+    expect(result.outputs['ac']['success']).toBe(false)
+    expect(result.outputs['ac']['response']).toContain('Blocked URL target')
+    // AND gate must not receive a positive success signal.
+    expect(result.outputs['gate']['out']).toBe(false)
   } finally {
     await apiDelete(`/api/v1/logic/graphs/${graphId}`)
   }

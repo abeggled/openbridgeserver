@@ -102,6 +102,7 @@ async def app(mosquitto_port):
     db_file = tempfile.NamedTemporaryFile(mode="w", suffix=".db", delete=False, prefix="obs_test_db_")
     db_file.close()
     db_path = db_file.name
+    allowlist_path = db_path.replace(".db", "_url_targets.yaml")
 
     override_settings(
         Settings(
@@ -118,6 +119,7 @@ async def app(mosquitto_port):
             security=SecuritySettings(
                 jwt_secret="integration-test-secret-32-chars-xx",
                 jwt_expire_minutes=60,
+                url_target_allowlist_path=allowlist_path,
             ),
             mosquitto=MosquittoSettings(
                 passwd_file="/tmp/obs_integration_test_passwd",
@@ -166,6 +168,7 @@ async def app(mosquitto_port):
         db_path.replace(".db", "_ringbuffer.db"),
         db_path.replace(".db", "_ringbuffer.db-wal"),
         db_path.replace(".db", "_ringbuffer.db-shm"),
+        allowlist_path,
     ]
     for cleanup_path in cleanup_paths:
         try:
