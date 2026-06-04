@@ -650,6 +650,16 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         config_schema={
             "app_token": {"type": "string", "default": "", "label": "App-Token"},
             "user_key": {"type": "string", "default": "", "label": "User-Key"},
+            "app_token_secret": {
+                "type": "string",
+                "default": "",
+                "label": "App-Token Secret-Dateiname",
+            },
+            "user_key_secret": {
+                "type": "string",
+                "default": "",
+                "label": "User-Key Secret-Dateiname",
+            },
             "title": {
                 "type": "string",
                 "default": "open bridge server",
