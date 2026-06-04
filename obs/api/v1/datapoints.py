@@ -209,26 +209,26 @@ async def update_datapoint(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"Unknown data_type '{body.data_type}'",
             )
+        # Exclude 'value' from the metadata update — DataPoint has no value field.
+    # The value is handled separately via DataValueEvent above.
     dp = await reg.update(dp_id, body)
 
-    # If a value was supplied, publish a DataValueEvent so the registry
-    # stores it and broadcasts it via MQTT (dp/{id}/value).
-    if body.value is not None:
-        from obs.core.event_bus import get_event_bus
-        from obs.models.events import DataValueEvent
+    # If a value was explicitly supplied (even as null), publish a DataValueEvent
+    # so the registry stores it and broadcasts it via MQTT (dp/{id}/value).
+    # Use model_fields_set to distinguish "value omitted" from "value=None".
+    if "value" in body.model_fields_set:
+        from obs.core.event_bus import DataValueEvent, get_event_bus
         import datetime
 
-        bus = get_event_bus()
-        await bus.publish(
-            DataValueEvent(
-                datapoint_id=dp_id,
-                value=body.value,
-                quality="good",
-                source_adapter="api",
-                binding_id=None,
-                ts=datetime.datetime.now(datetime.timezone.utc),
-            )
+        event = DataValueEvent(
+            datapoint_id=dp_id,
+            value=body.value,
+            quality="good",
+            source_adapter="api",
+            binding_id=None,
+            ts=datetime.datetime.now(datetime.timezone.utc),
         )
+        await get_event_bus().publish(event)
 
     return _enrich(dp)
 
