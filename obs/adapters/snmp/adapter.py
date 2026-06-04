@@ -207,7 +207,8 @@ def _coerce_value(snmp_value: Any, data_type: str) -> Any:
     # pysnmp wrapper object — use prettyPrint() / int() as before
     type_name = type(snmp_value).__name__
 
-    if data_type == "int" or (data_type == "auto" and type_name in ("Integer32", "Integer", "Unsigned32")):
+    _INT_AUTO_TYPES = ("Integer32", "Integer", "Unsigned32", "Counter64", "Counter32", "Gauge32")
+    if data_type == "int" or (data_type == "auto" and type_name in _INT_AUTO_TYPES):
         try:
             return int(snmp_value)
         except Exception:

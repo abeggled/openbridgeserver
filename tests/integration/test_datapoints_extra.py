@@ -144,3 +144,111 @@ async def test_write_value_404_for_unknown_dp(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# PATCH /datapoints/{id}  — value field
+# ---------------------------------------------------------------------------
+
+
+async def test_patch_with_value_publishes_and_readable(client, auth_headers):
+    dp = await _make_dp(client, auth_headers, data_type="FLOAT")
+    dp_id = dp["id"]
+
+    resp = await client.patch(
+        f"/api/v1/datapoints/{dp_id}",
+        json={"value": 3.14},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+
+    val_resp = await client.get(f"/api/v1/datapoints/{dp_id}/value", headers=auth_headers)
+    assert val_resp.status_code == 200
+    assert val_resp.json()["value"] == pytest.approx(3.14)
+
+
+async def test_patch_value_and_metadata_together(client, auth_headers):
+    dp = await _make_dp(client, auth_headers, name="PatchBoth", data_type="FLOAT")
+    dp_id = dp["id"]
+
+    resp = await client.patch(
+        f"/api/v1/datapoints/{dp_id}",
+        json={"name": "PatchBothRenamed", "value": 7.0},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "PatchBothRenamed"
+
+    val_resp = await client.get(f"/api/v1/datapoints/{dp_id}/value", headers=auth_headers)
+    assert val_resp.json()["value"] == pytest.approx(7.0)
+
+
+async def test_patch_metadata_only_does_not_overwrite_value(client, auth_headers):
+    dp = await _make_dp(client, auth_headers, data_type="FLOAT")
+    dp_id = dp["id"]
+
+    await client.patch(f"/api/v1/datapoints/{dp_id}", json={"value": 99.0}, headers=auth_headers)
+
+    resp = await client.patch(f"/api/v1/datapoints/{dp_id}", json={"unit": "kW"}, headers=auth_headers)
+    assert resp.status_code == 200
+
+    val_resp = await client.get(f"/api/v1/datapoints/{dp_id}/value", headers=auth_headers)
+    assert val_resp.json()["value"] == pytest.approx(99.0)
+
+
+async def test_patch_value_type_mismatch_returns_422(client, auth_headers):
+    dp = await _make_dp(client, auth_headers, data_type="INTEGER")
+    resp = await client.patch(
+        f"/api/v1/datapoints/{dp['id']}",
+        json={"value": "not-a-number"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_patch_value_mismatch_does_not_mutate_metadata(client, auth_headers):
+    dp = await _make_dp(client, auth_headers, name="OriginalName", data_type="INTEGER")
+    dp_id = dp["id"]
+
+    resp = await client.patch(
+        f"/api/v1/datapoints/{dp_id}",
+        json={"name": "ShouldNotChange", "value": "bad"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
+
+    get_resp = await client.get(f"/api/v1/datapoints/{dp_id}", headers=auth_headers)
+    assert get_resp.json()["name"] == "OriginalName"
+
+
+async def test_patch_value_int_coerced_from_float(client, auth_headers):
+    dp = await _make_dp(client, auth_headers, data_type="INTEGER")
+    resp = await client.patch(
+        f"/api/v1/datapoints/{dp['id']}",
+        json={"value": 5.0},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    val_resp = await client.get(f"/api/v1/datapoints/{dp['id']}/value", headers=auth_headers)
+    assert val_resp.json()["value"] == 5
+
+
+async def test_patch_explicit_null_publishes_uncertain(client, auth_headers):
+    dp = await _make_dp(client, auth_headers, data_type="FLOAT")
+    dp_id = dp["id"]
+    await client.patch(f"/api/v1/datapoints/{dp_id}", json={"value": 42.0}, headers=auth_headers)
+
+    resp = await client.patch(f"/api/v1/datapoints/{dp_id}", json={"value": None}, headers=auth_headers)
+    assert resp.status_code == 200
+
+    val_resp = await client.get(f"/api/v1/datapoints/{dp_id}/value", headers=auth_headers)
+    assert val_resp.json()["quality"] == "uncertain"
+
+
+async def test_patch_value_404_for_unknown_dp(client, auth_headers):
+    resp = await client.patch(
+        f"/api/v1/datapoints/{uuid.uuid4()}",
+        json={"value": 1.0},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404

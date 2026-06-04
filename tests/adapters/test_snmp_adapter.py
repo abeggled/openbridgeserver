@@ -191,6 +191,31 @@ class TestCoerceValue:
         result = _coerce_value(v, "timeticks")
         assert result == 7200
 
+    def test_int_counter64(self):
+        v = _make_snmp_value("123456789012345", "Counter64", int_val=123456789012345)
+        result = _coerce_value(v, "int")
+        assert result == 123456789012345
+
+    def test_int_counter32(self):
+        v = _make_snmp_value("4294967295", "Counter32", int_val=4294967295)
+        result = _coerce_value(v, "int")
+        assert result == 4294967295
+
+    def test_int_gauge32(self):
+        v = _make_snmp_value("1000000", "Gauge32", int_val=1000000)
+        result = _coerce_value(v, "int")
+        assert result == 1000000
+
+    def test_auto_counter64(self):
+        v = _make_snmp_value("999999999999", "Counter64", int_val=999999999999)
+        result = _coerce_value(v, "auto")
+        assert result == 999999999999
+
+    def test_auto_gauge32(self):
+        v = _make_snmp_value("750", "Gauge32", int_val=750)
+        result = _coerce_value(v, "auto")
+        assert result == 750
+
 
 # ---------------------------------------------------------------------------
 # Write Value Encoding
