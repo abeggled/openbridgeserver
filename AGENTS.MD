@@ -15,38 +15,35 @@ This file provides guidance to AI coding agents when working with code in this r
 ## Common Commands
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt -r requirements_dev.txt
-
 # Run the server
-python -m obs
+tools/with-venv python -m obs
 
 # Run all tests
-pytest tests/
+tools/with-venv pytest tests/
 
 # Run a single test file
-pytest tests/unit/test_converter.py
+tools/with-venv pytest tests/unit/test_converter.py
 
 # Run a specific test
-pytest tests/unit/test_converter.py::test_float_to_int
+tools/with-venv pytest tests/unit/test_converter.py::test_float_to_int
 
 # Run only adapter + unit tests (no Docker needed)
-pytest tests/adapters/ tests/unit/
+tools/with-venv pytest tests/adapters/ tests/unit/
 
 # Run contract tests — verify external library API surfaces (no Docker needed)
-pytest tests/contracts/
+tools/with-venv pytest tests/contracts/
 
 # Run integration tests (requires Docker for Mosquitto)
-pytest tests/integration/
+tools/with-venv pytest tests/integration/
 
 # Run with coverage report
-pytest tests/ --cov=obs --cov-report=term-missing
+tools/with-venv pytest tests/ --cov=obs --cov-report=term-missing
 
 # Lint (same checks as CI)
-./tools/lint.sh --check
+tools/with-venv ./tools/lint.sh --check
 
 # Format + autofix
-./tools/lint.sh --fix
+tools/with-venv ./tools/lint.sh --fix
 
 # Docker Compose (full stack)
 docker compose up -d
@@ -66,12 +63,13 @@ Typen) Ende-zu-Ende — Schwächen, die Vitest-Mocks verdecken können, fallen e
 **jedem** Push, der Frontend-Code berührt, alle Stufen lokal grün laufen lassen:
 
 ```bash
-./tools/lint.sh --check
+tools/with-venv ./tools/lint.sh --check
 cd gui && npm run build     # validiert reale Abhängigkeiten/Imports, was Vitest nicht tut
 cd gui && npm run test
+cd gui && npm run test:coverage
 # bei Backend-Änderungen zusätzlich:
-pytest tests/unit tests/adapters tests/contracts  # ohne Docker
-pytest tests/integration                          # mit Docker
+tools/with-venv pytest tests/unit tests/adapters tests/contracts  # ohne Docker
+tools/with-venv pytest tests/integration                          # mit Docker
 ```
 
 Wenn rot: nicht pushen, sondern fixen. Gilt für Haupt-Sessions **und** für Subagents — bitte
@@ -83,6 +81,17 @@ Zusätzlich für i18n-Änderungen (Admin GUI + Visu) gilt ein harter Diff-Gate:
 # Diff-basierter i18n Hard-Gate (Hardcoded user-facing strings + locale parity)
 ./scripts/check-i18n-hardcoded-strings.sh
 ```
+
+Für GUI-Änderungen gilt zusätzlich ein weicher Coverage-Nachzieh-Hinweis:
+
+```bash
+node tools/gui-coverage-summary.mjs --changed-only --threshold=70
+```
+
+Wenn geänderte Dateien unter dem Schwellwert liegen, im Abschlussbericht konkret nennen
+und möglichst passende Vitests ergänzen. Der Hinweis ist bewusst kein lokaler Hard-Fail;
+`npm run test` und `npm run test:coverage` bleiben dagegen verpflichtende Gates und
+brechen bei Fehlern ab.
 
 Optional als lokaler Push-Hook aktivieren:
 
@@ -105,12 +114,12 @@ halten. Konkret:
 
 ```bash
 # Baseline messen (vor der Änderung):
-pytest tests/unit tests/adapters tests/contracts --cov=obs --cov-report=term-missing
+tools/with-venv pytest tests/unit tests/adapters tests/contracts --cov=obs --cov-report=term-missing
 
 # Nach der Änderung nochmals — Gesamtprozentsatz muss ≥ Baseline sein:
-pytest tests/unit tests/adapters tests/contracts --cov=obs --cov-report=term-missing
+tools/with-venv pytest tests/unit tests/adapters tests/contracts --cov=obs --cov-report=term-missing
 # mit Docker auch:
-pytest tests/integration --cov=obs --cov-append --cov-report=term-missing
+tools/with-venv pytest tests/integration --cov=obs --cov-append --cov-report=term-missing
 ```
 
 Wenn der Coverage-Prozentsatz gefallen ist: Tests ergänzen, nicht pushen.
@@ -136,6 +145,42 @@ cp .env.example .env                  # set OBS_MQTT_PASSWORD
 # 3. Frontend deps
 cd gui && npm install
 ```
+
+### Python venv resolver for agents and worktrees
+
+Local checks must use the project venv through `tools/with-venv`:
+
+```bash
+tools/with-venv python -m pytest tests/unit
+tools/with-venv ./tools/lint.sh --check
+```
+
+The resolver checks `OBS_VENV`, then the current worktree's `.venv`, then the main Git worktree's
+`.venv`. If no usable venv exists, it exits with a hard error and explicitly forbids installing
+dependencies into the worktree.
+
+For linked worktrees, prefer a local `.venv` symlink to the main worktree venv:
+
+```bash
+tools/link-worktree-venvs
+```
+
+Do not run `pip install ...` in issue or PR worktrees. Install or update Python dependencies only
+in the shared project venv, then let worktrees resolve that environment through `.venv` or
+`OBS_VENV`.
+
+### GUI Node dependencies for agents and worktrees
+
+Do not run `npm install` or `npm ci` in issue or PR worktrees. GUI dependencies are shared from the
+main worktree through a local `gui/node_modules` symlink:
+
+```bash
+tools/link-worktree-node-modules
+```
+
+The pre-push hook runs this linker automatically before GUI Vitest gates if `gui/node_modules` is
+missing. If the main worktree dependencies are missing or stale, update them in the main worktree,
+not in the issue/PR worktree.
 
 ### config.yaml — required local overrides
 

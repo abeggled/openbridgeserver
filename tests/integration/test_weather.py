@@ -41,7 +41,11 @@ def bypass_ssrf():
     """Deaktiviert SSRF-Blocking für Tests die einen lokalen Mock-Server auf
     127.0.0.1 verwenden. Die SSRF-Tests (12–15) dürfen diese Fixture NICHT nutzen.
     """
-    with unittest.mock.patch.object(_weather_module, "_BLOCKED_NETWORKS", []):
+    with unittest.mock.patch.object(
+        _weather_module,
+        "build_pinned_url_targets",
+        side_effect=lambda url: ([url], {}, {}),
+    ):
         yield
 
 
@@ -265,7 +269,7 @@ async def test_fetch_ssrf_loopback_ipv4_blocked(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 400
-    assert "gesperrt" in resp.json().get("detail", "").lower()
+    assert resp.json()["detail"]["code"] == "url_target_blocked"
 
 
 # 13. Loopback via localhost-Hostname
@@ -275,7 +279,7 @@ async def test_fetch_ssrf_localhost_blocked(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 400
-    assert "gesperrt" in resp.json().get("detail", "").lower()
+    assert resp.json()["detail"]["code"] == "url_target_blocked"
 
 
 # 14. Link-local / Cloud-Metadata-Endpunkt (AWS IMDSv1)
@@ -285,7 +289,7 @@ async def test_fetch_ssrf_metadata_ip_blocked(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 400
-    assert "gesperrt" in resp.json().get("detail", "").lower()
+    assert resp.json()["detail"]["code"] == "url_target_blocked"
 
 
 # 15. Loopback IPv6
@@ -295,4 +299,4 @@ async def test_fetch_ssrf_loopback_ipv6_blocked(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 400
-    assert "gesperrt" in resp.json().get("detail", "").lower()
+    assert resp.json()["detail"]["code"] == "url_target_blocked"

@@ -2413,22 +2413,22 @@ class TestLogicManagerHelpers:
 
         assert _parse_http_url("https://") is None
 
-    def test_is_private_host_empty(self):
-        from obs.logic.manager import _is_private_host
+    def test_url_target_policy_empty_host(self):
+        from obs.security.url_targets import evaluate_url_target
 
-        assert _is_private_host("") is True
+        assert evaluate_url_target("http://", allow_loopback=True).allowed is False
 
-    def test_is_private_host_loopback_literal(self):
-        from obs.logic.manager import _is_private_host
+    def test_url_target_policy_loopback_literal(self):
+        from obs.security.url_targets import evaluate_url_target
 
-        # 127.0.0.1 is loopback and must be blocked.
-        assert _is_private_host("127.0.0.1") is True
+        # 127.0.0.1 is loopback and api_client policy allows loopback targets.
+        assert evaluate_url_target("http://127.0.0.1", allow_loopback=True).allowed is True
 
-    def test_is_private_host_private_ip(self):
-        from obs.logic.manager import _is_private_host
+    def test_url_target_policy_private_ip(self):
+        from obs.security.url_targets import evaluate_url_target
 
         # 192.168.x.x is private
-        assert _is_private_host("192.168.1.1") is True
+        assert evaluate_url_target("http://192.168.1.1", allow_loopback=True).allowed is False
 
     def test_read_secret_file_empty_path(self):
         from obs.logic.manager import _read_secret_file

@@ -605,7 +605,7 @@ test('api_client GET-Request gegen Loopback-Ziel wird blockiert', async ({ page 
     expect(result.outputs['ac']).toBeDefined()
     expect(result.outputs['ac']['success']).toBe(false)
     expect(result.outputs['ac']['status']).toBeNull()
-    expect(result.outputs['ac']['response']).toBe('Blocked URL target')
+    expect(result.outputs['ac']['response']).toContain('Blocked URL target')
   } finally {
     await apiDelete(`/api/v1/logic/graphs/${graphId}`)
   }
@@ -658,7 +658,7 @@ test('api_client Bearer Auth gegen Loopback-Ziel wird blockiert', async ({ page 
     expect(result.outputs['ac']).toBeDefined()
     expect(result.outputs['ac']['status']).toBeNull()
     expect(result.outputs['ac']['success']).toBe(false)
-    expect(result.outputs['ac']['response']).toBe('Blocked URL target')
+    expect(result.outputs['ac']['response']).toContain('Blocked URL target')
   } finally {
     await apiDelete(`/api/v1/logic/graphs/${graphId}`)
   }
@@ -766,7 +766,7 @@ test('api_client blockiertes Loopback-Ziel löst keinen positiven Erfolgspfad au
     }
     // api_client must show blocked failure.
     expect(result.outputs['ac']['success']).toBe(false)
-    expect(result.outputs['ac']['response']).toBe('Blocked URL target')
+    expect(result.outputs['ac']['response']).toContain('Blocked URL target')
     // AND gate must not receive a positive success signal.
     expect(result.outputs['gate']['out']).toBe(false)
   } finally {

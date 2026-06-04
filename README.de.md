@@ -141,9 +141,21 @@ ringbuffer:
 security:
   jwt_secret: changeme        # Sitzungsschlüssel — unbedingt ändern!
   jwt_expire_minutes: 1440    # Sitzungsdauer (Standard: 24 Stunden)
+  # Optionaler Override für die Allowlist privater/interner URL-Ziele.
+  # Standard: OBS_SECRET_FILE_DIR/url-target-allowlist.yaml, wenn OBS_SECRET_FILE_DIR gesetzt ist,
+  # sonst secrets/url-target-allowlist.yaml neben der konfigurierten Datenbank.
+  # url_target_allowlist_path: /data/secrets/url-target-allowlist.yaml
 ```
 
 > **Hinweis:** Der `mqtt`-Abschnitt betrifft den **internen** Mosquitto-Broker. Externe MQTT-Broker werden als separate Adapter-Instanzen eingerichtet (siehe [MQTT-Adapter](#mqtt-adapter-externer-broker)).
+
+### URL-Ziel-Allowlist für interne Dienste
+
+Backend-Abrufe aus Logik-API-Client-Knoten, iCalendar-Knoten, Pushover-`image_url`-Anhängen, dem Kamera-Proxy und der Wetter-API blockieren private/lokale Netzwerkziele standardmäßig. Admins können bewusst benötigte interne Ziele unter **Einstellungen → Sicherheit → URL-Ziel-Allowlist** freigeben oder die YAML-Datei bearbeiten, die über `security.url_target_allowlist_path` konfiguriert ist.
+
+Standardmäßig wird die YAML-Datei nach `OBS_SECRET_FILE_DIR/url-target-allowlist.yaml` geschrieben, wenn `OBS_SECRET_FILE_DIR` gesetzt ist. Sonst schreibt OBS nach `secrets/url-target-allowlist.yaml` neben der konfigurierten Datenbankdatei. Für private Ziele sollte eine IP-Adresse oder ein CIDR-Eintrag verwendet werden, zum Beispiel `192.168.1.23/32` für eine einzelne LAN-Kamera oder `10.38.113.0/24` für ein internes Netz.
+
+Wenn ein Hostname wie `internal.example` auf eine private IP-Adresse auflöst, muss die aufgelöste IP beziehungsweise das passende CIDR-Netz freigegeben werden. Ein reiner Hostname-Eintrag hebt die private-IP-Sperre nicht auf und umgeht keine DNS-Validierung.
 
 ---
 

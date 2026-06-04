@@ -588,7 +588,9 @@
       "formulaCustom": "Eigene Formel …",
       "formulaPlaceholder": "z.B. x * 0.1 + 20",
       "formulaHintPrefix": "Verfügbar:",
+      "formulaFunctions": "abs round min max sqrt floor ceil",
       "formulaHintSuffix": "und alle",
+      "formulaMathNamespace": "math.*",
       "formulaHintEnd": "-Funktionen. Leer = keine Transformation.",
       "valueMapDivider": "Wertzuordnung",
       "valueMapLabel": "Wertzuordnung",
@@ -1198,7 +1200,13 @@
         "requestContentType": "Request Content-Type",
         "authBasic": "Basic Auth",
         "authDigest": "Digest Auth",
-        "authBearer": "Bearer Token"
+        "authBearer": "Bearer Token",
+        "checkTarget": "Prüfen",
+        "targetAllowed": "Ziel ist erlaubt",
+        "targetBlocked": "Dieses Ziel wird blockiert",
+        "allowTarget": "{target} freigeben",
+        "allowSaved": "Ziel wurde freigegeben.",
+        "defaultAllowReason": "Freigabe aus API-Client-Konfiguration"
       },
       "stringConcat": {
         "inputCount": "Anzahl Eingänge",
@@ -1538,7 +1546,8 @@
       "hierarchy": "Hierarchie",
       "importexport": "Datenmanagement",
       "icons": "Icons",
-      "history": "Historie DB"
+      "history": "Historie DB",
+      "security": "Sicherheit"
     },
     "general": {
       "title": "Allgemeine Einstellungen",
@@ -1558,6 +1567,28 @@
       "themeDark": "Dunkel",
       "themeDarkDesc": "Dunkles Erscheinungsbild",
       "tzSaved": "Zeitzone auf «{tz}» gesetzt"
+    },
+    "security": {
+      "title": "URL-Ziel-Allowlist",
+      "description": "Logiken und API-Proxies dürfen öffentliche HTTP/HTTPS-Ziele direkt aufrufen. Interne, private oder reservierte IP-Bereiche werden blockiert, außer sie stehen bewusst in dieser YAML-Allowlist.",
+      "warning": "Eine Freigabe erlaubt dem Backend, diese interne Adresse aktiv anzufragen. Das ist nur sinnvoll für vertrauenswürdige Systeme im eigenen Netz; falsch gesetzte Einträge können SSRF-Schutz und Netzsegmentierung abschwächen.",
+      "filePath": "YAML-Datei:",
+      "checkTitle": "Ziel prüfen",
+      "checkButton": "Prüfen",
+      "allowed": "Ziel erlaubt",
+      "blocked": "Ziel blockiert",
+      "resolvedIps": "Aufgelöst:",
+      "allowSuggested": "{target} freigeben",
+      "allowlistTitle": "Freigegebene Ziele",
+      "reload": "Neu laden",
+      "reasonPlaceholder": "Grund, z.B. interne OBS-Instanz",
+      "target": "Ziel",
+      "reason": "Grund",
+      "created": "Erstellt",
+      "empty": "Keine freigegebenen URL-Ziele.",
+      "saved": "URL-Ziel wurde gespeichert.",
+      "deleted": "URL-Ziel wurde entfernt.",
+      "defaultReason": "Freigabe nach URL-Zielprüfung"
     },
     "users": {
       "deleteUser": "Benutzer löschen",

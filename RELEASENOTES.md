@@ -2,7 +2,7 @@
 
 ## 2026.6.0
 ### Breaking changes 🚨
-* none
+* Security: Backend URL fetches from logic API-client nodes, iCalendar nodes, Pushover `image_url` attachments, the camera proxy, and the weather API now block private/local network targets by default unless they are explicitly allowlisted. Migration: existing installations using LAN cameras such as `http://192.168.x.x/...`, local `.ics` calendars, local Pushover image sources, or a local weather endpoint must allowlist the target under Settings → Security → URL Target Allowlist, or in the YAML file configured by `security.url_target_allowlist_path` (default: `OBS_SECRET_FILE_DIR/url-target-allowlist.yaml` when `OBS_SECRET_FILE_DIR` is set, otherwise `secrets/url-target-allowlist.yaml` next to the configured database). Use an IP address or CIDR for private targets, for example `192.168.1.23/32` or `10.38.113.0/24`. If a hostname such as `internal.example` resolves to a private IP address, allowlist the resolved IP/CIDR; a hostname-only entry does not override private-IP blocking and does not bypass DNS validation. Until the target is allowlisted, affected camera widgets, weather widgets, iCalendar nodes, Pushover image attachments, or logic API-client calls are intentionally blocked. https://github.com/abeggled/openbridgeserver/pull/700
 
 ### New features ✨
 * Adapter: The KNX adapter now also supports TCP tunneling mode and Secure support via import of the .knxkeys file. https://github.com/abeggled/openbridgeserver/issues/14
@@ -19,6 +19,7 @@
 * Backend: Monitor/Ringbuffer retention, storage model, query/filter semantics and filtersets API. https://github.com/abeggled/openbridgeserver/issues/384 https://github.com/abeggled/openbridgeserver/issues/385 https://github.com/abeggled/openbridgeserver/issues/386 https://github.com/abeggled/openbridgeserver/issues/387 https://github.com/abeggled/openbridgeserver/issues/388 https://github.com/abeggled/openbridgeserver/issues/389
 * Backend: Monitor/Ringbuffer CSV export for complete filtered results. https://github.com/abeggled/openbridgeserver/issues/390
 * QA/CI: Monitor baseline, characterization and coverage/dependency audit tasks. https://github.com/abeggled/openbridgeserver/issues/383 https://github.com/abeggled/openbridgeserver/issues/428 https://github.com/abeggled/openbridgeserver/issues/429 https://github.com/abeggled/openbridgeserver/issues/439
+* QA/CI: Vitest unit and integration tests for the Admin GUI, including local pre-push gating, coverage hints for changed GUI files, and Codecov upload for GUI coverage. https://github.com/abeggled/openbridgeserver/issues/698
 * Backend: Possibility to migrate all objects of an adapter to a new one of the same type https://github.com/abeggled/openbridgeserver/issues/419
 * Backend: Log viewer with filtering options https://github.com/abeggled/openbridgeserver/issues/452
 * Backend: Hierarchy Manager use current names as example to better understand the changes https://github.com/abeggled/openbridgeserver/issues/467
@@ -51,8 +52,6 @@
 ### Fixes 🐞
 * Backend: `PATCH /api/v1/datapoints/{id}` now correctly accepts a `value` field. The value is validated and coerced against the datapoint's `data_type` (incompatible types return 422); on success a `DataValueEvent` is published and the value is immediately readable. Explicit `"value": null` clears the stored value with `quality="uncertain"`. https://github.com/abeggled/openbridgeserver/pull/707
 * Adapter: SNMP `_coerce_value` now routes `Counter64`, `Counter32`, and `Gauge32` through the `int` branch when `data_type="int"` is set explicitly, preventing these counter types from being stored as raw objects. https://github.com/abeggled/openbridgeserver/pull/707
-* Logic Security (Upstream PR #686): API client secret-file paths are restricted to a configured secret directory with bounded regular-file reads.
-* GUI: Settings → History DB no longer opens as an empty tab when the TimescaleDB DSN placeholder is rendered; the `@` in the PostgreSQL example is escaped for vue-i18n. https://github.com/abeggled/openbridgeserver/issues/690
 * Adapter: KNX IP Secure now works correctly in Docker bridge networks — credentials are extracted directly from the .knxkeys file and passed explicitly to xknx, bypassing the internal UDP DescriptionRequest that fails without host networking. Connection errors now include actionable hints (Docker network mode, gateway tunnel-slot exhaustion). https://github.com/abeggled/openbridgeserver/issues/393
 * Adapter: KNX DPT10.001 (Time of Day) values are now decoded as Python `datetime.time` objects, matching the OBS `TIME` datapoint type. Persisted values are correctly restored on restart. JSON/WebSocket/MQTT/History boundaries serialize them as ISO strings; MQTT output bindings without payload template keep the backward-compatible raw payload form such as `10:30:00`. https://github.com/abeggled/openbridgeserver/pull/688
 * Backend: Complete remaining UI translation fixes after i18n rollout. https://github.com/abeggled/openbridgeserver/pull/542
@@ -66,11 +65,12 @@
 * Backend: KNX UF Iconset import — one-click import of all 940 KNX UF icons from ha-knx-uf-iconset directly into the icon library (prefix `kuf_`); re-import overwrites existing icons. https://github.com/abeggled/openbridgeserver/issues/677
 * Backend: ETS import of password-protected .knxproj files now works correctly: Gewerke (trades) are parsed from the decrypted inner ZIP, ETS6 wrong-password errors ("Bad HMAC check") are properly reported as password errors, GA and location parsing run in parallel (non-blocking), frontend timeout raised to 300 s for large files, and error messages are fully localized via error codes. https://github.com/abeggled/openbridgeserver/issues/679
 * Backend: Fixed MQTT binding edit/create dialog becoming blank when switching to write direction; adapter-type resolution and i18n handling in BindingForm were hardened. https://github.com/abeggled/openbridgeserver/issues/656
-* Visu: History (Chart) widget and Value Display widget time-range dropdowns now show translated labels instead of raw i18n key strings. https://github.com/abeggled/openbridgeserver/issues/662
+* Backend: BindingForm was split into smaller adapter-specific components, reducing future maintenance risk and noisy i18n diffs. https://github.com/abeggled/openbridgeserver/issues/657
+* Backend: Settings → History DB no longer opens as an empty tab when the TimescaleDB DSN placeholder is rendered; the `@` in the PostgreSQL example is escaped for vue-i18n. https://github.com/abeggled/openbridgeserver/issues/690
+* Backend: Missing i18n in several areas of the Admin GUI: all port and node labels in the Logic Engine node canvas are now fully translated and react to locale switching; the Hierarchy Manager dialog has been fully internationalised (all hardcoded German strings replaced). https://github.com/abeggled/openbridgeserver/issues/668
 * General #375: Proxmox LXC, confusing checksum field content within release notes. https://github.com/abeggled/openbridgeserver/issues/375
 * Logic engine: The object selector now uses the entire available window space. https://github.com/abeggled/openbridgeserver/issues/345
 * Logic engine: Sommer/Winter (DIN) block now fills T1/T2/T3 slots correctly when sensors report at intervals that do not hit hours 7, 12, or 22 exactly (e.g. every 2 or 4 hours). "First-crossing" semantics: each slot is captured on the first measurement at or after its target hour, so daily_avg is always computed and heating mode switches reliably. https://github.com/abeggled/openbridgeserver/issues/548
-* GUI: Missing i18n in several areas of the Admin GUI: all port and node labels in the Logic Engine node canvas are now fully translated and react to locale switching; the Hierarchy Manager dialog has been fully internationalised (all hardcoded German strings replaced). https://github.com/abeggled/openbridgeserver/issues/668
 * Logic engine: Functional Block "Sommer/Winter (DIN)" completely rewritten: measurement times corrected to DIN Mannheimer standard (T1 = 07:00, T2 = 14:00, T3 = 21:00); single configurable threshold temperature (default 14 °C) with hysteresis (default 2 °C) replaces separate summer/winter thresholds; heating decision based on daily average; debug ports T1/T2/T3 now persist their values after the daily average is computed; missing slots are automatically recovered from history after a server restart. https://github.com/abeggled/openbridgeserver/issues/665
 * Backend Security (Upstream PR #683): prevent Uvicorn access logs from being exposed through the in-memory log stream.
 * Security (Upstream PR #576): prevent SSRF/data exfiltration in iCal URL fetching by enforcing public-network URL validation and streamed size limits.
@@ -97,6 +97,8 @@
 * Security: (Upstream PR #551): sanitize markdown HTML rendering in Text widget to prevent stored XSS.
 * Security: (Upstream PR #684): prevent stored XSS via `data:` SVG href rendering in icon sanitization.
 * Security: (Upstream PR #685): prevent api_client loopback SSRF by blocking localhost, direct loopback IPs, and loopback DNS answers.
+* Security: Logic API-client nodes, iCalendar nodes, Pushover image attachments, camera proxy requests, and weather API requests now share an admin-managed URL target allowlist for deliberate access to internal destinations while keeping SSRF protection active. https://github.com/abeggled/openbridgeserver/pull/700
+* Security (Upstream PR #686): API client secret-file paths are restricted to a configured secret directory with bounded regular-file reads.
 * Test stability: Monitor/Ringbuffer E2E scenarios stabilized. https://github.com/abeggled/openbridgeserver/pull/494
 * Visu: Internal API base URL usage fixed for E2E/runtime alignment. https://github.com/abeggled/openbridgeserver/pull/484
 * Visu: History widget now updates automatically when new values arrive via WebSocket. https://github.com/abeggled/openbridgeserver/issues/408
@@ -106,10 +108,19 @@
 * Visu: Slider widget values are now written on pointer release and keyboard commit, avoiding missed writes in browsers that do not reliably fire change after dragging. https://github.com/abeggled/openbridgeserver/pull/559
 * Visu: History widget displays translated labels instead of variable name
 * Visu: Fixed-width Visu pages are now centered horizontally in the viewer. https://github.com/abeggled/openbridgeserver/pull/672
+* Visu: History (Chart) widget and Value Display widget time-range dropdowns now show translated labels instead of raw i18n key strings. https://github.com/abeggled/openbridgeserver/issues/662
 
 ### Known Issues 🔔
 * none
 
+### Contributors ❤️
+* Daniel Abegglen ([@abeggled](https://github.com/abeggled)) [Founder]
+* Yves Schumann ([@starwarsfan](https://github.com/starwarsfan))
+* Sebastian Rieger ([@serieger21](https://github.com/serieger21))
+* Jochen Häberle ([@micsi](https://github.com/Micsi))
+* Henning Kettler ([@hhkettler](https://github.com/hhkettler)) [First-time contributor, thank you for your dedication to the project]
+* Michael Killermann ([@ISP-Mkiller](https://github.com/ISP-Mkiller)) [First-time contributor, thank you for your dedication to the project]
+  
 ## 2026.5.2
 ### Breaking changes 🚨
 * none

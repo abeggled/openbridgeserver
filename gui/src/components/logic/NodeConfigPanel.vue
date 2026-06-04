@@ -290,8 +290,22 @@
         <!-- Standard request fields -->
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.urlLabel') }}</label>
-          <input v-model="localData.url" type="text" class="input text-sm" @change="emitUpdate"
-            data-testid="api-client-url" />
+          <div class="flex gap-2">
+            <input v-model="localData.url" type="text" class="input text-sm flex-1 min-w-0" @change="emitUpdate"
+              data-testid="api-client-url" />
+            <button type="button" class="btn-secondary btn-sm shrink-0" :disabled="urlTargetChecking || !localData.url" @click="checkApiClientUrlTarget" data-testid="api-client-check-target">
+              {{ $t('logic.nodeConfig.apiClient.checkTarget') }}
+            </button>
+          </div>
+          <div v-if="urlTargetDecision" :class="['mt-2 p-3 rounded-lg border text-xs', urlTargetDecision.allowed ? 'bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300']">
+            <div class="font-semibold">{{ urlTargetDecision.allowed ? $t('logic.nodeConfig.apiClient.targetAllowed') : $t('logic.nodeConfig.apiClient.targetBlocked') }}</div>
+            <p class="mt-1">{{ urlTargetDecision.reason }}</p>
+            <p v-if="urlTargetDecision.resolved_ips?.length" class="mt-1 font-mono break-all">{{ urlTargetDecision.resolved_ips.join(', ') }}</p>
+            <button v-if="auth.isAdmin && !urlTargetDecision.allowed && urlTargetDecision.suggested_target" type="button" class="btn-primary btn-sm mt-2" :disabled="urlTargetSaving" @click="allowApiClientTarget" data-testid="api-client-allow-target">
+              {{ $t('logic.nodeConfig.apiClient.allowTarget', { target: urlTargetDecision.suggested_target }) }}
+            </button>
+          </div>
+          <div v-if="urlTargetMsg" :class="['mt-2 p-2 rounded text-xs', urlTargetMsg.ok ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500']">{{ urlTargetMsg.text }}</div>
         </div>
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.methodLabel') }}</label>
@@ -831,10 +845,12 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { dpApi, searchApi } from '@/api/client'
+import { dpApi, searchApi, securityApi } from '@/api/client'
+import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
 
 const { t, te } = useI18n()
+const auth = useAuthStore()
 
 const props = defineProps({
   node:        { type: Object, default: null },
@@ -858,6 +874,10 @@ const activeTab          = ref('connection')
 const valueMapPreset     = ref('')
 const valueMapCustom     = ref('')
 const valueMapCustomError = ref('')
+const urlTargetChecking = ref(false)
+const urlTargetSaving = ref(false)
+const urlTargetDecision = ref(null)
+const urlTargetMsg = ref(null)
 
 // ── Value Map Presets ──────────────────────────────────────────────────────
 const VALUE_MAP_PRESETS = computed(() => [
@@ -1435,6 +1455,8 @@ watch(() => props.node, (n) => {
     dpResults.value = []
     activeTab.value = 'connection'
     activeExtractorRow.value = null
+    urlTargetDecision.value = null
+    urlTargetMsg.value = null
     if (n.type === 'timer_cron') {
       parseCronToFields(n.data.cron || '0 7 * * *')
     }
@@ -1458,6 +1480,11 @@ watch(() => props.node, (n) => {
     }
   }
 }, { immediate: true })
+
+watch(() => localData.value.url, () => {
+  urlTargetDecision.value = null
+  urlTargetMsg.value = null
+})
 
 // ── Preset / formula handlers ──────────────────────────────────────────────
 function onPresetChange(e) {
@@ -1555,6 +1582,50 @@ function selectDp(dp) {
   dpSearch.value  = dp.name
   dpResults.value = []
   emitUpdate()
+}
+
+function normaliseUrlTargetInput(value) {
+  const trimmed = (value || '').trim()
+  if (!trimmed || /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed
+  return `http://${trimmed}`
+}
+
+async function checkApiClientUrlTarget() {
+  if (!localData.value.url) return
+  urlTargetChecking.value = true
+  urlTargetDecision.value = null
+  urlTargetMsg.value = null
+  try {
+    const checkedUrl = normaliseUrlTargetInput(localData.value.url)
+    if (checkedUrl !== localData.value.url) {
+      localData.value.url = checkedUrl
+      emitUpdate()
+    }
+    const { data } = await securityApi.checkUrlTarget({
+      url: checkedUrl,
+    })
+    urlTargetDecision.value = data
+  } catch (e) {
+    urlTargetMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.error') }
+  } finally {
+    urlTargetChecking.value = false
+  }
+}
+
+async function allowApiClientTarget() {
+  const target = urlTargetDecision.value?.suggested_target
+  if (!target) return
+  urlTargetSaving.value = true
+  urlTargetMsg.value = null
+  try {
+    await securityApi.addUrlTarget({ target, reason: t('logic.nodeConfig.apiClient.defaultAllowReason') })
+    urlTargetMsg.value = { ok: true, text: t('logic.nodeConfig.apiClient.allowSaved') }
+    await checkApiClientUrlTarget()
+  } catch (e) {
+    urlTargetMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.saveError') }
+  } finally {
+    urlTargetSaving.value = false
+  }
 }
 
 // ── Emit ───────────────────────────────────────────────────────────────────

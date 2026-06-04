@@ -15,7 +15,7 @@
  *   "+ Neu" action that emits `new-set`
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { DOMWrapper, mount, flushPromises } from '@vue/test-utils'
 
 function makeApi(overrides = {}) {
   return {
@@ -62,6 +62,10 @@ async function mountChips(props = {}) {
     },
   }))
 
+  const { useAuthStore } = await import('@/stores/auth')
+  const auth = useAuthStore()
+  auth.user = { username: 'tester', is_admin: true }
+
   const mod = await import('@/views/ringbuffer/TopbarFilterChips.vue')
   const TopbarFilterChips = mod.default
 
@@ -75,6 +79,14 @@ async function mountChips(props = {}) {
   await flushPromises()
 
   return { wrapper, api }
+}
+
+function bodyFind(selector) {
+  return new DOMWrapper(document.body.querySelector(selector))
+}
+
+function bodyFindAll(selector) {
+  return Array.from(document.body.querySelectorAll(selector)).map((node) => new DOMWrapper(node))
 }
 
 describe('TopbarFilterChips', () => {
@@ -167,7 +179,8 @@ describe('TopbarFilterChips', () => {
     const btn = wrapper.find('[data-testid="topbar-add-filter-btn"]')
     expect(btn.exists()).toBe(true)
     await btn.trigger('click')
-    const items = wrapper.findAll('[data-testid^="topbar-add-filter-item-"]')
+    await flushPromises()
+    const items = bodyFindAll('[data-testid^="topbar-add-filter-item-"]')
     // Only "Verfügbar" (s-c) is not topbar_active
     expect(items.length).toBe(1)
     expect(items[0].text()).toContain('Verfügbar')
@@ -176,7 +189,8 @@ describe('TopbarFilterChips', () => {
   it('+ Filter dropdown contains a + Neu action that emits new-set', async () => {
     const { wrapper } = await mountChips()
     await wrapper.find('[data-testid="topbar-add-filter-btn"]').trigger('click')
-    const newBtn = wrapper.find('[data-testid="topbar-add-filter-new"]')
+    await flushPromises()
+    const newBtn = bodyFind('[data-testid="topbar-add-filter-new"]')
     expect(newBtn.exists()).toBe(true)
     await newBtn.trigger('click')
     expect(wrapper.emitted('new-set')).toBeTruthy()
@@ -185,7 +199,8 @@ describe('TopbarFilterChips', () => {
   it('picking an available set from the dropdown adds it to the topbar via patchFiltersetTopbar', async () => {
     const { wrapper, api } = await mountChips()
     await wrapper.find('[data-testid="topbar-add-filter-btn"]').trigger('click')
-    const item = wrapper.find('[data-testid="topbar-add-filter-item-s-c"]')
+    await flushPromises()
+    const item = bodyFind('[data-testid="topbar-add-filter-item-s-c"]')
     expect(item.exists()).toBe(true)
     await item.trigger('click')
     expect(api.patchFiltersetTopbar).toHaveBeenCalledWith('s-c', { topbar_active: true })
@@ -194,7 +209,8 @@ describe('TopbarFilterChips', () => {
   it('renders + Neu as the first option in the dropdown (pinned), search input second', async () => {
     const { wrapper } = await mountChips()
     await wrapper.find('[data-testid="topbar-add-filter-btn"]').trigger('click')
-    const menu = wrapper.find('[data-testid="topbar-add-filter-menu"]')
+    await flushPromises()
+    const menu = bodyFind('[data-testid="topbar-add-filter-menu"]')
     expect(menu.exists()).toBe(true)
     const newBtn = menu.find('[data-testid="topbar-add-filter-new"]')
     const search = menu.find('[data-testid="topbar-add-filter-search"]')
@@ -214,11 +230,12 @@ describe('TopbarFilterChips', () => {
     const api = makeApi({ listFiltersets: vi.fn().mockResolvedValue({ data: filtersets }) })
     const { wrapper } = await mountChips({ api })
     await wrapper.find('[data-testid="topbar-add-filter-btn"]').trigger('click')
+    await flushPromises()
     // All three visible initially
-    expect(wrapper.findAll('[data-testid^="topbar-add-filter-item-"]').length).toBe(3)
+    expect(bodyFindAll('[data-testid^="topbar-add-filter-item-"]').length).toBe(3)
     // Typing "hei" narrows to Heizung
-    await wrapper.find('[data-testid="topbar-add-filter-search"]').setValue('hei')
-    const items = wrapper.findAll('[data-testid^="topbar-add-filter-item-"]')
+    await bodyFind('[data-testid="topbar-add-filter-search"]').setValue('hei')
+    const items = bodyFindAll('[data-testid^="topbar-add-filter-item-"]')
     expect(items.length).toBe(1)
     expect(items[0].text()).toContain('Heizung')
   })
@@ -226,8 +243,9 @@ describe('TopbarFilterChips', () => {
   it('shows "Keine Treffer" when search yields no results', async () => {
     const { wrapper } = await mountChips()
     await wrapper.find('[data-testid="topbar-add-filter-btn"]').trigger('click')
-    await wrapper.find('[data-testid="topbar-add-filter-search"]').setValue('zzz-no-match')
-    expect(wrapper.find('[data-testid="topbar-add-filter-empty"]').text()).toContain('Keine Treffer')
+    await flushPromises()
+    await bodyFind('[data-testid="topbar-add-filter-search"]').setValue('zzz-no-match')
+    expect(bodyFind('[data-testid="topbar-add-filter-empty"]').text()).toContain('Keine Treffer')
   })
 
   // ---------------------------------------------------------------------

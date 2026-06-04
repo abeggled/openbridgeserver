@@ -6,91 +6,32 @@ Unterstützt OpenWeatherMap One Call API 3.0 (und kompatible Dienste).
 
 SSRF-Schutz:
   - Nur HTTP/HTTPS-Schemas erlaubt
-  - Hostname wird per DNS aufgelöst; die resultierende IP wird gegen
-    gesperrte Netzwerkbereiche geprüft (Loopback, Link-local, Metadata)
+  - Hostname wird per DNS aufgelöst und zentral gegen öffentliche Ziele bzw.
+    die operatorgepflegte URL-Target-Allowlist geprüft
   - follow_redirects=False verhindert Redirect-basiertes SSRF
 """
 
 from __future__ import annotations
 
 import asyncio
-import ipaddress
-import socket
-from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 
 from obs.api.auth import decode_token
+from obs.security.url_targets import UrlTargetBlockedError, build_pinned_url_targets
 
 router = APIRouter(tags=["weather"])
 
-# ── SSRF-Schutz: gesperrte IP-Bereiche ────────────────────────────────────────
 
-_BLOCKED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
-    # Loopback
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("::1/128"),
-    # Link-local / Cloud-Metadata (AWS 169.254.169.254, GCP, Azure)
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("fe80::/10"),
-    # "This"-Netzwerk
-    ipaddress.ip_network("0.0.0.0/8"),
-    # Shared Address Space (RFC 6598, Carrier-Grade NAT)
-    ipaddress.ip_network("100.64.0.0/10"),
-    # IPv4-in-IPv6 Mapped (verhindert Bypass via ::ffff:127.0.0.1)
-    ipaddress.ip_network("::ffff:0:0/96"),
-]
-
-
-async def _check_ssrf(url: str) -> None:
-    """Löst den Hostnamen der URL auf und verwirft alle Adressen, die in
-    einem gesperrten Netzwerk liegen (SSRF-Prävention).
-
-    Private Netzwerke (192.168.x.x, 10.x.x.x) sind bewusst erlaubt,
-    da Wetter-Datenquellen auch im lokalen Netz betrieben werden können.
-
-    Raises:
-        HTTPException 400 — ungültige URL oder gesperrte Ziel-IP
-        HTTPException 502 — Hostname nicht auflösbar
-
-    """
+async def _build_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
     try:
-        parsed = urlparse(url)
-        hostname = parsed.hostname
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Ungültige URL: {exc}",
-        ) from exc
-
-    if not hostname:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Ungültige URL: kein Hostname erkennbar",
-        )
-
-    try:
-        addr_infos = await asyncio.to_thread(socket.getaddrinfo, hostname, None, 0, socket.SOCK_STREAM)
-    except socket.gaierror as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Hostname '{hostname}' nicht auflösbar: {exc}",
-        ) from exc
-
-    for *_, sockaddr in addr_infos:
-        ip_str = sockaddr[0]
-        try:
-            ip = ipaddress.ip_address(ip_str)
-        except ValueError:
-            continue
-        for net in _BLOCKED_NETWORKS:
-            if ip in net:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(f"URL-Ziel nicht erlaubt: die aufgelöste Adresse {ip} liegt in einem gesperrten Netzwerkbereich"),
-                )
+        return await asyncio.to_thread(build_pinned_url_targets, url)
+    except UrlTargetBlockedError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.decision.api_detail()) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 # ── Authentifizierung ──────────────────────────────────────────────────────────
@@ -136,11 +77,24 @@ async def fetch_weather(
             detail="Nur HTTP/HTTPS-URLs erlaubt",
         )
 
-    await _check_ssrf(url)
+    request_urls, pinned_headers, request_extensions = await _build_fetch_targets(url)
 
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as hc:
-            resp = await hc.get(url)
+            last_error: httpx.RequestError | None = None
+            for request_url in request_urls:
+                try:
+                    resp = await hc.get(
+                        request_url,
+                        headers=pinned_headers,
+                        extensions=request_extensions,
+                    )
+                    break
+                except httpx.RequestError as exc:
+                    last_error = exc
+            else:
+                assert last_error is not None
+                raise last_error
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

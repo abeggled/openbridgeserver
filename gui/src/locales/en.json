@@ -588,7 +588,9 @@
       "formulaCustom": "Custom formula …",
       "formulaPlaceholder": "e.g. x * 0.1 + 20",
       "formulaHintPrefix": "Available:",
+      "formulaFunctions": "abs round min max sqrt floor ceil",
       "formulaHintSuffix": "and all",
+      "formulaMathNamespace": "math.*",
       "formulaHintEnd": "functions. Empty = no transformation.",
       "valueMapDivider": "Value mapping",
       "valueMapLabel": "Value mapping",
@@ -1198,7 +1200,13 @@
         "requestContentType": "Request Content-Type",
         "authBasic": "Basic Auth",
         "authDigest": "Digest Auth",
-        "authBearer": "Bearer token"
+        "authBearer": "Bearer token",
+        "checkTarget": "Check",
+        "targetAllowed": "Target is allowed",
+        "targetBlocked": "This target will be blocked",
+        "allowTarget": "Allow {target}",
+        "allowSaved": "Target has been allowed.",
+        "defaultAllowReason": "Allowed from API client configuration"
       },
       "stringConcat": {
         "inputCount": "Number of inputs",
@@ -1538,7 +1546,8 @@
       "hierarchy": "Hierarchy",
       "importexport": "Data management",
       "icons": "Icons",
-      "history": "History DB"
+      "history": "History DB",
+      "security": "Security"
     },
     "general": {
       "title": "General settings",
@@ -1558,6 +1567,28 @@
       "themeDark": "Dark",
       "themeDarkDesc": "Dark appearance",
       "tzSaved": "Timezone set to «{tz}»"
+    },
+    "security": {
+      "title": "URL target allowlist",
+      "description": "Logic nodes and API proxies may call public HTTP/HTTPS targets directly. Internal, private, or reserved IP ranges are blocked unless they are explicitly listed in this YAML allowlist.",
+      "warning": "Allowing a target lets the backend actively request that internal address. Use this only for trusted systems on your own network; broad or incorrect entries can weaken SSRF protection and network segmentation.",
+      "filePath": "YAML file:",
+      "checkTitle": "Check target",
+      "checkButton": "Check",
+      "allowed": "Target allowed",
+      "blocked": "Target blocked",
+      "resolvedIps": "Resolved:",
+      "allowSuggested": "Allow {target}",
+      "allowlistTitle": "Allowed targets",
+      "reload": "Reload",
+      "reasonPlaceholder": "Reason, e.g. internal OBS instance",
+      "target": "Target",
+      "reason": "Reason",
+      "created": "Created",
+      "empty": "No allowed URL targets.",
+      "saved": "URL target has been saved.",
+      "deleted": "URL target has been removed.",
+      "defaultReason": "Allowed after URL target check"
     },
     "users": {
       "deleteUser": "Delete user",

@@ -3,31 +3,94 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+PUSH_REFS="$(cat)"
+WITH_VENV="$REPO_ROOT/tools/with-venv"
 
 cd "$REPO_ROOT"
 
-if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
-  PYTHON="${VIRTUAL_ENV}/bin/python"
-elif [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
-  PYTHON="$REPO_ROOT/.venv/bin/python"
-elif [[ -x "$REPO_ROOT/../openbridgeserver/.venv/bin/python" ]]; then
-  PYTHON="$REPO_ROOT/../openbridgeserver/.venv/bin/python"
-else
-  echo "pre-push gate: project venv not found" >&2
-  echo "Create or link a venv first:" >&2
-  echo "  python3 -m venv .venv" >&2
-  echo "  .venv/bin/python -m pip install -r requirements.txt -r requirements_dev.txt" >&2
+if [ ! -x "$WITH_VENV" ]; then
+  echo "pre-push gate: tools/with-venv missing or not executable" >&2
   exit 1
 fi
 
+default_push_base_ref() {
+  for ref in "${PRE_PUSH_BASE_REF:-}" origin/main upstream/main main; do
+    [ -n "$ref" ] || continue
+    if git rev-parse --verify --quiet "$ref^{commit}" >/dev/null; then
+      echo "$ref"
+      return 0
+    fi
+  done
+  return 1
+}
+
+changed_files_for_push() {
+  local saw_ref=0
+
+  while read -r _local_ref local_oid _remote_ref remote_oid; do
+    [ -n "${local_oid:-}" ] || continue
+    saw_ref=1
+    case "$local_oid" in
+      0000000000000000000000000000000000000000) continue ;;
+    esac
+    case "$remote_oid" in
+      0000000000000000000000000000000000000000)
+        if base_ref="$(default_push_base_ref)"; then
+          git diff --name-only --diff-filter=ACMR "$base_ref...$local_oid"
+        else
+          git diff-tree --root --no-commit-id --name-only -r "$local_oid"
+        fi
+        ;;
+      *)
+        git diff --name-only --diff-filter=ACMR "$remote_oid" "$local_oid"
+        ;;
+    esac
+  done <<<"$PUSH_REFS"
+
+  if [ "$saw_ref" -eq 0 ] &&
+    git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then
+    git diff --name-only --diff-filter=ACMR '@{upstream}...HEAD'
+    return
+  fi
+}
+
+GUI_CHANGED_FILES="$(
+  changed_files_for_push |
+    grep -E '^(gui/(src|tests)/|gui/(package(-lock)?\.json|vitest\.config\.js)$)' |
+    sort -u || true
+)"
+
 echo "[pre-push] i18n hard gate"
-./scripts/check-i18n-hardcoded-strings.sh
+"$WITH_VENV" ./scripts/check-i18n-hardcoded-strings.sh
+
+if [ -n "$GUI_CHANGED_FILES" ]; then
+  echo "[pre-push] gui vitest"
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "pre-push gate: npm not found" >&2
+    exit 1
+  fi
+  if [ ! -d gui/node_modules ]; then
+    if [ -x tools/link-worktree-node-modules ]; then
+      tools/link-worktree-node-modules --current >/dev/null
+    fi
+  fi
+  if [ ! -d gui/node_modules ]; then
+    echo "pre-push gate: gui/node_modules missing" >&2
+    echo "Run tools/link-worktree-node-modules, or update shared GUI dependencies in the main worktree." >&2
+    exit 1
+  fi
+  (cd gui && npm run test)
+
+  echo "[pre-push] gui coverage"
+  (cd gui && npm run test:coverage)
+  node tools/gui-coverage-summary.mjs --changed-only --threshold=70 || true
+fi
 
 echo "[gate] ruff check"
-"$PYTHON" -m ruff check .
+"$WITH_VENV" python3 -m ruff check .
 
 echo "[gate] ruff format --check"
-"$PYTHON" -m ruff format . --check
+"$WITH_VENV" python3 -m ruff format . --check
 
 echo "[gate] pytest (CI parity)"
-"$PYTHON" -m pytest tests/ -v --cov=obs --cov-report=xml --cov-report=term --junitxml="${TMPDIR:-/tmp}/openbridge-pre-push-junit.xml"
+"$WITH_VENV" pytest tests/ -v --cov=obs --cov-report=xml --cov-report=term --junitxml="${TMPDIR:-/tmp}/openbridge-pre-push-junit.xml"
