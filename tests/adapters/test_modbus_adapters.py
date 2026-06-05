@@ -1537,6 +1537,4 @@ class TestSilentReconnectFailure:
             pass
 
         events = [c.args[0] for c in bus.publish.call_args_list if hasattr(c.args[0], "quality")]
-        assert any(e.quality == "bad" for e in events), (
-            "Expected bad-quality event when connect() succeeds but client stays disconnected"
-        )
+        assert any(e.quality == "bad" for e in events), "Expected bad-quality event when connect() succeeds but client stays disconnected"
