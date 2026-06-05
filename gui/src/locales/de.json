@@ -323,11 +323,14 @@
         "sampleMustBeJsonObjectOrArray": "Sample muss ein JSON-Objekt oder Array sein",
         "selectAdapterInstance": "Bitte eine Adapter-Instanz wählen"
       },
-      "knxSection": "KNX Binding",
+      "knxSection": "KNX-Verknüpfung",
       "dptLabel": "DPT *",
       "respondToReadLabel": "Antworte auf Leseanfragen",
       "respondToReadHint": "Sendet den aktuellen Wert als GroupValueResponse wenn eine Leseanfrage eingeht.",
       "respondToReadPersistHint": "Erfordert aktiviertes „Letzten Wert speichern\" am Objekt.",
+      "groupAddressLoading": "Suche …",
+      "groupAddressNoResults": "Keine Gruppenadressen gefunden",
+      "groupAddressNoImport": "(.knxproj noch nicht importiert)",
       "modbusSection": "Modbus Binding",
       "addressLabel": "Adresse *",
       "registerTypeLabel": "Registertyp *",
@@ -624,7 +627,7 @@
       "scan": {
         "title": "KNX/IP-Geräte suchen",
         "button": "Suchen",
-        "noResultsDocker": "Keine Geräte per Multicast gefunden (typisch bei Docker-Netzwerk) — bitte Connection Type und Host unten manuell konfigurieren.",
+        "noResultsDocker": "Keine Geräte per Multicast gefunden (typisch bei Docker-Netzwerk) — bitte Verbindungstyp und Host unten manuell konfigurieren.",
         "resultCount": "{n} Gerät(e) — auswählen zum Übernehmen:",
         "physAddr": "PA:",
         "badge": {
@@ -632,12 +635,12 @@
           "tcp": "TCP",
           "routing": "Routing",
           "secure": "Secure",
-          "secureRequired": "Secure required"
+          "secureRequired": "Secure erforderlich"
         },
         "failed": "Scan fehlgeschlagen"
       },
       "form": {
-        "connectionTypeLabel": "Connection Type",
+        "connectionTypeLabel": "Verbindungstyp",
         "connectionTypeUdp": "Tunneling UDP",
         "connectionTypeTcp": "Tunneling TCP",
         "connectionTypeSecure": "Tunneling Secure (TCP)",
@@ -646,12 +649,12 @@
         "hostLabel": "Host",
         "hostHint": "IP des KNX/IP-Interfaces",
         "portLabel": "Port",
-        "localIpLabel": "Local IP",
+        "localIpLabel": "Lokale IP",
         "localIpOptional": "optional",
         "localIpPlaceholder": "leer = nicht gesetzt",
         "localIpTunnelingHint": "Netzwerkinterface für lokalen Socket (optional)",
         "localIpRoutingHint": "Netzwerkinterface für Multicast (optional)",
-        "individualAddressLabel": "Individual Address",
+        "individualAddressLabel": "Physikalische Adresse",
         "individualAddressSourceHint": "Quelladresse",
         "multicastGroupLabel": "Multicast-Gruppe",
         "multicastGroupHint": "KNX-Standard: 224.0.23.12"
@@ -662,20 +665,20 @@
       },
       "keyfile": {
         "reupload": "Neu hochladen",
-        "savedHint": "Keyfile gespeichert. Zum Ändern ein neues hochladen.",
-        "fromKeyfileHint": "aus Keyfile",
+        "savedHint": "Schlüsseldatei gespeichert. Zum Ändern eine neue hochladen.",
+        "fromKeyfileHint": "aus Schlüsseldatei",
         "change": "Ändern",
         "noTunnels": "Keine Tunneling-Interfaces im Keyfile gefunden.",
         "selectTunnel": "Tunnel auswählen",
         "physAddrCol": "PA:",
-        "userIdCol": "User:",
-        "secureGAsCol": "Secure GAs:",
-        "noBackbone": "Kein Backbone im Keyfile gefunden.",
+        "userIdCol": "Benutzer:",
+        "secureGAsCol": "Secure-GAs:",
+        "noBackbone": "Kein Backbone in der Schlüsseldatei gefunden.",
         "backboneInfo": "Backbone: {addr} · Latenz: {ms} ms",
         "uploadHint": "ETS-Schlüsselbackup (.knxkeys) hochladen",
-        "fileLabel": "Keyfile",
+        "fileLabel": "Schlüsseldatei",
         "passwordLabel": "Passwort",
-        "passwordPlaceholder": "Keyfile-Passwort",
+        "passwordPlaceholder": "Passwort der Schlüsseldatei",
         "uploadButton": "Hochladen & Parsen",
         "uploadFailed": "Upload fehlgeschlagen"
       }
