@@ -436,10 +436,13 @@ async def _authenticate_ws_request(ws: WebSocket) -> tuple[bool, str]:
 
 async def _ws_has_log_access(user: str | None, api_key: str | None) -> bool:
     """Return whether the authenticated websocket may receive log_entry pushes."""
-    db = get_db()
+    try:
+        db = get_db()
+    except RuntimeError:
+        return False
     if user and user != "__api_key__":
         row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (user,))
-        return row is not None and bool(row["is_admin"])
+        return _row_bool(row, "is_admin")
     if api_key:
         from obs.api.auth import hash_api_key
 
@@ -451,8 +454,15 @@ async def _ws_has_log_access(user: str | None, api_key: str | None) -> bool:
                WHERE k.key_hash=?""",
             (key_hash,),
         )
-        return row is not None and bool(row["is_admin"])
+        return _row_bool(row, "is_admin")
     return False
+
+
+def _row_bool(row: object, key: str) -> bool:
+    try:
+        return bool(row[key])  # type: ignore[index]
+    except (KeyError, IndexError, TypeError):
+        return False
 
 
 # ---------------------------------------------------------------------------
