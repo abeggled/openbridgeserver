@@ -520,6 +520,39 @@ describe('FilterEditor (#436)', () => {
     expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/Zahl/i)
     expect(wrapper.find('[data-testid="filter-editor-validation-hint"]').text()).toMatch(/Zahl/i)
     expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(wrapper.find('[data-testid="filter-editor-error"]').text()).toMatch(/Zahl/i)
+    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
+  })
+
+  it('requires both between bounds before saving', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('VF range missing')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('number')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('between')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/Obergrenze/i)
+    expect(wrapper.find('[data-testid="filter-editor-value-lower"]').attributes('aria-invalid')).toBe('true')
+    expect(wrapper.find('[data-testid="filter-editor-value-upper"]').attributes('aria-invalid')).toBe('true')
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
+    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
+  })
+
+  it('explains non-numeric between bounds before any API call', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('VF range invalid')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('number')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('between')
+    await wrapper.find('[data-testid="filter-editor-value-lower"]').setValue('unten')
+    await wrapper.find('[data-testid="filter-editor-value-upper"]').setValue('20')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/Zahl/i)
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
     expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
   })
 
@@ -534,6 +567,21 @@ describe('FilterEditor (#436)', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/Untergrenze/i)
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
+    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
+  })
+
+  it('explains invalid boolean value filters before any API call', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('VF bool invalid')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('bool')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('eq')
+    await wrapper.find('[data-testid="filter-editor-value-input"]').setValue('maybe')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/true/i)
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/false/i)
     expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
     expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
   })
@@ -591,6 +639,37 @@ describe('FilterEditor (#436)', () => {
     expect(payload.filter.value_filter).toMatchObject({ operator: 'between', lower: 10, upper: 20 })
   })
 
+  it('bool value filters serialise accepted literal variants', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('Bool')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('bool')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('eq')
+    await wrapper.find('[data-testid="filter-editor-value-input"]').setValue('1')
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+    expect(ringbufferApi.createFilterset.mock.calls[0][0].filter.value_filter).toMatchObject({ operator: 'eq', value: true })
+
+    ringbufferApi.createFilterset.mockClear()
+    await wrapper.find('[data-testid="filter-editor-value-input"]').setValue('false')
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+    expect(ringbufferApi.createFilterset.mock.calls[0][0].filter.value_filter).toMatchObject({ operator: 'eq', value: false })
+  })
+
+  it('string value filters serialise typed values', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('String')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('string')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('contains')
+    await wrapper.find('[data-testid="filter-editor-value-input"]').setValue('warm')
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+
+    expect(ringbufferApi.createFilterset.mock.calls[0][0].filter.value_filter).toMatchObject({ operator: 'contains', value: 'warm' })
+  })
+
   it('regex data type serialises pattern + ignore_case', async () => {
     const ringbufferApi = makeRingbufferApi()
     const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
@@ -603,6 +682,34 @@ describe('FilterEditor (#436)', () => {
     await flushPromises()
     const payload = ringbufferApi.createFilterset.mock.calls[0][0]
     expect(payload.filter.value_filter).toMatchObject({ operator: 'regex', pattern: '^temp', ignore_case: true })
+  })
+
+  it('regex data type serialises a typed pattern even before selecting an operator', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('Implicit Regex')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('regex')
+    await wrapper.find('[data-testid="filter-editor-value-pattern"]').setValue('temp$')
+    await wrapper.find('[data-testid="filter-editor-value-ignore-case"]').setValue(true)
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+
+    const payload = ringbufferApi.createFilterset.mock.calls[0][0]
+    expect(payload.filter.value_filter).toMatchObject({ operator: 'regex', pattern: 'temp$', ignore_case: true })
+  })
+
+  it('requires a regex pattern when the regex operator is selected', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('Regex missing')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('regex')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('regex')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/Pattern/i)
+    expect(wrapper.find('[data-testid="filter-editor-value-pattern"]').attributes('aria-invalid')).toBe('true')
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
+    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
   })
 
   it('allows Python-compatible regex syntax that JavaScript RegExp rejects', async () => {
