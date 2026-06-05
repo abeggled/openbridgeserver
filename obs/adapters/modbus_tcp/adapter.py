@@ -97,7 +97,9 @@ class ModbusTcpAdapter(AdapterBase):
         try:
             from pymodbus.client import AsyncModbusTcpClient
         except ImportError:
-            logger.error("pymodbus not installed — Modbus TCP disabled. Run: pip install pymodbus")
+            logger.error(
+                "pymodbus not installed — Modbus TCP disabled. Run: pip install pymodbus"
+            )
             await self._publish_status(False, "pymodbus not installed")
             return
 
@@ -123,7 +125,9 @@ class ModbusTcpAdapter(AdapterBase):
                 await self._publish_status(True, f"{cfg.host}:{cfg.port}")
                 logger.info("Modbus TCP connected: %s:%d", cfg.host, cfg.port)
             else:
-                await self._publish_status(False, f"Could not connect to {cfg.host}:{cfg.port}")
+                await self._publish_status(
+                    False, f"Could not connect to {cfg.host}:{cfg.port}"
+                )
         except Exception as exc:
             await self._publish_status(False, str(exc))
             logger.exception("Modbus TCP connect failed")
@@ -166,7 +170,9 @@ class ModbusTcpAdapter(AdapterBase):
                 logger.warning("Modbus TCP: reconnect after reload failed: %s", exc)
 
         # Start a poller task per SOURCE/BOTH binding
-        source_bindings = [b for b in self._bindings if b.direction in ("SOURCE", "BOTH")]
+        source_bindings = [
+            b for b in self._bindings if b.direction in ("SOURCE", "BOTH")
+        ]
         for binding in source_bindings:
             t = asyncio.create_task(
                 self._poll_loop(binding),
@@ -192,7 +198,9 @@ class ModbusTcpAdapter(AdapterBase):
         # overwhelm single-threaded Modbus TCP devices.
         _jitter_max = self._adp_cfg.startup_jitter_s
         if _jitter_max > 0:
-            await asyncio.sleep(random.uniform(0, min(bc.poll_interval * 0.5, _jitter_max)))
+            await asyncio.sleep(
+                random.uniform(0, min(bc.poll_interval * 0.5, _jitter_max))
+            )
 
         while True:
             # Auto-reconnect if the client became disconnected (e.g. after a reload
@@ -210,11 +218,14 @@ class ModbusTcpAdapter(AdapterBase):
                                 port = self._adp_cfg.port
                                 await self._publish_status(True, f"{host}:{port}")
                                 logger.info(
-                                    "Modbus TCP: reconnected in poll loop (binding %s)", binding.id
+                                    "Modbus TCP: reconnected in poll loop (binding %s)",
+                                    binding.id,
                                 )
                         except Exception as exc:
                             logger.warning(
-                                "Modbus TCP: reconnect failed (binding %s): %s", binding.id, exc
+                                "Modbus TCP: reconnect failed (binding %s): %s",
+                                binding.id,
+                                exc,
                             )
                             await self._bus.publish(
                                 DataValueEvent(
@@ -253,7 +264,9 @@ class ModbusTcpAdapter(AdapterBase):
             except asyncio.CancelledError:
                 return
             except Exception as exc:
-                logger.warning("Modbus TCP poll error (binding %s): %s", binding.id, exc)
+                logger.warning(
+                    "Modbus TCP poll error (binding %s): %s", binding.id, exc
+                )
                 await self._bus.publish(
                     DataValueEvent(
                         datapoint_id=binding.datapoint_id,
@@ -321,7 +334,9 @@ class ModbusTcpAdapter(AdapterBase):
                 except TypeError:
                     continue
 
-        raise RuntimeError(f"pymodbus: cannot call {fn.__name__} with any known API variant")
+        raise RuntimeError(
+            f"pymodbus: cannot call {fn.__name__} with any known API variant"
+        )
 
     async def _read_register(self, bc: ModbusBindingConfig) -> Any:
         if not self._client or not self._client.connected:
@@ -339,7 +354,10 @@ class ModbusTcpAdapter(AdapterBase):
                 )
             elif bc.register_type == "input":
                 r = await self._modbus_call(
-                    self._client.read_input_registers, bc.address, count, unit_id=bc.unit_id
+                    self._client.read_input_registers,
+                    bc.address,
+                    count,
+                    unit_id=bc.unit_id,
                 )
             elif bc.register_type == "coil":
                 r = await self._modbus_call(
@@ -347,7 +365,10 @@ class ModbusTcpAdapter(AdapterBase):
                 )
             elif bc.register_type == "discrete_input":
                 r = await self._modbus_call(
-                    self._client.read_discrete_inputs, bc.address, count, unit_id=bc.unit_id
+                    self._client.read_discrete_inputs,
+                    bc.address,
+                    count,
+                    unit_id=bc.unit_id,
                 )
             else:
                 return None
@@ -359,7 +380,11 @@ class ModbusTcpAdapter(AdapterBase):
                 return bool(r.bits[0])
 
             return decode_registers(
-                r.registers, bc.data_format, bc.byte_order, bc.word_order, bc.scale_factor
+                r.registers,
+                bc.data_format,
+                bc.byte_order,
+                bc.word_order,
+                bc.scale_factor,
             )
 
     async def _write_register(self, bc: ModbusBindingConfig, value: Any) -> None:
