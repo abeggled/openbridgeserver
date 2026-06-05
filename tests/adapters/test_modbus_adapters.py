@@ -24,12 +24,43 @@ from tests.adapters.conftest import make_binding
 # ---------------------------------------------------------------------------
 
 _DEFAULT_TCP_CFG = {"host": "127.0.0.1", "port": 502, "timeout": 1.0}
-_DEFAULT_RTU_CFG = {"port": "/dev/ttyUSB0", "baudrate": 9600, "parity": "N", "stopbits": 1, "bytesize": 8, "timeout": 1.0}
+_DEFAULT_RTU_CFG = {
+    "port": "/dev/ttyUSB0",
+    "baudrate": 9600,
+    "parity": "N",
+    "stopbits": 1,
+    "bytesize": 8,
+    "timeout": 1.0,
+}
 
-_HOLDING_CFG = {"unit_id": 1, "register_type": "holding", "address": 0, "data_format": "uint16", "poll_interval": 0.05}
-_INPUT_CFG = {"unit_id": 1, "register_type": "input", "address": 0, "data_format": "uint16", "poll_interval": 0.05}
-_COIL_CFG = {"unit_id": 1, "register_type": "coil", "address": 0, "data_format": "uint16", "poll_interval": 0.05}
-_DISCRETE_CFG = {"unit_id": 1, "register_type": "discrete_input", "address": 0, "data_format": "uint16", "poll_interval": 0.05}
+_HOLDING_CFG = {
+    "unit_id": 1,
+    "register_type": "holding",
+    "address": 0,
+    "data_format": "uint16",
+    "poll_interval": 0.05,
+}
+_INPUT_CFG = {
+    "unit_id": 1,
+    "register_type": "input",
+    "address": 0,
+    "data_format": "uint16",
+    "poll_interval": 0.05,
+}
+_COIL_CFG = {
+    "unit_id": 1,
+    "register_type": "coil",
+    "address": 0,
+    "data_format": "uint16",
+    "poll_interval": 0.05,
+}
+_DISCRETE_CFG = {
+    "unit_id": 1,
+    "register_type": "discrete_input",
+    "address": 0,
+    "data_format": "uint16",
+    "poll_interval": 0.05,
+}
 
 
 def _mock_bus():
@@ -398,7 +429,9 @@ class TestPublicReadWriteTcp:
         adapter, _ = _make_tcp()
         adapter._client = MagicMock()
         adapter._client.connected = True
-        adapter._client.read_holding_registers = AsyncMock(side_effect=Exception("boom"))
+        adapter._client.read_holding_registers = AsyncMock(
+            side_effect=Exception("boom")
+        )
         binding = make_binding(_HOLDING_CFG)
         result = await adapter.read(binding)
         assert result is None
@@ -540,7 +573,9 @@ class TestPollLoopTcp:
 
         await one_iteration()
         events = [c.args[0] for c in bus.publish.call_args_list]
-        good_events = [e for e in events if hasattr(e, "quality") and e.quality == "good"]
+        good_events = [
+            e for e in events if hasattr(e, "quality") and e.quality == "good"
+        ]
         assert len(good_events) >= 1
         assert good_events[0].value == 10
 
@@ -557,14 +592,20 @@ class TestPollLoopTcp:
         except asyncio.CancelledError:
             pass
 
-        events = [c.args[0] for c in bus.publish.call_args_list if hasattr(c.args[0], "quality")]
+        events = [
+            c.args[0]
+            for c in bus.publish.call_args_list
+            if hasattr(c.args[0], "quality")
+        ]
         good = [e for e in events if e.quality == "good"]
         assert good[0].value == 20
 
     async def test_poll_applies_value_map(self):
         adapter, bus = _make_tcp()
         adapter._client = _make_client(response=_ok_response([1]))
-        binding = make_binding(_HOLDING_CFG, direction="SOURCE", value_map={"1": "ON", "0": "OFF"})
+        binding = make_binding(
+            _HOLDING_CFG, direction="SOURCE", value_map={"1": "ON", "0": "OFF"}
+        )
 
         task = asyncio.create_task(adapter._poll_loop(binding))
         await asyncio.sleep(0.1)
@@ -574,7 +615,11 @@ class TestPollLoopTcp:
         except asyncio.CancelledError:
             pass
 
-        events = [c.args[0] for c in bus.publish.call_args_list if hasattr(c.args[0], "quality")]
+        events = [
+            c.args[0]
+            for c in bus.publish.call_args_list
+            if hasattr(c.args[0], "quality")
+        ]
         good = [e for e in events if e.quality == "good"]
         assert good[0].value == "ON"
 
@@ -592,13 +637,19 @@ class TestPollLoopTcp:
         except asyncio.CancelledError:
             pass
 
-        events = [c.args[0] for c in bus.publish.call_args_list if hasattr(c.args[0], "quality")]
+        events = [
+            c.args[0]
+            for c in bus.publish.call_args_list
+            if hasattr(c.args[0], "quality")
+        ]
         assert all(e.quality == "bad" for e in events)
 
     async def test_poll_publishes_bad_on_exception(self):
         adapter, bus = _make_tcp()
         adapter._client = _make_client()
-        adapter._client.read_holding_registers = AsyncMock(side_effect=OSError("read error"))
+        adapter._client.read_holding_registers = AsyncMock(
+            side_effect=OSError("read error")
+        )
         binding = make_binding(_HOLDING_CFG, direction="SOURCE")
 
         task = asyncio.create_task(adapter._poll_loop(binding))
@@ -609,14 +660,20 @@ class TestPollLoopTcp:
         except asyncio.CancelledError:
             pass
 
-        events = [c.args[0] for c in bus.publish.call_args_list if hasattr(c.args[0], "quality")]
+        events = [
+            c.args[0]
+            for c in bus.publish.call_args_list
+            if hasattr(c.args[0], "quality")
+        ]
         assert any(e.quality == "bad" for e in events)
 
     async def test_poll_invalid_binding_config_returns_early(self):
         adapter, bus = _make_tcp()
         adapter._client = _make_client()
         # Pass a completely invalid config that will fail ModbusBindingConfig(**config)
-        binding = make_binding({"register_type": "holding", "address": "not-an-int"}, direction="SOURCE")
+        binding = make_binding(
+            {"register_type": "holding", "address": "not-an-int"}, direction="SOURCE"
+        )
 
         # Should return without raising
         await adapter._poll_loop(binding)
@@ -738,7 +795,11 @@ class TestPollLoopRtu:
         except asyncio.CancelledError:
             pass
 
-        events = [c.args[0] for c in bus.publish.call_args_list if hasattr(c.args[0], "quality")]
+        events = [
+            c.args[0]
+            for c in bus.publish.call_args_list
+            if hasattr(c.args[0], "quality")
+        ]
         good = [e for e in events if e.quality == "good"]
         assert len(good) >= 1
         assert good[0].value == 55
@@ -746,7 +807,9 @@ class TestPollLoopRtu:
     async def test_poll_publishes_bad_on_exception(self):
         adapter, bus = _make_rtu()
         adapter._client = _make_client()
-        adapter._client.read_holding_registers = AsyncMock(side_effect=OSError("serial error"))
+        adapter._client.read_holding_registers = AsyncMock(
+            side_effect=OSError("serial error")
+        )
         binding = make_binding(_HOLDING_CFG, direction="SOURCE")
 
         task = asyncio.create_task(adapter._poll_loop(binding))
@@ -757,13 +820,19 @@ class TestPollLoopRtu:
         except asyncio.CancelledError:
             pass
 
-        events = [c.args[0] for c in bus.publish.call_args_list if hasattr(c.args[0], "quality")]
+        events = [
+            c.args[0]
+            for c in bus.publish.call_args_list
+            if hasattr(c.args[0], "quality")
+        ]
         assert any(e.quality == "bad" for e in events)
 
     async def test_poll_invalid_config_returns_early(self):
         adapter, bus = _make_rtu()
         adapter._client = _make_client()
-        binding = make_binding({"register_type": "holding", "address": "bad"}, direction="SOURCE")
+        binding = make_binding(
+            {"register_type": "holding", "address": "bad"}, direction="SOURCE"
+        )
         await adapter._poll_loop(binding)
         bus.publish.assert_not_awaited()
 
@@ -780,7 +849,11 @@ class TestPollLoopRtu:
         except asyncio.CancelledError:
             pass
 
-        events = [c.args[0] for c in bus.publish.call_args_list if hasattr(c.args[0], "quality")]
+        events = [
+            c.args[0]
+            for c in bus.publish.call_args_list
+            if hasattr(c.args[0], "quality")
+        ]
         good = [e for e in events if e.quality == "good"]
         assert good[0].value == 15
 
@@ -839,7 +912,9 @@ class TestModbusRtuAdditional:
     async def test_poll_applies_value_map(self):
         adapter, bus = _make_rtu()
         adapter._client = _make_client(response=_ok_response([1]))
-        binding = make_binding(_HOLDING_CFG, direction="SOURCE", value_map={"1": "ON", "0": "OFF"})
+        binding = make_binding(
+            _HOLDING_CFG, direction="SOURCE", value_map={"1": "ON", "0": "OFF"}
+        )
 
         task = asyncio.create_task(adapter._poll_loop(binding))
         await asyncio.sleep(0.1)
@@ -849,14 +924,20 @@ class TestModbusRtuAdditional:
         except asyncio.CancelledError:
             pass
 
-        events = [c.args[0] for c in bus.publish.call_args_list if hasattr(c.args[0], "quality")]
+        events = [
+            c.args[0]
+            for c in bus.publish.call_args_list
+            if hasattr(c.args[0], "quality")
+        ]
         good = [e for e in events if e.quality == "good"]
         assert good[0].value == "ON"
 
     async def test_read_exception_returns_none(self):
         adapter, _ = _make_rtu()
         adapter._client = _make_client()
-        adapter._client.read_holding_registers = AsyncMock(side_effect=Exception("boom"))
+        adapter._client.read_holding_registers = AsyncMock(
+            side_effect=Exception("boom")
+        )
         binding = make_binding(_HOLDING_CFG)
         result = await adapter.read(binding)
         assert result is None
@@ -918,6 +999,7 @@ class TestBindingsReloadedAwaitAndReconnect:
         adapter._poll_tasks.append(old_task)
         adapter._bindings = []
 
+        await asyncio.sleep(0)  # let old_task reach its first await before cancellation
         await adapter._on_bindings_reloaded()
 
         assert old_task.done(), (
@@ -1227,6 +1309,7 @@ class TestBindingDeleteRecreateCycleRegression:
             t.cancel()
         await asyncio.gather(*adapter._poll_tasks, return_exceptions=True)
 
+
 # ---------------------------------------------------------------------------
 # Config options: serialize_reads + startup_jitter_s
 # ---------------------------------------------------------------------------
@@ -1237,7 +1320,9 @@ class TestModbusTcpConfigOptions:
 
     async def test_serialize_reads_true_creates_semaphore_1(self):
         """serialize_reads=True (default) must create a Semaphore(1)."""
-        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "serialize_reads": True})
+        adapter, _ = _make_tcp(
+            {"host": "127.0.0.1", "port": 502, "timeout": 1.0, "serialize_reads": True}
+        )
         client = _make_client(connected=True)
         fake_mod = MagicMock()
         fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
@@ -1250,7 +1335,9 @@ class TestModbusTcpConfigOptions:
 
     async def test_serialize_reads_false_creates_unlimited_semaphore(self):
         """serialize_reads=False must allow concurrent reads (Semaphore with large value)."""
-        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "serialize_reads": False})
+        adapter, _ = _make_tcp(
+            {"host": "127.0.0.1", "port": 502, "timeout": 1.0, "serialize_reads": False}
+        )
         client = _make_client(connected=True)
         fake_mod = MagicMock()
         fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
@@ -1266,18 +1353,22 @@ class TestModbusTcpConfigOptions:
     async def test_default_config_has_serialize_reads_true(self):
         """Default adapter config must have serialize_reads=True (safe default)."""
         from obs.adapters.modbus_tcp.adapter import ModbusTcpAdapterConfig
+
         cfg = ModbusTcpAdapterConfig()
         assert cfg.serialize_reads is True
 
     async def test_default_config_has_startup_jitter_30s(self):
         """Default startup_jitter_s must be 30s."""
         from obs.adapters.modbus_tcp.adapter import ModbusTcpAdapterConfig
+
         cfg = ModbusTcpAdapterConfig()
         assert cfg.startup_jitter_s == 30.0
 
     async def test_startup_jitter_zero_skips_sleep(self):
         """startup_jitter_s=0 must skip the initial sleep entirely."""
-        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "startup_jitter_s": 0.0})
+        adapter, _ = _make_tcp(
+            {"host": "127.0.0.1", "port": 502, "timeout": 1.0, "startup_jitter_s": 0.0}
+        )
         client = _make_client(connected=True, response=_ok_response([1]))
         fake_mod = MagicMock()
         fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
@@ -1312,7 +1403,9 @@ class TestModbusTcpConfigOptions:
 
     async def test_startup_jitter_nonzero_produces_initial_sleep(self):
         """startup_jitter_s > 0 must produce an initial sleep <= jitter_max."""
-        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "startup_jitter_s": 5.0})
+        adapter, _ = _make_tcp(
+            {"host": "127.0.0.1", "port": 502, "timeout": 1.0, "startup_jitter_s": 5.0}
+        )
         client = _make_client(connected=True, response=_ok_response([1]))
         fake_mod = MagicMock()
         fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
@@ -1326,7 +1419,9 @@ class TestModbusTcpConfigOptions:
             sleep_calls.append(delay)
             raise asyncio.CancelledError
 
-        binding = make_binding({**_HOLDING_CFG, "poll_interval": 60.0}, direction="SOURCE")
+        binding = make_binding(
+            {**_HOLDING_CFG, "poll_interval": 60.0}, direction="SOURCE"
+        )
 
         with patch("asyncio.sleep", side_effect=_sleep):
             task = asyncio.create_task(adapter._poll_loop(binding))
@@ -1336,4 +1431,6 @@ class TestModbusTcpConfigOptions:
                 pass
 
         assert len(sleep_calls) >= 1, "No initial jitter sleep produced"
-        assert sleep_calls[0] <= 5.0, f"Jitter sleep {sleep_calls[0]:.2f}s exceeds startup_jitter_s=5.0"
+        assert sleep_calls[0] <= 5.0, (
+            f"Jitter sleep {sleep_calls[0]:.2f}s exceeds startup_jitter_s=5.0"
+        )
