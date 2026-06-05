@@ -1323,11 +1323,14 @@ class TestModbusTcpConfigOptions:
 
         binding = make_binding({**_HOLDING_CFG, "poll_interval": 60.0}, direction="SOURCE")
 
+        # Only one task — track and cancel it properly to avoid leaked pending tasks.
         with patch("asyncio.sleep", side_effect=recording_sleep):
             task = asyncio.create_task(adapter._poll_loop(binding))
             try:
-                await asyncio.wait_for(task, timeout=0.1)
+                await asyncio.wait_for(asyncio.shield(task), timeout=0.1)
             except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+            finally:
                 task.cancel()
                 try:
                     await task
