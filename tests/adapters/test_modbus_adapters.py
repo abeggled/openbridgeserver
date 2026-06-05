@@ -561,7 +561,7 @@ class TestPollLoopTcp:
         binding = make_binding(_HOLDING_CFG, direction="SOURCE")
 
         async def one_iteration():
-            task = asyncio.create_task(adapter._poll_loop(binding))
+            task = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
             await asyncio.sleep(0.1)
             task.cancel()
             try:
@@ -580,7 +580,7 @@ class TestPollLoopTcp:
         adapter._client = _make_client(response=_ok_response([10]))
         binding = make_binding(_HOLDING_CFG, direction="SOURCE", value_formula="x * 2")
 
-        task = asyncio.create_task(adapter._poll_loop(binding))
+        task = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
         await asyncio.sleep(0.1)
         task.cancel()
         try:
@@ -597,7 +597,7 @@ class TestPollLoopTcp:
         adapter._client = _make_client(response=_ok_response([1]))
         binding = make_binding(_HOLDING_CFG, direction="SOURCE", value_map={"1": "ON", "0": "OFF"})
 
-        task = asyncio.create_task(adapter._poll_loop(binding))
+        task = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
         await asyncio.sleep(0.1)
         task.cancel()
         try:
@@ -615,7 +615,7 @@ class TestPollLoopTcp:
         adapter._client = _make_client(connected=False)
         binding = make_binding(_HOLDING_CFG, direction="SOURCE")
 
-        task = asyncio.create_task(adapter._poll_loop(binding))
+        task = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
         await asyncio.sleep(0.1)
         task.cancel()
         try:
@@ -632,7 +632,7 @@ class TestPollLoopTcp:
         adapter._client.read_holding_registers = AsyncMock(side_effect=OSError("read error"))
         binding = make_binding(_HOLDING_CFG, direction="SOURCE")
 
-        task = asyncio.create_task(adapter._poll_loop(binding))
+        task = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
         await asyncio.sleep(0.1)
         task.cancel()
         try:
@@ -1080,7 +1080,7 @@ class TestPollLoopAutoReconnect:
         adapter._client = client
 
         binding = make_binding(_HOLDING_CFG, direction="SOURCE")
-        task = asyncio.create_task(adapter._poll_loop(binding))
+        task = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
         await asyncio.sleep(0.15)
         task.cancel()
         try:
@@ -1101,7 +1101,7 @@ class TestPollLoopAutoReconnect:
         adapter._client = client
 
         binding = make_binding(_HOLDING_CFG, direction="SOURCE")
-        task = asyncio.create_task(adapter._poll_loop(binding))
+        task = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
         await asyncio.sleep(0.15)
         task.cancel()
         try:
@@ -1137,7 +1137,7 @@ class TestPollLoopAutoReconnect:
         adapter._client = client
 
         binding = make_binding(_HOLDING_CFG, direction="SOURCE")
-        task = asyncio.create_task(adapter._poll_loop(binding))
+        task = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
         await asyncio.sleep(0.25)
         task.cancel()
         try:
@@ -1336,6 +1336,29 @@ class TestModbusTcpConfigOptions:
         assert len(sleep_calls) >= 1, "No initial jitter sleep produced"
         assert sleep_calls[0] <= 5.0, f"Jitter sleep {sleep_calls[0]:.2f}s exceeds startup_jitter_s=5.0"
 
+    async def test_startup_jitter_uses_configured_window_for_fast_polling(self):
+        """startup_jitter_s is not capped by the binding poll interval."""
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "startup_jitter_s": 30.0})
+        adapter._client = _make_client(connected=True)
+
+        sleep_calls = []
+
+        async def _sleep(delay, *args, **kwargs):
+            sleep_calls.append(delay)
+            raise asyncio.CancelledError
+
+        binding = make_binding({**_HOLDING_CFG, "poll_interval": 1.0}, direction="SOURCE")
+
+        with (
+            patch("random.uniform", return_value=12.0) as uniform_mock,
+            patch("asyncio.sleep", side_effect=_sleep),
+        ):
+            task = asyncio.create_task(adapter._poll_loop(binding))
+            await asyncio.gather(task, return_exceptions=True)
+
+        uniform_mock.assert_called_once_with(0, 30.0)
+        assert sleep_calls[0] == 12.0
+
 
 # ---------------------------------------------------------------------------
 # Maintainer review fixes — write path, disconnect, jitter, None semaphore
@@ -1524,7 +1547,7 @@ class TestSilentReconnectFailure:
         adapter._client = client
 
         binding = make_binding(_HOLDING_CFG, direction="SOURCE")
-        task = asyncio.create_task(adapter._poll_loop(binding))
+        task = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
         await asyncio.sleep(0.15)
         task.cancel()
         try:
@@ -1570,12 +1593,12 @@ class TestReloadLock:
 
 
 class TestReloadIoSemaphoreForCloseConnect:
-    """_on_bindings_reloaded holds _io_sem around close()+connect() so an
-    in-progress DEST write cannot be interrupted by the socket teardown.
+    """_on_bindings_reloaded waits for in-flight I/O before close()+connect(),
+    even when request serialization is disabled.
     """
 
     async def test_reload_waits_for_held_io_sem_before_closing(self):
-        """If _io_sem is held (write in progress), reload must wait."""
+        """A write in progress must finish before reload closes the socket."""
         adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0})
         client = _make_client(connected=True)
         fake_mod = MagicMock()
@@ -1584,27 +1607,61 @@ class TestReloadIoSemaphoreForCloseConnect:
             await adapter.connect()
         adapter._bindings = []
 
-        close_called_while_sem_held = []
+        write_started = asyncio.Event()
+        release_write = asyncio.Event()
 
-        # Acquire the semaphore to simulate an in-progress write
-        await adapter._io_sem.acquire()
+        async def slow_write_register(*args, **kwargs):
+            write_started.set()
+            await release_write.wait()
+            return _ok_response()
 
-        original_close = client.close
-
-        def recording_close():
-            # Check if sem is still held when close() is called
-            close_called_while_sem_held.append(adapter._io_sem.locked())
-            original_close()
-
-        client.close = recording_close
+        client.write_register = AsyncMock(side_effect=slow_write_register)
+        bc = ModbusBindingConfig(**{**_HOLDING_CFG, "data_format": "uint16"})
+        write_task = asyncio.create_task(adapter._write_register(bc, 42))
+        await write_started.wait()
 
         reload_task = asyncio.create_task(adapter._on_bindings_reloaded())
-        await asyncio.sleep(0.05)  # give reload a chance to run (should be blocked)
-        assert len(close_called_while_sem_held) == 0, "close() called while sem held — reload did not wait"
+        await asyncio.sleep(0.05)
+        assert client.close.call_count == 0, "close() called while write was in flight"
 
-        adapter._io_sem.release()  # release — reload should now proceed
+        release_write.set()
+        await write_task
         await reload_task
-        assert len(close_called_while_sem_held) == 1, "close() was never called after sem released"
+        client.close.assert_called_once()
+
+    async def test_reload_waits_for_inflight_io_when_serialize_reads_false(self):
+        adapter, _ = _make_tcp(
+            {"host": "127.0.0.1", "port": 502, "timeout": 1.0, "serialize_reads": False},
+        )
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._bindings = []
+        assert adapter._io_sem is None
+
+        read_started = asyncio.Event()
+        release_read = asyncio.Event()
+
+        async def slow_read_registers(*args, **kwargs):
+            read_started.set()
+            await release_read.wait()
+            return _ok_response([42])
+
+        client.read_holding_registers = AsyncMock(side_effect=slow_read_registers)
+        bc = ModbusBindingConfig(**_HOLDING_CFG)
+        read_task = asyncio.create_task(adapter._read_register(bc))
+        await read_started.wait()
+
+        reload_task = asyncio.create_task(adapter._on_bindings_reloaded())
+        await asyncio.sleep(0.05)
+        assert client.close.call_count == 0, "close() called while unserialized read was in flight"
+
+        release_read.set()
+        await read_task
+        await reload_task
+        client.close.assert_called_once()
 
 
 class TestReloadPublishesStatus:
@@ -1693,3 +1750,15 @@ class TestReconnectBackoff:
         assert connect_calls == 1, (
             f"Expected 1 connect() call due to backoff, got {connect_calls}. Without backoff, every binding fires its own timeout."
         )
+
+    async def test_backoff_uses_shortest_active_poll_interval(self):
+        adapter, _ = _make_tcp()
+        client = _make_client(connected=False)
+        client.connect = AsyncMock()
+        adapter._client = client
+
+        slow_binding = make_binding({**_HOLDING_CFG, "poll_interval": 300.0}, direction="SOURCE")
+        fast_binding = make_binding({**_HOLDING_CFG, "poll_interval": 1.0}, direction="SOURCE")
+        adapter._bindings = [slow_binding, fast_binding]
+
+        assert adapter._reconnect_backoff_delay(slow_binding.config["poll_interval"]) == 1.0
