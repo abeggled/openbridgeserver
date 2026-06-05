@@ -1704,6 +1704,49 @@ class TestReloadIoSemaphoreForCloseConnect:
 
         await asyncio.wait_for(adapter._read_register(bc), timeout=0.5)
 
+    async def test_queued_io_rechecks_client_after_lifecycle_wait(self):
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0})
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+
+        lifecycle_entered = asyncio.Event()
+        release_lifecycle = asyncio.Event()
+
+        async def close_client_during_lifecycle():
+            async with adapter._client_lifecycle():
+                lifecycle_entered.set()
+                await release_lifecycle.wait()
+
+        lifecycle_task = asyncio.create_task(close_client_during_lifecycle())
+        await lifecycle_entered.wait()
+
+        bc = ModbusBindingConfig(**{**_HOLDING_CFG, "data_format": "uint16"})
+        write_task = asyncio.create_task(adapter._write_register(bc, 42))
+        read_task = asyncio.create_task(adapter._read_register(bc))
+        await asyncio.sleep(0.05)
+        assert not write_task.done()
+        assert not read_task.done()
+
+        client.connected = False
+        release_lifecycle.set()
+        read_result = await asyncio.wait_for(read_task, timeout=0.5)
+        await asyncio.wait_for(write_task, timeout=0.5)
+        await lifecycle_task
+
+        assert read_result is None
+        client.write_register.assert_not_awaited()
+        client.read_holding_registers.assert_not_awaited()
+
+        client.connected = True
+        adapter._stopping = True
+        assert await adapter._read_register(bc) is None
+        await adapter._write_register(bc, 42)
+        client.write_register.assert_not_awaited()
+        client.read_holding_registers.assert_not_awaited()
+
 
 class TestReloadPublishesStatus:
     """_on_bindings_reloaded publishes adapter status after reconnect."""
@@ -1719,6 +1762,17 @@ class TestReloadPublishesStatus:
         status_events = [c.args[0] for c in bus.publish.call_args_list if hasattr(c.args[0], "connected")]
         connected_events = [e for e in status_events if e.connected]
         assert connected_events, "No connected=True status published after reload reconnect"
+
+    async def test_reload_success_clears_stale_reconnect_backoff(self):
+        adapter, _ = _make_tcp()
+        client = _make_client(connected=True)
+        adapter._client = client
+        adapter._bindings = []
+        adapter._reconnect_ok_after = 999999.0
+
+        await adapter._on_bindings_reloaded()
+
+        assert adapter._reconnect_ok_after == 0.0
 
     async def test_reload_publishes_disconnected_on_failure(self):
         adapter, bus = _make_tcp()

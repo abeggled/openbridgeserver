@@ -196,6 +196,7 @@ class ModbusTcpAdapter(AdapterBase):
                     try:
                         await self._client.connect()
                         if self._client.connected:
+                            self._reconnect_ok_after = 0.0
                             await self._publish_status(True, f"{self._adp_cfg.host}:{self._adp_cfg.port}")
                             logger.info("Modbus TCP: reconnected after binding reload")
                         else:
@@ -420,12 +421,15 @@ class ModbusTcpAdapter(AdapterBase):
     async def _modbus_io_context(self):
         if self._io_sem is None:
             async with self._inflight_modbus_call():
-                yield
+                yield self._client if self._client_ready() else None
             return
 
         async with self._io_sem:
             async with self._inflight_modbus_call():
-                yield
+                yield self._client if self._client_ready() else None
+
+    def _client_ready(self) -> bool:
+        return bool(not self._stopping and self._client and self._client.connected)
 
     def _reconnect_backoff_delay(self, current_poll_interval: float) -> float:
         intervals = [current_poll_interval]
@@ -482,20 +486,23 @@ class ModbusTcpAdapter(AdapterBase):
 
         # Use _io_sem to serialize I/O when requested; lifecycle tracking remains
         # active even when serialize_reads=False.
-        async with self._modbus_io_context():
+        async with self._modbus_io_context() as client:
+            if client is None:
+                return None
+
             if bc.register_type == "holding":
                 r = await self._modbus_call(
-                    self._client.read_holding_registers,
+                    client.read_holding_registers,
                     bc.address,
                     count,
                     unit_id=bc.unit_id,
                 )
             elif bc.register_type == "input":
-                r = await self._modbus_call(self._client.read_input_registers, bc.address, count, unit_id=bc.unit_id)
+                r = await self._modbus_call(client.read_input_registers, bc.address, count, unit_id=bc.unit_id)
             elif bc.register_type == "coil":
-                r = await self._modbus_call(self._client.read_coils, bc.address, count, unit_id=bc.unit_id)
+                r = await self._modbus_call(client.read_coils, bc.address, count, unit_id=bc.unit_id)
             elif bc.register_type == "discrete_input":
-                r = await self._modbus_call(self._client.read_discrete_inputs, bc.address, count, unit_id=bc.unit_id)
+                r = await self._modbus_call(client.read_discrete_inputs, bc.address, count, unit_id=bc.unit_id)
             else:
                 return None
 
@@ -510,21 +517,24 @@ class ModbusTcpAdapter(AdapterBase):
     async def _write_register(self, bc: ModbusBindingConfig, value: Any) -> None:
         # Use the same _io_sem as reads — a concurrent write and read on the same
         # TCP socket reproduce exactly the stream-corruption race the PR fixes.
-        async with self._modbus_io_context():
+        async with self._modbus_io_context() as client:
+            if client is None:
+                return
+
             if bc.register_type == "coil":
-                await self._modbus_call(self._client.write_coil, bc.address, bool(value), unit_id=bc.unit_id)
+                await self._modbus_call(client.write_coil, bc.address, bool(value), unit_id=bc.unit_id)
             elif bc.register_type == "holding":
                 registers = encode_value(value, bc.data_format, bc.byte_order, bc.word_order, bc.scale_factor)
                 if len(registers) == 1:
                     await self._modbus_call(
-                        self._client.write_register,
+                        client.write_register,
                         bc.address,
                         registers[0],
                         unit_id=bc.unit_id,
                     )
                 else:
                     await self._modbus_call(
-                        self._client.write_registers,
+                        client.write_registers,
                         bc.address,
                         registers,
                         unit_id=bc.unit_id,
