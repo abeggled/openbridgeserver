@@ -9,7 +9,7 @@ BUILDER_IMAGE="obs-lxc-builder:latest"
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
 VERSION=""
-IMAGE_NAME="openbridgeserver"
+IMAGE_NAME="localhost/openbridgeserver"
 PUSH=false
 REPO=""
 OUTPUT_DIR="${PROJECT_ROOT}/dist"
@@ -31,7 +31,7 @@ Commands:
 
 Options:
   --version VER    Override version (default: git describe --tags --always --dirty)
-  --image   NAME   Docker image name/prefix (default: openbridgeserver)
+  --image   NAME   Docker image name/prefix (default: localhost/openbridgeserver)
                    For registry push: e.g. ghcr.io/owner/openbridgeserver
   --push           Push Docker image to registry after build
   --repo    REPO   GitHub repo slug for the obs-update script, e.g. owner/openbridgeserver
@@ -44,11 +44,10 @@ Examples:
   tools/build-local.sh docker
   tools/build-local.sh --version 2026.6.0 lxc
   tools/build-local.sh --push --image ghcr.io/owner/openbridgeserver docker
-  tools/build-local.sh --no-cache lxc
-  tools/build-local.sh all
-  tools/build-local.sh clean
 
 Notes:
+  - The docker command passes the version via --build-arg OBS_VERSION so
+    obs/version and gui/package.json in the working tree are never modified.
   - The lxc and bundle commands use a builder Docker image (obs-lxc-builder) that is
     built automatically on first run and cached via Docker layer cache.
   - The debootstrap base system is cached in ~/.cache/obs-lxc-builder/ to speed up
@@ -129,35 +128,26 @@ build_docker() {
     require_docker
     echo "==> Building Docker image ${IMAGE_NAME}:${version}..."
 
-    # Stamp obs/version and gui/package.json; restore both on exit
-    local orig_obs_version orig_pkg_json
-    orig_obs_version=$(cat "$PROJECT_ROOT/obs/version")
-    orig_pkg_json=$(cat "$PROJECT_ROOT/gui/package.json")
-    restore_stamps() {
-        echo "$orig_obs_version" > "$PROJECT_ROOT/obs/version"
-        printf '%s\n' "$orig_pkg_json" > "$PROJECT_ROOT/gui/package.json"
-    }
-    trap restore_stamps EXIT
-
-    local base rc
+    # Derive the stamped obs/version string from RELEASENOTES.md + optional RC suffix.
+    # This is passed as a build-arg so the working tree is never modified.
+    local base rc obs_version
     base=$(grep -m1 '^## ' "$PROJECT_ROOT/RELEASENOTES.md" | sed 's/^## *//')
     if [[ "$version" =~ (-RC[0-9]*)$ ]]; then rc="${BASH_REMATCH[1]}"; else rc=""; fi
-    echo "${base}${rc}" > "$PROJECT_ROOT/obs/version"
-    (command -v npm &>/dev/null && npm pkg set version="$version" --prefix "$PROJECT_ROOT/gui") || true
+    obs_version="${base}${rc}"
 
-    # Build via docker compose — reuses compose context, Dockerfile, and .env build args
-    docker compose --project-directory "$PROJECT_ROOT" build obs
+    # Build via docker compose — passes OBS_VERSION build-arg into the Dockerfile
+    docker compose --project-directory "$PROJECT_ROOT" build \
+        --build-arg OBS_VERSION="$obs_version" obs
 
-    restore_stamps
-    trap - EXIT
-
-    # Retag the compose-built image with the proper versioned name
+    # Retag the compose-built image with versioned names and remove the compose tag
     local githash src_image
     githash=$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo "local")
     src_image=$(compose_image_tag)
 
     docker tag "$src_image" "${IMAGE_NAME}:${version}"
     docker tag "$src_image" "${IMAGE_NAME}:${githash}"
+    # Remove the intermediate compose-named tag (keep only our versioned tags)
+    docker image rm "$src_image" 2>/dev/null || true
     echo "==> Tagged: ${IMAGE_NAME}:${version}, ${IMAGE_NAME}:${githash}"
 
     if [[ "$PUSH" == "true" ]]; then
