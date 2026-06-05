@@ -1222,3 +1222,117 @@ class TestBindingDeleteRecreateCycleRegression:
         for t in adapter._poll_tasks:
             t.cancel()
         await asyncio.gather(*adapter._poll_tasks, return_exceptions=True)
+
+# ---------------------------------------------------------------------------
+# Config options: serialize_reads + startup_jitter_s
+# ---------------------------------------------------------------------------
+
+
+class TestModbusTcpConfigOptions:
+    """Tests for the two new adapter config options introduced in PR#714."""
+
+    async def test_serialize_reads_true_creates_semaphore_1(self):
+        """serialize_reads=True (default) must create a Semaphore(1)."""
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "serialize_reads": True})
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        # Semaphore(1): first acquire succeeds, second blocks
+        await adapter._read_sem.acquire()
+        assert adapter._read_sem.locked()
+        adapter._read_sem.release()
+
+    async def test_serialize_reads_false_creates_unlimited_semaphore(self):
+        """serialize_reads=False must allow concurrent reads (Semaphore with large value)."""
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "serialize_reads": False})
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        # Should be able to acquire many times without blocking
+        for _ in range(10):
+            await adapter._read_sem.acquire()
+        assert not adapter._read_sem.locked()
+        for _ in range(10):
+            adapter._read_sem.release()
+
+    async def test_default_config_has_serialize_reads_true(self):
+        """Default adapter config must have serialize_reads=True (safe default)."""
+        from obs.adapters.modbus_tcp.adapter import ModbusTcpAdapterConfig
+        cfg = ModbusTcpAdapterConfig()
+        assert cfg.serialize_reads is True
+
+    async def test_default_config_has_startup_jitter_30s(self):
+        """Default startup_jitter_s must be 30s."""
+        from obs.adapters.modbus_tcp.adapter import ModbusTcpAdapterConfig
+        cfg = ModbusTcpAdapterConfig()
+        assert cfg.startup_jitter_s == 30.0
+
+    async def test_startup_jitter_zero_skips_sleep(self):
+        """startup_jitter_s=0 must skip the initial sleep entirely."""
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "startup_jitter_s": 0.0})
+        client = _make_client(connected=True, response=_ok_response([1]))
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+
+        sleep_calls = []
+        original_sleep = asyncio.sleep
+
+        async def recording_sleep(delay, *args, **kwargs):
+            sleep_calls.append(delay)
+            await original_sleep(0)  # don't actually sleep
+
+        binding = make_binding(_HOLDING_CFG, direction="SOURCE")
+        task = asyncio.create_task(adapter._poll_loop(binding))
+
+        with patch("asyncio.sleep", side_effect=recording_sleep):
+            task = asyncio.create_task(adapter._poll_loop(binding))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        # With jitter=0, no initial sleep (only poll_interval sleeps allowed)
+        jitter_sleeps = [d for d in sleep_calls if d > 0]
+        assert all(d >= _HOLDING_CFG["poll_interval"] for d in jitter_sleeps), (
+            "startup_jitter_s=0 produced an unexpected initial sleep"
+        )
+
+    async def test_startup_jitter_nonzero_produces_initial_sleep(self):
+        """startup_jitter_s > 0 must produce an initial sleep <= jitter_max."""
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "startup_jitter_s": 5.0})
+        client = _make_client(connected=True, response=_ok_response([1]))
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+
+        sleep_calls = []
+
+        async def recording_sleep(delay, *args, **kwargs):
+            sleep_calls.append(delay)
+
+        binding = make_binding({**_HOLDING_CFG, "poll_interval": 60.0}, direction="SOURCE")
+
+        with patch("asyncio.sleep", side_effect=recording_sleep):
+            task = asyncio.create_task(adapter._poll_loop(binding))
+            try:
+                await asyncio.wait_for(task, timeout=0.1)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        assert len(sleep_calls) >= 1, "No initial jitter sleep produced"
+        assert sleep_calls[0] <= 5.0, f"Jitter sleep {sleep_calls[0]:.2f}s exceeds startup_jitter_s=5.0"
