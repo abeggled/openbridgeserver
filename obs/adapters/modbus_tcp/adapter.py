@@ -7,7 +7,7 @@ Adapter-Konfiguration (adapter_configs.config):
   host:             str    (default: "192.168.1.1")
   port:             int    (default: 502)
   timeout:          float  (default: 3.0)
-  serialize_reads:  bool   (default: True)  — one in-flight read at a time
+  serialize_reads:  bool   (default: True)  — one in-flight I/O at a time
   startup_jitter_s: float  (default: 30.0) — max random delay before first poll
 
 Binding-Konfiguration (AdapterBinding.config):
@@ -23,6 +23,7 @@ Binding-Konfiguration (AdapterBinding.config):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import random
 import sys
@@ -81,13 +82,18 @@ class ModbusTcpAdapter(AdapterBase):
         super().__init__(event_bus, config, **kwargs)
         self._client: Any = None
         self._poll_tasks: list[asyncio.Task] = []
-        # Semaphore(1) = one in-flight read at a time (safe for embedded devices).
+        # I/O semaphore — serializes both reads *and* writes so that a concurrent
+        # DEST write cannot interleave with a SOURCE read and corrupt the TCP stream.
+        # None when serialize_reads=False (unlimited / no-op via nullcontext).
         # Reconfigured in connect() based on serialize_reads option.
-        self._read_sem: asyncio.Semaphore = asyncio.Semaphore(1)
+        self._io_sem: asyncio.Semaphore | None = asyncio.Semaphore(1)
         # Serializes reconnect attempts from concurrent poll tasks (double-checked locking).
         self._reconnect_lock: asyncio.Lock = asyncio.Lock()
         # Parsed adapter config — populated in connect(), used in _poll_loop.
         self._adp_cfg: ModbusTcpAdapterConfig = ModbusTcpAdapterConfig()
+        # True after the first _on_bindings_reloaded() call; jitter is only applied
+        # on initial start, not on subsequent binding changes (delete/recreate).
+        self._initial_load_done: bool = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -104,8 +110,9 @@ class ModbusTcpAdapter(AdapterBase):
         cfg = ModbusTcpAdapterConfig(**self._config)
         self._adp_cfg = cfg
 
-        # Configure read serialization: Semaphore(1) = serial, sys.maxsize = unlimited.
-        self._read_sem = asyncio.Semaphore(1 if cfg.serialize_reads else sys.maxsize)
+        # Configure I/O serialization: Semaphore(1) = one operation at a time (safe
+        # for embedded devices); None = no-op via nullcontext (for capable PLCs).
+        self._io_sem = asyncio.Semaphore(1) if cfg.serialize_reads else None
         logger.debug(
             "Modbus TCP: serialize_reads=%s startup_jitter_s=%.1f",
             cfg.serialize_reads,
@@ -131,7 +138,13 @@ class ModbusTcpAdapter(AdapterBase):
     async def disconnect(self) -> None:
         for t in self._poll_tasks:
             t.cancel()
+        # Wait for tasks to finish — same as _on_bindings_reloaded to avoid the
+        # race condition where a cancelled task is still mid-read when close() runs.
+        if self._poll_tasks:
+            await asyncio.gather(*self._poll_tasks, return_exceptions=True)
         self._poll_tasks.clear()
+        # Reset initial-load flag so jitter applies again on next connect().
+        self._initial_load_done = False
         if self._client:
             self._client.close()
         await self._publish_status(False, "Disconnected")
@@ -165,11 +178,17 @@ class ModbusTcpAdapter(AdapterBase):
             except Exception as exc:
                 logger.warning("Modbus TCP: reconnect after reload failed: %s", exc)
 
+        # Jitter is only useful on the very first load (spreading out the initial
+        # burst after an adapter restart). Subsequent reloads triggered by binding
+        # changes affect only a few tasks and should not add unnecessary delay.
+        apply_jitter = not self._initial_load_done
+        self._initial_load_done = True
+
         # Start a poller task per SOURCE/BOTH binding
         source_bindings = [b for b in self._bindings if b.direction in ("SOURCE", "BOTH")]
         for binding in source_bindings:
             t = asyncio.create_task(
-                self._poll_loop(binding),
+                self._poll_loop(binding, apply_jitter=apply_jitter),
                 name=f"modbus-tcp-poll-{binding.id}",
             )
             self._poll_tasks.append(t)
@@ -180,7 +199,7 @@ class ModbusTcpAdapter(AdapterBase):
     # Polling
     # ------------------------------------------------------------------
 
-    async def _poll_loop(self, binding: Any) -> None:
+    async def _poll_loop(self, binding: Any, *, apply_jitter: bool = True) -> None:
         try:
             bc = ModbusBindingConfig(**binding.config)
         except Exception:
@@ -188,11 +207,11 @@ class ModbusTcpAdapter(AdapterBase):
             return
 
         # Stagger the initial poll with a random delay (startup_jitter_s adapter option).
-        # Prevents all N tasks from firing simultaneously on adapter start, which would
-        # overwhelm single-threaded Modbus TCP devices.
-        _jitter_max = self._adp_cfg.startup_jitter_s
-        if _jitter_max > 0:
-            await asyncio.sleep(random.uniform(0, min(bc.poll_interval * 0.5, _jitter_max)))
+        # Only applied on the first load after connect(), not on binding changes.
+        if apply_jitter:
+            _jitter_max = self._adp_cfg.startup_jitter_s
+            if _jitter_max > 0:
+                await asyncio.sleep(random.uniform(0, min(bc.poll_interval * 0.5, _jitter_max)))
 
         while True:
             # Auto-reconnect if the client became disconnected (e.g. after a reload
@@ -210,14 +229,28 @@ class ModbusTcpAdapter(AdapterBase):
                                 port = self._adp_cfg.port
                                 await self._publish_status(True, f"{host}:{port}")
                                 logger.info(
-                                    "Modbus TCP: reconnected in poll loop (binding %s)",
+                                    "Modbus TCP: reconnected in poll loop (binding %s)", binding.id
+                                )
+                            else:
+                                # connect() returned without error but socket is still down.
+                                logger.warning(
+                                    "Modbus TCP: connect() succeeded but client still disconnected (binding %s)",
                                     binding.id,
                                 )
+                                await self._bus.publish(
+                                    DataValueEvent(
+                                        datapoint_id=binding.datapoint_id,
+                                        value=None,
+                                        quality="bad",
+                                        source_adapter=self.adapter_type,
+                                        binding_id=binding.id,
+                                    ),
+                                )
+                                await asyncio.sleep(bc.poll_interval)
+                                continue
                         except Exception as exc:
                             logger.warning(
-                                "Modbus TCP: reconnect failed (binding %s): %s",
-                                binding.id,
-                                exc,
+                                "Modbus TCP: reconnect failed (binding %s): %s", binding.id, exc
                             )
                             await self._bus.publish(
                                 DataValueEvent(
@@ -332,7 +365,8 @@ class ModbusTcpAdapter(AdapterBase):
 
         count = register_count(bc.data_format)
 
-        async with self._read_sem:
+        # Use _io_sem to serialize I/O; None means no-op (serialize_reads=False).
+        async with (self._io_sem or contextlib.nullcontext()):
             if bc.register_type == "holding":
                 r = await self._modbus_call(
                     self._client.read_holding_registers,
@@ -342,19 +376,15 @@ class ModbusTcpAdapter(AdapterBase):
                 )
             elif bc.register_type == "input":
                 r = await self._modbus_call(
-                    self._client.read_input_registers,
-                    bc.address,
-                    count,
-                    unit_id=bc.unit_id,
+                    self._client.read_input_registers, bc.address, count, unit_id=bc.unit_id
                 )
             elif bc.register_type == "coil":
-                r = await self._modbus_call(self._client.read_coils, bc.address, count, unit_id=bc.unit_id)
+                r = await self._modbus_call(
+                    self._client.read_coils, bc.address, count, unit_id=bc.unit_id
+                )
             elif bc.register_type == "discrete_input":
                 r = await self._modbus_call(
-                    self._client.read_discrete_inputs,
-                    bc.address,
-                    count,
-                    unit_id=bc.unit_id,
+                    self._client.read_discrete_inputs, bc.address, count, unit_id=bc.unit_id
                 )
             else:
                 return None
@@ -366,29 +396,32 @@ class ModbusTcpAdapter(AdapterBase):
                 return bool(r.bits[0])
 
             return decode_registers(
-                r.registers,
-                bc.data_format,
-                bc.byte_order,
-                bc.word_order,
-                bc.scale_factor,
+                r.registers, bc.data_format, bc.byte_order, bc.word_order, bc.scale_factor
             )
 
     async def _write_register(self, bc: ModbusBindingConfig, value: Any) -> None:
-        if bc.register_type == "coil":
-            await self._modbus_call(self._client.write_coil, bc.address, bool(value), unit_id=bc.unit_id)
-        elif bc.register_type == "holding":
-            registers = encode_value(value, bc.data_format, bc.byte_order, bc.word_order, bc.scale_factor)
-            if len(registers) == 1:
+        # Use the same _io_sem as reads — a concurrent write and read on the same
+        # TCP socket reproduce exactly the stream-corruption race the PR fixes.
+        async with (self._io_sem or contextlib.nullcontext()):
+            if bc.register_type == "coil":
                 await self._modbus_call(
-                    self._client.write_register,
-                    bc.address,
-                    registers[0],
-                    unit_id=bc.unit_id,
+                    self._client.write_coil, bc.address, bool(value), unit_id=bc.unit_id
                 )
-            else:
-                await self._modbus_call(
-                    self._client.write_registers,
-                    bc.address,
-                    registers,
-                    unit_id=bc.unit_id,
+            elif bc.register_type == "holding":
+                registers = encode_value(
+                    value, bc.data_format, bc.byte_order, bc.word_order, bc.scale_factor
                 )
+                if len(registers) == 1:
+                    await self._modbus_call(
+                        self._client.write_register,
+                        bc.address,
+                        registers[0],
+                        unit_id=bc.unit_id,
+                    )
+                else:
+                    await self._modbus_call(
+                        self._client.write_registers,
+                        bc.address,
+                        registers,
+                        unit_id=bc.unit_id,
+                    )
