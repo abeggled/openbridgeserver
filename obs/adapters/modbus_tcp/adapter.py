@@ -176,7 +176,7 @@ class ModbusTcpAdapter(AdapterBase):
             # Close and reconnect while holding _io_sem so any in-flight write
             # finishes before close() tears down the socket underneath it.
             if self._client:
-                async with (self._io_sem or contextlib.nullcontext()):
+                async with self._io_sem or contextlib.nullcontext():
                     try:
                         self._client.close()
                     except Exception:
@@ -184,9 +184,7 @@ class ModbusTcpAdapter(AdapterBase):
                     try:
                         await self._client.connect()
                         if self._client.connected:
-                            await self._publish_status(
-                                True, f"{self._adp_cfg.host}:{self._adp_cfg.port}"
-                            )
+                            await self._publish_status(True, f"{self._adp_cfg.host}:{self._adp_cfg.port}")
                             logger.info("Modbus TCP: reconnected after binding reload")
                         else:
                             await self._publish_status(
@@ -285,9 +283,7 @@ class ModbusTcpAdapter(AdapterBase):
                                 continue
                         except Exception as exc:
                             self._reconnect_ok_after = time.monotonic() + bc.poll_interval
-                            logger.warning(
-                                "Modbus TCP: reconnect failed (binding %s): %s", binding.id, exc
-                            )
+                            logger.warning("Modbus TCP: reconnect failed (binding %s): %s", binding.id, exc)
                             await self._bus.publish(
                                 DataValueEvent(
                                     datapoint_id=binding.datapoint_id,
@@ -402,7 +398,7 @@ class ModbusTcpAdapter(AdapterBase):
         count = register_count(bc.data_format)
 
         # Use _io_sem to serialize I/O; None means no-op (serialize_reads=False).
-        async with (self._io_sem or contextlib.nullcontext()):
+        async with self._io_sem or contextlib.nullcontext():
             if bc.register_type == "holding":
                 r = await self._modbus_call(
                     self._client.read_holding_registers,
@@ -411,17 +407,11 @@ class ModbusTcpAdapter(AdapterBase):
                     unit_id=bc.unit_id,
                 )
             elif bc.register_type == "input":
-                r = await self._modbus_call(
-                    self._client.read_input_registers, bc.address, count, unit_id=bc.unit_id
-                )
+                r = await self._modbus_call(self._client.read_input_registers, bc.address, count, unit_id=bc.unit_id)
             elif bc.register_type == "coil":
-                r = await self._modbus_call(
-                    self._client.read_coils, bc.address, count, unit_id=bc.unit_id
-                )
+                r = await self._modbus_call(self._client.read_coils, bc.address, count, unit_id=bc.unit_id)
             elif bc.register_type == "discrete_input":
-                r = await self._modbus_call(
-                    self._client.read_discrete_inputs, bc.address, count, unit_id=bc.unit_id
-                )
+                r = await self._modbus_call(self._client.read_discrete_inputs, bc.address, count, unit_id=bc.unit_id)
             else:
                 return None
 
@@ -431,22 +421,16 @@ class ModbusTcpAdapter(AdapterBase):
             if bc.register_type in ("coil", "discrete_input"):
                 return bool(r.bits[0])
 
-            return decode_registers(
-                r.registers, bc.data_format, bc.byte_order, bc.word_order, bc.scale_factor
-            )
+            return decode_registers(r.registers, bc.data_format, bc.byte_order, bc.word_order, bc.scale_factor)
 
     async def _write_register(self, bc: ModbusBindingConfig, value: Any) -> None:
         # Use the same _io_sem as reads — a concurrent write and read on the same
         # TCP socket reproduce exactly the stream-corruption race the PR fixes.
-        async with (self._io_sem or contextlib.nullcontext()):
+        async with self._io_sem or contextlib.nullcontext():
             if bc.register_type == "coil":
-                await self._modbus_call(
-                    self._client.write_coil, bc.address, bool(value), unit_id=bc.unit_id
-                )
+                await self._modbus_call(self._client.write_coil, bc.address, bool(value), unit_id=bc.unit_id)
             elif bc.register_type == "holding":
-                registers = encode_value(
-                    value, bc.data_format, bc.byte_order, bc.word_order, bc.scale_factor
-                )
+                registers = encode_value(value, bc.data_format, bc.byte_order, bc.word_order, bc.scale_factor)
                 if len(registers) == 1:
                     await self._modbus_call(
                         self._client.write_register,

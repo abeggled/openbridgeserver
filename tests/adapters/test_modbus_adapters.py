@@ -1290,6 +1290,7 @@ class TestModbusTcpConfigOptions:
         adapter._client = client
 
         sleep_calls = []
+
         async def recording_sleep(delay, *args, **kwargs):
             sleep_calls.append(delay)
             raise asyncio.CancelledError  # exit immediately after capturing the delay
@@ -1665,6 +1666,5 @@ class TestReconnectBackoff:
         await asyncio.gather(t1, t2, return_exceptions=True)
 
         assert connect_calls == 1, (
-            f"Expected 1 connect() call due to backoff, got {connect_calls}. "
-            "Without backoff, every binding fires its own timeout."
+            f"Expected 1 connect() call due to backoff, got {connect_calls}. Without backoff, every binding fires its own timeout."
         )
