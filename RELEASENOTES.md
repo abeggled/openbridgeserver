@@ -48,6 +48,7 @@
 * Visu: Bar chart mode for history/chart widget. https://github.com/abeggled/openbridgeserver/pull/444
 * Visu: Added configurable ButtonGroup widget for one-shot actions, scene triggers, and grouped command buttons. https://github.com/abeggled/openbridgeserver/issues/675
 * Visu: Widgets können per Drag & Drop aus der Palette direkt an eine bestimmte Position auf der Seite gezogen werden; eine blaue Vorschau zeigt die Zielposition. Klick auf ein Widget fügt es weiterhin automatisch an der ersten freien Position ein. Die Widget-Liste ist jetzt sprachspezifisch alphabetisch sortiert. https://github.com/abeggled/openbridgeserver/issues/667
+* Visu: Stufenschalter now supports configurable operation modes for sequence cycling, selection with save, and direct selection while remaining compatible with existing step configurations.
 
 ### Fixes 🐞
 * Backend: `PATCH /api/v1/datapoints/{id}` now correctly accepts a `value` field. The value is validated and coerced against the datapoint's `data_type` (incompatible types return 422); on success a `DataValueEvent` is published and the value is immediately readable. Explicit `"value": null` clears the stored value with `quality="uncertain"`. https://github.com/abeggled/openbridgeserver/pull/707
