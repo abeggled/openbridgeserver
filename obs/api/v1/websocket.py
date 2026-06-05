@@ -43,17 +43,19 @@ class WebSocketManager:
     """Tracks all connected WebSocket clients and their DataPoint subscriptions."""
 
     def __init__(self) -> None:
-        # conn_id → (websocket, subscribed_dp_ids, send_lock, allowed_dp_ids)
+        # conn_id → (websocket, subscribed_dp_ids, send_lock, allowed_dp_ids, log_access)
         # allowed_dp_ids: None = unrestricted (authenticated user),
         # otherwise page-scoped allowlist for anonymous viewer sessions.
+        # log_access: only admin-authenticated connections receive log_entry pushes.
         # send_lock serialises concurrent sends on the same WebSocket;
         # concurrent asyncio.gather calls in EventBus would otherwise race.
-        self._connections: dict[str, tuple[WebSocket, set[str], asyncio.Lock, set[str] | None]] = {}
+        self._connections: dict[str, tuple[WebSocket, set[str], asyncio.Lock, set[str] | None, bool]] = {}
 
     async def connect(
         self,
         ws: WebSocket,
         allowed_dp_ids: set[str] | None = None,
+        log_access: bool = False,
         subprotocol: str | None = None,
     ) -> str:
         if subprotocol is None:
@@ -65,7 +67,7 @@ class WebSocketManager:
                 # Test doubles may not support the subprotocol kwarg.
                 await ws.accept()
         conn_id = str(uuid.uuid4())
-        self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids)
+        self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access)
         logger.debug("WS client connected: %s  (total: %d)", conn_id[:8], len(self._connections))
         return conn_id
 
@@ -112,7 +114,7 @@ class WebSocketManager:
         entry = self._connections.get(conn_id)
         if entry is None:
             return False
-        ws, _, lock, _allowed = entry
+        ws, _, lock, _allowed, _log_access = entry
         async with lock:
             try:
                 await ws.send_json(msg)
@@ -129,7 +131,10 @@ class WebSocketManager:
     async def broadcast(self, msg: dict) -> None:
         """Send a message to ALL connected clients (no subscription filter)."""
         dead: list[str] = []
-        for conn_id in list(self._connections):
+        log_only = msg.get("action") == "log_entry"
+        for conn_id, (_, _subs, _lock, _allowed_ids, log_access) in list(self._connections.items()):
+            if log_only and not log_access:
+                continue
             if not await self._send(conn_id, msg):
                 dead.append(conn_id)
         for conn_id in dead:
@@ -162,7 +167,7 @@ class WebSocketManager:
             "old_v": jsonable(state.old_value) if state else None,
         }
         dead: list[str] = []
-        for conn_id, (_, subs, _lock, _allowed_ids) in list(self._connections.items()):
+        for conn_id, (_, subs, _lock, _allowed_ids, _log_access) in list(self._connections.items()):
             if dp_id_str not in subs:
                 continue
             if not await self._send(conn_id, dp_msg):
@@ -185,7 +190,7 @@ class WebSocketManager:
             },
         }
         dead = []
-        for conn_id, (_, _subs, _lock, allowed_ids) in list(self._connections.items()):
+        for conn_id, (_, _subs, _lock, allowed_ids, _log_access) in list(self._connections.items()):
             if allowed_ids is not None and dp_id_str not in allowed_ids:
                 continue
             if not await self._send(conn_id, rb_msg):
@@ -429,6 +434,27 @@ async def _authenticate_ws_request(ws: WebSocket) -> tuple[bool, str]:
     return await _authenticate_visu_page_scope(ws)
 
 
+async def _ws_has_log_access(user: str | None, api_key: str | None) -> bool:
+    """Return whether the authenticated websocket may receive log_entry pushes."""
+    db = get_db()
+    if user and user != "__api_key__":
+        row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (user,))
+        return row is not None and bool(row["is_admin"])
+    if api_key:
+        from obs.api.auth import hash_api_key
+
+        key_hash = hash_api_key(api_key)
+        row = await db.fetchone(
+            """SELECT u.is_admin
+               FROM api_keys k
+               JOIN users u ON u.username = k.owner
+               WHERE k.key_hash=?""",
+            (key_hash,),
+        )
+        return row is not None and bool(row["is_admin"])
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Singleton
 # ---------------------------------------------------------------------------
@@ -544,8 +570,15 @@ async def websocket_endpoint(
             # page config cannot be parsed (e.g. lightweight test doubles).
             allowed_dp_ids = set()
 
+    log_access = await _ws_has_log_access(user, api_key) if allowed_dp_ids is None else False
+
     manager = get_ws_manager()
-    conn_id = await manager.connect(ws, allowed_dp_ids=allowed_dp_ids, subprotocol=selected_subprotocol)
+    conn_id = await manager.connect(
+        ws,
+        allowed_dp_ids=allowed_dp_ids,
+        log_access=log_access,
+        subprotocol=selected_subprotocol,
+    )
 
     try:
         while True:

@@ -59,9 +59,20 @@ _ENDPOINT_KEY_PARTS = (
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _IPV6_CANDIDATE_RE = re.compile(r"\b[0-9a-fA-F:]*:[0-9a-fA-F:]+\b")
 _LONG_TOKEN_RE = re.compile(r"(?i)\b(?:token|secret|password|passwd|api[_-]?key)=([^&\s]+)")
+_AUTH_HEADER_RE = re.compile(r"(?i)\bauthorization\s*:\s*(?:bearer|basic)\s+[^\s,;]+")
+_HEADER_SECRET_RE = re.compile(r"(?i)\b(x-api-key|api-key)\s*:\s*([^\s,;]+)")
+_COLON_SECRET_RE = re.compile(
+    r"(?i)\b(token|secret|password|passwd|api[_-]?key)\s*:\s*"
+    r"([^\s,;}]+)"
+)
+_JSON_SECRET_RE = re.compile(
+    r"(?i)([\"'](?:token|secret|password|passwd|api[_-]?key)[\"']\s*:\s*)"
+    r"([\"'])(.*?)(\2)"
+)
 
 _debug_restore_task: asyncio.Task[None] | None = None
 _debug_restore_level: str | None = None
+_debug_temporary_level: str | None = None
 _debug_until: datetime | None = None
 
 
@@ -154,7 +165,7 @@ async def enable_debug_log(
     _admin: str = Depends(get_admin_user),
 ) -> DebugLogStatusOut:
     """Temporarily enable verbose logging for support diagnostics."""
-    global _debug_restore_level, _debug_restore_task, _debug_until
+    global _debug_restore_level, _debug_restore_task, _debug_temporary_level, _debug_until
 
     level = body.level.upper()
     if level not in _VALID_LOG_LEVELS:
@@ -173,6 +184,7 @@ async def enable_debug_log(
         _debug_restore_task.cancel()
 
     _debug_until = datetime.now(UTC) + _duration(body.duration_seconds)
+    _debug_temporary_level = level
     set_log_buffer_level(level)
     _debug_restore_task = asyncio.create_task(_restore_debug_later(body.duration_seconds))
     return _debug_status(level=level)
@@ -274,7 +286,7 @@ async def _build_adapter_info(db: Database) -> list[dict[str, Any]]:
         """SELECT adapter_instance_id, COUNT(DISTINCT datapoint_id) AS count
            FROM adapter_bindings GROUP BY adapter_instance_id""",
     )
-    tps_by_instance, tps_by_adapter_type = await _ringbuffer_tps(window_seconds=60)
+    tps_available, tps_by_instance, tps_by_adapter_type = await _ringbuffer_tps(window_seconds=60)
     result: list[dict[str, Any]] = []
     for row in rows:
         instance = adapter_registry.get_instance_by_id(row["id"])
@@ -295,10 +307,12 @@ async def _build_adapter_info(db: Database) -> list[dict[str, Any]]:
                 "config": sanitize_support_data(config),
                 "objects": object_counts.get(row["id"], 0),
                 "bindings": binding_counts.get(row["id"], 0),
-                "transactions_per_second": tps,
-                "metrics_available": True,
-                "metrics_source": "ringbuffer_metadata_adapter_instance_60s",
-                "adapter_type_transactions_per_second": tps_by_adapter_type.get(adapter_type.upper(), 0.0),
+                "transactions_per_second": tps if tps_available else None,
+                "metrics_available": tps_available,
+                "metrics_source": "ringbuffer_metadata_adapter_instance_60s" if tps_available else None,
+                "adapter_type_transactions_per_second": (
+                    tps_by_adapter_type.get(adapter_type.upper(), 0.0) if tps_available else None
+                ),
                 "health": {
                     "severity": getattr(instance, "last_severity", "ok") if instance else "ok",
                     "detail": sanitize_support_data(getattr(instance, "last_detail", "") if instance else ""),
@@ -375,14 +389,14 @@ async def _counts_by_adapter(db: Database, query: str) -> dict[str, int]:
     return {row["adapter_instance_id"] or "": int(row["count"]) for row in rows}
 
 
-async def _ringbuffer_tps(window_seconds: int = 60) -> tuple[dict[str, float], dict[str, float]]:
+async def _ringbuffer_tps(window_seconds: int = 60) -> tuple[bool, dict[str, float], dict[str, float]]:
     try:
         from obs.ringbuffer.ringbuffer import get_ringbuffer
 
         since = _iso(datetime.now(UTC) - timedelta(seconds=window_seconds))
         entries = await get_ringbuffer().query(from_ts=since or "", limit=10000)
     except RuntimeError:
-        return {}, {}
+        return False, {}, {}
 
     instance_counts: dict[str, int] = {}
     type_counts: dict[str, int] = {}
@@ -404,6 +418,7 @@ async def _ringbuffer_tps(window_seconds: int = 60) -> tuple[dict[str, float], d
             type_counts[key] = type_counts.get(key, 0) + 1
 
     return (
+        True,
         {key: round(count / window_seconds, 3) for key, count in instance_counts.items()},
         {key: round(count / window_seconds, 3) for key, count in type_counts.items()},
     )
@@ -465,6 +480,10 @@ def _sanitize_log_entry(entry: dict[str, Any]) -> dict[str, Any]:
 
 def _sanitize_string(value: str) -> str:
     sanitized = _LONG_TOKEN_RE.sub(lambda match: match.group(0).split("=", 1)[0] + "=[REDACTED]", value)
+    sanitized = _JSON_SECRET_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]{match.group(4)}", sanitized)
+    sanitized = _COLON_SECRET_RE.sub(lambda match: f"{match.group(1)}: [REDACTED]", sanitized)
+    sanitized = _AUTH_HEADER_RE.sub("Authorization: [REDACTED]", sanitized)
+    sanitized = _HEADER_SECRET_RE.sub(lambda match: f"{match.group(1)}: [REDACTED]", sanitized)
     sanitized = _sanitize_urls(sanitized)
     sanitized = _IPV4_RE.sub("[REDACTED_IP]", sanitized)
     sanitized = _IPV6_CANDIDATE_RE.sub(_sanitize_ipv6_candidate, sanitized)
@@ -554,14 +573,17 @@ async def _restore_debug_later(seconds: int) -> None:
 
 
 async def _restore_debug_now() -> None:
-    global _debug_restore_level, _debug_restore_task, _debug_until
+    global _debug_restore_level, _debug_restore_task, _debug_temporary_level, _debug_until
 
     if _debug_restore_task and not _debug_restore_task.done():
         _debug_restore_task.cancel()
     restore_level = _debug_restore_level or "INFO"
-    set_log_buffer_level(restore_level)
+    current_level = logging.getLevelName(logging.getLogger().level)
+    if current_level == (_debug_temporary_level or "DEBUG"):
+        set_log_buffer_level(restore_level)
     _debug_restore_level = None
     _debug_restore_task = None
+    _debug_temporary_level = None
     _debug_until = None
 
 

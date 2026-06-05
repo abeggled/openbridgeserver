@@ -18,7 +18,13 @@ from __future__ import annotations
 
 import pytest
 
+from obs.api.auth import create_access_token
+
 pytestmark = pytest.mark.integration
+
+
+def _headers_for(username: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {create_access_token(username)}"}
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +273,21 @@ async def test_history_test_requires_auth(client):
 async def test_get_logs_requires_auth(client):
     resp = await client.get("/api/v1/system/logs")
     assert resp.status_code == 401
+
+
+async def test_get_logs_requires_admin(client, auth_headers):
+    username = "system-logs-non-admin"
+    created = await client.post(
+        "/api/v1/auth/users",
+        json={"username": username, "password": "pw-12345678", "is_admin": False},
+        headers=auth_headers,
+    )
+    assert created.status_code == 201, created.text
+    try:
+        resp = await client.get("/api/v1/system/logs", headers=_headers_for(username))
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_get_logs_returns_list(client, auth_headers):

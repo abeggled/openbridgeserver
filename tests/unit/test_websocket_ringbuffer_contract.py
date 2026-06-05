@@ -119,6 +119,22 @@ async def test_broadcast_disconnects_dead_connection_on_transport_error():
 
 
 @pytest.mark.asyncio
+async def test_log_broadcast_only_reaches_log_access_connections():
+    manager = WebSocketManager()
+    admin_ws = _FakeWebSocket()
+    user_ws = _FakeWebSocket()
+
+    await manager.connect(admin_ws, log_access=True)
+    await manager.connect(user_ws, log_access=False)
+
+    msg = {"action": "log_entry", "entry": {"level": "DEBUG", "message": "secret detail"}}
+    await manager.broadcast(msg)
+
+    assert admin_ws.messages == [msg]
+    assert user_ws.messages == []
+
+
+@pytest.mark.asyncio
 async def test_subscribe_filters_datapoints_for_page_scoped_connection():
     ws = _FakeWebSocket()
     manager = WebSocketManager()
