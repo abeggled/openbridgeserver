@@ -1,0 +1,571 @@
+"""Support diagnostics API.
+
+Phase 1 deliberately only builds an explicit, sanitized export package.
+It does not send data anywhere and does not create remote access sessions.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import ipaddress
+import json
+import logging
+import os
+import platform
+import re
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from urllib.parse import urlsplit, urlunsplit
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi import status as http_status
+from pydantic import BaseModel, Field
+
+from obs import __version__
+from obs.adapters import registry as adapter_registry
+from obs.api.auth import get_admin_user
+from obs.config import get_settings
+from obs.db.database import Database, get_db
+from obs.log_buffer import get_log_buffer, set_log_buffer_level
+
+router = APIRouter(tags=["support"])
+
+_PROCESS_STARTED_AT = datetime.now(UTC)
+_VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+_SENSITIVE_KEY_PARTS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "credential",
+    "username",
+    "apikey",
+    "api_key",
+    "keyfile",
+    "private_key",
+    "jwt",
+)
+_ENDPOINT_KEY_PARTS = (
+    "host",
+    "hostname",
+    "ip",
+    "address",
+    "url",
+    "uri",
+    "dsn",
+    "endpoint",
+    "server",
+)
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_IPV6_CANDIDATE_RE = re.compile(r"\b[0-9a-fA-F:]*:[0-9a-fA-F:]+\b")
+_LONG_TOKEN_RE = re.compile(r"(?i)\b(?:token|secret|password|passwd|api[_-]?key)=([^&\s]+)")
+
+_debug_restore_task: asyncio.Task[None] | None = None
+_debug_restore_level: str | None = None
+_debug_until: datetime | None = None
+
+
+class SupportCategoryOut(BaseModel):
+    key: str
+    label: str
+    description: str
+
+
+class DebugLogRequest(BaseModel):
+    duration_seconds: int = Field(300, ge=30, le=3600)
+    level: str = "DEBUG"
+
+
+class DebugLogStatusOut(BaseModel):
+    active: bool
+    level: str
+    until: str | None = None
+
+
+class SupportPackageOut(BaseModel):
+    schema_version: int
+    generated_at: str
+    generated_by: str
+    categories: list[str]
+    privacy: dict[str, Any]
+    installation: dict[str, Any]
+    runtime: dict[str, Any]
+    adapters: list[dict[str, Any]]
+    history: dict[str, Any]
+    monitor: dict[str, Any]
+    health: dict[str, Any]
+    warning_history: list[dict[str, Any]]
+    error_history: list[dict[str, Any]]
+    debug_log: list[dict[str, Any]]
+
+
+@router.get("/categories", response_model=list[SupportCategoryOut])
+async def support_categories(
+    _admin: str = Depends(get_admin_user),
+) -> list[SupportCategoryOut]:
+    """Return the information categories included in a support export."""
+    return _support_categories()
+
+
+@router.post("/package", response_model=SupportPackageOut)
+async def create_support_package(
+    db: Database = Depends(get_db),
+    admin: str = Depends(get_admin_user),
+) -> SupportPackageOut:
+    """Build a sanitized support package on explicit admin request."""
+    now = datetime.now(UTC)
+    log_entries = [_sanitize_log_entry(entry) for entry in get_log_buffer()]
+    error_history = [entry for entry in log_entries if entry.get("level") in {"ERROR", "CRITICAL"}][-50:]
+    warning_history = [entry for entry in log_entries if entry.get("level") in {"WARNING", "ERROR", "CRITICAL"}][-100:]
+
+    return SupportPackageOut(
+        schema_version=1,
+        generated_at=_iso(now),
+        generated_by=admin,
+        categories=[category.key for category in _support_categories()],
+        privacy={
+            "automatic_upload": False,
+            "remote_access": False,
+            "sanitizer": "central_recursive_v1",
+            "redacted": ["credentials", "tokens", "secrets", "IP addresses", "endpoint values"],
+        },
+        installation=_build_installation_info(),
+        runtime=_build_runtime_info(now),
+        adapters=await _build_adapter_info(db),
+        history=await _build_history_info(db),
+        monitor=await _build_monitor_info(),
+        health=_build_health_info(now),
+        warning_history=warning_history,
+        error_history=error_history,
+        debug_log=log_entries[-200:],
+    )
+
+
+@router.get("/debug-log", response_model=DebugLogStatusOut)
+async def get_debug_log_status(
+    _admin: str = Depends(get_admin_user),
+) -> DebugLogStatusOut:
+    return _debug_status()
+
+
+@router.post("/debug-log", response_model=DebugLogStatusOut)
+async def enable_debug_log(
+    body: DebugLogRequest,
+    _admin: str = Depends(get_admin_user),
+) -> DebugLogStatusOut:
+    """Temporarily enable verbose logging for support diagnostics."""
+    global _debug_restore_level, _debug_restore_task, _debug_until
+
+    level = body.level.upper()
+    if level not in _VALID_LOG_LEVELS:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"level must be one of: {', '.join(sorted(_VALID_LOG_LEVELS))}",
+        )
+
+    current = logging.getLevelName(logging.getLogger().level)
+    if not isinstance(current, str):
+        current = "INFO"
+    if _debug_restore_level is None:
+        _debug_restore_level = current
+
+    if _debug_restore_task and not _debug_restore_task.done():
+        _debug_restore_task.cancel()
+
+    _debug_until = datetime.now(UTC) + _duration(body.duration_seconds)
+    set_log_buffer_level(level)
+    _debug_restore_task = asyncio.create_task(_restore_debug_later(body.duration_seconds))
+    return _debug_status(level=level)
+
+
+@router.delete("/debug-log", response_model=DebugLogStatusOut)
+async def disable_debug_log(
+    _admin: str = Depends(get_admin_user),
+) -> DebugLogStatusOut:
+    """Disable a temporary support debug window immediately."""
+    await _restore_debug_now()
+    return _debug_status()
+
+
+def sanitize_support_data(value: Any, key: str | None = None) -> Any:
+    """Recursively redact secrets, credentials, endpoints and IP addresses."""
+    if _is_sensitive_key(key):
+        return "[REDACTED]"
+    if _is_endpoint_key(key):
+        return "[REDACTED_ENDPOINT]"
+    if isinstance(value, dict):
+        return {str(k): sanitize_support_data(v, str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize_support_data(item, key) for item in value]
+    if isinstance(value, tuple):
+        return [sanitize_support_data(item, key) for item in value]
+    if isinstance(value, str):
+        return _sanitize_string(value)
+    return value
+
+
+def _support_categories() -> list[SupportCategoryOut]:
+    return [
+        SupportCategoryOut(
+            key="installation",
+            label="Installation",
+            description="Installation type, OBS version, operating system and runtime environment.",
+        ),
+        SupportCategoryOut(
+            key="adapters",
+            label="Adapters",
+            description="Enabled adapter instances, sanitized adapter configuration, binding and object counts.",
+        ),
+        SupportCategoryOut(
+            key="health",
+            label="Health",
+            description="Runtime health states, uptime and last start timestamp.",
+        ),
+        SupportCategoryOut(
+            key="history",
+            label="History",
+            description="History backend configuration and sanitized storage statistics.",
+        ),
+        SupportCategoryOut(
+            key="monitor",
+            label="Monitor",
+            description="RingBuffer/Monitor configuration, retention and storage statistics.",
+        ),
+        SupportCategoryOut(
+            key="logs",
+            label="Logs",
+            description="Recent sanitized error history and in-memory debug log entries.",
+        ),
+    ]
+
+
+def _build_installation_info() -> dict[str, Any]:
+    settings = get_settings()
+    return sanitize_support_data(
+        {
+            "installation_type": _detect_installation_type(),
+            "obs_version": __version__,
+            "config_source": os.environ.get("OBS_CONFIG") or "config.yaml",
+            "database": {"path": settings.database.path, "history_plugin": settings.database.history_plugin},
+        },
+    )
+
+
+def _build_runtime_info(now: datetime) -> dict[str, Any]:
+    return {
+        "os": platform.system(),
+        "os_release": platform.release(),
+        "architecture": platform.machine(),
+        "python_version": platform.python_version(),
+        "environment": _detect_runtime_environment(),
+        "started_at": _iso(_PROCESS_STARTED_AT),
+        "uptime_seconds": max(0, int((now - _PROCESS_STARTED_AT).total_seconds())),
+    }
+
+
+async def _build_adapter_info(db: Database) -> list[dict[str, Any]]:
+    rows = await db.fetchall("SELECT * FROM adapter_instances ORDER BY adapter_type, name")
+    binding_counts = await _counts_by_adapter(
+        db,
+        "SELECT adapter_instance_id, COUNT(*) AS count FROM adapter_bindings GROUP BY adapter_instance_id",
+    )
+    object_counts = await _counts_by_adapter(
+        db,
+        """SELECT adapter_instance_id, COUNT(DISTINCT datapoint_id) AS count
+           FROM adapter_bindings GROUP BY adapter_instance_id""",
+    )
+    tps_by_instance, tps_by_adapter_type = await _ringbuffer_tps(window_seconds=60)
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        instance = adapter_registry.get_instance_by_id(row["id"])
+        adapter_type = row["adapter_type"]
+        cls = adapter_registry.get_class(adapter_type)
+        config = json.loads(row["config"]) if row["config"] else {}
+        tps = tps_by_instance.get(row["id"], 0.0)
+        result.append(
+            {
+                "id": row["id"],
+                "adapter_type": adapter_type,
+                "name": row["name"],
+                "enabled": bool(row["enabled"]),
+                "registered": cls is not None,
+                "running": instance is not None,
+                "connected": bool(instance.connected) if instance else False,
+                "version": _adapter_version(cls),
+                "config": sanitize_support_data(config),
+                "objects": object_counts.get(row["id"], 0),
+                "bindings": binding_counts.get(row["id"], 0),
+                "transactions_per_second": tps,
+                "metrics_available": True,
+                "metrics_source": "ringbuffer_metadata_adapter_instance_60s",
+                "adapter_type_transactions_per_second": tps_by_adapter_type.get(adapter_type.upper(), 0.0),
+                "health": {
+                    "severity": getattr(instance, "last_severity", "ok") if instance else "ok",
+                    "detail": sanitize_support_data(getattr(instance, "last_detail", "") if instance else ""),
+                },
+            }
+        )
+    return result
+
+
+async def _build_history_info(db: Database) -> dict[str, Any]:
+    settings = await _read_history_settings(db)
+    active_plugin = settings.get("plugin", "sqlite") or "sqlite"
+    table_stats = await _history_table_stats(db)
+    runtime_plugin = None
+    try:
+        from obs.history.factory import get_history_plugin
+
+        runtime_plugin = get_history_plugin().__class__.__name__
+    except RuntimeError:
+        runtime_plugin = None
+
+    return sanitize_support_data(
+        {
+            "enabled": True,
+            "active_plugin": active_plugin,
+            "runtime_plugin": runtime_plugin,
+            "settings": settings,
+            "sqlite_storage": table_stats,
+        }
+    )
+
+
+async def _build_monitor_info() -> dict[str, Any]:
+    try:
+        from obs.ringbuffer.ringbuffer import get_ringbuffer
+
+        stats = await get_ringbuffer().stats()
+        recent_entries = await get_ringbuffer().query(limit=200)
+    except RuntimeError:
+        return {"available": False, "reason": "RingBuffer not initialized"}
+
+    source_counts: dict[str, int] = {}
+    quality_counts: dict[str, int] = {}
+    for entry in recent_entries:
+        source_counts[entry.source_adapter] = source_counts.get(entry.source_adapter, 0) + 1
+        quality_counts[entry.quality] = quality_counts.get(entry.quality, 0) + 1
+
+    return sanitize_support_data(
+        {
+            "available": True,
+            "stats": stats,
+            "recent_sample_size": len(recent_entries),
+            "recent_source_adapter_counts": source_counts,
+            "recent_quality_counts": quality_counts,
+        }
+    )
+
+
+def _build_health_info(now: datetime) -> dict[str, Any]:
+    all_instances = adapter_registry.get_all_instances()
+    return {
+        "status": "ok",
+        "generated_at": _iso(now),
+        "started_at": _iso(_PROCESS_STARTED_AT),
+        "uptime_seconds": max(0, int((now - _PROCESS_STARTED_AT).total_seconds())),
+        "adapters_registered": len(adapter_registry.all_types()),
+        "adapters_running": len(all_instances),
+        "adapters_connected": sum(1 for instance in all_instances.values() if instance.connected),
+    }
+
+
+async def _counts_by_adapter(db: Database, query: str) -> dict[str, int]:
+    rows = await db.fetchall(query)
+    return {row["adapter_instance_id"] or "": int(row["count"]) for row in rows}
+
+
+async def _ringbuffer_tps(window_seconds: int = 60) -> tuple[dict[str, float], dict[str, float]]:
+    try:
+        from obs.ringbuffer.ringbuffer import get_ringbuffer
+
+        since = _iso(datetime.now(UTC) - timedelta(seconds=window_seconds))
+        entries = await get_ringbuffer().query(from_ts=since or "", limit=10000)
+    except RuntimeError:
+        return {}, {}
+
+    instance_counts: dict[str, int] = {}
+    type_counts: dict[str, int] = {}
+    for entry in entries:
+        seen_instances: set[str] = set()
+        bindings = entry.metadata.get("bindings") if isinstance(entry.metadata, dict) else None
+        if isinstance(bindings, list):
+            for binding in bindings:
+                if not isinstance(binding, dict):
+                    continue
+                instance_id = str(binding.get("adapter_instance_id") or "").strip()
+                if instance_id:
+                    seen_instances.add(instance_id)
+        for instance_id in seen_instances:
+            instance_counts[instance_id] = instance_counts.get(instance_id, 0) + 1
+
+        key = (entry.source_adapter or "").upper()
+        if key:
+            type_counts[key] = type_counts.get(key, 0) + 1
+
+    return (
+        {key: round(count / window_seconds, 3) for key, count in instance_counts.items()},
+        {key: round(count / window_seconds, 3) for key, count in type_counts.items()},
+    )
+
+
+async def _read_history_settings(db: Database) -> dict[str, str]:
+    defaults = {
+        "plugin": "sqlite",
+        "default_window_hours": "168",
+        "influx_url": "http://localhost:8086",
+        "influx_version": "2",
+        "influx_token": "",
+        "influx_org": "",
+        "influx_bucket": "obs",
+        "influx_database": "obs",
+        "influx_username": "",
+        "influx_password": "",
+        "timescale_dsn": "",
+    }
+    rows = await db.fetchall("SELECT key, value FROM app_settings WHERE key LIKE 'history.%'")
+    settings = dict(defaults)
+    for row in rows:
+        short_key = row["key"][len("history.") :]
+        if short_key in settings:
+            settings[short_key] = row["value"] or ""
+    return settings
+
+
+async def _history_table_stats(db: Database) -> dict[str, Any]:
+    row = await db.fetchone(
+        "SELECT COUNT(*) AS total, COUNT(DISTINCT datapoint_id) AS datapoints, MIN(ts) AS oldest_ts, MAX(ts) AS newest_ts FROM history_values"
+    )
+    by_adapter_rows = await db.fetchall(
+        """SELECT COALESCE(source_adapter, '') AS source_adapter, COUNT(*) AS count
+           FROM history_values
+           GROUP BY COALESCE(source_adapter, '')
+           ORDER BY count DESC
+           LIMIT 20"""
+    )
+    return {
+        "total_values": int(row["total"]) if row else 0,
+        "datapoints": int(row["datapoints"]) if row else 0,
+        "oldest_ts": row["oldest_ts"] if row else None,
+        "newest_ts": row["newest_ts"] if row else None,
+        "source_adapter_counts": {
+            (adapter_row["source_adapter"] or "unknown"): int(adapter_row["count"]) for adapter_row in by_adapter_rows
+        },
+    }
+
+
+def _sanitize_log_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ts": sanitize_support_data(entry.get("ts", "")),
+        "level": sanitize_support_data(entry.get("level", "")),
+        "logger": sanitize_support_data(entry.get("logger", "")),
+        "message": sanitize_support_data(entry.get("message", "")),
+    }
+
+
+def _sanitize_string(value: str) -> str:
+    sanitized = _LONG_TOKEN_RE.sub(lambda match: match.group(0).split("=", 1)[0] + "=[REDACTED]", value)
+    sanitized = _sanitize_urls(sanitized)
+    sanitized = _IPV4_RE.sub("[REDACTED_IP]", sanitized)
+    sanitized = _IPV6_CANDIDATE_RE.sub(_sanitize_ipv6_candidate, sanitized)
+    return sanitized
+
+
+def _sanitize_urls(value: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        try:
+            parsed = urlsplit(raw)
+        except ValueError:
+            return "[REDACTED_URL]"
+        replacement = urlunsplit((parsed.scheme, "[REDACTED_ENDPOINT]", parsed.path, "", ""))
+        return replacement.rstrip("/")
+
+    return re.sub(r"https?://[^\s\"'<>]+", repl, value)
+
+
+def _sanitize_ipv6_candidate(match: re.Match[str]) -> str:
+    candidate = match.group(0)
+    try:
+        parsed = ipaddress.ip_address(candidate)
+    except ValueError:
+        return candidate
+    if parsed.version == 6:
+        return "[REDACTED_IP]"
+    return candidate
+
+
+def _is_sensitive_key(key: str | None) -> bool:
+    if key is None:
+        return False
+    lowered = key.lower()
+    return any(part in lowered for part in _SENSITIVE_KEY_PARTS)
+
+
+def _is_endpoint_key(key: str | None) -> bool:
+    if key is None:
+        return False
+    lowered = key.lower()
+    return any(part in lowered for part in _ENDPOINT_KEY_PARTS)
+
+
+def _detect_installation_type() -> str:
+    if os.path.exists("/.dockerenv") or os.environ.get("container"):
+        return "docker"
+    return "native"
+
+
+def _detect_runtime_environment() -> dict[str, Any]:
+    return {
+        "docker": os.path.exists("/.dockerenv") or bool(os.environ.get("container")),
+        "raspberry_pi": platform.machine().startswith(("arm", "aarch64")),
+    }
+
+
+def _adapter_version(cls: type | None) -> str | None:
+    if cls is None:
+        return None
+    module = __import__(cls.__module__, fromlist=["__version__"])
+    return getattr(module, "__version__", None)
+
+
+def _duration(seconds: int) -> timedelta:
+    return timedelta(seconds=seconds)
+
+
+def _debug_status(level: str | None = None) -> DebugLogStatusOut:
+    active = _debug_until is not None and _debug_until > datetime.now(UTC)
+    current_level = level or logging.getLevelName(logging.getLogger().level)
+    if not isinstance(current_level, str):
+        current_level = "INFO"
+    return DebugLogStatusOut(
+        active=active,
+        level=current_level,
+        until=_iso(_debug_until) if active and _debug_until else None,
+    )
+
+
+async def _restore_debug_later(seconds: int) -> None:
+    try:
+        await asyncio.sleep(seconds)
+        await _restore_debug_now()
+    except asyncio.CancelledError:
+        return
+
+
+async def _restore_debug_now() -> None:
+    global _debug_restore_level, _debug_restore_task, _debug_until
+
+    if _debug_restore_task and not _debug_restore_task.done():
+        _debug_restore_task.cancel()
+    restore_level = _debug_restore_level or "INFO"
+    set_log_buffer_level(restore_level)
+    _debug_restore_level = None
+    _debug_restore_task = None
+    _debug_until = None
+
+
+def _iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")

@@ -207,6 +207,15 @@ export const logsApi = {
   setLevel: (level)  => api.put('/system/log-level', { level }),
 }
 
+// ── Support Diagnostics ──────────────────────────────────────────────────
+export const supportApi = {
+  categories:      ()       => api.get('/support/categories'),
+  createPackage:   ()       => api.post('/support/package'),
+  getDebugStatus:  ()       => api.get('/support/debug-log'),
+  enableDebugLog:  (data)   => api.post('/support/debug-log', data),
+  disableDebugLog: ()       => api.delete('/support/debug-log'),
+}
+
 // ── Security ─────────────────────────────────────────────────────────────
 export const securityApi = {
   listUrlTargets:  ()       => api.get('/security/url-target-allowlist'),

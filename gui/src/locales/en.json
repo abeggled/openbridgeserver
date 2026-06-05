@@ -1666,7 +1666,8 @@
       "importexport": "Data management",
       "icons": "Icons",
       "history": "History DB",
-      "security": "Security"
+      "security": "Security",
+      "support": "Support"
     },
     "general": {
       "title": "General settings",
@@ -1708,6 +1709,99 @@
       "saved": "URL target has been saved.",
       "deleted": "URL target has been removed.",
       "defaultReason": "Allowed after URL target check"
+    },
+    "support": {
+      "title": "Support package",
+      "description": "The support package is generated locally and downloaded. It is not sent automatically; sensitive values are centrally redacted before export.",
+      "packageTitle": "Create support package",
+      "exportButton": "Create support package",
+      "exported": "Support package created.",
+      "exportFailed": "Support package could not be created.",
+      "debugTitle": "Debug log",
+      "debugSettingsTitle": "Debug log settings",
+      "debugDescription": "Debug logging collects more detailed local diagnostic entries for a short time so they are included in the support package created afterwards.",
+      "debugFlow1": "Enable debug, reproduce the issue and then create the support package. The in-memory log buffer is included in the package.",
+      "debugFlow2": "Nothing is sent and no remote access is opened. After expiry or manual deactivation, the previous log level is restored.",
+      "debugActive": "Debug active",
+      "debugInactive": "Debug off",
+      "debugUntil": "until {until}",
+      "debugEnable": "Enable debug for 5 minutes",
+      "debugDisable": "Disable debug",
+      "viewerTitle": "Analyze support package",
+      "viewerDescription": "Open an obs_support JSON file locally and inspect it in a structured view. The file is not uploaded or stored.",
+      "viewerChooseFile": "Select support file",
+      "viewerClear": "Clear view",
+      "viewerLoaded": "Support package loaded.",
+      "viewerInvalid": "The file is not a valid support package.",
+      "viewerGeneratedAt": "Generated",
+      "viewerVersion": "OBS version",
+      "viewerRuntime": "System",
+      "viewerUptime": "Uptime",
+      "viewerAutoUploadOn": "Automatic upload active",
+      "viewerAutoUploadOff": "No automatic upload",
+      "viewerRemoteAccessOn": "Remote access active",
+      "viewerRemoteAccessOff": "No remote access",
+      "viewerAdapters": "Adapters",
+      "viewerAdaptersConnected": "{n} connected",
+      "viewerHistoryValues": "History values",
+      "viewerMonitorEntries": "Monitor entries",
+      "viewerAdapterTable": "Adapter analysis",
+      "viewerName": "Name",
+      "viewerType": "Type",
+      "viewerStatus": "Status",
+      "viewerObjects": "Objects",
+      "viewerBindings": "Bindings",
+      "viewerTps": "TPS",
+      "viewerConnected": "Connected",
+      "viewerDisconnected": "Disconnected",
+      "viewerDisabled": "Disabled",
+      "viewerNoAdapters": "No adapters in package.",
+      "viewerHistory": "History",
+      "viewerPlugin": "Plugin",
+      "viewerDatapoints": "Objects",
+      "viewerRange": "Range",
+      "viewerMonitor": "Monitor",
+      "viewerStorage": "Storage",
+      "viewerRetention": "Retention",
+      "viewerSample": "Sample",
+      "viewerWarnings": "Warnings and errors",
+      "viewerNoWarnings": "No warnings or errors in package.",
+      "viewerDebugLog": "Debug log",
+      "viewerNoDebugLog": "No debug log in package.",
+      "viewerLogFilter": "Log filter",
+      "viewerLogFilterPlaceholder": "e.g. kn ga=20/2/1*",
+      "viewerLogFilterHint": "Combine multiple search fragments with spaces. A trailing * matches prefixes.",
+      "viewerNoLogMatches": "No log entries match the filter.",
+      "viewerSeconds": "{n} s",
+      "viewerMinutes": "{n} min",
+      "viewerHours": "{n} h",
+      "viewerDays": "{n} d",
+      "categories": {
+        "installation": {
+          "label": "Installation",
+          "description": "Installation type, OBS version, operating system and runtime environment."
+        },
+        "adapters": {
+          "label": "Adapters",
+          "description": "Enabled adapter instances, sanitized adapter configuration, object counts and binding counts."
+        },
+        "health": {
+          "label": "Health",
+          "description": "Runtime health states, uptime and last start timestamp."
+        },
+        "history": {
+          "label": "History",
+          "description": "History backend, sanitized configuration and storage statistics."
+        },
+        "monitor": {
+          "label": "Monitor",
+          "description": "RingBuffer configuration, retention, storage size and recent event counters."
+        },
+        "logs": {
+          "label": "Logs",
+          "description": "Shortened sanitized error history and entries from the in-memory debug log."
+        }
+      }
     },
     "users": {
       "deleteUser": "Delete user",

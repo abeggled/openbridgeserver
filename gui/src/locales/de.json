@@ -1666,7 +1666,8 @@
       "importexport": "Datenmanagement",
       "icons": "Icons",
       "history": "Historie DB",
-      "security": "Sicherheit"
+      "security": "Sicherheit",
+      "support": "Support"
     },
     "general": {
       "title": "Allgemeine Einstellungen",
@@ -1708,6 +1709,99 @@
       "saved": "URL-Ziel wurde gespeichert.",
       "deleted": "URL-Ziel wurde entfernt.",
       "defaultReason": "Freigabe nach URL-Zielprüfung"
+    },
+    "support": {
+      "title": "Support-Paket",
+      "description": "Das Support-Paket wird lokal erzeugt und heruntergeladen. Es wird nicht automatisch versendet; sensible Werte werden vor dem Export zentral redigiert.",
+      "packageTitle": "Support-Paket erstellen",
+      "exportButton": "Support-Paket erstellen",
+      "exported": "Support-Paket wurde erstellt.",
+      "exportFailed": "Support-Paket konnte nicht erstellt werden.",
+      "debugTitle": "Debug-Log",
+      "debugSettingsTitle": "Debug-Log Einstellungen",
+      "debugDescription": "Debug-Logging sammelt für kurze Zeit detailliertere lokale Diagnoseeinträge, damit sie im anschliessend erstellten Support-Paket enthalten sind.",
+      "debugFlow1": "Aktiviere Debug, reproduziere das Problem und erstelle danach das Support-Paket. Der In-Memory-Logpuffer wird dabei in das Paket übernommen.",
+      "debugFlow2": "Es wird nichts versendet und kein Remote-Zugriff geöffnet. Nach Ablauf oder manuellem Deaktivieren wird das vorherige Loglevel wiederhergestellt.",
+      "debugActive": "Debug aktiv",
+      "debugInactive": "Debug aus",
+      "debugUntil": "bis {until}",
+      "debugEnable": "Debug 5 Minuten aktivieren",
+      "debugDisable": "Debug deaktivieren",
+      "viewerTitle": "Support-Paket analysieren",
+      "viewerDescription": "Eine obs_support JSON-Datei lokal öffnen und strukturiert prüfen. Die Datei wird nicht hochgeladen oder gespeichert.",
+      "viewerChooseFile": "Support-Datei auswählen",
+      "viewerClear": "Ansicht leeren",
+      "viewerLoaded": "Support-Paket geladen.",
+      "viewerInvalid": "Die Datei ist kein gültiges Support-Paket.",
+      "viewerGeneratedAt": "Erstellt",
+      "viewerVersion": "OBS-Version",
+      "viewerRuntime": "System",
+      "viewerUptime": "Uptime",
+      "viewerAutoUploadOn": "Automatischer Versand aktiv",
+      "viewerAutoUploadOff": "Kein automatischer Versand",
+      "viewerRemoteAccessOn": "Remote-Zugriff aktiv",
+      "viewerRemoteAccessOff": "Kein Remote-Zugriff",
+      "viewerAdapters": "Adapter",
+      "viewerAdaptersConnected": "{n} verbunden",
+      "viewerHistoryValues": "Historienwerte",
+      "viewerMonitorEntries": "Monitor-Einträge",
+      "viewerAdapterTable": "Adapter-Analyse",
+      "viewerName": "Name",
+      "viewerType": "Typ",
+      "viewerStatus": "Status",
+      "viewerObjects": "Objekte",
+      "viewerBindings": "Bindings",
+      "viewerTps": "TPS",
+      "viewerConnected": "Verbunden",
+      "viewerDisconnected": "Getrennt",
+      "viewerDisabled": "Deaktiviert",
+      "viewerNoAdapters": "Keine Adapter im Paket.",
+      "viewerHistory": "Historie",
+      "viewerPlugin": "Plugin",
+      "viewerDatapoints": "Objekte",
+      "viewerRange": "Zeitraum",
+      "viewerMonitor": "Monitor",
+      "viewerStorage": "Storage",
+      "viewerRetention": "Retention",
+      "viewerSample": "Sample",
+      "viewerWarnings": "Warnungen und Fehler",
+      "viewerNoWarnings": "Keine Warnungen oder Fehler im Paket.",
+      "viewerDebugLog": "Debug-Log",
+      "viewerNoDebugLog": "Kein Debug-Log im Paket.",
+      "viewerLogFilter": "Logfilter",
+      "viewerLogFilterPlaceholder": "z.B. kn ga=20/2/1*",
+      "viewerLogFilterHint": "Mehrere Suchteile mit Leerzeichen kombinieren. Ein * am Ende sucht nach Präfixen.",
+      "viewerNoLogMatches": "Keine Logeinträge passen zum Filter.",
+      "viewerSeconds": "{n} s",
+      "viewerMinutes": "{n} min",
+      "viewerHours": "{n} h",
+      "viewerDays": "{n} d",
+      "categories": {
+        "installation": {
+          "label": "Installation",
+          "description": "Installationsart, OBS-Version, Betriebssystem und Laufzeitumgebung."
+        },
+        "adapters": {
+          "label": "Adapter",
+          "description": "Aktivierte Adapter-Instanzen, sanitierte Adapter-Konfiguration sowie Objekt- und Binding-Anzahlen."
+        },
+        "health": {
+          "label": "Health",
+          "description": "Laufzeitstatus, Uptime und letzter Startzeitpunkt."
+        },
+        "history": {
+          "label": "Historie",
+          "description": "History-Backend, sanitierte Konfiguration und Speicherstatistiken."
+        },
+        "monitor": {
+          "label": "Monitor",
+          "description": "Ringbuffer-Konfiguration, Retention, Speichergrösse und aktuelle Ereigniszähler."
+        },
+        "logs": {
+          "label": "Logs",
+          "description": "Gekürzte sanitierte Fehlerhistorie und Einträge aus dem In-Memory-Debug-Log."
+        }
+      }
     },
     "users": {
       "deleteUser": "Benutzer löschen",

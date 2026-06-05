@@ -262,6 +262,240 @@
       </div>
     </div>
 
+    <!-- ── Support ── -->
+    <div v-if="activeTab === 'support' && (auth.isAdmin || isDemo)" class="flex flex-col gap-4 max-w-6xl" data-testid="support-tab" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.support.debugSettingsTitle') }}</h3>
+        </div>
+        <div class="card-body flex flex-col gap-4">
+          <p class="text-sm text-slate-500">{{ $t('settings.support.debugDescription') }}</p>
+          <div class="border-l-2 border-blue-500/40 pl-3 py-1 text-sm text-slate-600 dark:text-slate-300">
+            <p>{{ $t('settings.support.debugFlow1') }}</p>
+            <p class="mt-1">{{ $t('settings.support.debugFlow2') }}</p>
+          </div>
+          <div class="flex flex-wrap items-center gap-3">
+            <Badge :variant="supportDebugActive ? 'warning' : 'muted'" size="xs">
+              {{ supportDebugActive ? $t('settings.support.debugActive') : $t('settings.support.debugInactive') }}
+            </Badge>
+            <span v-if="supportDebugActive && supportDebugStatus.until" class="text-xs text-slate-500">
+              {{ $t('settings.support.debugUntil', { until: supportDebugUntilText }) }}
+            </span>
+          </div>
+          <div class="flex flex-wrap items-center gap-3">
+            <button class="btn-secondary" :disabled="supportDebugBusy" @click="enableSupportDebug" data-testid="btn-support-debug-enable">
+              <Spinner v-if="supportDebugBusy" size="sm" />
+              {{ $t('settings.support.debugEnable') }}
+            </button>
+            <button class="btn-secondary" :disabled="supportDebugBusy || !supportDebugActive" @click="disableSupportDebug" data-testid="btn-support-debug-disable">
+              {{ $t('settings.support.debugDisable') }}
+            </button>
+          </div>
+          <div v-if="supportDebugMsg" :class="['p-3 rounded-lg text-sm border', supportDebugMsg.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
+            {{ supportDebugMsg.text }}
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.support.packageTitle') }}</h3>
+        </div>
+        <div class="card-body flex flex-col gap-4">
+          <p class="text-sm text-slate-500">{{ $t('settings.support.description') }}</p>
+          <div v-if="supportLoading" class="flex justify-center py-4"><Spinner /></div>
+          <div v-else class="grid gap-3 sm:grid-cols-2">
+            <div v-for="category in supportCategories" :key="category.key" class="border-l-2 border-slate-200 dark:border-slate-700 pl-3 py-1">
+              <div class="text-sm font-medium text-slate-800 dark:text-slate-100">{{ supportCategoryLabel(category) }}</div>
+              <div class="text-xs text-slate-500 mt-1">{{ supportCategoryDescription(category) }}</div>
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center gap-3">
+            <button class="btn-primary" :disabled="supportExporting" @click="downloadSupportPackage" data-testid="btn-support-package">
+              <Spinner v-if="supportExporting" size="sm" color="white" />
+              {{ $t('settings.support.exportButton') }}
+            </button>
+          </div>
+          <div v-if="supportPackageMsg" :class="['p-3 rounded-lg text-sm border', supportPackageMsg.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
+            {{ supportPackageMsg.text }}
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.support.viewerTitle') }}</h3>
+        </div>
+        <div class="card-body flex flex-col gap-4">
+          <p class="text-sm text-slate-500">{{ $t('settings.support.viewerDescription') }}</p>
+          <div class="flex flex-wrap items-center gap-3">
+            <button type="button" class="btn-secondary btn-sm" @click="supportViewerFileInput.click()" data-testid="btn-support-viewer-file">
+              {{ $t('settings.support.viewerChooseFile') }}
+            </button>
+            <span class="text-sm text-slate-400">{{ supportViewerFileName || $t('common.noFileSelected') }}</span>
+            <button v-if="supportViewedPackage" type="button" class="btn-secondary btn-sm" @click="clearSupportViewer">
+              {{ $t('settings.support.viewerClear') }}
+            </button>
+            <input ref="supportViewerFileInput" type="file" accept=".json,application/json" class="hidden" @change="onSupportViewerFile" />
+          </div>
+          <div v-if="supportViewerMsg" :class="['p-3 rounded-lg text-sm border', supportViewerMsg.ok ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30']">
+            {{ supportViewerMsg.text }}
+          </div>
+
+          <div v-if="supportViewedPackage" class="flex flex-col gap-5" data-testid="support-viewer">
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div class="border-l-2 border-blue-500/50 pl-3 py-1">
+                <div class="text-xs uppercase text-slate-400">{{ $t('settings.support.viewerGeneratedAt') }}</div>
+                <div class="text-sm font-medium text-slate-800 dark:text-slate-100">{{ supportFormat(supportViewedPackage.generated_at) }}</div>
+              </div>
+              <div class="border-l-2 border-blue-500/50 pl-3 py-1">
+                <div class="text-xs uppercase text-slate-400">{{ $t('settings.support.viewerVersion') }}</div>
+                <div class="text-sm font-medium text-slate-800 dark:text-slate-100">{{ supportFormat(supportViewedPackage.installation?.obs_version) }}</div>
+              </div>
+              <div class="border-l-2 border-blue-500/50 pl-3 py-1">
+                <div class="text-xs uppercase text-slate-400">{{ $t('settings.support.viewerRuntime') }}</div>
+                <div class="text-sm font-medium text-slate-800 dark:text-slate-100">{{ supportRuntimeSummary }}</div>
+              </div>
+              <div class="border-l-2 border-blue-500/50 pl-3 py-1">
+                <div class="text-xs uppercase text-slate-400">{{ $t('settings.support.viewerUptime') }}</div>
+                <div class="text-sm font-medium text-slate-800 dark:text-slate-100">{{ supportDuration(supportViewedPackage.runtime?.uptime_seconds) }}</div>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-2">
+              <Badge :variant="supportViewedPackage.privacy?.automatic_upload ? 'danger' : 'success'" size="xs">
+                {{ supportViewedPackage.privacy?.automatic_upload ? $t('settings.support.viewerAutoUploadOn') : $t('settings.support.viewerAutoUploadOff') }}
+              </Badge>
+              <Badge :variant="supportViewedPackage.privacy?.remote_access ? 'danger' : 'success'" size="xs">
+                {{ supportViewedPackage.privacy?.remote_access ? $t('settings.support.viewerRemoteAccessOn') : $t('settings.support.viewerRemoteAccessOff') }}
+              </Badge>
+              <Badge variant="muted" size="xs">{{ supportViewedPackage.privacy?.sanitizer || '—' }}</Badge>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-3">
+              <div class="border-t border-slate-200 dark:border-slate-700 pt-3">
+                <div class="text-xs uppercase text-slate-400">{{ $t('settings.support.viewerAdapters') }}</div>
+                <div class="mt-1 text-2xl font-semibold text-slate-800 dark:text-slate-100">{{ supportAdapters.length }}</div>
+                <div class="text-xs text-slate-500">{{ $t('settings.support.viewerAdaptersConnected', { n: supportAdaptersConnected }) }}</div>
+              </div>
+              <div class="border-t border-slate-200 dark:border-slate-700 pt-3">
+                <div class="text-xs uppercase text-slate-400">{{ $t('settings.support.viewerHistoryValues') }}</div>
+                <div class="mt-1 text-2xl font-semibold text-slate-800 dark:text-slate-100">{{ supportFormatNumber(supportViewedPackage.history?.sqlite_storage?.total_values) }}</div>
+                <div class="text-xs text-slate-500">{{ supportViewedPackage.history?.active_plugin || '—' }}</div>
+              </div>
+              <div class="border-t border-slate-200 dark:border-slate-700 pt-3">
+                <div class="text-xs uppercase text-slate-400">{{ $t('settings.support.viewerMonitorEntries') }}</div>
+                <div class="mt-1 text-2xl font-semibold text-slate-800 dark:text-slate-100">{{ supportFormatNumber(supportViewedPackage.monitor?.stats?.total) }}</div>
+                <div class="text-xs text-slate-500">{{ supportFormatBytes(supportViewedPackage.monitor?.stats?.file_size_bytes) }}</div>
+              </div>
+            </div>
+
+            <div>
+              <h4 class="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">{{ $t('settings.support.viewerAdapterTable') }}</h4>
+              <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700/60">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>{{ $t('settings.support.viewerName') }}</th>
+                      <th>{{ $t('settings.support.viewerType') }}</th>
+                      <th>{{ $t('settings.support.viewerStatus') }}</th>
+                      <th>{{ $t('settings.support.viewerObjects') }}</th>
+                      <th>{{ $t('settings.support.viewerBindings') }}</th>
+                      <th>{{ $t('settings.support.viewerTps') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="adapter in supportAdapters" :key="adapter.id || adapter.name">
+                      <td class="font-medium">{{ supportFormat(adapter.name) }}</td>
+                      <td class="font-mono text-xs">{{ supportFormat(adapter.adapter_type) }}</td>
+                      <td>
+                        <Badge :variant="adapter.connected ? 'success' : adapter.enabled ? 'warning' : 'muted'" size="xs">
+                          {{ adapter.connected ? $t('settings.support.viewerConnected') : adapter.enabled ? $t('settings.support.viewerDisconnected') : $t('settings.support.viewerDisabled') }}
+                        </Badge>
+                      </td>
+                      <td>{{ supportFormatNumber(adapter.objects) }}</td>
+                      <td>{{ supportFormatNumber(adapter.bindings) }}</td>
+                      <td>{{ supportFormatNumber(adapter.transactions_per_second) }}</td>
+                    </tr>
+                    <tr v-if="supportAdapters.length === 0">
+                      <td colspan="6" class="text-center text-sm text-slate-500 py-4">{{ $t('settings.support.viewerNoAdapters') }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-2">
+              <div class="border-t border-slate-200 dark:border-slate-700 pt-3">
+                <h4 class="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">{{ $t('settings.support.viewerHistory') }}</h4>
+                <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+                  <dt class="text-slate-500">{{ $t('settings.support.viewerPlugin') }}</dt>
+                  <dd class="text-slate-800 dark:text-slate-100">{{ supportViewedPackage.history?.active_plugin || '—' }}</dd>
+                  <dt class="text-slate-500">{{ $t('settings.support.viewerDatapoints') }}</dt>
+                  <dd class="text-slate-800 dark:text-slate-100">{{ supportFormatNumber(supportViewedPackage.history?.sqlite_storage?.datapoints) }}</dd>
+                  <dt class="text-slate-500">{{ $t('settings.support.viewerRange') }}</dt>
+                  <dd class="text-slate-800 dark:text-slate-100">{{ supportFormatRange(supportViewedPackage.history?.sqlite_storage?.oldest_ts, supportViewedPackage.history?.sqlite_storage?.newest_ts) }}</dd>
+                </dl>
+              </div>
+              <div class="border-t border-slate-200 dark:border-slate-700 pt-3">
+                <h4 class="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">{{ $t('settings.support.viewerMonitor') }}</h4>
+                <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+                  <dt class="text-slate-500">{{ $t('settings.support.viewerStorage') }}</dt>
+                  <dd class="text-slate-800 dark:text-slate-100">{{ supportViewedPackage.monitor?.stats?.storage || '—' }}</dd>
+                  <dt class="text-slate-500">{{ $t('settings.support.viewerRetention') }}</dt>
+                  <dd class="text-slate-800 dark:text-slate-100">{{ supportDuration(supportViewedPackage.monitor?.stats?.effective_retention_seconds) }}</dd>
+                  <dt class="text-slate-500">{{ $t('settings.support.viewerSample') }}</dt>
+                  <dd class="text-slate-800 dark:text-slate-100">{{ supportFormatNumber(supportViewedPackage.monitor?.recent_sample_size) }}</dd>
+                </dl>
+              </div>
+            </div>
+
+            <div class="border-t border-slate-200 dark:border-slate-700 pt-3">
+              <label class="label">{{ $t('settings.support.viewerLogFilter') }}</label>
+              <input
+                v-model="supportLogFilter"
+                type="text"
+                class="input text-sm font-mono"
+                :placeholder="$t('settings.support.viewerLogFilterPlaceholder')"
+                data-testid="input-support-log-filter"
+              />
+              <p class="text-xs text-slate-500 mt-1">{{ $t('settings.support.viewerLogFilterHint') }}</p>
+            </div>
+
+            <div>
+              <h4 class="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">{{ $t('settings.support.viewerWarnings') }}</h4>
+              <div v-if="supportFilteredWarnings.length" class="max-h-72 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700/60 divide-y divide-slate-200 dark:divide-slate-700/60">
+                <div v-for="(entry, idx) in supportFilteredWarnings" :key="idx" class="p-3">
+                  <div class="flex items-center gap-2 text-xs text-slate-500">
+                    <Badge :variant="entry.level === 'WARNING' ? 'warning' : 'danger'" size="xs">{{ entry.level }}</Badge>
+                    <span>{{ entry.ts }}</span>
+                    <span class="font-mono">{{ entry.logger }}</span>
+                  </div>
+                  <div class="mt-1 text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words">{{ entry.message }}</div>
+                </div>
+              </div>
+              <div v-else class="text-sm text-slate-500">{{ supportLogFilter.trim() ? $t('settings.support.viewerNoLogMatches') : $t('settings.support.viewerNoWarnings') }}</div>
+            </div>
+
+            <div>
+              <h4 class="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">{{ $t('settings.support.viewerDebugLog') }}</h4>
+              <div v-if="supportFilteredDebugLog.length" class="max-h-96 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700/60 divide-y divide-slate-200 dark:divide-slate-700/60">
+                <div v-for="(entry, idx) in supportFilteredDebugLog" :key="idx" class="p-3">
+                  <div class="flex items-center gap-2 text-xs text-slate-500">
+                    <Badge :variant="supportLogLevelVariant(entry.level)" size="xs">{{ entry.level }}</Badge>
+                    <span>{{ entry.ts }}</span>
+                    <span class="font-mono">{{ entry.logger }}</span>
+                  </div>
+                  <div class="mt-1 text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words">{{ entry.message }}</div>
+                </div>
+              </div>
+              <div v-else class="text-sm text-slate-500">{{ supportLogFilter.trim() ? $t('settings.support.viewerNoLogMatches') : $t('settings.support.viewerNoDebugLog') }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Datenmanagement ── -->
     <div v-if="activeTab === 'importexport'" class="flex flex-col gap-4 max-w-lg" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
 
@@ -1045,7 +1279,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { authApi, adapterApi, configApi, autobackupApi, knxprojApi, historySettingsApi, iconsApi, dpApi, securityApi } from '@/api/client'
+import { authApi, adapterApi, configApi, autobackupApi, knxprojApi, historySettingsApi, iconsApi, dpApi, securityApi, supportApi } from '@/api/client'
 import { useI18n } from 'vue-i18n'
 import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
@@ -1064,7 +1298,7 @@ const { t, te } = useI18n()
 const auth     = useAuthStore()
 const settings = useSettingsStore()
 const navStore = useNavLinksStore()
-const { fmtDate } = useTz()
+const { fmtDate, fmtDateTime } = useTz()
 const activeTab = ref('general')
 const isDemo   = computed(() => auth.username === 'demo')
 
@@ -1135,6 +1369,7 @@ onMounted(async () => {
   if (!settings.loaded) await settings.load()
   tzSelected.value = settings.timezone
   document.addEventListener('mousedown', onOutsideClick)
+  supportDebugTick = window.setInterval(() => { supportNowMs.value = Date.now() }, 1000)
   if (auth.isAdmin) {
     loadHistorySettings()
     loadHistoryFilterDps()
@@ -1149,10 +1384,12 @@ watch(activeTab, (tab) => {
   if (tab === 'icons') { loadIcons(); loadFaSettings() }
   if (tab === 'links') { navStore.load() }
   if (tab === 'security') { loadUrlTargets() }
+  if (tab === 'support') { loadSupportInfo() }
 })
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', onOutsideClick)
+  if (supportDebugTick) window.clearInterval(supportDebugTick)
 })
 
 async function saveTz() {
@@ -1173,6 +1410,7 @@ const tabs = computed(() => [
   ...(auth.isAdmin || isDemo.value ? [{ id: 'users', label: t('settings.tabs.users') }] : []),
   { id: 'apikeys',      label: t('settings.tabs.apikeys') },
   ...(auth.isAdmin || isDemo.value ? [{ id: 'security', label: t('settings.tabs.security') }] : []),
+  ...(auth.isAdmin || isDemo.value ? [{ id: 'support', label: t('settings.tabs.support') }] : []),
   { id: 'links',        label: t('settings.tabs.links') },
   { id: 'hierarchy',    label: t('settings.tabs.hierarchy') },
   { id: 'importexport', label: t('settings.tabs.importexport') },
@@ -1263,6 +1501,217 @@ async function deleteUrlTarget(target) {
   } catch (e) {
     urlTargetMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.deleteError') }
   }
+}
+
+// ── Support Diagnostics ──────────────────────────────────────────────────
+const supportLoading = ref(false)
+const supportExporting = ref(false)
+const supportDebugBusy = ref(false)
+const supportCategories = ref([])
+const supportDebugMsg = ref(null)
+const supportPackageMsg = ref(null)
+const supportDebugStatus = ref({ active: false, level: 'INFO', until: null })
+const supportNowMs = ref(Date.now())
+const supportViewerFileInput = ref(null)
+const supportViewerFileName = ref('')
+const supportViewerMsg = ref(null)
+const supportViewedPackage = ref(null)
+const supportLogFilter = ref('')
+
+const supportAdapters = computed(() => supportViewedPackage.value?.adapters ?? [])
+const supportWarnings = computed(() => supportViewedPackage.value?.warning_history ?? supportViewedPackage.value?.error_history ?? [])
+const supportDebugLog = computed(() => supportViewedPackage.value?.debug_log ?? [])
+const supportFilteredWarnings = computed(() => filterSupportLogEntries(supportWarnings.value, supportLogFilter.value))
+const supportFilteredDebugLog = computed(() => filterSupportLogEntries(supportDebugLog.value, supportLogFilter.value))
+const supportAdaptersConnected = computed(() => supportAdapters.value.filter(adapter => adapter.connected).length)
+let supportDebugTick = null
+const supportDebugActive = computed(() => {
+  if (!supportDebugStatus.value.active) return false
+  if (!supportDebugStatus.value.until) return true
+  const untilMs = Date.parse(supportDebugStatus.value.until)
+  return Number.isFinite(untilMs) && untilMs > supportNowMs.value
+})
+const supportDebugUntilText = computed(() => supportDebugStatus.value.until ? fmtDateTime(supportDebugStatus.value.until) : '—')
+const supportRuntimeSummary = computed(() => {
+  const runtime = supportViewedPackage.value?.runtime
+  if (!runtime) return '—'
+  return [runtime.os, runtime.os_release, runtime.architecture].filter(Boolean).join(' / ') || '—'
+})
+
+async function loadSupportInfo() {
+  if (!auth.isAdmin && !isDemo.value) return
+  supportLoading.value = true
+  try {
+    const [{ data: categories }, { data: debugStatus }] = await Promise.all([
+      supportApi.categories(),
+      supportApi.getDebugStatus(),
+    ])
+    supportCategories.value = categories
+    supportDebugStatus.value = debugStatus
+  } catch (e) {
+    supportPackageMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.error') }
+  } finally {
+    supportLoading.value = false
+  }
+}
+
+function supportCategoryLabel(category) {
+  const key = `settings.support.categories.${category.key}.label`
+  return te(key) ? t(key) : category.label
+}
+
+function supportCategoryDescription(category) {
+  const key = `settings.support.categories.${category.key}.description`
+  return te(key) ? t(key) : category.description
+}
+
+async function downloadSupportPackage() {
+  supportExporting.value = true
+  supportPackageMsg.value = null
+  try {
+    const { data } = await supportApi.createPackage()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `obs_support_${_ts()}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    supportPackageMsg.value = { ok: true, text: t('settings.support.exported') }
+  } catch (e) {
+    supportPackageMsg.value = { ok: false, text: e.response?.data?.detail ?? t('settings.support.exportFailed') }
+  } finally {
+    supportExporting.value = false
+  }
+}
+
+async function enableSupportDebug() {
+  supportDebugBusy.value = true
+  supportDebugMsg.value = null
+  try {
+    const { data } = await supportApi.enableDebugLog({ duration_seconds: 300, level: 'DEBUG' })
+    supportDebugStatus.value = data
+    supportNowMs.value = Date.now()
+  } catch (e) {
+    supportDebugMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.error') }
+  } finally {
+    supportDebugBusy.value = false
+  }
+}
+
+async function disableSupportDebug() {
+  supportDebugBusy.value = true
+  supportDebugMsg.value = null
+  try {
+    const { data } = await supportApi.disableDebugLog()
+    supportDebugStatus.value = data
+  } catch (e) {
+    supportDebugMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.error') }
+  } finally {
+    supportDebugBusy.value = false
+  }
+}
+
+async function onSupportViewerFile(e) {
+  const file = e.target.files?.[0]
+  if (!file) return
+  supportViewerFileName.value = file.name
+  supportViewerMsg.value = null
+  try {
+    const text = await file.text()
+    const parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.categories) || !parsed.generated_at) {
+      throw new Error('invalid')
+    }
+    supportViewedPackage.value = parsed
+    supportViewerMsg.value = { ok: true, text: t('settings.support.viewerLoaded') }
+  } catch {
+    supportViewedPackage.value = null
+    supportViewerMsg.value = { ok: false, text: t('settings.support.viewerInvalid') }
+  } finally {
+    e.target.value = ''
+  }
+}
+
+function clearSupportViewer() {
+  supportViewedPackage.value = null
+  supportViewerFileName.value = ''
+  supportViewerMsg.value = null
+  supportLogFilter.value = ''
+}
+
+function supportFormat(value) {
+  if (value === null || value === undefined || value === '') return '—'
+  return String(value)
+}
+
+function supportFormatNumber(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return value.toLocaleString()
+}
+
+function supportFormatBytes(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return formatBytes(value)
+}
+
+function supportDuration(seconds) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return '—'
+  if (seconds < 60) return t('settings.support.viewerSeconds', { n: Math.round(seconds) })
+  if (seconds < 3600) return t('settings.support.viewerMinutes', { n: Math.round(seconds / 60) })
+  if (seconds < 86400) return t('settings.support.viewerHours', { n: Math.round(seconds / 3600) })
+  return t('settings.support.viewerDays', { n: Math.round(seconds / 86400) })
+}
+
+function supportFormatRange(from, to) {
+  if (!from && !to) return '—'
+  return `${from || '—'} → ${to || '—'}`
+}
+
+function supportLogLevelVariant(level) {
+  if (level === 'CRITICAL' || level === 'ERROR') return 'danger'
+  if (level === 'WARNING') return 'warning'
+  if (level === 'DEBUG') return 'info'
+  return 'muted'
+}
+
+function filterSupportLogEntries(entries, filterText) {
+  const tokens = parseSupportLogFilter(filterText)
+  if (!tokens.length) return entries
+  return entries.filter(entry => {
+    const haystack = supportLogHaystack(entry)
+    return tokens.every(token => token.wildcard ? token.pattern.test(haystack) : haystack.includes(token.value))
+  })
+}
+
+function parseSupportLogFilter(filterText) {
+  return (filterText || '')
+    .toLowerCase()
+    .split(/\s+/)
+    .map(token => token.trim())
+    .filter(Boolean)
+    .map(token => {
+      const wildcard = token.includes('*')
+      const value = token.replace(/\*+/g, '*')
+      if (!value.replace(/\*/g, '')) return null
+      return {
+        value,
+        wildcard,
+        pattern: wildcard ? new RegExp(escapeSupportLogRegex(value).replaceAll('\\*', '.*')) : null,
+      }
+    })
+    .filter(Boolean)
+}
+
+function supportLogHaystack(entry) {
+  return [entry.ts, entry.level, entry.logger, entry.message]
+    .filter(value => value !== null && value !== undefined)
+    .map(value => String(value).toLowerCase())
+    .join(' ')
+}
+
+function escapeSupportLogRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 // ── History Backend ────────────────────────────────────────────────────────
