@@ -379,8 +379,8 @@ const form = reactive(makeEmptyForm())
 function valueFilterValidationKey() {
   if (!form.valueOperator) return ''
   if (form.valueOperator === 'between') {
-    const lowerText = String(form.valueLower ?? '').trim()
-    const upperText = String(form.valueUpper ?? '').trim()
+    const lowerText = form.valueLower.trim()
+    const upperText = form.valueUpper.trim()
     if (!lowerText || !upperText) return 'ringbuffer.filterEditor.valueBetweenRequired'
     const lower = Number(lowerText)
     const upper = Number(upperText)
@@ -394,7 +394,7 @@ function valueFilterValidationKey() {
     return ''
   }
 
-  const text = String(form.valueInput ?? '').trim()
+  const text = form.valueInput.trim()
   if (!text) return 'ringbuffer.filterEditor.valueRequired'
   if (form.valueDataType === 'number') {
     return Number.isFinite(Number(text)) ? '' : 'ringbuffer.filterEditor.valueNumberRequired'
