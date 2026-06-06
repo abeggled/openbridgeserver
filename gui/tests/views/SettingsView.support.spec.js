@@ -163,6 +163,8 @@ describe('SettingsView support tab', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Support-Paket geladen')
     expect(wrapper.text()).toContain('KNX EG')
+    expect(wrapper.text()).toContain('Transformationen')
+    expect(wrapper.text()).toContain('python')
     expect(wrapper.text()).toContain('Debug ga=20/2/123')
 
     await wrapper.find('[data-testid="input-support-log-filter"]').setValue('kn ga=20/2/1*')
@@ -211,7 +213,22 @@ function supportPackage() {
     categories: ['installation', 'adapters', 'history', 'monitor', 'logs'],
     privacy: { automatic_upload: false, remote_access: false, sanitizer: 'central_recursive_v1' },
     installation: { obs_version: '1.2.3' },
-    runtime: { os: 'Linux', os_release: '6.0', architecture: 'x86_64', uptime_seconds: 3661 },
+    runtime: {
+      os: 'Linux',
+      os_release: '6.0',
+      architecture: 'x86_64',
+      uptime_seconds: 3661,
+      resources: {
+        system: {
+          cpu_count: 4,
+          load_average: { '1m': 0.42 },
+          memory: { used_bytes: 1024, total_bytes: 4096 },
+        },
+        process: { max_rss_bytes: 2048 },
+        disk: { available: true, free_bytes: 8192, total_bytes: 16384 },
+        top_processes: { available: true, source: 'procfs', items: [{ pid: 1, name: 'python', rss_bytes: 2048 }] },
+      },
+    },
     adapters: [
       {
         id: 'inst-knx',
@@ -221,6 +238,8 @@ function supportPackage() {
         connected: true,
         objects: 2,
         bindings: 3,
+        active_transformations: 1,
+        active_filters: 2,
         transactions_per_second: 0.2,
       },
     ],

@@ -401,6 +401,8 @@
                       <th>{{ $t('settings.support.viewerStatus') }}</th>
                       <th>{{ $t('settings.support.viewerObjects') }}</th>
                       <th>{{ $t('settings.support.viewerBindings') }}</th>
+                      <th>{{ $t('settings.support.viewerTransformations') }}</th>
+                      <th>{{ $t('settings.support.viewerFilters') }}</th>
                       <th>{{ $t('settings.support.viewerTps') }}</th>
                     </tr>
                   </thead>
@@ -415,10 +417,12 @@
                       </td>
                       <td>{{ supportFormatNumber(adapter.objects) }}</td>
                       <td>{{ supportFormatNumber(adapter.bindings) }}</td>
+                      <td>{{ supportFormatNumber(adapter.active_transformations) }}</td>
+                      <td>{{ supportFormatNumber(adapter.active_filters) }}</td>
                       <td>{{ supportFormatNumber(adapter.transactions_per_second) }}</td>
                     </tr>
                     <tr v-if="supportAdapters.length === 0">
-                      <td colspan="6" class="text-center text-sm text-slate-500 py-4">{{ $t('settings.support.viewerNoAdapters') }}</td>
+                      <td colspan="8" class="text-center text-sm text-slate-500 py-4">{{ $t('settings.support.viewerNoAdapters') }}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -446,6 +450,14 @@
                   <dd class="text-slate-800 dark:text-slate-100">{{ supportDuration(supportViewedPackage.monitor?.stats?.effective_retention_seconds) }}</dd>
                   <dt class="text-slate-500">{{ $t('settings.support.viewerSample') }}</dt>
                   <dd class="text-slate-800 dark:text-slate-100">{{ supportFormatNumber(supportViewedPackage.monitor?.recent_sample_size) }}</dd>
+                  <dt class="text-slate-500">{{ $t('settings.support.viewerCpu') }}</dt>
+                  <dd class="text-slate-800 dark:text-slate-100">{{ supportFormatCpu(supportViewedPackage.runtime?.resources) }}</dd>
+                  <dt class="text-slate-500">{{ $t('settings.support.viewerMemory') }}</dt>
+                  <dd class="text-slate-800 dark:text-slate-100">{{ supportFormatMemory(supportViewedPackage.runtime?.resources) }}</dd>
+                  <dt class="text-slate-500">{{ $t('settings.support.viewerDisk') }}</dt>
+                  <dd class="text-slate-800 dark:text-slate-100">{{ supportFormatDisk(supportViewedPackage.runtime?.resources) }}</dd>
+                  <dt class="text-slate-500">{{ $t('settings.support.viewerTop') }}</dt>
+                  <dd class="text-slate-800 dark:text-slate-100">{{ supportFormatTop(supportViewedPackage.runtime?.resources) }}</dd>
                 </dl>
               </div>
             </div>
@@ -1692,6 +1704,40 @@ function supportFormatNumber(value) {
 function supportFormatBytes(value) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
   return formatBytes(value)
+}
+
+function supportFormatCpu(resources) {
+  const cpuCount = resources?.system?.cpu_count
+  const load = resources?.system?.load_average?.['1m']
+  if (typeof cpuCount !== 'number' && typeof load !== 'number') return '—'
+  const parts = []
+  if (typeof cpuCount === 'number') parts.push(`${cpuCount} ${t('settings.support.viewerCpuUnit')}`)
+  if (typeof load === 'number') parts.push(`${t('settings.support.viewerLoad')} ${load.toFixed(2)}`)
+  return parts.join(' / ')
+}
+
+function supportFormatMemory(resources) {
+  const memory = resources?.system?.memory
+  if (!memory) return supportFormatBytes(resources?.process?.max_rss_bytes)
+  const used = supportFormatBytes(memory.used_bytes)
+  const total = supportFormatBytes(memory.total_bytes)
+  if (used === '—' && total === '—') return '—'
+  return `${used} / ${total}`
+}
+
+function supportFormatDisk(resources) {
+  const disk = resources?.disk
+  if (!disk?.available) return '—'
+  return `${supportFormatBytes(disk.free_bytes)} ${t('settings.support.viewerFree')} / ${supportFormatBytes(disk.total_bytes)}`
+}
+
+function supportFormatTop(resources) {
+  const top = resources?.top_processes
+  if (!top?.available || !Array.isArray(top.items) || top.items.length === 0) return '—'
+  return top.items
+    .slice(0, 3)
+    .map(item => `${item.name || item.pid}: ${supportFormatBytes(item.rss_bytes)}`)
+    .join(' / ')
 }
 
 function supportDuration(seconds) {

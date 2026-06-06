@@ -13,6 +13,7 @@ import logging
 import os
 import platform
 import re
+import shutil
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -64,6 +65,10 @@ _PASSTHROUGH_KEYS = {
     "config_source",
     "individual_address",
     "logger",
+    "sniffer.process",
+}
+_PASSTHROUGH_VALUES = {
+    "sniffer.process",
 }
 _ENDPOINT_KEY_PARTS = (
     "host",
@@ -316,6 +321,7 @@ def _build_runtime_info(now: datetime) -> dict[str, Any]:
         "environment": _detect_runtime_environment(),
         "started_at": _iso(_PROCESS_STARTED_AT),
         "uptime_seconds": max(0, int((now - _PROCESS_STARTED_AT).total_seconds())),
+        "resources": _build_resource_snapshot(),
     }
 
 
@@ -329,6 +335,30 @@ async def _build_adapter_info(db: Database) -> list[dict[str, Any]]:
         db,
         """SELECT adapter_instance_id, COUNT(DISTINCT datapoint_id) AS count
            FROM adapter_bindings GROUP BY adapter_instance_id""",
+    )
+    transformation_counts = await _counts_by_adapter(
+        db,
+        """SELECT adapter_instance_id, COUNT(*) AS count
+           FROM adapter_bindings
+           WHERE enabled=1
+             AND (
+               COALESCE(NULLIF(TRIM(value_formula), ''), '') != ''
+               OR COALESCE(NULLIF(TRIM(value_map), ''), '{}') NOT IN ('', '{}', '[]')
+             )
+           GROUP BY adapter_instance_id""",
+    )
+    filter_counts = await _counts_by_adapter(
+        db,
+        """SELECT adapter_instance_id, COUNT(*) AS count
+           FROM adapter_bindings
+           WHERE enabled=1
+             AND (
+               COALESCE(send_on_change, 0) != 0
+               OR COALESCE(send_throttle_ms, 0) > 0
+               OR send_min_delta IS NOT NULL
+               OR send_min_delta_pct IS NOT NULL
+             )
+           GROUP BY adapter_instance_id""",
     )
     tps_available, tps_by_instance, tps_by_adapter_type = await _ringbuffer_tps(window_seconds=60)
     result: list[dict[str, Any]] = []
@@ -351,6 +381,8 @@ async def _build_adapter_info(db: Database) -> list[dict[str, Any]]:
                 "config": sanitize_support_data(config),
                 "objects": object_counts.get(row["id"], 0),
                 "bindings": binding_counts.get(row["id"], 0),
+                "active_transformations": transformation_counts.get(row["id"], 0),
+                "active_filters": filter_counts.get(row["id"], 0),
                 "transactions_per_second": tps if tps_available else None,
                 "metrics_available": tps_available,
                 "metrics_source": "ringbuffer_metadata_adapter_instance_60s" if tps_available else None,
@@ -519,7 +551,14 @@ def _sanitize_log_entry(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sanitize_string(value: str) -> str:
-    sanitized = _LONG_TOKEN_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", value)
+    passthrough_tokens: dict[str, str] = {}
+    sanitized = value
+    for index, literal in enumerate(sorted(_PASSTHROUGH_VALUES, key=len, reverse=True)):
+        token = f"__OBS_SUPPORT_PASSTHROUGH_{index}__"
+        if literal in sanitized:
+            sanitized = sanitized.replace(literal, token)
+            passthrough_tokens[token] = literal
+    sanitized = _LONG_TOKEN_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", sanitized)
     sanitized = _JSON_SECRET_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]{match.group(4)}", sanitized)
     sanitized = _COLON_SECRET_RE.sub(lambda match: f"{match.group(1)}: [REDACTED]", sanitized)
     sanitized = _AUTH_HEADER_RE.sub("Authorization: [REDACTED]", sanitized)
@@ -529,6 +568,8 @@ def _sanitize_string(value: str) -> str:
     sanitized = _IPV6_CANDIDATE_RE.sub(_sanitize_ipv6_candidate, sanitized)
     sanitized = _EMAIL_RE.sub("[REDACTED_EMAIL]", sanitized)
     sanitized = _DOMAIN_RE.sub("[REDACTED_DOMAIN]", sanitized)
+    for token, literal in passthrough_tokens.items():
+        sanitized = sanitized.replace(token, literal)
     return sanitized
 
 
@@ -598,6 +639,149 @@ def _detect_runtime_environment() -> dict[str, Any]:
         "docker": os.path.exists("/.dockerenv") or bool(os.environ.get("container")),
         "raspberry_pi": platform.machine().startswith(("arm", "aarch64")),
     }
+
+
+def _build_resource_snapshot() -> dict[str, Any]:
+    return sanitize_support_data(
+        {
+            "captured_at": _iso(datetime.now(UTC)),
+            "system": _system_resource_snapshot(),
+            "process": _process_resource_snapshot(),
+            "disk": _disk_resource_snapshot(),
+            "top_processes": _top_process_snapshot(),
+        }
+    )
+
+
+def _system_resource_snapshot() -> dict[str, Any]:
+    load_avg = None
+    if hasattr(os, "getloadavg"):
+        try:
+            one, five, fifteen = os.getloadavg()
+            load_avg = {"1m": one, "5m": five, "15m": fifteen}
+        except OSError:
+            load_avg = None
+    return {
+        "cpu_count": os.cpu_count(),
+        "load_average": load_avg,
+        "memory": _memory_snapshot_procfs(),
+    }
+
+
+def _process_resource_snapshot() -> dict[str, Any]:
+    snapshot: dict[str, Any] = {"pid": os.getpid()}
+    try:
+        import resource
+
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        max_rss_kib = usage.ru_maxrss
+        if platform.system() == "Darwin":
+            max_rss_kib = int(max_rss_kib / 1024)
+        snapshot.update(
+            {
+                "user_cpu_seconds": usage.ru_utime,
+                "system_cpu_seconds": usage.ru_stime,
+                "max_rss_bytes": int(max_rss_kib) * 1024,
+            }
+        )
+    except (ImportError, OSError, ValueError):
+        snapshot.update({"user_cpu_seconds": None, "system_cpu_seconds": None, "max_rss_bytes": None})
+    return snapshot
+
+
+def _disk_resource_snapshot() -> dict[str, Any]:
+    path = os.getcwd()
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return {"path": _basename_only(path), "available": False}
+    return {
+        "path": _basename_only(path),
+        "available": True,
+        "total_bytes": usage.total,
+        "used_bytes": usage.used,
+        "free_bytes": usage.free,
+    }
+
+
+def _top_process_snapshot(limit: int = 5) -> dict[str, Any]:
+    try:
+        import psutil
+    except ImportError:
+        return _top_process_snapshot_procfs(limit=limit)
+
+    items: list[dict[str, Any]] = []
+    for proc in psutil.process_iter(["pid", "name", "username", "cpu_percent", "memory_info"]):
+        try:
+            info = proc.info
+            memory_info = info.get("memory_info")
+            items.append(
+                {
+                    "pid": info.get("pid"),
+                    "name": info.get("name"),
+                    "username": "[REDACTED]",
+                    "cpu_percent": info.get("cpu_percent"),
+                    "rss_bytes": getattr(memory_info, "rss", None),
+                }
+            )
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    items.sort(key=lambda item: (item.get("cpu_percent") or 0, item.get("rss_bytes") or 0), reverse=True)
+    return {"available": True, "source": "psutil", "items": items[:limit]}
+
+
+def _memory_snapshot_procfs() -> dict[str, Any] | None:
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            rows = fh.readlines()
+    except OSError:
+        return None
+
+    values: dict[str, int] = {}
+    for row in rows:
+        key, _, rest = row.partition(":")
+        parts = rest.strip().split()
+        if parts and parts[0].isdigit():
+            values[key] = int(parts[0]) * 1024
+    total = values.get("MemTotal")
+    available = values.get("MemAvailable")
+    return {
+        "total_bytes": total,
+        "available_bytes": available,
+        "used_bytes": total - available if total is not None and available is not None else None,
+    }
+
+
+def _top_process_snapshot_procfs(limit: int = 5) -> dict[str, Any]:
+    proc_root = "/proc"
+    if not os.path.isdir(proc_root):
+        return {"available": False, "reason": "psutil_not_installed", "items": []}
+
+    page_size = os.sysconf("SC_PAGE_SIZE")
+    items: list[dict[str, Any]] = []
+    for pid_name in os.listdir(proc_root):
+        if not pid_name.isdigit():
+            continue
+        proc_dir = os.path.join(proc_root, pid_name)
+        try:
+            with open(os.path.join(proc_dir, "comm"), encoding="utf-8") as fh:
+                name = fh.read().strip()
+            with open(os.path.join(proc_dir, "statm"), encoding="utf-8") as fh:
+                statm = fh.read().split()
+        except OSError:
+            continue
+        rss_pages = int(statm[1]) if len(statm) > 1 and statm[1].isdigit() else 0
+        items.append(
+            {
+                "pid": int(pid_name),
+                "name": name,
+                "username": "[REDACTED]",
+                "cpu_percent": None,
+                "rss_bytes": rss_pages * page_size,
+            }
+        )
+    items.sort(key=lambda item: item.get("rss_bytes") or 0, reverse=True)
+    return {"available": True, "source": "procfs", "items": items[:limit]}
 
 
 def _adapter_version(cls: type | None) -> str | None:

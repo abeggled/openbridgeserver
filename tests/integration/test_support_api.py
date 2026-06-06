@@ -83,6 +83,11 @@ async def test_support_package_contains_phase1_privacy_contract(client, auth_hea
     assert "monitor" in body
     assert "health" in body
     assert isinstance(body["debug_log"], list)
+    assert "resources" in body["runtime"]
+    assert body["runtime"]["resources"]["system"]["cpu_count"] is not None
+    assert "memory" in body["runtime"]["resources"]["system"]
+    assert "disk" in body["runtime"]["resources"]
+    assert "top_processes" in body["runtime"]["resources"]
     assert "/" not in body["installation"]["database"]["path"]
     assert body["installation"]["config_source"]
     assert "/" not in body["installation"]["config_source"]
@@ -101,6 +106,7 @@ async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_
                 "port": 1883,
                 "individual_address": "1.1.100",
                 "auth_protocol": "SHA",
+                "sniffer.process": "sniffer.process",
                 "username": "support-user",
                 "password": "top-secret",
                 "community": "support-community",
@@ -136,6 +142,8 @@ async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_
             "adapter_instance_id": instance_id,
             "direction": "SOURCE",
             "config": {"topic": "support/test"},
+            "send_on_change": True,
+            "value_formula": "x * 2",
         },
         headers=auth_headers,
     )
@@ -149,6 +157,7 @@ async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_
     assert adapter["config"]["host"] == "[REDACTED_ENDPOINT]"
     assert adapter["config"]["individual_address"] == "1.1.100"
     assert adapter["config"]["auth_protocol"] == "SHA"
+    assert adapter["config"]["sniffer.process"] == "sniffer.process"
     assert adapter["config"]["username"] == "[REDACTED]"
     assert adapter["config"]["password"] == "[REDACTED]"
     assert adapter["config"]["community"] == "[REDACTED]"
@@ -165,6 +174,8 @@ async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_
     assert adapter["config"]["client_id"] == "client-without-secret"
     assert adapter["bindings"] == 1
     assert adapter["objects"] == 1
+    assert adapter["active_transformations"] == 1
+    assert adapter["active_filters"] == 1
     assert adapter["transactions_per_second"] == 0.0
     assert adapter["metrics_available"] is True
     assert adapter["metrics_source"] == "ringbuffer_metadata_adapter_instance_60s"
@@ -283,6 +294,7 @@ async def test_support_package_sanitizes_error_history(client, auth_headers):
         "Authorization: Basic basic-secret "
         "access_token=access-secret refresh_token=refresh-secret client_secret: prefixed-colon "
         "community=public-community knxkeys_file_path=/home/support/secret.knxkeys "
+        "logger sniffer.process still visible "
         "contact admin@example.com connecting to mqtt.customer-site.com failed "
         '{"token":"json-token","client_secret":"json-client-secret"}'
     )
@@ -306,6 +318,7 @@ async def test_support_package_sanitizes_error_history(client, auth_headers):
     assert "prefixed-colon" not in message
     assert "public-community" not in message
     assert "secret.knxkeys" not in message
+    assert "sniffer.process" in message
     assert "admin@example.com" not in message
     assert "mqtt.customer-site.com" not in message
     assert "json-token" not in message
