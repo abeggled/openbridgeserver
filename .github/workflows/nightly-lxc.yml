@@ -119,7 +119,9 @@ jobs:
 
           # Re-runs on the same day (e.g. manual + scheduled) replace that day's
           # nightly release instead of failing on an existing tag.
-          gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag 2>/dev/null || true
+if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+  gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag
+fi
 
           gh release create "$TAG" \
             --repo "$REPO" \
