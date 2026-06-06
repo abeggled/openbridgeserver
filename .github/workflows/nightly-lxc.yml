@@ -144,11 +144,8 @@ jobs:
 
           CUTOFF_EPOCH="$(date -u -d "${RETENTION_DAYS} days ago" +%s)"
 
-          gh release list \
-            --repo "$REPO" \
-            --limit 200 \
-            --json tagName,createdAt \
-            --jq '.[] | select(.tagName | startswith("nightly-")) | [.tagName, .createdAt] | @tsv' \
+          gh api --paginate "/repos/${REPO}/releases?per_page=100" \
+            --jq '.[] | select(.tag_name | startswith("nightly-")) | [.tag_name, .created_at] | @tsv' \
             > releases.tsv
 
           while IFS=$'\t' read -r TAG CREATED_AT; do
