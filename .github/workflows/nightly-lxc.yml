@@ -7,14 +7,15 @@ on:
 
 permissions:
   actions: write
-  contents: read
+  contents: write
 
 concurrency:
   group: nightly-lxc
   cancel-in-progress: false
 
 env:
-  LXC_ARTIFACT_RETENTION_DAYS: 14
+  # How many days of nightly pre-releases to keep (one release per day).
+  NIGHTLY_RETENTION_DAYS: 14
 
 jobs:
   dispatch:
@@ -38,6 +39,7 @@ jobs:
           echo "dispatch_ts=$DISPATCH_TS" >> "$GITHUB_OUTPUT"
 
       - name: Wait for dispatched build to finish
+        id: watch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -61,37 +63,91 @@ jobs:
           done
 
           if [[ -z "$RUN_ID" ]]; then
-            echo "Could not locate the dispatched lxc-template run; skipping prune." >&2
+            echo "Could not locate the dispatched lxc-template run; aborting." >&2
             exit 1
           fi
 
           echo "Watching lxc-template run ${RUN_ID}"
           # --exit-status makes this step fail if the build concluded in failure,
-          # which short-circuits the prune step below.
+          # which short-circuits the publish/prune steps below.
           gh run watch "$RUN_ID" --repo "$REPO" --exit-status --interval 30
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
 
-      - name: Prune old LXC artifacts
-        # Only runs when the dispatched build succeeded (previous steps green).
-        # This guarantees we never delete the last good nightly artifacts during
-        # a prolonged build outage.
+      - name: Download build artifacts from dispatched run
         if: success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          RETENTION_DAYS: ${{ env.LXC_ARTIFACT_RETENTION_DAYS }}
+          RUN_ID: ${{ steps.watch.outputs.run_id }}
+        run: |
+          set -euo pipefail
+
+          rm -rf artifacts
+          # Grabs all artifacts of the run (lxc-amd64, lxc-arm64, app-bundle),
+          # each into its own subdirectory under artifacts/.
+          gh run download "$RUN_ID" --repo "$REPO" --dir artifacts
+          echo "Downloaded artifacts:"
+          find artifacts -type f -printf '  %p\n'
+
+      - name: Publish nightly release
+        # Date-based, addressable pre-release so users get a stable download URL
+        # per build instead of having to dig through Actions artifacts.
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          TAG="nightly-$(date -u +%Y%m%d)"
+          DAY="$(date -u +%Y-%m-%d)"
+
+          mapfile -t ASSETS < <(find artifacts -type f \
+            \( -name '*.tar.zst' -o -name '*.tar.gz' -o -name '*.sha512' \) | sort)
+
+          if [[ ${#ASSETS[@]} -eq 0 ]]; then
+            echo "No build assets found to publish." >&2
+            exit 1
+          fi
+
+          # Re-runs on the same day (e.g. manual + scheduled) replace that day's
+          # nightly release instead of failing on an existing tag.
+          gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag 2>/dev/null || true
+
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --title "Nightly $DAY" \
+            --notes "Automated nightly LXC template + app-bundle build for ${DAY} (commit ${GITHUB_SHA}). Pre-release — not for production use." \
+            --prerelease \
+            "${ASSETS[@]}"
+
+          echo "Published $TAG with ${#ASSETS[@]} assets."
+
+      - name: Prune old nightly releases
+        # Only runs when the build and publish succeeded, so a failed nightly
+        # never deletes previously published nightly releases.
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RETENTION_DAYS: ${{ env.NIGHTLY_RETENTION_DAYS }}
         run: |
           set -euo pipefail
 
           CUTOFF_EPOCH="$(date -u -d "${RETENTION_DAYS} days ago" +%s)"
-          gh api --paginate "/repos/${REPO}/actions/artifacts?per_page=100" \
-            --jq '.artifacts[] | select((.name == "lxc-amd64") or (.name == "lxc-arm64") or (.name == "app-bundle")) | [.id, .created_at, .name] | @tsv' \
-            > artifacts.tsv
 
-          while IFS=$'\t' read -r ARTIFACT_ID CREATED_AT ARTIFACT_NAME; do
-            [[ -z "$ARTIFACT_ID" ]] && continue
+          gh release list \
+            --repo "$REPO" \
+            --limit 200 \
+            --json tagName,createdAt \
+            --jq '.[] | select(.tagName | startswith("nightly-")) | [.tagName, .createdAt] | @tsv' \
+            > releases.tsv
+
+          while IFS=$'\t' read -r TAG CREATED_AT; do
+            [[ -z "$TAG" ]] && continue
             CREATED_EPOCH="$(date -u -d "$CREATED_AT" +%s)"
             if (( CREATED_EPOCH < CUTOFF_EPOCH )); then
-              echo "Deleting old LXC artifact ${ARTIFACT_NAME} (${ARTIFACT_ID}) from ${CREATED_AT}"
-              gh api --method DELETE "/repos/${REPO}/actions/artifacts/${ARTIFACT_ID}"
+              echo "Deleting old nightly release ${TAG} (created ${CREATED_AT})"
+              gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag
             fi
-          done < artifacts.tsv
+          done < releases.tsv
