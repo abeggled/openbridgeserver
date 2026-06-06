@@ -71,6 +71,9 @@ async def test_support_package_contains_phase1_privacy_contract(client, auth_hea
     assert resp.status_code == 200
     body = resp.json()
     assert body["schema_version"] == 1
+    assert body["generated_by"] == "[REDACTED]"
+    assert body["privacy"]["generated_by_redacted"] is True
+    assert body["privacy"]["path_policy"] == "basename_only"
     assert body["privacy"]["automatic_upload"] is False
     assert body["privacy"]["remote_access"] is False
     assert "installation" in body
@@ -80,6 +83,7 @@ async def test_support_package_contains_phase1_privacy_contract(client, auth_hea
     assert "monitor" in body
     assert "health" in body
     assert isinstance(body["debug_log"], list)
+    assert "/" not in body["installation"]["database"]["path"]
 
 
 async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_headers):
@@ -94,6 +98,15 @@ async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_
                 "port": 1883,
                 "username": "support-user",
                 "password": "top-secret",
+                "psk": "support-psk",
+                "pin": "123456",
+                "pre_shared_key": "support-pre-shared",
+                "auth": "support-auth",
+                "bearer": "support-bearer",
+                "passphrase": "support-passphrase",
+                "keyring": "support-keyring",
+                "ca_cert": "support-ca-cert",
+                "client_cert": "support-client-cert",
                 "client_id": "client-without-secret",
             },
         },
@@ -125,10 +138,19 @@ async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_
     assert resp.status_code == 200
     package = resp.json()
     adapter = next(entry for entry in package["adapters"] if entry["id"] == instance_id)
-    assert adapter["name"] == "[REDACTED_ENDPOINT]"
+    assert adapter["name"] == "[REDACTED_DOMAIN]"
     assert adapter["config"]["host"] == "[REDACTED_ENDPOINT]"
     assert adapter["config"]["username"] == "[REDACTED]"
     assert adapter["config"]["password"] == "[REDACTED]"
+    assert adapter["config"]["psk"] == "[REDACTED]"
+    assert adapter["config"]["pin"] == "[REDACTED]"
+    assert adapter["config"]["pre_shared_key"] == "[REDACTED]"
+    assert adapter["config"]["auth"] == "[REDACTED]"
+    assert adapter["config"]["bearer"] == "[REDACTED]"
+    assert adapter["config"]["passphrase"] == "[REDACTED]"
+    assert adapter["config"]["keyring"] == "[REDACTED]"
+    assert adapter["config"]["ca_cert"] == "[REDACTED]"
+    assert adapter["config"]["client_cert"] == "[REDACTED]"
     assert adapter["config"]["client_id"] == "client-without-secret"
     assert adapter["bindings"] == 1
     assert adapter["objects"] == 1
@@ -249,6 +271,7 @@ async def test_support_package_sanitizes_error_history(client, auth_headers):
         "Authorization: Bearer bearer-token X-API-Key: header-secret password: colon-secret "
         "Authorization: Basic basic-secret "
         "access_token=access-secret refresh_token=refresh-secret client_secret: prefixed-colon "
+        "contact admin@example.com connecting to mqtt.customer-site.com failed "
         '{"token":"json-token","client_secret":"json-client-secret"}'
     )
 
@@ -269,6 +292,8 @@ async def test_support_package_sanitizes_error_history(client, auth_headers):
     assert "access-secret" not in message
     assert "refresh-secret" not in message
     assert "prefixed-colon" not in message
+    assert "admin@example.com" not in message
+    assert "mqtt.customer-site.com" not in message
     assert "json-token" not in message
     assert "json-client-secret" not in message
     assert "[REDACTED" in message
@@ -294,10 +319,12 @@ async def test_support_debug_log_window_can_be_enabled_and_disabled(client, auth
     assert body["active"] is True
     assert body["level"] == "DEBUG"
     assert body["until"]
+    assert logging.getLevelName(logging.getLogger().level) == "DEBUG"
 
     status_resp = await client.get("/api/v1/support/debug-log", headers=auth_headers)
     assert status_resp.status_code == 200
     assert status_resp.json()["active"] is True
+    assert status_resp.json()["level"] == "DEBUG"
 
     disable_resp = await client.delete("/api/v1/support/debug-log", headers=auth_headers)
     assert disable_resp.status_code == 200

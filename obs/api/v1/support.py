@@ -41,8 +41,18 @@ _SENSITIVE_KEY_PARTS = (
     "username",
     "apikey",
     "api_key",
+    "auth",
+    "bearer",
+    "ca_cert",
+    "client_cert",
+    "cert",
     "keyfile",
+    "keyring",
+    "passphrase",
+    "pin",
+    "pre_shared_key",
     "private_key",
+    "psk",
     "jwt",
 )
 _ENDPOINT_KEY_PARTS = (
@@ -58,7 +68,13 @@ _ENDPOINT_KEY_PARTS = (
 )
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _IPV6_CANDIDATE_RE = re.compile(r"\b[0-9a-fA-F:]*:[0-9a-fA-F:]+\b")
-_SECRET_KEY_PATTERN = r"[a-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key|private[_-]?key)"
+_SECRET_KEY_PATTERN = (
+    r"[a-z0-9_-]*(?:"
+    r"token|secret|password|passwd|api[_-]?key|private[_-]?key|"
+    r"psk|pin|pre[_-]?shared[_-]?key|auth|bearer|passphrase|"
+    r"keyring|ca[_-]?cert|client[_-]?cert|cert"
+    r")"
+)
 _LONG_TOKEN_RE = re.compile(rf"(?i)(?<![a-z0-9_-])({_SECRET_KEY_PATTERN})=([^&\s]+)")
 _AUTH_HEADER_RE = re.compile(r"(?i)\bauthorization\s*:\s*(?:bearer|basic)\s+[^\s,;]+")
 _HEADER_SECRET_RE = re.compile(r"(?i)\b(x-api-key|api-key)\s*:\s*([^\s,;]+)")
@@ -71,6 +87,8 @@ _JSON_SECRET_RE = re.compile(
     r"([\"'])(.*?)(\2)"
 )
 _HOSTLIKE_NAME_RE = re.compile(r"(?i)\b(?:[a-z0-9-]+\.)+[a-z0-9-]+\b")
+_EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
+_DOMAIN_RE = re.compile(r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b")
 
 _debug_restore_task: asyncio.Task[None] | None = None
 _debug_restore_level: str | None = None
@@ -134,13 +152,25 @@ async def create_support_package(
     return SupportPackageOut(
         schema_version=1,
         generated_at=_iso(now),
-        generated_by=admin,
+        generated_by="[REDACTED]",
         categories=[category.key for category in _support_categories()],
         privacy={
             "automatic_upload": False,
             "remote_access": False,
             "sanitizer": "central_recursive_v1",
-            "redacted": ["credentials", "tokens", "secrets", "IP addresses", "endpoint values"],
+            "generated_by_redacted": admin != "[REDACTED]",
+            "path_policy": "basename_only",
+            "redacted": [
+                "credentials",
+                "tokens",
+                "secrets",
+                "IP addresses",
+                "domain names",
+                "email addresses",
+                "endpoint values",
+                "filesystem path prefixes",
+                "exporting username",
+            ],
         },
         installation=_build_installation_info(),
         runtime=_build_runtime_info(now),
@@ -259,8 +289,8 @@ def _build_installation_info() -> dict[str, Any]:
         {
             "installation_type": _detect_installation_type(),
             "obs_version": __version__,
-            "config_source": os.environ.get("OBS_CONFIG") or "config.yaml",
-            "database": {"path": settings.database.path, "history_plugin": settings.database.history_plugin},
+            "config_source": _basename_only(os.environ.get("OBS_CONFIG") or "config.yaml"),
+            "database": {"path": _basename_only(settings.database.path), "history_plugin": settings.database.history_plugin},
         },
     )
 
@@ -485,6 +515,8 @@ def _sanitize_string(value: str) -> str:
     sanitized = _sanitize_urls(sanitized)
     sanitized = _IPV4_RE.sub("[REDACTED_IP]", sanitized)
     sanitized = _IPV6_CANDIDATE_RE.sub(_sanitize_ipv6_candidate, sanitized)
+    sanitized = _EMAIL_RE.sub("[REDACTED_EMAIL]", sanitized)
+    sanitized = _DOMAIN_RE.sub("[REDACTED_DOMAIN]", sanitized)
     return sanitized
 
 
@@ -493,6 +525,10 @@ def _sanitize_adapter_name(value: str) -> str:
     if _HOSTLIKE_NAME_RE.search(sanitized):
         return _HOSTLIKE_NAME_RE.sub("[REDACTED_ENDPOINT]", sanitized)
     return sanitized
+
+
+def _basename_only(value: str) -> str:
+    return os.path.basename(str(value)) or "[REDACTED_PATH]"
 
 
 def _sanitize_urls(value: str) -> str:

@@ -1369,7 +1369,6 @@ onMounted(async () => {
   if (!settings.loaded) await settings.load()
   tzSelected.value = settings.timezone
   document.addEventListener('mousedown', onOutsideClick)
-  supportDebugTick = window.setInterval(() => { supportNowMs.value = Date.now() }, 1000)
   if (auth.isAdmin) {
     loadHistorySettings()
     loadHistoryFilterDps()
@@ -1389,7 +1388,7 @@ watch(activeTab, (tab) => {
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', onOutsideClick)
-  if (supportDebugTick) window.clearInterval(supportDebugTick)
+  stopSupportDebugTick()
 })
 
 async function saveTz() {
@@ -1538,9 +1537,15 @@ const supportRuntimeSummary = computed(() => {
   return [runtime.os, runtime.os_release, runtime.architecture].filter(Boolean).join(' / ') || '—'
 })
 
+watch(
+  () => [activeTab.value, supportDebugStatus.value.active, supportDebugStatus.value.until],
+  () => updateSupportDebugTick(),
+)
+
 async function loadSupportInfo() {
-  if (!auth.isAdmin && !isDemo.value) return
+  if (!auth.isAdmin) return
   supportLoading.value = true
+  supportDebugMsg.value = null
   try {
     const [{ data: categories }, { data: debugStatus }] = await Promise.all([
       supportApi.categories(),
@@ -1549,10 +1554,29 @@ async function loadSupportInfo() {
     supportCategories.value = categories
     supportDebugStatus.value = debugStatus
   } catch (e) {
-    supportPackageMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.error') }
+    supportDebugMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.error') }
   } finally {
     supportLoading.value = false
   }
+}
+
+function updateSupportDebugTick() {
+  if (activeTab.value === 'support' && supportDebugStatus.value.active) {
+    if (!supportDebugTick) {
+      supportDebugTick = window.setInterval(() => {
+        supportNowMs.value = Date.now()
+        if (!supportDebugActive.value) stopSupportDebugTick()
+      }, 1000)
+    }
+    return
+  }
+  stopSupportDebugTick()
+}
+
+function stopSupportDebugTick() {
+  if (!supportDebugTick) return
+  window.clearInterval(supportDebugTick)
+  supportDebugTick = null
 }
 
 function supportCategoryLabel(category) {
