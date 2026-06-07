@@ -135,6 +135,25 @@ async def test_log_broadcast_only_reaches_log_access_connections():
 
 
 @pytest.mark.asyncio
+async def test_log_broadcast_revalidates_existing_log_access_connections():
+    manager = WebSocketManager()
+    admin_ws = _FakeWebSocket()
+    checks = [True, False]
+
+    async def log_access_check() -> bool:
+        return checks.pop(0)
+
+    await manager.connect(admin_ws, log_access=True, log_access_check=log_access_check)
+
+    first = {"action": "log_entry", "entry": {"level": "INFO", "message": "first"}}
+    second = {"action": "log_entry", "entry": {"level": "INFO", "message": "second"}}
+    await manager.broadcast(first)
+    await manager.broadcast(second)
+
+    assert admin_ws.messages == [first]
+
+
+@pytest.mark.asyncio
 async def test_subscribe_filters_datapoints_for_page_scoped_connection():
     ws = _FakeWebSocket()
     manager = WebSocketManager()

@@ -120,6 +120,7 @@ async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_
                 "individual_address": "1.1.100",
                 "auth_protocol": "SHA",
                 "sniffer.process": "sniffer.process",
+                "logger": {"password": "nested-secret", "name": "obs_logger"},
                 "username": "support-user",
                 "password": "top-secret",
                 "community": "support-community",
@@ -171,6 +172,8 @@ async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_
     assert adapter["config"]["individual_address"] == "1.1.100"
     assert adapter["config"]["auth_protocol"] == "SHA"
     assert adapter["config"]["sniffer.process"] == "sniffer.process"
+    assert adapter["config"]["logger"]["password"] == "[REDACTED]"
+    assert adapter["config"]["logger"]["name"] == "obs_logger"
     assert adapter["config"]["username"] == "[REDACTED]"
     assert adapter["config"]["password"] == "[REDACTED]"
     assert adapter["config"]["community"] == "[REDACTED]"

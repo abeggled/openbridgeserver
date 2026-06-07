@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["websocket"])
 
+LogAccessCheck = Callable[[], Awaitable[bool]]
+
 
 # ---------------------------------------------------------------------------
 # WebSocketManager
@@ -43,19 +45,21 @@ class WebSocketManager:
     """Tracks all connected WebSocket clients and their DataPoint subscriptions."""
 
     def __init__(self) -> None:
-        # conn_id → (websocket, subscribed_dp_ids, send_lock, allowed_dp_ids, log_access)
+        # conn_id → (websocket, subscribed_dp_ids, send_lock, allowed_dp_ids, log_access, log_access_check)
         # allowed_dp_ids: None = unrestricted (authenticated user),
         # otherwise page-scoped allowlist for anonymous viewer sessions.
         # log_access: only admin-authenticated connections receive log_entry pushes.
+        # log_access_check: revalidates admin status before every log_entry push.
         # send_lock serialises concurrent sends on the same WebSocket;
         # concurrent asyncio.gather calls in EventBus would otherwise race.
-        self._connections: dict[str, tuple[WebSocket, set[str], asyncio.Lock, set[str] | None, bool]] = {}
+        self._connections: dict[str, tuple[WebSocket, set[str], asyncio.Lock, set[str] | None, bool, LogAccessCheck | None]] = {}
 
     async def connect(
         self,
         ws: WebSocket,
         allowed_dp_ids: set[str] | None = None,
         log_access: bool = False,
+        log_access_check: LogAccessCheck | None = None,
         subprotocol: str | None = None,
     ) -> str:
         if subprotocol is None:
@@ -67,7 +71,7 @@ class WebSocketManager:
                 # Test doubles may not support the subprotocol kwarg.
                 await ws.accept()
         conn_id = str(uuid.uuid4())
-        self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access)
+        self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access, log_access_check)
         logger.debug("WS client connected: %s  (total: %d)", conn_id[:8], len(self._connections))
         return conn_id
 
@@ -114,7 +118,7 @@ class WebSocketManager:
         entry = self._connections.get(conn_id)
         if entry is None:
             return False
-        ws, _, lock, _allowed, _log_access = entry
+        ws, _, lock, _allowed, _log_access, _log_access_check = entry
         async with lock:
             try:
                 await ws.send_json(msg)
@@ -132,9 +136,14 @@ class WebSocketManager:
         """Send a message to ALL connected clients (no subscription filter)."""
         dead: list[str] = []
         log_only = msg.get("action") == "log_entry"
-        for conn_id, (_, _subs, _lock, _allowed_ids, log_access) in list(self._connections.items()):
-            if log_only and not log_access:
-                continue
+        for conn_id, entry in list(self._connections.items()):
+            _, _subs, _lock, _allowed_ids, log_access, log_access_check = entry
+            if log_only:
+                if not log_access:
+                    continue
+                if log_access_check is not None and not await log_access_check():
+                    self._set_log_access(conn_id, False)
+                    continue
             if not await self._send(conn_id, msg):
                 dead.append(conn_id)
         for conn_id in dead:
@@ -167,7 +176,7 @@ class WebSocketManager:
             "old_v": jsonable(state.old_value) if state else None,
         }
         dead: list[str] = []
-        for conn_id, (_, subs, _lock, _allowed_ids, _log_access) in list(self._connections.items()):
+        for conn_id, (_, subs, _lock, _allowed_ids, _log_access, _log_access_check) in list(self._connections.items()):
             if dp_id_str not in subs:
                 continue
             if not await self._send(conn_id, dp_msg):
@@ -190,7 +199,7 @@ class WebSocketManager:
             },
         }
         dead = []
-        for conn_id, (_, _subs, _lock, allowed_ids, _log_access) in list(self._connections.items()):
+        for conn_id, (_, _subs, _lock, allowed_ids, _log_access, _log_access_check) in list(self._connections.items()):
             if allowed_ids is not None and dp_id_str not in allowed_ids:
                 continue
             if not await self._send(conn_id, rb_msg):
@@ -201,6 +210,13 @@ class WebSocketManager:
     @property
     def connection_count(self) -> int:
         return len(self._connections)
+
+    def _set_log_access(self, conn_id: str, log_access: bool) -> None:
+        entry = self._connections.get(conn_id)
+        if entry is None:
+            return
+        ws, subs, lock, allowed_dp_ids, _old_log_access, log_access_check = entry
+        self._connections[conn_id] = (ws, subs, lock, allowed_dp_ids, log_access, log_access_check)
 
 
 async def _page_allowed_datapoints(
@@ -587,6 +603,7 @@ async def websocket_endpoint(
         ws,
         allowed_dp_ids=allowed_dp_ids,
         log_access=log_access,
+        log_access_check=(lambda: _ws_has_log_access(user, api_key)) if log_access else None,
         subprotocol=selected_subprotocol,
     )
 

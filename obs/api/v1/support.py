@@ -248,7 +248,7 @@ async def disable_debug_log(
 
 def sanitize_support_data(value: Any, key: str | None = None) -> Any:
     """Recursively redact secrets, credentials, endpoints and IP addresses."""
-    if _is_passthrough_key(key):
+    if _is_passthrough_key(key) and not isinstance(value, (dict, list, tuple)):
         return value
     if _is_sensitive_key(key):
         return "[REDACTED]"
