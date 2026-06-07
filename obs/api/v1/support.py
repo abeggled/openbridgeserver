@@ -81,6 +81,10 @@ _ENDPOINT_KEY_PARTS = (
     "endpoint",
     "server",
 )
+_BASENAME_ONLY_KEYS = {
+    "config_source",
+    "path",
+}
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _IPV6_CANDIDATE_RE = re.compile(r"\b[0-9a-fA-F:]*:[0-9a-fA-F:]+\b")
 _SECRET_KEY_PATTERN = (
@@ -104,6 +108,8 @@ _JSON_SECRET_RE = re.compile(
 _HOSTLIKE_NAME_RE = re.compile(r"(?i)\b(?:[a-z0-9-]+\.)+[a-z0-9-]+\b")
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _DOMAIN_RE = re.compile(r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b")
+_FILENAME_DOMAIN_RE = re.compile(r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){2,}[a-z]{2,63}(?=\.[a-z0-9]{1,8}\b)")
+_ABS_PATH_RE = re.compile(r"(?<![:/])/(?:[^\s\"'<>:]+/)+[^\s\"'<>:]+")
 
 _debug_restore_task: asyncio.Task[None] | None = None
 _debug_restore_level: str | None = None
@@ -252,10 +258,12 @@ def sanitize_support_data(value: Any, key: str | None = None) -> Any:
         return value
     if _is_sensitive_key(key):
         return "[REDACTED]"
+    if _is_basename_only_key(key) and isinstance(value, str):
+        return _sanitize_basename(value)
     if _is_endpoint_key(key):
         return "[REDACTED_ENDPOINT]"
     if isinstance(value, dict):
-        return {str(k): sanitize_support_data(v, str(k)) for k, v in value.items()}
+        return {_sanitize_dict_key(k): sanitize_support_data(v, str(k)) for k, v in value.items()}
     if isinstance(value, list):
         return [sanitize_support_data(item, key) for item in value]
     if isinstance(value, tuple):
@@ -552,6 +560,7 @@ def _sanitize_log_entry(entry: dict[str, Any]) -> dict[str, Any]:
 
 def _sanitize_string(value: str) -> str:
     passthrough_tokens: dict[str, str] = {}
+    path_tokens: dict[str, str] = {}
     sanitized = value
     for index, literal in enumerate(sorted(_PASSTHROUGH_VALUES, key=len, reverse=True)):
         token = f"__OBS_SUPPORT_PASSTHROUGH_{index}__"
@@ -564,10 +573,13 @@ def _sanitize_string(value: str) -> str:
     sanitized = _AUTH_HEADER_RE.sub("Authorization: [REDACTED]", sanitized)
     sanitized = _HEADER_SECRET_RE.sub(lambda match: f"{match.group(1)}: [REDACTED]", sanitized)
     sanitized = _sanitize_urls(sanitized)
+    sanitized = _sanitize_paths(sanitized, path_tokens)
     sanitized = _IPV4_RE.sub("[REDACTED_IP]", sanitized)
     sanitized = _IPV6_CANDIDATE_RE.sub(_sanitize_ipv6_candidate, sanitized)
     sanitized = _EMAIL_RE.sub("[REDACTED_EMAIL]", sanitized)
     sanitized = _DOMAIN_RE.sub("[REDACTED_DOMAIN]", sanitized)
+    for token, replacement in path_tokens.items():
+        sanitized = sanitized.replace(token, replacement)
     for token, literal in passthrough_tokens.items():
         sanitized = sanitized.replace(token, literal)
     return sanitized
@@ -582,6 +594,37 @@ def _sanitize_adapter_name(value: str) -> str:
 
 def _basename_only(value: str) -> str:
     return os.path.basename(str(value)) or "[REDACTED_PATH]"
+
+
+def _sanitize_basename(value: str) -> str:
+    basename = _basename_only(value)
+    sanitized = _LONG_TOKEN_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", basename)
+    sanitized = _JSON_SECRET_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]{match.group(4)}", sanitized)
+    sanitized = _COLON_SECRET_RE.sub(lambda match: f"{match.group(1)}: [REDACTED]", sanitized)
+    sanitized = _AUTH_HEADER_RE.sub("Authorization: [REDACTED]", sanitized)
+    sanitized = _HEADER_SECRET_RE.sub(lambda match: f"{match.group(1)}: [REDACTED]", sanitized)
+    sanitized = _sanitize_urls(sanitized)
+    sanitized = _IPV4_RE.sub("[REDACTED_IP]", sanitized)
+    sanitized = _IPV6_CANDIDATE_RE.sub(_sanitize_ipv6_candidate, sanitized)
+    sanitized = _EMAIL_RE.sub("[REDACTED_EMAIL]", sanitized)
+    return _FILENAME_DOMAIN_RE.sub("[REDACTED_DOMAIN]", sanitized)
+
+
+def _sanitize_dict_key(key: Any) -> str:
+    return _sanitize_string(str(key))
+
+
+def _sanitize_paths(value: str, tokens: dict[str, str] | None = None) -> str:
+    def repl(match: re.Match[str]) -> str:
+        basename = os.path.basename(match.group(0).rstrip("/")) or "[REDACTED_PATH]"
+        replacement = f"[REDACTED_PATH]/{_sanitize_basename(basename)}"
+        if tokens is None:
+            return replacement
+        token = f"__OBS_SUPPORT_PATH_{len(tokens)}__"
+        tokens[token] = replacement
+        return token
+
+    return _ABS_PATH_RE.sub(repl, value)
 
 
 def _sanitize_urls(value: str) -> str:
@@ -619,6 +662,12 @@ def _is_passthrough_key(key: str | None) -> bool:
     if key is None:
         return False
     return key.lower() in _PASSTHROUGH_KEYS
+
+
+def _is_basename_only_key(key: str | None) -> bool:
+    if key is None:
+        return False
+    return key.lower() in _BASENAME_ONLY_KEYS
 
 
 def _is_endpoint_key(key: str | None) -> bool:

@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from obs.api.auth import create_access_token
-from obs.api.v1.support import _parse_procfs_stat_cpu_seconds
+from obs.api.v1.support import _parse_procfs_stat_cpu_seconds, sanitize_support_data
 
 pytestmark = pytest.mark.integration
 
@@ -97,6 +97,12 @@ async def test_support_package_contains_phase1_privacy_contract(client, auth_hea
 
 
 async def test_support_package_config_source_keeps_basename_but_sanitizes_endpoints(client, auth_headers):
+    with patch.dict("os.environ", {"OBS_CONFIG": "config.yaml"}):
+        default_resp = await client.post("/api/v1/support/package", headers=auth_headers)
+
+    assert default_resp.status_code == 200
+    assert default_resp.json()["installation"]["config_source"] == "config.yaml"
+
     with patch.dict("os.environ", {"OBS_CONFIG": "/etc/obs/prod-192.168.10.5.yaml"}):
         resp = await client.post("/api/v1/support/package", headers=auth_headers)
 
@@ -105,6 +111,14 @@ async def test_support_package_config_source_keeps_basename_but_sanitizes_endpoi
     assert "/" not in config_source
     assert "192.168.10.5" not in config_source
     assert config_source == "prod-[REDACTED_IP].yaml"
+
+    with patch.dict("os.environ", {"OBS_CONFIG": "/etc/obs/site.internal.local.yaml"}):
+        host_resp = await client.post("/api/v1/support/package", headers=auth_headers)
+
+    assert host_resp.status_code == 200
+    host_config_source = host_resp.json()["installation"]["config_source"]
+    assert "site.internal.local" not in host_config_source
+    assert host_config_source == "[REDACTED_DOMAIN].yaml"
 
 
 async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_headers):
@@ -312,6 +326,7 @@ async def test_support_package_sanitizes_error_history(client, auth_headers):
         "Authorization: Basic basic-secret "
         "access_token=access-secret refresh_token=refresh-secret client_secret: prefixed-colon "
         "community=public-community knxkeys_file_path=/home/support/secret.knxkeys "
+        "failed to open /home/alice/obs/config.yaml "
         "logger sniffer.process still visible "
         "contact admin@example.com connecting to mqtt.customer-site.com failed "
         '{"token":"json-token","client_secret":"json-client-secret"}'
@@ -340,6 +355,8 @@ async def test_support_package_sanitizes_error_history(client, auth_headers):
     assert "prefixed-colon" not in message
     assert "public-community" not in message
     assert "secret.knxkeys" not in message
+    assert "/home/alice/obs" not in message
+    assert "[REDACTED_PATH]/config.yaml" in message
     assert "sniffer.process" in message
     assert "admin@example.com" not in message
     assert "mqtt.customer-site.com" not in message
@@ -348,6 +365,26 @@ async def test_support_package_sanitizes_error_history(client, auth_headers):
     assert "[REDACTED" in message
     assert matching[-1]
     assert [entry for entry in resp.json()["error_history"] if entry["message"] == message][-1]["logger"] == "tests.support"
+
+
+def test_sanitize_support_data_redacts_dictionary_keys_and_preserves_path_basenames():
+    sanitized = sanitize_support_data(
+        {
+            "devices": {
+                "192.168.1.5": {"status": "ok"},
+                "broker.internal.local": {"status": "ok"},
+                "access_token": "secret-token",
+            },
+            "path": "obs.db",
+        }
+    )
+
+    assert "192.168.1.5" not in sanitized["devices"]
+    assert "broker.internal.local" not in sanitized["devices"]
+    assert "[REDACTED_IP]" in sanitized["devices"]
+    assert "[REDACTED_DOMAIN]" in sanitized["devices"]
+    assert sanitized["devices"]["access_token"] == "[REDACTED]"
+    assert sanitized["path"] == "obs.db"
 
 
 async def test_support_package_includes_warning_history(client, auth_headers):
