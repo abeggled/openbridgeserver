@@ -58,8 +58,10 @@ _SENSITIVE_KEY_PARTS = (
     "jwt",
 )
 _SENSITIVE_KEYS = {
+    "backbone_key",
     "community",
     "knxkeys_file_path",
+    "priv_key",
 }
 _PASSTHROUGH_KEYS = {
     "auth_protocol",
@@ -86,7 +88,7 @@ _BASENAME_ONLY_KEYS = {
     "path",
 }
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-_IPV6_CANDIDATE_RE = re.compile(r"\b[0-9a-fA-F:]*:[0-9a-fA-F:]+\b")
+_IPV6_CANDIDATE_RE = re.compile(r"(?<![0-9a-fA-F:])(?:[0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}(?![0-9a-fA-F:])")
 _SECRET_KEY_PATTERN = (
     r"[a-z0-9_-]*(?:"
     r"token|secret|password|passwd|api[_-]?key|private[_-]?key|"
@@ -95,6 +97,7 @@ _SECRET_KEY_PATTERN = (
     r")"
 )
 _LONG_TOKEN_RE = re.compile(rf"(?i)(?<![a-z0-9_-])({_SECRET_KEY_PATTERN})\s*=\s*([^&\s]+)")
+_QUOTED_SECRET_RE = re.compile(rf"(?i)(?<![a-z0-9_-])({_SECRET_KEY_PATTERN})\s*=\s*([\"'])(.*?)(\3)")
 _AUTH_HEADER_RE = re.compile(r"(?i)\bauthorization\s*:\s*(?:bearer|basic)\s+[^\s,;]+")
 _HEADER_SECRET_RE = re.compile(r"(?i)\b(x-api-key|api-key)\s*:\s*([^\s,;]+)")
 _COLON_SECRET_RE = re.compile(
@@ -569,6 +572,7 @@ def _sanitize_string(value: str) -> str:
         if literal in sanitized:
             sanitized = sanitized.replace(literal, token)
             passthrough_tokens[token] = literal
+    sanitized = _QUOTED_SECRET_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", sanitized)
     sanitized = _LONG_TOKEN_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", sanitized)
     sanitized = _JSON_SECRET_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]{match.group(4)}", sanitized)
     sanitized = _COLON_SECRET_RE.sub(lambda match: f"{match.group(1)}: [REDACTED]", sanitized)
@@ -601,7 +605,8 @@ def _basename_only(value: str) -> str:
 
 def _sanitize_basename(value: str) -> str:
     basename = _basename_only(value)
-    sanitized = _LONG_TOKEN_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", basename)
+    sanitized = _QUOTED_SECRET_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", basename)
+    sanitized = _LONG_TOKEN_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", sanitized)
     sanitized = _JSON_SECRET_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]{match.group(4)}", sanitized)
     sanitized = _COLON_SECRET_RE.sub(lambda match: f"{match.group(1)}: [REDACTED]", sanitized)
     sanitized = _AUTH_HEADER_RE.sub("Authorization: [REDACTED]", sanitized)

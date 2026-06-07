@@ -150,6 +150,8 @@ async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_
                 "psk": "support-psk",
                 "pin": "123456",
                 "pre_shared_key": "support-pre-shared",
+                "priv_key": "support-private-protocol-key",
+                "backbone_key": "support-backbone-key",
                 "auth": "support-auth",
                 "bearer": "support-bearer",
                 "passphrase": "support-passphrase",
@@ -203,6 +205,8 @@ async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_
     assert adapter["config"]["psk"] == "[REDACTED]"
     assert adapter["config"]["pin"] == "[REDACTED]"
     assert adapter["config"]["pre_shared_key"] == "[REDACTED]"
+    assert adapter["config"]["priv_key"] == "[REDACTED]"
+    assert adapter["config"]["backbone_key"] == "[REDACTED]"
     assert adapter["config"]["auth"] == "[REDACTED]"
     assert adapter["config"]["bearer"] == "[REDACTED]"
     assert adapter["config"]["passphrase"] == "[REDACTED]"
@@ -333,9 +337,11 @@ async def test_support_package_sanitizes_error_history(client, auth_headers):
         "Authorization: Bearer bearer-token X-API-Key: header-secret password: colon-secret "
         "Authorization: Basic basic-secret "
         "api_key = spaced-api-key password = spaced-password "
+        "password=\"quoted password\" api_key='quoted api key' "
         "access_token=access-secret refresh_token=refresh-secret client_secret: prefixed-colon "
         "community=public-community knxkeys_file_path=/home/support/secret.knxkeys "
         "failed to open /home/alice/obs/config.yaml "
+        "ipv6 ::1 ::dead:beef 2001:db8:: "
         r"windows path C:\Users\Alice\obs\customer.com.yaml unc \\fileserver\share\obs\config.yaml "
         "logger sniffer.process still visible "
         "contact admin@example.com connecting to mqtt.customer-site.com failed "
@@ -362,11 +368,16 @@ async def test_support_package_sanitizes_error_history(client, auth_headers):
     assert "basic-secret" not in message
     assert "spaced-api-key" not in message
     assert "spaced-password" not in message
+    assert "quoted password" not in message
+    assert "quoted api key" not in message
     assert "access-secret" not in message
     assert "refresh-secret" not in message
     assert "prefixed-colon" not in message
     assert "public-community" not in message
     assert "secret.knxkeys" not in message
+    assert "::1" not in message
+    assert "::dead:beef" not in message
+    assert "2001:db8::" not in message
     assert "/home/alice/obs" not in message
     assert "[REDACTED_PATH]/config.yaml" in message
     assert "C:\\Users\\Alice\\obs" not in message
