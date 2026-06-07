@@ -379,7 +379,7 @@ async def _build_adapter_info(db: Database) -> list[dict[str, Any]]:
         instance = adapter_registry.get_instance_by_id(row["id"])
         adapter_type = row["adapter_type"]
         cls = adapter_registry.get_class(adapter_type)
-        config = json.loads(row["config"]) if row["config"] else {}
+        config = _adapter_config_or_placeholder(row["config"])
         tps = tps_by_instance.get(row["id"], 0.0)
         result.append(
             {
@@ -436,10 +436,11 @@ async def _build_monitor_info() -> dict[str, Any]:
     try:
         from obs.ringbuffer.ringbuffer import get_ringbuffer
 
-        stats = await get_ringbuffer().stats()
-        recent_entries = await get_ringbuffer().query(limit=200)
-    except RuntimeError:
-        return {"available": False, "reason": "RingBuffer not initialized"}
+        ringbuffer = get_ringbuffer()
+        stats = await ringbuffer.stats()
+        recent_entries = await ringbuffer.query(limit=200)
+    except Exception as exc:
+        return {"available": False, "reason": _support_unavailable_reason(exc)}
 
     source_counts: dict[str, int] = {}
     quality_counts: dict[str, int] = {}
@@ -482,7 +483,7 @@ async def _ringbuffer_tps(window_seconds: int = 60) -> tuple[bool, dict[str, flo
 
         since = _iso(datetime.now(UTC) - timedelta(seconds=window_seconds))
         entries = await get_ringbuffer().query(from_ts=since or "", limit=10000)
-    except RuntimeError:
+    except Exception:
         return False, {}, {}
 
     instance_counts: dict[str, int] = {}
@@ -645,10 +646,28 @@ def _sanitize_urls(value: str) -> str:
             parsed = urlsplit(raw)
         except ValueError:
             return "[REDACTED_URL]"
-        replacement = urlunsplit((parsed.scheme, "[REDACTED_ENDPOINT]", parsed.path, "", ""))
+        replacement = urlunsplit((parsed.scheme, "[REDACTED_ENDPOINT]", "[REDACTED_PATH]", "", ""))
         return replacement.rstrip("/")
 
     return re.sub(r"\b[a-z][a-z0-9+.-]*://[^\s\"'<>]+", repl, value, flags=re.IGNORECASE)
+
+
+def _adapter_config_or_placeholder(raw_config: Any) -> dict[str, Any]:
+    if not raw_config:
+        return {}
+    try:
+        config = json.loads(raw_config)
+    except (TypeError, json.JSONDecodeError):
+        return {"available": False, "reason": "invalid_json"}
+    if isinstance(config, dict):
+        return config
+    return {"available": False, "reason": "invalid_config_type"}
+
+
+def _support_unavailable_reason(exc: Exception) -> str:
+    if isinstance(exc, RuntimeError):
+        return "RingBuffer not initialized"
+    return exc.__class__.__name__ or "unavailable"
 
 
 def _sanitize_ipv6_candidate(match: re.Match[str]) -> str:

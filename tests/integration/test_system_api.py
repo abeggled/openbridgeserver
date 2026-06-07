@@ -275,7 +275,7 @@ async def test_get_logs_requires_auth(client):
     assert resp.status_code == 401
 
 
-async def test_get_logs_requires_admin(client, auth_headers):
+async def test_get_logs_allows_authenticated_users(client, auth_headers):
     username = "system-logs-non-admin"
     created = await client.post(
         "/api/v1/auth/users",
@@ -285,7 +285,8 @@ async def test_get_logs_requires_admin(client, auth_headers):
     assert created.status_code == 201, created.text
     try:
         resp = await client.get("/api/v1/system/logs", headers=_headers_for(username))
-        assert resp.status_code == 403
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
     finally:
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 

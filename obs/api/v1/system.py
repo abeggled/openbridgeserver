@@ -541,7 +541,7 @@ _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 async def get_logs(
     level: str | None = None,
     limit: int = 200,
-    _user: str = Depends(get_admin_user),
+    _user: str = Depends(get_current_user),
 ) -> list[LogEntryOut]:
     """Recent log entries from the in-memory buffer, newest first.
 

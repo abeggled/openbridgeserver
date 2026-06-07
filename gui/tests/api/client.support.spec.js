@@ -37,7 +37,7 @@ describe('supportApi client', () => {
     await supportApi.disableDebugLog()
 
     expect(api.get).toHaveBeenCalledWith('/support/categories')
-    expect(api.post).toHaveBeenCalledWith('/support/package')
+    expect(api.post).toHaveBeenCalledWith('/support/package', null, { timeout: 120_000 })
     expect(api.get).toHaveBeenCalledWith('/support/debug-log')
     expect(api.post).toHaveBeenCalledWith('/support/debug-log', { duration_seconds: 300, level: 'DEBUG' })
     expect(api.delete).toHaveBeenCalledWith('/support/debug-log')

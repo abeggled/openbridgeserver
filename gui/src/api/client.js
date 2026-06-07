@@ -210,7 +210,7 @@ export const logsApi = {
 // ── Support Diagnostics ──────────────────────────────────────────────────
 export const supportApi = {
   categories:      ()       => api.get('/support/categories'),
-  createPackage:   ()       => api.post('/support/package'),
+  createPackage:   ()       => api.post('/support/package', null, { timeout: 120_000 }),
   getDebugStatus:  ()       => api.get('/support/debug-log'),
   enableDebugLog:  (data)   => api.post('/support/debug-log', data),
   disableDebugLog: ()       => api.delete('/support/debug-log'),

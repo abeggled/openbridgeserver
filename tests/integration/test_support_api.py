@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from obs.api.auth import create_access_token
-from obs.api.v1.support import _parse_procfs_stat_cpu_seconds, sanitize_support_data
+from obs.api.v1.support import _build_monitor_info, _parse_procfs_stat_cpu_seconds, _ringbuffer_tps, sanitize_support_data
 
 pytestmark = pytest.mark.integration
 
@@ -316,6 +316,52 @@ async def test_support_package_marks_tps_metrics_unavailable_without_ringbuffer(
     assert adapter["adapter_type_transactions_per_second"] is None
 
 
+async def test_support_package_marks_ringbuffer_metrics_unavailable_on_query_failure(client, auth_headers):
+    instance_resp = await client.post(
+        "/api/v1/adapters/instances",
+        json={
+            "adapter_type": "MQTT",
+            "name": "Support TPS broken MQTT",
+            "enabled": False,
+            "config": {"host": "localhost", "port": 1883},
+        },
+        headers=auth_headers,
+    )
+    assert instance_resp.status_code == 201, instance_resp.text
+    instance_id = instance_resp.json()["id"]
+
+    class BrokenRingBuffer:
+        async def stats(self) -> dict[str, object]:
+            return {"total": 0}
+
+        async def query(self, **_kwargs):
+            raise OSError("locked")
+
+    with patch("obs.ringbuffer.ringbuffer.get_ringbuffer", return_value=BrokenRingBuffer()):
+        resp = await client.post("/api/v1/support/package", headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    adapter = next(entry for entry in body["adapters"] if entry["id"] == instance_id)
+    assert adapter["transactions_per_second"] is None
+    assert adapter["metrics_available"] is False
+    assert adapter["metrics_source"] is None
+    assert body["monitor"] == {"available": False, "reason": "OSError"}
+
+
+async def test_ringbuffer_helpers_tolerate_query_failures():
+    class BrokenRingBuffer:
+        async def stats(self) -> dict[str, object]:
+            return {"total": 0}
+
+        async def query(self, **_kwargs):
+            raise OSError("locked")
+
+    with patch("obs.ringbuffer.ringbuffer.get_ringbuffer", return_value=BrokenRingBuffer()):
+        assert await _ringbuffer_tps() == (False, {}, {})
+        assert await _build_monitor_info() == {"available": False, "reason": "OSError"}
+
+
 async def test_support_package_contains_history_and_monitor_sections(client, auth_headers):
     resp = await client.post("/api/v1/support/package", headers=auth_headers)
     assert resp.status_code == 200
@@ -334,6 +380,8 @@ async def test_support_package_sanitizes_error_history(client, auth_headers):
         "connection failed url=http://admin:secret@192.168.1.20/api?token=abc password=hidden "
         "dsn=mqtt://mqtt-user:mqtt-pass@broker.internal.local/topic "
         "postgres://pg-user:pg-pass@db.internal.local/app "
+        "telegram=https://api.telegram.org/bot123456:telegram-secret-token/sendMessage "
+        "webhook=https://hooks.example.com/services/T000/B000/webhook-secret "
         "Authorization: Bearer bearer-token X-API-Key: header-secret password: colon-secret "
         "Authorization: Basic basic-secret "
         "api_key = spaced-api-key password = spaced-password "
@@ -360,6 +408,10 @@ async def test_support_package_sanitizes_error_history(client, auth_headers):
     assert "pg-user:pg-pass" not in message
     assert "broker.internal.local" not in message
     assert "db.internal.local" not in message
+    assert "bot123456:telegram-secret-token" not in message
+    assert "webhook-secret" not in message
+    assert "/sendMessage" not in message
+    assert "/services/T000/B000" not in message
     assert "abc" not in message
     assert "hidden" not in message
     assert "bearer-token" not in message
@@ -394,6 +446,32 @@ async def test_support_package_sanitizes_error_history(client, auth_headers):
     assert [entry for entry in resp.json()["error_history"] if entry["message"] == message][-1]["logger"] == "tests.support"
 
 
+async def test_support_package_tolerates_corrupt_adapter_config_rows(client, auth_headers):
+    from obs.db.database import get_db
+
+    instance_resp = await client.post(
+        "/api/v1/adapters/instances",
+        json={
+            "adapter_type": "MQTT",
+            "name": "Support Corrupt Config MQTT",
+            "enabled": False,
+            "config": {"host": "localhost", "port": 1883},
+        },
+        headers=auth_headers,
+    )
+    assert instance_resp.status_code == 201, instance_resp.text
+    instance_id = instance_resp.json()["id"]
+
+    db = get_db()
+    await db.execute_and_commit("UPDATE adapter_instances SET config=? WHERE id=?", ("{not valid json", instance_id))
+
+    resp = await client.post("/api/v1/support/package", headers=auth_headers)
+
+    assert resp.status_code == 200
+    adapter = next(entry for entry in resp.json()["adapters"] if entry["id"] == instance_id)
+    assert adapter["config"] == {"available": False, "reason": "invalid_json"}
+
+
 def test_sanitize_support_data_redacts_dictionary_keys_and_preserves_path_basenames():
     sanitized = sanitize_support_data(
         {
@@ -401,6 +479,7 @@ def test_sanitize_support_data_redacts_dictionary_keys_and_preserves_path_basena
                 "192.168.1.5": {"status": "ok"},
                 "broker.internal.local": {"status": "ok"},
                 "access_token": "secret-token",
+                "https://api.telegram.org/bot123456:dict-key-token/sendMessage": {"status": "ok"},
             },
             "path": "obs.db",
             "config_source": r"C:\Users\Alice\obs\customer.com.key",
@@ -409,11 +488,15 @@ def test_sanitize_support_data_redacts_dictionary_keys_and_preserves_path_basena
 
     assert "192.168.1.5" not in sanitized["devices"]
     assert "broker.internal.local" not in sanitized["devices"]
+    sanitized_device_keys = " ".join(sanitized["devices"])
+    assert "dict-key-token" not in sanitized_device_keys
+    assert not any("/sendMessage" in key for key in sanitized["devices"])
     assert "[REDACTED_IP]" in sanitized["devices"]
     assert "[REDACTED_DOMAIN]" in sanitized["devices"]
     assert sanitized["devices"]["access_token"] == "[REDACTED]"
     assert sanitized["path"] == "obs.db"
     assert sanitized["config_source"] == "[REDACTED_DOMAIN].key"
+    assert all(isinstance(key, str) for key in sanitized["devices"])
 
 
 async def test_support_package_includes_warning_history(client, auth_headers):
