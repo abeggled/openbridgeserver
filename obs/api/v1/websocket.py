@@ -107,6 +107,43 @@ class WebSocketManager:
         if conn_id in self._connections:
             self._connections[conn_id][1].difference_update(dp_ids)
 
+    async def send_initial_values(self, conn_id: str, dp_ids: list[str]) -> None:
+        """Send current registry values for subscribed datapoints."""
+        from obs.core.registry import get_registry
+
+        try:
+            reg = get_registry()
+        except RuntimeError:
+            return
+
+        dead = False
+        for dp_id in dp_ids:
+            try:
+                dp_uuid = uuid.UUID(dp_id)
+            except (TypeError, ValueError):
+                continue
+
+            dp = reg.get(dp_uuid)
+            state = reg.get_value(dp_uuid)
+            if dp is None or state is None:
+                continue
+
+            ts = state.ts
+            ts_str = ts.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+            msg = {
+                "id": str(dp_uuid),
+                "v": jsonable(state.value),
+                "u": dp.unit,
+                "t": ts_str,
+                "q": state.quality,
+            }
+            if not await self._send(conn_id, msg):
+                dead = True
+                break
+
+        if dead:
+            await self.disconnect(conn_id)
+
     async def _send(self, conn_id: str, msg: dict) -> bool:
         """Send *msg* to one connection, serialised via its per-connection lock.
 
@@ -196,7 +233,7 @@ class WebSocketManager:
             "unit": dp.unit if dp else None,
         }
         metadata: dict[str, Any] | None = None
-        if any(allowed_ids is None for _, _, _, allowed_ids in self._connections.values()):
+        if any(allowed_ids is None for _, _, _, allowed_ids, _, _ in self._connections.values()):
             from obs.ringbuffer.ringbuffer import build_ringbuffer_metadata_snapshot
 
             metadata = await build_ringbuffer_metadata_snapshot(
@@ -627,7 +664,9 @@ async def websocket_endpoint(
                 manager.subscribe(conn_id, ids)
                 after = manager.subscriptions(conn_id)
                 added = [i for i in ids if i in after and i not in before]
+                subscribed = [i for i in ids if i in after]
                 await ws.send_json({"action": "subscribed", "ids": added})
+                await manager.send_initial_values(conn_id, subscribed)
 
             elif action == "unsubscribe":
                 ids = [str(i) for i in data.get("ids", [])]

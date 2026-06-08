@@ -199,6 +199,81 @@ async def test_subscribe_filters_datapoints_for_page_scoped_connection():
 
 
 @pytest.mark.asyncio
+async def test_subscribe_initial_values_sends_current_registry_snapshot(monkeypatch):
+    dp_id = uuid4()
+    other_dp_id = uuid4()
+    ws = _FakeWebSocket()
+    manager = WebSocketManager()
+    conn_id = await manager.connect(ws)
+
+    class _RegistryStub:
+        def get(self, dp_uuid):
+            if dp_uuid == dp_id:
+                return SimpleNamespace(unit="W")
+            return None
+
+        def get_value(self, dp_uuid):
+            if dp_uuid == dp_id:
+                return SimpleNamespace(
+                    value=42.5,
+                    quality="good",
+                    ts=datetime(2026, 6, 8, 9, 10, 11, 123000, tzinfo=UTC),
+                )
+            return None
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+
+    manager.subscribe(conn_id, [str(dp_id), str(other_dp_id), "not-a-uuid"])
+    await manager.send_initial_values(conn_id, [str(dp_id), str(other_dp_id), "not-a-uuid"])
+
+    assert ws.messages == [
+        {
+            "id": str(dp_id),
+            "v": 42.5,
+            "u": "W",
+            "t": "2026-06-08T09:10:11.123Z",
+            "q": "good",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_initial_values_respects_page_scope(monkeypatch):
+    allowed_uuid = uuid4()
+    blocked_uuid = uuid4()
+    allowed_id = str(allowed_uuid)
+    blocked_id = str(blocked_uuid)
+    ws = _FakeWebSocket()
+    manager = WebSocketManager()
+    conn_id = await manager.connect(ws, allowed_dp_ids={allowed_id})
+
+    class _RegistryStub:
+        def get(self, dp_uuid):
+            if dp_uuid in {allowed_uuid, blocked_uuid}:
+                return SimpleNamespace(unit="W")
+            return None
+
+        def get_value(self, dp_uuid):
+            if dp_uuid in {allowed_uuid, blocked_uuid}:
+                return SimpleNamespace(
+                    value=str(dp_uuid),
+                    quality="good",
+                    ts=datetime(2026, 6, 8, 9, 10, 11, 123000, tzinfo=UTC),
+                )
+            return None
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+
+    before = manager.subscriptions(conn_id)
+    manager.subscribe(conn_id, [allowed_id, blocked_id])
+    after = manager.subscriptions(conn_id)
+    added = [dp_id for dp_id in [allowed_id, blocked_id] if dp_id in after and dp_id not in before]
+    await manager.send_initial_values(conn_id, added)
+
+    assert [msg["id"] for msg in ws.messages] == [allowed_id]
+
+
+@pytest.mark.asyncio
 async def test_ringbuffer_push_is_scoped_for_anonymous_page_connections(monkeypatch):
     allowed_uuid = uuid4()
     blocked_uuid = uuid4()

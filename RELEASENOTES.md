@@ -112,6 +112,7 @@
 * Test stability: Monitor/Ringbuffer E2E scenarios stabilized. https://github.com/abeggled/openbridgeserver/pull/494
 * Visu: Internal API base URL usage fixed for E2E/runtime alignment. https://github.com/abeggled/openbridgeserver/pull/484
 * Visu: History widget now updates automatically when new values arrive via WebSocket. https://github.com/abeggled/openbridgeserver/issues/408
+* Visu: WebSocket subscriptions now immediately receive the current registry values, so viewers show values again right after reconnects or page changes instead of waiting for the next adapter poll. https://github.com/abeggled/openbridgeserver/issues/749
 * Visu: History widget now uses aggregated history buckets for multi-day ranges, so periods up to "last 90 days" remain complete and render efficiently instead of only showing the newest 24 hours. https://github.com/abeggled/openbridgeserver/issues/692
 * Visu: RTR Widget now use correct values for room controller (heating) DPT 20.102 https://github.com/abeggled/openbridgeserver/issues/461
 * Visu: Floorplan Widget: positioning broken if floorplan is rotated https://github.com/abeggled/openbridgeserver/issues/440
