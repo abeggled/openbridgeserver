@@ -5,6 +5,9 @@
 * Security: Backend URL fetches from logic API-client nodes, iCalendar nodes, Pushover `image_url` attachments, the camera proxy, and the weather API now block private/local network targets by default unless they are explicitly allowlisted. Migration: existing installations using LAN cameras such as `http://192.168.x.x/...`, local `.ics` calendars, local Pushover image sources, or a local weather endpoint must allowlist the target under Settings → Security → URL Target Allowlist, or in the YAML file configured by `security.url_target_allowlist_path` (default: `OBS_SECRET_FILE_DIR/url-target-allowlist.yaml` when `OBS_SECRET_FILE_DIR` is set, otherwise `secrets/url-target-allowlist.yaml` next to the configured database). Use an IP address or CIDR for private targets, for example `192.168.1.23/32` or `10.38.113.0/24`. If a hostname such as `internal.example` resolves to a private IP address, allowlist the resolved IP/CIDR; a hostname-only entry does not override private-IP blocking and does not bypass DNS validation. Until the target is allowlisted, affected camera widgets, weather widgets, iCalendar nodes, Pushover image attachments, or logic API-client calls are intentionally blocked. https://github.com/abeggled/openbridgeserver/pull/700
 * Security: Support-package creation and temporary debug-log controls are now admin-only. The regular in-memory log API remains available to authenticated users and API keys, and live `log_entry` WebSocket messages follow the same authenticated read access. Generated support packages sanitize credentials, endpoints, IPs/domains, paths, and log details before export. https://github.com/abeggled/openbridgeserver/pull/737
 
+### Known Issues 🔔
+* History DB with SQlite should only used for development environments. No testing, no production, we will remove this feature in the future.
+
 ### New features ✨
 * Adapter: The KNX adapter now also supports TCP tunneling mode and Secure support via import of the .knxkeys file. https://github.com/abeggled/openbridgeserver/issues/14
 * Adapter: Add detailed connection error messages for KNX adapter: https://github.com/abeggled/openbridgeserver/issues/466
@@ -52,7 +55,6 @@
 * QA/CI: Vitest unit and integration tests for the Admin GUI, including local pre-push gating, coverage hints for changed GUI files, and Codecov upload for GUI coverage. https://github.com/abeggled/openbridgeserver/issues/698
 
 ### Fixes 🐞
-* Visu: Public/unauthenticated Info widgets now load values for `extra_datapoints` correctly. Nested datapoint references such as `extra_datapoints[].id` are included in the page-scoped datapoint allowlist instead of returning HTTP 403 and showing `...`. https://github.com/abeggled/openbridgeserver/issues/748
 * Backend: Hierarchy selections now respect the configured display start level consistently in dropdowns, chips, datapoint filters, and datapoint hierarchy assignments; deeper levels remain navigable while full paths stay available for disambiguation. https://github.com/abeggled/openbridgeserver/issues/717
 * Adapter: Fixed Modbus TCP bindings stopping to poll after a binding is deleted and recreated (e.g. when changing scale_factor or data_format). Root cause: `t.cancel()` without `asyncio.gather()` allowed old and new poll tasks to read the shared TCP socket concurrently, corrupting the stream. Fix includes: (1) await gather() so old tasks finish before new ones start; (2) always close+reconnect after reload for a clean TCP session; (3) auto-reconnect with `_reconnect_lock` in the poll loop; (4) unified I/O semaphore `_io_sem` covering both reads *and* writes so DEST writes cannot interleave with SOURCE reads; (5) `disconnect()` also awaits gather() for consistency; (6) startup jitter applied only on initial connect, not on subsequent binding changes; (7) `None` sentinel instead of `sys.maxsize` for the unlimited mode; (8) bad quality published when `connect()` returns without error but `client.connected` stays False. https://github.com/abeggled/openbridgeserver/pull/714
 * Adapter: Modbus TCP adapter now supports two new optional config fields: `serialize_reads` (bool, default `true`) serializes all in-flight reads via a semaphore — recommended for embedded devices that process only one request at a time; `startup_jitter_s` (float 0-300, default `30`) adds a random per-task delay before the first poll to prevent a thundering-herd burst when many bindings start simultaneously. Both options are configurable per adapter instance in the OBS UI. https://github.com/abeggled/openbridgeserver/pull/714
@@ -122,11 +124,9 @@
 * Visu: History widget displays translated labels instead of variable name
 * Visu: Fixed-width Visu pages are now centered horizontally in the viewer. https://github.com/abeggled/openbridgeserver/pull/672
 * Visu: History (Chart) widget and Value Display widget time-range dropdowns now show translated labels instead of raw i18n key strings. https://github.com/abeggled/openbridgeserver/issues/662
+* Visu: Public/unauthenticated Info widgets now load values for `extra_datapoints` correctly. Nested datapoint references such as `extra_datapoints[].id` are included in the page-scoped datapoint allowlist instead of returning HTTP 403 and showing `...`. https://github.com/abeggled/openbridgeserver/issues/748
 * QA/CI #375: Proxmox LXC, confusing checksum field content within release notes. https://github.com/abeggled/openbridgeserver/issues/375
   
-### Known Issues 🔔
-* none
-
 ### Contributors ❤️
 * Daniel Abegglen ([@abeggled](https://github.com/abeggled)) [Founder]
 * Yves Schumann ([@starwarsfan](https://github.com/starwarsfan))
