@@ -188,18 +188,19 @@
               <button v-for="n in filters.node_ids" :key="n.node_id"
                 @click="toggleNode(n)"
                 class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
-                data-testid="node-filter-selected-item">
+                data-testid="node-filter-selected-item"
+                v-bind="hierarchyNodeFullPathAttrs(n)">
                 <span class="flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center bg-blue-500 border-blue-500">
                   <svg class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
                   </svg>
                 </span>
-                <span class="text-xs text-slate-400 shrink-0">{{ n.tree_name }}</span>
-                <svg class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <span v-if="!hierarchyNodeDisplayPathIncludesTree(n)" class="text-xs text-slate-400 shrink-0">{{ n.tree_name }}</span>
+                <svg v-if="!hierarchyNodeDisplayPathIncludesTree(n)" class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                 </svg>
                 <span class="text-blue-600 dark:text-blue-400 font-medium min-w-0 flex-1">
-                  <PathLabel :segments="n.path && n.path.length ? n.path : [n.node_name]" />
+                  <PathLabel :segments="hierarchyNodeDisplayPath(n)" />
                 </span>
               </button>
             </div>
@@ -212,19 +213,20 @@
               <button v-else v-for="node in nodeResults" :key="node.node_id"
                 @click="toggleNode(node)"
                 class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
-                data-testid="node-filter-result-item">
+                data-testid="node-filter-result-item"
+                v-bind="hierarchyNodeFullPathAttrs(node)">
                 <span :class="['flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors',
                   isNodeSelected(node.node_id) ? 'bg-blue-500 border-blue-500' : 'border-slate-300 dark:border-slate-600']">
                   <svg v-if="isNodeSelected(node.node_id)" class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
                   </svg>
                 </span>
-                <span class="text-xs text-slate-400 shrink-0">{{ node.tree_name }}</span>
-                <svg class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <span v-if="!hierarchyNodeDisplayPathIncludesTree(node)" class="text-xs text-slate-400 shrink-0">{{ node.tree_name }}</span>
+                <svg v-if="!hierarchyNodeDisplayPathIncludesTree(node)" class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                 </svg>
                 <span :class="[isNodeSelected(node.node_id) ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-700 dark:text-slate-200', 'min-w-0 flex-1']">
-                  <PathLabel :segments="node.path && node.path.length ? node.path : [node.node_name]" />
+                  <PathLabel :segments="hierarchyNodeDisplayPath(node)" />
                 </span>
               </button>
             </div>
@@ -290,7 +292,7 @@
                       isNodeSelected(ref.node_id) || isAncestorSelected(ref)
                         ? 'bg-blue-500/20 text-blue-600 dark:text-blue-300'
                         : 'bg-slate-100 dark:bg-slate-700/60 text-slate-500']"
-                    :title="hierarchyFullPath(ref)">
+                    v-bind="hierarchyFullPathAttrs(ref)">
                     <!-- Anzeige-Start: Tree-Name oder konfigurierbarer Ancestor -->
                     <span
                       v-if="hierarchyDisplayAncestor(ref)"
@@ -408,6 +410,7 @@ import PathLabel     from '@/components/ui/PathLabel.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import AdapterCombobox from '@/components/ui/AdapterCombobox.vue'
 import DataPointForm from '@/components/datapoints/DataPointForm.vue'
+import { hierarchyDisplayPath } from '@/utils/hierarchyDisplay'
 
 // Inline sort-indicator
 const SortIcon = {
@@ -469,7 +472,7 @@ const hierarchyFilterLabel = computed(() => {
   if (total === 0) return ''
   if (total === 1) {
     if (trees.length === 1) return trees[0].tree_name
-    return `${nodes[0].tree_name} › ${nodes[0].node_name}`
+    return hierarchyNodeDisplayLabel(nodes[0])
   }
   return t('datapoints.nFilters', { n: total })
 })
@@ -653,7 +656,13 @@ function isNodeSelected(node_id) {
 function toggleNode(node) {
   const idx = filters.value.node_ids.findIndex(n => n.node_id === node.node_id)
   if (idx === -1) {
-    filters.value.node_ids.push({ node_id: node.node_id, node_name: node.node_name, tree_name: node.tree_name })
+    filters.value.node_ids.push({
+      node_id: node.node_id,
+      node_name: node.node_name,
+      tree_name: node.tree_name,
+      path: Array.isArray(node.path) ? node.path : undefined,
+      display_depth: node.display_depth ?? 0,
+    })
   } else {
     filters.value.node_ids.splice(idx, 1)
   }
@@ -679,6 +688,34 @@ function onDocClick(e) {
   if (tagFilterRef.value && !tagFilterRef.value.contains(e.target)) tagDropOpen.value = false
 }
 
+function hierarchyNodePath(node) {
+  if (Array.isArray(node?.path) && node.path.length) return node.path
+  return node?.node_name ? [node.node_name] : []
+}
+
+function hierarchyNodeDisplayPath(node) {
+  const path = hierarchyNodePath(node)
+  return hierarchyDisplayPath({
+    treeName: node?.tree_name,
+    path,
+    displayDepth: node?.display_depth ?? 0,
+  })
+}
+
+function hierarchyNodeDisplayPathIncludesTree(node) {
+  const path = hierarchyNodeDisplayPath(node)
+  return !!node?.tree_name && path[0] === node.tree_name
+}
+
+function hierarchyNodeDisplayLabel(node) {
+  return hierarchyNodeDisplayPath(node).join(' › ') || node?.node_name || ''
+}
+
+function hierarchyNodeFullPathAttrs(node) {
+  const parts = [node?.tree_name, ...hierarchyNodePath(node)]
+  return { title: parts.filter(Boolean).join(' › ') }
+}
+
 // --------------------------------------------------------------------------
 // CRUD
 // --------------------------------------------------------------------------
@@ -699,9 +736,9 @@ async function doDelete()  { await store.remove(deleteTarget.value.id) }
 // Hierarchy path helpers
 // --------------------------------------------------------------------------
 
-function hierarchyFullPath(ref) {
+function hierarchyFullPathAttrs(ref) {
   const parts = [ref.tree_name, ...(ref.node_path || []).map(n => n.node_name), ref.node_name]
-  return parts.join(' › ')
+  return { title: parts.filter(Boolean).join(' › ') }
 }
 
 function hierarchyDisplayAncestor(ref) {

@@ -72,7 +72,7 @@
           <!-- The remove (×) action is rendered by the surrounding Combobox
                wrapper — we only inject content + the ⊞ expand affordance. -->
           <template #chip="{ item, index }">
-            <span class="truncate">{{ chipLabel(item) }}</span>
+            <span class="truncate" v-bind="chipFullLabelAttrs(item)">{{ chipLabel(item) }}</span>
             <button
               type="button"
               :data-testid="`hierarchy-expand-${index}`"
@@ -188,7 +188,7 @@
                 v-model="form.valuePattern"
                 class="input"
                 data-testid="filter-editor-value-pattern"
-                placeholder="^temp"
+                :placeholder="$t('ringbuffer.filterEditor.patternPlaceholder')"
                 @input="markDirty"
               />
             </div>
@@ -398,27 +398,33 @@ const hierarchyIds = computed(() =>
 )
 
 function chipLabel(item) {
-  // Hierarchy chip respects `tree.display_depth` (PR #462 / issue #443):
-  // depth 0 → tree_name as the abbreviated start; depth ≥ 1 → ancestor at
-  // index depth-1 in the within-tree path. The leaf node is always the
-  // second segment. Falls back to tree_name when the configured depth runs
-  // past the leaf (degenerate but tolerated). Full path is available via the
-  // tooltip on the surrounding chip wrapper.
   if (!item) return ''
-  const path = Array.isArray(item.path) ? item.path : []
-  if (path.length === 0) return item.label ?? item.name ?? String(item.id ?? '')
-  const leaf = path[path.length - 1]
-  if (path.length === 1) return item.tree_name ? `${item.tree_name} › ${leaf}` : leaf
-  const depth = Number(item.display_depth) || 0
-  // Ancestor indices that make sense: 0 .. path.length-2. depth=0 maps to
-  // tree_name (no ancestor index used).
-  let start
-  if (depth <= 0 || depth - 1 >= path.length - 1) {
-    start = item.tree_name || path[0]
-  } else {
-    start = path[depth - 1]
+  if (Array.isArray(item.display_path) && item.display_path.length) {
+    return item.display_path.join(' › ')
   }
-  return `${start} › ${leaf}`
+  if (item.label) return item.label
+
+  const path = Array.isArray(item.path) ? item.path : []
+  if (path.length === 0) return item.name ?? String(item.id ?? '')
+  const leaf = path[path.length - 1]
+  const depth = Number(item.display_depth) || 0
+  if (depth > 0) {
+    const startIndex = depth - 1
+    if (path.length > startIndex) return path.slice(startIndex).join(' › ')
+  }
+  return item.tree_name ? `${item.tree_name} › ${leaf}` : leaf
+}
+
+function chipFullLabel(item) {
+  if (!item) return ''
+  if (item.full_label) return item.full_label
+  const path = Array.isArray(item.path) ? item.path : []
+  const parts = [item.tree_name, ...path].filter(Boolean)
+  return parts.length ? parts.join(' › ') : chipLabel(item)
+}
+
+function chipFullLabelAttrs(item) {
+  return { title: chipFullLabel(item) }
 }
 
 function parseCompositeId(compositeId) {

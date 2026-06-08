@@ -954,6 +954,7 @@
       "lowerBound": "Untergrenze",
       "upperBound": "Obergrenze",
       "patternLabel": "Pattern",
+      "patternPlaceholder": "^temp",
       "valueLabel": "Wert",
       "ignoreCase": "Regex ignore case",
       "emptyFilterWarning": "⚠ Mindestens ein Filterkriterium konfigurieren — sonst kann das Set nicht gespeichert werden.",

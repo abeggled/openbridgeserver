@@ -954,6 +954,7 @@
       "lowerBound": "Lower bound",
       "upperBound": "Upper bound",
       "patternLabel": "Pattern",
+      "patternPlaceholder": "^temp",
       "valueLabel": "Value",
       "ignoreCase": "Regex ignore case",
       "emptyFilterWarning": "⚠ Configure at least one filter criterion — otherwise the set cannot be saved.",

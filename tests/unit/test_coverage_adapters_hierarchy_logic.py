@@ -1478,18 +1478,50 @@ class TestSearchNodes:
     async def test_search_nodes_with_query(self):
         from obs.api.v1 import hierarchy as hier_api
 
-        search_row = _row(node_id="n1", node_name="Wohnzimmer", tree_id="t1", tree_name="EG")
+        search_row = _row(
+            node_id="n1",
+            node_name="Wohnzimmer",
+            tree_id="t1",
+            tree_name="EG",
+            display_depth=0,
+        )
 
         class _Db:
             async def fetchall(self, q, p=()):
                 if "LIKE" in q:
                     return [search_row]
-                # node_map query
-                return [_row(id="n1", parent_id=None, name="Wohnzimmer")]
+                # path query
+                return [_row(leaf_id="n1", cur_name="Wohnzimmer")]
 
         result = await hier_api.search_nodes(q="Wohnzimmer", limit=10, db=_Db(), _user="admin")
         assert len(result) == 1
         assert result[0].node_name == "Wohnzimmer"
+
+    @pytest.mark.asyncio
+    async def test_search_nodes_returns_descendant_for_hidden_ancestor_match(self):
+        from obs.api.v1 import hierarchy as hier_api
+
+        floor_row = _row(
+            node_id="floor",
+            node_name="EG",
+            tree_id="t1",
+            tree_name="Haus",
+            display_depth=2,
+        )
+
+        class _Db:
+            async def fetchall(self, q, p=()):
+                if "LIKE" in q:
+                    return [floor_row]
+                return [
+                    _row(leaf_id="floor", cur_name="Gebäude A"),
+                    _row(leaf_id="floor", cur_name="EG"),
+                ]
+
+        result = await hier_api.search_nodes(q="Gebäude A", limit=10, db=_Db(), _user="admin")
+        assert len(result) == 1
+        assert result[0].node_id == "floor"
+        assert result[0].path == ["Gebäude A", "EG"]
 
 
 class TestEtsImport:

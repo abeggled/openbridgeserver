@@ -14,18 +14,8 @@
         <div
           v-for="ref in linked" :key="ref.link_id"
           class="flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-full text-xs font-medium bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/20"
-          :title="nodeFullPath(ref)">
-          <span class="text-blue-400 dark:text-blue-500 font-normal">{{ ref.tree_name }}</span>
-          <template v-for="seg in (ref.node_path || [])" :key="seg.node_id">
-            <svg class="w-2 h-2 text-blue-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-            </svg>
-            <span class="text-blue-500 dark:text-blue-400 font-normal">{{ seg.node_name }}</span>
-          </template>
-          <svg class="w-2.5 h-2.5 text-blue-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-          </svg>
-          <span>{{ ref.node_name }}</span>
+          v-bind="nodeFullPathAttrs(ref)">
+          <span class="truncate">{{ hierarchyRefDisplayLabel(ref) }}</span>
           <button
             @click="removeLink(ref)"
             class="ml-0.5 text-blue-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
@@ -66,12 +56,15 @@
             :class="['flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors w-full',
               isLinked(node.node_id)
                 ? 'opacity-40 cursor-not-allowed bg-slate-50 dark:bg-slate-800/40'
-                : 'hover:bg-slate-50 dark:hover:bg-slate-700/40']">
-            <span class="text-slate-400 text-xs font-medium shrink-0">{{ node.tree_name }}</span>
-            <svg class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                : 'hover:bg-slate-50 dark:hover:bg-slate-700/40']"
+            v-bind="nodeSearchFullPathAttrs(node)">
+            <span v-if="!hierarchySearchDisplayPathIncludesTree(node)" class="text-slate-400 text-xs font-medium shrink-0">{{ node.tree_name }}</span>
+            <svg v-if="!hierarchySearchDisplayPathIncludesTree(node)" class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
             </svg>
-            <span class="text-slate-700 dark:text-slate-200 flex-1 truncate">{{ node.node_name }}</span>
+            <span class="text-slate-700 dark:text-slate-200 flex-1 min-w-0">
+              <PathLabel :segments="hierarchySearchDisplayPath(node)" />
+            </span>
             <svg v-if="isLinked(node.node_id)" class="w-3.5 h-3.5 text-blue-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
             </svg>
@@ -95,6 +88,8 @@ import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { hierarchyApi } from '@/api/client.js'
 import Spinner from '@/components/ui/Spinner.vue'
+import PathLabel from '@/components/ui/PathLabel.vue'
+import { hierarchyDisplayPath } from '@/utils/hierarchyDisplay'
 
 const { t } = useI18n()
 
@@ -175,9 +170,49 @@ async function removeLink(ref) {
 
 // ── Utils ─────────────────────────────────────────────────────────────────
 
-function nodeFullPath(ref) {
+function nodeFullPathAttrs(ref) {
   const parts = [ref.tree_name, ...(ref.node_path || []).map(n => n.node_name), ref.node_name]
-  return parts.join(' › ')
+  return { title: parts.filter(Boolean).join(' › ') }
+}
+
+function nodeSearchFullPathAttrs(node) {
+  const path = Array.isArray(node?.path) && node.path.length
+    ? node.path
+    : [node?.node_name].filter(Boolean)
+  const parts = [node?.tree_name, ...path]
+  return { title: parts.filter(Boolean).join(' › ') }
+}
+
+function hierarchyRefPath(ref) {
+  return [...(ref?.node_path || []).map(n => n.node_name), ref?.node_name].filter(Boolean)
+}
+
+function hierarchyRefDisplayPath(ref) {
+  return hierarchyDisplayPath({
+    treeName: ref?.tree_name,
+    path: hierarchyRefPath(ref),
+    displayDepth: ref?.display_depth ?? 0,
+  })
+}
+
+function hierarchyRefDisplayLabel(ref) {
+  return hierarchyRefDisplayPath(ref).join(' › ') || ref?.node_name || ''
+}
+
+function hierarchySearchDisplayPath(node) {
+  const path = Array.isArray(node?.path) && node.path.length
+    ? node.path
+    : [node?.node_name].filter(Boolean)
+  return hierarchyDisplayPath({
+    treeName: node?.tree_name,
+    path,
+    displayDepth: node?.display_depth ?? 0,
+  })
+}
+
+function hierarchySearchDisplayPathIncludesTree(node) {
+  const path = hierarchySearchDisplayPath(node)
+  return !!node?.tree_name && path[0] === node.tree_name
 }
 
 function showFeedback(text, ok) {

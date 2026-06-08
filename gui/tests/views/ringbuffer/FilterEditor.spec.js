@@ -92,6 +92,26 @@ function makeSampleSet(overrides = {}) {
  * named input so tests can drive the bound model value deterministically.
  */
 function stubCombobox(name, multi) {
+  function stubItem(id) {
+    if (name !== 'HierarchyCombobox') return { id, label: id }
+    if (id === 't1:display') {
+      return {
+        id,
+        display_path: ['Haus', 'EG'],
+        full_label: 'Haus › Gebäude › EG',
+      }
+    }
+    if (id === 't1:depth') {
+      return {
+        id,
+        path: ['Gebäude', 'EG', 'Küche'],
+        display_depth: 2,
+        tree_name: 'Haus',
+      }
+    }
+    return { id, label: id }
+  }
+
   return defineComponent({
     name,
     props: ['modelValue', 'placeholder'],
@@ -105,7 +125,7 @@ function stubCombobox(name, multi) {
             h('div', { 'data-testid': `stub-${name}-chips` }, multi
               ? (Array.isArray(props.modelValue) ? props.modelValue : []).map((id, i) =>
                   h('span', { key: id, 'data-testid': `stub-${name}-chip-${i}`, 'data-chip-id': id },
-                    slots.chip ? slots.chip({ item: { id, label: id }, index: i, remove: () => {} }) : [String(id)],
+                    slots.chip ? slots.chip({ item: stubItem(id), index: i, remove: () => {} }) : [String(id)],
                   ),
                 )
               : [String(props.modelValue ?? '')]),
@@ -323,6 +343,31 @@ describe('FilterEditor (#436)', () => {
     const expand = wrapper.find('[data-testid="hierarchy-expand-0"]')
     expect(expand.exists()).toBe(true)
     expect(expand.text()).toContain('⊞')
+  })
+
+  it('renders hierarchy chip labels from display path and display depth metadata', async () => {
+    const setWithHierarchy = makeSampleSet({
+      filter: {
+        hierarchy_nodes: [
+          { tree_id: 't1', node_id: 'display', include_descendants: true },
+          { tree_id: 't1', node_id: 'depth', include_descendants: true },
+        ],
+        datapoints: [],
+        tags: [],
+        adapters: [],
+        q: null,
+        value_filter: null,
+      },
+    })
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({ data: setWithHierarchy }),
+    })
+    const { wrapper } = await mountEditor({ props: { setId: 'fs-1' }, ringbufferApi })
+    const chips = wrapper.findAll('[data-testid^="stub-HierarchyCombobox-chip-"]')
+    expect(chips[0].text()).toContain('Haus › EG')
+    expect(chips[1].text()).toContain('EG › Küche')
+    expect(wrapper.find('[title="Haus › Gebäude › EG"]').exists()).toBe(true)
+    expect(wrapper.find('[title="Haus › Gebäude › EG › Küche"]').exists()).toBe(true)
   })
 
   it('clicking the expand button materializes DPs under the node and removes the hierarchy chip', async () => {
