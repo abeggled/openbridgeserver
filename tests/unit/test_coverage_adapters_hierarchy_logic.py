@@ -1684,6 +1684,24 @@ class TestEtsImport:
         )
         assert result.nodes_created >= 3  # main + mid + GA
 
+    @pytest.mark.asyncio
+    async def test_create_ets_hierarchy_service_reusable(self):
+        from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
+
+        ga_rows = [
+            _row(address="1/2/3", name="Light", description="desc", dpt="1.001", main_group_name="Main", mid_group_name="Mid"),
+        ]
+        db = _DbStub(rows=ga_rows)
+
+        result = await create_ets_hierarchy(
+            db,
+            EtsImportRequest(tree_name="Reusable", mode="groups"),
+        )
+
+        assert result.tree_name == "Reusable"
+        assert result.nodes_created == 3
+        assert any(entry[0] == "executemany" and "hierarchy_nodes" in entry[1] for entry in db.committed)
+
 
 # ============================================================================
 # obs/adapters/iobroker/adapter.py tests
