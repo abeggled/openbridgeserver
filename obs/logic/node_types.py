@@ -150,6 +150,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
                 "enum": [">", "<", "=", ">=", "<=", "!="],
                 "default": ">",
             },
+            "operand": {"type": "number", "default": "", "label": "Operand"},
         },
         color="#1d4ed8",
     ),

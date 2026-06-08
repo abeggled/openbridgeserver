@@ -1139,7 +1139,7 @@ class LogicManager:
                 if e.source in triggered_api_clients:
                     src_handle = e.sourceHandle or "out"
                     tgt_handle = e.targetHandle or "in"
-                    downstream_overrides.setdefault(e.target, {})[tgt_handle] = outputs[e.source].get(src_handle)
+                    downstream_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs[e.source], src_handle)
             if downstream_overrides:
                 second_executor = GraphExecutor(flow, hyst, self._app_config)
                 second_outputs = second_executor.execute(downstream_overrides)

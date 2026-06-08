@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -320,6 +321,42 @@ async def test_ringbuffer_push_is_scoped_for_anonymous_page_connections(monkeypa
     assert [m["entry"]["datapoint_id"] for m in scoped_ringbuffer] == [allowed_id]
     assert all("metadata" not in m["entry"] for m in scoped_ringbuffer)
     assert [m["entry"]["datapoint_id"] for m in unrestricted_ringbuffer] == [allowed_id, blocked_id]
+
+
+@pytest.mark.asyncio
+async def test_handle_value_event_accepts_six_field_connection_entries(monkeypatch):
+    dp_uuid = uuid4()
+    dp_id = str(dp_uuid)
+    ws = _FakeWebSocket()
+    manager = WebSocketManager()
+    conn_id = await manager.connect(ws)
+    manager.subscribe(conn_id, [dp_id])
+
+    ws_entry = manager._connections[conn_id]  # noqa: SLF001
+    manager._connections[conn_id] = (ws_entry[0], ws_entry[1], asyncio.Lock(), ws_entry[3], False, None)  # noqa: SLF001
+
+    class _RegistryStub:
+        def get(self, _dp_id):
+            return SimpleNamespace(name="Six Field DP", unit="W")
+
+        def get_value(self, _dp_id):
+            return SimpleNamespace(old_value=1.0)
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+
+    event = DataValueEvent(
+        datapoint_id=dp_uuid,
+        value=2.0,
+        quality="good",
+        source_adapter="api",
+        ts=datetime(2026, 5, 6, 19, 44, 49, 123000, tzinfo=UTC),
+    )
+
+    await manager.handle_value_event(event)
+
+    assert ws.messages[0]["id"] == dp_id
+    assert ws.messages[1]["action"] == "ringbuffer_entry"
+    assert ws.messages[1]["entry"]["datapoint_id"] == dp_id
 
 
 @pytest.mark.asyncio

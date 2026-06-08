@@ -21,11 +21,18 @@ logger = logging.getLogger(__name__)
 
 _COMPARE_OPS = {
     ">": operator.gt,
+    "gt": operator.gt,
     "<": operator.lt,
+    "lt": operator.lt,
     "=": operator.eq,
+    "==": operator.eq,
+    "eq": operator.eq,
     ">=": operator.ge,
+    "gte": operator.ge,
     "<=": operator.le,
+    "lte": operator.le,
     "!=": operator.ne,
+    "ne": operator.ne,
 }
 
 
@@ -76,7 +83,7 @@ class GraphExecutor:
             inputs: dict[str, Any] = {}
             for handle, (src_id, src_handle) in edge_map.get(node.id, {}).items():
                 src_out = outputs.get(src_id, {})
-                inputs[handle] = src_out.get(src_handle)
+                inputs[handle] = self._get_output_value(src_out, src_handle)
 
             # Apply overrides (for datapoint_read triggers)
             if node.id in input_overrides:
@@ -121,6 +128,17 @@ class GraphExecutor:
     # ── Type coercion helpers ─────────────────────────────────────────────
 
     @staticmethod
+    def _get_output_value(outputs: dict[str, Any], handle: str) -> Any:
+        """Read an output handle with compatibility for older result/out flows."""
+        if handle in outputs:
+            return outputs.get(handle)
+        if handle == "result" and "out" in outputs:
+            return outputs.get("out")
+        if handle == "out" and "result" in outputs:
+            return outputs.get("result")
+        return None
+
+    @staticmethod
     def _to_num(v: Any, default: float = 0.0) -> float:
         """Coerce any value to float. bool→1/0, str→float, None→default."""
         if v is None:
@@ -131,6 +149,16 @@ class GraphExecutor:
             return float(v)
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _try_num(v: Any) -> float | None:
+        """Return a float only when the original value is numeric-like."""
+        if isinstance(v, bool):
+            return 1.0 if v else 0.0
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _to_bool(v: Any) -> bool:
@@ -199,15 +227,30 @@ class GraphExecutor:
                 return {"out": out_val}
 
             case "compare":
-                op = _COMPARE_OPS.get(d.get("operator", ">"), operator.gt)
+                operator_key = str(d.get("operator", ">")).strip().lower()
+                op = _COMPARE_OPS.get(operator_key, operator.gt)
                 a, b = inputs.get("in1"), inputs.get("in2")
+                if "in2" not in inputs:
+                    operand = d.get("operand")
+                    if not (isinstance(operand, str) and operand.strip() == ""):
+                        b = operand
                 if a is None or b is None:
                     return {"out": False}
                 # Auto-coerce to number when both values look numeric
-                try:
-                    return {"out": op(self._to_num(a), self._to_num(b))}
-                except TypeError:
-                    return {"out": op(str(a), str(b))}
+                num_a, num_b = self._try_num(a), self._try_num(b)
+                if num_a is not None and num_b is not None:
+                    return {"out": op(num_a, num_b)}
+                equality_ops = {"=", "==", "eq"}
+                inequality_ops = {"!=", "ne"}
+                if (num_a is None) != (num_b is None):
+                    if operator_key in equality_ops:
+                        return {"out": False}
+                    if operator_key in inequality_ops:
+                        return {"out": True}
+                    return {"out": False}
+                if operator_key not in equality_ops | inequality_ops:
+                    return {"out": False}
+                return {"out": op(str(a), str(b))}
 
             case "hysteresis":
                 val = inputs.get("value")
