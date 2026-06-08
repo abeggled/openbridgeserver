@@ -1984,6 +1984,34 @@ async def test_page_has_datapoint_includes_nested_extra_datapoints():
 
 
 @pytest.mark.asyncio
+async def test_page_has_datapoint_includes_grundriss_mini_widget_datapoints():
+    """_page_has_datapoint includes Grundriss miniWidgets camelCase datapoint fields."""
+    dp_id = uuid.uuid4()
+    page_config = {
+        "widgets": [
+            {
+                "type": "grundriss",
+                "config": {
+                    "miniWidgets": [
+                        {
+                            "id": str(uuid.uuid4()),
+                            "widgetType": "display_value",
+                            "datapointId": str(dp_id),
+                            "statusDatapointId": str(uuid.uuid4()),
+                        },
+                    ],
+                },
+            },
+        ],
+    }
+    db = _DbStub(fetchone_result=_row({"page_config": json.dumps(page_config)}))
+
+    result = await dp_api._page_has_datapoint(db, "page-1", dp_id)
+
+    assert result is True
+
+
+@pytest.mark.asyncio
 async def test_page_has_datapoint_ignores_nested_non_datapoint_uuids():
     """_page_has_datapoint does not allow arbitrary nested UUID strings."""
     label_uuid = uuid.uuid4()

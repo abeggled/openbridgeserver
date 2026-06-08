@@ -14,6 +14,8 @@ _DATAPOINT_KEYS_EXACT = {
     "secondary_dp_id",
     "actual_temp_dp_id",
     "mode_dp_id",
+    "datapointId",
+    "statusDatapointId",
 }
 
 

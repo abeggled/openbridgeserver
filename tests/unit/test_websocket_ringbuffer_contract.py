@@ -365,6 +365,8 @@ async def test_page_allowed_datapoints_collects_only_datapoint_fields():
     not_a_datapoint_uuid = str(uuid4())
     source_page_id_uuid = str(uuid4())
     entity_dp_id = str(uuid4())
+    mini_widget_dp_id = str(uuid4())
+    mini_widget_status_dp_id = str(uuid4())
 
     page_config = {
         "grid_cols": 12,
@@ -390,6 +392,14 @@ async def test_page_allowed_datapoints_collects_only_datapoint_fields():
                     "entities": [
                         {"id": entity_dp_id, "label": str(uuid4())},
                     ],
+                    "miniWidgets": [
+                        {
+                            "id": str(uuid4()),
+                            "widgetType": "display_value",
+                            "datapointId": mini_widget_dp_id,
+                            "statusDatapointId": mini_widget_status_dp_id,
+                        },
+                    ],
                 },
             },
         ],
@@ -404,6 +414,8 @@ async def test_page_allowed_datapoints_collects_only_datapoint_fields():
     assert ids is not None
     assert nested_dp_id in ids
     assert entity_dp_id in ids
+    assert mini_widget_dp_id in ids
+    assert mini_widget_status_dp_id in ids
     assert not_a_datapoint_uuid not in ids
     assert source_page_id_uuid not in ids
 
