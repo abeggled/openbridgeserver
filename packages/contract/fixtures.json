@@ -1,1 +1,35 @@
-{}
+{
+  "contractVersion": "1.0",
+
+  "light": {
+    "off":    { "on": false, "dim": null, "room": "EG Küche",  "label": "Wandleuchten",  "accent": "orange" },
+    "on":     { "on": true,  "dim": null, "room": "EG Treppe", "label": "Hauseingang",   "accent": "orange" },
+    "dimmed": { "on": true,  "dim": 45,   "room": "Wohnz.",    "label": "Deckenlicht",   "accent": "amber"  }
+  },
+  "switch": {
+    "off": { "on": false, "room": "Wohnz.", "label": "Kamin",            "accent": "teal" },
+    "on":  { "on": true,  "room": "EG WC",  "label": "Lüfter (10 Min)",  "accent": "teal" }
+  },
+  "blind": {
+    "open":   { "position": 0,   "locked": false, "room": "EG Wohnz.",     "label": "Rollladen West" },
+    "half":   { "position": 62,  "locked": false, "room": "EG Schlafz.",   "label": "Rollladen Süd"  },
+    "locked": { "position": 100, "locked": true,  "room": "Wintergarten",  "label": "Rollladen"      }
+  },
+  "jalousie": {
+    "open":   { "position": 0,  "slat": 0,  "locked": false, "mode": "jalousie",
+                "room": "Wintergarten", "label": "Jalousie Süd", "accent": "green", "statuses": [] },
+    "tilted": { "position": 62, "slat": 35, "locked": false, "mode": "jalousie",
+                "room": "Wintergarten", "label": "Jalousie Süd", "accent": "green",
+                "statuses": [ {"label":"Sturm","val":false}, {"label":"Sonne","val":true}, {"label":"Sperre","val":null} ] },
+    "locked": { "position": 100, "slat": 90, "locked": true, "mode": "jalousie",
+                "room": "Wintergarten", "label": "Jalousie Ost", "accent": "green", "statuses": [] }
+  },
+  "sensor": {
+    "ok":   { "value": "20.4", "unit": "°C",  "status": "komfort", "room": "Schlafz.", "label": "Temp", "accent": "blue" },
+    "warn": { "value": 287,    "unit": "ppm", "status": "erhöht",  "room": "EG WC",    "label": "VOC",  "accent": "teal" }
+  },
+  "scene": {
+    "film":   { "icon": "sparkle", "sub": "Licht · Rollladen · TV", "room": "Szenen", "label": "Filmabend",    "accent": "violet" },
+    "morgen": { "icon": "scene",   "sub": "Rollladen · Kaffee",     "room": "Szenen", "label": "Guten Morgen", "accent": "violet" }
+  }
+}

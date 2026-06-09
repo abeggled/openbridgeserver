@@ -4,12 +4,12 @@
   "description": "Versioned data/type contract between the obs Visu app and Visu skins. Data and types only — executes nothing.",
   "license": "MIT",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
     },
     "./contract.schema.json": "./contract.schema.json",
     "./fixtures.json": "./fixtures.json"
@@ -17,12 +17,14 @@
   "files": [
     "dist",
     "contract.schema.json",
-    "fixtures.json"
+    "fixtures.json",
+    "types.d.ts",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc --noEmit --composite false -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run --typecheck"
   },
   "devDependencies": {
     "ajv": "^8.17.1",

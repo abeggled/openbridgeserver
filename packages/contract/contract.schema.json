@@ -1,1 +1,246 @@
-{}
+{
+  "$schema": "https://obs.visu/contract/v1",
+  "version": "1.0",
+
+  "roles": ["compact", "default", "wide", "tall", "feature", "banner"],
+
+  "iconSlots": [
+    "bulb", "blind", "thermo", "wind", "sun", "cloud", "cam", "shield",
+    "bolt", "scene", "sparkle", "lock", "play", "pause", "skip"
+  ],
+
+  "widgets": {
+    "light": {
+      "data": {
+        "on": "boolean",
+        "dim": "number|null  (0–100; null = nicht dimmbar)",
+        "room": "string",
+        "label": "string",
+        "accent": "token  (Palette-Schlüssel: orange|teal|violet|green|blue|rose|amber|slate)"
+      },
+      "actions": { "toggle": {}, "setDim": { "pct": "0–100" } },
+      "icon": "bulb",
+      "roles": { "allow": ["compact", "default", "wide"], "default": "default" },
+      "dataSchema": {
+        "type": "object",
+        "required": ["on", "dim", "room", "label", "accent"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "light" },
+          "id": { "type": "string" },
+          "on": { "type": "boolean" },
+          "dim": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+          "room": { "type": "string" },
+          "label": { "type": "string" },
+          "accent": { "$ref": "https://obs.visu/contract/v1/accent" }
+        }
+      }
+    },
+
+    "switch": {
+      "data": {
+        "on": "boolean",
+        "room": "string",
+        "label": "string",
+        "accent": "token"
+      },
+      "actions": { "toggle": {} },
+      "icon": "wind",
+      "roles": { "allow": ["compact", "default"], "default": "compact" },
+      "dataSchema": {
+        "type": "object",
+        "required": ["on", "room", "label", "accent"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "switch" },
+          "id": { "type": "string" },
+          "on": { "type": "boolean" },
+          "room": { "type": "string" },
+          "label": { "type": "string" },
+          "accent": { "$ref": "https://obs.visu/contract/v1/accent" }
+        }
+      }
+    },
+
+    "blind": {
+      "data": {
+        "position": "number  (0 = auf, 100 = zu)",
+        "locked": "boolean",
+        "room": "string",
+        "label": "string",
+        "accent": "token"
+      },
+      "actions": { "setPosition": { "pct": "0–100" }, "lock": {}, "unlock": {} },
+      "icon": "blind",
+      "roles": { "allow": ["compact", "default", "wide", "tall"], "default": "default" },
+      "dataSchema": {
+        "type": "object",
+        "required": ["position", "locked", "room", "label"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "blind" },
+          "id": { "type": "string" },
+          "position": { "type": "number", "minimum": 0, "maximum": 100 },
+          "locked": { "type": "boolean" },
+          "room": { "type": "string" },
+          "label": { "type": "string" },
+          "accent": { "$ref": "https://obs.visu/contract/v1/accent" }
+        }
+      }
+    },
+
+    "jalousie": {
+      "data": {
+        "position": "number  (0 = auf, 100 = zu)",
+        "slat": "number  (0–100 ⇒ 0–90° Lamellenwinkel)",
+        "locked": "boolean",
+        "invert": "boolean",
+        "moving": "string|null  (null|'up'|'down')",
+        "statuses": "Array<{ label: string, val: boolean|null }>  (Ampel: true|false|null)",
+        "room": "string",
+        "label": "string",
+        "accent": "token",
+        "mode": "'jalousie'"
+      },
+      "actions": {
+        "setPosition": { "pct": "0–100" },
+        "setSlat": { "pct": "0–100" },
+        "lock": {},
+        "unlock": {}
+      },
+      "icon": "blind",
+      "roles": { "allow": ["default", "wide", "tall", "feature"], "default": "wide" },
+      "dataSchema": {
+        "type": "object",
+        "required": ["position", "slat", "locked", "mode", "statuses", "room", "label", "accent"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "jalousie" },
+          "id": { "type": "string" },
+          "position": { "type": "number", "minimum": 0, "maximum": 100 },
+          "slat": { "type": "number", "minimum": 0, "maximum": 100 },
+          "locked": { "type": "boolean" },
+          "invert": { "type": "boolean" },
+          "moving": { "type": ["string", "null"], "enum": ["up", "down", null] },
+          "statuses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["label", "val"],
+              "additionalProperties": false,
+              "properties": {
+                "label": { "type": "string" },
+                "val": { "type": ["boolean", "null"] }
+              }
+            }
+          },
+          "room": { "type": "string" },
+          "label": { "type": "string" },
+          "accent": { "$ref": "https://obs.visu/contract/v1/accent" },
+          "mode": { "const": "jalousie" }
+        }
+      }
+    },
+
+    "sensor": {
+      "data": {
+        "value": "number|string",
+        "unit": "string  (°C · ppm · %)",
+        "status": "string|undefined  (komfort | erhöht | …)",
+        "room": "string",
+        "label": "string",
+        "accent": "token"
+      },
+      "actions": {},
+      "icon": "thermo",
+      "roles": { "allow": ["compact", "default"], "default": "compact" },
+      "dataSchema": {
+        "type": "object",
+        "required": ["value", "unit", "room", "label", "accent"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "sensor" },
+          "id": { "type": "string" },
+          "value": { "type": ["number", "string"] },
+          "unit": { "type": "string" },
+          "status": { "type": "string" },
+          "room": { "type": "string" },
+          "label": { "type": "string" },
+          "accent": { "$ref": "https://obs.visu/contract/v1/accent" }
+        }
+      }
+    },
+
+    "scene": {
+      "data": {
+        "icon": "string  (Icon-Slot, z. B. 'sparkle' | 'scene')",
+        "sub": "string|undefined  (Untertitel, z. B. 'Licht · Rollladen · TV')",
+        "room": "string",
+        "label": "string",
+        "accent": "token"
+      },
+      "actions": { "activateScene": {} },
+      "icon": "scene",
+      "roles": { "allow": ["compact", "default", "wide"], "default": "default" },
+      "dataSchema": {
+        "type": "object",
+        "required": ["icon", "room", "label", "accent"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "scene" },
+          "id": { "type": "string" },
+          "icon": { "type": "string" },
+          "sub": { "type": "string" },
+          "room": { "type": "string" },
+          "label": { "type": "string" },
+          "accent": { "$ref": "https://obs.visu/contract/v1/accent" }
+        }
+      }
+    },
+
+    "climate": {
+      "reserved": true,
+      "since": "1.1",
+      "data": { "target": "number", "current": "number", "mode": "string" }
+    },
+    "weather": {
+      "reserved": true,
+      "since": "1.1",
+      "data": { "temp": "number", "cond": "string" }
+    },
+    "energy": {
+      "reserved": true,
+      "since": "1.1",
+      "data": { "watts": "number" }
+    },
+    "chart": {
+      "reserved": true,
+      "since": "1.1",
+      "data": { "points": "number[]", "unit": "string" }
+    },
+    "media": {
+      "reserved": true,
+      "since": "1.1",
+      "data": { "track": "string", "playing": "boolean" }
+    },
+    "camera": {
+      "reserved": true,
+      "since": "1.1",
+      "data": {}
+    },
+    "alarm": {
+      "reserved": true,
+      "since": "1.1",
+      "data": { "armed": "boolean" },
+      "actions": { "arm": {}, "disarm": {} }
+    }
+  },
+
+  "$defs": {
+    "accent": {
+      "$id": "https://obs.visu/contract/v1/accent",
+      "type": "string",
+      "enum": ["orange", "teal", "violet", "green", "blue", "rose", "amber", "slate"]
+    }
+  }
+}
