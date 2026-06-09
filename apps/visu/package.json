@@ -14,7 +14,6 @@
     "@obs/visu-contract": "workspace:*",
     "@ionic/vue": "^8.4.0",
     "@ionic/vue-router": "^8.4.0",
-    "@obs/visu-contract": "workspace:*",
     "chroma-js": "^3.1.2",
     "pinia": "^2.2.6",
     "vue": "^3.5.13",
