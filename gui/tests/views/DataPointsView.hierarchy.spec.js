@@ -33,6 +33,8 @@ async function mountDataPointsView({ items = [], nodeResults = [], isAdmin = tru
   }
   const dpApi = {
     tags: vi.fn().mockResolvedValue({ data: [] }),
+    create: vi.fn().mockImplementation(payload => Promise.resolve({ data: { id: 'dp-created', ...payload } })),
+    update: vi.fn().mockImplementation((id, payload) => Promise.resolve({ data: { id, ...payload } })),
     delete: vi.fn().mockResolvedValue({}),
   }
   const systemApi = {
@@ -70,7 +72,7 @@ async function mountDataPointsView({ items = [], nodeResults = [], isAdmin = tru
   })
   await flushPromises()
   await flushPromises()
-  return { wrapper, hierarchyApi, searchApi }
+  return { wrapper, dpApi, hierarchyApi, searchApi }
 }
 
 describe('DataPointsView hierarchy rendering', () => {
@@ -93,6 +95,102 @@ describe('DataPointsView hierarchy rendering', () => {
     expect(wrapper.find('[data-testid="btn-new-datapoint"]').exists()).toBe(false)
     expect(wrapper.find('[title="Bearbeiten"]').exists()).toBe(false)
     expect(wrapper.find('[title="Löschen"]').exists()).toBe(false)
+  })
+
+  it('lets admins create, update and delete datapoints', async () => {
+    const item = {
+      id: 'dp-admin',
+      name: 'Admin DP',
+      data_type: 'FLOAT',
+      tags: [],
+      value: 1,
+      quality: 'good',
+      hierarchy_nodes: [],
+    }
+    const { wrapper, dpApi } = await mountDataPointsView({ items: [item] })
+
+    expect(wrapper.find('[data-testid="btn-new-datapoint"]').exists()).toBe(true)
+
+    wrapper.vm.openCreate()
+    expect(wrapper.vm.showForm).toBe(true)
+    await wrapper.vm.onSave({ name: 'Created DP', data_type: 'FLOAT', tags: [] })
+    expect(dpApi.create).toHaveBeenCalledWith({ name: 'Created DP', data_type: 'FLOAT', tags: [] })
+    expect(wrapper.vm.showForm).toBe(false)
+
+    wrapper.vm.openEdit(item)
+    expect(wrapper.vm.editTarget.id).toBe('dp-admin')
+    await wrapper.vm.onSave({ name: 'Updated DP', data_type: 'FLOAT', tags: [] })
+    expect(dpApi.update).toHaveBeenCalledWith('dp-admin', { name: 'Updated DP', data_type: 'FLOAT', tags: [] })
+
+    wrapper.vm.confirmDelete(item)
+    expect(wrapper.vm.deleteTarget.id).toBe('dp-admin')
+    expect(wrapper.vm.showConfirm).toBe(true)
+    await wrapper.vm.doDelete()
+    expect(dpApi.delete).toHaveBeenCalledWith('dp-admin')
+  })
+
+  it('applies and clears datapoint list filters', async () => {
+    const { wrapper } = await mountDataPointsView()
+
+    wrapper.vm.filters.q = 'temp'
+    wrapper.vm.filters.tags = ['hvac']
+    wrapper.vm.filters.adapters = ['knx']
+    wrapper.vm.filters.quality = 'good'
+    wrapper.vm.filters.type = 'FLOAT'
+    wrapper.vm.filters.node_ids = [{ node_id: 12, node_name: 'Küche', tree_name: 'Haus' }]
+    wrapper.vm.filters.tree_ids = [{ tree_id: 1, tree_name: 'Haus' }]
+
+    expect(wrapper.vm.apiFilters()).toEqual({
+      q: 'temp',
+      tag: 'hvac',
+      adapter: 'knx',
+      quality: 'good',
+      type: 'FLOAT',
+      node_id: '12',
+      tree_id: '1',
+    })
+
+    wrapper.vm.toggleQuality('bad')
+    expect(wrapper.vm.filters.quality).toBe('bad')
+    wrapper.vm.toggleQuality('bad')
+    expect(wrapper.vm.filters.quality).toBe('')
+
+    wrapper.vm.toggleTag('hvac')
+    expect(wrapper.vm.filters.tags).toEqual([])
+    wrapper.vm.toggleTag('hvac')
+    wrapper.vm.setTagFilter('energy')
+    expect(wrapper.vm.filters.tags).toEqual(['hvac', 'energy'])
+
+    wrapper.vm.setAdapterFilter(['mqtt'])
+    expect(wrapper.vm.filters.adapters).toEqual(['mqtt'])
+    wrapper.vm.setAdapterFilter(null)
+    expect(wrapper.vm.filters.adapters).toEqual([])
+
+    wrapper.vm.toggleTreeFilter({ tree_id: 2, tree_name: 'Etage' })
+    expect(wrapper.vm.isTreeSelected(2)).toBe(true)
+    wrapper.vm.toggleTreeFilter({ tree_id: 2, tree_name: 'Etage' })
+    expect(wrapper.vm.isTreeSelected(2)).toBe(false)
+
+    wrapper.vm.toggleNode({ node_id: 44, node_name: 'Bad', tree_name: 'Haus', path: ['EG', 'Bad'], display_depth: 1 })
+    expect(wrapper.vm.isNodeSelected(44)).toBe(true)
+    wrapper.vm.toggleNode({ node_id: 44, node_name: 'Bad', tree_name: 'Haus', path: ['EG', 'Bad'], display_depth: 1 })
+    expect(wrapper.vm.isNodeSelected(44)).toBe(false)
+
+    wrapper.vm.clearFilter('node_ids')
+    expect(wrapper.vm.filters.node_ids).toEqual([])
+    wrapper.vm.clearFilter('tree_ids')
+    expect(wrapper.vm.filters.tree_ids).toEqual([])
+    wrapper.vm.clearFilter('tags')
+    expect(wrapper.vm.filters.tags).toEqual([])
+    wrapper.vm.clearFilter('adapters')
+    expect(wrapper.vm.filters.adapters).toEqual([])
+    wrapper.vm.clearFilter('type')
+    expect(wrapper.vm.filters.type).toBe('')
+
+    wrapper.vm.clearAllFilters()
+    expect(wrapper.vm.filters).toEqual({ q: '', tags: [], adapters: [], quality: '', type: '', node_ids: [], tree_ids: [] })
+    wrapper.vm.clearHierarchyFilters()
+    expect(wrapper.vm.nodeResults).toEqual([])
   })
 
   it('keeps the full hierarchy path as title on datapoint row chips', async () => {
