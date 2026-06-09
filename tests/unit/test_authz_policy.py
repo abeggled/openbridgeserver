@@ -98,6 +98,28 @@ def test_read_inherits_upwards_from_assigned_child_node():
     assert decision.allowed is True
 
 
+def test_read_inherits_downwards_from_assigned_parent_node():
+    grant = _grant("floor", role=Role.GUEST, ancestors=("building",))
+    target = _target("room", ancestors=("building", "floor"))
+
+    decision = authorize(principal=_user(), action=AuthzAction.READ, targets=[target], grants=[grant])
+
+    assert decision.allowed is True
+
+
+def test_read_deny_inherits_downwards_from_assigned_parent_node():
+    target = _target("room", ancestors=("building", "floor"))
+    grants = [
+        _grant("room", role=Role.GUEST, ancestors=("building", "floor")),
+        _grant("floor", role=Role.GUEST, effect=GrantEffect.DENY, ancestors=("building",)),
+    ]
+
+    decision = authorize(principal=_user(), action=AuthzAction.READ, targets=[target], grants=grants)
+
+    assert decision.allowed is False
+    assert decision.reason == "explicit_deny"
+
+
 def test_literal_read_action_keeps_read_inheritance():
     grant = _grant("room", role=Role.GUEST, ancestors=("building", "floor"))
     target = _target("floor", ancestors=("building",))
