@@ -22,6 +22,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from obs.api.auth import create_access_token
 
 pytestmark = pytest.mark.integration
 
@@ -55,6 +56,23 @@ async def _make_adapter_instance(client, auth_headers, adapter_type: str = "ANWE
     return resp.json()
 
 
+async def _create_non_admin_headers(client, auth_headers) -> tuple[dict, str]:
+    username = f"knxproj-user-{uuid.uuid4().hex[:8]}"
+    password = "pw-12345678"
+    resp = await client.post(
+        "/api/v1/auth/users",
+        json={
+            "username": username,
+            "password": password,
+            "is_admin": False,
+            "mqtt_enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return {"Authorization": f"Bearer {create_access_token(username)}"}, username
+
+
 # ---------------------------------------------------------------------------
 # POST /knxproj/import  — error paths (no real knxproj needed)
 # ---------------------------------------------------------------------------
@@ -66,6 +84,19 @@ async def test_import_knxproj_requires_auth(client):
         files={"file": ("test.knxproj", b"dummy", "application/octet-stream")},
     )
     assert resp.status_code == 401
+
+
+async def test_import_knxproj_non_admin_forbidden(client, auth_headers):
+    non_admin_headers, username = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.post(
+            "/api/v1/knxproj/import",
+            files={"file": ("test.knxproj", b"dummy", "application/octet-stream")},
+            headers=non_admin_headers,
+        )
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_import_knxproj_wrong_extension_returns_400(client, auth_headers):
@@ -165,6 +196,19 @@ async def test_import_csv_requires_auth(client):
         files={"file": ("test.csv", _VALID_CSV, "text/csv")},
     )
     assert resp.status_code == 401
+
+
+async def test_import_csv_non_admin_forbidden(client, auth_headers):
+    non_admin_headers, username = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.post(
+            "/api/v1/knxproj/import-csv",
+            files={"file": ("test.csv", _VALID_CSV, "text/csv")},
+            headers=non_admin_headers,
+        )
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_import_csv_wrong_extension_returns_400(client, auth_headers):

@@ -24,6 +24,12 @@ import yaml
 from obs.config import get_settings
 
 _NAT64_WELL_KNOWN_PREFIX = ipaddress.IPv6Network("64:ff9b::/96")
+_PRIVATE_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
+    ipaddress.IPv6Network("fc00::/7"),
+)
 
 
 @dataclass(frozen=True)
@@ -286,14 +292,25 @@ def remove_allowed_url_target(target: str) -> bool:
 def _is_blocked_ip(addr: ipaddress._BaseAddress, *, allow_loopback: bool) -> bool:  # type: ignore[attr-defined]
     if allow_loopback and addr.is_loopback:
         return False
+    if addr.is_private:
+        return True
     if addr.is_multicast:
         return True
     if isinstance(addr, ipaddress.IPv6Address) and addr in _NAT64_WELL_KNOWN_PREFIX:
         embedded = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+        if embedded.is_private:
+            return True
         if embedded.is_multicast:
             return True
         return not embedded.is_global
     return not addr.is_global
+
+
+def _is_private_network_ip(addr: ipaddress._BaseAddress) -> bool:  # type: ignore[attr-defined]
+    if isinstance(addr, ipaddress.IPv6Address) and addr in _NAT64_WELL_KNOWN_PREFIX:
+        embedded = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+        return any(embedded in network for network in _PRIVATE_NETWORKS if isinstance(network, ipaddress.IPv4Network))
+    return any(addr in network for network in _PRIVATE_NETWORKS)
 
 
 def _match_allowlist(hostname: str, addr: ipaddress._BaseAddress | None = None) -> str | None:  # type: ignore[attr-defined]
@@ -319,6 +336,7 @@ def evaluate_url_target(
     *,
     require_https: bool = False,
     allow_loopback: bool = False,
+    allow_private_networks: bool = False,
 ) -> UrlTargetDecision:
     try:
         parsed = urlparse(url)
@@ -375,6 +393,8 @@ def evaluate_url_target(
         entry = _match_allowlist(hostname_ascii, addr)
         if entry:
             allowlisted_by = entry
+            continue
+        if allow_private_networks and _is_private_network_ip(addr):
             continue
         if _is_blocked_ip(addr, allow_loopback=allow_loopback):
             blocked_ips.append(ip_str)
@@ -443,8 +463,9 @@ def build_pinned_url_targets(
     *,
     require_https: bool = False,
     preserve_userinfo: bool = True,
+    allow_private_networks: bool = False,
 ) -> tuple[list[str], dict[str, str], dict[str, str]]:
-    decision = evaluate_url_target(url, require_https=require_https)
+    decision = evaluate_url_target(url, require_https=require_https, allow_private_networks=allow_private_networks)
     if not decision.allowed:
         raise UrlTargetBlockedError(decision)
     addresses = decision.resolved_ips

@@ -201,3 +201,90 @@ async def test_user_visu_allows_assigned_non_admin_user(client, auth_headers):
         await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
         await client.delete(f"/api/v1/datapoints/{dp_id}", headers=auth_headers)
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
+async def test_non_admin_cannot_mutate_visu_nodes_or_pages(client, auth_headers):
+    username = f"visu-mutate-user-{uuid.uuid4().hex[:8]}"
+    password = "pw-12345678"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username, password)
+    page_id = await _create_page(client, auth_headers, f"visu-admin-page-{uuid.uuid4().hex[:8]}", "public")
+
+    try:
+        create_resp = await client.post(
+            "/api/v1/visu/nodes",
+            json={"name": f"user-created-{uuid.uuid4().hex[:8]}", "type": "PAGE", "order": 1, "access": "public"},
+            headers=user_headers,
+        )
+        assert create_resp.status_code == 403, create_resp.text
+
+        update_resp = await client.patch(
+            f"/api/v1/visu/nodes/{page_id}",
+            json={"name": "non-admin-rename-attempt"},
+            headers=user_headers,
+        )
+        assert update_resp.status_code == 403, update_resp.text
+
+        copy_resp = await client.post(
+            f"/api/v1/visu/nodes/{page_id}/copy",
+            json={"target_parent_id": None, "new_name": f"copy-attempt-{uuid.uuid4().hex[:8]}"},
+            headers=user_headers,
+        )
+        assert copy_resp.status_code == 403, copy_resp.text
+
+        move_resp = await client.put(
+            f"/api/v1/visu/nodes/{page_id}/move",
+            json={"new_parent_id": None, "order": 10},
+            headers=user_headers,
+        )
+        assert move_resp.status_code == 403, move_resp.text
+
+        import_resp = await client.post(
+            "/api/v1/visu/nodes/import",
+            json={
+                "obs_export": "visu_subtree",
+                "version": 1,
+                "target_parent_id": None,
+                "nodes": [
+                    {
+                        "id": str(uuid.uuid4()),
+                        "parent_id": None,
+                        "name": "import-attempt",
+                        "type": "PAGE",
+                        "node_order": 0,
+                        "icon": None,
+                        "access": "public",
+                        "page_config": {
+                            "grid_cols": 12,
+                            "grid_row_height": 80,
+                            "grid_cell_width": 80,
+                            "background": None,
+                            "widgets": [],
+                        },
+                    },
+                ],
+            },
+            headers=user_headers,
+        )
+        assert import_resp.status_code == 403, import_resp.text
+
+        save_page_resp = await client.put(
+            f"/api/v1/visu/pages/{page_id}",
+            json={
+                "grid_cols": 12,
+                "grid_row_height": 80,
+                "grid_cell_width": 80,
+                "background": None,
+                "widgets": [],
+            },
+            headers=user_headers,
+        )
+        assert save_page_resp.status_code == 403, save_page_resp.text
+
+        delete_resp = await client.delete(
+            f"/api/v1/visu/nodes/{page_id}",
+            headers=user_headers,
+        )
+        assert delete_resp.status_code == 403, delete_resp.text
+    finally:
+        await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)

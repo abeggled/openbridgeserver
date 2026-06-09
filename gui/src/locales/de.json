@@ -123,6 +123,9 @@
       "uncertain": "Unbekannt",
       "bad": "Schlecht"
     },
+    "diagnostics": {
+      "typeMismatch": "Typkonflikt: erwartet {expected}, erhalten {got} von {source} ({count}x)"
+    },
     "detail": {
       "backToList": "← Objekte",
       "currentValue": "Aktueller Wert",

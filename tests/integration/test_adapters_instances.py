@@ -19,6 +19,8 @@ import uuid
 
 import pytest
 
+from obs.api.auth import create_access_token
+
 pytestmark = pytest.mark.integration
 
 _ADAPTER_TYPE = "ANWESENHEITSSIMULATION"
@@ -33,6 +35,17 @@ async def _create_instance(client, auth_headers, name: str = "", adapter_type: s
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+async def _create_non_admin_headers(client, auth_headers) -> tuple[str, dict]:
+    username = f"adp-user-{uuid.uuid4().hex[:8]}"
+    resp = await client.post(
+        "/api/v1/auth/users",
+        json={"username": username, "password": "TestPass123!", "is_admin": False},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return username, {"Authorization": f"Bearer {create_access_token(username)}"}
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +82,19 @@ async def test_list_instances_entry_shape(client, auth_headers):
 async def test_create_instance_requires_auth(client):
     resp = await client.post("/api/v1/adapters/instances", json={"adapter_type": _ADAPTER_TYPE, "name": "x", "config": {}})
     assert resp.status_code == 401
+
+
+async def test_create_instance_non_admin_forbidden(client, auth_headers):
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.post(
+            "/api/v1/adapters/instances",
+            json={"adapter_type": _ADAPTER_TYPE, "name": "x", "config": {}, "enabled": False},
+            headers=user_headers,
+        )
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_create_instance_success(client, auth_headers):
@@ -136,6 +162,19 @@ async def test_update_instance_requires_auth(client):
     assert resp.status_code == 401
 
 
+async def test_update_instance_non_admin_forbidden(client, auth_headers):
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.patch(
+            f"/api/v1/adapters/instances/{_MISSING_ID}",
+            json={"name": "x"},
+            headers=user_headers,
+        )
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 async def test_update_instance_404(client, auth_headers):
     resp = await client.patch(f"/api/v1/adapters/instances/{_MISSING_ID}", json={"name": "x"}, headers=auth_headers)
     assert resp.status_code == 404
@@ -179,6 +218,15 @@ async def test_update_instance_config(client, auth_headers):
 async def test_delete_instance_requires_auth(client):
     resp = await client.delete(f"/api/v1/adapters/instances/{_MISSING_ID}")
     assert resp.status_code == 401
+
+
+async def test_delete_instance_non_admin_forbidden(client, auth_headers):
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.delete(f"/api/v1/adapters/instances/{_MISSING_ID}", headers=user_headers)
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_delete_instance_404(client, auth_headers):
@@ -227,6 +275,15 @@ async def test_test_instance_returns_result(client, auth_headers):
 async def test_restart_instance_requires_auth(client):
     resp = await client.post(f"/api/v1/adapters/instances/{_MISSING_ID}/restart")
     assert resp.status_code == 401
+
+
+async def test_restart_instance_non_admin_forbidden(client, auth_headers):
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.post(f"/api/v1/adapters/instances/{_MISSING_ID}/restart", headers=user_headers)
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_restart_instance_404(client, auth_headers):
@@ -283,6 +340,19 @@ async def test_update_adapter_config_requires_auth(client):
     assert resp.status_code == 401
 
 
+async def test_update_adapter_config_non_admin_forbidden(client, auth_headers):
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.patch(
+            f"/api/v1/adapters/{_ADAPTER_TYPE}/config",
+            json={"config": {}, "enabled": True},
+            headers=user_headers,
+        )
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 async def test_update_adapter_config_success(client, auth_headers):
     resp = await client.patch(
         f"/api/v1/adapters/{_ADAPTER_TYPE}/config",
@@ -302,3 +372,16 @@ async def test_update_adapter_config_unknown_type_404(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 404
+
+
+async def test_migrate_instance_bindings_non_admin_forbidden(client, auth_headers):
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.post(
+            f"/api/v1/adapters/instances/{_MISSING_ID}/bindings/migrate",
+            json={"target_instance_id": _MISSING_ID},
+            headers=user_headers,
+        )
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)

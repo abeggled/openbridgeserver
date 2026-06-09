@@ -11,12 +11,21 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _adapters: dict[str, type] = {}  # adapter_type → AdapterBase Klasse
 _instances: dict[str, Any] = {}  # instance_id (str) → laufende Instanz
+_BINDING_LOAD_DETAIL_PREFIX = "Invalid adapter bindings skipped"
+
+
+@dataclass(frozen=True)
+class BindingLoadIssue:
+    binding_id: str
+    adapter_instance_id: str | None
+    reason: str
 
 
 # ---------------------------------------------------------------------------
@@ -93,14 +102,14 @@ async def start_all(event_bus: Any, db: Any, value_getter: Any = None) -> None:
                 "SELECT * FROM adapter_bindings WHERE adapter_instance_id=? AND enabled=1",
                 (instance_id,),
             )
-            bindings = [_row_to_binding(r) for r in binding_rows]
-            await instance.reload_bindings(bindings)
+            bindings, issues = await reload_instance_from_rows(instance, binding_rows)
 
             logger.info(
-                "Adapter gestartet: %s '%s' (%d Bindings)",
+                "Adapter gestartet: %s '%s' (%d Bindings, %d invalid skipped)",
                 adapter_type,
                 row["name"],
                 len(bindings),
+                len(issues),
             )
         except Exception:
             logger.exception("Fehler beim Starten von Adapter %s '%s'", adapter_type, row["name"])
@@ -205,14 +214,14 @@ async def restart_instance(instance_id: str, event_bus: Any, db: Any, value_gett
             "SELECT * FROM adapter_bindings WHERE adapter_instance_id=? AND enabled=1",
             (instance_id,),
         )
-        bindings = [_row_to_binding(r) for r in binding_rows]
-        await instance.reload_bindings(bindings)
+        bindings, issues = await reload_instance_from_rows(instance, binding_rows)
 
         logger.info(
-            "Adapter neu gestartet: %s '%s' (%d Bindings)",
+            "Adapter neu gestartet: %s '%s' (%d Bindings, %d invalid skipped)",
             row["adapter_type"],
             row["name"],
             len(bindings),
+            len(issues),
         )
         return instance
     except Exception:
@@ -254,8 +263,7 @@ async def reload_instance_bindings(instance_id: str, db: Any) -> None:
         "SELECT * FROM adapter_bindings WHERE adapter_instance_id=? AND enabled=1",
         (instance_id,),
     )
-    bindings = [_row_to_binding(r) for r in binding_rows]
-    await instance.reload_bindings(bindings)
+    await reload_instance_from_rows(instance, binding_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -291,3 +299,66 @@ def _row_to_binding(row: Any) -> Any:
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
+
+
+def load_valid_bindings(rows: list[Any]) -> tuple[list[Any], list[BindingLoadIssue]]:
+    """Convert DB rows to bindings, skipping malformed rows one-by-one."""
+    bindings: list[Any] = []
+    issues: list[BindingLoadIssue] = []
+    for row in rows:
+        try:
+            bindings.append(_row_to_binding(row))
+        except Exception as exc:
+            issue = BindingLoadIssue(
+                binding_id=_row_value(row, "id") or "<unknown>",
+                adapter_instance_id=_row_value(row, "adapter_instance_id"),
+                reason=f"{type(exc).__name__}: {exc}",
+            )
+            issues.append(issue)
+            logger.error(
+                "Invalid adapter binding skipped: id=%s instance=%s reason=%s",
+                issue.binding_id,
+                issue.adapter_instance_id,
+                issue.reason,
+            )
+    return bindings, issues
+
+
+async def reload_instance_from_rows(instance: Any, rows: list[Any]) -> tuple[list[Any], list[BindingLoadIssue]]:
+    bindings, issues = load_valid_bindings(rows)
+    await instance.reload_bindings(bindings)
+    await _publish_binding_load_status(instance, issues)
+    return bindings, issues
+
+
+async def _publish_binding_load_status(instance: Any, issues: list[BindingLoadIssue]) -> None:
+    if not issues:
+        if getattr(instance, "last_detail", "").startswith(_BINDING_LOAD_DETAIL_PREFIX):
+            await _set_instance_status(instance, "ok", "")
+        return
+
+    detail = _format_binding_load_detail(issues)
+    await _set_instance_status(instance, "warning", detail)
+
+
+def _format_binding_load_detail(issues: list[BindingLoadIssue]) -> str:
+    examples = "; ".join(f"{i.binding_id}: {i.reason}" for i in issues[:3])
+    suffix = f"; +{len(issues) - 3} more" if len(issues) > 3 else ""
+    return f"{_BINDING_LOAD_DETAIL_PREFIX}: {len(issues)} invalid binding(s) skipped ({examples}{suffix})"
+
+
+async def _set_instance_status(instance: Any, severity: str, detail: str) -> None:
+    publish = getattr(instance, "_publish_status", None)
+    if publish is not None:
+        await publish(getattr(instance, "connected", False), detail=detail, severity=severity)
+        return
+    instance._last_severity = severity
+    instance._last_detail = detail
+
+
+def _row_value(row: Any, key: str) -> str | None:
+    try:
+        value = row[key]
+    except Exception:
+        return None
+    return str(value) if value is not None else None

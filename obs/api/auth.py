@@ -26,6 +26,7 @@ import logging
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
@@ -127,19 +128,27 @@ _bearer = HTTPBearer(auto_error=False)
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-async def get_current_user(
+class Principal(BaseModel):
+    subject: str
+    type: Literal["user", "api_key"]
+    is_admin: bool
+
+
+async def get_current_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     api_key: str | None = Depends(_api_key_header),
     db: Database = Depends(lambda: get_db()),
-) -> str:
-    """FastAPI dependency — returns username or raises 401."""
+) -> Principal:
+    """FastAPI dependency — returns authenticated principal or raises 401."""
     if credentials:
-        return decode_token(credentials.credentials)
+        subject = decode_token(credentials.credentials)
+        row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (subject,))
+        return Principal(subject=subject, type="user", is_admin=bool(row and row["is_admin"]))
 
     if api_key:
         key_hash = hash_api_key(api_key)
         row = await db.fetchone(
-            "SELECT COALESCE(NULLIF(owner, ''), name) AS subject FROM api_keys WHERE key_hash=?",
+            "SELECT id FROM api_keys WHERE key_hash=?",
             (key_hash,),
         )
         if not row:
@@ -147,13 +156,30 @@ async def get_current_user(
         # Update last_used_at
         now = datetime.now(UTC).isoformat()
         await db.execute_and_commit("UPDATE api_keys SET last_used_at=? WHERE key_hash=?", (now, key_hash))
-        return row["subject"]
+        try:
+            api_key_id = row["id"]
+        except (IndexError, KeyError):
+            api_key_id = None
+        if api_key_id is not None:
+            return Principal(subject=f"api_key:{api_key_id}", type="api_key", is_admin=False)
+
+        return Principal(subject=str(row["subject"]), type="api_key", is_admin=False)
 
     raise HTTPException(
         status.HTTP_401_UNAUTHORIZED,
         "Provide Authorization: Bearer {token} or X-API-Key: {key}",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    api_key: str | None = Depends(_api_key_header),
+    db: Database = Depends(lambda: get_db()),
+) -> str:
+    """FastAPI compatibility dependency — returns principal subject."""
+    principal = await get_current_principal(credentials, api_key, db)
+    return principal.subject
 
 
 async def optional_current_user(
@@ -169,14 +195,24 @@ async def optional_current_user(
 
 
 async def get_admin_user(
-    current_user: str = Depends(get_current_user),
+    principal: Principal = Depends(get_current_principal),
+    current_user: str | None = None,
     db: Database = Depends(lambda: get_db()),
 ) -> str:
     """FastAPI dependency — returns username or raises 403 if not admin."""
-    row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (current_user,))
-    if not row or not row["is_admin"]:
+    if isinstance(principal, Principal):
+        if principal.type != "user" or not principal.is_admin:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
+        return principal.subject
+
+    if current_user is not None:
+        row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (current_user,))
+        if row and row["is_admin"]:
+            return current_user
+
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
-    return current_user
+
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
 
 
 # ---------------------------------------------------------------------------
