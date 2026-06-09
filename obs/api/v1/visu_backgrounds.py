@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.config import get_settings
 
 router = APIRouter(tags=["visu", "backgrounds"])
@@ -139,7 +139,7 @@ async def list_backgrounds(_user: str = Depends(get_current_user)) -> Background
 @router.post("/import", response_model=ImportResult)
 async def import_backgrounds(
     files: list[UploadFile] = File(...),
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> ImportResult:
     if not files:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Keine Dateien empfangen")

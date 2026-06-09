@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
 from obs.models.binding import (
@@ -130,7 +130,7 @@ async def list_bindings(
 async def create_binding(
     dp_id: uuid.UUID,
     body: AdapterBindingCreate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> BindingOut:
     if get_registry().get(dp_id) is None:
@@ -205,7 +205,7 @@ async def update_binding(
     dp_id: uuid.UUID,
     binding_id: uuid.UUID,
     body: AdapterBindingUpdate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> BindingOut:
     row = await db.fetchone(
@@ -271,7 +271,7 @@ async def update_binding(
 async def delete_binding(
     dp_id: uuid.UUID,
     binding_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
     row = await db.fetchone(

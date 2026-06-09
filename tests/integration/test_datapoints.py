@@ -13,6 +13,8 @@ Covers:
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from tests.integration.conftest import (
@@ -47,6 +49,25 @@ async def _create_dp(client, auth_headers, payload: dict | None = None) -> dict:
     return resp.json()
 
 
+async def _create_non_admin_user_and_headers(client, auth_headers, username: str, password: str) -> dict:
+    resp = await client.post(
+        "/api/v1/auth/users",
+        json={
+            "username": username,
+            "password": password,
+            "is_admin": False,
+            "mqtt_enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+    from obs.api.auth import create_access_token
+
+    token = create_access_token(username)
+    return {"Authorization": f"Bearer {token}"}
+
+
 # ---------------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------------
@@ -69,6 +90,20 @@ async def test_create_datapoint_unknown_type_returns_422(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 422
+
+
+async def test_create_datapoint_non_admin_forbidden(client, auth_headers):
+    username = f"dp-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        resp = await client.post(
+            "/api/v1/datapoints/",
+            json={**_DP_PAYLOAD, "name": "non-admin-create"},
+            headers=user_headers,
+        )
+        assert resp.status_code == 403, resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +234,22 @@ async def test_update_datapoint_name(client, auth_headers):
     assert get_resp.json()["name"] == "After-Update"
 
 
+async def test_update_datapoint_non_admin_forbidden(client, auth_headers):
+    created = await _create_dp(client, auth_headers, {**_DP_PAYLOAD, "name": "Before-Update-NA"})
+    dp_id = created["id"]
+    username = f"dp-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        patch_resp = await client.patch(
+            f"/api/v1/datapoints/{dp_id}",
+            json={"name": "After-Update-NA"},
+            headers=user_headers,
+        )
+        assert patch_resp.status_code == 403, patch_resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 # ---------------------------------------------------------------------------
 # Delete
 # ---------------------------------------------------------------------------
@@ -213,6 +264,18 @@ async def test_delete_datapoint_and_verify_404(client, auth_headers):
 
     get_resp = await client.get(f"/api/v1/datapoints/{dp_id}", headers=auth_headers)
     assert get_resp.status_code == 404
+
+
+async def test_delete_datapoint_non_admin_forbidden(client, auth_headers):
+    created = await _create_dp(client, auth_headers, {**_DP_PAYLOAD, "name": "To-Delete-NA"})
+    dp_id = created["id"]
+    username = f"dp-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        del_resp = await client.delete(f"/api/v1/datapoints/{dp_id}", headers=user_headers)
+        assert del_resp.status_code == 403, del_resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 # ---------------------------------------------------------------------------

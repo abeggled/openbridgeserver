@@ -22,7 +22,11 @@ Covers:
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
+
+from obs.api.auth import create_access_token
 
 pytestmark = pytest.mark.integration
 
@@ -60,6 +64,17 @@ async def _create_dp(client, auth_headers, name="TestDP") -> dict:
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+async def _create_non_admin_headers(client, auth_headers) -> tuple[str, dict]:
+    username = f"hier-user-{uuid.uuid4().hex[:8]}"
+    resp = await client.post(
+        "/api/v1/auth/users",
+        json={"username": username, "password": "TestPass123!", "is_admin": False},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return username, {"Authorization": f"Bearer {create_access_token(username)}"}
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +358,36 @@ async def test_import_from_ets_groups_mode(client, auth_headers):
     resp3 = await client.get(f"/api/v1/hierarchy/trees/{body['tree_id']}/nodes", headers=auth_headers)
     roots = resp3.json()
     assert len(roots) == 2  # Hauptgruppe 1 + 2
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "json_body", "params"),
+    [
+        ("post", "/api/v1/hierarchy/trees", {"name": "T", "description": ""}, None),
+        ("put", "/api/v1/hierarchy/trees/does-not-exist", {"name": "U"}, None),
+        ("delete", "/api/v1/hierarchy/trees/does-not-exist", None, None),
+        ("post", "/api/v1/hierarchy/nodes", {"tree_id": "does-not-exist", "name": "N"}, None),
+        ("put", "/api/v1/hierarchy/nodes/does-not-exist", {"name": "U"}, None),
+        ("put", "/api/v1/hierarchy/nodes/does-not-exist/move", {"new_parent_id": None, "new_order": 0}, None),
+        ("delete", "/api/v1/hierarchy/nodes/does-not-exist", None, None),
+        ("post", "/api/v1/hierarchy/links", {"node_id": "x", "datapoint_id": "y"}, None),
+        ("delete", "/api/v1/hierarchy/links", None, {"node_id": "x", "datapoint_id": "y"}),
+        ("post", "/api/v1/hierarchy/import-from-ets", {"tree_name": "ETS", "mode": "groups"}, None),
+    ],
+)
+async def test_mutating_hierarchy_endpoints_non_admin_forbidden(client, auth_headers, method, path, json_body, params):
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.request(
+            method,
+            path,
+            json=json_body,
+            params=params,
+            headers=user_headers,
+        )
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 # ---------------------------------------------------------------------------

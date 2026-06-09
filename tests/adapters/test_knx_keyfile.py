@@ -22,10 +22,10 @@ from obs.api.v1.knxkeyfile import router
 
 
 def _create_test_app() -> FastAPI:
-    from obs.api.auth import get_current_user
+    from obs.api.auth import get_admin_user
 
     app = FastAPI()
-    app.dependency_overrides[get_current_user] = lambda: "testuser"
+    app.dependency_overrides[get_admin_user] = lambda: "admin-testuser"
     app.include_router(router, prefix="/knx")
     return app
 

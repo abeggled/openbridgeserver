@@ -29,7 +29,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.knxproj.csv_parser import parse_ga_csv
 from obs.knxproj.parser import (
@@ -401,7 +401,7 @@ async def import_knxproj_file(
         description="Adapter-Instanzname — wenn angegeben, werden DataPoints und Bindings angelegt",
     ),
     direction: str = Query("SOURCE", pattern="^(SOURCE|DEST|BOTH)$", description="Verknüpfungsrichtung"),
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> ImportResult:
     """.knxproj Datei hochladen und Gruppenadressen in die DB importieren.
@@ -620,7 +620,7 @@ async def import_ga_csv_file(
         description="Adapter-Instanzname — wenn angegeben, werden DataPoints und Bindings angelegt",
     ),
     direction: str = Query("SOURCE", pattern="^(SOURCE|DEST|BOTH)$", description="Verknüpfungsrichtung"),
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> ImportResult:
     """ETS GA-CSV hochladen.

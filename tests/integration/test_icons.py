@@ -200,7 +200,7 @@ async def test_import_invalid_zip(client, auth_headers, icons_tmp):
 
 
 @pytest.mark.asyncio
-async def test_import_svg_with_admin_api_key(client, auth_headers, icons_tmp):
+async def test_import_svg_with_admin_api_key_forbidden_on_admin_only_endpoint(client, auth_headers, icons_tmp):
     create_key = await client.post(
         "/api/v1/auth/apikeys",
         headers=auth_headers,
@@ -214,8 +214,8 @@ async def test_import_svg_with_admin_api_key(client, auth_headers, icons_tmp):
         headers={"X-API-Key": api_key},
         files=[("files", ("home.svg", _MINIMAL_SVG, "image/svg+xml"))],
     )
-    assert resp.status_code == 200, resp.text
-    assert (icons_tmp / "home.svg").exists()
+    assert resp.status_code == 403, resp.text
+    assert not (icons_tmp / "home.svg").exists()
 
 
 @pytest.mark.asyncio
@@ -235,8 +235,33 @@ async def test_import_svg_with_non_admin_user(client, auth_headers, icons_tmp):
             headers=user_headers,
             files=[("files", ("user-icon.svg", _MINIMAL_SVG, "image/svg+xml"))],
         )
-        assert resp.status_code == 200, resp.text
-        assert (icons_tmp / "user-icon.svg").exists()
+        assert resp.status_code == 403, resp.text
+        assert not (icons_tmp / "user-icon.svg").exists()
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
+@pytest.mark.asyncio
+async def test_delete_icons_with_non_admin_user_forbidden(client, auth_headers, icons_tmp):
+    username = f"icons-del-user-{uuid.uuid4().hex[:8]}"
+    password = "pw-12345678"
+    create_user = await client.post(
+        "/api/v1/auth/users",
+        headers=auth_headers,
+        json={"username": username, "password": password, "is_admin": False},
+    )
+    assert create_user.status_code == 201, create_user.text
+    try:
+        (icons_tmp / "home.svg").write_bytes(_MINIMAL_SVG)
+        user_headers = {"Authorization": f"Bearer {create_access_token(username)}"}
+        resp = await client.request(
+            "DELETE",
+            "/api/v1/icons/",
+            headers=user_headers,
+            json={"names": ["home"]},
+        )
+        assert resp.status_code == 403, resp.text
+        assert (icons_tmp / "home.svg").exists()
     finally:
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
@@ -452,3 +477,25 @@ async def test_fontawesome_import_empty_list(client, auth_headers, icons_tmp):
         json={"icons": [], "style": "solid"},
     )
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_fontawesome_import_with_non_admin_user_forbidden(client, auth_headers, icons_tmp):
+    username = f"icons-fa-user-{uuid.uuid4().hex[:8]}"
+    password = "pw-12345678"
+    create_user = await client.post(
+        "/api/v1/auth/users",
+        headers=auth_headers,
+        json={"username": username, "password": password, "is_admin": False},
+    )
+    assert create_user.status_code == 201, create_user.text
+    try:
+        user_headers = {"Authorization": f"Bearer {create_access_token(username)}"}
+        resp = await client.post(
+            "/api/v1/icons/fontawesome",
+            headers=user_headers,
+            json={"icons": ["home"], "style": "solid"},
+        )
+        assert resp.status_code == 403, resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)

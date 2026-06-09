@@ -10,6 +10,7 @@ Verifies that:
 from __future__ import annotations
 
 import time
+import uuid
 
 import pytest
 
@@ -40,6 +41,25 @@ async def _patch_graph(client, auth_headers, graph_id: str, payload: dict) -> di
 
 async def _cleanup(client, auth_headers, graph_id: str) -> None:
     await client.delete(f"/api/v1/logic/graphs/{graph_id}", headers=auth_headers)
+
+
+async def _create_non_admin_user_and_headers(client, auth_headers, username: str, password: str) -> dict:
+    resp = await client.post(
+        "/api/v1/auth/users",
+        json={
+            "username": username,
+            "password": password,
+            "is_admin": False,
+            "mqtt_enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+    from obs.api.auth import create_access_token
+
+    token = create_access_token(username)
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.mark.asyncio
@@ -162,3 +182,22 @@ async def test_list_graphs_includes_enabled_field(client, auth_headers):
         assert target["enabled"] is False
     finally:
         await _cleanup(client, auth_headers, graph_id)
+
+
+@pytest.mark.asyncio
+async def test_patch_enabled_non_admin_forbidden(client, auth_headers):
+    ts = time.time()
+    graph = await _create_graph(client, auth_headers, f"IT-Toggle-NonAdmin-{ts}")
+    graph_id = graph["id"]
+    username = f"logic-toggle-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        resp = await client.patch(
+            f"/api/v1/logic/graphs/{graph_id}",
+            json={"enabled": False},
+            headers=user_headers,
+        )
+        assert resp.status_code == 403, resp.text
+    finally:
+        await _cleanup(client, auth_headers, graph_id)
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)

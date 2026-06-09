@@ -18,7 +18,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, field_serializer
 
-from obs.api.auth import get_current_user, optional_current_user
+from obs.api.auth import get_admin_user, get_current_user, optional_current_user
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config
 from obs.api.v1.sessions import validate_session
 from obs.core.event_bus import DataValueEvent, get_event_bus
@@ -224,7 +224,7 @@ async def list_datapoints(
 @router.post("/", response_model=DataPointOut, status_code=status.HTTP_201_CREATED)
 async def create_datapoint(
     body: DataPointCreate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> DataPointOut:
     from obs.models.types import DataTypeRegistry
 
@@ -253,7 +253,7 @@ async def get_datapoint(
 async def update_datapoint(
     dp_id: uuid.UUID,
     body: DataPointUpdate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> DataPointOut:
     reg = get_registry()
     current_dp = reg.get(dp_id)
@@ -305,7 +305,7 @@ async def update_datapoint(
 @router.delete("/{dp_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_datapoint(
     dp_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> None:
     reg = get_registry()
     if reg.get(dp_id) is None:
