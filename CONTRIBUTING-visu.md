@@ -70,6 +70,26 @@ Upstream-PR mergebar.
 - Jede Formänderung am Vertrag = Semver-Bump + `CHANGELOG.md`. Bricht ein Skin, wird seine
   Fixture-Wand rot — das ist gewollt.
 
+### Dev-Link (M2)
+
+Während M2 hängen App, Skin und Vertrag über lokale `link:`-Pfade zusammen (kein npm-publish).
+Beide Repos kennen einander nicht (Entkopplung, ARCHITECTURE.md §1) — der Link ist reines
+Entwicklungs-Tooling, kein Vertragsbestandteil. Die beiden cross-repo Links:
+
+- **App → Ionic-Skin** (in `apps/visu/package.json`):
+  `"@obs-visu-skins/ionic": "link:/Volumes/Daten/Projekte/openbridge/obs-visu-skins/packages/skins/ionic"`
+- **Ionic-Skin → Vertrag** (in `obs-visu-skins/packages/skins/ionic/package.json`):
+  `"@obs/visu-contract": "link:/Volumes/Daten/Projekte/openbridge/openbridgeserver-visu-integrate/packages/contract"`
+
+Auflösen mit `pnpm install` im jeweiligen Repo-Root; danach erreicht die App den Skin und der
+Skin den Vertrag über die Symlink-Kette. Verifiziert per Vitest
+(`apps/visu/tests/ionic-skin-link.test.ts`): Manifest-Form + `targetsContract`.
+
+> **Bei Release auf publizierte Versionen umstellen:** Die absoluten `link:`-Pfade werden durch
+> die veröffentlichten npm-Versionen ersetzt (`@obs/visu-contract`: `^x.y.z`,
+> `@obs-visu-skins/ionic`: `^x.y.z`). Absolute Pfade sind maschinengebunden und dürfen nie in
+> einen Release-Stand sickern.
+
 ## CI-Gates
 
 - **Fork:** `lint`, `typecheck`, `build`, **Vitest** (Pflicht bei GUI-Änderungen),

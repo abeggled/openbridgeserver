@@ -41,6 +41,9 @@ importers:
       '@ionic/vue-router':
         specifier: ^8.4.0
         version: 8.8.9(@stencil/core@4.43.5)(vue-router@4.6.4(vue@3.5.35(typescript@5.9.3)))(vue@3.5.35(typescript@5.9.3))
+      '@obs-visu-skins/ionic':
+        specifier: link:/Volumes/Daten/Projekte/openbridge/obs-visu-skins/packages/skins/ionic
+        version: link:../../../obs-visu-skins/packages/skins/ionic
       '@obs/visu-contract':
         specifier: workspace:*
         version: link:../../packages/contract
