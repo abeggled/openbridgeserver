@@ -628,7 +628,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (2, _MIGRATION_V2),
     (3, _MIGRATION_V3),
     (4, _MIGRATION_V4),
-    (5, _MIGRATION_V5),
+    (5, _migration_v5),
     (6, _MIGRATION_V6),
     (7, _MIGRATION_V7),
     (8, _MIGRATION_V8),
@@ -657,11 +657,11 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     # is consolidated into V32 below. Version numbers 30 and 31 are deliberately
     # skipped so fresh DBs jump 29→32, while epic dev DBs at schema_version=31
     # see V32 as the next applicable migration.
-    (32, _MIGRATION_V32),
-    (33, _MIGRATION_V33),
+    (32, _migration_v32),
+    (33, _migration_v33),
     (34, _MIGRATION_V34),
     (35, _MIGRATION_V35),
-    (36, _MIGRATION_V36),
+    (36, _migration_v36),
 ]
 
 

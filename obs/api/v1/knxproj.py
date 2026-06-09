@@ -29,7 +29,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
 from obs.db.database import Database, get_db
 from obs.knxproj.csv_parser import parse_ga_csv
@@ -535,7 +535,7 @@ async def import_knxproj_file(
         True,
         description="Bestehende automatisch erzeugte ETS-Hierarchien desselben Modus vor der Neuerzeugung ersetzen",
     ),
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> ImportResult:
     """.knxproj Datei hochladen und Gruppenadressen in die DB importieren.
@@ -621,6 +621,12 @@ async def import_knxproj_file(
         [(r.address, r.name, r.description, r.dpt, r.main_group_name, r.mid_group_name, now) for r in records],
     )
     await db.commit()
+
+    try:
+        await _import_knx_devices_and_comm_objects(file_bytes=content, password=pwd, db=db, now=now)
+    except Exception as e:
+        await db.conn.rollback()
+        logger.warning("KNX-Geräte-Import fehlgeschlagen (wird ignoriert): %s", e)
 
     # Import Gebäude/Gewerke structure — already parsed in parallel above
     locations_count = 0
