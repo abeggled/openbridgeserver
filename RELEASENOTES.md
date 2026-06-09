@@ -7,6 +7,7 @@
 ### New features ✨
 * Backend: ETS hierarchy import logic is now available as a reusable backend service while keeping `POST /api/v1/hierarchy/import-from-ets` behavior unchanged. This prepares the KNX project import to create selected ETS hierarchies in the same import flow. https://github.com/abeggled/openbridgeserver/issues/727
 * Backend: `.knxproj` imports can now create selected ETS hierarchies in the same backend request, reporting per-hierarchy node/link counts and non-fatal failures for unavailable ETS data. https://github.com/abeggled/openbridgeserver/issues/728
+* Admin GUI: `.knxproj` imports now offer hierarchy creation for topology, buildings/rooms, and trades in the same import flow, including per-hierarchy result feedback and optional auto-linking to created objects. https://github.com/abeggled/openbridgeserver/issues/729
 
 ### Fixes 🐞
 * none

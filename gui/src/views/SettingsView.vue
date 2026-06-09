@@ -671,6 +671,32 @@
             </div>
           </div>
 
+          <div class="form-group">
+            <label class="label">{{ $t('settings.importexport.knxHierarchyTitle') }}</label>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <label
+                v-for="option in knxHierarchyOptions"
+                :key="option.mode"
+                class="flex items-center gap-2 rounded border border-slate-700/70 px-3 py-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer select-none">
+                <input type="checkbox" v-model="knxHierarchyModes[option.mode]" class="w-4 h-4 rounded accent-blue-500" />
+                <span>{{ $t(option.labelKey) }}</span>
+              </label>
+            </div>
+            <p class="text-xs text-slate-500 mt-1">{{ $t('settings.importexport.knxHierarchyHint') }}</p>
+          </div>
+
+          <label
+            class="flex items-center gap-2 select-none mt-1"
+            :class="knxCreateDps ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'">
+            <input
+              type="checkbox"
+              v-model="knxHierarchyAutoLink"
+              :disabled="!knxCreateDps"
+              class="w-4 h-4 rounded accent-blue-500" />
+            <span class="text-sm text-slate-600 dark:text-slate-300">{{ $t('settings.importexport.knxHierarchyAutoLink') }}</span>
+          </label>
+          <p v-if="!knxCreateDps" class="text-xs text-slate-500 -mt-1">{{ $t('settings.importexport.knxHierarchyAutoLinkHint') }}</p>
+
           <div class="flex items-center gap-3">
             <button @click="doKnxImport" class="btn-primary btn-sm"
               :disabled="!knxFile || knxImporting || (knxCreateDps && !knxAdapterName)">
@@ -680,7 +706,19 @@
           </div>
         </div>
         <div v-if="knxResult" :class="['p-3 rounded-lg text-sm', knxResult.ok ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30']">
-          {{ knxResult.text }}
+          <p>{{ knxResult.text }}</p>
+          <ul v-if="knxResult.hierarchies?.length" class="mt-2 space-y-1 text-xs">
+            <li
+              v-for="hierarchy in knxResult.hierarchies"
+              :key="hierarchy.mode"
+              class="flex flex-col gap-0.5 rounded bg-black/10 px-2 py-1.5 text-slate-700 dark:text-slate-200">
+              <span class="font-medium">
+                {{ knxHierarchyModeLabel(hierarchy.mode) }}:
+                {{ knxHierarchyStatusLabel(hierarchy) }}
+              </span>
+              <span>{{ knxHierarchyResultDetails(hierarchy) }}</span>
+            </li>
+          </ul>
         </div>
       </div>
     </div>
@@ -2229,6 +2267,17 @@ const knxCreateDps        = ref(false)
 const knxAdapterName      = ref('')
 const knxDirection        = ref('SOURCE')
 const knxAdapterInstances = ref([])
+const knxHierarchyOptions = [
+  { mode: 'groups',    labelKey: 'settings.importexport.knxHierarchyTopology'  },
+  { mode: 'buildings', labelKey: 'settings.importexport.knxHierarchyBuildings' },
+  { mode: 'trades',    labelKey: 'settings.importexport.knxHierarchyTrades'    },
+]
+const knxHierarchyModes = reactive({
+  groups: true,
+  buildings: true,
+  trades: true,
+})
+const knxHierarchyAutoLink = ref(true)
 
 async function loadKnxGaCount() {
   try {
@@ -2252,6 +2301,33 @@ function onKnxprojFile(e) {
   knxResult.value = null
 }
 
+function selectedKnxHierarchyModes() {
+  return knxHierarchyOptions
+    .filter(option => knxHierarchyModes[option.mode])
+    .map(option => option.mode)
+}
+
+function knxHierarchyModeLabel(mode) {
+  const key = `settings.importexport.knxHierarchyMode_${mode}`
+  return te(key) ? t(key) : mode
+}
+
+function knxHierarchyStatusLabel(result) {
+  return result?.status === 'created'
+    ? t('settings.importexport.knxHierarchyStatusCreated')
+    : t('settings.importexport.knxHierarchyStatusSkipped')
+}
+
+function knxHierarchyResultDetails(result) {
+  if (result?.status === 'created') {
+    return t('settings.importexport.knxHierarchyResultCounts', {
+      nodes: result.nodes_created ?? 0,
+      links: result.links_created ?? 0,
+    })
+  }
+  return result?.message || t('settings.importexport.knxHierarchyResultSkipped')
+}
+
 async function doKnxImport() {
   if (!knxFile.value) return
   knxImporting.value = true
@@ -2265,13 +2341,18 @@ async function doKnxImport() {
       params.adapter_name = knxAdapterName.value
       params.direction    = knxDirection.value
     }
+    const hierarchyModes = selectedKnxHierarchyModes()
+    if (hierarchyModes.length > 0) {
+      params.hierarchy_modes = hierarchyModes.join(',')
+      params.hierarchy_auto_link = knxCreateDps.value && knxHierarchyAutoLink.value
+    }
     const { data } = await knxprojApi.import(fd, params)
     let msg = t('settings.importexport.knxImportResultOk', { n: data.imported })
     if (data.created  > 0) msg += t('settings.importexport.knxImportResultCreated',   { n: data.created })
     if (data.updated  > 0) msg += t('settings.importexport.knxImportResultUpdated',   { n: data.updated })
     if (data.locations > 0) msg += t('settings.importexport.knxImportResultLocations', { n: data.locations })
     if (data.trades   > 0) msg += t('settings.importexport.knxImportResultTrades',    { n: data.trades })
-    knxResult.value = { ok: true, text: msg }
+    knxResult.value = { ok: true, text: msg, hierarchies: Array.isArray(data.hierarchies) ? data.hierarchies : [] }
     await loadKnxGaCount()
   } catch (err) {
     const resp = err.response?.data
