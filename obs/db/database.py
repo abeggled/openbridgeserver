@@ -468,7 +468,7 @@ CREATE INDEX IF NOT EXISTS idx_knx_space_device_device ON knx_space_device_links
 """
 
 
-async def _migration_v34(conn: aiosqlite.Connection) -> None:
+async def _migration_v36(conn: aiosqlite.Connection) -> None:
     try:
         await conn.execute("ALTER TABLE hierarchy_trees ADD COLUMN source TEXT NOT NULL DEFAULT ''")
     except aiosqlite.OperationalError as exc:
@@ -659,7 +659,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     # see V32 as the next applicable migration.
     (32, _migration_v32),
     (33, _migration_v33),
-    (34, _MIGRATION_V34),
+    (36, _migration_v36),
     (35, _MIGRATION_V35),
 ]
 
