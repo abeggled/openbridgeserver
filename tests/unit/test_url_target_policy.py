@@ -42,6 +42,24 @@ def test_private_ip_is_blocked_without_allowlist(tmp_path):
     assert decision.suggested_target == "10.38.113.23/32"
 
 
+def test_private_ip_can_be_allowed_for_authenticated_weather_mode(tmp_path):
+    override_settings(_settings_for(tmp_path / "allow.yaml"))
+
+    decision = evaluate_url_target("http://10.38.113.23/api/v1/status", allow_private_networks=True)
+
+    assert decision.allowed is True
+    assert decision.resolved_ips == ["10.38.113.23"]
+
+
+def test_allow_private_networks_does_not_allow_link_local_targets(tmp_path):
+    override_settings(_settings_for(tmp_path / "allow.yaml"))
+
+    decision = evaluate_url_target("http://169.254.169.254/latest/meta-data/", allow_private_networks=True)
+
+    assert decision.allowed is False
+    assert decision.blocked_ips == ["169.254.169.254"]
+
+
 def test_private_ip_is_allowed_by_yaml_allowlist(tmp_path):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
     add_allowed_url_target("10.38.113.23", reason="internal test target", created_by="admin")

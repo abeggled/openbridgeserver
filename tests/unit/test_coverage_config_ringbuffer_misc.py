@@ -1030,6 +1030,12 @@ async def test_factory_reset_counts_rows(monkeypatch):
     assert result.datapoints_deleted == 10
     assert result.bindings_deleted == 5
     assert result.logic_graphs_deleted == 3
+    committed_sql = [query for query, _params in db.committed]
+    assert "DELETE FROM knx_space_device_links" in committed_sql
+    assert "DELETE FROM knx_co_ga_links" in committed_sql
+    assert "DELETE FROM knx_comm_objects" in committed_sql
+    assert "DELETE FROM knx_devices" in committed_sql
+    assert committed_sql.index("DELETE FROM knx_devices") < committed_sql.index("DELETE FROM knx_group_addresses")
 
 
 @pytest.mark.asyncio

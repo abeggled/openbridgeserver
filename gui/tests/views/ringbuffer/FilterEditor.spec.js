@@ -35,6 +35,7 @@ afterEach(() => {
   vi.doUnmock('@/components/ui/TagCombobox.vue')
   vi.doUnmock('@/components/ui/AdapterCombobox.vue')
   vi.doUnmock('@/stores/datapoints')
+  vi.doUnmock('@/stores/auth')
 })
 
 function makeRingbufferApi(overrides = {}) {
@@ -75,6 +76,7 @@ function makeSampleSet(overrides = {}) {
     filter: {
       hierarchy_nodes: [],
       datapoints: ['dp-1', 'dp-2'],
+      devices: [],
       tags: ['heizung'],
       adapters: ['knx'],
       q: 'temp',
@@ -163,6 +165,12 @@ async function mountEditor({ props = {}, ringbufferApi, searchApi, hierarchyApi,
     ringbufferApi,
     searchApi,
     hierarchyApi,
+  }))
+  vi.doMock('@/stores/auth', () => ({
+    useAuthStore: () => ({
+      isAdmin: true,
+      username: 'test-user',
+    }),
   }))
 
   // Passthrough modal: always render slot + footer.
@@ -440,6 +448,7 @@ describe('FilterEditor (#436)', () => {
     expect(payload.filter).toMatchObject({
       hierarchy_nodes: [],
       datapoints: [],
+      devices: [],
       tags: [],
       adapters: [],
       q: 'xyz',
@@ -835,6 +844,41 @@ describe('FilterEditor (#436)', () => {
       { tree_id: 't1', node_id: 'n1', include_descendants: true },
       { tree_id: 't1', node_id: 'n2', include_descendants: true },
     ])
+  })
+
+  it('serialises device physical addresses into filter.devices', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi, leaveEmpty: true })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('Mit Device-Filter')
+    await wrapper.find('[data-testid="filter-editor-devices"]').setValue('1.1.10, 1.1.11  1.1.10')
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+    const payload = ringbufferApi.createFilterset.mock.calls[0][0]
+    expect(payload.filter.devices).toEqual(['1.1.10', '1.1.11'])
+  })
+
+  it('hydrates existing filter.devices and roundtrips them on update', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({
+        data: makeSampleSet({
+          filter: {
+            hierarchy_nodes: [],
+            datapoints: [],
+            devices: ['1.2.3', '1.2.4'],
+            tags: ['heizung'],
+            adapters: ['knx'],
+            q: null,
+            value_filter: null,
+          },
+        }),
+      }),
+    })
+    const { wrapper } = await mountEditor({ props: { setId: 'fs-1' }, ringbufferApi })
+    expect(wrapper.find('[data-testid="filter-editor-devices"]').element.value).toBe('1.2.3, 1.2.4')
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+    const payload = ringbufferApi.updateFilterset.mock.calls[0][1]
+    expect(payload.filter.devices).toEqual(['1.2.3', '1.2.4'])
   })
 
   it('hierarchy expand error path surfaces a message and keeps the chip', async () => {

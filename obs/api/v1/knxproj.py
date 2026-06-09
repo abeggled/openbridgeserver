@@ -30,9 +30,15 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from obs.api.auth import get_current_user
+from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
 from obs.db.database import Database, get_db
 from obs.knxproj.csv_parser import parse_ga_csv
-from obs.knxproj.parser import parse_knxproj, parse_knxproj_locations, parse_knxproj_trades
+from obs.knxproj.parser import (
+    parse_knxproj,
+    parse_knxproj_devices,
+    parse_knxproj_locations,
+    parse_knxproj_trades,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["knxproj"])
@@ -43,6 +49,25 @@ router = APIRouter(tags=["knxproj"])
 # ---------------------------------------------------------------------------
 
 
+_HIERARCHY_MODE_NAMES = {
+    "groups": "ETS Gruppenadressen",
+    "mid": "ETS Haupt- und Mittelgruppen",
+    "flat": "ETS Gruppenadressen flach",
+    "buildings": "ETS Gebäude und Räume",
+    "trades": "ETS Gewerke",
+}
+
+
+class HierarchyImportResult(BaseModel):
+    mode: str
+    status: str
+    tree_id: str | None = None
+    tree_name: str | None = None
+    nodes_created: int = 0
+    links_created: int = 0
+    message: str
+
+
 class ImportResult(BaseModel):
     imported: int
     created: int = 0
@@ -50,6 +75,7 @@ class ImportResult(BaseModel):
     locations: int = 0
     functions: int = 0
     trades: int = 0
+    hierarchies: list[HierarchyImportResult] = []
     message: str
 
 
@@ -64,6 +90,35 @@ class GroupAddressOut(BaseModel):
 class GroupAddressPage(BaseModel):
     total: int
     items: list[GroupAddressOut]
+
+
+class KnxCommObjectOut(BaseModel):
+    id: str
+    number: str
+    name: str
+    datapoint_type: str
+    ga_addresses: list[str]
+
+
+class KnxDeviceOut(BaseModel):
+    pa: str
+    name: str
+    manufacturer: str
+    order_number: str
+    app_ref: str
+    imported_at: str
+
+
+class KnxDeviceDetailOut(KnxDeviceOut):
+    comm_objects: list[KnxCommObjectOut]
+
+
+class KnxDevicePage(BaseModel):
+    items: list[KnxDeviceOut]
+    total: int
+    page: int
+    size: int
+    pages: int
 
 
 # ---------------------------------------------------------------------------
@@ -230,24 +285,227 @@ async def _bulk_import_datapoints(
 
     # --- Adapter-Instanz neu laden ---
     try:
-        from obs.adapters.registry import _row_to_binding, get_instance_by_id
+        from obs.adapters.registry import reload_instance_bindings
 
-        adapter_instance = get_instance_by_id(adapter_instance_id)
-        if adapter_instance:
-            binding_rows = await db.fetchall(
-                "SELECT * FROM adapter_bindings WHERE adapter_instance_id=? AND enabled=1",
-                (adapter_instance_id,),
-            )
-            await adapter_instance.reload_bindings([_row_to_binding(r) for r in binding_rows])
+        await reload_instance_bindings(adapter_instance_id, db)
     except Exception:
         pass  # Adapter nicht geladen — kein Fehler
 
     return len(dp_inserts), len(dp_updates)
 
 
+async def _knx_device_schema_ready(db: Database) -> bool:
+    row = await db.fetchone(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='knx_devices'",
+    )
+    return row is not None
+
+
+def _device_out_from_row(row: Any) -> KnxDeviceOut:
+    return KnxDeviceOut(
+        pa=row["pa"],
+        name=row["name"] or "",
+        manufacturer=row["manufacturer"] or "",
+        order_number=row["order_number"] or "",
+        app_ref=row["app_ref"] or "",
+        imported_at=row["imported_at"],
+    )
+
+
+async def _import_knx_devices_and_comm_objects(
+    *,
+    file_bytes: bytes,
+    password: str | None,
+    db: Database,
+    now: str,
+) -> tuple[int, int]:
+    """Import devices + comm objects from .knxproj into V34 schema.
+
+    The import is intentionally tolerant: when device parsing fails we keep the
+    existing GA/location/function/trade import path functional.
+    """
+    if not await _knx_device_schema_ready(db):
+        return 0, 0
+
+    devices, comm_objects, co_ga_links = parse_knxproj_devices(file_bytes, password)
+
+    # Keep the latest project snapshot deterministic: tables mirror the current
+    # imported .knxproj payload.
+    await db.execute("DELETE FROM knx_co_ga_links")
+    await db.execute("DELETE FROM knx_comm_objects")
+    await db.execute("DELETE FROM knx_space_device_links")
+    await db.execute("DELETE FROM knx_devices")
+
+    if devices:
+        await db.executemany(
+            """INSERT INTO knx_devices
+                   (id, individual_address, name, description, product_name, product_refid, hardware2program_refid, imported_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    d.identifier,
+                    d.individual_address,
+                    d.name,
+                    d.description,
+                    d.manufacturer_name,
+                    d.order_number,
+                    d.application or "",
+                    now,
+                )
+                for d in devices
+                if d.identifier and d.individual_address
+            ],
+        )
+
+    device_id_by_pa = {d.individual_address: d.identifier for d in devices if d.individual_address and d.identifier}
+    imported_comm_ids: set[str] = set()
+    comm_rows: list[tuple[str, str, str, str, str, str, str, str]] = []
+    for co in comm_objects:
+        if not co.identifier:
+            continue
+        device_id = device_id_by_pa.get(co.device_address)
+        if not device_id:
+            continue
+        imported_comm_ids.add(co.identifier)
+        comm_rows.append(
+            (
+                co.identifier,
+                device_id,
+                str(co.number),
+                co.name,
+                co.text,
+                co.function_text,
+                ",".join(co.dpts),
+                now,
+            )
+        )
+
+    if comm_rows:
+        await db.executemany(
+            """INSERT INTO knx_comm_objects
+                   (id, device_id, number, name, text, function_text, datapoint_type, imported_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            comm_rows,
+        )
+
+    link_rows: list[tuple[str, str]] = []
+    for link in co_ga_links:
+        if link.comm_object_id in imported_comm_ids and link.ga_address:
+            link_rows.append((link.comm_object_id, link.ga_address))
+
+    if link_rows:
+        # Ensure FK target exists even if a downstream tool inserted links first.
+        await db.executemany(
+            "INSERT OR IGNORE INTO knx_group_addresses (address) VALUES (?)",
+            [(ga,) for _, ga in link_rows],
+        )
+        await db.executemany(
+            "INSERT OR IGNORE INTO knx_co_ga_links (comm_object_id, ga_address) VALUES (?, ?)",
+            link_rows,
+        )
+
+    await db.commit()
+    return len(devices), len(comm_rows)
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+def _normalize_hierarchy_modes(raw_modes: list[str] | None) -> list[str]:
+    if not raw_modes or not isinstance(raw_modes, list):
+        return []
+
+    modes: list[str] = []
+    for raw in raw_modes:
+        for part in raw.split(","):
+            mode = part.strip().lower()
+            if mode:
+                modes.append(mode)
+
+    invalid = sorted({mode for mode in modes if mode not in _HIERARCHY_MODE_NAMES})
+    if invalid:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "hierarchy_modes muss einen oder mehrere dieser Werte enthalten: groups, mid, flat, buildings, trades",
+        )
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for mode in modes:
+        if mode in seen:
+            continue
+        seen.add(mode)
+        deduped.append(mode)
+    return deduped
+
+
+async def _create_requested_hierarchies(
+    db: Database,
+    modes: list[str],
+    *,
+    auto_link: bool,
+    unavailable_messages: dict[str, str] | None = None,
+) -> list[HierarchyImportResult]:
+    results: list[HierarchyImportResult] = []
+    unavailable_messages = unavailable_messages or {}
+    for mode in modes:
+        tree_name = _HIERARCHY_MODE_NAMES[mode]
+        if mode in unavailable_messages:
+            results.append(
+                HierarchyImportResult(
+                    mode=mode,
+                    status="failed",
+                    tree_name=tree_name,
+                    message=unavailable_messages[mode],
+                )
+            )
+            continue
+        try:
+            created = await create_ets_hierarchy(
+                db,
+                EtsImportRequest(
+                    tree_name=tree_name,
+                    mode=mode,
+                    auto_link=auto_link,
+                ),
+            )
+        except HTTPException as exc:
+            message = str(exc.detail)
+            results.append(
+                HierarchyImportResult(
+                    mode=mode,
+                    status="failed",
+                    tree_name=tree_name,
+                    message=message,
+                )
+            )
+            continue
+        except Exception as exc:
+            logger.exception("ETS-Hierarchieimport fuer Modus '%s' fehlgeschlagen", mode)
+            results.append(
+                HierarchyImportResult(
+                    mode=mode,
+                    status="failed",
+                    tree_name=tree_name,
+                    message=f"Hierarchieimport fehlgeschlagen: {exc}",
+                )
+            )
+            continue
+
+        results.append(
+            HierarchyImportResult(
+                mode=mode,
+                status="created",
+                tree_id=created.tree_id,
+                tree_name=created.tree_name,
+                nodes_created=created.nodes_created,
+                links_created=created.links_created,
+                message=created.message,
+            )
+        )
+    return results
 
 
 @router.post("/import", response_model=ImportResult)
@@ -259,6 +517,14 @@ async def import_knxproj_file(
         description="Adapter-Instanzname — wenn angegeben, werden DataPoints und Bindings angelegt",
     ),
     direction: str = Query("SOURCE", pattern="^(SOURCE|DEST|BOTH)$", description="Verknüpfungsrichtung"),
+    hierarchy_modes: list[str] | None = Query(
+        None,
+        description="Optional: ETS-Hierarchien direkt miterzeugen. Mehrfach oder kommasepariert: groups, mid, flat, buildings, trades",
+    ),
+    hierarchy_auto_link: bool = Query(
+        True,
+        description="DataPoints automatisch mit ETS-Gebäude-/Gewerke-Hierarchien verknüpfen, wenn adapter_name DataPoints/Bindings erzeugt",
+    ),
     _user: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ) -> ImportResult:
@@ -278,6 +544,8 @@ async def import_knxproj_file(
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Datei ist leer")
 
+    requested_hierarchy_modes = _normalize_hierarchy_modes(hierarchy_modes)
+    auto_link_requested = hierarchy_auto_link if isinstance(hierarchy_auto_link, bool) else True
     pwd = password or None
 
     # Parse GAs and locations in parallel — large files can take 10+ s each,
@@ -420,26 +688,47 @@ async def import_knxproj_file(
     except Exception as e:
         logger.warning("Trades-Import fehlgeschlagen (wird ignoriert): %s", e)
 
-    # Ohne Adapter: nur GA-Tabelle → fertig
-    if not adapter_name:
-        msg = f"{len(records)} Gruppenadressen importiert"
-        extra = []
-        if locations_count:
-            extra.append(f"{locations_count} Räume/Gebäude")
-        if trades_count:
-            extra.append(f"{trades_count} Gewerke")
-        if extra:
-            msg += ", " + ", ".join(extra)
-        return ImportResult(
-            imported=len(records),
-            locations=locations_count,
-            functions=functions_count,
-            trades=trades_count,
-            message=msg,
-        )
+    created = 0
+    updated = 0
+    if adapter_name:
+        # Mit Adapter: DataPoints + Bindings bulk anlegen
+        created, updated = await _bulk_import_datapoints(records, adapter_name, direction, db, now)
 
-    # Mit Adapter: DataPoints + Bindings bulk anlegen
-    created, updated = await _bulk_import_datapoints(records, adapter_name, direction, db, now)
+    hierarchy_results = await _create_requested_hierarchies(
+        db,
+        requested_hierarchy_modes,
+        auto_link=auto_link_requested and bool(adapter_name),
+        unavailable_messages={
+            **(
+                {"buildings": ("Keine Gebäude-Daten aus dieser .knxproj importiert. Der buildings-Hierarchieimport wurde übersprungen.")}
+                if locations_count == 0
+                else {}
+            ),
+            **(
+                {"trades": ("Keine Gewerke-Daten aus dieser .knxproj importiert. Der trades-Hierarchieimport wurde übersprungen.")}
+                if trades_count == 0
+                else {}
+            ),
+        },
+    )
+
+    msg = f"{len(records)} Gruppenadressen importiert"
+    extra = []
+    if locations_count:
+        extra.append(f"{locations_count} Räume/Gebäude")
+    if trades_count:
+        extra.append(f"{trades_count} Gewerke")
+    if adapter_name:
+        extra.append(f"{created} DataPoints neu erstellt")
+        extra.append(f"{updated} aktualisiert")
+    created_hierarchies = [result for result in hierarchy_results if result.status == "created"]
+    failed_hierarchies = [result for result in hierarchy_results if result.status != "created"]
+    if created_hierarchies:
+        extra.append(f"{len(created_hierarchies)} Hierarchien erstellt")
+    if failed_hierarchies:
+        extra.append(f"{len(failed_hierarchies)} Hierarchien nicht erstellt")
+    if extra:
+        msg += ", " + ", ".join(extra)
 
     return ImportResult(
         imported=len(records),
@@ -448,7 +737,8 @@ async def import_knxproj_file(
         locations=locations_count,
         functions=functions_count,
         trades=trades_count,
-        message=f"{len(records)} Gruppenadressen importiert, {created} DataPoints neu erstellt, {updated} aktualisiert",
+        hierarchies=hierarchy_results,
+        message=msg,
     )
 
 
@@ -460,7 +750,7 @@ async def import_ga_csv_file(
         description="Adapter-Instanzname — wenn angegeben, werden DataPoints und Bindings angelegt",
     ),
     direction: str = Query("SOURCE", pattern="^(SOURCE|DEST|BOTH)$", description="Verknüpfungsrichtung"),
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> ImportResult:
     """ETS GA-CSV hochladen.
@@ -530,6 +820,186 @@ async def import_ga_csv_file(
         created=created,
         updated=updated,
         message=f"{created} DataPoints neu erstellt, {updated} aktualisiert",
+    )
+
+
+@router.get("/devices", response_model=KnxDevicePage)
+async def list_knx_devices(
+    q: str = Query("", description="Suche in PA, Name, Hersteller, Bestellnummer und App-Ref"),
+    manufacturer: str = Query("", description="Hersteller (Teilstring, case-insensitive)"),
+    order_number: str = Query("", description="Bestellnummer (Teilstring, case-insensitive)"),
+    room: str = Query("", description="Optionaler Raumfilter (noch ohne Wirkung)"),
+    trade: str = Query("", description="Optionaler Gewerkefilter (noch ohne Wirkung)"),
+    page: int = Query(0, ge=0),
+    size: int = Query(50, ge=1, le=500),
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> KnxDevicePage:
+    # room/trade are intentionally accepted already so the API surface stays
+    # stable while deeper room/trade joins are introduced in follow-up issues.
+    _ = room, trade
+
+    if not await _knx_device_schema_ready(db):
+        return KnxDevicePage(items=[], total=0, page=page, size=size, pages=1)
+
+    where: list[str] = []
+    params: list[Any] = []
+
+    if q:
+        like = f"%{q.lower()}%"
+        where.append(
+            """(
+                lower(individual_address) LIKE ?
+                OR lower(name) LIKE ?
+                OR lower(product_name) LIKE ?
+                OR lower(product_refid) LIKE ?
+                OR lower(hardware2program_refid) LIKE ?
+            )"""
+        )
+        params.extend([like, like, like, like, like])
+    if manufacturer:
+        where.append("lower(product_name) LIKE ?")
+        params.append(f"%{manufacturer.lower()}%")
+    if order_number:
+        where.append("lower(product_refid) LIKE ?")
+        params.append(f"%{order_number.lower()}%")
+
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    count_row = await db.fetchone(
+        f"SELECT COUNT(*) AS n FROM knx_devices {where_sql}",
+        tuple(params),
+    )
+    total = count_row["n"] if count_row else 0
+
+    rows = await db.fetchall(
+        f"""SELECT
+                individual_address AS pa,
+                name,
+                product_name AS manufacturer,
+                product_refid AS order_number,
+                hardware2program_refid AS app_ref,
+                imported_at
+            FROM knx_devices
+            {where_sql}
+            ORDER BY individual_address
+            LIMIT ? OFFSET ?""",
+        tuple([*params, size, page * size]),
+    )
+    pages = max(1, (total + size - 1) // size)
+    return KnxDevicePage(
+        items=[_device_out_from_row(row) for row in rows],
+        total=total,
+        page=page,
+        size=size,
+        pages=pages,
+    )
+
+
+@router.get("/devices/{pa}", response_model=KnxDeviceDetailOut)
+async def get_knx_device(
+    pa: str,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> KnxDeviceDetailOut:
+    if not await _knx_device_schema_ready(db):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"KNX Gerät {pa} nicht gefunden")
+
+    device_row = await db.fetchone(
+        """SELECT
+               id,
+               individual_address AS pa,
+               name,
+               product_name AS manufacturer,
+               product_refid AS order_number,
+               hardware2program_refid AS app_ref,
+               imported_at
+           FROM knx_devices
+           WHERE individual_address = ?""",
+        (pa,),
+    )
+    if not device_row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"KNX Gerät {pa} nicht gefunden")
+
+    co_rows = await db.fetchall(
+        """SELECT
+               co.id,
+               co.number,
+               co.name,
+               co.datapoint_type,
+               l.ga_address
+           FROM knx_comm_objects co
+           LEFT JOIN knx_co_ga_links l ON l.comm_object_id = co.id
+           WHERE co.device_id = ?
+           ORDER BY co.number, co.id, l.ga_address""",
+        (device_row["id"],),
+    )
+
+    by_id: dict[str, KnxCommObjectOut] = {}
+    for row in co_rows:
+        co_id = row["id"]
+        if co_id not in by_id:
+            by_id[co_id] = KnxCommObjectOut(
+                id=co_id,
+                number=row["number"] or "",
+                name=row["name"] or "",
+                datapoint_type=row["datapoint_type"] or "",
+                ga_addresses=[],
+            )
+        ga = row["ga_address"]
+        if ga:
+            by_id[co_id].ga_addresses.append(ga)
+
+    device = _device_out_from_row(device_row)
+    return KnxDeviceDetailOut(
+        **device.model_dump(),
+        comm_objects=list(by_id.values()),
+    )
+
+
+@router.get("/group-addresses/{ga:path}/devices", response_model=KnxDevicePage)
+async def list_knx_devices_for_group_address(
+    ga: str,
+    page: int = Query(0, ge=0),
+    size: int = Query(50, ge=1, le=500),
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> KnxDevicePage:
+    if not await _knx_device_schema_ready(db):
+        return KnxDevicePage(items=[], total=0, page=page, size=size, pages=1)
+
+    count_row = await db.fetchone(
+        """SELECT COUNT(DISTINCT d.id) AS n
+           FROM knx_devices d
+           JOIN knx_comm_objects co ON co.device_id = d.id
+           JOIN knx_co_ga_links l ON l.comm_object_id = co.id
+           WHERE l.ga_address = ?""",
+        (ga,),
+    )
+    total = count_row["n"] if count_row else 0
+
+    rows = await db.fetchall(
+        """SELECT DISTINCT
+               d.individual_address AS pa,
+               d.name,
+               d.product_name AS manufacturer,
+               d.product_refid AS order_number,
+               d.hardware2program_refid AS app_ref,
+               d.imported_at
+           FROM knx_devices d
+           JOIN knx_comm_objects co ON co.device_id = d.id
+           JOIN knx_co_ga_links l ON l.comm_object_id = co.id
+           WHERE l.ga_address = ?
+           ORDER BY d.individual_address
+           LIMIT ? OFFSET ?""",
+        (ga, size, page * size),
+    )
+    pages = max(1, (total + size - 1) // size)
+    return KnxDevicePage(
+        items=[_device_out_from_row(row) for row in rows],
+        total=total,
+        page=page,
+        size=size,
+        pages=pages,
     )
 
 

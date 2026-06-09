@@ -133,6 +133,17 @@
         />
       </section>
 
+      <section class="flex flex-col gap-1">
+        <label class="text-xs text-slate-500">KNX Devices (PA)</label>
+        <input
+          v-model="form.devicesInput"
+          class="input"
+          data-testid="filter-editor-devices"
+          placeholder="1.1.10, 1.1.11"
+          @input="markDirty"
+        />
+      </section>
+
       <!-- Wertfilter -->
       <section class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-2">
         <h4 class="text-sm font-semibold">{{ $t('ringbuffer.filterEditor.valueFilterTitle') }}</h4>
@@ -361,6 +372,7 @@ function makeEmptyForm() {
     color: DEFAULT_COLOR,
     hierarchy_nodes: [], // {tree_id, node_id, include_descendants}
     datapoints: [],
+    devicesInput: '',
     tags: [],
     adapters: [],
     q: '',
@@ -418,6 +430,7 @@ const filterIsEmpty = computed(() =>
   isEmptyFilter({
     hierarchy_nodes: form.hierarchy_nodes,
     datapoints: form.datapoints,
+    devices: parseDeviceAddresses(form.devicesInput),
     tags: form.tags,
     adapters: form.adapters,
     q: form.q,
@@ -609,12 +622,24 @@ function buildPayload() {
         include_descendants: n.include_descendants !== false,
       })),
       datapoints: [...form.datapoints],
+      devices: parseDeviceAddresses(form.devicesInput),
       tags: [...form.tags],
       adapters: [...form.adapters],
       q: form.q ? form.q.trim() : null,
       value_filter: buildValueFilter(),
     },
   }
+}
+
+function parseDeviceAddresses(raw) {
+  return Array.from(
+    new Set(
+      String(raw ?? '')
+        .split(/[,\s]+/g)
+        .map((part) => part.trim())
+        .filter(Boolean),
+    ),
+  )
 }
 
 function hydrateForm(payload) {
@@ -637,6 +662,7 @@ function hydrateForm(payload) {
       }))
     : []
   form.datapoints = Array.isArray(flt.datapoints) ? [...flt.datapoints] : []
+  form.devicesInput = Array.isArray(flt.devices) ? flt.devices.map((v) => String(v).trim()).filter(Boolean).join(', ') : ''
   form.tags = Array.isArray(flt.tags) ? [...flt.tags] : []
   form.adapters = Array.isArray(flt.adapters) ? [...flt.adapters] : []
   form.q = flt.q || ''

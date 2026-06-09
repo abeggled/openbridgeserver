@@ -339,9 +339,20 @@
               </td>
 
               <td>
-                <Badge :variant="qualityVariant(liveQuality(dp))" dot size="xs">
-                  {{ qualityLabel(liveQuality(dp)) ?? '—' }}
-                </Badge>
+                <div class="flex items-center gap-1">
+                  <Badge :variant="qualityVariant(liveQuality(dp))" dot size="xs">
+                    {{ qualityLabel(liveQuality(dp)) ?? '—' }}
+                  </Badge>
+                  <Badge
+                    v-if="typeMismatchDiagnostic(dp)"
+                    variant="warning"
+                    size="xs"
+                    v-bind="typeMismatchAttrs(typeMismatchDiagnostic(dp))"
+                    :data-testid="`dp-type-mismatch-${dp.id}`"
+                  >
+                    !
+                  </Badge>
+                </div>
               </td>
 
               <td>
@@ -767,5 +778,18 @@ function qualityVariant(q) {
 }
 function qualityLabel(q) {
   return q === 'good' ? t('datapoints.quality.good') : q === 'bad' ? t('datapoints.quality.bad') : q === 'uncertain' ? t('datapoints.quality.uncertain') : q
+}
+function typeMismatchDiagnostic(dp) {
+  return dp.diagnostics?.find(d => d.type === 'type_mismatch') ?? null
+}
+function typeMismatchAttrs(diagnostic) {
+  return {
+    title: t('datapoints.diagnostics.typeMismatch', {
+    expected: diagnostic.expected ?? '—',
+    got: diagnostic.got ?? '—',
+    source: diagnostic.source_adapter ?? '—',
+    count: diagnostic.count ?? 1,
+    }),
+  }
 }
 </script>

@@ -6,6 +6,7 @@
  *
  * Field semantics (mirroring `FilterCriteria` from obs/api/v1/ringbuffer.py):
  *   - datapoints[]  — OR over entry.datapoint_id
+ *   - devices[]     — server-resolved KNX physical addresses; pass-through
  *   - adapters[]    — OR over entry.source_adapter
  *   - tags[]        — OR over entry.metadata.datapoint.tags
  *   - q             — substring (case-insensitive) over name | datapoint_id | source_adapter
@@ -76,6 +77,7 @@ export function isEmptyFilter(criteria) {
   const hasList = (key) => Array.isArray(criteria[key]) && criteria[key].length > 0
   if (hasList('hierarchy_nodes')) return false
   if (hasList('datapoints')) return false
+  if (hasList('devices')) return false
   if (hasList('tags')) return false
   if (hasList('adapters')) return false
   if (typeof criteria.q === 'string' && criteria.q.trim().length > 0) return false
@@ -122,6 +124,11 @@ function _matchValueFilter(entryValue, vf) {
  * criterion accepts the entry.
  *
  * Empty / null / undefined criteria match NOTHING (Phase-2 UX feedback).
+ *
+ * Device-constrained filters match NOTHING on the client: the frontend has no
+ * resolver for that server-side mapping, even when other client-evaluable
+ * constraints pass. The REST OR-union remains authoritative; live pushes for
+ * device-constrained sets stay uncoloured until the next refresh.
  */
 export function matchEntry(entry, criteria) {
   if (!criteria || typeof criteria !== 'object') return false
@@ -130,6 +137,7 @@ export function matchEntry(entry, criteria) {
 
   const hasHierarchyConstraint = Array.isArray(criteria.hierarchy_nodes) && criteria.hierarchy_nodes.length > 0
   const hasDatapointConstraint = Array.isArray(criteria.datapoints) && criteria.datapoints.length > 0
+  const hasDeviceConstraint = Array.isArray(criteria.devices) && criteria.devices.length > 0
   const hasClientConstraint =
     hasDatapointConstraint ||
     (Array.isArray(criteria.adapters) && criteria.adapters.length > 0) ||
@@ -137,6 +145,7 @@ export function matchEntry(entry, criteria) {
     (typeof criteria.q === 'string' && criteria.q.trim().length > 0) ||
     (criteria.value_filter && criteria.value_filter.operator)
   if (!hasHierarchyConstraint && !hasClientConstraint) return false
+  if (hasDeviceConstraint) return false
 
   // Server-side hierarchy resolution OR-unions resolved hierarchy datapoints
   // with explicit datapoints before applying the remaining AND constraints.
@@ -173,7 +182,6 @@ export function matchEntry(entry, criteria) {
   if (criteria.value_filter && criteria.value_filter.operator) {
     if (!_matchValueFilter(entry.new_value, criteria.value_filter)) return false
   }
-
   return true
 }
 

@@ -96,3 +96,7 @@ def test_validate_session_does_not_remove_valid_session():
     token = create_session("page-1", expires_in=3600)
     validate_session(token, "page-1")
     assert token in _sessions_module._sessions
+
+
+def test_sessions_module_exposes_no_http_router_surface():
+    assert not hasattr(_sessions_module, "router")

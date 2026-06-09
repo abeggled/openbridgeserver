@@ -64,6 +64,44 @@ class TradeRecord:
     function_ids: list[str] = field(default_factory=list)  # resolved Function IDs
 
 
+@dataclass
+class DeviceRecord:
+    identifier: str
+    individual_address: str
+    name: str = ""
+    hardware_name: str = ""
+    order_number: str = ""
+    description: str = ""
+    manufacturer_name: str = ""
+    application: str | None = None
+    project_uid: int | None = None
+    communication_object_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CommunicationObjectRecord:
+    identifier: str
+    device_address: str
+    name: str = ""
+    number: int = 0
+    text: str = ""
+    function_text: str = ""
+    description: str = ""
+    device_application: str | None = None
+    channel: str | None = None
+    dpts: list[str] = field(default_factory=list)
+    object_size: str = ""
+    group_address_links: list[str] = field(default_factory=list)
+    flags: dict[str, bool] = field(default_factory=dict)
+    dpas: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CommObjectGaLinkRecord:
+    comm_object_id: str
+    ga_address: str
+
+
 def _extract_group_names(project: Any) -> tuple[dict[str, str], dict[str, str]]:
     """Extracts main- and middle-group names from xknxproject group_ranges.
 
@@ -423,6 +461,151 @@ def parse_knxproj_locations(
         len(fn_list),
     )
     return loc_list, fn_list
+
+
+def parse_knxproj_devices(
+    file_bytes: bytes,
+    password: str | None = None,
+) -> tuple[list[DeviceRecord], list[CommunicationObjectRecord], list[CommObjectGaLinkRecord]]:
+    """Parse .knxproj and return devices, communication objects and KO→GA links."""
+    try:
+        from xknxproject import XKNXProj
+    except ImportError as e:
+        raise ValueError("xknxproject nicht installiert.") from e
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".knxproj", delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+
+        knxproject = XKNXProj(tmp_path, password=password)
+        project = knxproject.parse()
+    except Exception as e:
+        msg = str(e)
+        if "password" in msg.lower() or "decrypt" in msg.lower() or "bad password" in msg.lower():
+            raise ValueError("Falsches Passwort oder Datei ist verschlüsselt.") from e
+        raise ValueError(f"Fehler beim Parsen: {msg}") from e
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    if isinstance(project, dict):
+        devices_raw = project.get("devices") or {}
+        comm_raw = project.get("communication_objects") or {}
+    else:
+        devices_raw = getattr(project, "devices", {}) or {}
+        comm_raw = getattr(project, "communication_objects", {}) or {}
+
+    device_records: list[DeviceRecord] = []
+    for dev_id, device in devices_raw.items():
+        if isinstance(device, dict):
+            identifier = str(device.get("identifier") or dev_id)
+            comm_ids = [str(co_id) for co_id in (device.get("communication_object_ids") or [])]
+            project_uid_raw = device.get("project_uid")
+            individual_address = str(device.get("individual_address") or "").strip()
+            application_raw = device.get("application")
+            device_records.append(
+                DeviceRecord(
+                    identifier=identifier,
+                    individual_address=individual_address,
+                    name=str(device.get("name") or "").strip(),
+                    hardware_name=str(device.get("hardware_name") or "").strip(),
+                    order_number=str(device.get("order_number") or "").strip(),
+                    description=str(device.get("description") or "").strip(),
+                    manufacturer_name=str(device.get("manufacturer_name") or "").strip(),
+                    application=str(application_raw).strip() if application_raw else None,
+                    project_uid=int(project_uid_raw) if isinstance(project_uid_raw, int) else None,
+                    communication_object_ids=comm_ids,
+                )
+            )
+        else:
+            identifier = str(getattr(device, "identifier", dev_id))
+            comm_ids = [str(co_id) for co_id in (getattr(device, "communication_object_ids", []) or [])]
+            project_uid_raw = getattr(device, "project_uid", None)
+            application_raw = getattr(device, "application", None)
+            device_records.append(
+                DeviceRecord(
+                    identifier=identifier,
+                    individual_address=str(getattr(device, "individual_address", "") or "").strip(),
+                    name=str(getattr(device, "name", "") or "").strip(),
+                    hardware_name=str(getattr(device, "hardware_name", "") or "").strip(),
+                    order_number=str(getattr(device, "order_number", "") or "").strip(),
+                    description=str(getattr(device, "description", "") or "").strip(),
+                    manufacturer_name=str(getattr(device, "manufacturer_name", "") or "").strip(),
+                    application=str(application_raw).strip() if application_raw else None,
+                    project_uid=int(project_uid_raw) if isinstance(project_uid_raw, int) else None,
+                    communication_object_ids=comm_ids,
+                )
+            )
+
+    comm_records: list[CommunicationObjectRecord] = []
+    ga_link_records: list[CommObjectGaLinkRecord] = []
+
+    for co_id, comm_obj in comm_raw.items():
+        if isinstance(comm_obj, dict):
+            identifier = str(comm_obj.get("identifier") or co_id)
+            dpt_values = [_dpt_from_xknxproject(dpt) for dpt in (comm_obj.get("dpts") or [])]
+            ga_links = [str(ga).strip() for ga in (comm_obj.get("group_address_links") or []) if str(ga).strip()]
+            flags_raw = comm_obj.get("flags") or {}
+            dpas_raw = comm_obj.get("dpas") or []
+            record = CommunicationObjectRecord(
+                identifier=identifier,
+                device_address=str(comm_obj.get("device_address") or "").strip(),
+                name=str(comm_obj.get("name") or "").strip(),
+                number=int(comm_obj.get("number") or 0),
+                text=str(comm_obj.get("text") or "").strip(),
+                function_text=str(comm_obj.get("function_text") or "").strip(),
+                description=str(comm_obj.get("description") or "").strip(),
+                device_application=(str(comm_obj.get("device_application")).strip() if comm_obj.get("device_application") else None),
+                channel=str(comm_obj.get("channel")).strip() if comm_obj.get("channel") else None,
+                dpts=[dpt for dpt in dpt_values if dpt],
+                object_size=str(comm_obj.get("object_size") or "").strip(),
+                group_address_links=ga_links,
+                flags={str(k): bool(v) for k, v in dict(flags_raw).items()},
+                dpas=[str(dpa) for dpa in dpas_raw],
+            )
+        else:
+            identifier = str(getattr(comm_obj, "identifier", co_id))
+            dpt_values = [_dpt_from_xknxproject(dpt) for dpt in (getattr(comm_obj, "dpts", []) or [])]
+            ga_links = [str(ga).strip() for ga in (getattr(comm_obj, "group_address_links", []) or []) if str(ga).strip()]
+            flags_raw = getattr(comm_obj, "flags", {}) or {}
+            dpas_raw = getattr(comm_obj, "dpas", []) or []
+            record = CommunicationObjectRecord(
+                identifier=identifier,
+                device_address=str(getattr(comm_obj, "device_address", "") or "").strip(),
+                name=str(getattr(comm_obj, "name", "") or "").strip(),
+                number=int(getattr(comm_obj, "number", 0) or 0),
+                text=str(getattr(comm_obj, "text", "") or "").strip(),
+                function_text=str(getattr(comm_obj, "function_text", "") or "").strip(),
+                description=str(getattr(comm_obj, "description", "") or "").strip(),
+                device_application=(
+                    str(getattr(comm_obj, "device_application", "")).strip() if getattr(comm_obj, "device_application", None) else None
+                ),
+                channel=str(getattr(comm_obj, "channel", "")).strip() if getattr(comm_obj, "channel", None) else None,
+                dpts=[dpt for dpt in dpt_values if dpt],
+                object_size=str(getattr(comm_obj, "object_size", "") or "").strip(),
+                group_address_links=ga_links,
+                flags={str(k): bool(v) for k, v in dict(flags_raw).items()},
+                dpas=[str(dpa) for dpa in dpas_raw],
+            )
+
+        comm_records.append(record)
+        for ga_address in record.group_address_links:
+            ga_link_records.append(
+                CommObjectGaLinkRecord(
+                    comm_object_id=record.identifier,
+                    ga_address=ga_address,
+                )
+            )
+
+    logger.info(
+        "parse_knxproj_devices: %d Geräte, %d Kommunikationsobjekte, %d KO→GA Links",
+        len(device_records),
+        len(comm_records),
+        len(ga_link_records),
+    )
+    return device_records, comm_records, ga_link_records
 
 
 def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupAddressRecord]:
