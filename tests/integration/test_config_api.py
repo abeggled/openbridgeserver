@@ -17,6 +17,7 @@ import uuid
 
 import pytest
 from obs.api.auth import create_access_token
+from obs.db.database import get_db
 
 pytestmark = pytest.mark.integration
 
@@ -635,7 +636,7 @@ async def test_import_hierarchy(client, auth_headers):
         "exported_at": "2024-01-01T00:00:00",
         "datapoints": [],
         "bindings": [],
-        "hierarchy_trees": [{"id": tree_id, "name": "Test Tree", "description": ""}],
+        "hierarchy_trees": [{"id": tree_id, "name": "Test Tree", "description": "", "source": "ets_import:groups"}],
         "hierarchy_nodes": [
             {
                 "id": node_id,
@@ -653,6 +654,8 @@ async def test_import_hierarchy(client, auth_headers):
     assert resp.status_code == 200
     body = resp.json()
     assert body["hierarchy_upserted"] >= 3  # tree + node + link
+    row = await get_db().fetchone("SELECT source FROM hierarchy_trees WHERE id = ?", (tree_id,))
+    assert row["source"] == "ets_import:groups"
 
 
 # ---------------------------------------------------------------------------

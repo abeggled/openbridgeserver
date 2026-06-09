@@ -127,6 +127,7 @@ class ExportedHierarchyTree(BaseModel):
     id: str
     name: str
     description: str
+    source: str = ""
 
 
 class ExportedHierarchyNode(BaseModel):
@@ -348,7 +349,7 @@ async def export_config(
 
     # Hierarchy
     tree_rows = await db.fetchall("SELECT * FROM hierarchy_trees ORDER BY name")
-    hierarchy_trees = [ExportedHierarchyTree(id=r["id"], name=r["name"], description=r["description"]) for r in tree_rows]
+    hierarchy_trees = [ExportedHierarchyTree(id=r["id"], name=r["name"], description=r["description"], source=r["source"] or "") for r in tree_rows]
 
     h_node_rows = await db.fetchall("SELECT * FROM hierarchy_nodes ORDER BY node_order, created_at")
     hierarchy_nodes = [
@@ -877,11 +878,11 @@ async def import_config(
     for ht in body.hierarchy_trees:
         try:
             await db.execute_and_commit(
-                """INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at)
-                   VALUES (?,?,?,?,?)
+                """INSERT INTO hierarchy_trees (id, name, description, source, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE
-                   SET name=excluded.name, description=excluded.description, updated_at=excluded.updated_at""",
-                (ht.id, ht.name, ht.description, now, now),
+                   SET name=excluded.name, description=excluded.description, source=excluded.source, updated_at=excluded.updated_at""",
+                (ht.id, ht.name, ht.description, ht.source, now, now),
             )
             result.hierarchy_upserted += 1
         except Exception as exc:

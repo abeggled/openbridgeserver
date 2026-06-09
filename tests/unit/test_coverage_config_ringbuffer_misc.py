@@ -236,6 +236,27 @@ async def test_export_config_with_fa_key(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_export_config_preserves_hierarchy_tree_source(monkeypatch):
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    db = _DbStub()
+
+    async def _fetchall(query, params=()):
+        if "hierarchy_trees" in query:
+            return [_row({"id": "tree-1", "name": "ETS Gruppen", "description": "", "source": "ets_import:groups"})]
+        return []
+
+    db.fetchall = _fetchall
+
+    with patch("obs.api.v1.icons._icons_dir") as mock_icons_dir:
+        icons_path = MagicMock()
+        icons_path.glob.return_value = []
+        mock_icons_dir.return_value = icons_path
+        result = await config_api.export_config(_user="u", db=db)
+
+    assert result.hierarchy_trees[0].source == "ets_import:groups"
+
+
+@pytest.mark.asyncio
 async def test_export_config_with_visu_nodes(monkeypatch):
     """export_config correctly assembles visu_nodes with user lists."""
     monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
@@ -771,7 +792,7 @@ async def test_import_config_hierarchy_trees_and_nodes(monkeypatch):
     dp_id = str(uuid.uuid4())
 
     body = _make_config_export(
-        hierarchy_trees=[config_api.ExportedHierarchyTree(id=tree_id, name="Gebäude", description="")],
+        hierarchy_trees=[config_api.ExportedHierarchyTree(id=tree_id, name="Gebäude", description="", source="ets_import:buildings")],
         hierarchy_nodes=[
             config_api.ExportedHierarchyNode(
                 id=node_id,
@@ -795,6 +816,15 @@ async def test_import_config_hierarchy_trees_and_nodes(monkeypatch):
         result = await config_api.import_config(body=body, _user="u", db=db)
 
     assert result.hierarchy_upserted >= 3
+    tree_query, tree_params = db.committed[0]
+    assert "source" in tree_query
+    assert tree_params[3] == "ets_import:buildings"
+
+
+def test_exported_hierarchy_tree_accepts_legacy_payload_without_source():
+    tree = config_api.ExportedHierarchyTree(id="tree-1", name="Legacy", description="")
+
+    assert tree.source == ""
 
 
 @pytest.mark.asyncio
