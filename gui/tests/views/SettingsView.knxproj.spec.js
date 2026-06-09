@@ -9,6 +9,7 @@ let iconsApi
 let authApi
 let dpApi
 let historySettingsApi
+let adapterApi
 
 beforeEach(() => {
   vi.resetModules()
@@ -139,6 +140,9 @@ beforeEach(() => {
     update: vi.fn().mockResolvedValue({ data: {} }),
     test: vi.fn().mockResolvedValue({ data: { ok: true, message: 'History OK' } }),
   }
+  adapterApi = {
+    listInstances: vi.fn().mockResolvedValue({ data: [] }),
+  }
 
   vi.doMock('@/api/client', () => ({
     settingsApi: {
@@ -154,9 +158,7 @@ beforeEach(() => {
       deleteUrlTarget: vi.fn().mockResolvedValue({ data: {} }),
     },
     authApi,
-    adapterApi: {
-      listInstances: vi.fn().mockResolvedValue({ data: [] }),
-    },
+    adapterApi,
     configApi,
     autobackupApi,
     knxprojApi,
@@ -325,6 +327,69 @@ describe('SettingsView KNX project import', () => {
     expect(wrapper.text()).toContain('Keine Gruppenadressen gefunden')
     expect(wrapper.text()).toContain('Gebäude / Räume: angelegt')
     expect(wrapper.text()).toContain('2 Knoten, 0 Verknüpfungen')
+
+    wrapper.unmount()
+  })
+
+  it('renders hierarchy import results with missing optional counts', async () => {
+    knxprojApi.import.mockResolvedValueOnce({
+      data: {
+        imported: 1,
+        hierarchies: [
+          {
+            mode: 'groups',
+            status: 'created',
+            tree_id: 'tree-1',
+            tree_name: 'ETS Gruppenadressen',
+            message: 'created',
+          },
+        ],
+      },
+    })
+
+    const wrapper = await mountSettingsView()
+    await openImportExportTab(wrapper)
+    await selectKnxProjectFile(wrapper)
+
+    const importButton = findKnxImportButton(wrapper)
+    expect(importButton).toBeTruthy()
+    await importButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Topologie: angelegt')
+    expect(wrapper.text()).toContain('0 Knoten, 0 Verknüpfungen')
+
+    wrapper.unmount()
+  })
+
+  it('enables hierarchy auto-link when DataPoint import uses a KNX adapter', async () => {
+    adapterApi.listInstances.mockResolvedValueOnce({
+      data: [{ name: 'knx-main', adapter_type: 'KNX' }],
+    })
+
+    const wrapper = await mountSettingsView()
+    await openImportExportTab(wrapper)
+    await selectKnxProjectFile(wrapper)
+
+    const createDps = wrapper
+      .findAll('label')
+      .find(node => node.text().includes('Objekte anlegen / aktualisieren'))
+      .find('input[type="checkbox"]')
+    await createDps.setValue(true)
+    await flushPromises()
+
+    const importButton = findKnxImportButton(wrapper)
+    expect(importButton).toBeTruthy()
+    await importButton.trigger('click')
+    await flushPromises()
+
+    expect(knxprojApi.import).toHaveBeenCalledTimes(1)
+    expect(knxprojApi.import.mock.calls[0][1]).toMatchObject({
+      adapter_name: 'knx-main',
+      direction: 'SOURCE',
+      hierarchy_auto_link: true,
+      hierarchy_replace_existing: true,
+    })
 
     wrapper.unmount()
   })
