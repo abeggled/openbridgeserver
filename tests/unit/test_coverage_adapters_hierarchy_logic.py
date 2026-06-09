@@ -1899,15 +1899,11 @@ class TestEtsImport:
             now = "2024-01-01T00:00:00+00:00"
             await db.execute_and_commit(
                 "INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)",
-                ("manual-tree", "Manual", "custom manual tree", now, now),
+                ("manual-tree", "Manual", "ets_import:groups", now, now),
             )
             await db.execute_and_commit(
                 "INSERT INTO hierarchy_trees (id, name, description, source, created_at, updated_at) VALUES (?,?,?,?,?,?)",
                 ("old-ets-tree", "Old ETS", "custom text", "ets_import:groups", now, now),
-            )
-            await db.execute_and_commit(
-                "INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)",
-                ("legacy-ets-tree", "Legacy ETS", "ets_import:groups", now, now),
             )
             await db.execute_and_commit(
                 """INSERT INTO hierarchy_nodes
@@ -1935,15 +1931,13 @@ class TestEtsImport:
             auto_trees = [row for row in trees if row["source"] == "ets_import:groups"]
             manual_trees = [row for row in trees if row["id"] == "manual-tree"]
             old_nodes = await db.fetchall("SELECT id FROM hierarchy_nodes WHERE tree_id=?", ("old-ets-tree",))
-            legacy_trees = [row for row in trees if row["id"] == "legacy-ets-tree"]
 
-            assert first.trees_replaced == 2
+            assert first.trees_replaced == 1
             assert second.trees_replaced == 1
             assert len(auto_trees) == 1
             assert len(manual_trees) == 1
-            assert manual_trees[0]["description"] == "custom manual tree"
+            assert manual_trees[0]["description"] == "ets_import:groups"
             assert manual_trees[0]["source"] == ""
-            assert legacy_trees == []
             assert old_nodes == []
         finally:
             await db.disconnect()
