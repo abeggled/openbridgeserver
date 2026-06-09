@@ -10,5 +10,30 @@
       "partial": "Partial",
       "position": "{position} % · {word}"
     }
+  },
+  "shell": {
+    "nav": {
+      "menuTitle": "Menu",
+      "overview": "Overview",
+      "groundFloor": "Ground floor",
+      "upperFloor": "Upper floor",
+      "basement": "Basement",
+      "garden": "Garden & outdoor",
+      "security": "Security",
+      "energy": "Energy",
+      "scenes": "Scenes",
+      "settings": "Settings"
+    },
+    "titlebar": {
+      "brand": "Visu"
+    },
+    "clock": {
+      "messages": "Messages",
+      "unread": "Unread messages"
+    },
+    "empty": "Nothing here yet.",
+    "error": {
+      "title": "Something went wrong."
+    }
   }
 }

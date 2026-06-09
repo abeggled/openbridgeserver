@@ -10,5 +10,30 @@
       "partial": "Teil",
       "position": "{position} % · {word}"
     }
+  },
+  "shell": {
+    "nav": {
+      "menuTitle": "Menü",
+      "overview": "Übersicht",
+      "groundFloor": "Erdgeschoss",
+      "upperFloor": "Obergeschoss",
+      "basement": "Keller",
+      "garden": "Garten & Außen",
+      "security": "Sicherheit",
+      "energy": "Energie",
+      "scenes": "Szenen",
+      "settings": "Einstellungen"
+    },
+    "titlebar": {
+      "brand": "Visu"
+    },
+    "clock": {
+      "messages": "Nachrichten",
+      "unread": "Ungelesene Nachrichten"
+    },
+    "empty": "Hier ist noch nichts.",
+    "error": {
+      "title": "Etwas ist schiefgelaufen."
+    }
   }
 }
