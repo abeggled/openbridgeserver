@@ -10,7 +10,8 @@
     "test": "pnpm -r test",
     "lint": "eslint apps packages",
     "format": "prettier --check \"apps/**/*.{ts,tsx,vue,json}\" \"packages/**/*.{ts,tsx,vue,json}\" eslint.config.js .dependency-cruiser.cjs .prettierrc.json pnpm-workspace.yaml .github/workflows/visu-ci.yml",
-    "boundaries": "depcruise apps packages"
+    "boundaries": "depcruise apps packages",
+    "m1:smoke": "pnpm --dir apps/visu m1:smoke"
   },
   "devDependencies": {
     "@eslint/js": "^9.16.0",
