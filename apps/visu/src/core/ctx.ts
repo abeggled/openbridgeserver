@@ -26,7 +26,7 @@ const NBSP = ' ';
  * NaN render as an en dash. `dec` defaults to 0 for integers, else 1.
  */
 function nf(v: number | string, dec?: number): string {
-  let n: number = typeof v === 'string' ? parseFloat(v.replace(',', '.')) : v;
+  const n: number = typeof v === 'string' ? parseFloat(v.replace(',', '.')) : v;
   if (n == null || Number.isNaN(n)) return '–';
   const d = dec != null ? dec : Number.isInteger(n) ? 0 : 1;
   return n.toLocaleString('de-DE', { minimumFractionDigits: d, maximumFractionDigits: d });

@@ -41,4 +41,12 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Tests read arbitrary JSON fixtures/schema; `any` is pragmatic there. The
+    // upstream Python config likewise relaxes rules for test files.
+    files: ['**/*.spec.ts', '**/*.test.ts', '**/tests/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
 );

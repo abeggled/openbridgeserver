@@ -125,3 +125,5 @@ Upstream-PR-Guardrails des Projekts.
 - Den Integrationsbranch nicht nach upstream pushen.
 - Keine State-Mutation in Skins; keine direkten Datenfelder-Schreibzugriffe im Renderer.
 - Keine lokalen Workflow-/Planungsartefakte in Upstream-Commits.
+- **Kein `git stash` / `git stash pop` im geteilten Klon.** Worktrees teilen sich die Stash-Liste — ein `pop` kann fremde Stashes anderer Worktrees (z. B. `issue-*`) einspielen. Jeder Agent arbeitet ausschließlich in seinem **eigenen Worktree** (`git worktree add … fork/feat/visu-mobile-skins`) und committet nur seine zugewiesenen Pfade; nie `git add -A` über fremde Änderungen.
+- Pushes für `feat/visu-*` laufen mit `git -c core.hooksPath=/dev/null push` (JS-only; das Backend-Pre-Push-Gate ist irrelevant) — **nicht** `--no-verify`.

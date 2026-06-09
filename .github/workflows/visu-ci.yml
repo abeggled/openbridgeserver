@@ -39,6 +39,9 @@ jobs:
       - name: Typecheck
         run: pnpm -r typecheck
 
+      - name: Lint
+        run: pnpm lint
+
       - name: Test (Vitest)
         run: pnpm -r test
 
