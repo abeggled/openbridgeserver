@@ -68,6 +68,7 @@ const theme = computed<'light' | 'dark' | 'image'>(() => {
       <DetailModalHost
         :skin="SKIN"
         :theme="theme"
+        :root-bind="rootTweaks"
       >
         <div
           class="visu-root overview-root"

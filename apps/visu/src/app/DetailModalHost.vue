@@ -35,6 +35,7 @@ import {
 import { IonModal } from '@ionic/vue';
 
 import type { Device } from '@obs/visu-contract';
+import type { RootTweakStyle } from '@obs-visu-skins/ionic';
 import { useDeviceStore } from '../core/store';
 import { ctx as defaultCtx } from '../core/ctx';
 import { makeTokens, type Theme } from '../core/tokens';
@@ -76,6 +77,11 @@ export default defineComponent({
     skin: { type: String, required: true },
     /** Active theme for AA-safe tokens in the detail surface. */
     theme: { type: String as PropType<Theme>, default: 'light' },
+    /** The page's skin root bindings (data-theme + tweak CSS vars). Applied to the
+     *  modal body so the teleported ion-modal (rendered at <body>, outside the
+     *  page's .visu-root) still carries the themed surface tokens the dialog
+     *  styles depend on — otherwise the detail renders structurally but unstyled. */
+    rootBind: { type: Object as PropType<RootTweakStyle>, default: undefined },
   },
   setup(props, { slots }) {
     const store = useDeviceStore();
@@ -199,7 +205,12 @@ export default defineComponent({
                 ? h(
                     'div',
                     {
-                      class: 'skin-host-modal-body',
+                      // `.visu-root` + the page tweak attrs/vars recreate the themed
+                      // surface inside the teleported modal so the dialog tokens
+                      // resolve (data-theme drives colours/bg; data-stil the glass).
+                      class: ['visu-root', 'skin-host-modal-body'],
+                      ...(props.rootBind?.attrs ?? {}),
+                      style: props.rootBind?.style,
                       // Single capture seam: every control inside marks an intent;
                       // the host owns the mapping to canonical store actions.
                       onClick: onModalEvent,
