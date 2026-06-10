@@ -1368,7 +1368,7 @@ async def test_query_history_dp_not_found(monkeypatch):
                 to_ts=None,
                 limit=100,
                 request=request,
-                user="admin",
+                principal=None,
                 db=db,
             )
     assert exc_info.value.status_code == 404
@@ -1397,7 +1397,7 @@ async def test_query_history_success(monkeypatch):
             to_ts=None,
             limit=100,
             request=request,
-            user="admin",
+            principal=None,
             db=db,
         )
 
@@ -1424,7 +1424,7 @@ async def test_aggregate_history_invalid_fn(monkeypatch):
                 from_ts=None,
                 to_ts=None,
                 request=request,
-                user="admin",
+                principal=None,
                 db=db,
             )
     assert exc_info.value.status_code == 422
@@ -1454,7 +1454,7 @@ async def test_aggregate_history_success(monkeypatch):
             from_ts=None,
             to_ts=None,
             request=request,
-            user="admin",
+            principal=None,
             db=db,
         )
 
@@ -1480,7 +1480,7 @@ async def test_aggregate_history_dp_not_found(monkeypatch):
                 from_ts=None,
                 to_ts=None,
                 request=request,
-                user="admin",
+                principal=None,
                 db=db,
             )
     assert exc_info.value.status_code == 404
