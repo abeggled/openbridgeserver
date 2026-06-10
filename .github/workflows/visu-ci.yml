@@ -32,10 +32,17 @@ jobs:
           ref: main
           path: .obs-visu-skins
 
+      # pnpm normalises link: deps to workspace-RELATIVE paths in the lockfile
+      # (e.g. link:../../../obs-visu-skins/...), so the runner must mirror the
+      # local sibling topology in the workspace parent. The /Volumes symlinks
+      # additionally satisfy the absolute specifiers in package.json.
       - name: Recreate dev-link paths
         run: |
+          WORK_PARENT="$(dirname "$GITHUB_WORKSPACE")"
+          mv "$GITHUB_WORKSPACE/.obs-visu-skins" "$WORK_PARENT/obs-visu-skins"
+          ln -s "$GITHUB_WORKSPACE" "$WORK_PARENT/openbridgeserver-visu-integrate"
           sudo mkdir -p /Volumes/Daten/Projekte/openbridge
-          sudo ln -s "$GITHUB_WORKSPACE/.obs-visu-skins" /Volumes/Daten/Projekte/openbridge/obs-visu-skins
+          sudo ln -s "$WORK_PARENT/obs-visu-skins" /Volumes/Daten/Projekte/openbridge/obs-visu-skins
           sudo ln -s "$GITHUB_WORKSPACE" /Volumes/Daten/Projekte/openbridge/openbridgeserver-visu-integrate
 
       - uses: pnpm/action-setup@v4
