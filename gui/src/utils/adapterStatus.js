@@ -26,3 +26,17 @@ export function adapterStatusLabel(a) {
   if (a.connected) return 'adapters.status.connected'
   return 'adapters.status.running'
 }
+
+// Issue #779: the backend emits a stable status-detail `code` (+ params) under
+// adapters.statusDetail.*; translate it here. Falls back to the non-localized
+// `status_detail` string (dynamic/technical text such as raw exception output).
+// `t`/`te` are passed in because this is a pure util without a Vue setup context;
+// call it from a computed() so it stays reactive on locale change.
+export function adapterStatusDetailText(a, t, te) {
+  const code = a?.status_detail_code
+  if (code) {
+    const key = `adapters.statusDetail.${code}`
+    if (te(key)) return t(key, a?.status_detail_params ?? {})
+  }
+  return a?.status_detail ?? ''
+}
