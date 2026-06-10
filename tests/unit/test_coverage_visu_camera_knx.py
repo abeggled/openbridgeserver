@@ -97,6 +97,7 @@ def _make_db(fetchone_result=None, fetchall_result=None):
     db.execute_and_commit = AsyncMock()
     db.executemany = AsyncMock()
     db.commit = AsyncMock()
+    db.rollback = AsyncMock()
     db.conn = _make_db_conn()
     return db
 

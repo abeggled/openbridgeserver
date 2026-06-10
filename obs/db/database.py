@@ -651,7 +651,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (32, _migration_v32),
     (33, _migration_v33),
     (34, _MIGRATION_V34),
-    (35, _MIGRATION_V35)
+    (35, _MIGRATION_V35),
 ]
 
 

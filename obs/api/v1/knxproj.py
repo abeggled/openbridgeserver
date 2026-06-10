@@ -29,7 +29,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
 from obs.db.database import Database, get_db
 from obs.knxproj.csv_parser import parse_ga_csv
@@ -327,7 +327,10 @@ async def _import_knx_devices_and_comm_objects(
     if not await _knx_device_schema_ready(db):
         return 0, 0
 
-    devices, comm_objects, co_ga_links = parse_knxproj_devices(file_bytes, password)
+    # Offload the blocking XKNXProj parse (writes a temp file + parses the ZIP)
+    # to a thread, like the GA/location/trade parsers, so large imports don't
+    # stall the event loop.
+    devices, comm_objects, co_ga_links = await run_in_threadpool(parse_knxproj_devices, file_bytes, password)
 
     # Keep the latest project snapshot deterministic: tables mirror the current
     # imported .knxproj payload.
@@ -525,7 +528,7 @@ async def import_knxproj_file(
         True,
         description="DataPoints automatisch mit ETS-Gebäude-/Gewerke-Hierarchien verknüpfen, wenn adapter_name DataPoints/Bindings erzeugt",
     ),
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> ImportResult:
     """.knxproj Datei hochladen und Gruppenadressen in die DB importieren.
@@ -641,6 +644,8 @@ async def import_knxproj_file(
             await db.commit()
             functions_count = len(fn_records)
     except Exception as e:
+        # Discard any partial inserts so they can't be made durable by a later commit.
+        await db.rollback()
         logger.warning("Gebäude/Gewerke-Import fehlgeschlagen (wird ignoriert): %s", e)
 
     # Import Trades (Gewerke) — direct ZIP/XML parsing; password forwarded for protected files
@@ -686,7 +691,18 @@ async def import_knxproj_file(
                     )
                     await db.commit()
     except Exception as e:
+        # Discard any partial inserts so they can't be made durable by a later commit.
+        await db.rollback()
         logger.warning("Trades-Import fehlgeschlagen (wird ignoriert): %s", e)
+
+    # Import Device Model (V34/V35) — optional and backward compatible.
+    # On failure roll back the partial device snapshot so the GA/location/trade
+    # import path stays intact and the subsequent adapter import can still commit.
+    try:
+        await _import_knx_devices_and_comm_objects(file_bytes=content, password=pwd, db=db, now=now)
+    except Exception as e:
+        await db.rollback()
+        logger.warning("KNX-Geräteimport fehlgeschlagen (wird ignoriert): %s", e)
 
     created = 0
     updated = 0
