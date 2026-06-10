@@ -62,17 +62,6 @@ jobs:
       - name: Install (linked skins repo)
         run: pnpm --dir /Volumes/Daten/Projekte/openbridge/obs-visu-skins install --frozen-lockfile
 
-      - name: Debug dev-link resolution
-        run: |
-          echo "--- app node_modules scope ---"
-          ls -la apps/visu/node_modules/@obs-visu-skins/ 2>/dev/null || echo "NO @obs-visu-skins DIR"
-          echo "--- realpath of the link ---"
-          readlink -f apps/visu/node_modules/@obs-visu-skins/ionic 2>/dev/null || echo "LINK MISSING"
-          echo "--- target reachable via /Volumes ---"
-          ls /Volumes/Daten/Projekte/openbridge/obs-visu-skins/packages/skins/ionic/renderers.ts 2>/dev/null || echo "TARGET MISSING"
-          echo "--- skin node_modules contract link ---"
-          readlink -f /Volumes/Daten/Projekte/openbridge/obs-visu-skins/packages/skins/ionic/node_modules/@obs/visu-contract 2>/dev/null || echo "CONTRACT LINK MISSING"
-
       - name: Build
         run: pnpm -r build
 
