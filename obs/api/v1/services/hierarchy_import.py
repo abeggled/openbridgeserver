@@ -10,11 +10,15 @@ from pydantic import BaseModel
 
 from obs.db.database import Database
 
+_GA_SCOPE_CHUNK_SIZE = 500
+
 
 class EtsImportRequest(BaseModel):
     tree_name: str
     mode: str  # "groups" | "mid" | "flat" | "buildings" | "trades"
     auto_link: bool = True  # automatically link DataPoints via GA addresses
+    replace_existing: bool = False  # replace existing auto-created ETS trees for this mode
+    group_addresses: list[str] | None = None  # optional scope for current .knxproj import
 
 
 class ImportResult(BaseModel):
@@ -22,6 +26,7 @@ class ImportResult(BaseModel):
     tree_name: str
     nodes_created: int
     links_created: int = 0
+    trees_replaced: int = 0
     message: str
 
 
@@ -35,6 +40,32 @@ def _new_id() -> str:
 
 def _ets_import_description(mode: str) -> str:
     return f"ets_import:{mode}"
+
+def _chunks(values: list[str], size: int) -> list[list[str]]:
+    return [values[i : i + size] for i in range(0, len(values), size)]
+
+
+async def _replace_existing_ets_trees(db: Database, mode: str) -> int:
+    """Delete auto-created ETS hierarchy trees for one mode, leaving manual trees untouched."""
+    source = _ets_import_description(mode)
+    rows = await db.fetchall(
+        "SELECT id FROM hierarchy_trees WHERE source=?",
+        (source,),
+    )
+    tree_ids = [row["id"] for row in rows]
+    if not tree_ids:
+        return 0
+
+    placeholders = ",".join("?" * len(tree_ids))
+    await db.execute_and_commit(
+        f"DELETE FROM hierarchy_trees WHERE id IN ({placeholders})",
+        tree_ids,
+    )
+    return len(tree_ids)
+
+
+async def replace_existing_ets_trees(db: Database, mode: str) -> int:
+    return await _replace_existing_ets_trees(db, mode)
 
 
 async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> ImportResult:
@@ -57,7 +88,24 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
         inserts.append((nid, tree_id, parent_id, name, desc, order, None, now, now))
 
     if request.mode in ("groups", "mid", "flat"):
-        rows = await db.fetchall("SELECT address, name, description, dpt, main_group_name, mid_group_name FROM knx_group_addresses ORDER BY address")
+        if request.group_addresses is not None:
+            scoped_addresses = list(dict.fromkeys(request.group_addresses))
+            rows = []
+            for chunk in _chunks(scoped_addresses, _GA_SCOPE_CHUNK_SIZE):
+                placeholders = ",".join("?" * len(chunk))
+                rows.extend(
+                    await db.fetchall(
+                        f"""SELECT address, name, description, dpt, main_group_name, mid_group_name
+                            FROM knx_group_addresses
+                            WHERE address IN ({placeholders})
+                            ORDER BY address""",
+                        chunk,
+                    )
+                )
+        else:
+            rows = await db.fetchall(
+                "SELECT address, name, description, dpt, main_group_name, mid_group_name FROM knx_group_addresses ORDER BY address"
+            )
         if not rows:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -232,9 +280,13 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
     node_inserts = [t for t in inserts if t[0] != "__link__"]
     link_sentinels = [t for t in inserts if t[0] == "__link__"]
 
+    trees_replaced = 0
+    if request.replace_existing:
+        trees_replaced = await _replace_existing_ets_trees(db, request.mode)
+
     await db.execute_and_commit(
-        "INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)",
-        (tree_id, request.tree_name, _ets_import_description(request.mode), now, now),
+        "INSERT INTO hierarchy_trees (id, name, description, source, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+        (tree_id, request.tree_name, _ets_import_description(request.mode), _ets_import_description(request.mode), now, now),
     )
 
     if node_inserts:
@@ -259,6 +311,8 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
         tree_name=request.tree_name,
         nodes_created=nodes_created,
         links_created=links_created,
+        trees_replaced=trees_replaced,
         message=f"Hierarchiebaum '{request.tree_name}' mit {nodes_created} Knoten erstellt"
+        + (f" ({trees_replaced} bestehende ETS-Hierarchien ersetzt)" if trees_replaced else "")
         + (f", {links_created} DataPoints automatisch verknüpft" if links_created else ""),
     )

@@ -55,20 +55,21 @@ async def test_device_parser_runs_in_threadpool(monkeypatch: pytest.MonkeyPatch)
     db = Database(":memory:")
     await db.connect()
     try:
-        parse_calls = []
+        calls = []
 
-        def _parse_devices(*_args, **_kwargs):
-            parse_calls.append(_args)
-            return (
-                [_device("dev-1", "1.1.10", "Kitchen Actuator")],
-                [_co("co-1", "1.1.10", 1, "Switch", ["DPT1.001"])],
-                [_co_link("co-1", "1/2/3")],
-            )
+        async def _run_in_threadpool(func, *args, **kwargs):
+            calls.append((func, args, kwargs))
+            return func(*args, **kwargs)
 
+        monkeypatch.setattr(knxproj_api, "run_in_threadpool", _run_in_threadpool)
         monkeypatch.setattr(
             knxproj_api,
             "parse_knxproj_devices",
-            _parse_devices,
+            lambda *_args, **_kwargs: (
+                [_device("dev-1", "1.1.10", "Kitchen Actuator")],
+                [_co("co-1", "1.1.10", 1, "Switch", ["DPT1.001"])],
+                [_co_link("co-1", "1/2/3")],
+            ),
         )
 
         imported_devices, imported_comm_objects = await knxproj_api._import_knx_devices_and_comm_objects(
@@ -80,7 +81,7 @@ async def test_device_parser_runs_in_threadpool(monkeypatch: pytest.MonkeyPatch)
 
         assert imported_devices == 1
         assert imported_comm_objects == 1
-        assert parse_calls == [(b"dummy", "secret")]
+        assert calls == [(knxproj_api.parse_knxproj_devices, (b"dummy", "secret"), {})]
     finally:
         await db.disconnect()
 

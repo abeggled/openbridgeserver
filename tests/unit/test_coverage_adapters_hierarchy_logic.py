@@ -1702,7 +1702,8 @@ class TestEtsImport:
         assert result.nodes_created == 3
         assert any(entry[0] == "executemany" and "hierarchy_nodes" in entry[1] for entry in db.committed)
 
-    async def test_create_ets_hierarchy_uses_all_group_addresses(self):
+    async def test_create_ets_hierarchy_scopes_groups_to_current_import_addresses(self, monkeypatch):
+        from obs.api.v1.services import hierarchy_import
         from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
 
         ga_rows = [
@@ -1719,7 +1720,7 @@ class TestEtsImport:
             async def fetchall(self, query, params=()):
                 self.queries.append((query, params))
                 if "knx_group_addresses" in query:
-                    return ga_rows
+                    return [row for row in ga_rows if row["address"] in params]
                 return []
 
             async def execute_and_commit(self, query, params=()):
@@ -1732,29 +1733,37 @@ class TestEtsImport:
             async def commit(self):
                 pass
 
+        monkeypatch.setattr(hierarchy_import, "_GA_SCOPE_CHUNK_SIZE", 2)
         db = _Db()
         result = await create_ets_hierarchy(
             db,
-            EtsImportRequest(tree_name="Scoped", mode="groups"),
+            EtsImportRequest(tree_name="Scoped", mode="groups", group_addresses=["1/2/3", "1/2/4", "9/9/8"]),
         )
 
         ga_queries = [(query, params) for query, params in db.queries if "knx_group_addresses" in query]
-        assert result.nodes_created == 7
-        assert [len(params) for _, params in ga_queries] == [0]
-        assert any("Stale" in row for row in db.node_rows)
+        assert result.nodes_created == 4
+        assert [len(params) for _, params in ga_queries] == [2, 1]
+        assert all("Stale" not in row for row in db.node_rows)
 
     @pytest.mark.asyncio
-    async def test_create_ets_hierarchy_without_addresses_raises_no_data(self):
+    async def test_create_ets_hierarchy_empty_scope_raises_no_data(self):
         from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
 
         with pytest.raises(HTTPException) as exc_info:
             await create_ets_hierarchy(
                 _DbStub(),
-                EtsImportRequest(tree_name="Scoped", mode="groups"),
+                EtsImportRequest(tree_name="Scoped", mode="groups", group_addresses=[]),
             )
 
         assert exc_info.value.status_code == 422
 
+    @pytest.mark.asyncio
+    async def test_replace_existing_ets_trees_returns_zero_without_auto_trees(self):
+        from obs.api.v1.services.hierarchy_import import replace_existing_ets_trees
+
+        result = await replace_existing_ets_trees(_DbStub(rows=[]), "groups")
+
+        assert result == 0
     @pytest.mark.asyncio
     async def test_create_ets_hierarchy_buildings_auto_links_datapoints(self):
         from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
@@ -1879,7 +1888,7 @@ class TestEtsImport:
         assert result.links_created == 0
 
     @pytest.mark.asyncio
-    async def test_create_ets_hierarchy_keeps_manual_trees_without_replace(self, tmp_path):
+    async def test_create_ets_hierarchy_replace_existing_keeps_manual_trees(self, tmp_path):
         from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
         from obs.db.database import Database
 
@@ -1892,8 +1901,8 @@ class TestEtsImport:
                 ("manual-tree", "Manual", "ets_import:groups", now, now),
             )
             await db.execute_and_commit(
-                "INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)",
-                ("old-ets-tree", "Old ETS", "custom text", now, now),
+                "INSERT INTO hierarchy_trees (id, name, description, source, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+                ("old-ets-tree", "Old ETS", "custom text", "ets_import:groups", now, now),
             )
             await db.execute_and_commit(
                 """INSERT INTO hierarchy_nodes
@@ -1910,25 +1919,25 @@ class TestEtsImport:
 
             first = await create_ets_hierarchy(
                 db,
-                EtsImportRequest(tree_name="ETS Gruppenadressen", mode="groups"),
+                EtsImportRequest(tree_name="ETS Gruppenadressen", mode="groups", replace_existing=True),
             )
             second = await create_ets_hierarchy(
                 db,
-                EtsImportRequest(tree_name="ETS Gruppenadressen", mode="groups"),
+                EtsImportRequest(tree_name="ETS Gruppenadressen", mode="groups", replace_existing=True),
             )
 
-            trees = await db.fetchall("SELECT id, description FROM hierarchy_trees ORDER BY id")
+            trees = await db.fetchall("SELECT id, description, source FROM hierarchy_trees ORDER BY id")
+            auto_trees = [row for row in trees if row["source"] == "ets_import:groups"]
             manual_trees = [row for row in trees if row["id"] == "manual-tree"]
-            auto_trees = [row for row in trees if row["id"].startswith("old-ets-tree") or row["id"] not in {"manual-tree", "old-ets-tree"}]
             old_nodes = await db.fetchall("SELECT id FROM hierarchy_nodes WHERE tree_id=?", ("old-ets-tree",))
 
-            assert first.nodes_created == 3
-            assert second.nodes_created == 3
-            assert len(auto_trees) == 3
+            assert first.trees_replaced == 1
+            assert second.trees_replaced == 1
+            assert len(auto_trees) == 1
             assert len(manual_trees) == 1
             assert manual_trees[0]["description"] == "ets_import:groups"
-            assert first.tree_id != second.tree_id
-            assert len(old_nodes) == 1
+            assert manual_trees[0]["source"] == ""
+            assert old_nodes == []
         finally:
             await db.disconnect()
 

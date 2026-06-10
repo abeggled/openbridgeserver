@@ -450,7 +450,7 @@ async def _create_requested_hierarchies(
     modes: list[str],
     *,
     auto_link: bool,
-    replace_existing: bool = True,
+    replace_existing: bool,
     group_addresses: list[str] | None = None,
     unavailable_messages: dict[str, str] | None = None,
 ) -> list[HierarchyImportResult]:
@@ -510,7 +510,7 @@ async def _create_requested_hierarchies(
                 tree_name=created.tree_name,
                 nodes_created=created.nodes_created,
                 links_created=created.links_created,
-                trees_replaced=getattr(created, "trees_replaced", 0),
+                trees_replaced=created.trees_replaced,
                 message=created.message,
             )
         )
@@ -625,20 +625,13 @@ async def import_knxproj_file(
     )
     await db.commit()
 
-    try:
-        await _import_knx_devices_and_comm_objects(file_bytes=content, password=pwd, db=db, now=now)
-    except Exception as e:
-        await db.rollback()
-        logger.warning("KNX-Geräte-Import fehlgeschlagen (wird ignoriert): %s", e)
-
     # Import Gebäude/Gewerke structure — already parsed in parallel above
     locations_count = 0
     functions_count = 0
     try:
         if locations_parse_ok:
-            if fn_records:
-                await db.execute_and_commit("DELETE FROM knx_function_ga_links")
-                await db.execute_and_commit("DELETE FROM knx_functions")
+            await db.execute_and_commit("DELETE FROM knx_function_ga_links")
+            await db.execute_and_commit("DELETE FROM knx_functions")
         if loc_records:
             await db.execute_and_commit("DELETE FROM knx_locations")
             await db.executemany(
@@ -715,18 +708,14 @@ async def import_knxproj_file(
         await db.rollback()
         logger.warning("Trades-Import fehlgeschlagen (wird ignoriert): %s", e)
 
-    devices_count = 0
-    comm_objects_count = 0
+    # Import Device Model (V34/V35) — optional and backward compatible.
+    # On failure roll back the partial device snapshot so the GA/location/trade
+    # import path stays intact and the subsequent adapter import can still commit.
     try:
-        devices_count, comm_objects_count = await _import_knx_devices_and_comm_objects(
-            file_bytes=content,
-            password=pwd,
-            db=db,
-            now=now,
-        )
+        await _import_knx_devices_and_comm_objects(file_bytes=content, password=pwd, db=db, now=now)
     except Exception as e:
         await db.rollback()
-        logger.warning("KNX-Geraeteimport fehlgeschlagen (wird ignoriert): %s", e)
+        logger.warning("KNX-Geräteimport fehlgeschlagen (wird ignoriert): %s", e)
 
     created = 0
     updated = 0
@@ -760,10 +749,6 @@ async def import_knxproj_file(
         extra.append(f"{locations_count} Räume/Gebäude")
     if trades_count:
         extra.append(f"{trades_count} Gewerke")
-    if devices_count:
-        extra.append(f"{devices_count} Geraete")
-    if comm_objects_count:
-        extra.append(f"{comm_objects_count} Kommunikationsobjekte")
     if adapter_name:
         extra.append(f"{created} DataPoints neu erstellt")
         extra.append(f"{updated} aktualisiert")
