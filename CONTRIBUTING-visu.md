@@ -127,9 +127,10 @@ startet leer).
 ## Pre-Push-Hook
 
 Visu-Branches sind **JS-only** (Pfade `packages/contract`, `apps/visu/src`). Das committete
-**Backend-`ruff`-Pre-Push-Gate** ist für sie **irrelevant** und scheitert zudem an einem
-**vorbestehenden Backend-Fehler** (`knxproj.py` → `get_admin_user`), der nichts mit den
-Visu-Diffs zu tun hat.
+**Backend-Pre-Push-Gate** (ruff + GUI-Vitest + i18n) ist für sie **irrelevant** und dauert
+Minuten. *(Der frühere harte Blocker — `knxproj.py` → `get_admin_user` — ist seit dem
+main-Sync vom 10.06.2026 behoben; der Bypass ist seither reine Zeitersparnis, kein
+Workaround mehr. `visu-ci` deckt alle Visu-Gates ab.)*
 
 Deshalb wird der Hook für Visu-Pushes gezielt umgangen:
 
