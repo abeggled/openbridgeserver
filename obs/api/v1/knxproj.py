@@ -30,7 +30,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from obs.api.auth import get_admin_user, get_current_user
-from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy, replace_existing_ets_trees
+from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
 from obs.db.database import Database, get_db
 from obs.knxproj.csv_parser import parse_ga_csv
 from obs.knxproj.parser import (
@@ -456,15 +456,11 @@ async def _create_requested_hierarchies(
     for mode in modes:
         tree_name = _HIERARCHY_MODE_NAMES[mode]
         if mode in unavailable_messages:
-            trees_replaced = 0
-            if replace_existing:
-                trees_replaced = await replace_existing_ets_trees(db, mode)
             results.append(
                 HierarchyImportResult(
                     mode=mode,
                     status="failed",
                     tree_name=tree_name,
-                    trees_replaced=trees_replaced,
                     message=unavailable_messages[mode],
                 )
             )

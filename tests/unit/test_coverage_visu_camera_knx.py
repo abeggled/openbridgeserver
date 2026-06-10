@@ -1017,14 +1017,11 @@ class TestImportKnxprojFile:
         assert "boom" in results[1].message
 
     @pytest.mark.asyncio
-    async def test_create_requested_hierarchies_replaces_unavailable_modes_when_requested(self):
+    async def test_create_requested_hierarchies_preserves_unavailable_modes_when_replace_requested(self):
         from obs.api.v1.knxproj import _create_requested_hierarchies
 
         db = _make_db()
-        with (
-            patch("obs.api.v1.knxproj.create_ets_hierarchy", new_callable=AsyncMock) as create_mock,
-            patch("obs.api.v1.knxproj.replace_existing_ets_trees", new_callable=AsyncMock, return_value=1) as replace_mock,
-        ):
+        with patch("obs.api.v1.knxproj.create_ets_hierarchy", new_callable=AsyncMock) as create_mock:
             results = await _create_requested_hierarchies(
                 db,
                 ["buildings"],
@@ -1034,9 +1031,8 @@ class TestImportKnxprojFile:
             )
 
         create_mock.assert_not_awaited()
-        replace_mock.assert_awaited_once_with(db, "buildings")
         assert results[0].status == "failed"
-        assert results[0].trees_replaced == 1
+        assert results[0].trees_replaced == 0
         assert results[0].message == "Keine Gebäude-Daten"
 
     @pytest.mark.asyncio
