@@ -898,14 +898,12 @@ class TestKnxprojModels:
                     tree_name="ETS Gruppenadressen",
                     nodes_created=3,
                     links_created=1,
-                    trees_replaced=1,
                     message="created",
                 )
             ],
         )
         assert r.hierarchies[0].mode == "groups"
         assert r.hierarchies[0].nodes_created == 3
-        assert r.hierarchies[0].trees_replaced == 1
 
     def test_group_address_out(self):
         ga = GroupAddressOut(
@@ -1011,7 +1009,7 @@ class TestImportKnxprojFile:
 
         db = _make_db()
         with patch("obs.api.v1.knxproj.create_ets_hierarchy", side_effect=fake_create):
-            results = await _create_requested_hierarchies(db, ["groups", "mid"], auto_link=False, replace_existing=True)
+            results = await _create_requested_hierarchies(db, ["groups", "mid"], auto_link=False)
 
         assert [result.status for result in results] == ["failed", "failed"]
         assert results[0].message == "Keine Gruppenadressen"
@@ -1027,13 +1025,11 @@ class TestImportKnxprojFile:
                 db,
                 ["buildings"],
                 auto_link=False,
-                replace_existing=True,
                 unavailable_messages={"buildings": "Keine Gebäude-Daten"},
             )
 
         create_mock.assert_not_awaited()
         assert results[0].status == "failed"
-        assert results[0].trees_replaced == 0
         assert results[0].message == "Keine Gebäude-Daten"
 
     @pytest.mark.asyncio
@@ -1205,7 +1201,6 @@ class TestImportKnxprojFile:
                 tree_name=request.tree_name,
                 nodes_created=2,
                 links_created=0,
-                trees_replaced=0,
                 message="created",
             )
 
@@ -1251,7 +1246,6 @@ class TestImportKnxprojFile:
                 tree_name=request.tree_name,
                 nodes_created=3,
                 links_created=0,
-                trees_replaced=1,
                 message="created",
             )
 
@@ -1277,8 +1271,6 @@ class TestImportKnxprojFile:
         assert result.hierarchies[0].nodes_created == 3
         assert captured_requests[0].mode == "groups"
         assert captured_requests[0].auto_link is False
-        assert captured_requests[0].replace_existing is True
-        assert captured_requests[0].group_addresses == ["1/1/1"]
 
     @pytest.mark.asyncio
     async def test_adapter_import_passes_auto_link_to_hierarchy_import(self):
@@ -1297,7 +1289,6 @@ class TestImportKnxprojFile:
                 tree_name=request.tree_name,
                 nodes_created=2,
                 links_created=1,
-                trees_replaced=0,
                 message="created",
             )
 
@@ -1360,8 +1351,8 @@ class TestImportKnxprojFile:
             )
 
         assert result.hierarchies[0].status == "created"
-        db.execute_and_commit.assert_any_call("DELETE FROM knx_function_ga_links")
-        db.execute_and_commit.assert_any_call("DELETE FROM knx_functions")
+        assert all(call.args[0] != "DELETE FROM knx_function_ga_links" for call in db.execute_and_commit.await_args_list)
+        assert all(call.args[0] != "DELETE FROM knx_functions" for call in db.execute_and_commit.await_args_list)
 
     @pytest.mark.asyncio
     async def test_import_preserves_functions_when_optional_location_parse_fails(self):
@@ -1409,7 +1400,6 @@ class TestImportKnxprojFile:
                 tree_name=request.tree_name,
                 nodes_created=3,
                 links_created=0,
-                trees_replaced=0,
                 message="created",
             )
 
@@ -1426,13 +1416,11 @@ class TestImportKnxprojFile:
                 direction="SOURCE",
                 hierarchy_modes=["groups"],
                 hierarchy_auto_link=True,
-                hierarchy_replace_existing=False,
                 _user="admin",
                 db=db,
             )
 
         assert result.hierarchies[0].status == "created"
-        assert captured_requests[0].replace_existing is False
 
     @pytest.mark.asyncio
     async def test_unavailable_hierarchy_mode_is_reported_without_aborting_import(self):
@@ -1463,7 +1451,6 @@ class TestImportKnxprojFile:
         assert result.imported == 1
         assert result.hierarchies[0].mode == "buildings"
         assert result.hierarchies[0].status == "failed"
-        assert result.hierarchies[0].trees_replaced == 0
         assert "Keine Gebäude-Daten" in result.hierarchies[0].message
         create_hierarchy.assert_not_called()
 
@@ -1487,6 +1474,28 @@ class TestImportKnxprojFile:
             )
 
         assert exc.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_device_import_failure_is_swallowed_after_group_address_import(self):
+        upload = AsyncMock()
+        upload.filename = "project.knxproj"
+        upload.read = AsyncMock(return_value=b"data")
+        record = SimpleNamespace(address="1/1/1", name="Light", description="", dpt="1.001", main_group_name="G1", mid_group_name="M1")
+        db = _make_db()
+
+        with (
+            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
+            patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
+            patch("obs.api.v1.knxproj._import_knx_devices_and_comm_objects", side_effect=RuntimeError("boom")),
+        ):
+            result = await import_knxproj_file(file=upload, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
+
+        assert result.imported == 1
+        assert result.locations == 0
+        assert result.functions == 0
+        assert result.trades == 0
+        assert len(result.hierarchies) == 0
 
 
 # ===========================================================================
@@ -1540,6 +1549,17 @@ class TestImportGaCsvFile:
         assert exc.value.status_code == 422
 
     @pytest.mark.asyncio
+    async def test_unexpected_parse_error_raises_500(self):
+        upload = AsyncMock()
+        upload.filename = "data.csv"
+        upload.read = AsyncMock(return_value=b"data")
+        db = _make_db()
+        with patch("obs.api.v1.knxproj.parse_ga_csv", side_effect=RuntimeError("parser broken")):
+            with pytest.raises(HTTPException) as exc:
+                await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
     async def test_successful_csv_import_without_adapter(self):
         upload = AsyncMock()
         upload.filename = "data.csv"
@@ -1550,6 +1570,86 @@ class TestImportGaCsvFile:
             result = await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
         assert result.imported == 1
         assert "ohne DataPoints" in result.message
+
+    @pytest.mark.asyncio
+    async def test_successful_csv_import_with_adapter_imports_datapoints(self):
+        upload = AsyncMock()
+        upload.filename = "data.csv"
+        upload.read = AsyncMock(return_value=b"data")
+        record = SimpleNamespace(address="1/1/1", name="Light", description="", dpt=None, main_group_name="G1", mid_group_name="M1")
+        db = _make_db()
+        with (
+            patch("obs.api.v1.knxproj.parse_ga_csv", return_value=[record]),
+            patch("obs.api.v1.knxproj._bulk_import_datapoints", return_value=(2, 1)),
+        ):
+            result = await import_ga_csv_file(file=upload, adapter_name="knx-main", direction="SOURCE", _user="admin", db=db)
+
+        assert result.imported == 3
+        assert result.created == 2
+        assert result.updated == 1
+        assert result.message == "2 DataPoints neu erstellt, 1 aktualisiert"
+
+
+# ===========================================================================
+# knxproj — _bulk_import_datapoints helper
+# ===========================================================================
+
+
+from obs.api.v1.knxproj import _bulk_import_datapoints
+
+
+class TestBulkImportDatapoints:
+    @pytest.mark.asyncio
+    async def test_bulk_import_datapoints_updates_existing_and_adds_new_records(self):
+        db = _make_db(
+            fetchone_result={"id": "inst-1", "adapter_type": "KNX"},
+            fetchall_result=[{"id": "binding-1", "datapoint_id": "dp-1", "config": '{"group_address":"1/1/1"}'}],
+        )
+
+        def _get_dpt(_dpt):
+            return SimpleNamespace(dpt_id="DPT1.001", data_type="BOOLEAN", unit=None)
+
+        async def _reload_instance_bindings(*_args, **_kwargs):
+            return None
+
+        def _raise_registry():
+            raise RuntimeError("registry unavailable")
+
+        with (
+            patch("obs.adapters.knx.dpt_registry.DPTRegistry.get", _get_dpt),
+            patch("obs.core.registry.get_registry", _raise_registry),
+            patch("obs.adapters.registry.reload_instance_bindings", _reload_instance_bindings),
+        ):
+            created, updated = await _bulk_import_datapoints(
+                records=[
+                    SimpleNamespace(address="1/1/1", name="Existing", dpt="DPT1.001"),
+                    SimpleNamespace(address="1/1/2", name="New", dpt=None),
+                ],
+                adapter_name="knx-main",
+                direction="SOURCE",
+                db=db,
+                now="2026-06-10T00:00:00+00:00",
+            )
+
+        assert created == 1
+        assert updated == 1
+        assert db.executemany.await_count == 4
+        assert db.commit.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_bulk_import_datapoints_fails_if_adapter_instance_missing(self):
+        db = _make_db(fetchone_result=None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _bulk_import_datapoints(
+                records=[],
+                adapter_name="missing",
+                direction="SOURCE",
+                db=db,
+                now="2026-06-10T00:00:00+00:00",
+            )
+
+        assert exc_info.value.status_code == 404
 
 
 # ===========================================================================

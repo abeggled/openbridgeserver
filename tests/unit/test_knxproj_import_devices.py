@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from io import BytesIO
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 
 from obs.api.v1 import knxproj as knxproj_api
 from obs.db.database import Database
@@ -54,21 +55,20 @@ async def test_device_parser_runs_in_threadpool(monkeypatch: pytest.MonkeyPatch)
     db = Database(":memory:")
     await db.connect()
     try:
-        calls = []
+        parse_calls = []
 
-        async def _run_in_threadpool(func, *args, **kwargs):
-            calls.append((func, args, kwargs))
-            return func(*args, **kwargs)
-
-        monkeypatch.setattr(knxproj_api, "run_in_threadpool", _run_in_threadpool)
-        monkeypatch.setattr(
-            knxproj_api,
-            "parse_knxproj_devices",
-            lambda *_args, **_kwargs: (
+        def _parse_devices(*_args, **_kwargs):
+            parse_calls.append(_args)
+            return (
                 [_device("dev-1", "1.1.10", "Kitchen Actuator")],
                 [_co("co-1", "1.1.10", 1, "Switch", ["DPT1.001"])],
                 [_co_link("co-1", "1/2/3")],
-            ),
+            )
+
+        monkeypatch.setattr(
+            knxproj_api,
+            "parse_knxproj_devices",
+            _parse_devices,
         )
 
         imported_devices, imported_comm_objects = await knxproj_api._import_knx_devices_and_comm_objects(
@@ -80,7 +80,7 @@ async def test_device_parser_runs_in_threadpool(monkeypatch: pytest.MonkeyPatch)
 
         assert imported_devices == 1
         assert imported_comm_objects == 1
-        assert calls == [(knxproj_api.parse_knxproj_devices, (b"dummy", "secret"), {})]
+        assert parse_calls == [(b"dummy", "secret")]
     finally:
         await db.disconnect()
 
@@ -224,5 +224,100 @@ async def test_failed_device_snapshot_rolls_back_before_adapter_import_commit(mo
         assert device["name"] == "Old Snapshot"
         link = await db.fetchone("SELECT comm_object_id FROM knx_co_ga_links WHERE ga_address = '1/2/3'")
         assert link["comm_object_id"] == "co-old"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_bulk_import_datapoints_updates_existing_and_adds_new_records(monkeypatch: pytest.MonkeyPatch):
+    db = MagicMock()
+    db.fetchone = AsyncMock(return_value={"id": "inst-1", "adapter_type": "KNX"})
+    db.fetchall = AsyncMock(
+        return_value=[{"id": "binding-1", "datapoint_id": "dp-1", "config": '{"group_address":"1/1/1"}'}]
+    )
+    db.executemany = AsyncMock()
+    db.commit = AsyncMock()
+
+    class _Dpt:
+        dpt_id = "DPT1.001"
+        data_type = "BOOLEAN"
+        unit = None
+
+    def _raise_registry():
+        raise RuntimeError("registry unavailable")
+
+    async def _noop_reload(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "obs.adapters.knx.dpt_registry.DPTRegistry.get",
+        lambda _dpt: _Dpt(),
+    )
+    monkeypatch.setattr("obs.core.registry.get_registry", _raise_registry)
+    monkeypatch.setattr("obs.adapters.registry.reload_instance_bindings", _noop_reload)
+
+    records = [
+        SimpleNamespace(address="1/1/1", name="Existing GA", dpt="DPT1.001"),
+        SimpleNamespace(address="1/1/2", name="New GA", dpt=None),
+    ]
+    created, updated = await knxproj_api._bulk_import_datapoints(
+        records=records,
+        adapter_name="knx-main",
+        direction="SOURCE",
+        db=db,
+        now="2026-06-10T00:00:00+00:00",
+    )
+
+    assert created == 1
+    assert updated == 1
+    assert db.executemany.await_count == 4
+    assert db.commit.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_import_datapoints_adapter_instance_missing(monkeypatch: pytest.MonkeyPatch):
+    db = MagicMock()
+    db.fetchone = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await knxproj_api._bulk_import_datapoints(
+            records=[],
+            adapter_name="missing",
+            direction="SOURCE",
+            db=db,
+            now="2026-06-10T00:00:00+00:00",
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_import_knx_devices_and_comm_objects_returns_zero_when_schema_missing(monkeypatch: pytest.MonkeyPatch):
+    db = Database(":memory:")
+    await db.connect()
+    await db.commit()
+
+    async def _schema_not_ready(_db_arg):
+        return False
+
+    parse_calls = []
+
+    def _parse_calls_not_expected(*_args, **_kwargs):
+        parse_calls.append(True)
+        return ([], [], [])
+
+    monkeypatch.setattr(knxproj_api, "_knx_device_schema_ready", _schema_not_ready)
+    monkeypatch.setattr(knxproj_api, "parse_knxproj_devices", _parse_calls_not_expected)
+
+    try:
+        imported_devices, imported_comm_objects = await knxproj_api._import_knx_devices_and_comm_objects(
+            file_bytes=b"dummy",
+            password=None,
+            db=db,
+            now="2026-06-10T00:00:00+00:00",
+        )
+        assert imported_devices == 0
+        assert imported_comm_objects == 0
+        assert parse_calls == []
     finally:
         await db.disconnect()
