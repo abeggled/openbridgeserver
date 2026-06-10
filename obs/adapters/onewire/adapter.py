@@ -78,18 +78,18 @@ class OneWireAdapter(AdapterBase):
                 "1-Wire path %s not found — adapter disabled (Linux only, needs w1-therm kernel module)",
                 w1_path,
             )
-            await self._publish_status(False, f"{w1_path} not found")
+            await self._publish_status(False, f"{w1_path} not found", code="pathNotFound", params={"path": w1_path})
             return
 
         self._available = True
-        await self._publish_status(True, f"1-Wire bus at {w1_path}")
+        await self._publish_status(True, f"1-Wire bus at {w1_path}", code="onewireBusAt", params={"path": w1_path})
         logger.info("1-Wire adapter connected: %s", w1_path)
 
     async def disconnect(self) -> None:
         for t in self._poll_tasks:
             t.cancel()
         self._poll_tasks.clear()
-        await self._publish_status(False, "Disconnected")
+        await self._publish_status(False, "Disconnected", code="disconnected")
 
     # ------------------------------------------------------------------
     # Bindings

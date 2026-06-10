@@ -128,7 +128,7 @@ class MqttAdapter(AdapterBase):
             import aiomqtt  # noqa: F401
         except ImportError:
             logger.error("aiomqtt not installed — MQTT adapter disabled")
-            await self._publish_status(False, "aiomqtt not installed")
+            await self._publish_status(False, "aiomqtt not installed", code="libNotInstalled", params={"lib": "aiomqtt"})
             return
 
         self._cfg = MqttAdapterConfig(**self._config)
@@ -150,7 +150,12 @@ class MqttAdapter(AdapterBase):
             self._tls_context = ctx
 
         self._pub_task = asyncio.create_task(self._publisher_loop(), name="mqtt-adapter-pub")
-        await self._publish_status(False, f"Connecting to {self._cfg.host}:{self._cfg.port}...")
+        await self._publish_status(
+            False,
+            f"Connecting to {self._cfg.host}:{self._cfg.port}...",
+            code="connecting",
+            params={"host": self._cfg.host, "port": self._cfg.port},
+        )
         logger.info("MQTT adapter started → %s:%d", self._cfg.host, self._cfg.port)
 
     async def disconnect(self) -> None:
@@ -164,7 +169,7 @@ class MqttAdapter(AdapterBase):
         self._pub_task = None
         self._sub_task = None
         self._topic_map.clear()
-        await self._publish_status(False, "Disconnected")
+        await self._publish_status(False, "Disconnected", code="disconnected")
 
     # ------------------------------------------------------------------
     # Bindings
@@ -314,7 +319,12 @@ class MqttAdapter(AdapterBase):
                     identifier=self._pub_client_id,
                     tls_context=self._tls_context,
                 ) as client:
-                    await self._publish_status(True, f"Connected to {cfg.host}:{cfg.port}")
+                    await self._publish_status(
+                        True,
+                        f"Connected to {cfg.host}:{cfg.port}",
+                        code="connectedTo",
+                        params={"host": cfg.host, "port": cfg.port},
+                    )
                     logger.info("MQTT adapter publisher connected")
                     while True:
                         topic, payload, retain = await self._publish_queue.get()
@@ -324,7 +334,12 @@ class MqttAdapter(AdapterBase):
                 raise
             except Exception:
                 logger.exception("MQTT adapter publisher error, reconnecting in 5 s")
-                await self._publish_status(False, f"Reconnecting to {cfg.host}:{cfg.port}...")
+                await self._publish_status(
+                    False,
+                    f"Reconnecting to {cfg.host}:{cfg.port}...",
+                    code="reconnecting",
+                    params={"host": cfg.host, "port": cfg.port},
+                )
                 await asyncio.sleep(5)
 
     # ------------------------------------------------------------------

@@ -364,7 +364,7 @@ class TestReconnect:
         await socket.disconnect()
 
         assert adapter._socket is None
-        adapter._publish_status.assert_awaited_once_with(False, "Socket.IO getrennt")
+        adapter._publish_status.assert_awaited_once_with(False, "Socket.IO getrennt", code="socketDisconnected")
         adapter._ensure_reconnect_task.assert_called_once()
 
     @pytest.mark.asyncio
