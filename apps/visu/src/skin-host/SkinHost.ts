@@ -96,6 +96,10 @@ export default defineComponent({
           {
             key: item.id,
             class: 'skin-host-cell',
+            // The host resolves the device id of a tapped tile from the cell
+            // (OverviewGrid → tileIdFor → cell.dataset.id), so the gesture maps to
+            // a canonical action. Without it, every tap resolves no id → no-op.
+            'data-id': item.id,
             'data-group': item.group,
             'data-role': item.role,
             // Grid footprint: only meaningful in a role-honouring grid model.

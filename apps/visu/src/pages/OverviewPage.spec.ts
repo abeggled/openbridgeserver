@@ -112,6 +112,28 @@ describe('OverviewPage — mounts and renders the room-grouped overview', () => 
     expect(wrapper.find('.jal-body').exists()).toBe(true); // jalousie
   });
 
+  it('tapping a tile dispatches its canonical action to the store (data-id wiring)', async () => {
+    // Regression: the host resolves the tapped tile's device id from the cell's
+    // data-id (OverviewGrid → tileIdFor → cell.dataset.id). When that attribute
+    // was missing, every tap resolved no id and silently no-op'd — taps did
+    // nothing although the markup rendered fine. Guard the full gesture → store path.
+    await seedStore();
+    const store = useDeviceStore();
+    const wrapper = await mountOverview();
+
+    const id = 'kueche-wand'; // first mobile light (Wandleuchten), starts off
+    const lightOn = () => (store.byId(id) as { on?: boolean } | undefined)?.on;
+    expect(lightOn()).toBe(false);
+
+    // every cell must carry its device id for the gesture mapping to work
+    const cell = wrapper.findAll('.skin-host-cell').find((c) => c.attributes('data-id') === id);
+    expect(cell).toBeDefined();
+
+    // tap the light tile → the host dispatches `toggle` onto the core store
+    await cell!.find('[data-type="light"]').trigger('click');
+    expect(lightOn()).toBe(true);
+  });
+
   it('exposes the ionic tweak controls when the panel is opened (A6, page owns values)', async () => {
     await seedStore();
     const wrapper = await mountOverview();
