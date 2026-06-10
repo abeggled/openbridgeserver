@@ -21,6 +21,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # M2 dev-link (CONTRIBUTING-visu.md → "Dev-Link"): apps/visu depends on the
+      # ionic skin via an absolute `link:` path, and the skin links back to the
+      # contract the same way. The runner recreates that local topology: check out
+      # the skins repo and symlink both absolute paths onto the workspace.
+      # Removed at release, when the links become published npm versions.
+      - uses: actions/checkout@v4
+        with:
+          repository: Micsi/obs-visu-skins
+          ref: feat/visu-m2-ionic
+          path: .obs-visu-skins
+
+      - name: Recreate dev-link paths
+        run: |
+          sudo mkdir -p /Volumes/Daten/Projekte/openbridge
+          sudo ln -s "$GITHUB_WORKSPACE/.obs-visu-skins" /Volumes/Daten/Projekte/openbridge/obs-visu-skins
+          sudo ln -s "$GITHUB_WORKSPACE" /Volumes/Daten/Projekte/openbridge/openbridgeserver-visu-integrate
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -32,6 +49,11 @@ jobs:
 
       - name: Install
         run: pnpm install --frozen-lockfile
+
+      # The linked skin resolves @obs/visu-contract through its own node_modules,
+      # so the skins workspace needs its install too (links only, no registry).
+      - name: Install (linked skins repo)
+        run: pnpm --dir /Volumes/Daten/Projekte/openbridge/obs-visu-skins install --frozen-lockfile
 
       - name: Build
         run: pnpm -r build

@@ -93,10 +93,31 @@ Skin den Vertrag über die Symlink-Kette. Verifiziert per Vitest
 ## CI-Gates
 
 - **Fork:** `lint`, `typecheck`, `build`, **Vitest** (Pflicht bei GUI-Änderungen),
-  Schema-Validierung des Vertrags.
+  Schema-Validierung des Vertrags. Während der Dev-Link-Phase checkt `visu-ci`
+  zusätzlich das Skins-Repo aus und baut die absoluten `link:`-Pfade per Symlink
+  nach (Step „Recreate dev-link paths" — entfällt beim Release).
 - **Skins-Repo:** `lint`, `typecheck`, `build` **+ Konformitätslauf** — CI bricht bei
   `gap`/`broken` für die Ziel-Vertragsversion. `support.json` wird als Artefakt abgelegt.
 - **Definition of Done eines Skins:** die Fixture-Wand ist grün.
+
+## Visual-Gate (Pflicht bei UI-Änderungen)
+
+**Build + jsdom-Mount-Tests beweisen keine Pixel.** Die M2-Abnahme war „grün", obwohl
+Grid, Theme-Hintergrund, Icons und Header im echten Browser sichtbar kaputt waren —
+CSS-Integration (Skin-Stylesheet × Host-Markup) fällt nur im Browser auf. Deshalb gilt
+für jede Änderung, die Rendering/Layout/Theme berührt:
+
+1. Dev-Server starten und die betroffene Seite **im echten Browser** ansehen
+   (Mobile-Viewport, Theme `image` als härtester Fall).
+2. **Screenshot-Vergleich gegen den Prototyp** (`reference/vue-ionic/`): Raster,
+   Raumtrennung, Lesbarkeit der Labels, Icons, Detail-Modal (Long-Press).
+3. Befund im PR dokumentieren (Screenshot anhängen oder „visuell verifiziert gegen
+   Prototyp" mit Datum/Viewport).
+4. Milestone-Abnahmen (`visu-m*`-Tag) enthalten den Visual-Check verpflichtend —
+   ein Tag wird nur auf einen visuell verifizierten Stand gesetzt.
+
+Subagent-Prompts für UI-Arbeit müssen diesen Check explizit enthalten (deren Kontext
+startet leer).
 
 ## Pre-Push-Hook
 
