@@ -123,6 +123,9 @@
       "uncertain": "Unbekannt",
       "bad": "Schlecht"
     },
+    "diagnostics": {
+      "typeMismatch": "Typkonflikt: erwartet {expected}, erhalten {got} von {source} ({count}x)"
+    },
     "detail": {
       "backToList": "← Objekte",
       "currentValue": "Aktueller Wert",
@@ -323,11 +326,14 @@
         "sampleMustBeJsonObjectOrArray": "Sample muss ein JSON-Objekt oder Array sein",
         "selectAdapterInstance": "Bitte eine Adapter-Instanz wählen"
       },
-      "knxSection": "KNX Binding",
+      "knxSection": "KNX-Verknüpfung",
       "dptLabel": "DPT *",
       "respondToReadLabel": "Antworte auf Leseanfragen",
       "respondToReadHint": "Sendet den aktuellen Wert als GroupValueResponse wenn eine Leseanfrage eingeht.",
       "respondToReadPersistHint": "Erfordert aktiviertes „Letzten Wert speichern\" am Objekt.",
+      "groupAddressLoading": "Suche …",
+      "groupAddressNoResults": "Keine Gruppenadressen gefunden",
+      "groupAddressNoImport": "(.knxproj noch nicht importiert)",
       "modbusSection": "Modbus Binding",
       "addressLabel": "Adresse *",
       "registerTypeLabel": "Registertyp *",
@@ -624,7 +630,7 @@
       "scan": {
         "title": "KNX/IP-Geräte suchen",
         "button": "Suchen",
-        "noResultsDocker": "Keine Geräte per Multicast gefunden (typisch bei Docker-Netzwerk) — bitte Connection Type und Host unten manuell konfigurieren.",
+        "noResultsDocker": "Keine Geräte per Multicast gefunden (typisch bei Docker-Netzwerk) — bitte Verbindungstyp und Host unten manuell konfigurieren.",
         "resultCount": "{n} Gerät(e) — auswählen zum Übernehmen:",
         "physAddr": "PA:",
         "badge": {
@@ -632,12 +638,12 @@
           "tcp": "TCP",
           "routing": "Routing",
           "secure": "Secure",
-          "secureRequired": "Secure required"
+          "secureRequired": "Secure erforderlich"
         },
         "failed": "Scan fehlgeschlagen"
       },
       "form": {
-        "connectionTypeLabel": "Connection Type",
+        "connectionTypeLabel": "Verbindungstyp",
         "connectionTypeUdp": "Tunneling UDP",
         "connectionTypeTcp": "Tunneling TCP",
         "connectionTypeSecure": "Tunneling Secure (TCP)",
@@ -646,12 +652,12 @@
         "hostLabel": "Host",
         "hostHint": "IP des KNX/IP-Interfaces",
         "portLabel": "Port",
-        "localIpLabel": "Local IP",
+        "localIpLabel": "Lokale IP",
         "localIpOptional": "optional",
         "localIpPlaceholder": "leer = nicht gesetzt",
         "localIpTunnelingHint": "Netzwerkinterface für lokalen Socket (optional)",
         "localIpRoutingHint": "Netzwerkinterface für Multicast (optional)",
-        "individualAddressLabel": "Individual Address",
+        "individualAddressLabel": "Physikalische Adresse",
         "individualAddressSourceHint": "Quelladresse",
         "multicastGroupLabel": "Multicast-Gruppe",
         "multicastGroupHint": "KNX-Standard: 224.0.23.12"
@@ -662,22 +668,138 @@
       },
       "keyfile": {
         "reupload": "Neu hochladen",
-        "savedHint": "Keyfile gespeichert. Zum Ändern ein neues hochladen.",
-        "fromKeyfileHint": "aus Keyfile",
+        "savedHint": "Schlüsseldatei gespeichert. Zum Ändern eine neue hochladen.",
+        "fromKeyfileHint": "aus Schlüsseldatei",
         "change": "Ändern",
         "noTunnels": "Keine Tunneling-Interfaces im Keyfile gefunden.",
         "selectTunnel": "Tunnel auswählen",
         "physAddrCol": "PA:",
-        "userIdCol": "User:",
-        "secureGAsCol": "Secure GAs:",
-        "noBackbone": "Kein Backbone im Keyfile gefunden.",
+        "userIdCol": "Benutzer:",
+        "secureGAsCol": "Secure-GAs:",
+        "noBackbone": "Kein Backbone in der Schlüsseldatei gefunden.",
         "backboneInfo": "Backbone: {addr} · Latenz: {ms} ms",
         "uploadHint": "ETS-Schlüsselbackup (.knxkeys) hochladen",
-        "fileLabel": "Keyfile",
+        "fileLabel": "Schlüsseldatei",
         "passwordLabel": "Passwort",
-        "passwordPlaceholder": "Keyfile-Passwort",
+        "passwordPlaceholder": "Passwort der Schlüsseldatei",
         "uploadButton": "Hochladen & Parsen",
         "uploadFailed": "Upload fehlgeschlagen"
+      }
+    },
+    "schema": {
+      "MODBUS_TCP": {
+        "serialize_reads": {
+          "title": "Lesezugriffe serialisieren",
+          "description": "Sendet Modbus-Requests nacheinander statt gleichzeitig. Empfohlen für einfache Geräte (Heizungsregler, Wechselrichter, Zähler), die nur einen Request gleichzeitig verarbeiten können. Deaktivieren bei leistungsstarken PLCs mit Multi-Request-Unterstützung."
+        },
+        "startup_jitter_s": {
+          "title": "Startup-Jitter (s)",
+          "description": "Maximale zufällige Verzögerung (Sekunden) vor dem ersten Poll jedes Bindings. Verhindert einen Request-Burst wenn alle Tasks gleichzeitig starten. 0 = deaktiviert."
+        }
+      },
+      "SNMP": {
+        "version": {
+          "title": "SNMP-Version"
+        },
+        "community": {
+          "title": "Community-String (v1/v2c)"
+        },
+        "security_name": {
+          "title": "Security Name / Benutzername (v3)"
+        },
+        "security_level": {
+          "title": "Sicherheitsstufe (v3)"
+        },
+        "auth_protocol": {
+          "title": "Auth-Protokoll (v3)"
+        },
+        "auth_key": {
+          "title": "Auth-Key (v3)"
+        },
+        "priv_protocol": {
+          "title": "Privacy-Protokoll (v3)"
+        },
+        "priv_key": {
+          "title": "Privacy-Key (v3)"
+        }
+      },
+      "ZEITSCHALTUHR": {
+        "latitude": {
+          "title": "Breitengrad",
+          "description": "Breitengrad für Sonnenauf/-untergang"
+        },
+        "longitude": {
+          "title": "Längengrad",
+          "description": "Längengrad für Sonnenauf/-untergang"
+        },
+        "altitude": {
+          "title": "Höhe ü.M. (m)",
+          "description": "Höhe ü.M. in Metern"
+        },
+        "timezone": {
+          "title": "Zeitzone",
+          "description": "Zeitzone (leer = App-Zeitzone, z.B. Europe/Zurich)"
+        },
+        "holiday_country": {
+          "title": "Feiertagsland",
+          "description": "Feiertagsland (ISO 3166-1: DE, AT, CH, FR …)"
+        },
+        "holiday_subdivision": {
+          "title": "Kanton / Bundesland",
+          "description": "Kanton/Bundesland (z.B. ZH, BY, OÖ) — leer = nur nationale Feiertage"
+        },
+        "holiday_language": {
+          "title": "Feiertagssprache",
+          "description": "Sprache der Feiertagsnamen (de, fr, it, en) — Standard: de"
+        },
+        "vacation_1_start": {
+          "title": "Ferien 1 Beginn",
+          "description": "Ferienperiode 1 Beginn (JJJJ-MM-TT)"
+        },
+        "vacation_1_end": {
+          "title": "Ferien 1 Ende",
+          "description": "Ferienperiode 1 Ende (JJJJ-MM-TT)"
+        },
+        "vacation_2_start": {
+          "title": "Ferien 2 Beginn",
+          "description": "Ferienperiode 2 Beginn (JJJJ-MM-TT)"
+        },
+        "vacation_2_end": {
+          "title": "Ferien 2 Ende",
+          "description": "Ferienperiode 2 Ende (JJJJ-MM-TT)"
+        },
+        "vacation_3_start": {
+          "title": "Ferien 3 Beginn",
+          "description": "Ferienperiode 3 Beginn (JJJJ-MM-TT)"
+        },
+        "vacation_3_end": {
+          "title": "Ferien 3 Ende",
+          "description": "Ferienperiode 3 Ende (JJJJ-MM-TT)"
+        },
+        "vacation_4_start": {
+          "title": "Ferien 4 Beginn",
+          "description": "Ferienperiode 4 Beginn (JJJJ-MM-TT)"
+        },
+        "vacation_4_end": {
+          "title": "Ferien 4 Ende",
+          "description": "Ferienperiode 4 Ende (JJJJ-MM-TT)"
+        },
+        "vacation_5_start": {
+          "title": "Ferien 5 Beginn",
+          "description": "Ferienperiode 5 Beginn (JJJJ-MM-TT)"
+        },
+        "vacation_5_end": {
+          "title": "Ferien 5 Ende",
+          "description": "Ferienperiode 5 Ende (JJJJ-MM-TT)"
+        },
+        "vacation_6_start": {
+          "title": "Ferien 6 Beginn",
+          "description": "Ferienperiode 6 Beginn (JJJJ-MM-TT)"
+        },
+        "vacation_6_end": {
+          "title": "Ferien 6 Ende",
+          "description": "Ferienperiode 6 Ende (JJJJ-MM-TT)"
+        }
       }
     }
   },
@@ -835,10 +957,17 @@
       "lowerBound": "Untergrenze",
       "upperBound": "Obergrenze",
       "patternLabel": "Pattern",
+      "patternPlaceholder": "z. B. ^temp",
       "valueLabel": "Wert",
       "ignoreCase": "Regex ignore case",
       "emptyFilterWarning": "⚠ Mindestens ein Filterkriterium konfigurieren — sonst kann das Set nicht gespeichert werden.",
       "semanticsHint": "Innerhalb des Sets: Hierarchy OR DP, alle anderen Kriterien AND-verknüpft.",
+      "valueRequired": "Für diesen Wertfilter ist ein Wert erforderlich.",
+      "valueNumberRequired": "Der Wertfilter erwartet eine gültige Zahl.",
+      "valueBoolRequired": "Der Wertfilter erwartet true/false oder 1/0.",
+      "valueBetweenRequired": "Unter- und Obergrenze sind für between erforderlich.",
+      "valueRangeInvalid": "Die Untergrenze darf nicht grösser als die Obergrenze sein.",
+      "valuePatternRequired": "Für den Regex-Wertfilter ist ein Pattern erforderlich.",
       "deleteTitle": "Filter-Set unwiderruflich löschen",
       "deleteRestricted": "Nur der Eigentümer oder ein Admin darf löschen",
       "saveRestricted": "Nur der Eigentümer oder ein Admin darf speichern",
@@ -1547,7 +1676,8 @@
       "importexport": "Datenmanagement",
       "icons": "Icons",
       "history": "Historie DB",
-      "security": "Sicherheit"
+      "security": "Sicherheit",
+      "support": "Support"
     },
     "general": {
       "title": "Allgemeine Einstellungen",
@@ -1589,6 +1719,109 @@
       "saved": "URL-Ziel wurde gespeichert.",
       "deleted": "URL-Ziel wurde entfernt.",
       "defaultReason": "Freigabe nach URL-Zielprüfung"
+    },
+    "support": {
+      "title": "Support-Paket",
+      "description": "Das Support-Paket wird lokal erzeugt und heruntergeladen. Es wird nicht automatisch versendet; sensible Werte werden vor dem Export zentral redigiert.",
+      "packageTitle": "Support-Paket erstellen",
+      "exportButton": "Support-Paket erstellen",
+      "exported": "Support-Paket wurde erstellt.",
+      "exportFailed": "Support-Paket konnte nicht erstellt werden.",
+      "debugTitle": "Debug-Log",
+      "debugSettingsTitle": "Debug-Log Einstellungen",
+      "debugDescription": "Debug-Logging sammelt für kurze Zeit detailliertere lokale Diagnoseeinträge, damit sie im anschliessend erstellten Support-Paket enthalten sind.",
+      "debugFlow1": "Aktiviere Debug, reproduziere das Problem und erstelle danach das Support-Paket. Der In-Memory-Logpuffer wird dabei in das Paket übernommen.",
+      "debugFlow2": "Es wird nichts versendet und kein Remote-Zugriff geöffnet. Nach Ablauf oder manuellem Deaktivieren wird das vorherige Loglevel wiederhergestellt.",
+      "debugActive": "Debug aktiv",
+      "debugInactive": "Debug aus",
+      "debugUntil": "bis {until}",
+      "debugEnable": "Debug 5 Minuten aktivieren",
+      "debugDisable": "Debug deaktivieren",
+      "viewerTitle": "Support-Paket analysieren",
+      "viewerDescription": "Eine obs_support JSON-Datei lokal öffnen und strukturiert prüfen. Die Datei wird nicht hochgeladen oder gespeichert.",
+      "viewerChooseFile": "Support-Datei auswählen",
+      "viewerClear": "Ansicht leeren",
+      "viewerLoaded": "Support-Paket geladen.",
+      "viewerInvalid": "Die Datei ist kein gültiges Support-Paket.",
+      "viewerGeneratedAt": "Erstellt",
+      "viewerVersion": "OBS-Version",
+      "viewerRuntime": "System",
+      "viewerUptime": "Uptime",
+      "viewerAutoUploadOn": "Automatischer Versand aktiv",
+      "viewerAutoUploadOff": "Kein automatischer Versand",
+      "viewerRemoteAccessOn": "Remote-Zugriff aktiv",
+      "viewerRemoteAccessOff": "Kein Remote-Zugriff",
+      "viewerAdapters": "Adapter",
+      "viewerAdaptersConnected": "{n} verbunden",
+      "viewerHistoryValues": "Historienwerte",
+      "viewerMonitorEntries": "Monitor-Einträge",
+      "viewerAdapterTable": "Adapter-Analyse",
+      "viewerName": "Name",
+      "viewerType": "Typ",
+      "viewerStatus": "Status",
+      "viewerObjects": "Objekte",
+      "viewerBindings": "Bindings",
+      "viewerTransformations": "Transformationen",
+      "viewerFilters": "Filter",
+      "viewerTps": "TPS",
+      "viewerConnected": "Verbunden",
+      "viewerDisconnected": "Getrennt",
+      "viewerDisabled": "Deaktiviert",
+      "viewerNoAdapters": "Keine Adapter im Paket.",
+      "viewerHistory": "Historie",
+      "viewerPlugin": "Plugin",
+      "viewerDatapoints": "Objekte",
+      "viewerRange": "Zeitraum",
+      "viewerMonitor": "Monitor",
+      "viewerStorage": "Storage",
+      "viewerRetention": "Retention",
+      "viewerSample": "Sample",
+      "viewerCpu": "CPU",
+      "viewerCpuUnit": "CPU",
+      "viewerLoad": "Load",
+      "viewerMemory": "Memory",
+      "viewerDisk": "Disk",
+      "viewerFree": "frei",
+      "viewerTopCpu": "Top CPU",
+      "viewerTopMemory": "Top Memory",
+      "viewerWarnings": "Warnungen und Fehler",
+      "viewerNoWarnings": "Keine Warnungen oder Fehler im Paket.",
+      "viewerDebugLog": "Debug-Log",
+      "viewerNoDebugLog": "Kein Debug-Log im Paket.",
+      "viewerLogFilter": "Logfilter",
+      "viewerLogFilterPlaceholder": "z.B. kn ga=20/2/1*",
+      "viewerLogFilterHint": "Mehrere Suchteile mit Leerzeichen kombinieren. Ein * am Ende sucht nach Präfixen.",
+      "viewerNoLogMatches": "Keine Logeinträge passen zum Filter.",
+      "viewerSeconds": "{n} s",
+      "viewerMinutes": "{n} min",
+      "viewerHours": "{n} h",
+      "viewerDays": "{n} d",
+      "categories": {
+        "installation": {
+          "label": "Installation",
+          "description": "Installationsart, OBS-Version, Betriebssystem und Laufzeitumgebung."
+        },
+        "adapters": {
+          "label": "Adapter",
+          "description": "Aktivierte Adapter-Instanzen, sanitierte Adapter-Konfiguration sowie Objekt- und Binding-Anzahlen."
+        },
+        "health": {
+          "label": "Health",
+          "description": "Laufzeitstatus, Uptime und letzter Startzeitpunkt."
+        },
+        "history": {
+          "label": "Historie",
+          "description": "History-Backend, sanitierte Konfiguration und Speicherstatistiken."
+        },
+        "monitor": {
+          "label": "Monitor",
+          "description": "Ringbuffer-Konfiguration, Retention, Speichergrösse und aktuelle Ereigniszähler."
+        },
+        "logs": {
+          "label": "Logs",
+          "description": "Gekürzte sanitierte Fehlerhistorie und Einträge aus dem In-Memory-Debug-Log."
+        }
+      }
     },
     "users": {
       "deleteUser": "Benutzer löschen",
@@ -1680,6 +1913,23 @@
       "knxPassword": "Projektpasswort",
       "knxPasswordPlaceholder": "Nur bei passwortgeschützten Projekten",
       "knxCreateDps": "Objekte anlegen / aktualisieren",
+      "knxHierarchyTitle": "Hierarchien anlegen",
+      "knxHierarchyTopology": "Topologie",
+      "knxHierarchyBuildings": "Gebäude / Räume",
+      "knxHierarchyTrades": "Gewerke",
+      "knxHierarchyHint": "Gebäude / Räume und Gewerke werden nur angelegt, wenn das ETS-Projekt diese Strukturen enthält.",
+      "knxHierarchyReplaceExisting": "Bestehende ETS-Hierarchien dieses Imports ersetzen",
+      "knxHierarchyReplaceExistingHint": "Es werden nur automatisch erzeugte ETS-Hierarchien ersetzt; manuell angelegte Hierarchien bleiben unverändert.",
+      "knxHierarchyAutoLink": "Angelegte Objekte automatisch mit Hierarchieknoten verknüpfen",
+      "knxHierarchyAutoLinkHint": "Aktiviere das Anlegen von Objekten, um sie in diesem Import zu verknüpfen.",
+      "knxHierarchyMode_groups": "Topologie",
+      "knxHierarchyMode_buildings": "Gebäude / Räume",
+      "knxHierarchyMode_trades": "Gewerke",
+      "knxHierarchyStatusCreated": "angelegt",
+      "knxHierarchyStatusSkipped": "nicht angelegt",
+      "knxHierarchyResultCounts": "{nodes} Knoten, {links} Verknüpfungen",
+      "knxHierarchyResultReplaced": ", {n} ersetzt",
+      "knxHierarchyResultSkipped": "Es wurde keine Hierarchie angelegt.",
       "knxAdapterInstance": "KNX-Adapter Instanz",
       "knxNoAdapter": "Keine KNX-Adapter-Instanz gefunden. Bitte zuerst einen KNX-Adapter anlegen.",
       "knxDirection": "Richtung",

@@ -6,7 +6,7 @@
 [![Tests][tests-badge]][tests]
 [![Coverage][coverage-badge]][coverage]
 
-Gehe zur [deutschen Version](/README.de.md) der Dokumentation.
+> 🇩🇪 [Deutsche Version](/README.de.md)
 
 **Open building automation platform — connects KNX, Modbus, MQTT, Home Assistant, and more**
 
@@ -81,7 +81,7 @@ The LXC template contains a complete Ubuntu 26.04 system with **open bridge serv
 **Step 2 — Create the container**
 
 1. In the Proxmox menu, select **Create CT**.
-2. Choose the just-downloaded `ubuntu-plucky-openbridgeserver_…` as the template.
+2. Choose the just-downloaded `openbridgeserver-lxc_…` as the template.
 3. Configure hostname, password, CPU, RAM, and network as needed — recommended: at least 512 MB RAM.
 4. Start the container.
 
@@ -1634,6 +1634,10 @@ pytest tests/
 ./tools/lint.sh --fix
 ```
 
+#### Local builds (Docker image, LXC template, app bundle)
+
+See **[tools/README.md](tools/README.md)** for full documentation of `build-local.sh` — commands, options, and the local Docker image naming schema.
+
 ### Local Git Hooks (Pre-Push Gate)
 
 Versioned hooks live in `.githooks/`. To activate them in a clone, set `core.hooksPath` once:
@@ -1725,7 +1729,7 @@ The database is updated automatically — each new version adds missing tables a
 ---
 
 ## Translations
-We'd like to use [Weblate](https://hosted.weblate.org/projects/open-bridge-server) to support language translations. As soon as this is set up, ontributions would be very much welcome.
+We'd like to use [Weblate](https://hosted.weblate.org/projects/open-bridge-server) to support language translations. As soon as this is set up, contributions would be very much welcome.
 
 ## License
 

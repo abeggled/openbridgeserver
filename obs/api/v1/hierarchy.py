@@ -29,8 +29,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.datapoints import NodePathSegment
+from obs.api.v1.services.hierarchy_import import EtsImportRequest, ImportResult, create_ets_hierarchy
 from obs.db.database import Database, get_db
 
 router = APIRouter(tags=["hierarchy"])
@@ -134,6 +135,7 @@ class NodeRef(BaseModel):
     tree_id: str
     tree_name: str
     node_path: list[NodePathSegment] = []
+    display_depth: int = 0
 
 
 class NodeSearchResult(BaseModel):
@@ -141,21 +143,8 @@ class NodeSearchResult(BaseModel):
     node_name: str
     tree_id: str
     tree_name: str
+    display_depth: int = 0
     path: list[str] = []  # ancestor node names (root → leaf), excluding tree_name (#433)
-
-
-class EtsImportRequest(BaseModel):
-    tree_name: str
-    mode: str  # "groups" | "mid" | "flat" | "buildings" | "trades"
-    auto_link: bool = True  # automatically link DataPoints via GA addresses
-
-
-class ImportResult(BaseModel):
-    tree_id: str
-    tree_name: str
-    nodes_created: int
-    links_created: int = 0
-    message: str
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +210,7 @@ async def list_trees(
 @router.post("/trees", response_model=HierarchyTree, status_code=status.HTTP_201_CREATED)
 async def create_tree(
     body: HierarchyTreeCreate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> HierarchyTree:
     now = _now()
@@ -238,7 +227,7 @@ async def create_tree(
 async def update_tree(
     tree_id: str,
     body: HierarchyTreeUpdate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> HierarchyTree:
     row = await db.fetchone("SELECT * FROM hierarchy_trees WHERE id=?", (tree_id,))
@@ -259,7 +248,7 @@ async def update_tree(
 @router.delete("/trees/{tree_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_tree(
     tree_id: str,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> None:
     row = await db.fetchone("SELECT id FROM hierarchy_trees WHERE id=?", (tree_id,))
@@ -294,7 +283,7 @@ async def get_tree_nodes(
 @router.post("/nodes", response_model=HierarchyNode, status_code=status.HTTP_201_CREATED)
 async def create_node(
     body: HierarchyNodeCreate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> HierarchyNode:
     # Baum muss existieren
@@ -323,7 +312,7 @@ async def create_node(
 async def update_node(
     node_id: str,
     body: HierarchyNodeUpdate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> HierarchyNode:
     row = await db.fetchone("SELECT * FROM hierarchy_nodes WHERE id=?", (node_id,))
@@ -346,7 +335,7 @@ async def update_node(
 async def move_node(
     node_id: str,
     body: HierarchyNodeMove,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> HierarchyNode:
     row = await db.fetchone("SELECT * FROM hierarchy_nodes WHERE id=?", (node_id,))
@@ -374,7 +363,7 @@ async def move_node(
 @router.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_node(
     node_id: str,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> None:
     row = await db.fetchone("SELECT id FROM hierarchy_nodes WHERE id=?", (node_id,))
@@ -425,7 +414,7 @@ async def get_datapoint_nodes(
 ) -> list[NodeRef]:
     rows = await db.fetchall(
         """SELECT hdl.id AS link_id, hn.id AS node_id, hn.name AS node_name,
-                  ht.id AS tree_id, ht.name AS tree_name
+                  ht.id AS tree_id, ht.name AS tree_name, ht.display_depth
            FROM hierarchy_datapoint_links hdl
            JOIN hierarchy_nodes hn ON hn.id = hdl.node_id
            JOIN hierarchy_trees ht ON ht.id = hn.tree_id
@@ -459,6 +448,7 @@ async def get_datapoint_nodes(
             tree_id=r["tree_id"],
             tree_name=r["tree_name"],
             node_path=node_paths.get(r["node_id"], []),
+            display_depth=r["display_depth"] if r["display_depth"] is not None else 0,
         )
         for r in rows
     ]
@@ -467,7 +457,7 @@ async def get_datapoint_nodes(
 @router.post("/links", status_code=status.HTTP_201_CREATED)
 async def create_link(
     body: HierarchyLinkCreate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> dict:
     node = await db.fetchone("SELECT id FROM hierarchy_nodes WHERE id=?", (body.node_id,))
@@ -497,7 +487,7 @@ async def create_link(
 async def delete_link(
     node_id: str = Query(...),
     datapoint_id: str = Query(...),
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> None:
     await db.execute_and_commit(
@@ -522,44 +512,107 @@ async def search_nodes(
     if q:
         like = f"%{q}%"
         rows = await db.fetchall(
-            """SELECT hn.id AS node_id, hn.name AS node_name,
-                      ht.id AS tree_id, ht.name AS tree_name
-               FROM hierarchy_nodes hn
+            """WITH RECURSIVE
+                   node_depths(id, tree_id, depth) AS (
+                       SELECT id, tree_id, 1 FROM hierarchy_nodes WHERE parent_id IS NULL
+                       UNION ALL
+                       SELECT hn.id, hn.tree_id, nd.depth + 1
+                       FROM hierarchy_nodes hn JOIN node_depths nd ON hn.parent_id = nd.id
+                       WHERE nd.depth < 64
+                   ),
+                   tree_depths(tree_id, max_depth) AS (
+                       SELECT tree_id, MAX(depth) FROM node_depths GROUP BY tree_id
+                   ),
+                   tree_matches(id) AS (
+                       SELECT id FROM hierarchy_trees WHERE name LIKE ?
+                   ),
+                   node_matches(id) AS (
+                       SELECT hn.id
+                       FROM hierarchy_nodes hn
+                       WHERE hn.name LIKE ?
+                   ),
+                   matched_roots(id) AS (
+                       SELECT hn.id
+                       FROM hierarchy_nodes hn
+                       JOIN tree_matches tm ON tm.id = hn.tree_id
+                       WHERE hn.parent_id IS NULL
+                   ),
+                   candidate_nodes(id) AS (
+                       SELECT id FROM matched_roots
+                       UNION
+                       SELECT id FROM node_matches
+                       UNION
+                       SELECT child.id
+                       FROM hierarchy_nodes child JOIN candidate_nodes parent ON child.parent_id = parent.id
+                   )
+               SELECT DISTINCT hn.id AS node_id, hn.name AS node_name,
+                      ht.id AS tree_id, ht.name AS tree_name, ht.display_depth
+               FROM candidate_nodes candidate
+               JOIN hierarchy_nodes hn ON hn.id = candidate.id
                JOIN hierarchy_trees ht ON ht.id = hn.tree_id
-               WHERE hn.name LIKE ? OR ht.name LIKE ?
+               LEFT JOIN node_depths nd ON nd.id = hn.id
+               LEFT JOIN tree_depths td ON td.tree_id = ht.id
+               WHERE ht.display_depth IS NULL
+                  OR ht.display_depth <= 0
+                  OR COALESCE(td.max_depth, 0) < ht.display_depth
+                  OR COALESCE(nd.depth, 1) >= ht.display_depth
                ORDER BY ht.name, hn.name
                LIMIT ?""",
             (like, like, limit),
         )
     else:
         rows = await db.fetchall(
-            """SELECT hn.id AS node_id, hn.name AS node_name,
-                      ht.id AS tree_id, ht.name AS tree_name
+            """WITH RECURSIVE node_depths(id, tree_id, depth) AS (
+                   SELECT id, tree_id, 1 FROM hierarchy_nodes WHERE parent_id IS NULL
+                   UNION ALL
+                   SELECT hn.id, hn.tree_id, nd.depth + 1
+                   FROM hierarchy_nodes hn JOIN node_depths nd ON hn.parent_id = nd.id
+                   WHERE nd.depth < 64
+               ),
+               tree_depths(tree_id, max_depth) AS (
+                   SELECT tree_id, MAX(depth) FROM node_depths GROUP BY tree_id
+               )
+               SELECT hn.id AS node_id, hn.name AS node_name,
+                      ht.id AS tree_id, ht.name AS tree_name, ht.display_depth
                FROM hierarchy_nodes hn
                JOIN hierarchy_trees ht ON ht.id = hn.tree_id
+               LEFT JOIN node_depths nd ON nd.id = hn.id
+               LEFT JOIN tree_depths td ON td.tree_id = ht.id
+               WHERE ht.display_depth IS NULL
+                  OR ht.display_depth <= 0
+                  OR COALESCE(td.max_depth, 0) < ht.display_depth
+                  OR COALESCE(nd.depth, 1) >= ht.display_depth
                ORDER BY ht.name, hn.name
                LIMIT ?""",
             (limit,),
         )
 
     # Build ancestor paths so callers can disambiguate same-named leaves under
-    # different parents (#433). One DB roundtrip for the full node map is
-    # cheaper than per-row Recursive CTEs at typical sizes.
-    node_rows = await db.fetchall("SELECT id, parent_id, name FROM hierarchy_nodes")
-    node_map: dict[str, tuple[str | None, str]] = {nr["id"]: (nr["parent_id"], nr["name"]) for nr in node_rows}
+    # different parents (#433). The result query is already limited, so path
+    # materialization stays bounded to the returned page.
+    node_ids = [r["node_id"] for r in rows]
+    node_paths: dict[str, list[str]] = {}
+    if node_ids:
+        ph = ",".join("?" * len(node_ids))
+        path_rows = await db.fetchall(
+            f"""WITH RECURSIVE anc(leaf_id, cur_id, cur_name, cur_parent, depth, seen) AS (
+                   SELECT id, id, name, parent_id, 0, '|' || id || '|'
+                   FROM hierarchy_nodes WHERE id IN ({ph})
+                   UNION ALL
+                   SELECT a.leaf_id, hn2.id, hn2.name, hn2.parent_id, a.depth + 1, a.seen || hn2.id || '|'
+                   FROM anc a JOIN hierarchy_nodes hn2 ON hn2.id = a.cur_parent
+                   WHERE a.cur_parent IS NOT NULL
+                     AND a.depth < 63
+                     AND instr(a.seen, '|' || hn2.id || '|') = 0
+               )
+               SELECT leaf_id, cur_name FROM anc
+               ORDER BY leaf_id, depth DESC""",
+            node_ids,
+        )
+        for r in path_rows:
+            node_paths.setdefault(r["leaf_id"], []).append(r["cur_name"])
 
-    def _path_for(node_id: str) -> list[str]:
-        path: list[str] = []
-        cursor: str | None = node_id
-        for _ in range(64):
-            if cursor is None or cursor not in node_map:
-                break
-            parent_id, name = node_map[cursor]
-            path.append(name)
-            cursor = parent_id
-        return list(reversed(path))
-
-    return [NodeSearchResult(**dict(r), path=_path_for(r["node_id"])) for r in rows]
+    return [NodeSearchResult(**dict(r), path=node_paths.get(r["node_id"], [r["node_name"]])) for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -570,249 +623,8 @@ async def search_nodes(
 @router.post("/import-from-ets", response_model=ImportResult, status_code=status.HTTP_201_CREATED)
 async def import_from_ets(
     body: EtsImportRequest,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> ImportResult:
-    """Erzeugt einen neuen Hierarchiebaum aus importierten ETS-Gruppenadressen.
-
-    Modes:
-      groups — Hauptgruppe → Mittelgruppe → GA (3-stufig)
-      flat   — Hauptgruppe → GA (2-stufig, Mittelgruppen werden übersprungen)
-
-    Knotenbezeichnungen werden aus den ETS-Gruppenadress-Bereichen übernommen
-    (main_group_name / mid_group_name). Fehlen diese (CSV-Import), wird
-    "Hauptgruppe X" bzw. "Mittelgruppe X" als Fallback verwendet.
-    """
-    if body.mode not in ("groups", "mid", "flat", "buildings", "trades"):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "mode muss 'groups', 'mid', 'flat', 'buildings' oder 'trades' sein",
-        )
-
-    now = _now()
-    tree_id = _new_id()
-    nodes_created = 0
-    links_created = 0
-
-    # Batch all inserts — commit once at the end for performance
-    inserts: list[tuple] = []
-
-    def _q_insert(nid: str, parent_id: str | None, name: str, desc: str, order: int) -> None:
-        inserts.append((nid, tree_id, parent_id, name, desc, order, None, now, now))
-
-    if body.mode in ("groups", "mid", "flat"):
-        rows = await db.fetchall("SELECT address, name, description, dpt, main_group_name, mid_group_name FROM knx_group_addresses ORDER BY address")
-        if not rows:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "Keine ETS-Gruppenadressen importiert. Bitte zuerst eine .knxproj oder CSV importieren.",
-            )
-
-        if body.mode == "mid":
-            main_nodes: dict[str, str] = {}
-            mid_nodes: dict[str, str] = {}
-            for row in rows:
-                parts = str(row["address"]).split("/")
-                if len(parts) < 2:
-                    continue
-                main_key, mid_key = parts[0], parts[1]
-                mid_composite = f"{main_key}/{mid_key}"
-                if main_key not in main_nodes:
-                    nid = _new_id()
-                    main_label = str(row["main_group_name"] or "").strip() or f"Hauptgruppe {main_key}"
-                    _q_insert(nid, None, main_label, "", int(main_key))
-                    main_nodes[main_key] = nid
-                    nodes_created += 1
-                if mid_composite not in mid_nodes:
-                    nid = _new_id()
-                    mid_label = str(row["mid_group_name"] or "").strip() or f"Mittelgruppe {mid_key}"
-                    _q_insert(nid, main_nodes[main_key], mid_label, "", int(mid_key))
-                    mid_nodes[mid_composite] = nid
-                    nodes_created += 1
-
-        elif body.mode == "groups":
-            main_nodes = {}
-            mid_nodes = {}
-            for row in rows:
-                parts = str(row["address"]).split("/")
-                if len(parts) != 3:
-                    continue
-                main_key, mid_key, _ = parts
-                mid_composite = f"{main_key}/{mid_key}"
-                if main_key not in main_nodes:
-                    nid = _new_id()
-                    main_label = str(row["main_group_name"] or "").strip() or f"Hauptgruppe {main_key}"
-                    _q_insert(nid, None, main_label, "", int(main_key))
-                    main_nodes[main_key] = nid
-                    nodes_created += 1
-                if mid_composite not in mid_nodes:
-                    nid = _new_id()
-                    mid_label = str(row["mid_group_name"] or "").strip() or f"Mittelgruppe {mid_key}"
-                    _q_insert(nid, main_nodes[main_key], mid_label, "", int(mid_key))
-                    mid_nodes[mid_composite] = nid
-                    nodes_created += 1
-                ga_name = str(row["name"]).strip() or row["address"]
-                nid = _new_id()
-                _q_insert(nid, mid_nodes[mid_composite], ga_name, str(row["description"] or ""), 0)
-                nodes_created += 1
-
-        else:  # "flat"
-            main_nodes = {}
-            for row in rows:
-                parts = str(row["address"]).split("/")
-                main_key = parts[0]
-                if main_key not in main_nodes:
-                    nid = _new_id()
-                    main_label = str(row["main_group_name"] or "").strip() or f"Hauptgruppe {main_key}"
-                    _q_insert(nid, None, main_label, "", int(main_key))
-                    main_nodes[main_key] = nid
-                    nodes_created += 1
-                ga_name = str(row["name"]).strip() or row["address"]
-                nid = _new_id()
-                _q_insert(nid, main_nodes[main_key], ga_name, str(row["description"] or ""), 0)
-                nodes_created += 1
-
-    elif body.mode == "buildings":
-        # Gebäude-Hierarchie aus knx_locations
-        loc_rows = await db.fetchall("SELECT id, parent_id, name, space_type, sort_order FROM knx_locations ORDER BY sort_order")
-        if not loc_rows:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "Keine Gebäude-Daten importiert. Bitte zuerst eine .knxproj importieren.",
-            )
-
-        # map ETS location id → hierarchy node id
-        loc_to_node: dict[str, str] = {}
-        for loc in loc_rows:
-            nid = _new_id()
-            parent_nid = loc_to_node.get(loc["parent_id"]) if loc["parent_id"] else None
-            _q_insert(nid, parent_nid, loc["name"] or loc["id"], loc["space_type"] or "", loc["sort_order"])
-            loc_to_node[loc["id"]] = nid
-            nodes_created += 1
-
-        # Auto-link DataPoints via GA addresses in functions linked to spaces
-        if body.auto_link:
-            fn_rows = await db.fetchall(
-                """SELECT f.space_id, l.ga_address
-                   FROM knx_functions f
-                   JOIN knx_function_ga_links l ON l.function_id = f.id"""
-            )
-            # space_id → set of GA addresses
-            space_gas: dict[str, set[str]] = {}
-            for fr in fn_rows:
-                space_gas.setdefault(fr["space_id"], set()).add(fr["ga_address"])
-
-            for space_id, gas in space_gas.items():
-                node_id = loc_to_node.get(space_id)
-                if not node_id or not gas:
-                    continue
-                placeholders = ",".join("?" * len(gas))
-                dp_rows = await db.fetchall(
-                    f"""SELECT DISTINCT dp.id
-                        FROM datapoints dp
-                        JOIN adapter_bindings ab ON ab.datapoint_id = dp.id
-                        WHERE UPPER(ab.adapter_type) = 'KNX'
-                          AND JSON_EXTRACT(ab.config, '$.group_address') IN ({placeholders})""",
-                    list(gas),
-                )
-                for dp in dp_rows:
-                    links_created += 1
-                    inserts.append(("__link__", node_id, dp["id"]))  # sentinel — handled below
-
-    else:  # "trades" — Gewerke aus knx_trades Tabelle (ETS <Trades> XML-Sektion)
-        trade_rows = await db.fetchall("SELECT id, name, parent_id, sort_order FROM knx_trades ORDER BY sort_order")
-        if not trade_rows:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "Keine Gewerke-Daten importiert. Bitte zuerst eine .knxproj importieren (die Datei muss einen <Trades>-Abschnitt enthalten).",
-            )
-
-        # Check whether function→trade links exist (populated during knxproj upload)
-        fn_count_row = await db.fetchone("SELECT COUNT(*) AS cnt FROM knx_functions WHERE trade_id IS NOT NULL")
-        has_fn_links = fn_count_row and (fn_count_row["cnt"] or 0) > 0
-
-        # Build trade hierarchy: ETS trade_id → hierarchy node_id
-        # Trades are ordered by sort_order (pre-order from recursive parse), so parents come first.
-        trade_id_to_nid: dict[str, str] = {}
-
-        for trade in trade_rows:
-            parent_trade_id = trade["parent_id"]  # ETS parent trade ID or None
-            parent_nid = trade_id_to_nid.get(parent_trade_id) if parent_trade_id else None
-            trade_nid = _new_id()
-            _q_insert(trade_nid, parent_nid, trade["name"] or trade["id"], "", trade["sort_order"])
-            trade_id_to_nid[trade["id"]] = trade_nid
-            nodes_created += 1
-
-            if not has_fn_links:
-                continue
-
-            fn_rows = await db.fetchall(
-                "SELECT id, name, usage_text FROM knx_functions WHERE trade_id = ? ORDER BY name",
-                (trade["id"],),
-            )
-            for fn in fn_rows:
-                fn_nid = _new_id()
-                fn_label = fn["name"] or fn["id"]
-                fn_desc = fn["usage_text"] or ""
-                _q_insert(fn_nid, trade_nid, fn_label, fn_desc, nodes_created)
-                nodes_created += 1
-
-                if not body.auto_link:
-                    continue
-
-                # Auto-link DataPoints via GA addresses stored in knx_function_ga_links
-                ga_rows = await db.fetchall(
-                    "SELECT ga_address FROM knx_function_ga_links WHERE function_id = ?",
-                    (fn["id"],),
-                )
-                gas = [r["ga_address"] for r in ga_rows if r["ga_address"]]
-                if not gas:
-                    continue
-
-                placeholders = ",".join("?" * len(gas))
-                dp_rows = await db.fetchall(
-                    f"""SELECT DISTINCT dp.id
-                        FROM datapoints dp
-                        JOIN adapter_bindings ab ON ab.datapoint_id = dp.id
-                        WHERE UPPER(ab.adapter_type) = 'KNX'
-                          AND JSON_EXTRACT(ab.config, '$.group_address') IN ({placeholders})""",
-                    gas,
-                )
-                for dp in dp_rows:
-                    links_created += 1
-                    inserts.append(("__link__", fn_nid, dp["id"]))
-
-    # Separate node inserts from link sentinels
-    node_inserts = [t for t in inserts if t[0] != "__link__"]
-    link_sentinels = [t for t in inserts if t[0] == "__link__"]
-
-    await db.execute_and_commit(
-        "INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)",
-        (tree_id, body.tree_name, f"ets_import:{body.mode}", now, now),
-    )
-
-    if node_inserts:
-        await db.executemany(
-            """INSERT INTO hierarchy_nodes
-               (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            node_inserts,
-        )
-
-    if link_sentinels:
-        link_rows = [(_new_id(), node_id, dp_id, now) for (_, node_id, dp_id) in link_sentinels]
-        await db.executemany(
-            "INSERT OR IGNORE INTO hierarchy_datapoint_links (id, node_id, datapoint_id, created_at) VALUES (?,?,?,?)",
-            link_rows,
-        )
-
-    await db.commit()
-
-    return ImportResult(
-        tree_id=tree_id,
-        tree_name=body.tree_name,
-        nodes_created=nodes_created,
-        links_created=links_created,
-        message=f"Hierarchiebaum '{body.tree_name}' mit {nodes_created} Knoten erstellt"
-        + (f", {links_created} DataPoints automatisch verknüpft" if links_created else ""),
-    )
+    """Erzeugt einen neuen Hierarchiebaum aus importierten ETS-Daten."""
+    return await create_ets_hierarchy(db, body)

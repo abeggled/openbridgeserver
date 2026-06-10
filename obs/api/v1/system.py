@@ -22,13 +22,15 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi import status as http_status
 from pydantic import BaseModel, Field
 
 from obs import __version__
 from obs.adapters import registry as adapter_registry
+from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.auth import get_admin_user, get_current_user
+from obs.api.v1.redaction import REDACTED, redact_sensitive_fields
 from obs.db.database import Database, get_db
 from obs.models.types import DataTypeRegistry
 
@@ -282,6 +284,8 @@ _HISTORY_DEFAULTS: dict[str, str] = {
     "timescale_dsn": "",
 }
 
+_HISTORY_SENSITIVE_FIELDS = ("influx_token", "influx_password", "timescale_dsn")
+
 
 async def _read_history_cfg(db: Database) -> dict[str, str]:
     rows = await db.fetchall("SELECT key, value FROM app_settings WHERE key LIKE 'history.%'")
@@ -300,24 +304,29 @@ async def get_history_settings(
 ) -> HistorySettingsOut:
     """Read current history backend configuration."""
     cfg = await _read_history_cfg(db)
-    return HistorySettingsOut(
-        plugin=cfg["plugin"],
-        default_window_hours=int(cfg["default_window_hours"]),
-        influx_url=cfg["influx_url"],
-        influx_version=int(cfg["influx_version"]),
-        influx_token=cfg["influx_token"],
-        influx_org=cfg["influx_org"],
-        influx_bucket=cfg["influx_bucket"],
-        influx_database=cfg["influx_database"],
-        influx_username=cfg["influx_username"],
-        influx_password=cfg["influx_password"],
-        timescale_dsn=cfg["timescale_dsn"],
+    payload = redact_sensitive_fields(
+        {
+            "plugin": cfg["plugin"],
+            "default_window_hours": int(cfg["default_window_hours"]),
+            "influx_url": cfg["influx_url"],
+            "influx_version": int(cfg["influx_version"]),
+            "influx_token": cfg["influx_token"],
+            "influx_org": cfg["influx_org"],
+            "influx_bucket": cfg["influx_bucket"],
+            "influx_database": cfg["influx_database"],
+            "influx_username": cfg["influx_username"],
+            "influx_password": cfg["influx_password"],
+            "timescale_dsn": cfg["timescale_dsn"],
+        },
+        _HISTORY_SENSITIVE_FIELDS,
     )
+    return HistorySettingsOut(**payload)
 
 
 @router.put("/history/settings", response_model=HistorySettingsOut)
 async def update_history_settings(
     body: HistorySettingsIn,
+    request: Request = None,  # type: ignore[assignment]
     db: Database = Depends(get_db),
     _admin: str = Depends(get_admin_user),
 ) -> HistorySettingsOut:
@@ -342,6 +351,14 @@ async def update_history_settings(
         "timescale_dsn": body.timescale_dsn,
     }
 
+    # UI submits redacted marker unchanged when a secret is already configured.
+    # Preserve persisted values instead of storing the marker literal.
+    if any(data[field] == REDACTED for field in _HISTORY_SENSITIVE_FIELDS):
+        existing_cfg = await _read_history_cfg(db)
+        for field in _HISTORY_SENSITIVE_FIELDS:
+            if data[field] == REDACTED:
+                data[field] = existing_cfg[field]
+
     for k, v in data.items():
         await db.execute_and_commit(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
@@ -359,19 +376,46 @@ async def update_history_settings(
             detail=f"Settings saved but plugin reload failed: {exc}",
         )
 
-    return HistorySettingsOut(
-        plugin=body.plugin,
-        default_window_hours=body.default_window_hours,
-        influx_url=body.influx_url,
-        influx_version=body.influx_version,
-        influx_token=body.influx_token,
-        influx_org=body.influx_org,
-        influx_bucket=body.influx_bucket,
-        influx_database=body.influx_database,
-        influx_username=body.influx_username,
-        influx_password=body.influx_password,
-        timescale_dsn=body.timescale_dsn,
+    audit_writer = AuditLogWriter(
+        db=db,
+        context=build_audit_context(request=request, current_user=_admin),
     )
+    await audit_writer.write(
+        action="system.history.settings.updated",
+        resource_type="history_settings",
+        resource_id="global",
+        details={
+            "plugin": body.plugin,
+            "default_window_hours": body.default_window_hours,
+            "influx_url": body.influx_url,
+            "influx_version": body.influx_version,
+            "influx_org": body.influx_org,
+            "influx_bucket": body.influx_bucket,
+            "influx_database": body.influx_database,
+            "influx_username": body.influx_username,
+            "has_influx_token": bool(body.influx_token),
+            "has_influx_password": bool(body.influx_password),
+            "has_timescale_dsn": bool(body.timescale_dsn),
+        },
+    )
+
+    payload = redact_sensitive_fields(
+        {
+            "plugin": body.plugin,
+            "default_window_hours": body.default_window_hours,
+            "influx_url": body.influx_url,
+            "influx_version": body.influx_version,
+            "influx_token": body.influx_token,
+            "influx_org": body.influx_org,
+            "influx_bucket": body.influx_bucket,
+            "influx_database": body.influx_database,
+            "influx_username": body.influx_username,
+            "influx_password": body.influx_password,
+            "timescale_dsn": body.timescale_dsn,
+        },
+        _HISTORY_SENSITIVE_FIELDS,
+    )
+    return HistorySettingsOut(**payload)
 
 
 @router.post("/history/test", response_model=HistoryTestResult)

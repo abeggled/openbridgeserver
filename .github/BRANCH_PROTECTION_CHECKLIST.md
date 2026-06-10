@@ -16,8 +16,8 @@ Use this checklist to configure robust pull request safety for `main`.
 - [ ] Require status checks to pass before merging
 - [ ] Require branches to be up to date before merging
 - [ ] Select required checks (exact names from Actions):
-- [ ] `Tests (3.12)`
 - [ ] `Tests (3.13)`
+- [ ] `Tests (3.14)`
 - [ ] `Ruff`
 
 Optional, if enabled:

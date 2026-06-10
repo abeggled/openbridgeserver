@@ -254,6 +254,63 @@ class TestCompareNode:
         out = run_single("compare", {"operator": op}, {"in1": a, "in2": b})
         assert out["out"] is expected
 
+    @pytest.mark.parametrize(
+        "op, a, b, expected",
+        [
+            ("gt", 5, 3, True),
+            ("lt", 3, 5, True),
+            ("eq", 5, 5, True),
+            ("gte", 5, 5, True),
+            ("lte", 4, 5, True),
+            ("ne", 4, 5, True),
+        ],
+    )
+    def test_operator_aliases(self, op, a, b, expected):
+        out = run_single("compare", {"operator": op}, {"in1": a, "in2": b})
+        assert out["out"] is expected
+
+    def test_static_operand_is_used_when_in2_is_unwired(self):
+        out = run_single("compare", {"operator": "lt", "operand": 50}, {"in1": 10})
+        assert out["out"] is True
+
+    def test_static_operand_is_not_used_when_in2_is_wired_but_none(self):
+        out = run_single("compare", {"operator": "lt", "operand": 50}, {"in1": 10, "in2": None})
+        assert out["out"] is False
+
+    def test_blank_static_operand_is_treated_as_missing(self):
+        out = run_single("compare", {"operator": "gt", "operand": ""}, {"in1": 10})
+        assert out["out"] is False
+
+    @pytest.mark.parametrize(
+        "op, a, b, expected",
+        [
+            ("eq", "open", "closed", False),
+            ("eq", "open", "open", True),
+            ("ne", "open", "closed", True),
+            ("ne", "open", "open", False),
+        ],
+    )
+    def test_operator_aliases_compare_nonnumeric_strings_as_strings(self, op, a, b, expected):
+        out = run_single("compare", {"operator": op}, {"in1": a, "in2": b})
+        assert out["out"] is expected
+
+    @pytest.mark.parametrize("op", [">", "gt", "<", "lt", ">=", "gte", "<=", "lte"])
+    def test_ordering_comparison_returns_false_for_nonnumeric_strings(self, op):
+        out = run_single("compare", {"operator": op}, {"in1": "open", "in2": "closed"})
+        assert out["out"] is False
+
+    def test_compare_treats_bool_as_numeric(self):
+        out = run_single("compare", {"operator": "eq"}, {"in1": True, "in2": 1})
+        assert out["out"] is True
+
+    @pytest.mark.parametrize(
+        "op, expected",
+        [("gt", False), ("lt", False), ("eq", False), ("ne", True)],
+    )
+    def test_compare_handles_mixed_numeric_and_nonnumeric_values(self, op, expected):
+        out = run_single("compare", {"operator": op}, {"in1": "open", "in2": 50})
+        assert out["out"] is expected
+
     def test_none_input_returns_false(self):
         out = run_single("compare", {"operator": ">"}, {"in1": None, "in2": 5})
         assert out["out"] is False
@@ -261,6 +318,54 @@ class TestCompareNode:
     def test_default_operator_is_greater_than(self):
         out = run_single("compare", {}, {"in1": 10, "in2": 5})
         assert out["out"] is True
+
+    def test_result_source_handle_from_compare_flows_to_downstream_node(self):
+        nodes = [
+            node("value", "const_value", {"value": "10", "data_type": "number"}),
+            node("cmp", "compare", {"operator": "lt", "operand": 50}),
+            node("invert", "not", {}),
+        ]
+        edges = [
+            edge("value", "cmp", "value", "in1"),
+            edge("cmp", "invert", "result", "in1"),
+        ]
+        exc = make_executor(nodes, edges)
+
+        out = exc.execute()
+
+        assert out["cmp"]["out"] is True
+        assert out["invert"]["out"] is False
+
+    def test_out_source_handle_from_result_node_flows_to_downstream_node(self):
+        nodes = [
+            node("a", "const_value", {"value": "2", "data_type": "number"}),
+            node("b", "const_value", {"value": "3", "data_type": "number"}),
+            node("sum", "math_formula", {"formula": "a + b"}),
+            node("cmp", "compare", {"operator": "eq", "operand": 5}),
+        ]
+        edges = [
+            edge("a", "sum", "value", "in1"),
+            edge("b", "sum", "value", "in2"),
+            edge("sum", "cmp", "out", "in1"),
+        ]
+        exc = make_executor(nodes, edges)
+
+        out = exc.execute()
+
+        assert out["sum"]["result"] == 5
+        assert out["cmp"]["out"] is True
+
+    def test_unknown_source_handle_resolves_to_none(self):
+        nodes = [
+            node("value", "const_value", {"value": "10", "data_type": "number"}),
+            node("cmp", "compare", {"operator": "gt", "operand": 5}),
+        ]
+        edges = [edge("value", "cmp", "missing", "in1")]
+        exc = make_executor(nodes, edges)
+
+        out = exc.execute()
+
+        assert out["cmp"]["out"] is False
 
 
 # ===========================================================================

@@ -35,6 +35,7 @@ afterEach(() => {
   vi.doUnmock('@/components/ui/TagCombobox.vue')
   vi.doUnmock('@/components/ui/AdapterCombobox.vue')
   vi.doUnmock('@/stores/datapoints')
+  vi.doUnmock('@/stores/auth')
 })
 
 function makeRingbufferApi(overrides = {}) {
@@ -75,6 +76,7 @@ function makeSampleSet(overrides = {}) {
     filter: {
       hierarchy_nodes: [],
       datapoints: ['dp-1', 'dp-2'],
+      devices: [],
       tags: ['heizung'],
       adapters: ['knx'],
       q: 'temp',
@@ -92,6 +94,26 @@ function makeSampleSet(overrides = {}) {
  * named input so tests can drive the bound model value deterministically.
  */
 function stubCombobox(name, multi) {
+  function stubItem(id) {
+    if (name !== 'HierarchyCombobox') return { id, label: id }
+    if (id === 't1:display') {
+      return {
+        id,
+        display_path: ['Haus', 'EG'],
+        full_label: 'Haus › Gebäude › EG',
+      }
+    }
+    if (id === 't1:depth') {
+      return {
+        id,
+        path: ['Gebäude', 'EG', 'Küche'],
+        display_depth: 2,
+        tree_name: 'Haus',
+      }
+    }
+    return { id, label: id }
+  }
+
   return defineComponent({
     name,
     props: ['modelValue', 'placeholder'],
@@ -105,7 +127,7 @@ function stubCombobox(name, multi) {
             h('div', { 'data-testid': `stub-${name}-chips` }, multi
               ? (Array.isArray(props.modelValue) ? props.modelValue : []).map((id, i) =>
                   h('span', { key: id, 'data-testid': `stub-${name}-chip-${i}`, 'data-chip-id': id },
-                    slots.chip ? slots.chip({ item: { id, label: id }, index: i, remove: () => {} }) : [String(id)],
+                    slots.chip ? slots.chip({ item: stubItem(id), index: i, remove: () => {} }) : [String(id)],
                   ),
                 )
               : [String(props.modelValue ?? '')]),
@@ -143,6 +165,12 @@ async function mountEditor({ props = {}, ringbufferApi, searchApi, hierarchyApi,
     ringbufferApi,
     searchApi,
     hierarchyApi,
+  }))
+  vi.doMock('@/stores/auth', () => ({
+    useAuthStore: () => ({
+      isAdmin: true,
+      username: 'test-user',
+    }),
   }))
 
   // Passthrough modal: always render slot + footer.
@@ -325,6 +353,31 @@ describe('FilterEditor (#436)', () => {
     expect(expand.text()).toContain('⊞')
   })
 
+  it('renders hierarchy chip labels from display path and display depth metadata', async () => {
+    const setWithHierarchy = makeSampleSet({
+      filter: {
+        hierarchy_nodes: [
+          { tree_id: 't1', node_id: 'display', include_descendants: true },
+          { tree_id: 't1', node_id: 'depth', include_descendants: true },
+        ],
+        datapoints: [],
+        tags: [],
+        adapters: [],
+        q: null,
+        value_filter: null,
+      },
+    })
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({ data: setWithHierarchy }),
+    })
+    const { wrapper } = await mountEditor({ props: { setId: 'fs-1' }, ringbufferApi })
+    const chips = wrapper.findAll('[data-testid^="stub-HierarchyCombobox-chip-"]')
+    expect(chips[0].text()).toContain('Haus › EG')
+    expect(chips[1].text()).toContain('EG › Küche')
+    expect(wrapper.find('[title="Haus › Gebäude › EG"]').exists()).toBe(true)
+    expect(wrapper.find('[title="Haus › Gebäude › EG › Küche"]').exists()).toBe(true)
+  })
+
   it('clicking the expand button materializes DPs under the node and removes the hierarchy chip', async () => {
     const setWithHierarchy = makeSampleSet({
       filter: {
@@ -395,6 +448,7 @@ describe('FilterEditor (#436)', () => {
     expect(payload.filter).toMatchObject({
       hierarchy_nodes: [],
       datapoints: [],
+      devices: [],
       tags: [],
       adapters: [],
       q: 'xyz',
@@ -493,6 +547,99 @@ describe('FilterEditor (#436)', () => {
     expect(payload.filter.value_filter).toMatchObject({ operator: 'gt', value: 42 })
   })
 
+  it('marks value-filter value as required and prevents saving without it', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('VF missing')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('number')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('gt')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/Wert/i)
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
+  })
+
+  it('explains invalid numeric value filters before any API call', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('VF invalid')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('number')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('gt')
+    await wrapper.find('[data-testid="filter-editor-value-input"]').setValue('not-a-number')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/Zahl/i)
+    expect(wrapper.find('[data-testid="filter-editor-validation-hint"]').text()).toMatch(/Zahl/i)
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(wrapper.find('[data-testid="filter-editor-error"]').text()).toMatch(/Zahl/i)
+    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
+  })
+
+  it('requires both between bounds before saving', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('VF range missing')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('number')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('between')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/Obergrenze/i)
+    expect(wrapper.find('[data-testid="filter-editor-value-lower"]').attributes('aria-invalid')).toBe('true')
+    expect(wrapper.find('[data-testid="filter-editor-value-upper"]').attributes('aria-invalid')).toBe('true')
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
+    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
+  })
+
+  it('explains non-numeric between bounds before any API call', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('VF range invalid')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('number')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('between')
+    await wrapper.find('[data-testid="filter-editor-value-lower"]').setValue('unten')
+    await wrapper.find('[data-testid="filter-editor-value-upper"]').setValue('20')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/Zahl/i)
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
+    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
+  })
+
+  it('rejects contradictory between value-filter bounds in the dialog', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('VF range')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('number')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('between')
+    await wrapper.find('[data-testid="filter-editor-value-lower"]').setValue('20')
+    await wrapper.find('[data-testid="filter-editor-value-upper"]').setValue('10')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/Untergrenze/i)
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
+    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
+  })
+
+  it('explains invalid boolean value filters before any API call', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('VF bool invalid')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('bool')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('eq')
+    await wrapper.find('[data-testid="filter-editor-value-input"]').setValue('maybe')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/true/i)
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/false/i)
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
+    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
+  })
+
   it('emits "saved" after a successful save', async () => {
     const ringbufferApi = makeRingbufferApi()
     const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
@@ -546,6 +693,37 @@ describe('FilterEditor (#436)', () => {
     expect(payload.filter.value_filter).toMatchObject({ operator: 'between', lower: 10, upper: 20 })
   })
 
+  it('bool value filters serialise accepted literal variants', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('Bool')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('bool')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('eq')
+    await wrapper.find('[data-testid="filter-editor-value-input"]').setValue('1')
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+    expect(ringbufferApi.createFilterset.mock.calls[0][0].filter.value_filter).toMatchObject({ operator: 'eq', value: true })
+
+    ringbufferApi.createFilterset.mockClear()
+    await wrapper.find('[data-testid="filter-editor-value-input"]').setValue('false')
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+    expect(ringbufferApi.createFilterset.mock.calls[0][0].filter.value_filter).toMatchObject({ operator: 'eq', value: false })
+  })
+
+  it('string value filters serialise typed values', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('String')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('string')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('contains')
+    await wrapper.find('[data-testid="filter-editor-value-input"]').setValue('warm')
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+
+    expect(ringbufferApi.createFilterset.mock.calls[0][0].filter.value_filter).toMatchObject({ operator: 'contains', value: 'warm' })
+  })
+
   it('regex data type serialises pattern + ignore_case', async () => {
     const ringbufferApi = makeRingbufferApi()
     const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
@@ -558,6 +736,50 @@ describe('FilterEditor (#436)', () => {
     await flushPromises()
     const payload = ringbufferApi.createFilterset.mock.calls[0][0]
     expect(payload.filter.value_filter).toMatchObject({ operator: 'regex', pattern: '^temp', ignore_case: true })
+  })
+
+  it('regex data type serialises a typed pattern even before selecting an operator', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi, leaveEmpty: true })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('Implicit Regex')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('regex')
+    await wrapper.find('[data-testid="filter-editor-value-pattern"]').setValue('temp$')
+    await wrapper.find('[data-testid="filter-editor-value-ignore-case"]').setValue(true)
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(false)
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+
+    const payload = ringbufferApi.createFilterset.mock.calls[0][0]
+    expect(payload.filter.value_filter).toMatchObject({ operator: 'regex', pattern: 'temp$', ignore_case: true })
+  })
+
+  it('requires a regex pattern when the regex operator is selected', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('Regex missing')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('regex')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('regex')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-editor-value-error"]').text()).toMatch(/Pattern/i)
+    expect(wrapper.find('[data-testid="filter-editor-value-pattern"]').attributes('aria-invalid')).toBe('true')
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
+    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
+  })
+
+  it('allows Python-compatible regex syntax that JavaScript RegExp rejects', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('Python Regex')
+    await wrapper.find('[data-testid="filter-editor-value-type"]').setValue('regex')
+    await wrapper.find('[data-testid="filter-editor-value-operator"]').setValue('regex')
+    await wrapper.find('[data-testid="filter-editor-value-pattern"]').setValue('(?P<name>temp)')
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+
+    expect(ringbufferApi.createFilterset).toHaveBeenCalledTimes(1)
+    const payload = ringbufferApi.createFilterset.mock.calls[0][0]
+    expect(payload.filter.value_filter).toMatchObject({ operator: 'regex', pattern: '(?P<name>temp)' })
   })
 
   it('roundtrips a value_filter of operator gt from getFilterset payload', async () => {
@@ -622,6 +844,41 @@ describe('FilterEditor (#436)', () => {
       { tree_id: 't1', node_id: 'n1', include_descendants: true },
       { tree_id: 't1', node_id: 'n2', include_descendants: true },
     ])
+  })
+
+  it('serialises device physical addresses into filter.devices', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi, leaveEmpty: true })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('Mit Device-Filter')
+    await wrapper.find('[data-testid="filter-editor-devices"]').setValue('1.1.10, 1.1.11  1.1.10')
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+    const payload = ringbufferApi.createFilterset.mock.calls[0][0]
+    expect(payload.filter.devices).toEqual(['1.1.10', '1.1.11'])
+  })
+
+  it('hydrates existing filter.devices and roundtrips them on update', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({
+        data: makeSampleSet({
+          filter: {
+            hierarchy_nodes: [],
+            datapoints: [],
+            devices: ['1.2.3', '1.2.4'],
+            tags: ['heizung'],
+            adapters: ['knx'],
+            q: null,
+            value_filter: null,
+          },
+        }),
+      }),
+    })
+    const { wrapper } = await mountEditor({ props: { setId: 'fs-1' }, ringbufferApi })
+    expect(wrapper.find('[data-testid="filter-editor-devices"]').element.value).toBe('1.2.3, 1.2.4')
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+    const payload = ringbufferApi.updateFilterset.mock.calls[0][1]
+    expect(payload.filter.devices).toEqual(['1.2.3', '1.2.4'])
   })
 
   it('hierarchy expand error path surfaces a message and keeps the chip', async () => {

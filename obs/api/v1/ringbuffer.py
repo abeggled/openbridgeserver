@@ -28,7 +28,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.ringbuffer.persisted_config import persist_ringbuffer_config
 from obs.ringbuffer.ringbuffer import get_ringbuffer
@@ -231,6 +231,7 @@ class FilterCriteria(BaseModel):
 
     hierarchy_nodes: list[NodeRef] = Field(default_factory=list)
     datapoints: list[str] = Field(default_factory=list)
+    devices: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     adapters: list[str] = Field(default_factory=list)
     q: str | None = None
@@ -244,7 +245,7 @@ def _is_empty_criteria(c: FilterCriteria | None) -> bool:
     """
     if c is None:
         return True
-    if c.hierarchy_nodes or c.datapoints or c.tags or c.adapters:
+    if c.hierarchy_nodes or c.datapoints or c.devices or c.tags or c.adapters:
         return False
     if c.q and c.q.strip():
         return False
@@ -511,6 +512,147 @@ async def _resolve_hierarchy_to_datapoints(
                 seen.add(dp_id)
                 out.append(dp_id)
     return out
+
+
+def _normalize_nonempty(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        token = value.strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+
+async def _table_columns(db: Database, table_name: str) -> set[str]:
+    rows = await db.fetchall(f"PRAGMA table_info({table_name})")
+    return {str(row["name"]) for row in rows if "name" in row.keys()}
+
+
+async def _resolve_device_pas_to_group_addresses(
+    device_pas: list[str],
+    db: Database,
+) -> list[str]:
+    """Resolve physical addresses to KNX group addresses via persisted knxproj tables.
+
+    The helper is schema-tolerant so it keeps working while the KNX device
+    import tables are introduced incrementally across sub-issues.
+    """
+    normalized_pas = _normalize_nonempty(device_pas)
+    if not normalized_pas:
+        return []
+
+    co_cols = await _table_columns(db, "knx_comm_objects")
+    link_cols = await _table_columns(db, "knx_co_ga_links")
+    dev_cols = await _table_columns(db, "knx_devices")
+
+    ga_col = next((c for c in ("group_address", "ga_address", "ga", "address") if c in link_cols), None)
+    if not ga_col:
+        return []
+
+    placeholders = ",".join("?" * len(normalized_pas))
+    co_id_col = next((c for c in ("id", "comm_object_id", "communication_object_id", "co_id") if c in co_cols), None)
+    link_co_col = next((c for c in ("comm_object_id", "communication_object_id", "co_id") if c in link_cols), None)
+
+    # Most direct shape: knx_comm_objects holds the device physical address.
+    co_pa_col = next(
+        (c for c in ("physical_address", "device_physical_address", "device_pa", "pa", "address") if c in co_cols),
+        None,
+    )
+    if co_id_col and link_co_col and co_pa_col:
+        rows = await db.fetchall(
+            f"""SELECT DISTINCT l.{ga_col} AS ga
+                   FROM knx_comm_objects co
+                   JOIN knx_co_ga_links l ON l.{link_co_col} = co.{co_id_col}
+                  WHERE co.{co_pa_col} IN ({placeholders})""",
+            tuple(normalized_pas),
+        )
+        resolved = _normalize_nonempty([str(row["ga"]) for row in rows if row["ga"] is not None])
+        if resolved:
+            return resolved
+
+    # Fallback shape: knx_devices linked via device_id in knx_comm_objects.
+    dev_id_col = next((c for c in ("id", "device_id") if c in dev_cols), None)
+    dev_pa_col = next((c for c in ("individual_address", "physical_address", "pa", "address") if c in dev_cols), None)
+    co_dev_id_col = next((c for c in ("device_id", "knx_device_id") if c in co_cols), None)
+    if dev_id_col and dev_pa_col and co_id_col and link_co_col and co_dev_id_col:
+        rows = await db.fetchall(
+            f"""SELECT DISTINCT l.{ga_col} AS ga
+                   FROM knx_devices d
+                   JOIN knx_comm_objects co ON co.{co_dev_id_col} = d.{dev_id_col}
+                   JOIN knx_co_ga_links l ON l.{link_co_col} = co.{co_id_col}
+                  WHERE d.{dev_pa_col} IN ({placeholders})""",
+            tuple(normalized_pas),
+        )
+        return _normalize_nonempty([str(row["ga"]) for row in rows if row["ga"] is not None])
+
+    return []
+
+
+def _apply_group_addresses_to_filter_query(
+    query: RingBufferQueryV2,
+    group_addresses: list[str],
+) -> RingBufferQueryV2:
+    normalized_group_addresses = _normalize_nonempty(group_addresses)
+    if not normalized_group_addresses:
+        return query
+
+    metadata_payload = query.filters.metadata.model_dump() if query.filters.metadata else {}
+    existing = _normalize_nonempty(metadata_payload.get("group_addresses_any_of", []))
+    if existing:
+        allowed_set = set(normalized_group_addresses)
+        allowed = [ga for ga in existing if ga in allowed_set]
+        if not allowed:
+            allowed = ["__obs_no_matching_group_address__"]
+    else:
+        allowed = normalized_group_addresses
+
+    metadata_payload["group_addresses_any_of"] = allowed
+    return query.model_copy(
+        update={"filters": query.filters.model_copy(update={"metadata": RingBufferMetadataFilterV2.model_validate(metadata_payload)})}
+    )
+
+
+async def _build_query_from_filter_criteria(
+    filter_: FilterCriteria,
+    *,
+    time_filter: RingBufferTimeFilterV2 | None,
+    db: Database,
+    sort: RingBufferSortV2 | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> RingBufferQueryV2 | None:
+    effective_filter = filter_
+    if filter_.hierarchy_nodes:
+        resolved_dps = await _resolve_hierarchy_to_datapoints(filter_.hierarchy_nodes, db)
+        if resolved_dps:
+            merged = list({*filter_.datapoints, *resolved_dps})
+            effective_filter = filter_.model_copy(update={"datapoints": merged})
+
+    query = _filter_to_query_v2(effective_filter, time_filter)
+
+    if filter_.devices:
+        resolved_group_addresses = await _resolve_device_pas_to_group_addresses(filter_.devices, db)
+        if not resolved_group_addresses:
+            return None
+        query = _apply_group_addresses_to_filter_query(query, resolved_group_addresses)
+
+    updates: dict[str, Any] = {}
+    if sort is not None:
+        updates["sort"] = sort
+    if limit is not None or offset is not None:
+        updates["pagination"] = query.pagination.model_copy(
+            update={
+                "limit": limit if limit is not None else query.pagination.limit,
+                "offset": offset if offset is not None else query.pagination.offset,
+            }
+        )
+    if updates:
+        query = query.model_copy(update=updates)
+
+    return query
 
 
 def _filter_to_query_v2(filter_: FilterCriteria, time: RingBufferTimeFilterV2 | None) -> RingBufferQueryV2:
@@ -1040,7 +1182,7 @@ async def list_ringbuffer_filtersets(
 @router.post("/filtersets", response_model=RingBufferFiltersetOut, status_code=status.HTTP_201_CREATED)
 async def create_ringbuffer_filterset(
     request: Request,
-    current_user: str = Depends(get_current_user),
+    current_user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> RingBufferFiltersetOut:
     raw = await _read_json_body(request)
@@ -1048,7 +1190,7 @@ async def create_ringbuffer_filterset(
     if _is_empty_criteria(payload.filter):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "filterset.filter must declare at least one criterion (hierarchy_nodes, datapoints, tags, adapters, q, or value_filter)",
+            "filterset.filter must declare at least one criterion (hierarchy_nodes, datapoints, devices, tags, adapters, q, or value_filter)",
         )
     return await _insert_filterset(db, payload=payload, created_by=current_user)
 
@@ -1069,7 +1211,7 @@ async def get_ringbuffer_filterset(
 async def update_ringbuffer_filterset(
     filterset_id: str,
     request: Request,
-    current_user: str = Depends(get_current_user),
+    current_user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> RingBufferFiltersetOut:
     current = await _require_filterset_ownership(db, filterset_id, current_user)
@@ -1093,7 +1235,7 @@ async def update_ringbuffer_filterset(
     if _is_empty_criteria(new_filter):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "filterset.filter must declare at least one criterion (hierarchy_nodes, datapoints, tags, adapters, q, or value_filter)",
+            "filterset.filter must declare at least one criterion (hierarchy_nodes, datapoints, devices, tags, adapters, q, or value_filter)",
         )
 
     # is_active, topbar_active and topbar_order live in
@@ -1141,7 +1283,7 @@ async def update_ringbuffer_filterset(
 @router.delete("/filtersets/{filterset_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_ringbuffer_filterset(
     filterset_id: str,
-    current_user: str = Depends(get_current_user),
+    current_user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> None:
     await _require_filterset_ownership(db, filterset_id, current_user)
@@ -1152,7 +1294,7 @@ async def delete_ringbuffer_filterset(
 async def clone_ringbuffer_filterset(
     filterset_id: str,
     body: RingBufferFiltersetCloneRequest,
-    current_user: str = Depends(get_current_user),
+    current_user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> RingBufferFiltersetOut:
     # Cloning stays open for everyone — that's how a non-admin gets a writable
@@ -1337,26 +1479,16 @@ async def query_ringbuffer_filtersets_multi(
     matched: dict[int, list[str]] = {}
     entries_by_id: dict[int, RingBufferEntryOut] = {}
     for fs in resolved:
-        # Resolve hierarchy_nodes to their concrete DataPoints (rec. via the
-        # subtree CTE) and OR-union them with the explicit datapoints list.
-        # This makes a hierarchy-only filter actually match rows in the
-        # ringbuffer; previously hierarchy_nodes was persisted but ignored
-        # on the server side.
-        effective_filter = fs.filter
-        if fs.filter.hierarchy_nodes:
-            resolved_dps = await _resolve_hierarchy_to_datapoints(fs.filter.hierarchy_nodes, db)
-            if resolved_dps:
-                merged = list({*fs.filter.datapoints, *resolved_dps})
-                effective_filter = fs.filter.model_copy(update={"datapoints": merged})
-        query = _filter_to_query_v2(effective_filter, body.time)
-        query = query.model_copy(
-            update={
-                "sort": body.sort,
-                "pagination": query.pagination.model_copy(
-                    update={"limit": per_set_limit, "offset": 0},
-                ),
-            }
+        query = await _build_query_from_filter_criteria(
+            fs.filter,
+            time_filter=body.time,
+            db=db,
+            sort=body.sort,
+            limit=per_set_limit,
+            offset=0,
         )
+        if query is None:
+            continue
         try:
             rows = await _query_v2_entries(query)
         except HTTPException:
@@ -1402,7 +1534,9 @@ async def query_ringbuffer_filterset(
     if not current.is_active:
         return []
 
-    query = _filter_to_query_v2(current.filter, None)
+    query = await _build_query_from_filter_criteria(current.filter, time_filter=None, db=db)
+    if query is None:
+        return []
     return await _query_v2_entries(query)
 
 
@@ -1461,22 +1595,15 @@ async def _collect_multi_entries(
     matched: dict[int, list[str]] = {}
     entries_by_id: dict[int, RingBufferEntryOut] = {}
     for fs in resolved:
-        # Resolve hierarchy_nodes to concrete DPs (see the multi-query helper
-        # for rationale). Same recursive-subtree pattern.
-        effective_filter = fs.filter
-        if fs.filter.hierarchy_nodes:
-            resolved_dps = await _resolve_hierarchy_to_datapoints(fs.filter.hierarchy_nodes, db)
-            if resolved_dps:
-                merged = list({*fs.filter.datapoints, *resolved_dps})
-                effective_filter = fs.filter.model_copy(update={"datapoints": merged})
-        query = _filter_to_query_v2(effective_filter, body.time)
-        query = query.model_copy(
-            update={
-                "pagination": query.pagination.model_copy(
-                    update={"limit": _CSV_EXPORT_MAX_ROWS, "offset": 0},
-                ),
-            }
+        query = await _build_query_from_filter_criteria(
+            fs.filter,
+            time_filter=body.time,
+            db=db,
+            limit=_CSV_EXPORT_MAX_ROWS,
+            offset=0,
         )
+        if query is None:
+            continue
         try:
             rows = await _query_v2_entries(query)
         except HTTPException:

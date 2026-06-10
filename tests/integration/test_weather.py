@@ -3,8 +3,8 @@
 GET /api/v1/weather/fetch
 
 Abgedeckt:
-  1.  Kein Token → 401
-  2.  Ungültiger Token → 401
+  1.  Public: Kein Token nötig
+  2.  Public: Ungültiger _token wird ignoriert
   3.  Ungültiges URL-Schema (ftp://) → 400
   4.  Wetter-API erreichbar → 200, JSON-Daten weitergeleitet
   5.  Wetter-API nicht erreichbar → 502
@@ -44,7 +44,7 @@ def bypass_ssrf():
     with unittest.mock.patch.object(
         _weather_module,
         "build_pinned_url_targets",
-        side_effect=lambda url: ([url], {}, {}),
+        side_effect=lambda url, **_kwargs: ([url], {}, {}),
     ):
         yield
 
@@ -123,16 +123,65 @@ class _MockWeatherServer:
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 
-# 1. Kein Token
-async def test_fetch_no_auth_returns_401(client):
-    resp = await client.get("/api/v1/weather/fetch?url=http://example.com/weather")
-    assert resp.status_code == 401
+# 1. Public: Kein Token nötig
+async def test_fetch_no_auth_required(client, bypass_ssrf):
+    srv = _MockWeatherServer()
+    try:
+        resp = await client.get(f"/api/v1/weather/fetch?url={srv.base_url}/weather")
+        assert resp.status_code == 200
+    finally:
+        srv.shutdown()
 
 
-# 2. Ungültiger Token
-async def test_fetch_invalid_token_returns_401(client):
-    resp = await client.get("/api/v1/weather/fetch?url=http://example.com/weather&_token=not.valid.jwt")
-    assert resp.status_code == 401
+# 2. Public: Ungültiger _token wird ignoriert
+async def test_fetch_invalid_token_is_ignored_for_public_route(client, bypass_ssrf):
+    srv = _MockWeatherServer()
+    try:
+        resp = await client.get(
+            f"/api/v1/weather/fetch?url={srv.base_url}/weather&_token=not.valid.jwt",
+        )
+        assert resp.status_code == 200
+    finally:
+        srv.shutdown()
+
+
+async def test_fetch_public_request_uses_private_network_blocking_mode(client, monkeypatch):
+    observed: dict[str, bool] = {}
+
+    def _wrapped_build_targets(url: str, *, allow_private_networks: bool, **_kwargs):
+        observed["allow_private_networks"] = allow_private_networks
+        return [url], {}, {}
+
+    monkeypatch.setattr(_weather_module, "build_pinned_url_targets", _wrapped_build_targets)
+
+    srv = _MockWeatherServer()
+    try:
+        resp = await client.get(f"/api/v1/weather/fetch?url={srv.base_url}/weather")
+        assert resp.status_code == 200
+        assert observed["allow_private_networks"] is False
+    finally:
+        srv.shutdown()
+
+
+async def test_fetch_authenticated_request_allows_private_network_mode(client, auth_headers, monkeypatch):
+    observed: dict[str, bool] = {}
+
+    def _wrapped_build_targets(url: str, *, allow_private_networks: bool, **_kwargs):
+        observed["allow_private_networks"] = allow_private_networks
+        return [url], {}, {}
+
+    monkeypatch.setattr(_weather_module, "build_pinned_url_targets", _wrapped_build_targets)
+
+    srv = _MockWeatherServer()
+    try:
+        resp = await client.get(
+            f"/api/v1/weather/fetch?url={srv.base_url}/weather",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert observed["allow_private_networks"] is True
+    finally:
+        srv.shutdown()
 
 
 # 3. Ungültiges URL-Schema
@@ -298,5 +347,17 @@ async def test_fetch_ssrf_loopback_ipv6_blocked(client, auth_headers):
         "/api/v1/weather/fetch?url=http://[::1]/secret",
         headers=auth_headers,
     )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "url_target_blocked"
+
+
+async def test_fetch_ssrf_private_network_without_auth_blocked(client):
+    resp = await client.get("/api/v1/weather/fetch?url=http://192.168.1.10/weather")
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "url_target_blocked"
+
+
+async def test_fetch_ssrf_user_query_param_does_not_enable_private_networks(client):
+    resp = await client.get("/api/v1/weather/fetch?url=http://192.168.1.10/weather&_user=admin")
     assert resp.status_code == 400
     assert resp.json()["detail"]["code"] == "url_target_blocked"

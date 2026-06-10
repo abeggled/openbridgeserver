@@ -13,6 +13,8 @@ import uuid
 
 import pytest
 
+from obs.api.auth import create_access_token
+
 pytestmark = pytest.mark.integration
 
 _MISSING_ID = "00000000-0000-0000-0000-000000000000"
@@ -44,6 +46,17 @@ async def _create_instance(client, auth_headers, name: str = "") -> dict:
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+async def _create_non_admin_headers(client, auth_headers) -> tuple[str, dict]:
+    username = f"bind-user-{uuid.uuid4().hex[:8]}"
+    resp = await client.post(
+        "/api/v1/auth/users",
+        json={"username": username, "password": "TestPass123!", "is_admin": False},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return username, {"Authorization": f"Bearer {create_access_token(username)}"}
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +110,19 @@ async def test_create_binding_requires_auth(client):
         json={"adapter_instance_id": _MISSING_ID, "direction": "SOURCE", "config": {}},
     )
     assert resp.status_code == 401
+
+
+async def test_create_binding_non_admin_forbidden(client, auth_headers):
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.post(
+            f"/api/v1/datapoints/{_MISSING_ID}/bindings",
+            json={"adapter_instance_id": _MISSING_ID, "direction": "SOURCE", "config": {}},
+            headers=user_headers,
+        )
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_create_binding_404_for_unknown_dp(client, auth_headers):
@@ -198,6 +224,19 @@ async def test_update_binding_requires_auth(client):
     assert resp.status_code == 401
 
 
+async def test_update_binding_non_admin_forbidden(client, auth_headers):
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.patch(
+            f"/api/v1/datapoints/{_MISSING_ID}/bindings/{_MISSING_ID}",
+            json={"enabled": False},
+            headers=user_headers,
+        )
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 async def test_update_binding_404_for_unknown(client, auth_headers):
     dp = await _create_dp(client, auth_headers)
     resp = await client.patch(
@@ -277,6 +316,18 @@ async def test_update_binding_invalid_formula_returns_422(client, auth_headers):
 async def test_delete_binding_requires_auth(client):
     resp = await client.delete(f"/api/v1/datapoints/{_MISSING_ID}/bindings/{_MISSING_ID}")
     assert resp.status_code == 401
+
+
+async def test_delete_binding_non_admin_forbidden(client, auth_headers):
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.delete(
+            f"/api/v1/datapoints/{_MISSING_ID}/bindings/{_MISSING_ID}",
+            headers=user_headers,
+        )
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_delete_binding_404_for_unknown(client, auth_headers):

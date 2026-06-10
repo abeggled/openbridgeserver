@@ -49,7 +49,6 @@ def decode_registers(
 ) -> Any:
     """Convert a list of 16-bit Modbus register values to a Python value."""
     bo = ">" if byte_order == "big" else "<"
-    wo = ">" if word_order == "big" else "<"
 
     if data_format == "uint16":
         raw = registers[0]
@@ -62,8 +61,8 @@ def decode_registers(
     if data_format in ("uint32", "int32", "float32"):
         if len(registers) < 2:
             return 0
-        r = registers[:2] if wo == ">" else registers[:2][::-1]
-        word_bytes = struct.pack(">HH", r[0], r[1])
+        words = registers[:2] if word_order == "big" else registers[:2][::-1]
+        word_bytes = b"".join(struct.pack(bo + "H", word) for word in words)
         if data_format == "uint32":
             raw = struct.unpack(">I", word_bytes)[0]
         elif data_format == "int32":
@@ -107,8 +106,8 @@ def encode_value(
             word_bytes = struct.pack(">i", int(scaled))
         else:
             word_bytes = struct.pack(">f", scaled)
-        r0, r1 = struct.unpack(">HH", word_bytes)
-        return [r0, r1] if word_order == "big" else [r1, r0]
+        words = [struct.unpack(bo + "H", word_bytes[i : i + 2])[0] for i in range(0, 4, 2)]
+        return words if word_order == "big" else words[::-1]
 
     if data_format in ("uint64", "int64"):
         fmt = ">Q" if data_format == "uint64" else ">q"

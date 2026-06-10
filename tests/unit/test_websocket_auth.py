@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from uuid import uuid4
+
 import pytest
 from fastapi import HTTPException, WebSocketDisconnect
 
@@ -14,6 +18,7 @@ class _FakeWebSocket:
         headers: dict[str, str] | None = None,
         query_params: dict[str, str] | None = None,
         subprotocols: list[str] | None = None,
+        received: list[dict] | None = None,
     ) -> None:
         self.headers = headers or {}
         self.query_params = query_params or {}
@@ -21,6 +26,8 @@ class _FakeWebSocket:
         self.accepted = False
         self.accepted_subprotocol: str | None = None
         self.close_calls: list[tuple[int | None, str | None]] = []
+        self.received = received or []
+        self.sent: list[dict] = []
 
     async def accept(self, subprotocol: str | None = None) -> None:
         self.accepted = True
@@ -30,10 +37,12 @@ class _FakeWebSocket:
         self.close_calls.append((code, reason))
 
     async def receive_json(self) -> dict:
+        if self.received:
+            return self.received.pop(0)
         raise WebSocketDisconnect()
 
-    async def send_json(self, _msg: dict) -> None:
-        return None
+    async def send_json(self, msg: dict) -> None:
+        self.sent.append(msg)
 
 
 class _DbStub:
@@ -51,6 +60,16 @@ class _DbStub:
 
     async def execute_and_commit(self, _query: str, _params: tuple) -> None:
         self.updated = True
+
+
+class _LogAccessDbStub:
+    def __init__(self, row: dict | None) -> None:
+        self.row = row
+        self.queries: list[str] = []
+
+    async def fetchone(self, query: str, _params: tuple):
+        self.queries.append(query)
+        return self.row
 
 
 @pytest.mark.asyncio
@@ -118,6 +137,80 @@ async def test_websocket_endpoint_accepts_api_key(monkeypatch):
 
     assert ws.accepted is True
     assert db.updated is True
+
+
+@pytest.mark.asyncio
+async def test_websocket_endpoint_subscribe_sends_initial_registry_value(monkeypatch):
+    dp_id = uuid4()
+    monkeypatch.setattr(auth_api, "hash_api_key", lambda key: f"hash:{key}")
+    monkeypatch.setattr(ws_api, "get_db", lambda: _DbStub(has_key=True))
+
+    class _RegistryStub:
+        def get(self, dp_uuid):
+            if dp_uuid == dp_id:
+                return SimpleNamespace(unit="W")
+            return None
+
+        def get_value(self, dp_uuid):
+            if dp_uuid == dp_id:
+                return SimpleNamespace(
+                    value=17.25,
+                    quality="good",
+                    ts=datetime(2026, 6, 8, 9, 10, 11, 456000, tzinfo=UTC),
+                )
+            return None
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+
+    ws = _FakeWebSocket(
+        headers={"x-api-key": "obs_valid"},
+        received=[{"action": "subscribe", "ids": [str(dp_id)]}],
+    )
+    ws_api.init_ws_manager()
+    try:
+        await ws_api.websocket_endpoint(ws)
+    finally:
+        ws_api.reset_ws_manager()
+
+    assert ws.sent == [
+        {"action": "subscribed", "ids": [str(dp_id)]},
+        {
+            "id": str(dp_id),
+            "v": 17.25,
+            "u": "W",
+            "t": "2026-06-08T09:10:11.456Z",
+            "q": "good",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ws_log_access_allows_authenticated_user_without_admin_lookup(monkeypatch):
+    def fail_get_db():
+        raise AssertionError("JWT log access should match REST read access without admin lookup")
+
+    monkeypatch.setattr(ws_api, "get_db", fail_get_db)
+
+    assert await ws_api._ws_has_log_access("regular-user", None) is True  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_ws_log_access_revalidates_api_key_with_legacy_name_fallback(monkeypatch):
+    monkeypatch.setattr(auth_api, "hash_api_key", lambda key: f"hash:{key}")
+    db = _LogAccessDbStub({"subject": "automation-client"})
+    monkeypatch.setattr(ws_api, "get_db", lambda: db)
+
+    assert await ws_api._ws_has_log_access("__api_key__", "obs_valid") is True  # noqa: SLF001
+    assert "COALESCE(NULLIF(owner, ''), name)" in db.queries[0]
+
+
+@pytest.mark.asyncio
+async def test_ws_log_access_rejects_revoked_api_key(monkeypatch):
+    monkeypatch.setattr(auth_api, "hash_api_key", lambda key: f"hash:{key}")
+    db = _LogAccessDbStub(None)
+    monkeypatch.setattr(ws_api, "get_db", lambda: db)
+
+    assert await ws_api._ws_has_log_access("__api_key__", "obs_revoked") is False  # noqa: SLF001
 
 
 @pytest.mark.asyncio

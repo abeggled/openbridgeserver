@@ -4,11 +4,13 @@ on:
   push:
     tags:
       - '*'
+      - '!nightly-*'  # nightly-lxc.yml creates these; must not trigger a real release/build
+
   workflow_dispatch:
 
 env:
   TEMPLATE_NAME: openbridgeserver
-  BASE_OS: ubuntu-plucky
+  BASE_OS: ubuntu-resolute
 
 jobs:
   build:
@@ -57,6 +59,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y debootstrap zstd ubuntu-keyring
+          # Ubuntu releases all share the generic 'gutsy' debootstrap script.
+          # The runner's debootstrap may predate resolute (26.04); symlink it if missing.
+          if [[ ! -e /usr/share/debootstrap/scripts/resolute ]]; then
+            sudo ln -sf gutsy /usr/share/debootstrap/scripts/resolute
+          fi
 
       # ── Build GUI and frontend on the runner (no Node needed in the LXC) ─────
       - name: Setup Node.js
@@ -234,7 +241,8 @@ jobs:
       - name: Stamp version file
         run: |
           BASE=$(grep -m1 '^## ' RELEASENOTES.md | sed 's/^## *//')
-          RC=$(echo "${{ steps.meta.outputs.version }}" | grep -oP -- '-RC\d*$' || true)
+          TAG="${{ steps.meta.outputs.version }}"
+          if [[ "$TAG" =~ (-RC[0-9]*)$ ]]; then RC="${BASH_REMATCH[1]}"; else RC=""; fi
           echo "${BASE}${RC}" > obs/version
 
       - name: Create app bundle
@@ -252,7 +260,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: base-system-cache.tar.zst
-          key: base-system-ubuntu-plucky-${{ matrix.arch }}-v1
+          key: base-system-ubuntu-resolute-${{ matrix.arch }}-v1
 
       - name: Create or restore base system
         run: |
@@ -271,15 +279,15 @@ jobs:
               --arch=${{ matrix.arch }} \
               --components=main,restricted,universe \
               --include=systemd,systemd-sysv,dbus,apt-utils,locales,iproute2,wget,curl,ca-certificates,less,logrotate,openssh-server,ifupdown \
-              plucky \
+              resolute \
               "$ROOTFS" \
               ${{ matrix.mirror }}
 
             # Write arch-specific sources.list before entering the chroot
             sudo tee "$ROOTFS/etc/apt/sources.list" > /dev/null <<SOURCES
-          deb ${{ matrix.mirror }} plucky main restricted universe multiverse
-          deb ${{ matrix.mirror }} plucky-updates main restricted universe multiverse
-          deb ${{ matrix.security_mirror }} plucky-security main restricted universe multiverse
+          deb ${{ matrix.mirror }} resolute main restricted universe multiverse
+          deb ${{ matrix.mirror }} resolute-updates main restricted universe multiverse
+          deb ${{ matrix.security_mirror }} resolute-security main restricted universe multiverse
           SOURCES
 
             sudo chroot "$ROOTFS" /bin/bash <<'BASESCRIPT'

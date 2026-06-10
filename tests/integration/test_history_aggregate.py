@@ -43,6 +43,21 @@ async def _write_value(client, auth_headers, dp_id: str, value: float) -> None:
     assert resp.status_code == 204, resp.text
 
 
+async def _create_page(client, auth_headers, name: str, access: str, *, access_pin: str | None = None) -> str:
+    payload: dict[str, object] = {
+        "name": name,
+        "type": "PAGE",
+        "order": 999,
+        "access": access,
+    }
+    if access_pin is not None:
+        payload["access_pin"] = access_pin
+
+    resp = await client.post("/api/v1/visu/nodes", json=payload, headers=auth_headers)
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
 async def _seed_history_value(dp_id: str, ts: datetime.datetime, value: float) -> None:
     from obs.db.database import get_db
 
@@ -232,3 +247,42 @@ async def test_aggregate_no_auth_no_page_id_returns_401(client):
     fake_id = str(uuid.uuid4())
     resp = await client.get(f"/api/v1/history/{fake_id}/aggregate")
     assert resp.status_code == 401
+
+
+async def test_history_allows_public_page_without_jwt(client, auth_headers):
+    dp = await _create_dp(client, auth_headers, name=f"HistPublic-{uuid.uuid4().hex[:8]}")
+    page_id = await _create_page(client, auth_headers, f"hist-public-{uuid.uuid4().hex[:8]}", "public")
+    try:
+        resp = await client.get(f"/api/v1/history/{dp['id']}", headers={"X-Page-Id": page_id})
+        assert resp.status_code == 200, resp.text
+    finally:
+        await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+        await client.delete(f"/api/v1/datapoints/{dp['id']}", headers=auth_headers)
+
+
+async def test_history_protected_page_requires_valid_session_token(client, auth_headers):
+    pin = "1234"
+    dp = await _create_dp(client, auth_headers, name=f"HistProtected-{uuid.uuid4().hex[:8]}")
+    page_id = await _create_page(
+        client,
+        auth_headers,
+        f"hist-protected-{uuid.uuid4().hex[:8]}",
+        "protected",
+        access_pin=pin,
+    )
+    try:
+        denied = await client.get(f"/api/v1/history/{dp['id']}", headers={"X-Page-Id": page_id})
+        assert denied.status_code == 401, denied.text
+
+        auth_resp = await client.post(f"/api/v1/visu/nodes/{page_id}/auth", json={"pin": pin})
+        assert auth_resp.status_code == 200, auth_resp.text
+        session_token = auth_resp.json()["session_token"]
+
+        allowed = await client.get(
+            f"/api/v1/history/{dp['id']}",
+            headers={"X-Page-Id": page_id, "X-Session-Token": session_token},
+        )
+        assert allowed.status_code == 200, allowed.text
+    finally:
+        await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+        await client.delete(f"/api/v1/datapoints/{dp['id']}", headers=auth_headers)

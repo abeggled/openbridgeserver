@@ -371,8 +371,9 @@ function onLiveEntry(entry) {
   //      (future-compatible path for when the WS push starts including the
   //      match annotation; the row-color spec exercises this case).
   //   3. Active sets present and entry has no preset → client-side match.
-  //      Empty FilterCriteria match nothing (#36 semantics, see useClientSideMatch);
-  //      an entry that matches none of the active sets is dropped.
+  //      Empty FilterCriteria match nothing (#36 semantics, see useClientSideMatch).
+  //      Hierarchy sets are matched from WS metadata; entries that match none
+  //      of the active sets are dropped.
   const activeSets = filtersets.value.filter((s) => s.topbar_active && s.is_active !== false)
   const presetMatched = Array.isArray(entry?.matched_set_ids) ? entry.matched_set_ids : null
 

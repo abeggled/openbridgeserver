@@ -6,19 +6,66 @@
  *
  * Field semantics (mirroring `FilterCriteria` from obs/api/v1/ringbuffer.py):
  *   - datapoints[]  — OR over entry.datapoint_id
+ *   - devices[]     — server-resolved KNX physical addresses; pass-through
  *   - adapters[]    — OR over entry.source_adapter
- *   - tags[]        — OR over entry.metadata.tags
+ *   - tags[]        — OR over entry.metadata.datapoint.tags
  *   - q             — substring (case-insensitive) over name | datapoint_id | source_adapter
  *   - value_filter  — operator + value/lower/upper/pattern over entry.new_value
- *   - hierarchy_nodes — pass-through (the frontend has no hierarchy resolver;
- *                       a set with only hierarchy filters matches every entry
- *                       on the client). The REST OR-union remains authoritative.
+ *   - hierarchy_nodes — OR over entry.metadata.hierarchy_nodes for the same
+ *                       tree, respecting include_descendants.
  *
  * Multiple criteria within a single FilterCriteria are AND-combined.
  */
 
-function _arrayIncludes(list, value) {
-  return Array.isArray(list) && list.length > 0 && list.includes(value)
+function _normalizedStrings(list) {
+  if (!Array.isArray(list)) return []
+  return list
+    .map((value) => String(value ?? '').trim().toLowerCase())
+    .filter(Boolean)
+}
+
+function _entryTags(entry) {
+  const metadata = entry?.metadata
+  if (!metadata || typeof metadata !== 'object') return []
+  const datapoint = metadata.datapoint
+  if (datapoint && typeof datapoint === 'object' && Array.isArray(datapoint.tags)) {
+    return _normalizedStrings(datapoint.tags)
+  }
+  // Legacy test fixtures and pre-metadata live payloads used metadata.tags.
+  return _normalizedStrings(metadata.tags)
+}
+
+function _entryHierarchyNodes(entry) {
+  const metadata = entry?.metadata
+  if (!metadata || typeof metadata !== 'object') return []
+  if (!Array.isArray(metadata.hierarchy_nodes)) return []
+  return metadata.hierarchy_nodes
+    .filter((node) => node && typeof node === 'object')
+    .map((node) => ({
+      treeId: String(node.tree_id ?? '').trim(),
+      nodeId: String(node.node_id ?? '').trim(),
+      ancestorNodeIds: Array.isArray(node.ancestor_node_ids)
+        ? node.ancestor_node_ids.map((id) => String(id ?? '').trim()).filter(Boolean)
+        : [],
+    }))
+    .filter((node) => node.treeId && node.nodeId)
+}
+
+function _matchHierarchy(entry, hierarchyNodes) {
+  const entryNodes = _entryHierarchyNodes(entry)
+  if (entryNodes.length === 0) return false
+
+  return hierarchyNodes.some((requested) => {
+    const requestedTreeId = String(requested?.tree_id ?? '').trim()
+    const requestedNodeId = String(requested?.node_id ?? '').trim()
+    if (!requestedTreeId || !requestedNodeId) return false
+    const includeDescendants = requested?.include_descendants !== false
+    return entryNodes.some((entryNode) => {
+      if (entryNode.treeId !== requestedTreeId) return false
+      if (!includeDescendants) return entryNode.nodeId === requestedNodeId
+      return entryNode.ancestorNodeIds.includes(requestedNodeId)
+    })
+  })
 }
 
 /**
@@ -30,6 +77,7 @@ export function isEmptyFilter(criteria) {
   const hasList = (key) => Array.isArray(criteria[key]) && criteria[key].length > 0
   if (hasList('hierarchy_nodes')) return false
   if (hasList('datapoints')) return false
+  if (hasList('devices')) return false
   if (hasList('tags')) return false
   if (hasList('adapters')) return false
   if (typeof criteria.q === 'string' && criteria.q.trim().length > 0) return false
@@ -62,6 +110,8 @@ function _matchValueFilter(entryValue, vf) {
       const re = new RegExp(vf.pattern, vf.ignore_case ? 'i' : '')
       return re.test(String(entryValue ?? ''))
     } catch {
+      // The backend accepts Python regex syntax that JavaScript cannot compile.
+      // Do not count an unevaluable criterion as a positive live match.
       return false
     }
   }
@@ -70,34 +120,39 @@ function _matchValueFilter(entryValue, vf) {
 }
 
 /**
- * Returns true iff at least one *client-evaluable* criterion is populated AND
- * every populated criterion accepts the entry.
+ * Returns true iff at least one criterion is populated AND every populated
+ * criterion accepts the entry.
  *
  * Empty / null / undefined criteria match NOTHING (Phase-2 UX feedback).
  *
- * Hierarchy-only filters also match NOTHING on the client: the frontend has
- * no hierarchy resolver, and silently accepting every entry would colour
- * unrelated rows (e.g. a Wetterstation push would inherit a hierarchy set's
- * colour). The REST OR-union already does the right thing using the server's
- * recursive node-DP resolution, so the next refresh shows real matches; live
- * pushes for hierarchy-only sets stay uncoloured until then.
+ * Device-constrained filters match NOTHING on the client: the frontend has no
+ * resolver for that server-side mapping, even when other client-evaluable
+ * constraints pass. The REST OR-union remains authoritative; live pushes for
+ * device-constrained sets stay uncoloured until the next refresh.
  */
 export function matchEntry(entry, criteria) {
   if (!criteria || typeof criteria !== 'object') return false
   if (isEmptyFilter(criteria)) return false
   if (!entry) return false
 
-  const hasNonHierarchyConstraint =
-    (Array.isArray(criteria.datapoints) && criteria.datapoints.length > 0) ||
+  const hasHierarchyConstraint = Array.isArray(criteria.hierarchy_nodes) && criteria.hierarchy_nodes.length > 0
+  const hasDatapointConstraint = Array.isArray(criteria.datapoints) && criteria.datapoints.length > 0
+  const hasDeviceConstraint = Array.isArray(criteria.devices) && criteria.devices.length > 0
+  const hasClientConstraint =
+    hasDatapointConstraint ||
     (Array.isArray(criteria.adapters) && criteria.adapters.length > 0) ||
     (Array.isArray(criteria.tags) && criteria.tags.length > 0) ||
     (typeof criteria.q === 'string' && criteria.q.trim().length > 0) ||
     (criteria.value_filter && criteria.value_filter.operator)
-  if (!hasNonHierarchyConstraint) return false
+  if (!hasHierarchyConstraint && !hasClientConstraint) return false
+  if (hasDeviceConstraint) return false
 
-  // datapoints
-  if (Array.isArray(criteria.datapoints) && criteria.datapoints.length > 0) {
-    if (!criteria.datapoints.includes(entry.datapoint_id)) return false
+  // Server-side hierarchy resolution OR-unions resolved hierarchy datapoints
+  // with explicit datapoints before applying the remaining AND constraints.
+  if (hasHierarchyConstraint || hasDatapointConstraint) {
+    const matchesHierarchy = hasHierarchyConstraint && _matchHierarchy(entry, criteria.hierarchy_nodes)
+    const matchesDatapoint = hasDatapointConstraint && criteria.datapoints.includes(entry.datapoint_id)
+    if (!matchesHierarchy && !matchesDatapoint) return false
   }
 
   // adapters
@@ -107,12 +162,10 @@ export function matchEntry(entry, criteria) {
 
   // tags
   if (Array.isArray(criteria.tags) && criteria.tags.length > 0) {
-    const entryTags = entry.metadata && Array.isArray(entry.metadata.tags) ? entry.metadata.tags : []
-    const hasAny = criteria.tags.some((t) => entryTags.includes(t))
+    const entryTags = _entryTags(entry)
+    const requestedTags = _normalizedStrings(criteria.tags)
+    const hasAny = requestedTags.some((t) => entryTags.includes(t))
     if (!hasAny) return false
-    // Avoid lint complaints about unused helper above; _arrayIncludes is exported-like
-    // (kept for clarity of intent in future overloads).
-    void _arrayIncludes
   }
 
   // q (case-insensitive substring over name | datapoint_id | source_adapter)
@@ -129,8 +182,6 @@ export function matchEntry(entry, criteria) {
   if (criteria.value_filter && criteria.value_filter.operator) {
     if (!_matchValueFilter(entry.new_value, criteria.value_filter)) return false
   }
-
-  // hierarchy_nodes is pass-through on the client side.
   return true
 }
 

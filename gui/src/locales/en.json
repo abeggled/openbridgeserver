@@ -123,6 +123,9 @@
       "uncertain": "Unknown",
       "bad": "Bad"
     },
+    "diagnostics": {
+      "typeMismatch": "Type mismatch: expected {expected}, got {got} from {source} ({count}x)"
+    },
     "detail": {
       "backToList": "← Data points",
       "currentValue": "Current value",
@@ -328,6 +331,9 @@
       "respondToReadLabel": "Respond to read requests",
       "respondToReadHint": "Sends the current value as GroupValueResponse when a read request arrives.",
       "respondToReadPersistHint": "Requires enabled “Persist last value” on the object.",
+      "groupAddressLoading": "Searching …",
+      "groupAddressNoResults": "No group addresses found",
+      "groupAddressNoImport": "(.knxproj not imported yet)",
       "modbusSection": "Modbus binding",
       "addressLabel": "Address *",
       "registerTypeLabel": "Register type *",
@@ -679,6 +685,122 @@
         "uploadButton": "Upload & Parse",
         "uploadFailed": "Upload failed"
       }
+    },
+    "schema": {
+      "MODBUS_TCP": {
+        "serialize_reads": {
+          "title": "Serialize reads",
+          "description": "Sends Modbus requests one at a time instead of concurrently. Recommended for simple devices (heating controllers, inverters, meters) that can only handle one request at a time. Disable for capable PLCs with multi-request support."
+        },
+        "startup_jitter_s": {
+          "title": "Startup jitter (s)",
+          "description": "Maximum random delay (seconds) before the first poll of each binding. Prevents a request burst when all tasks start simultaneously. 0 = disabled."
+        }
+      },
+      "SNMP": {
+        "version": {
+          "title": "SNMP version"
+        },
+        "community": {
+          "title": "Community string (v1/v2c)"
+        },
+        "security_name": {
+          "title": "Security name / username (v3)"
+        },
+        "security_level": {
+          "title": "Security level (v3)"
+        },
+        "auth_protocol": {
+          "title": "Auth protocol (v3)"
+        },
+        "auth_key": {
+          "title": "Auth key (v3)"
+        },
+        "priv_protocol": {
+          "title": "Privacy protocol (v3)"
+        },
+        "priv_key": {
+          "title": "Privacy key (v3)"
+        }
+      },
+      "ZEITSCHALTUHR": {
+        "latitude": {
+          "title": "Latitude",
+          "description": "Latitude for sunrise/sunset calculation"
+        },
+        "longitude": {
+          "title": "Longitude",
+          "description": "Longitude for sunrise/sunset calculation"
+        },
+        "altitude": {
+          "title": "Altitude (m)",
+          "description": "Altitude above sea level in meters"
+        },
+        "timezone": {
+          "title": "Timezone",
+          "description": "Timezone (empty = app timezone, e.g. Europe/Zurich)"
+        },
+        "holiday_country": {
+          "title": "Holiday country",
+          "description": "Holiday country (ISO 3166-1: DE, AT, CH, FR …)"
+        },
+        "holiday_subdivision": {
+          "title": "State / Canton",
+          "description": "State/Canton (e.g. ZH, BY, OÖ) — empty = national holidays only"
+        },
+        "holiday_language": {
+          "title": "Holiday language",
+          "description": "Language for holiday names (de, fr, it, en) — default: de"
+        },
+        "vacation_1_start": {
+          "title": "Vacation 1 start",
+          "description": "Vacation period 1 start (YYYY-MM-DD)"
+        },
+        "vacation_1_end": {
+          "title": "Vacation 1 end",
+          "description": "Vacation period 1 end (YYYY-MM-DD)"
+        },
+        "vacation_2_start": {
+          "title": "Vacation 2 start",
+          "description": "Vacation period 2 start (YYYY-MM-DD)"
+        },
+        "vacation_2_end": {
+          "title": "Vacation 2 end",
+          "description": "Vacation period 2 end (YYYY-MM-DD)"
+        },
+        "vacation_3_start": {
+          "title": "Vacation 3 start",
+          "description": "Vacation period 3 start (YYYY-MM-DD)"
+        },
+        "vacation_3_end": {
+          "title": "Vacation 3 end",
+          "description": "Vacation period 3 end (YYYY-MM-DD)"
+        },
+        "vacation_4_start": {
+          "title": "Vacation 4 start",
+          "description": "Vacation period 4 start (YYYY-MM-DD)"
+        },
+        "vacation_4_end": {
+          "title": "Vacation 4 end",
+          "description": "Vacation period 4 end (YYYY-MM-DD)"
+        },
+        "vacation_5_start": {
+          "title": "Vacation 5 start",
+          "description": "Vacation period 5 start (YYYY-MM-DD)"
+        },
+        "vacation_5_end": {
+          "title": "Vacation 5 end",
+          "description": "Vacation period 5 end (YYYY-MM-DD)"
+        },
+        "vacation_6_start": {
+          "title": "Vacation 6 start",
+          "description": "Vacation period 6 start (YYYY-MM-DD)"
+        },
+        "vacation_6_end": {
+          "title": "Vacation 6 end",
+          "description": "Vacation period 6 end (YYYY-MM-DD)"
+        }
+      }
     }
   },
   "history": {
@@ -835,10 +957,17 @@
       "lowerBound": "Lower bound",
       "upperBound": "Upper bound",
       "patternLabel": "Pattern",
+      "patternPlaceholder": "e.g. ^temp",
       "valueLabel": "Value",
       "ignoreCase": "Regex ignore case",
       "emptyFilterWarning": "⚠ Configure at least one filter criterion — otherwise the set cannot be saved.",
       "semanticsHint": "Within the set: Hierarchy OR DP, all other criteria AND-linked.",
+      "valueRequired": "This value filter requires a value.",
+      "valueNumberRequired": "The value filter expects a valid number.",
+      "valueBoolRequired": "The value filter expects true/false or 1/0.",
+      "valueBetweenRequired": "Lower and upper bound are required for between.",
+      "valueRangeInvalid": "Lower bound must not be greater than upper bound.",
+      "valuePatternRequired": "The regex value filter requires a pattern.",
       "deleteTitle": "Delete filter set permanently",
       "deleteRestricted": "Only the owner or an admin may delete",
       "saveRestricted": "Only the owner or an admin may save",
@@ -1547,7 +1676,8 @@
       "importexport": "Data management",
       "icons": "Icons",
       "history": "History DB",
-      "security": "Security"
+      "security": "Security",
+      "support": "Support"
     },
     "general": {
       "title": "General settings",
@@ -1589,6 +1719,109 @@
       "saved": "URL target has been saved.",
       "deleted": "URL target has been removed.",
       "defaultReason": "Allowed after URL target check"
+    },
+    "support": {
+      "title": "Support package",
+      "description": "The support package is generated locally and downloaded. It is not sent automatically; sensitive values are centrally redacted before export.",
+      "packageTitle": "Create support package",
+      "exportButton": "Create support package",
+      "exported": "Support package created.",
+      "exportFailed": "Support package could not be created.",
+      "debugTitle": "Debug log",
+      "debugSettingsTitle": "Debug log settings",
+      "debugDescription": "Debug logging collects more detailed local diagnostic entries for a short time so they are included in the support package created afterwards.",
+      "debugFlow1": "Enable debug, reproduce the issue and then create the support package. The in-memory log buffer is included in the package.",
+      "debugFlow2": "Nothing is sent and no remote access is opened. After expiry or manual deactivation, the previous log level is restored.",
+      "debugActive": "Debug active",
+      "debugInactive": "Debug off",
+      "debugUntil": "until {until}",
+      "debugEnable": "Enable debug for 5 minutes",
+      "debugDisable": "Disable debug",
+      "viewerTitle": "Analyze support package",
+      "viewerDescription": "Open an obs_support JSON file locally and inspect it in a structured view. The file is not uploaded or stored.",
+      "viewerChooseFile": "Select support file",
+      "viewerClear": "Clear view",
+      "viewerLoaded": "Support package loaded.",
+      "viewerInvalid": "The file is not a valid support package.",
+      "viewerGeneratedAt": "Generated",
+      "viewerVersion": "OBS version",
+      "viewerRuntime": "System",
+      "viewerUptime": "Uptime",
+      "viewerAutoUploadOn": "Automatic upload active",
+      "viewerAutoUploadOff": "No automatic upload",
+      "viewerRemoteAccessOn": "Remote access active",
+      "viewerRemoteAccessOff": "No remote access",
+      "viewerAdapters": "Adapters",
+      "viewerAdaptersConnected": "{n} connected",
+      "viewerHistoryValues": "History values",
+      "viewerMonitorEntries": "Monitor entries",
+      "viewerAdapterTable": "Adapter analysis",
+      "viewerName": "Name",
+      "viewerType": "Type",
+      "viewerStatus": "Status",
+      "viewerObjects": "Objects",
+      "viewerBindings": "Bindings",
+      "viewerTransformations": "Transformations",
+      "viewerFilters": "Filters",
+      "viewerTps": "TPS",
+      "viewerConnected": "Connected",
+      "viewerDisconnected": "Disconnected",
+      "viewerDisabled": "Disabled",
+      "viewerNoAdapters": "No adapters in package.",
+      "viewerHistory": "History",
+      "viewerPlugin": "Plugin",
+      "viewerDatapoints": "Objects",
+      "viewerRange": "Range",
+      "viewerMonitor": "Monitor",
+      "viewerStorage": "Storage",
+      "viewerRetention": "Retention",
+      "viewerSample": "Sample",
+      "viewerCpu": "CPU",
+      "viewerCpuUnit": "CPU",
+      "viewerLoad": "Load",
+      "viewerMemory": "Memory",
+      "viewerDisk": "Disk",
+      "viewerFree": "free",
+      "viewerTopCpu": "Top CPU",
+      "viewerTopMemory": "Top memory",
+      "viewerWarnings": "Warnings and errors",
+      "viewerNoWarnings": "No warnings or errors in package.",
+      "viewerDebugLog": "Debug log",
+      "viewerNoDebugLog": "No debug log in package.",
+      "viewerLogFilter": "Log filter",
+      "viewerLogFilterPlaceholder": "e.g. kn ga=20/2/1*",
+      "viewerLogFilterHint": "Combine multiple search fragments with spaces. A trailing * matches prefixes.",
+      "viewerNoLogMatches": "No log entries match the filter.",
+      "viewerSeconds": "{n} s",
+      "viewerMinutes": "{n} min",
+      "viewerHours": "{n} h",
+      "viewerDays": "{n} d",
+      "categories": {
+        "installation": {
+          "label": "Installation",
+          "description": "Installation type, OBS version, operating system and runtime environment."
+        },
+        "adapters": {
+          "label": "Adapters",
+          "description": "Enabled adapter instances, sanitized adapter configuration, object counts and binding counts."
+        },
+        "health": {
+          "label": "Health",
+          "description": "Runtime health states, uptime and last start timestamp."
+        },
+        "history": {
+          "label": "History",
+          "description": "History backend, sanitized configuration and storage statistics."
+        },
+        "monitor": {
+          "label": "Monitor",
+          "description": "RingBuffer configuration, retention, storage size and recent event counters."
+        },
+        "logs": {
+          "label": "Logs",
+          "description": "Shortened sanitized error history and entries from the in-memory debug log."
+        }
+      }
     },
     "users": {
       "deleteUser": "Delete user",
@@ -1680,6 +1913,23 @@
       "knxPassword": "Project Password",
       "knxPasswordPlaceholder": "Only for password-protected projects",
       "knxCreateDps": "Create / update objects",
+      "knxHierarchyTitle": "Create hierarchies",
+      "knxHierarchyTopology": "Topology",
+      "knxHierarchyBuildings": "Buildings / rooms",
+      "knxHierarchyTrades": "Trades",
+      "knxHierarchyHint": "Buildings / rooms and trades are only created when the ETS project contains those structures.",
+      "knxHierarchyReplaceExisting": "Replace existing ETS hierarchies from this import",
+      "knxHierarchyReplaceExistingHint": "Only automatically created ETS hierarchies are replaced; manually created hierarchies remain unchanged.",
+      "knxHierarchyAutoLink": "Auto-link created objects to hierarchy nodes",
+      "knxHierarchyAutoLinkHint": "Enable object creation to link objects during this import.",
+      "knxHierarchyMode_groups": "Topology",
+      "knxHierarchyMode_buildings": "Buildings / rooms",
+      "knxHierarchyMode_trades": "Trades",
+      "knxHierarchyStatusCreated": "created",
+      "knxHierarchyStatusSkipped": "not created",
+      "knxHierarchyResultCounts": "{nodes} nodes, {links} links",
+      "knxHierarchyResultReplaced": ", {n} replaced",
+      "knxHierarchyResultSkipped": "No hierarchy was created.",
       "knxAdapterInstance": "KNX Adapter Instance",
       "knxNoAdapter": "No KNX adapter instance found. Please create a KNX adapter first.",
       "knxDirection": "Direction",

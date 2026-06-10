@@ -470,13 +470,13 @@ class LogicManager:
 
         self._event_bus.unsubscribe(DataValueEvent, self._on_value_event)
         self._event_bus.unsubscribe(DataPointRenamedEvent, self._on_datapoint_renamed)
-        for task in self._cron_tasks.values():
+        for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
 
     async def reload(self) -> None:
         """Reload graph cache from DB and restart cron schedulers."""
-        for task in self._cron_tasks.values():
+        for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
         await self._load_graphs()
@@ -510,7 +510,11 @@ class LogicManager:
             logger.warning("croniter not installed — timer_cron nodes will not auto-execute. Install with: pip install croniter")
             _has_croniter = False
 
-        for graph_id, (name, enabled, flow) in self._graphs.items():
+        for graph_id in list(self._graphs):
+            entry = self._graphs.get(graph_id)
+            if entry is None:
+                continue
+            name, enabled, flow = entry
             if not enabled:
                 continue
             for node in flow.nodes:
@@ -617,7 +621,11 @@ class LogicManager:
         dp_id = str(event.datapoint_id)
         now = datetime.now(UTC)
 
-        for graph_id, (name, enabled, flow) in self._graphs.items():
+        for graph_id in list(self._graphs):
+            entry = self._graphs.get(graph_id)
+            if entry is None:
+                continue
+            name, enabled, flow = entry
             if not enabled:
                 continue
             trigger_nodes = [n for n in flow.nodes if n.type == "datapoint_read" and n.data.get("datapoint_id") == dp_id]
@@ -683,13 +691,20 @@ class LogicManager:
     async def _on_datapoint_renamed(self, event: Any) -> None:
         """Update datapoint_name in all logic nodes that reference the renamed DataPoint."""
         dp_id_str = str(event.dp_id)
-        for graph_id, (name, enabled, flow) in self._graphs.items():
+        for graph_id in list(self._graphs):
+            entry = self._graphs.get(graph_id)
+            if entry is None:
+                continue
+            name, enabled, flow = entry
             changed = False
             for node in flow.nodes:
                 if node.data.get("datapoint_id") == dp_id_str and node.data.get("datapoint_name") != event.new_name:
                     node.data["datapoint_name"] = event.new_name
                     changed = True
             if changed:
+                current = self._graphs.get(graph_id)
+                if current is None or current[2] is not flow:
+                    continue
                 try:
                     await self._db.execute_and_commit(
                         "UPDATE logic_graphs SET flow_data=?, updated_at=? WHERE id=?",
@@ -1124,7 +1139,7 @@ class LogicManager:
                 if e.source in triggered_api_clients:
                     src_handle = e.sourceHandle or "out"
                     tgt_handle = e.targetHandle or "in"
-                    downstream_overrides.setdefault(e.target, {})[tgt_handle] = outputs[e.source].get(src_handle)
+                    downstream_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs[e.source], src_handle)
             if downstream_overrides:
                 second_executor = GraphExecutor(flow, hyst, self._app_config)
                 second_outputs = second_executor.execute(downstream_overrides)
@@ -1463,7 +1478,7 @@ class LogicManager:
         # the in-memory entry is a no-op and will be GC'd naturally.
         self._node_state.pop(graph_id, None)
         # Cancel cron tasks for this specific graph
-        to_remove = [k for k in self._cron_tasks if k[0] == graph_id]
+        to_remove = [k for k in list(self._cron_tasks) if k[0] == graph_id]
         for k in to_remove:
             self._cron_tasks[k].cancel()
             del self._cron_tasks[k]

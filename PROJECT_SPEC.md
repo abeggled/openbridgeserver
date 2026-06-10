@@ -19,7 +19,7 @@ Zielgruppe: Bestehende Timberwolf Server (TWS) Anwender und Neueinsteiger in der
 | Anforderung | Wert |
 |---|---|
 | Zielplattform | Linux, ARM Cortex-A72 (ARMv8-A) und x86_64 |
-| Programmiersprache | Python 3.11+ |
+| Programmiersprache | Python 3.13+ |
 | Max. DataPoints pro Instanz | 100'000 |
 | Lizenz | MIT (alle Komponenten) |
 | API-First | Web GUI nutzt ausschliesslich die öffentliche API |

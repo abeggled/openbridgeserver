@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - '*'
+      - '!nightly-*'  # nightly-lxc.yml creates these; must not trigger a real release/build
 
 permissions: {}
 
@@ -75,12 +76,10 @@ jobs:
         run: |
           echo "VERSION=${GITHUB_REF##*/}" >> $GITHUB_ENV
           echo "GITHASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-
-      - name: Stamp version file
-        run: |
           BASE=$(grep -m1 '^## ' RELEASENOTES.md | sed 's/^## *//')
-          RC=$(echo "${GITHUB_REF##*/}" | grep -oP -- '-RC\d*$' || true)
-          echo "${BASE}${RC}" > obs/version
+          TAG="${GITHUB_REF##*/}"
+          if [[ "$TAG" =~ (-RC[0-9]*)$ ]]; then RC="${BASH_REMATCH[1]}"; else RC=""; fi
+          echo "OBS_VERSION=${BASE}${RC}" >> $GITHUB_ENV
 
       - name: Stamp gui/package.json version
         run: npm pkg set version="${VERSION}" --prefix gui
@@ -134,3 +133,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            OBS_VERSION=${{ env.OBS_VERSION }}

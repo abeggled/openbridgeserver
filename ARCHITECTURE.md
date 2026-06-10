@@ -2,7 +2,7 @@
 
 **Version:** 0.1 (pre-implementation)  
 **Lizenz:** MIT  
-**Zielplattform:** Python 3.11+, Linux, ARM Cortex-A72 / x86_64  
+**Zielplattform:** Python 3.13+, Linux, ARM Cortex-A72 / x86_64  
 **Stand:** 2026-03-26
 
 ---

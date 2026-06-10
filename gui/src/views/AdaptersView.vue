@@ -62,6 +62,7 @@
               <SchemaForm
                 :schema="newSchema"
                 v-model="newForm.config"
+                :adapter-type="newForm.adapter_type"
                 :exclude="newForm.adapter_type.toLowerCase() === 'zeitschaltuhr' ? ['custom_holidays'] : []"
               />
               <ZeitschaltuhrCustomHolidaysEditor
@@ -174,6 +175,7 @@
                 <SchemaForm
                   :schema="schemas[a.adapter_type]"
                   v-model="drafts[a.id].config"
+                  :adapter-type="a.adapter_type"
                   :exclude="a.adapter_type.toLowerCase() === 'zeitschaltuhr' ? ['custom_holidays'] : []"
                 />
                 <ZeitschaltuhrCustomHolidaysEditor
@@ -748,11 +750,11 @@ async function executeBindingMigration() {
     migrationResult.value = data
     feedback[source.id] = {
       success: true,
-      detail: `${data.migrated} Verknüpfungen migriert, ${data.skipped} übersprungen`,
+      detail: t('adapters.migration.result', { migrated: data.migrated, skipped: data.skipped }),
     }
     await refreshInstances()
   } catch (e) {
-    migrationError.value = e.response?.data?.detail ?? 'Migration fehlgeschlagen'
+    migrationError.value = e.response?.data?.detail ?? t('adapters.migration.failed')
   } finally {
     migrationBusy.value = false
   }

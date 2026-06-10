@@ -51,6 +51,12 @@ docker compose up -d
 # Docker Compose (Mosquitto only — for local dev outside Docker)
 docker compose up -d mosquitto
 
+# Build release artifacts locally (only requires Docker)
+./tools/build-local.sh docker    # Docker image (via docker compose build obs + version stamp)
+./tools/build-local.sh lxc       # Proxmox LXC template (.tar.zst); rootfs cached in ~/.cache/obs-lxc-builder/
+./tools/build-local.sh bundle    # app bundle only, no rootfs (fast)
+./tools/build-local.sh all       # docker + lxc
+
 # Admin GUI dev server (proxies /api to localhost:8080)
 cd gui && npm run dev
 ```
@@ -527,12 +533,12 @@ RCs never receive the `latest` tag.
 
 ### LXC Template
 
-- Base OS: **Ubuntu 26.04 (Plucky)** — chosen for native Python 3.14 support
+- Base OS: **Ubuntu 26.04 LTS (Resolute)** — chosen for native Python 3.14 support
 - The build job runs as a **matrix** (two parallel jobs): `amd64` on `ubuntu-latest`, `arm64` on `ubuntu-24.04-arm` (native runner — no QEMU)
   - `amd64` uses `archive.ubuntu.com`; `arm64` uses `ports.ubuntu.com/ubuntu-ports` (including security updates)
 - Three release assets are produced:
-  - `ubuntu-plucky-openbridgeserver_<version>_amd64.tar.zst` — full Proxmox CT template (x86-64)
-  - `ubuntu-plucky-openbridgeserver_<version>_arm64.tar.zst` — full Proxmox CT template (ARM64)
+  - `openbridgeserver-lxc_<version>_amd64.tar.zst` — full Proxmox CT template (x86-64)
+  - `openbridgeserver-lxc_<version>_arm64.tar.zst` — full Proxmox CT template (ARM64)
   - `openbridgeserver-app-bundle_<version>.tar.gz` — arch-agnostic app archive (`obs/`, `gui_dist/`, `frontend_dist/`, `requirements.txt`, `obs-update`) used for in-place updates; built once from the amd64 job
 - App installs to `/opt/obs/`, Python venv at `/opt/obs/venv/`, data volume at `/data/`
 - Installed version tracked in `/opt/obs/version` (written by `obs-update` after each install)

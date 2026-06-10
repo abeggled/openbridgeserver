@@ -16,6 +16,8 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from obs.api.auth import create_access_token
+from obs.db.database import get_db
 
 pytestmark = pytest.mark.integration
 
@@ -57,6 +59,23 @@ async def _make_graph(client, auth_headers) -> dict:
     return resp.json()
 
 
+async def _create_non_admin_headers(client, auth_headers) -> tuple[dict, str]:
+    username = f"cfg-user-{uuid.uuid4().hex[:8]}"
+    password = "pw-12345678"
+    resp = await client.post(
+        "/api/v1/auth/users",
+        json={
+            "username": username,
+            "password": password,
+            "is_admin": False,
+            "mqtt_enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return {"Authorization": f"Bearer {create_access_token(username)}"}, username
+
+
 # ---------------------------------------------------------------------------
 # GET /config/export
 # ---------------------------------------------------------------------------
@@ -65,6 +84,15 @@ async def _make_graph(client, auth_headers) -> dict:
 async def test_export_requires_auth(client):
     resp = await client.get("/api/v1/config/export")
     assert resp.status_code == 401
+
+
+async def test_export_non_admin_forbidden(client, auth_headers):
+    non_admin_headers, username = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.get("/api/v1/config/export", headers=non_admin_headers)
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_export_returns_200(client, auth_headers):
@@ -162,6 +190,24 @@ async def test_import_requires_auth(client):
         },
     )
     assert resp.status_code == 401
+
+
+async def test_import_non_admin_forbidden(client, auth_headers):
+    non_admin_headers, username = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.post(
+            "/api/v1/config/import",
+            json={
+                "obs_version": "5",
+                "exported_at": "2024-01-01T00:00:00",
+                "datapoints": [],
+                "bindings": [],
+            },
+            headers=non_admin_headers,
+        )
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_import_empty_payload_succeeds(client, auth_headers):
@@ -590,7 +636,7 @@ async def test_import_hierarchy(client, auth_headers):
         "exported_at": "2024-01-01T00:00:00",
         "datapoints": [],
         "bindings": [],
-        "hierarchy_trees": [{"id": tree_id, "name": "Test Tree", "description": ""}],
+        "hierarchy_trees": [{"id": tree_id, "name": "Test Tree", "description": "", "source": "ets_import:groups"}],
         "hierarchy_nodes": [
             {
                 "id": node_id,
@@ -608,6 +654,8 @@ async def test_import_hierarchy(client, auth_headers):
     assert resp.status_code == 200
     body = resp.json()
     assert body["hierarchy_upserted"] >= 3  # tree + node + link
+    row = await get_db().fetchone("SELECT source FROM hierarchy_trees WHERE id = ?", (tree_id,))
+    assert row["source"] == "ets_import:groups"
 
 
 # ---------------------------------------------------------------------------

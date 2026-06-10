@@ -7,7 +7,7 @@
       @keydown.up.prevent="moveUp"
       @keydown.enter.prevent="selectActive"
       @keydown.escape="close"
-      :placeholder="placeholder"
+      :placeholder="effectivePlaceholder"
       class="input pr-8"
       autocomplete="off"
     />
@@ -29,13 +29,13 @@
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
         </svg>
-        Suche …
+        {{ $t('adapters.bindingForm.groupAddressLoading') }}
       </div>
 
       <!-- No results -->
       <div v-else-if="noResults" class="px-3 py-2 text-xs text-slate-500">
-        Keine Gruppenadressen gefunden
-        <span v-if="!hasImport" class="block mt-0.5 text-slate-600">(.knxproj noch nicht importiert)</span>
+        {{ $t('adapters.bindingForm.groupAddressNoResults') }}
+        <span v-if="!hasImport" class="block mt-0.5 text-slate-600">{{ $t('adapters.bindingForm.groupAddressNoImport') }}</span>
       </div>
 
       <!-- Suggestions -->
@@ -58,12 +58,15 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { knxprojApi } from '@/api/client'
+
+const { t } = useI18n()
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
-  placeholder: { type: String, default: 'z.B. 1/2/3 oder Name suchen' },
+  placeholder: { type: String, default: null },
 })
 const emit = defineEmits(['update:modelValue', 'select'])
 
@@ -77,6 +80,8 @@ const activeIndex = ref(-1)
 const container   = ref(null)
 
 let debounceTimer = null
+
+const effectivePlaceholder = computed(() => props.placeholder ?? t('adapters.bindingForm.groupAddressPlaceholder'))
 
 // Sync modelValue → query when parent changes it
 watch(() => props.modelValue, val => {
@@ -102,7 +107,7 @@ async function doSearch(q) {
     const { data } = await knxprojApi.listGA({ q, size: 20 })
     suggestions.value = data.items || []
     noResults.value   = suggestions.value.length === 0
-    hasImport.value   = (data.total !== undefined) ? true : (suggestions.value.length > 0)
+    if (suggestions.value.length > 0) hasImport.value = true
     activeIndex.value = -1
   } catch {
     suggestions.value = []

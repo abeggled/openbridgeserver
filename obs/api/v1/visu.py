@@ -148,7 +148,7 @@ async def get_tree(db: Database = Depends(get_db)):
 async def import_nodes(
     body: VisuImportRequest,
     db: Database = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_admin_user),
 ):
     """Importiert einen exportierten Visu-Teilbaum und hängt ihn an target_parent_id."""
     if body.obs_export != "visu_subtree":
@@ -219,7 +219,7 @@ async def get_node(node_id: str, db: Database = Depends(get_db)):
 async def create_node(
     body: VisuNodeCreate,
     db: Database = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_admin_user),
 ):
     now = _now_iso()
     node_id = str(uuid.uuid4())
@@ -260,7 +260,7 @@ async def update_node(
     node_id: str,
     body: VisuNodeUpdate,
     db: Database = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_admin_user),
 ):
     await _get_node_or_404(db, node_id)
     updates: list[str] = []
@@ -297,7 +297,7 @@ async def update_node(
 async def delete_node(
     node_id: str,
     db: Database = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_admin_user),
 ):
     await _get_node_or_404(db, node_id)
     # ON DELETE CASCADE löscht Kinder automatisch
@@ -343,7 +343,7 @@ async def copy_node(
     node_id: str,
     body: CopyNodeRequest,
     db: Database = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_admin_user),
 ):
     source = await _get_node_or_404(db, node_id)
     now = _now_iso()
@@ -442,7 +442,7 @@ async def move_node(
     node_id: str,
     body: MoveNodeRequest,
     db: Database = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_admin_user),
 ):
     await _get_node_or_404(db, node_id)
     await db.conn.execute(
@@ -564,7 +564,7 @@ async def save_page(
     node_id: str,
     config: PageConfig,
     db: Database = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_admin_user),
 ):
     node = await _get_node_or_404(db, node_id)
     if node.type != "PAGE":

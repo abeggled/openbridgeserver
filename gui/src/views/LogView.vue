@@ -42,6 +42,7 @@
     <!-- Log table -->
     <div class="card overflow-hidden">
       <div v-if="loading" class="flex justify-center py-12"><Spinner size="lg" /></div>
+      <div v-else-if="errorMsg" class="text-center text-red-500 text-sm py-12">{{ errorMsg }}</div>
       <div v-else-if="!entries.length" class="text-center text-slate-500 text-sm py-12">{{ $t('logs.noEntries') }}</div>
       <div v-else class="table-wrap max-h-[65vh] overflow-y-auto">
         <table class="table">
@@ -82,6 +83,7 @@ const wsStore = useWebSocketStore()
 
 const entries = ref([])
 const loading = ref(false)
+const errorMsg = ref('')
 const logLevel = ref('INFO')
 
 const filters = reactive({ q: '', level: '', limit: '200' })
@@ -126,6 +128,7 @@ onUnmounted(() => {
 
 async function load() {
   loading.value = true
+  errorMsg.value = ''
   try {
     const params = {}
     if (filters.level) params.level = filters.level
@@ -136,6 +139,9 @@ async function load() {
     entries.value = q
       ? data.filter(e => e.logger?.toLowerCase().includes(q) || e.message?.toLowerCase().includes(q))
       : data
+  } catch (e) {
+    entries.value = []
+    errorMsg.value = e.response?.data?.detail ?? t('common.error')
   } finally {
     loading.value = false
   }

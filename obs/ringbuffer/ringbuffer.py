@@ -510,7 +510,7 @@ class RingBuffer:
         except RuntimeError:
             topic = f"dp/{dp_id}/value"
 
-        metadata = await self._build_metadata_snapshot(
+        metadata = await build_ringbuffer_metadata_snapshot(
             dp_id=dp_id,
             source_adapter=str(event.source_adapter),
             datapoint=dp,
@@ -527,52 +527,6 @@ class RingBuffer:
             metadata=metadata,
         )
         self._last_values[dp_id] = event.value
-
-    async def _build_metadata_snapshot(
-        self,
-        *,
-        dp_id: str,
-        source_adapter: str,
-        datapoint: Any,
-    ) -> dict[str, Any]:
-        bindings: list[dict[str, Any]] = []
-        try:
-            from obs.db.database import get_db
-
-            rows = await get_db().fetchall(
-                """SELECT adapter_type, adapter_instance_id, direction, config
-                   FROM adapter_bindings
-                   WHERE datapoint_id=? AND enabled=1
-                   ORDER BY created_at, id""",
-                (dp_id,),
-            )
-            for row in rows:
-                raw_config = _safe_loads(row["config"])
-                config = raw_config if isinstance(raw_config, dict) else {}
-                bindings.append(
-                    {
-                        "adapter_type": str(row["adapter_type"] or ""),
-                        "adapter_instance_id": str(row["adapter_instance_id"] or ""),
-                        "direction": str(row["direction"] or ""),
-                        "normalized": _normalize_binding_metadata(config),
-                    }
-                )
-        except RuntimeError:
-            pass
-        except Exception:
-            logger.exception("RingBuffer metadata snapshot for dp=%s failed", dp_id)
-
-        tags = list(datapoint.tags) if datapoint and isinstance(getattr(datapoint, "tags", None), list) else []
-        return {
-            "source": {"adapter": source_adapter},
-            "datapoint": {
-                "id": dp_id,
-                "name": getattr(datapoint, "name", None),
-                "data_type": getattr(datapoint, "data_type", None),
-                "tags": tags,
-            },
-            "bindings": bindings,
-        }
 
     # ------------------------------------------------------------------
     # Query
@@ -974,6 +928,87 @@ def _normalize_binding_metadata(config: dict[str, Any]) -> dict[str, Any]:
         "register_type": _str_or_empty(config.get("register_type")),
         "register_address": _str_or_empty(config.get("address")),
         "unit_id": _str_or_empty(config.get("unit_id")),
+    }
+
+
+async def build_ringbuffer_metadata_snapshot(
+    *,
+    dp_id: str,
+    source_adapter: str,
+    datapoint: Any,
+) -> dict[str, Any]:
+    bindings: list[dict[str, Any]] = []
+    hierarchy_nodes: list[dict[str, Any]] = []
+    try:
+        from obs.db.database import get_db
+
+        db = get_db()
+        rows = await db.fetchall(
+            """SELECT adapter_type, adapter_instance_id, direction, config
+               FROM adapter_bindings
+               WHERE datapoint_id=? AND enabled=1
+               ORDER BY created_at, id""",
+            (dp_id,),
+        )
+        for row in rows:
+            raw_config = _safe_loads(row["config"])
+            config = raw_config if isinstance(raw_config, dict) else {}
+            bindings.append(
+                {
+                    "adapter_type": str(row["adapter_type"] or ""),
+                    "adapter_instance_id": str(row["adapter_instance_id"] or ""),
+                    "direction": str(row["direction"] or ""),
+                    "normalized": _normalize_binding_metadata(config),
+                }
+            )
+        hierarchy_rows = await db.fetchall(
+            """WITH RECURSIVE ancestors(node_id, tree_id, ancestor_id, parent_id, depth) AS (
+                   SELECT hn.id, hn.tree_id, hn.id, hn.parent_id, 0
+                   FROM hierarchy_datapoint_links hdl
+                   JOIN hierarchy_nodes hn ON hn.id = hdl.node_id
+                   WHERE hdl.datapoint_id = ?
+                   UNION ALL
+                   SELECT ancestors.node_id, ancestors.tree_id, hn.id, hn.parent_id, ancestors.depth + 1
+                   FROM ancestors
+                   JOIN hierarchy_nodes hn ON hn.id = ancestors.parent_id
+               )
+               SELECT node_id, tree_id, ancestor_id
+               FROM ancestors
+               ORDER BY tree_id, node_id, depth""",
+            (dp_id,),
+        )
+        ancestors_by_node: dict[tuple[str, str], list[str]] = {}
+        for row in hierarchy_rows:
+            tree_id = str(row["tree_id"] or "")
+            node_id = str(row["node_id"] or "")
+            ancestor_id = str(row["ancestor_id"] or "")
+            if not tree_id or not node_id or not ancestor_id:
+                continue
+            ancestors_by_node.setdefault((tree_id, node_id), []).append(ancestor_id)
+        hierarchy_nodes = [
+            {
+                "tree_id": tree_id,
+                "node_id": node_id,
+                "ancestor_node_ids": ancestor_ids,
+            }
+            for (tree_id, node_id), ancestor_ids in ancestors_by_node.items()
+        ]
+    except RuntimeError:
+        pass
+    except Exception:
+        logger.exception("RingBuffer metadata snapshot for dp=%s failed", dp_id)
+
+    tags = list(datapoint.tags) if datapoint and isinstance(getattr(datapoint, "tags", None), list) else []
+    return {
+        "source": {"adapter": source_adapter},
+        "datapoint": {
+            "id": dp_id,
+            "name": getattr(datapoint, "name", None),
+            "data_type": getattr(datapoint, "data_type", None),
+            "tags": tags,
+        },
+        "bindings": bindings,
+        "hierarchy_nodes": hierarchy_nodes,
     }
 
 

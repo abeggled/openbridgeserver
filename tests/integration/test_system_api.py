@@ -18,7 +18,32 @@ from __future__ import annotations
 
 import pytest
 
+from obs.api.auth import create_access_token
+
 pytestmark = pytest.mark.integration
+
+
+async def _create_non_admin_headers(client, auth_headers) -> tuple[dict, str]:
+    import uuid
+
+    username = f"sys-user-{uuid.uuid4().hex[:8]}"
+    password = "pw-12345678"
+    resp = await client.post(
+        "/api/v1/auth/users",
+        json={
+            "username": username,
+            "password": password,
+            "is_admin": False,
+            "mqtt_enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return {"Authorization": f"Bearer {create_access_token(username)}"}, username
+
+
+def _headers_for(username: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {create_access_token(username)}"}
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +237,131 @@ async def test_put_history_settings_sqlite_roundtrip(client, auth_headers):
     )
 
 
+async def test_put_history_settings_writes_audit_log_entry(client, auth_headers):
+    from obs.db.database import get_db
+
+    resp = await client.put(
+        "/api/v1/system/history/settings",
+        json={"plugin": "sqlite", "default_window_hours": 96},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+
+    row = await get_db().fetchone(
+        """
+        SELECT actor, action, resource_type, resource_id, details_json
+        FROM audit_log_entries
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+    assert row is not None
+    assert row["actor"] == "admin"
+    assert row["action"] == "system.history.settings.updated"
+    assert row["resource_type"] == "history_settings"
+    assert row["resource_id"] == "global"
+    assert "sqlite" in row["details_json"]
+
+    await client.put(
+        "/api/v1/system/history/settings",
+        json={"plugin": "sqlite", "default_window_hours": 168},
+        headers=auth_headers,
+    )
+
+
+async def test_history_settings_redacts_sensitive_fields_in_responses(client, auth_headers):
+    secret_token = "tok_live_super_secret"
+    secret_password = "pass_live_super_secret"
+
+    try:
+        put_resp = await client.put(
+            "/api/v1/system/history/settings",
+            json={
+                "plugin": "sqlite",
+                "default_window_hours": 48,
+                "influx_token": secret_token,
+                "influx_password": secret_password,
+            },
+            headers=auth_headers,
+        )
+        assert put_resp.status_code == 200
+        put_body = put_resp.json()
+        assert put_body["influx_token"] == "[redacted]"
+        assert put_body["influx_password"] == "[redacted]"
+
+        get_resp = await client.get("/api/v1/system/history/settings", headers=auth_headers)
+        assert get_resp.status_code == 200
+        get_body = get_resp.json()
+        assert get_body["influx_token"] == "[redacted]"
+        assert get_body["influx_password"] == "[redacted]"
+    finally:
+        await client.put(
+            "/api/v1/system/history/settings",
+            json={
+                "plugin": "sqlite",
+                "default_window_hours": 168,
+                "influx_token": "",
+                "influx_password": "",
+            },
+            headers=auth_headers,
+        )
+
+
+async def test_put_history_settings_preserves_existing_secrets_on_redacted_marker(client, auth_headers):
+    from obs.db.database import get_db
+
+    secret_token = "tok_keep_me_123"
+    secret_password = "pass_keep_me_123"
+    secret_dsn = "postgresql://obs:secret@db.local/obs"
+
+    try:
+        seed = await client.put(
+            "/api/v1/system/history/settings",
+            json={
+                "plugin": "sqlite",
+                "default_window_hours": 48,
+                "influx_token": secret_token,
+                "influx_password": secret_password,
+                "timescale_dsn": secret_dsn,
+            },
+            headers=auth_headers,
+        )
+        assert seed.status_code == 200, seed.text
+
+        preserve = await client.put(
+            "/api/v1/system/history/settings",
+            json={
+                "plugin": "sqlite",
+                "default_window_hours": 49,
+                "influx_token": "[redacted]",
+                "influx_password": "[redacted]",
+                "timescale_dsn": "[redacted]",
+            },
+            headers=auth_headers,
+        )
+        assert preserve.status_code == 200, preserve.text
+
+        db = get_db()
+        token_row = await db.fetchone("SELECT value FROM app_settings WHERE key='history.influx_token'")
+        password_row = await db.fetchone("SELECT value FROM app_settings WHERE key='history.influx_password'")
+        dsn_row = await db.fetchone("SELECT value FROM app_settings WHERE key='history.timescale_dsn'")
+        assert token_row["value"] == secret_token
+        assert password_row["value"] == secret_password
+        assert dsn_row["value"] == secret_dsn
+    finally:
+        await client.put(
+            "/api/v1/system/history/settings",
+            json={
+                "plugin": "sqlite",
+                "default_window_hours": 168,
+                "influx_token": "",
+                "influx_password": "",
+                "timescale_dsn": "",
+            },
+            headers=auth_headers,
+        )
+
+
 # ---------------------------------------------------------------------------
 # POST /history/test
 # ---------------------------------------------------------------------------
@@ -269,6 +419,22 @@ async def test_get_logs_requires_auth(client):
     assert resp.status_code == 401
 
 
+async def test_get_logs_allows_authenticated_users(client, auth_headers):
+    username = "system-logs-non-admin"
+    created = await client.post(
+        "/api/v1/auth/users",
+        json={"username": username, "password": "pw-12345678", "is_admin": False},
+        headers=auth_headers,
+    )
+    assert created.status_code == 201, created.text
+    try:
+        resp = await client.get("/api/v1/system/logs", headers=_headers_for(username))
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 async def test_get_logs_returns_list(client, auth_headers):
     resp = await client.get("/api/v1/system/logs", headers=auth_headers)
     assert resp.status_code == 200
@@ -313,6 +479,15 @@ async def test_get_log_level_requires_auth(client):
     assert resp.status_code == 401
 
 
+async def test_get_log_level_non_admin_forbidden(client, auth_headers):
+    user_headers, username = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.get("/api/v1/system/log-level", headers=user_headers)
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 async def test_get_log_level_returns_level(client, auth_headers):
     resp = await client.get("/api/v1/system/log-level", headers=auth_headers)
     assert resp.status_code == 200
@@ -329,6 +504,15 @@ async def test_get_log_level_returns_level(client, auth_headers):
 async def test_put_log_level_requires_auth(client):
     resp = await client.put("/api/v1/system/log-level", json={"level": "INFO"})
     assert resp.status_code == 401
+
+
+async def test_put_log_level_non_admin_forbidden(client, auth_headers):
+    user_headers, username = await _create_non_admin_headers(client, auth_headers)
+    try:
+        resp = await client.put("/api/v1/system/log-level", json={"level": "INFO"}, headers=user_headers)
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_put_log_level_valid(client, auth_headers):

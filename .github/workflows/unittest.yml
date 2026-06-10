@@ -14,10 +14,11 @@ on:
 
 jobs:
   test:
+    name: Tests
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v6
@@ -38,8 +39,8 @@ jobs:
         run: pytest tests/ -v --cov=obs --cov-report=xml --cov-report=term --junitxml=junit.xml
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
-        if: matrix.python-version == '3.13'
+        uses: codecov/codecov-action@v7
+        if: matrix.python-version == '3.14'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.xml
@@ -48,8 +49,8 @@ jobs:
           fail_ci_if_error: false
 
       - name: Upload test results to Codecov
-        uses: codecov/codecov-action@v6
-        if: matrix.python-version == '3.13'
+        uses: codecov/codecov-action@v7
+        if: matrix.python-version == '3.14'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./junit.xml
@@ -79,7 +80,7 @@ jobs:
         run: npm run test:coverage
 
       - name: Upload GUI coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./gui/coverage/lcov.info
