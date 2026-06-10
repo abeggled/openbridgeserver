@@ -329,7 +329,9 @@ WantedBy=multi-user.target
 EOF
 
 cat > /etc/mosquitto/mosquitto.conf << 'MQTTCONF'
-pid_file /run/mosquitto/mosquitto.pid
+# No pid_file: systemd (Type=notify) manages the process lifecycle, and the
+# Ubuntu mosquitto package ships no tmpfiles rule to create /run/mosquitto,
+# so a pid_file there would fail on every boot (/run is a fresh tmpfs).
 
 allow_anonymous false
 password_file /etc/mosquitto/passwd
