@@ -49,6 +49,11 @@ main (Fork, gespiegelt von upstream)
 - Abhängigkeiten stehen im Issue-Body. Kritische Kette kurz halten:
   `C1→C2→{C3,C4}→model→datasource→store→host-dispatch→host-actions→Seiten→Capacitor`.
 - Pro Milestone-Ende ein **Tag** auf dem Fork als Checkpoint (`visu-m1`, `visu-m2`, …).
+  **Achtung:** Jeder Tag-Push triggert die geerbten Release-Workflows (`release.yml`,
+  `lxc-template.yml` laufen auf `tags: '*'`) und erzeugt ein **öffentliches Release im
+  Fork**. Nach jedem Milestone-Tag daher sofort: laufende Tag-Workflows canceln und das
+  Release löschen (`gh release delete visu-m* --yes` — der Tag bleibt erhalten).
+  Geheimhaltung: kein „Latest Release visu-m*" auf der Fork-Startseite.
 
 ## Upstream-Sync (wöchentlich)
 
