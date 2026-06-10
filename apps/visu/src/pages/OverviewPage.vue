@@ -59,7 +59,7 @@ const theme = computed<'light' | 'dark' | 'image'>(() => {
 </script>
 
 <template>
-  <AppShell class="overview-page" :state="{ active: 'overview' }">
+  <AppShell class="overview-page" :state="{ active: 'overview' }" :root-bind="rootTweaks">
     <template #default>
       <DetailModalHost :skin="SKIN" :theme="theme">
         <div class="visu-root overview-root" v-bind="rootTweaks.attrs" :style="rootTweaks.style">

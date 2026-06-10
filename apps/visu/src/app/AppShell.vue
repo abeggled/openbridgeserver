@@ -52,6 +52,7 @@ import ShellBackground from './shell/ShellBackground.vue';
 import RoomDivider from './shell/RoomDivider.vue';
 import ShellEmpty from './shell/ShellEmpty.vue';
 import ShellError from './shell/ShellError.vue';
+import type { RootTweakStyle } from '@obs-visu-skins/ionic';
 
 const props = withDefaults(
   defineProps<{
@@ -63,8 +64,13 @@ const props = withDefaults(
     empty?: boolean;
     /** Render the embedded `ion-router-outlet` (the app) vs. only the default slot (tests/pages). */
     withRouterOutlet?: boolean;
+    /** The page's skin root bindings (data-theme + tweak CSS vars). Applied to the
+     *  page so the whole shell — header included — sits inside the themed surface:
+     *  toolbars go transparent + themed (ionic.css .visu-root) and the photo/
+     *  gradient background spans behind the chrome. */
+    rootBind?: RootTweakStyle;
   }>(),
-  { state: undefined, error: null, empty: false, withRouterOutlet: false },
+  { state: undefined, error: null, empty: false, withRouterOutlet: false, rootBind: undefined },
 );
 
 const { t } = useI18n();
@@ -110,7 +116,12 @@ defineExpose({ shell });
       </IonContent>
     </IonMenu>
 
-    <IonPage id="app-shell-content" class="app-shell-page">
+    <IonPage
+      id="app-shell-content"
+      class="visu-root app-shell-page"
+      v-bind="rootBind?.attrs"
+      :style="rootBind?.style"
+    >
       <!-- Optional brand titlebar (store.js → showTitlebar). Holds the clock pill
            when shown; otherwise the pill rides in the header below. -->
       <IonHeader v-if="shell.showTitlebar.value" class="app-shell-titlebar">
@@ -188,6 +199,19 @@ defineExpose({ shell });
 .app-shell-body {
   position: relative;
   z-index: 1; /* above the decorative background layer */
+}
+
+/* When the page is the skin's themed surface, the chrome is glass over the
+   background: content transparent so the page photo/gradient shows through, and
+   the toolbars get a frosted backdrop (their transparent fill + colour come from
+   ionic.css .visu-root → --ion-toolbar-background / --ion-toolbar-color). */
+.app-shell-page.visu-root .app-shell-content {
+  --background: transparent;
+}
+.app-shell-page.visu-root .app-shell-header ion-toolbar,
+.app-shell-page.visu-root .app-shell-titlebar ion-toolbar {
+  backdrop-filter: blur(16px) saturate(1.3);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
 }
 
 /* Active nav entry — additive accent, legible in every theme. */
