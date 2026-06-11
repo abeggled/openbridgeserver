@@ -332,6 +332,32 @@ describe('SettingsView security tab', () => {
     revokeObjectURL.mockRestore()
   })
 
+  it('surfaces icon workflow errors without keeping busy state stuck', async () => {
+    const wrapper = await mountSettingsView()
+
+    iconsApi.import.mockRejectedValueOnce({ response: { data: { detail: 'SVG ungültig' } } })
+    await wrapper.vm.onIconsFileSelect({
+      target: { files: [new File(['<svg />'], 'bad.svg', { type: 'image/svg+xml' })], value: 'bad.svg' },
+    })
+    expect(wrapper.vm.iconsUploading).toBe(false)
+    expect(wrapper.vm.iconsMsg).toEqual({ ok: false, text: 'SVG ungültig' })
+
+    wrapper.vm.iconsSelected = new Set(['home'])
+    iconsApi.delete.mockRejectedValueOnce({ response: { data: { detail: 'delete failed' } } })
+    await wrapper.vm.doIconsDelete()
+    expect(wrapper.vm.iconsMsg).toEqual({ ok: false, text: 'delete failed' })
+
+    iconsApi.export.mockRejectedValueOnce({ response: { data: { detail: 'export failed' } } })
+    await wrapper.vm.doIconsExport()
+    expect(wrapper.vm.iconsMsg).toEqual({ ok: false, text: 'export failed' })
+
+    wrapper.vm.faIconNames = 'broken'
+    iconsApi.importFa.mockRejectedValueOnce({ response: { data: { detail: 'fa failed' } } })
+    await wrapper.vm.doFaImport()
+    expect(wrapper.vm.faImporting).toBe(false)
+    expect(wrapper.vm.faMsg).toEqual({ ok: false, text: 'fa failed', debug: [] })
+  })
+
   it('checks a private URL target and allows the suggested CIDR entry', async () => {
     checkUrlTarget
       .mockResolvedValueOnce({

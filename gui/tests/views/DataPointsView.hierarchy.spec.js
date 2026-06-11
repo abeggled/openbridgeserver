@@ -2,18 +2,30 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
+let routeLeaveHandlers
+let intersectionCallback
+
 beforeEach(() => {
   vi.resetModules()
+  routeLeaveHandlers = []
+  intersectionCallback = null
   globalThis.ResizeObserver = class {
     observe() {}
     unobserve() {}
     disconnect() {}
   }
   globalThis.IntersectionObserver = class {
+    constructor(callback) {
+      intersectionCallback = callback
+    }
     observe() {}
     disconnect() {}
   }
-  vi.doMock('vue-router', () => ({ onBeforeRouteLeave: vi.fn() }))
+  vi.doMock('vue-router', () => ({
+    onBeforeRouteLeave: vi.fn((callback) => {
+      routeLeaveHandlers.push(callback)
+    }),
+  }))
 })
 
 afterEach(() => {
@@ -21,13 +33,13 @@ afterEach(() => {
   vi.doUnmock('vue-router')
 })
 
-async function mountDataPointsView({ items = [], nodeResults = [], isAdmin = true } = {}) {
+async function mountDataPointsView({ items = [], nodeResults = [], isAdmin = true, pages = 1 } = {}) {
   const searchApi = {
     search: vi.fn().mockResolvedValue({
       data: {
         items,
         total: items.length,
-        pages: 1,
+        pages,
       },
     }),
   }
@@ -382,5 +394,55 @@ describe('DataPointsView hierarchy rendering', () => {
     expect(badge.exists()).toBe(true)
     expect(badge.attributes('title')).toContain('—')
     expect(badge.attributes('title')).toContain('1')
+  })
+
+  it('persists scroll state before opening datapoint details', async () => {
+    const { wrapper } = await mountDataPointsView({
+      items: [
+        {
+          id: 'dp-scroll',
+          name: 'Scrollable',
+          data_type: 'FLOAT',
+          tags: ['hvac'],
+          value: 1,
+          quality: 'good',
+          hierarchy_nodes: [],
+        },
+      ],
+    })
+    const scrollSpy = vi.spyOn(window, 'scrollY', 'get').mockReturnValue(321)
+
+    wrapper.vm.filters.q = 'scrollable'
+    wrapper.vm.filters.tags = ['hvac']
+    routeLeaveHandlers[0]({ name: 'DataPointDetail' })
+
+    const saved = JSON.parse(sessionStorage.getItem('obs.dp.scroll'))
+    expect(saved.scrollY).toBe(321)
+    expect(saved.filters.q).toBe('scrollable')
+    expect(saved.filters.tags).toEqual(['hvac'])
+
+    scrollSpy.mockRestore()
+  })
+
+  it('loads another page when the infinite-scroll sentinel intersects', async () => {
+    const { searchApi } = await mountDataPointsView({
+      pages: 2,
+      items: [
+        {
+          id: 'dp-page-1',
+          name: 'Page 1',
+          data_type: 'FLOAT',
+          tags: [],
+          value: 1,
+          quality: 'good',
+          hierarchy_nodes: [],
+        },
+      ],
+    })
+
+    await intersectionCallback([{ isIntersecting: true }])
+    await flushPromises()
+
+    expect(searchApi.search).toHaveBeenCalledWith(expect.objectContaining({ page: 1, size: 50 }))
   })
 })

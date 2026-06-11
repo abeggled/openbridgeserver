@@ -257,6 +257,40 @@ describe('TopbarFilterChips', () => {
     expect(document.body.querySelector('[data-testid="topbar-add-filter-new"]')).toBeNull()
   })
 
+  it('keeps the dropdown open for inside clicks and closes it on outside clicks', async () => {
+    const { wrapper } = await mountChips()
+
+    await wrapper.find('[data-testid="topbar-add-filter-btn"]').trigger('click')
+    await flushPromises()
+    const menu = document.body.querySelector('[data-testid="topbar-add-filter-menu"]')
+    expect(menu).not.toBeNull()
+
+    wrapper.vm.onDocumentClick({ target: menu })
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="topbar-add-filter-menu"]')).not.toBeNull()
+
+    wrapper.vm.onDocumentClick({ target: document.createElement('div') })
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="topbar-add-filter-menu"]')).toBeNull()
+  })
+
+  it('keeps menu scroll local and closes the dropdown on document scroll', async () => {
+    const { wrapper } = await mountChips()
+
+    await wrapper.find('[data-testid="topbar-add-filter-btn"]').trigger('click')
+    await flushPromises()
+    const menu = document.body.querySelector('[data-testid="topbar-add-filter-menu"]')
+    expect(menu).not.toBeNull()
+
+    wrapper.vm.onDocumentScroll({ target: menu })
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="topbar-add-filter-menu"]')).not.toBeNull()
+
+    wrapper.vm.onDocumentScroll({ target: document.createElement('div') })
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="topbar-add-filter-menu"]')).toBeNull()
+  })
+
   // ---------------------------------------------------------------------
   // QA-01 audit: drag-reorder edge cases (#439)
   // ---------------------------------------------------------------------
