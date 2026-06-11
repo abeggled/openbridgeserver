@@ -50,6 +50,16 @@ def bypass_ssrf():
         yield
 
 
+@pytest.fixture
+def bypass_page_scope():
+    with unittest.mock.patch.object(
+        _camera_module,
+        "_ensure_camera_page_scope",
+        new=unittest.mock.AsyncMock(return_value=None),
+    ):
+        yield
+
+
 # ── Hilfs-HTTP-Server ──────────────────────────────────────────────────────────
 
 
@@ -134,11 +144,11 @@ async def test_proxy_invalid_scheme_returns_400(client, auth_headers):
 
 
 # 4. Kamera erreichbar → 200 + Stream
-async def test_proxy_streams_camera_response(client, auth_headers, bypass_ssrf):
+async def test_proxy_streams_camera_response(client, auth_headers, bypass_ssrf, bypass_page_scope):
     cam = _MockCameraServer(body=b"\xff\xd8\xff\xe0JFIF", content_type="image/jpeg")
     try:
         resp = await client.get(
-            f"/api/v1/camera/proxy?url={cam.base_url}/snapshot.jpg",
+            f"/api/v1/camera/proxy?url={cam.base_url}/snapshot.jpg&page_id=page-camera",
             headers=auth_headers,
         )
         assert resp.status_code == 200
@@ -149,10 +159,10 @@ async def test_proxy_streams_camera_response(client, auth_headers, bypass_ssrf):
 
 
 # 5. Kamera nicht erreichbar → 502
-async def test_proxy_camera_unreachable_returns_502(client, auth_headers, bypass_ssrf):
+async def test_proxy_camera_unreachable_returns_502(client, auth_headers, bypass_ssrf, bypass_page_scope):
     # Port 19979 sollte nichts laufen haben
     resp = await client.get(
-        "/api/v1/camera/proxy?url=http://127.0.0.1:19979/cam",
+        "/api/v1/camera/proxy?url=http://127.0.0.1:19979/cam&page_id=page-camera",
         headers=auth_headers,
     )
     assert resp.status_code == 502
@@ -160,11 +170,11 @@ async def test_proxy_camera_unreachable_returns_502(client, auth_headers, bypass
 
 
 # 6. Kamera antwortet 401 → 502
-async def test_proxy_camera_401_returns_502(client, auth_headers, bypass_ssrf):
+async def test_proxy_camera_401_returns_502(client, auth_headers, bypass_ssrf, bypass_page_scope):
     cam = _MockCameraServer(status=401)
     try:
         resp = await client.get(
-            f"/api/v1/camera/proxy?url={cam.base_url}/cam",
+            f"/api/v1/camera/proxy?url={cam.base_url}/cam&page_id=page-camera",
             headers=auth_headers,
         )
         assert resp.status_code == 502
@@ -175,11 +185,11 @@ async def test_proxy_camera_401_returns_502(client, auth_headers, bypass_ssrf):
 
 
 # 7. Kamera antwortet 404 → 502
-async def test_proxy_camera_404_returns_502(client, auth_headers, bypass_ssrf):
+async def test_proxy_camera_404_returns_502(client, auth_headers, bypass_ssrf, bypass_page_scope):
     cam = _MockCameraServer(status=404)
     try:
         resp = await client.get(
-            f"/api/v1/camera/proxy?url={cam.base_url}/cam",
+            f"/api/v1/camera/proxy?url={cam.base_url}/cam&page_id=page-camera",
             headers=auth_headers,
         )
         assert resp.status_code == 502
@@ -189,12 +199,12 @@ async def test_proxy_camera_404_returns_502(client, auth_headers, bypass_ssrf):
 
 
 # 8. Auth via ?_token= Query-Param
-async def test_proxy_auth_via_query_token(client, auth_headers, bypass_ssrf):
+async def test_proxy_auth_via_query_token(client, auth_headers, bypass_ssrf, bypass_page_scope):
     token = auth_headers["Authorization"].removeprefix("Bearer ")
     cam = _MockCameraServer()
     try:
         resp = await client.get(
-            f"/api/v1/camera/proxy?url={cam.base_url}/cam&_token={token}",
+            f"/api/v1/camera/proxy?url={cam.base_url}/cam&_token={token}&page_id=page-camera",
             # Bewusst kein Authorization-Header
         )
         assert resp.status_code == 200
@@ -203,11 +213,11 @@ async def test_proxy_auth_via_query_token(client, auth_headers, bypass_ssrf):
 
 
 # 9. Basic-Auth-Credentials werden weitergeleitet
-async def test_proxy_basic_auth_forwarded(client, auth_headers, bypass_ssrf):
+async def test_proxy_basic_auth_forwarded(client, auth_headers, bypass_ssrf, bypass_page_scope):
     cam = _MockCameraServer()
     try:
         resp = await client.get(
-            f"/api/v1/camera/proxy?url={cam.base_url}/cam&username=testuser&password=s3cr3t",
+            f"/api/v1/camera/proxy?url={cam.base_url}/cam&username=testuser&password=s3cr3t&page_id=page-camera",
             headers=auth_headers,
         )
         assert resp.status_code == 200
@@ -220,11 +230,11 @@ async def test_proxy_basic_auth_forwarded(client, auth_headers, bypass_ssrf):
 
 
 # 10. API-Key als Query-Parameter angehängt
-async def test_proxy_apikey_appended_to_url(client, auth_headers, bypass_ssrf):
+async def test_proxy_apikey_appended_to_url(client, auth_headers, bypass_ssrf, bypass_page_scope):
     cam = _MockCameraServer()
     try:
         resp = await client.get(
-            f"/api/v1/camera/proxy?url={cam.base_url}/cam&apikey_param=token&apikey_value=secret123",
+            f"/api/v1/camera/proxy?url={cam.base_url}/cam&apikey_param=token&apikey_value=secret123&page_id=page-camera",
             headers=auth_headers,
         )
         assert resp.status_code == 200
@@ -235,12 +245,12 @@ async def test_proxy_apikey_appended_to_url(client, auth_headers, bypass_ssrf):
 
 
 # 11. HEAD antwortet 405 (nicht unterstützt) → Proxy fährt fort
-async def test_proxy_head_405_proceeds(client, auth_headers, bypass_ssrf):
+async def test_proxy_head_405_proceeds(client, auth_headers, bypass_ssrf, bypass_page_scope):
     # HEAD → 405, GET → 200 (z. B. alte IP-Kameras)
     cam = _MockCameraServer(status=200, head_status=405)
     try:
         resp = await client.get(
-            f"/api/v1/camera/proxy?url={cam.base_url}/cam",
+            f"/api/v1/camera/proxy?url={cam.base_url}/cam&page_id=page-camera",
             headers=auth_headers,
         )
         assert resp.status_code == 200
@@ -252,9 +262,9 @@ async def test_proxy_head_405_proceeds(client, auth_headers, bypass_ssrf):
 
 
 # 12. Loopback IPv4 direkt als IP-Literal
-async def test_proxy_ssrf_loopback_ipv4_blocked(client, auth_headers):
+async def test_proxy_ssrf_loopback_ipv4_blocked(client, auth_headers, bypass_page_scope):
     resp = await client.get(
-        "/api/v1/camera/proxy?url=http://127.0.0.1:8080/secret",
+        "/api/v1/camera/proxy?url=http://127.0.0.1:8080/secret&page_id=page-camera",
         headers=auth_headers,
     )
     assert resp.status_code == 400
@@ -262,9 +272,9 @@ async def test_proxy_ssrf_loopback_ipv4_blocked(client, auth_headers):
 
 
 # 13. Loopback via localhost-Hostname
-async def test_proxy_ssrf_localhost_blocked(client, auth_headers):
+async def test_proxy_ssrf_localhost_blocked(client, auth_headers, bypass_page_scope):
     resp = await client.get(
-        "/api/v1/camera/proxy?url=http://localhost/secret",
+        "/api/v1/camera/proxy?url=http://localhost/secret&page_id=page-camera",
         headers=auth_headers,
     )
     assert resp.status_code == 400
@@ -272,9 +282,9 @@ async def test_proxy_ssrf_localhost_blocked(client, auth_headers):
 
 
 # 14. Link-local / Cloud-Metadata-Endpunkt (AWS IMDSv1)
-async def test_proxy_ssrf_metadata_ip_blocked(client, auth_headers):
+async def test_proxy_ssrf_metadata_ip_blocked(client, auth_headers, bypass_page_scope):
     resp = await client.get(
-        "/api/v1/camera/proxy?url=http://169.254.169.254/latest/meta-data/",
+        "/api/v1/camera/proxy?url=http://169.254.169.254/latest/meta-data/&page_id=page-camera",
         headers=auth_headers,
     )
     assert resp.status_code == 400
@@ -282,9 +292,9 @@ async def test_proxy_ssrf_metadata_ip_blocked(client, auth_headers):
 
 
 # 15. Loopback IPv6
-async def test_proxy_ssrf_loopback_ipv6_blocked(client, auth_headers):
+async def test_proxy_ssrf_loopback_ipv6_blocked(client, auth_headers, bypass_page_scope):
     resp = await client.get(
-        "/api/v1/camera/proxy?url=http://[::1]/secret",
+        "/api/v1/camera/proxy?url=http://[::1]/secret&page_id=page-camera",
         headers=auth_headers,
     )
     assert resp.status_code == 400

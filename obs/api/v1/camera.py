@@ -110,7 +110,7 @@ async def proxy_camera(
     password: str = Query("", description="Basic-Auth Passwort"),
     apikey_param: str = Query("", description="API-Key Query-Parameter-Name"),
     apikey_value: str = Query("", description="API-Key Wert"),
-    page_id: str = Query(..., description="Visu-Seite, die das Kamera-Widget enthält"),
+    page_id: str = Query("", description="Visu-Seite, die das Kamera-Widget enthält"),
     _user: str = Depends(_camera_auth),
     db: Database = Depends(get_db),
 ) -> StreamingResponse:
