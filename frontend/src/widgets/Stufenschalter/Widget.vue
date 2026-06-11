@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { datapoints } from '@/api/client'
+import VisuIcon from '@/components/VisuIcon.vue'
 import { useIcons } from '@/composables/useIcons'
 import type { DataPointValue } from '@/types'
 
@@ -299,7 +300,13 @@ const saveLabel = computed(() => t('widgets.stufenschalter.save'))
         data-testid="stufenschalter-option"
         @click="selectOption(option.value)"
       >
-        <span v-if="option.icon" class="shrink-0 leading-none">{{ option.icon }}</span>
+        <span
+          v-if="option.icon"
+          class="flex h-4 w-4 shrink-0 items-center justify-center text-base leading-none [&>img]:h-full [&>img]:w-full"
+          data-testid="stufenschalter-option-icon"
+        >
+          <VisuIcon :icon="option.icon" />
+        </span>
         <span class="min-w-0 truncate">{{ option.label || option.value }}</span>
       </button>
     </div>

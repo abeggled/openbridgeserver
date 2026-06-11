@@ -65,6 +65,14 @@ function mountWidget(config: Record<string, unknown>, value: unknown = 0) {
       editorMode: false,
       readonly: false,
     },
+    global: {
+      stubs: {
+        VisuIcon: {
+          props: ['icon'],
+          template: '<span data-testid="visu-icon" />',
+        },
+      },
+    },
   })
   return wrapper
 }
@@ -118,6 +126,20 @@ describe('Stufenschalter widget', () => {
     await wrapper!.findAll('[data-testid="stufenschalter-option"]')[1].trigger('click')
 
     expect(writeMock).not.toHaveBeenCalled()
+  })
+
+  it('renders SVG option icons through the icon renderer instead of raw text', () => {
+    mountWidget({
+      mode: 'select-save',
+      options: [
+        { label: 'Off', value: '0', icon: 'svg:kuf_audio_audio', color: '#6b7280' },
+        { label: 'Eco', value: '1', icon: '⚡', color: '#3b82f6' },
+      ],
+    }, 0)
+
+    expect(wrapper!.find('[data-testid="stufenschalter-option-icon"]').exists()).toBe(true)
+    expect(wrapper!.find('[data-testid="visu-icon"]').exists()).toBe(true)
+    expect(wrapper!.text()).not.toContain('svg:kuf_audio_audio')
   })
 
   it('writes the selected value when save is clicked in select-save mode', async () => {
