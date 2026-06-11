@@ -214,6 +214,30 @@ async def test_node_and_tree_filters_compose_with_authz_filtering(db: Database, 
 
 
 @pytest.mark.asyncio
+async def test_search_hierarchy_metadata_and_filters_hide_unauthorized_links(db: Database, monkeypatch):
+    await _insert_tree(db, "building")
+    await _insert_node(db, "allowed-room", tree_id="building")
+    await _insert_node(db, "secret-room", tree_id="building")
+    shared = _dp("AuthZ Search Shared")
+    await _insert_datapoint(db, shared)
+    await _link_datapoint(db, shared, "allowed-room", "link-shared-allowed")
+    await _link_datapoint(db, shared, "secret-room", "link-shared-secret")
+    await _insert_grant(db, node_id="allowed-room")
+    registry = _RegistryStub([shared])
+    monkeypatch.setattr(search_api, "get_registry", lambda: registry)
+    monkeypatch.setattr(datapoints_api, "get_registry", lambda: registry)
+    principal = Principal(subject="alice", type="user", is_admin=False)
+
+    default_result = await _call_search(db, principal, q="AuthZ Search Shared")
+    secret_node_result = await _call_search(db, principal, q="AuthZ Search Shared", node_id="secret-room")
+
+    assert [item.id for item in default_result.items] == [shared.id]
+    assert [node.node_id for node in default_result.items[0].hierarchy_nodes] == ["allowed-room"]
+    assert secret_node_result.items == []
+    assert secret_node_result.total == 0
+
+
+@pytest.mark.asyncio
 async def test_admin_search_still_returns_ungranted_datapoints(db: Database, monkeypatch):
     admin_visible = _dp("AuthZ Search Admin Visible")
     await _insert_datapoint(db, admin_visible)

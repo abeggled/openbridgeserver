@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from obs.api.auth import Principal, get_current_principal
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import filter_authorized_datapoints
+from obs.api.v1.datapoints import _page_context_allows_datapoint_read
 from obs.api.v1.sessions import validate_session
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
@@ -148,7 +149,12 @@ async def _check_history_access(
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
 
-async def _check_datapoint_read_access(db: Database, principal: Principal | None, dp_id: uuid.UUID) -> None:
+async def _check_datapoint_read_access(
+    db: Database,
+    principal: Principal | None,
+    dp_id: uuid.UUID,
+    request: Request,
+) -> None:
     if principal is None:
         return
 
@@ -158,7 +164,7 @@ async def _check_datapoint_read_access(db: Database, principal: Principal | None
         [str(dp_id)],
         action=AuthzAction.READ,
     )
-    if str(dp_id) not in allowed:
+    if str(dp_id) not in allowed and not await _page_context_allows_datapoint_read(db, request, dp_id, principal):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
 
 
@@ -180,7 +186,7 @@ async def query_history(
     await _check_history_access(request, principal.subject if principal else None, db)
     if get_registry().get(dp_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
-    await _check_datapoint_read_access(db, principal, dp_id)
+    await _check_datapoint_read_access(db, principal, dp_id, request)
 
     now = datetime.now(UTC)
     window_hours = await _get_default_history_window_hours(db)
@@ -206,7 +212,7 @@ async def aggregate_history(
     await _check_history_access(request, principal.subject if principal else None, db)
     if get_registry().get(dp_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
-    await _check_datapoint_read_access(db, principal, dp_id)
+    await _check_datapoint_read_access(db, principal, dp_id, request)
     if fn not in ("avg", "min", "max", "last"):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,

@@ -88,6 +88,39 @@ async def _insert_read_grant(db: Database, *, principal_id: str, node_id: str) -
     )
 
 
+async def _insert_public_visu_page(db: Database, page_id: str, dp_id: uuid.UUID) -> None:
+    page_config = f"""
+    {{
+      "grid_cols": 12,
+      "grid_row_height": 80,
+      "grid_cell_width": 120,
+      "background": null,
+      "widgets": [
+        {{
+          "id": "widget-1",
+          "name": "Chart",
+          "type": "chart",
+          "datapoint_id": "{dp_id}",
+          "status_datapoint_id": null,
+          "x": 0,
+          "y": 0,
+          "w": 4,
+          "h": 3,
+          "config": {{}}
+        }}
+      ]
+    }}
+    """
+    await db.execute_and_commit(
+        """
+        INSERT INTO visu_nodes
+            (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
+        VALUES (?, NULL, 'Page', 'PAGE', 0, NULL, 'public', NULL, ?, ?, ?)
+        """,
+        (page_id, page_config, NOW, NOW),
+    )
+
+
 async def _seed_datapoint_scope(
     db: Database,
     dp_id: uuid.UUID,
@@ -200,6 +233,35 @@ async def test_query_history_without_read_grant_returns_404_and_skips_plugin(mon
 
     assert exc_info.value.status_code == 404
     plugin.query.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_query_history_authenticated_public_page_context_remains_compatible_without_grant(monkeypatch, db: Database):
+    dp_id = uuid.uuid4()
+    await _seed_datapoint_scope(db, dp_id)
+    await _insert_public_visu_page(db, "page-public-history", dp_id)
+    monkeypatch.setattr(history_api, "get_registry", lambda: _RegistryStub(dp_id))
+
+    plugin = MagicMock()
+    plugin.query = AsyncMock(return_value=[])
+    monkeypatch.setattr(history_api, "get_history_plugin", lambda: plugin)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", AsyncMock(return_value=("public", None)))
+
+    request = MagicMock()
+    request.headers.get = lambda key, default=None: {"X-Page-Id": "page-public-history"}.get(key, default)
+
+    result = await history_api.query_history(
+        dp_id=dp_id,
+        from_ts=None,
+        to_ts=None,
+        limit=100,
+        request=request,
+        principal=_principal("alice"),
+        db=db,
+    )
+
+    assert result == []
+    plugin.query.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -18,8 +18,8 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from obs.api.auth import Principal, get_current_principal
-from obs.api.authz import AuthzAction
-from obs.api.authz_service import filter_authorized_datapoints
+from obs.api.authz import AuthzAction, authorize
+from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_hierarchy_targets
 from obs.api.v1.datapoints import _SORT_KEYS, DataPointOut, HierarchyNodeRef, NodePathSegment, _enrich
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
@@ -36,7 +36,22 @@ class SearchPage(BaseModel):
     query: dict
 
 
-async def _add_hierarchy(items: list[DataPointOut], db: Database) -> None:
+async def _filter_authorized_hierarchy_rows(db: Database, principal: Principal, rows: list) -> list:
+    if principal.type == "user" and principal.is_admin:
+        return rows
+
+    node_ids = [row["node_id"] for row in rows]
+    targets_by_node = {target.node_id: target for target in await resolve_hierarchy_targets(db, node_ids)}
+    grants = await load_role_grants(db, principal, node_type="hierarchy")
+    return [
+        row
+        for row in rows
+        if (target := targets_by_node.get(row["node_id"]))
+        and authorize(principal=principal, action=AuthzAction.READ, targets=[target], grants=grants).allowed
+    ]
+
+
+async def _add_hierarchy(items: list[DataPointOut], db: Database, principal: Principal) -> None:
     """Batch-query hierarchy node links and inject into items in-place.
 
     Also computes each node's ancestor path (root → leaf, excluding tree name)
@@ -57,6 +72,7 @@ async def _add_hierarchy(items: list[DataPointOut], db: Database) -> None:
             ORDER BY ht.name, hn.name""",
         dp_ids,
     )
+    rows = await _filter_authorized_hierarchy_rows(db, principal, rows)
     # Build ancestor paths for all linked nodes via recursive CTE (upstream
     # PR #462) — produces the richer node_path schema (objects with stable
     # node_id + node_name per segment) that the epic switched to during the
@@ -179,11 +195,12 @@ async def search(
                     UNION ALL
                     SELECT hn.id FROM hierarchy_nodes hn JOIN desc d ON hn.parent_id = d.id
                 )
-                SELECT DISTINCT hdl.datapoint_id
+                SELECT DISTINCT hdl.datapoint_id, hdl.node_id
                 FROM hierarchy_datapoint_links hdl
                 JOIN desc d ON hdl.node_id = d.id""",
                 node_id_list,
             )
+            rows = await _filter_authorized_hierarchy_rows(db, principal, rows)
             matched_ids = {r["datapoint_id"] for r in rows}
             results = [dp for dp in results if str(dp.id) in matched_ids]
 
@@ -193,12 +210,13 @@ async def search(
         if tree_id_list:
             placeholders = ",".join("?" * len(tree_id_list))
             rows = await db.fetchall(
-                f"""SELECT DISTINCT hdl.datapoint_id
+                f"""SELECT DISTINCT hdl.datapoint_id, hdl.node_id
                     FROM hierarchy_datapoint_links hdl
                     JOIN hierarchy_nodes hn ON hn.id = hdl.node_id
                     WHERE hn.tree_id IN ({placeholders})""",
                 tree_id_list,
             )
+            rows = await _filter_authorized_hierarchy_rows(db, principal, rows)
             matched_ids = {r["datapoint_id"] for r in rows}
             results = [dp for dp in results if str(dp.id) in matched_ids]
 
@@ -234,7 +252,7 @@ async def search(
     items = [_enrich(dp) for dp in results[offset : offset + size]]
 
     # 10. Enrich with hierarchy node assignments (single batch query)
-    await _add_hierarchy(items, db)
+    await _add_hierarchy(items, db, principal)
 
     return SearchPage(
         items=items,
