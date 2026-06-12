@@ -144,6 +144,21 @@ async def test_get_graph_returns_404_for_existing_out_of_scope_graph(db: Databas
 
 
 @pytest.mark.asyncio
+async def test_get_graph_requires_read_scope_for_all_referenced_datapoints(db: Database):
+    allowed_dp, blocked_dp = await _seed_scope(db)
+    await _insert_graph(db, "graph-mixed", "Mixed graph", allowed_dp, blocked_dp)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await logic_api.get_graph(
+            graph_id="graph-mixed",
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_export_graph_returns_404_for_existing_out_of_scope_graph(db: Database):
     _, blocked_dp = await _seed_scope(db)
     await _insert_graph(db, "graph-blocked", "Blocked graph", blocked_dp)

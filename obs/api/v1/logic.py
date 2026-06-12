@@ -102,7 +102,7 @@ async def _authorized_logic_datapoint_ids(
 
 async def _can_read_logic_graph(db: Database, principal: Principal, row: dict) -> bool:
     all_ids, allowed_ids = await _authorized_logic_datapoint_ids(db, principal, row, action=AuthzAction.READ)
-    return bool(allowed_ids) if all_ids else principal.type == "user" and principal.is_admin
+    return len(allowed_ids) == len(all_ids) if all_ids else principal.type == "user" and principal.is_admin
 
 
 async def _require_logic_graph_read(db: Database, principal: Principal, row: dict) -> None:
