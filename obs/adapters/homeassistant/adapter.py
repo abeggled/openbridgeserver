@@ -139,13 +139,13 @@ class HomeAssistantAdapter(AdapterBase):
             import websockets  # noqa: F401
         except ImportError:
             logger.error("websockets not installed — Home Assistant adapter disabled")
-            await self._publish_status(False, "websockets not installed")
+            await self._publish_status(False, "websockets not installed", code="libNotInstalled", params={"lib": "websockets"})
             return
 
         self._cfg = HaAdapterConfig(**self._config)
         if not self._cfg.token:
             logger.error("Home Assistant adapter: no token configured")
-            await self._publish_status(False, "Kein Token konfiguriert")
+            await self._publish_status(False, "Kein Token konfiguriert", code="noToken")
             return
 
         scheme = "https" if self._cfg.ssl else "http"
@@ -156,7 +156,12 @@ class HomeAssistantAdapter(AdapterBase):
             timeout=10.0,
         )
 
-        await self._publish_status(True, f"Verbunden mit {self._cfg.host}:{self._cfg.port}")
+        await self._publish_status(
+            True,
+            f"Verbunden mit {self._cfg.host}:{self._cfg.port}",
+            code="connectedTo",
+            params={"host": self._cfg.host, "port": self._cfg.port},
+        )
         logger.info(
             "Home Assistant adapter started → %s:%d ssl=%s",
             self._cfg.host,
@@ -178,7 +183,7 @@ class HomeAssistantAdapter(AdapterBase):
             self._http_client = None
 
         self._entity_map.clear()
-        await self._publish_status(False, "Getrennt")
+        await self._publish_status(False, "Getrennt", code="disconnected")
 
     # ------------------------------------------------------------------
     # Bindings
@@ -247,7 +252,7 @@ class HomeAssistantAdapter(AdapterBase):
                     msg = json.loads(await ws.recv())
                     if msg.get("type") == "auth_invalid":
                         logger.error("HA WebSocket: authentication failed — check token")
-                        await self._publish_status(False, "Token ungültig")
+                        await self._publish_status(False, "Token ungültig", code="tokenInvalid")
                         await asyncio.sleep(60)
                         continue
                     if msg.get("type") != "auth_ok":
@@ -259,7 +264,12 @@ class HomeAssistantAdapter(AdapterBase):
                         "HA WebSocket authenticated (ha_version=%s)",
                         msg.get("ha_version", "?"),
                     )
-                    await self._publish_status(True, f"Verbunden mit HA {msg.get('ha_version', '')}")
+                    await self._publish_status(
+                        True,
+                        f"Verbunden mit HA {msg.get('ha_version', '')}",
+                        code="connectedHa",
+                        params={"version": msg.get("ha_version", "")},
+                    )
 
                     # Step 3: subscribe to state_changed events
                     sub_id = _next_ws_id()
@@ -301,7 +311,7 @@ class HomeAssistantAdapter(AdapterBase):
                 raise
             except Exception:
                 logger.exception("HA adapter WebSocket error, reconnecting in 10 s")
-                await self._publish_status(False, "WebSocket Fehler — reconnecting")
+                await self._publish_status(False, "WebSocket Fehler — reconnecting", code="wsErrorReconnecting")
                 await asyncio.sleep(10)
 
     async def _on_state_changed(self, data: dict) -> None:

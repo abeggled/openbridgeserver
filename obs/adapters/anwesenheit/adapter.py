@@ -151,7 +151,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
             self._simulation_loop(),
             name=f"anwesenheitssimulation_{self._instance_id}",
         )
-        await self._publish_status(True, "Anwesenheitssimulation gestartet")
+        await self._publish_status(True, "Anwesenheitssimulation gestartet", code="started")
 
     async def disconnect(self) -> None:
         if self._task and not self._task.done():
@@ -163,7 +163,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
             self._task = None
         self._pending.clear()
         self._seq = 0
-        await self._publish_status(False, "Anwesenheitssimulation gestoppt")
+        await self._publish_status(False, "Anwesenheitssimulation gestoppt", code="stopped")
 
     async def read(self, binding: Any) -> None:  # noqa: ARG002
         return None

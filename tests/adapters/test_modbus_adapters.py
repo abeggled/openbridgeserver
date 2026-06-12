@@ -204,6 +204,31 @@ class TestModbusTcpConnect:
         assert t.cancelled()
         client.close.assert_called_once()
 
+    async def test_connect_success_emits_connected_code(self):
+        adapter, bus = _make_tcp()
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        event = bus.publish.call_args_list[-1].args[0]
+        assert event.detail_code == "connectedTo"
+        assert event.detail_params == {"host": adapter._adp_cfg.host, "port": adapter._adp_cfg.port}
+
+    async def test_publish_disconnected_if_needed_forwards_code(self):
+        adapter, bus = _make_tcp()
+        adapter._connected = True
+        await adapter._publish_disconnected_if_needed("backoff", code="modbusReconnectBackoff")
+        event = bus.publish.call_args_list[-1].args[0]
+        assert event.connected is False
+        assert event.detail_code == "modbusReconnectBackoff"
+
+    async def test_publish_disconnected_if_needed_noop_when_disconnected(self):
+        adapter, bus = _make_tcp()
+        adapter._connected = False
+        await adapter._publish_disconnected_if_needed("ignored", code="modbusReconnectBackoff")
+        bus.publish.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # connect / disconnect — RTU

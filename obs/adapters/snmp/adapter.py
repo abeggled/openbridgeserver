@@ -310,7 +310,7 @@ class SnmpAdapter(AdapterBase):
         if not self._snmp:
             msg = "pysnmp nicht installiert — SNMP deaktiviert. Ausführen: pip install pysnmp"
             logger.error(msg)
-            await self._publish_status(False, msg)
+            await self._publish_status(False, msg, code="libNotInstalled", params={"lib": "pysnmp"})
             return
 
         self._engine = self._snmp["SnmpEngine"]()
@@ -329,7 +329,7 @@ class SnmpAdapter(AdapterBase):
             t.cancel()
         self._poll_tasks.clear()
         self._engine = None
-        await self._publish_status(False, "Getrennt")
+        await self._publish_status(False, "Getrennt", code="disconnected")
 
     # ------------------------------------------------------------------
     # Bindings

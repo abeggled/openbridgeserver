@@ -7,7 +7,9 @@ are all pure / near-pure methods that can be tested without asyncio.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from obs.adapters.zeitschaltuhr.adapter import (
     HolidayMode,
@@ -50,6 +52,33 @@ def _now(hour: int = 8, minute: int = 0, weekday_offset: int = 0) -> datetime:
 
     base = datetime(2026, 4, 6, hour, minute, 0, tzinfo=UTC)  # a Monday
     return base + timedelta(days=weekday_offset)
+
+
+# ---------------------------------------------------------------------------
+# connect / disconnect — i18n status codes (issue #779)
+# ---------------------------------------------------------------------------
+
+
+class TestConnectDisconnect:
+    @pytest.mark.asyncio
+    async def test_connect_emits_started_code(self):
+        adapter = _make_adapter()
+        adapter._bus.publish = AsyncMock()
+        await adapter.connect()
+        try:
+            assert adapter.last_detail_code == "started"
+            assert adapter.connected is True
+        finally:
+            await adapter.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_emits_stopped_code(self):
+        adapter = _make_adapter()
+        adapter._bus.publish = AsyncMock()
+        await adapter.connect()
+        await adapter.disconnect()
+        assert adapter.last_detail_code == "stopped"
+        assert adapter.connected is False
 
 
 # ---------------------------------------------------------------------------

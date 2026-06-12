@@ -695,6 +695,18 @@
         "startup_jitter_s": {
           "title": "Startup-Jitter (s)",
           "description": "Maximale zufällige Verzögerung (Sekunden) vor dem ersten Poll jedes Bindings. Verhindert einen Request-Burst wenn alle Tasks gleichzeitig starten. 0 = deaktiviert."
+        },
+        "host": {
+          "title": "Host",
+          "description": "Hostname oder IP-Adresse des Modbus-TCP-Geräts"
+        },
+        "port": {
+          "title": "Port",
+          "description": "Modbus-TCP-Port (Standard: 502)"
+        },
+        "timeout": {
+          "title": "Timeout (s)",
+          "description": "Anfrage-Timeout in Sekunden"
         }
       },
       "SNMP": {
@@ -799,8 +811,189 @@
         "vacation_6_end": {
           "title": "Ferien 6 Ende",
           "description": "Ferienperiode 6 Ende (JJJJ-MM-TT)"
+        },
+        "custom_holidays": {
+          "title": "Benutzerdefinierte Feiertage",
+          "description": "Benutzerdefinierte Feiertage als Liste von Ausdrücken. Formate: 'MM-TT[:Name]' (fixes Datum, z.B. '12-26:Stephanstag'), 'easter+N[:Name]' / 'easter-N[:Name]' (relativ zu Ostersonntag), 'advent+N[:Name]' / 'advent-N[:Name]' (relativ zum 1. Advent), 'last_WT_MON[:Name]' (letzter Wochentag des Monats), 'N_WT_MON[:Name]' (n-ter Wochentag). Wochentags-Kürzel: MO DI MI DO FR SA SO. Monats-Kürzel: JAN FEB MAR APR MAI JUN JUL AUG SEP OKT NOV DEZ. Mehrere Einträge durch Komma oder Zeilenumbruch trennen."
+        }
+      },
+      "HOME_ASSISTANT": {
+        "host": {
+          "title": "Host",
+          "description": "Hostname oder IP-Adresse des Home-Assistant-Servers"
+        },
+        "port": {
+          "title": "Port",
+          "description": "TCP-Port des Home-Assistant-Servers"
+        },
+        "token": {
+          "title": "Zugriffstoken",
+          "description": "Langlebiges Zugriffstoken aus dem Home-Assistant-Profil"
+        },
+        "ssl": {
+          "title": "SSL/TLS verwenden",
+          "description": "Verbindung über HTTPS/WSS statt HTTP/WS"
+        }
+      },
+      "IOBROKER": {
+        "host": {
+          "title": "Host",
+          "description": "Hostname oder IP-Adresse des ioBroker-Servers"
+        },
+        "port": {
+          "title": "Port",
+          "description": "Port des ioBroker-Socket.IO-Adapters (web/socketio)"
+        },
+        "username": {
+          "title": "Benutzername",
+          "description": "ioBroker-Benutzername (optional, für authentifizierte Instanzen)"
+        },
+        "password": {
+          "title": "Passwort",
+          "description": "ioBroker-Passwort (optional)"
+        },
+        "ssl": {
+          "title": "SSL/TLS verwenden",
+          "description": "Verbindung über HTTPS statt HTTP"
+        },
+        "path": {
+          "title": "Socket.IO-Pfad",
+          "description": "Socket.IO-Endpunktpfad (Standard: socket.io)"
+        },
+        "access_token": {
+          "title": "Zugriffstoken",
+          "description": "OAuth2-Zugriffstoken (Alternative zu Benutzername/Passwort)"
+        },
+        "resubscribe_interval_seconds": {
+          "title": "Resubscribe-Intervall (s)",
+          "description": "Wie oft der Subscription-Watchdog States erneut abonniert"
+        },
+        "reconnect_interval_seconds": {
+          "title": "Reconnect-Intervall (s)",
+          "description": "Anfangsverzögerung zwischen Reconnect-Versuchen"
+        },
+        "reconnect_max_interval_seconds": {
+          "title": "Max. Reconnect-Intervall (s)",
+          "description": "Obergrenze für die Reconnect-Backoff-Verzögerung"
+        },
+        "socket_instability_threshold": {
+          "title": "Instabilitäts-Schwelle",
+          "description": "Anzahl Disconnects im Zeitfenster, bevor die Verbindung als instabil gilt"
+        },
+        "socket_instability_window_s": {
+          "title": "Instabilitäts-Fenster (s)",
+          "description": "Zeitfenster (Sekunden) zum Zählen der Disconnects"
+        }
+      },
+      "MODBUS_RTU": {
+        "port": {
+          "title": "Serieller Port",
+          "description": "Pfad zum seriellen Gerät (z.B. /dev/ttyUSB0 oder COM3)"
+        },
+        "baudrate": {
+          "title": "Baudrate",
+          "description": "Serielle Baudrate (z.B. 9600, 19200, 115200)"
+        },
+        "parity": {
+          "title": "Parität",
+          "description": "Paritätsbit: N (keine), E (gerade), O (ungerade)"
+        },
+        "stopbits": {
+          "title": "Stoppbits",
+          "description": "Anzahl Stoppbits (1 oder 2)"
+        },
+        "bytesize": {
+          "title": "Bytegröße",
+          "description": "Anzahl Datenbits (7 oder 8)"
+        },
+        "timeout": {
+          "title": "Timeout (s)",
+          "description": "Anfrage-Timeout in Sekunden"
+        }
+      },
+      "MQTT": {
+        "host": {
+          "title": "Host",
+          "description": "Hostname oder IP-Adresse des MQTT-Brokers"
+        },
+        "port": {
+          "title": "Port",
+          "description": "MQTT-Broker-Port (Standard: 1883, oder 8883 für TLS)"
+        },
+        "username": {
+          "title": "Benutzername",
+          "description": "MQTT-Benutzername (optional)"
+        },
+        "password": {
+          "title": "Passwort",
+          "description": "MQTT-Passwort (optional)"
+        },
+        "client_id": {
+          "title": "Client-ID",
+          "description": "MQTT-Client-Kennung (leer = automatisch generiert)"
+        },
+        "tls": {
+          "title": "TLS verwenden",
+          "description": "Broker-Verbindung mit TLS verschlüsseln"
+        },
+        "tls_insecure": {
+          "title": "TLS-Prüfung überspringen",
+          "description": "TLS-Zertifikat des Brokers nicht prüfen (unsicher)"
+        }
+      },
+      "ONEWIRE": {
+        "poll_interval": {
+          "title": "Abfrageintervall (s)",
+          "description": "Wie oft Sensoren gelesen werden, in Sekunden"
+        },
+        "w1_path": {
+          "title": "1-Wire-Pfad",
+          "description": "Sysfs-Pfad zum 1-Wire-Bus (Standard: /sys/bus/w1/devices)"
         }
       }
+    },
+    "statusDetail": {
+      "connected": "Verbunden",
+      "connectedTo": "Verbunden mit {host}:{port}",
+      "connectedHa": "Verbunden mit HA {version}",
+      "knxConnectedRouting": "Verbunden (Routing {group}:{port})",
+      "connecting": "Verbinde mit {host}:{port}…",
+      "reconnecting": "Neuverbindung mit {host}:{port}…",
+      "disconnected": "Getrennt",
+      "started": "Gestartet",
+      "stopped": "Gestoppt",
+      "libNotInstalled": "{lib} nicht installiert",
+      "noToken": "Kein Token konfiguriert",
+      "tokenInvalid": "Token ungültig",
+      "wsErrorReconnecting": "WebSocket-Fehler — Neuverbindung",
+      "couldNotConnectTo": "Verbindung zu {host}:{port} nicht möglich",
+      "couldNotReconnectTo": "Neuverbindung zu {host}:{port} nicht möglich",
+      "couldNotOpenPort": "{port} konnte nicht geöffnet werden",
+      "modbusSerialConnected": "Verbunden ({port} @ {baudrate} Baud)",
+      "modbusReconnectBackoff": "Modbus-TCP-Neuverbindung pausiert (Backoff aktiv)",
+      "pathNotFound": "{path} nicht gefunden",
+      "onewireBusAt": "1-Wire-Bus an {path}",
+      "socketConnectFailed": "Socket.IO-Verbindung fehlgeschlagen",
+      "socketDisconnected": "Socket.IO getrennt",
+      "socketUnstable": "ioBroker Socket.IO-Verbindung instabil: mehrere Disconnects in kurzer Zeit.",
+      "socketStable": "ioBroker Socket.IO-Verbindung stabil.",
+      "subscribeFailed": "Abonnement fehlgeschlagen",
+      "watchdogSubscribeFailed": "ioBroker Subscription-Watchdog konnte States nicht erneut abonnieren.",
+      "knxRoutingSecureRequiresKey": "routing_secure erfordert backbone_key oder knxkeys_file_path",
+      "knxBackboneKeyInvalid": "KNX-Backbone-Key ungültig (kein Hex-String): {error}",
+      "knxIpSecureConfigError": "KNX-IP-Secure-Konfigurationsfehler: {error}",
+      "knxNoBackboneKeyInKeyfile": "Kein Backbone-Key im Keyfile — das Keyfile enthält keinen Backbone-Eintrag für Routing Secure.",
+      "knxNoTunnelingInterfaces": "Keine Tunneling-Interfaces im Keyfile gefunden — bitte Individual Address im Keyfile prüfen.",
+      "knxTunnelOverload": "KNX-Tunnel-Slot wahrscheinlich von anderem Client belegt — Gateway-Pool überlastet.",
+      "knxTunnelStable": "Tunnel-Pool wieder stabil.",
+      "invalidBindingsSkipped": "{count} ungültige Verknüpfung(en) übersprungen ({examples})"
+    },
+    "testResult": {
+      "typeNotRegistered": "Adapter-Typ '{type}' nicht registriert",
+      "configError": "Konfigurationsfehler: {error}",
+      "configValidationError": "Konfigurations-Validierungsfehler: {error}",
+      "connectOk": "Verbindung zu {type} erfolgreich",
+      "connectFailed": "Verbindungsversuch fehlgeschlagen"
     }
   },
   "history": {

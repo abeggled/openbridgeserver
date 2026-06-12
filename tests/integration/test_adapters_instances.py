@@ -265,6 +265,52 @@ async def test_test_instance_returns_result(client, auth_headers):
     body = resp.json()
     assert "success" in body
     assert "detail" in body
+    # issue #779: response carries a translatable code + params alongside the raw detail
+    assert "detail_code" in body
+    assert "detail_params" in body
+    if body["success"]:
+        assert body["detail_code"] == "connectOk"
+        assert body["detail_params"] == {"type": _ADAPTER_TYPE}
+
+
+# ---------------------------------------------------------------------------
+# POST /{adapter_type}/test  (type-level, ephemeral)
+# ---------------------------------------------------------------------------
+
+
+async def test_adapter_type_test_requires_auth(client):
+    resp = await client.post(f"/api/v1/adapters/{_ADAPTER_TYPE}/test", json={"config": {}})
+    assert resp.status_code == 401
+
+
+async def test_adapter_type_test_unregistered_returns_404(client, auth_headers):
+    resp = await client.post("/api/v1/adapters/NOPE/test", json={"config": {}}, headers=auth_headers)
+    assert resp.status_code == 404
+
+
+async def test_adapter_type_test_returns_result_with_code(client, auth_headers):
+    resp = await client.post(f"/api/v1/adapters/{_ADAPTER_TYPE}/test", json={"config": {}}, headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["success"], bool)
+    assert "detail_code" in body
+    if body["success"]:
+        assert body["detail_code"] == "connectOk"
+        assert body["detail_params"] == {"type": _ADAPTER_TYPE}
+
+
+async def test_adapter_type_test_invalid_config_returns_validation_code(client, auth_headers):
+    # offset_days expects an int; a list cannot be coerced → config validation error.
+    resp = await client.post(
+        f"/api/v1/adapters/{_ADAPTER_TYPE}/test",
+        json={"config": {"offset_days": [1, 2]}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert body["detail_code"] == "configValidationError"
+    assert "error" in body["detail_params"]
 
 
 # ---------------------------------------------------------------------------
