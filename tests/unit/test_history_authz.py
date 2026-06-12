@@ -88,7 +88,7 @@ async def _insert_read_grant(db: Database, *, principal_id: str, node_id: str) -
     )
 
 
-async def _insert_public_visu_page(db: Database, page_id: str, dp_id: uuid.UUID) -> None:
+async def _insert_public_visu_page(db: Database, page_id: str, dp_id: uuid.UUID, *, access: str = "public") -> None:
     page_config = f"""
     {{
       "grid_cols": 12,
@@ -115,9 +115,9 @@ async def _insert_public_visu_page(db: Database, page_id: str, dp_id: uuid.UUID)
         """
         INSERT INTO visu_nodes
             (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
-        VALUES (?, NULL, 'Page', 'PAGE', 0, NULL, 'public', NULL, ?, ?, ?)
+        VALUES (?, NULL, 'Page', 'PAGE', 0, NULL, ?, NULL, ?, ?, ?)
         """,
-        (page_id, page_config, NOW, NOW),
+        (page_id, access, page_config, NOW, NOW),
     )
 
 
@@ -320,6 +320,35 @@ async def test_query_history_assigned_user_page_remains_compatible_without_page_
         to_ts=None,
         limit=100,
         request=_request(),
+        principal=_principal("alice"),
+        db=db,
+    )
+
+    assert result == []
+    plugin.query.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_query_history_authenticated_protected_source_page_remains_compatible_without_session(monkeypatch, db: Database):
+    dp_id = uuid.uuid4()
+    await _seed_datapoint_scope(db, dp_id)
+    await _insert_public_visu_page(db, "page-protected-history", dp_id, access="protected")
+    monkeypatch.setattr(history_api, "get_registry", lambda: _RegistryStub(dp_id))
+
+    plugin = MagicMock()
+    plugin.query = AsyncMock(return_value=[])
+    monkeypatch.setattr(history_api, "get_history_plugin", lambda: plugin)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", AsyncMock(return_value=("protected", None)))
+
+    request = MagicMock()
+    request.headers.get = lambda key, default=None: {"X-Page-Id": "page-protected-history"}.get(key, default)
+
+    result = await history_api.query_history(
+        dp_id=dp_id,
+        from_ts=None,
+        to_ts=None,
+        limit=100,
+        request=request,
         principal=_principal("alice"),
         db=db,
     )

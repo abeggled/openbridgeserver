@@ -39,6 +39,7 @@ const props = defineProps<{
   value: DataPointValue | null
   statusValue: DataPointValue | null
   editorMode: boolean
+  pageId?: string | null
   readonly?: boolean
 }>()
 
@@ -245,6 +246,7 @@ function handleAreaClick(area: GrundrissArea) {
           :editor-mode="editorMode"
           :readonly="props.readonly"
           :h="Math.round(mw.hPx / 80)"
+          v-bind="mw.widgetType === 'Kamera' ? { pageId: props.pageId } : {}"
         />
         <div v-else class="flex items-center justify-center h-full text-xs text-gray-500">
           {{ mw.widgetType }}?

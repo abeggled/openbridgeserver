@@ -334,6 +334,60 @@ async def test_get_value_authenticated_public_page_path_remains_compatible_witho
 
 
 @pytest.mark.asyncio
+async def test_get_value_authenticated_protected_source_page_remains_compatible_without_session(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000043", "Authenticated protected source page value")
+    await _insert_datapoint(db, datapoint)
+    page_config = f"""
+    {{
+      "grid_cols": 12,
+      "grid_row_height": 80,
+      "grid_cell_width": 120,
+      "background": null,
+      "widgets": [
+        {{
+          "id": "widget-1",
+          "name": "Widget",
+          "type": "value",
+          "datapoint_id": "{datapoint.id}",
+          "status_datapoint_id": null,
+          "x": 0,
+          "y": 0,
+          "w": 2,
+          "h": 1,
+          "config": {{}}
+        }}
+      ]
+    }}
+    """
+    await db.execute_and_commit(
+        """
+        INSERT INTO visu_nodes
+            (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
+        VALUES ('page-protected-auth', NULL, 'Page', 'PAGE', 0, NULL, 'protected', '1234', ?, ?, ?)
+        """,
+        (page_config, NOW, NOW),
+    )
+    registry = _RegistryStub([datapoint])
+    state = ValueState()
+    state.update(21.0, "good")
+    registry._values[datapoint.id] = state
+    monkeypatch.setattr(dp_api, "get_registry", lambda: registry)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", AsyncMock(return_value=("protected", None)))
+
+    request = MagicMock()
+    request.headers.get = lambda key, default=None: {"X-Page-Id": "page-protected-auth"}.get(key, default)
+    result = await dp_api.get_value(
+        dp_id=datapoint.id,
+        request=request,
+        user=Principal(subject="alice", type="user", is_admin=False),
+        db=db,
+    )
+
+    assert result.value == 21.0
+    assert result.quality == "good"
+
+
+@pytest.mark.asyncio
 async def test_get_value_assigned_user_visu_page_remains_compatible_without_grant(monkeypatch, db: Database):
     datapoint = _dp("00000000-0000-0000-0000-000000000051", "User page value")
     await _insert_datapoint(db, datapoint)

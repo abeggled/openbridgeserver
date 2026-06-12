@@ -67,6 +67,55 @@ async def _insert_camera_page(db: Database, *, access: str = "public", url: str 
     )
 
 
+async def _insert_grundriss_camera_page(db: Database, *, url: str = CAMERA_URL) -> None:
+    page_config = f"""
+    {{
+      "grid_cols": 12,
+      "grid_row_height": 80,
+      "grid_cell_width": 120,
+      "background": null,
+      "widgets": [
+        {{
+          "id": "grundriss-widget",
+          "name": "Floorplan",
+          "type": "Grundriss",
+          "datapoint_id": null,
+          "status_datapoint_id": null,
+          "x": 0,
+          "y": 0,
+          "w": 8,
+          "h": 6,
+          "config": {{
+            "miniWidgets": [
+              {{
+                "id": "mini-camera",
+                "label": "Door",
+                "widgetType": "Kamera",
+                "datapointId": null,
+                "statusDatapointId": null,
+                "config": {{"url": "{url}", "useProxy": true}},
+                "x": 100,
+                "y": 100,
+                "wPx": 320,
+                "hPx": 180,
+                "visible": true
+              }}
+            ]
+          }}
+        }}
+      ]
+    }}
+    """
+    await db.execute_and_commit(
+        """
+        INSERT INTO visu_nodes
+            (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
+        VALUES ('page-camera', NULL, 'Camera Page', 'PAGE', 0, NULL, 'public', NULL, ?, ?, ?)
+        """,
+        (page_config, NOW, NOW),
+    )
+
+
 def _mock_camera_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         camera_api,
@@ -86,6 +135,25 @@ async def test_proxy_camera_allows_assigned_user_page_scope(monkeypatch: pytest.
     await _insert_user(db, "alice")
     await _insert_camera_page(db, access="user")
     await db.execute_and_commit("INSERT INTO visu_node_users (node_id, username) VALUES ('page-camera', 'alice')")
+    _mock_camera_fetch(monkeypatch)
+
+    result = await camera_api.proxy_camera(
+        url=CAMERA_URL,
+        username="",
+        password="",
+        apikey_param="",
+        apikey_value="",
+        page_id="page-camera",
+        _user="alice",
+        db=db,
+    )
+
+    assert isinstance(result, StreamingResponse)
+
+
+@pytest.mark.asyncio
+async def test_proxy_camera_allows_grundriss_mini_widget_page_scope(monkeypatch: pytest.MonkeyPatch, db: Database):
+    await _insert_grundriss_camera_page(db)
     _mock_camera_fetch(monkeypatch)
 
     result = await camera_api.proxy_camera(

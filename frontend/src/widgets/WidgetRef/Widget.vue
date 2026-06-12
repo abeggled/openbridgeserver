@@ -7,7 +7,7 @@
  * konfiguriertes Widget auf beliebig vielen Seiten zu verwenden.
  */
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { visu } from '@/api/client'
+import { getSessionToken, visu } from '@/api/client'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { WidgetRegistry } from '@/widgets/registry'
 import type { DataPointValue, WidgetInstance } from '@/types'
@@ -28,6 +28,11 @@ let subscribedIds: string[] = []
 
 const sourcePageId     = computed(() => (props.config.source_page_id     as string | undefined) ?? '')
 const sourceWidgetName = computed(() => (props.config.source_widget_name as string | undefined) ?? '')
+const sourceSessionToken = computed(() => sourcePageId.value ? getSessionToken(sourcePageId.value) : null)
+const sourceReadContext = computed(() => ({
+  pageId: sourcePageId.value,
+  ...(sourceSessionToken.value ? { sessionToken: sourceSessionToken.value } : {}),
+}))
 
 async function loadReference() {
   if (!sourcePageId.value || !sourceWidgetName.value) {
@@ -47,7 +52,7 @@ async function loadReference() {
       const ids = [found.datapoint_id, found.status_datapoint_id].filter(Boolean) as string[]
       if (ids.length) {
         dpStore.subscribe(ids)
-        dpStore.fetchInitialValues(ids)
+        dpStore.fetchInitialValues(ids, sourceReadContext.value)
         subscribedIds = ids
       }
       sourceWidget.value = found
@@ -111,5 +116,7 @@ const refStatusValue = computed(() => sourceWidget.value?.status_datapoint_id ? 
     :value="refValue"
     :status-value="refStatusValue"
     :editor-mode="false"
+    :page-id="sourcePageId"
+    :session-token="sourceSessionToken"
   />
 </template>

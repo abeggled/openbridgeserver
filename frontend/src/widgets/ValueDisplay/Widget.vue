@@ -32,6 +32,8 @@ const props = defineProps<{
   datapointId: string | null
   value: DataPointValue | null
   editorMode: boolean
+  pageId?: string | null
+  sessionToken?: string | null
   w?: number
   h?: number
 }>()
@@ -285,7 +287,11 @@ function makeDataset(color: string) {
 async function fetchPoints(timeRange: string) {
   if (!props.datapointId || props.editorMode) return { pts: [], minMs: 0, maxMs: 0 }
   const { from: fromDate, to: toDate } = resolveTimeRange(timeRange)
-  const data = await history.query(props.datapointId, fromDate.toISOString(), toDate.toISOString())
+  const context = {
+    ...(props.pageId ? { pageId: props.pageId } : {}),
+    ...(props.sessionToken ? { sessionToken: props.sessionToken } : {}),
+  }
+  const data = await history.query(props.datapointId, fromDate.toISOString(), toDate.toISOString(), 10000, context)
   histUnit = data[0]?.u ?? ''
   return {
     pts:   data.map(d => ({ x: new Date(d.ts).getTime(), y: Number(d.v) })),

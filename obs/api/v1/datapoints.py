@@ -261,6 +261,8 @@ async def _page_context_allows_datapoint_read(
     if access in ("public", "readonly"):
         return True
     if access == "protected":
+        if principal is not None and principal.type == "user":
+            return True
         session_token = request.headers.get("X-Session-Token")
         validate_id = defining_node_id or page_id
         return bool(session_token and validate_session(session_token, validate_id))

@@ -72,15 +72,23 @@ def _page_config_contains_camera_url(page_config: Any, url: str) -> bool:
         return False
 
     expected_url = url.strip()
-    for widget in widgets:
-        if not isinstance(widget, dict):
-            continue
-        if str(widget.get("type", "")).lower() not in {"kamera", "camera"}:
-            continue
+
+    def _is_camera_widget(widget: dict[str, Any]) -> bool:
+        widget_type = widget.get("type", widget.get("widgetType"))
+        return str(widget_type or "").lower() in {"kamera", "camera"}
+
+    def _contains_camera(widget: dict[str, Any]) -> bool:
         config = widget.get("config")
-        if not isinstance(config, dict):
-            continue
-        if str(config.get("url", "")).strip() == expected_url:
+        if isinstance(config, dict):
+            if _is_camera_widget(widget) and str(config.get("url", "")).strip() == expected_url:
+                return True
+            mini_widgets = config.get("miniWidgets")
+            if isinstance(mini_widgets, list):
+                return any(isinstance(mini_widget, dict) and _contains_camera(mini_widget) for mini_widget in mini_widgets)
+        return False
+
+    for widget in widgets:
+        if isinstance(widget, dict) and _contains_camera(widget):
             return True
     return False
 
