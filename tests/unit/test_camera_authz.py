@@ -212,6 +212,25 @@ async def test_proxy_camera_allows_grundriss_mini_widget_page_scope(monkeypatch:
 
 
 @pytest.mark.asyncio
+async def test_proxy_camera_allows_public_page_scope_without_jwt(monkeypatch: pytest.MonkeyPatch, db: Database):
+    await _insert_camera_page(db, access="public")
+    _mock_camera_fetch(monkeypatch)
+
+    result = await camera_api.proxy_camera(
+        url=CAMERA_URL,
+        username="",
+        password="",
+        apikey_param="",
+        apikey_value="",
+        page_id="page-camera",
+        _user=None,
+        db=db,
+    )
+
+    assert isinstance(result, StreamingResponse)
+
+
+@pytest.mark.asyncio
 async def test_proxy_camera_blocks_unassigned_user_page_scope(monkeypatch: pytest.MonkeyPatch, db: Database):
     await _insert_user(db, "alice")
     await _insert_camera_page(db, access="user")
@@ -231,6 +250,30 @@ async def test_proxy_camera_blocks_unassigned_user_page_scope(monkeypatch: pytes
         )
 
     assert exc_info.value.status_code == 403
+    build_targets.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_proxy_camera_requires_jwt_for_user_page_scope(monkeypatch: pytest.MonkeyPatch, db: Database):
+    await _insert_user(db, "alice")
+    await _insert_camera_page(db, access="user")
+    await db.execute_and_commit("INSERT INTO visu_node_users (node_id, username) VALUES ('page-camera', 'alice')")
+    build_targets = AsyncMock()
+    monkeypatch.setattr(camera_api, "_build_fetch_targets", build_targets)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await camera_api.proxy_camera(
+            url=CAMERA_URL,
+            username="",
+            password="",
+            apikey_param="",
+            apikey_value="",
+            page_id="page-camera",
+            _user=None,
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 401
     build_targets.assert_not_called()
 
 
@@ -278,7 +321,7 @@ async def test_proxy_camera_accepts_session_for_inherited_protected_page_scope(
         apikey_value="",
         page_id="page-camera",
         session_token="session-1",
-        _user="alice",
+        _user=None,
         db=db,
     )
 

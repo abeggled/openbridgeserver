@@ -3,7 +3,7 @@
 GET /api/v1/camera/proxy
 
 Abgedeckt:
-  1.  Kein Token → 401
+  1.  Kein Page-Scope → 400
   2.  Ungültiger Token → 401
   3.  Ungültiges URL-Schema (ftp://) → 400
   4.  Kamera erreichbar → 200, Stream + Content-Type weitergeleitet
@@ -121,10 +121,10 @@ class _MockCameraServer:
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 
-# 1. Kein Token
-async def test_proxy_no_auth_returns_401(client):
+# 1. Kein Page-Scope
+async def test_proxy_without_page_scope_returns_400(client):
     resp = await client.get("/api/v1/camera/proxy?url=http://example.com/cam")
-    assert resp.status_code == 401
+    assert resp.status_code == 400
 
 
 # 2. Ungültiger Token

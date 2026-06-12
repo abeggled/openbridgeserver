@@ -247,7 +247,7 @@ function handleAreaClick(area: GrundrissArea) {
           :editor-mode="editorMode"
           :readonly="props.readonly"
           :h="Math.round(mw.hPx / 80)"
-          v-bind="mw.widgetType === 'Kamera' ? { pageId: props.pageId, sessionToken: props.sessionToken } : {}"
+          v-bind="{ pageId: props.pageId, sessionToken: props.sessionToken }"
         />
         <div v-else class="flex items-center justify-center h-full text-xs text-gray-500">
           {{ mw.widgetType }}?

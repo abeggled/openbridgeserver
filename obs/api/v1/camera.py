@@ -43,7 +43,7 @@ async def _build_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dic
 async def _camera_auth(
     request: Request,
     _token: str = Query("", alias="_token", description="JWT als Query-Parameter"),
-) -> str:
+) -> str | None:
     """Akzeptiert JWT entweder als 'Authorization: Bearer …'-Header
     oder als URL-Query-Parameter '?_token=…' (nötig für <img>/<video>-Tags).
     """
@@ -52,11 +52,7 @@ async def _camera_auth(
         return decode_token(auth_header[7:])
     if _token:
         return decode_token(_token)
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Provide Authorization: Bearer {token} or ?_token=",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    return None
 
 
 def _page_config_contains_camera_url(page_config: Any, url: str) -> bool:
@@ -94,7 +90,7 @@ def _page_config_contains_camera_url(page_config: Any, url: str) -> bool:
     return False
 
 
-async def _ensure_camera_page_scope(db: Database, page_id: str, url: str, user: str, session_token: str = "") -> None:
+async def _ensure_camera_page_scope(db: Database, page_id: str, url: str, user: str | None, session_token: str = "") -> None:
     row = await db.fetchone(
         "SELECT page_config FROM visu_nodes WHERE id = ? AND type = 'PAGE'",
         (page_id,),
@@ -109,6 +105,12 @@ async def _ensure_camera_page_scope(db: Database, page_id: str, url: str, user: 
         validate_id = defining_node_id or page_id
         if not session_token or not validate_session(session_token, validate_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Valid session token required")
+    if access == "user" and user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Provide Authorization: Bearer {token} or ?_token=",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     if access == "user" and not await _check_user_access(db, page_id, user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
@@ -125,7 +127,7 @@ async def proxy_camera(
     apikey_value: str = Query("", description="API-Key Wert"),
     page_id: str = Query("", description="Visu-Seite, die das Kamera-Widget enthält"),
     session_token: str = Query("", description="PIN-Session-Token für geschützte Visu-Seiten"),
-    _user: str = Depends(_camera_auth),
+    _user: str | None = Depends(_camera_auth),
     db: Database = Depends(get_db),
 ) -> StreamingResponse:
     """Proxyt den Kamera-Stream vom Backend aus.

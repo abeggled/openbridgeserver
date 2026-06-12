@@ -97,12 +97,11 @@ async def test_camera_auth_query_token(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_camera_auth_missing_raises_401():
+async def test_camera_auth_missing_returns_anonymous_identity():
     req = MagicMock()
     req.headers = {}
-    with pytest.raises(HTTPException) as exc_info:
-        await _camera_auth(req, _token="")
-    assert exc_info.value.status_code == 401
+    result = await _camera_auth(req, _token="")
+    assert result is None
 
 
 # ===========================================================================
