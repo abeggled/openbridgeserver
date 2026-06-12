@@ -93,6 +93,7 @@ async def _insert_grant(
     db: Database,
     *,
     principal_id: str = "alice",
+    node_type: str = "hierarchy",
     node_id: str,
     role: str = "guest",
     effect: str = "allow",
@@ -100,9 +101,9 @@ async def _insert_grant(
     await db.execute_and_commit(
         """
         INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
-        VALUES ('user', ?, 'hierarchy', ?, ?, ?)
+        VALUES ('user', ?, ?, ?, ?, ?)
         """,
-        (principal_id, node_id, role, effect),
+        (principal_id, node_type, node_id, role, effect),
     )
 
 
@@ -210,6 +211,32 @@ async def test_node_and_tree_filters_compose_with_authz_filtering(db: Database, 
     assert [item.id for item in node_result.items] == [allowed.id]
     assert node_result.total == 1
     assert [item.id for item in tree_result.items] == [allowed.id]
+    assert tree_result.total == 1
+
+
+@pytest.mark.asyncio
+async def test_node_and_tree_filters_include_directly_granted_datapoints(db: Database, monkeypatch):
+    await _insert_tree(db, "building")
+    await _insert_node(db, "root", tree_id="building")
+    await _insert_node(db, "room", tree_id="building", parent_id="root")
+    direct = _dp("AuthZ Search Direct Grant")
+    denied = _dp("AuthZ Search Denied")
+    await _insert_datapoint(db, direct)
+    await _insert_datapoint(db, denied)
+    await _link_datapoint(db, direct, "room", "link-direct")
+    await _link_datapoint(db, denied, "room", "link-denied")
+    await _insert_grant(db, node_type="datapoint", node_id=str(direct.id))
+    registry = _RegistryStub([direct, denied])
+    monkeypatch.setattr(search_api, "get_registry", lambda: registry)
+    monkeypatch.setattr(datapoints_api, "get_registry", lambda: registry)
+    principal = Principal(subject="alice", type="user", is_admin=False)
+
+    node_result = await _call_search(db, principal, q="AuthZ Search", node_id="root")
+    tree_result = await _call_search(db, principal, q="AuthZ Search", tree_id="building")
+
+    assert [item.id for item in node_result.items] == [direct.id]
+    assert node_result.total == 1
+    assert [item.id for item in tree_result.items] == [direct.id]
     assert tree_result.total == 1
 
 

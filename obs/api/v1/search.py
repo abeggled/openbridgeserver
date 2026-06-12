@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from obs.api.auth import Principal, get_current_principal
-from obs.api.authz import AuthzAction, authorize
+from obs.api.authz import AuthzAction, AuthzTarget, authorize
 from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_hierarchy_targets
 from obs.api.v1.datapoints import _SORT_KEYS, DataPointOut, HierarchyNodeRef, NodePathSegment, _enrich
 from obs.core.registry import get_registry
@@ -36,18 +36,41 @@ class SearchPage(BaseModel):
     query: dict
 
 
-async def _filter_authorized_hierarchy_rows(db: Database, principal: Principal, rows: list) -> list:
+async def _filter_authorized_hierarchy_rows(
+    db: Database,
+    principal: Principal,
+    rows: list,
+    *,
+    include_datapoint_grants: bool = False,
+) -> list:
     if principal.type == "user" and principal.is_admin:
         return rows
 
     node_ids = [row["node_id"] for row in rows]
     targets_by_node = {target.node_id: target for target in await resolve_hierarchy_targets(db, node_ids)}
-    grants = await load_role_grants(db, principal, node_type="hierarchy")
+    grants = await load_role_grants(db, principal)
+    direct_authorized_dp_ids: set[str] = set()
+    if include_datapoint_grants:
+        row_dp_ids = {row["datapoint_id"] for row in rows}
+        direct_grant_dp_ids = {grant.node_id for grant in grants if grant.node_type == "datapoint" and grant.node_id in row_dp_ids}
+        direct_authorized_dp_ids = {
+            dp_id
+            for dp_id in direct_grant_dp_ids
+            if authorize(
+                principal=principal,
+                action=AuthzAction.READ,
+                targets=[AuthzTarget(node_type="datapoint", node_id=dp_id)],
+                grants=grants,
+            ).allowed
+        }
     return [
         row
         for row in rows
-        if (target := targets_by_node.get(row["node_id"]))
-        and authorize(principal=principal, action=AuthzAction.READ, targets=[target], grants=grants).allowed
+        if row["datapoint_id"] in direct_authorized_dp_ids
+        or (
+            (target := targets_by_node.get(row["node_id"]))
+            and authorize(principal=principal, action=AuthzAction.READ, targets=[target], grants=grants).allowed
+        )
     ]
 
 
@@ -201,7 +224,7 @@ async def search(
                 JOIN desc d ON hdl.node_id = d.id""",
                 node_id_list,
             )
-            rows = await _filter_authorized_hierarchy_rows(db, principal, rows)
+            rows = await _filter_authorized_hierarchy_rows(db, principal, rows, include_datapoint_grants=True)
             matched_ids = {r["datapoint_id"] for r in rows}
             results = [dp for dp in results if str(dp.id) in matched_ids]
 
@@ -217,7 +240,7 @@ async def search(
                     WHERE hn.tree_id IN ({placeholders})""",
                 tree_id_list,
             )
-            rows = await _filter_authorized_hierarchy_rows(db, principal, rows)
+            rows = await _filter_authorized_hierarchy_rows(db, principal, rows, include_datapoint_grants=True)
             matched_ids = {r["datapoint_id"] for r in rows}
             results = [dp for dp in results if str(dp.id) in matched_ids]
 

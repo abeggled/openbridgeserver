@@ -173,6 +173,19 @@ async def test_filter_authorized_datapoints_honors_direct_grants_on_linked_datap
 
 
 @pytest.mark.asyncio
+async def test_resolve_datapoint_targets_ignores_other_principals_direct_grants(db: Database):
+    await _insert_tree(db)
+    await _insert_node(db, "room")
+    await _insert_datapoint(db, "dp-1")
+    await _link_datapoint(db, "dp-1", "room", "link")
+    await _insert_grant(db, principal_id="bob", node_type="datapoint", node_id="dp-1", role="guest", effect="allow")
+
+    targets_by_dp = await resolve_datapoint_targets(db, ["dp-1"])
+
+    assert [(target.node_type, target.node_id) for target in targets_by_dp["dp-1"]] == [("hierarchy", "room")]
+
+
+@pytest.mark.asyncio
 async def test_filter_authorized_datapoints_honors_direct_denies_on_linked_datapoints(db: Database):
     await _insert_tree(db)
     await _insert_node(db, "room")
