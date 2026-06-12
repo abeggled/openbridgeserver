@@ -59,6 +59,12 @@ def _dp(dp_id: str, name: str):
     )
 
 
+def _tagged_dp(dp_id: str, name: str, tags: list[str]):
+    datapoint = _dp(dp_id, name)
+    datapoint.tags = tags
+    return datapoint
+
+
 async def _insert_tree(db: Database) -> None:
     await db.execute_and_commit(
         """
@@ -143,6 +149,23 @@ async def test_list_datapoints_filters_before_pagination_and_preserves_sort(monk
     assert result.total == 2
     assert result.pages == 2
     assert [item.name for item in result.items] == ["Bravo allowed"]
+
+
+@pytest.mark.asyncio
+async def test_list_tags_filters_to_readable_datapoints(monkeypatch, db: Database):
+    hidden = _tagged_dp("00000000-0000-0000-0000-000000000004", "Hidden", ["secret-room"])
+    allowed = _tagged_dp("00000000-0000-0000-0000-000000000005", "Allowed", ["public-room"])
+    await _prepare_linked_datapoints(db, [hidden, allowed])
+    await _link_datapoint(db, hidden.id, "blocked")
+    await _link_datapoint(db, allowed.id, "allowed")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([hidden, allowed]))
+
+    result = await dp_api.list_tags(
+        _user=Principal(subject="alice", type="user", is_admin=False),
+        db=db,
+    )
+
+    assert result == ["public-room"]
 
 
 @pytest.mark.asyncio

@@ -150,6 +150,16 @@ async def resolve_datapoint_targets(db: Database, dp_ids: Iterable[str]) -> dict
         ordered_ids,
     )
     node_targets = {target.node_id: target for target in await resolve_hierarchy_targets(db, [row["node_id"] for row in link_rows])}
+    direct_grant_rows = await db.fetchall(
+        f"""
+        SELECT DISTINCT node_id
+        FROM authz_node_roles
+        WHERE node_type = 'datapoint'
+          AND node_id IN ({_placeholders(ordered_ids)})
+        """,
+        ordered_ids,
+    )
+    directly_granted_ids = {row["node_id"] for row in direct_grant_rows}
 
     targets_by_dp: dict[str, list[AuthzTarget]] = {dp_id: [] for dp_id in ordered_ids}
     for row in link_rows:
@@ -158,7 +168,7 @@ async def resolve_datapoint_targets(db: Database, dp_ids: Iterable[str]) -> dict
             targets_by_dp[row["datapoint_id"]].append(target)
 
     for dp_id in ordered_ids:
-        if dp_id in existing_ids and not targets_by_dp[dp_id]:
+        if dp_id in existing_ids and (dp_id in directly_granted_ids or not targets_by_dp[dp_id]):
             targets_by_dp[dp_id].append(AuthzTarget(node_type="datapoint", node_id=dp_id))
 
     return targets_by_dp

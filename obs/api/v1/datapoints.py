@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, field_serializer
 
-from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user, optional_current_user
+from obs.api.auth import Principal, get_admin_user, get_current_principal, optional_current_user
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import filter_authorized_datapoints
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config
@@ -282,9 +282,15 @@ _SORT_KEYS = {
 
 
 @router.get("/tags", response_model=list[str])
-async def list_tags(_user: str = Depends(get_current_user)) -> list[str]:
+async def list_tags(
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(get_db),
+) -> list[str]:
     reg = get_registry()
-    return sorted({t for dp in reg.all() for t in dp.tags})
+    all_dps = reg.all()
+    principal = _principal_from_dependency(_user)
+    allowed_ids = set(await _readable_datapoint_ids(db, principal, all_dps))
+    return sorted({t for dp in all_dps if str(dp.id) in allowed_ids for t in dp.tags})
 
 
 @router.get("/", response_model=DataPointPage)
