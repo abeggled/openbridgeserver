@@ -2,7 +2,7 @@
 
 ## 2026.7.0
 ### Breaking changes 🚨
-* none
+* Security: `GET /api/v1/weather/fetch` now requires authenticated access and no longer accepts tokens in the URL query string. Weather widgets on PIN-protected Visu pages continue to work with their page-scoped session token, but unauthenticated public weather proxy calls are rejected; private/local weather endpoints still require an explicit URL Target Allowlist entry. https://github.com/abeggled/openbridgeserver/issues/791
 
 ### New features ✨
 * Backend: ETS hierarchy import logic is now available as a reusable backend service while keeping `POST /api/v1/hierarchy/import-from-ets` behavior unchanged. This prepares the KNX project import to create selected ETS hierarchies in the same import flow. https://github.com/abeggled/openbridgeserver/issues/727

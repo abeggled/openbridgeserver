@@ -16,10 +16,13 @@ from __future__ import annotations
 import asyncio
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 
-from obs.api.auth import get_current_user
+from obs.api.auth import optional_current_user
+from obs.api.v1.sessions import validate_session
+from obs.db.database import Database, get_db
+from obs.models.visu import PageConfig
 from obs.security.url_targets import UrlTargetBlockedError, build_pinned_url_targets
 
 router = APIRouter(tags=["weather"])
@@ -66,13 +69,51 @@ async def _check_ssrf(
         raise
 
 
+async def _page_has_weather_url(db: Database, page_id: str, url: str) -> bool:
+    row = await db.fetchone("SELECT page_config FROM visu_nodes WHERE id = ? AND type = 'PAGE'", (page_id,))
+    if not row or not row["page_config"]:
+        return False
+
+    try:
+        page = PageConfig.model_validate_json(row["page_config"])
+    except Exception:
+        return False
+
+    requested_url = url.strip()
+    return any(widget.type == "Wetter" and str(widget.config.get("url") or "").strip() == requested_url for widget in page.widgets)
+
+
+async def _require_weather_access(
+    request: Request,
+    url: str,
+    user: str | None = Depends(optional_current_user),
+    db: Database = Depends(get_db),
+) -> None:
+    if user is not None:
+        return
+
+    page_id = request.headers.get("X-Page-Id")
+    session_token = request.headers.get("X-Session-Token")
+    if not page_id or not session_token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
+    from obs.api.v1.visu import _resolve_access_with_node
+
+    access, defining_node_id = await _resolve_access_with_node(db, page_id)
+    validate_id = defining_node_id or page_id
+    if access != "protected" or not validate_session(session_token, validate_id):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Valid session token required")
+    if not await _page_has_weather_url(db, page_id, url):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Weather URL is not configured on the page")
+
+
 # ── Fetch-Endpunkt ─────────────────────────────────────────────────────────────
 
 
 @router.get("/fetch")
 async def fetch_weather(
     url: str = Query(..., description="Vollständige Wetter-API-URL (inkl. API-Key)"),
-    _user: str = Depends(get_current_user),
+    _user: object = Depends(_require_weather_access),
 ) -> JSONResponse:
     """Holt Wetterdaten von der konfigurierten API-URL und gibt sie als JSON zurück.
     Der API-Key wird als Teil der URL übergeben (z.B. OpenWeatherMap appid=…).
