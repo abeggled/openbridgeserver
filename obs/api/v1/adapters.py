@@ -52,7 +52,9 @@ class AdapterInstanceOut(BaseModel):
     running: bool
     connected: bool
     severity: str = "ok"  # "ok" | "warning" | "error" — last AdapterStatusEvent
-    status_detail: str = ""
+    status_detail: str = ""  # non-localized fallback (issue #779)
+    status_detail_code: str | None = None  # key suffix under adapters.statusDetail.*
+    status_detail_params: dict = {}
     bindings: int
     created_at: str
     updated_at: str
@@ -112,7 +114,9 @@ class TestRequest(BaseModel):
 
 class TestResult(BaseModel):
     success: bool
-    detail: str
+    detail: str  # non-localized fallback (issue #779)
+    detail_code: str | None = None  # key suffix under adapters.testResult.*
+    detail_params: dict = {}
 
 
 class IoBrokerStateOut(BaseModel):
@@ -178,6 +182,8 @@ def _instance_out(row: Any, instance: Any | None) -> AdapterInstanceOut:
         connected=instance.connected if instance else False,
         severity=getattr(instance, "last_severity", "ok") if instance else "ok",
         status_detail=getattr(instance, "last_detail", "") if instance else "",
+        status_detail_code=getattr(instance, "last_detail_code", None) if instance else None,
+        status_detail_params=getattr(instance, "last_detail_params", {}) if instance else {},
         bindings=len(instance.get_bindings()) if instance else 0,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -353,6 +359,8 @@ async def test_instance(
         return TestResult(
             success=False,
             detail=f"Adapter-Typ '{row['adapter_type']}' nicht registriert",
+            detail_code="typeNotRegistered",
+            detail_params={"type": row["adapter_type"]},
         )
 
     if body and body.config:
@@ -364,7 +372,7 @@ async def test_instance(
     try:
         cls.config_schema(**config_dict)
     except Exception as exc:
-        return TestResult(success=False, detail=f"Config-Fehler: {exc}")
+        return TestResult(success=False, detail=f"Config-Fehler: {exc}", detail_code="configError", detail_params={"error": str(exc)})
 
     from obs.core.event_bus import EventBus
 
@@ -380,8 +388,13 @@ async def test_instance(
         connected = test_instance.connected
         await test_instance.disconnect()
         if connected:
-            return TestResult(success=True, detail=f"Verbindung zu {row['adapter_type']} erfolgreich")
-        return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen")
+            return TestResult(
+                success=True,
+                detail=f"Verbindung zu {row['adapter_type']} erfolgreich",
+                detail_code="connectOk",
+                detail_params={"type": row["adapter_type"]},
+            )
+        return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed")
     except Exception as exc:
         return TestResult(success=False, detail=str(exc))
 
@@ -1242,7 +1255,12 @@ async def test_adapter(
     try:
         cls.config_schema(**body.config)
     except Exception as exc:
-        return TestResult(success=False, detail=f"Config-Validierungsfehler: {exc}")
+        return TestResult(
+            success=False,
+            detail=f"Config-Validierungsfehler: {exc}",
+            detail_code="configValidationError",
+            detail_params={"error": str(exc)},
+        )
 
     from obs.core.event_bus import EventBus
 
@@ -1258,8 +1276,13 @@ async def test_adapter(
         connected = test_instance.connected
         await test_instance.disconnect()
         if connected:
-            return TestResult(success=True, detail=f"Verbindung zu {adapter_type} erfolgreich")
-        return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen")
+            return TestResult(
+                success=True,
+                detail=f"Verbindung zu {adapter_type} erfolgreich",
+                detail_code="connectOk",
+                detail_params={"type": adapter_type},
+            )
+        return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed")
     except Exception as exc:
         return TestResult(success=False, detail=str(exc))
 

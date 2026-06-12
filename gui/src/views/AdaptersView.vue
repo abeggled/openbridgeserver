@@ -122,7 +122,7 @@
 
         <!-- Status-Detail bei Warning/Error -->
         <div
-          v-if="a.severity && a.severity !== 'ok' && a.status_detail"
+          v-if="a.severity && a.severity !== 'ok' && (a.status_detail || a.status_detail_code)"
           :class="[
             'mx-5 mb-3 flex items-start gap-2 p-3 rounded-lg text-sm',
             a.severity === 'error'
@@ -135,7 +135,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
               d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
           </svg>
-          <span>{{ a.status_detail }}</span>
+          <span>{{ statusDetailText(a) }}</span>
         </div>
 
         <!-- Expanded Config Panel -->
@@ -204,7 +204,7 @@
               <path v-if="feedback[a.id].success" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
               <path v-else stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
             </svg>
-            {{ feedback[a.id].detail }}
+            {{ feedbackText(feedback[a.id]) }}
           </div>
 
           <div v-if="!isDemo" class="flex gap-3 flex-wrap">
@@ -403,9 +403,21 @@ import AnwesenheitDatapointSelector from '@/components/adapters/AnwesenheitDatap
 import AnwesenheitConfigForm from '@/components/adapters/AnwesenheitConfigForm.vue'
 import KnxConfigForm        from '@/components/adapters/KnxConfigForm.vue'
 import Modal         from '@/components/ui/Modal.vue'
-import { adapterDotClass as dotClass, adapterBadgeVariant as statusBadgeVariant, adapterStatusLabel as statusLabel } from '@/utils/adapterStatus'
+import { adapterDotClass as dotClass, adapterBadgeVariant as statusBadgeVariant, adapterStatusLabel as statusLabel, adapterStatusDetailText } from '@/utils/adapterStatus'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
+const statusDetailText = (a) => adapterStatusDetailText(a, t, te)
+// Issue #779: TestResult / action feedback may carry a backend detail_code
+// (adapters.testResult.*) with params; translate it, else show the raw detail.
+function feedbackText(fb) {
+  if (!fb) return ''
+  const code = fb.detail_code
+  if (code) {
+    const key = `adapters.testResult.${code}`
+    if (te(key)) return t(key, fb.detail_params ?? {})
+  }
+  return fb.detail ?? ''
+}
 const store          = useAdapterStore()
 const auth           = useAuthStore()
 const isDemo         = computed(() => auth.username === 'demo')

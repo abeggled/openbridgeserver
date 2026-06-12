@@ -738,10 +738,10 @@ class TestPublisherLoop:
         connected_event = asyncio.Event()
         original_publish_status = adapter._publish_status
 
-        async def track_status(connected, detail="", severity="ok"):
+        async def track_status(connected, detail="", severity="ok", *, code=None, params=None):
             if connected:
                 connected_event.set()
-            await original_publish_status(connected, detail, severity)
+            await original_publish_status(connected, detail, severity, code=code, params=params)
 
         adapter._publish_status = track_status
 

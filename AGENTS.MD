@@ -246,9 +246,9 @@ Both frontends use **vue-i18n v9** (Composition API mode, `legacy: false`).
 
 | File | Purpose |
 |---|---|
-| `gui/src/i18n.js` | i18n instance; locale auto-detected from `localStorage` → browser language → fallback `de` |
-| `gui/src/locales/de.json` | German source strings (authoritative) |
-| `gui/src/locales/en.json` | English translations |
+| `gui/src/i18n.js` | i18n instance; locale auto-detected from `localStorage` → browser language; `fallbackLocale: 'en'` |
+| `gui/src/locales/en.json` | English source strings (authoritative — Weblate source language; must be complete) |
+| `gui/src/locales/de.json` | German translation |
 | `gui/src/components/ui/LocaleSwitcher.vue` | Dropdown wired into Settings → Appearance |
 | `frontend/src/i18n.ts` | Same setup for the Visu SPA (TypeScript) |
 | `frontend/src/locales/{de,en}.json` | Visu locale files |
@@ -258,7 +258,7 @@ Both frontends use **vue-i18n v9** (Composition API mode, `legacy: false`).
 
 **No hardcoded user-facing strings.** Any text visible to the user — labels, button text, placeholders, tooltips, error messages, badge text, empty-state messages — must go through `$t()` / `t()`. This includes strings returned from utility functions (`utils/`, composables) that end up rendered in a template.
 
-**`de.json` is the source of truth.** Always add new keys to both `de.json` (German) and `en.json` (English) in the same commit. Use Python (`json.dumps(..., ensure_ascii=False)`) when writing locale files programmatically — never shell heredocs, which strip non-ASCII characters.
+**`en.json` is the source of truth.** English is the Weblate source language (volunteers translate *from* English) and is the i18n `fallbackLocale`, so it must be complete. Always add new keys to both `en.json` (English, authoritative) and `de.json` (German) in the same commit. Use Python (`json.dumps(..., ensure_ascii=False)`) when writing locale files programmatically — never shell heredocs, which strip non-ASCII characters.
 
 #### Key namespace conventions
 
@@ -355,12 +355,23 @@ When adding a new view, widget config, or significant UI component:
 
 #### Hard-Gate (local + CI)
 
-`./scripts/check-i18n-hardcoded-strings.sh` enforces two checks on the PR/push diff:
+`./scripts/check-i18n-hardcoded-strings.sh` runs two gates on the PR/push diff; both must pass.
+
+**Frontend** (`scripts/check_i18n_guard.py`):
 
 1. Changed files under `gui/src` and `frontend/src` with extension `.vue`, `.js`, `.ts` are scanned file-wide for hardcoded user-facing strings outside `$t()` / `t()`.
 2. If locale files changed, `de.json` and `en.json` are compared pairwise (`gui/src/locales/` and `frontend/src/locales/`); missing counterpart keys fail the gate.
 
 Allowlisted technical literals are maintained in `scripts/i18n-allowlist.txt`. Keep the list minimal and reviewable.
+
+**Backend adapter strings** (`scripts/check_adapter_i18n.py`, issue #779): changed files under `obs/adapters/**` and `obs/api/v1/adapters.py` are AST-scanned — any `_publish_status(...)` / `TestResult(...)` call (and the thin wrappers around them) whose `detail` is a non-empty **string literal** must also pass a stable `code=` / `detail_code=`, and every referenced code must exist in both `en.json` and `de.json`. Dynamic fallbacks (f-strings, variables, `str(exc)`) are allowed without a code.
+
+##### Backend adapter status / schema strings (issue #779)
+
+Adapter status details and config-schema labels are user-facing and must use locale keys, **not** German literals:
+
+- **Status details** — `_publish_status(connected, detail, *, code=..., params=...)` emits a stable `code` (key suffix under `adapters.statusDetail.*`) plus interpolation `params`; the frontend translates it via `adapterStatusDetailText()` in `gui/src/utils/adapterStatus.js`. `detail` stays as the non-localized fallback for genuinely dynamic text. `TestResult` works the same way via `detail_code` / `adapters.testResult.*`.
+- **Schema labels** — `gui/src/components/adapters/SchemaForm.vue` prefers `adapters.schema.<ADAPTER_TYPE>.<field>.{title,description}` over the backend Pydantic `Field(title/description=)`. Add keys for every field of any `SchemaForm`-rendered adapter (KNX & Anwesenheit use custom forms). `<ADAPTER_TYPE>` is the registry type string (e.g. `HOME_ASSISTANT`, `MODBUS_TCP`).
 
 ##### `gui/src/utils/hierarchyDepthOptions.js`
 

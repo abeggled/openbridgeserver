@@ -161,6 +161,27 @@ class TestDoConnectSecure:
         assert "backbone_key" in event.detail.lower() or "backbone" in event.detail.lower()
 
     @pytest.mark.asyncio
+    async def test_routing_secure_keyfile_without_backbone_publishes_error(self, mock_bus, monkeypatch):
+        """Keyfile yields no backbone entry → knxNoBackboneKeyInKeyfile code (issue #779)."""
+        import obs.adapters.knx.adapter as knx_mod
+
+        monkeypatch.setattr(knx_mod, "_secure_config_from_keyfile", lambda *a, **k: None)
+        adapter = KnxAdapter(
+            event_bus=mock_bus,
+            config={
+                "connection_type": "routing_secure",
+                "host": "239.0.0.1",
+                "knxkeys_file_path": "/tmp/does-not-matter.knxkeys",
+                "knxkeys_password": "pw",
+            },
+        )
+        await adapter._do_connect()
+
+        event = mock_bus.publish.call_args[0][0]
+        assert event.connected is False
+        assert event.detail_code == "knxNoBackboneKeyInKeyfile"
+
+    @pytest.mark.asyncio
     async def test_routing_secure_invalid_backbone_key_publishes_error(self, mock_bus):
         """routing_secure mit ungültigem Hex → Status-Fehler, kein Absturz."""
         adapter = KnxAdapter(

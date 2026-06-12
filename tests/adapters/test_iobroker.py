@@ -6,6 +6,8 @@ Keine echte ioBroker-Instanz erforderlich — Socket.IO-Client wird gemockt.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from datetime import UTC, datetime, time, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -13,7 +15,13 @@ import pytest
 
 from obs.core.event_bus import AdapterStatusEvent, DataValueEvent
 from tests.adapters.conftest import make_binding
-from obs.adapters.iobroker.adapter import IoBrokerAdapter, IoBrokerAdapterConfig, _EngineIOQueueFilter, _coerce_iobroker_value
+from obs.adapters.iobroker.adapter import (
+    WATCHDOG_SUBSCRIBE_WARNING_DETAIL,
+    IoBrokerAdapter,
+    IoBrokerAdapterConfig,
+    _EngineIOQueueFilter,
+    _coerce_iobroker_value,
+)
 
 
 @pytest.fixture
@@ -364,7 +372,7 @@ class TestReconnect:
         await socket.disconnect()
 
         assert adapter._socket is None
-        adapter._publish_status.assert_awaited_once_with(False, "Socket.IO getrennt")
+        adapter._publish_status.assert_awaited_once_with(False, "Socket.IO getrennt", code="socketDisconnected")
         adapter._ensure_reconnect_task.assert_called_once()
 
     @pytest.mark.asyncio
@@ -800,3 +808,26 @@ class TestWrite:
             ("0_userdata.0.time", {"val": "10:30:00", "ack": False}),
             timeout=10.0,
         )
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_publishes_warning_on_failure(adapter):
+    """The watchdog loop emits the watchdogSubscribeFailed code when a resync raises."""
+    adapter._cfg = adapter.config_schema(**{**adapter._config, "resubscribe_interval_seconds": 0})
+    adapter._publish_warning_status = AsyncMock()
+
+    async def _boom(**_kwargs):
+        raise RuntimeError("subscribe failed")
+
+    adapter._subscribe_bound_states = _boom
+
+    task = asyncio.create_task(adapter._subscription_watchdog())
+    for _ in range(10):
+        await asyncio.sleep(0)
+        if adapter._publish_warning_status.await_count:
+            break
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    adapter._publish_warning_status.assert_awaited_with(WATCHDOG_SUBSCRIBE_WARNING_DETAIL, code="watchdogSubscribeFailed")
