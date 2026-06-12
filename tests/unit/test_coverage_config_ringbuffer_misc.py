@@ -1389,6 +1389,7 @@ async def test_query_history_success(monkeypatch):
 
     with (
         patch.object(history_api, "_check_history_access", AsyncMock()),
+        patch.object(history_api, "_check_datapoint_read_access", AsyncMock()),
         patch("obs.api.v1.history.get_history_plugin", return_value=mock_plugin),
     ):
         result = await history_api.query_history(
@@ -1415,7 +1416,10 @@ async def test_aggregate_history_invalid_fn(monkeypatch):
     db = _DbStub(fetchone_result=None)
     request = MagicMock()
 
-    with patch.object(history_api, "_check_history_access", AsyncMock()):
+    with (
+        patch.object(history_api, "_check_history_access", AsyncMock()),
+        patch.object(history_api, "_check_datapoint_read_access", AsyncMock()),
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await history_api.aggregate_history(
                 dp_id=dp.id,
@@ -1445,6 +1449,7 @@ async def test_aggregate_history_success(monkeypatch):
 
     with (
         patch.object(history_api, "_check_history_access", AsyncMock()),
+        patch.object(history_api, "_check_datapoint_read_access", AsyncMock()),
         patch("obs.api.v1.history.get_history_plugin", return_value=mock_plugin),
     ):
         result = await history_api.aggregate_history(
