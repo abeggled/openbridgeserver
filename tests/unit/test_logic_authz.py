@@ -205,6 +205,20 @@ async def test_get_datapoint_logic_usages_returns_readable_usages(db: Database):
 
 
 @pytest.mark.asyncio
+async def test_get_datapoint_logic_usages_hides_mixed_scope_graphs(db: Database):
+    allowed_dp, blocked_dp = await _seed_scope(db)
+    await _insert_graph(db, "graph-mixed", "Mixed graph", allowed_dp, blocked_dp)
+
+    result = await logic_api.get_datapoint_logic_usages(
+        dp_id=str(allowed_dp),
+        _user=Principal(subject="alice", type="user", is_admin=False),
+        db=db,
+    )
+
+    assert result == []
+
+
+@pytest.mark.asyncio
 async def test_run_graph_requires_activation_scope_for_all_referenced_datapoints(monkeypatch, db: Database):
     allowed_dp, blocked_dp = await _seed_scope(db, allowed_role="resident")
     await _insert_graph(db, "mixed-graph", "Mixed graph", allowed_dp, blocked_dp)

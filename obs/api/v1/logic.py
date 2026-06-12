@@ -443,6 +443,8 @@ async def get_datapoint_logic_usages(
     rows = await db.fetchall("SELECT id, name, enabled, flow_data FROM logic_graphs")
     usages: list[LogicUsageOut] = []
     for row in rows:
+        if not await _can_read_logic_graph(db, principal, row):
+            continue
         raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
         flow = FlowData.model_validate(raw)
         for node in flow.nodes:
