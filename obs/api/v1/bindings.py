@@ -103,6 +103,21 @@ async def _ensure_binding_mutation_scope(db: Database, principal: Principal, dp_
         return
 
     targets_by_dp = await resolve_datapoint_targets(db, [str(dp_id)])
+    grants = await load_role_grants(db, principal)
+    direct_target = AuthzTarget(
+        node_type="datapoint",
+        node_id=str(dp_id),
+        min_role="operator",
+    )
+    direct_decision = authorize(
+        principal=principal,
+        action=AuthzAction.WRITE,
+        targets=[direct_target],
+        grants=grants,
+    )
+    if direct_decision.reason == "explicit_deny":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Binding-Änderung nicht erlaubt")
+
     targets = [
         AuthzTarget(
             node_type=target.node_type,
@@ -116,9 +131,9 @@ async def _ensure_binding_mutation_scope(db: Database, principal: Principal, dp_
         principal=principal,
         action=AuthzAction.WRITE,
         targets=targets,
-        grants=await load_role_grants(db, principal),
+        grants=grants,
     )
-    if not decision.allowed:
+    if not decision.allowed and not direct_decision.allowed:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Binding-Änderung nicht erlaubt")
 
 

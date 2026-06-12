@@ -121,6 +121,43 @@ async def _insert_public_visu_page(db: Database, page_id: str, dp_id: uuid.UUID)
     )
 
 
+async def _insert_user_visu_page(db: Database, page_id: str, username: str, dp_id: uuid.UUID) -> None:
+    page_config = f"""
+    {{
+      "grid_cols": 12,
+      "grid_row_height": 80,
+      "grid_cell_width": 120,
+      "background": null,
+      "widgets": [
+        {{
+          "id": "widget-1",
+          "name": "Chart",
+          "type": "chart",
+          "datapoint_id": "{dp_id}",
+          "status_datapoint_id": null,
+          "x": 0,
+          "y": 0,
+          "w": 4,
+          "h": 3,
+          "config": {{}}
+        }}
+      ]
+    }}
+    """
+    await db.execute_and_commit(
+        """
+        INSERT INTO visu_nodes
+            (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
+        VALUES (?, NULL, 'User Page', 'PAGE', 0, NULL, 'user', NULL, ?, ?, ?)
+        """,
+        (page_id, page_config, NOW, NOW),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO visu_node_users (node_id, username) VALUES (?, ?)",
+        (page_id, username),
+    )
+
+
 async def _seed_datapoint_scope(
     db: Database,
     dp_id: uuid.UUID,
@@ -256,6 +293,33 @@ async def test_query_history_authenticated_public_page_context_remains_compatibl
         to_ts=None,
         limit=100,
         request=request,
+        principal=_principal("alice"),
+        db=db,
+    )
+
+    assert result == []
+    plugin.query.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_query_history_assigned_user_page_remains_compatible_without_page_header(monkeypatch, db: Database):
+    dp_id = uuid.uuid4()
+    await _seed_datapoint_scope(db, dp_id)
+    await _insert_user_visu_page(db, "page-user-history", "alice", dp_id)
+    monkeypatch.setattr(history_api, "get_registry", lambda: _RegistryStub(dp_id))
+
+    plugin = MagicMock()
+    plugin.query = AsyncMock(return_value=[])
+    monkeypatch.setattr(history_api, "get_history_plugin", lambda: plugin)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", AsyncMock(return_value=("user", None)))
+    monkeypatch.setattr("obs.api.v1.visu._check_user_access", AsyncMock(return_value=True))
+
+    result = await history_api.query_history(
+        dp_id=dp_id,
+        from_ts=None,
+        to_ts=None,
+        limit=100,
+        request=_request(),
         principal=_principal("alice"),
         db=db,
     )
