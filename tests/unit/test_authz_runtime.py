@@ -137,6 +137,22 @@ async def test_resolve_hierarchy_targets_returns_ancestor_paths(db: Database):
 
 
 @pytest.mark.asyncio
+async def test_resolve_hierarchy_targets_keeps_ancestors_beyond_legacy_depth_cutoff(db: Database):
+    await _insert_tree(db)
+    parent_id = None
+    for index in range(70):
+        node_id = f"node-{index}"
+        await _insert_node(db, node_id, parent_id=parent_id)
+        parent_id = node_id
+
+    targets = await resolve_hierarchy_targets(db, ["node-69"])
+
+    assert len(targets) == 1
+    assert len(targets[0].ancestors) == 69
+    assert targets[0].ancestors[0] == "node-0"
+
+
+@pytest.mark.asyncio
 async def test_resolve_datapoint_targets_includes_all_linked_hierarchy_nodes(db: Database):
     await _insert_tree(db)
     await _insert_node(db, "wing-a")

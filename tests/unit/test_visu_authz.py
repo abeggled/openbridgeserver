@@ -175,15 +175,29 @@ async def test_get_page_with_hierarchy_read_grant_allows_user_page(db: Database)
 
 
 @pytest.mark.asyncio
-async def test_get_widget_ref_requires_hierarchy_read_grant(db: Database):
+async def test_get_widget_ref_user_page_requires_hierarchy_read_grant(db: Database):
     await _seed_scope(db)
+    await _insert_user(db)
     await _insert_grant(db, node_id="allowed")
-    await _insert_visu_page(db, "blocked-ref-page", access="public", config=_page_config(BLOCKED_DP_ID))
+    await _insert_visu_page(db, "blocked-ref-page", access="user", config=_page_config(BLOCKED_DP_ID))
+    await db.execute_and_commit(
+        "INSERT INTO visu_node_users (node_id, username) VALUES ('blocked-ref-page', 'alice')",
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await visu_api.get_widget_ref("blocked-ref-page", _request(), db=db, user=_principal())
 
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_authenticated_public_page_read_remains_compatible_without_hierarchy_grant(db: Database):
+    await _seed_scope(db)
+    await _insert_visu_page(db, "public-page", access="public", config=_page_config(BLOCKED_DP_ID))
+
+    result = await visu_api.get_page("public-page", _request(), db=db, user=_principal())
+
+    assert result.widgets[0].datapoint_id == str(BLOCKED_DP_ID)
 
 
 @pytest.mark.asyncio
@@ -208,6 +222,19 @@ async def test_save_page_with_hierarchy_write_grant_allows_non_admin(db: Databas
 
     row = await db.fetchone("SELECT page_config FROM visu_nodes WHERE id = 'write-page'")
     assert str(ALLOWED_DP_ID) in row["page_config"]
+
+
+@pytest.mark.asyncio
+async def test_save_page_user_page_requires_user_assignment(db: Database):
+    await _seed_scope(db)
+    await _insert_user(db)
+    await _insert_grant(db, node_id="allowed", role="resident")
+    await _insert_visu_page(db, "user-write-page", access="user", config=_page_config(ALLOWED_DP_ID))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await visu_api.save_page("user-write-page", _page_config(ALLOWED_DP_ID), db=db, _user=_principal())
+
+    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio

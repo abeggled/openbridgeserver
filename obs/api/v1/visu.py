@@ -190,6 +190,16 @@ async def _check_page_datapoint_policy(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
 
+async def _check_page_write_access(db: Database, node_id: str, principal: Principal | None) -> None:
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+    if principal.type == "user" and principal.is_admin:
+        return
+    access, _ = await _resolve_access_with_node(db, node_id)
+    if access == "user" and (principal.type != "user" or not await _check_user_access(db, node_id, principal.subject)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+
+
 # ── Tree ──────────────────────────────────────────────────────────────────────
 
 
@@ -580,7 +590,8 @@ async def get_page(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
     config = node.page_config or PageConfig()
-    await _check_page_datapoint_policy(db, principal, _collect_page_datapoint_ids(config), AuthzAction.READ)
+    if access == "user":
+        await _check_page_datapoint_policy(db, principal, _collect_page_datapoint_ids(config), AuthzAction.READ)
     return config
 
 
@@ -620,7 +631,8 @@ async def get_widget_ref(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
     pc = node.page_config or PageConfig()
-    await _check_page_datapoint_policy(db, principal, _collect_page_datapoint_ids(pc), AuthzAction.READ)
+    if access == "user":
+        await _check_page_datapoint_policy(db, principal, _collect_page_datapoint_ids(pc), AuthzAction.READ)
     return pc.widgets
 
 
@@ -636,6 +648,7 @@ async def save_page(
     if node.type != "PAGE":
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
 
+    await _check_page_write_access(db, node_id, principal)
     datapoint_ids = sorted(set(_collect_page_datapoint_ids(node.page_config or PageConfig())) | set(_collect_page_datapoint_ids(config)))
     await _check_page_datapoint_policy(db, principal, datapoint_ids, AuthzAction.WRITE, allow_empty=False)
 

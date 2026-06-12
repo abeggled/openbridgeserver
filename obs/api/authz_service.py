@@ -94,7 +94,6 @@ async def resolve_hierarchy_targets(db: Database, node_ids: Iterable[str]) -> li
             FROM anc
             JOIN hierarchy_nodes hn ON hn.id = anc.cur_parent
             WHERE anc.cur_parent IS NOT NULL
-              AND anc.depth < 63
               AND instr(anc.seen, '|' || hn.id || '|') = 0
         )
         SELECT leaf_id, cur_id, depth
