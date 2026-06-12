@@ -1069,7 +1069,7 @@ async def test_check_history_access_public_page(monkeypatch):
     """Public page allows unauthenticated access."""
     from obs.api.v1 import history as hist_api
 
-    monkeypatch.setattr(hist_api, "_resolve_page_access", AsyncMock(return_value="public"))
+    monkeypatch.setattr(hist_api, "_resolve_page_access_with_node", AsyncMock(return_value=("public", None)))
     req = MagicMock()
     req.headers = {"X-Page-Id": "page-1"}
     await _check_history_access(req, user=None, db=MagicMock())  # should not raise
@@ -1080,7 +1080,7 @@ async def test_check_history_access_private_page(monkeypatch):
     """Private page without user raises 401."""
     from obs.api.v1 import history as hist_api
 
-    monkeypatch.setattr(hist_api, "_resolve_page_access", AsyncMock(return_value="private"))
+    monkeypatch.setattr(hist_api, "_resolve_page_access_with_node", AsyncMock(return_value=("private", "page-1")))
     req = MagicMock()
     req.headers = {"X-Page-Id": "page-1"}
     with pytest.raises(HTTPException) as exc_info:

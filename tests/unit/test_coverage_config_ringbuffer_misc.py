@@ -1290,7 +1290,7 @@ async def test_check_history_access_public_page_allowed():
     request.headers.get = MagicMock(return_value="page-1")
     db = _DbStub()
 
-    with patch.object(history_api, "_resolve_page_access", AsyncMock(return_value="public")):
+    with patch.object(history_api, "_resolve_page_access_with_node", AsyncMock(return_value=("public", None))):
         # Should not raise
         await history_api._check_history_access(request, user=None, db=db)
 
@@ -1302,7 +1302,7 @@ async def test_check_history_access_readonly_page_allowed():
     request.headers.get = MagicMock(return_value="page-1")
     db = _DbStub()
 
-    with patch.object(history_api, "_resolve_page_access", AsyncMock(return_value="readonly")):
+    with patch.object(history_api, "_resolve_page_access_with_node", AsyncMock(return_value=("readonly", None))):
         await history_api._check_history_access(request, user=None, db=db)
 
 
@@ -1315,7 +1315,7 @@ async def test_check_history_access_protected_page_with_valid_token():
     db = _DbStub()
 
     with (
-        patch.object(history_api, "_resolve_page_access", AsyncMock(return_value="protected")),
+        patch.object(history_api, "_resolve_page_access_with_node", AsyncMock(return_value=("protected", "page-1"))),
         patch("obs.api.v1.history.validate_session", return_value=True),
     ):
         await history_api._check_history_access(request, user=None, db=db)
@@ -1329,7 +1329,7 @@ async def test_check_history_access_protected_page_no_token_raises():
     db = _DbStub()
 
     with (
-        patch.object(history_api, "_resolve_page_access", AsyncMock(return_value="protected")),
+        patch.object(history_api, "_resolve_page_access_with_node", AsyncMock(return_value=("protected", "page-1"))),
         patch("obs.api.v1.history.validate_session", return_value=False),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -1344,7 +1344,7 @@ async def test_check_history_access_private_page_raises():
     request.headers.get = MagicMock(side_effect=["page-1"])
     db = _DbStub()
 
-    with patch.object(history_api, "_resolve_page_access", AsyncMock(return_value="private")):
+    with patch.object(history_api, "_resolve_page_access_with_node", AsyncMock(return_value=("private", "page-1"))):
         with pytest.raises(HTTPException) as exc_info:
             await history_api._check_history_access(request, user=None, db=db)
         assert exc_info.value.status_code == 401
