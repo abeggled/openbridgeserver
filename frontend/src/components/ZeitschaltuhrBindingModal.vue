@@ -9,6 +9,7 @@ import type { HolidayEntry } from '@/api/client'
 
 const props = defineProps<{
   datapointId: string
+  instanceId: string
   bindingId: string
 }>()
 
@@ -219,7 +220,7 @@ async function loadBinding() {
   errorMsg.value = ''
   try {
     const bindings = await dpApi.listBindings(props.datapointId)
-    const b = bindings.find((b) => b.id === props.bindingId)
+    const b = bindings.find((b) => b.id === props.bindingId && b.adapter_instance_id === props.instanceId)
     if (!b) { errorMsg.value = t('zst.bindingNotFound'); return }
     bindingEnabled.value = b.enabled
     instanceId.value     = b.adapter_instance_id ?? ''

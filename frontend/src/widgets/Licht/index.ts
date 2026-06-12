@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'Licht',
-  label: 'Licht',
+  label: 'widgets.licht.title',
   icon: '💡',
   group: 'Steuerung',
   minW: 2, minH: 2,

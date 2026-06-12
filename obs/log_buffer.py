@@ -19,7 +19,8 @@ from typing import Any
 
 _buffer: deque[dict[str, Any]] = deque(maxlen=500)
 _loop: asyncio.AbstractEventLoop | None = None
-_NON_PROPAGATING_LOGGER_NAMES = ("uvicorn.access", "uvicorn.error")
+_NON_PROPAGATING_LOGGER_NAMES = ("uvicorn.error",)
+_IGNORED_LOGGER_NAMES = {"uvicorn.access"}
 
 
 def get_log_buffer() -> list[dict[str, Any]]:
@@ -38,6 +39,9 @@ class LogBufferHandler(logging.Handler):
     """Captures log records into an in-memory deque and broadcasts them via WebSocket."""
 
     def emit(self, record: logging.LogRecord) -> None:
+        if record.name in _IGNORED_LOGGER_NAMES:
+            return
+
         try:
             entry: dict[str, Any] = {
                 "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",

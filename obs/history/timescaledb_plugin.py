@@ -29,6 +29,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from obs.core.json import json_dumps
 from obs.history.base import HistoryPlugin
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,12 @@ class TimescaleDBHistoryPlugin(HistoryPlugin):
         except ImportError:
             raise RuntimeError("asyncpg is required for the TimescaleDB history plugin. Install it with: pip install asyncpg")
 
-        self._pool = await asyncpg.create_pool(self._dsn, min_size=1, max_size=5)
+        self._pool = await asyncpg.create_pool(
+            self._dsn,
+            min_size=1,
+            max_size=5,
+            server_settings={"timezone": "UTC"},
+        )
         await self._ensure_schema()
 
     async def disconnect(self) -> None:
@@ -131,7 +137,7 @@ class TimescaleDBHistoryPlugin(HistoryPlugin):
         except (TypeError, ValueError):
             v_float = None
 
-        raw_str = json.dumps(value)
+        raw_str = json_dumps(value)
 
         async with self._pool.acquire() as conn:
             await conn.execute(
@@ -224,7 +230,7 @@ class TimescaleDBHistoryPlugin(HistoryPlugin):
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
-                SELECT {bucket_expr} AS bucket, {pg_fn}(v) AS v
+                SELECT {bucket_expr} AS bucket, {pg_fn}(v) AS v, COUNT(v)::int AS n
                 FROM dp_history
                 WHERE dp_id = $1 AND time >= $2 AND time <= $3 AND v IS NOT NULL
                 GROUP BY bucket
@@ -239,6 +245,7 @@ class TimescaleDBHistoryPlugin(HistoryPlugin):
             {
                 "bucket": r["bucket"].isoformat() if hasattr(r["bucket"], "isoformat") else str(r["bucket"]),
                 "v": r["v"],
+                "n": r["n"],
             }
             for r in rows
         ]

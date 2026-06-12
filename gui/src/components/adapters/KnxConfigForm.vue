@@ -4,7 +4,7 @@
     <!-- ── Gateway-Scanner ───────────────────────────────────────────────── -->
     <div class="flex flex-col gap-3 p-3 bg-slate-800/50 border border-slate-600 rounded-lg">
       <div class="flex items-center justify-between gap-3">
-        <span class="text-sm font-medium text-slate-300">KNX/IP-Geräte suchen</span>
+        <span class="text-sm font-medium text-slate-300">{{ $t('adapters.knx.scan.title') }}</span>
         <button
           type="button"
           class="btn-secondary btn-sm shrink-0"
@@ -15,7 +15,7 @@
           <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
           </svg>
-          Suchen
+          {{ $t('adapters.knx.scan.button') }}
         </button>
       </div>
 
@@ -25,11 +25,10 @@
       <!-- Scan results -->
       <div v-if="scanResults !== null" class="flex flex-col gap-2">
         <p v-if="scanResults.length === 0" class="text-xs text-slate-400">
-          Keine Geräte per Multicast gefunden (typisch bei Docker-Netzwerk) —
-          bitte Connection Type und Host unten manuell konfigurieren.
+          {{ $t('adapters.knx.scan.noResultsDocker') }}
         </p>
         <template v-else>
-          <p class="text-xs text-slate-400">{{ scanResults.length }} Gerät(e) — auswählen zum Übernehmen:</p>
+          <p class="text-xs text-slate-400">{{ $t('adapters.knx.scan.resultCount', { n: scanResults.length }) }}</p>
           <div
             v-for="gw in scanResults"
             :key="gw.ip_addr + ':' + gw.port"
@@ -44,13 +43,13 @@
               <span class="text-xs text-slate-400 font-mono">{{ gw.ip_addr }}:{{ gw.port }}</span>
             </div>
             <div class="flex flex-wrap gap-1">
-              <span v-if="gw.supports_tunnelling && !gw.tunnelling_requires_secure" class="text-xs px-1.5 py-0.5 rounded bg-slate-600 text-slate-300">UDP</span>
-              <span v-if="gw.supports_tunnelling_tcp && !gw.tunnelling_requires_secure" class="text-xs px-1.5 py-0.5 rounded bg-slate-600 text-slate-300">TCP</span>
-              <span v-if="gw.supports_routing && !gw.routing_requires_secure" class="text-xs px-1.5 py-0.5 rounded bg-slate-600 text-slate-300">Routing</span>
-              <span v-if="gw.supports_secure" class="text-xs px-1.5 py-0.5 rounded bg-blue-600/40 text-blue-300">Secure</span>
-              <span v-if="gw.tunnelling_requires_secure" class="text-xs px-1.5 py-0.5 rounded bg-amber-600/40 text-amber-300">Secure required</span>
+              <span v-if="gw.supports_tunnelling && !gw.tunnelling_requires_secure" class="text-xs px-1.5 py-0.5 rounded bg-slate-600 text-slate-300">{{ $t('adapters.knx.scan.badge.udp') }}</span>
+              <span v-if="gw.supports_tunnelling_tcp && !gw.tunnelling_requires_secure" class="text-xs px-1.5 py-0.5 rounded bg-slate-600 text-slate-300">{{ $t('adapters.knx.scan.badge.tcp') }}</span>
+              <span v-if="gw.supports_routing && !gw.routing_requires_secure" class="text-xs px-1.5 py-0.5 rounded bg-slate-600 text-slate-300">{{ $t('adapters.knx.scan.badge.routing') }}</span>
+              <span v-if="gw.supports_secure" class="text-xs px-1.5 py-0.5 rounded bg-blue-600/40 text-blue-300">{{ $t('adapters.knx.scan.badge.secure') }}</span>
+              <span v-if="gw.tunnelling_requires_secure" class="text-xs px-1.5 py-0.5 rounded bg-amber-600/40 text-amber-300">{{ $t('adapters.knx.scan.badge.secureRequired') }}</span>
             </div>
-            <span v-if="gw.individual_address" class="text-xs text-slate-400">PA: {{ gw.individual_address }}</span>
+            <span v-if="gw.individual_address" class="text-xs text-slate-400">{{ $t('adapters.knx.scan.physAddr') }} {{ gw.individual_address }}</span>
           </div>
         </template>
       </div>
@@ -58,40 +57,51 @@
 
     <!-- ── Connection Type ───────────────────────────────────────────────── -->
     <div class="form-group">
-      <label class="label">Connection Type</label>
+      <label class="label">{{ $t('adapters.knx.form.connectionTypeLabel') }}</label>
       <select v-model="cfg.connection_type" class="input" @change="onTypeChange">
-        <option value="tunneling">Tunneling UDP</option>
-        <option value="tunneling_tcp">Tunneling TCP</option>
-        <option value="tunneling_secure">Tunneling Secure (TCP)</option>
-        <option value="routing">Routing (Multicast)</option>
-        <option value="routing_secure">Routing Secure (Multicast)</option>
+        <option value="tunneling">{{ $t('adapters.knx.form.connectionTypeUdp') }}</option>
+        <option value="tunneling_tcp">{{ $t('adapters.knx.form.connectionTypeTcp') }}</option>
+        <option value="tunneling_secure">{{ $t('adapters.knx.form.connectionTypeSecure') }}</option>
+        <option value="routing">{{ $t('adapters.knx.form.connectionTypeRouting') }}</option>
+        <option value="routing_secure">{{ $t('adapters.knx.form.connectionTypeRoutingSecure') }}</option>
       </select>
+    </div>
+
+    <!-- Docker warning for all secure connection types (tunneling_secure + routing_secure) -->
+    <div v-if="isSecure" class="flex gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-300">
+      <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+      </svg>
+      <div>
+        <p class="font-medium mb-0.5">{{ $t('adapters.knx.docker.warningTitle') }}</p>
+        <p>{{ $t('adapters.knx.docker.warningDescription') }}</p>
+      </div>
     </div>
 
     <!-- ── Tunneling ──────────────────────────────────────────────────────── -->
     <template v-if="isTunneling">
       <div class="form-group">
-        <label class="label">Host <span class="text-xs text-slate-400">(IP des KNX/IP-Interfaces)</span></label>
+        <label class="label">{{ $t('adapters.knx.form.hostLabel') }} <span class="text-xs text-slate-400">({{ $t('adapters.knx.form.hostHint') }})</span></label>
         <input v-model="cfg.host" type="text" class="input" placeholder="192.168.1.100" @input="emitUpdate" />
       </div>
       <div class="form-group">
-        <label class="label">Port</label>
+        <label class="label">{{ $t('adapters.knx.form.portLabel') }}</label>
         <input v-model.number="cfg.port" type="number" step="1" class="input" placeholder="3671" @change="emitUpdate" />
       </div>
       <div class="form-group">
-        <label class="label">Local IP <span class="text-xs text-slate-400">(optional)</span></label>
+        <label class="label">{{ $t('adapters.knx.form.localIpLabel') }} <span class="text-xs text-slate-400">({{ $t('adapters.knx.form.localIpTunnelingHint') }})</span></label>
         <input
           :value="cfg.local_ip ?? ''"
           type="text"
           class="input"
-          placeholder="(leer = nicht gesetzt)"
+          :placeholder="$t('adapters.knx.form.localIpPlaceholder')"
           @input="setLocalIp($event.target.value)"
         />
       </div>
 
       <!-- Plain tunneling: individual address -->
       <div v-if="!isSecure" class="form-group">
-        <label class="label">Individual Address</label>
+        <label class="label">{{ $t('adapters.knx.form.individualAddressLabel') }}</label>
         <input v-model="cfg.individual_address" type="text" class="input" placeholder="1.1.255" @input="emitUpdate" />
       </div>
     </template>
@@ -99,23 +109,23 @@
     <!-- ── Routing ────────────────────────────────────────────────────────── -->
     <template v-if="isRouting">
       <div class="form-group">
-        <label class="label">Multicast-Gruppe <span class="text-xs text-slate-400">(KNX-Standard: 224.0.23.12)</span></label>
+        <label class="label">{{ $t('adapters.knx.form.multicastGroupLabel') }} <span class="text-xs text-slate-400">({{ $t('adapters.knx.form.multicastGroupHint') }})</span></label>
         <input v-model="cfg.multicast_group" type="text" class="input" placeholder="224.0.23.12" @input="emitUpdate" />
       </div>
       <div class="form-group">
-        <label class="label">Local IP <span class="text-xs text-slate-400">(Netzwerkinterface, optional)</span></label>
+        <label class="label">{{ $t('adapters.knx.form.localIpLabel') }} <span class="text-xs text-slate-400">({{ $t('adapters.knx.form.localIpRoutingHint') }})</span></label>
         <input
           :value="cfg.local_ip ?? ''"
           type="text"
           class="input"
-          placeholder="(leer = nicht gesetzt)"
+          :placeholder="$t('adapters.knx.form.localIpPlaceholder')"
           @input="setLocalIp($event.target.value)"
         />
       </div>
 
       <!-- Plain routing: individual address -->
       <div v-if="!isSecure" class="form-group">
-        <label class="label">Individual Address <span class="text-xs text-slate-400">(Quelladresse)</span></label>
+        <label class="label">{{ $t('adapters.knx.form.individualAddressLabel') }} <span class="text-xs text-slate-400">({{ $t('adapters.knx.form.individualAddressSourceHint') }})</span></label>
         <input v-model="cfg.individual_address" type="text" class="input" placeholder="1.1.255" @input="emitUpdate" />
       </div>
     </template>
@@ -130,11 +140,11 @@
       >
         <div class="flex items-center justify-between">
           <span class="text-sm text-slate-300 font-mono truncate">{{ keyfileFilename }}</span>
-          <button type="button" class="text-xs text-blue-400 hover:text-blue-300 shrink-0 ml-2" @click="startReupload">Neu hochladen</button>
+          <button type="button" class="text-xs text-blue-400 hover:text-blue-300 shrink-0 ml-2" @click="startReupload">{{ $t('adapters.knx.keyfile.reupload') }}</button>
         </div>
-        <p class="text-xs text-slate-400">Keyfile gespeichert. Zum Ändern ein neues hochladen.</p>
+        <p class="text-xs text-slate-400">{{ $t('adapters.knx.keyfile.savedHint') }}</p>
         <div v-if="isTunnelSecure" class="form-group">
-          <label class="label">Individual Address <span class="text-xs text-slate-400">(aus Keyfile)</span></label>
+          <label class="label">{{ $t('adapters.knx.form.individualAddressLabel') }} <span class="text-xs text-slate-400">({{ $t('adapters.knx.keyfile.fromKeyfileHint') }})</span></label>
           <input v-model="cfg.individual_address" type="text" class="input" placeholder="1.1.255" @input="emitUpdate" />
         </div>
       </div>
@@ -146,32 +156,32 @@
       >
         <div class="flex items-center justify-between">
           <span class="text-sm font-medium text-green-400">{{ uploadResult.project_name }}</span>
-          <button type="button" class="text-xs text-slate-400 hover:text-slate-200" @click="clearUpload">Ändern</button>
+          <button type="button" class="text-xs text-slate-400 hover:text-slate-200" @click="clearUpload">{{ $t('adapters.knx.keyfile.change') }}</button>
         </div>
 
         <!-- tunneling_secure: tunnel selection -->
         <template v-if="isTunnelSecure">
           <div v-if="uploadResult.tunnels.length === 0" class="text-sm text-amber-400">
-            Keine Tunneling-Interfaces im Keyfile gefunden.
+            {{ $t('adapters.knx.keyfile.noTunnels') }}
           </div>
           <div v-else class="form-group">
-            <label class="label">Tunnel auswählen</label>
+            <label class="label">{{ $t('adapters.knx.keyfile.selectTunnel') }}</label>
             <div class="flex flex-col gap-2">
               <label
-                v-for="t in uploadResult.tunnels"
-                :key="t.individual_address"
+                v-for="tun in uploadResult.tunnels"
+                :key="tun.individual_address"
                 :class="[
                   'flex items-center gap-3 p-2 rounded-lg border cursor-pointer transition-colors select-none',
-                  selectedTunnel?.individual_address === t.individual_address
+                  selectedTunnel?.individual_address === tun.individual_address
                     ? 'border-blue-500 bg-blue-500/10'
                     : 'border-slate-600 hover:border-slate-400'
                 ]"
               >
-                <input type="radio" :value="t" v-model="selectedTunnel" class="sr-only" @change="onTunnelSelected" />
+                <input type="radio" :value="tun" v-model="selectedTunnel" class="sr-only" @change="onTunnelSelected" />
                 <div class="grid grid-cols-3 gap-2 text-sm flex-1">
-                  <span><span class="text-slate-400">PA: </span>{{ t.individual_address }}</span>
-                  <span><span class="text-slate-400">User: </span>{{ t.user_id }}</span>
-                  <span><span class="text-slate-400">Secure GAs: </span>{{ t.secure_ga_count }}</span>
+                  <span><span class="text-slate-400">{{ $t('adapters.knx.keyfile.physAddrCol') }} </span>{{ tun.individual_address }}</span>
+                  <span><span class="text-slate-400">{{ $t('adapters.knx.keyfile.userIdCol') }} </span>{{ tun.user_id }}</span>
+                  <span><span class="text-slate-400">{{ $t('adapters.knx.keyfile.secureGAsCol') }} </span>{{ tun.secure_ga_count }}</span>
                 </div>
               </label>
             </div>
@@ -181,14 +191,13 @@
         <!-- routing_secure: backbone info -->
         <template v-else>
           <div v-if="!uploadResult.backbone" class="text-sm text-amber-400">
-            Kein Backbone im Keyfile gefunden.
+            {{ $t('adapters.knx.keyfile.noBackbone') }}
           </div>
           <div v-else class="text-sm text-slate-300">
-            Backbone: {{ uploadResult.backbone.multicast_address }}
-            · Latenz: {{ uploadResult.backbone.latency_ms }} ms
+            {{ $t('adapters.knx.keyfile.backboneInfo', { addr: uploadResult.backbone.multicast_address, ms: uploadResult.backbone.latency_ms }) }}
           </div>
           <div class="form-group">
-            <label class="label">Individual Address <span class="text-xs text-slate-400">(Quelladresse)</span></label>
+            <label class="label">{{ $t('adapters.knx.form.individualAddressLabel') }} <span class="text-xs text-slate-400">({{ $t('adapters.knx.form.individualAddressSourceHint') }})</span></label>
             <input v-model="cfg.individual_address" type="text" class="input" placeholder="1.1.255" @input="emitUpdate" />
           </div>
         </template>
@@ -196,9 +205,9 @@
 
       <!-- Upload form -->
       <div v-else class="flex flex-col gap-3 p-3 bg-slate-800/50 border border-slate-600 rounded-lg">
-        <p class="text-sm text-slate-400">ETS-Schlüsselbackup (.knxkeys) hochladen</p>
+        <p class="text-sm text-slate-400">{{ $t('adapters.knx.keyfile.uploadHint') }}</p>
         <div class="form-group">
-          <label class="label">Keyfile</label>
+          <label class="label">{{ $t('adapters.knx.keyfile.fileLabel') }}</label>
           <input
             ref="fileInputRef"
             type="file"
@@ -208,8 +217,8 @@
           />
         </div>
         <div class="form-group">
-          <label class="label">Passwort</label>
-          <input v-model="uploadPw" type="password" class="input" placeholder="Keyfile-Passwort" @keyup.enter="doUpload" />
+          <label class="label">{{ $t('adapters.knx.keyfile.passwordLabel') }}</label>
+          <input v-model="uploadPw" type="password" class="input" :placeholder="$t('adapters.knx.keyfile.passwordPlaceholder')" @keyup.enter="doUpload" />
         </div>
         <div v-if="uploadError" class="text-xs text-red-400">{{ uploadError }}</div>
         <button
@@ -219,7 +228,7 @@
           @click="doUpload"
         >
           <Spinner v-if="uploading" size="xs" color="white" />
-          Hochladen &amp; Parsen
+          {{ $t('adapters.knx.keyfile.uploadButton') }}
         </button>
       </div>
 
@@ -230,8 +239,11 @@
 
 <script setup>
 import { ref, reactive, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import Spinner from '@/components/ui/Spinner.vue'
 import { knxKeyfileApi } from '@/api/client.js'
+
+const { t } = useI18n()
 
 const props = defineProps({
   modelValue: { type: Object, default: () => ({}) },
@@ -305,7 +317,7 @@ async function doScan() {
     const res = await knxKeyfileApi.scan({ timeout: 4 })
     scanResults.value = res.data
   } catch (err) {
-    scanError.value = err.response?.data?.detail ?? 'Scan fehlgeschlagen'
+    scanError.value = err.response?.data?.detail ?? t('adapters.knx.scan.failed')
   } finally {
     scanning.value = false
   }
@@ -368,7 +380,7 @@ async function doUpload() {
     }
     emitUpdate()
   } catch (err) {
-    uploadError.value = err.response?.data?.detail ?? 'Upload fehlgeschlagen'
+    uploadError.value = err.response?.data?.detail ?? t('adapters.knx.keyfile.uploadFailed')
   } finally {
     uploading.value = false
   }
@@ -400,9 +412,9 @@ function onTunnelSelected() {
   if (selectedTunnel.value) applyTunnel(selectedTunnel.value)
 }
 
-function applyTunnel(t) {
-  cfg.individual_address = t.individual_address
-  cfg.user_id = t.user_id
+function applyTunnel(tun) {
+  cfg.individual_address = tun.individual_address
+  cfg.user_id = tun.user_id
   emitUpdate()
 }
 

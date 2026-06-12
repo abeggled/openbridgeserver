@@ -9,8 +9,11 @@ Covers:
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
+from obs.api.auth import create_access_token
 from tests.integration.conftest import assert_auth_token_shape
 
 pytestmark = pytest.mark.integration
@@ -126,3 +129,66 @@ async def test_me_returns_admin_info(client, auth_headers):
     body = resp.json()
     assert body["username"] == "admin"
     assert body["is_admin"] is True
+
+
+async def test_api_key_does_not_inherit_admin_rights_after_username_rename(client, auth_headers):
+    original = f"admin-rename-{uuid.uuid4().hex[:8]}"
+    renamed = f"{original}-new"
+    password = "pw-12345678"
+
+    create_user = await client.post(
+        "/api/v1/auth/users",
+        headers=auth_headers,
+        json={"username": original, "password": password, "is_admin": True},
+    )
+    assert create_user.status_code == 201, create_user.text
+
+    try:
+        user_headers = {"Authorization": f"Bearer {create_access_token(original)}"}
+
+        create_key = await client.post(
+            "/api/v1/auth/apikeys",
+            headers=user_headers,
+            json={"name": "rename-sync-test"},
+        )
+        assert create_key.status_code == 201, create_key.text
+        api_key = create_key.json()["key"]
+
+        rename = await client.patch(
+            f"/api/v1/auth/users/{original}",
+            headers=auth_headers,
+            json={"username": renamed},
+        )
+        assert rename.status_code == 200, rename.text
+
+        admin_call = await client.get("/api/v1/auth/users", headers={"X-API-Key": api_key})
+        assert admin_call.status_code == 403, admin_call.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{renamed}", headers=auth_headers)
+        await client.delete(f"/api/v1/auth/users/{original}", headers=auth_headers)
+
+
+async def test_api_key_name_collision_does_not_impersonate_admin(client, auth_headers):
+    create_key = await client.post(
+        "/api/v1/auth/apikeys",
+        headers=auth_headers,
+        json={"name": "admin"},
+    )
+    assert create_key.status_code == 201, create_key.text
+    key_id = create_key.json()["id"]
+    api_key = create_key.json()["key"]
+
+    try:
+        # Must never resolve to the admin user via key name collision.
+        list_users = await client.get("/api/v1/auth/users", headers={"X-API-Key": api_key})
+        assert list_users.status_code == 403, list_users.text
+
+        # Also self-or-admin flows must not treat this key as user "admin".
+        rotate_mqtt = await client.post(
+            "/api/v1/auth/users/admin/mqtt-password",
+            headers={"X-API-Key": api_key},
+            json={"password": "nope"},
+        )
+        assert rotate_mqtt.status_code == 401, rotate_mqtt.text
+    finally:
+        await client.delete(f"/api/v1/auth/apikeys/{key_id}", headers=auth_headers)

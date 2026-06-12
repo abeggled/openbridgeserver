@@ -58,6 +58,12 @@ except ImportError:
     GroupValueRead = None  # type: ignore[assignment,misc]
     _APCI_IMPORTED = False
 
+# Module-level keyring import — makes sync_load_keyring patchable in tests
+try:
+    from xknx.secure.keyring import sync_load_keyring
+except ImportError:
+    sync_load_keyring = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -192,18 +198,31 @@ class KnxAdapter(AdapterBase):
 
         # Build SecureConfig for KNX IP Secure modes
         secure_config = None
+        resolved_individual_address = cfg.individual_address
         if cfg.connection_type in ("tunneling_secure", "routing_secure"):
             try:
                 from xknx.io import SecureConfig
 
                 if cfg.knxkeys_file_path and cfg.knxkeys_password:
-                    # Keyfile-Modus (bevorzugt): xknx liest alle Credentials aus dem .knxkeys File.
-                    # individual_address in ConnectionConfig wählt den Tunnel aus.
-                    secure_config = SecureConfig(
-                        knxkeys_file_path=cfg.knxkeys_file_path,
-                        knxkeys_password=cfg.knxkeys_password,
+                    # Keyfile-Modus: OBS extrahiert Credentials selbst aus dem .knxkeys File
+                    # und übergibt sie explizit an SecureConfig.  Dadurch entfällt der interne
+                    # UDP-DescriptionRequest von xknx, der in Docker-Bridge-Netzwerken scheitert,
+                    # weil keine Route zurück zum Container besteht (Issue #393).
+                    keyfile_result = _secure_config_from_keyfile(
+                        cfg.knxkeys_file_path,
+                        cfg.knxkeys_password,
+                        cfg.connection_type,
+                        cfg.individual_address,
                     )
-                    logger.info("KNX IP Secure: Keyfile-Modus (%s)", cfg.knxkeys_file_path)
+                    if keyfile_result is None:
+                        if cfg.connection_type == "routing_secure":
+                            detail = "Kein Backbone-Key im Keyfile — das Keyfile enthält keinen Backbone-Eintrag für Routing Secure."
+                        else:
+                            detail = "Keine Tunneling-Interfaces im Keyfile gefunden — bitte Individual Address im Keyfile prüfen."
+                        await self._publish_status(False, detail, severity="error")
+                        return
+                    secure_config, resolved_individual_address = keyfile_result
+                    logger.info("KNX IP Secure: Keyfile-Modus (%s), Credentials direkt extrahiert", cfg.knxkeys_file_path)
                 elif cfg.connection_type == "tunneling_secure":
                     # Manueller Modus Tunneling: Credentials einzeln angeben
                     secure_config = SecureConfig(
@@ -243,7 +262,7 @@ class KnxAdapter(AdapterBase):
                 multicast_group=cfg.multicast_group,
                 multicast_port=cfg.multicast_port,
                 local_ip=cfg.local_ip,
-                individual_address=IndividualAddress(cfg.individual_address),
+                individual_address=IndividualAddress(resolved_individual_address),
                 secure_config=secure_config,
             )
         else:
@@ -252,7 +271,7 @@ class KnxAdapter(AdapterBase):
                 gateway_ip=cfg.host,
                 gateway_port=cfg.port,
                 local_ip=cfg.local_ip,
-                individual_address=IndividualAddress(cfg.individual_address),
+                individual_address=IndividualAddress(resolved_individual_address),
                 secure_config=secure_config,
             )
 
@@ -277,8 +296,13 @@ class KnxAdapter(AdapterBase):
             # Rebuild sniffer on the new xknx instance
             await self._on_bindings_reloaded()
         except Exception as exc:
-            await self._publish_status(False, str(exc), severity="error")
-            logger.warning("KNX connect failed: %s", exc)
+            detail = _knx_connect_error_detail(exc, cfg.connection_type)
+            await self._publish_status(False, detail, severity="error")
+            cause = exc.__cause__
+            if cause:
+                logger.warning("KNX connect failed: %s (cause: %s)", exc, cause)
+            else:
+                logger.warning("KNX connect failed: %s", exc)
 
     async def _reconnect_loop(self) -> None:
         """Background task: reconnect every 30 s when not connected."""
@@ -665,8 +689,117 @@ def _build_sniffer(xknx_instance: Any, ga_source_map: dict, adapter: KnxAdapter)
 
 
 # ---------------------------------------------------------------------------
-# Helper
+# Helpers
 # ---------------------------------------------------------------------------
+
+
+def _secure_config_from_keyfile(
+    knxkeys_file_path: str,
+    knxkeys_password: str,
+    connection_type: str,
+    individual_address: str,
+) -> tuple[Any, str] | None:
+    """Extract KNX IP Secure credentials from a .knxkeys file.
+
+    Returns ``(SecureConfig, resolved_individual_address)`` or ``None``.
+
+    Explicit credentials (user_id + user_password + device_authentication_password)
+    make xknx take the "Branch A" code path in _start_secure_tunnelling_tcp, which
+    does NOT call request_description() — the UDP step that fails in Docker bridge
+    networks (Issue #393).
+
+    The keyring object is ALSO passed in SecureConfig so that xknx can initialise
+    Data Secure (data_secure_init) for gateways that use KNX Data Secure on top
+    of the transport layer.  Without it, group-value telegrams from data-secure GAs
+    would be undecryptable even though the tunnel connects successfully.
+
+    The resolved_individual_address is the address of the actual keyfile interface used
+    (may differ from the configured address when the fallback to the first tunnel fires).
+    """
+    from xknx.io import SecureConfig
+    from xknx.secure.keyring import InterfaceType
+    from xknx.telegram.address import IndividualAddress
+
+    keyring = sync_load_keyring(knxkeys_file_path, knxkeys_password)  # type: ignore[misc]
+
+    if connection_type == "tunneling_secure":
+        xml_iface = keyring.get_tunnel_interface_by_individual_address(IndividualAddress(individual_address))
+        if xml_iface is None:
+            # Fallback: nimm das erste Tunneling-Interface
+            tunnel_ifaces = [i for i in keyring.interfaces if i.type is InterfaceType.TUNNELING]
+            if not tunnel_ifaces:
+                return None
+            xml_iface = tunnel_ifaces[0]
+            logger.warning(
+                "KNX IP Secure: individual_address %s nicht im Keyfile — verwende erstes Interface (%s)",
+                individual_address,
+                xml_iface.individual_address,
+            )
+        logger.info(
+            "KNX IP Secure: Keyfile-Tunnel IA=%s user_id=%d",
+            xml_iface.individual_address,
+            xml_iface.user_id,
+        )
+        return (
+            SecureConfig(
+                device_authentication_password=xml_iface.decrypted_authentication or "",
+                user_id=xml_iface.user_id,
+                user_password=xml_iface.decrypted_password or "",
+                keyring=keyring,
+            ),
+            str(xml_iface.individual_address),
+        )
+
+    # routing_secure: Backbone-Key extrahieren
+    if keyring.backbone is None or keyring.backbone.decrypted_key is None:
+        logger.error("KNX IP Secure (Routing): kein Backbone-Key im Keyfile")
+        return None
+    backbone_hex = keyring.backbone.decrypted_key.hex()
+    logger.info("KNX IP Secure: Keyfile-Routing, Backbone-Key extrahiert (%d bytes)", len(keyring.backbone.decrypted_key))
+    return (SecureConfig(backbone_key=backbone_hex, keyring=keyring), individual_address)
+
+
+_DOCKER_BRIDGE_HINT = (
+    " — Mögliche Ursache: Docker-Bridge-Netzwerk. xknx wählt die Container-IP "
+    "statt der Host-LAN-IP; UDP-Anfragen für den Verbindungsaufbau kommen nicht "
+    "zurück. Lösung: 'network_mode: host' in docker-compose.yml setzen."
+)
+
+_NO_MORE_CONNECTIONS_HINT = (
+    " — Alle Tunnel-Verbindungsplätze des Gateways sind belegt. "
+    "Mögliche Ursachen: ETS, TWS oder ein anderer Client hält einen Tunnel offen; "
+    "oder eine vorherige Verbindung wurde vom Gateway noch nicht freigegeben. "
+    "Andere KNX-Clients trennen oder das Gateway kurz neu starten."
+)
+
+_GATEWAY_UNREACHABLE_KEYWORDS = (
+    "could not fetch gateway info",
+    "did not respond in time",
+    "descriptionquery",
+)
+
+
+def _knx_connect_error_detail(exc: Exception, connection_type: str = "") -> str:
+    """Convert an xknx connection exception to a user-friendly German detail string.
+
+    Includes the underlying cause (exc.__cause__) so the GUI shows the real
+    error (e.g. "ConnectRequest failed. Status code: ErrorCode.E_NO_MORE_CONNECTIONS")
+    rather than only the generic wrapper "Tunnel connection could not be established".
+
+    Also detects known failure patterns and appends actionable hints.
+    """
+    msg = str(exc)
+    # Include the real underlying cause when available
+    cause = exc.__cause__
+    cause_msg = f" ({cause})" if cause and str(cause) != msg else ""
+    full_msg = msg + cause_msg
+
+    combined = full_msg.lower()
+    if "e_no_more_connections" in combined:
+        return full_msg + _NO_MORE_CONNECTIONS_HINT
+    if any(kw in combined for kw in _GATEWAY_UNREACHABLE_KEYWORDS):
+        return full_msg + _DOCKER_BRIDGE_HINT
+    return full_msg
 
 
 def _telegram_to_bytes(telegram: Any) -> bytes:

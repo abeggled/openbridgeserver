@@ -6,7 +6,7 @@ Keine echte ioBroker-Instanz erforderlich — Socket.IO-Client wird gemockt.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -147,6 +147,16 @@ class TestStateChange:
         assert mock_bus.publish.await_args_list[1].args[0].value == pytest.approx(21.1)
 
     @pytest.mark.asyncio
+    async def test_publish_binding_value_accepts_time_values(self, adapter, mock_bus):
+        binding = make_binding({"state_id": "0_userdata.0.time"})
+
+        await adapter._publish_binding_value(binding, time(10, 30, 0))
+
+        event = mock_bus.publish.call_args[0][0]
+        assert event.value == time(10, 30, 0)
+        assert event.quality == "good"
+
+    @pytest.mark.asyncio
     async def test_unknown_state_ignored(self, adapter, mock_bus):
         await adapter._on_state_change_event("unknown.state", {"val": 1})
 
@@ -215,6 +225,26 @@ class TestSubscribe:
         assert len(self._data_events(mock_bus)) == 2
         event = self._data_events(mock_bus)[-1]
         assert event.value == pytest.approx(23.0)
+
+    @pytest.mark.asyncio
+    async def test_watchdog_resync_skips_failed_reads(self, adapter, mock_bus):
+        binding = make_binding({"state_id": "0_userdata.0.light", "source_data_type": "bool"})
+        adapter._state_map["0_userdata.0.light"] = [binding]
+        adapter._socket.call = AsyncMock(
+            side_effect=[
+                [None, None],
+                [None, {"val": True}],
+                [None, None],
+                TimeoutError("temporary getState timeout"),
+            ]
+        )
+
+        await adapter._subscribe_bound_states(force_publish_initial=True)
+        await adapter._subscribe_bound_states(force_publish_initial=False)
+
+        events = self._data_events(mock_bus)
+        assert len(events) == 1
+        assert events[0].value is True
 
     @pytest.mark.asyncio
     async def test_initial_read_seeds_source_filter_state(self, adapter, mock_bus):
@@ -755,5 +785,18 @@ class TestWrite:
         adapter._socket.call.assert_awaited_once_with(
             "setState",
             ("device.0.light.SET", {"val": "ON", "ack": True}),
+            timeout=10.0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_write_serializes_time_value_for_set_state(self, adapter):
+        binding = make_binding({"state_id": "0_userdata.0.time", "ack": False})
+        adapter._socket.call = AsyncMock(return_value=[None, None])
+
+        await adapter.write(binding, time(10, 30, 0))
+
+        adapter._socket.call.assert_awaited_once_with(
+            "setState",
+            ("0_userdata.0.time", {"val": "10:30:00", "ack": False}),
             timeout=10.0,
         )

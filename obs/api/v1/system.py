@@ -22,13 +22,15 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi import status as http_status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from obs import __version__
 from obs.adapters import registry as adapter_registry
+from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.auth import get_admin_user, get_current_user
+from obs.api.v1.redaction import REDACTED, redact_sensitive_fields
 from obs.db.database import Database, get_db
 from obs.models.types import DataTypeRegistry
 
@@ -73,6 +75,7 @@ class AppSettingsIn(BaseModel):
 
 class HistorySettingsOut(BaseModel):
     plugin: str  # sqlite | influxdb | timescaledb
+    default_window_hours: int
     influx_url: str
     influx_version: int
     influx_token: str
@@ -86,6 +89,7 @@ class HistorySettingsOut(BaseModel):
 
 class HistorySettingsIn(BaseModel):
     plugin: str
+    default_window_hours: int = Field(168, ge=1, le=24 * 365)
     influx_url: str = "http://localhost:8086"
     influx_version: int = 2
     influx_token: str = ""
@@ -254,6 +258,7 @@ async def update_app_settings(
 
 _HISTORY_KEYS = [
     "plugin",
+    "default_window_hours",
     "influx_url",
     "influx_version",
     "influx_token",
@@ -267,6 +272,7 @@ _HISTORY_KEYS = [
 
 _HISTORY_DEFAULTS: dict[str, str] = {
     "plugin": "sqlite",
+    "default_window_hours": "168",
     "influx_url": "http://localhost:8086",
     "influx_version": "2",
     "influx_token": "",
@@ -277,6 +283,8 @@ _HISTORY_DEFAULTS: dict[str, str] = {
     "influx_password": "",
     "timescale_dsn": "",
 }
+
+_HISTORY_SENSITIVE_FIELDS = ("influx_token", "influx_password", "timescale_dsn")
 
 
 async def _read_history_cfg(db: Database) -> dict[str, str]:
@@ -296,23 +304,29 @@ async def get_history_settings(
 ) -> HistorySettingsOut:
     """Read current history backend configuration."""
     cfg = await _read_history_cfg(db)
-    return HistorySettingsOut(
-        plugin=cfg["plugin"],
-        influx_url=cfg["influx_url"],
-        influx_version=int(cfg["influx_version"]),
-        influx_token=cfg["influx_token"],
-        influx_org=cfg["influx_org"],
-        influx_bucket=cfg["influx_bucket"],
-        influx_database=cfg["influx_database"],
-        influx_username=cfg["influx_username"],
-        influx_password=cfg["influx_password"],
-        timescale_dsn=cfg["timescale_dsn"],
+    payload = redact_sensitive_fields(
+        {
+            "plugin": cfg["plugin"],
+            "default_window_hours": int(cfg["default_window_hours"]),
+            "influx_url": cfg["influx_url"],
+            "influx_version": int(cfg["influx_version"]),
+            "influx_token": cfg["influx_token"],
+            "influx_org": cfg["influx_org"],
+            "influx_bucket": cfg["influx_bucket"],
+            "influx_database": cfg["influx_database"],
+            "influx_username": cfg["influx_username"],
+            "influx_password": cfg["influx_password"],
+            "timescale_dsn": cfg["timescale_dsn"],
+        },
+        _HISTORY_SENSITIVE_FIELDS,
     )
+    return HistorySettingsOut(**payload)
 
 
 @router.put("/history/settings", response_model=HistorySettingsOut)
 async def update_history_settings(
     body: HistorySettingsIn,
+    request: Request = None,  # type: ignore[assignment]
     db: Database = Depends(get_db),
     _admin: str = Depends(get_admin_user),
 ) -> HistorySettingsOut:
@@ -325,6 +339,7 @@ async def update_history_settings(
 
     data: dict[str, str] = {
         "plugin": body.plugin,
+        "default_window_hours": str(body.default_window_hours),
         "influx_url": body.influx_url,
         "influx_version": str(body.influx_version),
         "influx_token": body.influx_token,
@@ -335,6 +350,14 @@ async def update_history_settings(
         "influx_password": body.influx_password,
         "timescale_dsn": body.timescale_dsn,
     }
+
+    # UI submits redacted marker unchanged when a secret is already configured.
+    # Preserve persisted values instead of storing the marker literal.
+    if any(data[field] == REDACTED for field in _HISTORY_SENSITIVE_FIELDS):
+        existing_cfg = await _read_history_cfg(db)
+        for field in _HISTORY_SENSITIVE_FIELDS:
+            if data[field] == REDACTED:
+                data[field] = existing_cfg[field]
 
     for k, v in data.items():
         await db.execute_and_commit(
@@ -353,42 +376,88 @@ async def update_history_settings(
             detail=f"Settings saved but plugin reload failed: {exc}",
         )
 
-    return HistorySettingsOut(
-        plugin=body.plugin,
-        influx_url=body.influx_url,
-        influx_version=body.influx_version,
-        influx_token=body.influx_token,
-        influx_org=body.influx_org,
-        influx_bucket=body.influx_bucket,
-        influx_database=body.influx_database,
-        influx_username=body.influx_username,
-        influx_password=body.influx_password,
-        timescale_dsn=body.timescale_dsn,
+    audit_writer = AuditLogWriter(
+        db=db,
+        context=build_audit_context(request=request, current_user=_admin),
     )
+    await audit_writer.write(
+        action="system.history.settings.updated",
+        resource_type="history_settings",
+        resource_id="global",
+        details={
+            "plugin": body.plugin,
+            "default_window_hours": body.default_window_hours,
+            "influx_url": body.influx_url,
+            "influx_version": body.influx_version,
+            "influx_org": body.influx_org,
+            "influx_bucket": body.influx_bucket,
+            "influx_database": body.influx_database,
+            "influx_username": body.influx_username,
+            "has_influx_token": bool(body.influx_token),
+            "has_influx_password": bool(body.influx_password),
+            "has_timescale_dsn": bool(body.timescale_dsn),
+        },
+    )
+
+    payload = redact_sensitive_fields(
+        {
+            "plugin": body.plugin,
+            "default_window_hours": body.default_window_hours,
+            "influx_url": body.influx_url,
+            "influx_version": body.influx_version,
+            "influx_token": body.influx_token,
+            "influx_org": body.influx_org,
+            "influx_bucket": body.influx_bucket,
+            "influx_database": body.influx_database,
+            "influx_username": body.influx_username,
+            "influx_password": body.influx_password,
+            "timescale_dsn": body.timescale_dsn,
+        },
+        _HISTORY_SENSITIVE_FIELDS,
+    )
+    return HistorySettingsOut(**payload)
 
 
 @router.post("/history/test", response_model=HistoryTestResult)
 async def test_history_connection(
     body: HistorySettingsIn,
     _admin: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
 ) -> HistoryTestResult:
     """Test connectivity for the given history backend configuration. Admin only."""
     try:
         if body.plugin == "sqlite":
             return HistoryTestResult(ok=True, message="SQLite is always available.")
 
+        data: dict[str, str] = {
+            "influx_url": body.influx_url,
+            "influx_version": str(body.influx_version),
+            "influx_token": body.influx_token,
+            "influx_org": body.influx_org,
+            "influx_bucket": body.influx_bucket,
+            "influx_database": body.influx_database,
+            "influx_username": body.influx_username,
+            "influx_password": body.influx_password,
+            "timescale_dsn": body.timescale_dsn,
+        }
+        if any(data[field] == REDACTED for field in _HISTORY_SENSITIVE_FIELDS):
+            existing_cfg = await _read_history_cfg(db)
+            for field in _HISTORY_SENSITIVE_FIELDS:
+                if data[field] == REDACTED:
+                    data[field] = existing_cfg[field]
+
         if body.plugin == "influxdb":
             from obs.history.influxdb_plugin import InfluxDBHistoryPlugin
 
             plugin = InfluxDBHistoryPlugin(
-                url=body.influx_url,
-                version=body.influx_version,
-                token=body.influx_token,
-                org=body.influx_org,
-                bucket=body.influx_bucket,
-                database=body.influx_database,
-                username=body.influx_username,
-                password=body.influx_password,
+                url=data["influx_url"],
+                version=int(data["influx_version"]),
+                token=data["influx_token"],
+                org=data["influx_org"],
+                bucket=data["influx_bucket"],
+                database=data["influx_database"],
+                username=data["influx_username"],
+                password=data["influx_password"],
             )
             ok = await plugin.ping()
             if ok:
@@ -404,7 +473,7 @@ async def test_history_connection(
         if body.plugin == "timescaledb":
             from obs.history.timescaledb_plugin import TimescaleDBHistoryPlugin
 
-            plugin = TimescaleDBHistoryPlugin(dsn=body.timescale_dsn)
+            plugin = TimescaleDBHistoryPlugin(dsn=data["timescale_dsn"])
             ok = await plugin.ping()
             if ok:
                 return HistoryTestResult(ok=True, message="PostgreSQL/TimescaleDB reachable.")

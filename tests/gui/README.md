@@ -6,7 +6,7 @@ They drive a real Chromium against a running open bridge server instance.
 ## Prerequisites
 
 1. Backend stack reachable on the resolved base URL (see below).
-2. Node.js 20.19+ or 22+, the version pinned by the repo's `.nvmrc`.
+2. Node.js 24, the version pinned by the repo's `.nvmrc`.
 3. Browser binaries installed once after `npm ci`:
    ```bash
    npx playwright install --with-deps

@@ -4,7 +4,9 @@ on:
   push:
     branches:
       - main
+      - bug/*
       - bugfix/*
+      - feat/*
       - feature/*
   pull_request:
     branches:
@@ -12,10 +14,11 @@ on:
 
 jobs:
   test:
+    name: Tests
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v6
@@ -36,8 +39,8 @@ jobs:
         run: pytest tests/ -v --cov=obs --cov-report=xml --cov-report=term --junitxml=junit.xml
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
-        if: matrix.python-version == '3.13'
+        uses: codecov/codecov-action@v7
+        if: matrix.python-version == '3.14'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.xml
@@ -46,11 +49,41 @@ jobs:
           fail_ci_if_error: false
 
       - name: Upload test results to Codecov
-        uses: codecov/codecov-action@v6
-        if: matrix.python-version == '3.13'
+        uses: codecov/codecov-action@v7
+        if: matrix.python-version == '3.14'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./junit.xml
           flags: unittests
           report_type: test_results
+          fail_ci_if_error: false
+
+  gui-vitest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Install GUI dependencies
+        working-directory: gui
+        run: npm ci
+
+      - name: Run GUI tests with coverage
+        working-directory: gui
+        run: npm run test:coverage
+
+      - name: Upload GUI coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./gui/coverage/lcov.info
+          flags: gui
+          name: codecov-gui-vitest
           fail_ci_if_error: false

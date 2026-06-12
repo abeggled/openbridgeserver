@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'Wetter',
-  label: 'Wetter',
+  label: 'widgets.wetter.title',
   icon: '🌤️',
   group: 'Anzeige',
   minW: 4, minH: 3,

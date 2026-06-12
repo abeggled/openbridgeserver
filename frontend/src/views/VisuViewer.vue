@@ -23,6 +23,7 @@ import type { WidgetInstance } from '@/types'
 // Alle Widgets registrieren (self-registering via import)
 import '@/widgets/ValueDisplay/index'
 import '@/widgets/Toggle/index'
+import '@/widgets/ButtonGroup/index'
 import '@/widgets/Slider/index'
 import '@/widgets/Chart/index'
 import '@/widgets/Link/index'
@@ -140,7 +141,10 @@ async function load() {
         sessionToken: getSessionToken(definingId) ?? undefined,
         definingId,
       })
-      ws.connect()
+      ws.connect({
+        pageId: props.id,
+        sessionToken: getSessionToken(definingId) ?? undefined,
+      })
       dpStore.subscribe(allDpIds.value)
       // Sofort aktuelle Werte per HTTP laden (unabhängig von WS-Status)
       await dpStore.fetchInitialValues(allDpIds.value)
@@ -240,7 +244,7 @@ function gridStyle(w: WidgetInstance) {
     <!-- PAGE → Widget-Grid (feste Pixelbreite = Editor WYSIWYG) -->
     <main v-else class="flex-1 p-4 overflow-auto" :style="viewerBackgroundStyle">
       <div
-        class="grid"
+        class="grid mx-auto"
         :style="{
           gridTemplateColumns: `repeat(${COLS}, ${CELL_W}px)`,
           gridAutoRows: `${ROW_H}px`,

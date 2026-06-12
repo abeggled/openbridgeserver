@@ -12,7 +12,9 @@
  *   3. With no topbar sets active the table is unfiltered, as before.
  *
  * The matcher is the client-side equivalent of FilterCriteria
- * (datapoints / adapters / tags / q / value_filter; hierarchy is pass-through).
+ * (hierarchy_nodes / datapoints / adapters / tags / q / value_filter).
+ * Hierarchy live matching uses entry.metadata.hierarchy_nodes from the WS
+ * payload instead of refreshing from REST for each push.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mountRingBufferView, makeRingbufferApiMock, flushPromises } from '../helpers/mountRingBufferView'
@@ -53,6 +55,24 @@ const ACTIVE_SET_KNX = {
   filter_json: '{"adapters":["knx"]}',
 }
 
+const ACTIVE_SET_HIERARCHY = {
+  id: 'set-hierarchy',
+  name: 'Etage',
+  is_active: true,
+  color: '#22c55e',
+  topbar_active: true,
+  topbar_order: 0,
+  filter: {
+    hierarchy_nodes: [{ tree_id: 'tree-1', node_id: 'node-1', include_descendants: true }],
+    datapoints: [],
+    tags: [],
+    adapters: [],
+    q: null,
+    value_filter: null,
+  },
+  filter_json: '{"hierarchy_nodes":[{"tree_id":"tree-1","node_id":"node-1","include_descendants":true}]}',
+}
+
 function makeLiveEntry(overrides = {}) {
   return {
     id: 9999,
@@ -87,7 +107,7 @@ describe('RingBufferView — live-entry matching (#36 follow-up)', () => {
     await flushPromises()
 
     // Live entry with tag "heizung" AND adapter "knx" — should be matched by both sets
-    emitLive(makeLiveEntry({ metadata: { tags: ['heizung'] }, source_adapter: 'knx' }))
+    emitLive(makeLiveEntry({ metadata: { datapoint: { tags: ['heizung'] } }, source_adapter: 'knx' }))
     await flushPromises()
     await new Promise((r) => setTimeout(r, 120))
     await flushPromises()
@@ -115,6 +135,62 @@ describe('RingBufferView — live-entry matching (#36 follow-up)', () => {
 
     const rows = wrapper.findAll('[data-testid="ringbuffer-entry"]')
     expect(rows.length).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('matches hierarchy-filtered live entries from WS metadata without a REST refresh', async () => {
+    const liveEntry = makeLiveEntry({
+      datapoint_id: 'dp-hier',
+      metadata: {
+        hierarchy_nodes: [
+          { tree_id: 'tree-1', node_id: 'leaf-node', ancestor_node_ids: ['leaf-node', 'node-1'] },
+        ],
+      },
+    })
+    const ringbufferApi = makeRingbufferApiMock({
+      listFiltersets: vi.fn().mockResolvedValue({ data: [ACTIVE_SET_HIERARCHY] }),
+      queryMultiFiltersets: vi.fn().mockResolvedValue({ data: [] }),
+    })
+    const { wrapper, emitLive } = await mountRingBufferView({ ringbufferApi })
+    await flushPromises()
+
+    emitLive(liveEntry)
+    await flushPromises()
+    await new Promise((r) => setTimeout(r, 180))
+    await flushPromises()
+
+    expect(ringbufferApi.queryMultiFiltersets).toHaveBeenCalledTimes(1)
+    const rows = wrapper.findAll('[data-testid="ringbuffer-entry"]')
+    expect(rows.length).toBe(1)
+    expect(rows[0].attributes('title')).toContain('Etage')
+    wrapper.unmount()
+  })
+
+  it('annotates live entries with hierarchy and adapter matches from the same payload', async () => {
+    const ringbufferApi = makeRingbufferApiMock({
+      listFiltersets: vi.fn().mockResolvedValue({ data: [ACTIVE_SET_HIERARCHY, ACTIVE_SET_KNX] }),
+      queryMultiFiltersets: vi.fn().mockResolvedValue({ data: [] }),
+    })
+    const { wrapper, emitLive } = await mountRingBufferView({ ringbufferApi })
+    await flushPromises()
+
+    emitLive(makeLiveEntry({
+      source_adapter: 'knx',
+      metadata: {
+        hierarchy_nodes: [
+          { tree_id: 'tree-1', node_id: 'leaf-node', ancestor_node_ids: ['leaf-node', 'node-1'] },
+        ],
+      },
+    }))
+    await flushPromises()
+    await new Promise((r) => setTimeout(r, 120))
+    await flushPromises()
+
+    expect(ringbufferApi.queryMultiFiltersets).toHaveBeenCalledTimes(1)
+    const rows = wrapper.findAll('[data-testid="ringbuffer-entry"]')
+    expect(rows.length).toBe(1)
+    expect(rows[0].attributes('title')).toContain('Etage')
+    expect(rows[0].attributes('title')).toContain('KNX')
     wrapper.unmount()
   })
 

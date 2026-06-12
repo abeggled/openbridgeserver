@@ -141,8 +141,11 @@ export const knxKeyfileApi = {
 
 // ── KNX Project Import ────────────────────────────────────────────────────
 export const knxprojApi = {
-  import:  (formData, params = {}) => api.post('/knxproj/import', formData, { headers: { 'Content-Type': 'multipart/form-data' }, params }),
+  import:  (formData, params = {}) => api.post('/knxproj/import', formData, { headers: { 'Content-Type': 'multipart/form-data' }, params, timeout: 300_000 }),
   listGA:  (params)   => api.get('/knxproj/group-addresses', { params }),
+  listDevices: (params) => api.get('/knxproj/devices', { params }),
+  getDevice: (pa)      => api.get(`/knxproj/devices/${encodeURIComponent(pa)}`),
+  listGaDevices: (ga, params) => api.get(`/knxproj/group-addresses/${encodeURIComponent(ga)}/devices`, { params }),
   clearGA: ()         => api.delete('/knxproj/group-addresses'),
 }
 
@@ -207,6 +210,23 @@ export const logsApi = {
   setLevel: (level)  => api.put('/system/log-level', { level }),
 }
 
+// ── Support Diagnostics ──────────────────────────────────────────────────
+export const supportApi = {
+  categories:      ()       => api.get('/support/categories'),
+  createPackage:   ()       => api.post('/support/package', null, { timeout: 120_000 }),
+  getDebugStatus:  ()       => api.get('/support/debug-log'),
+  enableDebugLog:  (data)   => api.post('/support/debug-log', data),
+  disableDebugLog: ()       => api.delete('/support/debug-log'),
+}
+
+// ── Security ─────────────────────────────────────────────────────────────
+export const securityApi = {
+  listUrlTargets:  ()       => api.get('/security/url-target-allowlist'),
+  addUrlTarget:    (data)   => api.post('/security/url-target-allowlist', data),
+  deleteUrlTarget: (target) => api.delete('/security/url-target-allowlist', { params: { target } }),
+  checkUrlTarget:  (data)   => api.post('/security/url-target-check', data),
+}
+
 // ── RingBuffer ────────────────────────────────────────────────────────────
 export const ringbufferApi = {
   query:  (params)                  => api.get('/ringbuffer/', { params }),
@@ -266,6 +286,7 @@ export const iconsApi = {
   delete:         (names)                  => api.delete('/icons/', { data: { names } }),
   export:         (names = [])             => api.post('/icons/export', { names }, { responseType: 'blob' }),
   importFa:       (data)                   => api.post('/icons/fontawesome', data),
+  importKnxuf:    ()                       => api.post('/icons/knxuf'),
   getSettings:    ()                       => api.get('/icons/settings'),
   saveSettings:   (data)                   => api.put('/icons/settings', data),
 }

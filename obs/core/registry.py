@@ -19,7 +19,9 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from obs.core.json import json_dumps
 from obs.models.datapoint import DataPoint, DataPointCreate, DataPointUpdate
+from obs.models.types import DataTypeRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -30,13 +32,14 @@ logger = logging.getLogger(__name__)
 
 
 class ValueState:
-    __slots__ = ("old_value", "quality", "ts", "value")
+    __slots__ = ("diagnostics", "old_value", "quality", "ts", "value")
 
     def __init__(self) -> None:
         self.value: Any = None
         self.quality: str = "uncertain"
         self.ts: datetime = datetime.now(UTC)
         self.old_value: Any = None
+        self.diagnostics: dict[str, dict[str, Any]] = {}
 
     def update(self, value: Any, quality: str) -> bool:
         """Update state. Returns True if value actually changed."""
@@ -102,6 +105,16 @@ class DataPointRegistry:
                 value = _json.loads(row["value"])
             except Exception:
                 value = row["value"]
+            if dp.data_type in {"DATE", "TIME", "DATETIME"}:
+                try:
+                    value = DataTypeRegistry.get(dp.data_type).mqtt_deserializer(row["value"])
+                except Exception as exc:
+                    logger.debug(
+                        "DataPointRegistry: persisted %s value for %s could not be deserialized: %s",
+                        dp.data_type,
+                        dp.id,
+                        exc,
+                    )
             state.value = value
             state.quality = "good"
             from datetime import datetime
@@ -263,7 +276,7 @@ class DataPointRegistry:
                        ts=excluded.ts""",
                 (
                     str(dp.id),
-                    json.dumps(event.value),
+                    json_dumps(event.value),
                     dp.unit,
                     event.ts.isoformat(),
                 ),
@@ -279,6 +292,36 @@ class DataPointRegistry:
             mqtt_alias_topic=alias_topic,
             ts=event.ts,
         )
+
+    async def report_type_mismatch(
+        self,
+        dp_id: uuid.UUID,
+        *,
+        expected: str,
+        got: str,
+        source_adapter: str,
+        value: Any,
+    ) -> None:
+        state = self._values.get(dp_id)
+        if state is None:
+            return
+        current = state.diagnostics.get("type_mismatch")
+        count = int(current.get("count", 0)) + 1 if current else 1
+        state.diagnostics["type_mismatch"] = {
+            "type": "type_mismatch",
+            "expected": expected,
+            "got": got,
+            "source_adapter": source_adapter,
+            "count": count,
+            "last_value": value,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+
+    async def clear_diagnostic(self, dp_id: uuid.UUID, diagnostic_type: str) -> None:
+        state = self._values.get(dp_id)
+        if state is None:
+            return
+        state.diagnostics.pop(diagnostic_type, None)
 
 
 # ---------------------------------------------------------------------------

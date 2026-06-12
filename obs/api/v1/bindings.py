@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
 from obs.models.binding import (
@@ -76,17 +76,9 @@ async def _get_bindings_for_dp(db: Database, dp_id: uuid.UUID) -> list[BindingOu
 
 async def _reload_adapter_instance(instance_id: str, db: Database) -> None:
     """Laufende Adapter-Instanz über ihre Bindings aus DB informieren."""
-    from obs.adapters.registry import _row_to_binding, get_instance_by_id
+    from obs.adapters import registry as adapter_registry
 
-    instance = get_instance_by_id(instance_id)
-    if instance is None:
-        return
-    rows = await db.fetchall(
-        "SELECT * FROM adapter_bindings WHERE adapter_instance_id=? AND enabled=1",
-        (instance_id,),
-    )
-    bindings = [_row_to_binding(r) for r in rows]
-    await instance.reload_bindings(bindings)
+    await adapter_registry.reload_instance_bindings(instance_id, db)
 
 
 def _row_out(row: Any, name_map: dict[str, str] | None = None) -> BindingOut:
@@ -138,7 +130,7 @@ async def list_bindings(
 async def create_binding(
     dp_id: uuid.UUID,
     body: AdapterBindingCreate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> BindingOut:
     if get_registry().get(dp_id) is None:
@@ -213,7 +205,7 @@ async def update_binding(
     dp_id: uuid.UUID,
     binding_id: uuid.UUID,
     body: AdapterBindingUpdate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> BindingOut:
     row = await db.fetchone(
@@ -279,7 +271,7 @@ async def update_binding(
 async def delete_binding(
     dp_id: uuid.UUID,
     binding_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
     row = await db.fetchone(

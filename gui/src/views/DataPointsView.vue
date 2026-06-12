@@ -7,7 +7,7 @@
         <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('datapoints.title') }}</h2>
         <p class="text-sm text-slate-500 mt-0.5">{{ $t('datapoints.subtitle', { count: store.total }) }}</p>
       </div>
-      <button @click="openCreate" class="btn-primary" data-testid="btn-new-datapoint">
+      <button v-if="auth.isAdmin" @click="openCreate" class="btn-primary" data-testid="btn-new-datapoint">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
         </svg>
@@ -188,18 +188,19 @@
               <button v-for="n in filters.node_ids" :key="n.node_id"
                 @click="toggleNode(n)"
                 class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
-                data-testid="node-filter-selected-item">
+                data-testid="node-filter-selected-item"
+                v-bind="hierarchyNodeFullPathAttrs(n)">
                 <span class="flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center bg-blue-500 border-blue-500">
                   <svg class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
                   </svg>
                 </span>
-                <span class="text-xs text-slate-400 shrink-0">{{ n.tree_name }}</span>
-                <svg class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <span v-if="!hierarchyNodeDisplayPathIncludesTree(n)" class="text-xs text-slate-400 shrink-0">{{ n.tree_name }}</span>
+                <svg v-if="!hierarchyNodeDisplayPathIncludesTree(n)" class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                 </svg>
                 <span class="text-blue-600 dark:text-blue-400 font-medium min-w-0 flex-1">
-                  <PathLabel :segments="n.path && n.path.length ? n.path : [n.node_name]" />
+                  <PathLabel :segments="hierarchyNodeDisplayPath(n)" />
                 </span>
               </button>
             </div>
@@ -212,19 +213,20 @@
               <button v-else v-for="node in nodeResults" :key="node.node_id"
                 @click="toggleNode(node)"
                 class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
-                data-testid="node-filter-result-item">
+                data-testid="node-filter-result-item"
+                v-bind="hierarchyNodeFullPathAttrs(node)">
                 <span :class="['flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors',
                   isNodeSelected(node.node_id) ? 'bg-blue-500 border-blue-500' : 'border-slate-300 dark:border-slate-600']">
                   <svg v-if="isNodeSelected(node.node_id)" class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
                   </svg>
                 </span>
-                <span class="text-xs text-slate-400 shrink-0">{{ node.tree_name }}</span>
-                <svg class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <span v-if="!hierarchyNodeDisplayPathIncludesTree(node)" class="text-xs text-slate-400 shrink-0">{{ node.tree_name }}</span>
+                <svg v-if="!hierarchyNodeDisplayPathIncludesTree(node)" class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                 </svg>
                 <span :class="[isNodeSelected(node.node_id) ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-700 dark:text-slate-200', 'min-w-0 flex-1']">
-                  <PathLabel :segments="node.path && node.path.length ? node.path : [node.node_name]" />
+                  <PathLabel :segments="hierarchyNodeDisplayPath(node)" />
                 </span>
               </button>
             </div>
@@ -290,7 +292,7 @@
                       isNodeSelected(ref.node_id) || isAncestorSelected(ref)
                         ? 'bg-blue-500/20 text-blue-600 dark:text-blue-300'
                         : 'bg-slate-100 dark:bg-slate-700/60 text-slate-500']"
-                    :title="hierarchyFullPath(ref)">
+                    v-bind="hierarchyFullPathAttrs(ref)">
                     <!-- Anzeige-Start: Tree-Name oder konfigurierbarer Ancestor -->
                     <span
                       v-if="hierarchyDisplayAncestor(ref)"
@@ -337,9 +339,20 @@
               </td>
 
               <td>
-                <Badge :variant="qualityVariant(liveQuality(dp))" dot size="xs">
-                  {{ qualityLabel(liveQuality(dp)) ?? '—' }}
-                </Badge>
+                <div class="flex items-center gap-1">
+                  <Badge :variant="qualityVariant(liveQuality(dp))" dot size="xs">
+                    {{ qualityLabel(liveQuality(dp)) ?? '—' }}
+                  </Badge>
+                  <Badge
+                    v-if="typeMismatchDiagnostic(dp)"
+                    variant="warning"
+                    size="xs"
+                    v-bind="typeMismatchAttrs(typeMismatchDiagnostic(dp))"
+                    :data-testid="`dp-type-mismatch-${dp.id}`"
+                  >
+                    !
+                  </Badge>
+                </div>
               </td>
 
               <td>
@@ -349,12 +362,12 @@
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.5 6.5l4-4a4.95 4.95 0 017 7l-4 4m-10 4l-4 4a4.95 4.95 0 01-7-7l4-4m5.5 3.5l5-5"/>
                     </svg>
                   </RouterLink>
-                  <button @click="openEdit(dp)" class="btn-icon" :title="$t('common.edit')">
+                  <button v-if="auth.isAdmin" @click="openEdit(dp)" class="btn-icon" :title="$t('common.edit')">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                     </svg>
                   </button>
-                  <button @click="confirmDelete(dp)" class="btn-icon text-red-400" :title="$t('common.delete')">
+                  <button v-if="auth.isAdmin" @click="confirmDelete(dp)" class="btn-icon text-red-400" :title="$t('common.delete')">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                     </svg>
@@ -399,6 +412,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useDatapointStore } from '@/stores/datapoints'
+import { useAuthStore } from '@/stores/auth'
 import { useWebSocketStore } from '@/stores/websocket'
 import { hierarchyApi } from '@/api/client'
 import Badge         from '@/components/ui/Badge.vue'
@@ -408,6 +422,7 @@ import PathLabel     from '@/components/ui/PathLabel.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import AdapterCombobox from '@/components/ui/AdapterCombobox.vue'
 import DataPointForm from '@/components/datapoints/DataPointForm.vue'
+import { hierarchyDisplayPath } from '@/utils/hierarchyDisplay'
 
 // Inline sort-indicator
 const SortIcon = {
@@ -427,6 +442,7 @@ const qualityOptions = computed(() => [
 
 const { t } = useI18n()
 const store = useDatapointStore()
+const auth  = useAuthStore()
 const ws    = useWebSocketStore()
 
 const filters      = ref({ q: '', tags: [], adapters: [], quality: '', type: '', node_ids: [], tree_ids: [] })
@@ -469,7 +485,7 @@ const hierarchyFilterLabel = computed(() => {
   if (total === 0) return ''
   if (total === 1) {
     if (trees.length === 1) return trees[0].tree_name
-    return `${nodes[0].tree_name} › ${nodes[0].node_name}`
+    return hierarchyNodeDisplayLabel(nodes[0])
   }
   return t('datapoints.nFilters', { n: total })
 })
@@ -653,7 +669,13 @@ function isNodeSelected(node_id) {
 function toggleNode(node) {
   const idx = filters.value.node_ids.findIndex(n => n.node_id === node.node_id)
   if (idx === -1) {
-    filters.value.node_ids.push({ node_id: node.node_id, node_name: node.node_name, tree_name: node.tree_name })
+    filters.value.node_ids.push({
+      node_id: node.node_id,
+      node_name: node.node_name,
+      tree_name: node.tree_name,
+      path: Array.isArray(node.path) ? node.path : undefined,
+      display_depth: node.display_depth ?? 0,
+    })
   } else {
     filters.value.node_ids.splice(idx, 1)
   }
@@ -679,29 +701,73 @@ function onDocClick(e) {
   if (tagFilterRef.value && !tagFilterRef.value.contains(e.target)) tagDropOpen.value = false
 }
 
+function hierarchyNodePath(node) {
+  if (Array.isArray(node?.path) && node.path.length) return node.path
+  return node?.node_name ? [node.node_name] : []
+}
+
+function hierarchyNodeDisplayPath(node) {
+  const path = hierarchyNodePath(node)
+  return hierarchyDisplayPath({
+    treeName: node?.tree_name,
+    path,
+    displayDepth: node?.display_depth ?? 0,
+  })
+}
+
+function hierarchyNodeDisplayPathIncludesTree(node) {
+  const path = hierarchyNodeDisplayPath(node)
+  return !!node?.tree_name && path[0] === node.tree_name
+}
+
+function hierarchyNodeDisplayLabel(node) {
+  return hierarchyNodeDisplayPath(node).join(' › ') || node?.node_name || ''
+}
+
+function hierarchyNodeFullPathAttrs(node) {
+  const parts = [node?.tree_name, ...hierarchyNodePath(node)]
+  return { title: parts.filter(Boolean).join(' › ') }
+}
+
 // --------------------------------------------------------------------------
 // CRUD
 // --------------------------------------------------------------------------
 
-function openCreate() { editTarget.value = null; showForm.value = true }
-function openEdit(dp) { editTarget.value = dp;   showForm.value = true }
+function openCreate() {
+  if (!auth.isAdmin) return
+  editTarget.value = null
+  showForm.value = true
+}
+function openEdit(dp) {
+  if (!auth.isAdmin) return
+  editTarget.value = dp
+  showForm.value = true
+}
 
 async function onSave(payload) {
+  if (!auth.isAdmin) return
   if (editTarget.value) await store.update(editTarget.value.id, payload)
   else await store.create(payload)
   showForm.value = false
 }
 
-function confirmDelete(dp) { deleteTarget.value = dp; showConfirm.value = true }
-async function doDelete()  { await store.remove(deleteTarget.value.id) }
+function confirmDelete(dp) {
+  if (!auth.isAdmin) return
+  deleteTarget.value = dp
+  showConfirm.value = true
+}
+async function doDelete() {
+  if (!auth.isAdmin) return
+  await store.remove(deleteTarget.value.id)
+}
 
 // --------------------------------------------------------------------------
 // Hierarchy path helpers
 // --------------------------------------------------------------------------
 
-function hierarchyFullPath(ref) {
+function hierarchyFullPathAttrs(ref) {
   const parts = [ref.tree_name, ...(ref.node_path || []).map(n => n.node_name), ref.node_name]
-  return parts.join(' › ')
+  return { title: parts.filter(Boolean).join(' › ') }
 }
 
 function hierarchyDisplayAncestor(ref) {
@@ -730,5 +796,18 @@ function qualityVariant(q) {
 }
 function qualityLabel(q) {
   return q === 'good' ? t('datapoints.quality.good') : q === 'bad' ? t('datapoints.quality.bad') : q === 'uncertain' ? t('datapoints.quality.uncertain') : q
+}
+function typeMismatchDiagnostic(dp) {
+  return dp.diagnostics?.find(d => d.type === 'type_mismatch') ?? null
+}
+function typeMismatchAttrs(diagnostic) {
+  return {
+    title: t('datapoints.diagnostics.typeMismatch', {
+    expected: diagnostic.expected ?? '—',
+    got: diagnostic.got ?? '—',
+    source: diagnostic.source_adapter ?? '—',
+    count: diagnostic.count ?? 1,
+    }),
+  }
 }
 </script>

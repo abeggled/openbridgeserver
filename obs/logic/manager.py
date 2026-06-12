@@ -9,16 +9,25 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import email.utils
+import http.cookies
+import ipaddress
 import json
 import logging
+import os
+import stat
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
 
 import httpx
 
 from obs.logic.executor import GraphExecutor
 from obs.logic.models import FlowData
+from obs.security.url_targets import resolve_url_target
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +52,375 @@ _THROTTLE_UNITS: dict[str, float] = {
     "min": 60_000.0,
     "h": 3_600_000.0,
 }
+
+_ICAL_MAX_BYTES = 1_048_576
+_ICAL_MAX_REDIRECTS = 5
+_ICAL_ALLOWED_CONTENT_TYPES = ("text/calendar", "application/ics", "application/octet-stream", "text/plain")
+_PUSHOVER_ATTACHMENT_MAX_BYTES = 5_000_000
+_SECRET_FILE_MAX_BYTES = 8192
+_SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
+_API_CLIENT_RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _secret_file_root() -> Path:
+    return Path(os.environ.get("OBS_SECRET_FILE_DIR", _SECRET_FILE_DEFAULT_ROOT)).resolve()
+
+
+def _read_secret_file(path: str) -> str:
+    secret_path_raw = (path or "").strip()
+    if not secret_path_raw:
+        return ""
+
+    try:
+        secret_root = _secret_file_root()
+        secret_path = Path(secret_path_raw).resolve(strict=True)
+        if not secret_path.is_relative_to(secret_root):
+            logger.warning("Refusing to read secret file outside %s: %s", secret_root, secret_path)
+            return ""
+
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(secret_path, flags)
+        try:
+            file_stat = os.fstat(fd)
+            if not stat.S_ISREG(file_stat.st_mode):
+                logger.warning("Refusing to read non-regular secret file: %s", secret_path)
+                return ""
+            if file_stat.st_size > _SECRET_FILE_MAX_BYTES:
+                logger.warning("Refusing to read oversized secret file: %s", secret_path)
+                return ""
+            data = os.read(fd, _SECRET_FILE_MAX_BYTES + 1)
+        finally:
+            os.close(fd)
+
+        if len(data) > _SECRET_FILE_MAX_BYTES:
+            logger.warning("Refusing to read oversized secret file: %s", secret_path)
+            return ""
+        return data.decode("utf-8").strip()
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        logger.warning("Could not read secret file %s: %s", secret_path_raw, exc)
+        return ""
+
+
+def _parse_http_url(url: str) -> Any | None:
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    if not parsed.hostname:
+        return None
+    return parsed
+
+
+async def _resolve_safe_image_url(url: str) -> tuple[str, str, str] | None:
+    """Return a DNS-pinned HTTPS request tuple for safe image downloads.
+
+    Returns:
+        (pinned_url, host_header, pinned_ip) or None if the URL is unsafe.
+    """
+    try:
+        target = await asyncio.to_thread(resolve_url_target, url, require_https=True)
+    except ValueError:
+        return None
+    if not target.addresses:
+        return None
+
+    parsed = urlparse(url)
+    port = target.port or 443
+    pinned_ip = target.addresses[0]
+    pinned_host = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+    has_explicit_port = target.port is not None
+    netloc = f"{pinned_host}:{port}" if has_explicit_port else pinned_host
+    pinned_url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+    host_header = f"{target.hostname_ascii}:{port}" if has_explicit_port else target.hostname_ascii
+    return pinned_url, host_header, pinned_ip
+
+
+def _origin_tuple(parsed: Any) -> tuple[str, str, int] | None:
+    if not parsed or not parsed.hostname or parsed.scheme not in {"http", "https"}:
+        return None
+    try:
+        hostname_ascii = parsed.hostname.encode("idna").decode("ascii")
+        port = parsed.port
+    except (UnicodeError, ValueError):
+        return None
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    return parsed.scheme, hostname_ascii, port
+
+
+def _preserve_same_origin_credentials(current_url: str, redirected_url: str) -> str:
+    current_parsed = _parse_http_url(current_url)
+    redirected_parsed = _parse_http_url(redirected_url)
+    if not current_parsed or not redirected_parsed:
+        return redirected_url
+    if redirected_parsed.username is not None:
+        return redirected_url
+    if _origin_tuple(current_parsed) != _origin_tuple(redirected_parsed):
+        return redirected_url
+    if current_parsed.username is None:
+        return redirected_url
+
+    username = quote(unquote(current_parsed.username), safe="")
+    password = None if current_parsed.password is None else quote(unquote(current_parsed.password), safe="")
+    hostname = redirected_parsed.hostname
+    if not hostname:
+        return redirected_url
+    try:
+        host_for_netloc = hostname.encode("idna").decode("ascii")
+        ip = ipaddress.ip_address(host_for_netloc)
+        if isinstance(ip, ipaddress.IPv6Address):
+            host_for_netloc = f"[{host_for_netloc}]"
+    except UnicodeError:
+        return redirected_url
+    except ValueError:
+        pass
+    try:
+        port = redirected_parsed.port
+    except ValueError:
+        return redirected_url
+
+    auth = username if password is None else f"{username}:{password}"
+    netloc = f"{auth}@{host_for_netloc}"
+    if port is not None:
+        netloc = f"{netloc}:{port}"
+    return redirected_parsed._replace(netloc=netloc).geturl()
+
+
+def _build_http_host_header(hostname_ascii: str, scheme: str, port: int | None) -> str:
+    host_header = hostname_ascii
+    if ":" in host_header and not host_header.startswith("["):
+        host_header = f"[{host_header}]"
+    if port is not None:
+        default_port = 443 if scheme == "https" else 80
+        if port != default_port:
+            host_header = f"{host_header}:{port}"
+    return host_header
+
+
+def _build_api_client_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
+    parsed = _parse_http_url(url)
+    if not parsed:
+        raise ValueError("Invalid URL target")
+    try:
+        hostname_ascii = parsed.hostname.encode("idna").decode("ascii")
+    except UnicodeError:
+        raise ValueError("Invalid URL target") from None
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError("Invalid URL target") from None
+
+    try:
+        target = resolve_url_target(url)
+    except ValueError as exc:
+        raise ValueError(f"Blocked URL target: {exc}") from exc
+    addresses = target.addresses
+    if not addresses:
+        raise ValueError("Blocked unresolved URL target")
+
+    auth_prefix = ""
+    if parsed.username is not None:
+        username = quote(unquote(parsed.username), safe="")
+        password = None if parsed.password is None else quote(unquote(parsed.password), safe="")
+        auth = username if password is None else f"{username}:{password}"
+        auth_prefix = f"{auth}@"
+
+    pinned_urls: list[str] = []
+    for pinned_ip in dict.fromkeys(addresses):
+        pinned_host = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+        netloc = f"{auth_prefix}{pinned_host}:{port}" if port is not None else f"{auth_prefix}{pinned_host}"
+        pinned_urls.append(parsed._replace(netloc=netloc).geturl())
+    headers = {"Host": _build_http_host_header(hostname_ascii, parsed.scheme, port)}
+    extensions = {"sni_hostname": hostname_ascii} if parsed.scheme == "https" else {}
+    return pinned_urls, headers, extensions
+
+
+def _cookie_domain_matches(hostname: str, cookie_domain: str) -> bool:
+    host = hostname.lower()
+    domain = cookie_domain.lower().lstrip(".")
+    return host == domain or host.endswith(f".{domain}")
+
+
+def _cookie_path_matches(request_path: str, cookie_path: str) -> bool:
+    req = request_path or "/"
+    path = cookie_path or "/"
+    if not req.startswith("/"):
+        req = f"/{req}"
+    if not path.startswith("/"):
+        path = f"/{path}"
+    if req == path:
+        return True
+    if not req.startswith(path):
+        return False
+    if path.endswith("/"):
+        return True
+    return len(req) > len(path) and req[len(path)] == "/"
+
+
+def _default_cookie_path(request_path: str) -> str:
+    path = request_path or "/"
+    if not path.startswith("/"):
+        return "/"
+    if path.count("/") <= 1:
+        return "/"
+    return path.rsplit("/", 1)[0] or "/"
+
+
+def _store_response_cookies(
+    cookie_store: dict[tuple[str, str, str, bool], tuple[str, bool]],
+    set_cookie_headers: list[str],
+    logical_url: str,
+) -> None:
+    parsed = _parse_http_url(logical_url)
+    if not parsed or not parsed.hostname:
+        return
+    hostname = parsed.hostname.encode("idna").decode("ascii").lower()
+    default_path = _default_cookie_path(parsed.path or "/")
+    for raw in set_cookie_headers:
+        jar = http.cookies.SimpleCookie()
+        try:
+            jar.load(raw)
+        except Exception:
+            continue
+        for morsel in jar.values():
+            name = morsel.key
+            value = morsel.value
+            raw_domain = (morsel["domain"] or "").strip().lower()
+            host_only = raw_domain == ""
+            domain = hostname if host_only else raw_domain.lstrip(".")
+            if not _cookie_domain_matches(hostname, domain):
+                continue
+            path = (morsel["path"] or default_path).strip() or "/"
+            if not path.startswith("/"):
+                path = f"/{path}"
+            max_age = (morsel["max-age"] or "").strip()
+            expires = (morsel["expires"] or "").strip()
+            delete_cookie = False
+            if max_age:
+                try:
+                    delete_cookie = int(max_age) <= 0
+                except ValueError:
+                    pass
+            if not delete_cookie and expires:
+                try:
+                    exp_dt = email.utils.parsedate_to_datetime(expires)
+                    if exp_dt.tzinfo is None:
+                        exp_dt = exp_dt.replace(tzinfo=UTC)
+                    delete_cookie = exp_dt <= datetime.now(UTC)
+                except Exception:
+                    pass
+            key = (domain, path, name, host_only)
+            if delete_cookie:
+                cookie_store.pop(key, None)
+                continue
+            secure = bool(morsel["secure"])
+            cookie_store[key] = (value, secure)
+
+
+def _build_cookie_header(cookie_store: dict[tuple[str, str, str, bool], tuple[str, bool]], logical_url: str) -> str:
+    parsed = _parse_http_url(logical_url)
+    if not parsed or not parsed.hostname:
+        return ""
+    hostname = parsed.hostname.encode("idna").decode("ascii").lower()
+    req_path = parsed.path or "/"
+    is_https_request = parsed.scheme.lower() == "https"
+    matched: list[tuple[str, str]] = []
+    for (domain, path, name, host_only), (value, secure) in cookie_store.items():
+        if not _should_send_cookie(
+            req_hostname=hostname,
+            req_path=req_path,
+            req_is_https=is_https_request,
+            cookie_domain=domain,
+            cookie_path=path,
+            cookie_host_only=host_only,
+            cookie_secure=secure,
+        ):
+            continue
+        cookie_pair = (name, value)
+        matched.append(cookie_pair)
+    return "; ".join(f"{name}={value}" for name, value in matched)
+
+
+def _should_send_cookie(
+    req_hostname: str,
+    req_path: str,
+    req_is_https: bool,
+    cookie_domain: str,
+    cookie_path: str,
+    cookie_host_only: bool,
+    cookie_secure: bool,
+) -> bool:
+    if cookie_host_only and req_hostname != cookie_domain:
+        return False
+    if not cookie_host_only and not _cookie_domain_matches(req_hostname, cookie_domain):
+        return False
+    if not _cookie_path_matches(req_path, cookie_path):
+        return False
+    if bool(cookie_secure) and not req_is_https:
+        return False
+    return True
+
+
+def _build_ical_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
+    parsed = _parse_http_url(url)
+    if not parsed:
+        raise ValueError(f"Invalid iCal URL: {url}")
+    try:
+        hostname_ascii = parsed.hostname.encode("idna").decode("ascii")
+    except UnicodeError:
+        raise ValueError(f"Invalid iCal URL host: {url}") from None
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError(f"Invalid iCal URL port: {url}") from None
+    try:
+        target = resolve_url_target(url)
+    except ValueError as exc:
+        raise ValueError(f"Blocked iCal URL target: {url}") from exc
+    addresses = target.addresses
+    if not addresses:
+        raise ValueError(f"Blocked unresolved iCal URL target: {url}")
+    headers = {"Host": _build_http_host_header(hostname_ascii, parsed.scheme, port)}
+    if parsed.username is not None:
+        username = unquote(parsed.username)
+        password = unquote(parsed.password or "")
+        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+        headers["Authorization"] = f"Basic {token}"
+    extensions = {"sni_hostname": hostname_ascii} if parsed.scheme == "https" else {}
+    fetch_urls: list[str] = []
+    for resolved_ip in addresses:
+        resolved_ip_for_url = f"[{resolved_ip}]" if ":" in resolved_ip else resolved_ip
+        if port is not None:
+            netloc = f"{resolved_ip_for_url}:{port}"
+        else:
+            netloc = resolved_ip_for_url
+        fetch_urls.append(parsed._replace(netloc=netloc).geturl())
+    return fetch_urls, headers, extensions
+
+
+def _build_ical_fetch_target(url: str) -> tuple[str, dict[str, str], dict[str, str]]:
+    fetch_urls, headers, extensions = _build_ical_fetch_targets(url)
+    return fetch_urls[0], headers, extensions
+
+
+def _is_public_http_url(url: str) -> bool:
+    try:
+        _build_ical_fetch_targets(url)
+    except ValueError:
+        return False
+    return True
+
+
+async def _read_limited_response_body(resp: httpx.Response, max_bytes: int) -> bytes:
+    body = bytearray()
+    async for chunk in resp.aiter_bytes():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            raise ValueError(f"iCal response too large: {len(body)} bytes")
+    return bytes(body)
+
 
 _manager: LogicManager | None = None
 
@@ -92,13 +470,13 @@ class LogicManager:
 
         self._event_bus.unsubscribe(DataValueEvent, self._on_value_event)
         self._event_bus.unsubscribe(DataPointRenamedEvent, self._on_datapoint_renamed)
-        for task in self._cron_tasks.values():
+        for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
 
     async def reload(self) -> None:
         """Reload graph cache from DB and restart cron schedulers."""
-        for task in self._cron_tasks.values():
+        for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
         await self._load_graphs()
@@ -132,7 +510,11 @@ class LogicManager:
             logger.warning("croniter not installed — timer_cron nodes will not auto-execute. Install with: pip install croniter")
             _has_croniter = False
 
-        for graph_id, (name, enabled, flow) in self._graphs.items():
+        for graph_id in list(self._graphs):
+            entry = self._graphs.get(graph_id)
+            if entry is None:
+                continue
+            name, enabled, flow = entry
             if not enabled:
                 continue
             for node in flow.nodes:
@@ -278,7 +660,11 @@ class LogicManager:
         dp_id = str(event.datapoint_id)
         now = datetime.now(UTC)
 
-        for graph_id, (name, enabled, flow) in self._graphs.items():
+        for graph_id in list(self._graphs):
+            entry = self._graphs.get(graph_id)
+            if entry is None:
+                continue
+            name, enabled, flow = entry
             if not enabled:
                 continue
             trigger_nodes = [n for n in flow.nodes if n.type == "datapoint_read" and n.data.get("datapoint_id") == dp_id]
@@ -344,13 +730,20 @@ class LogicManager:
     async def _on_datapoint_renamed(self, event: Any) -> None:
         """Update datapoint_name in all logic nodes that reference the renamed DataPoint."""
         dp_id_str = str(event.dp_id)
-        for graph_id, (name, enabled, flow) in self._graphs.items():
+        for graph_id in list(self._graphs):
+            entry = self._graphs.get(graph_id)
+            if entry is None:
+                continue
+            name, enabled, flow = entry
             changed = False
             for node in flow.nodes:
                 if node.data.get("datapoint_id") == dp_id_str and node.data.get("datapoint_name") != event.new_name:
                     node.data["datapoint_name"] = event.new_name
                     changed = True
             if changed:
+                current = self._graphs.get(graph_id)
+                if current is None or current[2] is not flow:
+                    continue
                 try:
                     await self._db.execute_and_commit(
                         "UPDATE logic_graphs SET flow_data=?, updated_at=? WHERE id=?",
@@ -377,8 +770,6 @@ class LogicManager:
         if not entry:
             raise KeyError(f"Graph {graph_id} not in cache")
         name, enabled, flow = entry
-        if not enabled:
-            raise ValueError(f"Graph {graph_id} ist deaktiviert")
         return await self._execute_graph(graph_id, name, flow, {})
 
     async def _execute_graph(
@@ -440,15 +831,71 @@ class LogicManager:
             url_changed = hyst_node.get("fetched_url") != url
             needs_fetch = url_changed or last_fetch is None or (execute_now.timestamp() - last_fetch) >= refresh_min * 60
             if needs_fetch:
+                active_client: httpx.AsyncClient | None = None
                 try:
-                    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _hclient:
-                        _resp = await _hclient.get(url)
-                        _resp.raise_for_status()
+                    current_url = url
+                    active_origin: tuple[str, str, int] | None = None
+                    logical_cookie_store: dict[tuple[str, str, str, bool], tuple[str, bool]] = {}
+                    for redirect_count in range(_ICAL_MAX_REDIRECTS + 1):
+                        fetch_urls, headers, extensions = await asyncio.to_thread(_build_ical_fetch_targets, current_url)
+                        cookie_header = _build_cookie_header(logical_cookie_store, current_url)
+                        if cookie_header:
+                            headers = {**headers, "Cookie": cookie_header}
+                        current_origin = _origin_tuple(_parse_http_url(current_url))
+                        if current_origin != active_origin:
+                            if active_client is not None:
+                                await active_client.aclose()
+                            # Keep one shared logical_cookie_store across all hops (including
+                            # cross-origin redirects), but rotate the HTTP client per origin.
+                            active_client = httpx.AsyncClient(timeout=30.0)
+                            active_origin = None if current_origin is None else tuple(current_origin)
+                        if active_client is None:
+                            raise ValueError("Could not initialize iCal HTTP client")
+                        redirected_to: str | None = None
+                        _ct = ""
+                        _resp_bytes = b""
+                        last_transport_error: Exception | None = None
+                        for fetch_url in fetch_urls:
+                            try:
+                                # Requests go to a pinned IP, but cookie send/store logic uses
+                                # current_url (logical host) via _build/_store_response_cookies.
+                                request_headers = headers
+                                async with active_client.stream("GET", fetch_url, headers=request_headers, extensions=extensions) as _resp:
+                                    if _resp.status_code in {301, 302, 303, 307, 308}:
+                                        location = _resp.headers.get("location")
+                                        if not location:
+                                            raise ValueError("iCal redirect without Location header")
+                                        _store_response_cookies(logical_cookie_store, _resp.headers.get_list("set-cookie"), current_url)
+                                        redirected_to = urljoin(current_url, location)
+                                        break
+                                    _resp.raise_for_status()
+                                    _store_response_cookies(logical_cookie_store, _resp.headers.get_list("set-cookie"), current_url)
+                                    _ct = _resp.headers.get("content-type", "").lower()
+                                    _resp_bytes = await _read_limited_response_body(_resp, _ICAL_MAX_BYTES)
+                                    break
+                            except httpx.RequestError as req_exc:
+                                last_transport_error = req_exc
+                                continue
+                        if redirected_to:
+                            if redirect_count >= _ICAL_MAX_REDIRECTS:
+                                raise ValueError("Too many iCal redirects")
+                            current_url = _preserve_same_origin_credentials(current_url, redirected_to)
+                            continue
+                        if last_transport_error is not None and not _resp_bytes:
+                            raise last_transport_error
+                        if not _resp_bytes:
+                            raise ValueError(f"Could not fetch iCal URL after trying {len(fetch_urls)} address(es)")
+                        if _ct and not any(t in _ct for t in _ICAL_ALLOWED_CONTENT_TYPES):
+                            logger.debug(
+                                "Graph %s: non-standard iCal content-type %r for %s; validating by body signature",
+                                graph_id[:8],
+                                _ct,
+                                current_url,
+                            )
                         # Decode with charset from Content-Type; many iCal servers
                         # omit the charset and serve Latin-1 (e.g. c-trace.de).
                         # Try strict UTF-8 first; fall back to Latin-1 which always
                         # succeeds and covers ISO-8859-1 / CP-1252 content.
-                        _ct = _resp.headers.get("content-type", "")
                         _charset: str | None = None
                         for _part in _ct.split(";"):
                             _p = _part.strip()
@@ -456,20 +903,115 @@ class LogicManager:
                                 _charset = _p[8:].strip().strip('"').strip("'")
                                 break
                         if _charset:
-                            _raw_text = _resp.content.decode(_charset, errors="replace")
+                            _raw_text = _resp_bytes.decode(_charset, errors="replace")
                         else:
                             try:
-                                _raw_text = _resp.content.decode("utf-8")
+                                _raw_text = _resp_bytes.decode("utf-8")
                             except UnicodeDecodeError:
-                                _raw_text = _resp.content.decode("latin-1")
+                                _raw_text = _resp_bytes.decode("latin-1")
                         if not _raw_text.lstrip().startswith("BEGIN:VCALENDAR"):
                             raise ValueError(f"Response is not an iCal file (starts with {_raw_text[:60]!r})")
                         hyst_node["raw"] = _raw_text
                         hyst_node["fetched_url"] = url
                         hyst_node["last_fetch_ts"] = execute_now.timestamp()
-                        logger.info("Graph %s: iCal fetched from %s (%d bytes)", graph_id[:8], url, len(_raw_text))
+                        logger.info("Graph %s: iCal fetched from %s (%d bytes)", graph_id[:8], current_url, len(_resp_bytes))
+                        break
                 except Exception as _exc:
                     logger.warning("Graph %s: iCal fetch failed for node %s (%s): %s", graph_id[:8], node.id[:8], url, _exc)
+                finally:
+                    if active_client is not None:
+                        await active_client.aclose()
+
+        # ── Pre-fill heating_circuit missing slots from history ───────────────────────
+        # For each heating_circuit node: when a slot (T1/T2/T3) is missing for today
+        # and the clock has already passed the slot's threshold hour, query the history
+        # for the last value at or before that hour and inject it as _history_{slot}.
+        # This covers restarts where the slot would otherwise stay empty all day.
+        import datetime as _hc_dt  # noqa: PLC0415
+        import zoneinfo as _hc_zi  # noqa: PLC0415
+
+        _hc_tz = _hc_zi.ZoneInfo(self._app_config.get("timezone", "Europe/Zurich"))
+        _hc_now = _hc_dt.datetime.now(tz=_hc_tz)
+        _hc_today = _hc_now.date().isoformat()
+        _HC_SLOTS = (("t1", 7), ("t2", 14), ("t3", 21))
+
+        for node in flow.nodes:
+            if node.type != "heating_circuit":
+                continue
+            # Find the datapoint_id and datapoint_read node via graph edges
+            _hc_dp_id_str: str | None = None
+            _hc_dp_read_node = None
+            for edge in flow.edges:
+                if edge.target != node.id:
+                    continue
+                _src = next((n for n in flow.nodes if n.id == edge.source), None)
+                if _src and _src.type == "datapoint_read":
+                    _hc_dp_id_str = _src.data.get("datapoint_id")
+                    _hc_dp_read_node = _src
+                    break
+            if not _hc_dp_id_str:
+                continue
+            _hc_node_state = hyst.setdefault(node.id, {})
+            _hc_node_aug = aug_overrides.setdefault(node.id, {})
+            # Always inject app-timezone date so executor uses the same date as the manager;
+            # without this, system clock vs. app timezone differences around midnight can
+            # cause slots to be tagged with the wrong date and re-filled on every run.
+            _hc_node_aug["_date"] = _hc_today
+            try:
+                from obs.history.factory import get_history_plugin as _get_hp  # noqa: PLC0415
+
+                _hc_dp_id = uuid.UUID(_hc_dp_id_str)
+                _hc_plugin = _get_hp()
+                for _hc_slot, _hc_hour in _HC_SLOTS:
+                    if _hc_node_state.get(f"{_hc_slot}_date") == _hc_today:
+                        continue  # already captured today
+                    if _hc_now.hour < _hc_hour:
+                        continue  # not yet past slot time
+                    # Query last known value at or before the slot's threshold time
+                    _slot_dt = _hc_now.replace(hour=_hc_hour, minute=0, second=0, microsecond=0)
+                    _from_dt = (_slot_dt - _hc_dt.timedelta(hours=24)).astimezone(UTC)
+                    _to_dt = _slot_dt.astimezone(UTC)
+                    _rows = await _hc_plugin.query(_hc_dp_id, _from_dt, _to_dt, limit=1)
+                    if _rows:
+                        # Keep raw value; float() is deferred until after transforms so that
+                        # value_map can handle non-numeric stored values (e.g. "on" → 22.5).
+                        _hist_val: Any = _rows[0]["v"]
+                        # Apply the same transforms as live datapoint_read execution
+                        if _hc_dp_read_node:
+                            _hc_formula = (_hc_dp_read_node.data.get("value_formula") or "").strip()
+                            if _hc_formula:
+                                try:
+                                    from obs.logic.executor import GraphExecutor as _GE  # noqa: PLC0415
+
+                                    _hist_val = _GE._safe_eval(_hc_formula, {"x": float(_hist_val)})
+                                except Exception:
+                                    pass
+                            _hc_vmap = _hc_dp_read_node.data.get("value_map")
+                            if _hc_vmap:
+                                try:
+                                    from obs.core.transformation import apply_value_map as _avm  # noqa: PLC0415
+
+                                    _hist_val = _avm(_hist_val, _hc_vmap)
+                                except Exception:
+                                    pass
+                        try:
+                            _hc_node_aug[f"_history_{_hc_slot}"] = float(_hist_val)
+                            logger.debug(
+                                "Graph %s: heating_circuit %s: %s filled from history: %.1f",
+                                graph_id[:8],
+                                node.id[:8],
+                                _hc_slot,
+                                float(_hc_node_aug[f"_history_{_hc_slot}"]),
+                            )
+                        except (TypeError, ValueError):
+                            logger.debug(
+                                "Graph %s: heating_circuit %s: %s history value not numeric after transforms, skipping",
+                                graph_id[:8],
+                                node.id[:8],
+                                _hc_slot,
+                            )
+            except Exception as _hc_exc:
+                logger.debug("Graph %s: heating_circuit history pre-fill failed: %s", graph_id[:8], _hc_exc)
 
         executor = GraphExecutor(flow, hyst, self._app_config)
         try:
@@ -511,6 +1053,12 @@ class LogicManager:
             url = (node.data.get("url") or "").strip()
             if not url:
                 continue
+            try:
+                request_urls, pinned_headers, request_extensions = _build_api_client_fetch_targets(url)
+            except ValueError as exc:
+                logger.warning("Graph %s: blocked api_client target %s: %s", graph_id[:8], url, exc)
+                outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                continue
             method = (node.data.get("method", "GET") or "GET").upper()
             content_type = node.data.get("content_type", "application/json")
             resp_type = node.data.get("response_type", "application/json")
@@ -525,6 +1073,15 @@ class LogicManager:
                     extra_headers = _json.loads(hdr_str)
                 except Exception:
                     pass
+            hdr_file = (node.data.get("headers_secret_file") or "").strip()
+            if hdr_file:
+                try:
+                    extra_headers = {
+                        **extra_headers,
+                        **_json.loads(_read_secret_file(hdr_file)),
+                    }
+                except Exception:
+                    pass
             body = out.get("_body")
             # ── Authentication ──────────────────────────────────────────
             auth_type = (node.data.get("auth_type") or "none").lower()
@@ -536,6 +1093,8 @@ class LogicManager:
                     auth = httpx.BasicAuth(username, password) if auth_type == "basic" else httpx.DigestAuth(username, password)
             elif auth_type == "bearer":
                 token = (node.data.get("auth_token") or "").strip()
+                if not token:
+                    token = _read_secret_file(node.data.get("auth_token_file") or "")
                 if token:
                     extra_headers = {
                         **extra_headers,
@@ -561,30 +1120,49 @@ class LogicManager:
                             **extra_headers,
                             "Content-Type": "text/plain",
                         }
+                req_headers = {key: value for key, value in req_kwargs.get("headers", {}).items() if key.lower() != "host"}
+                req_kwargs["headers"] = {**req_headers, **pinned_headers}
+                if request_extensions:
+                    req_kwargs["extensions"] = request_extensions
+                last_transport_error: Exception = ValueError(f"Could not fetch API target after trying {len(request_urls)} address(es)")
+                resp: httpx.Response | Any | None = None
                 async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
-                    resp = await client.request(method, url, **req_kwargs)
-                    if resp_type in ("json", "application/json"):
+                    for request_url in request_urls:
                         try:
-                            resp_data: Any = resp.json()
-                        except Exception:
-                            resp_data = resp.text
-                    else:
-                        resp_data = resp.text
-                    outputs[node.id].update(
-                        {
-                            "response": resp_data,
-                            "status": resp.status_code,
-                            "success": 200 <= resp.status_code < 300,
-                        },
-                    )
-                    logger.info(
-                        "Graph %s: API %s %s → %d",
-                        graph_id[:8],
-                        method,
-                        url,
-                        resp.status_code,
-                    )
-                    triggered_api_clients.add(node.id)
+                            resp = await client.request(method, request_url, **req_kwargs)
+                            break
+                        except httpx.RequestError as req_exc:
+                            last_transport_error = req_exc
+                            if method not in _API_CLIENT_RETRYABLE_METHODS:
+                                break
+                            continue
+                if resp is None:
+                    raise last_transport_error
+                resp_text = resp.text
+                if len(resp_text) > 1_000_000:
+                    resp_text = resp_text[:1_000_000]
+                if resp_type in ("json", "application/json"):
+                    try:
+                        resp_data: Any = resp.json()
+                    except Exception:
+                        resp_data = resp_text
+                else:
+                    resp_data = resp_text
+                outputs[node.id].update(
+                    {
+                        "response": resp_data,
+                        "status": resp.status_code,
+                        "success": 200 <= resp.status_code < 300,
+                    },
+                )
+                logger.info(
+                    "Graph %s: API %s %s → %d",
+                    graph_id[:8],
+                    method,
+                    url,
+                    resp.status_code,
+                )
+                triggered_api_clients.add(node.id)
             except Exception as exc:
                 logger.warning("Graph %s: api_client failed: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
@@ -600,7 +1178,7 @@ class LogicManager:
                 if e.source in triggered_api_clients:
                     src_handle = e.sourceHandle or "out"
                     tgt_handle = e.targetHandle or "in"
-                    downstream_overrides.setdefault(e.target, {})[tgt_handle] = outputs[e.source].get(src_handle)
+                    downstream_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs[e.source], src_handle)
             if downstream_overrides:
                 second_executor = GraphExecutor(flow, hyst, self._app_config)
                 second_outputs = second_executor.execute(downstream_overrides)
@@ -649,15 +1227,48 @@ class LogicManager:
                         payload["url_title"] = url_title
 
                     if image_url:
-                        # Download image and attach as multipart
-                        img_r = await client.get(image_url, timeout=10.0)
-                        img_r.raise_for_status()
-                        content_type = img_r.headers.get("content-type", "image/jpeg")
+                        resolved = await _resolve_safe_image_url(image_url)
+                        if resolved is None:
+                            raise ValueError("Unsafe image_url: only validated HTTPS targets are allowed")
+                        pinned_url, host_header, pinned_ip = resolved
+                        # Stream attachment bytes and enforce max size while downloading.
+                        async with client.stream(
+                            "GET",
+                            pinned_url,
+                            timeout=10.0,
+                            follow_redirects=False,
+                            headers={"Host": host_header},
+                            extensions={"sni_hostname": host_header.split(":", 1)[0]},
+                        ) as img_r:
+                            net_stream = img_r.extensions.get("network_stream")
+                            if net_stream is not None:
+                                server_addr = net_stream.get_extra_info("server_addr")
+                                if server_addr and server_addr[0] != pinned_ip:
+                                    raise ValueError("Pushover image_url resolved to an unexpected target IP")
+                            img_r.raise_for_status()
+                            content_type = img_r.headers.get("content-type", "").split(";")[0].strip().lower()
+                            if not content_type.startswith("image/"):
+                                raise ValueError("Pushover image_url must return an image/* content type")
+
+                            content_len_raw = img_r.headers.get("content-length", "0") or "0"
+                            try:
+                                content_len = int(content_len_raw)
+                            except ValueError:
+                                content_len = 0
+                            if content_len > _PUSHOVER_ATTACHMENT_MAX_BYTES:
+                                raise ValueError("Pushover attachment too large (max 5 MB)")
+
+                            img_content = bytearray()
+                            async for chunk in img_r.aiter_bytes():
+                                img_content.extend(chunk)
+                                if len(img_content) > _PUSHOVER_ATTACHMENT_MAX_BYTES:
+                                    raise ValueError("Pushover attachment too large (max 5 MB)")
+
                         fname = image_url.split("?")[0].split("/")[-1] or "image.jpg"
                         r = await client.post(
                             "https://api.pushover.net/1/messages.json",
                             data=payload,
-                            files={"attachment": (fname, img_r.content, content_type)},
+                            files={"attachment": (fname, bytes(img_content), content_type or "image/jpeg")},
                         )
                     else:
                         r = await client.post(
@@ -906,7 +1517,7 @@ class LogicManager:
         # the in-memory entry is a no-op and will be GC'd naturally.
         self._node_state.pop(graph_id, None)
         # Cancel cron tasks for this specific graph
-        to_remove = [k for k in self._cron_tasks if k[0] == graph_id]
+        to_remove = [k for k in list(self._cron_tasks) if k[0] == graph_id]
         for k in to_remove:
             self._cron_tasks[k].cancel()
             del self._cron_tasks[k]

@@ -2,7 +2,11 @@
 
 ![**open bridge server** Logo](logo/obs_logo_dark.svg)
 
-Go to the [English version](/README.md) version of the documentation.
+![Version](https://img.shields.io/github/v/release/abeggled/openbridgeserver?style=for-the-badge)
+[![Tests][tests-badge]][tests]
+[![Coverage][coverage-badge]][coverage]
+
+> 🇬🇧 [English version](/README.md)
 
 **Offene Gebäudeautomations-Plattform — verbindet KNX, Modbus, MQTT, Home Assistant und mehr**
 
@@ -79,7 +83,7 @@ Das LXC-Template enthält ein vollständiges Ubuntu 26.04-System mit **open brid
 **Schritt 2 — Container erstellen**
 
 1. Im Proxmox-Menü **Create CT** wählen.
-2. Als Template das gerade heruntergeladene `ubuntu-plucky-openbridgeserver_…` auswählen.
+2. Als Template das gerade heruntergeladene `openbridgeserver-lxc_…` auswählen.
 3. Hostname, Passwort, CPU, RAM und Netzwerk nach Bedarf konfigurieren — empfohlen: mindestens 512 MB RAM.
 4. Container starten.
 
@@ -139,9 +143,21 @@ ringbuffer:
 security:
   jwt_secret: changeme        # Sitzungsschlüssel — unbedingt ändern!
   jwt_expire_minutes: 1440    # Sitzungsdauer (Standard: 24 Stunden)
+  # Optionaler Override für die Allowlist privater/interner URL-Ziele.
+  # Standard: OBS_SECRET_FILE_DIR/url-target-allowlist.yaml, wenn OBS_SECRET_FILE_DIR gesetzt ist,
+  # sonst secrets/url-target-allowlist.yaml neben der konfigurierten Datenbank.
+  # url_target_allowlist_path: /data/secrets/url-target-allowlist.yaml
 ```
 
 > **Hinweis:** Der `mqtt`-Abschnitt betrifft den **internen** Mosquitto-Broker. Externe MQTT-Broker werden als separate Adapter-Instanzen eingerichtet (siehe [MQTT-Adapter](#mqtt-adapter-externer-broker)).
+
+### URL-Ziel-Allowlist für interne Dienste
+
+Backend-Abrufe aus Logik-API-Client-Knoten, iCalendar-Knoten, Pushover-`image_url`-Anhängen, dem Kamera-Proxy und der Wetter-API blockieren private/lokale Netzwerkziele standardmäßig. Admins können bewusst benötigte interne Ziele unter **Einstellungen → Sicherheit → URL-Ziel-Allowlist** freigeben oder die YAML-Datei bearbeiten, die über `security.url_target_allowlist_path` konfiguriert ist.
+
+Standardmäßig wird die YAML-Datei nach `OBS_SECRET_FILE_DIR/url-target-allowlist.yaml` geschrieben, wenn `OBS_SECRET_FILE_DIR` gesetzt ist. Sonst schreibt OBS nach `secrets/url-target-allowlist.yaml` neben der konfigurierten Datenbankdatei. Für private Ziele sollte eine IP-Adresse oder ein CIDR-Eintrag verwendet werden, zum Beispiel `192.168.1.23/32` für eine einzelne LAN-Kamera oder `10.38.113.0/24` für ein internes Netz.
+
+Wenn ein Hostname wie `internal.example` auf eine private IP-Adresse auflöst, muss die aufgelöste IP beziehungsweise das passende CIDR-Netz freigegeben werden. Ein reiner Hostname-Eintrag hebt die private-IP-Sperre nicht auf und umgeht keine DNS-Validierung.
 
 ---
 
@@ -1634,6 +1650,10 @@ pytest tests/
 ./tools/lint.sh --fix
 ```
 
+#### Lokale Builds (Docker-Image, LXC-Template, App-Bundle)
+
+Vollständige Dokumentation zu `build-local.sh` — Befehle, Optionen und das Docker-Image-Namensschema — siehe **[tools/README.de.md](tools/README.de.md)**.
+
 ### Lokale Git-Hooks (Pre-Push Gate)
 
 Versionierte Hooks liegen in `.githooks/`. Um sie in einem Klon zu aktivieren, `core.hooksPath` einmalig setzen:
@@ -1730,3 +1750,9 @@ Zukünftig möchten wir [Weblate](https://hosted.weblate.org/projects/open-bridg
 ## Lizenz
 
 MIT — kostenlos und quelloffen.
+
+[tests]: https://github.com/abeggled/openbridgeserver/actions/workflows/unittest.yml
+[tests-badge]: https://img.shields.io/github/actions/workflow/status/abeggled/openbridgeserver/unittest.yml?style=for-the-badge&logo=github&logoColor=ccc&label=Tests
+
+[coverage]: https://app.codecov.io/github/abeggled/openbridgeserver
+[coverage-badge]: https://img.shields.io/codecov/c/github/abeggled/openbridgeserver?style=for-the-badge&logo=codecov&logoColor=ccc&label=Coverage

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -51,6 +51,7 @@ class DatabaseSettings(BaseModel):
 class SecuritySettings(BaseModel):
     jwt_secret: str = "changeme"
     jwt_expire_minutes: int = 1440
+    url_target_allowlist_path: str = "/data/secrets/url-target-allowlist.yaml"
 
     @field_validator("jwt_secret")
     @classmethod
@@ -112,13 +113,94 @@ class YamlConfigSource(PydanticBaseSettingsSource):
 
 
 # ---------------------------------------------------------------------------
+# Backward-compatibility helpers
+# ---------------------------------------------------------------------------
+
+
+def _has_env_key_case_insensitive(env_key: str) -> bool:
+    lookup = env_key.upper()
+    return any(existing.upper() == lookup for existing in os.environ)
+
+
+def _get_existing_env_key_case_insensitive(env_key: str) -> str | None:
+    lookup = env_key.upper()
+    return next((existing for existing in os.environ if existing.upper() == lookup), None)
+
+
+def _get_env_case_insensitive(*env_keys: str) -> str | None:
+    for key in env_keys:
+        if key in os.environ:
+            return os.environ[key]
+        upper_key = key.upper()
+        for existing, value in os.environ.items():
+            if existing.upper() == upper_key:
+                return value
+    return None
+
+
+def _import_legacy_env_vars() -> None:
+    """Import OPENTWS_* variables as OBS_* when OBS_* is not set.
+
+    Docker images may predefine OBS_* defaults. If those exact defaults are
+    present, prefer an explicitly supplied OPENTWS_* value for compatibility.
+    """
+    legacy_prefix = "OPENTWS_"
+    legacy_prefix_upper = legacy_prefix.upper()
+    new_prefix = "OBS_"
+    docker_defaults = {
+        "OBS_CONFIG": "/data/config.yaml",
+        "OBS_DATABASE__PATH": "/data/obs.db",
+    }
+
+    for key, value in list(os.environ.items()):
+        if not key.upper().startswith(legacy_prefix_upper):
+            continue
+        mapped_key = f"{new_prefix}{key[len(legacy_prefix) :]}"
+        existing_key = _get_existing_env_key_case_insensitive(mapped_key)
+        if existing_key is None:
+            os.environ[mapped_key] = value
+            continue
+
+        expected_default = docker_defaults.get(mapped_key.upper())
+        if expected_default is not None and os.environ.get(existing_key) == expected_default:
+            os.environ[existing_key] = value
+
+
+def _resolve_default_db_path(default_path: str = "/data/obs.db") -> str:
+    """Prefer legacy DB path if new default file does not exist yet."""
+    new_path = Path(default_path)
+    legacy_path = new_path.with_name("opentws.db")
+    if not new_path.exists() and legacy_path.exists():
+        return str(legacy_path)
+    return default_path
+
+
+def _is_builtin_default_db_path(path: str) -> bool:
+    return Path(path).as_posix() == "/data/obs.db"
+
+
+def _is_builtin_default_url_target_allowlist_path(path: str) -> bool:
+    return Path(path).as_posix() == "/data/secrets/url-target-allowlist.yaml"
+
+
+def _resolve_default_url_target_allowlist_path(database_path: str) -> str:
+    secret_root = _get_env_case_insensitive("OBS_SECRET_FILE_DIR", "OPENTWS_SECRET_FILE_DIR")
+    if secret_root:
+        return str(Path(secret_root) / "url-target-allowlist.yaml")
+    return str(Path(database_path).parent / "secrets" / "url-target-allowlist.yaml")
+
+
+_import_legacy_env_vars()
+
+
+# ---------------------------------------------------------------------------
 # Main settings class
 # ---------------------------------------------------------------------------
 
 
 def _config_path() -> Path:
-    """Resolve the YAML config path at construction time (honours OBS_CONFIG)."""
-    return Path(os.environ.get("OBS_CONFIG", "config.yaml"))
+    """Resolve the YAML config path at construction time."""
+    return Path(_get_env_case_insensitive("OBS_CONFIG", "OPENTWS_CONFIG") or "config.yaml")
 
 
 class Settings(BaseSettings):
@@ -130,13 +212,96 @@ class Settings(BaseSettings):
 
     server: ServerSettings = Field(default_factory=ServerSettings)
     mqtt: MqttSettings = Field(default_factory=MqttSettings)
-    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    database: DatabaseSettings = Field(default_factory=lambda: DatabaseSettings(path=_resolve_default_db_path()))
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     mosquitto: MosquittoSettings = Field(default_factory=MosquittoSettings)
     cors: CorsSettings = Field(default_factory=CorsSettings)
     # Optional directory scanned for *.py plugin files at startup.
     # Env override: OBS_PLUGINS_DIR=/path/to/plugins
     plugins_dir: str | None = None
+
+    @staticmethod
+    def _database_path_from_input(result: dict[str, Any], database_key: str | None, default_path: str) -> str:
+        if database_key is None:
+            return default_path
+        database_value = result.get(database_key)
+        if isinstance(database_value, DatabaseSettings):
+            return database_value.path
+        if isinstance(database_value, dict):
+            path_key = next(
+                (key for key in database_value if isinstance(key, str) and key.lower() == "path"),
+                None,
+            )
+            if path_key is not None and isinstance(database_value.get(path_key), str):
+                return database_value[path_key]
+        return default_path
+
+    @model_validator(mode="before")
+    @classmethod
+    def _inject_database_path_fallback(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        result = dict(data)
+        database_key = next(
+            (key for key in result if isinstance(key, str) and key.lower() == "database"),
+            None,
+        )
+        default_path = _resolve_default_db_path()
+
+        if database_key is None:
+            result["database"] = {"path": default_path}
+            database_key = "database"
+
+        database_value = result.get(database_key)
+        if database_value is None:
+            result[database_key] = {"path": default_path}
+            database_value = result[database_key]
+
+        if isinstance(database_value, dict):
+            path_key = next(
+                (key for key in database_value if isinstance(key, str) and key.lower() == "path"),
+                None,
+            )
+            if path_key is None:
+                merged_database = dict(database_value)
+                merged_database["path"] = default_path
+                result[database_key] = merged_database
+            else:
+                current_path = database_value.get(path_key)
+                if isinstance(current_path, str) and _is_builtin_default_db_path(current_path):
+                    merged_database = dict(database_value)
+                    merged_database[path_key] = default_path
+                    result[database_key] = merged_database
+
+        database_path = cls._database_path_from_input(result, database_key, default_path)
+        allowlist_path = _resolve_default_url_target_allowlist_path(database_path)
+        security_key = next(
+            (key for key in result if isinstance(key, str) and key.lower() == "security"),
+            None,
+        )
+
+        if security_key is None or result.get(security_key) is None:
+            result["security"] = {"url_target_allowlist_path": allowlist_path}
+            return result
+
+        security_value = result[security_key]
+        if isinstance(security_value, SecuritySettings):
+            if "url_target_allowlist_path" not in security_value.model_fields_set:
+                result[security_key] = security_value.model_copy(update={"url_target_allowlist_path": allowlist_path})
+            return result
+
+        if isinstance(security_value, dict):
+            path_key = next(
+                (key for key in security_value if isinstance(key, str) and key.lower() == "url_target_allowlist_path"),
+                None,
+            )
+            if path_key is None:
+                merged_security = dict(security_value)
+                merged_security["url_target_allowlist_path"] = allowlist_path
+                result[security_key] = merged_security
+
+        return result
 
     @classmethod
     def settings_customise_sources(

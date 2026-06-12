@@ -10,12 +10,12 @@
         <option value="">{{ $t('logic.selectGraph') }}</option>
         <option v-for="g in store.graphs" :key="g.id" :value="g.id">{{ g.name }}{{ g.enabled ? '' : $t('logic.graphDisabledSuffix') }}</option>
       </select>
-      <button @click="newGraph" class="btn-primary btn-sm">{{ $t('logic.newGraphBtn') }}</button>
-      <button v-if="activeGraphId" @click="saveGraph" class="btn-secondary btn-sm" :disabled="saving">
+      <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm">{{ $t('logic.newGraphBtn') }}</button>
+      <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph" class="btn-secondary btn-sm" :disabled="saving">
         <Spinner v-if="saving" size="sm" color="white" />
         {{ $t('common.save') }}
       </button>
-      <button v-if="activeGraphId" @click="runGraph"
+      <button v-if="auth.isAdmin && activeGraphId" @click="runGraph"
         :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
         :disabled="!activeGraph?.enabled"
         :title="activeGraph?.enabled ? $t('logic.runTitle') : $t('logic.runDisabledTitle')"
@@ -27,26 +27,26 @@
         :title="$t('logic.debugMode')" data-testid="btn-debug">
         &#128270; {{ $t('logic.debugBtn') }}
       </button>
-      <button v-if="activeGraphId" @click="doToggleEnabled"
+      <button v-if="auth.isAdmin && activeGraphId" @click="doToggleEnabled"
         :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-orange-400 ring-1 ring-orange-400/50']"
         :title="activeGraph?.enabled ? $t('logic.toggleActiveTitle') : $t('logic.toggleDisabledTitle')"
         data-testid="btn-toggle-enabled">
         {{ activeGraph?.enabled ? $t('logic.toggleActive') : $t('logic.toggleDisabled') }}
       </button>
-      <button v-if="activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm" :title="$t('logic.renameGraph')" data-testid="btn-rename">
+      <button v-if="auth.isAdmin && activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm" :title="$t('logic.renameGraph')" data-testid="btn-rename">
         ✏ {{ $t('logic.rename') }}
       </button>
-      <button v-if="activeGraphId" @click="doDuplicateGraph" class="btn-secondary btn-sm" :title="$t('logic.duplicateGraph')" data-testid="btn-duplicate">
+      <button v-if="auth.isAdmin && activeGraphId" @click="doDuplicateGraph" class="btn-secondary btn-sm" :title="$t('logic.duplicateGraph')" data-testid="btn-duplicate">
         ⧉ {{ $t('logic.duplicate') }}
       </button>
       <button v-if="activeGraphId" @click="doExportGraph" class="btn-secondary btn-sm" :title="$t('logic.exportJson')" data-testid="btn-export">
         ↓ {{ $t('logic.export') }}
       </button>
-      <label class="btn-secondary btn-sm cursor-pointer" :title="$t('logic.importJson')" data-testid="btn-import">
+      <label v-if="auth.isAdmin" class="btn-secondary btn-sm cursor-pointer" :title="$t('logic.importJson')" data-testid="btn-import">
         ↑ {{ $t('logic.import') }}
         <input type="file" accept=".json" class="hidden" @change="onImportFile" data-testid="input-import-file" />
       </label>
-      <button v-if="activeGraphId" @click="confirmDeleteGraph" class="btn-icon text-red-400">
+      <button v-if="auth.isAdmin && activeGraphId" @click="confirmDeleteGraph" class="btn-icon text-red-400" data-testid="btn-delete">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
         </svg>
@@ -61,7 +61,7 @@
     <!-- Main area -->
     <div class="flex flex-1 overflow-hidden">
       <!-- Node Palette -->
-      <NodePalette :node-types="store.nodeTypes" />
+      <NodePalette v-if="auth.isAdmin" :node-types="store.nodeTypes" />
 
       <!-- Canvas -->
       <div class="flex-1 relative" ref="canvasWrapper"
@@ -73,7 +73,10 @@
           v-model:edges="edges"
           :node-types="nodeTypeComponents"
           :default-edge-options="defaultEdgeOptions"
-          :delete-key-code="['Backspace', 'Delete']"
+          :delete-key-code="auth.isAdmin ? ['Backspace', 'Delete'] : []"
+          :nodes-draggable="auth.isAdmin"
+          :nodes-connectable="auth.isAdmin"
+          :edges-updatable="auth.isAdmin"
           fit-view-on-init
           class="logic-canvas"
           @connect="onConnect"
@@ -94,7 +97,7 @@
 
       <!-- Config Panel -->
       <NodeConfigPanel
-        v-if="selectedNode"
+        v-if="selectedNode && auth.isAdmin"
         :node="selectedNode"
         :node-types="store.nodeTypes"
         :node-outputs="lastRunOutputs"
@@ -162,6 +165,7 @@ import '@vue-flow/minimap/dist/style.css'
 
 import { useLogicStore }    from '@/stores/logic'
 import { useSettingsStore } from '@/stores/settings'
+import { useAuthStore }     from '@/stores/auth'
 import { logicApi }        from '@/api/client'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
@@ -180,6 +184,7 @@ const { t }    = useI18n()
 const route    = useRoute()
 const store    = useLogicStore()
 const settings = useSettingsStore()
+const auth     = useAuthStore()
 // Reactive background pattern colour — recomputes when theme changes
 const bgPatternColor = computed(() => {
   void settings.theme   // track reactively
@@ -292,7 +297,7 @@ async function loadGraph() {
 }
 
 async function saveGraph() {
-  if (!activeGraphId.value) return
+  if (!auth.isAdmin || !activeGraphId.value) return
   saving.value = true
   try {
     const graph = store.graphs.find(g => g.id === activeGraphId.value)
@@ -383,6 +388,7 @@ function toggleDebug() {
 }
 
 async function runGraph() {
+  if (!auth.isAdmin || !activeGraphId.value) return
   try {
     const { data } = await logicApi.runGraph(activeGraphId.value)
     const evalCount = Object.keys(data.outputs || {}).length
@@ -400,8 +406,14 @@ const showNewGraph  = ref(false)
 const newGraphName  = ref('')
 const newGraphDesc  = ref('')
 
-function newGraph() { newGraphName.value = ''; newGraphDesc.value = ''; showNewGraph.value = true }
+function newGraph() {
+  if (!auth.isAdmin) return
+  newGraphName.value = ''
+  newGraphDesc.value = ''
+  showNewGraph.value = true
+}
 async function doCreateGraph() {
+  if (!auth.isAdmin) return
   const g = await store.createGraph(newGraphName.value, newGraphDesc.value)
   showNewGraph.value = false
   activeGraphId.value = g.id
@@ -410,7 +422,7 @@ async function doCreateGraph() {
 
 // ── Toggle enabled ─────────────────────────────────────────────────────────
 async function doToggleEnabled() {
-  if (!activeGraphId.value) return
+  if (!auth.isAdmin || !activeGraphId.value) return
   try {
     const updated = await store.toggleEnabled(activeGraphId.value)
     showStatus(true, updated.enabled ? t('logic.activated') : t('logic.deactivated'))
@@ -421,8 +433,12 @@ async function doToggleEnabled() {
 
 // ── Delete graph ───────────────────────────────────────────────────────────
 const showDeleteConfirm = ref(false)
-function confirmDeleteGraph() { showDeleteConfirm.value = true }
+function confirmDeleteGraph() {
+  if (!auth.isAdmin || !activeGraphId.value) return
+  showDeleteConfirm.value = true
+}
 async function doDeleteGraph() {
+  if (!auth.isAdmin || !activeGraphId.value) return
   await store.deleteGraph(activeGraphId.value)
   activeGraphId.value = ''
   nodes.value = []; edges.value = []
@@ -430,7 +446,7 @@ async function doDeleteGraph() {
 
 // ── Duplizieren ────────────────────────────────────────────────────────────
 async function doDuplicateGraph() {
-  if (!activeGraphId.value) return
+  if (!auth.isAdmin || !activeGraphId.value) return
   try {
     const copy = await store.duplicateGraph(activeGraphId.value)
     activeGraphId.value = copy.id
@@ -466,6 +482,7 @@ const renameGraphName  = ref('')
 const renameGraphDesc  = ref('')
 
 function openRenameGraph() {
+  if (!auth.isAdmin || !activeGraphId.value) return
   const g = store.graphs.find(g => g.id === activeGraphId.value)
   renameGraphName.value = g?.name ?? ''
   renameGraphDesc.value = g?.description ?? ''
@@ -473,7 +490,7 @@ function openRenameGraph() {
 }
 
 async function doRenameGraph() {
-  if (!activeGraphId.value || !renameGraphName.value.trim()) return
+  if (!auth.isAdmin || !activeGraphId.value || !renameGraphName.value.trim()) return
   try {
     await store.renameGraph(activeGraphId.value, renameGraphName.value.trim(), renameGraphDesc.value)
     showRenameGraph.value = false
@@ -485,6 +502,7 @@ async function doRenameGraph() {
 
 // ── Importieren ────────────────────────────────────────────────────────────
 async function onImportFile(event) {
+  if (!auth.isAdmin) return
   const file = event.target.files?.[0]
   if (!file) return
   event.target.value = ''   // Reset input für erneuten Import derselben Datei
@@ -511,6 +529,7 @@ async function onImportFile(event) {
 
 // ── Connect handler — REQUIRED to actually create edges ────────────────────
 function onConnect(params) {
+  if (!auth.isAdmin) return
   const opts = defaultEdgeOptions.value
   edges.value = addEdge({
     ...params,
@@ -522,6 +541,7 @@ function onConnect(params) {
 
 // ── Drop node from palette ─────────────────────────────────────────────────
 function onDrop(event) {
+  if (!auth.isAdmin) return
   const type = event.dataTransfer.getData('application/vueflow-node-type')
   if (!type || !activeGraphId.value) return
 
@@ -537,7 +557,6 @@ function onDrop(event) {
     type,
     position: pos,
     data: {
-      label: nt?.label ?? type,
       ...(nt?.config_schema
         ? Object.fromEntries(
             Object.entries(nt.config_schema).map(([k, v]) => [k, v.default ?? ''])
@@ -552,12 +571,13 @@ function onDrop(event) {
 const selectedNode = ref(null)
 
 function onNodeClick({ node }) {
+  if (!auth.isAdmin) return
   selectedNode.value = { ...node }
 }
 
 let _autoSaveTimer = null
 function onNodeDataUpdate(newData) {
-  if (!selectedNode.value) return
+  if (!auth.isAdmin || !selectedNode.value) return
   nodes.value = nodes.value.map(n =>
     n.id === selectedNode.value.id ? { ...n, data: { ...n.data, ...newData } } : n
   )
@@ -570,14 +590,16 @@ function onNodeDataUpdate(newData) {
 // ── WebSocket — live debug updates ────────────────────────────────────────
 let _ws = null
 let _wsTimer = null
+let _wsShouldReconnect = true
 
 function _wsConnect() {
   const token = localStorage.getItem('access_token')
   if (!token) return
+  _wsShouldReconnect = true
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const url   = `${proto}://${window.location.host}/api/v1/ws?token=${encodeURIComponent(token)}`
+  const url   = `${proto}://${window.location.host}/api/v1/ws`
   try {
-    _ws = new WebSocket(url)
+    _ws = new WebSocket(url, [`obs.jwt.${token}`])
   } catch { return }
 
   _ws.onmessage = (ev) => {
@@ -593,8 +615,10 @@ function _wsConnect() {
     } catch { /* ignore parse errors */ }
   }
 
-  _ws.onclose = () => {
+  _ws.onclose = (ev) => {
     _ws = null
+    if (ev?.code === 4001) _wsShouldReconnect = false
+    if (!_wsShouldReconnect) return
     _wsTimer = setTimeout(_wsConnect, 4000)   // auto-reconnect
   }
   _ws.onerror = () => { try { _ws?.close() } catch { /* ignore */ } }

@@ -21,11 +21,18 @@ logger = logging.getLogger(__name__)
 
 _COMPARE_OPS = {
     ">": operator.gt,
+    "gt": operator.gt,
     "<": operator.lt,
+    "lt": operator.lt,
     "=": operator.eq,
+    "==": operator.eq,
+    "eq": operator.eq,
     ">=": operator.ge,
+    "gte": operator.ge,
     "<=": operator.le,
+    "lte": operator.le,
     "!=": operator.ne,
+    "ne": operator.ne,
 }
 
 
@@ -76,7 +83,7 @@ class GraphExecutor:
             inputs: dict[str, Any] = {}
             for handle, (src_id, src_handle) in edge_map.get(node.id, {}).items():
                 src_out = outputs.get(src_id, {})
-                inputs[handle] = src_out.get(src_handle)
+                inputs[handle] = self._get_output_value(src_out, src_handle)
 
             # Apply overrides (for datapoint_read triggers)
             if node.id in input_overrides:
@@ -121,6 +128,17 @@ class GraphExecutor:
     # ── Type coercion helpers ─────────────────────────────────────────────
 
     @staticmethod
+    def _get_output_value(outputs: dict[str, Any], handle: str) -> Any:
+        """Read an output handle with compatibility for older result/out flows."""
+        if handle in outputs:
+            return outputs.get(handle)
+        if handle == "result" and "out" in outputs:
+            return outputs.get("out")
+        if handle == "out" and "result" in outputs:
+            return outputs.get("result")
+        return None
+
+    @staticmethod
     def _to_num(v: Any, default: float = 0.0) -> float:
         """Coerce any value to float. bool→1/0, str→float, None→default."""
         if v is None:
@@ -131,6 +149,16 @@ class GraphExecutor:
             return float(v)
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _try_num(v: Any) -> float | None:
+        """Return a float only when the original value is numeric-like."""
+        if isinstance(v, bool):
+            return 1.0 if v else 0.0
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _to_bool(v: Any) -> bool:
@@ -199,15 +227,30 @@ class GraphExecutor:
                 return {"out": out_val}
 
             case "compare":
-                op = _COMPARE_OPS.get(d.get("operator", ">"), operator.gt)
+                operator_key = str(d.get("operator", ">")).strip().lower()
+                op = _COMPARE_OPS.get(operator_key, operator.gt)
                 a, b = inputs.get("in1"), inputs.get("in2")
+                if "in2" not in inputs:
+                    operand = d.get("operand")
+                    if not (isinstance(operand, str) and operand.strip() == ""):
+                        b = operand
                 if a is None or b is None:
                     return {"out": False}
                 # Auto-coerce to number when both values look numeric
-                try:
-                    return {"out": op(self._to_num(a), self._to_num(b))}
-                except TypeError:
-                    return {"out": op(str(a), str(b))}
+                num_a, num_b = self._try_num(a), self._try_num(b)
+                if num_a is not None and num_b is not None:
+                    return {"out": op(num_a, num_b)}
+                equality_ops = {"=", "==", "eq"}
+                inequality_ops = {"!=", "ne"}
+                if (num_a is None) != (num_b is None):
+                    if operator_key in equality_ops:
+                        return {"out": False}
+                    if operator_key in inequality_ops:
+                        return {"out": True}
+                    return {"out": False}
+                if operator_key not in equality_ops | inequality_ops:
+                    return {"out": False}
+                return {"out": op(str(a), str(b))}
 
             case "hysteresis":
                 val = inputs.get("value")
@@ -589,18 +632,14 @@ class GraphExecutor:
                 return {}
 
             case "heating_circuit":
-                # DIN-Norm Sommer/Winter-Umschaltung mit Hysterese
-                # Eingang: Aussentemperatur (kontinuierlicher Datenpunkt, keine Zeitschaltuhr nötig).
-                # Der Block puffert den zuletzt empfangenen Wert und übernimmt ihn als Slot-Wert
-                # in dem Moment, in dem die Uhr genau die Zielstunde erreicht:
-                #   T1 = "anliegender Wert" bei Stunde 7  (07:xx Uhr)
-                #   T2 = "anliegender Wert" bei Stunde 12 (12:xx Uhr)
-                #   T3 = "anliegender Wert" bei Stunde 22 (22:xx Uhr)
-                # "anliegender Wert" = letzter bekannter Wert zum Zeitpunkt des Übergangs,
-                # d.h. wenn um 07:05 ein Wert eintrifft, wird last_value (06:55-Wert) als T1 gespeichert.
-                # Jeder Slot wird pro Tag nur EINMAL erfasst; Folgewerte werden verworfen.
+                # Mannheimer Methode (DIN 4710): Sommer/Winter-Umschaltung anhand Tagesmittel.
+                # Messzeitpunkte (Erste-Kreuzung-Semantik — kein exakter Sensor-Takt nötig):
+                #   T1 = anliegender Wert beim ersten Eintreffen einer Messung ab 07:00
+                #   T2 = anliegender Wert beim ersten Eintreffen einer Messung ab 14:00
+                #   T3 = anliegender Wert beim ersten Eintreffen einer Messung ab 21:00
                 # T_avg = (T1 + T2 + 2×T3) / 4
-                # heating_mode=1 wenn ref_temp < temp_winter, bleibt 1 bis ref_temp > temp_summer
+                # Heizmodus EIN wenn T_avg < threshold_temp, AUS wenn >= threshold_temp + hysteresis.
+                # Fehlende Slots werden aus history-Vorberechnungen des Managers ergänzt (_history_*).
                 import datetime as _dt
 
                 state = self.hysteresis_state.setdefault(
@@ -621,64 +660,79 @@ class GraphExecutor:
                     },
                 )
                 # Migrate states persisted before these fields were introduced
-                state.setdefault("last_value", None)
-                state.setdefault("daily_avg_date", None)
+                for _k in ("last_value", "t1", "t1_date", "t2", "t2_date", "t3", "t3_date", "daily_avg", "daily_avg_date", "monthly_avg"):
+                    state.setdefault(_k, None)
+                state.setdefault("daily_temps", [])
+                state.setdefault("heating_mode", 0)
 
+                # Read new config keys; fall back to legacy temp_winter/temp_summer for
+                # graphs saved before this change so existing configurations are preserved.
+                _tw = d.get("temp_winter")
+                _ts = d.get("temp_summer")
+                if "threshold_temp" not in d and _tw is not None:
+                    threshold = float(_tw)
+                    hysteresis = float(_ts) - float(_tw) if _ts is not None else 2.0
+                else:
+                    threshold = float(d.get("threshold_temp", 14.0))
+                    hysteresis = float(d.get("hysteresis", 2.0))
+                today = inputs.get("_date") or _dt.date.today().isoformat()
+                hour = inputs.get("_hour", _dt.datetime.now().hour)
                 val = inputs.get("value")
-                temp_winter = float(d.get("temp_winter", 15.0))
-                temp_summer = float(d.get("temp_summer", 20.0))
+
+                # History fallback: fill missing slots pre-queried by the manager
+                for _slot in ("t1", "t2", "t3"):
+                    _hist_val = inputs.get(f"_history_{_slot}")
+                    if state[f"{_slot}_date"] != today and _hist_val is not None:
+                        state[_slot] = float(_hist_val)
+                        state[f"{_slot}_date"] = today
+
                 if val is not None:
                     fval = self._to_num(val)
-                    # _date / _hour allow unit tests to override wall-clock without mocking
-                    today = inputs.get("_date") or _dt.date.today().isoformat()
-                    slot = inputs.get("_slot")
+                    prev_value = state["last_value"]
 
-                    if slot in ("t1", "t2", "t3"):
-                        # Test-Override: Slot direkt mit dem eingehenden Wert belegen
-                        state[slot] = fval
-                        state[f"{slot}_date"] = today
-                    elif state["daily_avg_date"] != today:
-                        # "Anliegender Wert"-Logik: T1/T2/T3 = last_value beim Überqueren der
-                        # Zielstunde.  Ist noch kein last_value vorhanden (erster Wert des Tages),
-                        # wird der aktuelle Wert als bestmögliche Näherung verwendet.
-                        hour = inputs.get("_hour", _dt.datetime.now().hour)
-                        capture_val = state["last_value"] if state["last_value"] is not None else fval
-                        if hour == 7 and state["t1_date"] != today:
+                    slot_override = inputs.get("_slot")
+                    if slot_override in ("t1", "t2", "t3"):
+                        # Test override: inject slot value directly
+                        state[slot_override] = fval
+                        state[f"{slot_override}_date"] = today
+                    else:
+                        # Erste-Kreuzung: capture the value already on the bus AT the threshold
+                        # hour (prev_value), not the triggering measurement (fval).
+                        # Falls back to fval on cold start (no prior reading).
+                        capture_val = prev_value if prev_value is not None else fval
+                        if hour >= 7 and state["t1_date"] != today:
                             state["t1"] = capture_val
                             state["t1_date"] = today
-                        elif hour == 12 and state["t2_date"] != today:
+                        if hour >= 14 and state["t2_date"] != today:
                             state["t2"] = capture_val
                             state["t2_date"] = today
-                        elif hour == 22 and state["t3_date"] != today:
+                        if hour >= 21 and state["t3_date"] != today:
                             state["t3"] = capture_val
                             state["t3_date"] = today
 
-                    # last_value nach dem Slot-Check aktualisieren, damit beim NÄCHSTEN
-                    # Zeitpunkt der gerade empfangene Wert als "anliegender Wert" dient.
+                    # Update last_value AFTER slot capture so prev_value was valid at threshold time
                     state["last_value"] = fval
 
-                    # Tagesmittel berechnen sobald alle drei Slots das gleiche Datum tragen
-                    if state["t1_date"] == today and state["t2_date"] == today and state["t3_date"] == today and state["daily_avg_date"] != today:
-                        daily_avg = (state["t1"] + state["t2"] + 2 * state["t3"]) / 4
-                        state["daily_avg"] = daily_avg
-                        state["daily_avg_date"] = today
-                        state["daily_temps"].append(daily_avg)
-                        state["daily_temps"] = state["daily_temps"][-31:]
-                        state["monthly_avg"] = sum(state["daily_temps"]) / len(state["daily_temps"])
-                        # Slots für den nächsten Tag zurücksetzen
-                        for k in ("t1", "t2", "t3", "t1_date", "t2_date", "t3_date"):
-                            state[k] = None
-                # Hysterese: EIN wenn < temp_winter, AUS wenn > temp_summer
-                ref_temp = state["monthly_avg"] if state["monthly_avg"] is not None else state["daily_avg"]
+                # Calculate daily average once all three slots are captured for today
+                if state["t1_date"] == today and state["t2_date"] == today and state["t3_date"] == today and state["daily_avg_date"] != today:
+                    daily_avg = (state["t1"] + state["t2"] + 2 * state["t3"]) / 4
+                    state["daily_avg"] = daily_avg
+                    state["daily_avg_date"] = today
+                    state["daily_temps"].append(daily_avg)
+                    state["daily_temps"] = state["daily_temps"][-31:]
+                    state["monthly_avg"] = sum(state["daily_temps"]) / len(state["daily_temps"])
+
+                # Heating mode: ON below threshold, OFF at or above threshold + hysteresis
+                ref_temp = state["daily_avg"]
                 if ref_temp is not None:
-                    if ref_temp < temp_winter:
+                    if ref_temp < threshold:
                         state["heating_mode"] = 1
-                    elif ref_temp > temp_summer:
+                    elif ref_temp >= threshold + hysteresis:
                         state["heating_mode"] = 0
-                    # zwischen den Schwellwerten: letzten Zustand beibehalten (Hysterese)
+                    # Between thresholds: maintain current state (hysteresis band)
                 elif val is not None:
-                    # Noch keine Historik: Modus sofort aus dem aktuellen Wert ableiten
-                    state["heating_mode"] = 1 if self._to_num(val) < temp_winter else 0
+                    # No daily avg yet: immediate estimate from current value
+                    state["heating_mode"] = 1 if self._to_num(val) < threshold else 0
                 return {
                     "heating_mode": state["heating_mode"],
                     "daily_avg": state["daily_avg"],
@@ -1119,6 +1173,82 @@ class GraphExecutor:
             return round(x, ndigits)  # fallback
 
     @staticmethod
+    def _validate_formula_ast(tree: ast.AST) -> None:
+        """Allow only a constrained subset of expression AST nodes."""
+        allowed_nodes = (
+            ast.Expression,
+            ast.BinOp,
+            ast.UnaryOp,
+            ast.BoolOp,
+            ast.Compare,
+            ast.Call,
+            ast.Name,
+            ast.Attribute,
+            ast.Load,
+            ast.Constant,
+            ast.IfExp,
+            ast.List,
+            ast.Tuple,
+            ast.Dict,
+            ast.Subscript,
+            ast.Slice,
+            ast.Add,
+            ast.Sub,
+            ast.Mult,
+            ast.Div,
+            ast.FloorDiv,
+            ast.Mod,
+            ast.Pow,
+            ast.UAdd,
+            ast.USub,
+            ast.And,
+            ast.Or,
+            ast.Not,
+            ast.Eq,
+            ast.NotEq,
+            ast.Lt,
+            ast.LtE,
+            ast.Gt,
+            ast.GtE,
+            ast.In,
+            ast.NotIn,
+        )
+        for node in ast.walk(tree):
+            if not isinstance(node, allowed_nodes):
+                raise ExecutionError(f"Formula contains disallowed syntax: {type(node).__name__}")
+            if isinstance(node, ast.Attribute):
+                if not (isinstance(node.value, ast.Name) and node.value.id == "math" and not node.attr.startswith("_")):
+                    raise ExecutionError("Formula attribute access is not allowed")
+
+    @staticmethod
+    def _validate_script_ast(tree: ast.AST) -> None:
+        """Disallow dangerous script syntax while preserving basic script support."""
+        blocked = (
+            ast.Import,
+            ast.ImportFrom,
+            ast.ClassDef,
+            ast.FunctionDef,
+            ast.AsyncFunctionDef,
+            ast.Lambda,
+            ast.Try,
+            ast.With,
+            ast.AsyncWith,
+            ast.Global,
+            ast.Nonlocal,
+            ast.Raise,
+            ast.Delete,
+            ast.Yield,
+            ast.YieldFrom,
+            ast.Await,
+        )
+        for node in ast.walk(tree):
+            if isinstance(node, blocked):
+                raise ExecutionError(f"Script contains disallowed syntax: {type(node).__name__}")
+            if isinstance(node, ast.Attribute):
+                if not (isinstance(node.value, ast.Name) and node.value.id == "math" and not node.attr.startswith("_")):
+                    raise ExecutionError("Script attribute access is not allowed")
+
+    @staticmethod
     def _safe_eval(expr: str, ctx: dict[str, Any]) -> Any:
         """Evaluate a math expression safely.
 
@@ -1128,10 +1258,11 @@ class GraphExecutor:
         # Add Python builtins that are safe and useful in formulas.
         # Use _round_half_up instead of built-in round to get mathematical
         # rounding (0.5 always rounds up) rather than banker's rounding.
-        allowed.update({"abs": abs, "round": GraphExecutor._round_half_up, "min": min, "max": max})
+        allowed.update({"abs": abs, "round": GraphExecutor._round_half_up, "min": min, "max": max, "math": math})
         allowed.update(ctx)
         try:
             tree = ast.parse(expr, mode="eval")
+            GraphExecutor._validate_formula_ast(tree)
             return eval(compile(tree, "<formula>", "eval"), {"__builtins__": {}}, allowed)  # noqa: S307
         except Exception as exc:
             raise ExecutionError(f"Formula error: {exc}") from exc
@@ -1141,8 +1272,10 @@ class GraphExecutor:
         """Run a restricted Python script."""
         local_ns: dict[str, Any] = {"inputs": inputs, "result": None, "math": math}
         try:
+            tree = ast.parse(script, mode="exec")
+            GraphExecutor._validate_script_ast(tree)
             exec(
-                script,
+                compile(tree, "<script>", "exec"),
                 {
                     "__builtins__": {
                         "range": range,

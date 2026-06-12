@@ -93,7 +93,7 @@
       "bottom-left": "Bottom left",
       "bottom-right": "Bottom right"
     },
-    "hintClick": "Click → insert",
+    "hintClick": "Click → insert (first free position)",
     "hintDrag": "Drag → move",
     "hintResize": "↘ Handle → resize",
     "hintDelete": "Del → delete widget",
@@ -119,7 +119,8 @@
     "posX": "X",
     "posY": "Y",
     "widthShort": "W",
-    "heightShort": "H"
+    "heightShort": "H",
+    "hintPaletteDrag": "Drag from palette → place directly"
   },
   "viewer": {
     "noVisuSelected": "No visu selected"
@@ -390,6 +391,7 @@
       "type": "Type"
     },
     "chart": {
+      "title": "History",
       "period": "Period (hours)",
       "primarySeries": "Primary series",
       "additionalSeries": "Additional series",
@@ -418,9 +420,13 @@
         "last_week": "Last week",
         "last_month": "Last month"
       },
-      "defaultTimeRange": "Default time range"
+      "defaultTimeRange": "Default time range",
+      "selectTimeRange": "Select time range",
+      "editorPlaceholder": "History chart",
+      "seriesFallback": "Series {n}"
     },
     "energiefluss": {
+      "title": "Energy flow",
       "titleLabel": "Title (optional)",
       "hint": "Colour and flow direction are configured per node.\nFor «Bidirectional», the sign determines direction (positive → house, negative → away).\n«Invert sign» reverses this logic.",
       "center": "House consumption (centre, optional)",
@@ -436,6 +442,7 @@
       "invertSign": "Invert sign"
     },
     "fenster": {
+      "title": "Window / Door",
       "statusColors": "Status colours",
       "closed": "Closed",
       "tilted": "Tilted",
@@ -477,7 +484,11 @@
       "dpShutterStatus": "Shutter position status / display"
     },
     "iframe": {
+      "title": "iFrame",
       "url": "URL",
+      "labelPlaceholder": "e.g. weather map, calendar …",
+      "configureUrl": "Configure URL",
+      "noUrlConfigured": "No URL configured",
       "aspectRatio": "Aspect ratio",
       "aspectFree": "Free (fill height)",
       "sandbox": "Sandbox permissions",
@@ -492,6 +503,7 @@
       "invalidUrl": "Invalid URL"
     },
     "info": {
+      "title": "Info",
       "unitOverride": "Unit (overrides object unit)",
       "decimals": "Decimal places",
       "additionalValues": "Additional values (max. {max})",
@@ -501,6 +513,7 @@
       "placeholderDecimals": "Decimal places"
     },
     "kamera": {
+      "title": "Camera",
       "streamType": "Stream type",
       "streamMjpeg": "MJPEG (Motion JPEG)",
       "streamSnapshot": "JPEG Snapshot (Auto-Refresh)",
@@ -526,6 +539,7 @@
       "fitFill": "Fill"
     },
     "licht": {
+      "title": "Light",
       "type": "Type",
       "typeOnOff": "On/Off",
       "typeDimm": "On/Off + Dim",
@@ -555,11 +569,13 @@
       "dpWStatus": "Read white (status, optional)"
     },
     "link": {
+      "title": "Link",
       "targetPage": "Target page",
       "defaultLabel": "Link",
       "noTarget": "No target"
     },
     "qrcode": {
+      "title": "QR code",
       "labelAbove": "Label (shown above)",
       "type": "QR code type",
       "typeUrl": "URL",
@@ -586,6 +602,7 @@
       "bgColor": "Background colour"
     },
     "rolladen": {
+      "title": "Roller blind / Venetian blind",
       "typeRollo": "Roller blind",
       "typeJalousie": "Venetian blind (with slats)",
       "invertPos": "Invert position (0 % = closed)",
@@ -621,6 +638,7 @@
       "closedShort": "closed"
     },
     "rtr": {
+      "title": "Room temperature controller",
       "gradientColors": "Colour / gradient (1–4 colours, cold → warm)",
       "colorIndex": "Colour {n}",
       "tempRange": "Temperature range",
@@ -654,12 +672,14 @@
       "labelPlaceholder": "e.g. living room"
     },
     "slider": {
+      "title": "Slider",
       "unit": "Unit",
       "min": "Min",
       "max": "Max",
       "step": "Step"
     },
     "stufenschalter": {
+      "title": "Step switch",
       "stepsCount": "Steps ({n}/{max})",
       "addStep": "+ Step",
       "hint": "Pressing cycles through steps. The value is sent as bool / int / float / string depending on the object.",
@@ -670,9 +690,12 @@
       "color": "Colour",
       "name": "Name",
       "value": "Value",
+      "labelPlaceholder": "e.g. Fan speed",
+      "defaultOffLabel": "Off",
       "defaultStepLabel": "Step {n}"
     },
     "text": {
+      "title": "Text",
       "content": "Content",
       "markdownSupported": "(Markdown supported)",
       "fontSize": "Font size",
@@ -686,9 +709,11 @@
       "alignLeft": "Left",
       "alignCenter": "Centre",
       "alignRight": "Right",
-      "markdownRef": "Markdown quick reference"
+      "markdownRef": "Markdown quick reference",
+      "noText": "No text"
     },
     "toggle": {
+      "title": "Switch",
       "states": "States",
       "stateOn": "ON (true)",
       "stateOff": "OFF (false)",
@@ -700,7 +725,32 @@
       "colorTitle": "Colour",
       "textLabel": "Text"
     },
+    "buttongroup": {
+      "title": "Button group",
+      "defaultButton": "Button 1",
+      "defaultButtonWithNumber": "Button {number}",
+      "labelPlaceholder": "e.g. Scenes",
+      "columns": "Columns",
+      "showTitle": "Show title",
+      "buttons": "Buttons ({count}/{max})",
+      "addButton": "+ Button",
+      "writeHint": "Pressing a button writes the configured value to the linked object.",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "icon": "Icon",
+      "color": "Colour",
+      "value": "Send value",
+      "valuePlaceholder": "true, false, 1 ...",
+      "reset": "Reset",
+      "resetValue": "Reset value",
+      "resetDelay": "Delay (ms)",
+      "sent": "Sent",
+      "error": "Error",
+      "empty": "No buttons configured.",
+      "noDatapoint": "No linked object."
+    },
     "uhr": {
+      "title": "Clock",
       "accentColor": "Accent colour",
       "showSeconds": "Show seconds",
       "showDate": "Show date",
@@ -711,6 +761,7 @@
       "modeWortuhr": "Word clock"
     },
     "valuedisplay": {
+      "title": "Value display",
       "modeValueIcon": "Value + Icon",
       "modeValueHistory": "Value + History",
       "modeIconOnly": "Icon only",
@@ -758,9 +809,15 @@
       "minimum": "Minimum",
       "maximum": "Maximum",
       "gaugeColors": "Colour / gradient (1–4 colours, low → high)",
-      "colorIndex": "Colour {n}"
+      "colorIndex": "Colour {n}",
+      "clickForFullViewTitle": "Click for full view",
+      "qualityBadTitle": "Quality: bad",
+      "qualityUncertainTitle": "Quality: uncertain",
+      "selectTimeRangeTitle": "Select time range",
+      "historyFallback": "History"
     },
     "wetter": {
+      "title": "Weather",
       "labelCity": "Label (location name)",
       "labelHint": "Leave empty → timezone from API response is used",
       "apiUrl": "Weather API URL",
@@ -793,6 +850,7 @@
       "precipitationTitle": "Precipitation: {pct}"
     },
     "widgetref": {
+      "title": "Widget reference",
       "sourcePage": "Source page",
       "selectPage": "— Select page —",
       "widget": "Widget (name)",
@@ -801,6 +859,7 @@
       "noNamedWidgetsHint": "⚠ No widget on this page has a name. Add names in the editor."
     },
     "zeitschaltuhr": {
+      "title": "Timer",
       "widgetMode": "Widget mode",
       "modeFull": "Full access",
       "modeFullTitle": "Add, edit, delete",
@@ -821,6 +880,7 @@
       "loadError": "Could not load timer instances."
     },
     "grundriss": {
+      "title": "Floor plan / Schema",
       "background": "Background image",
       "replaceImage": "↺ Replace image",
       "uploadImage": "+ Upload image (SVG, PNG, JPG)",
@@ -875,6 +935,9 @@
       "keyboardHint": "Enter = close polygon · Esc = discard · Click first point = close",
       "defaultAreaName": "Area {n}",
       "datapoint": "Data point"
+    },
+    "horizontalbar": {
+      "title": "Bar display"
     },
     "missing": {
       "title": "Unknown",

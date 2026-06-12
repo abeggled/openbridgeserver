@@ -94,6 +94,84 @@ describe('HierarchyCombobox', () => {
     expect(items.length).toBe(1)
   })
 
+  it('does not render a duplicate tree header when the display path already includes it', async () => {
+    const { wrapper } = await mountHierarchyCombobox(
+      { modelValue: [] },
+      {
+        trees: [{ id: 1, name: 'Haus', display_depth: 0 }],
+        nodesByTree: {
+          1: [
+            { id: 1, tree_id: 1, parent_id: null, name: 'Gebäude' },
+            { id: 2, tree_id: 1, parent_id: 1, name: 'EG' },
+            { id: 3, tree_id: 1, parent_id: 2, name: 'Küche' },
+          ],
+        },
+      },
+    )
+    const input = wrapper.find('input')
+    await input.trigger('focus')
+    input.element.value = 'Küche'
+    await input.trigger('input')
+    await new Promise((r) => setTimeout(r, 250))
+    await flushPromises()
+
+    const item = wrapper.find('[data-testid="combobox-item-0"]')
+    expect(item.exists()).toBe(true)
+    expect((item.text().match(/Haus/g) || []).length).toBe(1)
+    expect(item.text()).toContain('Gebäude')
+    expect(item.text()).toContain('EG')
+    expect(item.text()).toContain('Küche')
+  })
+
+  it('keeps full path context available when display depth hides ancestors', async () => {
+    const { wrapper } = await mountHierarchyCombobox(
+      { modelValue: [] },
+      {
+        trees: [{ id: 1, name: 'Haus', display_depth: 2 }],
+        nodesByTree: {
+          1: [
+            { id: 1, tree_id: 1, parent_id: null, name: 'Gebäude A' },
+            { id: 2, tree_id: 1, parent_id: 1, name: 'EG' },
+            { id: 3, tree_id: 1, parent_id: 2, name: 'Küche' },
+            { id: 4, tree_id: 1, parent_id: null, name: 'Gebäude B' },
+            { id: 5, tree_id: 1, parent_id: 4, name: 'EG' },
+            { id: 6, tree_id: 1, parent_id: 5, name: 'Küche' },
+          ],
+        },
+      },
+    )
+
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+
+    const items = wrapper.findAll('[data-testid^="combobox-item-"]')
+    expect(items.length).toBeGreaterThanOrEqual(2)
+    expect(items.some((item) => item.text().includes('Gebäude A'))).toBe(false)
+    expect(items.some((item) => item.text().includes('Gebäude B'))).toBe(false)
+    expect(wrapper.find('[title="Haus › Gebäude A › EG › Küche"]').exists()).toBe(true)
+    expect(wrapper.find('[title="Haus › Gebäude B › EG › Küche"]').exists()).toBe(true)
+  })
+
+  it('keeps shallow selected chips disambiguated by tree name', async () => {
+    const { wrapper } = await mountHierarchyCombobox(
+      { modelValue: ['1:1'] },
+      {
+        trees: [{ id: 1, name: 'Haus', display_depth: 2 }],
+        nodesByTree: {
+          1: [
+            { id: 1, tree_id: 1, parent_id: null, name: 'Gebäude' },
+            { id: 2, tree_id: 1, parent_id: 1, name: 'EG' },
+          ],
+        },
+      },
+    )
+
+    const chip = wrapper.find('[data-testid="combobox-chip-0"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toContain('Haus')
+    expect(chip.text()).toContain('Gebäude')
+  })
+
   it('emits string[] of composite ids on selection', async () => {
     const { wrapper } = await mountHierarchyCombobox({ modelValue: [] })
     await wrapper.find('input').trigger('focus')

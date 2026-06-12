@@ -12,7 +12,7 @@ Abgedeckt:
   7.  Wetter-API antwortet 404 → 502
   8.  Wetter-API antwortet mit Redirect → 400
   9.  Wetter-API liefert kein JSON (HTML) → 502
-  10. Auth via ?_token= Query-Param (statt Authorization-Header)
+  10. Query-Token wird nicht als Auth akzeptiert
   11. Content-Type application/json;charset=utf-8 wird akzeptiert
 
 SSRF-Schutz:
@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import threading
 import unittest.mock
+import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -41,7 +42,11 @@ def bypass_ssrf():
     """Deaktiviert SSRF-Blocking für Tests die einen lokalen Mock-Server auf
     127.0.0.1 verwenden. Die SSRF-Tests (12–15) dürfen diese Fixture NICHT nutzen.
     """
-    with unittest.mock.patch.object(_weather_module, "_BLOCKED_NETWORKS", []):
+    with unittest.mock.patch.object(
+        _weather_module,
+        "build_pinned_url_targets",
+        side_effect=lambda url, **_kwargs: ([url], {}, {}),
+    ):
         yield
 
 
@@ -116,19 +121,311 @@ class _MockWeatherServer:
         self._server.shutdown()
 
 
+async def _create_weather_page(
+    client,
+    auth_headers: dict[str, str],
+    *,
+    access: str,
+    weather_url: str,
+    access_pin: str | None = None,
+) -> str:
+    payload: dict[str, object] = {
+        "name": f"weather-page-{uuid.uuid4().hex[:8]}",
+        "type": "PAGE",
+        "order": 999,
+        "access": access,
+    }
+    if access_pin is not None:
+        payload["access_pin"] = access_pin
+
+    create_resp = await client.post("/api/v1/visu/nodes", json=payload, headers=auth_headers)
+    assert create_resp.status_code == 201, create_resp.text
+    page_id = create_resp.json()["id"]
+
+    save_resp = await client.put(
+        f"/api/v1/visu/pages/{page_id}",
+        json={
+            "grid_cols": 12,
+            "grid_row_height": 80,
+            "grid_cell_width": 80,
+            "background": None,
+            "widgets": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "Weather",
+                    "type": "Wetter",
+                    "datapoint_id": None,
+                    "status_datapoint_id": None,
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 5,
+                    "config": {"url": weather_url},
+                },
+            ],
+        },
+        headers=auth_headers,
+    )
+    assert save_resp.status_code in (200, 204), save_resp.text
+    return page_id
+
+
+async def _create_page_with_widgets(
+    client,
+    auth_headers: dict[str, str],
+    *,
+    access: str,
+    widgets: list[dict[str, object]],
+    access_pin: str | None = None,
+) -> str:
+    payload: dict[str, object] = {
+        "name": f"weather-page-{uuid.uuid4().hex[:8]}",
+        "type": "PAGE",
+        "order": 999,
+        "access": access,
+    }
+    if access_pin is not None:
+        payload["access_pin"] = access_pin
+
+    create_resp = await client.post("/api/v1/visu/nodes", json=payload, headers=auth_headers)
+    assert create_resp.status_code == 201, create_resp.text
+    page_id = create_resp.json()["id"]
+
+    save_resp = await client.put(
+        f"/api/v1/visu/pages/{page_id}",
+        json={
+            "grid_cols": 12,
+            "grid_row_height": 80,
+            "grid_cell_width": 80,
+            "background": None,
+            "widgets": widgets,
+        },
+        headers=auth_headers,
+    )
+    assert save_resp.status_code in (200, 204), save_resp.text
+    return page_id
+
+
+def _weather_widget(weather_url: str, *, name: str = "Weather") -> dict[str, object]:
+    return {
+        "id": str(uuid.uuid4()),
+        "name": name,
+        "type": "Wetter",
+        "datapoint_id": None,
+        "status_datapoint_id": None,
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 5,
+        "config": {"url": weather_url},
+    }
+
+
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 
 # 1. Kein Token
-async def test_fetch_no_auth_returns_401(client):
+async def test_fetch_no_auth_returns_401(client, bypass_ssrf):
     resp = await client.get("/api/v1/weather/fetch?url=http://example.com/weather")
     assert resp.status_code == 401
 
 
 # 2. Ungültiger Token
-async def test_fetch_invalid_token_returns_401(client):
-    resp = await client.get("/api/v1/weather/fetch?url=http://example.com/weather&_token=not.valid.jwt")
+async def test_fetch_invalid_token_returns_401(client, bypass_ssrf):
+    resp = await client.get(
+        "/api/v1/weather/fetch?url=http://example.com/weather",
+        headers={"Authorization": "Bearer not.valid.jwt"},
+    )
     assert resp.status_code == 401
+
+
+async def test_fetch_allows_protected_visu_session_for_configured_weather_url(client, auth_headers, bypass_ssrf):
+    pin = "1234"
+    srv = _MockWeatherServer()
+    page_id = await _create_weather_page(
+        client,
+        auth_headers,
+        access="protected",
+        access_pin=pin,
+        weather_url=f"{srv.base_url}/weather",
+    )
+    try:
+        auth_resp = await client.post(f"/api/v1/visu/nodes/{page_id}/auth", json={"pin": pin})
+        assert auth_resp.status_code == 200, auth_resp.text
+        session_token = auth_resp.json()["session_token"]
+
+        resp = await client.get(
+            f"/api/v1/weather/fetch?url={srv.base_url}/weather",
+            headers={"X-Page-Id": page_id, "X-Session-Token": session_token},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["timezone"] == "Europe/Zurich"
+    finally:
+        srv.shutdown()
+        await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+
+
+async def test_fetch_rejects_protected_visu_session_for_unconfigured_weather_url(client, auth_headers, bypass_ssrf):
+    pin = "1234"
+    page_id = await _create_weather_page(
+        client,
+        auth_headers,
+        access="protected",
+        access_pin=pin,
+        weather_url="http://example.com/configured-weather",
+    )
+    try:
+        auth_resp = await client.post(f"/api/v1/visu/nodes/{page_id}/auth", json={"pin": pin})
+        assert auth_resp.status_code == 200, auth_resp.text
+        session_token = auth_resp.json()["session_token"]
+
+        resp = await client.get(
+            "/api/v1/weather/fetch?url=http://example.com/other-weather",
+            headers={"X-Page-Id": page_id, "X-Session-Token": session_token},
+        )
+        assert resp.status_code == 403
+    finally:
+        await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+
+
+async def test_fetch_rejects_public_visu_page_without_login(client, auth_headers, bypass_ssrf):
+    page_id = await _create_weather_page(
+        client,
+        auth_headers,
+        access="public",
+        weather_url="http://example.com/weather",
+    )
+    try:
+        resp = await client.get(
+            "/api/v1/weather/fetch?url=http://example.com/weather",
+            headers={"X-Page-Id": page_id},
+        )
+        assert resp.status_code == 401
+    finally:
+        await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+
+
+async def test_fetch_allows_protected_visu_session_for_widget_ref_weather_url(client, auth_headers, bypass_ssrf):
+    pin = "1234"
+    srv = _MockWeatherServer()
+    source_page_id = await _create_page_with_widgets(
+        client,
+        auth_headers,
+        access="public",
+        widgets=[_weather_widget(f"{srv.base_url}/weather", name="Outdoor weather")],
+    )
+    page_id = await _create_page_with_widgets(
+        client,
+        auth_headers,
+        access="protected",
+        access_pin=pin,
+        widgets=[
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Weather reference",
+                "type": "WidgetRef",
+                "datapoint_id": None,
+                "status_datapoint_id": None,
+                "x": 0,
+                "y": 0,
+                "w": 6,
+                "h": 5,
+                "config": {"source_page_id": source_page_id, "source_widget_name": "Outdoor weather"},
+            }
+        ],
+    )
+    try:
+        auth_resp = await client.post(f"/api/v1/visu/nodes/{page_id}/auth", json={"pin": pin})
+        assert auth_resp.status_code == 200, auth_resp.text
+        session_token = auth_resp.json()["session_token"]
+
+        resp = await client.get(
+            f"/api/v1/weather/fetch?url={srv.base_url}/weather",
+            headers={"X-Page-Id": page_id, "X-Session-Token": session_token},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["timezone"] == "Europe/Zurich"
+    finally:
+        srv.shutdown()
+        await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+        await client.delete(f"/api/v1/visu/nodes/{source_page_id}", headers=auth_headers)
+
+
+async def test_fetch_allows_protected_visu_session_for_grundriss_weather_url(client, auth_headers, bypass_ssrf):
+    pin = "1234"
+    srv = _MockWeatherServer()
+    page_id = await _create_page_with_widgets(
+        client,
+        auth_headers,
+        access="protected",
+        access_pin=pin,
+        widgets=[
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Floor plan",
+                "type": "Grundriss",
+                "datapoint_id": None,
+                "status_datapoint_id": None,
+                "x": 0,
+                "y": 0,
+                "w": 6,
+                "h": 5,
+                "config": {
+                    "image": "data:image/png;base64,",
+                    "miniWidgets": [
+                        {
+                            "id": str(uuid.uuid4()),
+                            "label": "Weather",
+                            "widgetType": "Wetter",
+                            "config": {"url": f"{srv.base_url}/weather"},
+                            "datapointId": None,
+                            "statusDatapointId": None,
+                            "x": 100,
+                            "y": 100,
+                            "wPx": 240,
+                            "hPx": 160,
+                            "visible": True,
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    try:
+        auth_resp = await client.post(f"/api/v1/visu/nodes/{page_id}/auth", json={"pin": pin})
+        assert auth_resp.status_code == 200, auth_resp.text
+        session_token = auth_resp.json()["session_token"]
+
+        resp = await client.get(
+            f"/api/v1/weather/fetch?url={srv.base_url}/weather",
+            headers={"X-Page-Id": page_id, "X-Session-Token": session_token},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["timezone"] == "Europe/Zurich"
+    finally:
+        srv.shutdown()
+        await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+
+
+async def test_fetch_uses_private_network_blocking_mode(client, auth_headers, monkeypatch):
+    observed: dict[str, bool] = {}
+
+    def _wrapped_build_targets(url: str, **kwargs):
+        observed["allow_private_networks"] = bool(kwargs.get("allow_private_networks"))
+        return [url], {}, {}
+
+    monkeypatch.setattr(_weather_module, "build_pinned_url_targets", _wrapped_build_targets)
+
+    srv = _MockWeatherServer()
+    try:
+        resp = await client.get(
+            f"/api/v1/weather/fetch?url={srv.base_url}/weather",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert observed["allow_private_networks"] is False
+    finally:
+        srv.shutdown()
 
 
 # 3. Ungültiges URL-Schema
@@ -228,18 +525,14 @@ async def test_fetch_non_json_response_returns_502(client, auth_headers, bypass_
         srv.shutdown()
 
 
-# 10. Auth via ?_token= Query-Param
-async def test_fetch_auth_via_query_token(client, auth_headers, bypass_ssrf):
+# 10. Query-Token wird nicht als Auth akzeptiert
+async def test_fetch_query_token_returns_401(client, auth_headers, bypass_ssrf):
     token = auth_headers["Authorization"].removeprefix("Bearer ")
-    srv = _MockWeatherServer()
-    try:
-        resp = await client.get(
-            f"/api/v1/weather/fetch?url={srv.base_url}/weather&_token={token}",
-            # Bewusst kein Authorization-Header
-        )
-        assert resp.status_code == 200
-    finally:
-        srv.shutdown()
+    resp = await client.get(
+        f"/api/v1/weather/fetch?url=http://example.com/weather&_token={token}",
+        # Bewusst kein Authorization-Header: Weather akzeptiert keine Tokens in URLs.
+    )
+    assert resp.status_code == 401
 
 
 # 11. Content-Type application/json;charset=utf-8 wird akzeptiert
@@ -265,7 +558,7 @@ async def test_fetch_ssrf_loopback_ipv4_blocked(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 400
-    assert "gesperrt" in resp.json().get("detail", "").lower()
+    assert resp.json()["detail"]["code"] == "url_target_blocked"
 
 
 # 13. Loopback via localhost-Hostname
@@ -275,7 +568,7 @@ async def test_fetch_ssrf_localhost_blocked(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 400
-    assert "gesperrt" in resp.json().get("detail", "").lower()
+    assert resp.json()["detail"]["code"] == "url_target_blocked"
 
 
 # 14. Link-local / Cloud-Metadata-Endpunkt (AWS IMDSv1)
@@ -285,7 +578,7 @@ async def test_fetch_ssrf_metadata_ip_blocked(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 400
-    assert "gesperrt" in resp.json().get("detail", "").lower()
+    assert resp.json()["detail"]["code"] == "url_target_blocked"
 
 
 # 15. Loopback IPv6
@@ -295,4 +588,18 @@ async def test_fetch_ssrf_loopback_ipv6_blocked(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 400
-    assert "gesperrt" in resp.json().get("detail", "").lower()
+    assert resp.json()["detail"]["code"] == "url_target_blocked"
+
+
+async def test_fetch_ssrf_private_network_blocked_for_authenticated_user(client, auth_headers):
+    resp = await client.get(
+        "/api/v1/weather/fetch?url=http://192.168.1.10/weather",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "url_target_blocked"
+
+
+async def test_fetch_ssrf_private_network_without_auth_is_rejected_before_fetch(client):
+    resp = await client.get("/api/v1/weather/fetch?url=http://192.168.1.10/weather")
+    assert resp.status_code == 401

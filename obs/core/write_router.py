@@ -144,8 +144,10 @@ class WriteRouter:
                     dt.python_type.__name__,
                     type(value).__name__,
                 )
+                await self._report_type_mismatch(event, dt.python_type.__name__, type(value).__name__)
                 return
 
+        await self._clear_type_mismatch(event.datapoint_id)
         await self._write_to_dest_bindings(event.datapoint_id, value, skip_binding_id=event.binding_id)
 
     # ------------------------------------------------------------------
@@ -172,7 +174,16 @@ class WriteRouter:
 
         logger.info("WriteRouter: %d writable binding(s) for dp %s", len(rows), dp_id)
         for row in rows:
-            binding = _row_to_binding(row)
+            try:
+                binding = _row_to_binding(row)
+            except Exception as exc:
+                logger.error(
+                    "WriteRouter: invalid writable binding skipped for dp=%s binding=%s: %s",
+                    dp_id,
+                    _row_value(row, "id") or "<unknown>",
+                    exc,
+                )
+                continue
             if skip_binding_id and binding.id == skip_binding_id:
                 logger.debug("WriteRouter: skipping originating binding %s", binding.id)
                 continue
@@ -292,6 +303,32 @@ class WriteRouter:
                     binding.adapter_type,
                     binding.id,
                 )
+
+    async def _report_type_mismatch(self, event: Any, expected: str, got: str) -> None:
+        reporter = getattr(self._registry, "report_type_mismatch", None)
+        if reporter is None:
+            return
+        await reporter(
+            event.datapoint_id,
+            expected=expected,
+            got=got,
+            source_adapter=getattr(event, "source_adapter", ""),
+            value=event.value,
+        )
+
+    async def _clear_type_mismatch(self, dp_id: uuid.UUID) -> None:
+        clear = getattr(self._registry, "clear_diagnostic", None)
+        if clear is None:
+            return
+        await clear(dp_id, "type_mismatch")
+
+
+def _row_value(row: Any, key: str) -> str | None:
+    try:
+        value = row[key]
+    except Exception:
+        return None
+    return str(value) if value is not None else None
 
 
 # ---------------------------------------------------------------------------

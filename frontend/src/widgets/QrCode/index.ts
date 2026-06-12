@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type: 'QrCode',
-  label: 'QR-Code',
+  label: 'widgets.qrcode.title',
   icon: '▣',
   group: 'Medien & Sonstiges',
   minW: 2, minH: 2,

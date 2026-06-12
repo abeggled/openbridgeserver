@@ -120,6 +120,32 @@ async def test_rename_updates_multiple_graphs_and_nodes():
 
 
 @pytest.mark.asyncio
+async def test_rename_uses_current_graph_after_cache_mutation():
+    dp_id = uuid.uuid4()
+    flow1 = _flow_with_nodes({"datapoint_id": str(dp_id), "datapoint_name": "Alt"})
+    stale_flow2 = _flow_with_nodes({"datapoint_id": str(dp_id), "datapoint_name": "Alt", "marker": "stale"})
+    current_flow2 = _flow_with_nodes({"datapoint_id": str(dp_id), "datapoint_name": "UserEdit", "marker": "current"})
+    mgr, db = _make_manager({"g1": ("G1", True, flow1), "g2": ("G2", True, stale_flow2)})
+    reloaded = False
+
+    async def _persist_and_reload(*_args):
+        nonlocal reloaded
+        if not reloaded:
+            reloaded = True
+            mgr._graphs["g2"] = ("G2", True, current_flow2)
+
+    db.execute_and_commit.side_effect = _persist_and_reload
+
+    event = DataPointRenamedEvent(dp_id=dp_id, old_name="Alt", new_name="Neu")
+    await mgr._on_datapoint_renamed(event)
+
+    assert db.execute_and_commit.await_count == 2
+    saved_flow = json.loads(db.execute_and_commit.await_args_list[1].args[1][0])
+    assert saved_flow["nodes"][0]["data"]["datapoint_name"] == "Neu"
+    assert saved_flow["nodes"][0]["data"]["marker"] == "current"
+
+
+@pytest.mark.asyncio
 async def test_rename_handles_node_without_datapoint_id():
     """Nodes that have no datapoint_id (e.g. math nodes) must not be touched."""
     dp_id = uuid.uuid4()

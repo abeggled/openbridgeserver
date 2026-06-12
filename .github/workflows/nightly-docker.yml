@@ -1,0 +1,126 @@
+name: Nightly Docker Image
+
+on:
+  schedule:
+    - cron: '10 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: nightly-docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NIGHTLY_RETENTION_COUNT: 14
+
+jobs:
+  docker:
+    name: Build and push nightly Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set nightly metadata
+        id: nightly
+        run: |
+          DATE="$(date -u +%Y%m%d)"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          VERSION="nightly-${DATE}-${SHORT_SHA}"
+          echo "$VERSION" > obs/version
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=nightly
+            type=raw,value=nightly-${{ steps.nightly.outputs.date }}
+            type=raw,value=nightly-${{ steps.nightly.outputs.short_sha }}
+            type=raw,value=${{ steps.nightly.outputs.version }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Prune old nightly container versions
+        # Only runs when the build-and-push step succeeded, so a failed nightly
+        # never deletes previously published nightly images.
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: ${{ github.event.repository.name }}
+          KEEP: ${{ env.NIGHTLY_RETENTION_COUNT }}
+        run: |
+          set -euo pipefail
+
+          if gh api "/users/${OWNER}/packages/container/${PACKAGE}/versions?per_page=1" >/dev/null 2>&1; then
+            PACKAGE_BASE="/users/${OWNER}/packages/container/${PACKAGE}/versions"
+          else
+            PACKAGE_BASE="/orgs/${OWNER}/packages/container/${PACKAGE}/versions"
+          fi
+
+          gh api --paginate "${PACKAGE_BASE}?per_page=100" \
+            --jq '.[] | [.id, .created_at, ((.metadata.container.tags // []) | join(","))] | @tsv' \
+            > versions.tsv
+
+          python3 <<'PY' > delete-ids.txt
+          import os
+          import re
+
+          keep = int(os.environ["KEEP"])
+          nightly_re = re.compile(r"^nightly(?:-\d{8})?(?:-[0-9a-f]{7,})?$")
+          release_re = re.compile(r"^\d+\.\d+\.\d+(?:-RC\d*)?$", re.IGNORECASE)
+
+          versions = []
+          with open("versions.tsv", encoding="utf-8") as handle:
+              for line in handle:
+                  line = line.rstrip("\n")
+                  if not line:
+                      continue
+                  version_id, created_at, tags_raw = (line.split("\t") + ["", "", ""])[:3]
+                  tags = [tag for tag in tags_raw.split(",") if tag]
+                  if any(tag == "latest" or release_re.match(tag) for tag in tags):
+                      continue
+                  if not any(nightly_re.match(tag) for tag in tags):
+                      continue
+                  versions.append((created_at, version_id))
+
+          versions.sort(reverse=True)
+          for _, version_id in versions[keep:]:
+              print(version_id)
+          PY
+
+          while IFS= read -r VERSION_ID; do
+            [[ -z "$VERSION_ID" ]] && continue
+            echo "Deleting old nightly package version ${VERSION_ID}"
+            gh api --method DELETE "${PACKAGE_BASE}/${VERSION_ID}"
+          done < delete-ids.txt

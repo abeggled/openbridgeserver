@@ -103,6 +103,14 @@ def test_filter_to_query_v2_q_is_forwarded():
     assert query.filters.q == "kitchen"
 
 
+def test_filter_to_query_v2_accepts_device_pas_criteria():
+    """Device(PA) criteria is persisted for filterset matching, not dropped as extra."""
+    criteria = FilterCriteria(devices=["1.1.10", "1.1.11"])
+    query = _filter_to_query_v2(criteria, None)
+    assert query.filters.metadata is None
+    assert query.filters.datapoints is None
+
+
 def test_filter_criteria_accepts_hierarchy_node_refs():
     """hierarchy_nodes is stored verbatim — server-side expansion is the UI's job."""
     criteria = FilterCriteria(

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
 from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
+from obs.api.auth import create_access_token
 
 pytestmark = pytest.mark.integration
 
@@ -60,17 +62,13 @@ async def test_import_background_png(client, auth_headers, backgrounds_tmp):
 
 
 @pytest.mark.asyncio
-async def test_import_background_svg(client, auth_headers, backgrounds_tmp):
+async def test_import_background_rejects_svg(client, auth_headers, backgrounds_tmp):
     resp = await client.post(
         "/api/v1/visu/backgrounds/import",
         headers=auth_headers,
         files=[("files", ("blueprint.svg", _MINIMAL_SVG, "image/svg+xml"))],
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["imported"] == 1
-    assert body["names"] == ["blueprint"]
-    assert (backgrounds_tmp / "blueprint.svg").exists()
+    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -81,6 +79,29 @@ async def test_import_background_rejects_non_image(client, auth_headers, backgro
         files=[("files", ("notes.txt", b"not an image", "text/plain"))],
     )
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_import_background_with_non_admin_user_forbidden(client, auth_headers, backgrounds_tmp):
+    username = f"bg-user-{uuid.uuid4().hex[:8]}"
+    password = "pw-12345678"
+    create_user = await client.post(
+        "/api/v1/auth/users",
+        headers=auth_headers,
+        json={"username": username, "password": password, "is_admin": False},
+    )
+    assert create_user.status_code == 201, create_user.text
+    try:
+        user_headers = {"Authorization": f"Bearer {create_access_token(username)}"}
+        resp = await client.post(
+            "/api/v1/visu/backgrounds/import",
+            headers=user_headers,
+            files=[("files", ("floorplan.png", _MINIMAL_PNG, "image/png"))],
+        )
+        assert resp.status_code == 403, resp.text
+        assert not (backgrounds_tmp / "floorplan.png").exists()
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 @pytest.mark.asyncio

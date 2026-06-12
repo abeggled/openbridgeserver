@@ -28,7 +28,7 @@
 
         <!-- Verbindung -->
         <div v-show="activeTab === 'connection'" class="p-4 flex flex-col h-full">
-          <p class="text-xs text-slate-500 mb-3 shrink-0">{{ nodeDef?.description }}</p>
+          <p class="text-xs text-slate-500 mb-3 shrink-0">{{ nodeDescription(nodeDef) }}</p>
           <div class="flex flex-col flex-1 min-h-0 gap-1">
             <label class="label shrink-0">{{ $t('logic.ports.object') }}</label>
             <input v-model="dpSearch" type="text" class="input text-sm shrink-0" :placeholder="$t('logic.nodeConfig.connection.searchPlaceholder')" @input="searchDps" />
@@ -88,7 +88,7 @@
                 @input="onValueMapCustomInput"
                 @change="onValueMapCustomChange"
                 class="input text-xs font-mono h-24 resize-y"
-                placeholder='{"0": "Aus", "1": "Init", "2": "Aktiv", "3": "Fehler"}'
+                :placeholder="$t('logic.nodeConfig.transform.valuemapPlaceholder')"
                 data-testid="value-map-custom"
               />
               <p v-if="valueMapCustomError" class="text-xs text-red-400 mt-0.5">{{ valueMapCustomError }}</p>
@@ -172,7 +172,7 @@
     <!-- ── Trigger node: cron builder ──────────────────────────────────── -->
     <template v-else-if="isCronNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-        <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
 
         <!-- Presets -->
         <div class="form-group">
@@ -240,7 +240,7 @@
     <!-- ── math_formula: Formel + Ausgangs-Transformation ──────────────── -->
     <template v-else-if="isMathFormulaNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-        <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
 
         <!-- Hauptformel -->
         <div class="form-group">
@@ -285,13 +285,27 @@
     <!-- ── api_client: special rendering with conditional auth fields ──── -->
     <template v-else-if="isApiClientNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-        <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
 
         <!-- Standard request fields -->
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.urlLabel') }}</label>
-          <input v-model="localData.url" type="text" class="input text-sm" @change="emitUpdate"
-            data-testid="api-client-url" />
+          <div class="flex gap-2">
+            <input v-model="localData.url" type="text" class="input text-sm flex-1 min-w-0" @change="emitUpdate"
+              data-testid="api-client-url" />
+            <button type="button" class="btn-secondary btn-sm shrink-0" :disabled="urlTargetChecking || !localData.url" @click="checkApiClientUrlTarget" data-testid="api-client-check-target">
+              {{ $t('logic.nodeConfig.apiClient.checkTarget') }}
+            </button>
+          </div>
+          <div v-if="urlTargetDecision" :class="['mt-2 p-3 rounded-lg border text-xs', urlTargetDecision.allowed ? 'bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300']">
+            <div class="font-semibold">{{ urlTargetDecision.allowed ? $t('logic.nodeConfig.apiClient.targetAllowed') : $t('logic.nodeConfig.apiClient.targetBlocked') }}</div>
+            <p class="mt-1">{{ urlTargetDecision.reason }}</p>
+            <p v-if="urlTargetDecision.resolved_ips?.length" class="mt-1 font-mono break-all">{{ urlTargetDecision.resolved_ips.join(', ') }}</p>
+            <button v-if="auth.isAdmin && !urlTargetDecision.allowed && urlTargetDecision.suggested_target" type="button" class="btn-primary btn-sm mt-2" :disabled="urlTargetSaving" @click="allowApiClientTarget" data-testid="api-client-allow-target">
+              {{ $t('logic.nodeConfig.apiClient.allowTarget', { target: urlTargetDecision.suggested_target }) }}
+            </button>
+          </div>
+          <div v-if="urlTargetMsg" :class="['mt-2 p-2 rounded text-xs', urlTargetMsg.ok ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500']">{{ urlTargetMsg.text }}</div>
         </div>
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.methodLabel') }}</label>
@@ -365,7 +379,7 @@
     <!-- ── string_concat ────────────────────────────────────────────────── -->
     <template v-else-if="isStringConcatNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-        <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
 
         <!-- Count + Separator -->
         <div class="flex gap-3">
@@ -413,7 +427,7 @@
     <!-- ── json_extractor / xml_extractor ───────────────────────────────── -->
     <template v-else-if="isExtractorNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-        <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
 
         <!-- Preview: last received raw data -->
         <div class="form-group">
@@ -461,7 +475,7 @@
               <button
                 @click="addJsonPath"
                 class="w-6 h-6 flex items-center justify-center rounded text-teal-400 hover:bg-teal-400/10 font-bold text-lg leading-none"
-                title="Ausgang hinzufügen"
+                :title="$t('logic.nodeConfig.extractor.addOutput')"
               >+</button>
             </div>
 
@@ -476,12 +490,12 @@
                   :value="entry.label"
                   @input="updateJsonPath(i, 'label', $event.target.value)"
                   class="input text-xs flex-1"
-                  placeholder="Bezeichnung"
+                  :placeholder="$t('logic.nodeConfig.extractor.labelPlaceholder')"
                 />
                 <button
                   @click="removeJsonPath(i)"
                   class="extractor-output-remove w-5 h-5 flex items-center justify-center rounded hover:bg-red-400/10 text-base leading-none shrink-0"
-                  title="Ausgang entfernen"
+                  :title="$t('logic.nodeConfig.extractor.removeOutput')"
                 >−</button>
               </div>
               <input
@@ -491,7 +505,7 @@
                 @blur="activeExtractorRow = null"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
-                placeholder="z.B. data.temperature"
+                :placeholder="$t('logic.nodeConfig.extractor.pathExample')"
                 data-testid="extractor-path-input"
               />
               <p v-if="jsonPathPreview(i) !== null" class="text-xs text-teal-400">
@@ -586,7 +600,7 @@
     <!-- ── substring_extractor ──────────────────────────────────────────── -->
     <template v-else-if="isSubstringExtractorNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-        <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
 
         <!-- Modus -->
         <div class="form-group">
@@ -693,7 +707,7 @@
     <!-- ── iCalendar ──────────────────────────────────────────────────────── -->
     <template v-else-if="isICalNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-        <p class="text-xs text-slate-500">{{ nodeDef?.description }}</p>
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
 
         <!-- URL -->
         <div class="form-group">
@@ -801,10 +815,10 @@
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-        <p v-if="nodeDef?.description" class="text-xs text-slate-500">{{ nodeDef.description }}</p>
+        <p v-if="nodeDef?.description" class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
         <template v-if="nodeDef?.config_schema">
           <div v-for="(schema, key) in configFields" :key="key" class="form-group">
-            <label class="label">{{ schema.label ?? key }}</label>
+            <label class="label">{{ fieldLabel(nodeDef?.type, key, schema.label) }}</label>
             <textarea v-if="schema.type === 'string' && key === 'script'"
               v-model="localData[key]" rows="6"
               class="input text-xs font-mono resize-y" @change="emitUpdate" />
@@ -831,10 +845,12 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { dpApi, searchApi } from '@/api/client'
+import { dpApi, searchApi, securityApi } from '@/api/client'
+import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
 
 const { t, te } = useI18n()
+const auth = useAuthStore()
 
 const props = defineProps({
   node:        { type: Object, default: null },
@@ -858,6 +874,10 @@ const activeTab          = ref('connection')
 const valueMapPreset     = ref('')
 const valueMapCustom     = ref('')
 const valueMapCustomError = ref('')
+const urlTargetChecking = ref(false)
+const urlTargetSaving = ref(false)
+const urlTargetDecision = ref(null)
+const urlTargetMsg = ref(null)
 
 // ── Value Map Presets ──────────────────────────────────────────────────────
 const VALUE_MAP_PRESETS = computed(() => [
@@ -1215,7 +1235,7 @@ function _saveJsonPaths(paths) {
 
 function addJsonPath() {
   const paths = jsonPaths.value.slice()
-  paths.push({ label: `Wert ${paths.length + 1}`, path: '' })
+  paths.push({ label: t('logic.nodeConfig.extractor.valueN', { n: paths.length + 1 }), path: '' })
   _saveJsonPaths(paths)
   activeExtractorRow.value = paths.length - 1
 }
@@ -1254,7 +1274,7 @@ function jsonPathPreview(i) {
 function migrateJsonToMultiPath() {
   const legacyPath = (localData.value.json_path || '').trim()
   if (!legacyPath) return
-  localData.value.json_paths = JSON.stringify([{ label: 'Wert 1', path: legacyPath }])
+  localData.value.json_paths = JSON.stringify([{ label: t('logic.nodeConfig.extractor.valueN', { n: 1 }), path: legacyPath }])
   localData.value.json_path = ''
   emitUpdate()
 }
@@ -1416,6 +1436,17 @@ function setBool(key, val) {
   localData.value[key] = val
 }
 
+function nodeDescription(def) {
+  if (!def?.type) return def?.description ?? ''
+  const key = `logic.nodeDescriptions.${def.type}`
+  return te(key) ? t(key) : (def.description ?? '')
+}
+
+function fieldLabel(nodeType, fieldKey, fallback) {
+  const key = `logic.nodeConfig.${nodeType}.${fieldKey}`
+  return te(key) ? t(key) : (fallback ?? fieldKey)
+}
+
 // ── Watchers ───────────────────────────────────────────────────────────────
 watch(() => props.node, (n) => {
   if (n) {
@@ -1424,6 +1455,8 @@ watch(() => props.node, (n) => {
     dpResults.value = []
     activeTab.value = 'connection'
     activeExtractorRow.value = null
+    urlTargetDecision.value = null
+    urlTargetMsg.value = null
     if (n.type === 'timer_cron') {
       parseCronToFields(n.data.cron || '0 7 * * *')
     }
@@ -1447,6 +1480,11 @@ watch(() => props.node, (n) => {
     }
   }
 }, { immediate: true })
+
+watch(() => localData.value.url, () => {
+  urlTargetDecision.value = null
+  urlTargetMsg.value = null
+})
 
 // ── Preset / formula handlers ──────────────────────────────────────────────
 function onPresetChange(e) {
@@ -1544,6 +1582,50 @@ function selectDp(dp) {
   dpSearch.value  = dp.name
   dpResults.value = []
   emitUpdate()
+}
+
+function normaliseUrlTargetInput(value) {
+  const trimmed = (value || '').trim()
+  if (!trimmed || /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed
+  return `http://${trimmed}`
+}
+
+async function checkApiClientUrlTarget() {
+  if (!localData.value.url) return
+  urlTargetChecking.value = true
+  urlTargetDecision.value = null
+  urlTargetMsg.value = null
+  try {
+    const checkedUrl = normaliseUrlTargetInput(localData.value.url)
+    if (checkedUrl !== localData.value.url) {
+      localData.value.url = checkedUrl
+      emitUpdate()
+    }
+    const { data } = await securityApi.checkUrlTarget({
+      url: checkedUrl,
+    })
+    urlTargetDecision.value = data
+  } catch (e) {
+    urlTargetMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.error') }
+  } finally {
+    urlTargetChecking.value = false
+  }
+}
+
+async function allowApiClientTarget() {
+  const target = urlTargetDecision.value?.suggested_target
+  if (!target) return
+  urlTargetSaving.value = true
+  urlTargetMsg.value = null
+  try {
+    await securityApi.addUrlTarget({ target, reason: t('logic.nodeConfig.apiClient.defaultAllowReason') })
+    urlTargetMsg.value = { ok: true, text: t('logic.nodeConfig.apiClient.allowSaved') }
+    await checkApiClientUrlTarget()
+  } catch (e) {
+    urlTargetMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.saveError') }
+  } finally {
+    urlTargetSaving.value = false
+  }
 }
 
 // ── Emit ───────────────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ interface BarConfig {
 
 WidgetRegistry.register({
   type: 'HorizontalBar',
-  label: 'Balkenanzeige',
+  label: 'widgets.horizontalbar.title',
   icon: '📊',
   group: 'Anzeige',
   minW: 3, minH: 2,

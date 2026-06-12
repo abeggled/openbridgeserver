@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import httpx
@@ -20,13 +21,15 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.config import get_settings
 from obs.db.database import Database, get_db
 
 router = APIRouter(tags=["icons"])
 
 _SVG_RE = re.compile(rb"<svg[\s>]", re.IGNORECASE)
+_SVG_MAX_DEPTH = 256
+_SVG_DOCTYPE_RE = re.compile(r"<!DOCTYPE", re.IGNORECASE)
 
 
 def _secure_filename(filename: str) -> str:
@@ -107,6 +110,72 @@ def _is_svg(content: bytes) -> bool:
     return bool(_SVG_RE.search(content[:2048]))
 
 
+def _sanitize_svg(content: bytes) -> bytes:
+    """Remove executable/dangerous SVG constructs and return sanitized UTF-8 bytes."""
+    try:
+        decoded_probe = content.decode("utf-8", errors="ignore")
+        if _SVG_DOCTYPE_RE.search(decoded_probe):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "Ungültiges SVG (DOCTYPE ist nicht erlaubt)",
+            )
+        parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=False))
+        root = ET.fromstring(content, parser=parser)
+    except (ET.ParseError, LookupError, UnicodeError):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Ungültiges SVG (XML konnte nicht gelesen werden)",
+        )
+
+    def local_name(tag: str) -> str:
+        return tag.split("}", 1)[-1].lower()
+
+    blocked_tags = {
+        "script",
+        "foreignobject",
+        "iframe",
+        "object",
+        "embed",
+        "animate",
+        "animatemotion",
+        "animatetransform",
+        "set",
+    }
+    stack: list[tuple[ET.Element | None, ET.Element, int]] = [(None, root, 0)]
+
+    while stack:
+        parent, elem, depth = stack.pop()
+        if depth > _SVG_MAX_DEPTH:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "Ungültiges SVG (zu tief verschachtelt)",
+            )
+
+        tag_name = local_name(elem.tag)
+        if tag_name in blocked_tags:
+            if parent is not None:
+                parent.remove(elem)
+            continue
+
+        for attr in list(elem.attrib):
+            attr_name = local_name(attr)
+            value = elem.attrib.get(attr) or ""
+            normalized_scheme = re.sub(r"[\x00-\x20]+", "", value).lower()
+            if attr_name.startswith("on"):
+                del elem.attrib[attr]
+            elif attr_name in {"href", "xlink:href"} and normalized_scheme.startswith(("javascript:", "data:")):
+                del elem.attrib[attr]
+
+        for child in list(elem):
+            stack.append((elem, child, depth + 1))
+
+    if local_name(root.tag) != "svg":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Ungültiges SVG")
+    if root.tag.startswith("{"):
+        ET.register_namespace("", root.tag.split("}", 1)[0][1:])
+    return ET.tostring(root, encoding="utf-8", xml_declaration=False)
+
+
 def _safe_name(filename: str) -> str | None:
     """Return a sanitised icon name (stem only, alphanumeric + hyphen/underscore,
     lowercase). Returns None if the name cannot be made safe.
@@ -174,11 +243,15 @@ async def list_icons(
     for svg_file in sorted(icons_dir.glob("*.svg")):
         try:
             raw = svg_file.read_bytes()
+            try:
+                sanitized = _sanitize_svg(raw)
+            except HTTPException:
+                sanitized = b""
             items.append(
                 IconOut(
                     name=svg_file.stem,
                     size=len(raw),
-                    content=raw.decode("utf-8", errors="replace"),
+                    content=sanitized.decode("utf-8", errors="replace"),
                 ),
             )
         except OSError:
@@ -189,7 +262,7 @@ async def list_icons(
 @router.post("/import", response_model=ImportResult)
 async def import_icons(
     files: list[UploadFile] = File(...),
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> ImportResult:
     """Upload one or more SVG files or a ZIP archive containing SVGs.
     Each file is validated to confirm it actually contains SVG markup,
@@ -199,6 +272,7 @@ async def import_icons(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Keine Dateien empfangen")
 
     icons_dir = _icons_dir()
+    pending_writes: dict[str, bytes] = {}
     imported: list[str] = []
     skipped = 0
 
@@ -228,7 +302,7 @@ async def import_icons(
                             if not name:
                                 skipped += 1
                                 continue
-                            (icons_dir / f"{name}.svg").write_bytes(member_bytes)
+                            pending_writes[name] = _sanitize_svg(member_bytes)
                             if name not in imported:
                                 imported.append(name)
                         else:
@@ -249,9 +323,12 @@ async def import_icons(
             if not name:
                 skipped += 1
                 continue
-            (icons_dir / f"{name}.svg").write_bytes(content)
+            pending_writes[name] = _sanitize_svg(content)
             if name not in imported:
                 imported.append(name)
+
+    for name, svg_bytes in pending_writes.items():
+        (icons_dir / f"{name}.svg").write_bytes(svg_bytes)
 
     return ImportResult(
         imported=len(imported),
@@ -306,7 +383,7 @@ async def export_icons_post(
 @router.delete("/", status_code=status.HTTP_200_OK)
 async def delete_icons(
     body: DeleteRequest,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> dict:
     """Delete one or multiple icons by name."""
     icons_dir = _icons_dir()
@@ -412,8 +489,14 @@ async def get_icon(
             status.HTTP_404_NOT_FOUND,
             f"Icon '{name}' nicht gefunden",
         )
-    return Response(content=svg_file.read_bytes(), media_type="image/svg+xml")
+    raw = svg_file.read_bytes()
+    sanitized = _sanitize_svg(raw)
+    return Response(content=sanitized, media_type="image/svg+xml")
 
+
+_KNXUF_URL = "https://raw.githubusercontent.com/mampfes/ha-knx-uf-iconset/refs/heads/master/dist/ha-knx-uf-iconset.js"
+_KNXUF_VIEWBOX = "50 50 260 260"
+_KNXUF_ICONS_RE = re.compile(r"'([^']+)'\s*:\s*'([^']+)'")
 
 _FA_GRAPHQL_URL = "https://api.fontawesome.com"
 _FA_CDN = "https://unpkg.com/@fortawesome/fontawesome-free@7.2.0/svgs"
@@ -575,7 +658,7 @@ async def _fa_cdn_svg(
 @router.post("/fontawesome", response_model=ImportResult)
 async def import_fontawesome(
     body: FontAwesomeRequest,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> ImportResult:
     """Icons von FontAwesome importieren.
@@ -671,4 +754,97 @@ async def import_fontawesome(
         names=imported,
         debug=[],  # debug=dbg  ← Debug-Ausgabe bei Bedarf wieder aktivieren
         message=(f"{len(imported)} FontAwesome Icon(s) importiert" + (f", {skipped} nicht gefunden/übersprungen" if skipped else "")),
+    )
+
+
+# ---------------------------------------------------------------------------
+# KNX UF Iconset
+# ---------------------------------------------------------------------------
+
+
+def _parse_knxuf_js(content: str) -> dict[str, str]:
+    """Extract icon name → SVG path data pairs from ha-knx-uf-iconset.js.
+
+    The file stores icons as JS object literals:
+        const ICONS = { 'icon_name': 'M ...', ... };
+    Returns only entries whose path data is non-empty.
+    """
+    return {name: path_data for name, path_data in _KNXUF_ICONS_RE.findall(content) if name and path_data}
+
+
+def _build_knxuf_svg(path_data: str) -> bytes:
+    """Wrap a KNX UF path string in a minimal SVG element."""
+    import xml.etree.ElementTree as ET  # noqa: PLC0415 (local import for clarity)
+
+    root = ET.Element("svg")
+    root.set("xmlns", "http://www.w3.org/2000/svg")
+    root.set("viewBox", _KNXUF_VIEWBOX)
+    path_el = ET.SubElement(root, "path")
+    path_el.set("d", path_data)
+    return ET.tostring(root, encoding="utf-8", xml_declaration=False)
+
+
+@router.post("/knxuf", response_model=ImportResult)
+async def import_knxuf(
+    _user: str = Depends(get_current_user),
+) -> ImportResult:
+    """KNX UF Iconset aus dem ha-knx-uf-iconset GitHub-Repository importieren.
+
+    Lädt die JS-Bundle-Datei herunter, extrahiert alle Icons und speichert sie
+    mit dem Präfix kuf_ in der Icon-Bibliothek. Bereits vorhandene kuf_-Icons
+    werden überschrieben.
+    """
+    icons_dir = _icons_dir()
+    icons_dir_resolved = icons_dir.resolve()
+
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as http:
+        try:
+            resp = await http.get(_KNXUF_URL)
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"Download fehlgeschlagen: {exc}",
+            )
+
+    raw_icons = _parse_knxuf_js(resp.text)
+    if not raw_icons:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Keine Icons in der Quelldatei gefunden",
+        )
+
+    imported: list[str] = []
+    skipped = 0
+
+    for icon_name, path_data in raw_icons.items():
+        safe = _safe_name(icon_name)
+        if not safe:
+            skipped += 1
+            continue
+
+        stored_name = f"kuf_{safe}"
+        svg_bytes = _build_knxuf_svg(path_data)
+
+        try:
+            sanitized = _sanitize_svg(svg_bytes)
+        except HTTPException:
+            skipped += 1
+            continue
+
+        target_path = (icons_dir / f"{stored_name}.svg").resolve()
+        try:
+            target_path.relative_to(icons_dir_resolved)
+        except ValueError:
+            skipped += 1
+            continue
+
+        target_path.write_bytes(sanitized)
+        imported.append(stored_name)
+
+    return ImportResult(
+        imported=len(imported),
+        skipped=skipped,
+        names=imported,
+        message=(f"{len(imported)} KNX UF Icon(s) importiert" + (f", {skipped} übersprungen" if skipped else "")),
     )

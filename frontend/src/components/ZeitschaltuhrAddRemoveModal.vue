@@ -6,7 +6,7 @@
  * mode="restricted"  — Bearbeiten + Aktivieren/Deaktivieren (kein Hinzufügen/Löschen)
  * mode="minimal"     — nur Aktivieren/Deaktivieren
  */
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { datapoints as dpApi } from '@/api/client'
 import type { BindingOut } from '@/api/client'
@@ -33,6 +33,10 @@ const bindings  = ref<BindingOut[]>([])
 
 const editingBinding   = ref<BindingOut | null>(null)
 const pendingDeleteId  = ref<string | null>(null)
+
+const zsuBindings = computed(() =>
+  bindings.value.filter((b) => b.adapter_instance_id === props.instanceId)
+)
 
 // ── Load ──────────────────────────────────────────────────────────────────────
 
@@ -184,7 +188,7 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
         <template v-else>
 
           <div
-            v-if="bindings.length === 0"
+            v-if="zsuBindings.length === 0"
             class="text-sm text-gray-400 dark:text-gray-500 text-center py-4"
           >
             {{ $t('zst.noBindings') }}
@@ -192,8 +196,9 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
 
           <!-- Binding-Liste -->
           <div
-            v-for="b in bindings"
+            v-for="b in zsuBindings"
             :key="String(b.id)"
+            data-testid="zsu-binding-row"
             class="rounded-lg border transition-colors"
             :class="pendingDeleteId === String(b.id)
               ? 'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20'
@@ -228,7 +233,7 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
               <button
                 v-if="mode !== 'minimal'"
                 type="button"
-                title="Bearbeiten"
+                :title="$t('common.edit')"
                 :class="[btnBase, 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 hover:text-blue-600 dark:hover:text-blue-400 border border-gray-200 dark:border-gray-600']"
                 :disabled="saving"
                 @click="openEdit(b)"
@@ -238,7 +243,8 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
               <button
                 v-if="mode === 'full'"
                 type="button"
-                title="Löschen"
+                :title="$t('common.delete')"
+                data-testid="zsu-delete-btn"
                 :class="[btnBase, 'bg-red-50 dark:bg-red-900/20 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 border border-red-200 dark:border-red-800']"
                 :disabled="saving"
                 @click="requestDelete(b)"
@@ -257,6 +263,7 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
               >{{ $t('common.no') }}</button>
               <button
                 type="button"
+                data-testid="zsu-confirm-delete"
                 :class="[btnBase, 'bg-red-600 hover:bg-red-500 text-white border border-red-600']"
                 :disabled="saving"
                 @click="confirmDelete(b)"
@@ -296,6 +303,7 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
     <ZeitschaltuhrBindingModal
       v-if="editingBinding"
       :datapoint-id="props.datapointId"
+      :instance-id="props.instanceId"
       :binding-id="String(editingBinding.id)"
       @close="editingBinding = null"
       @saved="onEditSaved"

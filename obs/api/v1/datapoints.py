@@ -11,14 +11,17 @@ POST   /api/v1/datapoints/{id}/value write value (fires DataValueEvent)
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, field_serializer
 
-from obs.api.auth import get_current_user, optional_current_user
+from obs.api.auth import get_admin_user, get_current_user, optional_current_user
+from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config
 from obs.api.v1.sessions import validate_session
+from obs.core.event_bus import DataValueEvent, get_event_bus
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
 from obs.models.datapoint import DataPointCreate, DataPointUpdate
@@ -51,6 +54,16 @@ class HierarchyNodeRef(BaseModel):
     display_depth: int = 0
 
 
+class DataPointDiagnostic(BaseModel):
+    type: str
+    expected: str | None = None
+    got: str | None = None
+    source_adapter: str | None = None
+    count: int = 1
+    last_value: Any = None
+    updated_at: str | None = None
+
+
 class DataPointOut(BaseModel):
     id: uuid.UUID
     name: str
@@ -66,6 +79,7 @@ class DataPointOut(BaseModel):
     # Runtime
     value: Any = None
     quality: str | None = None
+    diagnostics: list[DataPointDiagnostic] = []
     # Hierarchy (populated by search endpoint, empty elsewhere)
     hierarchy_nodes: list[HierarchyNodeRef] = []
 
@@ -103,6 +117,48 @@ class WriteValueIn(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _coerce_value_for_type(value: Any, data_type: str) -> Any:
+    """Coerce *value* to the Python type declared for *data_type*.
+
+    Raises ValueError when the value is incompatible so callers can return 422.
+    UNKNOWN datapoints accept any value unchanged.
+    """
+    from obs.models.types import DataTypeRegistry
+
+    defn = DataTypeRegistry.get(data_type)
+    if defn.name == "UNKNOWN":
+        return value
+
+    py_type = defn.python_type
+
+    if isinstance(value, py_type) and not (py_type is int and isinstance(value, bool)):
+        return value
+    if py_type is int and isinstance(value, bool):
+        return int(value)
+    if py_type is float and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if py_type is int and isinstance(value, float) and not isinstance(value, bool) and value == int(value):
+        return int(value)
+    if py_type is bool and isinstance(value, int) and not isinstance(value, bool):
+        return bool(value)
+    if py_type is datetime.date and isinstance(value, str):
+        try:
+            return datetime.date.fromisoformat(value)
+        except ValueError:
+            pass
+    if py_type is datetime.time and isinstance(value, str):
+        try:
+            return datetime.time.fromisoformat(value)
+        except ValueError:
+            pass
+    if py_type is datetime.datetime and isinstance(value, str):
+        try:
+            return datetime.datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    raise ValueError(f"Value {value!r} ({type(value).__name__}) is not compatible with data_type '{data_type}'")
+
+
 def _enrich(dp: Any) -> DataPointOut:
     """Add current value/quality from registry ValueState."""
     reg = get_registry()
@@ -121,6 +177,7 @@ def _enrich(dp: Any) -> DataPointOut:
         updated_at=dp.updated_at.isoformat(),
         value=state.value if state else None,
         quality=state.quality if state else None,
+        diagnostics=list(state.diagnostics.values()) if state else [],
     )
 
 
@@ -167,7 +224,7 @@ async def list_datapoints(
 @router.post("/", response_model=DataPointOut, status_code=status.HTTP_201_CREATED)
 async def create_datapoint(
     body: DataPointCreate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> DataPointOut:
     from obs.models.types import DataTypeRegistry
 
@@ -196,11 +253,14 @@ async def get_datapoint(
 async def update_datapoint(
     dp_id: uuid.UUID,
     body: DataPointUpdate,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> DataPointOut:
     reg = get_registry()
-    if reg.get(dp_id) is None:
+    current_dp = reg.get(dp_id)
+    if current_dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+
+    # --- Validation phase (no side effects) ---
     if body.data_type is not None:
         from obs.models.types import DataTypeRegistry
 
@@ -209,14 +269,43 @@ async def update_datapoint(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"Unknown data_type '{body.data_type}'",
             )
-    dp = await reg.update(dp_id, body)
+
+    coerced: Any = None
+    quality: str | None = None
+    if "value" in body.model_fields_set:
+        if body.value is not None:
+            # Use the incoming data_type when it changes in the same request.
+            effective_type = body.data_type if body.data_type is not None else current_dp.data_type
+            try:
+                coerced = _coerce_value_for_type(body.value, effective_type)
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
+            quality = "good"
+        else:
+            quality = "uncertain"
+
+    # --- Mutation phase (all validation passed) ---
+    # value=None in model_copy ensures exclude_none=True in reg.update() drops it —
+    # DataPoint has no value field.
+    dp = await reg.update(dp_id, body.model_copy(update={"value": None}))
+
+    if "value" in body.model_fields_set:
+        await get_event_bus().publish(
+            DataValueEvent(
+                datapoint_id=dp_id,
+                value=coerced,
+                quality=quality,
+                source_adapter="api",
+            )
+        )
+
     return _enrich(dp)
 
 
 @router.delete("/{dp_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_datapoint(
     dp_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> None:
     reg = get_registry()
     if reg.get(dp_id) is None:
@@ -291,7 +380,9 @@ async def _page_has_datapoint(db: Database, page_id: str, dp_id: uuid.UUID) -> b
     for widget in page.widgets:
         if widget.datapoint_id == dp_id_str or widget.status_datapoint_id == dp_id_str:
             return True
-        if any(v == dp_id_str for v in widget.config.values() if isinstance(v, str)):
+        config_dp_ids: set[str] = set()
+        collect_datapoint_ids_from_config(widget.config, config_dp_ids)
+        if dp_id_str in config_dp_ids:
             return True
     return False
 
@@ -314,8 +405,6 @@ async def write_value(
     - Seite ist 'private' ohne JWT → 401
     - Kein Auth-Kontext → 401
     """
-    from obs.core.event_bus import DataValueEvent, get_event_bus
-
     reg = get_registry()
     if reg.get(dp_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")

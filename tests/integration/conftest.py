@@ -1,7 +1,7 @@
 """Integration Test Fixtures — Ebene 2
 
 Session-scoped setup:
-  1. mosquitto  — Eclipse Mosquitto in Docker (anonymous, port 18830)
+  1. mosquitto  — Eclipse Mosquitto in Docker (anonymous, dynamic localhost port)
   2. app        — FastAPI app with lifespan, SQLite file DB, test MQTT port
   3. client     — httpx.AsyncClient via ASGITransport
   4. auth_headers — Bearer token from admin/admin login
@@ -13,6 +13,7 @@ Requirements (install alongside regular deps):
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import tempfile
 import time
@@ -30,9 +31,12 @@ from httpx import ASGITransport, AsyncClient
 @pytest.fixture(scope="session")
 def mosquitto_port():
     """Start eclipse-mosquitto in Docker with anonymous access enabled.
-    Yields the host port (18830). Stops/removes the container on teardown.
+    Yields the host port. Stops/removes the container on teardown.
     """
-    port = 18830
+    image = os.environ.get("OBS_TEST_MOSQUITTO_IMAGE", "eclipse-mosquitto:2")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
 
     # Write a minimal mosquitto config that allows anonymous connections
     cfg = tempfile.NamedTemporaryFile(mode="w", suffix=".conf", delete=False, prefix="obs_test_mosquitto_")
@@ -47,27 +51,36 @@ def mosquitto_port():
                 "run",
                 "-d",
                 "-p",
-                f"{port}:1883",
+                f"127.0.0.1:{port}:1883",
                 "-v",
                 f"{cfg.name}:/mosquitto/config/mosquitto.conf:ro",
-                "eclipse-mosquitto",
+                image,
             ],
         )
         .decode()
         .strip()
     )
 
-    # Give the broker a moment to start accepting connections
-    time.sleep(1.5)
-
-    yield port
-
-    subprocess.run(["docker", "stop", cid], check=False, capture_output=True)
-    subprocess.run(["docker", "rm", cid], check=False, capture_output=True)
     try:
-        os.unlink(cfg.name)
-    except OSError:
-        pass
+        deadline = time.monotonic() + 15
+        while True:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                    break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    logs = subprocess.run(["docker", "logs", cid], check=False, capture_output=True, text=True)
+                    raise RuntimeError(f"Mosquitto test broker did not become ready on port {port}: {logs.stderr or logs.stdout}")
+                time.sleep(0.1)
+
+        yield port
+    finally:
+        subprocess.run(["docker", "stop", cid], check=False, capture_output=True)
+        subprocess.run(["docker", "rm", cid], check=False, capture_output=True)
+        try:
+            os.unlink(cfg.name)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +115,7 @@ async def app(mosquitto_port):
     db_file = tempfile.NamedTemporaryFile(mode="w", suffix=".db", delete=False, prefix="obs_test_db_")
     db_file.close()
     db_path = db_file.name
+    allowlist_path = db_path.replace(".db", "_url_targets.yaml")
 
     override_settings(
         Settings(
@@ -118,6 +132,7 @@ async def app(mosquitto_port):
             security=SecuritySettings(
                 jwt_secret="integration-test-secret-32-chars-xx",
                 jwt_expire_minutes=60,
+                url_target_allowlist_path=allowlist_path,
             ),
             mosquitto=MosquittoSettings(
                 passwd_file="/tmp/obs_integration_test_passwd",
@@ -166,6 +181,7 @@ async def app(mosquitto_port):
         db_path.replace(".db", "_ringbuffer.db"),
         db_path.replace(".db", "_ringbuffer.db-wal"),
         db_path.replace(".db", "_ringbuffer.db-shm"),
+        allowlist_path,
     ]
     for cleanup_path in cleanup_paths:
         try:

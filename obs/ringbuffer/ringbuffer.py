@@ -28,9 +28,17 @@ from typing import Any
 
 import aiosqlite
 
+from obs.core.json import json_dumps
+
 logger = logging.getLogger(__name__)
 _UNSET = object()
 _ALLOWED_STORAGE_MODELS = {"memory", "disk", "file"}
+_SQLITE_CORRUPTION_MARKERS = (
+    "database disk image is malformed",
+    "file is not a database",
+    "integrity_check failed",
+)
+_MAX_QUARANTINE_FILES_PER_STORAGE_FILE = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ringbuffer (
@@ -120,6 +128,8 @@ class RingBuffer:
         self._max_age = max_age
         self._conn: aiosqlite.Connection | None = None
         self._last_values: dict[str, Any] = {}  # dp_id → last recorded value
+        self._last_recovery_at: str | None = None
+        self._last_recovery_files: list[str] = []
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -127,15 +137,13 @@ class RingBuffer:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        path = ":memory:" if self._storage == "memory" else self._disk_path
-        self._conn = await aiosqlite.connect(path)
-        self._conn.row_factory = aiosqlite.Row
-        await self._conn.execute("PRAGMA foreign_keys=ON")
-        if self._storage in {"disk", "file"}:
-            await self._conn.execute("PRAGMA journal_mode=WAL")
-        await self._conn.executescript(_SCHEMA)
-        await self._ensure_compat_schema()
-        await self._conn.commit()
+        async with self._lock:
+            try:
+                await self._open_connection_locked()
+            except Exception as exc:
+                if not self._can_recover_from(exc):
+                    raise
+                await self._recover_corrupt_storage_locked(exc)
         logger.info(
             "RingBuffer started (%s, max_entries=%s, max_file_size_bytes=%s, max_age=%s)",
             self._storage,
@@ -145,9 +153,7 @@ class RingBuffer:
         )
 
     async def stop(self) -> None:
-        if self._conn:
-            await self._conn.close()
-            self._conn = None
+        await self._close_connection()
 
     # ------------------------------------------------------------------
     # Runtime config switch
@@ -190,7 +196,12 @@ class RingBuffer:
                 self._max_entries = resolved_max_entries
                 self._max_file_size_bytes = int(resolved_max_file_size) if resolved_max_file_size is not None else None
                 self._max_age = int(resolved_max_age) if resolved_max_age is not None else None
-                await self._trim()
+                try:
+                    await self._trim()
+                except Exception as exc:
+                    if not self._can_recover_from(exc):
+                        raise
+                    await self._recover_corrupt_storage_locked(exc)
                 logger.info(
                     "RingBuffer reconfigured in-place → %s, max_entries=%s, max_file_size_bytes=%s, max_age=%s",
                     storage,
@@ -202,8 +213,7 @@ class RingBuffer:
 
             # Model switch: close old connection and start empty without migration.
             old_storage = self._storage
-            if self._conn:
-                await self._conn.close()
+            await self._close_connection()
 
             self._storage = storage
             self._max_entries = resolved_max_entries
@@ -211,14 +221,12 @@ class RingBuffer:
             self._max_age = int(resolved_max_age) if resolved_max_age is not None else None
 
             # Open new connection
-            path = ":memory:" if storage == "memory" else self._disk_path
-            self._conn = await aiosqlite.connect(path)
-            self._conn.row_factory = aiosqlite.Row
-            await self._conn.execute("PRAGMA foreign_keys=ON")
-            if storage in {"disk", "file"}:
-                await self._conn.execute("PRAGMA journal_mode=WAL")
-            await self._conn.executescript(_SCHEMA)
-            await self._ensure_compat_schema()
+            try:
+                await self._open_connection_locked()
+            except Exception as exc:
+                if not self._can_recover_from(exc):
+                    raise
+                await self._recover_corrupt_storage_locked(exc)
             await self._conn.execute("DELETE FROM ringbuffer")
             await self._conn.commit()
             self._last_values.clear()
@@ -251,25 +259,67 @@ class RingBuffer:
             return
         metadata_obj = metadata or {}
         async with self._lock:
-            cursor = await self._conn.execute(
-                """INSERT INTO ringbuffer
-                   (ts, datapoint_id, topic, old_value, new_value, source_adapter, quality, metadata_version, metadata)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                (
+            try:
+                await self._record_locked(
                     ts,
                     datapoint_id,
                     topic,
-                    json.dumps(old_value),
-                    json.dumps(new_value),
+                    old_value,
+                    new_value,
                     source_adapter,
                     quality,
                     metadata_version,
-                    json.dumps(metadata_obj),
-                ),
-            )
-            await self._persist_metadata_indexes(cursor.lastrowid, metadata_obj)
-            await self._conn.commit()
-            await self._trim(reference_ts=ts)
+                    metadata_obj,
+                )
+            except Exception as exc:
+                if not self._can_recover_from(exc):
+                    raise
+                await self._recover_corrupt_storage_locked(exc)
+                await self._record_locked(
+                    ts,
+                    datapoint_id,
+                    topic,
+                    old_value,
+                    new_value,
+                    source_adapter,
+                    quality,
+                    metadata_version,
+                    metadata_obj,
+                )
+
+    async def _record_locked(
+        self,
+        ts: str,
+        datapoint_id: str,
+        topic: str,
+        old_value: Any,
+        new_value: Any,
+        source_adapter: str,
+        quality: str,
+        metadata_version: int,
+        metadata_obj: dict[str, Any],
+    ) -> None:
+        if not self._conn:
+            return
+        cursor = await self._conn.execute(
+            """INSERT INTO ringbuffer
+               (ts, datapoint_id, topic, old_value, new_value, source_adapter, quality, metadata_version, metadata)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                ts,
+                datapoint_id,
+                topic,
+                json_dumps(old_value),
+                json_dumps(new_value),
+                source_adapter,
+                quality,
+                metadata_version,
+                json.dumps(metadata_obj),
+            ),
+        )
+        await self._persist_metadata_indexes(cursor.lastrowid, metadata_obj)
+        await self._conn.commit()
+        await self._trim(reference_ts=ts)
 
     async def _trim(self, reference_ts: str | None = None) -> None:
         """Apply retention rules and keep max_entries compatibility."""
@@ -451,7 +501,6 @@ class RingBuffer:
 
         # Capture old value from our own tracking (reliable in asyncio)
         old_value = self._last_values.get(dp_id)
-        self._last_values[dp_id] = event.value
 
         try:
             from obs.core.registry import get_registry
@@ -461,7 +510,7 @@ class RingBuffer:
         except RuntimeError:
             topic = f"dp/{dp_id}/value"
 
-        metadata = await self._build_metadata_snapshot(
+        metadata = await build_ringbuffer_metadata_snapshot(
             dp_id=dp_id,
             source_adapter=str(event.source_adapter),
             datapoint=dp,
@@ -477,52 +526,7 @@ class RingBuffer:
             metadata_version=1,
             metadata=metadata,
         )
-
-    async def _build_metadata_snapshot(
-        self,
-        *,
-        dp_id: str,
-        source_adapter: str,
-        datapoint: Any,
-    ) -> dict[str, Any]:
-        bindings: list[dict[str, Any]] = []
-        try:
-            from obs.db.database import get_db
-
-            rows = await get_db().fetchall(
-                """SELECT adapter_type, adapter_instance_id, direction, config
-                   FROM adapter_bindings
-                   WHERE datapoint_id=? AND enabled=1
-                   ORDER BY created_at, id""",
-                (dp_id,),
-            )
-            for row in rows:
-                raw_config = _safe_loads(row["config"])
-                config = raw_config if isinstance(raw_config, dict) else {}
-                bindings.append(
-                    {
-                        "adapter_type": str(row["adapter_type"] or ""),
-                        "adapter_instance_id": str(row["adapter_instance_id"] or ""),
-                        "direction": str(row["direction"] or ""),
-                        "normalized": _normalize_binding_metadata(config),
-                    }
-                )
-        except RuntimeError:
-            pass
-        except Exception:
-            logger.exception("RingBuffer metadata snapshot for dp=%s failed", dp_id)
-
-        tags = list(datapoint.tags) if datapoint and isinstance(getattr(datapoint, "tags", None), list) else []
-        return {
-            "source": {"adapter": source_adapter},
-            "datapoint": {
-                "id": dp_id,
-                "name": getattr(datapoint, "name", None),
-                "data_type": getattr(datapoint, "data_type", None),
-                "tags": tags,
-            },
-            "bindings": bindings,
-        }
+        self._last_values[dp_id] = event.value
 
     # ------------------------------------------------------------------
     # Query
@@ -668,13 +672,23 @@ class RingBuffer:
             sql += f" ORDER BY id {direction}"
 
         rows: list[Any]
-        if value_filters:
-            rows = await self._fetchall(sql, params)
-        else:
+        if not value_filters:
             sql += " LIMIT ? OFFSET ?"
             params.append(limit)
             params.append(offset)
+        try:
             rows = await self._fetchall(sql, params)
+        except Exception as exc:
+            if not self._can_recover_from(exc):
+                raise
+            async with self._lock:
+                try:
+                    rows = await self._fetchall(sql, params)
+                except Exception as locked_exc:
+                    if not self._can_recover_from(locked_exc):
+                        raise
+                    await self._recover_corrupt_storage_locked(locked_exc)
+                    rows = await self._fetchall(sql, params)
 
         entries = [
             RingBufferEntry(
@@ -722,9 +736,25 @@ class RingBuffer:
                 "max_file_size_bytes": self._max_file_size_bytes,
                 "max_age": self._max_age,
                 "file_size_bytes": 0,
+                "last_recovery_at": self._last_recovery_at,
+                "last_recovery_file_count": len(self._last_recovery_files),
             }
-        async with self._conn.execute("SELECT COUNT(*) AS c, MIN(ts) AS oldest, MAX(ts) AS newest FROM ringbuffer") as cur:
-            row = await cur.fetchone()
+        try:
+            async with self._conn.execute("SELECT COUNT(*) AS c, MIN(ts) AS oldest, MAX(ts) AS newest FROM ringbuffer") as cur:
+                row = await cur.fetchone()
+        except Exception as exc:
+            if not self._can_recover_from(exc):
+                raise
+            async with self._lock:
+                try:
+                    async with self._conn.execute("SELECT COUNT(*) AS c, MIN(ts) AS oldest, MAX(ts) AS newest FROM ringbuffer") as cur:
+                        row = await cur.fetchone()
+                except Exception as locked_exc:
+                    if not self._can_recover_from(locked_exc):
+                        raise
+                    await self._recover_corrupt_storage_locked(locked_exc)
+                    async with self._conn.execute("SELECT COUNT(*) AS c, MIN(ts) AS oldest, MAX(ts) AS newest FROM ringbuffer") as cur:
+                        row = await cur.fetchone()
         oldest_ts = row[1] if row else None
         return {
             "total": row[0] if row else 0,
@@ -736,6 +766,8 @@ class RingBuffer:
             "max_file_size_bytes": self._max_file_size_bytes,
             "max_age": self._max_age,
             "file_size_bytes": await self._current_storage_bytes(),
+            "last_recovery_at": self._last_recovery_at,
+            "last_recovery_file_count": len(self._last_recovery_files),
         }
 
     async def _persist_metadata_indexes(self, entry_id: int, metadata: dict[str, Any]) -> None:
@@ -766,6 +798,86 @@ class RingBuffer:
         async with self._conn.execute(sql, params) as cur:
             return await cur.fetchall()
 
+    async def _open_connection_locked(self) -> None:
+        path = ":memory:" if self._storage == "memory" else self._disk_path
+        if self._storage in {"disk", "file"}:
+            directory = os.path.dirname(path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+        conn: aiosqlite.Connection | None = None
+        try:
+            conn = await aiosqlite.connect(path)
+            conn.row_factory = aiosqlite.Row
+            await conn.execute("PRAGMA foreign_keys=ON")
+            if self._storage in {"disk", "file"}:
+                await conn.execute("PRAGMA journal_mode=WAL")
+            self._conn = conn
+            await self._conn.executescript(_SCHEMA)
+            await self._ensure_compat_schema()
+            if self._storage in {"disk", "file"}:
+                await self._assert_integrity_ok()
+            await self._conn.commit()
+        except Exception:
+            if conn:
+                await conn.close()
+            if self._conn is conn:
+                self._conn = None
+            raise
+
+    async def _assert_integrity_ok(self) -> None:
+        if not self._conn:
+            return
+        async with self._conn.execute("PRAGMA integrity_check") as cur:
+            row = await cur.fetchone()
+        result = row[0] if row else ""
+        if str(result).lower() != "ok":
+            raise aiosqlite.DatabaseError(f"SQLite integrity_check failed: {result}")
+
+    async def _close_connection(self) -> None:
+        if self._conn:
+            await self._conn.close()
+            self._conn = None
+
+    async def _recover_corrupt_storage_locked(self, exc: Exception) -> None:
+        logger.warning("RingBuffer SQLite database is corrupt; quarantining and recreating empty database: %s", exc)
+        await self._close_connection()
+        moved_paths = self._quarantine_storage_files()
+        self._cleanup_quarantine_files()
+        await self._open_connection_locked()
+        self._last_values.clear()
+        self._last_recovery_at = _isoformat_utc(datetime.now(UTC))
+        self._last_recovery_files = moved_paths
+        logger.warning("RingBuffer recovered with empty database; quarantined files=%s", moved_paths)
+
+    def _quarantine_storage_files(self) -> list[str]:
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        moved: list[str] = []
+        for path in (self._disk_path, f"{self._disk_path}-wal", f"{self._disk_path}-shm"):
+            if not os.path.exists(path):
+                continue
+            target = f"{path}.corrupt-{stamp}"
+            os.replace(path, target)
+            moved.append(target)
+        return moved
+
+    def _cleanup_quarantine_files(self) -> None:
+        for path in (self._disk_path, f"{self._disk_path}-wal", f"{self._disk_path}-shm"):
+            directory = os.path.dirname(path) or "."
+            prefix = f"{os.path.basename(path)}.corrupt-"
+            try:
+                candidates = [os.path.join(directory, name) for name in os.listdir(directory) if name.startswith(prefix)]
+            except FileNotFoundError:
+                continue
+            stale = sorted(candidates, reverse=True)[_MAX_QUARANTINE_FILES_PER_STORAGE_FILE:]
+            for candidate in stale:
+                try:
+                    os.remove(candidate)
+                except FileNotFoundError:
+                    pass
+
+    def _can_recover_from(self, exc: Exception) -> bool:
+        return self._storage in {"disk", "file"} and _is_sqlite_corruption(exc)
+
 
 def _safe_loads(s: str | None) -> Any:
     if s is None:
@@ -779,6 +891,13 @@ def _safe_loads(s: str | None) -> Any:
 def _safe_loads_dict(s: str | None) -> dict[str, Any]:
     loaded = _safe_loads(s)
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _is_sqlite_corruption(exc: Exception) -> bool:
+    if not isinstance(exc, aiosqlite.Error):
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in _SQLITE_CORRUPTION_MARKERS)
 
 
 def _normalize_string_filters(values: list[str] | None) -> list[str]:
@@ -809,6 +928,87 @@ def _normalize_binding_metadata(config: dict[str, Any]) -> dict[str, Any]:
         "register_type": _str_or_empty(config.get("register_type")),
         "register_address": _str_or_empty(config.get("address")),
         "unit_id": _str_or_empty(config.get("unit_id")),
+    }
+
+
+async def build_ringbuffer_metadata_snapshot(
+    *,
+    dp_id: str,
+    source_adapter: str,
+    datapoint: Any,
+) -> dict[str, Any]:
+    bindings: list[dict[str, Any]] = []
+    hierarchy_nodes: list[dict[str, Any]] = []
+    try:
+        from obs.db.database import get_db
+
+        db = get_db()
+        rows = await db.fetchall(
+            """SELECT adapter_type, adapter_instance_id, direction, config
+               FROM adapter_bindings
+               WHERE datapoint_id=? AND enabled=1
+               ORDER BY created_at, id""",
+            (dp_id,),
+        )
+        for row in rows:
+            raw_config = _safe_loads(row["config"])
+            config = raw_config if isinstance(raw_config, dict) else {}
+            bindings.append(
+                {
+                    "adapter_type": str(row["adapter_type"] or ""),
+                    "adapter_instance_id": str(row["adapter_instance_id"] or ""),
+                    "direction": str(row["direction"] or ""),
+                    "normalized": _normalize_binding_metadata(config),
+                }
+            )
+        hierarchy_rows = await db.fetchall(
+            """WITH RECURSIVE ancestors(node_id, tree_id, ancestor_id, parent_id, depth) AS (
+                   SELECT hn.id, hn.tree_id, hn.id, hn.parent_id, 0
+                   FROM hierarchy_datapoint_links hdl
+                   JOIN hierarchy_nodes hn ON hn.id = hdl.node_id
+                   WHERE hdl.datapoint_id = ?
+                   UNION ALL
+                   SELECT ancestors.node_id, ancestors.tree_id, hn.id, hn.parent_id, ancestors.depth + 1
+                   FROM ancestors
+                   JOIN hierarchy_nodes hn ON hn.id = ancestors.parent_id
+               )
+               SELECT node_id, tree_id, ancestor_id
+               FROM ancestors
+               ORDER BY tree_id, node_id, depth""",
+            (dp_id,),
+        )
+        ancestors_by_node: dict[tuple[str, str], list[str]] = {}
+        for row in hierarchy_rows:
+            tree_id = str(row["tree_id"] or "")
+            node_id = str(row["node_id"] or "")
+            ancestor_id = str(row["ancestor_id"] or "")
+            if not tree_id or not node_id or not ancestor_id:
+                continue
+            ancestors_by_node.setdefault((tree_id, node_id), []).append(ancestor_id)
+        hierarchy_nodes = [
+            {
+                "tree_id": tree_id,
+                "node_id": node_id,
+                "ancestor_node_ids": ancestor_ids,
+            }
+            for (tree_id, node_id), ancestor_ids in ancestors_by_node.items()
+        ]
+    except RuntimeError:
+        pass
+    except Exception:
+        logger.exception("RingBuffer metadata snapshot for dp=%s failed", dp_id)
+
+    tags = list(datapoint.tags) if datapoint and isinstance(getattr(datapoint, "tags", None), list) else []
+    return {
+        "source": {"adapter": source_adapter},
+        "datapoint": {
+            "id": dp_id,
+            "name": getattr(datapoint, "name", None),
+            "data_type": getattr(datapoint, "data_type", None),
+            "tags": tags,
+        },
+        "bindings": bindings,
+        "hierarchy_nodes": hierarchy_nodes,
     }
 
 

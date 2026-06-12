@@ -95,10 +95,57 @@ watch(
   { immediate: true },
 )
 
+function sanitizeSvg(svg: string): string {
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(svg, 'image/svg+xml')
+  const root = doc.documentElement
+  if (!root || root.tagName.toLowerCase() !== 'svg') return ''
+
+  const blockedTags = new Set([
+    'script', 'foreignobject', 'iframe', 'object', 'embed', 'audio', 'video',
+    'image', 'use', 'animate', 'animatemotion', 'animatetransform', 'set',
+  ])
+  const normalizeSchemeValue = (value: string) => value
+    .toLowerCase()
+    .replace(/[\u0000-\u0020\u007f]+/g, '')
+  const isDangerousHref = (value: string) => {
+    const normalized = normalizeSchemeValue(value)
+    return normalized.startsWith('javascript:') || normalized.startsWith('data:')
+  }
+
+  const allNodes = Array.from(root.getElementsByTagName('*'))
+  for (const el of allNodes) {
+    const tag = el.tagName.toLowerCase()
+    if (blockedTags.has(tag)) {
+      el.remove()
+      continue
+    }
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase()
+      const value = attr.value.trim().toLowerCase()
+      if (name.startsWith('on')) {
+        el.removeAttribute(attr.name)
+        continue
+      }
+      if ((name === 'href' || name === 'xlink:href') && isDangerousHref(value)) {
+        el.removeAttribute(attr.name)
+      }
+    }
+  }
+
+  for (const attr of Array.from(root.attributes)) {
+    if (attr.name.toLowerCase().startsWith('on')) root.removeAttribute(attr.name)
+  }
+
+  return new XMLSerializer().serializeToString(root)
+}
+
 const coloredSvg = computed(() => {
   if (!svgContent.value) return ''
   const nonNoneFill = /\bfill\s*:\s*(?!none\b)/g
-  return svgContent.value
+  const safeSvg = sanitizeSvg(svgContent.value)
+  if (!safeSvg) return ''
+  return safeSvg
     .replace(/<svg\b([^>]*)>/, (_, attrs: string) => {
       const updated = /\bfill=/.test(attrs)
         ? attrs.replace(/\bfill="(?!none\b)[^"]*"/, 'fill="currentColor"')

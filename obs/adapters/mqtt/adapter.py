@@ -64,6 +64,7 @@ from pydantic import BaseModel, Field
 from obs.adapters.base import AdapterBase
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
+from obs.core.json import json_dumps, jsonable
 from obs.core.transformation import apply_source_type, apply_value_map
 
 logger = logging.getLogger(__name__)
@@ -342,10 +343,16 @@ class MqttAdapter(AdapterBase):
             # value already transformed by write_router (formula + value_map)
             # Build payload
             if bc.payload_template:
-                val_str = value if isinstance(value, str) else json.dumps(value)
+                val_str = value if isinstance(value, str) else json_dumps(value)
                 payload = bc.payload_template.replace("###DP###", val_str)
             else:
-                payload = value if isinstance(value, str) else json.dumps(value)
+                # Keep direct MQTT payloads backward-compatible: strings are emitted raw,
+                # while template contexts use JSON quoting for embedded values.
+                raw_value = jsonable(value)
+                if isinstance(raw_value, str):
+                    payload = raw_value
+                else:
+                    payload = json_dumps(raw_value)
 
             await self._publish_queue.put((topic, payload, bc.retain))
             logger.info(

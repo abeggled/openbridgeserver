@@ -15,44 +15,47 @@ This file provides guidance to AI coding agents when working with code in this r
 ## Common Commands
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt -r requirements_dev.txt
-
 # Run the server
-python -m obs
+tools/with-venv python -m obs
 
 # Run all tests
-pytest tests/
+tools/with-venv pytest tests/
 
 # Run a single test file
-pytest tests/unit/test_converter.py
+tools/with-venv pytest tests/unit/test_converter.py
 
 # Run a specific test
-pytest tests/unit/test_converter.py::test_float_to_int
+tools/with-venv pytest tests/unit/test_converter.py::test_float_to_int
 
 # Run only adapter + unit tests (no Docker needed)
-pytest tests/adapters/ tests/unit/
+tools/with-venv pytest tests/adapters/ tests/unit/
 
 # Run contract tests — verify external library API surfaces (no Docker needed)
-pytest tests/contracts/
+tools/with-venv pytest tests/contracts/
 
 # Run integration tests (requires Docker for Mosquitto)
-pytest tests/integration/
+tools/with-venv pytest tests/integration/
 
 # Run with coverage report
-pytest tests/ --cov=obs --cov-report=term-missing
+tools/with-venv pytest tests/ --cov=obs --cov-report=term-missing
 
 # Lint (same checks as CI)
-./tools/lint.sh --check
+tools/with-venv ./tools/lint.sh --check
 
 # Format + autofix
-./tools/lint.sh --fix
+tools/with-venv ./tools/lint.sh --fix
 
 # Docker Compose (full stack)
 docker compose up -d
 
 # Docker Compose (Mosquitto only — for local dev outside Docker)
 docker compose up -d mosquitto
+
+# Build release artifacts locally (only requires Docker)
+./tools/build-local.sh docker    # Docker image (via docker compose build obs + version stamp)
+./tools/build-local.sh lxc       # Proxmox LXC template (.tar.zst); rootfs cached in ~/.cache/obs-lxc-builder/
+./tools/build-local.sh bundle    # app bundle only, no rootfs (fast)
+./tools/build-local.sh all       # docker + lxc
 
 # Admin GUI dev server (proxies /api to localhost:8080)
 cd gui && npm run dev
@@ -66,12 +69,13 @@ Typen) Ende-zu-Ende — Schwächen, die Vitest-Mocks verdecken können, fallen e
 **jedem** Push, der Frontend-Code berührt, alle Stufen lokal grün laufen lassen:
 
 ```bash
-./tools/lint.sh --check
+tools/with-venv ./tools/lint.sh --check
 cd gui && npm run build     # validiert reale Abhängigkeiten/Imports, was Vitest nicht tut
 cd gui && npm run test
+cd gui && npm run test:coverage
 # bei Backend-Änderungen zusätzlich:
-pytest tests/unit tests/adapters tests/contracts  # ohne Docker
-pytest tests/integration                          # mit Docker
+tools/with-venv pytest tests/unit tests/adapters tests/contracts  # ohne Docker
+tools/with-venv pytest tests/integration                          # mit Docker
 ```
 
 Wenn rot: nicht pushen, sondern fixen. Gilt für Haupt-Sessions **und** für Subagents — bitte
@@ -84,6 +88,17 @@ Zusätzlich für i18n-Änderungen (Admin GUI + Visu) gilt ein harter Diff-Gate:
 ./scripts/check-i18n-hardcoded-strings.sh
 ```
 
+Für GUI-Änderungen gilt zusätzlich ein weicher Coverage-Nachzieh-Hinweis:
+
+```bash
+node tools/gui-coverage-summary.mjs --changed-only --threshold=70
+```
+
+Wenn geänderte Dateien unter dem Schwellwert liegen, im Abschlussbericht konkret nennen
+und möglichst passende Vitests ergänzen. Der Hinweis ist bewusst kein lokaler Hard-Fail;
+`npm run test` und `npm run test:coverage` bleiben dagegen verpflichtende Gates und
+brechen bei Fehlern ab.
+
 Optional als lokaler Push-Hook aktivieren:
 
 ```bash
@@ -92,10 +107,34 @@ git config core.hooksPath .githooks
 
 Danach läuft der i18n-Gate automatisch vor jedem `git push`.
 
+## Test Coverage Gate (verbindlich)
+
+**Coverage darf durch neuen Code nie sinken.** Jede neue Python-Datei oder -Funktion in `obs/`
+muss mit Tests abgedeckt sein, die die Gesamtabdeckung mindestens auf dem Niveau vor der Änderung
+halten. Konkret:
+
+- **Neuer Code → neue Tests.** Wer eine neue API-Route, einen neuen Adapter oder eine neue
+  Hilfsfunktion hinzufügt, liefert zugehörige Tests (Unit oder Integration) im selben Commit.
+- **Refactorings** dürfen die Coverage nicht senken.
+- **Vor jedem Push mit Backend-Änderungen** Coverage prüfen:
+
+```bash
+# Baseline messen (vor der Änderung):
+tools/with-venv pytest tests/unit tests/adapters tests/contracts --cov=obs --cov-report=term-missing
+
+# Nach der Änderung nochmals — Gesamtprozentsatz muss ≥ Baseline sein:
+tools/with-venv pytest tests/unit tests/adapters tests/contracts --cov=obs --cov-report=term-missing
+# mit Docker auch:
+tools/with-venv pytest tests/integration --cov=obs --cov-append --cov-report=term-missing
+```
+
+Wenn der Coverage-Prozentsatz gefallen ist: Tests ergänzen, nicht pushen.
+Gilt für Haupt-Sessions **und** für Subagents — bitte explizit in den Subagent-Prompt schreiben.
+
 ## Local Development Setup
 
 ### Prerequisites
-- Python 3.13+, Docker Desktop, Node.js 20.19+ or 22+ (use nvm; `.nvmrc` pins v22)
+- Python 3.13+, Docker Desktop, Node.js 24 (use nvm; `.nvmrc` pins v24)
 
 ### One-time setup
 
@@ -112,6 +151,42 @@ cp .env.example .env                  # set OBS_MQTT_PASSWORD
 # 3. Frontend deps
 cd gui && npm install
 ```
+
+### Python venv resolver for agents and worktrees
+
+Local checks must use the project venv through `tools/with-venv`:
+
+```bash
+tools/with-venv python -m pytest tests/unit
+tools/with-venv ./tools/lint.sh --check
+```
+
+The resolver checks `OBS_VENV`, then the current worktree's `.venv`, then the main Git worktree's
+`.venv`. If no usable venv exists, it exits with a hard error and explicitly forbids installing
+dependencies into the worktree.
+
+For linked worktrees, prefer a local `.venv` symlink to the main worktree venv:
+
+```bash
+tools/link-worktree-venvs
+```
+
+Do not run `pip install ...` in issue or PR worktrees. Install or update Python dependencies only
+in the shared project venv, then let worktrees resolve that environment through `.venv` or
+`OBS_VENV`.
+
+### GUI Node dependencies for agents and worktrees
+
+Do not run `npm install` or `npm ci` in issue or PR worktrees. GUI dependencies are shared from the
+main worktree through a local `gui/node_modules` symlink:
+
+```bash
+tools/link-worktree-node-modules
+```
+
+The pre-push hook runs this linker automatically before GUI Vitest gates if `gui/node_modules` is
+missing. If the main worktree dependencies are missing or stale, update them in the main worktree,
+not in the issue/PR worktree.
 
 ### config.yaml — required local overrides
 
@@ -287,10 +362,9 @@ When adding a new view, widget config, or significant UI component:
 
 Allowlisted technical literals are maintained in `scripts/i18n-allowlist.txt`. Keep the list minimal and reviewable.
 
-#### Known exception — `gui/src/utils/hierarchyDepthOptions.js`
+##### `gui/src/utils/hierarchyDepthOptions.js`
 
-This utility builds option labels that mix tree node names (runtime data) with structural level names. It cannot cleanly return plain i18n keys because the labels are composite strings (e.g. `"1 — EG Test (nur \"Wohnzimmer\")"`). It currently uses hardcoded German strings. This is a known gap; do not copy this pattern for new utilities.
-The current gate allowlists only these specific legacy string patterns in `scripts/i18n-allowlist.txt`.
+This utility builds option labels that mix runtime tree node names with translated structural level names. It accepts an optional `t` function from the caller. Composite labels are assembled from translated parts and runtime data using local variables (not `label:` assignments) to stay clean of the i18n guard ASSIGN_RE scan. Call it from a `computed()` and pass `t` to keep labels reactive on locale changes.
 
 #### E2E tests (Playwright) and locale
 
@@ -459,12 +533,12 @@ RCs never receive the `latest` tag.
 
 ### LXC Template
 
-- Base OS: **Ubuntu 26.04 (Plucky)** — chosen for native Python 3.14 support
+- Base OS: **Ubuntu 26.04 LTS (Resolute)** — chosen for native Python 3.14 support
 - The build job runs as a **matrix** (two parallel jobs): `amd64` on `ubuntu-latest`, `arm64` on `ubuntu-24.04-arm` (native runner — no QEMU)
   - `amd64` uses `archive.ubuntu.com`; `arm64` uses `ports.ubuntu.com/ubuntu-ports` (including security updates)
 - Three release assets are produced:
-  - `ubuntu-plucky-openbridgeserver_<version>_amd64.tar.zst` — full Proxmox CT template (x86-64)
-  - `ubuntu-plucky-openbridgeserver_<version>_arm64.tar.zst` — full Proxmox CT template (ARM64)
+  - `openbridgeserver-lxc_<version>_amd64.tar.zst` — full Proxmox CT template (x86-64)
+  - `openbridgeserver-lxc_<version>_arm64.tar.zst` — full Proxmox CT template (ARM64)
   - `openbridgeserver-app-bundle_<version>.tar.gz` — arch-agnostic app archive (`obs/`, `gui_dist/`, `frontend_dist/`, `requirements.txt`, `obs-update`) used for in-place updates; built once from the amd64 job
 - App installs to `/opt/obs/`, Python venv at `/opt/obs/venv/`, data volume at `/data/`
 - Installed version tracked in `/opt/obs/version` (written by `obs-update` after each install)

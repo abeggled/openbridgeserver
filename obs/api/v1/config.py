@@ -21,7 +21,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from obs.api.auth import get_admin_user, get_current_user
+from obs.api.auth import get_admin_user
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
@@ -127,6 +127,7 @@ class ExportedHierarchyTree(BaseModel):
     id: str
     name: str
     description: str
+    source: str = ""
 
 
 class ExportedHierarchyNode(BaseModel):
@@ -211,7 +212,7 @@ class ClearResult(BaseModel):
 
 @router.get("/export", response_model=ConfigExport)
 async def export_config(
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> ConfigExport:
     reg = get_registry()
@@ -348,7 +349,7 @@ async def export_config(
 
     # Hierarchy
     tree_rows = await db.fetchall("SELECT * FROM hierarchy_trees ORDER BY name")
-    hierarchy_trees = [ExportedHierarchyTree(id=r["id"], name=r["name"], description=r["description"]) for r in tree_rows]
+    hierarchy_trees = [ExportedHierarchyTree(id=r["id"], name=r["name"], description=r["description"], source=r["source"] or "") for r in tree_rows]
 
     h_node_rows = await db.fetchall("SELECT * FROM hierarchy_nodes ORDER BY node_order, created_at")
     hierarchy_nodes = [
@@ -516,7 +517,7 @@ async def import_db(
 @router.post("/import", response_model=ImportResult, status_code=status.HTTP_200_OK)
 async def import_config(
     body: ConfigExport,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> ImportResult:
     result = ImportResult(
@@ -765,20 +766,21 @@ async def import_config(
 
     # --- Icons ---
     if body.icons:
-        from obs.api.v1.icons import _icons_dir, _is_svg, _safe_name
+        from obs.api.v1.icons import _icons_dir, _safe_name, _sanitize_svg
 
         icons_dir = _icons_dir()
         for icon in body.icons:
             try:
                 raw = base64.b64decode(icon.content_b64)
-                if not _is_svg(raw):
-                    result.errors.append(f"Icon '{icon.name}': kein gültiges SVG, übersprungen")
+                sanitized = _sanitize_svg(raw)
+                if sanitized is None:
+                    result.errors.append(f"Icon '{icon.name}': kein gültiges/sicheres SVG, übersprungen")
                     continue
                 safe = _safe_name(f"{icon.name}.svg")
                 if not safe:
                     result.errors.append(f"Icon '{icon.name}': ungültiger Name, übersprungen")
                     continue
-                (icons_dir / f"{safe}.svg").write_bytes(raw)
+                (icons_dir / f"{safe}.svg").write_bytes(sanitized)
                 result.icons_imported += 1
             except Exception as exc:
                 result.errors.append(f"Icon '{icon.name}': {exc}")
@@ -876,11 +878,11 @@ async def import_config(
     for ht in body.hierarchy_trees:
         try:
             await db.execute_and_commit(
-                """INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at)
-                   VALUES (?,?,?,?,?)
+                """INSERT INTO hierarchy_trees (id, name, description, source, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE
-                   SET name=excluded.name, description=excluded.description, updated_at=excluded.updated_at""",
-                (ht.id, ht.name, ht.description, now, now),
+                   SET name=excluded.name, description=excluded.description, source=excluded.source, updated_at=excluded.updated_at""",
+                (ht.id, ht.name, ht.description, ht.source, now, now),
             )
             result.hierarchy_upserted += 1
         except Exception as exc:
@@ -992,6 +994,8 @@ async def factory_reset(
         result.errors.append(f"Adapter instances reset failed: {exc}")
 
     try:
+        for table in ("knx_space_device_links", "knx_co_ga_links", "knx_comm_objects", "knx_devices"):
+            await db.execute_and_commit(f"DELETE FROM {table}")
         row = await db.fetchone("SELECT COUNT(*) as n FROM knx_group_addresses")
         result.knx_group_addresses_deleted = row["n"] if row else 0
         await db.execute_and_commit("DELETE FROM knx_group_addresses")

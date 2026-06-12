@@ -50,7 +50,7 @@
         @edit-set="onEditSet"
         @new-set="onNewSet"
         @changed="onTopbarChanged"
-        @export="showExportDialog = true"
+        @export="openExportDialog"
       >
         <template #time-filter-slot>
           <TimeFilterPopover v-model="timeFilter" @update:modelValue="onTimeFilterChanged" />
@@ -65,6 +65,14 @@
       @saved="onFilterEditorSaved"
       @deleted="onFilterEditorDeleted"
     />
+
+    <div
+      v-if="recoveryNotice"
+      class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300"
+      data-testid="ringbuffer-recovery-notice"
+    >
+      {{ recoveryNotice }}
+    </div>
 
     <!-- Soft-modal CSV/TSV export dialog (#427) -->
     <ExportDialog
@@ -97,7 +105,7 @@
               :data-dp="e.datapoint_id"
               :class="getRowStyle(e.matched_set_ids) ? 'ringbuffer-row-matched' : null"
               :style="getRowStyle(e.matched_set_ids)"
-              :title="rowMatchTitle(e.matched_set_ids)"
+              :title="e.match_title"
             >
               <td class="font-mono text-xs text-slate-400 whitespace-nowrap">{{ fmtDateTime(e.ts) }}</td>
               <td class="text-sm">
@@ -152,7 +160,14 @@ function rowMatchTitle(matchedIds) {
     const set = topbarSetsRef.value.get(id)
     if (set?.name) names.push(set.name)
   }
-  return names.length ? `Match: ${names.join(', ')}` : null
+  return names.length ? t('ringbuffer.rowMatchTitle', { names: names.join(', ') }) : null
+}
+
+function withRowMatchTitle(entry) {
+  return {
+    ...entry,
+    match_title: rowMatchTitle(entry?.matched_set_ids),
+  }
 }
 
 const entries = ref([])
@@ -163,6 +178,9 @@ const showFilterEditor = ref(false)
 const showExportDialog = ref(false)
 const editorTargetId = ref(null)
 const topbarChipsRef = ref(null)
+const recoveryNotice = ref('')
+let recoveryNoticeRefreshPromise = null
+let lastRecoveryNoticeRefreshAt = 0
 
 function onEditSet(id) {
   editorTargetId.value = id
@@ -172,6 +190,10 @@ function onEditSet(id) {
 function onNewSet() {
   editorTargetId.value = null
   showFilterEditor.value = true
+}
+
+function openExportDialog() {
+  showExportDialog.value = true
 }
 
 async function onFilterEditorDeleted() {
@@ -225,7 +247,7 @@ const { paused, queuedCount, enqueue: enqueueLive, pause: pauseLive, resume: res
 
 function markAndEnqueueLive(entry) {
   liveIngressSeq += 1
-  enqueueLive(entry)
+  enqueueLive(withRowMatchTitle(entry))
 }
 
 function entryIdentity(entry) {
@@ -295,6 +317,33 @@ async function loadFiltersets() {
   }
 }
 
+async function loadRecoveryNotice() {
+  try {
+    const { data } = await ringbufferApi.stats()
+    if (!data?.last_recovery_at) {
+      recoveryNotice.value = ''
+      return
+    }
+    recoveryNotice.value = t('ringbuffer.recoveryNotice', {
+      ts: fmtDateTime(data.last_recovery_at),
+      n: Number(data.last_recovery_file_count ?? 0),
+    })
+  } catch {
+    recoveryNotice.value = ''
+  }
+}
+
+function refreshRecoveryNoticeSoon() {
+  if (recoveryNotice.value) return
+  if (recoveryNoticeRefreshPromise) return
+  const now = Date.now()
+  if (lastRecoveryNoticeRefreshAt && now - lastRecoveryNoticeRefreshAt < 5000) return
+  lastRecoveryNoticeRefreshAt = now
+  recoveryNoticeRefreshPromise = loadRecoveryNotice().finally(() => {
+    recoveryNoticeRefreshPromise = null
+  })
+}
+
 function buildQueryV2() {
   const payload = {
     filters: {},
@@ -307,6 +356,8 @@ function buildQueryV2() {
 }
 
 function onLiveEntry(entry) {
+  refreshRecoveryNoticeSoon()
+
   // First gate: honor the active TimeFilterPopover. Entries outside the
   // resolved window are dropped — a fixed past window or a point ± span
   // window in the past therefore produces a static table, matching user
@@ -320,8 +371,9 @@ function onLiveEntry(entry) {
   //      (future-compatible path for when the WS push starts including the
   //      match annotation; the row-color spec exercises this case).
   //   3. Active sets present and entry has no preset → client-side match.
-  //      Empty FilterCriteria match nothing (#36 semantics, see useClientSideMatch);
-  //      an entry that matches none of the active sets is dropped.
+  //      Empty FilterCriteria match nothing (#36 semantics, see useClientSideMatch).
+  //      Hierarchy sets are matched from WS metadata; entries that match none
+  //      of the active sets are dropped.
   const activeSets = filtersets.value.filter((s) => s.topbar_active && s.is_active !== false)
   const presetMatched = Array.isArray(entry?.matched_set_ids) ? entry.matched_set_ids : null
 
@@ -390,7 +442,7 @@ async function load() {
       const resp = await ringbufferApi.queryV2(buildQueryV2())
       data = resp.data
     }
-    const loadedEntries = Array.isArray(data) ? data : []
+    const loadedEntries = Array.isArray(data) ? data.map(withRowMatchTitle) : []
     const liveArrivedDuringLoad = liveIngressSeq !== liveSeqAtLoadStart
     entries.value = liveArrivedDuringLoad
       ? mergeEntriesKeepingLiveFirst(entries.value, loadedEntries)
@@ -401,6 +453,7 @@ async function load() {
     entries.value = []
     listError.value = extractErrorMessage(error, t('ringbuffer.queryFailed'))
   } finally {
+    await loadRecoveryNotice()
     loading.value = false
   }
 }

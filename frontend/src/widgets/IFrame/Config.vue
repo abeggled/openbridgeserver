@@ -10,10 +10,27 @@ const emit = defineEmits<{
   (e: 'update:modelValue', val: Record<string, unknown>): void
 }>()
 
+const SAFE_SANDBOX_TOKENS = new Set([
+  'allow-popups',
+  'allow-forms',
+  'allow-popups-to-escape-sandbox',
+  'allow-top-navigation-by-user-activation',
+])
+const DEFAULT_SANDBOX = 'allow-popups allow-forms'
+
+function sanitizeSandbox(value: unknown): string {
+  if (value == null) return DEFAULT_SANDBOX
+  if (typeof value !== 'string') return DEFAULT_SANDBOX
+  const tokens = value
+    .split(/\s+/)
+    .filter(token => SAFE_SANDBOX_TOKENS.has(token))
+  return Array.from(new Set(tokens)).join(' ')
+}
+
 const cfg = reactive({
   label:           (props.modelValue.label           as string)  ?? '',
   url:             (props.modelValue.url             as string)  ?? '',
-  sandbox:         (props.modelValue.sandbox         as string)  ?? 'allow-same-origin allow-scripts allow-popups allow-forms',
+  sandbox:         sanitizeSandbox(props.modelValue.sandbox),
   allowFullscreen: (props.modelValue.allowFullscreen as boolean) ?? false,
   aspectRatio:     (props.modelValue.aspectRatio     as string)  ?? '16/9',
 })
@@ -21,7 +38,7 @@ const cfg = reactive({
 watch(() => props.modelValue, (v) => {
   cfg.label           = (v.label           as string)  ?? ''
   cfg.url             = (v.url             as string)  ?? ''
-  cfg.sandbox         = (v.sandbox         as string)  ?? 'allow-same-origin allow-scripts allow-popups allow-forms'
+  cfg.sandbox         = sanitizeSandbox(v.sandbox)
   cfg.allowFullscreen = (v.allowFullscreen as boolean) ?? false
   cfg.aspectRatio     = (v.aspectRatio     as string)  ?? '16/9'
 })
@@ -31,8 +48,6 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 const { t } = useI18n()
 
 const SANDBOX_OPTIONS = computed(() => [
-  { key: 'allow-same-origin',              label: t('widgets.iframe.sandboxSameOrigin') },
-  { key: 'allow-scripts',                  label: t('widgets.iframe.sandboxScripts') },
   { key: 'allow-popups',                   label: t('widgets.iframe.sandboxPopups') },
   { key: 'allow-forms',                    label: t('widgets.iframe.sandboxForms') },
   { key: 'allow-popups-to-escape-sandbox', label: t('widgets.iframe.sandboxEscape') },
@@ -40,15 +55,15 @@ const SANDBOX_OPTIONS = computed(() => [
 ])
 
 function hasSandbox(key: string): boolean {
-  return cfg.sandbox.split(' ').includes(key)
+  return cfg.sandbox.split(/\s+/).includes(key)
 }
 
 function toggleSandbox(key: string) {
-  const parts = cfg.sandbox ? cfg.sandbox.split(' ').filter(Boolean) : []
+  const parts = cfg.sandbox ? cfg.sandbox.split(/\s+/).filter(Boolean) : []
   const idx = parts.indexOf(key)
   if (idx >= 0) parts.splice(idx, 1)
   else parts.push(key)
-  cfg.sandbox = parts.join(' ')
+  cfg.sandbox = sanitizeSandbox(parts.join(' '))
 }
 
 const ASPECT_RATIOS = computed(() => [
@@ -60,7 +75,12 @@ const ASPECT_RATIOS = computed(() => [
 
 const isValidUrl = computed(() => {
   if (!cfg.url) return true
-  try { new URL(cfg.url); return true } catch { return false }
+  try {
+    const parsed = new URL(cfg.url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
 })
 </script>
 
@@ -73,7 +93,7 @@ const isValidUrl = computed(() => {
       <input
         v-model="cfg.label"
         type="text"
-        placeholder="z.B. Wetterkarte, Kalender …"
+        :placeholder="$t('widgets.iframe.labelPlaceholder')"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       />
     </div>

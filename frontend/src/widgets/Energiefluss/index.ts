@@ -8,7 +8,7 @@ interface EntityConfig {
 
 WidgetRegistry.register({
   type: 'Energiefluss',
-  label: 'Energiefluss',
+  label: 'widgets.energiefluss.title',
   icon: '⚡',
   group: 'Anzeige',
   minW: 4, minH: 4,

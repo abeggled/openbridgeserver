@@ -4,7 +4,7 @@ import Config from './Config.vue'
 
 WidgetRegistry.register({
   type:     'RTR',
-  label:    'Raumtemperaturregler',
+  label:    'widgets.rtr.title',
   icon:     '🌡️',
   group:    'Steuerung',
   minW:     3,

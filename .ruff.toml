@@ -21,6 +21,7 @@ line-length = 150
     "D",       # Docstrings
     "SLF001",  # Private member access
     "PLR2004", # Magic values
+    "E402",    # Module level import not at top of file (common in test helpers)
 ]
 # Contract tests use pytest.importorskip() before importing the library under test,
 # which places non-import statements between imports — a standard pytest pattern.

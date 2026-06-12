@@ -4,11 +4,13 @@ on:
   push:
     tags:
       - '*'
+      - '!nightly-*'  # nightly-lxc.yml creates these; must not trigger a real release/build
+
   workflow_dispatch:
 
 env:
   TEMPLATE_NAME: openbridgeserver
-  BASE_OS: ubuntu-plucky
+  BASE_OS: ubuntu-resolute
 
 jobs:
   build:
@@ -57,12 +59,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y debootstrap zstd ubuntu-keyring
+          # Ubuntu releases all share the generic 'gutsy' debootstrap script.
+          # The runner's debootstrap may predate resolute (26.04); symlink it if missing.
+          if [[ ! -e /usr/share/debootstrap/scripts/resolute ]]; then
+            sudo ln -sf gutsy /usr/share/debootstrap/scripts/resolute
+          fi
 
       # ── Build GUI and frontend on the runner (no Node needed in the LXC) ─────
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version-file: .nvmrc
           cache: 'npm'
           cache-dependency-path: |
             gui/package-lock.json
@@ -177,31 +184,43 @@ jobs:
 
           echo "Installing $TARGET ..."
 
-          BUNDLE_URL=$(echo "$ALL_RELEASES" | python3 -c "
+          ASSET_INFO=$(echo "$ALL_RELEASES" | python3 -c "
           import sys, json
           target = '${TARGET}'
           releases = json.load(sys.stdin)
           r = next((r for r in releases if r['tag_name'] == target), None)
           if r:
-              a = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz')), None)
-              if a:
-                  print(a['browser_download_url'])
+              bundle = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz')), None)
+              checksum = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha512')), None)
+              if bundle and checksum:
+                  print(bundle['browser_download_url'])
+                  print(checksum['browser_download_url'])
           ")
 
-          if [[ -z "$BUNDLE_URL" ]]; then
-              echo "Error: no app-bundle asset found for $TARGET" >&2
+          BUNDLE_URL=$(echo "$ASSET_INFO" | sed -n '1p')
+          CHECKSUM_URL=$(echo "$ASSET_INFO" | sed -n '2p')
+
+          if [[ -z "$BUNDLE_URL" ]] || [[ -z "$CHECKSUM_URL" ]]; then
+              echo "Error: missing app-bundle or checksum asset for $TARGET" >&2
               exit 1
           fi
+
+          BUNDLE_FILENAME=$(basename "$BUNDLE_URL")
+          CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
 
           TMP=$(mktemp -d)
           trap "rm -rf $TMP" EXIT
 
           echo "Downloading $BUNDLE_URL ..."
-          curl -fL "$BUNDLE_URL" -o "$TMP/app-bundle.tar.gz"
+          curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"
+          echo "Downloading $CHECKSUM_URL ..."
+          curl -fL "$CHECKSUM_URL" -o "$TMP/$CHECKSUM_FILENAME"
+
+          (cd "$TMP" && sha512sum -c "$CHECKSUM_FILENAME")
 
           systemctl stop "$SERVICE"
 
-          tar -xzf "$TMP/app-bundle.tar.gz" -C "$INSTALL_DIR"
+          tar -xzf "$TMP/$BUNDLE_FILENAME" -C "$INSTALL_DIR"
           "$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
 
           # Self-update: replace this script with the version from the bundle
@@ -222,7 +241,8 @@ jobs:
       - name: Stamp version file
         run: |
           BASE=$(grep -m1 '^## ' RELEASENOTES.md | sed 's/^## *//')
-          RC=$(echo "${{ steps.meta.outputs.version }}" | grep -oP -- '-RC\d*$' || true)
+          TAG="${{ steps.meta.outputs.version }}"
+          if [[ "$TAG" =~ (-RC[0-9]*)$ ]]; then RC="${BASH_REMATCH[1]}"; else RC=""; fi
           echo "${BASE}${RC}" > obs/version
 
       - name: Create app bundle
@@ -240,7 +260,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: base-system-cache.tar.zst
-          key: base-system-ubuntu-plucky-${{ matrix.arch }}-v1
+          key: base-system-ubuntu-resolute-${{ matrix.arch }}-v1
 
       - name: Create or restore base system
         run: |
@@ -259,15 +279,15 @@ jobs:
               --arch=${{ matrix.arch }} \
               --components=main,restricted,universe \
               --include=systemd,systemd-sysv,dbus,apt-utils,locales,iproute2,wget,curl,ca-certificates,less,logrotate,openssh-server,ifupdown \
-              plucky \
+              resolute \
               "$ROOTFS" \
               ${{ matrix.mirror }}
 
             # Write arch-specific sources.list before entering the chroot
             sudo tee "$ROOTFS/etc/apt/sources.list" > /dev/null <<SOURCES
-          deb ${{ matrix.mirror }} plucky main restricted universe multiverse
-          deb ${{ matrix.mirror }} plucky-updates main restricted universe multiverse
-          deb ${{ matrix.security_mirror }} plucky-security main restricted universe multiverse
+          deb ${{ matrix.mirror }} resolute main restricted universe multiverse
+          deb ${{ matrix.mirror }} resolute-updates main restricted universe multiverse
+          deb ${{ matrix.security_mirror }} resolute-security main restricted universe multiverse
           SOURCES
 
             sudo chroot "$ROOTFS" /bin/bash <<'BASESCRIPT'
@@ -397,7 +417,9 @@ jobs:
 
           # Mosquitto configuration — replaces the package default (no anonymous, WebSocket, syslog)
           cat > /etc/mosquitto/mosquitto.conf << 'MQTTCONF'
-          pid_file /run/mosquitto/mosquitto.pid
+          # No pid_file: systemd (Type=notify) manages the process lifecycle, and the
+          # Ubuntu mosquitto package ships no tmpfiles rule to create /run/mosquitto,
+          # so a pid_file there would fail on every boot (/run is a fresh tmpfs).
 
           allow_anonymous false
           password_file /etc/mosquitto/passwd

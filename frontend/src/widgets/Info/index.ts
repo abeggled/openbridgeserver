@@ -8,14 +8,19 @@ interface ExtraDatapoint {
 
 WidgetRegistry.register({
   type: 'Info',
-  label: 'Info',
+  label: 'widgets.info.title',
   icon: 'ℹ️',
   group: 'Anzeige',
   minW: 2, minH: 2,
   defaultW: 3, defaultH: 3,
   component: Widget,
   configComponent: Config,
-  defaultConfig: { label: '', decimals: 1, unit: '', extra_datapoints: [] },
+  defaultConfig: {
+    label: '',
+    decimals: 1,
+    unit: '',
+    extra_datapoints: [],
+  },
   compatibleTypes: ['FLOAT', 'INTEGER', 'BOOLEAN', 'STRING'],
   getExtraDatapointIds: (config) => {
     const extras = config.extra_datapoints as ExtraDatapoint[] | undefined

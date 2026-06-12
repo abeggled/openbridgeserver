@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git -C "$SCRIPT_DIR/.." rev-parse --show-toplevel)"
+
+MAIN_WORKTREE=""
+while IFS= read -r line; do
+  case "$line" in
+    worktree\ *)
+      MAIN_WORKTREE="${line#worktree }"
+      break
+      ;;
+  esac
+done < <(git -C "$REPO_ROOT" worktree list --porcelain)
+
+if [ -z "$MAIN_WORKTREE" ]; then
+  echo "link-worktree-venvs: could not determine main worktree" >&2
+  exit 1
+fi
+
+MAIN_VENV="$MAIN_WORKTREE/.venv"
+if [ ! -x "$MAIN_VENV/bin/python" ]; then
+  echo "link-worktree-venvs: main worktree venv is missing or unusable: $MAIN_VENV" >&2
+  exit 1
+fi
+
+git -C "$REPO_ROOT" worktree list --porcelain |
+  awk '/^worktree /{print substr($0,10)}' |
+  while IFS= read -r worktree; do
+    [ "$worktree" = "$MAIN_WORKTREE" ] && continue
+
+    if [ -e "$worktree/.venv" ] || [ -L "$worktree/.venv" ]; then
+      printf 'skip existing .venv: %s\n' "$worktree"
+      continue
+    fi
+
+    ln -s "$MAIN_VENV" "$worktree/.venv"
+    printf 'linked .venv: %s\n' "$worktree"
+  done

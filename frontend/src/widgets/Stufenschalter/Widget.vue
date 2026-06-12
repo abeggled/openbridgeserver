@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { datapoints } from '@/api/client'
 import { useIcons } from '@/composables/useIcons'
 import type { DataPointValue } from '@/types'
@@ -21,15 +22,47 @@ const props = defineProps<{
 }>()
 
 const { getSvg, isSvgIcon, svgIconName } = useIcons()
+const { t } = useI18n()
+const DEFAULT_OFF_LABEL = 'widgets.stufenschalter.defaultOffLabel'
+const DEFAULT_STEP_LABEL = 'widgets.stufenschalter.defaultStepLabel'
 
 const label = computed(() => (props.config.label as string | undefined) ?? '')
+
+function sanitizeColor(value: unknown, fallback = '#6b7280'): string {
+  if (typeof value !== 'string') return fallback
+  const color = value.trim()
+  if (/^#[0-9a-fA-F]{3}$/.test(color)) return color
+  if (/^#[0-9a-fA-F]{6}$/.test(color)) return color
+  return fallback
+}
+
+function defaultStepLabel(value: unknown, index: number): string {
+  const numericValue = Number(value)
+  if (String(value ?? '') === '0') return t(DEFAULT_OFF_LABEL)
+  if (Number.isInteger(numericValue) && numericValue > 0) {
+    return t(DEFAULT_STEP_LABEL, { n: numericValue })
+  }
+  return t(DEFAULT_STEP_LABEL, { n: index + 1 })
+}
+
+function normalizeStepLabel(raw: unknown, value: unknown, index: number): string {
+  if (typeof raw !== 'string') return defaultStepLabel(value, index)
+  const label = raw.trim()
+  if (raw === DEFAULT_OFF_LABEL) return t(DEFAULT_OFF_LABEL)
+  if (raw === DEFAULT_STEP_LABEL) return defaultStepLabel(value, index)
+  if (label === 'Aus') return t(DEFAULT_OFF_LABEL)
+  const legacyStepMatch = label.match(/^Stufe\s+(\d+)$/)
+  if (legacyStepMatch) return t(DEFAULT_STEP_LABEL, { n: Number(legacyStepMatch[1]) })
+  return raw
+}
+
 const steps = computed<Step[]>(() => {
   const raw = props.config.steps as Partial<Step>[] | undefined
-  return (raw ?? []).map((s) => ({
-    label: s.label ?? '',
+  return (raw ?? []).map((s, index) => ({
+    label: normalizeStepLabel(s.label, s.value, index),
     value: String(s.value ?? ''),
     icon:  s.icon  ?? '',
-    color: s.color ?? '#6b7280',
+    color: sanitizeColor(s.color),
   }))
 })
 
@@ -106,7 +139,7 @@ watch(
 
 const coloredSvg = computed(() => {
   if (!svgContent.value || !currentStep.value) return ''
-  const color = currentStep.value.color
+  const color = sanitizeColor(currentStep.value.color)
   const nonNoneFill = /\bfill\s*:\s*(?!none\b)/g
   return svgContent.value
     .replace(/<svg\b([^>]*)>/, (_, attrs: string) => {
@@ -127,7 +160,7 @@ const coloredSvg = computed(() => {
         .replace(/\bstroke\s*:\s*(?!none\b)[^;}\n]*/g, `stroke:${color}`)}${close}`)
 })
 
-const activeColor  = computed(() => currentStep.value?.color ?? '#6b7280')
+const activeColor  = computed(() => sanitizeColor(currentStep.value?.color))
 const activeIcon   = computed(() => currentStep.value?.icon  ?? '')
 const activeLabel  = computed(() => currentStep.value?.label ?? '—')
 </script>

@@ -16,12 +16,12 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from obs.api.auth import get_current_user
+from obs.api.auth import get_admin_user, get_current_user
 from obs.config import get_settings
 
 router = APIRouter(tags=["visu", "backgrounds"])
 
-_ALLOWED_EXTENSIONS = ("png", "jpg", "jpeg", "webp", "svg")
+_ALLOWED_EXTENSIONS = ("png", "jpg", "jpeg", "webp")
 
 
 class BackgroundOut(BaseModel):
@@ -85,8 +85,6 @@ def _detect_image_type(content: bytes) -> tuple[str, str] | None:
         return "jpg", "image/jpeg"
     if len(head) >= 12 and head[0:4] == b"RIFF" and head[8:12] == b"WEBP":
         return "webp", "image/webp"
-    if re.search(rb"<svg[\s>]", head, flags=re.IGNORECASE):
-        return "svg", "image/svg+xml"
     return None
 
 
@@ -98,8 +96,6 @@ def _guess_mime_type(path: Path) -> str:
         return "image/jpeg"
     if ext == "webp":
         return "image/webp"
-    if ext == "svg":
-        return "image/svg+xml"
     return "application/octet-stream"
 
 
@@ -143,7 +139,7 @@ async def list_backgrounds(_user: str = Depends(get_current_user)) -> Background
 @router.post("/import", response_model=ImportResult)
 async def import_backgrounds(
     files: list[UploadFile] = File(...),
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> ImportResult:
     if not files:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Keine Dateien empfangen")
@@ -160,7 +156,7 @@ async def import_backgrounds(
         if detected is None:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                f"'{filename}' enthält kein gültiges Bildformat (erlaubt: PNG, JPG, WEBP, SVG)",
+                f"'{filename}' enthält kein gültiges Bildformat (erlaubt: PNG, JPG, WEBP)",
             )
 
         name = _safe_stem(filename)

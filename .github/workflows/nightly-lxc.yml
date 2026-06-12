@@ -1,0 +1,183 @@
+name: Nightly LXC Template
+
+on:
+  schedule:
+    - cron: '25 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: nightly-lxc
+  cancel-in-progress: false
+
+env:
+  # How many days of nightly pre-releases to keep (one release per day).
+  NIGHTLY_RETENTION_DAYS: 14
+
+jobs:
+  dispatch:
+    name: Dispatch LXC template build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch existing LXC template workflow
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Record a timestamp just before dispatch so we can identify the run
+          # we triggered (and not an unrelated concurrent one).
+          DISPATCH_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run lxc-template.yml \
+            --repo "$REPO" \
+            --ref main
+          echo "dispatch_ts=$DISPATCH_TS" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for dispatched build to finish
+        id: watch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          DISPATCH_TS: ${{ steps.dispatch.outputs.dispatch_ts }}
+        run: |
+          set -euo pipefail
+
+          # Poll until the run created by our dispatch shows up, then capture it.
+          RUN_ID=""
+          for _ in $(seq 1 30); do
+            RUN_ID="$(gh run list \
+              --repo "$REPO" \
+              --workflow lxc-template.yml \
+              --event workflow_dispatch \
+              --branch main \
+              --limit 10 \
+              --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$DISPATCH_TS\")] | sort_by(.createdAt) | last | .databaseId // empty")"
+            [[ -n "$RUN_ID" ]] && break
+            sleep 10
+          done
+
+          if [[ -z "$RUN_ID" ]]; then
+            echo "Could not locate the dispatched lxc-template run; aborting." >&2
+            exit 1
+          fi
+
+          echo "Watching lxc-template run ${RUN_ID}"
+          # --exit-status makes this step fail if the build concluded in failure,
+          # which short-circuits the publish/prune steps below.
+          gh run watch "$RUN_ID" --repo "$REPO" --exit-status --interval 30
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download build artifacts from dispatched run
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.watch.outputs.run_id }}
+        run: |
+          set -euo pipefail
+
+          rm -rf artifacts
+          # Grabs all artifacts of the run (lxc-amd64, lxc-arm64, app-bundle),
+          # each into its own subdirectory under artifacts/.
+          gh run download "$RUN_ID" --repo "$REPO" --dir artifacts
+          echo "Downloaded artifacts:"
+          find artifacts -type f -printf '  %p\n'
+
+      - name: Publish nightly release
+        # Date-based, addressable pre-release so users get a stable download URL
+        # per build instead of having to dig through Actions artifacts.
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          TAG="nightly-$(date -u +%Y%m%d)"
+          DAY="$(date -u +%Y-%m-%d)"
+          RUN_ID="${{ steps.watch.outputs.run_id }}"
+          TARGET_SHA="$(gh run view "$RUN_ID" --repo "$REPO" --json headSha --jq .headSha)"
+
+          if [[ -z "$TARGET_SHA" ]]; then
+            echo "Could not determine commit SHA for run ${RUN_ID}; aborting." >&2
+            exit 1
+          fi
+
+          mapfile -t ASSETS < <(find artifacts -type f \
+            \( -name '*.tar.zst' -o -name '*.tar.gz' -o -name '*.sha512' \) | sort)
+
+          if [[ ${#ASSETS[@]} -eq 0 ]]; then
+            echo "No build assets found to publish." >&2
+            exit 1
+          fi
+
+          # Re-runs on the same day (e.g. manual + scheduled) replace that day's
+          # nightly release instead of failing on an existing tag.
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag
+          fi
+
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --target "$TARGET_SHA" \
+            --title "Nightly $DAY" \
+            --notes "Automated nightly LXC template + app-bundle build for ${DAY} (commit ${TARGET_SHA}). Pre-release — not for production use." \
+            --prerelease \
+            "${ASSETS[@]}"
+
+          echo "Published $TAG with ${#ASSETS[@]} assets."
+
+      - name: Prune old nightly releases
+        # Only runs when the build and publish succeeded, so a failed nightly
+        # never deletes previously published nightly releases.
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RETENTION_DAYS: ${{ env.NIGHTLY_RETENTION_DAYS }}
+        run: |
+          set -euo pipefail
+
+          CUTOFF_EPOCH="$(date -u -d "${RETENTION_DAYS} days ago" +%s)"
+
+          gh api --paginate "/repos/${REPO}/releases?per_page=100" \
+            --jq '.[] | select(.tag_name | startswith("nightly-")) | [.tag_name, .created_at] | @tsv' \
+            > releases.tsv
+
+          while IFS=$'\t' read -r TAG CREATED_AT; do
+            [[ -z "$TAG" ]] && continue
+            CREATED_EPOCH="$(date -u -d "$CREATED_AT" +%s)"
+            if (( CREATED_EPOCH < CUTOFF_EPOCH )); then
+              echo "Deleting old nightly release ${TAG} (created ${CREATED_AT})"
+              gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag
+            fi
+          done < releases.tsv
+
+      - name: Delete dispatched run artifacts
+        # The .tar.zst / .tar.gz / .sha512 files now live on the nightly
+        # pre-release, so the source Actions artifacts are redundant. Delete
+        # them to avoid storage growth (lxc-template.yml sets no retention-days,
+        # so they would otherwise linger at the repo default ~90 days).
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.watch.outputs.run_id }}
+        run: |
+          set -euo pipefail
+
+          gh api --paginate "/repos/${REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100" \
+            --jq '.artifacts[] | [.id, .name] | @tsv' \
+            > run-artifacts.tsv
+
+          while IFS=$'\t' read -r ARTIFACT_ID ARTIFACT_NAME; do
+            [[ -z "$ARTIFACT_ID" ]] && continue
+            echo "Deleting dispatched-run artifact ${ARTIFACT_NAME} (${ARTIFACT_ID})"
+            gh api --method DELETE "/repos/${REPO}/actions/artifacts/${ARTIFACT_ID}"
+          done < run-artifacts.tsv

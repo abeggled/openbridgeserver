@@ -45,6 +45,7 @@ from pydantic import BaseModel, Field
 from obs.adapters.base import AdapterBase
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
+from obs.core.json import json_dumps, jsonable
 from obs.core.transformation import apply_source_type, apply_value_map
 
 logger = logging.getLogger(__name__)
@@ -528,7 +529,14 @@ class IoBrokerAdapter(AdapterBase):
             # can heal stale subscriptions without creating repeated writes.
             for bindings in list(self._state_map.values()):
                 for binding in bindings:
-                    value = await self.read(binding)
+                    try:
+                        value = await self._read_binding_value(binding, suppress_errors=False)
+                    except Exception:
+                        logger.warning(
+                            "ioBroker adapter skipped publish after failed read during subscribe/resync for binding %s",
+                            binding.id,
+                        )
+                        continue
                     await self._publish_binding_value(
                         binding,
                         value,
@@ -720,7 +728,7 @@ class IoBrokerAdapter(AdapterBase):
     ) -> None:
         try:
             bc = IoBrokerBindingConfig(**binding.config)
-            raw = value if isinstance(value, str) else json.dumps(value)
+            raw = value if isinstance(value, str) else json_dumps(value)
             auto_value = _coerce_iobroker_value(value)
             pub_value = apply_source_type(
                 raw,
@@ -835,7 +843,7 @@ class IoBrokerAdapter(AdapterBase):
 
         return True
 
-    async def read(self, binding: Any) -> Any:
+    async def _read_binding_value(self, binding: Any, *, suppress_errors: bool = True) -> Any:
         if self._socket is None:
             return None
         try:
@@ -843,8 +851,13 @@ class IoBrokerAdapter(AdapterBase):
             state = await self._call_socket("getState", bc.state_id)
             return self._extract_state_value(state)
         except Exception:
-            logger.exception("ioBroker adapter read failed for binding %s", binding.id)
-            return None
+            if suppress_errors:
+                logger.exception("ioBroker adapter read failed for binding %s", binding.id)
+                return None
+            raise
+
+    async def read(self, binding: Any) -> Any:
+        return await self._read_binding_value(binding, suppress_errors=True)
 
     @staticmethod
     def _extract_state_value(state: Any) -> Any:
@@ -867,6 +880,7 @@ class IoBrokerAdapter(AdapterBase):
         try:
             bc = IoBrokerBindingConfig(**binding.config)
             mapped = apply_value_map(value, binding.value_map)
+            mapped = jsonable(mapped)
             state_id = bc.command_state_id or bc.state_id
             await self._call_socket("setState", state_id, {"val": mapped, "ack": bc.ack})
             logger.info(

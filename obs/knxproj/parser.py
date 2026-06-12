@@ -10,14 +10,19 @@ https://github.com/XKNX/xknxproject
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import logging
 import os
+import re
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from typing import Any
 from xml.etree import ElementTree
+
+import pyzipper
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,44 @@ class TradeRecord:
     parent_id: str | None = None  # parent trade ID for nested trades
     sort_order: int = 0
     function_ids: list[str] = field(default_factory=list)  # resolved Function IDs
+
+
+@dataclass
+class DeviceRecord:
+    identifier: str
+    individual_address: str
+    name: str = ""
+    hardware_name: str = ""
+    order_number: str = ""
+    description: str = ""
+    manufacturer_name: str = ""
+    application: str | None = None
+    project_uid: int | None = None
+    communication_object_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CommunicationObjectRecord:
+    identifier: str
+    device_address: str
+    name: str = ""
+    number: int = 0
+    text: str = ""
+    function_text: str = ""
+    description: str = ""
+    device_application: str | None = None
+    channel: str | None = None
+    dpts: list[str] = field(default_factory=list)
+    object_size: str = ""
+    group_address_links: list[str] = field(default_factory=list)
+    flags: dict[str, bool] = field(default_factory=dict)
+    dpas: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CommObjectGaLinkRecord:
+    comm_object_id: str
+    ga_address: str
 
 
 def _extract_group_names(project: Any) -> tuple[dict[str, str], dict[str, str]]:
@@ -194,10 +237,28 @@ def _walk_trade_el(
             _walk_trade_el(child, tid, records, sort_counter, fi_to_fn)
 
 
-def parse_knxproj_trades(file_bytes: bytes) -> list[TradeRecord]:
+def _parse_trades_from_xml(xml_bytes: bytes) -> list[TradeRecord]:
+    """Parse <Trades> section from raw 0.xml bytes."""
+    records: list[TradeRecord] = []
+    root = ElementTree.fromstring(xml_bytes)
+    fi_to_fn = _collect_fi_to_fn(root)
+    sort_counter = [0]
+    for el in root.iter():
+        etag = el.tag.split("}")[-1] if "}" in el.tag else el.tag
+        if etag == "Trades":
+            for child in el:
+                ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                if ctag == "Trade":
+                    _walk_trade_el(child, None, records, sort_counter, fi_to_fn)
+            break
+    return records
+
+
+def parse_knxproj_trades(file_bytes: bytes, password: str | None = None) -> list[TradeRecord]:
     """Parse <Trades><Trade .../></Trades> directly from the .knxproj ZIP.
 
     xknxproject does not expose this section. Supports:
+    - Unprotected and password-protected .knxproj files (ETS5 / ETS6 AES)
     - Nested <Trade> elements (sub-categories) → parent_id is set accordingly
     - DeviceInstanceRef.Links → resolves FunctionInstance IDs to Function IDs
 
@@ -206,26 +267,67 @@ def parse_knxproj_trades(file_bytes: bytes) -> list[TradeRecord]:
     records: list[TradeRecord] = []
     try:
         with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
-            candidates = [n for n in zf.namelist() if n.endswith("0.xml") and "/" in n]
-            if not candidates:
-                logger.warning("parse_knxproj_trades: no 0.xml found in archive")
+            names = zf.namelist()
+            # Unprotected: 0.xml is directly inside P-XXXX/ in the outer ZIP
+            candidates = [n for n in names if n.endswith("0.xml") and "/" in n]
+            if candidates:
+                xml_bytes = zf.read(candidates[0])
+                records = _parse_trades_from_xml(xml_bytes)
+                logger.info("parse_knxproj_trades: %d Gewerke gefunden", len(records))
                 return records
 
-            xml_bytes = zf.read(candidates[0])
-            root = ElementTree.fromstring(xml_bytes)
+            # Password-protected: 0.xml is inside an inner P-XXXX.zip
+            inner_zips = [n for n in names if n.endswith(".zip") and "/" not in n]
+            if not inner_zips:
+                logger.debug("parse_knxproj_trades: no 0.xml and no inner ZIP found")
+                return records
 
-            fi_to_fn = _collect_fi_to_fn(root)
+            if not password:
+                logger.debug("parse_knxproj_trades: inner ZIP found but no password — skipping trades")
+                return records
 
-            # Find top-level <Trades> container and walk direct <Trade> children
-            sort_counter = [0]
-            for el in root.iter():
-                etag = el.tag.split("}")[-1] if "}" in el.tag else el.tag
-                if etag == "Trades":
-                    for child in el:
-                        ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-                        if ctag == "Trade":
-                            _walk_trade_el(child, None, records, sort_counter, fi_to_fn)
-                    break  # only the first <Trades> element
+            inner_zip_bytes = zf.read(inner_zips[0])
+
+        # Determine ETS version from knx_master.xml to choose decryption method
+        ets6_schema_version = 21
+        schema_version = ets6_schema_version  # default: try ETS6 first
+        try:
+            with zipfile.ZipFile(io.BytesIO(file_bytes)) as outer:
+                if "knx_master.xml" in outer.namelist():
+                    master = outer.read("knx_master.xml").decode("utf-8", errors="ignore")
+                    m = re.search(r'xmlns="http://knx\.org/xml/project/(\d+)"', master)
+                    if m:
+                        schema_version = int(m.group(1))
+        except Exception:
+            pass
+
+        if schema_version < ets6_schema_version:
+            # ETS5: standard ZIP password (UTF-8)
+            with zipfile.ZipFile(io.BytesIO(inner_zip_bytes)) as inner:
+                inner.setpassword(password.encode("utf-8"))
+                inner_names = inner.namelist()
+                zero_xml = next((n for n in inner_names if n.endswith("0.xml")), None)
+                if zero_xml:
+                    xml_bytes = inner.read(zero_xml)
+                    records = _parse_trades_from_xml(xml_bytes)
+        else:
+            # ETS6: AES-256 via PBKDF2
+            aes_pwd = base64.b64encode(
+                hashlib.pbkdf2_hmac(
+                    hash_name="sha256",
+                    password=password.encode("utf-16-le"),
+                    salt=b"21.project.ets.knx.org",
+                    iterations=65536,
+                    dklen=32,
+                )
+            )
+            with pyzipper.AESZipFile(io.BytesIO(inner_zip_bytes)) as inner:
+                inner.setpassword(aes_pwd)
+                inner_names = inner.namelist()
+                zero_xml = next((n for n in inner_names if n.endswith("0.xml")), None)
+                if zero_xml:
+                    xml_bytes = inner.read(zero_xml)
+                    records = _parse_trades_from_xml(xml_bytes)
 
     except Exception as e:
         logger.warning("parse_knxproj_trades failed (ignored): %s", e)
@@ -332,10 +434,10 @@ def parse_knxproj_locations(
         knxproject = XKNXProj(tmp_path, password=password)
         project = knxproject.parse()
     except Exception as e:
-        msg = str(e)
-        if "password" in msg.lower() or "decrypt" in msg.lower():
+        msg = str(e).lower()
+        if any(kw in msg for kw in ("password", "decrypt", "hmac", "bad zip", "invalid password")):
             raise ValueError("Falsches Passwort oder Datei ist verschlüsselt.") from e
-        raise ValueError(f"Fehler beim Parsen: {msg}") from e
+        raise ValueError(f"Fehler beim Parsen: {str(e)}") from e
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -359,6 +461,151 @@ def parse_knxproj_locations(
         len(fn_list),
     )
     return loc_list, fn_list
+
+
+def parse_knxproj_devices(
+    file_bytes: bytes,
+    password: str | None = None,
+) -> tuple[list[DeviceRecord], list[CommunicationObjectRecord], list[CommObjectGaLinkRecord]]:
+    """Parse .knxproj and return devices, communication objects and KO→GA links."""
+    try:
+        from xknxproject import XKNXProj
+    except ImportError as e:
+        raise ValueError("xknxproject nicht installiert.") from e
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".knxproj", delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+
+        knxproject = XKNXProj(tmp_path, password=password)
+        project = knxproject.parse()
+    except Exception as e:
+        msg = str(e)
+        if "password" in msg.lower() or "decrypt" in msg.lower() or "bad password" in msg.lower():
+            raise ValueError("Falsches Passwort oder Datei ist verschlüsselt.") from e
+        raise ValueError(f"Fehler beim Parsen: {msg}") from e
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    if isinstance(project, dict):
+        devices_raw = project.get("devices") or {}
+        comm_raw = project.get("communication_objects") or {}
+    else:
+        devices_raw = getattr(project, "devices", {}) or {}
+        comm_raw = getattr(project, "communication_objects", {}) or {}
+
+    device_records: list[DeviceRecord] = []
+    for dev_id, device in devices_raw.items():
+        if isinstance(device, dict):
+            identifier = str(device.get("identifier") or dev_id)
+            comm_ids = [str(co_id) for co_id in (device.get("communication_object_ids") or [])]
+            project_uid_raw = device.get("project_uid")
+            individual_address = str(device.get("individual_address") or "").strip()
+            application_raw = device.get("application")
+            device_records.append(
+                DeviceRecord(
+                    identifier=identifier,
+                    individual_address=individual_address,
+                    name=str(device.get("name") or "").strip(),
+                    hardware_name=str(device.get("hardware_name") or "").strip(),
+                    order_number=str(device.get("order_number") or "").strip(),
+                    description=str(device.get("description") or "").strip(),
+                    manufacturer_name=str(device.get("manufacturer_name") or "").strip(),
+                    application=str(application_raw).strip() if application_raw else None,
+                    project_uid=int(project_uid_raw) if isinstance(project_uid_raw, int) else None,
+                    communication_object_ids=comm_ids,
+                )
+            )
+        else:
+            identifier = str(getattr(device, "identifier", dev_id))
+            comm_ids = [str(co_id) for co_id in (getattr(device, "communication_object_ids", []) or [])]
+            project_uid_raw = getattr(device, "project_uid", None)
+            application_raw = getattr(device, "application", None)
+            device_records.append(
+                DeviceRecord(
+                    identifier=identifier,
+                    individual_address=str(getattr(device, "individual_address", "") or "").strip(),
+                    name=str(getattr(device, "name", "") or "").strip(),
+                    hardware_name=str(getattr(device, "hardware_name", "") or "").strip(),
+                    order_number=str(getattr(device, "order_number", "") or "").strip(),
+                    description=str(getattr(device, "description", "") or "").strip(),
+                    manufacturer_name=str(getattr(device, "manufacturer_name", "") or "").strip(),
+                    application=str(application_raw).strip() if application_raw else None,
+                    project_uid=int(project_uid_raw) if isinstance(project_uid_raw, int) else None,
+                    communication_object_ids=comm_ids,
+                )
+            )
+
+    comm_records: list[CommunicationObjectRecord] = []
+    ga_link_records: list[CommObjectGaLinkRecord] = []
+
+    for co_id, comm_obj in comm_raw.items():
+        if isinstance(comm_obj, dict):
+            identifier = str(comm_obj.get("identifier") or co_id)
+            dpt_values = [_dpt_from_xknxproject(dpt) for dpt in (comm_obj.get("dpts") or [])]
+            ga_links = [str(ga).strip() for ga in (comm_obj.get("group_address_links") or []) if str(ga).strip()]
+            flags_raw = comm_obj.get("flags") or {}
+            dpas_raw = comm_obj.get("dpas") or []
+            record = CommunicationObjectRecord(
+                identifier=identifier,
+                device_address=str(comm_obj.get("device_address") or "").strip(),
+                name=str(comm_obj.get("name") or "").strip(),
+                number=int(comm_obj.get("number") or 0),
+                text=str(comm_obj.get("text") or "").strip(),
+                function_text=str(comm_obj.get("function_text") or "").strip(),
+                description=str(comm_obj.get("description") or "").strip(),
+                device_application=(str(comm_obj.get("device_application")).strip() if comm_obj.get("device_application") else None),
+                channel=str(comm_obj.get("channel")).strip() if comm_obj.get("channel") else None,
+                dpts=[dpt for dpt in dpt_values if dpt],
+                object_size=str(comm_obj.get("object_size") or "").strip(),
+                group_address_links=ga_links,
+                flags={str(k): bool(v) for k, v in dict(flags_raw).items()},
+                dpas=[str(dpa) for dpa in dpas_raw],
+            )
+        else:
+            identifier = str(getattr(comm_obj, "identifier", co_id))
+            dpt_values = [_dpt_from_xknxproject(dpt) for dpt in (getattr(comm_obj, "dpts", []) or [])]
+            ga_links = [str(ga).strip() for ga in (getattr(comm_obj, "group_address_links", []) or []) if str(ga).strip()]
+            flags_raw = getattr(comm_obj, "flags", {}) or {}
+            dpas_raw = getattr(comm_obj, "dpas", []) or []
+            record = CommunicationObjectRecord(
+                identifier=identifier,
+                device_address=str(getattr(comm_obj, "device_address", "") or "").strip(),
+                name=str(getattr(comm_obj, "name", "") or "").strip(),
+                number=int(getattr(comm_obj, "number", 0) or 0),
+                text=str(getattr(comm_obj, "text", "") or "").strip(),
+                function_text=str(getattr(comm_obj, "function_text", "") or "").strip(),
+                description=str(getattr(comm_obj, "description", "") or "").strip(),
+                device_application=(
+                    str(getattr(comm_obj, "device_application", "")).strip() if getattr(comm_obj, "device_application", None) else None
+                ),
+                channel=str(getattr(comm_obj, "channel", "")).strip() if getattr(comm_obj, "channel", None) else None,
+                dpts=[dpt for dpt in dpt_values if dpt],
+                object_size=str(getattr(comm_obj, "object_size", "") or "").strip(),
+                group_address_links=ga_links,
+                flags={str(k): bool(v) for k, v in dict(flags_raw).items()},
+                dpas=[str(dpa) for dpa in dpas_raw],
+            )
+
+        comm_records.append(record)
+        for ga_address in record.group_address_links:
+            ga_link_records.append(
+                CommObjectGaLinkRecord(
+                    comm_object_id=record.identifier,
+                    ga_address=ga_address,
+                )
+            )
+
+    logger.info(
+        "parse_knxproj_devices: %d Geräte, %d Kommunikationsobjekte, %d KO→GA Links",
+        len(device_records),
+        len(comm_records),
+        len(ga_link_records),
+    )
+    return device_records, comm_records, ga_link_records
 
 
 def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupAddressRecord]:
@@ -391,10 +638,10 @@ def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupA
         project = knxproject.parse()
 
     except Exception as e:
-        msg = str(e)
-        if "password" in msg.lower() or "decrypt" in msg.lower() or "bad password" in msg.lower():
+        msg = str(e).lower()
+        if any(kw in msg for kw in ("password", "decrypt", "bad password", "hmac", "bad zip", "invalid password")):
             raise ValueError("Falsches Passwort oder Datei ist verschlüsselt.") from e
-        raise ValueError(f"Fehler beim Parsen der .knxproj Datei: {msg}") from e
+        raise ValueError(f"Fehler beim Parsen der .knxproj Datei: {str(e)}") from e
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)

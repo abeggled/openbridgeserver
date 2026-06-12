@@ -37,3 +37,14 @@ database:
 security:
   jwt_secret: changeme      # In Produktion: aus Env-Var OBS_SECURITY__JWT_SECRET
   jwt_expire_minutes: 1440
+  # YAML-Datei fuer bewusst freigegebene interne URL-Ziele.
+  # Format:
+  #   version: 1
+  #   allowed_targets:
+  #     - target: 10.38.113.23/32
+  #       reason: "Interne OBS-Instanz"
+  #       created_by: admin
+  #       created_at: "2026-06-03T12:00:00Z"
+  # Optional override. By default OBS writes this to OBS_SECRET_FILE_DIR when
+  # set, otherwise to "secrets/url-target-allowlist.yaml" next to the database.
+  # url_target_allowlist_path: /data/secrets/url-target-allowlist.yaml
