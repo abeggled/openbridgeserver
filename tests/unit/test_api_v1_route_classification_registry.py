@@ -31,10 +31,11 @@ def test_all_v1_routes_are_classified_and_registry_has_no_stale_entries() -> Non
     assert discovered == classified
 
 
-def test_public_allowlist_is_explicit_and_covers_weather() -> None:
-    weather_route = ("GET", "/api/v1/weather/fetch")
-    assert weather_route in PUBLIC_ROUTE_ALLOWLIST
-    assert ROUTE_CLASSIFICATIONS[weather_route] == "public"
-
+def test_public_allowlist_is_explicit() -> None:
     public_classified = {route for route, category in ROUTE_CLASSIFICATIONS.items() if category == "public"}
     assert public_classified == set(PUBLIC_ROUTE_ALLOWLIST)
+
+
+def test_weather_fetch_requires_authenticated_read_classification() -> None:
+    assert ROUTE_CLASSIFICATIONS[("GET", "/api/v1/weather/fetch")] == "read_live"
+    assert ("GET", "/api/v1/weather/fetch") not in PUBLIC_ROUTE_ALLOWLIST

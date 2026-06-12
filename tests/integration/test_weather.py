@@ -3,8 +3,8 @@
 GET /api/v1/weather/fetch
 
 Abgedeckt:
-  1.  Public: Kein Token nötig
-  2.  Public: Ungültiger _token wird ignoriert
+  1.  Kein Token → 401
+  2.  Ungültiger Token → 401
   3.  Ungültiges URL-Schema (ftp://) → 400
   4.  Wetter-API erreichbar → 200, JSON-Daten weitergeleitet
   5.  Wetter-API nicht erreichbar → 502
@@ -12,7 +12,7 @@ Abgedeckt:
   7.  Wetter-API antwortet 404 → 502
   8.  Wetter-API antwortet mit Redirect → 400
   9.  Wetter-API liefert kein JSON (HTML) → 502
-  10. Auth via ?_token= Query-Param (statt Authorization-Header)
+  10. Query-Token wird nicht als Auth akzeptiert
   11. Content-Type application/json;charset=utf-8 wird akzeptiert
 
 SSRF-Schutz:
@@ -123,51 +123,26 @@ class _MockWeatherServer:
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 
-# 1. Public: Kein Token nötig
-async def test_fetch_no_auth_required(client, bypass_ssrf):
-    srv = _MockWeatherServer()
-    try:
-        resp = await client.get(f"/api/v1/weather/fetch?url={srv.base_url}/weather")
-        assert resp.status_code == 200
-    finally:
-        srv.shutdown()
+# 1. Kein Token
+async def test_fetch_no_auth_returns_401(client, bypass_ssrf):
+    resp = await client.get("/api/v1/weather/fetch?url=http://example.com/weather")
+    assert resp.status_code == 401
 
 
-# 2. Public: Ungültiger _token wird ignoriert
-async def test_fetch_invalid_token_is_ignored_for_public_route(client, bypass_ssrf):
-    srv = _MockWeatherServer()
-    try:
-        resp = await client.get(
-            f"/api/v1/weather/fetch?url={srv.base_url}/weather&_token=not.valid.jwt",
-        )
-        assert resp.status_code == 200
-    finally:
-        srv.shutdown()
+# 2. Ungültiger Token
+async def test_fetch_invalid_token_returns_401(client, bypass_ssrf):
+    resp = await client.get(
+        "/api/v1/weather/fetch?url=http://example.com/weather",
+        headers={"Authorization": "Bearer not.valid.jwt"},
+    )
+    assert resp.status_code == 401
 
 
-async def test_fetch_public_request_uses_private_network_blocking_mode(client, monkeypatch):
+async def test_fetch_uses_private_network_blocking_mode(client, auth_headers, monkeypatch):
     observed: dict[str, bool] = {}
 
-    def _wrapped_build_targets(url: str, *, allow_private_networks: bool, **_kwargs):
-        observed["allow_private_networks"] = allow_private_networks
-        return [url], {}, {}
-
-    monkeypatch.setattr(_weather_module, "build_pinned_url_targets", _wrapped_build_targets)
-
-    srv = _MockWeatherServer()
-    try:
-        resp = await client.get(f"/api/v1/weather/fetch?url={srv.base_url}/weather")
-        assert resp.status_code == 200
-        assert observed["allow_private_networks"] is False
-    finally:
-        srv.shutdown()
-
-
-async def test_fetch_authenticated_request_allows_private_network_mode(client, auth_headers, monkeypatch):
-    observed: dict[str, bool] = {}
-
-    def _wrapped_build_targets(url: str, *, allow_private_networks: bool, **_kwargs):
-        observed["allow_private_networks"] = allow_private_networks
+    def _wrapped_build_targets(url: str, **kwargs):
+        observed["allow_private_networks"] = bool(kwargs.get("allow_private_networks"))
         return [url], {}, {}
 
     monkeypatch.setattr(_weather_module, "build_pinned_url_targets", _wrapped_build_targets)
@@ -179,7 +154,7 @@ async def test_fetch_authenticated_request_allows_private_network_mode(client, a
             headers=auth_headers,
         )
         assert resp.status_code == 200
-        assert observed["allow_private_networks"] is True
+        assert observed["allow_private_networks"] is False
     finally:
         srv.shutdown()
 
@@ -281,18 +256,14 @@ async def test_fetch_non_json_response_returns_502(client, auth_headers, bypass_
         srv.shutdown()
 
 
-# 10. Auth via ?_token= Query-Param
-async def test_fetch_auth_via_query_token(client, auth_headers, bypass_ssrf):
+# 10. Query-Token wird nicht als Auth akzeptiert
+async def test_fetch_query_token_returns_401(client, auth_headers, bypass_ssrf):
     token = auth_headers["Authorization"].removeprefix("Bearer ")
-    srv = _MockWeatherServer()
-    try:
-        resp = await client.get(
-            f"/api/v1/weather/fetch?url={srv.base_url}/weather&_token={token}",
-            # Bewusst kein Authorization-Header
-        )
-        assert resp.status_code == 200
-    finally:
-        srv.shutdown()
+    resp = await client.get(
+        f"/api/v1/weather/fetch?url=http://example.com/weather&_token={token}",
+        # Bewusst kein Authorization-Header: Weather akzeptiert keine Tokens in URLs.
+    )
+    assert resp.status_code == 401
 
 
 # 11. Content-Type application/json;charset=utf-8 wird akzeptiert
@@ -351,13 +322,15 @@ async def test_fetch_ssrf_loopback_ipv6_blocked(client, auth_headers):
     assert resp.json()["detail"]["code"] == "url_target_blocked"
 
 
-async def test_fetch_ssrf_private_network_without_auth_blocked(client):
+async def test_fetch_ssrf_private_network_blocked_for_authenticated_user(client, auth_headers):
+    resp = await client.get(
+        "/api/v1/weather/fetch?url=http://192.168.1.10/weather",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "url_target_blocked"
+
+
+async def test_fetch_ssrf_private_network_without_auth_is_rejected_before_fetch(client):
     resp = await client.get("/api/v1/weather/fetch?url=http://192.168.1.10/weather")
-    assert resp.status_code == 400
-    assert resp.json()["detail"]["code"] == "url_target_blocked"
-
-
-async def test_fetch_ssrf_user_query_param_does_not_enable_private_networks(client):
-    resp = await client.get("/api/v1/weather/fetch?url=http://192.168.1.10/weather&_user=admin")
-    assert resp.status_code == 400
-    assert resp.json()["detail"]["code"] == "url_target_blocked"
+    assert resp.status_code == 401

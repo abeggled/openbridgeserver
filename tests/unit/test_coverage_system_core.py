@@ -2061,7 +2061,7 @@ class TestFetchWeather:
         from obs.api.v1.weather import fetch_weather
 
         with pytest.raises(HTTPException) as exc_info:
-            await fetch_weather(url="ftp://example.com/file", current_user="admin")
+            await fetch_weather(url="ftp://example.com/file", _user="admin")
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -2093,7 +2093,7 @@ class TestFetchWeather:
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
 
-        result = await fetch_weather(url="http://example.com/weather", current_user="admin")
+        result = await fetch_weather(url="http://example.com/weather", _user="admin")
         assert result.status_code == 200
 
     @pytest.mark.asyncio
@@ -2125,7 +2125,7 @@ class TestFetchWeather:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
 
         with pytest.raises(HTTPException) as exc_info:
-            await fetch_weather(url="http://example.com/weather", current_user="admin")
+            await fetch_weather(url="http://example.com/weather", _user="admin")
         assert exc_info.value.status_code == 502
 
     @pytest.mark.asyncio
@@ -2156,7 +2156,7 @@ class TestFetchWeather:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
 
         with pytest.raises(HTTPException) as exc_info:
-            await fetch_weather(url="http://example.com/weather", current_user="admin")
+            await fetch_weather(url="http://example.com/weather", _user="admin")
         assert exc_info.value.status_code == 502
 
     @pytest.mark.asyncio
@@ -2187,7 +2187,7 @@ class TestFetchWeather:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
 
         with pytest.raises(HTTPException) as exc_info:
-            await fetch_weather(url="http://example.com/weather", current_user="admin")
+            await fetch_weather(url="http://example.com/weather", _user="admin")
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -2215,7 +2215,7 @@ class TestFetchWeather:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
 
         with pytest.raises(HTTPException) as exc_info:
-            await fetch_weather(url="http://example.com/weather", current_user="admin")
+            await fetch_weather(url="http://example.com/weather", _user="admin")
         assert exc_info.value.status_code == 502
 
     @pytest.mark.asyncio
@@ -2246,5 +2246,5 @@ class TestFetchWeather:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
 
         with pytest.raises(HTTPException) as exc_info:
-            await fetch_weather(url="http://example.com/weather", current_user="admin")
+            await fetch_weather(url="http://example.com/weather", _user="admin")
         assert exc_info.value.status_code == 502

@@ -1,6 +1,6 @@
 """Wetter-Proxy — holt Wetterdaten von einer konfigurierten API-URL.
 
-GET /api/v1/weather/fetch?url=…
+GET /api/v1/weather/fetch?url=…  (authenticated)
 
 Unterstützt OpenWeatherMap One Call API 3.0 (und kompatible Dienste).
 
@@ -19,7 +19,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
-from obs.api.auth import optional_current_user
+from obs.api.auth import get_current_user
 from obs.security.url_targets import UrlTargetBlockedError, build_pinned_url_targets
 
 router = APIRouter(tags=["weather"])
@@ -27,16 +27,9 @@ router = APIRouter(tags=["weather"])
 
 async def _build_fetch_targets(
     url: str,
-    *,
-    allow_private_networks: bool = False,
 ) -> tuple[list[str], dict[str, str], dict[str, str]]:
     try:
-        try:
-            return await asyncio.to_thread(build_pinned_url_targets, url, allow_private_networks=allow_private_networks)
-        except TypeError as exc:
-            if "allow_private_networks" not in str(exc):
-                raise
-            return await asyncio.to_thread(build_pinned_url_targets, url)
+        return await asyncio.to_thread(build_pinned_url_targets, url)
     except UrlTargetBlockedError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.decision.api_detail()) from exc
     except ValueError as exc:
@@ -46,11 +39,10 @@ async def _build_fetch_targets(
 async def _check_ssrf(
     url: str,
     *,
-    allow_private_networks: bool,
     legacy_detail: bool = True,
 ) -> tuple[list[str], dict[str, str], dict[str, str]]:
     try:
-        return await _build_fetch_targets(url, allow_private_networks=allow_private_networks)
+        return await _build_fetch_targets(url)
     except HTTPException as exc:
         detail = exc.detail
         if isinstance(detail, dict):
@@ -80,7 +72,7 @@ async def _check_ssrf(
 @router.get("/fetch")
 async def fetch_weather(
     url: str = Query(..., description="Vollständige Wetter-API-URL (inkl. API-Key)"),
-    current_user: str | None = Depends(optional_current_user),
+    _user: str = Depends(get_current_user),
 ) -> JSONResponse:
     """Holt Wetterdaten von der konfigurierten API-URL und gibt sie als JSON zurück.
     Der API-Key wird als Teil der URL übergeben (z.B. OpenWeatherMap appid=…).
@@ -95,20 +87,7 @@ async def fetch_weather(
             detail="Nur HTTP/HTTPS-URLs erlaubt",
         )
 
-    try:
-        fetch_targets = await _check_ssrf(
-            url,
-            allow_private_networks=current_user is not None,
-            legacy_detail=False,
-        )
-    except TypeError as exc:
-        if "legacy_detail" not in str(exc):
-            raise
-        fetch_targets = await _check_ssrf(
-            url,
-            allow_private_networks=current_user is not None,
-        )
-    request_urls, pinned_headers, request_extensions = fetch_targets or ([url], {}, {})
+    request_urls, pinned_headers, request_extensions = await _check_ssrf(url, legacy_detail=False)
 
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as hc:
