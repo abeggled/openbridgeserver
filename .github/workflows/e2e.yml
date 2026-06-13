@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+      - '[0-9][0-9][0-9][0-9].*.x'  # release maintenance lines, e.g. 2026.6.x
   pull_request:
     branches:
       - main
+      - '[0-9][0-9][0-9][0-9].*.x'  # release maintenance lines, e.g. 2026.6.x
 
 concurrency:
   group: e2e-${{ github.ref }}

@@ -4,9 +4,11 @@ on:
   pull_request:
     branches:
       - main
+      - '[0-9][0-9][0-9][0-9].*.x'  # release maintenance lines, e.g. 2026.6.x
   push:
     branches:
       - main
+      - '[0-9][0-9][0-9][0-9].*.x'  # release maintenance lines, e.g. 2026.6.x
       - bug/*
       - bugfix/*
       - feat/*
