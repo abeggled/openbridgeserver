@@ -1,5 +1,9 @@
 # Changes
 
+## 2026.6.1
+### Fixes 🐞
+* Packaging: New LXC container based on release 2026.6.0 not starting. https://github.com/abeggled/openbridgeserver/issues/808
+
 ## 2026.6.0
 ### Breaking changes 🚨
 * Security: Backend URL fetches from logic API-client nodes, iCalendar nodes, Pushover `image_url` attachments, the camera proxy, and the weather API now block private/local network targets by default unless they are explicitly allowlisted. Migration: existing installations using LAN cameras such as `http://192.168.x.x/...`, local `.ics` calendars, local Pushover image sources, or a local weather endpoint must allowlist the target under Settings → Security → URL Target Allowlist, or in the YAML file configured by `security.url_target_allowlist_path` (default: `OBS_SECRET_FILE_DIR/url-target-allowlist.yaml` when `OBS_SECRET_FILE_DIR` is set, otherwise `secrets/url-target-allowlist.yaml` next to the configured database). Use an IP address or CIDR for private targets, for example `192.168.1.23/32` or `10.38.113.0/24`. If a hostname such as `internal.example` resolves to a private IP address, allowlist the resolved IP/CIDR; a hostname-only entry does not override private-IP blocking and does not bypass DNS validation. Until the target is allowlisted, affected camera widgets, weather widgets, iCalendar nodes, Pushover image attachments, or logic API-client calls are intentionally blocked. https://github.com/abeggled/openbridgeserver/pull/700
