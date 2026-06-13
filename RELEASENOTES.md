@@ -3,6 +3,7 @@
 ## 2026.6.1
 ### Fixes 🐞
 * Packaging: New LXC container based on release 2026.6.0 not starting. https://github.com/abeggled/openbridgeserver/issues/808
+* Backend: High-volume third-party DEBUG loggers are now floored at INFO, so enabling DEBUG globally no longer floods the logs and saturates a CPU core. https://github.com/abeggled/openbridgeserver/issues/798
 
 ## 2026.6.0
 ### Breaking changes 🚨
