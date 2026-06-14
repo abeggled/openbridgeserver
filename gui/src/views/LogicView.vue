@@ -324,6 +324,11 @@ function fmtDebugVal(nodeOut) {
     return String(v).slice(0, 18)
   }
 
+  // node execution error — show prominently before any other key handling
+  if ('__error__' in nodeOut) {
+    return `${t('logic.nodeError')}: ${String(nodeOut.__error__).slice(0, 50)}`
+  }
+
   // notify nodes — show message content + sent status (before generic key loop)
   if ('_message' in nodeOut) {
     const msg  = nodeOut._message !== null && nodeOut._message !== undefined

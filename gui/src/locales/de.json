@@ -1305,6 +1305,7 @@
     "saved": "Graph gespeichert",
     "errorSave": "Fehler beim Speichern",
     "runResult": "Graph ausgeführt — {count} Nodes evaluiert",
+    "nodeError": "⚠ Fehler",
     "duplicated": "Graph dupliziert als „{name}“",
     "errorDuplicate": "Fehler beim Duplizieren",
     "errorExport": "Fehler beim Exportieren",

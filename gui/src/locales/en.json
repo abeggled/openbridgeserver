@@ -1305,6 +1305,7 @@
     "saved": "Graph saved",
     "errorSave": "Error saving graph",
     "runResult": "Graph executed — {count} nodes evaluated",
+    "nodeError": "⚠ Error",
     "duplicated": "Graph duplicated as “{name}”",
     "errorDuplicate": "Error duplicating graph",
     "errorExport": "Error exporting graph",

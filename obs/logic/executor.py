@@ -93,7 +93,7 @@ class GraphExecutor:
                 result = self._eval_node(node, inputs)
             except Exception as exc:
                 logger.warning("Node %s (%s) error: %s", node.id, node.type, exc)
-                result = {}
+                result = {"__error__": str(exc)}
 
             outputs[node.id] = result
 

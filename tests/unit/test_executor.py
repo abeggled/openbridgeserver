@@ -773,29 +773,58 @@ class TestPythonScriptNode:
         out = run_single("python_script", {"script": "result = math.sqrt(inputs['a'])"}, {"a": 9})
         assert out["result"] == pytest.approx(3.0)
 
-    def test_script_error_returns_empty_output(self):
-        # execute() catches all errors internally and logs them — never raises to caller
+    def test_script_error_sets_error_key(self):
+        # execute() catches all errors internally and logs them — never raises to caller;
+        # the failing node gets {"__error__": "<msg>"} so callers can surface the failure.
         n1 = node("p", "python_script", {"script": "result = 1 / 0"})
         exc = make_executor([n1])
         out = exc.execute({"p": {}})
-        assert out.get("p") == {}  # node output is empty on error
+        assert "__error__" in out.get("p", {})
+        assert isinstance(out["p"]["__error__"], str)
+        assert out["p"]["__error__"]  # non-empty message
 
-    def test_os_import_blocked_returns_empty_output(self):
-        # __import__ is not in builtins → ExecutionError caught internally → empty output
+    def test_os_import_blocked_sets_error_key(self):
+        # __import__ is not in builtins → ExecutionError caught internally → __error__ set
         n1 = node("p", "python_script", {"script": "import os; result = os.getcwd()"})
         exc = make_executor([n1])
         out = exc.execute({"p": {}})
-        assert out.get("p") == {}
+        assert "__error__" in out.get("p", {})
 
     def test_round_uses_mathematical_rounding(self):
         out = run_single("python_script", {"script": "result = round(inputs['a'], 1)"}, {"a": 21.15})
         assert out["result"] == pytest.approx(21.2)
 
-    def test_math_dunder_attribute_blocked_returns_empty_output(self):
+    def test_math_dunder_attribute_blocked_sets_error_key(self):
         n1 = node("p", "python_script", {"script": "result = math.__dict__"})
         exc = make_executor([n1])
         out = exc.execute({"p": {}})
-        assert out.get("p") == {}
+        assert "__error__" in out.get("p", {})
+
+    def test_error_node_downstream_receives_none(self):
+        # A node downstream of a failing node gets None as input (not the error dict).
+        nodes = [
+            node("bad", "python_script", {"script": "result = 1 / 0"}),
+            node("good", "math_formula", {"formula": "a + 1"}),
+        ]
+        edges = [edge("bad", "good", source_handle="result", target_handle="in1")]
+        exc = make_executor(nodes, edges)
+        out = exc.execute()
+        assert "__error__" in out["bad"]
+        # in1 resolves to None (handle "result" absent from error dict) → 0.0 + 1 = 1.0
+        assert out["good"]["result"] == pytest.approx(1.0)
+
+    def test_graph_continues_after_node_error(self):
+        # When one node fails, the rest of the graph still executes.
+        nodes = [
+            node("ok", "const_value", {"value": "5", "data_type": "number"}),
+            node("bad", "python_script", {"script": "result = 1 / 0"}),
+            node("out", "math_formula", {"formula": "a"}),
+        ]
+        edges = [edge("ok", "out", source_handle="value", target_handle="in1")]
+        exc = make_executor(nodes, edges)
+        out = exc.execute()
+        assert "__error__" in out["bad"]
+        assert out["out"]["result"] == pytest.approx(5.0)
 
 
 # ===========================================================================
