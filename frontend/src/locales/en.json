@@ -8,7 +8,8 @@
     "submitting": "Signing in …",
     "subtitle": "Visualization · Sign in",
     "failed": "Login failed",
-    "backWithoutLogin": "← Back to overview (without login)"
+    "backWithoutLogin": "← Back to overview (without login)",
+    "logoAlt": "open bridge server"
   },
   "common": {
     "save": "Save",

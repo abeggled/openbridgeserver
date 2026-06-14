@@ -8,7 +8,8 @@
     "submitting": "Anmelden …",
     "subtitle": "Visualisierung · Anmeldung",
     "failed": "Login fehlgeschlagen",
-    "backWithoutLogin": "← Zur Übersicht (ohne Login)"
+    "backWithoutLogin": "← Zur Übersicht (ohne Login)",
+    "logoAlt": "open bridge server"
   },
   "common": {
     "save": "Speichern",

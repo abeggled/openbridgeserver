@@ -20,7 +20,8 @@
     "username": "Username",
     "password": "Password",
     "submit": "Sign in",
-    "submitting": "Signing in …"
+    "submitting": "Signing in …",
+    "logoAlt": "open bridge server"
   },
   "dashboard": {
     "title": "Overview",

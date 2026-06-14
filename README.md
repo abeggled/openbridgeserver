@@ -1,6 +1,7 @@
 # open bridge multiprotocol ai server
 
-![**open bridge server** Logo](logo/obs_logo_dark.svg)
+![**open bridge server** Logo](logo/obs_logo_light.svg#gh-light-mode-only)
+![**open bridge server** Logo](logo/obs_logo_dark.svg#gh-dark-mode-only)
 
 ![Version](https://img.shields.io/github/v/release/abeggled/openbridgeserver?style=for-the-badge)
 [![Tests][tests-badge]][tests]
