@@ -2,7 +2,7 @@
 # Python 3.13+
 
 # Web Framework
-fastapi>=0.137,<0.138   # 0.137.0 pulls Starlette 1.x which breaks APIRouter.routes — re-evaluate before bumping
+fastapi>=0.137,<0.138
 uvicorn[standard]>=0.46.0
 
 # Data Validation & Settings
