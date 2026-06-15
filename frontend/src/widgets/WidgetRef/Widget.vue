@@ -8,6 +8,7 @@
  */
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { getSessionToken, visu } from '@/api/client'
+import { createWebSocketClient } from '@/composables/useWebSocket'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { WidgetRegistry } from '@/widgets/registry'
 import type { DataPointValue, WidgetInstance } from '@/types'
@@ -25,7 +26,9 @@ const sourceWidget = ref<WidgetInstance | null>(null)
 const loading = ref(false)
 const errorMsg = ref('')
 const sourceSessionNodeId = ref('')
-let subscribedIds: string[] = []
+const sourceAccess = ref('public')
+const sourceValues = ref<Record<string, DataPointValue>>({})
+const sourceWs = createWebSocketClient()
 
 const sourcePageId     = computed(() => (props.config.source_page_id     as string | undefined) ?? '')
 const sourceWidgetName = computed(() => (props.config.source_widget_name as string | undefined) ?? '')
@@ -35,38 +38,59 @@ const sourceReadContext = computed(() => ({
   ...(sourceSessionToken.value ? { sessionToken: sourceSessionToken.value } : {}),
 }))
 
-async function resolveSourceSessionNodeId(pageId: string): Promise<string> {
+sourceWs.onMessage((msg) => {
+  if (msg.id && msg.v !== undefined) {
+    const id = msg.id as string
+    sourceValues.value[id] = {
+      id,
+      v: msg.v,
+      u: (msg.u as string | null) ?? null,
+      t: (msg.t as string | undefined) ?? new Date().toISOString(),
+      q: (msg.q as DataPointValue['q']) ?? 'good',
+    }
+  }
+})
+
+async function resolveSourceSessionContext(pageId: string): Promise<{ sessionNodeId: string; access: string }> {
   try {
     const breadcrumb = await visu.getBreadcrumb(pageId)
     const definingNode = [...breadcrumb].reverse().find(node => node.access !== null)
-    return definingNode?.id ?? pageId
+    return {
+      sessionNodeId: definingNode?.id ?? pageId,
+      access: definingNode?.access ?? 'public',
+    }
   } catch {
-    return pageId
+    return { sessionNodeId: pageId, access: 'public' }
   }
 }
 
 async function loadReference() {
+  sourceWs.disconnect()
+  sourceValues.value = {}
   if (!sourcePageId.value || !sourceWidgetName.value) {
     sourceWidget.value = null
     sourceSessionNodeId.value = ''
+    sourceAccess.value = 'public'
     return
   }
   loading.value = true
   errorMsg.value = ''
   try {
-    sourceSessionNodeId.value = await resolveSourceSessionNodeId(sourcePageId.value)
+    const sourceContext = await resolveSourceSessionContext(sourcePageId.value)
+    sourceSessionNodeId.value = sourceContext.sessionNodeId
+    sourceAccess.value = sourceContext.access
     const widgets = await visu.getWidgetRef(sourcePageId.value, sourceSessionNodeId.value)
     const found = widgets.find(w => w.name === sourceWidgetName.value) ?? null
-
-    // Alte Subscriptions ablösen
-    if (subscribedIds.length) { dpStore.unsubscribe(subscribedIds); subscribedIds = [] }
 
     if (found) {
       const ids = [found.datapoint_id, found.status_datapoint_id].filter(Boolean) as string[]
       if (ids.length) {
-        dpStore.subscribe(ids)
+        sourceWs.connect({
+          ...sourceReadContext.value,
+          preferPageScope: sourceAccess.value !== 'user',
+        })
+        sourceWs.subscribe(ids)
         dpStore.fetchInitialValues(ids, sourceReadContext.value)
-        subscribedIds = ids
       }
       sourceWidget.value = found
     } else {
@@ -83,11 +107,17 @@ async function loadReference() {
 
 onMounted(() => { if (!props.editorMode) loadReference() })
 watch([sourcePageId, sourceWidgetName], () => { if (!props.editorMode) loadReference() })
-onUnmounted(() => { if (subscribedIds.length) dpStore.unsubscribe(subscribedIds) })
+onUnmounted(() => { sourceWs.disconnect() })
 
 const refDef         = computed(() => sourceWidget.value ? WidgetRegistry.get(sourceWidget.value.type) : null)
-const refValue       = computed(() => sourceWidget.value?.datapoint_id        ? dpStore.getValue(sourceWidget.value.datapoint_id)        : null)
-const refStatusValue = computed(() => sourceWidget.value?.status_datapoint_id ? dpStore.getValue(sourceWidget.value.status_datapoint_id) : null)
+const refValue = computed(() => {
+  const id = sourceWidget.value?.datapoint_id
+  return id ? (sourceValues.value[id] ?? dpStore.getValue(id)) : null
+})
+const refStatusValue = computed(() => {
+  const id = sourceWidget.value?.status_datapoint_id
+  return id ? (sourceValues.value[id] ?? dpStore.getValue(id)) : null
+})
 </script>
 
 <template>

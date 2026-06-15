@@ -24,6 +24,9 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from obs.api.auth import Principal
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import filter_authorized_datapoints
 from obs.api.v1 import sessions as sessions_api
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config, is_uuid_str
 from obs.core.json import jsonable
@@ -483,6 +486,26 @@ async def _ws_has_log_access(user: str | None, api_key: str | None) -> bool:
     return False
 
 
+async def _jwt_principal(db: Database, username: str) -> Principal:
+    row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (username,))
+    return Principal(subject=username, type="user", is_admin=bool(row and row["is_admin"]))
+
+
+async def _ws_authorized_datapoint_scope(db: Database, principal: Principal) -> set[str] | None:
+    if principal.type == "user" and principal.is_admin:
+        return None
+
+    rows = await db.fetchall("SELECT id FROM datapoints ORDER BY id")
+    all_ids = [row["id"] for row in rows]
+    allowed = await filter_authorized_datapoints(
+        db,
+        principal,
+        all_ids,
+        action=AuthzAction.READ,
+    )
+    return set(allowed)
+
+
 # ---------------------------------------------------------------------------
 # Singleton
 # ---------------------------------------------------------------------------
@@ -559,6 +582,12 @@ async def websocket_endpoint(
         return
 
     allowed_dp_ids: set[str] | None = None
+    db: Database | None = None
+    if user is not None and user != "__api_key__":
+        db = get_db()
+        principal = await _jwt_principal(db, user)
+        allowed_dp_ids = await _ws_authorized_datapoint_scope(db, principal)
+
     if user is None:
         if not page_id:
             await ws.close(code=4001, reason="Authentication required")

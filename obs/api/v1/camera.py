@@ -51,7 +51,12 @@ async def _camera_auth(
     if auth_header.startswith("Bearer "):
         return decode_token(auth_header[7:])
     if _token:
-        return decode_token(_token)
+        try:
+            return decode_token(_token)
+        except HTTPException:
+            if request.query_params.get("page_id"):
+                return None
+            raise
     return None
 
 

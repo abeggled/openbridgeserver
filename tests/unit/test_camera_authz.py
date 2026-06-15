@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -175,6 +176,36 @@ def _mock_camera_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_client.head = AsyncMock(return_value=mock_head)
     monkeypatch.setattr(camera_api.httpx, "AsyncClient", lambda **kw: mock_client)
+
+
+@pytest.mark.asyncio
+async def test_camera_auth_treats_stale_query_token_as_optional_with_page_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def _decode_token(_token: str) -> str:
+        raise HTTPException(401, "Token invalid")
+
+    monkeypatch.setattr(camera_api, "decode_token", _decode_token)
+    request = SimpleNamespace(
+        headers={},
+        query_params={"page_id": "page-camera"},
+    )
+
+    assert await camera_api._camera_auth(request, _token="stale.jwt") is None  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_camera_auth_rejects_stale_query_token_without_page_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def _decode_token(_token: str) -> str:
+        raise HTTPException(401, "Token invalid")
+
+    monkeypatch.setattr(camera_api, "decode_token", _decode_token)
+    request = SimpleNamespace(headers={}, query_params={})
+
+    with pytest.raises(HTTPException):
+        await camera_api._camera_auth(request, _token="stale.jwt")  # noqa: SLF001
 
 
 @pytest.mark.asyncio

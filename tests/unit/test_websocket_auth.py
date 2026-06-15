@@ -72,6 +72,21 @@ class _LogAccessDbStub:
         return self.row
 
 
+class _JwtScopeDbStub:
+    def __init__(self, *, is_admin: bool = False) -> None:
+        self.is_admin = is_admin
+
+    async def fetchone(self, query: str, _params: tuple):
+        if "FROM users" in query:
+            return {"is_admin": int(self.is_admin)}
+        return None
+
+    async def fetchall(self, query: str, _params: tuple = ()):
+        if "FROM datapoints" in query:
+            return [{"id": "allowed-dp"}, {"id": "blocked-dp"}]
+        return []
+
+
 @pytest.mark.asyncio
 async def test_authenticate_ws_rejects_missing_credentials():
     ws = _FakeWebSocket()
@@ -110,6 +125,7 @@ async def test_websocket_endpoint_accepts_subprotocol_jwt(monkeypatch):
         raise HTTPException(401, "invalid")
 
     monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+    monkeypatch.setattr(ws_api, "get_db", lambda: _JwtScopeDbStub(is_admin=True))
 
     ws = _FakeWebSocket(subprotocols=["obs.jwt.valid.jwt.token"])
     ws_api.init_ws_manager()
@@ -120,6 +136,37 @@ async def test_websocket_endpoint_accepts_subprotocol_jwt(monkeypatch):
 
     assert ws.accepted is True
     assert ws.accepted_subprotocol == "obs.jwt.valid.jwt.token"
+
+
+@pytest.mark.asyncio
+async def test_websocket_endpoint_filters_jwt_subscriptions_by_datapoint_authz(monkeypatch):
+    def _decode_token(token: str, expected_type: str = "access") -> str:
+        if token == "valid.jwt.token" and expected_type == "access":
+            return "alice"
+        raise HTTPException(401, "invalid")
+
+    async def _filter_authorized_datapoints(_db, principal, ids, *, action):
+        assert principal.subject == "alice"
+        assert action is ws_api.AuthzAction.READ
+        assert ids == ["allowed-dp", "blocked-dp"]
+        return ["allowed-dp"]
+
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+    monkeypatch.setattr(ws_api, "get_db", lambda: _JwtScopeDbStub(is_admin=False))
+    monkeypatch.setattr(ws_api, "filter_authorized_datapoints", _filter_authorized_datapoints)
+
+    ws = _FakeWebSocket(
+        headers={"authorization": "Bearer valid.jwt.token"},
+        received=[{"action": "subscribe", "ids": ["allowed-dp", "blocked-dp"]}],
+    )
+    ws_api.init_ws_manager()
+    try:
+        await ws_api.websocket_endpoint(ws)
+    finally:
+        ws_api.reset_ws_manager()
+
+    assert ws.accepted is True
+    assert ws.sent == [{"action": "subscribed", "ids": ["allowed-dp"]}]
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,12 @@ const mocks = vi.hoisted(() => ({
   subscribe: vi.fn(),
   unsubscribe: vi.fn(),
   getValue: vi.fn(),
+  wsConnect: vi.fn(),
+  wsDisconnect: vi.fn(),
+  wsSubscribe: vi.fn(),
+  wsUnsubscribe: vi.fn(),
+  wsOnMessage: vi.fn(),
+  messageHandlers: [] as Array<(msg: Record<string, unknown>) => void>,
 }))
 
 vi.mock('@/api/client', () => ({
@@ -36,6 +42,17 @@ vi.mock('@/stores/datapoints', () => ({
   }),
 }))
 
+vi.mock('@/composables/useWebSocket', () => ({
+  createWebSocketClient: () => ({
+    connected: { value: false },
+    connect: mocks.wsConnect,
+    disconnect: mocks.wsDisconnect,
+    subscribe: mocks.wsSubscribe,
+    unsubscribe: mocks.wsUnsubscribe,
+    onMessage: mocks.wsOnMessage,
+  }),
+}))
+
 const RefTarget = defineComponent({
   props: {
     config: { type: Object, required: true },
@@ -46,12 +63,18 @@ const RefTarget = defineComponent({
     pageId: { type: String, default: null },
     sessionToken: { type: String, default: null },
   },
-  template: '<div data-testid="ref-target" :data-page-id="pageId" :data-session-token="sessionToken"></div>',
+  template:
+    '<div data-testid="ref-target" :data-page-id="pageId" :data-session-token="sessionToken" :data-value="value?.v"></div>',
 })
 
 beforeEach(() => {
   vi.clearAllMocks()
   sessionStorage.clear()
+  mocks.messageHandlers.length = 0
+  mocks.wsOnMessage.mockImplementation((handler: (msg: Record<string, unknown>) => void) => {
+    mocks.messageHandlers.push(handler)
+    return vi.fn()
+  })
   mocks.getBreadcrumb.mockResolvedValue([{ id: 'source-page', access: 'public' }])
   WidgetRegistry.register({
     type: 'RefTarget',
@@ -101,6 +124,8 @@ describe('WidgetRef source page context', () => {
 
     expect(mocks.getWidgetRef).toHaveBeenCalledWith('source-page', 'source-page')
     expect(mocks.fetchInitialValues).toHaveBeenCalledWith(['dp-1'], { pageId: 'source-page' })
+    expect(mocks.wsConnect).toHaveBeenCalledWith({ pageId: 'source-page', preferPageScope: true })
+    expect(mocks.wsSubscribe).toHaveBeenCalledWith(['dp-1'])
     expect(wrapper.get('[data-testid="ref-target"]').attributes('data-page-id')).toBe('source-page')
   })
 
@@ -141,6 +166,11 @@ describe('WidgetRef source page context', () => {
     expect(mocks.fetchInitialValues).toHaveBeenCalledWith(['dp-1'], {
       pageId: 'source-page',
       sessionToken: 'session-1',
+    })
+    expect(mocks.wsConnect).toHaveBeenCalledWith({
+      pageId: 'source-page',
+      sessionToken: 'session-1',
+      preferPageScope: true,
     })
     expect(wrapper.get('[data-testid="ref-target"]').attributes('data-session-token')).toBe('session-1')
   })
@@ -188,6 +218,47 @@ describe('WidgetRef source page context', () => {
       pageId: 'source-page',
       sessionToken: 'session-root',
     })
+    expect(mocks.wsConnect).toHaveBeenCalledWith({
+      pageId: 'source-page',
+      sessionToken: 'session-root',
+      preferPageScope: true,
+    })
     expect(wrapper.get('[data-testid="ref-target"]').attributes('data-session-token')).toBe('session-root')
+  })
+
+  it('renders live values received through the source-scoped websocket', async () => {
+    mocks.getWidgetRef.mockResolvedValue([
+      {
+        id: 'widget-1',
+        name: 'Referenced Meter',
+        type: 'RefTarget',
+        datapoint_id: 'dp-1',
+        status_datapoint_id: null,
+        x: 0,
+        y: 0,
+        w: 2,
+        h: 2,
+        config: {},
+      },
+    ])
+
+    const wrapper = mount(WidgetRef, {
+      props: {
+        config: {
+          source_page_id: 'source-page',
+          source_widget_name: 'Referenced Meter',
+        },
+        datapointId: null,
+        value: null,
+        statusValue: null,
+        editorMode: false,
+      },
+    })
+    await flushPromises()
+
+    mocks.messageHandlers[0]({ id: 'dp-1', v: 42, u: 'W', t: '2026-06-15T00:00:00.000Z', q: 'good' })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.get('[data-testid="ref-target"]').attributes('data-value')).toBe('42')
   })
 })
