@@ -4,14 +4,16 @@ import { createPinia, setActivePinia } from 'pinia'
 
 let checkUrlTarget
 let addUrlTarget
+let searchDatapoints
 
 beforeEach(() => {
   vi.resetModules()
   checkUrlTarget = vi.fn()
   addUrlTarget = vi.fn().mockResolvedValue({ data: { target: '10.38.113.23/32' } })
+  searchDatapoints = vi.fn().mockResolvedValue({ data: { items: [] } })
   vi.doMock('@/api/client', () => ({
     dpApi: { list: vi.fn().mockResolvedValue({ data: { items: [] } }) },
-    searchApi: { search: vi.fn().mockResolvedValue({ data: { items: [] } }) },
+    searchApi: { search: searchDatapoints },
     securityApi: { checkUrlTarget, addUrlTarget },
   }))
 })
@@ -90,6 +92,29 @@ describe('NodeConfigPanel api_client URL target policy', () => {
       url: 'http://internal.example/api/v1/status',
     })
     expect(wrapper.text()).toContain('Ziel ist erlaubt')
+    wrapper.unmount()
+  })
+
+  it('adds api_client variables from datapoint search', async () => {
+    searchDatapoints.mockResolvedValueOnce({
+      data: {
+        items: [{ id: 'dp-1', name: 'Device ID', data_type: 'STRING' }],
+      },
+    })
+
+    const wrapper = await mountApiClientPanel()
+    await wrapper.find('[data-testid="api-client-add-variable"]').trigger('click')
+    await wrapper.find('[data-testid="api-client-variable-search-0"]').setValue('Device')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="api-client-variable-result-0"]').trigger('click')
+
+    expect(searchDatapoints).toHaveBeenCalledWith({ q: 'Device', size: 50 })
+    expect(wrapper.text()).toContain('###OBS1###')
+    expect(wrapper.text()).toContain('Device ID')
+    expect(wrapper.emitted('update').at(-1)[0].variables).toEqual([
+      { datapoint_id: 'dp-1', datapoint_name: 'Device ID' },
+    ])
     wrapper.unmount()
   })
 })

@@ -307,6 +307,67 @@
           </div>
           <div v-if="urlTargetMsg" :class="['mt-2 p-2 rounded text-xs', urlTargetMsg.ok ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500']">{{ urlTargetMsg.text }}</div>
         </div>
+        <div class="section-label flex items-center justify-between mt-1">
+          <span>{{ $t('logic.nodeConfig.apiClient.variablesSection') }}</span>
+          <button type="button" class="btn-secondary btn-sm text-teal-400" @click="addApiVariable" data-testid="api-client-add-variable">
+            {{ $t('logic.nodeConfig.apiClient.addVariable') }}
+          </button>
+        </div>
+        <p class="text-xs text-slate-500 -mt-2">{{ $t('logic.nodeConfig.apiClient.variablesHint') }}</p>
+        <div v-if="apiVariables.length === 0" class="text-xs text-slate-500 italic">
+          {{ $t('logic.nodeConfig.apiClient.noVariables') }}
+        </div>
+        <div
+          v-for="(variable, i) in apiVariables"
+          :key="i"
+          class="border border-slate-700 rounded-lg p-3 flex flex-col gap-2 bg-slate-900/40"
+          :data-testid="`api-client-variable-${i}`"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <span class="text-xs font-semibold text-teal-400">OBS{{ i + 1 }}</span>
+              <code class="ml-2 text-xs text-slate-400 break-all">###OBS{{ i + 1 }}###</code>
+            </div>
+            <button
+              type="button"
+              class="text-xs text-red-400 hover:text-red-300 shrink-0"
+              @click="removeApiVariable(i)"
+              :data-testid="`api-client-variable-remove-${i}`"
+            >
+              {{ $t('logic.nodeConfig.apiClient.removeVariable') }}
+            </button>
+          </div>
+          <div class="form-group">
+            <label class="label">{{ $t('logic.ports.object') }}</label>
+            <input
+              :value="apiVariableSearches[i] ?? variable.datapoint_name ?? ''"
+              type="text"
+              class="input text-sm"
+              :placeholder="$t('logic.nodeConfig.connection.searchPlaceholder')"
+              @input="onApiVariableSearchInput(i, $event)"
+              :data-testid="`api-client-variable-search-${i}`"
+            />
+            <div
+              v-if="apiVariableResults[i]?.length"
+              class="mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden max-h-40 overflow-y-auto"
+            >
+              <button
+                v-for="dp in apiVariableResults[i]"
+                :key="dp.id"
+                type="button"
+                @click="selectApiVariableDp(i, dp)"
+                class="w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200"
+                :data-testid="`api-client-variable-result-${i}`"
+              >
+                {{ dp.name }}
+                <span class="text-slate-500 ml-1">{{ dp.data_type }}</span>
+              </button>
+            </div>
+            <div v-if="variable.datapoint_name" class="mt-1 text-xs text-teal-400">
+              ✓ {{ variable.datapoint_name }}
+            </div>
+          </div>
+        </div>
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.methodLabel') }}</label>
           <select v-model="localData.method" class="input text-sm" @change="emitUpdate"
@@ -878,6 +939,8 @@ const urlTargetChecking = ref(false)
 const urlTargetSaving = ref(false)
 const urlTargetDecision = ref(null)
 const urlTargetMsg = ref(null)
+const apiVariableSearches = ref([])
+const apiVariableResults = ref([])
 
 // ── Value Map Presets ──────────────────────────────────────────────────────
 const VALUE_MAP_PRESETS = computed(() => [
@@ -1037,6 +1100,7 @@ const isExtractorNode  = computed(() =>
 const isSubstringExtractorNode = computed(() => props.node?.type === 'substring_extractor')
 const isStringConcatNode = computed(() => props.node?.type === 'string_concat')
 const isICalNode          = computed(() => props.node?.type === 'ical')
+const apiVariables = computed(() => Array.isArray(localData.value.variables) ? localData.value.variables : [])
 
 // ── iCal: filter management ───────────────────────────────────────────────
 const icalFilters = computed(() => {
@@ -1447,6 +1511,21 @@ function fieldLabel(nodeType, fieldKey, fallback) {
   return te(key) ? t(key) : (fallback ?? fieldKey)
 }
 
+function normaliseApiVariables(raw) {
+  return Array.isArray(raw)
+    ? raw.map(v => ({
+        datapoint_id: v?.datapoint_id || '',
+        datapoint_name: v?.datapoint_name || '',
+      }))
+    : []
+}
+
+function syncApiVariableUiState() {
+  const vars = apiVariables.value
+  apiVariableSearches.value = vars.map((v, i) => apiVariableSearches.value[i] ?? v.datapoint_name ?? '')
+  apiVariableResults.value = vars.map((_, i) => apiVariableResults.value[i] ?? [])
+}
+
 // ── Watchers ───────────────────────────────────────────────────────────────
 watch(() => props.node, (n) => {
   if (n) {
@@ -1462,6 +1541,14 @@ watch(() => props.node, (n) => {
     }
     if (n.type === 'api_client' && !localData.value.auth_type) {
       localData.value.auth_type = 'none'
+    }
+    if (n.type === 'api_client') {
+      localData.value.variables = normaliseApiVariables(localData.value.variables)
+      apiVariableSearches.value = localData.value.variables.map(v => v.datapoint_name || '')
+      apiVariableResults.value = localData.value.variables.map(() => [])
+    } else {
+      apiVariableSearches.value = []
+      apiVariableResults.value = []
     }
     if (n.type === 'datapoint_read' || n.type === 'datapoint_write') {
       searchDps()
@@ -1581,6 +1668,65 @@ function selectDp(dp) {
   localData.value.datapoint_name = dp.name
   dpSearch.value  = dp.name
   dpResults.value = []
+  emitUpdate()
+}
+
+function addApiVariable() {
+  const variables = normaliseApiVariables(localData.value.variables)
+  variables.push({ datapoint_id: '', datapoint_name: '' })
+  localData.value.variables = variables
+  syncApiVariableUiState()
+  emitUpdate()
+}
+
+function removeApiVariable(index) {
+  const variables = normaliseApiVariables(localData.value.variables)
+  variables.splice(index, 1)
+  localData.value.variables = variables
+  apiVariableSearches.value.splice(index, 1)
+  apiVariableResults.value.splice(index, 1)
+  syncApiVariableUiState()
+  emitUpdate()
+}
+
+async function searchApiVariableDps(index, query) {
+  try {
+    let items
+    if ((query || '').length < 1) {
+      const { data } = await dpApi.list(0, 50)
+      items = data.items || data
+    } else {
+      const { data } = await searchApi.search({ q: query, size: 50 })
+      items = data.items || data
+    }
+    const next = apiVariableResults.value.slice()
+    next[index] = items
+    apiVariableResults.value = next
+  } catch {
+    const next = apiVariableResults.value.slice()
+    next[index] = []
+    apiVariableResults.value = next
+  }
+}
+
+function onApiVariableSearchInput(index, event) {
+  const query = event.target.value
+  const searches = apiVariableSearches.value.slice()
+  searches[index] = query
+  apiVariableSearches.value = searches
+  searchApiVariableDps(index, query)
+}
+
+function selectApiVariableDp(index, dp) {
+  const variables = normaliseApiVariables(localData.value.variables)
+  variables[index] = { datapoint_id: dp.id, datapoint_name: dp.name }
+  localData.value.variables = variables
+  const searches = apiVariableSearches.value.slice()
+  searches[index] = dp.name
+  apiVariableSearches.value = searches
+  const results = apiVariableResults.value.slice()
+  results[index] = []
+  apiVariableResults.value = results
   emitUpdate()
 }
 

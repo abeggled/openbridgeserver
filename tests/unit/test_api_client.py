@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
 from obs.config import SecuritySettings, Settings, override_settings
+from obs.core.registry import ValueState
 from obs.logic.manager import LogicManager, _build_api_client_fetch_targets, _read_secret_file
 from obs.logic.models import FlowData
 from obs.security.url_targets import add_allowed_url_target, evaluate_url_target
@@ -847,6 +849,132 @@ class TestApiClientAuthentication:
         # Called with auth=None
         _, kwargs = mock_client_cls.call_args
         assert kwargs.get("auth") is None
+
+
+class TestApiClientVariables:
+    def _state(self, value):
+        state = ValueState()
+        state.value = value
+        state.quality = "good"
+        return state
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    @patch(
+        "obs.security.url_targets.socket.getaddrinfo",
+        return_value=[(None, None, None, None, ("93.184.216.34", 80))],
+    )
+    def test_replaces_variables_in_url_headers_auth_and_body(self, _mock_resolve, mock_client_cls):
+        captured: dict = {}
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        async def _capture(method, url, **kwargs):
+            captured["method"] = method
+            captured["url"] = url
+            captured.update(kwargs)
+            return _mock_response(200, {"ok": True})
+
+        mock_client.request = _capture
+
+        dp1 = uuid.uuid4()
+        dp2 = uuid.uuid4()
+        dp3 = uuid.uuid4()
+        manager = _make_manager()
+        manager._registry.get_value.side_effect = lambda dp_id: {
+            dp1: self._state("device/7"),
+            dp2: self._state("42&admin=true"),
+            dp3: self._state("a b#frag"),
+        }.get(dp_id)
+        data = {
+            "url": "http://example.com/api/###OBS1###?value=###OBS2###&label=###OBS3###",
+            "method": "POST",
+            "content_type": "text/plain",
+            "headers": '{"X-Device": "###OBS1###", "X-Both": "###OBS1###-###OBS2###"}',
+            "auth_type": "bearer",
+            "auth_token": "token-###OBS2###",
+            "variables": [
+                {"datapoint_id": str(dp1), "datapoint_name": "Device"},
+                {"datapoint_id": str(dp2), "datapoint_name": "Value"},
+                {"datapoint_id": str(dp3), "datapoint_name": "Label"},
+            ],
+        }
+        n = node("ac", "api_client", data)
+        flow = _flow([n])
+        graph_id = "g-vars"
+        manager._graphs[graph_id] = ("t", True, flow)
+
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = asyncio.run(
+                manager._execute_graph(
+                    graph_id,
+                    "t",
+                    flow,
+                    {"ac": {"trigger": True, "body": "state=###OBS1###/###OBS2###"}},
+                )
+            )
+
+        assert outputs["ac"]["success"] is True
+        assert captured["method"] == "POST"
+        assert captured["url"] == "http://93.184.216.34/api/device%2F7?value=42%26admin%3Dtrue&label=a%20b%23frag"
+        assert captured["content"] == "state=device/7/42&admin=true"
+        assert captured["headers"] == {
+            "X-Device": "device/7",
+            "X-Both": "device/7-42&admin=true",
+            "Authorization": "Bearer token-42&admin=true",
+            "Content-Type": "text/plain",
+            "Host": "example.com",
+        }
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_missing_variable_configuration_sets_error_output(self, mock_client_cls):
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.request = AsyncMock()
+
+        manager = _make_manager()
+        data = {"url": "http://example.com/###OBS1###", "method": "GET", "variables": []}
+        n = node("ac", "api_client", data)
+        flow = _flow([n])
+        graph_id = "g-missing-var"
+        manager._graphs[graph_id] = ("t", True, flow)
+
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "t", flow, {"ac": {"trigger": True}}))
+
+        mock_client.request.assert_not_called()
+        assert outputs["ac"]["success"] is False
+        assert outputs["ac"]["status"] is None
+        assert outputs["ac"]["response"] == "API client variable OBS1 is not configured"
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_variable_without_value_sets_error_output(self, mock_client_cls):
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.request = AsyncMock()
+
+        dp_id = uuid.uuid4()
+        manager = _make_manager()
+        manager._registry.get_value.return_value = self._state(None)
+        data = {
+            "url": "http://example.com/###OBS1###",
+            "method": "GET",
+            "variables": [{"datapoint_id": str(dp_id), "datapoint_name": "MissingValue"}],
+        }
+        n = node("ac", "api_client", data)
+        flow = _flow([n])
+        graph_id = "g-no-value"
+        manager._graphs[graph_id] = ("t", True, flow)
+
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "t", flow, {"ac": {"trigger": True}}))
+
+        mock_client.request.assert_not_called()
+        assert outputs["ac"]["success"] is False
+        assert outputs["ac"]["status"] is None
+        assert outputs["ac"]["response"] == "API client variable OBS1 object MissingValue has no value"
 
 
 # ===========================================================================

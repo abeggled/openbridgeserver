@@ -1532,7 +1532,12 @@
         "targetBlocked": "Dieses Ziel wird blockiert",
         "allowTarget": "{target} freigeben",
         "allowSaved": "Ziel wurde freigegeben.",
-        "defaultAllowReason": "Freigabe aus API-Client-Konfiguration"
+        "defaultAllowReason": "Freigabe aus API-Client-Konfiguration",
+        "variablesSection": "Variablen",
+        "addVariable": "Variable hinzufügen",
+        "removeVariable": "Entfernen",
+        "variablesHint": "Variablen referenzieren bestehende Objekte und können als ###OBS1###, ###OBS2### usw. in URL, Headern, Auth-Feldern und Body verwendet werden.",
+        "noVariables": "Keine Variablen konfiguriert."
       },
       "stringConcat": {
         "inputCount": "Anzahl Eingänge",

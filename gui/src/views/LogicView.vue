@@ -280,7 +280,7 @@ async function loadGraph() {
   const { data } = await logicApi.getGraph(activeGraphId.value)
   nodes.value = (data.flow_data.nodes || []).map(n => {
     // eslint-disable-next-line no-unused-vars
-    const { _dbg, ...nodeData } = n.data ?? {}
+    const { _dbg, _dbg_title, ...nodeData } = n.data ?? {}
     return { ...n, position: n.position || { x: 100, y: 100 }, data: nodeData }
   })
   edges.value = data.flow_data.edges || []
@@ -295,7 +295,7 @@ async function saveGraph() {
     await store.saveGraph(activeGraphId.value, graph.name, graph.description, graph.enabled, {
       nodes: nodes.value.map(n => {
         // eslint-disable-next-line no-unused-vars
-        const { _dbg, ...nodeData } = n.data ?? {}
+        const { _dbg, _dbg_title, ...nodeData } = n.data ?? {}
         return { id: n.id, type: n.type, position: n.position, data: nodeData }
       }),
       edges: edges.value.map(e => ({
@@ -313,20 +313,33 @@ async function saveGraph() {
 
 // ── Debug mode ─────────────────────────────────────────────────────────────
 const debugMode = ref(localStorage.getItem('logic_debug_mode') === '1')
+const DEBUG_TOOLTIP_MAX_CHARS = 1000
 
-function fmtDebugVal(nodeOut) {
+function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
   if (!nodeOut || typeof nodeOut !== 'object') return null
+
+  function maybeClip(text) {
+    return maxChars !== null && text.length > maxChars ? `${text.slice(0, maxChars)}…` : text
+  }
 
   function fv(v) {
     if (v === null || v === undefined) return '—'
     if (typeof v === 'boolean') return v ? '✓' : '✗'
     if (typeof v === 'number') return String(parseFloat(v.toPrecision(5)))
-    return String(v).slice(0, 18)
+    const text = String(v)
+    return full ? maybeClip(text) : text.slice(0, 18)
+  }
+
+  function clipped(v, limit) {
+    if (v === null || v === undefined) return '—'
+    const text = String(v)
+    if (full) return maybeClip(text)
+    return text.length <= limit ? text : `${text.slice(0, limit)}…`
   }
 
   // node execution error — show prominently before any other key handling
   if ('__error__' in nodeOut) {
-    return `${t('logic.nodeError')}: ${String(nodeOut.__error__).slice(0, 50)}`
+    return `${t('logic.nodeError')}: ${clipped(nodeOut.__error__, 50)}`
   }
 
   // notify nodes — show message content + sent status (before generic key loop)
@@ -348,6 +361,11 @@ function fmtDebugVal(nodeOut) {
     return `→ ${fv(nodeOut._write_value)}`
   }
 
+  // api_client — response text is often the useful error and needs more room
+  if ('response' in nodeOut && 'status' in nodeOut && 'success' in nodeOut) {
+    return `response=${clipped(nodeOut.response, 80)}   status=${fv(nodeOut.status)}   success=${fv(nodeOut.success)}`
+  }
+
   // Public keys (no leading _) — generic fallback
   const pairs = Object.entries(nodeOut)
     .filter(([k]) => !k.startsWith('_'))
@@ -365,14 +383,18 @@ function applyDebugValues(outputs) {
   lastRunOutputs.value = outputs
   nodes.value = nodes.value.map(n => ({
     ...n,
-    data: { ...n.data, _dbg: fmtDebugVal(outputs[n.id]) ?? undefined }
+    data: {
+      ...n.data,
+      _dbg: fmtDebugVal(outputs[n.id]) ?? undefined,
+      _dbg_title: fmtDebugVal(outputs[n.id], { full: true, maxChars: DEBUG_TOOLTIP_MAX_CHARS }) ?? undefined,
+    }
   }))
 }
 
 function clearDebugValues() {
   nodes.value = nodes.value.map(n => {
     // eslint-disable-next-line no-unused-vars
-    const { _dbg, ...rest } = n.data
+    const { _dbg, _dbg_title, ...rest } = n.data
     return { ...n, data: rest }
   })
 }

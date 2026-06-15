@@ -16,6 +16,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import stat
 import uuid
 from datetime import UTC, datetime
@@ -60,6 +61,11 @@ _PUSHOVER_ATTACHMENT_MAX_BYTES = 5_000_000
 _SECRET_FILE_MAX_BYTES = 8192
 _SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
 _API_CLIENT_RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
+_API_CLIENT_VARIABLE_RE = re.compile(r"###OBS([1-9][0-9]*)###")
+
+
+class _ApiClientVariableError(ValueError):
+    pass
 
 
 def _secret_file_root() -> Path:
@@ -99,6 +105,93 @@ def _read_secret_file(path: str) -> str:
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         logger.warning("Could not read secret file %s: %s", secret_path_raw, exc)
         return ""
+
+
+def _normalise_api_client_variables(raw: Any) -> dict[int, dict[str, str]]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = []
+    if not isinstance(raw, list):
+        return {}
+
+    variables: dict[int, dict[str, str]] = {}
+    for idx, entry in enumerate(raw, start=1):
+        if not isinstance(entry, dict):
+            continue
+        datapoint_id = str(entry.get("datapoint_id") or "").strip()
+        if not datapoint_id:
+            continue
+        variables[idx] = {
+            "datapoint_id": datapoint_id,
+            "datapoint_name": str(entry.get("datapoint_name") or datapoint_id),
+        }
+    return variables
+
+
+def _api_client_value_to_string(value: Any) -> str:
+    if value is None:
+        raise _ApiClientVariableError("API client variable value is empty")
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _replace_api_client_placeholders(
+    value: Any,
+    resolver: Any,
+    transform: Any | None = None,
+) -> Any:
+    if isinstance(value, str):
+        def _replace(match: re.Match[str]) -> str:
+            replacement = resolver(int(match.group(1)))
+            return transform(replacement) if transform is not None else replacement
+
+        return _API_CLIENT_VARIABLE_RE.sub(_replace, value)
+    if isinstance(value, list):
+        return [_replace_api_client_placeholders(item, resolver, transform) for item in value]
+    if isinstance(value, dict):
+        return {
+            _replace_api_client_placeholders(key, resolver, transform): _replace_api_client_placeholders(item, resolver, transform)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _quote_api_client_url_value(value: str) -> str:
+    return quote(value, safe="-._~")
+
+
+def _make_api_client_variable_resolver(registry: Any, raw_variables: Any) -> Any:
+    variables = _normalise_api_client_variables(raw_variables)
+    cache: dict[int, str] = {}
+
+    def _resolve(index: int) -> str:
+        if index in cache:
+            return cache[index]
+        variable = variables.get(index)
+        if variable is None:
+            raise _ApiClientVariableError(f"API client variable OBS{index} is not configured")
+        datapoint_id = variable["datapoint_id"]
+        try:
+            state = registry.get_value(uuid.UUID(datapoint_id))
+        except Exception as exc:
+            raise _ApiClientVariableError(f"API client variable OBS{index} references an invalid object") from exc
+        if state is None:
+            raise _ApiClientVariableError(
+                f"API client variable OBS{index} object {variable['datapoint_name']} is not available",
+            )
+        if state.value is None:
+            raise _ApiClientVariableError(
+                f"API client variable OBS{index} object {variable['datapoint_name']} has no value",
+            )
+        cache[index] = _api_client_value_to_string(state.value)
+        return cache[index]
+
+    return _resolve
 
 
 def _parse_http_url(url: str) -> Any | None:
@@ -701,6 +794,17 @@ class LogicManager:
                 if node.data.get("datapoint_id") == dp_id_str and node.data.get("datapoint_name") != event.new_name:
                     node.data["datapoint_name"] = event.new_name
                     changed = True
+                variables = node.data.get("variables")
+                if isinstance(variables, list):
+                    for variable in variables:
+                        if not isinstance(variable, dict):
+                            continue
+                        if (
+                            variable.get("datapoint_id") == dp_id_str
+                            and variable.get("datapoint_name") != event.new_name
+                        ):
+                            variable["datapoint_name"] = event.new_name
+                            changed = True
             if changed:
                 current = self._graphs.get(graph_id)
                 if current is None or current[2] is not flow:
@@ -1011,8 +1115,18 @@ class LogicManager:
             out = outputs.get(node.id, {})
             if not GraphExecutor._to_bool(out.get("_trigger")):
                 continue
-            url = (node.data.get("url") or "").strip()
-            if not url:
+            variable_resolver = _make_api_client_variable_resolver(self._registry, node.data.get("variables"))
+            try:
+                url = _replace_api_client_placeholders(
+                    node.data.get("url") or "",
+                    variable_resolver,
+                    _quote_api_client_url_value,
+                ).strip()
+                if not url:
+                    continue
+            except _ApiClientVariableError as exc:
+                logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
+                outputs[node.id].update({"response": str(exc), "status": None, "success": False})
                 continue
             try:
                 request_urls, pinned_headers, request_extensions = _build_api_client_fetch_targets(url)
@@ -1043,24 +1157,48 @@ class LogicManager:
                     }
                 except Exception:
                     pass
-            body = out.get("_body")
+            try:
+                extra_headers = _replace_api_client_placeholders(extra_headers, variable_resolver)
+                body = _replace_api_client_placeholders(out.get("_body"), variable_resolver)
+            except _ApiClientVariableError as exc:
+                logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
+                outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                continue
             # ── Authentication ──────────────────────────────────────────
             auth_type = (node.data.get("auth_type") or "none").lower()
             auth: Any = None
-            if auth_type in ("basic", "digest"):
-                username = (node.data.get("auth_username") or "").strip()
-                password = (node.data.get("auth_password") or "").strip()
-                if username:
-                    auth = httpx.BasicAuth(username, password) if auth_type == "basic" else httpx.DigestAuth(username, password)
-            elif auth_type == "bearer":
-                token = (node.data.get("auth_token") or "").strip()
-                if not token:
-                    token = _read_secret_file(node.data.get("auth_token_file") or "")
-                if token:
-                    extra_headers = {
-                        **extra_headers,
-                        "Authorization": f"Bearer {token}",
-                    }
+            try:
+                if auth_type in ("basic", "digest"):
+                    username = _replace_api_client_placeholders(
+                        node.data.get("auth_username") or "",
+                        variable_resolver,
+                    ).strip()
+                    password = _replace_api_client_placeholders(
+                        node.data.get("auth_password") or "",
+                        variable_resolver,
+                    ).strip()
+                    if username:
+                        auth = (
+                            httpx.BasicAuth(username, password)
+                            if auth_type == "basic"
+                            else httpx.DigestAuth(username, password)
+                        )
+                elif auth_type == "bearer":
+                    token = _replace_api_client_placeholders(
+                        node.data.get("auth_token") or "",
+                        variable_resolver,
+                    ).strip()
+                    if not token:
+                        token = _read_secret_file(node.data.get("auth_token_file") or "")
+                    if token:
+                        extra_headers = {
+                            **extra_headers,
+                            "Authorization": f"Bearer {token}",
+                        }
+            except _ApiClientVariableError as exc:
+                logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
+                outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                continue
             try:
                 req_kwargs: dict[str, Any] = {
                     "headers": extra_headers,
