@@ -214,12 +214,13 @@ jobs:
           echo "Downloading $BUNDLE_URL ..."
           curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"
 
-          if [[ -n "$EXPECTED_SHA256" ]]; then
-              echo "Verifying integrity ..."
-              echo "${EXPECTED_SHA256}  ${BUNDLE_FILENAME}" | (cd "$TMP" && sha256sum -c -)
-          else
-              echo "Warning: no SHA-256 found in release notes, skipping integrity check."
+          if [[ -z "$EXPECTED_SHA256" ]]; then
+              echo "Error: no SHA-256 found in release notes for $TARGET." >&2
+              echo "Integrity check is required; aborting." >&2
+              exit 1
           fi
+          echo "Verifying integrity ..."
+          echo "${EXPECTED_SHA256}  ${BUNDLE_FILENAME}" | (cd "$TMP" && sha256sum -c -)
 
           systemctl stop "$SERVICE"
 
@@ -592,7 +593,7 @@ jobs:
             > /tmp/release_body.txt
 
           python3 <<'PYEOF' > /tmp/new_body.txt
-          import glob, os
+          import glob, os, re
 
           def read(path):
               with open(path) as f:
@@ -610,6 +611,14 @@ jobs:
           entries.sort(key=lambda x: x[0])
 
           marker = "<!-- LXC_INSERT -->"
+
+          # Strip any previously generated block so the step is idempotent on re-runs
+          body = re.sub(
+              r'### Checksums \(SHA-256\)\n.*?' + re.escape(marker),
+              marker,
+              body,
+              flags=re.DOTALL,
+          )
 
           section = "### Checksums (SHA-256)\n\n"
           for name, cs in entries:
