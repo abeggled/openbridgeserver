@@ -196,6 +196,8 @@ async def _check_page_write_access(db: Database, node_id: str, principal: Princi
     if principal.type == "user" and principal.is_admin:
         return
     access, _ = await _resolve_access_with_node(db, node_id)
+    if access in ("readonly", "protected"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
     if access == "user" and (principal.type != "user" or not await _check_user_access(db, node_id, principal.subject)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 

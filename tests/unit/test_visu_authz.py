@@ -225,6 +225,19 @@ async def test_save_page_with_hierarchy_write_grant_allows_non_admin(db: Databas
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("access", ["readonly", "protected"])
+async def test_save_page_blocks_non_admin_on_readonly_and_protected_pages(db: Database, access: str):
+    await _seed_scope(db)
+    await _insert_grant(db, node_id="allowed", role="resident")
+    await _insert_visu_page(db, f"{access}-write-page", access=access, config=_page_config(ALLOWED_DP_ID))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await visu_api.save_page(f"{access}-write-page", _page_config(ALLOWED_DP_ID), db=db, _user=_principal())
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_save_page_user_page_requires_user_assignment(db: Database):
     await _seed_scope(db)
     await _insert_user(db)

@@ -265,6 +265,37 @@ async def test_query_history_authenticated_public_page_context_remains_compatibl
 
 
 @pytest.mark.asyncio
+async def test_query_history_authenticated_public_page_matches_anonymous_page_access(monkeypatch, db: Database):
+    page_dp_id = uuid.uuid4()
+    history_dp_id = uuid.uuid4()
+    await _seed_datapoint_scope(db, history_dp_id)
+    await _insert_datapoint(db, page_dp_id)
+    await _insert_public_visu_page(db, "page-public-history", page_dp_id)
+    monkeypatch.setattr(history_api, "get_registry", lambda: _RegistryStub(history_dp_id))
+
+    plugin = MagicMock()
+    plugin.query = AsyncMock(return_value=[])
+    monkeypatch.setattr(history_api, "get_history_plugin", lambda: plugin)
+    monkeypatch.setattr(history_api, "_resolve_page_access", AsyncMock(return_value="public"))
+
+    request = MagicMock()
+    request.headers.get = lambda key, default=None: {"X-Page-Id": "page-public-history"}.get(key, default)
+
+    result = await history_api.query_history(
+        dp_id=history_dp_id,
+        from_ts=None,
+        to_ts=None,
+        limit=100,
+        request=request,
+        principal=_principal("alice"),
+        db=db,
+    )
+
+    assert result == []
+    plugin.query.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_aggregate_history_with_read_grant_reaches_plugin(monkeypatch, db: Database):
     dp_id = uuid.uuid4()
     await _seed_datapoint_scope(db, dp_id, grant_principal="alice")

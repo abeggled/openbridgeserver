@@ -164,7 +164,14 @@ async def _check_datapoint_read_access(
         [str(dp_id)],
         action=AuthzAction.READ,
     )
-    if str(dp_id) not in allowed and not await _page_context_allows_datapoint_read(db, request, dp_id, principal):
+    if str(dp_id) in allowed:
+        return
+    try:
+        await _check_history_access(request, None, db)
+        return
+    except HTTPException:
+        pass
+    if not await _page_context_allows_datapoint_read(db, request, dp_id, principal):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
 
 
