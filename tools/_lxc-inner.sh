@@ -143,38 +143,42 @@ fi
 echo "Installing $TARGET ..."
 
 ASSET_INFO=$(echo "$ALL_RELEASES" | python3 -c "
-import sys, json
+import sys, json, re
 target = '${TARGET}'
 releases = json.load(sys.stdin)
 r = next((r for r in releases if r['tag_name'] == target), None)
 if r:
     bundle = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz')), None)
-    checksum = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha512')), None)
-    if bundle and checksum:
+    if bundle:
         print(bundle['browser_download_url'])
-        print(checksum['browser_download_url'])
+    body = r.get('body') or ''
+    m = re.search(r'app-bundle[^\n]*\n\x60\x60\x60\s*\n([0-9a-f]{64})', body)
+    print(m.group(1) if m else '')
 ")
 
 BUNDLE_URL=$(echo "$ASSET_INFO" | sed -n '1p')
-CHECKSUM_URL=$(echo "$ASSET_INFO" | sed -n '2p')
+EXPECTED_SHA256=$(echo "$ASSET_INFO" | sed -n '2p')
 
-if [[ -z "$BUNDLE_URL" ]] || [[ -z "$CHECKSUM_URL" ]]; then
-    echo "Error: missing app-bundle or checksum asset for $TARGET" >&2
+if [[ -z "$BUNDLE_URL" ]]; then
+    echo "Error: missing app-bundle asset for $TARGET" >&2
     exit 1
 fi
 
 BUNDLE_FILENAME=$(basename "$BUNDLE_URL")
-CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
 
 TMP=$(mktemp -d)
 trap "rm -rf $TMP" EXIT
 
 echo "Downloading $BUNDLE_URL ..."
 curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"
-echo "Downloading $CHECKSUM_URL ..."
-curl -fL "$CHECKSUM_URL" -o "$TMP/$CHECKSUM_FILENAME"
 
-(cd "$TMP" && sha512sum -c "$CHECKSUM_FILENAME")
+if [[ -z "$EXPECTED_SHA256" ]]; then
+    echo "Error: no SHA-256 found in release notes for $TARGET." >&2
+    echo "Integrity check is required; aborting." >&2
+    exit 1
+fi
+echo "Verifying integrity ..."
+echo "${EXPECTED_SHA256}  ${BUNDLE_FILENAME}" | (cd "$TMP" && sha256sum -c -)
 
 systemctl stop "$SERVICE"
 
@@ -199,8 +203,8 @@ cp /tmp/obs-update obs-update
 # ── App bundle ─────────────────────────────────────────────────────────────────
 echo "==> Creating app bundle..."
 tar -czf "/tmp/$APP_BUNDLE_FILE" obs/ gui_dist/ frontend_dist/ requirements.txt obs-update
-(cd /tmp && sha512sum "$APP_BUNDLE_FILE" > "$APP_BUNDLE_FILE.sha512")
-cp "/tmp/$APP_BUNDLE_FILE" "/tmp/$APP_BUNDLE_FILE.sha512" /output/
+(cd /tmp && sha256sum "$APP_BUNDLE_FILE" > "$APP_BUNDLE_FILE.sha256")
+cp "/tmp/$APP_BUNDLE_FILE" "/tmp/$APP_BUNDLE_FILE.sha256" /output/
 
 if [[ "${BUNDLE_ONLY}" == "true" ]]; then
     echo ""
@@ -427,8 +431,8 @@ cd "$ROOTFS"
 tar --numeric-owner --acls --xattrs \
     -cf - . | zstd -T0 -9 -o "/tmp/$TEMPLATE_FILE"
 cd /tmp
-sha512sum "$TEMPLATE_FILE" > "$TEMPLATE_FILE.sha512"
-cp "$TEMPLATE_FILE" "$TEMPLATE_FILE.sha512" /output/
+sha256sum "$TEMPLATE_FILE" > "$TEMPLATE_FILE.sha256"
+cp "$TEMPLATE_FILE" "$TEMPLATE_FILE.sha256" /output/
 
 echo ""
 echo "==> Done! Artifacts:"
