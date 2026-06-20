@@ -91,6 +91,21 @@ describe('createWebSocketClient', () => {
     expect(mocks.sockets[0].protocols).toEqual(['obs.jwt.jwt-token'])
   })
 
+  it('reconnects when a JWT socket gains page context', () => {
+    mocks.getJwt.mockReturnValue('jwt-token')
+
+    const client = createWebSocketClient()
+    client.connect()
+    const initialSocket = mocks.sockets[0]
+
+    client.connect({ pageId: 'viewer-page', sessionToken: 'session-1' })
+
+    expect(initialSocket.readyState).toBe(3)
+    expect(mocks.sockets).toHaveLength(2)
+    expect(mocks.sockets[1].url).toContain('/api/v1/ws?page_id=viewer-page&session_token=session-1')
+    expect(mocks.sockets[1].protocols).toEqual(['obs.jwt.jwt-token'])
+  })
+
   it('does not reconnect after an explicit disconnect', () => {
     mocks.getJwt.mockReturnValue('jwt-token')
 

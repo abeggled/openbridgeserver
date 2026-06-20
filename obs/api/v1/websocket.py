@@ -613,6 +613,10 @@ async def websocket_endpoint(
         db = get_db()
         principal = await get_current_principal(credentials=None, api_key=api_key, db=db)
         allowed_dp_ids = await _ws_authorized_datapoint_scope(db, principal)
+        if page_id and allowed_dp_ids is not None:
+            page_scope_ids = await _ws_authenticated_page_scope(db, page_id, principal, subprotocol_session or ws.query_params.get("session_token"))
+            if page_scope_ids is not None:
+                allowed_dp_ids.update(page_scope_ids)
     elif user is not None:
         db = get_db()
         principal = await _jwt_principal(db, user)

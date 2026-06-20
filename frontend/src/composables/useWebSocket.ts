@@ -44,9 +44,19 @@ export function createWebSocketClient() {
     for (const handler of handlers) handler(data)
   }
 
+  function sameConnectContext(a: ConnectContext, b: ConnectContext) {
+    return a.pageId === b.pageId && a.sessionToken === b.sessionToken && a.preferPageScope === b.preferPageScope
+  }
+
   function connect(nextContext: ConnectContext = {}) {
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-      return
+      if (sameConnectContext(connectContext, nextContext)) return
+      socket.onclose = null
+      socket.onerror = null
+      socket.onmessage = null
+      socket.close()
+      socket = null
+      connected.value = false
     }
 
     connectContext = nextContext
