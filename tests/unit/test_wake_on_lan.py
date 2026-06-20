@@ -275,3 +275,120 @@ class TestWakeOnLanManager:
                 )
 
         assert outputs["wol"]["sent"] is False
+
+    def _run_manager_raw(self, data: dict, trigger: bool = True):
+        """Run manager with raw node data dict (for edge-case config testing)."""
+        manager = _make_manager()
+        flow = _flow([node("wol", "wake_on_lan", data)])
+        graph_id = "g"
+        manager._graphs[graph_id] = ("test", True, flow)
+        manager._node_state[graph_id] = {}
+
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+                outputs = asyncio.run(
+                    manager._execute_graph(
+                        graph_id,
+                        "test",
+                        flow,
+                        {"wol": {"trigger": trigger}},
+                    ),
+                )
+        return outputs, mock_to_thread
+
+    def test_whitespace_only_broadcast_defaults_to_global(self):
+        _, mock_to_thread = self._run_manager_raw({"mac_address": "AA:BB:CC:DD:EE:FF", "broadcast_ip": "   "})
+        call_args = mock_to_thread.call_args
+        assert call_args.args[2] == "255.255.255.255"
+
+    def test_port_zero_invalid_falls_back_to_nine(self):
+        _, mock_to_thread = self._run_manager_raw({"mac_address": "AA:BB:CC:DD:EE:FF", "port": 0})
+        mock_to_thread.assert_not_awaited()
+
+    def test_port_out_of_range_falls_back_to_nine(self):
+        _, mock_to_thread = self._run_manager_raw({"mac_address": "AA:BB:CC:DD:EE:FF", "port": 99999})
+        mock_to_thread.assert_not_awaited()
+
+    def test_non_numeric_port_does_not_raise(self):
+        outputs, mock_to_thread = self._run_manager_raw({"mac_address": "AA:BB:CC:DD:EE:FF", "port": "abc"})
+        mock_to_thread.assert_not_awaited()
+        assert outputs["wol"]["sent"] is False
+
+
+# ===========================================================================
+# Manager: wake_on_lan downstream re-propagation
+# ===========================================================================
+
+
+class TestWakeOnLanDownstreamPropagation:
+    """sent=True must propagate to downstream nodes after the WoL packet is sent."""
+
+    def test_downstream_and_gate_receives_sent_true(self):
+        """Graph: wol.sent → gate.in1, const_value(True) → gate.in2
+        After the second-pass fix, gate.out must be True when WoL succeeds.
+        """
+        from tests.unit.conftest import edge
+
+        nodes = [
+            node("wol", "wake_on_lan", {"mac_address": "AA:BB:CC:DD:EE:FF"}),
+            node("cv", "const_value", {"value": "true", "data_type": "bool"}),
+            node("gate", "and", {"input_count": 2}),
+        ]
+        edges = [
+            edge("wol", "gate", "sent", "in1"),
+            edge("cv", "gate", "value", "in2"),
+        ]
+        flow = _flow(nodes, edges)
+
+        manager = _make_manager()
+        graph_id = "g"
+        manager._graphs[graph_id] = ("test", True, flow)
+        manager._node_state[graph_id] = {}
+
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock):
+                outputs = asyncio.run(
+                    manager._execute_graph(
+                        graph_id,
+                        "test",
+                        flow,
+                        {"wol": {"trigger": True}},
+                    ),
+                )
+
+        assert outputs["wol"]["sent"] is True
+        assert outputs["gate"]["out"] is True
+
+    def test_downstream_gate_stays_false_on_wol_failure(self):
+        """When WoL send fails, sent=False must NOT re-propagate (gate stays False)."""
+        from tests.unit.conftest import edge
+
+        nodes = [
+            node("wol", "wake_on_lan", {"mac_address": "AA:BB:CC:DD:EE:FF"}),
+            node("cv", "const_value", {"value": "true", "data_type": "bool"}),
+            node("gate", "and", {"input_count": 2}),
+        ]
+        edges = [
+            edge("wol", "gate", "sent", "in1"),
+            edge("cv", "gate", "value", "in2"),
+        ]
+        flow = _flow(nodes, edges)
+
+        manager = _make_manager()
+        graph_id = "g2"
+        manager._graphs[graph_id] = ("test", True, flow)
+        manager._node_state[graph_id] = {}
+
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock, side_effect=OSError("net err")):
+                outputs = asyncio.run(
+                    manager._execute_graph(
+                        graph_id,
+                        "test",
+                        flow,
+                        {"wol": {"trigger": True}},
+                    ),
+                )
+
+        assert outputs["wol"]["sent"] is False
+        assert outputs["gate"]["out"] is False
