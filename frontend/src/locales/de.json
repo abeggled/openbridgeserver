@@ -587,6 +587,11 @@
       "white": "Weisskanal (0–255)"
     },
     "link": {
+      "activeIndicator": "Aktive Seite markieren",
+      "activeIndicatorBorder": "Rahmen",
+      "activeIndicatorDot": "Punkt (●)",
+      "activeIndicatorLine": "Linie (unten)",
+      "activeIndicatorNone": "Keine",
       "defaultLabel": "Link",
       "labelPlaceholder": "z.B. Wohnzimmer",
       "noTarget": "Kein Ziel",

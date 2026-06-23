@@ -587,6 +587,11 @@
       "white": "White channel (0–255)"
     },
     "link": {
+      "activeIndicator": "Highlight active page",
+      "activeIndicatorBorder": "Border",
+      "activeIndicatorDot": "Dot (●)",
+      "activeIndicatorLine": "Line (bottom)",
+      "activeIndicatorNone": "None",
       "defaultLabel": "Link",
       "labelPlaceholder": "e.g. Living room",
       "noTarget": "No target",

@@ -145,15 +145,15 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
 
     <!-- Aktive Seite markieren -->
     <div>
-      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Aktive Seite markieren</label>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.link.activeIndicator') }}</label>
       <select
         v-model="cfg.active_indicator"
         class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
       >
-        <option value="none">Keine</option>
-        <option value="dot">Punkt (●)</option>
-        <option value="bar">Linie (unten)</option>
-        <option value="border">Rahmen</option>
+        <option value="none">{{ $t('widgets.link.activeIndicatorNone') }}</option>
+        <option value="dot">{{ $t('widgets.link.activeIndicatorDot') }}</option>
+        <option value="bar">{{ $t('widgets.link.activeIndicatorLine') }}</option>
+        <option value="border">{{ $t('widgets.link.activeIndicatorBorder') }}</option>
       </select>
     </div>
 
