@@ -601,6 +601,7 @@
       "defaultLabel": "Link",
       "labelPlaceholder": "z.B. Wohnzimmer",
       "noTarget": "Kein Ziel",
+      "showArrow": "Navigationspfeil (→) anzeigen",
       "showIcon": "Icon anzeigen",
       "preserveIconColor": "SVG-Icon-Farbe erhalten (kein Schwarz/Weiß)",
       "targetPage": "Ziel-Seite",

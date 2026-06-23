@@ -24,6 +24,8 @@
 * Admin GUI: Logic editor block palette — individual block sections (Logic, Objects, Math, …) can now be collapsed and expanded by clicking the section header; the entire palette column can also be collapsed to a slim rail and restored the same way. Both states persist across page reloads. https://github.com/abeggled/openbridgeserver/issues/875
 * Admin GUI: The minimap in the logic editor can now be dragged to any position within the canvas; the position is saved and restored across page reloads. https://github.com/abeggled/openbridgeserver/issues/879
 
+* Visu: Link widget: the navigation arrow (→) can now be hidden independently of the icon via the "show_arrow" option (default: shown).
+
 ### Fixes 🐞
 * Visu: Kamera widget — Basic Auth and API-Key credential fields are now always shown when the matching auth type is selected, including after loading a page saved with an older auth format. The config panel no longer renders blank when a widget with a null or missing config is selected. Legacy authType values stored as display text are normalised to canonical form on load. https://github.com/abeggled/openbridgeserver/issues/823
 * Backend: KNX adapter no longer forwards non-finite float values (`inf`, `-inf`, `nan`) produced by DPT decoders to the event bus. Such values are now published with `quality=bad` and `value=null` instead of propagating to the InfluxDB history plugin, which rejected them with HTTP 400 "invalid boolean". https://github.com/abeggled/openbridgeserver/issues/827

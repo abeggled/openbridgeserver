@@ -14,6 +14,7 @@ WidgetRegistry.register({
   defaultConfig: {
     label: '',
     icon: '🔗',
+    show_arrow: true,
     target_node_id: '',
     show_icon: true,
     preserve_icon_color: false,

@@ -601,6 +601,7 @@
       "defaultLabel": "Link",
       "labelPlaceholder": "e.g. Living room",
       "noTarget": "No target",
+      "showArrow": "Show navigation arrow (→)",
       "showIcon": "Show icon",
       "preserveIconColor": "Preserve SVG icon color (no black/white)",
       "targetPage": "Target page",

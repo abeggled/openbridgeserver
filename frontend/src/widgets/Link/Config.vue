@@ -13,6 +13,7 @@ const cfg = reactive({
   label:               (props.modelValue.label               as string)  ?? '',
   icon:                (props.modelValue.icon                as string)  ?? '🔗',
   target_node_id:      (props.modelValue.target_node_id      as string)  ?? '',
+  show_arrow:          (props.modelValue.show_arrow          as boolean) ?? true,
   show_icon:           (props.modelValue.show_icon           as boolean) ?? true,
   preserve_icon_color: (props.modelValue.preserve_icon_color as boolean) ?? false,
   label_size:          (props.modelValue.label_size          as string)  ?? 'sm',
@@ -24,6 +25,7 @@ watch(() => props.modelValue, (v) => {
   cfg.label               = (v.label               as string)  ?? ''
   cfg.icon                = (v.icon                as string)  ?? '🔗'
   cfg.target_node_id      = (v.target_node_id      as string)  ?? ''
+  cfg.show_arrow          = (v.show_arrow          as boolean) ?? true
   cfg.show_icon           = (v.show_icon           as boolean) ?? true
   cfg.preserve_icon_color = (v.preserve_icon_color as boolean) ?? false
   cfg.label_size          = (v.label_size          as string)  ?? 'sm'
@@ -156,6 +158,12 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
         <option value="border">{{ $t('widgets.link.activeIndicatorBorder') }}</option>
       </select>
     </div>
+
+    <!-- Navigationspfeil anzeigen -->
+    <label class="flex items-center gap-2 cursor-pointer select-none">
+      <input type="checkbox" v-model="cfg.show_arrow" class="rounded" />
+      <span class="text-xs text-gray-500 dark:text-gray-400">{{ $t('widgets.link.showArrow') }}</span>
+    </label>
 
     <!-- Ziel-Seite (suchbarer Picker) -->
     <div>
