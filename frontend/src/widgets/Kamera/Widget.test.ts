@@ -3,7 +3,7 @@ import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import KameraWidget from './Widget.vue'
 
-function mountWidget(pageId?: string | null, sessionToken?: string | null) {
+function mountWidget(pageId?: string | null, sessionToken?: string | null, editorMode = false) {
   return mount(KameraWidget, {
     props: {
       config: {
@@ -13,7 +13,7 @@ function mountWidget(pageId?: string | null, sessionToken?: string | null) {
       datapointId: null,
       value: null,
       statusValue: null,
-      editorMode: false,
+      editorMode,
       pageId,
       sessionToken,
     },
@@ -57,5 +57,16 @@ describe('Kamera widget proxy scope', () => {
     const params = new URLSearchParams(src.split('?')[1])
 
     expect(params.get('session_token')).toBe('session-1')
+  })
+
+  it('marks proxied editor previews so draft camera URLs are not page-config scoped', () => {
+    const wrapper = mountWidget('page-1', 'session-1', true)
+
+    const src = wrapper.get('img').attributes('src')
+    expect(src).toBeDefined()
+    if (!src) return
+    const params = new URLSearchParams(src.split('?')[1])
+
+    expect(params.get('editor_preview')).toBe('1')
   })
 })

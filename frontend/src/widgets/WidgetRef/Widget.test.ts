@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/client', () => ({
+  getJwt: () => localStorage.getItem('visu_jwt'),
   getSessionToken: (nodeId: string) => {
     const raw = sessionStorage.getItem(`session_${nodeId}`)
     if (!raw) return null
@@ -71,13 +72,14 @@ const RefTarget = defineComponent({
     '<div data-testid="ref-target" :data-page-id="pageId" :data-session-token="sessionToken" :data-value="value?.v"></div>',
 })
 
-beforeEach(() => {
-  vi.clearAllMocks()
-  sessionStorage.clear()
-  mocks.messageHandlers.length = 0
-  mocks.wsOnMessage.mockImplementation((handler: (msg: Record<string, unknown>) => void) => {
-    mocks.messageHandlers.push(handler)
-    return vi.fn()
+  beforeEach(() => {
+    vi.clearAllMocks()
+    sessionStorage.clear()
+    localStorage.clear()
+    mocks.messageHandlers.length = 0
+    mocks.wsOnMessage.mockImplementation((handler: (msg: Record<string, unknown>) => void) => {
+      mocks.messageHandlers.push(handler)
+      return vi.fn()
   })
   mocks.getBreadcrumb.mockResolvedValue([{ id: 'source-page', access: 'public' }])
   WidgetRegistry.register({
@@ -255,6 +257,40 @@ describe('WidgetRef source page context', () => {
         config: {
           source_page_id: 'source-page',
           source_widget_name: 'Protected Widget',
+        },
+        datapointId: null,
+        value: null,
+        statusValue: null,
+        editorMode: false,
+      },
+    })
+    await flushPromises()
+
+    expect(mocks.wsConnect).toHaveBeenCalledWith({ pageId: 'source-page' })
+  })
+
+  it('keeps JWT transport for public source pages when the viewer is logged in', async () => {
+    localStorage.setItem('visu_jwt', 'jwt-token')
+    mocks.getWidgetRef.mockResolvedValue([
+      {
+        id: 'widget-1',
+        name: 'Public Widget',
+        type: 'RefTarget',
+        datapoint_id: 'dp-1',
+        status_datapoint_id: null,
+        x: 0,
+        y: 0,
+        w: 2,
+        h: 2,
+        config: {},
+      },
+    ])
+
+    mount(WidgetRef, {
+      props: {
+        config: {
+          source_page_id: 'source-page',
+          source_widget_name: 'Public Widget',
         },
         datapointId: null,
         value: null,

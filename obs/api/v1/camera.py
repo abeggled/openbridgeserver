@@ -160,6 +160,7 @@ async def proxy_camera(
     apikey_value: str = Query("", description="API-Key Wert"),
     page_id: str = Query("", description="Visu-Seite, die das Kamera-Widget enthält"),
     session_token: str = Query("", description="PIN-Session-Token für geschützte Visu-Seiten"),
+    editor_preview: bool = False,
     _user: str | None = Depends(_camera_auth),
     db: Database = Depends(get_db),
 ) -> StreamingResponse:
@@ -179,13 +180,23 @@ async def proxy_camera(
         sep = "&" if "?" in target else "?"
         target = f"{target}{sep}{apikey_param}={apikey_value}"
 
-    # 3. Verpflichtender Visu-Page-Scope für Kamera-Widgets
-    if not isinstance(page_id, str) or not page_id.strip():
+    # 3. Verpflichtender Visu-Page-Scope für Viewer-Widgets.
+    # Authentifizierte Editor-Previews dürfen Draft-URLs testen, die noch nicht
+    # in visu_nodes.page_config gespeichert sind.
+    if editor_preview:
+        if _user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Provide Authorization: Bearer {token} or ?_token=",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    elif not isinstance(page_id, str) or not page_id.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Kamera-Page-Scope erforderlich",
         )
-    await _ensure_camera_page_scope(db, page_id.strip(), target, _user, session_token, username, password)
+    else:
+        await _ensure_camera_page_scope(db, page_id.strip(), target, _user, session_token, username, password)
 
     # 4. SSRF-Prüfung und DNS-Pinning auf validierte Ziel-IP
     request_urls, pinned_headers, request_extensions = await _build_fetch_targets(target)

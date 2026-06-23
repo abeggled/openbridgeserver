@@ -35,6 +35,7 @@ const streamUrl = computed(() => {
     const jwt = localStorage.getItem('visu_jwt') ?? ''
     const p = new URLSearchParams({ url: base })
     if (jwt) p.set('_token', jwt)
+    if (props.editorMode) p.set('editor_preview', '1')
     if (props.pageId) p.set('page_id', props.pageId)
     if (props.sessionToken) p.set('session_token', props.sessionToken)
     if (authType.value === 'basic' && username.value) {

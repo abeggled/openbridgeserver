@@ -355,6 +355,61 @@ async def test_proxy_camera_rejects_basic_credentials_that_do_not_match_page_sco
 
 
 @pytest.mark.asyncio
+async def test_proxy_camera_allows_authenticated_editor_preview_for_unsaved_url(
+    monkeypatch: pytest.MonkeyPatch,
+    db: Database,
+):
+    await _insert_camera_page(db, access="protected", url="http://camera.local/persisted")
+    draft_url = "http://camera.local/draft"
+    build_targets = AsyncMock(return_value=([draft_url], {}, {}))
+    monkeypatch.setattr(camera_api, "_build_fetch_targets", build_targets)
+    mock_head = MagicMock(status_code=200, headers={"content-type": "video/mjpeg"})
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.head = AsyncMock(return_value=mock_head)
+    monkeypatch.setattr(camera_api.httpx, "AsyncClient", lambda **kw: mock_client)
+
+    result = await camera_api.proxy_camera(
+        url=draft_url,
+        username="",
+        password="",
+        apikey_param="",
+        apikey_value="",
+        page_id="page-camera",
+        editor_preview=True,
+        _user="alice",
+        db=db,
+    )
+
+    assert isinstance(result, StreamingResponse)
+    build_targets.assert_awaited_once_with(draft_url)
+
+
+@pytest.mark.asyncio
+async def test_proxy_camera_rejects_anonymous_editor_preview(monkeypatch: pytest.MonkeyPatch, db: Database):
+    await _insert_camera_page(db, access="public", url="http://camera.local/persisted")
+    build_targets = AsyncMock()
+    monkeypatch.setattr(camera_api, "_build_fetch_targets", build_targets)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await camera_api.proxy_camera(
+            url="http://camera.local/draft",
+            username="",
+            password="",
+            apikey_param="",
+            apikey_value="",
+            page_id="page-camera",
+            editor_preview=True,
+            _user=None,
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 401
+    build_targets.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_proxy_camera_blocks_unassigned_user_page_scope(monkeypatch: pytest.MonkeyPatch, db: Database):
     await _insert_user(db, "alice")
     await _insert_camera_page(db, access="user")

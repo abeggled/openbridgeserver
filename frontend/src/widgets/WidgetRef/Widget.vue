@@ -7,7 +7,7 @@
  * konfiguriertes Widget auf beliebig vielen Seiten zu verwenden.
  */
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { getSessionToken, visu } from '@/api/client'
+import { getJwt, getSessionToken, visu } from '@/api/client'
 import { createWebSocketClient, useWebSocket } from '@/composables/useWebSocket'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { WidgetRegistry } from '@/widgets/registry'
@@ -87,7 +87,7 @@ async function loadReference() {
     if (found) {
       const ids = [found.datapoint_id, found.status_datapoint_id].filter(Boolean) as string[]
       if (ids.length) {
-        const preferPageScope = sourceAccess.value !== 'user' && (sourceAccess.value !== 'protected' || !!sourceSessionToken.value)
+        const preferPageScope = !getJwt() && sourceAccess.value !== 'user' && (sourceAccess.value !== 'protected' || !!sourceSessionToken.value)
         sourceWs.connect({
           ...sourceReadContext.value,
           ...(preferPageScope ? { preferPageScope } : {}),
