@@ -618,17 +618,17 @@ const showSettings = ref(false)
     <div v-if="showSettings" class="border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 px-4 py-3 flex items-center gap-6 text-sm flex-wrap">
       <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
         {{ $t('editor.cols') }}
-        <input v-model.number="config.grid_cols" type="number" min="4" max="48"
+        <input v-model.number="config.grid_cols" type="number" min="4" max="120"
           class="w-16 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
       <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
         {{ $t('editor.cellWidth') }}
-        <input v-model.number="config.grid_cell_width" type="number" min="40" max="300" step="5"
+        <input v-model.number="config.grid_cell_width" type="number" min="10" max="300" step="5"
           class="w-20 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
       <label class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
         {{ $t('editor.rowHeight') }}
-        <input v-model.number="config.grid_row_height" type="number" min="40" max="300" step="5"
+        <input v-model.number="config.grid_row_height" type="number" min="10" max="300" step="5"
           class="w-20 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500" />
       </label>
       <div class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
