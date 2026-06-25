@@ -371,6 +371,33 @@ class TestWakeOnLanRisingEdge:
             self._exec(manager, flow, True, mock_to_thread)  # rising edge → send
         assert mock_to_thread.await_count == 1
 
+    def test_cron_execution_retrigggers_on_each_tick(self):
+        """Each timer_cron tick must send a packet even though trigger stays True."""
+        from tests.unit.conftest import edge
+
+        nodes = [
+            node("cron", "timer_cron", {"cron": "0 7 * * *"}),
+            node("wol", "wake_on_lan", {"mac_address": "AA:BB:CC:DD:EE:FF"}),
+        ]
+        edges_list = [edge("cron", "wol", "trigger", "trigger")]
+        flow = _flow(nodes, edges_list)
+
+        manager = _make_manager()
+        graph_id = "g"
+        manager._graphs[graph_id] = ("test", True, flow)
+        manager._node_state[graph_id] = {}
+
+        # Simulate three cron ticks — overrides use the cron node id as the key,
+        # exactly as _cron_loop does: overrides = {node_id: {"trigger": True}}
+        cron_overrides = {"cron": {"trigger": True}}
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+                asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
+                asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
+                asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
+
+        assert mock_to_thread.await_count == 3
+
 
 # ===========================================================================
 # Manager: wake_on_lan downstream re-propagation
@@ -449,3 +476,40 @@ class TestWakeOnLanDownstreamPropagation:
 
         assert outputs["wol"]["sent"] is False
         assert outputs["gate"]["out"] is False
+
+    def test_unrelated_node_output_not_overwritten_by_second_pass(self):
+        """A node not downstream of WoL must keep its first-pass output value.
+
+        Graph: cv_true → wol.trigger (wol has no outgoing edges)
+               cv_false → unrelated_gate.in1, cv_true → unrelated_gate.in2
+        The unrelated_gate is independent of WoL; its first-pass out=False
+        must not be replaced by a second-pass placeholder.
+        """
+        from tests.unit.conftest import edge
+
+        nodes = [
+            node("cv_true", "const_value", {"value": "true", "data_type": "bool"}),
+            node("cv_false", "const_value", {"value": "false", "data_type": "bool"}),
+            node("wol", "wake_on_lan", {"mac_address": "AA:BB:CC:DD:EE:FF"}),
+            node("unrelated_gate", "and", {"input_count": 2}),
+        ]
+        edges_list = [
+            edge("cv_true", "wol", "value", "trigger"),
+            edge("cv_false", "unrelated_gate", "value", "in1"),
+            edge("cv_true", "unrelated_gate", "value", "in2"),
+        ]
+        flow = _flow(nodes, edges_list)
+
+        manager = _make_manager()
+        graph_id = "g3"
+        manager._graphs[graph_id] = ("test", True, flow)
+        manager._node_state[graph_id] = {}
+
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"wol": {"trigger": True}}))
+
+        # WoL fired but has no outgoing edges; unrelated_gate must keep its
+        # first-pass value (False AND True = False), not be overwritten.
+        assert outputs["wol"]["sent"] is True
+        assert outputs["unrelated_gate"]["out"] is False

@@ -1030,6 +1030,10 @@ class LogicManager:
         # api_client or wol.sent → notify fire correctly in the same execution.
         # Rising-edge: packet is sent only on the False→True transition of
         # _trigger, preventing repeated broadcasts on sustained truthy inputs.
+        # Exception: cron-triggered executions are always treated as a fresh
+        # rising edge, since each cron tick is an independent scheduled event.
+        cron_node_ids = {n.id for n in flow.nodes if n.type == "timer_cron"}
+        is_cron_execution = bool(overrides.keys() & cron_node_ids)
         triggered_wol_nodes: set[str] = set()
         for node in flow.nodes:
             if node.type != "wake_on_lan":
@@ -1039,7 +1043,7 @@ class LogicManager:
             is_triggered = GraphExecutor._to_bool(out.get("_trigger"))
             was_triggered = hyst_wol.get("wol_prev_trigger", False)
             hyst_wol["wol_prev_trigger"] = is_triggered
-            if not is_triggered or was_triggered:
+            if not is_triggered or (was_triggered and not is_cron_execution):
                 continue
             mac = (node.data.get("mac_address") or "").strip()
             if not mac:
@@ -1068,9 +1072,14 @@ class LogicManager:
 
         # ── Re-propagate wake_on_lan sent=True to downstream nodes ───────────
         # The first executor pass computed downstream nodes with sent=False.
-        # Re-run only the downstream subgraph with the real sent value as input.
-        # Datapoint-read seeds from aug_overrides are carried into the second
-        # pass so value-wired downstream datapoint_write nodes resolve correctly.
+        # Re-run only the transitive downstream subgraph with the real sent
+        # value injected as an input override.
+        # Full aug_overrides (dp-read seeds + cron/event overrides from the
+        # call site) are carried into the second pass so that downstream nodes
+        # which also read from a cron pulse or a datapoint see correct values.
+        # Only transitively downstream nodes are updated from the second pass
+        # so that unrelated nodes (e.g. an api_client with its own trigger)
+        # keep their first-pass results.
         if triggered_wol_nodes:
             wol_downstream_overrides: dict[str, dict[str, Any]] = {}
             for e in flow.edges:
@@ -1079,15 +1088,24 @@ class LogicManager:
                     tgt_handle = e.targetHandle or "in"
                     wol_downstream_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs[e.source], src_handle)
             if wol_downstream_overrides:
-                dp_read_ids = {n.id for n in flow.nodes if n.type == "datapoint_read"}
-                wol_merged: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in aug_overrides.items() if nid in dp_read_ids}
+                wol_merged: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in aug_overrides.items()}
                 for nid, vals in wol_downstream_overrides.items():
                     wol_merged.setdefault(nid, {}).update(vals)
                 wol_second_executor = GraphExecutor(flow, hyst, self._app_config)
                 wol_second_outputs = wol_second_executor.execute(wol_merged)
+                # Compute transitive closure of WoL-triggered nodes so that only
+                # their descendants are updated, leaving unrelated nodes intact.
+                wol_descendants: set[str] = set()
+                queue = list(triggered_wol_nodes)
+                while queue:
+                    nid = queue.pop()
+                    for e in flow.edges:
+                        if e.source == nid and e.target not in wol_descendants:
+                            wol_descendants.add(e.target)
+                            queue.append(e.target)
                 wol_node_ids = {n.id for n in flow.nodes if n.type == "wake_on_lan"}
                 for nid, vals in wol_second_outputs.items():
-                    if nid not in wol_node_ids:
+                    if nid not in wol_node_ids and nid in wol_descendants:
                         outputs[nid] = vals
 
         # ── Handle api_client ─────────────────────────────────────────────
