@@ -314,6 +314,63 @@ class TestWakeOnLanManager:
         mock_to_thread.assert_not_awaited()
         assert outputs["wol"]["sent"] is False
 
+    def test_fractional_port_is_rejected(self):
+        _, mock_to_thread = self._run_manager_raw({"mac_address": "AA:BB:CC:DD:EE:FF", "port": 9.8})
+        mock_to_thread.assert_not_awaited()
+
+    def test_integer_float_port_is_accepted(self):
+        _, mock_to_thread = self._run_manager_raw({"mac_address": "AA:BB:CC:DD:EE:FF", "port": 9.0})
+        mock_to_thread.assert_awaited_once()
+
+    def test_invalid_broadcast_ip_is_rejected(self):
+        _, mock_to_thread = self._run_manager_raw({"mac_address": "AA:BB:CC:DD:EE:FF", "broadcast_ip": "not-an-ip"})
+        mock_to_thread.assert_not_awaited()
+
+
+# ===========================================================================
+# Manager: wake_on_lan rising-edge trigger semantics
+# ===========================================================================
+
+
+class TestWakeOnLanRisingEdge:
+    """Packet must only be sent on the False→True edge, not on sustained True."""
+
+    def _make_flow(self) -> "FlowData":
+        return _flow([node("wol", "wake_on_lan", {"mac_address": "AA:BB:CC:DD:EE:FF"})])
+
+    def _exec(self, manager, flow, trigger: bool, mock_to_thread):
+        graph_id = "g"
+        manager._graphs[graph_id] = ("test", True, flow)
+        manager._node_state[graph_id] = {}
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            return asyncio.run(manager._execute_graph(graph_id, "test", flow, {"wol": {"trigger": trigger}}))
+
+    def test_sustained_trigger_sends_only_once(self):
+        manager = _make_manager()
+        flow = self._make_flow()
+        with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            self._exec(manager, flow, True, mock_to_thread)
+            self._exec(manager, flow, True, mock_to_thread)
+            self._exec(manager, flow, True, mock_to_thread)
+        assert mock_to_thread.await_count == 1
+
+    def test_trigger_fires_again_after_dropping_to_false(self):
+        manager = _make_manager()
+        flow = self._make_flow()
+        with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            self._exec(manager, flow, True, mock_to_thread)  # rising edge → send
+            self._exec(manager, flow, False, mock_to_thread)  # falling edge → no send
+            self._exec(manager, flow, True, mock_to_thread)  # rising edge again → send
+        assert mock_to_thread.await_count == 2
+
+    def test_initial_false_then_true_fires(self):
+        manager = _make_manager()
+        flow = self._make_flow()
+        with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            self._exec(manager, flow, False, mock_to_thread)  # no send
+            self._exec(manager, flow, True, mock_to_thread)  # rising edge → send
+        assert mock_to_thread.await_count == 1
+
 
 # ===========================================================================
 # Manager: wake_on_lan downstream re-propagation
