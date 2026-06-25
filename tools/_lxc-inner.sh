@@ -185,9 +185,13 @@ tar -xzf "$TMP/$BUNDLE_FILENAME" -C "$INSTALL_DIR"
 cp "$INSTALL_DIR/obs-update" /usr/local/bin/obs-update
 chmod +x /usr/local/bin/obs-update
 rm -f "$INSTALL_DIR/obs-update"
-cp "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin
-chmod +x /usr/local/bin/obs-admin
-rm -f "$INSTALL_DIR/obs-admin"
+if [[ -f "$INSTALL_DIR/obs-admin" ]]; then
+    cp "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin
+    chmod +x /usr/local/bin/obs-admin
+    rm -f "$INSTALL_DIR/obs-admin"
+else
+    rm -f /usr/local/bin/obs-admin
+fi
 
 echo "$TARGET" > "$INSTALL_DIR/version"
 

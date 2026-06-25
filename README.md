@@ -171,8 +171,8 @@ obs-admin support-package create --output /tmp/obs-support.json
 For Docker, run it on the host inside the OBS container, for example:
 
 ```bash
-docker compose exec openbridgeserver obs-admin status
-docker compose exec openbridgeserver obs-admin adapters disable <instance-id-or-name>
+docker compose exec obs obs-admin status
+docker compose exec obs obs-admin adapters disable <instance-id-or-name>
 ```
 
 If the database is not at the normal configured path, pass it explicitly:

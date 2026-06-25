@@ -171,8 +171,8 @@ obs-admin support-package create --output /tmp/obs-support.json
 Im Docker-Betrieb wird der Befehl auf dem Host im OBS-Container ausgeführt, zum Beispiel:
 
 ```bash
-docker compose exec openbridgeserver obs-admin status
-docker compose exec openbridgeserver obs-admin adapters disable <instanz-id-oder-name>
+docker compose exec obs obs-admin status
+docker compose exec obs obs-admin adapters disable <instanz-id-oder-name>
 ```
 
 Falls die Datenbank nicht am normalen Pfad liegt, kann sie explizit angegeben werden:

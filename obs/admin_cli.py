@@ -28,7 +28,7 @@ def _now() -> str:
 
 
 def _timestamp() -> str:
-    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
 
 
 def _env_case_insensitive(*names: str) -> str | None:
@@ -59,9 +59,20 @@ def _database_path_from_yaml(path: Path) -> str | None:
     return None
 
 
+def _with_legacy_db_fallback(path: Path) -> Path:
+    legacy_path = path.with_name("opentws.db")
+    if path.name == "obs.db" and not path.exists() and legacy_path.exists():
+        return legacy_path
+    return path
+
+
 def resolve_database_path(db_arg: str | None = None, *, require_exists: bool = True) -> Path:
     """Resolve the OBS SQLite database path without contacting the HTTP server."""
-    raw = db_arg or _env_case_insensitive("OBS_DATABASE__PATH", "OPENTWS_DATABASE__PATH")
+    raw = db_arg
+    use_legacy_fallback = False
+    if raw is None:
+        use_legacy_fallback = True
+        raw = _env_case_insensitive("OBS_DATABASE__PATH", "OPENTWS_DATABASE__PATH")
     raw = raw or _database_path_from_yaml(_config_path())
     if raw is None:
         from obs.config import Settings
@@ -69,6 +80,8 @@ def resolve_database_path(db_arg: str | None = None, *, require_exists: bool = T
         raw = Settings().database.path
 
     path = Path(raw).expanduser()
+    if use_legacy_fallback:
+        path = _with_legacy_db_fallback(path)
     if require_exists and not path.exists():
         raise AdminCliError(
             f"Keine OBS-Konfigurationsdatenbank gefunden: {path}. "
@@ -130,6 +143,10 @@ def _basename(path: Path) -> str:
     return path.name or "[REDACTED_PATH]"
 
 
+def _sqlite_sidecar_path(db_path: Path, suffix: str) -> Path:
+    return Path(f"{db_path}{suffix}")
+
+
 def create_backup(db_path: Path, output: str | None = None) -> Path:
     """Create a consistent SQLite backup using the sqlite backup API."""
     if not db_path.exists():
@@ -172,8 +189,8 @@ def database_info(db_path: Path) -> dict[str, Any]:
             "size_bytes": db_path.stat().st_size if db_path.exists() else 0,
             "schema_version": schema["version"] if schema else None,
             "tables": tables,
-            "wal_exists": db_path.with_suffix(db_path.suffix + "-wal").exists(),
-            "shm_exists": db_path.with_suffix(db_path.suffix + "-shm").exists(),
+            "wal_exists": _sqlite_sidecar_path(db_path, "-wal").exists(),
+            "shm_exists": _sqlite_sidecar_path(db_path, "-shm").exists(),
         }
     finally:
         conn.close()

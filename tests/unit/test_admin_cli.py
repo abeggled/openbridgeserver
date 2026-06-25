@@ -10,7 +10,9 @@ import pytest
 from obs.admin_cli import (
     AdminCliError,
     build_parser,
+    create_backup,
     create_support_package,
+    database_info,
     list_bindings,
     resolve_database_path,
     set_adapter_enabled,
@@ -135,6 +137,49 @@ def test_resolve_database_path_from_yaml_config(tmp_path: Path, monkeypatch: pyt
     monkeypatch.delenv("OBS_DATABASE__PATH", raising=False)
 
     assert resolve_database_path() == db_path
+
+
+def test_resolve_database_path_uses_legacy_opentws_fallback_for_auto_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    obs_path = tmp_path / "obs.db"
+    legacy_path = tmp_path / "opentws.db"
+    legacy_path.write_bytes(b"legacy")
+    monkeypatch.setenv("OBS_DATABASE__PATH", str(obs_path))
+
+    assert resolve_database_path() == legacy_path
+
+
+def test_resolve_database_path_explicit_arg_does_not_use_legacy_fallback(tmp_path: Path):
+    obs_path = tmp_path / "obs.db"
+    legacy_path = tmp_path / "opentws.db"
+    legacy_path.write_bytes(b"legacy")
+
+    with pytest.raises(AdminCliError, match="Keine OBS-Konfigurationsdatenbank"):
+        resolve_database_path(str(obs_path))
+
+
+def test_database_info_handles_suffixless_db_paths(tmp_path: Path):
+    db_path = tmp_path / "obs"
+    _make_db(db_path)
+    Path(f"{db_path}-wal").write_bytes(b"wal")
+    Path(f"{db_path}-shm").write_bytes(b"shm")
+
+    info = database_info(db_path)
+
+    assert info["path"] == str(db_path)
+    assert info["wal_exists"] is True
+    assert info["shm_exists"] is True
+
+
+def test_automatic_backup_names_are_unique_within_same_second(tmp_path: Path):
+    db_path = tmp_path / "obs.db"
+    _make_db(db_path)
+
+    first = create_backup(db_path)
+    second = create_backup(db_path)
+
+    assert first != second
+    assert first.exists()
+    assert second.exists()
 
 
 def test_adapter_enable_disable_offline_updates_timestamp_and_backup(tmp_path: Path):
