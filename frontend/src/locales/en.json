@@ -508,6 +508,8 @@
       "unitOverride": "Unit (overrides object unit)",
       "decimals": "Decimal places",
       "additionalValues": "Additional values (max. {max})",
+      "mainLabelPlaceholder": "e.g. flow temperature",
+      "unitPlaceholder": "e.g. °C",
       "valueN": "Value {n}",
       "placeholderLabel": "Label",
       "placeholderUnit": "Unit",

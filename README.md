@@ -1654,6 +1654,8 @@ On each `git push`, the hook runs:
 - `python3 -m ruff format . --check`
 - `pytest tests/ -v --cov=obs --cov-report=xml --cov-report=term --junitxml="${TMPDIR:-/tmp}/openbridge-pre-push-junit.xml"`
 
+The i18n gate checks changed GUI/Visu files for hardcoded user-facing strings, locale key parity, and raw translation expressions such as `$t(...)` rendered as template text.
+
 To bypass once:
 
 ```bash

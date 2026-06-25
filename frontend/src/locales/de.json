@@ -508,6 +508,8 @@
       "unitOverride": "Einheit (überschreibt Objekt-Einheit)",
       "decimals": "Dezimalstellen",
       "additionalValues": "Zusätzliche Werte (max. {max})",
+      "mainLabelPlaceholder": "z.B. Vorlauftemperatur",
+      "unitPlaceholder": "z.B. °C",
       "valueN": "Wert {n}",
       "placeholderLabel": "Beschriftung",
       "placeholderUnit": "Einheit",

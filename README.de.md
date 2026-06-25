@@ -1661,6 +1661,8 @@ Bei jedem `git push` führt der Hook aus:
 - `python3 -m ruff format . --check`
 - `pytest tests/ -v --cov=obs --cov-report=xml --cov-report=term --junitxml="${TMPDIR:-/tmp}/openbridge-pre-push-junit.xml"`
 
+Das i18n-Gate prüft geänderte GUI-/Visu-Dateien auf hart codierte sichtbare Texte, Locale-Key-Parität und rohe Übersetzungsausdrücke wie `$t(...)`, die als Template-Text gerendert würden.
+
 Einmalig umgehen:
 
 ```bash

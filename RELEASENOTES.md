@@ -15,6 +15,7 @@
 * Visu: Editor grid limits extended — columns up to 120, cell size down to 10 px, enabling fullscreen/dense layouts. https://github.com/abeggled/openbridgeserver/issues/842
 
 ### Fixes 🐞
+* Admin GUI/Visu: Missing translations no longer show `common.enabled` in the binding form, and the Info widget now renders the "additional values" heading instead of the raw `$t(...)` expression. The frontend i18n guard also catches raw translation calls left as template text. https://github.com/abeggled/openbridgeserver/issues/864
 * Visu: Rolladen-Widget — Beschriftungen der Statusindikatoren 1–4 wurden als roher i18n-Key angezeigt statt als übersetzter Text (fehlende doppelte geschweifte Klammern in der Config-Komponente).
 * Backend: High-volume third-party DEBUG loggers (e.g. `aiosqlite`, which logs two lines per SQL operation) are now floored at INFO, so enabling DEBUG globally no longer floods the logs and saturates a CPU core. https://github.com/abeggled/openbridgeserver/issues/798
 * Backend: Logic-Executor verschluckt Node-Fehler still (result = {}) — kein sichtbares Feedback. https://github.com/abeggled/openbridgeserver/issues/788
