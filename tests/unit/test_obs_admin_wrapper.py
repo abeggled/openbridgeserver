@@ -15,6 +15,8 @@ def test_obs_admin_wrapper_parses_systemd_env_file_without_sourcing(tmp_path: Pa
 printf '%s\\n' "cwd=$PWD"
 printf '%s\\n' "OBS_CONFIG=$OBS_CONFIG"
 printf '%s\\n' "OBS_DATABASE__PATH=$OBS_DATABASE__PATH"
+printf '%s\\n' "OPENTWS_CONFIG=$OPENTWS_CONFIG"
+printf '%s\\n' "OPENTWS_DATABASE__PATH=$OPENTWS_DATABASE__PATH"
 printf '%s\\n' "OBS_MOSQUITTO__RELOAD_COMMAND=${OBS_MOSQUITTO__RELOAD_COMMAND-unset}"
 printf '%s\\n' "args=$*"
 """,
@@ -29,6 +31,8 @@ printf '%s\\n' "args=$*"
                 "# systemd EnvironmentFile syntax, not shell code",
                 "OBS_DATABASE__PATH=/data/obs.db",
                 "OBS_CONFIG=/data/config with spaces.yaml",
+                "OPENTWS_DATABASE__PATH=/legacy/opentws.db",
+                "OPENTWS_CONFIG=/legacy/config.yaml",
                 "OBS_MOSQUITTO__RELOAD_COMMAND=systemctl reload mosquitto",
             ]
         ),
@@ -57,6 +61,8 @@ printf '%s\\n' "args=$*"
         f"cwd={app_dir}",
         "OBS_CONFIG=/data/config with spaces.yaml",
         "OBS_DATABASE__PATH=/data/obs.db",
+        "OPENTWS_CONFIG=/legacy/config.yaml",
+        "OPENTWS_DATABASE__PATH=/legacy/opentws.db",
         "OBS_MOSQUITTO__RELOAD_COMMAND=unset",
         "args=-m obs.admin_cli status",
     ]

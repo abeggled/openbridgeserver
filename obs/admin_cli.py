@@ -299,7 +299,7 @@ def show_adapter(db_path: Path, reference: str) -> dict[str, Any]:
             "id": row["id"],
             "adapter_type": row["adapter_type"],
             "name": row["name"],
-            "config": _adapter_config_or_placeholder(row["config"]),
+            "config": _config_or_placeholder(row["config"]),
             "enabled": bool(row["enabled"]),
             "bindings": count,
             "created_at": row["created_at"],
@@ -337,13 +337,14 @@ def set_adapter_enabled(db_path: Path, reference: str, enabled: bool, *, backup:
         conn.close()
 
 
-def _resolve_binding(conn: sqlite3.Connection, binding_id: str) -> dict[str, Any]:
+def _resolve_binding(conn: sqlite3.Connection, binding_id: str, *, validate_json: bool = True) -> dict[str, Any]:
     row = _row(conn, "SELECT * FROM adapter_bindings WHERE id=?", (binding_id,))
     if row is None:
         raise AdminCliError(f"Binding nicht gefunden: {binding_id}")
-    _json_dict(row.get("config"), context=f"adapter_bindings.config ({binding_id})")
-    if row.get("value_map"):
-        _json_dict(row["value_map"], context=f"adapter_bindings.value_map ({binding_id})")
+    if validate_json:
+        _json_dict(row.get("config"), context=f"adapter_bindings.config ({binding_id})")
+        if row.get("value_map"):
+            _json_dict(row["value_map"], context=f"adapter_bindings.value_map ({binding_id})")
     return row
 
 
@@ -393,13 +394,13 @@ def set_binding_enabled(db_path: Path, binding_id: str, enabled: bool, *, backup
     conn = connect_database(db_path)
     try:
         _begin_immediate(conn)
-        row = _resolve_binding(conn, binding_id)
+        row = _resolve_binding(conn, binding_id, validate_json=False)
         updated_at = _now()
         conn.execute("UPDATE adapter_bindings SET enabled=?, updated_at=? WHERE id=?", (int(enabled), updated_at, row["id"]))
         conn.commit()
-        updated = _resolve_binding(conn, binding_id)
+        updated = _resolve_binding(conn, binding_id, validate_json=False)
         updated["enabled"] = bool(updated["enabled"])
-        updated["config"] = _json_dict(updated["config"], context=f"adapter_bindings.config ({binding_id})")
+        updated["config"] = _config_or_placeholder(updated["config"])
         updated["backup"] = str(backup_path) if backup_path else None
         return updated
     except Exception:
@@ -510,7 +511,7 @@ def create_support_package(db_path: Path) -> dict[str, Any]:
                             "registered": None,
                             "running": False,
                             "connected": False,
-                            "config": _adapter_config_or_placeholder(row["config"]),
+                            "config": _config_or_placeholder(row["config"]),
                             "objects": object_counts.get(row["id"], 0),
                             "bindings": binding_counts.get(row["id"], 0),
                             "updated_at": row["updated_at"],
@@ -575,7 +576,7 @@ def create_support_package(db_path: Path) -> dict[str, Any]:
         conn.close()
 
 
-def _adapter_config_or_placeholder(raw_config: Any) -> dict[str, Any]:
+def _config_or_placeholder(raw_config: Any) -> dict[str, Any]:
     try:
         config = json.loads(raw_config or "{}")
     except (TypeError, json.JSONDecodeError):

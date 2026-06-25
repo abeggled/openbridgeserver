@@ -227,6 +227,13 @@ jobs:
           cp "$INSTALL_DIR/obs-update" /usr/local/bin/obs-update
           chmod +x /usr/local/bin/obs-update
           rm -f "$INSTALL_DIR/obs-update"
+          if [[ -f "$INSTALL_DIR/obs-admin" ]]; then
+              cp "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin
+              chmod +x /usr/local/bin/obs-admin
+              rm -f "$INSTALL_DIR/obs-admin"
+          else
+              rm -f /usr/local/bin/obs-admin
+          fi
 
           echo "$TARGET" > "$INSTALL_DIR/version"
 
@@ -249,7 +256,7 @@ jobs:
         if: matrix.arch == 'amd64'
         run: |
           tar -czf "${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}" \
-            obs/ gui_dist/ frontend_dist/ requirements.txt obs-update
+            obs/ gui_dist/ frontend_dist/ requirements.txt obs-update obs-admin
           cd "${{ runner.temp }}"
           sha512sum "${{ steps.meta.outputs.app_bundle_file }}" \
             > "${{ steps.meta.outputs.app_bundle_file }}.sha512"
@@ -371,8 +378,11 @@ jobs:
           sudo cp -r gui_dist         "$ROOTFS/opt/obs/"
           sudo cp -r frontend_dist    "$ROOTFS/opt/obs/"
           sudo cp    requirements.txt "$ROOTFS/opt/obs/"
+          sudo cp    obs-admin        "$ROOTFS/opt/obs/"
           echo "${{ steps.meta.outputs.version }}" | sudo tee "$ROOTFS/opt/obs/version" > /dev/null
           sudo cp /tmp/obs-update "$ROOTFS/usr/local/bin/obs-update"
+          sudo cp obs-admin "$ROOTFS/usr/local/bin/obs-admin"
+          sudo chmod +x "$ROOTFS/usr/local/bin/obs-admin"
 
           sudo chroot "$ROOTFS" /bin/bash <<'INSTALL'
           set -euo pipefail

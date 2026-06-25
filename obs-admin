@@ -8,7 +8,7 @@ obs_admin_load_env_file() {
       ""|\#*)
         continue
         ;;
-      OBS_CONFIG=*|OBS_DATABASE__PATH=*)
+      OBS_CONFIG=*|OBS_DATABASE__PATH=*|OPENTWS_CONFIG=*|OPENTWS_DATABASE__PATH=*)
         key=${line%%=*}
         value=${line#*=}
         case "$value" in

@@ -354,6 +354,28 @@ def test_binding_enable_disable_offline_updates_timestamp_and_backup(tmp_path: P
     assert list_bindings(db_path, ids["instance_id"])[0]["enabled"] is False
 
 
+def test_binding_disable_tolerates_broken_config_json(tmp_path: Path):
+    db_path = tmp_path / "obs.db"
+    ids = _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "UPDATE adapter_bindings SET config=?, value_map=? WHERE id=?",
+        ("{broken", "{also-broken", ids["binding_id"]),
+    )
+    conn.commit()
+    conn.close()
+
+    result = set_binding_enabled(db_path, ids["binding_id"], False, backup=False)
+
+    assert result["enabled"] is False
+    assert result["config"] == {"available": False, "reason": "invalid_json"}
+
+    conn = sqlite3.connect(db_path)
+    enabled = conn.execute("SELECT enabled FROM adapter_bindings WHERE id=?", (ids["binding_id"],)).fetchone()[0]
+    conn.close()
+    assert enabled == 0
+
+
 def test_missing_binding_raises_user_facing_error(tmp_path: Path):
     db_path = tmp_path / "obs.db"
     _make_db(db_path)
