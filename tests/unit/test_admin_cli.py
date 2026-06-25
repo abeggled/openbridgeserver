@@ -153,6 +153,26 @@ def test_resolve_database_path_uses_legacy_opentws_fallback_for_auto_env(tmp_pat
     assert resolve_database_path() == legacy_path
 
 
+def test_resolve_database_path_prefers_legacy_when_obs_env_is_docker_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    legacy_path = tmp_path / "custom-opentws.db"
+    legacy_path.write_bytes(b"legacy")
+    monkeypatch.setenv("OBS_DATABASE__PATH", "/data/obs.db")
+    monkeypatch.setenv("OPENTWS_DATABASE__PATH", str(legacy_path))
+
+    assert resolve_database_path() == legacy_path
+
+
+def test_resolve_database_path_prefers_explicit_obs_over_legacy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    obs_path = tmp_path / "custom-obs.db"
+    legacy_path = tmp_path / "custom-opentws.db"
+    obs_path.write_bytes(b"obs")
+    legacy_path.write_bytes(b"legacy")
+    monkeypatch.setenv("OBS_DATABASE__PATH", str(obs_path))
+    monkeypatch.setenv("OPENTWS_DATABASE__PATH", str(legacy_path))
+
+    assert resolve_database_path() == obs_path
+
+
 def test_resolve_database_path_explicit_arg_does_not_use_legacy_fallback(tmp_path: Path):
     obs_path = tmp_path / "obs.db"
     legacy_path = tmp_path / "opentws.db"
@@ -189,6 +209,19 @@ def test_status_includes_database_details_for_existing_db(tmp_path: Path, monkey
     assert result["database"]["schema_version"] == 37
 
 
+def test_status_reports_error_for_corrupt_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    db_path = tmp_path / "obs.db"
+    db_path.write_bytes(b"not a sqlite database")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f"database:\n  path: {db_path}\n", encoding="utf-8")
+    monkeypatch.setenv("OBS_CONFIG", str(config_path))
+
+    result = status()
+
+    assert result["database"]["path"] == str(db_path)
+    assert "Datenbankinformationen konnten nicht gelesen werden" in result["database"]["error"]
+
+
 def test_automatic_backup_names_are_unique_within_same_second(tmp_path: Path):
     db_path = tmp_path / "obs.db"
     _make_db(db_path)
@@ -211,6 +244,26 @@ def test_create_backup_accepts_output_directory(tmp_path: Path):
 
     assert backup.parent == backup_dir
     assert backup.exists()
+
+
+def test_create_backup_treats_new_trailing_slash_output_as_directory(tmp_path: Path):
+    db_path = tmp_path / "obs.db"
+    _make_db(db_path)
+    backup_dir = tmp_path / "new-backups"
+
+    backup = create_backup(db_path, f"{backup_dir}/")
+
+    assert backup.parent == backup_dir
+    assert backup.exists()
+    assert backup.name.startswith("obs-")
+
+
+def test_create_backup_rejects_database_as_output(tmp_path: Path):
+    db_path = tmp_path / "obs.db"
+    _make_db(db_path)
+
+    with pytest.raises(AdminCliError, match="nicht identisch"):
+        create_backup(db_path, str(db_path))
 
 
 def test_list_and_show_adapters_include_binding_counts(tmp_path: Path):
@@ -256,6 +309,20 @@ def test_show_adapter_rejects_ambiguous_names(tmp_path: Path):
 
     with pytest.raises(AdminCliError, match="nicht eindeutig"):
         show_adapter(db_path, "mqtt.internal.local")
+
+
+def test_adapter_disable_tolerates_broken_config_json(tmp_path: Path):
+    db_path = tmp_path / "obs.db"
+    ids = _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE adapter_instances SET config=? WHERE id=?", ("{broken", ids["instance_id"]))
+    conn.commit()
+    conn.close()
+
+    result = set_adapter_enabled(db_path, ids["instance_id"], False, backup=False)
+
+    assert result["enabled"] is False
+    assert result["config"] == {"available": False, "reason": "invalid_json"}
 
 
 def test_adapter_enable_disable_offline_updates_timestamp_and_backup(tmp_path: Path):

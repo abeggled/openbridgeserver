@@ -1,5 +1,10 @@
 #!/bin/sh
 if [ -d /opt/obs/obs ] && [ -x /opt/obs/venv/bin/python3 ]; then
+  if [ -f /etc/obs.env ]; then
+    set -a
+    . /etc/obs.env
+    set +a
+  fi
   cd /opt/obs || exit 1
   exec /opt/obs/venv/bin/python3 -m obs.admin_cli "$@"
 fi

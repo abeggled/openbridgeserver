@@ -17,6 +17,10 @@ from obs import __version__
 from obs.api.v1.support import sanitize_support_data
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+DOCKER_DEFAULT_ENV = {
+    "OBS_CONFIG": "/data/config.yaml",
+    "OBS_DATABASE__PATH": "/data/obs.db",
+}
 
 
 class AdminCliError(RuntimeError):
@@ -31,16 +35,24 @@ def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
 
 
-def _env_case_insensitive(*names: str) -> str | None:
-    lookup = {name.upper() for name in names}
+def _env_case_insensitive(name: str) -> str | None:
+    lookup = name.upper()
     for key, value in os.environ.items():
-        if key.upper() in lookup:
+        if key.upper() == lookup:
             return value
     return None
 
 
+def _legacy_aware_env(new_name: str, legacy_name: str) -> str | None:
+    new_value = _env_case_insensitive(new_name)
+    legacy_value = _env_case_insensitive(legacy_name)
+    if legacy_value and (new_value is None or new_value == DOCKER_DEFAULT_ENV.get(new_name.upper())):
+        return legacy_value
+    return new_value or legacy_value
+
+
 def _config_path() -> Path:
-    return Path(_env_case_insensitive("OBS_CONFIG", "OPENTWS_CONFIG") or "config.yaml")
+    return Path(_legacy_aware_env("OBS_CONFIG", "OPENTWS_CONFIG") or "config.yaml")
 
 
 def _database_path_from_yaml(path: Path) -> str | None:
@@ -72,7 +84,7 @@ def resolve_database_path(db_arg: str | None = None, *, require_exists: bool = T
     use_legacy_fallback = False
     if raw is None:
         use_legacy_fallback = True
-        raw = _env_case_insensitive("OBS_DATABASE__PATH", "OPENTWS_DATABASE__PATH")
+        raw = _legacy_aware_env("OBS_DATABASE__PATH", "OPENTWS_DATABASE__PATH")
     raw = raw or _database_path_from_yaml(_config_path())
     if raw is None:
         from obs.config import Settings
@@ -144,15 +156,29 @@ def _sqlite_sidecar_path(db_path: Path, suffix: str) -> Path:
     return Path(f"{db_path}{suffix}")
 
 
+def _default_backup_target(db_path: Path) -> Path:
+    return db_path.with_name(f"{db_path.stem}-{_timestamp()}.sqlite")
+
+
+def _backup_target(db_path: Path, output: str | None) -> Path:
+    if output is None:
+        return _default_backup_target(db_path)
+    target = Path(output).expanduser()
+    if target.is_dir() or output.endswith(("/", os.sep)):
+        target.mkdir(parents=True, exist_ok=True)
+        return target / _default_backup_target(db_path).name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
 def create_backup(db_path: Path, output: str | None = None) -> Path:
     """Create a consistent SQLite backup using the sqlite backup API."""
     if not db_path.exists():
         raise AdminCliError(f"Datenbank nicht gefunden: {db_path}")
 
-    target = Path(output).expanduser() if output else db_path.with_name(f"{db_path.stem}-{_timestamp()}.sqlite")
-    if target.is_dir():
-        target = target / f"{db_path.stem}-{_timestamp()}.sqlite"
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target = _backup_target(db_path, output)
+    if target.resolve() == db_path.resolve():
+        raise AdminCliError("Backup-Ziel darf nicht identisch mit der Datenbank sein")
 
     source: sqlite3.Connection | None = None
     dest: sqlite3.Connection | None = None
@@ -178,17 +204,20 @@ def create_backup(db_path: Path, output: str | None = None) -> Path:
 def database_info(db_path: Path) -> dict[str, Any]:
     conn = connect_database(db_path)
     try:
-        schema = _row(conn, "SELECT MAX(version) AS version FROM schema_version") if _table_exists(conn, "schema_version") else None
-        tables = [row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()]
-        return {
-            "path": str(db_path),
-            "exists": db_path.exists(),
-            "size_bytes": db_path.stat().st_size if db_path.exists() else 0,
-            "schema_version": schema["version"] if schema else None,
-            "tables": tables,
-            "wal_exists": _sqlite_sidecar_path(db_path, "-wal").exists(),
-            "shm_exists": _sqlite_sidecar_path(db_path, "-shm").exists(),
-        }
+        try:
+            schema = _row(conn, "SELECT MAX(version) AS version FROM schema_version") if _table_exists(conn, "schema_version") else None
+            tables = [row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()]
+            return {
+                "path": str(db_path),
+                "exists": db_path.exists(),
+                "size_bytes": db_path.stat().st_size if db_path.exists() else 0,
+                "schema_version": schema["version"] if schema else None,
+                "tables": tables,
+                "wal_exists": _sqlite_sidecar_path(db_path, "-wal").exists(),
+                "shm_exists": _sqlite_sidecar_path(db_path, "-shm").exists(),
+            }
+        except sqlite3.Error as exc:
+            raise AdminCliError(f"Datenbankinformationen konnten nicht gelesen werden: {exc}") from exc
     finally:
         conn.close()
 
@@ -224,7 +253,6 @@ def _resolve_adapter(conn: sqlite3.Connection, reference: str) -> dict[str, Any]
         raise AdminCliError(f"Adapter-Instanz nicht gefunden: {reference}")
     if len(rows) > 1:
         raise AdminCliError(f"Adapter-Name ist nicht eindeutig: {reference}. Bitte die Instanz-ID verwenden.")
-    _json_dict(rows[0].get("config"), context=f"adapter_instances.config ({rows[0]['id']})")
     return rows[0]
 
 
@@ -271,7 +299,7 @@ def show_adapter(db_path: Path, reference: str) -> dict[str, Any]:
             "id": row["id"],
             "adapter_type": row["adapter_type"],
             "name": row["name"],
-            "config": _json_dict(row["config"], context=f"adapter_instances.config ({row['id']})"),
+            "config": _adapter_config_or_placeholder(row["config"]),
             "enabled": bool(row["enabled"]),
             "bindings": count,
             "created_at": row["created_at"],
