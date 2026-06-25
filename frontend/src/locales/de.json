@@ -121,7 +121,13 @@
     "posY": "Y",
     "widthShort": "B",
     "heightShort": "H",
-    "hintPaletteDrag": "Aus Palette ziehen → direkt platzieren"
+    "hintPaletteDrag": "Aus Palette ziehen → direkt platzieren",
+    "appearance": "Darstellung",
+    "chromeVariant": {
+      "default": "Standard (Grau-Karte)",
+      "flat": "Flat (kein Hintergrund)",
+      "outline": "Outline (nur Rahmen)"
+    }
   },
   "viewer": {
     "noVisuSelected": "Keine Visu ausgewählt"

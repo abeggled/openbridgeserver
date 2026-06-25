@@ -1001,6 +1001,20 @@ const showSettings = ref(false)
               />
             </div>
 
+            <!-- Darstellung (Chrome-Variante) -->
+            <div>
+              <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">{{ $t('editor.appearance') }}</p>
+              <select
+                :value="(selectedWidget.config?.chrome_variant as string) ?? 'default'"
+                class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
+                @change="updateConfig({ ...selectedWidget.config, chrome_variant: ($event.target as HTMLSelectElement).value === 'default' ? undefined : ($event.target as HTMLSelectElement).value })"
+              >
+                <option value="default">{{ $t('editor.chromeVariant.default') }}</option>
+                <option value="flat">{{ $t('editor.chromeVariant.flat') }}</option>
+                <option value="outline">{{ $t('editor.chromeVariant.outline') }}</option>
+              </select>
+            </div>
+
             <!-- Widget-Config -->
             <div>
               <p class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">{{ $t('editor.configuration') }}</p>

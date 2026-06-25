@@ -121,7 +121,13 @@
     "posY": "Y",
     "widthShort": "W",
     "heightShort": "H",
-    "hintPaletteDrag": "Drag from palette → place directly"
+    "hintPaletteDrag": "Drag from palette → place directly",
+    "appearance": "Appearance",
+    "chromeVariant": {
+      "default": "Default (gray card)",
+      "flat": "Flat (no background)",
+      "outline": "Outline (border only)"
+    }
   },
   "viewer": {
     "noVisuSelected": "No visu selected"
