@@ -572,10 +572,12 @@
       "white": "White channel (0–255)"
     },
     "link": {
-      "title": "Link",
-      "targetPage": "Target page",
       "defaultLabel": "Link",
-      "noTarget": "No target"
+      "labelPlaceholder": "e.g. Living room",
+      "noTarget": "No target",
+      "showIcon": "Show icon",
+      "targetPage": "Target page",
+      "title": "Link"
     },
     "qrcode": {
       "title": "QR code",

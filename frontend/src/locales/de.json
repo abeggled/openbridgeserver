@@ -572,10 +572,12 @@
       "white": "Weisskanal (0–255)"
     },
     "link": {
-      "title": "Link",
-      "targetPage": "Ziel-Seite",
       "defaultLabel": "Link",
-      "noTarget": "Kein Ziel"
+      "labelPlaceholder": "z.B. Wohnzimmer",
+      "noTarget": "Kein Ziel",
+      "showIcon": "Icon anzeigen",
+      "targetPage": "Ziel-Seite",
+      "title": "Link"
     },
     "qrcode": {
       "title": "QR-Code",
