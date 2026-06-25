@@ -195,13 +195,22 @@ jobs:
               bundle = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz')), None)
               if bundle:
                   print(bundle['browser_download_url'])
+              else:
+                  print('')
+              # Prefer SHA-256 embedded in release notes body (new format).
+              # Fall back to the legacy .sha512 release asset for releases
+              # published before this migration (enables rollback/downgrade).
               body = r.get('body') or ''
               m = re.search(r'app-bundle[^\n]*\n\x60\x60\x60\s*\n([0-9a-f]{64})', body)
-              print(m.group(1) if m else '')
+              if m:
+                  print('sha256:' + m.group(1))
+              else:
+                  sha512 = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha512')), None)
+                  print('sha512url:' + sha512['browser_download_url'] if sha512 else '')
           ")
 
           BUNDLE_URL=$(echo "$ASSET_INFO" | sed -n '1p')
-          EXPECTED_SHA256=$(echo "$ASSET_INFO" | sed -n '2p')
+          CHECKSUM_LINE=$(echo "$ASSET_INFO" | sed -n '2p')
 
           if [[ -z "$BUNDLE_URL" ]]; then
               echo "Error: missing app-bundle asset for $TARGET" >&2
@@ -216,13 +225,22 @@ jobs:
           echo "Downloading $BUNDLE_URL ..."
           curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"
 
-          if [[ -z "$EXPECTED_SHA256" ]]; then
-              echo "Error: no SHA-256 found in release notes for $TARGET." >&2
+          if [[ "$CHECKSUM_LINE" == sha256:* ]]; then
+              EXPECTED_SHA256="${CHECKSUM_LINE#sha256:}"
+              echo "Verifying integrity (SHA-256) ..."
+              echo "${EXPECTED_SHA256}  ${BUNDLE_FILENAME}" | (cd "$TMP" && sha256sum -c -)
+          elif [[ "$CHECKSUM_LINE" == sha512url:* ]]; then
+              CHECKSUM_URL="${CHECKSUM_LINE#sha512url:}"
+              CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
+              echo "Downloading checksum (legacy SHA-512) ..."
+              curl -fL "$CHECKSUM_URL" -o "$TMP/$CHECKSUM_FILENAME"
+              echo "Verifying integrity (SHA-512) ..."
+              (cd "$TMP" && sha512sum -c "$CHECKSUM_FILENAME")
+          else
+              echo "Error: no integrity checksum available for $TARGET." >&2
               echo "Integrity check is required; aborting." >&2
               exit 1
           fi
-          echo "Verifying integrity ..."
-          echo "${EXPECTED_SHA256}  ${BUNDLE_FILENAME}" | (cd "$TMP" && sha256sum -c -)
 
           systemctl stop "$SERVICE"
 
@@ -259,6 +277,11 @@ jobs:
           cd "${{ runner.temp }}"
           sha256sum "${{ steps.meta.outputs.app_bundle_file }}" \
             > "${{ steps.meta.outputs.app_bundle_file }}.sha256"
+          # Backward-compat: obs-update versions prior to this release verify
+          # via a .sha512 release asset. Publish it so existing LXC installs
+          # can bootstrap the self-update once before switching to SHA-256.
+          sha512sum "${{ steps.meta.outputs.app_bundle_file }}" \
+            > "${{ steps.meta.outputs.app_bundle_file }}.sha512"
 
       # ── Base system ───────────────────────────────────────────────────────────
       - name: Cache base system
@@ -550,6 +573,7 @@ jobs:
           path: |
             ${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}
             ${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}.sha256
+            ${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}.sha512
 
   release:
     needs: build
@@ -575,7 +599,7 @@ jobs:
             echo "Invalid tag format: $RELEASE_TAG" >&2
             exit 1
           fi
-          find artifacts/ -type f \( -name "*.tar.zst" -o -name "*.tar.gz" \) -print0 \
+          find artifacts/ -type f \( -name "*.tar.zst" -o -name "*.tar.gz" -o -name "*.sha512" \) -print0 \
             | xargs -0 gh release upload "$RELEASE_TAG" \
               --repo "$RELEASE_REPO" \
               --clobber
