@@ -29,12 +29,15 @@ def test_updater_uses_release_bundle_filename_for_download_and_extract():
 def test_updater_verifies_checksum_against_downloaded_filenames():
     workflow = _workflow_text()
 
-    # SHA-256 is parsed from the release notes body — no separate checksum asset needed
-    assert "EXPECTED_SHA256" in workflow
+    # Primary path: SHA-256 embedded in release notes body
+    assert "sha256:" in workflow
     assert "sha256sum -c -" in workflow
-    # Old sha512 approach must be gone
-    assert "CHECKSUM_URL" not in workflow
-    assert "sha512sum" not in workflow
+    # Fallback path: legacy .sha512 release asset for releases predating this
+    # migration (enables rollback/downgrade to older versions)
+    assert "sha512url:" in workflow
+    assert "sha512sum -c" in workflow
+    # Both paths are dispatched from the same CHECKSUM_LINE variable
+    assert "CHECKSUM_LINE" in workflow
 
 
 def test_updater_fails_closed_when_sha256_missing():
