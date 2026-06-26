@@ -15,6 +15,7 @@
 * Visu: Licht widget: the EIN/AUS state label can now be hidden via "show_state_text". https://github.com/abeggled/openbridgeserver/issues/840
 * Visu: Link widget now supports hiding the icon via the "show_icon" option. https://github.com/abeggled/openbridgeserver/issues/839
 * Visu: Editor grid limits extended — columns up to 120, cell size down to 10 px, enabling fullscreen/dense layouts. https://github.com/abeggled/openbridgeserver/issues/842
+* Visu: Link and ButtonGroup widgets now support "preserve_icon_color" per widget/button — when enabled, SVG icons retain their original colors instead of being forced to black/white. https://github.com/abeggled/openbridgeserver/issues/845
 * Admin GUI: Logic editor block palette — individual block sections (Logic, Objects, Math, …) can now be collapsed and expanded by clicking the section header; the entire palette column can also be collapsed to a slim rail and restored the same way. Both states persist across page reloads. https://github.com/abeggled/openbridgeserver/issues/875
 
 ### Fixes 🐞

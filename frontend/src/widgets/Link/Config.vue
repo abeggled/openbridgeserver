@@ -13,7 +13,8 @@ const cfg = reactive({
   label:          (props.modelValue.label          as string)  ?? '',
   icon:           (props.modelValue.icon           as string)  ?? '🔗',
   target_node_id: (props.modelValue.target_node_id as string)  ?? '',
-  show_icon:      (props.modelValue.show_icon      as boolean) ?? true,
+  show_icon:           (props.modelValue.show_icon           as boolean) ?? true,
+  preserve_icon_color: (props.modelValue.preserve_icon_color as boolean) ?? false,
 })
 
 // Sync bei Widget-Wechsel
@@ -21,7 +22,8 @@ watch(() => props.modelValue, (v) => {
   cfg.label          = (v.label          as string)  ?? ''
   cfg.icon           = (v.icon           as string)  ?? '🔗'
   cfg.target_node_id = (v.target_node_id as string)  ?? ''
-  cfg.show_icon      = (v.show_icon      as boolean) ?? true
+  cfg.show_icon           = (v.show_icon           as boolean) ?? true
+  cfg.preserve_icon_color = (v.preserve_icon_color as boolean) ?? false
 })
 
 watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
@@ -114,6 +116,12 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
     <label class="flex items-center gap-2 cursor-pointer select-none">
       <input type="checkbox" v-model="cfg.show_icon" class="rounded" />
       <span class="text-xs text-gray-500 dark:text-gray-400">{{ $t('widgets.link.showIcon') }}</span>
+    </label>
+
+    <!-- SVG-Farbe erhalten -->
+    <label class="flex items-center gap-2 cursor-pointer select-none">
+      <input type="checkbox" v-model="cfg.preserve_icon_color" class="rounded" />
+      <span class="text-xs text-gray-500 dark:text-gray-400">{{ $t('widgets.link.preserveIconColor') }}</span>
     </label>
 
     <!-- Ziel-Seite (suchbarer Picker) -->

@@ -576,6 +576,7 @@
       "labelPlaceholder": "z.B. Wohnzimmer",
       "noTarget": "Kein Ziel",
       "showIcon": "Icon anzeigen",
+      "preserveIconColor": "SVG-Icon-Farbe erhalten (kein Schwarz/Weiß)",
       "targetPage": "Ziel-Seite",
       "title": "Link"
     },
@@ -757,7 +758,8 @@
       "sent": "Gesendet",
       "error": "Fehler",
       "empty": "Keine Tasten konfiguriert.",
-      "noDatapoint": "Kein Objekt verknüpft."
+      "noDatapoint": "Kein Objekt verknüpft.",
+      "preserveIconColor": "SVG-Icon-Farbe erhalten (kein Schwarz/Weiß)"
     },
     "uhr": {
       "title": "Uhr",
