@@ -297,7 +297,7 @@ Optional: eine Tabelle, die Rohwerte auf andere Werte abbildet — nützlich z. 
 { "value_map": { "0": "Aus", "1": "Ein", "2": "Standby" } }
 ```
 
-Der Schlüssel ist immer ein String (der Rohwert wird intern umgewandelt). Gibt es keinen passenden Eintrag, wird der Originalwert unverändert weitergegeben. `value_map` wird nach `value_formula` angewendet.
+Der Schlüssel ist immer ein String (der Rohwert wird intern umgewandelt). Die Zuordnung prüft zuerst den exakten Schlüssel und danach ohne Beachtung der Gross-/Kleinschreibung, sodass `OFF` auch einen Eintrag wie `"off"` trifft. Gibt es keinen passenden Eintrag, wird der Originalwert unverändert weitergegeben. `value_map` wird nach `value_formula` angewendet.
 
 **Sendefilter** (nur für DEST/BOTH, werden der Reihe nach geprüft):
 

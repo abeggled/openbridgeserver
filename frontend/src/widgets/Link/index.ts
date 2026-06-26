@@ -15,6 +15,7 @@ WidgetRegistry.register({
     label: '',
     icon: '🔗',
     target_node_id: '',
+    show_icon: true,
   },
   compatibleTypes: ['*'],
   noDatapoint: true,

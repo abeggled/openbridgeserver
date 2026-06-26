@@ -18,6 +18,7 @@ from typing import Any
 from obs.logic.models import FlowData, LogicNode
 
 logger = logging.getLogger(__name__)
+_AVG_MULTI_MAX_SAMPLES = 100_000
 
 _COMPARE_OPS = {
     ">": operator.gt,
@@ -837,9 +838,11 @@ class GraphExecutor:
                     current_avg: float | None = sum(values) / len(values)
                     now_utc = _dt.datetime.now(_dt.UTC)
                     state["samples"].append([now_utc.isoformat(), current_avg])
-                    # Trim buffer: keep only samples within the max window (365 days)
+                    # Keep the 365-day window bounded even for high-frequency inputs.
                     cutoff_iso = (now_utc - _dt.timedelta(days=365)).isoformat()
                     state["samples"] = [s for s in state["samples"] if s[0] >= cutoff_iso]
+                    if len(state["samples"]) > _AVG_MULTI_MAX_SAMPLES:
+                        state["samples"] = state["samples"][-_AVG_MULTI_MAX_SAMPLES:]
                 else:
                     current_avg = None
                 # Compute moving averages for each time window

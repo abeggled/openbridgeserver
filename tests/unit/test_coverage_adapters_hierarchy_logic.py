@@ -2870,6 +2870,31 @@ class TestLogicManagerValueEvent:
         assert len(executed) == 0
 
     @pytest.mark.asyncio
+    async def test_on_value_event_suppresses_logic_cascade_at_depth_limit(self):
+        dp_id = uuid.uuid4()
+        flow = _make_flow(
+            nodes=[
+                {
+                    "id": "n1",
+                    "type": "datapoint_read",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"datapoint_id": str(dp_id)},
+                }
+            ]
+        )
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        mgr._execute_graph = AsyncMock()
+
+        event = MagicMock()
+        event.datapoint_id = dp_id
+        event.value = 1.0
+        event.logic_depth = 10
+
+        await mgr._on_value_event(event)
+
+        mgr._execute_graph.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_on_value_event_min_delta_pct_suppresses(self):
         dp_id = uuid.uuid4()
         flow = _make_flow(
@@ -3136,6 +3161,30 @@ class TestLogicManagerExecuteGraph:
 
         # The event_bus.publish should have been called for the write
         assert event_bus.publish.called
+
+    @pytest.mark.asyncio
+    async def test_execute_graph_increments_logic_depth_on_write(self):
+        write_dp_id = uuid.uuid4()
+        flow = _make_flow(
+            nodes=[
+                {
+                    "id": "n_write",
+                    "type": "datapoint_write",
+                    "position": {"x": 200, "y": 0},
+                    "data": {"datapoint_id": str(write_dp_id)},
+                },
+            ],
+        )
+        mgr, db, event_bus, registry = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        registry.get_value = MagicMock(return_value=None)
+        db.execute_and_commit = AsyncMock()
+
+        with patch("obs.api.v1.websocket.get_ws_manager") as mock_ws:
+            mock_ws.return_value.broadcast = AsyncMock()
+            await mgr._execute_graph("g1", "G1", flow, {"n_write": {"value": 42.0}}, logic_depth=4)
+
+        published_event = event_bus.publish.await_args.args[0]
+        assert published_event.logic_depth == 5
 
     @pytest.mark.asyncio
     async def test_execute_graph_ws_error_ignored(self):

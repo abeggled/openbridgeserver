@@ -17,7 +17,9 @@ export function applyFormula(formula: string, value: number): number {
 
 /**
  * Applies a value map (enum substitution) to any value.
- * Booleans are normalized to lowercase ("true" / "false").
+ * Booleans are normalized to lowercase ("true" / "false"). Exact keys win,
+ * then string keys are matched case-insensitively. Boolean values also fall
+ * back to numeric keys ("1" / "0").
  * Returns the original value if no match is found.
  */
 export function applyValueMap(
@@ -25,6 +27,19 @@ export function applyValueMap(
   value: unknown,
 ): unknown {
   if (!valueMap || Object.keys(valueMap).length === 0) return value
-  const key = typeof value === 'boolean' ? String(value) : String(value)
-  return Object.prototype.hasOwnProperty.call(valueMap, key) ? valueMap[key] : value
+  const keys = typeof value === 'boolean'
+    ? [String(value), value ? '1' : '0']
+    : [String(value)]
+
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(valueMap, key)) return valueMap[key]
+
+    const foldedKey = key.toLowerCase()
+    const fallbackKey = Object.keys(valueMap).find(
+      mapKey => mapKey.toLowerCase() === foldedKey,
+    )
+    if (fallbackKey !== undefined) return valueMap[fallbackKey]
+  }
+
+  return value
 }

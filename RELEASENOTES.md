@@ -5,18 +5,23 @@
 * Security: `GET /api/v1/weather/fetch` now requires authenticated access and no longer accepts tokens in the URL query string. Weather widgets on PIN-protected Visu pages continue to work with their page-scoped session token, but unauthenticated public weather proxy calls are rejected; private/local weather endpoints still require an explicit URL Target Allowlist entry. https://github.com/abeggled/openbridgeserver/issues/791
 
 ### New features ✨
+* Admin GUI: `.knxproj` imports now offer hierarchy creation for topology, buildings/rooms, and trades in the same import flow, including per-hierarchy result feedback and optional auto-linking to created objects. https://github.com/abeggled/openbridgeserver/issues/729
 * Backend/Admin GUI: OBS internal datapoints without adapter bindings can now be written through MQTT `dp/{uuid}/set` or the object detail view; the write is stored as the current value and propagated through the normal registry, retained MQTT value, history/ringbuffer, WebSocket, and logic event path. https://github.com/abeggled/openbridgeserver/issues/715
 * Backend: ETS hierarchy import logic is now available as a reusable backend service while keeping `POST /api/v1/hierarchy/import-from-ets` behavior unchanged. This prepares the KNX project import to create selected ETS hierarchies in the same import flow. https://github.com/abeggled/openbridgeserver/issues/727
 * Backend: `.knxproj` imports can now create selected ETS hierarchies in the same backend request, reporting per-hierarchy node/link counts and non-fatal failures for unavailable ETS data. https://github.com/abeggled/openbridgeserver/issues/728
-* Admin GUI: `.knxproj` imports now offer hierarchy creation for topology, buildings/rooms, and trades in the same import flow, including per-hierarchy result feedback and optional auto-linking to created objects. https://github.com/abeggled/openbridgeserver/issues/729
 * Backend/Admin GUI: Repeated `.knxproj` imports now replace automatically generated ETS hierarchies per selected mode by default, while manual hierarchy trees remain untouched; the import dialog also offers an opt-out to keep a separate tree for each import run. https://github.com/abeggled/openbridgeserver/issues/730
 * Release: LXC template and app-bundle checksums now use SHA-256 instead of SHA-512; release notes include a `Checksums (SHA-256)` section and Proxmox download instructions are updated accordingly. Existing installations are unaffected — the new `obs-update` falls back to legacy SHA-512 assets for rollback targets, and a transitional SHA-512 asset is still published alongside SHA-256 so pre-migration updaters can bootstrap the switch. https://github.com/abeggled/openbridgeserver/issues/831
+* Visu: Licht widget: the EIN/AUS state label can now be hidden via "show_state_text". https://github.com/abeggled/openbridgeserver/issues/840
+* Visu: Link widget now supports hiding the icon via the "show_icon" option. https://github.com/abeggled/openbridgeserver/issues/839
+* Visu: Editor grid limits extended — columns up to 120, cell size down to 10 px, enabling fullscreen/dense layouts. https://github.com/abeggled/openbridgeserver/issues/842
 
 ### Fixes 🐞
+* Backend/Frontend: `value_map` transformations now match string keys case-insensitively after exact lookup, so values such as `OFF`, `oN`, `TRUE`, and `FALSE` work with built-in presets and custom maps. https://github.com/abeggled/openbridgeserver/issues/834
+* Visu: Rolladen-Widget — Beschriftungen der Statusindikatoren 1–4 wurden als roher i18n-Key angezeigt statt als übersetzter Text (fehlende doppelte geschweifte Klammern in der Config-Komponente).
 * Backend: High-volume third-party DEBUG loggers (e.g. `aiosqlite`, which logs two lines per SQL operation) are now floored at INFO, so enabling DEBUG globally no longer floods the logs and saturates a CPU core. https://github.com/abeggled/openbridgeserver/issues/798
+* Backend: Logic-Executor verschluckt Node-Fehler still (result = {}) — kein sichtbares Feedback. https://github.com/abeggled/openbridgeserver/issues/788
 * Visu: German string literals in backend adapter code reached the GUI untranslated, bypassing the i18n/Weblate pipeline. https://github.com/abeggled/openbridgeserver/issues/779
 * Visu: Zeitschaltuhr widgets now only show and manage Schaltpunkte for the configured scheduler instance, preventing unrelated KNX or other adapter bindings on the same object from being listed or deleted. https://github.com/abeggled/openbridgeserver/issues/782
-* Backend: Logic-Executor verschluckt Node-Fehler still (result = {}) — kein sichtbares Feedback. https://github.com/abeggled/openbridgeserver/issues/788
 
 ### Known Issues 🔔
 * none

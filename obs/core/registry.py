@@ -206,7 +206,10 @@ class DataPointRegistry:
 
     async def update(self, dp_id: uuid.UUID, payload: DataPointUpdate) -> DataPoint:
         dp = self.get_or_raise(dp_id)
-        updates = payload.model_dump(exclude_none=True)
+        updates = payload.model_dump(exclude_none=True, exclude={"value"})
+        for clearable_field in ("unit", "mqtt_alias"):
+            if clearable_field in payload.model_fields_set:
+                updates[clearable_field] = getattr(payload, clearable_field)
         now = datetime.now(UTC)
 
         old_name = dp.name

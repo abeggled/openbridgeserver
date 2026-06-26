@@ -717,6 +717,11 @@ class TestDatapointNodes:
         out = run_single("datapoint_read", {"value_map": m}, {"value": 99})
         assert out["value"] == 99
 
+    def test_read_value_map_string_lookup_is_case_insensitive(self):
+        m = {"on": "true", "off": "false"}
+        out = run_single("datapoint_read", {"value_map": m}, {"value": "OFF"})
+        assert out["value"] == "false"
+
     def test_read_formula_then_value_map(self):
         # Formula runs first: x*2 → 2; then map: "2" → "Zwei"
         m = {"2": "Zwei"}

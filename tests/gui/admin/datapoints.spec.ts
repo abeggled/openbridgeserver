@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { apiPost, apiDelete } from '../helpers'
+import { apiGet, apiPost, apiDelete } from '../helpers'
 
 // ---------------------------------------------------------------------------
 // Test 1: DataPoint anlegen via GUI-Flow und in der Liste sehen
@@ -339,5 +339,40 @@ test('DataPoint mit Einheit ° anlegen', async ({ page }) => {
       await apiDelete(`/api/v1/datapoints/${id}`)
       break
     }
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Test 10: Einheit im Bearbeiten-Dialog auf "keine" zurücksetzen
+// ---------------------------------------------------------------------------
+
+test('DataPoint-Einheit kann über den Bearbeiten-Dialog geleert werden', async ({ page }) => {
+  const name = `E2E-UnitReset-${Date.now()}`
+  const created = await apiPost('/api/v1/datapoints', {
+    name,
+    data_type: 'FLOAT',
+    unit: '°C',
+    tags: [],
+  }) as { id: string }
+  const dpId = created.id
+
+  try {
+    await page.goto('/datapoints')
+    await page.waitForSelector('[data-testid="input-search"]', { timeout: 10_000 })
+    await page.fill('[data-testid="input-search"]', name)
+    await page.waitForTimeout(500)
+    await expect(page.locator(`[data-testid="dp-row-${dpId}"]`)).toBeVisible({ timeout: 5_000 })
+
+    const row = page.locator(`[data-testid="dp-row-${dpId}"]`)
+    await row.locator('[title="Bearbeiten"]').click()
+    await expect(page.locator('[data-testid="select-unit"]')).toHaveValue('°C', { timeout: 5_000 })
+    await page.selectOption('[data-testid="select-unit"]', '')
+    await page.click('[data-testid="btn-save"]')
+    await expect(page.locator('[data-testid="btn-save"]')).not.toBeVisible({ timeout: 5_000 })
+
+    const updated = await apiGet(`/api/v1/datapoints/${dpId}`) as { unit: string | null }
+    expect(updated.unit).toBeNull()
+  } finally {
+    await apiDelete(`/api/v1/datapoints/${dpId}`)
   }
 })

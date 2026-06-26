@@ -296,7 +296,7 @@ Optional: a table that maps raw values to other values — useful for enumeratio
 { "value_map": { "0": "Off", "1": "On", "2": "Standby" } }
 ```
 
-The key is always a string (the raw value is converted internally). If no matching entry exists, the original value is passed through unchanged. `value_map` is applied after `value_formula`.
+The key is always a string (the raw value is converted internally). Matching first tries the exact key and then a case-insensitive key, so `OFF` matches a map entry like `"off"`. If no matching entry exists, the original value is passed through unchanged. `value_map` is applied after `value_formula`.
 
 **Send filters** (DEST/BOTH only, checked in order):
 

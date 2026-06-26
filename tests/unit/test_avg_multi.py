@@ -205,6 +205,17 @@ class TestAvgMultiBuffer:
         assert "samples" in state["a"]
         assert len(state["a"]["samples"]) == 1
 
+    def test_buffer_trimmed_to_max_sample_count(self, monkeypatch):
+        """High-frequency inputs must not keep an unbounded 365-day sample list."""
+        from obs.logic import executor as executor_mod
+
+        monkeypatch.setattr(executor_mod, "_AVG_MULTI_MAX_SAMPLES", 3)
+        state: dict = {}
+        for value in [1.0, 2.0, 3.0, 4.0, 5.0]:
+            _run_avg({"input_count": 1}, {"in_1": value}, state)
+
+        assert [sample[1] for sample in state["a"]["samples"]] == [3.0, 4.0, 5.0]
+
 
 # ===========================================================================
 # persist_state toggle — manager-level filtering

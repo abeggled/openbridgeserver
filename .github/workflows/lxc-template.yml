@@ -286,7 +286,7 @@ jobs:
       # ── Base system ───────────────────────────────────────────────────────────
       - name: Cache base system
         id: cache-base
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: base-system-cache.tar.zst
           key: base-system-ubuntu-resolute-${{ matrix.arch }}-v1
@@ -369,7 +369,7 @@ jobs:
 
       # ── APT cache for app-specific packages ───────────────────────────────────
       - name: Cache APT packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /tmp/apt-cache
           key: apt-obs-${{ matrix.arch }}-${{ hashFiles('requirements.txt') }}

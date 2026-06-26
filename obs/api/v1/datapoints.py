@@ -285,7 +285,7 @@ async def update_datapoint(
             quality = "uncertain"
 
     # --- Mutation phase (all validation passed) ---
-    # value=None in model_copy ensures exclude_none=True in reg.update() drops it —
+    # value=None in model_copy keeps value updates out of DataPoint metadata;
     # DataPoint has no value field.
     dp = await reg.update(dp_id, body.model_copy(update={"value": None}))
 

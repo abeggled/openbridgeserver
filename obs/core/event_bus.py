@@ -39,6 +39,7 @@ class DataValueEvent:
     source_adapter: str  # adapter_type string
     ts: datetime = field(default_factory=lambda: datetime.now(UTC))
     binding_id: uuid.UUID | None = None
+    logic_depth: int = 0
 
 
 @dataclass

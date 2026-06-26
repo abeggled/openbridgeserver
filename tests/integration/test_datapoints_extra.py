@@ -196,6 +196,28 @@ async def test_patch_metadata_only_does_not_overwrite_value(client, auth_headers
     assert val_resp.json()["value"] == pytest.approx(99.0)
 
 
+async def test_patch_unit_null_clears_existing_unit(client, auth_headers):
+    resp = await client.post(
+        "/api/v1/datapoints/",
+        json={"name": f"ClearUnit-{uuid.uuid4().hex[:8]}", "data_type": "FLOAT", "unit": "km"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    dp_id = resp.json()["id"]
+
+    patch_resp = await client.patch(
+        f"/api/v1/datapoints/{dp_id}",
+        json={"unit": None},
+        headers=auth_headers,
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    assert patch_resp.json()["unit"] is None
+
+    get_resp = await client.get(f"/api/v1/datapoints/{dp_id}", headers=auth_headers)
+    assert get_resp.status_code == 200
+    assert get_resp.json()["unit"] is None
+
+
 async def test_patch_value_type_mismatch_returns_422(client, auth_headers):
     dp = await _make_dp(client, auth_headers, data_type="INTEGER")
     resp = await client.patch(
