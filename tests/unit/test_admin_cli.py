@@ -115,6 +115,60 @@ def _make_db(path: Path) -> dict[str, str]:
     return {"instance_id": instance_id, "binding_id": binding_id, "dp_id": dp_id}
 
 
+def _make_legacy_binding_db(path: Path) -> dict[str, str]:
+    instance_id = str(uuid.uuid4())
+    binding_id = str(uuid.uuid4())
+    dp_id = str(uuid.uuid4())
+    now = "2026-06-25T12:00:00+00:00"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE adapter_instances (
+            id TEXT PRIMARY KEY,
+            adapter_type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            config TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE datapoints (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            data_type TEXT NOT NULL DEFAULT 'UNKNOWN',
+            mqtt_topic TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE adapter_bindings (
+            id TEXT PRIMARY KEY,
+            datapoint_id TEXT NOT NULL,
+            adapter_type TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            config TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO adapter_instances VALUES (?,?,?,?,?,?,?)",
+        (instance_id, "MQTT", "legacy mqtt", "{}", 1, now, now),
+    )
+    conn.execute(
+        "INSERT INTO datapoints VALUES (?,?,?,?,?,?)",
+        (dp_id, "DP legacy", "STRING", "legacy/topic", now, now),
+    )
+    conn.execute(
+        "INSERT INTO adapter_bindings VALUES (?,?,?,?,?,?,?,?)",
+        (binding_id, dp_id, "MQTT", "SOURCE", "{}", 1, now, now),
+    )
+    conn.commit()
+    conn.close()
+    return {"instance_id": instance_id, "binding_id": binding_id, "dp_id": dp_id}
+
+
 def test_resolve_database_path_from_explicit_arg(tmp_path: Path):
     db_path = tmp_path / "obs.db"
     db_path.write_bytes(b"")
@@ -390,6 +444,25 @@ def test_bindings_list_tolerates_broken_config_json(tmp_path: Path):
     assert bindings[0]["config"] == {"available": False, "reason": "invalid_json"}
 
 
+def test_bindings_list_handles_legacy_rows_without_adapter_instance_id(tmp_path: Path):
+    db_path = tmp_path / "legacy.db"
+    ids = _make_legacy_binding_db(db_path)
+
+    bindings = list_bindings(db_path)
+
+    assert bindings[0]["id"] == ids["binding_id"]
+    assert bindings[0]["adapter_instance_id"] is None
+    assert bindings[0]["datapoint_name"] == "DP legacy"
+
+
+def test_bindings_list_with_adapter_filter_reports_legacy_schema(tmp_path: Path):
+    db_path = tmp_path / "legacy.db"
+    ids = _make_legacy_binding_db(db_path)
+
+    with pytest.raises(AdminCliError, match="adapter_instance_id"):
+        list_bindings(db_path, ids["instance_id"])
+
+
 def test_missing_binding_raises_user_facing_error(tmp_path: Path):
     db_path = tmp_path / "obs.db"
     _make_db(db_path)
@@ -452,6 +525,18 @@ def test_support_package_marks_invalid_adapter_json(tmp_path: Path):
     package = create_support_package(db_path)
 
     assert package["adapters"][0]["config"] == {"available": False, "reason": "invalid_json"}
+
+
+def test_support_package_handles_legacy_bindings_without_adapter_instance_id(tmp_path: Path):
+    db_path = tmp_path / "legacy.db"
+    ids = _make_legacy_binding_db(db_path)
+
+    package = create_support_package(db_path)
+
+    assert package["database"]["counts"]["adapter_bindings"] == 1
+    adapter = next(entry for entry in package["adapters"] if entry["id"] == ids["instance_id"])
+    assert adapter["bindings"] == 0
+    assert adapter["objects"] == 0
 
 
 def test_config_validate_reports_invalid_json(tmp_path: Path):
@@ -524,6 +609,20 @@ def test_main_dispatches_support_package_create(tmp_path: Path, capsys: pytest.C
     assert code == 0
     assert output.exists()
     assert "output:" in capsys.readouterr().out
+
+
+def test_main_support_package_create_accepts_output_directory(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    db_path = tmp_path / "obs.db"
+    _make_db(db_path)
+    output_dir = tmp_path / "support"
+    output_dir.mkdir()
+
+    code = admin_main(["--db", str(db_path), "support-package", "create", "--output", str(output_dir)])
+
+    files = list(output_dir.glob("obs-support-*.json"))
+    assert code == 0
+    assert len(files) == 1
+    assert f"output: {files[0]}" in capsys.readouterr().out
 
 
 def test_main_returns_error_code_for_user_errors(tmp_path: Path, capsys: pytest.CaptureFixture[str]):

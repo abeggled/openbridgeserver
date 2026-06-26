@@ -168,6 +168,12 @@ obs-admin loglevel set DEBUG
 obs-admin support-package create --output /tmp/obs-support.json
 ```
 
+When upgrading an existing LXC container from a release that did not ship `obs-admin`, the first `obs-update` run may leave the command at `/opt/obs/obs-admin` without installing `/usr/local/bin/obs-admin`. In that case run `/opt/obs/obs-admin ...` directly or install the wrapper once with:
+
+```bash
+install -m 0755 /opt/obs/obs-admin /usr/local/bin/obs-admin
+```
+
 For Docker, run it on the host inside the OBS container, for example:
 
 ```bash

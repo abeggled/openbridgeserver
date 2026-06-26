@@ -171,6 +171,15 @@ def _backup_target(db_path: Path, output: str | None) -> Path:
     return target
 
 
+def _support_package_target(output: str) -> Path:
+    target = Path(output).expanduser()
+    if target.is_dir() or output.endswith(("/", os.sep)):
+        target.mkdir(parents=True, exist_ok=True)
+        return target / f"obs-support-{_timestamp()}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
 def create_backup(db_path: Path, output: str | None = None) -> Path:
     """Create a consistent SQLite backup using the sqlite backup API."""
     if not db_path.exists():
@@ -353,17 +362,25 @@ def list_bindings(db_path: Path, adapter: str | None = None) -> list[dict[str, A
     try:
         if not _table_exists(conn, "adapter_bindings"):
             return []
+        binding_cols = _columns(conn, "adapter_bindings")
+        has_adapter_instance_id = "adapter_instance_id" in binding_cols
         params: tuple[Any, ...] = ()
         where = ""
         if adapter:
+            if not has_adapter_instance_id:
+                raise AdminCliError(
+                    "Tabelle adapter_bindings enthaelt keine Spalte adapter_instance_id. "
+                    "Bitte Datenbankmigrationen ausfuehren oder bindings list ohne --adapter nutzen."
+                )
             adapter_row = _resolve_adapter(conn, adapter)
             where = "WHERE ab.adapter_instance_id=?"
             params = (adapter_row["id"],)
         dp_name_expr = "dp.name" if _table_exists(conn, "datapoints") else "NULL"
+        adapter_instance_expr = "ab.adapter_instance_id" if has_adapter_instance_id else "NULL"
         join = "LEFT JOIN datapoints dp ON dp.id = ab.datapoint_id" if _table_exists(conn, "datapoints") else ""
         sql = f"""
             SELECT ab.id, ab.datapoint_id, {dp_name_expr} AS datapoint_name,
-                   ab.adapter_type, ab.adapter_instance_id, ab.direction,
+                   ab.adapter_type, {adapter_instance_expr} AS adapter_instance_id, ab.direction,
                    ab.config, ab.enabled, ab.created_at, ab.updated_at
             FROM adapter_bindings ab
             {join}
@@ -479,12 +496,14 @@ def _count(conn: sqlite3.Connection, table: str, where: str = "", params: tuple[
 def create_support_package(db_path: Path) -> dict[str, Any]:
     conn = connect_database(db_path)
     try:
+        binding_cols = _columns(conn, "adapter_bindings") if _table_exists(conn, "adapter_bindings") else set()
+        has_adapter_instance_id = "adapter_instance_id" in binding_cols
         binding_counts = (
             {
                 row["adapter_instance_id"] or "": int(row["count"])
                 for row in conn.execute("SELECT adapter_instance_id, COUNT(*) AS count FROM adapter_bindings GROUP BY adapter_instance_id").fetchall()
             }
-            if _table_exists(conn, "adapter_bindings")
+            if has_adapter_instance_id
             else {}
         )
         object_counts = (
@@ -494,7 +513,7 @@ def create_support_package(db_path: Path) -> dict[str, Any]:
                     "SELECT adapter_instance_id, COUNT(DISTINCT datapoint_id) AS count FROM adapter_bindings GROUP BY adapter_instance_id"
                 ).fetchall()
             }
-            if _table_exists(conn, "adapter_bindings")
+            if has_adapter_instance_id
             else {}
         )
 
@@ -715,8 +734,7 @@ def run(args: argparse.Namespace) -> tuple[Any, int]:
         return set_loglevel(db_path, args.level, backup=backup), 0
     if args.command == "support-package" and args.support_command == "create":
         package = create_support_package(db_path)
-        output = Path(args.output).expanduser()
-        output.parent.mkdir(parents=True, exist_ok=True)
+        output = _support_package_target(args.output)
         output.write_text(json.dumps(package, indent=2, sort_keys=True), encoding="utf-8")
         return {"output": str(output)}, 0
     if args.command == "config" and args.config_command == "validate":
