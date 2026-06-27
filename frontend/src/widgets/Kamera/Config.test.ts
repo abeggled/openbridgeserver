@@ -77,12 +77,13 @@ describe('Kamera widget config', () => {
     })
   })
 
-  it('normalizes legacy Basic Auth values without hiding the form', async () => {
-    const wrapper = mountConfig({ authType: 'Basic Auth', username: 'admin' })
+  it('normalizes legacy values without hiding the form', async () => {
+    const wrapper = mountConfig({ authType: 'Basic Auth', stream_type: 'snapshot', username: 'admin' })
 
     expect(wrapper.text()).toContain('Username')
     expect(wrapper.text()).toContain('Password')
     expect(wrapper.text()).toContain('Stream URL')
+    expect(wrapper.text()).toContain('Refresh interval')
     expect((wrapper.find('input[type="text"]').element as HTMLInputElement).value).toBe('')
 
     const usernameInput = wrapper.findAll('input[type="text"]')[2]

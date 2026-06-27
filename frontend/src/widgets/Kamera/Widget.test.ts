@@ -54,7 +54,7 @@ describe('Kamera widget auth compatibility', () => {
   it('uses snake_case snapshot and layout config aliases', () => {
     const wrapper = mountWidget({
       url: 'http://camera.local/snapshot.jpg',
-      streamType: 'snapshot',
+      stream_type: 'snapshot',
       refresh_interval: '30',
       aspect_ratio: '4/3',
       object_fit: 'cover',

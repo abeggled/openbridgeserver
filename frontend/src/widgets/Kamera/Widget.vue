@@ -41,7 +41,7 @@ function normalizeAuthType(raw: unknown): AuthType {
 
 const label           = computed(() => stringValue(props.config.label))
 const url             = computed(() => stringValue(props.config.url))
-const streamType      = computed(() => stringValue(props.config.streamType, 'mjpeg'))
+const streamType      = computed(() => stringValue(props.config.streamType ?? props.config.stream_type, 'mjpeg'))
 const username        = computed(() => stringValue(props.config.username))
 const password        = computed(() => stringValue(props.config.password))
 const apiKeyParam     = computed(() => stringValue(props.config.apiKeyParam ?? props.config.api_key_param, 'token'))

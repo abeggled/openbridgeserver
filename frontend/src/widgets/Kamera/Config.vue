@@ -62,7 +62,7 @@ function parseConfig(raw: unknown): CameraConfig {
   return {
     label: stringValue(value.label),
     url: stringValue(value.url),
-    streamType: stringValue(value.streamType, 'mjpeg'),
+    streamType: stringValue(value.streamType ?? value.stream_type, 'mjpeg'),
     authType: normalizeAuthType(value.authType ?? value.auth_type ?? value.auth),
     username: stringValue(value.username),
     password: stringValue(value.password),
