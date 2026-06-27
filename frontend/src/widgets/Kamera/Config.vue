@@ -1,30 +1,100 @@
 <script setup lang="ts">
-import { reactive, watch, computed } from 'vue'
+import { computed, reactive, watch } from 'vue'
 
 const props = defineProps<{
-  modelValue: Record<string, unknown>
+  modelValue: Record<string, unknown> | null | undefined
 }>()
 
 const emit = defineEmits<{
   (e: 'update:modelValue', val: Record<string, unknown>): void
 }>()
 
-const cfg = reactive({
-  label:           (props.modelValue.label          as string)  ?? '',
-  url:             (props.modelValue.url             as string)  ?? '',
-  streamType:      (props.modelValue.streamType      as string)  ?? 'mjpeg',
-  authType:        (props.modelValue.authType        as string)  ?? 'none',
-  username:        (props.modelValue.username        as string)  ?? '',
-  password:        (props.modelValue.password        as string)  ?? '',
-  apiKeyParam:     (props.modelValue.apiKeyParam     as string)  ?? 'token',
-  apiKeyValue:     (props.modelValue.apiKeyValue     as string)  ?? '',
-  refreshInterval: (props.modelValue.refreshInterval as number)  ?? 5,
-  aspectRatio:     (props.modelValue.aspectRatio     as string)  ?? '16/9',
-  objectFit:       (props.modelValue.objectFit       as string)  ?? 'contain',
-  useProxy:        (props.modelValue.useProxy        as boolean) ?? false,
-})
+type AuthType = 'none' | 'basic' | 'apikey'
 
-watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
+interface CameraConfig {
+  label: string
+  url: string
+  streamType: string
+  authType: AuthType
+  username: string
+  password: string
+  apiKeyParam: string
+  apiKeyValue: string
+  refreshInterval: number
+  aspectRatio: string
+  objectFit: string
+  useProxy: boolean
+}
+
+function asRecord(raw: unknown): Record<string, unknown> {
+  return raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+}
+
+function stringValue(raw: unknown, fallback = ''): string {
+  return typeof raw === 'string' ? raw : fallback
+}
+
+function numberValue(raw: unknown, fallback: number): number {
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function booleanValue(raw: unknown, fallback: boolean): boolean {
+  if (typeof raw === 'boolean') return raw
+  if (typeof raw === 'string') {
+    const value = raw.trim().toLowerCase()
+    if (value === 'true') return true
+    if (value === 'false') return false
+  }
+  return fallback
+}
+
+function normalizeAuthType(raw: unknown): AuthType {
+  if (typeof raw !== 'string') return 'none'
+  const value = raw.trim().toLowerCase().replace(/[\s_-]+/g, '')
+  if (value === 'basic' || value === 'basicauth') return 'basic'
+  if (value === 'apikey' || value === 'api' || value === 'token') return 'apikey'
+  return 'none'
+}
+
+function parseConfig(raw: unknown): CameraConfig {
+  const value = asRecord(raw)
+  return {
+    label: stringValue(value.label),
+    url: stringValue(value.url),
+    streamType: stringValue(value.streamType, 'mjpeg'),
+    authType: normalizeAuthType(value.authType ?? value.auth_type ?? value.auth),
+    username: stringValue(value.username),
+    password: stringValue(value.password),
+    apiKeyParam: stringValue(value.apiKeyParam ?? value.api_key_param, 'token'),
+    apiKeyValue: stringValue(value.apiKeyValue ?? value.api_key_value),
+    refreshInterval: numberValue(value.refreshInterval ?? value.refresh_interval, 5),
+    aspectRatio: stringValue(value.aspectRatio ?? value.aspect_ratio, '16/9'),
+    objectFit: stringValue(value.objectFit ?? value.object_fit, 'contain'),
+    useProxy: booleanValue(value.useProxy ?? value.use_proxy, false),
+  }
+}
+
+const cfg = reactive<CameraConfig>(parseConfig(props.modelValue))
+
+let syncingFromProps = false
+
+watch(
+  () => props.modelValue,
+  (value) => {
+    syncingFromProps = true
+    Object.assign(cfg, parseConfig(value))
+    syncingFromProps = false
+  },
+)
+
+watch(
+  cfg,
+  () => {
+    if (!syncingFromProps) emit('update:modelValue', { ...cfg })
+  },
+  { deep: true, flush: 'sync' },
+)
 
 const showBasicAuth  = computed(() => cfg.authType === 'basic')
 const showApiKeyAuth = computed(() => cfg.authType === 'apikey')
