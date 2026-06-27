@@ -13,7 +13,6 @@ const props = defineProps<{
 const label           = computed(() => (props.config.label           as string) ?? '')
 const url             = computed(() => (props.config.url             as string) ?? '')
 const streamType      = computed(() => (props.config.streamType      as string) ?? 'mjpeg')
-const authType        = computed(() => (props.config.authType        as string) ?? 'none')
 const username        = computed(() => (props.config.username        as string) ?? '')
 const password        = computed(() => (props.config.password        as string) ?? '')
 const apiKeyParam     = computed(() => (props.config.apiKeyParam     as string) ?? 'token')
@@ -22,6 +21,20 @@ const refreshInterval = computed(() => (props.config.refreshInterval as number) 
 const aspectRatio     = computed(() => (props.config.aspectRatio     as string) ?? '16/9')
 const objectFit       = computed(() => (props.config.objectFit       as string) ?? 'contain')
 const useProxy        = computed(() => (props.config.useProxy        as boolean) ?? false)
+
+type AuthType = 'none' | 'basic' | 'apikey'
+
+function normalizeAuthType(raw: unknown): AuthType {
+  if (typeof raw !== 'string') return 'none'
+  const value = raw.trim().toLowerCase().replace(/[\s_-]+/g, '')
+  if (value === 'basic' || value === 'basicauth') return 'basic'
+  if (value === 'apikey' || value === 'api' || value === 'token') return 'apikey'
+  return 'none'
+}
+
+const authType = computed(() =>
+  normalizeAuthType(props.config.authType ?? props.config.auth_type ?? props.config.auth)
+)
 
 /** Baut die finale Stream-URL — direkt oder über den Backend-Proxy */
 const streamUrl = computed(() => {
