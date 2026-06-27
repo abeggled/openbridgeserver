@@ -78,7 +78,7 @@ describe('Kamera widget config', () => {
   })
 
   it('normalizes legacy values without hiding the form', async () => {
-    const wrapper = mountConfig({ authType: 'Basic Auth', stream_type: 'snapshot', username: 'admin' })
+    const wrapper = mountConfig({ authType: 'Basic Auth (Benutzername / Passwort)', stream_type: 'snapshot', username: 'admin' })
 
     expect(wrapper.text()).toContain('Username')
     expect(wrapper.text()).toContain('Password')
@@ -88,6 +88,13 @@ describe('Kamera widget config', () => {
 
     const usernameInput = wrapper.findAll('input[type="text"]')[2]
     expect((usernameInput.element as HTMLInputElement).value).toBe('admin')
+  })
+
+  it('shows API key fields for translated legacy option labels', async () => {
+    const wrapper = mountConfig({ authType: 'API-Key (Query-Parameter)' })
+
+    expect(wrapper.text()).toContain('Parameter name')
+    expect(wrapper.text()).toContain('API key value')
   })
 
   it('keeps Basic Auth fields visible after the parent stores the emitted config', async () => {
