@@ -135,6 +135,8 @@ def should_flag(candidate: str, allowlist: Allowlist, *, allow_technical_tokens:
         return False
     if not has_letters(strip_translated_template_interpolations(text)):
         return False
+    if not has_letters(strip_template_interpolations(text)):
+        return False
     if allow_technical_tokens and is_technical_token(text):
         return False
     if allowlist.contains(text):
@@ -143,7 +145,66 @@ def should_flag(candidate: str, allowlist: Allowlist, *, allow_technical_tokens:
 
 
 def strip_translated_template_interpolations(text: str) -> str:
-    return re.sub(r"\$\{\s*(?:\$t|(?<![\w$])t)\s*\([^{}]*\)\s*\}", "", text)
+    result: list[str] = []
+    idx = 0
+    while idx < len(text):
+        if text.startswith("${", idx):
+            end = find_balanced_end(text, idx + 1, "{", "}")
+            if end is not None:
+                expression = text[idx + 2 : end]
+                if re.search(r"(?:\$t|(?<![\w$])t)\s*\(", expression):
+                    idx = end + 1
+                    continue
+
+        result.append(text[idx])
+        idx += 1
+
+    return "".join(result)
+
+
+def strip_template_interpolations(text: str) -> str:
+    result: list[str] = []
+    idx = 0
+    while idx < len(text):
+        if text.startswith("${", idx):
+            end = find_balanced_end(text, idx + 1, "{", "}")
+            if end is not None:
+                idx = end + 1
+                continue
+
+        result.append(text[idx])
+        idx += 1
+
+    return "".join(result)
+
+
+def find_balanced_end(text: str, open_idx: int, open_char: str, close_char: str) -> int | None:
+    depth = 0
+    quote: str | None = None
+    escaped = False
+
+    for idx in range(open_idx, len(text)):
+        char = text[idx]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"', "`"}:
+            quote = char
+        elif char == open_char:
+            depth += 1
+        elif char == close_char:
+            depth -= 1
+            if depth == 0:
+                return idx
+
+    return None
 
 
 def add_violations_from_matches(
@@ -163,8 +224,20 @@ def add_violations_from_matches(
 
 
 def is_translation_key_argument(expression: str, start: int) -> bool:
-    prefix = expression[:start].rstrip()
-    return re.search(r"(?:\$t|(?<![\w$])t)\s*\($", prefix) is not None
+    call_start = find_enclosing_translation_call(expression, start)
+    if call_start is None:
+        return False
+    closing_paren = find_balanced_end(expression, call_start, "(", ")")
+    return closing_paren is not None and start < closing_paren
+
+
+def find_enclosing_translation_call(expression: str, start: int) -> int | None:
+    for match in re.finditer(r"(?:\$t|(?<![\w$])t)\s*\(", expression):
+        open_paren = expression.rfind("(", match.start(), match.end())
+        closing_paren = find_balanced_end(expression, open_paren, "(", ")")
+        if closing_paren is not None and open_paren < start < closing_paren:
+            return open_paren
+    return None
 
 
 def is_bound_literal_technical(text: str) -> bool:
@@ -433,8 +506,8 @@ def scan_vue(path: str, content: str, allowlist: Allowlist) -> list[Violation]:
         interpolation_depth = 0
         in_tag = False
         tag_quote: str | None = None
-        for idx, raw_line in enumerate(tpl.splitlines(), start=start_line):
-            line = COMMENT_RE.sub("", raw_line)
+        for idx, raw_line in enumerate(tpl_without_comments.splitlines(), start=start_line):
+            line = raw_line
             if not line.strip():
                 continue
             if violation := raw_translation_text_violation(path, idx, line, interpolation_depth > 0, in_tag, tag_quote):

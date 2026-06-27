@@ -197,6 +197,17 @@ def test_bound_translated_template_literal_expression_is_allowed():
     assert violations == []
 
 
+def test_bound_translated_computed_keys_are_allowed():
+    src = """<template>
+  <button :title="$t(enabled ? 'common.disable' : 'common.enable')" />
+</template>
+"""
+
+    violations = gate.scan_vue("frontend/src/components/ToggleButton.vue", src, EmptyAllowlist())
+
+    assert violations == []
+
+
 def test_bound_template_literal_interpolation_literals_are_flagged():
     src = """<template>
   <button :title="`${enabled ? 'Enabled' : 'Disabled'}`" />
@@ -362,6 +373,29 @@ def test_translated_script_template_literal_is_allowed():
 """
 
     violations = gate.scan_script("frontend/src/widgets/Info/Config.test.ts", src, EmptyAllowlist())
+
+    assert violations == []
+
+
+def test_parameterized_translated_script_template_literal_is_allowed():
+    src = """toast.success(`${t('common.saved', { name })} ${name}`)
+"""
+
+    violations = gate.scan_script("frontend/src/widgets/Info/Config.test.ts", src, EmptyAllowlist())
+
+    assert violations == []
+
+
+def test_multiline_template_comment_raw_translation_call_is_ignored():
+    src = """<template>
+  <!--
+    $t('widgets.info.additionalValues')
+  -->
+  <p>{{ $t('widgets.info.additionalValues') }}</p>
+</template>
+"""
+
+    violations = gate.scan_vue("frontend/src/widgets/Info/Config.vue", src, EmptyAllowlist())
 
     assert violations == []
 
