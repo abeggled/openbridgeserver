@@ -17,6 +17,7 @@
 * Visu: Editor grid limits extended — columns up to 120, cell size down to 10 px, enabling fullscreen/dense layouts. https://github.com/abeggled/openbridgeserver/issues/842
 * Visu: Link and ButtonGroup widgets now support "preserve_icon_color" per widget/button — when enabled, SVG icons retain their original colors instead of being forced to black/white. https://github.com/abeggled/openbridgeserver/issues/845
 * Admin GUI: Logic editor block palette — individual block sections (Logic, Objects, Math, …) can now be collapsed and expanded by clicking the section header; the entire palette column can also be collapsed to a slim rail and restored the same way. Both states persist across page reloads. https://github.com/abeggled/openbridgeserver/issues/875
+* Admin GUI: The minimap in the logic editor can now be dragged to any position within the canvas; the position is saved and restored across page reloads. https://github.com/abeggled/openbridgeserver/issues/879
 
 ### Fixes 🐞
 * Backend/Frontend: `value_map` transformations now match string keys case-insensitively after exact lookup, so values such as `OFF`, `oN`, `TRUE`, and `FALSE` work with built-in presets and custom maps. https://github.com/abeggled/openbridgeserver/issues/834
