@@ -63,7 +63,7 @@ COPY --from=py-builder /install /usr/local
 # Application source
 WORKDIR /app
 COPY obs/ ./obs/
-COPY obs-admin /usr/local/bin/obs-admin
+COPY scripts/obs-admin /usr/local/bin/obs-admin
 RUN chmod +x /usr/local/bin/obs-admin
 # Stamp the version into the image without touching the working tree
 RUN echo "$OBS_VERSION" > ./obs/version

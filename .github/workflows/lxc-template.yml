@@ -110,7 +110,7 @@ jobs:
         if: matrix.arch == 'amd64'
         run: |
           tar -czf "${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}" \
-            obs/ gui_dist/ frontend_dist/ requirements.txt obs-update obs-admin
+            obs/ gui_dist/ frontend_dist/ requirements.txt obs-update -C scripts obs-admin
           cd "${{ runner.temp }}"
           sha256sum "${{ steps.meta.outputs.app_bundle_file }}" \
             > "${{ steps.meta.outputs.app_bundle_file }}.sha256"
@@ -237,10 +237,10 @@ jobs:
           sudo cp -r gui_dist         "$ROOTFS/opt/obs/"
           sudo cp -r frontend_dist    "$ROOTFS/opt/obs/"
           sudo cp    requirements.txt "$ROOTFS/opt/obs/"
-          sudo cp    obs-admin        "$ROOTFS/opt/obs/"
+          sudo cp    scripts/obs-admin   "$ROOTFS/opt/obs/"
           echo "${{ steps.meta.outputs.version }}" | sudo tee "$ROOTFS/opt/obs/version" > /dev/null
           sudo cp /tmp/obs-update "$ROOTFS/usr/local/bin/obs-update"
-          sudo cp obs-admin "$ROOTFS/usr/local/bin/obs-admin"
+          sudo cp scripts/obs-admin "$ROOTFS/usr/local/bin/obs-admin"
           sudo chmod +x "$ROOTFS/usr/local/bin/obs-admin"
 
           sudo chroot "$ROOTFS" /bin/bash <<'INSTALL'

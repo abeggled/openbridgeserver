@@ -57,7 +57,7 @@ cp /tmp/obs-update obs-update
 
 # ── App bundle ─────────────────────────────────────────────────────────────────
 echo "==> Creating app bundle..."
-tar -czf "/tmp/$APP_BUNDLE_FILE" obs/ gui_dist/ frontend_dist/ requirements.txt obs-update obs-admin
+tar -czf "/tmp/$APP_BUNDLE_FILE" obs/ gui_dist/ frontend_dist/ requirements.txt obs-update -C scripts obs-admin
 (cd /tmp && sha256sum "$APP_BUNDLE_FILE" > "$APP_BUNDLE_FILE.sha256")
 # Backward-compat: pre-migration obs-update versions verify via a .sha512 asset.
 (cd /tmp && sha512sum "$APP_BUNDLE_FILE" > "$APP_BUNDLE_FILE.sha512")
@@ -148,10 +148,10 @@ cp -r obs              "$ROOTFS/opt/obs/"
 cp -r gui_dist         "$ROOTFS/opt/obs/"
 cp -r frontend_dist    "$ROOTFS/opt/obs/"
 cp    requirements.txt "$ROOTFS/opt/obs/"
-cp    obs-admin        "$ROOTFS/opt/obs/"
+cp    scripts/obs-admin   "$ROOTFS/opt/obs/"
 echo "$VERSION" | tee "$ROOTFS/opt/obs/version" > /dev/null
 cp /tmp/obs-update "$ROOTFS/usr/local/bin/obs-update"
-cp obs-admin "$ROOTFS/usr/local/bin/obs-admin"
+cp scripts/obs-admin "$ROOTFS/usr/local/bin/obs-admin"
 chmod +x "$ROOTFS/usr/local/bin/obs-admin"
 
 chroot "$ROOTFS" /bin/bash << 'INSTALL'
