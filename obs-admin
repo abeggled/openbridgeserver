@@ -1,4 +1,19 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 abeggled and all contributors
+# SPDX-License-Identifier: MIT
+#
+# obs-admin — offline administration wrapper for OpenBridgeServer
+#
+# Installed to /usr/local/bin/obs-admin during LXC and Docker builds.
+# Intended as a break-glass tool when OBS is stopped or unreachable:
+# database inspection, adapter enable/disable, config validation, backups.
+#
+# Python resolution order:
+#   1. LXC install:  $OBS_ADMIN_APP_DIR/venv/bin/python3  (default: /opt/obs/venv/bin/python3)
+#   2. Docker:       python3 relative to /app
+#   3. Dev venv:     ./.venv/bin/python3
+#   4. System:       python3
+
 obs_admin_load_env_file() {
   env_file=$1
   [ -f "$env_file" ] || return 0
