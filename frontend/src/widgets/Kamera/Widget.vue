@@ -33,9 +33,9 @@ function booleanValue(raw: unknown, fallback: boolean): boolean {
 
 function normalizeAuthType(raw: unknown): AuthType {
   if (typeof raw !== 'string') return 'none'
-  const value = raw.trim().toLowerCase().replace(/[\s_-]+/g, '')
-  if (value === 'basic' || value === 'basicauth') return 'basic'
-  if (value === 'apikey' || value === 'api' || value === 'token') return 'apikey'
+  const value = raw.trim().toLowerCase().replace(/[^a-z0-9]+/g, '')
+  if (value === 'basic' || value.startsWith('basicauth')) return 'basic'
+  if (value === 'apikey' || value.startsWith('apikey') || value === 'api' || value === 'token') return 'apikey'
   return 'none'
 }
 

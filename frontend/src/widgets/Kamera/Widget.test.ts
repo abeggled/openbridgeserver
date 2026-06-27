@@ -25,13 +25,25 @@ describe('Kamera widget auth compatibility', () => {
     const wrapper = mountWidget({
       url: 'http://camera.local/stream.mjpeg',
       streamType: 'mjpeg',
-      authType: 'Basic Auth',
+      authType: 'Basic Auth (Benutzername / Passwort)',
       username: 'admin',
       password: 'secret',
       useProxy: false,
     })
 
     expect(wrapper.find('img').attributes('src')).toBe('http://admin:secret@camera.local/stream.mjpeg')
+  })
+
+  it('uses API keys for legacy translated auth labels', () => {
+    const wrapper = mountWidget({
+      url: 'http://camera.local/stream.mjpeg',
+      streamType: 'mjpeg',
+      authType: 'API-Key (Query-Parameter)',
+      apiKeyParam: 'token',
+      apiKeyValue: 'abc123',
+    })
+
+    expect(wrapper.find('img').attributes('src')).toBe('http://camera.local/stream.mjpeg?token=abc123')
   })
 
   it('uses snake_case proxy and API key config aliases', () => {
