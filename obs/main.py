@@ -246,12 +246,17 @@ def create_app() -> FastAPI:
         if _visu_assets.is_dir():
             app.mount("/visu/assets", StaticFiles(directory=_visu_assets), name="visu_assets")
 
+        @app.get("/visu/favicon.svg", include_in_schema=False)
+        async def visu_favicon():
+            return FileResponse(_visu_dist / "favicon.svg")
+
+        @app.get("/visu/manifest.webmanifest", include_in_schema=False)
+        async def visu_manifest():
+            return FileResponse(_visu_dist / "manifest.webmanifest")
+
         @app.get("/visu/{path:path}", include_in_schema=False)
         async def visu_spa(path: str):
-            """Alle /visu/... Pfade → Datei wenn vorhanden, sonst index.html (Vue Router history mode)."""
-            candidate = (_visu_dist / path).resolve()
-            if candidate.is_relative_to(_visu_dist) and candidate.is_file():
-                return FileResponse(candidate)
+            """Alle /visu/... Pfade → index.html (Vue Router history mode)."""
             index = _visu_dist / "index.html"
             if index.exists():
                 return _spa_index_response(index)
