@@ -550,7 +550,7 @@ class KnxAdapter(AdapterBase):
                     from obs.core.formula import apply_formula
 
                     value = apply_formula(binding.value_formula, value)
-                if binding.value_map:
+                if binding.value_map and quality == "good":
                     from obs.core.transformation import apply_value_map
 
                     value = apply_value_map(value, binding.value_map)

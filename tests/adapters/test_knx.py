@@ -2166,6 +2166,24 @@ class TestOnTelegramNonFiniteFloat:
         assert event.value is None
 
     @pytest.mark.asyncio
+    async def test_non_finite_skips_value_map(self, mock_bus):
+        """value_map must not run after the non-finite guard sets value=None.
+        A value_map with a 'none' key would otherwise override the null sentinel."""
+        adapter = self._make_adapter(mock_bus)
+        bad_dpt = self._make_bad_dpt(float("nan"))
+        binding = make_binding(
+            {"group_address": "9/6/29", "dpt_id": "DPT13.012"},
+            value_map={"none": "MAPPED"},
+        )
+        adapter._ga_source_map["9/6/29"] = [(binding, bad_dpt)]
+
+        await adapter._on_telegram(self._make_telegram("9/6/29", b"\x00\x00\x00\x00"))
+
+        event = mock_bus.publish.call_args[0][0]
+        assert event.quality == "bad"
+        assert event.value is None
+
+    @pytest.mark.asyncio
     async def test_finite_float_still_published_with_good_quality(self, mock_bus):
         """Regression guard: a normal finite float is unaffected by the new check."""
         adapter = self._make_adapter(mock_bus)
