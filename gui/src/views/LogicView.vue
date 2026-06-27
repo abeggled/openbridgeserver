@@ -89,7 +89,13 @@
         >
           <Background :pattern-color="bgPatternColor" :gap="20" />
           <Controls class="logic-controls" />
-          <MiniMap class="logic-minimap" node-color="#475569" />
+          <MiniMap
+            ref="minimapRef"
+            class="logic-minimap"
+            :class="{ 'logic-minimap--dragging': minimapDragging }"
+            node-color="#475569"
+            :style="minimapStyle"
+          />
         </VueFlow>
 
         <div v-else class="absolute inset-0 flex items-center justify-center text-slate-600 flex-col gap-3">
@@ -156,7 +162,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, markRaw } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, watchEffect, markRaw } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { VueFlow, useVueFlow, addEdge } from '@vue-flow/core'
@@ -658,7 +664,81 @@ onMounted(async () => {
 
 onUnmounted(() => {
   _wsDisconnect()
+  window.removeEventListener('mousemove', _onMinimapMouseMove, { capture: true })
+  window.removeEventListener('mouseup',   _onMinimapMouseUp,   { capture: true })
 })
+
+// ── Draggable minimap ─────────────────────────────────────────────────────
+// MiniMap uses inheritAttrs:false and D3 captures mousedown internally,
+// so we attach directly to the DOM element in capture phase and use a
+// movement threshold to distinguish a drag from a normal click-to-pan.
+const MINIMAP_POS_KEY = 'obs-logic-minimap-pos'
+const DRAG_THRESHOLD  = 5
+
+const minimapRef     = ref(null)
+const minimapPos     = ref((() => {
+  try { return JSON.parse(localStorage.getItem(MINIMAP_POS_KEY)) } catch { return null }
+})())
+const minimapDragging = ref(false)
+
+const minimapStyle = computed(() => {
+  if (!minimapPos.value) return {}
+  return { left: minimapPos.value.x + 'px', top: minimapPos.value.y + 'px', right: 'auto', bottom: 'auto' }
+})
+
+let _mmDragStart  = null
+let _mmIsDragging = false
+
+watchEffect((onCleanup) => {
+  const el = minimapRef.value?.$el
+  if (!el) return
+  el.addEventListener('mousedown', _onMinimapMouseDown, { capture: true })
+  onCleanup(() => el.removeEventListener('mousedown', _onMinimapMouseDown, { capture: true }))
+})
+
+function _defaultMinimapPos() {
+  const rect = canvasWrapper.value?.getBoundingClientRect()
+  const w = rect ? rect.width  : window.innerWidth
+  const h = rect ? rect.height : window.innerHeight
+  return { x: w - 208, y: h - 152 }
+}
+
+function _onMinimapMouseDown(e) {
+  if (e.button !== 0) return
+  _mmIsDragging = false
+  const pos = minimapPos.value ?? _defaultMinimapPos()
+  _mmDragStart = { mouseX: e.clientX, mouseY: e.clientY, posX: pos.x, posY: pos.y }
+  window.addEventListener('mousemove', _onMinimapMouseMove, { capture: true })
+  window.addEventListener('mouseup',   _onMinimapMouseUp,   { capture: true })
+}
+
+function _onMinimapMouseMove(e) {
+  const dx = e.clientX - _mmDragStart.mouseX
+  const dy = e.clientY - _mmDragStart.mouseY
+  if (!_mmIsDragging) {
+    if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return
+    _mmIsDragging = true
+    minimapDragging.value = true
+  }
+  e.stopImmediatePropagation()
+  const rawX = _mmDragStart.posX + dx
+  const rawY = _mmDragStart.posY + dy
+  const rect = canvasWrapper.value?.getBoundingClientRect()
+  const maxX = rect ? rect.width  - 208 : rawX
+  const maxY = rect ? rect.height - 152 : rawY
+  minimapPos.value = { x: Math.max(0, Math.min(rawX, maxX)), y: Math.max(0, Math.min(rawY, maxY)) }
+}
+
+function _onMinimapMouseUp(e) {
+  if (_mmIsDragging) {
+    e.stopImmediatePropagation()
+    localStorage.setItem(MINIMAP_POS_KEY, JSON.stringify(minimapPos.value))
+  }
+  _mmIsDragging = false
+  minimapDragging.value = false
+  window.removeEventListener('mousemove', _onMinimapMouseMove, { capture: true })
+  window.removeEventListener('mouseup',   _onMinimapMouseUp,   { capture: true })
+}
 </script>
 
 <style>
@@ -666,7 +746,8 @@ onUnmounted(() => {
 .logic-canvas .vue-flow__edge-path { stroke: #475569; }
 .logic-canvas .vue-flow__handle { width: 10px; height: 10px; border-radius: 50%; }
 .logic-controls { bottom: 1rem; left: 1rem; }
-.logic-minimap { bottom: 1rem; right: 1rem; background: var(--logic-minimap-bg); border: 1px solid var(--node-card-border); border-radius: 6px; }
+.logic-minimap { bottom: 1rem; right: 1rem; background: var(--logic-minimap-bg); border: 1px solid var(--node-card-border); border-radius: 6px; cursor: grab; user-select: none; }
+.logic-minimap--dragging { cursor: grabbing; }
 
 /* Edge interaction — breite unsichtbare Klickfläche */
 .logic-canvas .vue-flow__edge .vue-flow__edge-interaction {
