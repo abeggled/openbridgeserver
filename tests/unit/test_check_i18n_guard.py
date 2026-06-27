@@ -409,6 +409,20 @@ def test_multiline_template_comment_raw_translation_call_is_ignored():
     assert violations == []
 
 
+def test_multiline_template_comment_bound_literal_attr_is_ignored():
+    src = """<template>
+  <!--
+    <input :placeholder="'Hardcoded label'" />
+  -->
+  <input :placeholder="$t('widgets.info.mainLabelPlaceholder')" />
+</template>
+"""
+
+    violations = gate.scan_vue("frontend/src/widgets/Info/Config.vue", src, EmptyAllowlist())
+
+    assert violations == []
+
+
 def test_static_template_text_still_gets_flagged():
     src = """<template>
   <p>Additional values</p>
