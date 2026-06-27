@@ -21,6 +21,7 @@
 * Admin GUI: The minimap in the logic editor can now be dragged to any position within the canvas; the position is saved and restored across page reloads. https://github.com/abeggled/openbridgeserver/issues/879
 
 ### Fixes 🐞
+* Visu: Kamera widget — Basic Auth and API-Key credential fields are now always shown when the matching auth type is selected, including after loading a page saved with an older auth format. The config panel no longer renders blank when a widget with a null or missing config is selected. Legacy authType values stored as display text are normalised to canonical form on load. https://github.com/abeggled/openbridgeserver/issues/823
 * Admin GUI/Visu: Missing translations no longer show `common.enabled` in the binding form, and the Info widget now renders the "additional values" heading instead of the raw `$t(...)` expression. The frontend i18n guard also catches raw translation calls left as template text. https://github.com/abeggled/openbridgeserver/issues/864
 * Backend/Frontend: `value_map` transformations now match string keys case-insensitively after exact lookup, so values such as `OFF`, `oN`, `TRUE`, and `FALSE` work with built-in presets and custom maps. https://github.com/abeggled/openbridgeserver/issues/834
 * Visu: Rolladen-Widget — Beschriftungen der Statusindikatoren 1–4 wurden als roher i18n-Key angezeigt statt als übersetzter Text (fehlende doppelte geschweifte Klammern in der Config-Komponente).
