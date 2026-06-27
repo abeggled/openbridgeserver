@@ -10,6 +10,11 @@ def _workflow_text() -> str:
     return (root / ".github" / "workflows" / "lxc-template.yml").read_text(encoding="utf-8")
 
 
+def _obs_update_text() -> str:
+    root = Path(__file__).resolve().parents[2]
+    return (root / "scripts" / "obs-update").read_text(encoding="utf-8")
+
+
 def _extract_checksum_injection_script(workflow: str) -> str:
     """Extract the Python HEREDOC used for checksum injection."""
     m = re.search(r"python3 <<'PYEOF'[^\n]*\n(.*?)\n[ \t]*PYEOF", workflow, re.DOTALL)
@@ -18,49 +23,52 @@ def _extract_checksum_injection_script(workflow: str) -> str:
 
 
 def test_updater_uses_release_bundle_filename_for_download_and_extract():
-    workflow = _workflow_text()
+    obs_update = _obs_update_text()
 
-    assert 'BUNDLE_FILENAME=$(basename "$BUNDLE_URL")' in workflow
-    assert 'curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"' in workflow
-    assert 'tar -xzf "$TMP/$BUNDLE_FILENAME" -C "$INSTALL_DIR"' in workflow
-    assert '"$TMP/app-bundle.tar.gz"' not in workflow
+    assert 'BUNDLE_FILENAME=$(basename "$BUNDLE_URL")' in obs_update
+    assert 'curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"' in obs_update
+    assert 'tar -xzf "$TMP/$BUNDLE_FILENAME" -C "$INSTALL_DIR"' in obs_update
+    assert '"$TMP/app-bundle.tar.gz"' not in obs_update
 
 
 def test_updater_verifies_checksum_against_downloaded_filenames():
-    workflow = _workflow_text()
+    obs_update = _obs_update_text()
 
     # Primary path: SHA-256 embedded in release notes body
-    assert "sha256:" in workflow
-    assert "sha256sum -c -" in workflow
+    assert "sha256:" in obs_update
+    assert "sha256sum -c -" in obs_update
     # Fallback path: legacy .sha512 release asset for releases predating this
     # migration (enables rollback/downgrade to older versions)
-    assert "sha512url:" in workflow
-    assert "sha512sum -c" in workflow
+    assert "sha512url:" in obs_update
+    assert "sha512sum -c" in obs_update
     # Both paths are dispatched from the same CHECKSUM_LINE variable
-    assert "CHECKSUM_LINE" in workflow
+    assert "CHECKSUM_LINE" in obs_update
 
 
 def test_release_lxc_workflow_packages_obs_admin():
-    workflow = _workflow_text()
+    workflow   = _workflow_text()
+    obs_update = _obs_update_text()
 
+    # Bundle creation and initial rootfs install are in the workflow
     assert "requirements.txt obs-update -C scripts obs-admin" in workflow
-    assert 'tar -tzf "$TMP/$BUNDLE_FILENAME" > "$TMP/bundle-files.txt"' in workflow
-    assert "BUNDLE_HAS_OBS_ADMIN=false" in workflow
-    assert "grep -Eq '^(\\./)?obs-admin$'" in workflow
-    assert 'if [[ "$BUNDLE_HAS_OBS_ADMIN" == "true" ]]; then' in workflow
-    assert 'cp "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin' in workflow
     assert 'sudo cp    scripts/obs-admin   "$ROOTFS/opt/obs/"' in workflow
     assert 'sudo cp scripts/obs-admin "$ROOTFS/usr/local/bin/obs-admin"' in workflow
+    # Self-update logic lives in scripts/obs-update
+    assert 'tar -tzf "$TMP/$BUNDLE_FILENAME" > "$TMP/bundle-files.txt"' in obs_update
+    assert "BUNDLE_HAS_OBS_ADMIN=false" in obs_update
+    assert "grep -Eq '^(\\./)?obs-admin$'" in obs_update
+    assert 'if [[ "$BUNDLE_HAS_OBS_ADMIN" == "true" ]]; then' in obs_update
+    assert 'cp "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin' in obs_update
 
 
 def test_updater_fails_closed_when_sha256_missing():
     """obs-update must abort (exit 1) when no SHA-256 is found, not warn-and-continue."""
-    workflow = _workflow_text()
+    obs_update = _obs_update_text()
     # The fail-open warning line must be gone
-    assert "skipping integrity check" not in workflow
+    assert "skipping integrity check" not in obs_update
     # The fail-closed error and exit must be present
-    assert "Integrity check is required" in workflow
-    assert "exit 1" in workflow
+    assert "Integrity check is required" in obs_update
+    assert "exit 1" in obs_update
 
 
 def test_checksum_injection_is_idempotent(tmp_path):
