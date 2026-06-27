@@ -110,7 +110,7 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
       <input
         v-model="cfg.label"
         type="text"
-        placeholder="z.B. Eingang, Garten …"
+        :placeholder="$t('widgets.kamera.labelPlaceholder')"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       />
     </div>
@@ -227,7 +227,7 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
       />
       <label for="cam-proxy" class="text-xs text-gray-300 cursor-pointer">
         {{ $t('widgets.kamera.useProxy') }}
-        <span class="text-gray-500 font-normal ml-1">(Mixed-Content / HTTPS → HTTP)</span>
+        <span class="text-gray-500 font-normal ml-1">{{ $t('widgets.kamera.proxyMixedContentHint') }}</span>
       </label>
     </div>
 
