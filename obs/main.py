@@ -44,7 +44,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     settings = get_settings()
 
-    log_level = getattr(logging, settings.server.log_level.upper(), logging.INFO)
+    configured_log_level = settings.server.log_level.upper()
+    log_level = getattr(logging, configured_log_level, logging.INFO)
     logging.basicConfig(level=log_level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
     import asyncio
@@ -56,6 +57,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 1. Database
     db = await init_db(settings.database.path)
+    persistent_log_level = await _read_persistent_log_level(db)
+    if persistent_log_level and persistent_log_level != configured_log_level:
+        log_level = getattr(logging, persistent_log_level, log_level)
+        logging.getLogger().setLevel(log_level)
+        try:
+            from obs.log_buffer import set_log_buffer_level
+
+            set_log_buffer_level(persistent_log_level)
+        except Exception:
+            logger.exception("Failed to apply persistent log level")
+        logger.info("Applied persistent log level from app_settings: %s", persistent_log_level)
     await ensure_default_user(db)
 
     # Rebuild Mosquitto passwd file from DB on every startup (keeps it in sync).
@@ -260,6 +272,19 @@ def create_app() -> FastAPI:
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     return app
+
+
+async def _read_persistent_log_level(db: object) -> str | None:
+    try:
+        row = await db.fetchone("SELECT value FROM app_settings WHERE key='server.log_level'")
+    except Exception:
+        return None
+    if row is None:
+        return None
+    level = str(row["value"] or "").upper()
+    if level in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        return level
+    return None
 
 
 async def main() -> None:

@@ -162,6 +162,40 @@ security:
 
 > **Hinweis:** Der `mqtt`-Abschnitt betrifft den **internen** Mosquitto-Broker. Externe MQTT-Broker werden als separate Adapter-Instanzen eingerichtet (siehe [MQTT-Adapter](#mqtt-adapter-externer-broker)).
 
+### Offline-Administration mit `obs-admin`
+
+Für Support- und Fehlerfälle gibt es ein Offline-CLI, das direkt auf die SQLite-Konfigurationsdatenbank zugreift und keinen laufenden OBS-HTTP-Server benötigt.
+
+Im LXC-Template wird der Befehl direkt im Container ausgeführt:
+
+```bash
+obs-admin status
+obs-admin db info
+obs-admin adapters list
+obs-admin adapters disable <instanz-id-oder-name>
+obs-admin adapters enable <instanz-id-oder-name>
+obs-admin bindings list --adapter <instanz-id-oder-name>
+obs-admin bindings disable <binding-id>
+obs-admin loglevel set DEBUG
+obs-admin support-package create --output /tmp/obs-support.json
+```
+
+Im Docker-Betrieb wird der Befehl auf dem Host im OBS-Container ausgeführt, zum Beispiel:
+
+```bash
+docker compose exec obs obs-admin status
+docker compose exec obs obs-admin adapters disable <instanz-id-oder-name>
+```
+
+Falls die Datenbank nicht am normalen Pfad liegt, kann sie explizit angegeben werden:
+
+```bash
+obs-admin --db /data/obs.db adapters list --json
+obs-admin --db /data/obs.db db backup --output /var/backups/obs/
+```
+
+Schreibende Befehle erzeugen standardmäßig vor der Änderung ein SQLite-Backup neben der Datenbank. Das Offline-Supportpaket verwendet dieselbe zentrale Sanitizing-Logik wie die Support-API und redigiert Secrets, Tokens, Passwörter, Endpunkte und vollständige Pfade.
+
 ### URL-Ziel-Allowlist für interne Dienste
 
 Backend-Abrufe aus Logik-API-Client-Knoten, iCalendar-Knoten, Pushover-`image_url`-Anhängen, dem Kamera-Proxy und der Wetter-API blockieren private/lokale Netzwerkziele standardmäßig. Admins können bewusst benötigte interne Ziele unter **Einstellungen → Sicherheit → URL-Ziel-Allowlist** freigeben oder die YAML-Datei bearbeiten, die über `security.url_target_allowlist_path` konfiguriert ist.

@@ -161,6 +161,46 @@ security:
 
 > **Note:** The `mqtt` section refers to the **internal** Mosquitto broker. External MQTT brokers are set up as separate adapter instances (see [MQTT adapter](#mqtt-adapter-external-broker)).
 
+### Offline administration with `obs-admin`
+
+For support and failure scenarios, OBS ships an offline CLI that works directly on the SQLite configuration database and does not require the OBS HTTP server to be running.
+
+In the LXC template, run the command inside the container:
+
+```bash
+obs-admin status
+obs-admin db info
+obs-admin adapters list
+obs-admin adapters disable <instance-id-or-name>
+obs-admin adapters enable <instance-id-or-name>
+obs-admin bindings list --adapter <instance-id-or-name>
+obs-admin bindings disable <binding-id>
+obs-admin loglevel set DEBUG
+obs-admin support-package create --output /tmp/obs-support.json
+```
+
+When upgrading an existing LXC container from a release that did not ship `obs-admin`, the first `obs-update` run may leave the command at `/opt/obs/obs-admin` without installing `/usr/local/bin/obs-admin`. In that case run `/opt/obs/obs-admin ...` directly or install the wrapper once with:
+
+```bash
+install -m 0755 /opt/obs/obs-admin /usr/local/bin/obs-admin
+```
+
+For Docker, run it on the host inside the OBS container, for example:
+
+```bash
+docker compose exec obs obs-admin status
+docker compose exec obs obs-admin adapters disable <instance-id-or-name>
+```
+
+If the database is not at the normal configured path, pass it explicitly:
+
+```bash
+obs-admin --db /data/obs.db adapters list --json
+obs-admin --db /data/obs.db db backup --output /var/backups/obs/
+```
+
+Write commands create a SQLite backup next to the database before changing data by default. The offline support package uses the same central sanitizing logic as the support API and redacts secrets, tokens, passwords, endpoints, and full filesystem paths.
+
 ### URL target allowlist for internal services
 
 Backend fetches from logic API-client nodes, iCalendar nodes, Pushover `image_url` attachments, the camera proxy, and the weather API block private/local network targets by default. Admins can allow deliberate internal targets under **Settings → Security → URL Target Allowlist** or by editing the YAML file configured through `security.url_target_allowlist_path`.

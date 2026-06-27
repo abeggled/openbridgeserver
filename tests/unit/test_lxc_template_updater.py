@@ -40,6 +40,19 @@ def test_updater_verifies_checksum_against_downloaded_filenames():
     assert "CHECKSUM_LINE" in workflow
 
 
+def test_release_lxc_workflow_packages_obs_admin():
+    workflow = _workflow_text()
+
+    assert "requirements.txt obs-update obs-admin" in workflow
+    assert 'tar -tzf "$TMP/$BUNDLE_FILENAME" > "$TMP/bundle-files.txt"' in workflow
+    assert "BUNDLE_HAS_OBS_ADMIN=false" in workflow
+    assert "grep -Eq '^(\\./)?obs-admin$'" in workflow
+    assert 'if [[ "$BUNDLE_HAS_OBS_ADMIN" == "true" ]]; then' in workflow
+    assert 'cp "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin' in workflow
+    assert 'sudo cp    obs-admin        "$ROOTFS/opt/obs/"' in workflow
+    assert 'sudo cp obs-admin "$ROOTFS/usr/local/bin/obs-admin"' in workflow
+
+
 def test_updater_fails_closed_when_sha256_missing():
     """obs-update must abort (exit 1) when no SHA-256 is found, not warn-and-continue."""
     workflow = _workflow_text()
