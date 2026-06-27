@@ -22,6 +22,7 @@
 
 ### Fixes 🐞
 * Backend: KNX adapter no longer forwards non-finite float values (`inf`, `-inf`, `nan`) produced by DPT decoders to the event bus. Such values are now published with `quality=bad` and `value=null` instead of propagating to the InfluxDB history plugin, which rejected them with HTTP 400 "invalid boolean". https://github.com/abeggled/openbridgeserver/issues/827
+* Visu/Admin GUI: The Visu browser-tab favicon was missing; a web app manifest with icon metadata has been added to both frontends so that "Add to Home Screen" shortcuts on mobile devices receive the OBS icon. https://github.com/abeggled/openbridgeserver/issues/884
 * Admin GUI/Visu: Missing translations no longer show `common.enabled` in the binding form, and the Info widget now renders the "additional values" heading instead of the raw `$t(...)` expression. The frontend i18n guard also catches raw translation calls left as template text. https://github.com/abeggled/openbridgeserver/issues/864
 * Backend/Frontend: `value_map` transformations now match string keys case-insensitively after exact lookup, so values such as `OFF`, `oN`, `TRUE`, and `FALSE` work with built-in presets and custom maps. https://github.com/abeggled/openbridgeserver/issues/834
 * Visu: Rolladen-Widget — Beschriftungen der Statusindikatoren 1–4 wurden als roher i18n-Key angezeigt statt als übersetzter Text (fehlende doppelte geschweifte Klammern in der Config-Komponente).

@@ -239,12 +239,32 @@ def create_app() -> FastAPI:
         async def favicon():
             return FileResponse(_gui_dist / "favicon.svg")
 
+        @app.get("/manifest.webmanifest", include_in_schema=False)
+        async def admin_manifest():
+            return FileResponse(_gui_dist / "manifest.webmanifest")
+
+        @app.get("/apple-touch-icon.png", include_in_schema=False)
+        async def admin_apple_touch_icon():
+            return FileResponse(_gui_dist / "apple-touch-icon.png")
+
     # ── Serve Visu SPA (frontend_dist → /visu) ────────────────────────────
     _visu_dist = Path(__file__).parent.parent / "frontend_dist"
     if _visu_dist.is_dir():
         _visu_assets = _visu_dist / "assets"
         if _visu_assets.is_dir():
             app.mount("/visu/assets", StaticFiles(directory=_visu_assets), name="visu_assets")
+
+        @app.get("/visu/favicon.svg", include_in_schema=False)
+        async def visu_favicon():
+            return FileResponse(_visu_dist / "favicon.svg")
+
+        @app.get("/visu/manifest.webmanifest", include_in_schema=False)
+        async def visu_manifest():
+            return FileResponse(_visu_dist / "manifest.webmanifest")
+
+        @app.get("/visu/apple-touch-icon.png", include_in_schema=False)
+        async def visu_apple_touch_icon():
+            return FileResponse(_visu_dist / "apple-touch-icon.png")
 
         @app.get("/visu/{path:path}", include_in_schema=False)
         async def visu_spa(path: str):

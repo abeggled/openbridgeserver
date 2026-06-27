@@ -120,26 +120,25 @@ Danach läuft der i18n-Gate automatisch vor jedem `git push`.
 
 ## Test Coverage Gate (verbindlich)
 
-**Coverage darf durch neuen Code nie sinken.** Jede neue Python-Datei oder -Funktion in `obs/`
-muss mit Tests abgedeckt sein, die die Gesamtabdeckung mindestens auf dem Niveau vor der Änderung
-halten. Konkret:
+**Jede neue Zeile Code muss durch Tests abgedeckt sein.** Codecov prüft die *Patch Coverage* —
+d.h. ob jede im Diff hinzugefügte Zeile durch die Testsuite ausgeführt wird. Das ist strenger als
+nur die Gesamtabdeckung zu halten: eine neue Funktion, die bestehende Zeilen nicht senkt, aber
+selbst ungetestet bleibt, fällt durch dieses Gate.
 
-- **Neuer Code → neue Tests.** Wer eine neue API-Route, einen neuen Adapter oder eine neue
-  Hilfsfunktion hinzufügt, liefert zugehörige Tests (Unit oder Integration) im selben Commit.
-- **Refactorings** dürfen die Coverage nicht senken.
+- **Neuer Code → neue Tests im selben Commit.** Jede neue API-Route, jeder neue Adapter, jede
+  neue Hilfsfunktion braucht zugehörige Tests (Unit oder Integration), die genau die neuen Zeilen
+  ausführen.
+- **Refactorings** dürfen weder die Gesamtabdeckung noch die Patch Coverage senken.
 - **Vor jedem Push mit Backend-Änderungen** Coverage prüfen:
 
 ```bash
-# Baseline messen (vor der Änderung):
-tools/with-venv pytest tests/unit tests/adapters tests/contracts --cov=obs --cov-report=term-missing
-
-# Nach der Änderung nochmals — Gesamtprozentsatz muss ≥ Baseline sein:
+# Gesamtabdeckung (muss ≥ Baseline bleiben):
 tools/with-venv pytest tests/unit tests/adapters tests/contracts --cov=obs --cov-report=term-missing
 # mit Docker auch:
 tools/with-venv pytest tests/integration --cov=obs --cov-append --cov-report=term-missing
 ```
 
-Wenn der Coverage-Prozentsatz gefallen ist: Tests ergänzen, nicht pushen.
+Wenn neue Zeilen im Report unter „Missing" auftauchen: Tests ergänzen, nicht pushen.
 Gilt für Haupt-Sessions **und** für Subagents — bitte explizit in den Subagent-Prompt schreiben.
 
 ## Local Development Setup
