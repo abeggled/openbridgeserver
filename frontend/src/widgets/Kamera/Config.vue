@@ -96,9 +96,11 @@ watch(
   { deep: true, flush: 'sync' },
 )
 
-const showBasicAuth  = computed(() => cfg.authType === 'basic')
-const showApiKeyAuth = computed(() => cfg.authType === 'apikey')
-const showRefresh    = computed(() => cfg.streamType === 'snapshot')
+const showRefresh = computed(() => cfg.streamType === 'snapshot')
+
+function updateAuthType(event: Event) {
+  cfg.authType = normalizeAuthType((event.target as HTMLSelectElement).value)
+}
 </script>
 
 <template>
@@ -157,8 +159,9 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
     <div>
       <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.auth') }}</label>
       <select
-        v-model="cfg.authType"
+        :value="cfg.authType"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+        @change="updateAuthType"
       >
         <option value="none">{{ $t('widgets.kamera.authNone') }}</option>
         <option value="basic">{{ $t('widgets.kamera.authBasic') }}</option>
@@ -167,7 +170,7 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
     </div>
 
     <!-- Basic Auth -->
-    <template v-if="showBasicAuth">
+    <template v-if="cfg.authType === 'basic'">
       <div class="grid grid-cols-2 gap-2">
         <div>
           <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.username') }}</label>
@@ -194,7 +197,7 @@ const showRefresh    = computed(() => cfg.streamType === 'snapshot')
     </template>
 
     <!-- API Key -->
-    <template v-if="showApiKeyAuth">
+    <template v-if="cfg.authType === 'apikey'">
       <div class="grid grid-cols-2 gap-2">
         <div>
           <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.apiKeyParam') }}</label>

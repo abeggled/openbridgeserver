@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import { defineComponent, ref } from 'vue'
 import KameraConfig from './Config.vue'
 
 const messages: Record<string, string> = {
@@ -9,6 +10,7 @@ const messages: Record<string, string> = {
   'widgets.kamera.streamMjpeg': 'MJPEG',
   'widgets.kamera.streamSnapshot': 'Snapshot',
   'widgets.kamera.streamHls': 'HLS',
+  'widgets.kamera.labelPlaceholder': 'e.g. entrance',
   'widgets.kamera.streamUrl': 'Stream URL',
   'widgets.kamera.refreshInterval': 'Refresh interval',
   'widgets.kamera.auth': 'Authentication',
@@ -21,6 +23,7 @@ const messages: Record<string, string> = {
   'widgets.kamera.apiKey': 'API key value',
   'widgets.kamera.credentialWarning': 'Credential warning',
   'widgets.kamera.useProxy': 'Use proxy',
+  'widgets.kamera.proxyMixedContentHint': 'proxy hint',
   'widgets.kamera.aspectRatio': 'Aspect ratio',
   'widgets.kamera.aspectSquare': 'Square',
   'widgets.kamera.aspectFree': 'Free',
@@ -84,5 +87,42 @@ describe('Kamera widget config', () => {
 
     const usernameInput = wrapper.findAll('input[type="text"]')[2]
     expect((usernameInput.element as HTMLInputElement).value).toBe('admin')
+  })
+
+  it('keeps Basic Auth fields visible after the parent stores the emitted config', async () => {
+    const Host = defineComponent({
+      components: { KameraConfig },
+      setup() {
+        const config = ref<Record<string, unknown>>({})
+        function updateConfig(nextConfig: Record<string, unknown>) {
+          config.value = nextConfig
+        }
+        return { config, updateConfig }
+      },
+      template: `
+        <KameraConfig
+          :model-value="config"
+          @update:model-value="updateConfig"
+        />
+      `,
+    })
+
+    const wrapper = mount(Host, {
+      global: {
+        mocks: {
+          $t: (key: string) => messages[key] ?? key,
+        },
+      },
+    })
+
+    const selects = wrapper.findComponent(KameraConfig).findAll('select')
+    await selects[1].setValue('basic')
+
+    expect(wrapper.text()).toContain('Username')
+    expect(wrapper.text()).toContain('Password')
+    expect((wrapper.vm as unknown as { config: Record<string, unknown> }).config).toMatchObject({
+      authType: 'basic',
+      streamType: 'mjpeg',
+    })
   })
 })
