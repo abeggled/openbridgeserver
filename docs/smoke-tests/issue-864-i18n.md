@@ -16,6 +16,6 @@ Purpose: help reviewers verify that raw i18n keys and raw `$t(...)` expressions 
 6. Run the automated regression checks:
 
 ```bash
-pytest tests/unit/test_check_i18n_guard.py
-cd frontend && npm test -- src/widgets/Info/Config.test.ts
+tools/with-venv pytest tests/unit/test_check_i18n_guard.py
+cd frontend && npm run test -- src/widgets/Info/Config.test.ts
 ```
