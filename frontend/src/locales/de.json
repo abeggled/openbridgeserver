@@ -534,7 +534,7 @@
       "password": "Passwort",
       "apiKeyParam": "Parameter-Name",
       "apiKey": "API-Key",
-      "credentialWarning": "Credentials werden in die URL eingebettet (http://user:pass@host/…). Nur für interne Netzwerke empfohlen.",
+      "credentialWarning": "Credentials werden in die URL eingebettet (http://user:pass{'@'}host/…). Nur für interne Netzwerke empfohlen.",
       "useProxy": "Via Server-Proxy laden",
       "proxyMixedContentHint": "(Mixed-Content / HTTPS → HTTP)",
       "aspectRatio": "Seitenverhältnis",
