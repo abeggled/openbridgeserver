@@ -249,3 +249,53 @@ test('Kamera: Snapshot-Modus → img src enthält _t Cache-Buster', async ({ pag
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
   }
 })
+
+test('Kamera Editor: Basic Auth-Felder bleiben sichtbar und Config bleibt nach Speichern erhalten', async ({ page }) => {
+  const visuNode = await createVisuPage()
+  const pageId   = visuNode.id
+  const widgetId = randomUUID()
+
+  await buildKameraPage(pageId, widgetId, {
+    label: 'E2E Kamera',
+    url: 'http://192.168.1.100/video.cgi',
+    streamType: 'mjpeg',
+    authType: 'none',
+    username: '',
+    password: '',
+    useProxy: false,
+    aspectRatio: '16/9',
+    objectFit: 'contain',
+  })
+
+  try {
+    await page.goto(`/visu/${pageId}/edit`)
+    await page.waitForLoadState('domcontentloaded')
+
+    await page.locator(`[data-widget-id="${widgetId}"]`).click()
+
+    const configPanel = page.locator('aside').filter({ hasText: 'Konfiguration' }).last()
+    await expect(configPanel.getByLabel('Stream-URL')).toHaveValue('http://192.168.1.100/video.cgi')
+
+    await configPanel.getByLabel('Authentifizierung').selectOption('basic')
+    await expect(configPanel.getByLabel('Benutzername')).toBeVisible()
+    await expect(configPanel.getByLabel('Passwort')).toBeVisible()
+
+    await configPanel.getByLabel('Benutzername').fill('admin')
+    await configPanel.getByLabel('Passwort').fill('secret')
+    await page.getByRole('button', { name: /Speichern/ }).click()
+    await expect(page).toHaveURL(new RegExp(`/visu/${pageId}$`))
+
+    await page.goto(`/visu/${pageId}/edit`)
+    await page.waitForLoadState('domcontentloaded')
+    await page.locator(`[data-widget-id="${widgetId}"]`).click()
+
+    await expect(configPanel.getByLabel('Stream-URL')).toHaveValue('http://192.168.1.100/video.cgi')
+    await expect(configPanel.getByLabel('Authentifizierung')).toHaveValue('basic')
+    await expect(configPanel.getByLabel('Benutzername')).toBeVisible()
+    await expect(configPanel.getByLabel('Benutzername')).toHaveValue('admin')
+    await expect(configPanel.getByLabel('Passwort')).toBeVisible()
+    await expect(configPanel.getByLabel('Passwort')).toHaveValue('secret')
+  } finally {
+    await apiDelete(`/api/v1/visu/nodes/${pageId}`)
+  }
+})

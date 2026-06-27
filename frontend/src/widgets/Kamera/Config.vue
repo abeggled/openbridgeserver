@@ -57,14 +57,6 @@ function normalizeAuthType(raw: unknown): AuthType {
   return 'none'
 }
 
-function isBasicAuth(raw: unknown): boolean {
-  return normalizeAuthType(raw) === 'basic'
-}
-
-function isApiKeyAuth(raw: unknown): boolean {
-  return normalizeAuthType(raw) === 'apikey'
-}
-
 function parseConfig(raw: unknown): CameraConfig {
   const value = asRecord(raw)
   return {
@@ -105,10 +97,14 @@ watch(
 )
 
 const showRefresh = computed(() => cfg.streamType === 'snapshot')
-
-function updateAuthType(event: Event) {
-  cfg.authType = normalizeAuthType((event.target as HTMLSelectElement).value)
-}
+const authTypeModel = computed({
+  get: () => normalizeAuthType(cfg.authType),
+  set: (value: string) => {
+    cfg.authType = normalizeAuthType(value)
+  },
+})
+const showBasicAuth = computed(() => authTypeModel.value === 'basic')
+const showApiKeyAuth = computed(() => authTypeModel.value === 'apikey')
 </script>
 
 <template>
@@ -167,10 +163,8 @@ function updateAuthType(event: Event) {
     <div>
       <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.auth') }}</label>
       <select
-        :value="cfg.authType"
+        v-model="authTypeModel"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
-        @input="updateAuthType"
-        @change="updateAuthType"
       >
         <option value="none">{{ $t('widgets.kamera.authNone') }}</option>
         <option value="basic">{{ $t('widgets.kamera.authBasic') }}</option>
@@ -179,7 +173,7 @@ function updateAuthType(event: Event) {
     </div>
 
     <!-- Basic Auth -->
-    <template v-if="isBasicAuth(cfg.authType)">
+    <template v-if="showBasicAuth">
       <div class="grid grid-cols-2 gap-2">
         <div>
           <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.username') }}</label>
@@ -206,7 +200,7 @@ function updateAuthType(event: Event) {
     </template>
 
     <!-- API Key -->
-    <template v-if="isApiKeyAuth(cfg.authType)">
+    <template v-if="showApiKeyAuth">
       <div class="grid grid-cols-2 gap-2">
         <div>
           <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.apiKeyParam') }}</label>
