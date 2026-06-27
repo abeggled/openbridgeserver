@@ -296,7 +296,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Diff-scoped i18n hard gate")
     parser.add_argument("--base", help="Base git ref for diff", default=None)
     parser.add_argument("--head", help="Head git ref for diff", default=None)
-    parser.add_argument("--allowlist", default="scripts/i18n-allowlist.txt", help="Allowlist file path")
+    parser.add_argument("--allowlist", default="tools/i18n-allowlist.txt", help="Allowlist file path")
     parser.add_argument("files", nargs="*", help="Explicit files to scan instead of deriving from git diff")
     return parser.parse_args()
 
