@@ -522,6 +522,8 @@
       "streamSnapshot": "JPEG Snapshot (Auto-Refresh)",
       "streamHls": "HLS (.m3u8)",
       "labelPlaceholder": "z.B. Eingang, Garten …",
+      "configureUrl": "Kamera-URL konfigurieren",
+      "noUrlConfigured": "Keine URL konfiguriert",
       "streamUrl": "Stream-URL",
       "refreshInterval": "Aktualisierungsintervall (Sekunden)",
       "auth": "Authentifizierung",
@@ -541,7 +543,10 @@
       "objectFit": "Bildanpassung",
       "fitContain": "Einpassen (contain)",
       "fitCover": "Füllen (cover)",
-      "fitFill": "Strecken (fill)"
+      "fitFill": "Strecken (fill)",
+      "streamUnavailable": "Stream nicht erreichbar",
+      "autoRetry": "Automatischer Neuversuch in 10 s",
+      "reloadNow": "Jetzt neu laden"
     },
     "licht": {
       "brightness": "Helligkeit (0–100 %)",

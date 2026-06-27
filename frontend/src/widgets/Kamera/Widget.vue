@@ -10,19 +10,26 @@ const props = defineProps<{
   editorMode: boolean
 }>()
 
-const label           = computed(() => (props.config.label           as string) ?? '')
-const url             = computed(() => (props.config.url             as string) ?? '')
-const streamType      = computed(() => (props.config.streamType      as string) ?? 'mjpeg')
-const username        = computed(() => (props.config.username        as string) ?? '')
-const password        = computed(() => (props.config.password        as string) ?? '')
-const apiKeyParam     = computed(() => (props.config.apiKeyParam     as string) ?? 'token')
-const apiKeyValue     = computed(() => (props.config.apiKeyValue     as string) ?? '')
-const refreshInterval = computed(() => (props.config.refreshInterval as number) ?? 5)
-const aspectRatio     = computed(() => (props.config.aspectRatio     as string) ?? '16/9')
-const objectFit       = computed(() => (props.config.objectFit       as string) ?? 'contain')
-const useProxy        = computed(() => (props.config.useProxy        as boolean) ?? false)
-
 type AuthType = 'none' | 'basic' | 'apikey'
+
+function stringValue(raw: unknown, fallback = ''): string {
+  return typeof raw === 'string' ? raw : fallback
+}
+
+function numberValue(raw: unknown, fallback: number): number {
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function booleanValue(raw: unknown, fallback: boolean): boolean {
+  if (typeof raw === 'boolean') return raw
+  if (typeof raw === 'string') {
+    const value = raw.trim().toLowerCase()
+    if (value === 'true') return true
+    if (value === 'false') return false
+  }
+  return fallback
+}
 
 function normalizeAuthType(raw: unknown): AuthType {
   if (typeof raw !== 'string') return 'none'
@@ -32,6 +39,17 @@ function normalizeAuthType(raw: unknown): AuthType {
   return 'none'
 }
 
+const label           = computed(() => stringValue(props.config.label))
+const url             = computed(() => stringValue(props.config.url))
+const streamType      = computed(() => stringValue(props.config.streamType, 'mjpeg'))
+const username        = computed(() => stringValue(props.config.username))
+const password        = computed(() => stringValue(props.config.password))
+const apiKeyParam     = computed(() => stringValue(props.config.apiKeyParam ?? props.config.api_key_param, 'token'))
+const apiKeyValue     = computed(() => stringValue(props.config.apiKeyValue ?? props.config.api_key_value))
+const refreshInterval = computed(() => numberValue(props.config.refreshInterval ?? props.config.refresh_interval, 5))
+const aspectRatio     = computed(() => stringValue(props.config.aspectRatio ?? props.config.aspect_ratio, '16/9'))
+const objectFit       = computed(() => stringValue(props.config.objectFit ?? props.config.object_fit, 'contain'))
+const useProxy        = computed(() => booleanValue(props.config.useProxy ?? props.config.use_proxy, false))
 const authType = computed(() =>
   normalizeAuthType(props.config.authType ?? props.config.auth_type ?? props.config.auth)
 )
@@ -168,7 +186,7 @@ const imgSrc = computed(() =>
       class="flex-1 flex flex-col items-center justify-center text-gray-500 gap-2"
     >
       <span class="text-4xl">📷</span>
-      <span class="text-xs">Kamera-URL konfigurieren</span>
+      <span class="text-xs">{{ $t('widgets.kamera.configureUrl') }}</span>
     </div>
 
     <!-- Kein URL im Live-Modus -->
@@ -176,7 +194,7 @@ const imgSrc = computed(() =>
       v-else-if="!url"
       class="flex-1 flex items-center justify-center text-gray-600 text-xs"
     >
-      Keine URL konfiguriert
+      {{ $t('widgets.kamera.noUrlConfigured') }}
     </div>
 
     <!-- MJPEG / Snapshot -->
@@ -189,7 +207,7 @@ const imgSrc = computed(() =>
         :src="imgSrc"
         :style="containerStyle"
         class="max-h-full max-w-full"
-        alt="Kamera"
+        :alt="$t('widgets.kamera.title')"
         @error="onStreamError"
         @load="onStreamLoad"
       />
@@ -219,13 +237,13 @@ const imgSrc = computed(() =>
       class="absolute inset-0 flex flex-col items-center justify-center bg-black/70 gap-2 z-20"
     >
       <span class="text-2xl">⚠️</span>
-      <span class="text-xs text-red-400 text-center px-4">Stream nicht erreichbar</span>
-      <span class="text-xs text-gray-500 text-center px-4">Automatischer Neuversuch in 10 s</span>
+      <span class="text-xs text-red-400 text-center px-4">{{ $t('widgets.kamera.streamUnavailable') }}</span>
+      <span class="text-xs text-gray-500 text-center px-4">{{ $t('widgets.kamera.autoRetry') }}</span>
       <button
         class="mt-1 px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-xs text-gray-200 transition-colors"
         @click="reload"
       >
-        Jetzt neu laden
+        {{ $t('widgets.kamera.reloadNow') }}
       </button>
     </div>
 
