@@ -59,6 +59,22 @@ describe('NodeConfigPanel decision', () => {
     w.unmount()
   })
 
+  it('renders condition rows from array-backed data without overwriting them', async () => {
+    const w = await mountPanel('decision', {
+      conditions: [
+        { handle: 'out_10', name: 'Warm', operator: 'gt', value: '24' },
+        { handle: 'out_20', name: 'Cold', operator: 'lt', value: '18' },
+      ],
+    })
+    await flushPromises()
+
+    const rows = w.findAll('[data-testid^="rule-row-"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].find('input').element.value).toBe('Warm')
+    expect(rows[1].find('input').element.value).toBe('Cold')
+    w.unmount()
+  })
+
   it('adds a condition with the next output handle', async () => {
     const w = await mountPanel('decision', {})
     await flushPromises()
@@ -115,7 +131,7 @@ describe('NodeConfigPanel decision', () => {
     w.unmount()
   })
 
-  it('removes a condition only when more than two exist and renumbers handles', async () => {
+  it('removes a condition only when more than two exist and preserves remaining handles', async () => {
     const w = await mountPanel('decision', {
       conditions: JSON.stringify([
         { handle: 'out_1', name: 'A', operator: 'eq', value: 'a' },
@@ -130,8 +146,28 @@ describe('NodeConfigPanel decision', () => {
 
     const conditions = JSON.parse(lastUpdate(w).conditions)
     expect(conditions).toHaveLength(2)
-    expect(conditions.map(c => c.handle)).toEqual(['out_1', 'out_2'])
+    expect(conditions.map(c => c.handle)).toEqual(['out_1', 'out_3'])
     expect(conditions.map(c => c.name)).toEqual(['A', 'C'])
+    w.unmount()
+  })
+
+  it('adds a condition with a new handle after a middle condition was removed', async () => {
+    const w = await mountPanel('decision', {
+      conditions: JSON.stringify([
+        { handle: 'out_1', name: 'A', operator: 'eq', value: 'a' },
+        { handle: 'out_2', name: 'B', operator: 'eq', value: 'b' },
+        { handle: 'out_3', name: 'C', operator: 'eq', value: 'c' },
+      ]),
+    })
+    await flushPromises()
+
+    await w.find('[data-testid="rule-row-1"]').findAll('button').at(-1).trigger('click')
+    await flushPromises()
+    await w.find('[data-testid="rule-add"]').trigger('click')
+    await flushPromises()
+
+    const conditions = JSON.parse(lastUpdate(w).conditions)
+    expect(conditions.map(c => c.handle)).toEqual(['out_1', 'out_3', 'out_4'])
     w.unmount()
   })
 })
@@ -148,6 +184,22 @@ describe('NodeConfigPanel value_mapping', () => {
     const rules = JSON.parse(lastUpdate(w).rules)
     expect(rules).toHaveLength(3)
     expect(rules[2]).toMatchObject({ name: 'Regel 3', operator: 'eq', value: '', result: '' })
+    w.unmount()
+  })
+
+  it('renders mapping rows from array-backed data', async () => {
+    const w = await mountPanel('value_mapping', {
+      rules: [
+        { name: 'Open', operator: 'eq', value: '1', result: 'yes' },
+        { name: 'Closed', operator: 'eq', value: '0', result: 'no' },
+      ],
+    })
+    await flushPromises()
+
+    const rows = w.findAll('[data-testid^="rule-row-"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].find('input').element.value).toBe('Open')
+    expect(rows[1].find('input').element.value).toBe('Closed')
     w.unmount()
   })
 

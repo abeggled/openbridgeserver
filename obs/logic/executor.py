@@ -226,6 +226,8 @@ class GraphExecutor:
         if operator_key in _CONTAINS_OPS | _STARTS_WITH_OPS | _ENDS_WITH_OPS | _TEXT_COMPARE_OPS:
             left = str(input_value)
             right = str(expected if expected is not None else "")
+            if operator_key in _CONTAINS_OPS | _STARTS_WITH_OPS | _ENDS_WITH_OPS and right == "":
+                return False
             if not rule.get("case_sensitive"):
                 left = left.casefold()
                 right = right.casefold()

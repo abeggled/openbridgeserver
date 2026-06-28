@@ -1311,9 +1311,15 @@ function onConcatCountChange(e) {
 
 // ── Decision / value_mapping: shared condition row management ─────────────
 function _parseRows(raw) {
+  if (Array.isArray(raw)) {
+    return raw.filter(row => row && typeof row === 'object' && !Array.isArray(row))
+  }
+  if (typeof raw !== 'string') return []
   try {
     const parsed = JSON.parse(raw || '[]')
-    return Array.isArray(parsed) ? parsed : []
+    return Array.isArray(parsed)
+      ? parsed.filter(row => row && typeof row === 'object' && !Array.isArray(row))
+      : []
   } catch { return [] }
 }
 
@@ -1360,9 +1366,13 @@ function _saveConditionRows(rows) {
 
 function addDecisionCondition() {
   const rows = decisionConditions.value.map(r => ({ ...r }))
+  const nextNumber = rows.reduce((max, row) => {
+    const match = String(row.handle || '').match(/^out_(\d+)$/)
+    return match ? Math.max(max, Number(match[1])) : max
+  }, 0) + 1
   rows.push({
-    handle: `out_${rows.length + 1}`,
-    name: t('logic.nodeConfig.decision.defaultOutput', { n: rows.length + 1 }),
+    handle: `out_${nextNumber}`,
+    name: t('logic.nodeConfig.decision.defaultOutput', { n: nextNumber }),
     operator: 'eq',
     value: '',
   })
@@ -1396,12 +1406,6 @@ function removeConditionRow(i) {
   const rows = conditionRows.value.map(r => ({ ...r }))
   if (rows.length <= 2) return
   rows.splice(i, 1)
-  if (isDecisionNode.value) {
-    rows.forEach((row, idx) => {
-      row.handle = `out_${idx + 1}`
-      row.name = row.name || t('logic.nodeConfig.decision.defaultOutput', { n: idx + 1 })
-    })
-  }
   _saveConditionRows(rows)
 }
 

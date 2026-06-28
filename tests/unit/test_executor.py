@@ -471,6 +471,16 @@ class TestDecisionNode:
 
         assert out == {"text": False, "ends": True}
 
+    @pytest.mark.parametrize("operator_key", ["contains", "starts_with", "ends_with"])
+    def test_blank_substring_conditions_do_not_match_everything(self, operator_key):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "blank", "operator": operator_key, "value": ""}]},
+            {"value": "anything"},
+        )
+
+        assert out["blank"] is False
+
     def test_range_accepts_value_and_value_to_aliases(self):
         out = run_single(
             "decision",
