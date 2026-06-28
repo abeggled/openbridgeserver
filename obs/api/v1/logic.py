@@ -4,6 +4,7 @@ GET    /api/v1/logic/node-types               list all node type definitions
 GET    /api/v1/logic/graphs                   list all logic graphs
 POST   /api/v1/logic/graphs                   create a new graph
 POST   /api/v1/logic/graphs/import            import graph from JSON
+POST   /api/v1/logic/graphs/validate          validate flow topology
 GET    /api/v1/logic/graphs/{id}              get graph (with flow_data)
 PUT    /api/v1/logic/graphs/{id}              full update (save canvas)
 PATCH  /api/v1/logic/graphs/{id}             partial update (name/enabled)
