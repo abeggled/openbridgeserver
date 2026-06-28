@@ -6,7 +6,7 @@
           <input type="checkbox" :checked="providerConfig(provider.key).enabled" class="w-4 h-4 rounded" @change="setProvider(provider.key, { enabled: $event.target.checked })" />
           {{ provider.label }}
         </label>
-        <button type="button" class="btn-secondary btn-sm" @click="addTarget(provider.key)">
+        <button v-if="providerConfig(provider.key).enabled" type="button" class="btn-secondary btn-sm" @click="addTarget(provider.key)">
           {{ $t('adapters.message.addTarget') }}
         </button>
       </div>

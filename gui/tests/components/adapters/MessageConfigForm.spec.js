@@ -21,6 +21,12 @@ function mountForm(initial = {}) {
 }
 
 describe('MessageConfigForm', () => {
+  it('hides target buttons for disabled providers', () => {
+    const { wrapper } = mountForm()
+
+    expect(wrapper.findAll('button').filter(button => button.text() === 'Ziel hinzufügen')).toHaveLength(0)
+  })
+
   it('enables a provider and updates provider fields', async () => {
     const { wrapper, getModel } = mountForm()
 
@@ -56,11 +62,10 @@ describe('MessageConfigForm', () => {
   it('adds a seven.io target with SMS default and allows changing to voice', async () => {
     const { wrapper, getModel } = mountForm()
     const checkboxes = wrapper.findAll('input[type="checkbox"]')
-    const addButtons = wrapper.findAll('button').filter(button => button.text() === 'Ziel hinzufügen')
 
     await checkboxes[2].setChecked(true)
     await flushPromises()
-    await addButtons[2].trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'Ziel hinzufügen').trigger('click')
     await flushPromises()
     expect(getModel().providers['seven.io'].targets.default.channel).toBe('sms')
 
@@ -75,9 +80,8 @@ describe('MessageConfigForm', () => {
         'seven.io': { enabled: true, targets: { default: { channel: 'sms' } } },
       },
     })
-    const addButtons = wrapper.findAll('button').filter(button => button.text() === 'Ziel hinzufügen')
 
-    await addButtons[2].trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'Ziel hinzufügen').trigger('click')
     await flushPromises()
     const textInputs = wrapper.findAll('input').filter(input => input.attributes('type') === 'text')
     await textInputs[textInputs.length - 1].setValue('+4100000000')
@@ -89,12 +93,11 @@ describe('MessageConfigForm', () => {
   it('updates a Telegram chat target', async () => {
     const { wrapper, getModel } = mountForm()
     const checkboxes = wrapper.findAll('input[type="checkbox"]')
-    const addButtons = wrapper.findAll('button').filter(button => button.text() === 'Ziel hinzufügen')
 
     await checkboxes[1].setChecked(true)
     await flushPromises()
     await wrapper.find('input[type="password"]').setValue('bot-token')
-    await addButtons[1].trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'Ziel hinzufügen').trigger('click')
     await flushPromises()
 
     const textInputs = wrapper.findAll('input').filter(input => input.attributes('type') === 'text')

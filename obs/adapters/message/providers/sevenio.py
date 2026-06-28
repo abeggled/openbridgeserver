@@ -107,7 +107,16 @@ def _is_success_value(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, int | float):
-        return value != 0
+        return value == 100
     if isinstance(value, str):
-        return value.strip().lower() not in {"", "0", "false", "no", "failed", "error"}
+        normalized = value.strip().lower()
+        if normalized == "100":
+            return True
+        if normalized in {"true", "ok", "success"}:
+            return True
+        if normalized in {"", "0", "false", "no", "failed", "error"}:
+            return False
+        if normalized.isdecimal():
+            return False
+        return True
     return bool(value)

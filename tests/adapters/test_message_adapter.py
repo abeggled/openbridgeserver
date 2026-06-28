@@ -157,7 +157,7 @@ def _message_binding(dp_id: uuid.UUID, **config):
 
 
 async def _drain_sends(adapter: MessageAdapter) -> None:
-    if adapter._send_tasks:
+    while adapter._send_tasks:
         await asyncio.gather(*list(adapter._send_tasks))
 
 
@@ -310,6 +310,23 @@ async def test_disabled_binding_is_not_reloaded(bus, dummy_provider):
 
 
 @pytest.mark.asyncio
+async def test_both_binding_is_not_observed(bus, dummy_provider):
+    dp_id = uuid.uuid4()
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"dummy": {"enabled": True, "targets": {"default": {}}}}},
+    )
+    binding = _message_binding(dp_id)
+    binding.direction = "BOTH"
+
+    await adapter.reload_bindings([binding])
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=99, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
+
+    dummy_provider.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_provider_failures_publish_warning(bus, dummy_provider, monkeypatch):
     dp_id = uuid.uuid4()
     monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
@@ -349,6 +366,38 @@ async def test_complete_provider_failure_is_retried_for_same_condition(bus, dumm
 
 
 @pytest.mark.asyncio
+async def test_partial_provider_failure_is_retried_for_same_condition(bus, dummy_provider, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    dummy_provider.send.side_effect = [
+        MessageSendResult("dummy", "ok", True),
+        MessageSendResult("dummy", "fail", False, "temporary"),
+        MessageSendResult("dummy", "ok", True),
+        MessageSendResult("dummy", "fail", False, "temporary"),
+    ]
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"dummy": {"enabled": True, "targets": {"ok": {}, "fail": {}}}}},
+    )
+    binding = _message_binding(
+        dp_id,
+        providers=[
+            {"provider": "dummy", "target": "ok"},
+            {"provider": "dummy", "target": "fail"},
+        ],
+    )
+    await adapter.reload_bindings([binding])
+    event = DataValueEvent(datapoint_id=dp_id, value=99, quality="good", source_adapter="test")
+
+    await adapter._on_value_event(event)
+    await _drain_sends(adapter)
+    await adapter._on_value_event(event)
+    await _drain_sends(adapter)
+
+    assert dummy_provider.send.await_count == 4
+
+
+@pytest.mark.asyncio
 async def test_value_event_does_not_wait_for_provider_http_call(bus, monkeypatch):
     dp_id = uuid.uuid4()
     monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
@@ -378,6 +427,44 @@ async def test_value_event_does_not_wait_for_provider_http_call(bus, monkeypatch
     assert len(adapter._send_tasks) == 1
     release.set()
     await _drain_sends(adapter)
+
+
+@pytest.mark.asyncio
+async def test_false_true_transition_during_in_flight_send_is_retried(bus, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    release = asyncio.Event()
+    calls = 0
+
+    class _SlowProvider(_DummyProvider):
+        provider_type = "slow-transition"
+
+        def __init__(self) -> None:
+            pass
+
+        async def send(self, **kwargs):
+            nonlocal calls
+            calls += 1
+            await release.wait()
+            return MessageSendResult("slow-transition", "default", True)
+
+    provider = _SlowProvider()
+    register_provider(provider)
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"slow-transition": {"enabled": True, "targets": {"default": {}}}}},
+    )
+    binding = _message_binding(dp_id, providers=[{"provider": "slow-transition", "target": "default"}])
+    await adapter.reload_bindings([binding])
+
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=99, quality="good", source_adapter="test"))
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=20, quality="good", source_adapter="test"))
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=99, quality="good", source_adapter="test"))
+
+    release.set()
+    await _drain_sends(adapter)
+
+    assert calls == 2
 
 
 @pytest.mark.asyncio
@@ -541,6 +628,27 @@ async def test_sevenio_provider_reports_json_success_false(monkeypatch):
     _FakeAsyncClient.status_code = 200
     _FakeAsyncClient.text = ""
     _FakeAsyncClient.json_body = {"messages": [{"success": True}, {"success": False}]}
+    monkeypatch.setattr("obs.adapters.message.providers.sevenio.httpx.AsyncClient", _FakeAsyncClient)
+
+    result = await SevenIoProvider().send(
+        provider_config={"enabled": True, "api_key": "key", "targets": {}},
+        target_name="sms",
+        target_config={"to": "+4100000000", "channel": "sms"},
+        title=None,
+        message="Door",
+        context={},
+    )
+
+    assert result.ok is False
+    assert result.detail == "seven.io response success=false"
+
+
+@pytest.mark.asyncio
+async def test_sevenio_provider_reports_json_success_error_code(monkeypatch):
+    _FakeAsyncClient.calls = []
+    _FakeAsyncClient.status_code = 200
+    _FakeAsyncClient.text = ""
+    _FakeAsyncClient.json_body = {"success": "101"}
     monkeypatch.setattr("obs.adapters.message.providers.sevenio.httpx.AsyncClient", _FakeAsyncClient)
 
     result = await SevenIoProvider().send(

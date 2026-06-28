@@ -67,6 +67,8 @@ class _BindingState:
         self.last_sent_monotonic: float | None = None
         self.last_value: Any = object()
         self.in_flight: bool = False
+        self.reset_version: int = 0
+        self.pending_event: tuple[Any, DataValueEvent] | None = None
 
 
 def _as_number(value: Any) -> float | None:
@@ -196,7 +198,7 @@ class MessageAdapter(AdapterBase):
         self._binding_map.clear()
         active_ids: set[uuid.UUID] = set()
         for binding in self._bindings:
-            if binding.direction not in ("SOURCE", "BOTH"):
+            if binding.direction != "SOURCE":
                 continue
             try:
                 cfg = MessageBindingConfig(**binding.config)
@@ -237,6 +239,7 @@ class MessageAdapter(AdapterBase):
         state = self._states.setdefault(binding.id, _BindingState())
         if not condition:
             state.last_condition = False
+            state.reset_version += 1
             return
 
         now = time.monotonic()
@@ -260,10 +263,12 @@ class MessageAdapter(AdapterBase):
             datapoint_id=event.datapoint_id,
             ts=event.ts if event.ts.tzinfo else event.ts.replace(tzinfo=UTC),
         )
+        reset_version = state.reset_version
         if state.in_flight and not ignore_repetition:
+            state.pending_event = (binding, event)
             return
         state.in_flight = True
-        task = asyncio.create_task(self._send_and_record(binding, event, cfg, rendered, state, now))
+        task = asyncio.create_task(self._send_and_record(binding, event, cfg, rendered, state, now, reset_version))
         self._send_tasks.add(task)
         task.add_done_callback(self._send_tasks.discard)
 
@@ -275,17 +280,16 @@ class MessageAdapter(AdapterBase):
         rendered: str,
         state: _BindingState,
         sent_monotonic: float,
+        reset_version: int,
     ) -> None:
         try:
             results = await self._send_to_targets(cfg, binding, event, rendered)
         except Exception as exc:  # pragma: no cover - defensive guard for unexpected task errors
             logger.exception("MESSAGE send task failed unexpectedly")
             results = [MessageSendResult("message", "internal", False, str(exc))]
-        finally:
-            state.in_flight = False
 
-        success = any(result.ok for result in results)
-        if success:
+        success = bool(results) and all(result.ok for result in results)
+        if success and state.reset_version == reset_version:
             state.last_condition = True
             state.last_value = event.value
             state.last_sent_monotonic = sent_monotonic
@@ -296,6 +300,13 @@ class MessageAdapter(AdapterBase):
             await self._publish_status(True, detail, severity="warning", code="messageProviderFailures", params={"count": len(failures)})
         elif results:
             await self._publish_status(True, "MESSAGE sent", code="messageSent")
+
+        state.in_flight = False
+        pending = state.pending_event
+        state.pending_event = None
+        if pending is not None:
+            pending_binding, pending_event = pending
+            await self._handle_binding_event(pending_binding, pending_event)
 
     async def _send_to_targets(
         self,
