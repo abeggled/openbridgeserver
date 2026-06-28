@@ -14,6 +14,12 @@ const ALL_INSTANCES = [
   { id: 'zt-1',     name: 'Timer Test',          adapter_type: 'ZEITSCHALTUHR' },
   { id: 'anw-1',    name: 'Anwesenheit Test',    adapter_type: 'ANWESENHEITSSIMULATION' },
   { id: 'snmp-1',   name: 'SNMP Test',           adapter_type: 'SNMP' },
+  {
+    id: 'msg-1',
+    name: 'Message Test',
+    adapter_type: 'MESSAGE',
+    config: { providers: { pushover: { enabled: true, targets: { phone: {} } } } },
+  },
 ]
 
 beforeEach(() => {
@@ -219,6 +225,66 @@ describe('BindingForm — SNMP create submit', () => {
     expect(createBinding).toHaveBeenCalledWith('dp-1', expect.objectContaining({
       adapter_instance_id: 'snmp-1',
       config:              expect.objectContaining({ host: '192.168.1.1' }),
+    }))
+    w.unmount()
+  })
+})
+
+// ─── MESSAGE submit ──────────────────────────────────────────────────────────
+
+describe('BindingForm — MESSAGE create submit', () => {
+  it('calls createBinding with MESSAGE config and forces SOURCE direction', async () => {
+    const w = await mountForm()
+    await selectInstance(w, 'msg-1')
+    await submit(w)
+
+    expect(createBinding).toHaveBeenCalledWith('dp-1', expect.objectContaining({
+      adapter_instance_id: 'msg-1',
+      direction: 'SOURCE',
+      config: expect.objectContaining({
+        operator: '==',
+        compare_value: '',
+        message: '###DPN###: ###DP### ###DPU###',
+        providers: [],
+        send_on_change: true,
+        cooldown_seconds: 0,
+      }),
+    }))
+    w.unmount()
+  })
+
+  it('preserves MESSAGE title, priority and provider targets in edit mode', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-message',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'DEST',
+        enabled: true,
+        config: {
+          operator: 'any',
+          compare_value: null,
+          message: '###DP###',
+          title: '  Alarm  ',
+          priority: 1,
+          providers: [{ provider: 'pushover', target: 'phone' }],
+          send_on_change: false,
+          cooldown_seconds: 30,
+        },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding).toHaveBeenCalledWith('dp-1', 'binding-message', expect.objectContaining({
+      direction: 'SOURCE',
+      config: expect.objectContaining({
+        operator: 'any',
+        title: 'Alarm',
+        priority: 1,
+        providers: [{ provider: 'pushover', target: 'phone' }],
+        send_on_change: false,
+        cooldown_seconds: 30,
+      }),
     }))
     w.unmount()
   })

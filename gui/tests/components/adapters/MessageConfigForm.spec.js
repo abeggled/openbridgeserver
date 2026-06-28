@@ -68,4 +68,22 @@ describe('MessageConfigForm', () => {
     await channelSelect.setValue('voice')
     expect(getModel().providers['seven.io'].targets.default.channel).toBe('voice')
   })
+
+  it('updates a Telegram chat target', async () => {
+    const { wrapper, getModel } = mountForm()
+    const checkboxes = wrapper.findAll('input[type="checkbox"]')
+    const addButtons = wrapper.findAll('button').filter(button => button.text() === 'Ziel hinzufügen')
+
+    await checkboxes[1].setChecked(true)
+    await flushPromises()
+    await wrapper.find('input[type="password"]').setValue('bot-token')
+    await addButtons[1].trigger('click')
+    await flushPromises()
+
+    const textInputs = wrapper.findAll('input').filter(input => input.attributes('type') === 'text')
+    await textInputs[textInputs.length - 1].setValue('123456')
+
+    expect(getModel().providers.telegram.bot_token).toBe('bot-token')
+    expect(getModel().providers.telegram.targets.default.chat_id).toBe('123456')
+  })
 })

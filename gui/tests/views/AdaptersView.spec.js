@@ -135,6 +135,18 @@ describe('AdaptersView — initial render', () => {
     expect(select.html()).toContain('KNX')
     expect(select.html()).toContain('MQTT')
   })
+
+  it('renders the MESSAGE config form for new MESSAGE instances', async () => {
+    const { wrapper } = await mountAdapters({ types: ['MESSAGE'] })
+    await wrapper.find('[data-testid="btn-new-instance"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="select-adapter-type"]').setValue('MESSAGE')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Pushover')
+    expect(wrapper.text()).toContain('Telegram')
+    expect(wrapper.text()).toContain('seven.io')
+  })
 })
 
 // ─── Demo mode ───────────────────────────────────────────────────────────────
