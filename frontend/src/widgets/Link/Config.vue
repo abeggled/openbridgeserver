@@ -15,6 +15,7 @@ const cfg = reactive({
   target_node_id: (props.modelValue.target_node_id as string)  ?? '',
   show_icon:           (props.modelValue.show_icon           as boolean) ?? true,
   preserve_icon_color: (props.modelValue.preserve_icon_color as boolean) ?? false,
+  label_size:     (props.modelValue.label_size     as string)  ?? 'sm',
 })
 
 // Sync bei Widget-Wechsel
@@ -24,6 +25,7 @@ watch(() => props.modelValue, (v) => {
   cfg.target_node_id = (v.target_node_id as string)  ?? ''
   cfg.show_icon           = (v.show_icon           as boolean) ?? true
   cfg.preserve_icon_color = (v.preserve_icon_color as boolean) ?? false
+  cfg.label_size     = (v.label_size     as string)  ?? 'sm'
 })
 
 watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
@@ -123,6 +125,21 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
       <input type="checkbox" v-model="cfg.preserve_icon_color" class="rounded" />
       <span class="text-xs text-gray-500 dark:text-gray-400">{{ $t('widgets.link.preserveIconColor') }}</span>
     </label>
+
+    <!-- Schriftgrösse Label -->
+    <div>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.common.fontSize') }}</label>
+      <select
+        v-model="cfg.label_size"
+        class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
+      >
+        <option value="xs">{{ $t('widgets.common.fontSizeXs') }}</option>
+        <option value="sm">{{ $t('widgets.common.fontSizeSm') }}</option>
+        <option value="md">{{ $t('widgets.common.fontSizeMd') }}</option>
+        <option value="lg">{{ $t('widgets.common.fontSizeLg') }}</option>
+        <option value="xl">{{ $t('widgets.common.fontSizeXl') }}</option>
+      </select>
+    </div>
 
     <!-- Ziel-Seite (suchbarer Picker) -->
     <div>

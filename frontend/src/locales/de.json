@@ -383,12 +383,18 @@
   },
   "widgets": {
     "common": {
+      "fontSize": "Schriftgrösse Label",
+      "fontSizeLg": "L",
+      "fontSizeMd": "M",
+      "fontSizeSm": "S",
+      "fontSizeXl": "XL",
+      "fontSizeXs": "XS",
       "label": "Beschriftung",
       "noResults": "Keine Treffer",
-      "selectPage": "Seite wählen …",
-      "searchPage": "Seitenname suchen …",
-      "nodeTypePage": "Seite",
       "nodeTypeArea": "Bereich",
+      "nodeTypePage": "Seite",
+      "searchPage": "Seitenname suchen …",
+      "selectPage": "Seite wählen …",
       "type": "Typ"
     },
     "chart": {

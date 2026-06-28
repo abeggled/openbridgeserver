@@ -383,12 +383,18 @@
   },
   "widgets": {
     "common": {
+      "fontSize": "Label font size",
+      "fontSizeLg": "L",
+      "fontSizeMd": "M",
+      "fontSizeSm": "S",
+      "fontSizeXl": "XL",
+      "fontSizeXs": "XS",
       "label": "Label",
       "noResults": "No results",
-      "selectPage": "Select page …",
-      "searchPage": "Search page name …",
-      "nodeTypePage": "Page",
       "nodeTypeArea": "Area",
+      "nodeTypePage": "Page",
+      "searchPage": "Search page name …",
+      "selectPage": "Select page …",
       "type": "Type"
     },
     "chart": {

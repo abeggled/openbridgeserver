@@ -20,6 +20,11 @@ const icon     = computed(() => (props.config.icon          as string | undefine
 const targetId = computed(() => (props.config.target_node_id as string | undefined) ?? '')
 const showIcon = computed(() => props.config.show_icon !== false)
 const preserveIconColor = computed(() => props.config.preserve_icon_color === true)
+const labelSize = computed(() => {
+  const s = props.config.label_size as string | undefined
+  const map: Record<string, string> = { xs: 'text-xs', sm: 'text-sm', md: 'text-base', lg: 'text-lg', xl: 'text-xl' }
+  return map[s ?? ''] ?? 'text-sm'
+})
 
 function navigate() {
   if (props.editorMode || !targetId.value) return
@@ -36,7 +41,7 @@ function navigate() {
     @click="navigate"
   >
     <span v-if="showIcon" class="text-4xl leading-none" data-testid="link-icon"><VisuIcon :icon="icon" :preserve-color="preserveIconColor" /></span>
-    <span class="text-sm font-medium text-gray-800 dark:text-gray-200 text-center leading-tight">{{ label }}</span>
+    <span class="font-medium text-gray-800 dark:text-gray-200 text-center leading-tight" :class="labelSize">{{ label }}</span>
     <span v-if="!editorMode && targetId" class="text-xs text-gray-400 dark:text-gray-500">→</span>
     <span v-else-if="!targetId" class="text-xs text-gray-400 dark:text-gray-600">{{ $t('widgets.link.noTarget') }}</span>
   </div>
