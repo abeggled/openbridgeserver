@@ -55,7 +55,7 @@ function makeGraph(id = 'graph-1', overrides = {}) {
     enabled: true,
     flow_data: {
       nodes: [
-        { id: 'n1', type: 'const_value', position: { x: 10, y: 20 }, data: { value: 1, _dbg: 'old' } },
+        { id: 'n1', type: 'const_value', position: { x: 10, y: 20 }, data: { value: 1, _dbg: 'old', _dbg_title: 'old title' } },
       ],
       edges: [
         { id: 'e1', source: 'n1', target: 'n2', sourceHandle: 'out', targetHandle: 'in' },
@@ -203,6 +203,8 @@ describe('LogicView auth gates', () => {
 
     expect(logicApi.getGraph).toHaveBeenCalledWith('graph-1')
     expect(wrapper.find('[data-testid="btn-run"]').exists()).toBe(true)
+    expect(wrapper.vm.nodes[0].data).not.toHaveProperty('_dbg')
+    expect(wrapper.vm.nodes[0].data).not.toHaveProperty('_dbg_title')
 
     wrapper.vm.onConnect({ source: 'n1', target: 'n3', sourceHandle: 'out', targetHandle: 'in' })
     expect(wrapper.vm.edges).toEqual(expect.arrayContaining([
@@ -233,6 +235,12 @@ describe('LogicView auth gates', () => {
     wrapper.vm.toggleDebug()
     await wrapper.vm.runGraph()
     expect(wrapper.vm.nodes[0].data._dbg).toBe('= 42')
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBe('= 42')
+
+    await wrapper.vm.saveGraph()
+    const savedPayload = logicApi.saveGraph.mock.calls.at(-1)[1]
+    expect(savedPayload.flow_data.nodes[0].data).not.toHaveProperty('_dbg')
+    expect(savedPayload.flow_data.nodes[0].data).not.toHaveProperty('_dbg_title')
 
     await wrapper.vm.doToggleEnabled()
     expect(logicApi.patchGraph).toHaveBeenCalledWith('graph-1', { enabled: false })
@@ -306,6 +314,18 @@ describe('LogicView fmtDebugVal branches', () => {
     expect(wrapper.vm.nodes[0].data._dbg).toBe('→ 99')
   })
 
+  it('formats api_client responses with short strip text and full tooltip text', async () => {
+    const { wrapper } = await mountWithActiveGraph()
+    const longResponse = 'x'.repeat(1200)
+
+    wrapper.vm.applyDebugValues({ n1: { response: longResponse, status: 500, success: false } })
+
+    expect(wrapper.vm.nodes[0].data._dbg).toContain(`response=${'x'.repeat(80)}…`)
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('status=500')
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('success=✗')
+    expect(wrapper.vm.nodes[0].data._dbg_title).toContain(`response=${'x'.repeat(1000)}…`)
+  })
+
   it('formats generic public-key pairs as fallback', async () => {
     const { wrapper } = await mountWithActiveGraph()
 
@@ -344,10 +364,12 @@ describe('LogicView fmtDebugVal branches', () => {
     wrapper.vm.toggleDebug() // false → true
     wrapper.vm.applyDebugValues({ n1: { value: 1, changed: false } })
     expect(wrapper.vm.nodes[0].data._dbg).toBeDefined()
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBeDefined()
 
     wrapper.vm.toggleDebug() // true → false, triggers clearDebugValues
     expect(wrapper.vm.debugMode).toBe(false)
     expect(wrapper.vm.nodes[0].data).not.toHaveProperty('_dbg')
+    expect(wrapper.vm.nodes[0].data).not.toHaveProperty('_dbg_title')
   })
 })
 

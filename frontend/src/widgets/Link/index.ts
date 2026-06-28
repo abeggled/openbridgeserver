@@ -17,6 +17,7 @@ WidgetRegistry.register({
     target_node_id: '',
     show_icon: true,
     preserve_icon_color: false,
+    label_size: 'sm',
   },
   compatibleTypes: ['*'],
   noDatapoint: true,

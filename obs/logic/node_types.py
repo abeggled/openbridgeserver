@@ -868,6 +868,11 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
                 "default": "",
                 "label": "Header-Datei (/run/secrets)",
             },
+            "variables": {
+                "type": "array",
+                "default": [],
+                "label": "Variablen",
+            },
             "timeout_s": {"type": "number", "default": 10, "label": "Timeout (s)"},
             "auth_type": {
                 "type": "string",

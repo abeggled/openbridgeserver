@@ -161,7 +161,7 @@
                 <Badge v-if="!u.graph_enabled" variant="muted" size="xs">{{ $t('datapoints.detail.graphDisabled') }}</Badge>
               </div>
               <div class="text-xs text-slate-500 mt-1">
-                {{ u.node_type === 'datapoint_read' ? $t('datapoints.detail.logicReads') : $t('datapoints.detail.logicWrites') }}
+                {{ u.direction === 'SOURCE' ? $t('datapoints.detail.logicReads') : $t('datapoints.detail.logicWrites') }}
               </div>
             </div>
             <RouterLink :to="`/logic?graph=${u.graph_id}`" class="btn-icon shrink-0" :title="$t('datapoints.detail.openLogicSheet')">

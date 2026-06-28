@@ -51,7 +51,7 @@
       </div>
 
       <!-- Debug value strip -->
-      <div v-if="data._dbg" class="gn-debug" data-testid="debug-band">{{ data._dbg }}</div>
+      <div v-if="data._dbg" class="gn-debug" :title="debugTitle" data-testid="debug-band">{{ data._dbg }}</div>
     </div>
 
     <!-- Output handles (RIGHT) -->
@@ -78,6 +78,8 @@ const props = defineProps({
   type: { type: String, required: true },
   data: { type: Object, default: () => ({}) },
 })
+
+const debugTitle = computed(() => props.data._dbg_title || props.data._dbg || '')
 
 // ── Node definitions ───────────────────────────────────────────────────────
 const NODE_DEFS = computed(() => ({

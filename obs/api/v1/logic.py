@@ -35,6 +35,7 @@ from obs.logic.models import (
     LogicUsageOut,
     NodeTypeDef,
 )
+from obs.logic.manager import _normalise_api_client_variables
 from obs.logic.node_types import list_node_types
 
 router = APIRouter(tags=["logic"])
@@ -369,12 +370,19 @@ async def get_datapoint_logic_usages(
         raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
         flow = FlowData.model_validate(raw)
         for node in flow.nodes:
-            if node.data.get("datapoint_id") != dp_id:
-                continue
             if node.type == "datapoint_read":
+                if node.data.get("datapoint_id") != dp_id:
+                    continue
                 direction = "SOURCE"
             elif node.type == "datapoint_write":
+                if node.data.get("datapoint_id") != dp_id:
+                    continue
                 direction = "DEST"
+            elif node.type == "api_client":
+                variables = _normalise_api_client_variables(node.data.get("variables"))
+                if not any(variable["datapoint_id"] == dp_id for variable in variables.values()):
+                    continue
+                direction = "SOURCE"
             else:
                 continue
             usages.append(

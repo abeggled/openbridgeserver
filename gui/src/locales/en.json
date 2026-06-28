@@ -1518,6 +1518,7 @@
         "methodLabel": "Method",
         "responseContentType": "Response Content-Type",
         "headersLabel": "Headers (JSON object, optional)",
+        "headersPlaceholder": "{'{'}\"X-Api-Key\": \"abc\"{'}'}",
         "timeoutLabel": "Timeout (s)",
         "verifySsl": "Verify SSL certificate",
         "authSection": "Authentication",
@@ -1535,7 +1536,12 @@
         "targetBlocked": "This target will be blocked",
         "allowTarget": "Allow {target}",
         "allowSaved": "Target has been allowed.",
-        "defaultAllowReason": "Allowed from API client configuration"
+        "defaultAllowReason": "Allowed from API client configuration",
+        "variablesSection": "Variables",
+        "addVariable": "Add variable",
+        "removeVariable": "Remove",
+        "variablesHint": "Variables reference existing objects and can be used as ###OBS1###, ###OBS2###, etc. in URL, headers, auth fields and body.",
+        "noVariables": "No variables configured."
       },
       "stringConcat": {
         "inputCount": "Number of inputs",
