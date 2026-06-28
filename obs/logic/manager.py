@@ -200,6 +200,28 @@ def _quote_api_client_url_value(value: str) -> str:
     return quote(value, safe="-._~")
 
 
+def _replace_api_client_url_placeholders(value: str, resolver: Any) -> str:
+    authority_bounds: tuple[int, int] | None = None
+    scheme_match = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value)
+    if scheme_match is not None:
+        separator_scan_value = _API_CLIENT_VARIABLE_RE.sub(lambda match: "X" * (match.end() - match.start()), value)
+        authority_start = scheme_match.end()
+        authority_end = len(value)
+        for separator in "/?#":
+            separator_index = separator_scan_value.find(separator, authority_start)
+            if separator_index != -1:
+                authority_end = min(authority_end, separator_index)
+        authority_bounds = (authority_start, authority_end)
+
+    def _replace(match: re.Match[str]) -> str:
+        replacement = resolver(int(match.group(1)))
+        if authority_bounds is not None and authority_bounds[0] <= match.start() < authority_bounds[1]:
+            return quote(replacement, safe="-._~:[]")
+        return _quote_api_client_url_value(replacement)
+
+    return _API_CLIENT_VARIABLE_RE.sub(_replace, value)
+
+
 def _make_api_client_variable_resolver(
     registry: Any,
     raw_variables: Any,
@@ -1165,12 +1187,18 @@ class LogicManager:
         # re-propagate success responses and explicit error details downstream.
         triggered_api_clients: set[str] = set()
         execution_values_by_datapoint_id: dict[str, Any] = {}
+        execution_value_priority_by_datapoint_id: dict[str, int] = {}
         for node in flow.nodes:
             if node.type != "datapoint_read":
                 continue
             dp_id_str = str(node.data.get("datapoint_id") or "").strip()
-            if dp_id_str and node.id in aug_overrides and "value" in aug_overrides[node.id]:
-                execution_values_by_datapoint_id[dp_id_str] = aug_overrides[node.id]["value"]
+            if not dp_id_str or node.id not in aug_overrides or "value" not in aug_overrides[node.id]:
+                continue
+            node_override = aug_overrides[node.id]
+            priority = 2 if node.id in overrides or GraphExecutor._to_bool(node_override.get("changed")) else 1
+            if priority >= execution_value_priority_by_datapoint_id.get(dp_id_str, 0):
+                execution_values_by_datapoint_id[dp_id_str] = node_override["value"]
+                execution_value_priority_by_datapoint_id[dp_id_str] = priority
         import json as _json  # noqa: PLC0415
 
         for node in flow.nodes:
@@ -1185,10 +1213,9 @@ class LogicManager:
                 execution_values_by_datapoint_id,
             )
             try:
-                url = _replace_api_client_placeholders(
+                url = _replace_api_client_url_placeholders(
                     node.data.get("url") or "",
                     variable_resolver,
-                    _quote_api_client_url_value,
                 ).strip()
                 if not url:
                     continue
@@ -1229,7 +1256,6 @@ class LogicManager:
                     pass
             try:
                 extra_headers = _replace_api_client_placeholders(extra_headers, variable_resolver)
-                body = _replace_api_client_placeholders(out.get("_body"), variable_resolver)
             except _ApiClientVariableError as exc:
                 logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
@@ -1276,6 +1302,7 @@ class LogicManager:
                     "timeout": timeout_s,
                 }
                 if method in ("POST", "PUT", "PATCH"):
+                    body = _replace_api_client_placeholders(out.get("_body"), variable_resolver)
                     if content_type == "application/json":
                         req_kwargs["content"] = _json.dumps(body) if not isinstance(body, (str, bytes)) else body
                         req_kwargs["headers"] = {

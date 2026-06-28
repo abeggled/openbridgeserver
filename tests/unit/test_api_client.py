@@ -1147,7 +1147,7 @@ class TestApiClientVariables:
         "obs.security.url_targets.socket.getaddrinfo",
         return_value=[(None, None, None, None, ("93.184.216.34", 80))],
     )
-    def test_variable_uses_current_datapoint_override_before_registry(self, _mock_resolve, mock_client_cls):
+    def test_variable_uses_current_datapoint_override_before_duplicate_registry_seed(self, _mock_resolve, mock_client_cls):
         captured: dict = {}
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
@@ -1173,6 +1173,7 @@ class TestApiClientVariables:
                     "variables": [{"slot": 1, "datapoint_id": str(dp_id), "datapoint_name": "Trigger"}],
                 },
             ),
+            node("duplicate_read", "datapoint_read", {"datapoint_id": str(dp_id), "datapoint_name": "Trigger"}),
         ]
         edges = [edge("read", "ac", "value", "trigger")]
         flow = _flow(nodes, edges)
@@ -1184,6 +1185,44 @@ class TestApiClientVariables:
 
         assert outputs["ac"]["success"] is True
         assert captured["url"] == "http://93.184.216.34/api/fresh"
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    @patch(
+        "obs.security.url_targets.socket.getaddrinfo",
+        return_value=[(None, None, None, None, ("93.184.216.34", 8443))],
+    )
+    def test_url_variable_preserves_authority_host_port(self, _mock_resolve, mock_client_cls):
+        captured: dict = {}
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        async def _capture(method, url, **kwargs):
+            captured["url"] = url
+            captured["headers"] = kwargs.get("headers")
+            return _mock_response(200, {"ok": True})
+
+        mock_client.request = _capture
+
+        dp_id = uuid.uuid4()
+        manager = _make_manager()
+        manager._registry.get_value.return_value = self._state("example.com:8443")
+        data = {
+            "url": "http://###OBS1###/status",
+            "method": "GET",
+            "variables": [{"slot": 1, "datapoint_id": str(dp_id), "datapoint_name": "Host"}],
+        }
+        n = node("ac", "api_client", data)
+        flow = _flow([n])
+        graph_id = "g-authority-var"
+        manager._graphs[graph_id] = ("t", True, flow)
+
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "t", flow, {"ac": {"trigger": True}}))
+
+        assert outputs["ac"]["success"] is True
+        assert captured["url"] == "http://93.184.216.34:8443/status"
+        assert captured["headers"]["Host"] == "example.com:8443"
 
     @patch("obs.logic.manager.httpx.AsyncClient")
     def test_missing_variable_configuration_sets_error_output(self, mock_client_cls):
@@ -1339,6 +1378,44 @@ class TestApiClientVariables:
         assert outputs["ac"]["response"] == "API client variable OBS1 object Offline Body is not available"
         assert outputs["ac"]["status"] is None
         assert outputs["ac"]["success"] is False
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    @patch(
+        "obs.security.url_targets.socket.getaddrinfo",
+        return_value=[(None, None, None, None, ("93.184.216.34", 80))],
+    )
+    def test_get_ignores_unavailable_variable_in_unused_body(self, _mock_resolve, mock_client_cls):
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.request = AsyncMock(return_value=_mock_response(200, {"ok": True}))
+
+        dp_id = uuid.uuid4()
+        manager = _make_manager()
+        manager._registry.get_value.return_value = None
+        data = {
+            "url": "http://example.com/status",
+            "method": "GET",
+            "variables": [{"datapoint_id": str(dp_id), "datapoint_name": "Unused Body"}],
+        }
+        n = node("ac", "api_client", data)
+        flow = _flow([n])
+        graph_id = "g-get-unused-body-var"
+        manager._graphs[graph_id] = ("t", True, flow)
+
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = asyncio.run(
+                manager._execute_graph(
+                    graph_id,
+                    "t",
+                    flow,
+                    {"ac": {"trigger": True, "body": "value=###OBS1###"}},
+                )
+            )
+
+        mock_client.request.assert_called_once()
+        assert outputs["ac"]["success"] is True
+        assert outputs["ac"]["status"] == 200
 
 
 # ===========================================================================
