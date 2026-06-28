@@ -180,6 +180,16 @@ class GraphExecutor:
                 return False
         return None
 
+    @classmethod
+    def _values_equal(cls, left: Any, right: Any) -> bool:
+        bool_left, bool_right = cls._try_bool_literal(left), cls._try_bool_literal(right)
+        if bool_left is not None and bool_right is not None:
+            return bool_left == bool_right
+        num_left, num_right = cls._try_num(left), cls._try_num(right)
+        if num_left is not None and num_right is not None:
+            return num_left == num_right
+        return str(left) == str(right)
+
     @staticmethod
     def _to_bool(v: Any) -> bool:
         """Coerce any value to bool. Strings '0'/'false'/'off' → False."""
@@ -251,24 +261,18 @@ class GraphExecutor:
                 return left.endswith(right)
             return left == right
 
-        op = _COMPARE_OPS.get(operator_key, operator.eq)
         if input_value is None or expected is None:
             return False
-        num_left, num_right = cls._try_num(input_value), cls._try_num(expected)
-        if num_left is not None and num_right is not None:
-            return op(num_left, num_right)
         equality_ops = {"=", "==", "eq"}
         inequality_ops = {"!=", "ne"}
         if operator_key in equality_ops:
-            bool_left, bool_right = cls._try_bool_literal(input_value), cls._try_bool_literal(expected)
-            if bool_left is not None and bool_right is not None:
-                return bool_left == bool_right
-            return str(input_value) == str(expected)
+            return cls._values_equal(input_value, expected)
         if operator_key in inequality_ops:
-            bool_left, bool_right = cls._try_bool_literal(input_value), cls._try_bool_literal(expected)
-            if bool_left is not None and bool_right is not None:
-                return bool_left != bool_right
-            return str(input_value) != str(expected)
+            return not cls._values_equal(input_value, expected)
+        op = _COMPARE_OPS.get(operator_key, operator.eq)
+        num_left, num_right = cls._try_num(input_value), cls._try_num(expected)
+        if num_left is not None and num_right is not None:
+            return op(num_left, num_right)
         return False
 
     @classmethod
