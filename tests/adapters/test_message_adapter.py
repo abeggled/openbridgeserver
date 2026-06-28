@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from obs.adapters.message.adapter import (
     MessageAdapter,
+    MessageAdapterConfig,
     evaluate_condition,
     render_message,
 )
@@ -123,6 +124,12 @@ def test_render_message_replaces_value_unit_and_metadata():
     )
 
     assert rendered == f"Temperatur {dp_id} 29.4 °C 2026-06-28T12:00:00+00:00"
+
+
+def test_disabled_provider_allows_incomplete_hidden_targets():
+    cfg = MessageAdapterConfig(providers={"telegram": {"enabled": False, "targets": {"default": {}}}})
+
+    assert cfg.providers["telegram"]["enabled"] is False
 
 
 @pytest.fixture
@@ -465,6 +472,44 @@ async def test_false_true_transition_during_in_flight_send_is_retried(bus, monke
     await _drain_sends(adapter)
 
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_condition_reset_clears_pending_in_flight_send(bus, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    release = asyncio.Event()
+    calls = 0
+
+    class _SlowProvider(_DummyProvider):
+        provider_type = "slow-reset"
+
+        def __init__(self) -> None:
+            pass
+
+        async def send(self, **kwargs):
+            nonlocal calls
+            calls += 1
+            await release.wait()
+            return MessageSendResult("slow-reset", "default", True)
+
+    provider = _SlowProvider()
+    register_provider(provider)
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"slow-reset": {"enabled": True, "targets": {"default": {}}}}},
+    )
+    binding = _message_binding(dp_id, providers=[{"provider": "slow-reset", "target": "default"}])
+    await adapter.reload_bindings([binding])
+
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=99, quality="good", source_adapter="test"))
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=99, quality="good", source_adapter="test"))
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=20, quality="good", source_adapter="test"))
+
+    release.set()
+    await _drain_sends(adapter)
+
+    assert calls == 1
 
 
 @pytest.mark.asyncio

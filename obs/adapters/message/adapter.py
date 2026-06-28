@@ -45,7 +45,10 @@ class MessageAdapterConfig(BaseModel):
             provider = message_providers.get_provider(provider_type)
             if provider is None:
                 raise ValueError(f"Unknown MESSAGE provider: {provider_type}")
-            provider.config_schema(**provider_config)
+            if provider_config.get("enabled", False):
+                provider.config_schema(**provider_config)
+            else:
+                provider.config_schema(**{**provider_config, "targets": {}})
         return self
 
 
@@ -240,6 +243,7 @@ class MessageAdapter(AdapterBase):
         if not condition:
             state.last_condition = False
             state.reset_version += 1
+            state.pending_event = None
             return
 
         now = time.monotonic()
