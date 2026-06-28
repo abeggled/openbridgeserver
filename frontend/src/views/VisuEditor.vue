@@ -373,7 +373,7 @@ function widgetStyle(w: WidgetInstance) {
 
 function widgetChrome(w: WidgetInstance): string {
   const v = w.config?.chrome_variant
-  if (v === 'flat')    return 'overflow-hidden'
+  if (v === 'flat')    return 'rounded-xl border-2 border-transparent overflow-hidden'
   if (v === 'outline') return 'rounded-xl border border-gray-300 dark:border-gray-600 overflow-hidden'
   return 'bg-gray-100 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden'
 }
@@ -848,11 +848,12 @@ const showSettings = ref(false)
           <div
             v-for="w in config.widgets"
             :key="w.id"
-            class="absolute overflow-hidden rounded-xl border-2 transition-[border-color,box-shadow] group"
+            class="absolute transition-[border-color,box-shadow] group"
             :class="[
+              widgetChrome(w),
               selectedId === w.id
-                ? 'border-blue-500 shadow-lg shadow-blue-500/30 z-10'
-                : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 z-0',
+                ? '!border-2 !border-blue-500 shadow-lg shadow-blue-500/30 z-10'
+                : 'hover:border-gray-400 dark:hover:border-gray-500 z-0',
               drag?.widgetId === w.id && drag?.type === 'move' ? 'opacity-90' : '',
             ]"
             :style="widgetStyle(w)"
@@ -861,10 +862,7 @@ const showSettings = ref(false)
             @click.stop="selectedId = w.id"
           >
             <!-- Widget-Vorschau (echte Komponente, editorMode=true) -->
-            <div
-              class="w-full h-full pointer-events-none"
-              :class="widgetChrome(w)"
-            >
+            <div class="w-full h-full pointer-events-none">
               <component
                 :is="WidgetRegistry.get(w.type)?.component"
                 v-if="WidgetRegistry.get(w.type)"
