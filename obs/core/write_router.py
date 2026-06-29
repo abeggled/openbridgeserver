@@ -164,7 +164,7 @@ class WriteRouter:
         )
         active_rows = [row for row in rows if _row_is_enabled(row)]
         write_semantic_rows = [row for row in active_rows if _row_value(row, "adapter_type") != "MESSAGE"]
-        has_write_semantic_bindings = any(_row_value(row, "adapter_type") != "MESSAGE" for row in rows)
+        has_write_semantic_bindings = bool(write_semantic_rows)
         has_writable_bindings = any(_row_value(row, "direction") in {"DEST", "BOTH"} for row in write_semantic_rows)
         if has_write_semantic_bindings and not has_writable_bindings:
             logger.warning("Write request for non-writable DataPoint %s — ignored", dp_id)

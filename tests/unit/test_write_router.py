@@ -288,7 +288,7 @@ async def test_handle_ignores_source_only_datapoint_without_publishing_state():
 
 
 @pytest.mark.asyncio
-async def test_handle_ignores_disabled_bindings_without_publishing_internal_state():
+async def test_handle_ignores_disabled_bindings_when_deciding_write_semantics():
     dp_id = uuid.uuid4()
     bus = SimpleNamespace(publish=AsyncMock())
     router = _make_router([_row(datapoint_id=str(dp_id), direction="DEST", enabled=0)])
@@ -298,7 +298,10 @@ async def test_handle_ignores_disabled_bindings_without_publishing_internal_stat
 
     await router.handle(dp_id, "21.5")
 
-    bus.publish.assert_not_awaited()
+    bus.publish.assert_awaited_once()
+    event = bus.publish.await_args.args[0]
+    assert event.datapoint_id == dp_id
+    assert event.value == pytest.approx(21.5)
     router._write_to_dest_bindings.assert_not_awaited()
 
 
@@ -307,6 +310,28 @@ async def test_handle_publishes_internal_state_for_message_only_binding():
     dp_id = uuid.uuid4()
     bus = SimpleNamespace(publish=AsyncMock())
     router = _make_router([_row(datapoint_id=str(dp_id), direction="SOURCE", adapter_type="MESSAGE")])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Internal Alarm", data_type="FLOAT"))
+    router._write_to_dest_bindings = AsyncMock()
+
+    await router.handle(dp_id, "21.5")
+
+    bus.publish.assert_awaited_once()
+    event = bus.publish.await_args.args[0]
+    assert event.datapoint_id == dp_id
+    assert event.value == pytest.approx(21.5)
+    router._write_to_dest_bindings.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_publishes_internal_state_for_message_with_disabled_write_binding():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    rows = [
+        _row(datapoint_id=str(dp_id), direction="SOURCE", adapter_type="MESSAGE"),
+        _row(datapoint_id=str(dp_id), direction="SOURCE", adapter_type="KNX", enabled=0),
+    ]
+    router = _make_router(rows)
     router._bus = bus
     router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Internal Alarm", data_type="FLOAT"))
     router._write_to_dest_bindings = AsyncMock()
