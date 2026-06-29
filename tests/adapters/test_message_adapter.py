@@ -168,6 +168,14 @@ def test_binding_rejects_duplicate_message_targets():
         )
 
 
+def test_binding_rejects_pushover_emergency_priority_without_required_fields():
+    with pytest.raises(ValueError, match="Pushover emergency priority"):
+        MessageBindingConfig(
+            priority=2,
+            providers=[{"provider": "pushover", "target": "default"}],
+        )
+
+
 @pytest.fixture
 def dummy_provider():
     provider = _DummyProvider()
@@ -479,11 +487,30 @@ async def test_disabled_binding_is_not_reloaded(bus, dummy_provider):
         config={"providers": {"dummy": {"enabled": True, "targets": {"default": {}}}}},
     )
     binding = _message_binding(dp_id, enabled=False)
+    binding.enabled = False
 
     await adapter.reload_bindings([binding])
     await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=99, quality="good", source_adapter="test"))
 
     dummy_provider.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_binding_reload_uses_top_level_enabled_flag(bus, dummy_provider, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"dummy": {"enabled": True, "targets": {"default": {}}}}},
+    )
+    binding = _message_binding(dp_id, enabled=False)
+    binding.enabled = True
+
+    await adapter.reload_bindings([binding])
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=99, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
+
+    dummy_provider.send.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -888,6 +915,28 @@ async def test_pushover_provider_reports_body_failure(monkeypatch):
 
     assert result.ok is False
     assert result.detail == "application token is invalid"
+
+
+@pytest.mark.asyncio
+async def test_pushover_provider_rejects_priority_two_before_posting(monkeypatch):
+    _FakeAsyncClient.calls = []
+    _FakeAsyncClient.json_body = {"status": 1}
+    _FakeAsyncClient.status_code = 200
+    _FakeAsyncClient.text = ""
+    monkeypatch.setattr("obs.adapters.message.providers.pushover.httpx.AsyncClient", _FakeAsyncClient)
+
+    result = await PushoverProvider().send(
+        provider_config={"enabled": True, "api_token": "app", "targets": {}},
+        target_name="phone",
+        target_config={"user_key": "user"},
+        title=None,
+        message="Body",
+        context={"priority": 2},
+    )
+
+    assert result.ok is False
+    assert result.detail == "pushover priority=2 requires retry and expire"
+    assert _FakeAsyncClient.calls == []
 
 
 @pytest.mark.asyncio

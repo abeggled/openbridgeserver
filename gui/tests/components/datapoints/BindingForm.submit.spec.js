@@ -20,6 +20,12 @@ const ALL_INSTANCES = [
     adapter_type: 'MESSAGE',
     config: { providers: { pushover: { enabled: true, targets: { phone: {} } } } },
   },
+  {
+    id: 'msg-2',
+    name: 'Message Test 2',
+    adapter_type: 'MESSAGE',
+    config: { providers: { telegram: { enabled: true, targets: { family: {} } } } },
+  },
 ]
 
 beforeEach(() => {
@@ -211,6 +217,27 @@ describe('BindingForm — ANWESENHEITSSIMULATION create submit', () => {
     const call = createBinding.mock.calls[0][1]
     // effectiveDirection for ANWESENHEITSSIMULATION is always 'SOURCE'
     expect(call.direction).toBe('SOURCE')
+    w.unmount()
+  })
+})
+
+// ─── MESSAGE submit ──────────────────────────────────────────────────────────
+
+describe('BindingForm — MESSAGE create submit', () => {
+  it('clears selected targets when the message instance changes', async () => {
+    const w = await mountForm()
+    await selectInstance(w, 'msg-1')
+    await w.findAll('button').find(button => button.text() === 'Ziel hinzufügen').trigger('click')
+    await flushPromises()
+
+    await selectInstance(w, 'msg-2')
+    await submit(w)
+
+    expect(createBinding.mock.calls[0][1]).toEqual(expect.objectContaining({
+      adapter_instance_id: 'msg-2',
+      direction: 'SOURCE',
+      config: expect.objectContaining({ providers: [] }),
+    }))
     w.unmount()
   })
 })

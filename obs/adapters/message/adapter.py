@@ -75,6 +75,8 @@ class MessageBindingConfig(BaseModel):
             if key in seen_targets:
                 raise ValueError(f"Duplicate MESSAGE target: {ref.provider}/{ref.target}")
             seen_targets.add(key)
+        if self.priority == 2 and any(ref.provider == "pushover" for ref in self.providers):
+            raise ValueError("Pushover emergency priority is not supported")
         return self
 
 
@@ -91,6 +93,10 @@ class _BindingState:
         if len(self.pending_events) >= MAX_PENDING_EVENTS_PER_BINDING:
             self.pending_events.popleft()
         self.pending_events.append((binding, event))
+
+
+def _binding_config(binding: Any) -> MessageBindingConfig:
+    return MessageBindingConfig(**{**binding.config, "enabled": bool(getattr(binding, "enabled", True))})
 
 
 def _as_number(value: Any) -> float | None:
@@ -223,7 +229,7 @@ class MessageAdapter(AdapterBase):
             if binding.direction != "SOURCE":
                 continue
             try:
-                cfg = MessageBindingConfig(**binding.config)
+                cfg = _binding_config(binding)
             except Exception:
                 logger.warning("Invalid MESSAGE binding config for %s skipped", binding.id)
                 continue
@@ -256,7 +262,7 @@ class MessageAdapter(AdapterBase):
             await self._handle_binding_event(binding, event)
 
     async def _handle_binding_event(self, binding: Any, event: DataValueEvent, *, ignore_repetition: bool = False) -> None:
-        cfg = MessageBindingConfig(**binding.config)
+        cfg = _binding_config(binding)
         condition = evaluate_condition(event.value, cfg.operator, cfg.compare_value)
         state = self._states.setdefault(binding.id, _BindingState())
         if not condition:

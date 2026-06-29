@@ -64,6 +64,8 @@ class PushoverProvider:
             payload["sound"] = target.sound
         priority = context.get("priority")
         if priority is not None:
+            if priority == 2:
+                return MessageSendResult("pushover", target_name, False, "pushover priority=2 requires retry and expire")
             payload["priority"] = priority
 
         async with httpx.AsyncClient(timeout=10.0) as client:

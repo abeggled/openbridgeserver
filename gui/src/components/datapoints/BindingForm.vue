@@ -880,6 +880,12 @@ watch(selectedAdapterType, type => {
   if (type === 'SNMP' && !cfg.poll_interval) cfg.poll_interval = 30.0
 })
 
+watch(selectedInstanceId, (newId, oldId) => {
+  if (oldId && newId !== oldId && selectedAdapterType.value === 'MESSAGE') {
+    cfg.providers = []
+  }
+})
+
 // Zeitschaltuhr helpers
 function ztToggleWeekday(idx) {
   const i = cfg.weekdays.indexOf(idx)
