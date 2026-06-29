@@ -355,10 +355,11 @@ async def test_proxy_camera_rejects_basic_credentials_that_do_not_match_page_sco
 
 
 @pytest.mark.asyncio
-async def test_proxy_camera_allows_authenticated_editor_preview_for_unsaved_url(
+async def test_proxy_camera_allows_admin_editor_preview_for_unsaved_url(
     monkeypatch: pytest.MonkeyPatch,
     db: Database,
 ):
+    await _insert_user(db, "alice", is_admin=True)
     await _insert_camera_page(db, access="protected", url="http://camera.local/persisted")
     draft_url = "http://camera.local/draft"
     build_targets = AsyncMock(return_value=([draft_url], {}, {}))
@@ -384,6 +385,31 @@ async def test_proxy_camera_allows_authenticated_editor_preview_for_unsaved_url(
 
     assert isinstance(result, StreamingResponse)
     build_targets.assert_awaited_once_with(draft_url)
+
+
+@pytest.mark.asyncio
+async def test_proxy_camera_rejects_non_admin_editor_preview(monkeypatch: pytest.MonkeyPatch, db: Database):
+    await _insert_user(db, "alice", is_admin=False)
+    await _insert_camera_page(db, access="public", url="http://camera.local/persisted")
+    build_targets = AsyncMock()
+    monkeypatch.setattr(camera_api, "_build_fetch_targets", build_targets)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await camera_api.proxy_camera(
+            url="http://camera.local/draft",
+            username="",
+            password="",
+            apikey_param="",
+            apikey_value="",
+            page_id="page-camera",
+            editor_preview=True,
+            _user="alice",
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Admin access required"
+    build_targets.assert_not_called()
 
 
 @pytest.mark.asyncio

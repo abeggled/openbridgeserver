@@ -148,6 +148,18 @@ async def _ensure_camera_page_scope(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kamera nicht gefunden")
 
 
+async def _ensure_camera_editor_preview_access(db: Database, user: str | None) -> None:
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Provide Authorization: Bearer {token} or ?_token=",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (user,))
+    if not row or not row["is_admin"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+
 # ── Proxy-Endpunkt ─────────────────────────────────────────────────────────────
 
 
@@ -181,15 +193,10 @@ async def proxy_camera(
         target = f"{target}{sep}{apikey_param}={apikey_value}"
 
     # 3. Verpflichtender Visu-Page-Scope für Viewer-Widgets.
-    # Authentifizierte Editor-Previews dürfen Draft-URLs testen, die noch nicht
-    # in visu_nodes.page_config gespeichert sind.
+    # Admin-Editor-Previews dürfen Draft-URLs testen, die noch nicht in
+    # visu_nodes.page_config gespeichert sind.
     if editor_preview:
-        if _user is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Provide Authorization: Bearer {token} or ?_token=",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+        await _ensure_camera_editor_preview_access(db, _user)
     elif not isinstance(page_id, str) or not page_id.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
