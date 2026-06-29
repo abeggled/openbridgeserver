@@ -22,7 +22,6 @@ RouteSignature: TypeAlias = tuple[str, str]
 PUBLIC_ROUTE_ALLOWLIST: Final[frozenset[RouteSignature]] = frozenset(
     {
         ("GET", "/api/v1/system/health"),
-        ("GET", "/api/v1/weather/fetch"),
     }
 )
 
@@ -128,7 +127,7 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("GET", "/api/v1/visu/pages/{node_id}"): "read_live",
     ("GET", "/api/v1/visu/tree"): "read_live",
     ("GET", "/api/v1/visu/widget-ref/{page_id}"): "read_live",
-    ("GET", "/api/v1/weather/fetch"): "public",
+    ("GET", "/api/v1/weather/fetch"): "read_live",
     ("PATCH", "/api/v1/adapters/instances/{instance_id}"): "config_mutation",
     ("PATCH", "/api/v1/adapters/{adapter_type}/config"): "config_mutation",
     ("PATCH", "/api/v1/auth/users/{username}"): "config_mutation",
@@ -173,6 +172,7 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("POST", "/api/v1/knxproj/import-csv"): "config_mutation",
     ("POST", "/api/v1/logic/graphs"): "config_mutation",
     ("POST", "/api/v1/logic/graphs/import"): "config_mutation",
+    ("POST", "/api/v1/logic/graphs/validate"): "read_live",
     ("POST", "/api/v1/logic/graphs/{graph_id}/duplicate"): "config_mutation",
     ("POST", "/api/v1/logic/graphs/{graph_id}/run"): "config_mutation",
     ("POST", "/api/v1/ringbuffer/config"): "config_mutation",

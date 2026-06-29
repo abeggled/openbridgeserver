@@ -5,8 +5,9 @@ import en from './locales/en.json'
 /**
  * Supported locales.
  * To add a new language: add its JSON file to src/locales/ and import it here.
- * The JSON files are the Weblate source/target resources — de.json is the
- * authoritative source; translations are managed via Weblate and pulled with `wlc pull`.
+ * The JSON files are the Weblate source/target resources — en.json is the
+ * authoritative source language (what Weblate volunteers translate from) and
+ * must be complete; other locales are managed via Weblate and pulled with `wlc pull`.
  */
 export const SUPPORTED_LOCALES = [
   { code: 'de', label: 'Deutsch' },
@@ -24,7 +25,7 @@ function detectLocale() {
 const i18n = createI18n({
   legacy: false,          // use Composition API mode
   locale: detectLocale(),
-  fallbackLocale: 'de',
+  fallbackLocale: 'en',  // en.json is the authoritative source; fall back to it for missing keys
   messages: { de, en },
 })
 

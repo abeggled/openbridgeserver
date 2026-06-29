@@ -59,7 +59,7 @@ watch(
       <input
         v-model="cfg.label"
         type="text"
-        placeholder="z.B. Vorlauftemperatur"
+        :placeholder="$t('widgets.info.mainLabelPlaceholder')"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       />
     </div>
@@ -68,7 +68,7 @@ watch(
       <input
         v-model="cfg.unit"
         type="text"
-        placeholder="z.B. °C"
+        :placeholder="$t('widgets.info.unitPlaceholder')"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       />
     </div>
@@ -86,7 +86,7 @@ watch(
     <!-- Extra-Objekte -->
     <div class="pt-1">
       <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
-        $t('widgets.info.additionalValues', { max: MAX_EXTRA })
+        {{ $t('widgets.info.additionalValues', { max: MAX_EXTRA }) }}
       </p>
       <div
         v-for="(extra, i) in cfg.extra_datapoints"

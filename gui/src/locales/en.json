@@ -20,7 +20,8 @@
     "username": "Username",
     "password": "Password",
     "submit": "Sign in",
-    "submitting": "Signing in …"
+    "submitting": "Signing in …",
+    "logoAlt": "open bridge server"
   },
   "dashboard": {
     "title": "Overview",
@@ -132,6 +133,7 @@
       "writeValue": "Write value",
       "write": "Write",
       "invalidNumber": "Please enter a valid number.",
+      "invalidTemporal": "Please enter a valid date or time.",
       "noWritableBinding": "No writable binding available.",
       "properties": "Properties",
       "datatype": "Data type",
@@ -148,6 +150,7 @@
       "noLogicBindings": "Data point is not used in any logic sheet",
       "logicReads": "Logic reads this data point in the linked sheet",
       "logicWrites": "Logic writes to this data point in the linked sheet",
+      "openLogicSheet": "Open logic sheet",
       "writtenSuccess": "Value written.",
       "writeError": "Value could not be written.",
       "bindingModalEdit": "Edit binding",
@@ -695,6 +698,18 @@
         "startup_jitter_s": {
           "title": "Startup jitter (s)",
           "description": "Maximum random delay (seconds) before the first poll of each binding. Prevents a request burst when all tasks start simultaneously. 0 = disabled."
+        },
+        "host": {
+          "title": "Host",
+          "description": "Hostname or IP address of the Modbus TCP device"
+        },
+        "port": {
+          "title": "Port",
+          "description": "Modbus TCP port (default: 502)"
+        },
+        "timeout": {
+          "title": "Timeout (s)",
+          "description": "Request timeout in seconds"
         }
       },
       "SNMP": {
@@ -799,8 +814,189 @@
         "vacation_6_end": {
           "title": "Vacation 6 end",
           "description": "Vacation period 6 end (YYYY-MM-DD)"
+        },
+        "custom_holidays": {
+          "title": "Custom holidays",
+          "description": "User-defined holidays as a list of expressions. Formats: 'MM-DD[:Name]' (fixed date), 'easter+N[:Name]' / 'easter-N[:Name]' (relative to Easter Sunday), 'advent+N[:Name]' / 'advent-N[:Name]' (relative to the 1st Advent), 'last_WD_MON[:Name]' (last weekday of the month), 'N_WD_MON[:Name]' (n-th weekday). Weekday codes: MO TU WE TH FR SA SU. Month codes: JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC. Separate multiple entries with a comma or newline."
+        }
+      },
+      "HOME_ASSISTANT": {
+        "host": {
+          "title": "Host",
+          "description": "Hostname or IP address of the Home Assistant server"
+        },
+        "port": {
+          "title": "Port",
+          "description": "TCP port of the Home Assistant server"
+        },
+        "token": {
+          "title": "Access token",
+          "description": "Long-lived access token from your Home Assistant profile"
+        },
+        "ssl": {
+          "title": "Use SSL/TLS",
+          "description": "Connect via HTTPS/WSS instead of HTTP/WS"
+        }
+      },
+      "IOBROKER": {
+        "host": {
+          "title": "Host",
+          "description": "Hostname or IP address of the ioBroker server"
+        },
+        "port": {
+          "title": "Port",
+          "description": "Port of the ioBroker Socket.IO adapter (web/socketio)"
+        },
+        "username": {
+          "title": "Username",
+          "description": "ioBroker username (optional, for authenticated instances)"
+        },
+        "password": {
+          "title": "Password",
+          "description": "ioBroker password (optional)"
+        },
+        "ssl": {
+          "title": "Use SSL/TLS",
+          "description": "Connect via HTTPS instead of HTTP"
+        },
+        "path": {
+          "title": "Socket.IO path",
+          "description": "Socket.IO endpoint path (default: socket.io)"
+        },
+        "access_token": {
+          "title": "Access token",
+          "description": "OAuth2 access token (alternative to username/password)"
+        },
+        "resubscribe_interval_seconds": {
+          "title": "Resubscribe interval (s)",
+          "description": "How often the subscription watchdog re-subscribes to states"
+        },
+        "reconnect_interval_seconds": {
+          "title": "Reconnect interval (s)",
+          "description": "Initial delay between reconnect attempts"
+        },
+        "reconnect_max_interval_seconds": {
+          "title": "Max reconnect interval (s)",
+          "description": "Upper bound for the reconnect backoff delay"
+        },
+        "socket_instability_threshold": {
+          "title": "Instability threshold",
+          "description": "Number of disconnects within the window before the connection is flagged unstable"
+        },
+        "socket_instability_window_s": {
+          "title": "Instability window (s)",
+          "description": "Time window (seconds) for counting disconnects"
+        }
+      },
+      "MODBUS_RTU": {
+        "port": {
+          "title": "Serial port",
+          "description": "Serial device path (e.g. /dev/ttyUSB0 or COM3)"
+        },
+        "baudrate": {
+          "title": "Baud rate",
+          "description": "Serial baud rate (e.g. 9600, 19200, 115200)"
+        },
+        "parity": {
+          "title": "Parity",
+          "description": "Parity bit: N (none), E (even), O (odd)"
+        },
+        "stopbits": {
+          "title": "Stop bits",
+          "description": "Number of stop bits (1 or 2)"
+        },
+        "bytesize": {
+          "title": "Byte size",
+          "description": "Number of data bits (7 or 8)"
+        },
+        "timeout": {
+          "title": "Timeout (s)",
+          "description": "Request timeout in seconds"
+        }
+      },
+      "MQTT": {
+        "host": {
+          "title": "Host",
+          "description": "Hostname or IP address of the MQTT broker"
+        },
+        "port": {
+          "title": "Port",
+          "description": "MQTT broker port (default: 1883, or 8883 for TLS)"
+        },
+        "username": {
+          "title": "Username",
+          "description": "MQTT username (optional)"
+        },
+        "password": {
+          "title": "Password",
+          "description": "MQTT password (optional)"
+        },
+        "client_id": {
+          "title": "Client ID",
+          "description": "MQTT client identifier (empty = auto-generated)"
+        },
+        "tls": {
+          "title": "Use TLS",
+          "description": "Encrypt the broker connection with TLS"
+        },
+        "tls_insecure": {
+          "title": "Skip TLS verification",
+          "description": "Do not verify the broker's TLS certificate (insecure)"
+        }
+      },
+      "ONEWIRE": {
+        "poll_interval": {
+          "title": "Poll interval (s)",
+          "description": "How often sensors are read, in seconds"
+        },
+        "w1_path": {
+          "title": "1-Wire path",
+          "description": "Sysfs path to the 1-Wire bus (default: /sys/bus/w1/devices)"
         }
       }
+    },
+    "statusDetail": {
+      "connected": "Connected",
+      "connectedTo": "Connected to {host}:{port}",
+      "connectedHa": "Connected to HA {version}",
+      "knxConnectedRouting": "Connected (routing {group}:{port})",
+      "connecting": "Connecting to {host}:{port}…",
+      "reconnecting": "Reconnecting to {host}:{port}…",
+      "disconnected": "Disconnected",
+      "started": "Started",
+      "stopped": "Stopped",
+      "libNotInstalled": "{lib} not installed",
+      "noToken": "No token configured",
+      "tokenInvalid": "Token invalid",
+      "wsErrorReconnecting": "WebSocket error — reconnecting",
+      "couldNotConnectTo": "Could not connect to {host}:{port}",
+      "couldNotReconnectTo": "Could not reconnect to {host}:{port}",
+      "couldNotOpenPort": "Could not open {port}",
+      "modbusSerialConnected": "Connected ({port} @ {baudrate} baud)",
+      "modbusReconnectBackoff": "Modbus TCP reconnect backoff active",
+      "pathNotFound": "{path} not found",
+      "onewireBusAt": "1-Wire bus at {path}",
+      "socketConnectFailed": "Socket.IO connection failed",
+      "socketDisconnected": "Socket.IO disconnected",
+      "socketUnstable": "ioBroker Socket.IO connection unstable: multiple disconnects in a short time.",
+      "socketStable": "ioBroker Socket.IO connection stable.",
+      "subscribeFailed": "Subscribe failed",
+      "watchdogSubscribeFailed": "ioBroker subscription watchdog could not re-subscribe states.",
+      "knxRoutingSecureRequiresKey": "routing_secure requires backbone_key or knxkeys_file_path",
+      "knxBackboneKeyInvalid": "KNX backbone key invalid (not a hex string): {error}",
+      "knxIpSecureConfigError": "KNX IP Secure configuration error: {error}",
+      "knxNoBackboneKeyInKeyfile": "No backbone key in keyfile — the keyfile contains no backbone entry for Routing Secure.",
+      "knxNoTunnelingInterfaces": "No tunneling interfaces found in keyfile — please check the individual address in the keyfile.",
+      "knxTunnelOverload": "KNX tunnel slot likely occupied by another client — gateway pool overloaded.",
+      "knxTunnelStable": "Tunnel pool stable again.",
+      "invalidBindingsSkipped": "{count} invalid binding(s) skipped ({examples})"
+    },
+    "testResult": {
+      "typeNotRegistered": "Adapter type '{type}' not registered",
+      "configError": "Configuration error: {error}",
+      "configValidationError": "Configuration validation error: {error}",
+      "connectOk": "Connection to {type} successful",
+      "connectFailed": "Connection attempt failed"
     }
   },
   "history": {
@@ -1053,8 +1249,11 @@
       "not": "NOT",
       "xor": "XOR",
       "gate": "Gate",
+      "memory": "Memory",
       "compare": "Comparison",
       "hysteresis": "Hysteresis",
+      "decision": "Decision",
+      "value_mapping": "Mapping",
       "datapoint_read": "Read Object",
       "datapoint_write": "Write Object",
       "math_formula": "Formula",
@@ -1076,6 +1275,7 @@
       "astro_sun": "Astro Sun",
       "notify_pushover": "Pushover",
       "notify_sms": "SMS (seven.io)",
+      "wake_on_lan": "Wake on LAN",
       "json_extractor": "JSON Extractor",
       "xml_extractor": "XML Extractor",
       "substring_extractor": "Substring / RegEx",
@@ -1110,6 +1310,12 @@
     "saved": "Graph saved",
     "errorSave": "Error saving graph",
     "runResult": "Graph executed — {count} nodes evaluated",
+    "runResultWithWarnings": "Graph executed — {count} nodes checked, {warnings} warnings",
+    "nodeError": "⚠ Error",
+    "graphValidationCycle": "Cycle detected: {count} node(s) need a Memory node as tick boundary.",
+    "graphValidationConnectBlocked": "Connection not created: cycle detected ({count} node(s)). Use a Memory node for feedback.",
+    "graphValidationSaveBlocked": "Save blocked: cycle detected ({count} node(s)). Use a Memory node for feedback.",
+    "graphValidationNodeError": "Cycle detected; direct feedback needs a Memory node.",
     "duplicated": "Graph duplicated as “{name}”",
     "errorDuplicate": "Error duplicating graph",
     "errorExport": "Error exporting graph",
@@ -1124,6 +1330,8 @@
     "negatePort": "Negate {id}",
     "palette": {
       "title": "Blocks",
+      "collapse": "Collapse block palette",
+      "expand": "Expand block palette",
       "categories": {
         "logic": "Logic",
         "datapoint": "Objects",
@@ -1168,6 +1376,7 @@
     "summary": {
       "inputs": "{n} Inputs",
       "parts": "{n} Parts",
+      "rules": "{n} Rules",
       "hold": "→ hold",
       "filters": "{n} Filters",
       "negateEnable": "¬Enable",
@@ -1318,6 +1527,7 @@
         "methodLabel": "Method",
         "responseContentType": "Response Content-Type",
         "headersLabel": "Headers (JSON object, optional)",
+        "headersPlaceholder": "{'{'}\"X-Api-Key\": \"abc\"{'}'}",
         "timeoutLabel": "Timeout (s)",
         "verifySsl": "Verify SSL certificate",
         "authSection": "Authentication",
@@ -1335,7 +1545,12 @@
         "targetBlocked": "This target will be blocked",
         "allowTarget": "Allow {target}",
         "allowSaved": "Target has been allowed.",
-        "defaultAllowReason": "Allowed from API client configuration"
+        "defaultAllowReason": "Allowed from API client configuration",
+        "variablesSection": "Variables",
+        "addVariable": "Add variable",
+        "removeVariable": "Remove",
+        "variablesHint": "Variables reference existing objects and can be used as ###OBS1###, ###OBS2###, etc. in URL, headers, auth fields and body.",
+        "noVariables": "No variables configured."
       },
       "stringConcat": {
         "inputCount": "Number of inputs",
@@ -1344,6 +1559,45 @@
         "staticSection": "Static text per input",
         "staticHint": "Connected inputs override static text. Empty fields produce an empty substring.",
         "inputPlaceholder": "Input {n} …"
+      },
+      "rules": {
+        "add": "+ Rule",
+        "remove": "Remove rule",
+        "removeShort": "−",
+        "namePlaceholder": "Name",
+        "operator": "Operator",
+        "compareValue": "Compare value",
+        "valuePlaceholder": "Value",
+        "regexPlaceholder": "RegEx pattern",
+        "minValue": "From",
+        "maxValue": "To",
+        "minPlaceholder": "Minimum",
+        "maxPlaceholder": "Maximum",
+        "caseSensitive": "Case sensitive",
+        "operators": {
+          "eq": "equals",
+          "ne": "not equal",
+          "gt": "greater than",
+          "lt": "less than",
+          "gte": "greater or equal",
+          "lte": "less or equal",
+          "range": "range",
+          "text_eq": "text comparison",
+          "contains": "contains",
+          "starts_with": "starts with",
+          "ends_with": "ends with",
+          "regex": "regular expression"
+        }
+      },
+      "mapping": {
+        "rules": "Rules",
+        "outputType": "Output type",
+        "resultValue": "Return value",
+        "resultPlaceholder": "Result",
+        "hasDefault": "Use default value",
+        "defaultValue": "Default value",
+        "defaultPlaceholder": "Value when no rule matches",
+        "defaultRule": "Rule {n}"
       },
       "extractor": {
         "receivedData": "Received data",
@@ -1448,11 +1702,26 @@
         "negate_enable": "Invert enable",
         "persist_state": "Restore state on restart"
       },
+      "memory": {
+        "initial_value": "Initial value",
+        "data_type": "Data type",
+        "persist_state": "Restore state on restart"
+      },
       "hysteresis": {
         "persist_state": "Restore state on restart"
       },
       "compare": {
         "operator": "Operator"
+      },
+      "decision": {
+        "conditions": "Conditions",
+        "defaultOutput": "Output {n}"
+      },
+      "value_mapping": {
+        "output_type": "Output type",
+        "rules": "Rules",
+        "has_default": "Use default value",
+        "default_value": "Default value"
       },
       "clamp": {
         "min": "Minimum",
@@ -1533,6 +1802,14 @@
         "to": "Recipient (+41…)",
         "sender": "Sender (max 11 chars)",
         "message": "Message (fallback)"
+      },
+      "wake_on_lan": {
+        "mac_address": "MAC address (e.g. AA:BB:CC:DD:EE:FF)",
+        "broadcast_ip": "Broadcast IP",
+        "port": "UDP port",
+        "invalidMac": "Invalid MAC address – please use the format AA:BB:CC:DD:EE:FF",
+        "invalidBroadcastIp": "Invalid IP address – please enter a valid IPv4 address",
+        "invalidPort": "Invalid port – please enter a number between 1 and 65535"
       },
       "json_extractor": {
         "json_path": "Key path (legacy)",
@@ -1632,8 +1909,11 @@
       "not": "Inverts the input",
       "xor": "Output is true when EXACTLY ONE input is true. Inputs (2–30) and output can be individually negated.",
       "gate": "Signal gate: passes the input when enable=true, blocks otherwise. Behavior when closed: hold the last value (retain) or output a default value.",
+      "memory": "Outputs the stored value from the previous logic run and stores the current input value for the next run. Explicit tick boundary for controlled feedback.",
       "compare": "Compares two values (>, <, =, >=, <=, !=)",
       "hysteresis": "Switches ON when threshold is exceeded, OFF only when it falls below",
+      "decision": "Checks one input value against multiple independent conditions. Each output returns TRUE or FALSE independently; multiple outputs can be TRUE at the same time.",
+      "value_mapping": "Checks an ordered rule list and returns the value from the first matching rule. An optional default value is returned when no rule matches.",
       "datapoint_read": "Outputs the current value of a DataPoint. Triggers on value change.",
       "datapoint_write": "Writes a value to a DataPoint",
       "math_formula": "Evaluates an expression. Variables: a (= IN 1), b (= IN 2)",
@@ -1654,6 +1934,7 @@
       "astro_sun": "Calculates sunrise and sunset based on latitude/longitude. Requires: pip install astral",
       "notify_pushover": "Sends a push notification via the Pushover API (api.pushover.net). Triggered automatically when a message arrives at the input.",
       "notify_sms": "Sends an SMS via the seven.io gateway (gateway.seven.io). Triggered automatically when a message arrives at the input.",
+      "wake_on_lan": "Sends a Wake-on-LAN magic packet to a device via UDP broadcast. Triggered when the trigger input is true.",
       "json_extractor": "Parses a JSON string and extracts one or more values by key paths (dot notation, e.g. sensors.temperature). Multiple outputs configurable via + in the config panel.",
       "xml_extractor": "Parses an XML string and extracts one or more values by XPath expressions (ElementTree syntax, e.g. .//temperature). Multiple outputs configurable via + in the config panel.",
       "substring_extractor": "Extracts text from a string using substring operations or regular expressions. Modes: left_of / right_of (first or last occurrence), between (two markers), cut (position + length), regex (Python re syntax, capture groups selectable).",
@@ -2112,6 +2393,7 @@
     "success": "Success",
     "details": "Details",
     "remove": "Remove",
+    "enabled": "Enabled",
     "active": "Active",
     "inactive": "Inactive",
     "on": "On",

@@ -50,6 +50,13 @@ class AdapterBase(ABC):
         # subscribing to the EventBus (GUI polls /adapters/instances).
         self._last_severity: str = "ok"
         self._last_detail: str = ""
+        # i18n (issue #779): status details are emitted as a stable key suffix
+        # (`detail_code`, under `adapters.statusDetail.*` in the locale files)
+        # plus interpolation `detail_params`. The frontend translates the code;
+        # `_last_detail` stays as a human-readable fallback for codeless/dynamic
+        # messages (e.g. raw exception text).
+        self._last_detail_code: str | None = None
+        self._last_detail_params: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -110,7 +117,30 @@ class AdapterBase(ABC):
     def last_detail(self) -> str:
         return self._last_detail
 
-    async def _publish_status(self, connected: bool, detail: str = "", severity: str = "ok") -> None:
+    @property
+    def last_detail_code(self) -> str | None:
+        return self._last_detail_code
+
+    @property
+    def last_detail_params(self) -> dict[str, Any]:
+        return self._last_detail_params
+
+    async def _publish_status(
+        self,
+        connected: bool,
+        detail: str = "",
+        severity: str = "ok",
+        *,
+        code: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> None:
+        """Publish an adapter status change.
+
+        For i18n (issue #779) prefer a stable `code` (key suffix under
+        `adapters.statusDetail.*`) plus `params` for interpolation; the frontend
+        translates it. `detail` is the human-readable fallback shown when no code
+        is given or the locale key is missing (e.g. raw exception text).
+        """
         from obs.core.event_bus import AdapterStatusEvent
 
         # severity="warning" signals degraded operation without changing the
@@ -119,6 +149,8 @@ class AdapterBase(ABC):
             self._connected = connected
         self._last_severity = severity
         self._last_detail = detail
+        self._last_detail_code = code
+        self._last_detail_params = params or {}
         await self._bus.publish(
             AdapterStatusEvent(
                 adapter_type=self.adapter_type,
@@ -127,5 +159,7 @@ class AdapterBase(ABC):
                 connected=self._connected,
                 detail=detail,
                 severity=severity,
+                detail_code=code,
+                detail_params=params or {},
             ),
         )

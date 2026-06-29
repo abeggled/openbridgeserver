@@ -31,7 +31,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set template metadata
         id: meta
@@ -51,9 +51,11 @@ jobs:
           fi
           TEMPLATE_FILE="${{ env.TEMPLATE_NAME }}-lxc_${VERSION}_${{ matrix.arch }}.tar.zst"
           APP_BUNDLE_FILE="${{ env.TEMPLATE_NAME }}-app-bundle_${VERSION}.tar.gz"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "template_file=$TEMPLATE_FILE" >> "$GITHUB_OUTPUT"
-          echo "app_bundle_file=$APP_BUNDLE_FILE" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$VERSION"
+            echo "template_file=$TEMPLATE_FILE"
+            echo "app_bundle_file=$APP_BUNDLE_FILE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Install debootstrap and tools
         run: |
@@ -92,151 +94,8 @@ jobs:
 
       - name: Write obs-update script
         run: |
-          cat > /tmp/obs-update << 'SCRIPTEOF'
-          #!/bin/bash
-          set -euo pipefail
-
-          REPO="__REPO__"
-          INSTALL_DIR="/opt/obs"
-          SERVICE="obs"
-
-          CURRENT=$(cat "$INSTALL_DIR/version" 2>/dev/null || echo "unknown")
-          echo "Fetching release information..."
-          ALL_RELEASES=$(curl -sf "https://api.github.com/repos/${REPO}/releases")
-
-          # Build ordered list via semantic version sort, stopping after 2 stables
-          VERSION_LIST=$(echo "$ALL_RELEASES" | python3 -c "
-          import sys, json, re
-
-          releases = json.load(sys.stdin)
-
-          def sort_key(tag):
-              m = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-RC(\d+))?\$', tag, re.IGNORECASE)
-              if not m:
-                  return (0, 0, 0, 0, 0)
-              y, mn, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
-              rc = int(m.group(4)) if m.group(4) else None
-              return (y, mn, p, 1 if rc is None else 0, rc or 0)
-
-          candidates = sorted(
-              [r for r in releases if not r['draft']],
-              key=lambda r: sort_key(r['tag_name']), reverse=True
-          )
-
-          stables_seen = 0
-          for r in candidates:
-              kind = 'rc' if r['prerelease'] else 'stable'
-              print(kind + ' ' + r['tag_name'])
-              if not r['prerelease']:
-                  stables_seen += 1
-                  if stables_seen >= 2:
-                      break
-          ")
-
-          echo "Current version: $CURRENT"
-          echo ""
-
-          OPTIONS=()
-          LABELS=()
-
-          while IFS=' ' read -r TYPE TAG; do
-              OPTIONS+=("$TAG")
-              MARKER=""
-              [[ "$TAG" == "$CURRENT" ]] && MARKER=", current"
-              if [[ "$TYPE" == "stable" ]]; then
-                  LABELS+=("$TAG  (stable${MARKER})")
-              else
-                  LABELS+=("$TAG  (release candidate${MARKER})")
-              fi
-          done <<< "$VERSION_LIST"
-
-          if [[ ${#OPTIONS[@]} -eq 0 ]]; then
-              echo "No releases found."
-              exit 0
-          fi
-
-          echo "Available versions:"
-          for i in "${!OPTIONS[@]}"; do
-              echo "  $((i+1))) ${LABELS[$i]}"
-          done
-          echo "  0) Cancel"
-          echo ""
-
-          while true; do
-              read -rp "Select version to install [0-${#OPTIONS[@]}]: " CHOICE
-              if [[ "$CHOICE" =~ ^[0-9]+$ ]] && [[ "$CHOICE" -ge 0 ]] && [[ "$CHOICE" -le "${#OPTIONS[@]}" ]]; then
-                  break
-              fi
-              echo "Invalid selection, please try again."
-          done
-
-          if [[ "$CHOICE" -eq 0 ]]; then
-              echo "Cancelled."
-              exit 0
-          fi
-
-          TARGET="${OPTIONS[$((CHOICE-1))]}"
-
-          if [[ "$TARGET" == "$CURRENT" ]]; then
-              echo "$TARGET is already installed."
-              exit 0
-          fi
-
-          echo "Installing $TARGET ..."
-
-          ASSET_INFO=$(echo "$ALL_RELEASES" | python3 -c "
-          import sys, json
-          target = '${TARGET}'
-          releases = json.load(sys.stdin)
-          r = next((r for r in releases if r['tag_name'] == target), None)
-          if r:
-              bundle = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz')), None)
-              checksum = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha512')), None)
-              if bundle and checksum:
-                  print(bundle['browser_download_url'])
-                  print(checksum['browser_download_url'])
-          ")
-
-          BUNDLE_URL=$(echo "$ASSET_INFO" | sed -n '1p')
-          CHECKSUM_URL=$(echo "$ASSET_INFO" | sed -n '2p')
-
-          if [[ -z "$BUNDLE_URL" ]] || [[ -z "$CHECKSUM_URL" ]]; then
-              echo "Error: missing app-bundle or checksum asset for $TARGET" >&2
-              exit 1
-          fi
-
-          BUNDLE_FILENAME=$(basename "$BUNDLE_URL")
-          CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
-
-          TMP=$(mktemp -d)
-          trap "rm -rf $TMP" EXIT
-
-          echo "Downloading $BUNDLE_URL ..."
-          curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"
-          echo "Downloading $CHECKSUM_URL ..."
-          curl -fL "$CHECKSUM_URL" -o "$TMP/$CHECKSUM_FILENAME"
-
-          (cd "$TMP" && sha512sum -c "$CHECKSUM_FILENAME")
-
-          systemctl stop "$SERVICE"
-
-          tar -xzf "$TMP/$BUNDLE_FILENAME" -C "$INSTALL_DIR"
-          "$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
-
-          # Self-update: replace this script with the version from the bundle
-          cp "$INSTALL_DIR/obs-update" /usr/local/bin/obs-update
-          chmod +x /usr/local/bin/obs-update
-          rm -f "$INSTALL_DIR/obs-update"
-
-          echo "$TARGET" > "$INSTALL_DIR/version"
-
-          systemctl start "$SERVICE"
-          echo "Done. Now running $TARGET."
-          SCRIPTEOF
-
-          sed -i "s|__REPO__|${{ github.repository }}|g" /tmp/obs-update
-          chmod +x /tmp/obs-update
-          cp /tmp/obs-update obs-update
+          sed "s|__REPO__|${{ github.repository }}|g" scripts/obs-update > obs-update
+          chmod +x obs-update
 
       - name: Stamp version file
         run: |
@@ -249,15 +108,20 @@ jobs:
         if: matrix.arch == 'amd64'
         run: |
           tar -czf "${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}" \
-            obs/ gui_dist/ frontend_dist/ requirements.txt obs-update
+            obs/ gui_dist/ frontend_dist/ requirements.txt obs-update -C scripts obs-admin
           cd "${{ runner.temp }}"
+          sha256sum "${{ steps.meta.outputs.app_bundle_file }}" \
+            > "${{ steps.meta.outputs.app_bundle_file }}.sha256"
+          # Backward-compat: obs-update versions prior to this release verify
+          # via a .sha512 release asset. Publish it so existing LXC installs
+          # can bootstrap the self-update once before switching to SHA-256.
           sha512sum "${{ steps.meta.outputs.app_bundle_file }}" \
             > "${{ steps.meta.outputs.app_bundle_file }}.sha512"
 
       # ── Base system ───────────────────────────────────────────────────────────
       - name: Cache base system
         id: cache-base
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: base-system-cache.tar.zst
           key: base-system-ubuntu-resolute-${{ matrix.arch }}-v1
@@ -340,7 +204,7 @@ jobs:
 
       # ── APT cache for app-specific packages ───────────────────────────────────
       - name: Cache APT packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /tmp/apt-cache
           key: apt-obs-${{ matrix.arch }}-${{ hashFiles('requirements.txt') }}
@@ -362,7 +226,7 @@ jobs:
           if ! mountpoint -q "$ROOTFS/proc"; then
             sudo mount -t proc proc "$ROOTFS/proc"
           fi
-          cleanup() { mountpoint -q "$ROOTFS/proc" && sudo umount "$ROOTFS/proc" || true; }
+          cleanup() { if mountpoint -q "$ROOTFS/proc"; then sudo umount "$ROOTFS/proc" || true; fi; }
           trap cleanup EXIT
 
           # Copy application source and built assets into rootfs
@@ -371,8 +235,11 @@ jobs:
           sudo cp -r gui_dist         "$ROOTFS/opt/obs/"
           sudo cp -r frontend_dist    "$ROOTFS/opt/obs/"
           sudo cp    requirements.txt "$ROOTFS/opt/obs/"
+          sudo cp    scripts/obs-admin   "$ROOTFS/opt/obs/"
           echo "${{ steps.meta.outputs.version }}" | sudo tee "$ROOTFS/opt/obs/version" > /dev/null
-          sudo cp /tmp/obs-update "$ROOTFS/usr/local/bin/obs-update"
+          sudo cp obs-update "$ROOTFS/usr/local/bin/obs-update"
+          sudo cp scripts/obs-admin "$ROOTFS/usr/local/bin/obs-admin"
+          sudo chmod +x "$ROOTFS/usr/local/bin/obs-admin"
 
           sudo chroot "$ROOTFS" /bin/bash <<'INSTALL'
           set -euo pipefail
@@ -525,8 +392,8 @@ jobs:
           sudo tar --numeric-owner --acls --xattrs \
             -cf - . | zstd -T0 -9 -o "${{ runner.temp }}/${{ steps.meta.outputs.template_file }}"
           cd "${{ runner.temp }}"
-          sha512sum "${{ steps.meta.outputs.template_file }}" \
-            > "${{ steps.meta.outputs.template_file }}.sha512"
+          sha256sum "${{ steps.meta.outputs.template_file }}" \
+            > "${{ steps.meta.outputs.template_file }}.sha256"
 
       - name: Upload LXC template artifact
         uses: actions/upload-artifact@v7
@@ -534,7 +401,7 @@ jobs:
           name: lxc-${{ matrix.arch }}
           path: |
             ${{ runner.temp }}/${{ steps.meta.outputs.template_file }}
-            ${{ runner.temp }}/${{ steps.meta.outputs.template_file }}.sha512
+            ${{ runner.temp }}/${{ steps.meta.outputs.template_file }}.sha256
 
       - name: Upload app bundle artifact
         if: matrix.arch == 'amd64'
@@ -543,6 +410,7 @@ jobs:
           name: app-bundle
           path: |
             ${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}
+            ${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}.sha256
             ${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}.sha512
 
   release:
@@ -569,8 +437,8 @@ jobs:
             echo "Invalid tag format: $RELEASE_TAG" >&2
             exit 1
           fi
-          find artifacts/ -type f \( -name "*.tar.zst" -o -name "*.tar.gz" -o -name "*.sha512" \) \
-            | xargs gh release upload "$RELEASE_TAG" \
+          find artifacts/ -type f \( -name "*.tar.zst" -o -name "*.tar.gz" -o -name "*.sha512" \) -print0 \
+            | xargs -0 gh release upload "$RELEASE_TAG" \
               --repo "$RELEASE_REPO" \
               --clobber
 
@@ -589,7 +457,7 @@ jobs:
             > /tmp/release_body.txt
 
           python3 <<'PYEOF' > /tmp/new_body.txt
-          import glob, os
+          import glob, os, re
 
           def read(path):
               with open(path) as f:
@@ -597,36 +465,30 @@ jobs:
 
           body = read('/tmp/release_body.txt')
 
-          lxc_entries = []
-          bundle_checksum = None
+          entries = []
 
-          for f in sorted(glob.glob('artifacts/**/*.sha512', recursive=True)):
+          for f in sorted(glob.glob('artifacts/**/*.sha256', recursive=True)):
               content = read(f).split()[0]
-              name = os.path.basename(f).removesuffix('.sha512')
-              if 'app-bundle' in name:
-                  bundle_checksum = content
-              elif name.endswith('.tar.zst'):
-                  lxc_entries.append((name, content))
+              name = os.path.basename(f).removesuffix('.sha256')
+              entries.append((name, content))
+
+          entries.sort(key=lambda x: x[0])
 
           marker = "<!-- LXC_INSERT -->"
 
-          lxc_section = "**LXC Templates** (`.tar.zst` — Proxmox CT template):\n"
-          for name, cs in lxc_entries:
-              lxc_section += f"\n*{name}*:\n```\n{cs}\n```\n"
-
-          bundle_section = ""
-          if bundle_checksum:
-              bundle_section = (
-                  "\n**App Bundle** (`.tar.gz` — for in-place updates via `obs-update`):\n"
-                  f"```\n{bundle_checksum}\n```\n\n"
-              )
-
-          section = (
-              "### Checksums\n\n"
-              + lxc_section
-              + bundle_section
-              + marker
+          # Strip any previously generated block so the step is idempotent on re-runs
+          body = re.sub(
+              r'### Checksums \(SHA-256\)\n.*?' + re.escape(marker),
+              marker,
+              body,
+              flags=re.DOTALL,
           )
+
+          section = "### Checksums (SHA-256)\n\n"
+          for name, cs in entries:
+              section += f"*{name}*:\n```\n{cs}\n```\n\n"
+          section += marker
+
           print(body.replace(marker, section), end='')
           PYEOF
 

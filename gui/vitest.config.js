@@ -7,6 +7,9 @@ import { resolve } from 'path'
 // RingBufferView.vue with mocked API and websocket dependencies.
 export default defineConfig({
   plugins: [vue()],
+  define: {
+    __APP_VERSION__: '"test"',
+  },
   resolve: {
     alias: { '@': resolve(__dirname, 'src') },
   },

@@ -12,10 +12,20 @@ const props = defineProps<{
   sessionToken?: string | null
 }>()
 
+type AuthType = 'none' | 'basic' | 'apikey'
+
+function normalizeAuthType(raw: unknown): AuthType {
+  if (typeof raw !== 'string') return 'none'
+  const v = raw.trim().toLowerCase().replace(/[^a-z0-9]+/g, '')
+  if (v === 'basic' || v.startsWith('basicauth')) return 'basic'
+  if (v === 'apikey' || v.startsWith('apikey')) return 'apikey'
+  return 'none'
+}
+
 const label           = computed(() => (props.config.label           as string) ?? '')
 const url             = computed(() => (props.config.url             as string) ?? '')
 const streamType      = computed(() => (props.config.streamType      as string) ?? 'mjpeg')
-const authType        = computed(() => (props.config.authType        as string) ?? 'none')
+const authType        = computed(() => normalizeAuthType(props.config.authType))
 const username        = computed(() => (props.config.username        as string) ?? '')
 const password        = computed(() => (props.config.password        as string) ?? '')
 const apiKeyParam     = computed(() => (props.config.apiKeyParam     as string) ?? 'token')
@@ -181,7 +191,7 @@ const imgSrc = computed(() =>
         :src="imgSrc"
         :style="containerStyle"
         class="max-h-full max-w-full"
-        :alt="$t('widgets.kamera.alt')"
+        :alt="$t('widgets.kamera.title')"
         @error="onStreamError"
         @load="onStreamLoad"
       />
@@ -212,7 +222,7 @@ const imgSrc = computed(() =>
     >
       <span class="text-2xl">⚠️</span>
       <span class="text-xs text-red-400 text-center px-4">{{ $t('widgets.kamera.streamUnavailable') }}</span>
-      <span class="text-xs text-gray-500 text-center px-4">{{ $t('widgets.kamera.retryInTenSeconds') }}</span>
+      <span class="text-xs text-gray-500 text-center px-4">{{ $t('widgets.kamera.autoRetry') }}</span>
       <button
         class="mt-1 px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-xs text-gray-200 transition-colors"
         @click="reload"

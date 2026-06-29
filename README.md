@@ -1,6 +1,7 @@
 # open bridge multiprotocol ai server
 
-![**open bridge server** Logo](logo/obs_logo_dark.svg)
+![**open bridge server** Logo](logo/obs_logo_light.svg#gh-light-mode-only)
+![**open bridge server** Logo](logo/obs_logo_dark.svg#gh-dark-mode-only)
 
 ![Version](https://img.shields.io/github/v/release/abeggled/openbridgeserver?style=for-the-badge)
 [![Tests][tests-badge]][tests]
@@ -68,15 +69,26 @@ The LXC template contains a complete Ubuntu 26.04 system with **open bridge serv
 
 **Step 1 — Download the template**
 
-1. On the [releases page](../../releases/latest), copy the URL of the `.tar.zst` file and the SHA512 hash from the **LXC Template** section.
+1. On the [releases page](../../releases/latest), expand the assets and right-click to copy the URL of the `.tar.zst` file for your architecture:
+
+   ![ProxmoxDownloadFromURL](docs/Release-Assets.png)
+
 2. In the Proxmox web interface, navigate to **Datacenter → Storage → local → CT Templates**.
 3. Click **Download from URL**.
 4. Paste the copied URL and click **Query URL**.
-5. Select **SHA512** as the hash algorithm.
-6. Paste the copied hash.
-7. Click **Download**.
+5. If not already enabled, activate **Advanced** in the bottom right of the popup.
+6. Select **SHA256** as the hash algorithm.
+7. On the [releases page](../../releases/latest), copy the checksum of the desired template from the **Checksums** section using the copy button:
 
-![ProxmoxDownloadFromURL](docs/ProxmoxDownloadFromURL.png)
+   ![ProxmoxDownloadFromURL](docs/Release-Asset-Checksums.png)
+
+   Note: If you copy the checksum directly from the column next to the asset, remove the `SHA256:` prefix, as Proxmox does not expect it!
+8. Back in the Proxmox web interface, paste the copied hash into the **Checksum** field.
+9. It should now look like this, for example:
+
+   ![ProxmoxDownloadFromURL](docs/ProxmoxDownloadFromURL.png)
+
+10. Click **Download**.
 
 **Step 2 — Create the container**
 
@@ -148,6 +160,46 @@ security:
 ```
 
 > **Note:** The `mqtt` section refers to the **internal** Mosquitto broker. External MQTT brokers are set up as separate adapter instances (see [MQTT adapter](#mqtt-adapter-external-broker)).
+
+### Offline administration with `obs-admin`
+
+For support and failure scenarios, OBS ships an offline CLI that works directly on the SQLite configuration database and does not require the OBS HTTP server to be running.
+
+In the LXC template, run the command inside the container:
+
+```bash
+obs-admin status
+obs-admin db info
+obs-admin adapters list
+obs-admin adapters disable <instance-id-or-name>
+obs-admin adapters enable <instance-id-or-name>
+obs-admin bindings list --adapter <instance-id-or-name>
+obs-admin bindings disable <binding-id>
+obs-admin loglevel set DEBUG
+obs-admin support-package create --output /tmp/obs-support.json
+```
+
+When upgrading an existing LXC container from a release that did not ship `obs-admin`, the first `obs-update` run may leave the command at `/opt/obs/obs-admin` without installing `/usr/local/bin/obs-admin`. In that case run `/opt/obs/obs-admin ...` directly or install the wrapper once with:
+
+```bash
+install -m 0755 /opt/obs/obs-admin /usr/local/bin/obs-admin
+```
+
+For Docker, run it on the host inside the OBS container, for example:
+
+```bash
+docker compose exec obs obs-admin status
+docker compose exec obs obs-admin adapters disable <instance-id-or-name>
+```
+
+If the database is not at the normal configured path, pass it explicitly:
+
+```bash
+obs-admin --db /data/obs.db adapters list --json
+obs-admin --db /data/obs.db db backup --output /var/backups/obs/
+```
+
+Write commands create a SQLite backup next to the database before changing data by default. The offline support package uses the same central sanitizing logic as the support API and redacts secrets, tokens, passwords, endpoints, and full filesystem paths.
 
 ### URL target allowlist for internal services
 
@@ -284,7 +336,7 @@ Optional: a table that maps raw values to other values — useful for enumeratio
 { "value_map": { "0": "Off", "1": "On", "2": "Standby" } }
 ```
 
-The key is always a string (the raw value is converted internally). If no matching entry exists, the original value is passed through unchanged. `value_map` is applied after `value_formula`.
+The key is always a string (the raw value is converted internally). Matching first tries the exact key and then a case-insensitive key, so `OFF` matches a map entry like `"off"`. If no matching entry exists, the original value is passed through unchanged. `value_map` is applied after `value_formula`.
 
 **Send filters** (DEST/BOTH only, checked in order):
 
@@ -428,7 +480,8 @@ The `q` parameter searches both the name and the ID of the data point.
 - Pagination via `pagination.limit` + `pagination.offset`, sorting via `sort.field` (`id|ts`) and `sort.order` (`asc|desc`).
 - The versioned metadata model is documented in `docs/ringbuffer-metadata-model-v1.md` (`metadata_version: 1`).
 
-`POST /api/v1/ringbuffer/export/csv` uses the same request body as `/query`, but always exports the complete filtered result set (UI pagination is ignored).  
+`POST /api/v1/ringbuffer/export/csv` uses the same request body as `/query`, but always exports the complete filtered result set (UI pagination is ignored).
+
 CSV columns: `id`, `ts`, `datapoint_id`, `name`, `topic`, `old_value_json`, `new_value_json`, `source_adapter`, `quality`, `metadata_version`, `metadata_json`.
 
 ---
@@ -558,7 +611,9 @@ The logic editor enables visual creation of automation rules — without program
 
 The graph can also be started manually via the **▶ Run** button.
 
-**States** (hysteresis, statistics, operating hours, min/max tracker, consumption counter) are stored in the database and survive a restart.
+**States** (hysteresis, memory, statistics, operating hours, min/max tracker, consumption counter) are stored in the database and survive a restart.
+
+Direct feedback loops are validated in the editor and blocked when saving or connecting nodes. Use a **Memory** block as an explicit tick boundary for controlled feedback: it outputs the value stored from the previous graph run and stores the current input for the next run.
 
 ---
 
@@ -578,8 +633,13 @@ The graph can also be started manually via the **▶ Run** button.
 | **OR** | A, B | Out | True when **at least one** input is true. |
 | **NOT** | In | Out | Inverts the input. |
 | **XOR** | A, B | Out | True when **exactly one** input is true. |
+| **Memory** | In, Reset | Out | Outputs the stored value from the previous graph run and stores the current input for the next run. Use this block to build controlled feedback loops. |
 | **Compare** | A, B | Result | Compares two values. Options: `>` `<` `=` `>=` `<=` `≠` |
 | **Hysteresis** | Value | Out | Switches on when the value exceeds "threshold ON", and switches off only when it falls below "threshold OFF". Prevents rapid toggling. |
+| **Decision** | Value | 2-n boolean outputs | Evaluates multiple independent conditions against one input. Every output has its own name and condition; several outputs can be true at the same time. |
+| **Mapping** | Value | Result | Evaluates ordered rules and returns the first matching result. Output type can be bool, int, float, or string; an optional default value handles unmatched inputs. |
+
+Decision and Mapping share the same condition operators: equals, not equal, greater/less than, greater/less or equal, range, text comparison, contains, starts with, ends with, and regular expression.
 
 #### Data point
 
@@ -1648,10 +1708,12 @@ Versioned hooks live in `.githooks/`. To activate them in a clone, set `core.hoo
 
 On each `git push`, the hook runs:
 
-- `./scripts/check-i18n-hardcoded-strings.sh`
+- `./tools/check-i18n-hardcoded-strings.sh`
 - `python3 -m ruff check .`
 - `python3 -m ruff format . --check`
 - `pytest tests/ -v --cov=obs --cov-report=xml --cov-report=term --junitxml="${TMPDIR:-/tmp}/openbridge-pre-push-junit.xml"`
+
+The i18n gate checks changed GUI/Visu files for hardcoded user-facing strings, locale key parity, and raw translation expressions such as `$t(...)` rendered as template text.
 
 To bypass once:
 

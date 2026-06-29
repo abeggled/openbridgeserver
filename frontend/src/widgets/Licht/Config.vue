@@ -6,9 +6,10 @@ const props = defineProps<{ modelValue: Record<string, unknown> }>()
 const emit  = defineEmits<{ (e: 'update:modelValue', val: Record<string, unknown>): void }>()
 
 const cfg = reactive({
-  label:            (props.modelValue.label            as string) ?? '',
-  mode:             (props.modelValue.mode             as string) ?? 'dimm',
-  dp_switch:        (props.modelValue.dp_switch        as string) ?? '',
+  label:            (props.modelValue.label            as string)  ?? '',
+  mode:             (props.modelValue.mode             as string)  ?? 'dimm',
+  show_state_text:  (props.modelValue.show_state_text  as boolean) ?? true,
+  dp_switch:        (props.modelValue.dp_switch        as string)  ?? '',
   dp_switch_status: (props.modelValue.dp_switch_status as string) ?? '',
   dp_dim:           (props.modelValue.dp_dim           as string) ?? '',
   dp_dim_status:    (props.modelValue.dp_dim_status    as string) ?? '',
@@ -43,7 +44,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
       <input
         v-model="cfg.label"
         type="text"
-        placeholder="z.B. Wohnzimmer"
+        :placeholder="$t('widgets.licht.labelPlaceholder')"
         class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
       />
     </div>
@@ -62,6 +63,12 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
         <option value="rgbw">{{ $t('widgets.licht.typeRgbw') }}</option>
       </select>
     </div>
+
+    <!-- Statustext -->
+    <label class="flex items-center gap-2 cursor-pointer select-none">
+      <input type="checkbox" v-model="cfg.show_state_text" class="rounded" />
+      <span class="text-xs text-gray-500 dark:text-gray-400">{{ $t('widgets.licht.showStateText') }}</span>
+    </label>
 
     <hr class="border-gray-200 dark:border-gray-700" />
 
@@ -86,12 +93,12 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
       <DataPointPicker
         v-model="cfg.dp_dim"
-        label="Helligkeit schreiben"
+        :label="$t('widgets.licht.dpDimSend')"
         :compatible-types="['FLOAT', 'INTEGER']"
       />
       <DataPointPicker
         v-model="cfg.dp_dim_status"
-        label="Helligkeit lesen (Status, optional)"
+        :label="$t('widgets.licht.dpDimStatus')"
         :compatible-types="['FLOAT', 'INTEGER']"
       />
     </template>
@@ -124,12 +131,12 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
       <DataPointPicker
         v-model="cfg.dp_tw"
-        label="Farbtemperatur schreiben (DPT 7.600 = Kelvin)"
+        :label="$t('widgets.licht.dpTwSend')"
         :compatible-types="['FLOAT', 'INTEGER']"
       />
       <DataPointPicker
         v-model="cfg.dp_tw_status"
-        label="Farbtemperatur lesen (Status, optional)"
+        :label="$t('widgets.licht.dpTwStatus')"
         :compatible-types="['FLOAT', 'INTEGER']"
       />
     </template>
@@ -155,12 +162,12 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
 
       <DataPointPicker
         v-model="cfg.dp_w"
-        label="Weiss schreiben"
+        :label="$t('widgets.licht.dpWSend')"
         :compatible-types="['FLOAT', 'INTEGER']"
       />
       <DataPointPicker
         v-model="cfg.dp_w_status"
-        label="Weiss lesen (Status, optional)"
+        :label="$t('widgets.licht.dpWStatus')"
         :compatible-types="['FLOAT', 'INTEGER']"
       />
     </template>

@@ -2,7 +2,7 @@
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { DataPointValue } from '@/types'
-import { getJwt } from '@/api/client'
+import { getJwt, getWriteContext } from '@/api/client'
 
 // ── OWM One Call API Typen ─────────────────────────────────────────────────────
 
@@ -167,9 +167,15 @@ async function fetchWeather(): Promise<void> {
 
   try {
     const jwt = getJwt() ?? ''
+    const writeContext = getWriteContext()
     const params = new URLSearchParams({ url: url.value })
+    const headers: Record<string, string> = {}
+    if (jwt) headers.Authorization = `Bearer ${jwt}`
+    if (writeContext.pageId) headers['X-Page-Id'] = writeContext.pageId
+    if (writeContext.sessionToken) headers['X-Session-Token'] = writeContext.sessionToken
+
     const resp = await fetch(`/api/v1/weather/fetch?${params.toString()}`, {
-      headers: jwt ? { Authorization: `Bearer ${jwt}` } : {},
+      headers,
     })
 
     if (!resp.ok) {

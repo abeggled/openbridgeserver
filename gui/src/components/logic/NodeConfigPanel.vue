@@ -307,6 +307,67 @@
           </div>
           <div v-if="urlTargetMsg" :class="['mt-2 p-2 rounded text-xs', urlTargetMsg.ok ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500']">{{ urlTargetMsg.text }}</div>
         </div>
+        <div class="section-label flex items-center justify-between mt-1">
+          <span>{{ $t('logic.nodeConfig.apiClient.variablesSection') }}</span>
+          <button type="button" class="btn-secondary btn-sm text-teal-400" @click="addApiVariable" data-testid="api-client-add-variable">
+            {{ $t('logic.nodeConfig.apiClient.addVariable') }}
+          </button>
+        </div>
+        <p class="text-xs text-slate-500 -mt-2">{{ $t('logic.nodeConfig.apiClient.variablesHint') }}</p>
+        <div v-if="apiVariables.length === 0" class="text-xs text-slate-500 italic">
+          {{ $t('logic.nodeConfig.apiClient.noVariables') }}
+        </div>
+        <div
+          v-for="(variable, i) in apiVariables"
+          :key="variable.slot || i"
+          class="border border-slate-700 rounded-lg p-3 flex flex-col gap-2 bg-slate-900/40"
+          :data-testid="`api-client-variable-${i}`"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <span class="text-xs font-semibold text-teal-400">OBS{{ variable.slot || i + 1 }}</span>
+              <code class="ml-2 text-xs text-slate-400 break-all">###OBS{{ variable.slot || i + 1 }}###</code>
+            </div>
+            <button
+              type="button"
+              class="text-xs text-red-400 hover:text-red-300 shrink-0"
+              @click="removeApiVariable(i)"
+              :data-testid="`api-client-variable-remove-${i}`"
+            >
+              {{ $t('logic.nodeConfig.apiClient.removeVariable') }}
+            </button>
+          </div>
+          <div class="form-group">
+            <label class="label">{{ $t('logic.ports.object') }}</label>
+            <input
+              :value="apiVariableSearches[i] ?? variable.datapoint_name ?? ''"
+              type="text"
+              class="input text-sm"
+              :placeholder="$t('logic.nodeConfig.connection.searchPlaceholder')"
+              @input="onApiVariableSearchInput(i, $event)"
+              :data-testid="`api-client-variable-search-${i}`"
+            />
+            <div
+              v-if="apiVariableResults[i]?.length"
+              class="mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden max-h-40 overflow-y-auto"
+            >
+              <button
+                v-for="dp in apiVariableResults[i]"
+                :key="dp.id"
+                type="button"
+                @click="selectApiVariableDp(i, dp)"
+                class="w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200"
+                :data-testid="`api-client-variable-result-${i}`"
+              >
+                {{ dp.name }}
+                <span class="text-slate-500 ml-1">{{ dp.data_type }}</span>
+              </button>
+            </div>
+            <div v-if="variable.datapoint_name" class="mt-1 text-xs text-teal-400">
+              ✓ {{ variable.datapoint_name }}
+            </div>
+          </div>
+        </div>
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.methodLabel') }}</label>
           <select v-model="localData.method" class="input text-sm" @change="emitUpdate"
@@ -331,7 +392,7 @@
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.headersLabel') }}</label>
           <input v-model="localData.headers" type="text" class="input text-sm font-mono" @change="emitUpdate"
-            placeholder='{"X-Api-Key": "abc"}' />
+            :placeholder="$t('logic.nodeConfig.apiClient.headersPlaceholder')" />
         </div>
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.timeoutLabel') }}</label>
@@ -421,6 +482,141 @@
             />
           </div>
         </div>
+      </div>
+    </template>
+
+    <!-- ── decision / value_mapping ─────────────────────────────────────── -->
+    <template v-else-if="isDecisionNode || isValueMappingNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+
+        <template v-if="isValueMappingNode">
+          <div class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.mapping.outputType') }}</label>
+            <select v-model="localData.output_type" class="input text-sm" @change="emitUpdate" data-testid="mapping-output-type">
+              <option value="bool">BOOL</option>
+              <option value="int">INT</option>
+              <option value="float">FLOAT</option>
+              <option value="string">STRING</option>
+            </select>
+          </div>
+        </template>
+
+        <div class="flex items-center justify-between">
+          <span class="section-label">{{ isDecisionNode ? $t('logic.nodeConfig.decision.conditions') : $t('logic.nodeConfig.mapping.rules') }}</span>
+          <button
+            @click="isDecisionNode ? addDecisionCondition() : addMappingRule()"
+            class="btn-secondary btn-sm text-teal-400"
+            data-testid="rule-add"
+          >{{ $t('logic.nodeConfig.rules.add') }}</button>
+        </div>
+
+        <div
+          v-for="(rule, i) in conditionRows" :key="rule.handle || i"
+          class="rule-row"
+          :data-testid="`rule-row-${i}`"
+        >
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-mono text-slate-400 w-5 shrink-0">{{ i + 1 }}</span>
+            <input
+              :value="conditionRowName(rule, i)"
+              @input="updateConditionRow(i, 'name', $event.target.value)"
+              class="input text-xs flex-1"
+              :placeholder="$t('logic.nodeConfig.rules.namePlaceholder')"
+            />
+            <button
+              @click="removeConditionRow(i)"
+              class="text-xs text-red-400 hover:text-red-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="conditionRows.length <= 2"
+              :title="$t('logic.nodeConfig.rules.remove')"
+            >{{ $t('logic.nodeConfig.rules.removeShort') }}</button>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div class="form-group">
+              <label class="label">{{ $t('logic.nodeConfig.rules.operator') }}</label>
+              <select
+                :value="rule.operator || 'eq'"
+                @change="updateConditionRow(i, 'operator', $event.target.value)"
+                class="input text-xs"
+              >
+                <option v-for="op in CONDITION_OPERATOR_OPTIONS" :key="op.value" :value="op.value">{{ op.label }}</option>
+              </select>
+            </div>
+            <div v-if="rule.operator === 'range'" class="form-group">
+              <label class="label">{{ $t('logic.nodeConfig.rules.maxValue') }}</label>
+              <input
+                :value="rule.max ?? rule.value_to ?? ''"
+                @input="updateConditionRow(i, 'max', $event.target.value)"
+                class="input text-xs"
+                :placeholder="$t('logic.nodeConfig.rules.maxPlaceholder')"
+              />
+            </div>
+            <div v-else class="form-group">
+              <label class="label">{{ $t('logic.nodeConfig.rules.compareValue') }}</label>
+              <input
+                :value="rule.value ?? ''"
+                @input="updateConditionRow(i, 'value', $event.target.value)"
+                class="input text-xs"
+                :placeholder="rule.operator === 'regex' ? $t('logic.nodeConfig.rules.regexPlaceholder') : $t('logic.nodeConfig.rules.valuePlaceholder')"
+              />
+            </div>
+          </div>
+
+          <div v-if="rule.operator === 'range'" class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.rules.minValue') }}</label>
+            <input
+              :value="rule.min ?? rule.value ?? ''"
+              @input="updateConditionRow(i, 'min', $event.target.value)"
+              class="input text-xs"
+              :placeholder="$t('logic.nodeConfig.rules.minPlaceholder')"
+            />
+          </div>
+
+          <label v-if="isTextCondition(rule.operator)" class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              :checked="!!rule.case_sensitive"
+              @change="updateConditionRow(i, 'case_sensitive', $event.target.checked)"
+              class="accent-teal-500"
+            />
+            <span class="text-xs text-slate-600 dark:text-slate-300">{{ $t('logic.nodeConfig.rules.caseSensitive') }}</span>
+          </label>
+
+          <div v-if="isValueMappingNode" class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.mapping.resultValue') }}</label>
+            <input
+              :value="rule.result ?? ''"
+              @input="updateConditionRow(i, 'result', $event.target.value)"
+              class="input text-xs"
+              :placeholder="$t('logic.nodeConfig.mapping.resultPlaceholder')"
+              data-testid="mapping-result"
+            />
+          </div>
+        </div>
+
+        <template v-if="isValueMappingNode">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              :checked="boolVal('has_default')"
+              @change="e => { setBool('has_default', e.target.checked); emitUpdate() }"
+              class="accent-teal-500"
+              data-testid="mapping-has-default"
+            />
+            <span class="text-xs text-slate-600 dark:text-slate-300">{{ $t('logic.nodeConfig.mapping.hasDefault') }}</span>
+          </label>
+          <div v-if="boolVal('has_default')" class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.mapping.defaultValue') }}</label>
+            <input
+              v-model="localData.default_value"
+              @change="emitUpdate"
+              class="input text-sm"
+              :placeholder="$t('logic.nodeConfig.mapping.defaultPlaceholder')"
+              data-testid="mapping-default"
+            />
+          </div>
+        </template>
       </div>
     </template>
 
@@ -812,6 +1008,53 @@
       </div>
     </template>
 
+    <!-- ── wake_on_lan: MAC validation ─────────────────────────────────── -->
+    <template v-else-if="isWakeOnLanNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.wake_on_lan.mac_address') }}</label>
+          <input
+            v-model="localData.mac_address"
+            type="text"
+            :class="['input text-sm font-mono', macAddressError ? 'border-red-500 focus:ring-red-500' : '']"
+            placeholder="AA:BB:CC:DD:EE:FF"
+            @change="emitUpdate"
+            data-testid="wol-mac-address"
+          />
+          <p v-if="macAddressError" class="text-xs text-red-400 mt-1">{{ macAddressError }}</p>
+        </div>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.wake_on_lan.broadcast_ip') }}</label>
+          <input
+            v-model="localData.broadcast_ip"
+            type="text"
+            :class="['input text-sm font-mono', broadcastIpError ? 'border-red-500 focus:ring-red-500' : '']"
+            placeholder="255.255.255.255"
+            @change="emitUpdate"
+            data-testid="wol-broadcast-ip"
+          />
+          <p v-if="broadcastIpError" class="text-xs text-red-400 mt-1">{{ broadcastIpError }}</p>
+        </div>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.wake_on_lan.port') }}</label>
+          <input
+            v-model.number="localData.port"
+            type="number"
+            min="1"
+            max="65535"
+            :class="['input text-sm', portError ? 'border-red-500 focus:ring-red-500' : '']"
+            @change="emitUpdate"
+            data-testid="wol-port"
+          />
+          <p v-if="portError" class="text-xs text-red-400 mt-1">{{ portError }}</p>
+        </div>
+      </div>
+    </template>
+
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -878,6 +1121,23 @@ const urlTargetChecking = ref(false)
 const urlTargetSaving = ref(false)
 const urlTargetDecision = ref(null)
 const urlTargetMsg = ref(null)
+const apiVariableSearches = ref([])
+const apiVariableResults = ref([])
+
+const CONDITION_OPERATOR_OPTIONS = computed(() => [
+  { value: 'eq',          label: t('logic.nodeConfig.rules.operators.eq') },
+  { value: 'ne',          label: t('logic.nodeConfig.rules.operators.ne') },
+  { value: 'gt',          label: t('logic.nodeConfig.rules.operators.gt') },
+  { value: 'lt',          label: t('logic.nodeConfig.rules.operators.lt') },
+  { value: 'gte',         label: t('logic.nodeConfig.rules.operators.gte') },
+  { value: 'lte',         label: t('logic.nodeConfig.rules.operators.lte') },
+  { value: 'range',       label: t('logic.nodeConfig.rules.operators.range') },
+  { value: 'text_eq',     label: t('logic.nodeConfig.rules.operators.text_eq') },
+  { value: 'contains',    label: t('logic.nodeConfig.rules.operators.contains') },
+  { value: 'starts_with', label: t('logic.nodeConfig.rules.operators.starts_with') },
+  { value: 'ends_with',   label: t('logic.nodeConfig.rules.operators.ends_with') },
+  { value: 'regex',       label: t('logic.nodeConfig.rules.operators.regex') },
+])
 
 // ── Value Map Presets ──────────────────────────────────────────────────────
 const VALUE_MAP_PRESETS = computed(() => [
@@ -1037,6 +1297,32 @@ const isExtractorNode  = computed(() =>
 const isSubstringExtractorNode = computed(() => props.node?.type === 'substring_extractor')
 const isStringConcatNode = computed(() => props.node?.type === 'string_concat')
 const isICalNode          = computed(() => props.node?.type === 'ical')
+const apiVariables = computed(() => Array.isArray(localData.value.variables) ? localData.value.variables : [])
+const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
+const isDecisionNode      = computed(() => props.node?.type === 'decision')
+const isValueMappingNode  = computed(() => props.node?.type === 'value_mapping')
+
+const MAC_RE = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/
+const macAddressError = computed(() => {
+  const mac = (localData.value.mac_address || '').trim()
+  if (!mac) return ''
+  return MAC_RE.test(mac) ? '' : t('logic.nodeConfig.wake_on_lan.invalidMac')
+})
+
+const IPV4_RE = /^(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)$/
+const broadcastIpError = computed(() => {
+  const ip = (localData.value.broadcast_ip || '').trim()
+  if (!ip) return ''
+  return IPV4_RE.test(ip) ? '' : t('logic.nodeConfig.wake_on_lan.invalidBroadcastIp')
+})
+
+const portError = computed(() => {
+  const p = localData.value.port
+  if (p === '' || p === null || p === undefined) return ''
+  const n = Number(p)
+  if (!Number.isInteger(n) || n < 1 || n > 65535) return t('logic.nodeConfig.wake_on_lan.invalidPort')
+  return ''
+})
 
 // ── iCal: filter management ───────────────────────────────────────────────
 const icalFilters = computed(() => {
@@ -1085,6 +1371,119 @@ function onConcatCountChange(e) {
   const v = Math.max(2, Math.min(20, parseInt(e.target.value) || 2))
   localData.value.count = v
   emitUpdate()
+}
+
+// ── Decision / value_mapping: shared condition row management ─────────────
+function _parseRows(raw) {
+  if (Array.isArray(raw)) {
+    return raw.filter(row => row && typeof row === 'object' && !Array.isArray(row))
+  }
+  if (typeof raw !== 'string') return []
+  try {
+    const parsed = JSON.parse(raw || '[]')
+    return Array.isArray(parsed)
+      ? parsed.filter(row => row && typeof row === 'object' && !Array.isArray(row))
+      : []
+  } catch { return [] }
+}
+
+function _defaultDecisionRows() {
+  return [
+    { handle: 'out_1', operator: 'eq' },
+    { handle: 'out_2', operator: 'eq' },
+  ]
+}
+
+function _defaultMappingRows() {
+  return [
+    { operator: 'eq', result: '' },
+    { operator: 'eq', result: '' },
+  ]
+}
+
+const decisionConditions = computed(() => {
+  const rows = _parseRows(localData.value.conditions)
+  return rows.length ? rows : _defaultDecisionRows()
+})
+
+const mappingRules = computed(() => {
+  const rows = _parseRows(localData.value.rules)
+  return rows.length ? rows : _defaultMappingRows()
+})
+
+const conditionRows = computed(() =>
+  isDecisionNode.value ? decisionConditions.value : mappingRules.value
+)
+
+function conditionRowName(row, i) {
+  if (row.name) return row.name
+  return isDecisionNode.value
+    ? t('logic.nodeConfig.decision.defaultOutput', { n: i + 1 })
+    : t('logic.nodeConfig.mapping.defaultRule', { n: i + 1 })
+}
+
+function _saveConditionRows(rows) {
+  if (isDecisionNode.value) {
+    localData.value.conditions = JSON.stringify(rows.map((row, i) => ({
+      ...row,
+      handle: row.handle || `out_${i + 1}`,
+    })).map(row => {
+      if (!row.name) delete row.name
+      return row
+    }))
+  } else {
+    localData.value.rules = JSON.stringify(rows.map(row => {
+      const next = { ...row }
+      if (!next.name) delete next.name
+      return next
+    }))
+  }
+  emitUpdate()
+}
+
+function addDecisionCondition() {
+  const rows = decisionConditions.value.map(r => ({ ...r }))
+  const nextNumber = rows.reduce((max, row) => {
+    const match = String(row.handle || '').match(/^out_(\d+)$/)
+    return match ? Math.max(max, Number(match[1])) : max
+  }, 0) + 1
+  rows.push({
+    handle: `out_${nextNumber}`,
+    operator: 'eq',
+  })
+  _saveConditionRows(rows)
+}
+
+function addMappingRule() {
+  const rows = mappingRules.value.map(r => ({ ...r }))
+  rows.push({
+    operator: 'eq',
+    result: '',
+  })
+  _saveConditionRows(rows)
+}
+
+function updateConditionRow(i, key, value) {
+  const rows = conditionRows.value.map(r => ({ ...r }))
+  if (!rows[i]) return
+  rows[i][key] = value
+  if (key === 'operator' && value !== 'range') {
+    delete rows[i].min
+    delete rows[i].max
+    delete rows[i].value_to
+  }
+  _saveConditionRows(rows)
+}
+
+function removeConditionRow(i) {
+  const rows = conditionRows.value.map(r => ({ ...r }))
+  if (rows.length <= 2) return
+  rows.splice(i, 1)
+  _saveConditionRows(rows)
+}
+
+function isTextCondition(operator) {
+  return ['text_eq', 'contains', 'starts_with', 'ends_with', 'regex'].includes(operator)
 }
 
 // ── Extractor: preview + path helpers ─────────────────────────────────────
@@ -1447,6 +1846,33 @@ function fieldLabel(nodeType, fieldKey, fallback) {
   return te(key) ? t(key) : (fallback ?? fieldKey)
 }
 
+function normaliseApiVariables(raw) {
+  let variables = raw
+  if (typeof variables === 'string') {
+    try {
+      variables = JSON.parse(variables)
+    } catch {
+      variables = []
+    }
+  }
+  return Array.isArray(variables)
+    ? variables.map((v, i) => {
+        const slot = Number.parseInt(v?.slot, 10)
+        return {
+          slot: Number.isInteger(slot) && slot > 0 ? slot : i + 1,
+          datapoint_id: v?.datapoint_id || '',
+          datapoint_name: v?.datapoint_name || '',
+        }
+      })
+    : []
+}
+
+function syncApiVariableUiState() {
+  const vars = apiVariables.value
+  apiVariableSearches.value = vars.map((v, i) => apiVariableSearches.value[i] ?? v.datapoint_name ?? '')
+  apiVariableResults.value = vars.map((_, i) => apiVariableResults.value[i] ?? [])
+}
+
 // ── Watchers ───────────────────────────────────────────────────────────────
 watch(() => props.node, (n) => {
   if (n) {
@@ -1462,6 +1888,14 @@ watch(() => props.node, (n) => {
     }
     if (n.type === 'api_client' && !localData.value.auth_type) {
       localData.value.auth_type = 'none'
+    }
+    if (n.type === 'api_client') {
+      localData.value.variables = normaliseApiVariables(localData.value.variables)
+      apiVariableSearches.value = localData.value.variables.map(v => v.datapoint_name || '')
+      apiVariableResults.value = localData.value.variables.map(() => [])
+    } else {
+      apiVariableSearches.value = []
+      apiVariableResults.value = []
     }
     if (n.type === 'datapoint_read' || n.type === 'datapoint_write') {
       searchDps()
@@ -1581,6 +2015,66 @@ function selectDp(dp) {
   localData.value.datapoint_name = dp.name
   dpSearch.value  = dp.name
   dpResults.value = []
+  emitUpdate()
+}
+
+function addApiVariable() {
+  const variables = normaliseApiVariables(localData.value.variables)
+  const maxSlot = variables.reduce((max, variable) => Math.max(max, variable.slot || 0), 0)
+  variables.push({ slot: maxSlot + 1, datapoint_id: '', datapoint_name: '' })
+  localData.value.variables = variables
+  syncApiVariableUiState()
+  emitUpdate()
+}
+
+function removeApiVariable(index) {
+  const variables = normaliseApiVariables(localData.value.variables)
+  variables.splice(index, 1)
+  localData.value.variables = variables
+  apiVariableSearches.value.splice(index, 1)
+  apiVariableResults.value.splice(index, 1)
+  syncApiVariableUiState()
+  emitUpdate()
+}
+
+async function searchApiVariableDps(index, query) {
+  try {
+    let items
+    if ((query || '').length < 1) {
+      const { data } = await dpApi.list(0, 50)
+      items = data.items || data
+    } else {
+      const { data } = await searchApi.search({ q: query, size: 50 })
+      items = data.items || data
+    }
+    const next = apiVariableResults.value.slice()
+    next[index] = items
+    apiVariableResults.value = next
+  } catch {
+    const next = apiVariableResults.value.slice()
+    next[index] = []
+    apiVariableResults.value = next
+  }
+}
+
+function onApiVariableSearchInput(index, event) {
+  const query = event.target.value
+  const searches = apiVariableSearches.value.slice()
+  searches[index] = query
+  apiVariableSearches.value = searches
+  searchApiVariableDps(index, query)
+}
+
+function selectApiVariableDp(index, dp) {
+  const variables = normaliseApiVariables(localData.value.variables)
+  variables[index] = { slot: variables[index]?.slot || index + 1, datapoint_id: dp.id, datapoint_name: dp.name }
+  localData.value.variables = variables
+  const searches = apiVariableSearches.value.slice()
+  searches[index] = dp.name
+  apiVariableSearches.value = searches
+  const results = apiVariableResults.value.slice()
+  results[index] = []
+  apiVariableResults.value = results
   emitUpdate()
 }
 
@@ -1726,6 +2220,16 @@ function emitUpdate() {
 
 .extractor-output-row {
   background: var(--extractor-output-bg);
+}
+
+.rule-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(100, 116, 139, 0.35);
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.35);
 }
 
 .extractor-output-index {

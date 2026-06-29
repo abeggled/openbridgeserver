@@ -119,7 +119,7 @@ class ModbusTcpAdapter(AdapterBase):
             from pymodbus.client import AsyncModbusTcpClient
         except ImportError:
             logger.error("pymodbus not installed — Modbus TCP disabled. Run: pip install pymodbus")
-            await self._publish_status(False, "pymodbus not installed")
+            await self._publish_status(False, "pymodbus not installed", code="libNotInstalled", params={"lib": "pymodbus"})
             return
         self._client_factory = AsyncModbusTcpClient
 
@@ -139,10 +139,20 @@ class ModbusTcpAdapter(AdapterBase):
         try:
             await self._client.connect()
             if self._client.connected:
-                await self._publish_status(True, f"{cfg.host}:{cfg.port}")
+                await self._publish_status(
+                    True,
+                    f"{cfg.host}:{cfg.port}",
+                    code="connectedTo",
+                    params={"host": cfg.host, "port": cfg.port},
+                )
                 logger.info("Modbus TCP connected: %s:%d", cfg.host, cfg.port)
             else:
-                await self._publish_status(False, f"Could not connect to {cfg.host}:{cfg.port}")
+                await self._publish_status(
+                    False,
+                    f"Could not connect to {cfg.host}:{cfg.port}",
+                    code="couldNotConnectTo",
+                    params={"host": cfg.host, "port": cfg.port},
+                )
         except Exception as exc:
             await self._publish_status(False, str(exc))
             logger.exception("Modbus TCP connect failed")
@@ -162,7 +172,7 @@ class ModbusTcpAdapter(AdapterBase):
             if self._client:
                 async with self._client_lifecycle():
                     self._client.close()
-            await self._publish_status(False, "Disconnected")
+            await self._publish_status(False, "Disconnected", code="disconnected")
 
     # ------------------------------------------------------------------
     # Bindings
@@ -199,12 +209,19 @@ class ModbusTcpAdapter(AdapterBase):
                         await self._client.connect()
                         if self._client.connected:
                             self._reconnect_ok_after = 0.0
-                            await self._publish_status(True, f"{self._adp_cfg.host}:{self._adp_cfg.port}")
+                            await self._publish_status(
+                                True,
+                                f"{self._adp_cfg.host}:{self._adp_cfg.port}",
+                                code="connectedTo",
+                                params={"host": self._adp_cfg.host, "port": self._adp_cfg.port},
+                            )
                             logger.info("Modbus TCP: reconnected after binding reload")
                         else:
                             await self._publish_status(
                                 False,
                                 f"Could not reconnect to {self._adp_cfg.host}:{self._adp_cfg.port}",
+                                code="couldNotReconnectTo",
+                                params={"host": self._adp_cfg.host, "port": self._adp_cfg.port},
                             )
                             logger.warning("Modbus TCP: reconnect after reload left client disconnected")
                     except Exception as exc:
@@ -259,7 +276,7 @@ class ModbusTcpAdapter(AdapterBase):
                     if self._client and not self._client.connected:
                         if time.monotonic() < self._reconnect_ok_after:
                             # Backoff active — skip this attempt, publish bad quality.
-                            await self._publish_disconnected_if_needed("Modbus TCP reconnect backoff active")
+                            await self._publish_disconnected_if_needed("Modbus TCP reconnect backoff active", code="modbusReconnectBackoff")
                             reconnect_failed = True
                         else:
                             try:
@@ -269,7 +286,7 @@ class ModbusTcpAdapter(AdapterBase):
                                     self._reconnect_ok_after = 0.0  # clear backoff on success
                                     host = self._adp_cfg.host
                                     port = self._adp_cfg.port
-                                    await self._publish_status(True, f"{host}:{port}")
+                                    await self._publish_status(True, f"{host}:{port}", code="connectedTo", params={"host": host, "port": port})
                                     logger.info(
                                         "Modbus TCP: reconnected in poll loop (binding %s)",
                                         binding.id,
@@ -281,6 +298,8 @@ class ModbusTcpAdapter(AdapterBase):
                                     )
                                     await self._publish_disconnected_if_needed(
                                         f"Could not reconnect to {self._adp_cfg.host}:{self._adp_cfg.port}",
+                                        code="couldNotReconnectTo",
+                                        params={"host": self._adp_cfg.host, "port": self._adp_cfg.port},
                                     )
                                     logger.warning(
                                         "Modbus TCP: connect() succeeded but client still disconnected (binding %s)",
@@ -440,9 +459,9 @@ class ModbusTcpAdapter(AdapterBase):
                 continue
         return max(0.0, min(intervals))
 
-    async def _publish_disconnected_if_needed(self, detail: str) -> None:
+    async def _publish_disconnected_if_needed(self, detail: str, *, code: str | None = None, params: dict | None = None) -> None:
         if self.connected:
-            await self._publish_status(False, detail)
+            await self._publish_status(False, detail, code=code, params=params)
 
     async def _modbus_call(self, fn, *pos_args, unit_id: int, **extra_kwargs) -> Any:
         """Version-safe pymodbus call across 2.x / 3.x / 3.12+.

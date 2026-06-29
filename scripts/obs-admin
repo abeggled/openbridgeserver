@@ -1,0 +1,61 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 abeggled and all contributors
+# SPDX-License-Identifier: MIT
+#
+# obs-admin — offline administration wrapper for OpenBridgeServer
+#
+# Installed to /usr/local/bin/obs-admin during LXC and Docker builds.
+# Intended as a break-glass tool when OBS is stopped or unreachable:
+# database inspection, adapter enable/disable, config validation, backups.
+#
+# Python resolution order:
+#   1. LXC install:  $OBS_ADMIN_APP_DIR/venv/bin/python3  (default: /opt/obs/venv/bin/python3)
+#   2. Docker:       python3 relative to /app
+#   3. Dev venv:     ./.venv/bin/python3
+#   4. System:       python3
+
+obs_admin_load_env_file() {
+  env_file=$1
+  [ -f "$env_file" ] || return 0
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ""|\#*)
+        continue
+        ;;
+      OBS_CONFIG=*|OBS_DATABASE__PATH=*|OPENTWS_CONFIG=*|OPENTWS_DATABASE__PATH=*)
+        key=${line%%=*}
+        value=${line#*=}
+        case "$value" in
+          \"*)
+            value=${value#\"}
+            value=${value%\"}
+            ;;
+          \'*)
+            value=${value#\'}
+            value=${value%\'}
+            ;;
+        esac
+        export "$key=$value"
+        ;;
+    esac
+  done < "$env_file"
+}
+
+obs_admin_app_dir=${OBS_ADMIN_APP_DIR:-/opt/obs}
+obs_admin_python=${OBS_ADMIN_PYTHON:-$obs_admin_app_dir/venv/bin/python3}
+obs_admin_env_file=${OBS_ADMIN_ENV_FILE:-/etc/obs.env}
+
+if [ -d "$obs_admin_app_dir/obs" ] && [ -x "$obs_admin_python" ]; then
+  obs_admin_load_env_file "$obs_admin_env_file"
+  cd "$obs_admin_app_dir" || exit 1
+  exec "$obs_admin_python" -m obs.admin_cli "$@"
+fi
+if [ -d /app/obs ]; then
+  cd /app || exit 1
+  exec python3 -m obs.admin_cli "$@"
+fi
+if [ -x ./.venv/bin/python3 ]; then
+  exec ./.venv/bin/python3 -m obs.admin_cli "$@"
+fi
+exec python3 -m obs.admin_cli "$@"

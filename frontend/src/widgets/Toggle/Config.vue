@@ -12,10 +12,11 @@ interface StateRule {
 }
 
 interface Cfg {
-  label: string
-  mode: DisplayMode
-  on: StateRule
-  off: StateRule
+  label:      string
+  mode:       DisplayMode
+  label_size: string
+  on:         StateRule
+  off:        StateRule
 }
 
 
@@ -41,8 +42,9 @@ function parseRule(raw: unknown, defaults: StateRule): StateRule {
 }
 
 const cfg = reactive<Cfg>({
-  label: (props.modelValue.label as string) ?? '',
-  mode:  (props.modelValue.mode  as DisplayMode) ?? 'switch',
+  label:      (props.modelValue.label      as string)      ?? '',
+  mode:       (props.modelValue.mode       as DisplayMode) ?? 'switch',
+  label_size: (props.modelValue.label_size as string)      ?? 'xs',
   on:  parseRule(props.modelValue.on,  { icon: '', color: '#3b82f6', text: t('common.on') }),
   off: parseRule(props.modelValue.off, { icon: '', color: '#6b7280', text: t('common.off') }),
 })
@@ -62,6 +64,21 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
         :placeholder="$t('widgets.toggle.labelPlaceholder')"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       />
+    </div>
+
+    <!-- Schriftgrösse -->
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.common.fontSize') }}</label>
+      <select
+        v-model="cfg.label_size"
+        class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+      >
+        <option value="xs">{{ $t('widgets.common.fontSizeXs') }} – Standard (text-xs)</option>
+        <option value="sm">{{ $t('widgets.common.fontSizeSm') }} (text-sm)</option>
+        <option value="md">{{ $t('widgets.common.fontSizeMd') }} (text-base)</option>
+        <option value="lg">{{ $t('widgets.common.fontSizeLg') }} (text-lg)</option>
+        <option value="xl">{{ $t('widgets.common.fontSizeXl') }} (text-xl)</option>
+      </select>
     </div>
 
     <!-- Modus -->

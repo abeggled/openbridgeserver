@@ -75,7 +75,7 @@ class ModbusRtuAdapter(AdapterBase):
             from pymodbus.client import AsyncModbusSerialClient
         except ImportError:
             logger.error("pymodbus not installed — Modbus RTU disabled. Run: pip install pymodbus")
-            await self._publish_status(False, "pymodbus not installed")
+            await self._publish_status(False, "pymodbus not installed", code="libNotInstalled", params={"lib": "pymodbus"})
             return
 
         cfg = ModbusRtuAdapterConfig(**self._config)
@@ -90,10 +90,15 @@ class ModbusRtuAdapter(AdapterBase):
         try:
             await self._client.connect()
             if self._client.connected:
-                await self._publish_status(True, f"{cfg.port}@{cfg.baudrate}")
+                await self._publish_status(
+                    True,
+                    f"{cfg.port}@{cfg.baudrate}",
+                    code="modbusSerialConnected",
+                    params={"port": cfg.port, "baudrate": cfg.baudrate},
+                )
                 logger.info("Modbus RTU connected: %s @ %d baud", cfg.port, cfg.baudrate)
             else:
-                await self._publish_status(False, f"Could not open {cfg.port}")
+                await self._publish_status(False, f"Could not open {cfg.port}", code="couldNotOpenPort", params={"port": cfg.port})
         except Exception as exc:
             await self._publish_status(False, str(exc))
             logger.exception("Modbus RTU connect failed")
@@ -104,7 +109,7 @@ class ModbusRtuAdapter(AdapterBase):
         self._poll_tasks.clear()
         if self._client:
             self._client.close()
-        await self._publish_status(False, "Disconnected")
+        await self._publish_status(False, "Disconnected", code="disconnected")
 
     # ------------------------------------------------------------------
     # Bindings

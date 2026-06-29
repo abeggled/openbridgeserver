@@ -16,8 +16,9 @@ const props = defineProps<{
 const dpStore = useDatapointsStore()
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const label     = computed(() => (props.config.label as string) ?? '—')
-const mode      = computed(() => (props.config.mode  as string) ?? 'on_off')
+const label         = computed(() => (props.config.label          as string)  ?? '—')
+const mode          = computed(() => (props.config.mode           as string)  ?? 'on_off')
+const showStateText = computed(() => props.config.show_state_text !== false)
 const hasTw     = computed(() => mode.value === 'tw')
 const hasColor  = computed(() => ['rgb', 'rgbw'].includes(mode.value))
 const hasWhite  = computed(() => mode.value === 'rgbw')
@@ -377,7 +378,7 @@ onUnmounted(() => {
           :class="{ 'translate-x-6': isOn }"
         />
       </button>
-      <span class="text-xs font-medium" :class="isOn ? 'text-blue-500' : 'text-gray-400'">
+      <span v-if="showStateText" class="text-xs font-medium" :class="isOn ? 'text-blue-500' : 'text-gray-400'">
         {{ isOn ? 'EIN' : 'AUS' }}
       </span>
     </div>
@@ -411,7 +412,7 @@ onUnmounted(() => {
             :class="{ 'translate-x-5': isOn }"
           />
         </button>
-        <span class="text-xs font-medium" :class="isOn ? 'text-blue-500' : 'text-gray-400'">
+        <span v-if="showStateText" class="text-xs font-medium" :class="isOn ? 'text-blue-500' : 'text-gray-400'">
           {{ isOn ? 'EIN' : 'AUS' }}
         </span>
       </div>
