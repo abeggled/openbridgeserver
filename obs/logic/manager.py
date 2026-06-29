@@ -1391,11 +1391,9 @@ class LogicManager:
                 hyst_wol["wol_prev_trigger"] = True
                 outputs[node.id]["sent"] = True
                 triggered_wol_nodes.add(node.id)
-                mac_oui = ":".join(mac.upper().split(":")[:3]) + ":??:??:??" if ":" in mac else "??:??:??:??:??:??"
-                logger.info("Graph %s: WoL sent to %s via %s:%d", graph_id[:8], mac_oui, broadcast, port)
+                logger.info("Graph %s: WoL sent by node %s", graph_id[:8], node.id[:8])
             except Exception as exc:
-                mac_oui = ":".join(mac.upper().split(":")[:3]) + ":??:??:??" if ":" in mac else "??:??:??:??:??:??"
-                logger.warning("Graph %s: WoL failed (mac=%s): %s", graph_id[:8], mac_oui, exc)
+                logger.warning("Graph %s: WoL failed on node %s: %s", graph_id[:8], node.id[:8], type(exc).__name__)
 
         # ── Re-propagate wake_on_lan sent=True to downstream nodes ───────────
         # The first executor pass computed downstream nodes with sent=False.
@@ -1794,11 +1792,9 @@ class LogicManager:
                     outputs[node.id]["sent"] = True
                     post_api_wol_nodes.add(node.id)
                     triggered_wol_nodes.add(node.id)
-                    mac_oui = ":".join(mac.upper().split(":")[:3]) + ":??:??:??" if ":" in mac else "??:??:??:??:??:??"
-                    logger.info("Graph %s: WoL sent to %s via %s:%d", graph_id[:8], mac_oui, broadcast, port)
+                    logger.info("Graph %s: WoL sent by node %s", graph_id[:8], node.id[:8])
                 except Exception as exc:
-                    mac_oui = ":".join(mac.upper().split(":")[:3]) + ":??:??:??" if ":" in mac else "??:??:??:??:??:??"
-                    logger.warning("Graph %s: WoL failed (mac=%s): %s", graph_id[:8], mac_oui, exc)
+                    logger.warning("Graph %s: WoL failed on node %s: %s", graph_id[:8], node.id[:8], type(exc).__name__)
 
         if post_api_wol_nodes:
             post_api_wol_overrides: dict[str, dict[str, Any]] = {}
