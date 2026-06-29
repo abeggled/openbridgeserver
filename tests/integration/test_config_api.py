@@ -424,9 +424,7 @@ async def test_import_message_binding_non_source_direction_records_error(client,
                 "enabled": True,
             }
         ],
-        "adapter_instances": [
-            {"id": inst_id, "adapter_type": "MESSAGE", "name": f"MsgInst-{uuid.uuid4().hex[:6]}", "config": {}, "enabled": False}
-        ],
+        "adapter_instances": [{"id": inst_id, "adapter_type": "MESSAGE", "name": f"MsgInst-{uuid.uuid4().hex[:6]}", "config": {}, "enabled": False}],
     }
     resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
 
