@@ -119,6 +119,7 @@
 * Backend: Complete remaining UI translation fixes after i18n rollout. https://github.com/abeggled/openbridgeserver/pull/542
 * Backend: Validate `DataValueEvent` payloads before bridge propagation. https://github.com/abeggled/openbridgeserver/pull/519
 * Backend: Ringbuffer pause/resume race condition stabilized. https://github.com/abeggled/openbridgeserver/pull/509
+* Backend: RingBuffer configuration changes that greatly reduce the maximum entry count no longer time out or pin a CPU core. Old monitor entries are trimmed in bounded batches, and existing RingBuffer metadata databases receive an `entry_id` index for efficient cascade deletes. https://github.com/abeggled/openbridgeserver/issues/856
 * Backend: Monitor/RingBuffer now recovers automatically from a malformed SQLite database by quarantining the corrupted monitor DB/WAL/SHM files and recreating an empty RingBuffer, preventing repeated EventBus errors and Monitor API failures. https://github.com/abeggled/openbridgeserver/issues/689
 * Backend: Monitor live updates now stay in sync when active filtersets are applied; WebSocket entries include RingBuffer metadata for tag matching and hierarchy-based filters trigger a server refresh instead of leaving the table stale. https://github.com/abeggled/openbridgeserver/issues/718
 * Backend: InfluxDB v3 writes now use correct `db` query parameter. https://github.com/abeggled/openbridgeserver/pull/511

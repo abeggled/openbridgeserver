@@ -39,6 +39,7 @@ _SQLITE_CORRUPTION_MARKERS = (
     "integrity_check failed",
 )
 _MAX_QUARANTINE_FILES_PER_STORAGE_FILE = 3
+_DELETE_OLDEST_BATCH_SIZE = 500
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ringbuffer (
@@ -76,6 +77,7 @@ CREATE TABLE IF NOT EXISTS ringbuffer_metadata_bindings (
 );
 CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_adapter_type ON ringbuffer_metadata_bindings(adapter_type);
 CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_adapter_instance ON ringbuffer_metadata_bindings(adapter_instance_id);
+CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_entry_id ON ringbuffer_metadata_bindings(entry_id);
 CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_group_address ON ringbuffer_metadata_bindings(group_address);
 CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_topic ON ringbuffer_metadata_bindings(topic);
 CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_entity_id ON ringbuffer_metadata_bindings(entity_id);
@@ -413,24 +415,37 @@ class RingBuffer:
         if not self._conn or limit <= 0:
             return 0
 
-        async with self._conn.execute(
-            "SELECT id FROM ringbuffer ORDER BY id ASC LIMIT ?",
-            (limit,),
-        ) as cur:
-            rows = await cur.fetchall()
-        if not rows:
+        removed_total = 0
+        remaining = limit
+        while remaining > 0:
+            batch_size = min(remaining, _DELETE_OLDEST_BATCH_SIZE)
+            cur = await self._conn.execute(
+                """
+                DELETE FROM ringbuffer
+                WHERE id IN (
+                    SELECT id FROM ringbuffer ORDER BY id ASC LIMIT ?
+                )
+                """,
+                (batch_size,),
+            )
+            removed = cur.rowcount
+            await cur.close()
+            if removed is None or removed < 0:
+                async with self._conn.execute("SELECT changes()") as changes_cur:
+                    row = await changes_cur.fetchone()
+                removed = row[0] if row else 0
+            if removed <= 0:
+                break
+            removed_total += removed
+            remaining -= removed
+
+        if removed_total == 0:
             return 0
 
-        ids = [row[0] for row in rows]
-        placeholders = ",".join("?" for _ in ids)
-        await self._conn.execute(
-            f"DELETE FROM ringbuffer WHERE id IN ({placeholders})",
-            ids,
-        )
         await self._conn.commit()
         if self._storage in {"disk", "file"}:
             await self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        return len(ids)
+        return removed_total
 
     async def _current_storage_bytes(self) -> int:
         if not self._conn or self._storage == "memory":
