@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from obs.adapters.message.adapter import (
     MessageAdapter,
     MessageAdapterConfig,
+    MessageBindingConfig,
     evaluate_condition,
     render_message,
 )
@@ -130,6 +131,15 @@ def test_disabled_provider_allows_incomplete_hidden_targets():
     cfg = MessageAdapterConfig(providers={"telegram": {"enabled": False, "targets": {"default": {}}}})
 
     assert cfg.providers["telegram"]["enabled"] is False
+
+
+def test_enabled_binding_requires_message_target():
+    with pytest.raises(ValueError, match="at least one target"):
+        MessageBindingConfig(providers=[])
+
+    cfg = MessageBindingConfig(enabled=False, providers=[])
+
+    assert cfg.enabled is False
 
 
 @pytest.fixture
@@ -677,6 +687,26 @@ async def test_binding_reload_drops_stale_pending_in_flight_send(bus, monkeypatc
     await _drain_sends(adapter)
 
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_binding_reload_resets_previous_condition_state(bus, dummy_provider, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"dummy": {"enabled": True, "targets": {"default": {}}}}},
+    )
+    binding = _message_binding(dp_id)
+    await adapter.reload_bindings([binding])
+
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=99, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
+    await adapter.reload_bindings([binding])
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=99, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
+
+    assert dummy_provider.send.await_count == 2
 
 
 @pytest.mark.asyncio

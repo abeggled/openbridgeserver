@@ -62,6 +62,7 @@ _SENSITIVE_KEYS = {
     "backbone_key",
     "community",
     "knxkeys_file_path",
+    "to",
     "priv_key",
     "user_key",
 }

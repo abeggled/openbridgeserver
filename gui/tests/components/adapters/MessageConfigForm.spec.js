@@ -54,7 +54,7 @@ describe('MessageConfigForm', () => {
     await passwordInputs[passwordInputs.length - 1].setValue('user-key')
 
     expect(getModel().providers.pushover.targets.home.user_key).toBe('user-key')
-    expect(getModel().providers.pushover.targets.default).toBeDefined()
+    expect(getModel().providers.pushover.targets.default).toBeUndefined()
 
     const deleteButtons = wrapper.findAll('button').filter(button => button.text() === 'Löschen')
     await deleteButtons[deleteButtons.length - 1].trigger('click')

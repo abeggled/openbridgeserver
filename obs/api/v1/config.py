@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from obs.api.auth import get_admin_user
+from obs.api.v1.bindings import _validate_adapter_binding
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
@@ -635,6 +636,7 @@ async def import_config(
                 err = validate_formula(formula)
                 if err:
                     raise ValueError(f"Ungültige Formel: {err}")
+            _validate_adapter_binding(b_data.adapter_type, b_data.direction, b_data.config)
             row = await db.fetchone("SELECT id FROM adapter_bindings WHERE id=?", (b_id,))
             if row:
                 await db.execute_and_commit(

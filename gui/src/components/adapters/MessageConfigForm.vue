@@ -172,6 +172,7 @@ function renameTarget(provider, oldName, rawName) {
   const targets = { ...(cfg.targets ?? {}) }
   if (targets[newName]) return
   targets[newName] = targets[oldName]
+  delete targets[oldName]
   setProvider(provider, { targets })
 }
 

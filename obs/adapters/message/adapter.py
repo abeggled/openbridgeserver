@@ -64,6 +64,12 @@ class MessageBindingConfig(BaseModel):
     cooldown_seconds: int = Field(default=0, ge=0)
     enabled: bool = True
 
+    @model_validator(mode="after")
+    def _validate_targets(self) -> "MessageBindingConfig":
+        if self.enabled and not self.providers:
+            raise ValueError("MESSAGE binding requires at least one target")
+        return self
+
 
 class _BindingState:
     def __init__(self) -> None:
@@ -211,10 +217,9 @@ class MessageAdapter(AdapterBase):
                 continue
             if not cfg.enabled:
                 continue
-            self._binding_map.setdefault(binding.datapoint_id, []).append(binding)
             active_ids.add(binding.id)
-            state = self._states.setdefault(binding.id, _BindingState())
-            state.pending_events.clear()
+            self._binding_map.setdefault(binding.datapoint_id, []).append(binding)
+            self._states[binding.id] = _BindingState()
         for binding_id in list(self._states):
             if binding_id not in active_ids:
                 self._states.pop(binding_id, None)

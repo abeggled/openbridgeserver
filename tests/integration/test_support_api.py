@@ -550,6 +550,7 @@ def test_sanitize_support_data_redacts_dictionary_keys_and_preserves_path_basena
                 "sniffer.process.com": {"status": "ok"},
             },
             "logger": "mqtt.customer.local api_key=logger-secret",
+            "to": "+41000000000",
             "user_key": "pushover-user-key",
             "path": "obs.db",
             "config_source": r"C:\Users\Alice\obs\customer.com.key",
@@ -566,6 +567,7 @@ def test_sanitize_support_data_redacts_dictionary_keys_and_preserves_path_basena
     assert "[REDACTED_IP] (2)" in sanitized["devices"]
     assert "[REDACTED_DOMAIN]" in sanitized["devices"]
     assert sanitized["devices"]["access_token"] == "[REDACTED]"
+    assert sanitized["to"] == "[REDACTED]"
     assert sanitized["user_key"] == "[REDACTED]"
     assert "mqtt.customer.local" not in sanitized["logger"]
     assert "logger-secret" not in sanitized["logger"]

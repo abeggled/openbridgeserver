@@ -81,6 +81,26 @@ async def _reload_adapter_instance(instance_id: str, db: Database) -> None:
     await adapter_registry.reload_instance_bindings(instance_id, db)
 
 
+def _validate_adapter_binding(adapter_type: str, direction: str, config: dict[str, Any]) -> None:
+    if adapter_type == "MESSAGE" and direction != "SOURCE":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "MESSAGE-Bindings unterstützen nur Richtung SOURCE",
+        )
+
+    from obs.adapters.registry import get_class
+
+    cls = get_class(adapter_type)
+    if cls and hasattr(cls, "binding_config_schema"):
+        try:
+            cls.binding_config_schema(**config)
+        except Exception as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"Ungültige Binding-Config: {exc}",
+            ) from exc
+
+
 def _row_out(row: Any, name_map: dict[str, str] | None = None) -> BindingOut:
     instance_id = row["adapter_instance_id"]
     throttle = row["send_throttle_ms"]
@@ -145,18 +165,7 @@ async def create_binding(
         )
     adapter_type = instance_row["adapter_type"]
 
-    # Binding-Config gegen Schema validieren
-    from obs.adapters.registry import get_class
-
-    cls = get_class(adapter_type)
-    if cls and hasattr(cls, "binding_config_schema"):
-        try:
-            cls.binding_config_schema(**body.config)
-        except Exception as exc:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                f"Ungültige Binding-Config: {exc}",
-            ) from exc
+    _validate_adapter_binding(adapter_type, body.direction, body.config)
 
     # Formel validieren
     if body.value_formula:
@@ -219,7 +228,8 @@ async def update_binding(
     now = datetime.now(UTC).isoformat()
 
     direction = updates.get("direction", row["direction"])
-    config_val = json.dumps(updates.get("config", json.loads(row["config"])))
+    config = updates.get("config", json.loads(row["config"]))
+    config_val = json.dumps(config)
     enabled = int(updates.get("enabled", bool(row["enabled"])))
     throttle_ms = updates.get("send_throttle_ms", row["send_throttle_ms"])
     on_change = int(updates.get("send_on_change", bool(row["send_on_change"])))
@@ -228,6 +238,8 @@ async def update_binding(
     formula = updates.get("value_formula", row["value_formula"]) or None
     value_map_new = updates.get("value_map", json.loads(row["value_map"]) if row["value_map"] else None)
     value_map_json = json.dumps(value_map_new) if value_map_new else None
+
+    _validate_adapter_binding(row["adapter_type"], direction, config)
 
     # Formel validieren
     if formula:
