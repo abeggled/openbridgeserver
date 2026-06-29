@@ -51,6 +51,26 @@ describe('BindingFormMessage', () => {
     expect(cfg.providers).toEqual([])
   })
 
+  it('does not expose targets from string-disabled providers', async () => {
+    const cfg = { providers: [] }
+    const wrapper = mk({
+      cfg,
+      selectedInstance: {
+        config: {
+          providers: {
+            pushover: { enabled: 'false', targets: { hidden: {} } },
+            telegram: { enabled: 'true', targets: { family: {} } },
+          },
+        },
+      },
+    })
+
+    await wrapper.findAll('button').find(button => button.text() === 'Ziel hinzufügen').trigger('click')
+
+    expect(cfg.providers).toEqual([{ provider: 'telegram', target: 'family' }])
+    expect(wrapper.text()).not.toContain('hidden')
+  })
+
   it('does not add duplicate provider target pairs', async () => {
     const cfg = { providers: [] }
     const wrapper = mk({

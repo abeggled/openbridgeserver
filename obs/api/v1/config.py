@@ -111,6 +111,15 @@ async def _validate_import_message_instance_configs(
         return {}
 
     message_import_bindings = [binding for binding in bindings if binding.adapter_type == "MESSAGE"]
+    existing_import_bindings: dict[str, dict] = {}
+    for binding in message_import_bindings:
+        row = await db.fetchone(
+            "SELECT id, adapter_instance_id, adapter_type FROM adapter_bindings WHERE id=?",
+            (binding.id,),
+        )
+        if row is not None and row["adapter_type"] == "MESSAGE":
+            existing_import_bindings[binding.id] = row
+
     invalid: dict[str, str] = {}
     for instance_id, instance in message_instances.items():
         rows = await db.fetchall(
@@ -130,15 +139,17 @@ async def _validate_import_message_instance_configs(
             for row in rows
         }
         for binding in message_import_bindings:
-            if binding.id in proposed and binding.adapter_instance_id != instance_id:
+            existing = existing_import_bindings.get(binding.id)
+            effective_instance_id = existing["adapter_instance_id"] if existing is not None else binding.adapter_instance_id
+            if binding.id in proposed and effective_instance_id != instance_id:
                 proposed.pop(binding.id)
-            if binding.adapter_instance_id == instance_id:
+            if effective_instance_id == instance_id:
                 proposed[binding.id] = _message_binding_row(
                     binding_id=binding.id,
                     direction=binding.direction,
                     config=binding.config,
                     enabled=binding.enabled,
-                    instance_id=binding.adapter_instance_id,
+                    instance_id=effective_instance_id,
                 )
         try:
             for binding in proposed.values():
@@ -705,26 +716,33 @@ async def import_config(
     for b_data in body.bindings:
         try:
             b_id = b_data.id
+            existing_binding = await db.fetchone(
+                "SELECT id, adapter_type, adapter_instance_id FROM adapter_bindings WHERE id=?",
+                (b_id,),
+            )
+            effective_adapter_type = existing_binding["adapter_type"] if existing_binding is not None else b_data.adapter_type
+            effective_instance_id = existing_binding["adapter_instance_id"] if existing_binding is not None else b_data.adapter_instance_id
             formula = (b_data.value_formula or "").strip() or None
             if formula:
                 err = validate_formula(formula)
                 if err:
                     raise ValueError(f"Ungültige Formel: {err}")
             instance_config = None
-            if b_data.adapter_type == "MESSAGE" and b_data.adapter_instance_id:
-                instance_row = await db.fetchone("SELECT config FROM adapter_instances WHERE id=?", (b_data.adapter_instance_id,))
+            if effective_adapter_type == "MESSAGE" and effective_instance_id:
+                if effective_instance_id in invalid_message_instances:
+                    raise ValueError(invalid_message_instances[effective_instance_id])
+                instance_row = await db.fetchone("SELECT config FROM adapter_instances WHERE id=?", (effective_instance_id,))
                 if instance_row is None:
-                    raise ValueError(f"MESSAGE adapter instance not found: {b_data.adapter_instance_id}")
+                    raise ValueError(f"MESSAGE adapter instance not found: {effective_instance_id}")
                 instance_config = _json_config(instance_row["config"])
             _validate_adapter_binding(
-                b_data.adapter_type,
+                effective_adapter_type,
                 b_data.direction,
                 b_data.config,
                 enabled=b_data.enabled,
                 instance_config=instance_config,
             )
-            row = await db.fetchone("SELECT id FROM adapter_bindings WHERE id=?", (b_id,))
-            if row:
+            if existing_binding:
                 await db.execute_and_commit(
                     """UPDATE adapter_bindings
                        SET direction=?, config=?, enabled=?,

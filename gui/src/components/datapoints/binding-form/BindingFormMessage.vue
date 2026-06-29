@@ -65,10 +65,18 @@ const props = defineProps({
 
 const OPERATORS = ['any', '=', '==', '<', '<=', '>', '>=', '!=', 'contains', 'contains not', 'starts with', 'ends with']
 
+function providerEnabled(config) {
+  if (config?.enabled === true || config?.enabled === 1) return true
+  if (typeof config?.enabled === 'string') {
+    return ['true', '1', 'yes', 'on'].includes(config.enabled.trim().toLowerCase())
+  }
+  return false
+}
+
 const providerOptions = computed(() => {
   const providers = props.selectedInstance?.config?.providers ?? {}
   return Object.entries(providers)
-    .filter(([, config]) => config?.enabled)
+    .filter(([, config]) => providerEnabled(config))
     .map(([provider, config]) => ({ provider, targets: Object.keys(config.targets ?? {}) }))
     .filter((entry) => entry.targets.length > 0)
 })

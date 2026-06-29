@@ -620,6 +620,62 @@ async def test_import_message_instance_config_does_not_orphan_existing_binding(c
     assert set(get_resp.json()["config"]["providers"]["pushover"]["targets"]) == {"default"}
 
 
+async def test_import_message_binding_update_validates_against_existing_instance(client, auth_headers):
+    dp = await _make_dp(client, auth_headers)
+    old_inst = await _make_message_instance(client, auth_headers, config=_message_instance_config(target="default"))
+    new_inst = await _make_message_instance(client, auth_headers, config=_message_instance_config(target="other"))
+    create_resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={
+            "adapter_instance_id": old_inst["id"],
+            "direction": "SOURCE",
+            "config": {"providers": [{"provider": "pushover", "target": "default"}]},
+        },
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    binding = create_resp.json()
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [],
+        "bindings": [
+            {
+                "id": binding["id"],
+                "datapoint_id": dp["id"],
+                "adapter_type": "MESSAGE",
+                "adapter_instance_id": new_inst["id"],
+                "direction": "SOURCE",
+                "config": {"providers": [{"provider": "pushover", "target": "other"}]},
+                "enabled": True,
+            }
+        ],
+        "adapter_instances": [
+            {
+                "id": old_inst["id"],
+                "adapter_type": "MESSAGE",
+                "name": old_inst["name"],
+                "config": _message_instance_config(target="renamed"),
+                "enabled": False,
+            }
+        ],
+    }
+
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["adapter_instances_upserted"] == 0
+    assert body["bindings_updated"] == 0
+    assert any("MESSAGE target not configured" in error for error in body["errors"])
+    old_get_resp = await client.get(f"/api/v1/adapters/instances/{old_inst['id']}", headers=auth_headers)
+    assert set(old_get_resp.json()["config"]["providers"]["pushover"]["targets"]) == {"default"}
+    export_resp = await client.get("/api/v1/config/export", headers=auth_headers)
+    imported_binding = next(item for item in export_resp.json()["bindings"] if item["id"] == binding["id"])
+    assert imported_binding["adapter_instance_id"] == old_inst["id"]
+    assert imported_binding["config"] == {"providers": [{"provider": "pushover", "target": "default"}]}
+
+
 # ---------------------------------------------------------------------------
 # POST /config/import  — datapoint UPDATE path (existing DP gets updated)
 # ---------------------------------------------------------------------------
