@@ -507,6 +507,35 @@ class TestHostCheckSustainedTrigger:
         assert out2["hc"]["reachable"] is True
         assert out2["gate"]["out"] is True
 
+    def test_sustained_trigger_rechecks_after_config_change(self):
+        manager = _make_manager()
+        flow = self._make_flow()
+        with patch(
+            "obs.logic.manager._ping_host",
+            new_callable=AsyncMock,
+            side_effect=[(True, 7.5), (False, None)],
+        ) as mock_ping:
+            self._exec(manager, flow, True)
+            flow.nodes[0].data["host"] = "192.168.1.2"
+            out2 = self._exec(manager, flow, True)
+        assert mock_ping.await_count == 2
+        assert mock_ping.await_args.args[0] == "192.168.1.2"
+        assert out2["hc"]["reachable"] is False
+
+    def test_sustained_trigger_rechecks_after_process_token_change(self):
+        manager = _make_manager()
+        flow = self._make_flow()
+        with patch(
+            "obs.logic.manager._ping_host",
+            new_callable=AsyncMock,
+            side_effect=[(True, 7.5), (False, None)],
+        ) as mock_ping:
+            self._exec(manager, flow, True)
+            manager._hysteresis["g"]["hc"]["hc_runtime_token"] = "previous-process"
+            out2 = self._exec(manager, flow, True)
+        assert mock_ping.await_count == 2
+        assert out2["hc"]["reachable"] is False
+
 
 # ===========================================================================
 # Manager: non-numeric config values do not crash the graph (Fix 5)
@@ -714,3 +743,48 @@ class TestHostCheckReplayState:
         assert outputs["ac1"]["success"] is True
         assert outputs["hc"]["reachable"] is True
         assert outputs["ac2"]["success"] is True
+
+    def test_final_api_replay_triggers_downstream_host_check(self):
+        nodes = [
+            node("cv", "const_value", {"value": "true", "data_type": "bool"}),
+            node("ac1", "api_client", {"url": "http://93.184.216.34/one", "method": "GET"}),
+            node("hc1", "host_check", {"host": "one.local", "timeout_s": 1, "count": 1}),
+            node("ac2", "api_client", {"url": "http://93.184.216.34/two", "method": "GET"}),
+            node("hc2", "host_check", {"host": "two.local", "timeout_s": 1, "count": 1}),
+        ]
+        flow = _flow(
+            nodes,
+            [
+                edge("cv", "ac1", "value", "trigger"),
+                edge("ac1", "hc1", "success", "trigger"),
+                edge("hc1", "ac2", "reachable", "trigger"),
+                edge("ac2", "hc2", "success", "trigger"),
+            ],
+        )
+        manager = _make_manager()
+        graph_id = "g-post-api-api-hc"
+        manager._graphs[graph_id] = ("test", True, flow)
+        manager._node_state[graph_id] = {}
+
+        patcher = patch("obs.logic.manager.httpx.AsyncClient")
+        mock_client_cls = patcher.start()
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.request = AsyncMock(return_value=_MockResponse(200))
+        try:
+            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+                with patch(
+                    "obs.logic.manager._ping_host",
+                    new_callable=AsyncMock,
+                    side_effect=[(True, 1.0), (True, 2.0)],
+                ) as mock_ping:
+                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+        finally:
+            patcher.stop()
+
+        assert mock_client.request.await_count == 2
+        assert mock_ping.await_count == 2
+        assert outputs["hc1"]["reachable"] is True
+        assert outputs["hc2"]["reachable"] is True
+        assert outputs["hc2"]["latency_ms"] == pytest.approx(2.0)

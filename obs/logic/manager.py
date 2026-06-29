@@ -69,6 +69,7 @@ _HOST_CHECK_MIN_TIMEOUT_S = 1.0
 _HOST_CHECK_MAX_TIMEOUT_S = 30.0
 _HOST_CHECK_MIN_COUNT = 1
 _HOST_CHECK_MAX_COUNT = 10
+_HOST_CHECK_RUNTIME_TOKEN = uuid.uuid4().hex
 
 
 class _ApiClientVariableError(ValueError):
@@ -1291,21 +1292,33 @@ class LogicManager:
             if not is_triggered:
                 hyst_hc["hc_prev_trigger"] = False
                 return False
-            if was_triggered and not is_cron_triggered:
-                outputs[node.id]["reachable"] = hyst_hc.get("hc_last_reachable", False)
-                outputs[node.id]["latency_ms"] = hyst_hc.get("hc_last_latency_ms")
-                target_set.add(node.id)
-                return True
             host = (node.data.get("host") or "").strip()
             if not host:
                 logger.warning("host_check: host missing on node %s", node.id[:8])
                 return False
             try:
                 timeout_s, count = _normalise_host_check_ping_config(node.data.get("timeout_s"), node.data.get("count"))
+                config_sig = f"{host}\0{timeout_s:g}\0{count}"
+            except Exception as exc:
+                logger.warning("Graph %s: host_check %s failed: %s", graph_id[:8], host, exc)
+                return False
+            if (
+                was_triggered
+                and not is_cron_triggered
+                and hyst_hc.get("hc_config_sig") == config_sig
+                and hyst_hc.get("hc_runtime_token") == _HOST_CHECK_RUNTIME_TOKEN
+            ):
+                outputs[node.id]["reachable"] = hyst_hc.get("hc_last_reachable", False)
+                outputs[node.id]["latency_ms"] = hyst_hc.get("hc_last_latency_ms")
+                target_set.add(node.id)
+                return True
+            try:
                 reachable, latency_ms = await _ping_host(host, count, timeout_s)
                 hyst_hc["hc_prev_trigger"] = True
                 hyst_hc["hc_last_reachable"] = reachable
                 hyst_hc["hc_last_latency_ms"] = latency_ms
+                hyst_hc["hc_config_sig"] = config_sig
+                hyst_hc["hc_runtime_token"] = _HOST_CHECK_RUNTIME_TOKEN
                 outputs[node.id]["reachable"] = reachable
                 outputs[node.id]["latency_ms"] = latency_ms
                 target_set.add(node.id)
@@ -2041,6 +2054,66 @@ class LogicManager:
                         if nid in replay_hyst:
                             hyst[nid] = replay_hyst[nid]
                 _apply_operating_hours_state(api_descendants, pre_execute_node_state)
+                final_api_triggered_hc: set[str] = set()
+                for node in flow.nodes:
+                    if node.type == "host_check" and node.id in api_descendants and node.id not in triggered_host_check_nodes:
+                        await _run_host_check_node(node, final_api_triggered_hc, " (post-api api replay)")
+                if final_api_triggered_hc:
+                    triggered_host_check_nodes.update(final_api_triggered_hc)
+                    pending_final_api_hc_replay = set(final_api_triggered_hc)
+                    processed_final_api_hc_replay: set[str] = set()
+                    while pending_final_api_hc_replay:
+                        replay_sources = pending_final_api_hc_replay - processed_final_api_hc_replay
+                        if not replay_sources:
+                            break
+                        processed_final_api_hc_replay.update(replay_sources)
+                        final_hc_descendants: set[str] = set()
+                        final_hc_queue = list(replay_sources)
+                        while final_hc_queue:
+                            nid = final_hc_queue.pop()
+                            for e in flow.edges:
+                                if e.source == nid and e.target not in final_hc_descendants:
+                                    final_hc_descendants.add(e.target)
+                                    final_hc_queue.append(e.target)
+                        final_hc_overrides: dict[str, dict[str, Any]] = {}
+                        for e in flow.edges:
+                            if e.source in replay_sources:
+                                src_handle = e.sourceHandle or "out"
+                                tgt_handle = e.targetHandle or "in"
+                                final_hc_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(
+                                    outputs[e.source],
+                                    src_handle,
+                                )
+                        if not final_hc_overrides:
+                            continue
+                        final_hc_merged = {nid: dict(vals) for nid, vals in replay_overrides.items()}
+                        for nid, vals in final_hc_overrides.items():
+                            final_hc_merged.setdefault(nid, {}).update(vals)
+                        for e in flow.edges:
+                            if e.target not in final_hc_descendants or e.source in final_hc_descendants or e.source in replay_sources:
+                                continue
+                            src_handle = e.sourceHandle or "out"
+                            tgt_handle = e.targetHandle or "in"
+                            final_hc_merged.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(
+                                outputs.get(e.source, {}),
+                                src_handle,
+                            )
+                        final_hc_hyst = copy.deepcopy(pre_execute_hyst if pre_execute_hyst is not None else hyst)
+                        final_hc_executor = GraphExecutor(flow, final_hc_hyst, self._app_config)
+                        final_hc_outputs = final_hc_executor.execute(final_hc_merged)
+                        for nid, vals in final_hc_outputs.items():
+                            if nid in final_hc_descendants:
+                                outputs[nid] = vals
+                                if nid not in host_check_ids and nid in final_hc_hyst:
+                                    hyst[nid] = final_hc_hyst[nid]
+                        _apply_operating_hours_state(final_hc_descendants, pre_execute_node_state)
+                        chained_final_hc: set[str] = set()
+                        for node in flow.nodes:
+                            if node.type == "host_check" and node.id in final_hc_descendants and node.id not in triggered_host_check_nodes:
+                                await _run_host_check_node(node, chained_final_hc, " (post-api api replay)")
+                        if chained_final_hc:
+                            triggered_host_check_nodes.update(chained_final_hc)
+                            pending_final_api_hc_replay.update(chained_final_hc)
 
         # ── Handle notify_pushover ────────────────────────────────────────
         # Runs AFTER api_client second-pass so that graphs with api_client →
