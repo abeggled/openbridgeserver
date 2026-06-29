@@ -14,6 +14,7 @@ interface ButtonConfig {
   resetEnabled: boolean
   resetValue: string
   resetDelayMs: number
+  preserveIconColor: boolean
 }
 
 const props = defineProps<{
@@ -46,6 +47,7 @@ const buttons = computed<ButtonConfig[]>(() => {
     resetEnabled: parseBoolean(button.resetEnabled, false),
     resetValue: String(button.resetValue ?? 'false'),
     resetDelayMs: parseDelay(button.resetDelayMs),
+    preserveIconColor: parseBoolean(button.preserveIconColor, false),
   }))
 })
 
@@ -165,7 +167,7 @@ onUnmounted(() => {
             class="text-xl leading-none"
             :style="{ color: button.color }"
           >
-            <VisuIcon :icon="button.icon" />
+            <VisuIcon :icon="button.icon" :preserve-color="button.preserveIconColor" />
           </span>
           <span
             class="max-w-full truncate leading-tight"

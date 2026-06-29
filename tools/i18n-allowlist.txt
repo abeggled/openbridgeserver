@@ -45,6 +45,7 @@ Zähler
 String Verketten
 API Client
 Substring / RegEx
+Wake on LAN
 
 # SchemaForm.vue — defaultPlaceholder() returns a schema default value (e.g. "502", "3.0")
 # from the backend JSON schema, not a hardcoded user-facing string.

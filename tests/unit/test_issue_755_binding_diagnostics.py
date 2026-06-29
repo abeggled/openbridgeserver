@@ -28,14 +28,18 @@ class _Instance:
         self.status_events = []
         self.last_severity = "ok"
         self.last_detail = ""
+        self.last_detail_code = None
+        self.last_detail_params = {}
 
     async def reload_bindings(self, bindings):
         self.bindings = bindings
 
-    async def _publish_status(self, connected, detail="", severity="ok"):
+    async def _publish_status(self, connected, detail="", severity="ok", *, code=None, params=None):
         self.status_events.append((connected, detail, severity))
         self.last_severity = severity
         self.last_detail = detail
+        self.last_detail_code = code
+        self.last_detail_params = params or {}
 
 
 class _PlainInstance:
@@ -197,6 +201,33 @@ async def test_binding_load_status_supports_instances_without_publish_status():
 
     assert instance._last_severity == "warning"
     assert "b1" in instance._last_detail
+    assert instance._last_detail_code == "invalidBindingsSkipped"
+    assert instance._last_detail_params == {"count": 1, "examples": "b1: ValueError: bad"}
+
+
+@pytest.mark.asyncio
+async def test_binding_load_status_emits_i18n_code_and_params():
+    instance = _Instance()
+    issue = adapter_registry.BindingLoadIssue(binding_id="b1", adapter_instance_id="i1", reason="ValueError: bad")
+
+    await adapter_registry._publish_binding_load_status(instance, [issue])
+
+    assert instance.last_severity == "warning"
+    assert instance.last_detail_code == "invalidBindingsSkipped"
+    assert instance.last_detail_params == {"count": 1, "examples": "b1: ValueError: bad"}
+
+
+@pytest.mark.asyncio
+async def test_binding_load_status_clears_warning_via_i18n_code():
+    instance = _Instance()
+    instance.last_detail = ""
+    instance.last_detail_code = "invalidBindingsSkipped"
+
+    await adapter_registry._publish_binding_load_status(instance, [])
+
+    assert instance.last_severity == "ok"
+    assert instance.last_detail == ""
+    assert instance.last_detail_code is None
 
 
 def test_binding_load_detail_shows_more_suffix():

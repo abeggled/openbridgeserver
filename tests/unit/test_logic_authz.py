@@ -251,5 +251,5 @@ async def test_run_graph_allows_resident_when_all_datapoints_are_in_scope(monkey
         db=db,
     )
 
-    assert result == {"status": "ok", "outputs": {"n0": {"out": True}}}
+    assert result == {"status": "ok", "outputs": {"n0": {"out": True}}, "warnings": []}
     manager.execute_graph.assert_awaited_once_with("allowed-graph")

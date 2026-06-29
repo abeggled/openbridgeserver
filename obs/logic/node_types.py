@@ -136,6 +136,32 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         },
         color="#1d4ed8",
     ),
+    NodeTypeDef(
+        type="memory",
+        label="Speicher",
+        category="logic",
+        description=(
+            "Gibt den gespeicherten Wert aus dem vorherigen Logiklauf aus und speichert den aktuellen Eingangswert für den nächsten Lauf. "
+            "Diese Node ist die explizite Tick-Grenze für kontrollierte Rückkopplungen."
+        ),
+        inputs=[_port("in", "Eingang"), _port("reset", "Reset", "trigger")],
+        outputs=[_port("out", "Ausgang")],
+        config_schema={
+            "initial_value": {"type": "string", "default": "", "label": "Initialwert"},
+            "data_type": {
+                "type": "string",
+                "enum": ["auto", "number", "bool", "string"],
+                "default": "auto",
+                "label": "Datentyp",
+            },
+            "persist_state": {
+                "type": "boolean",
+                "default": True,
+                "label": "Zustand nach Neustart wiederherstellen",
+            },
+        },
+        color="#1d4ed8",
+    ),
     # ── Comparison ────────────────────────────────────────────────────────
     NodeTypeDef(
         type="compare",
@@ -169,6 +195,46 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
                 "default": True,
                 "label": "Zustand nach Neustart wiederherstellen",
             },
+        },
+        color="#1d4ed8",
+    ),
+    NodeTypeDef(
+        type="decision",
+        label="Entscheidung",
+        category="logic",
+        description="Prüft einen Eingangswert gegen mehrere unabhängige Bedingungen. Jeder Ausgang liefert TRUE/FALSE.",
+        inputs=[_port("value", "Wert")],
+        outputs=[_port("out_1", "Ausgang 1", "trigger"), _port("out_2", "Ausgang 2", "trigger")],
+        config_schema={
+            "conditions": {
+                "type": "string",
+                "default": ('[{"handle":"out_1","operator":"eq"},{"handle":"out_2","operator":"eq"}]'),
+                "label": "Bedingungen",
+            },
+        },
+        color="#1d4ed8",
+    ),
+    NodeTypeDef(
+        type="value_mapping",
+        label="Zuordnung",
+        category="logic",
+        description="Ordnet einem Eingangswert anhand einer geordneten Regelliste genau einen Ergebniswert zu.",
+        inputs=[_port("value", "Wert")],
+        outputs=[_port("result", "Ergebnis")],
+        config_schema={
+            "output_type": {
+                "type": "string",
+                "enum": ["bool", "int", "float", "string"],
+                "default": "string",
+                "label": "Ausgangstyp",
+            },
+            "rules": {
+                "type": "string",
+                "default": ('[{"operator":"eq","result":""},{"operator":"eq","result":""}]'),
+                "label": "Regeln",
+            },
+            "has_default": {"type": "boolean", "default": False, "label": "Sonst-Wert verwenden"},
+            "default_value": {"type": "string", "default": "", "label": "Sonst-Wert"},
         },
         color="#1d4ed8",
     ),
@@ -706,6 +772,32 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
     ),
     # ── Integration ───────────────────────────────────────────────────────
     NodeTypeDef(
+        type="wake_on_lan",
+        label="Wake on LAN",
+        category="integration",
+        description="Sendet ein Wake-on-LAN Magic-Paket an ein Gerät per UDP-Broadcast. Wird ausgelöst wenn der Trigger-Eingang true ist.",
+        inputs=[_port("trigger", "Trigger", "trigger")],
+        outputs=[_port("sent", "Gesendet", "trigger")],
+        config_schema={
+            "mac_address": {
+                "type": "string",
+                "default": "",
+                "label": "MAC-Adresse (z.B. AA:BB:CC:DD:EE:FF)",
+            },
+            "broadcast_ip": {
+                "type": "string",
+                "default": "255.255.255.255",
+                "label": "Broadcast-IP",
+            },
+            "port": {
+                "type": "number",
+                "default": 9,
+                "label": "UDP-Port",
+            },
+        },
+        color="#0369a1",
+    ),
+    NodeTypeDef(
         type="json_extractor",
         label="JSON Extractor",
         category="integration",
@@ -841,6 +933,11 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
                 "type": "string",
                 "default": "",
                 "label": "Header-Datei (/run/secrets)",
+            },
+            "variables": {
+                "type": "array",
+                "default": [],
+                "label": "Variablen",
             },
             "timeout_s": {"type": "number", "default": 10, "label": "Timeout (s)"},
             "auth_type": {

@@ -98,6 +98,10 @@ Alle wesentlichen Änderungen an open bridge server werden hier festgehalten.
 - Das Enddatum in der Verlaufsansicht wurde immer als Ortszeit des Browsers interpretiert, unabhängig von der eingestellten Zeitzone
 - Behoben: alle Datums-/Zeitfelder in der Verlaufsansicht verwenden jetzt die konfigurierte Zeitzone
 
+**Rolladen-Widget — Statusindikatoren zeigten i18n-Keys**
+- Beschriftungen der Statusindikatoren 1–4 im Konfigurations-Panel wurden als roher Übersetzungsschlüssel (`{ $t('widgets.rolladen.indicatorLabel', { n: … }) }`) angezeigt statt als übersetzter Text
+- Ursache: fehlende doppelte geschweifte Klammern (`{{ }}`) für die Vue-Interpolation in `Rolladen/Config.vue`
+
 **Verschiedenes**
 - Löschen-Dialog bei Adaptern war unsichtbar (Anzeigefehler)
 - Handle-Punkte an Blöcken verschoben sich beim Darüberfahren seitwärts (Vue Flow CSS-Überschreibung)

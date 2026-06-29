@@ -24,7 +24,7 @@ function detectLocale(): LocaleCode {
 const i18n = createI18n({
   legacy: false,
   locale: detectLocale(),
-  fallbackLocale: 'de',
+  fallbackLocale: 'en',  // en.json is the authoritative source; fall back to it for missing keys
   messages: { de, en },
 })
 

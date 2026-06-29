@@ -112,6 +112,8 @@ class TestInstanceOut:
         inst.connected = True
         inst.last_severity = "warning"
         inst.last_detail = "some detail"
+        inst.last_detail_code = "knxTunnelOverload"
+        inst.last_detail_params = {}
         inst.get_bindings.return_value = [1, 2, 3]
         row = _inst_row()
         result = adp_api._instance_out(row, inst)
@@ -119,6 +121,7 @@ class TestInstanceOut:
         assert result.connected is True
         assert result.severity == "warning"
         assert result.status_detail == "some detail"
+        assert result.status_detail_code == "knxTunnelOverload"
         assert result.bindings == 3
 
     @pytest.mark.asyncio
@@ -142,6 +145,55 @@ class TestInstanceOut:
         monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
         result = await adp_api.list_instances(db=db, _user="admin")
         assert result == []
+
+
+def _fake_adapter_cls(*, connect_raises=False, connected=False):
+    """A minimal adapter class for driving the connection-test endpoints (issue #779)."""
+
+    class _Fake:
+        config_schema = staticmethod(lambda **_kw: None)
+
+        def __init__(self, event_bus=None, config=None):
+            self.connected = connected
+
+        async def connect(self):
+            if connect_raises:
+                raise RuntimeError("boom")
+
+        async def disconnect(self):
+            return None
+
+    return _Fake
+
+
+class TestConnectionTestEndpoints:
+    """Cover the TestResult code paths of the two connection-test endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_instance_connect_failed_emits_code(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: _fake_adapter_cls(connected=False))
+        # Skip the 5 s poll: deadline=0+5, first check returns 999 → loop exits immediately.
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0.0, 999.0, 999.0])
+        monkeypatch.setattr(adp_api.asyncio, "get_event_loop", lambda: loop)
+
+        db = _DbStub(one=_inst_row(adapter_type="MQTT"))
+        result = await adp_api.test_instance(instance_id=uuid.uuid4(), body=None, _user="admin", db=db)
+        assert result.success is False
+        assert result.detail_code == "connectFailed"
+
+    @pytest.mark.asyncio
+    async def test_adapter_type_connect_exception_keeps_raw_detail(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: _fake_adapter_cls(connect_raises=True))
+        body = adp_api.TestRequest(config={})
+        result = await adp_api.test_adapter(adapter_type="MQTT", body=body, _user="admin")
+        assert result.success is False
+        assert result.detail_code is None  # dynamic exception text → no code
+        assert "boom" in result.detail
 
 
 class TestCreateInstance:
@@ -2818,6 +2870,31 @@ class TestLogicManagerValueEvent:
         assert len(executed) == 0
 
     @pytest.mark.asyncio
+    async def test_on_value_event_suppresses_logic_cascade_at_depth_limit(self):
+        dp_id = uuid.uuid4()
+        flow = _make_flow(
+            nodes=[
+                {
+                    "id": "n1",
+                    "type": "datapoint_read",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"datapoint_id": str(dp_id)},
+                }
+            ]
+        )
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        mgr._execute_graph = AsyncMock()
+
+        event = MagicMock()
+        event.datapoint_id = dp_id
+        event.value = 1.0
+        event.logic_depth = 10
+
+        await mgr._on_value_event(event)
+
+        mgr._execute_graph.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_on_value_event_min_delta_pct_suppresses(self):
         dp_id = uuid.uuid4()
         flow = _make_flow(
@@ -3084,6 +3161,30 @@ class TestLogicManagerExecuteGraph:
 
         # The event_bus.publish should have been called for the write
         assert event_bus.publish.called
+
+    @pytest.mark.asyncio
+    async def test_execute_graph_increments_logic_depth_on_write(self):
+        write_dp_id = uuid.uuid4()
+        flow = _make_flow(
+            nodes=[
+                {
+                    "id": "n_write",
+                    "type": "datapoint_write",
+                    "position": {"x": 200, "y": 0},
+                    "data": {"datapoint_id": str(write_dp_id)},
+                },
+            ],
+        )
+        mgr, db, event_bus, registry = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        registry.get_value = MagicMock(return_value=None)
+        db.execute_and_commit = AsyncMock()
+
+        with patch("obs.api.v1.websocket.get_ws_manager") as mock_ws:
+            mock_ws.return_value.broadcast = AsyncMock()
+            await mgr._execute_graph("g1", "G1", flow, {"n_write": {"value": 42.0}}, logic_depth=4)
+
+        published_event = event_bus.publish.await_args.args[0]
+        assert published_event.logic_depth == 5
 
     @pytest.mark.asyncio
     async def test_execute_graph_ws_error_ignored(self):

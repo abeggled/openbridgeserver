@@ -333,27 +333,54 @@ async def reload_instance_from_rows(instance: Any, rows: list[Any]) -> tuple[lis
 
 async def _publish_binding_load_status(instance: Any, issues: list[BindingLoadIssue]) -> None:
     if not issues:
-        if getattr(instance, "last_detail", "").startswith(_BINDING_LOAD_DETAIL_PREFIX):
+        # Clear a previously raised binding-load warning. Match on the i18n code
+        # (issue #779) and fall back to the legacy detail prefix for safety.
+        is_binding_warning = getattr(instance, "last_detail_code", None) == "invalidBindingsSkipped" or getattr(
+            instance,
+            "last_detail",
+            "",
+        ).startswith(_BINDING_LOAD_DETAIL_PREFIX)
+        if is_binding_warning:
             await _set_instance_status(instance, "ok", "")
         return
 
-    detail = _format_binding_load_detail(issues)
-    await _set_instance_status(instance, "warning", detail)
+    examples = _format_binding_load_examples(issues)
+    detail = f"{_BINDING_LOAD_DETAIL_PREFIX}: {len(issues)} invalid binding(s) skipped ({examples})"
+    await _set_instance_status(
+        instance,
+        "warning",
+        detail,
+        code="invalidBindingsSkipped",
+        params={"count": len(issues), "examples": examples},
+    )
+
+
+def _format_binding_load_examples(issues: list[BindingLoadIssue]) -> str:
+    examples = "; ".join(f"{i.binding_id}: {i.reason}" for i in issues[:3])
+    suffix = f"; +{len(issues) - 3} more" if len(issues) > 3 else ""
+    return f"{examples}{suffix}"
 
 
 def _format_binding_load_detail(issues: list[BindingLoadIssue]) -> str:
-    examples = "; ".join(f"{i.binding_id}: {i.reason}" for i in issues[:3])
-    suffix = f"; +{len(issues) - 3} more" if len(issues) > 3 else ""
-    return f"{_BINDING_LOAD_DETAIL_PREFIX}: {len(issues)} invalid binding(s) skipped ({examples}{suffix})"
+    return f"{_BINDING_LOAD_DETAIL_PREFIX}: {len(issues)} invalid binding(s) skipped ({_format_binding_load_examples(issues)})"
 
 
-async def _set_instance_status(instance: Any, severity: str, detail: str) -> None:
+async def _set_instance_status(
+    instance: Any,
+    severity: str,
+    detail: str,
+    *,
+    code: str | None = None,
+    params: dict | None = None,
+) -> None:
     publish = getattr(instance, "_publish_status", None)
     if publish is not None:
-        await publish(getattr(instance, "connected", False), detail=detail, severity=severity)
+        await publish(getattr(instance, "connected", False), detail=detail, severity=severity, code=code, params=params)
         return
     instance._last_severity = severity
     instance._last_detail = detail
+    instance._last_detail_code = code
+    instance._last_detail_params = params or {}
 
 
 def _row_value(row: Any, key: str) -> str | None:

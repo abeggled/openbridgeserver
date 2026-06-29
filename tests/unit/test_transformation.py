@@ -116,6 +116,13 @@ class TestApplyValueMapBoolNormalisation:
         # If both "true" and "1" exist, "true" wins (bool key has priority)
         assert apply_value_map(True, {"true": "bool-on", "1": "num-on"}) == "bool-on"
 
+    def test_bool_true_prefers_case_insensitive_true_key_over_numeric(self):
+        assert apply_value_map(True, {"1": "num-on", "TRUE": "bool-on"}) == "bool-on"
+
+    def test_bool_text_key_lookup_is_case_insensitive(self):
+        assert apply_value_map(True, {"TRUE": "on"}) == "on"
+        assert apply_value_map(False, {"FALSE": "off"}) == "off"
+
     def test_bool_no_match_returns_original(self):
         # Neither "true" nor "1" in map → original value returned
         assert apply_value_map(True, {"foo": "bar"}) is True
@@ -143,6 +150,15 @@ class TestApplyValueMapStringValues:
         m = {"0": "1", "1": "0"}
         assert apply_value_map(0, m) == "1"
         assert apply_value_map(1, m) == "0"
+
+    def test_string_lookup_is_case_insensitive(self):
+        m = {"on": "true", "off": "false"}
+        assert apply_value_map("OFF", m) == "false"
+        assert apply_value_map("On", m) == "true"
+
+    def test_exact_key_wins_before_case_insensitive_fallback(self):
+        m = {"off": "lowercase", "OFF": "uppercase"}
+        assert apply_value_map("OFF", m) == "uppercase"
 
 
 # ===========================================================================

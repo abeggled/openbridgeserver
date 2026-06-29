@@ -1,0 +1,186 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: 2026 abeggled and all contributors
+# SPDX-License-Identifier: MIT
+#
+# obs-update — interactive OBS version updater for LXC installations
+#
+# Installed to /usr/local/bin/obs-update during LXC builds.
+# Fetches available releases from GitHub, prompts the user to select a version,
+# downloads and verifies the app bundle, and performs the in-place upgrade.
+# Also self-updates this script from the bundle on each run.
+#
+# The __REPO__ placeholder is replaced with the actual GitHub repository path
+# (owner/name) at build time by the CI pipeline before the script is bundled.
+set -euo pipefail
+
+REPO="__REPO__"
+INSTALL_DIR="/opt/obs"
+SERVICE="obs"
+
+CURRENT=$(cat "$INSTALL_DIR/version" 2>/dev/null || echo "unknown")
+echo "Fetching release information..."
+ALL_RELEASES=$(curl -sf "https://api.github.com/repos/${REPO}/releases")
+
+# Build ordered list via semantic version sort, stopping after 2 stables
+VERSION_LIST=$(echo "$ALL_RELEASES" | python3 -c "
+import sys, json, re
+
+releases = json.load(sys.stdin)
+
+def sort_key(tag):
+    m = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-RC(\d+))?\$', tag, re.IGNORECASE)
+    if not m:
+        return (0, 0, 0, 0, 0)
+    y, mn, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    rc = int(m.group(4)) if m.group(4) else None
+    return (y, mn, p, 1 if rc is None else 0, rc or 0)
+
+candidates = sorted(
+    [r for r in releases if not r['draft']],
+    key=lambda r: sort_key(r['tag_name']), reverse=True
+)
+
+stables_seen = 0
+for r in candidates:
+    kind = 'rc' if r['prerelease'] else 'stable'
+    print(kind + ' ' + r['tag_name'])
+    if not r['prerelease']:
+        stables_seen += 1
+        if stables_seen >= 2:
+            break
+")
+
+echo "Current version: $CURRENT"
+echo ""
+
+OPTIONS=()
+LABELS=()
+
+while IFS=' ' read -r TYPE TAG; do
+    OPTIONS+=("$TAG")
+    MARKER=""
+    [[ "$TAG" == "$CURRENT" ]] && MARKER=", current"
+    if [[ "$TYPE" == "stable" ]]; then
+        LABELS+=("$TAG  (stable${MARKER})")
+    else
+        LABELS+=("$TAG  (release candidate${MARKER})")
+    fi
+done <<< "$VERSION_LIST"
+
+if [[ ${#OPTIONS[@]} -eq 0 ]]; then
+    echo "No releases found."
+    exit 0
+fi
+
+echo "Available versions:"
+for i in "${!OPTIONS[@]}"; do
+    echo "  $((i+1))) ${LABELS[$i]}"
+done
+echo "  0) Cancel"
+echo ""
+
+while true; do
+    read -rp "Select version to install [0-${#OPTIONS[@]}]: " CHOICE
+    if [[ "$CHOICE" =~ ^[0-9]+$ ]] && [[ "$CHOICE" -ge 0 ]] && [[ "$CHOICE" -le "${#OPTIONS[@]}" ]]; then
+        break
+    fi
+    echo "Invalid selection, please try again."
+done
+
+if [[ "$CHOICE" -eq 0 ]]; then
+    echo "Cancelled."
+    exit 0
+fi
+
+TARGET="${OPTIONS[$((CHOICE-1))]}"
+
+if [[ "$TARGET" == "$CURRENT" ]]; then
+    echo "$TARGET is already installed."
+    exit 0
+fi
+
+echo "Installing $TARGET ..."
+
+ASSET_INFO=$(echo "$ALL_RELEASES" | python3 -c "
+import sys, json, re
+target = '${TARGET}'
+releases = json.load(sys.stdin)
+r = next((r for r in releases if r['tag_name'] == target), None)
+if r:
+    bundle = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz')), None)
+    if bundle:
+        print(bundle['browser_download_url'])
+    else:
+        print('')
+    # Prefer SHA-256 embedded in release notes body (new format).
+    # Fall back to the legacy .sha512 release asset for releases
+    # published before this migration (enables rollback/downgrade).
+    body = r.get('body') or ''
+    m = re.search(r'app-bundle[^\n]*\n\x60\x60\x60\s*\n([0-9a-f]{64})', body)
+    if m:
+        print('sha256:' + m.group(1))
+    else:
+        sha512 = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha512')), None)
+        print('sha512url:' + sha512['browser_download_url'] if sha512 else '')
+")
+
+BUNDLE_URL=$(echo "$ASSET_INFO" | sed -n '1p')
+CHECKSUM_LINE=$(echo "$ASSET_INFO" | sed -n '2p')
+
+if [[ -z "$BUNDLE_URL" ]]; then
+    echo "Error: missing app-bundle asset for $TARGET" >&2
+    exit 1
+fi
+
+BUNDLE_FILENAME=$(basename "$BUNDLE_URL")
+
+TMP=$(mktemp -d)
+trap "rm -rf $TMP" EXIT
+
+echo "Downloading $BUNDLE_URL ..."
+curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"
+
+if [[ "$CHECKSUM_LINE" == sha256:* ]]; then
+    EXPECTED_SHA256="${CHECKSUM_LINE#sha256:}"
+    echo "Verifying integrity (SHA-256) ..."
+    echo "${EXPECTED_SHA256}  ${BUNDLE_FILENAME}" | (cd "$TMP" && sha256sum -c -)
+elif [[ "$CHECKSUM_LINE" == sha512url:* ]]; then
+    CHECKSUM_URL="${CHECKSUM_LINE#sha512url:}"
+    CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
+    echo "Downloading checksum (legacy SHA-512) ..."
+    curl -fL "$CHECKSUM_URL" -o "$TMP/$CHECKSUM_FILENAME"
+    echo "Verifying integrity (SHA-512) ..."
+    (cd "$TMP" && sha512sum -c "$CHECKSUM_FILENAME")
+else
+    echo "Error: no integrity checksum available for $TARGET." >&2
+    echo "Integrity check is required; aborting." >&2
+    exit 1
+fi
+
+tar -tzf "$TMP/$BUNDLE_FILENAME" > "$TMP/bundle-files.txt"
+BUNDLE_HAS_OBS_ADMIN=false
+if grep -Eq '^(\./)?obs-admin$' "$TMP/bundle-files.txt"; then
+    BUNDLE_HAS_OBS_ADMIN=true
+fi
+
+systemctl stop "$SERVICE"
+
+tar -xzf "$TMP/$BUNDLE_FILENAME" -C "$INSTALL_DIR"
+"$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
+
+# Self-update: replace this script with the version from the bundle
+cp "$INSTALL_DIR/obs-update" /usr/local/bin/obs-update
+chmod +x /usr/local/bin/obs-update
+rm -f "$INSTALL_DIR/obs-update"
+if [[ "$BUNDLE_HAS_OBS_ADMIN" == "true" ]]; then
+    cp "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin
+    chmod +x /usr/local/bin/obs-admin
+    rm -f "$INSTALL_DIR/obs-admin"
+else
+    rm -f /usr/local/bin/obs-admin
+fi
+
+echo "$TARGET" > "$INSTALL_DIR/version"
+
+systemctl start "$SERVICE"
+echo "Done. Now running $TARGET."

@@ -387,7 +387,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
         self._tz = await self._resolve_timezone()
         self._hol = self._build_holidays()
         self._connected = True
-        await self._publish_status(True, "Zeitschaltuhr gestartet")
+        await self._publish_status(True, "Zeitschaltuhr gestartet", code="started")
         self._task = asyncio.create_task(
             self._timer_loop(),
             name=f"zeitschaltuhr_{self._instance_id}",
@@ -409,7 +409,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
                 pass
             self._task = None
         self._connected = False
-        await self._publish_status(False, "Zeitschaltuhr gestoppt")
+        await self._publish_status(False, "Zeitschaltuhr gestoppt", code="stopped")
 
     async def reload_bindings(self, bindings: list[Any]) -> None:
         """Überschreibt Base-Methode: filtert ungültige Richtungen vor dem Speichern."""

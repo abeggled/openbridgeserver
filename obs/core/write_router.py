@@ -62,13 +62,76 @@ def _cached_value_equals(current_value: Any, cached_value: Any) -> bool:
     return current_value == cached_value
 
 
+def _unwrap_mqtt_set_payload(raw_payload: str) -> tuple[Any, bool]:
+    try:
+        payload = json.loads(raw_payload)
+    except Exception:
+        return raw_payload, False
+
+    if isinstance(payload, dict) and "v" in payload:
+        return payload["v"], True
+    return payload, True
+
+
+def _coerce_mqtt_boolean(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value in {0, 1}:
+            return bool(value)
+        raise ValueError(f"Invalid boolean numeric value: {value!r}")
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    raise ValueError(f"Invalid boolean value: {value!r}")
+
+
+def _coerce_mqtt_integer(value: Any) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float) and not isinstance(value, bool) and value == int(value):
+        return int(value)
+    raise ValueError(f"Invalid integer value: {value!r}")
+
+
+def _coerce_mqtt_float(value: Any) -> float:
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    raise ValueError(f"Invalid float value: {value!r}")
+
+
+def _deserialize_typed_mqtt_set_value(dt: Any, raw_payload: str, payload_value: Any, payload_was_json: bool) -> Any:
+    if dt.name == "BOOLEAN":
+        value = payload_value if payload_was_json else raw_payload
+        return _coerce_mqtt_boolean(value)
+    if dt.name == "INTEGER":
+        value = payload_value if payload_was_json else json.loads(raw_payload)
+        return _coerce_mqtt_integer(value)
+    if dt.name == "FLOAT":
+        value = payload_value if payload_was_json else json.loads(raw_payload)
+        return _coerce_mqtt_float(value)
+    if dt.name == "STRING" and not payload_was_json:
+        return raw_payload
+    if dt.name in {"DATE", "TIME", "DATETIME"} and not payload_was_json:
+        return dt.mqtt_deserializer(json.dumps(raw_payload))
+    return dt.mqtt_deserializer(json.dumps(payload_value) if payload_was_json else raw_payload)
+
+
+def _row_is_enabled(row: Any) -> bool:
+    return _row_value(row, "enabled") in {1, True, "1"}
+
+
 class WriteRouter:
-    def __init__(self, db: Any, registry: Any) -> None:
+    def __init__(self, db: Any, registry: Any, event_bus: Any | None = None) -> None:
         from obs.core.registry import DataPointRegistry
         from obs.db.database import Database
 
         self._db: Database = db
         self._registry: DataPointRegistry = registry
+        self._bus = event_bus
         # binding_id → timestamp of last successful send (monotonic seconds)
         self._last_sent: dict[uuid.UUID, float] = {}
         # binding_id → last successfully sent value (for on-change / delta checks)
@@ -79,7 +142,13 @@ class WriteRouter:
     # ------------------------------------------------------------------
 
     async def handle(self, dp_id: uuid.UUID, raw_payload: str) -> None:
-        """Deserialize payload and write to all DEST/BOTH bindings."""
+        """Deserialize an inbound MQTT set payload.
+
+        Bound datapoints keep the adapter write semantics: only DEST/BOTH
+        bindings receive commands, and registry state changes only when an
+        adapter later publishes a value event. Bindingless datapoints are OBS
+        internal objects, so their validated set payload becomes the value event.
+        """
         from obs.models.types import DataTypeRegistry
 
         logger.info("WriteRouter.handle: dp_id=%s payload=%r", dp_id, raw_payload)
@@ -88,17 +157,50 @@ class WriteRouter:
             logger.warning("Write request for unknown DataPoint %s — ignored", dp_id)
             return
 
+        rows = await self._db.fetchall(
+            """SELECT direction, enabled FROM adapter_bindings
+               WHERE datapoint_id=?""",
+            (str(dp_id),),
+        )
+        has_bindings = bool(rows)
+        active_rows = [row for row in rows if _row_is_enabled(row)]
+        has_writable_bindings = any(_row_value(row, "direction") in {"DEST", "BOTH"} for row in active_rows)
+        if has_bindings and not has_writable_bindings:
+            logger.warning("Write request for non-writable DataPoint %s — ignored", dp_id)
+            return
+
         dt = DataTypeRegistry.get(dp.data_type)
-        try:
-            value = dt.mqtt_deserializer(raw_payload)
-        except Exception:
+        payload_value, payload_was_json = _unwrap_mqtt_set_payload(raw_payload)
+        if dt.name == "UNKNOWN":
+            value = payload_value if payload_was_json else raw_payload
+        else:
             try:
-                value = json.loads(raw_payload)
+                value = _deserialize_typed_mqtt_set_value(dt, raw_payload, payload_value, payload_was_json)
             except Exception:
-                value = raw_payload
+                logger.warning(
+                    "WriteRouter: invalid MQTT set payload for dp=%s data_type=%s payload=%r",
+                    dp_id,
+                    dp.data_type,
+                    raw_payload,
+                )
+                return
         logger.info("WriteRouter: dp=%s value=%r (type=%s)", dp.name, value, dp.data_type)
 
-        await self._write_to_dest_bindings(dp_id, value, skip_binding_id=None)
+        if has_writable_bindings:
+            await self._write_to_dest_bindings(dp_id, value, skip_binding_id=None)
+            return
+
+        from obs.core.event_bus import DataValueEvent, get_event_bus
+
+        bus = getattr(self, "_bus", None) or get_event_bus()
+        await bus.publish(
+            DataValueEvent(
+                datapoint_id=dp_id,
+                value=value,
+                quality="good",
+                source_adapter="mqtt_set",
+            )
+        )
 
     # ------------------------------------------------------------------
     # Path 2 — internal DataValueEvent propagation
@@ -350,7 +452,7 @@ def reset_write_router() -> None:
     _write_router = None
 
 
-def init_write_router(db: Any, registry: Any) -> WriteRouter:
+def init_write_router(db: Any, registry: Any, event_bus: Any | None = None) -> WriteRouter:
     global _write_router
-    _write_router = WriteRouter(db, registry)
+    _write_router = WriteRouter(db, registry, event_bus=event_bus)
     return _write_router

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - '[0-9][0-9][0-9][0-9].*.x'  # release maintenance lines, e.g. 2026.6.x
       - bug/*
       - bugfix/*
       - feat/*
@@ -11,6 +12,7 @@ on:
   pull_request:
     branches:
       - main
+      - '[0-9][0-9][0-9][0-9].*.x'  # release maintenance lines, e.g. 2026.6.x
 
 permissions: {}
 
@@ -21,12 +23,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.14"
 
@@ -35,7 +37,7 @@ jobs:
         env:
           I18N_DIFF_BASE: ${{ github.event.pull_request.base.sha }}
           I18N_DIFF_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: ./scripts/check-i18n-hardcoded-strings.sh
+        run: ./tools/check-i18n-hardcoded-strings.sh
 
       - name: Run i18n soft gate (push)
         id: i18n_push
@@ -44,7 +46,7 @@ jobs:
         env:
           I18N_DIFF_BASE: ${{ github.event.before }}
           I18N_DIFF_HEAD: ${{ github.sha }}
-        run: ./scripts/check-i18n-hardcoded-strings.sh
+        run: ./tools/check-i18n-hardcoded-strings.sh
 
       - name: Report i18n soft-gate warning (push)
         if: github.event_name == 'push' && steps.i18n_push.outcome == 'failure'

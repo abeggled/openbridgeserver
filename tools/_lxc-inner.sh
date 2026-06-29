@@ -50,157 +50,16 @@ npm run build
 cd ..
 
 # ── Write obs-update ───────────────────────────────────────────────────────────
-cat > /tmp/obs-update << 'SCRIPTEOF'
-#!/bin/bash
-set -euo pipefail
-
-REPO="__REPO__"
-INSTALL_DIR="/opt/obs"
-SERVICE="obs"
-
-CURRENT=$(cat "$INSTALL_DIR/version" 2>/dev/null || echo "unknown")
-echo "Fetching release information..."
-ALL_RELEASES=$(curl -sf "https://api.github.com/repos/${REPO}/releases")
-
-# Build ordered list via semantic version sort, stopping after 2 stables
-VERSION_LIST=$(echo "$ALL_RELEASES" | python3 -c "
-import sys, json, re
-
-releases = json.load(sys.stdin)
-
-def sort_key(tag):
-    m = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-RC(\d+))?\$', tag, re.IGNORECASE)
-    if not m:
-        return (0, 0, 0, 0, 0)
-    y, mn, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
-    rc = int(m.group(4)) if m.group(4) else None
-    return (y, mn, p, 1 if rc is None else 0, rc or 0)
-
-candidates = sorted(
-    [r for r in releases if not r['draft']],
-    key=lambda r: sort_key(r['tag_name']), reverse=True
-)
-
-stables_seen = 0
-for r in candidates:
-    kind = 'rc' if r['prerelease'] else 'stable'
-    print(kind + ' ' + r['tag_name'])
-    if not r['prerelease']:
-        stables_seen += 1
-        if stables_seen >= 2:
-            break
-")
-
-echo "Current version: $CURRENT"
-echo ""
-
-OPTIONS=()
-LABELS=()
-
-while IFS=' ' read -r TYPE TAG; do
-    OPTIONS+=("$TAG")
-    MARKER=""
-    [[ "$TAG" == "$CURRENT" ]] && MARKER=", current"
-    if [[ "$TYPE" == "stable" ]]; then
-        LABELS+=("$TAG  (stable${MARKER})")
-    else
-        LABELS+=("$TAG  (release candidate${MARKER})")
-    fi
-done <<< "$VERSION_LIST"
-
-if [[ ${#OPTIONS[@]} -eq 0 ]]; then
-    echo "No releases found."
-    exit 0
-fi
-
-echo "Available versions:"
-for i in "${!OPTIONS[@]}"; do
-    echo "  $((i+1))) ${LABELS[$i]}"
-done
-echo "  0) Cancel"
-echo ""
-
-while true; do
-    read -rp "Select version to install [0-${#OPTIONS[@]}]: " CHOICE
-    if [[ "$CHOICE" =~ ^[0-9]+$ ]] && [[ "$CHOICE" -ge 0 ]] && [[ "$CHOICE" -le "${#OPTIONS[@]}" ]]; then
-        break
-    fi
-    echo "Invalid selection, please try again."
-done
-
-if [[ "$CHOICE" -eq 0 ]]; then
-    echo "Cancelled."
-    exit 0
-fi
-
-TARGET="${OPTIONS[$((CHOICE-1))]}"
-
-if [[ "$TARGET" == "$CURRENT" ]]; then
-    echo "$TARGET is already installed."
-    exit 0
-fi
-
-echo "Installing $TARGET ..."
-
-ASSET_INFO=$(echo "$ALL_RELEASES" | python3 -c "
-import sys, json
-target = '${TARGET}'
-releases = json.load(sys.stdin)
-r = next((r for r in releases if r['tag_name'] == target), None)
-if r:
-    bundle = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz')), None)
-    checksum = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha512')), None)
-    if bundle and checksum:
-        print(bundle['browser_download_url'])
-        print(checksum['browser_download_url'])
-")
-
-BUNDLE_URL=$(echo "$ASSET_INFO" | sed -n '1p')
-CHECKSUM_URL=$(echo "$ASSET_INFO" | sed -n '2p')
-
-if [[ -z "$BUNDLE_URL" ]] || [[ -z "$CHECKSUM_URL" ]]; then
-    echo "Error: missing app-bundle or checksum asset for $TARGET" >&2
-    exit 1
-fi
-
-BUNDLE_FILENAME=$(basename "$BUNDLE_URL")
-CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
-
-TMP=$(mktemp -d)
-trap "rm -rf $TMP" EXIT
-
-echo "Downloading $BUNDLE_URL ..."
-curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"
-echo "Downloading $CHECKSUM_URL ..."
-curl -fL "$CHECKSUM_URL" -o "$TMP/$CHECKSUM_FILENAME"
-
-(cd "$TMP" && sha512sum -c "$CHECKSUM_FILENAME")
-
-systemctl stop "$SERVICE"
-
-tar -xzf "$TMP/$BUNDLE_FILENAME" -C "$INSTALL_DIR"
-"$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
-
-# Self-update: replace this script with the version from the bundle
-cp "$INSTALL_DIR/obs-update" /usr/local/bin/obs-update
-chmod +x /usr/local/bin/obs-update
-rm -f "$INSTALL_DIR/obs-update"
-
-echo "$TARGET" > "$INSTALL_DIR/version"
-
-systemctl start "$SERVICE"
-echo "Done. Now running $TARGET."
-SCRIPTEOF
-
-sed -i "s|__REPO__|$REPO|g" /tmp/obs-update
-chmod +x /tmp/obs-update
-cp /tmp/obs-update obs-update
+sed "s|__REPO__|$REPO|g" scripts/obs-update > obs-update
+chmod +x obs-update
 
 # ── App bundle ─────────────────────────────────────────────────────────────────
 echo "==> Creating app bundle..."
-tar -czf "/tmp/$APP_BUNDLE_FILE" obs/ gui_dist/ frontend_dist/ requirements.txt obs-update
+tar -czf "/tmp/$APP_BUNDLE_FILE" obs/ gui_dist/ frontend_dist/ requirements.txt obs-update -C scripts obs-admin
+(cd /tmp && sha256sum "$APP_BUNDLE_FILE" > "$APP_BUNDLE_FILE.sha256")
+# Backward-compat: pre-migration obs-update versions verify via a .sha512 asset.
 (cd /tmp && sha512sum "$APP_BUNDLE_FILE" > "$APP_BUNDLE_FILE.sha512")
-cp "/tmp/$APP_BUNDLE_FILE" "/tmp/$APP_BUNDLE_FILE.sha512" /output/
+cp "/tmp/$APP_BUNDLE_FILE" "/tmp/$APP_BUNDLE_FILE.sha256" "/tmp/$APP_BUNDLE_FILE.sha512" /output/
 
 if [[ "${BUNDLE_ONLY}" == "true" ]]; then
     echo ""
@@ -287,8 +146,11 @@ cp -r obs              "$ROOTFS/opt/obs/"
 cp -r gui_dist         "$ROOTFS/opt/obs/"
 cp -r frontend_dist    "$ROOTFS/opt/obs/"
 cp    requirements.txt "$ROOTFS/opt/obs/"
+cp    scripts/obs-admin   "$ROOTFS/opt/obs/"
 echo "$VERSION" | tee "$ROOTFS/opt/obs/version" > /dev/null
-cp /tmp/obs-update "$ROOTFS/usr/local/bin/obs-update"
+cp obs-update "$ROOTFS/usr/local/bin/obs-update"
+cp scripts/obs-admin "$ROOTFS/usr/local/bin/obs-admin"
+chmod +x "$ROOTFS/usr/local/bin/obs-admin"
 
 chroot "$ROOTFS" /bin/bash << 'INSTALL'
 set -euo pipefail
@@ -427,8 +289,8 @@ cd "$ROOTFS"
 tar --numeric-owner --acls --xattrs \
     -cf - . | zstd -T0 -9 -o "/tmp/$TEMPLATE_FILE"
 cd /tmp
-sha512sum "$TEMPLATE_FILE" > "$TEMPLATE_FILE.sha512"
-cp "$TEMPLATE_FILE" "$TEMPLATE_FILE.sha512" /output/
+sha256sum "$TEMPLATE_FILE" > "$TEMPLATE_FILE.sha256"
+cp "$TEMPLATE_FILE" "$TEMPLATE_FILE.sha256" /output/
 
 echo ""
 echo "==> Done! Artifacts:"

@@ -1,27 +1,154 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 64" width="420" height="64" style="background:#111111">
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 310 55"
+   width="310"
+   height="55"
+   version="1.1"
+   id="svg11"
+   sodipodi:docname="obs_logo_dark.svg"
+   inkscape:version="1.4.3 (0d15f75, 2025-12-25)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs11" />
+  <sodipodi:namedview
+     id="namedview11"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="4.2142857"
+     inkscape:cx="202.88136"
+     inkscape:cy="31.915254"
+     inkscape:window-width="1920"
+     inkscape:window-height="1017"
+     inkscape:window-x="1912"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg11" />
   <!-- Hängebrücke Mark -->
-  <rect x="0" y="38" width="62" height="3.5" rx="1.75" fill="#5DCAA5"/>
-  <rect x="10" y="10" width="3.5" height="32" rx="1.75" fill="#5DCAA5"/>
-  <rect x="48.5" y="10" width="3.5" height="32" rx="1.75" fill="#5DCAA5"/>
-  <line x1="11.75" y1="10" x2="0"    y2="40" stroke="#5DCAA5" stroke-width="2" stroke-linecap="round"/>
-  <line x1="11.75" y1="10" x2="31"   y2="40" stroke="#5DCAA5" stroke-width="2" stroke-linecap="round"/>
-  <line x1="50.25" y1="10" x2="31"   y2="40" stroke="#5DCAA5" stroke-width="2" stroke-linecap="round"/>
-  <line x1="50.25" y1="10" x2="62"   y2="40" stroke="#5DCAA5" stroke-width="2" stroke-linecap="round"/>
-  <line x1="18"  y1="19" x2="18"  y2="38" stroke="#5DCAA5" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
-  <line x1="25"  y1="13" x2="25"  y2="38" stroke="#5DCAA5" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
-  <line x1="37"  y1="13" x2="37"  y2="38" stroke="#5DCAA5" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
-  <line x1="44"  y1="19" x2="44"  y2="38" stroke="#5DCAA5" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+  <rect
+     x="8"
+     y="36"
+     width="62"
+     height="3.5"
+     rx="1.75"
+     fill="#5dcaa5"
+     id="rect1" />
+  <rect
+     x="18"
+     y="8"
+     width="3.5"
+     height="32"
+     rx="1.75"
+     fill="#5dcaa5"
+     id="rect2" />
+  <rect
+     x="56.5"
+     y="8"
+     width="3.5"
+     height="32"
+     rx="1.75"
+     fill="#5dcaa5"
+     id="rect3" />
+  <line
+     x1="19.75"
+     y1="8"
+     x2="8"
+     y2="38"
+     stroke="#5dcaa5"
+     stroke-width="2"
+     stroke-linecap="round"
+     id="line3" />
+  <line
+     x1="19.75"
+     y1="8"
+     x2="39"
+     y2="38"
+     stroke="#5dcaa5"
+     stroke-width="2"
+     stroke-linecap="round"
+     id="line4" />
+  <line
+     x1="58.25"
+     y1="8"
+     x2="39"
+     y2="38"
+     stroke="#5dcaa5"
+     stroke-width="2"
+     stroke-linecap="round"
+     id="line5" />
+  <line
+     x1="58.25"
+     y1="8"
+     x2="70"
+     y2="38"
+     stroke="#5dcaa5"
+     stroke-width="2"
+     stroke-linecap="round"
+     id="line6" />
+  <line
+     x1="26"
+     y1="17"
+     x2="26"
+     y2="36"
+     stroke="#5dcaa5"
+     stroke-width="1.2"
+     stroke-linecap="round"
+     opacity="0.65"
+     id="line7" />
+  <line
+     x1="33"
+     y1="11"
+     x2="33"
+     y2="36"
+     stroke="#5dcaa5"
+     stroke-width="1.2"
+     stroke-linecap="round"
+     opacity="0.65"
+     id="line8" />
+  <line
+     x1="45"
+     y1="11"
+     x2="45"
+     y2="36"
+     stroke="#5dcaa5"
+     stroke-width="1.2"
+     stroke-linecap="round"
+     opacity="0.65"
+     id="line9" />
+  <line
+     x1="52"
+     y1="17"
+     x2="52"
+     y2="36"
+     stroke="#5dcaa5"
+     stroke-width="1.2"
+     stroke-linecap="round"
+     opacity="0.65"
+     id="line10" />
   <!-- Wordmark -->
-  <text x="80" y="30"
-    font-family="'DM Mono', monospace"
-    font-size="28"
-    font-weight="500"
-    letter-spacing="-0.4"
-    fill="#f0eeea">open bridge</text>
-  <text x="81" y="48"
-    font-family="'DM Mono', monospace"
-    font-size="9.5"
-    font-weight="300"
-    letter-spacing="2.8"
-    fill="#888780">MULTIPROTOCOL · AI SERVER</text>
+  <text
+     x="88"
+     y="28"
+     font-family="'DM Mono', monospace"
+     font-size="28px"
+     font-weight="500"
+     letter-spacing="-0.4"
+     fill="#f0eeea"
+     id="text10">open bridge</text>
+  <text
+     x="89"
+     y="46"
+     font-family="'DM Mono', monospace"
+     font-size="9.5px"
+     font-weight="300"
+     letter-spacing="2.8"
+     fill="#888780"
+     id="text11">MULTIPROTOCOL · AI SERVER</text>
 </svg>

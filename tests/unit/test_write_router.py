@@ -74,6 +74,7 @@ def _make_router(db_rows: list[dict]) -> WriteRouter:
     router = WriteRouter.__new__(WriteRouter)
     router._db = _FakeDb(db_rows)
     router._registry = None
+    router._bus = None
     router._last_sent = {}
     router._last_value = {}
     return router
@@ -210,37 +211,309 @@ async def test_handle_value_event_forwards_skip_binding_id(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_handle_uses_json_fallback_when_deserializer_fails(monkeypatch):
+async def test_handle_rejects_invalid_typed_payload_without_publishing_event():
     dp_id = uuid.uuid4()
     router = _make_router([])
-    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="dp", data_type="dummy"))
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="dp", data_type="FLOAT"))
+    bus = SimpleNamespace(publish=AsyncMock())
+    router._bus = bus
     router._write_to_dest_bindings = AsyncMock()
 
-    def _failing_deserializer(_raw):
-        raise ValueError("boom")
+    await router.handle(dp_id, "not json")
 
-    fake_dt = SimpleNamespace(mqtt_deserializer=_failing_deserializer)
-    monkeypatch.setattr("obs.models.types.DataTypeRegistry.get", lambda _dt: fake_dt)
-
-    await router.handle(dp_id, '{"n": 7}')
-    router._write_to_dest_bindings.assert_awaited_once_with(dp_id, {"n": 7}, skip_binding_id=None)
+    bus.publish.assert_not_awaited()
+    router._write_to_dest_bindings.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_handle_uses_raw_payload_when_deserializer_and_json_fallback_fail(monkeypatch):
+async def test_handle_publishes_unknown_json_payload_for_bindingless_datapoint():
     dp_id = uuid.uuid4()
     router = _make_router([])
-    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="dp", data_type="dummy"))
-    router._write_to_dest_bindings = AsyncMock()
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="dp", data_type="UNKNOWN"))
+    bus = SimpleNamespace(publish=AsyncMock())
+    router._bus = bus
 
-    def _failing_deserializer(_raw):
-        raise ValueError("boom")
+    await router.handle(dp_id, '{"n": 7}')
+    bus.publish.assert_awaited_once()
+    event = bus.publish.await_args.args[0]
+    assert isinstance(event, DataValueEvent)
+    assert event.datapoint_id == dp_id
+    assert event.value == {"n": 7}
+    assert event.quality == "good"
+    assert event.source_adapter == "mqtt_set"
 
-    fake_dt = SimpleNamespace(mqtt_deserializer=_failing_deserializer)
-    monkeypatch.setattr("obs.models.types.DataTypeRegistry.get", lambda _dt: fake_dt)
+
+@pytest.mark.asyncio
+async def test_handle_publishes_unknown_raw_payload_for_bindingless_datapoint():
+    dp_id = uuid.uuid4()
+    router = _make_router([])
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="dp", data_type="UNKNOWN"))
+    bus = SimpleNamespace(publish=AsyncMock())
+    router._bus = bus
 
     await router.handle(dp_id, "not json")
-    router._write_to_dest_bindings.assert_awaited_once_with(dp_id, "not json", skip_binding_id=None)
+    bus.publish.assert_awaited_once()
+    event = bus.publish.await_args.args[0]
+    assert event.datapoint_id == dp_id
+    assert event.value == "not json"
+    assert event.quality == "good"
+
+
+@pytest.mark.asyncio
+async def test_handle_ignores_source_only_datapoint_without_publishing_state():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([_row(datapoint_id=str(dp_id), direction="SOURCE")])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Sensor", data_type="FLOAT"))
+    router._write_to_dest_bindings = AsyncMock()
+
+    await router.handle(dp_id, "21.5")
+
+    bus.publish.assert_not_awaited()
+    router._write_to_dest_bindings.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_ignores_disabled_bindings_without_publishing_internal_state():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([_row(datapoint_id=str(dp_id), direction="DEST", enabled=0)])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Disabled", data_type="FLOAT"))
+    router._write_to_dest_bindings = AsyncMock()
+
+    await router.handle(dp_id, "21.5")
+
+    bus.publish.assert_not_awaited()
+    router._write_to_dest_bindings.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_with_writable_binding_writes_adapter_without_publishing_state():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([_row(datapoint_id=str(dp_id), direction="DEST")])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Actuator", data_type="FLOAT"))
+    router._write_to_dest_bindings = AsyncMock()
+
+    await router.handle(dp_id, "21.5")
+
+    router._write_to_dest_bindings.assert_awaited_once_with(dp_id, pytest.approx(21.5), skip_binding_id=None)
+    bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_publishes_value_event_for_bindingless_datapoint():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Internal", data_type="FLOAT"))
+
+    await router.handle(dp_id, "21.5")
+
+    bus.publish.assert_awaited_once()
+    event = bus.publish.await_args.args[0]
+    assert event.datapoint_id == dp_id
+    assert event.value == pytest.approx(21.5)
+    assert event.quality == "good"
+    assert event.source_adapter == "mqtt_set"
+
+
+@pytest.mark.asyncio
+async def test_handle_unwraps_documented_value_payload_for_bindingless_datapoint():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Internal", data_type="BOOLEAN"))
+
+    await router.handle(dp_id, '{"v": false, "q": "good"}')
+
+    bus.publish.assert_awaited_once()
+    event = bus.publish.await_args.args[0]
+    assert event.datapoint_id == dp_id
+    assert event.value is False
+    assert event.quality == "good"
+
+
+@pytest.mark.asyncio
+async def test_handle_parses_wrapped_boolean_string_before_publishing():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Internal", data_type="BOOLEAN"))
+
+    await router.handle(dp_id, '{"v": "false"}')
+
+    bus.publish.assert_awaited_once()
+    event = bus.publish.await_args.args[0]
+    assert event.datapoint_id == dp_id
+    assert event.value is False
+    assert event.quality == "good"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("raw_payload", "expected"), [("on", True), ("off", False), ("yes", True), ("no", False)])
+async def test_handle_accepts_raw_boolean_word_payloads(raw_payload, expected):
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Internal", data_type="BOOLEAN"))
+
+    await router.handle(dp_id, raw_payload)
+
+    bus.publish.assert_awaited_once()
+    event = bus.publish.await_args.args[0]
+    assert event.datapoint_id == dp_id
+    assert event.value is expected
+    assert event.quality == "good"
+
+
+@pytest.mark.asyncio
+async def test_handle_rejects_invalid_boolean_payload_without_publishing_event():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Internal", data_type="BOOLEAN"))
+    router._write_to_dest_bindings = AsyncMock()
+
+    await router.handle(dp_id, '{"v": "not-bool"}')
+
+    bus.publish.assert_not_awaited()
+    router._write_to_dest_bindings.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_rejects_boolean_object_payload_without_truthiness_coercion():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Internal", data_type="BOOLEAN"))
+    router._write_to_dest_bindings = AsyncMock()
+
+    await router.handle(dp_id, '{"unexpected": true}')
+
+    bus.publish.assert_not_awaited()
+    router._write_to_dest_bindings.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("data_type", "raw_payload"),
+    [
+        ("INTEGER", "1.9"),
+        ("INTEGER", '{"v": 1.9}'),
+        ("INTEGER", "true"),
+        ("FLOAT", "true"),
+        ("FLOAT", '{"v": "1.5"}'),
+    ],
+)
+async def test_handle_rejects_lossy_numeric_payloads_without_publishing_event(data_type, raw_payload):
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Internal", data_type=data_type))
+    router._write_to_dest_bindings = AsyncMock()
+
+    await router.handle(dp_id, raw_payload)
+
+    bus.publish.assert_not_awaited()
+    router._write_to_dest_bindings.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_preserves_raw_string_payload_for_bindingless_datapoint():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Internal", data_type="STRING"))
+
+    await router.handle(dp_id, "hello")
+
+    bus.publish.assert_awaited_once()
+    event = bus.publish.await_args.args[0]
+    assert event.datapoint_id == dp_id
+    assert event.value == "hello"
+    assert event.quality == "good"
+
+
+@pytest.mark.asyncio
+async def test_handle_preserves_raw_string_payload_for_writable_binding():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([_row(datapoint_id=str(dp_id), direction="DEST")])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Actuator", data_type="STRING"))
+    router._write_to_dest_bindings = AsyncMock()
+
+    await router.handle(dp_id, "hello")
+
+    router._write_to_dest_bindings.assert_awaited_once_with(dp_id, "hello", skip_binding_id=None)
+    bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("data_type", "raw_payload", "expected"),
+    [
+        ("DATE", "2026-06-12", datetime.date(2026, 6, 12)),
+        ("TIME", "10:30:00", datetime.time(10, 30, 0)),
+        ("DATETIME", "2026-06-12T10:30:00+00:00", datetime.datetime(2026, 6, 12, 10, 30, 0, tzinfo=datetime.UTC)),
+    ],
+)
+async def test_handle_preserves_raw_temporal_payload_for_bindingless_datapoint(data_type, raw_payload, expected):
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Internal", data_type=data_type))
+
+    await router.handle(dp_id, raw_payload)
+
+    bus.publish.assert_awaited_once()
+    event = bus.publish.await_args.args[0]
+    assert event.datapoint_id == dp_id
+    assert event.value == expected
+    assert event.quality == "good"
+
+
+@pytest.mark.asyncio
+async def test_handle_preserves_raw_temporal_payload_for_writable_binding():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([_row(datapoint_id=str(dp_id), direction="DEST")])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Clock", data_type="TIME"))
+    router._write_to_dest_bindings = AsyncMock()
+
+    await router.handle(dp_id, "10:30:00")
+
+    router._write_to_dest_bindings.assert_awaited_once_with(dp_id, datetime.time(10, 30, 0), skip_binding_id=None)
+    bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_rejects_invalid_raw_temporal_payload_without_raising():
+    dp_id = uuid.uuid4()
+    bus = SimpleNamespace(publish=AsyncMock())
+    router = _make_router([])
+    router._bus = bus
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="Clock", data_type="TIME"))
+    router._write_to_dest_bindings = AsyncMock()
+
+    await router.handle(dp_id, "not-a-time")
+
+    bus.publish.assert_not_awaited()
+    router._write_to_dest_bindings.assert_not_awaited()
 
 
 @pytest.mark.asyncio

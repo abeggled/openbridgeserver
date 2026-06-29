@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import email.utils
 import http.cookies
 import ipaddress
 import json
 import logging
 import os
+import re
+import socket
 import stat
 import uuid
 from datetime import UTC, datetime
@@ -52,6 +55,7 @@ _THROTTLE_UNITS: dict[str, float] = {
     "min": 60_000.0,
     "h": 3_600_000.0,
 }
+_MAX_LOGIC_CASCADE_DEPTH = 10
 
 _ICAL_MAX_BYTES = 1_048_576
 _ICAL_MAX_REDIRECTS = 5
@@ -60,6 +64,11 @@ _PUSHOVER_ATTACHMENT_MAX_BYTES = 5_000_000
 _SECRET_FILE_MAX_BYTES = 8192
 _SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
 _API_CLIENT_RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
+_API_CLIENT_VARIABLE_RE = re.compile(r"###OBS([1-9][0-9]*)###")
+
+
+class _ApiClientVariableError(ValueError):
+    pass
 
 
 def _secret_file_root() -> Path:
@@ -99,6 +108,161 @@ def _read_secret_file(path: str) -> str:
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         logger.warning("Could not read secret file %s: %s", secret_path_raw, exc)
         return ""
+
+
+def _normalise_api_client_variables(raw: Any) -> dict[int, dict[str, str]]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = []
+    if not isinstance(raw, list):
+        return {}
+
+    variables: dict[int, dict[str, str]] = {}
+    for idx, entry in enumerate(raw, start=1):
+        if not isinstance(entry, dict):
+            continue
+        slot_raw = entry.get("slot", idx)
+        try:
+            slot = int(slot_raw)
+        except (TypeError, ValueError):
+            slot = idx
+        if slot < 1:
+            slot = idx
+        datapoint_id = str(entry.get("datapoint_id") or "").strip()
+        if not datapoint_id:
+            continue
+        variables[slot] = {
+            "datapoint_id": datapoint_id,
+            "datapoint_name": str(entry.get("datapoint_name") or datapoint_id),
+        }
+    return variables
+
+
+def _rename_api_client_variable_datapoint_names(raw: Any, datapoint_id: str, new_name: str) -> tuple[Any, bool]:
+    was_string = isinstance(raw, str)
+    variables = raw
+    if was_string:
+        try:
+            variables = json.loads(raw)
+        except Exception:
+            return raw, False
+    if not isinstance(variables, list):
+        return raw, False
+
+    changed = False
+    for variable in variables:
+        if not isinstance(variable, dict):
+            continue
+        if variable.get("datapoint_id") == datapoint_id and variable.get("datapoint_name") != new_name:
+            variable["datapoint_name"] = new_name
+            changed = True
+    if not changed:
+        return raw, False
+    if was_string:
+        return json.dumps(variables, ensure_ascii=False), True
+    return variables, True
+
+
+def _api_client_value_to_string(value: Any) -> str:
+    if value is None:
+        raise _ApiClientVariableError("API client variable value is empty")
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _replace_api_client_placeholders(
+    value: Any,
+    resolver: Any,
+    transform: Any | None = None,
+) -> Any:
+    if isinstance(value, str):
+
+        def _replace(match: re.Match[str]) -> str:
+            replacement = resolver(int(match.group(1)))
+            return transform(replacement) if transform is not None else replacement
+
+        return _API_CLIENT_VARIABLE_RE.sub(_replace, value)
+    if isinstance(value, list):
+        return [_replace_api_client_placeholders(item, resolver, transform) for item in value]
+    if isinstance(value, dict):
+        return {
+            _replace_api_client_placeholders(key, resolver, transform): _replace_api_client_placeholders(item, resolver, transform)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _quote_api_client_url_value(value: str) -> str:
+    return quote(value, safe="-._~")
+
+
+def _replace_api_client_url_placeholders(value: str, resolver: Any) -> str:
+    authority_bounds: tuple[int, int] | None = None
+    scheme_match = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value)
+    if scheme_match is not None:
+        separator_scan_value = _API_CLIENT_VARIABLE_RE.sub(lambda match: "X" * (match.end() - match.start()), value)
+        authority_start = scheme_match.end()
+        authority_end = len(value)
+        for separator in "/?#":
+            separator_index = separator_scan_value.find(separator, authority_start)
+            if separator_index != -1:
+                authority_end = min(authority_end, separator_index)
+        authority_bounds = (authority_start, authority_end)
+
+    def _replace(match: re.Match[str]) -> str:
+        replacement = resolver(int(match.group(1)))
+        if authority_bounds is not None and authority_bounds[0] <= match.start() < authority_bounds[1]:
+            return quote(replacement, safe="-._~:[]")
+        return _quote_api_client_url_value(replacement)
+
+    return _API_CLIENT_VARIABLE_RE.sub(_replace, value)
+
+
+def _make_api_client_variable_resolver(
+    registry: Any,
+    raw_variables: Any,
+    execution_values_by_datapoint_id: dict[str, Any] | None = None,
+) -> Any:
+    variables = _normalise_api_client_variables(raw_variables)
+    execution_values_by_datapoint_id = execution_values_by_datapoint_id or {}
+    cache: dict[int, str] = {}
+
+    def _resolve(index: int) -> str:
+        if index in cache:
+            return cache[index]
+        variable = variables.get(index)
+        if variable is None:
+            raise _ApiClientVariableError(f"API client variable OBS{index} is not configured")
+        datapoint_id = variable["datapoint_id"]
+        if datapoint_id in execution_values_by_datapoint_id:
+            value = execution_values_by_datapoint_id[datapoint_id]
+            if value is None:
+                raise _ApiClientVariableError(
+                    f"API client variable OBS{index} object {variable['datapoint_name']} has no value",
+                )
+            cache[index] = _api_client_value_to_string(value)
+            return cache[index]
+        try:
+            state = registry.get_value(uuid.UUID(datapoint_id))
+        except Exception as exc:
+            raise _ApiClientVariableError(f"API client variable OBS{index} references an invalid object") from exc
+        if state is None:
+            raise _ApiClientVariableError(
+                f"API client variable OBS{index} object {variable['datapoint_name']} is not available",
+            )
+        if state.value is None:
+            raise _ApiClientVariableError(
+                f"API client variable OBS{index} object {variable['datapoint_name']} has no value",
+            )
+        cache[index] = _api_client_value_to_string(state.value)
+        return cache[index]
+
+    return _resolve
 
 
 def _parse_http_url(url: str) -> Any | None:
@@ -363,6 +527,18 @@ def _should_send_cookie(
     return True
 
 
+def _send_wol_packet(mac: str, broadcast: str, port: int) -> None:
+    """Build and send a Wake-on-LAN magic packet via UDP broadcast."""
+    clean = re.sub(r"[:\-\.]", "", mac).upper()
+    if len(clean) != 12 or not re.fullmatch(r"[0-9A-F]{12}", clean):
+        raise ValueError(f"Invalid MAC address: {mac!r}")
+    mac_bytes = bytes.fromhex(clean)
+    magic = b"\xff" * 6 + mac_bytes * 16
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.sendto(magic, (broadcast, port))
+
+
 def _build_ical_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
     parsed = _parse_http_url(url)
     if not parsed:
@@ -620,6 +796,7 @@ class LogicManager:
     async def _on_value_event(self, event: Any) -> None:
         dp_id = str(event.datapoint_id)
         now = datetime.now(UTC)
+        logic_depth = int(getattr(event, "logic_depth", 0) or 0)
 
         for graph_id in list(self._graphs):
             entry = self._graphs.get(graph_id)
@@ -630,6 +807,15 @@ class LogicManager:
                 continue
             trigger_nodes = [n for n in flow.nodes if n.type == "datapoint_read" and n.data.get("datapoint_id") == dp_id]
             if not trigger_nodes:
+                continue
+            if logic_depth >= _MAX_LOGIC_CASCADE_DEPTH:
+                logger.warning(
+                    "Logic cascade depth limit reached: suppressing graph=%s (%s) for dp=%s depth=%d",
+                    graph_id[:8],
+                    name,
+                    dp_id,
+                    logic_depth,
+                )
                 continue
 
             graph_state = self._node_state.setdefault(graph_id, {})
@@ -686,7 +872,7 @@ class LogicManager:
 
             if not overrides:
                 continue
-            await self._execute_graph(graph_id, name, flow, overrides)
+            await self._execute_graph(graph_id, name, flow, overrides, logic_depth=logic_depth)
 
     async def _on_datapoint_renamed(self, event: Any) -> None:
         """Update datapoint_name in all logic nodes that reference the renamed DataPoint."""
@@ -700,6 +886,14 @@ class LogicManager:
             for node in flow.nodes:
                 if node.data.get("datapoint_id") == dp_id_str and node.data.get("datapoint_name") != event.new_name:
                     node.data["datapoint_name"] = event.new_name
+                    changed = True
+                variables, variables_changed = _rename_api_client_variable_datapoint_names(
+                    node.data.get("variables"),
+                    dp_id_str,
+                    event.new_name,
+                )
+                if variables_changed:
+                    node.data["variables"] = variables
                     changed = True
             if changed:
                 current = self._graphs.get(graph_id)
@@ -739,6 +933,7 @@ class LogicManager:
         name: str,
         flow: FlowData,
         overrides: dict[str, dict[str, Any]],
+        logic_depth: int = 0,
     ) -> dict[str, Any]:
         execute_now = datetime.now(UTC)
         graph_state = self._node_state.setdefault(graph_id, {})
@@ -974,9 +1169,12 @@ class LogicManager:
             except Exception as _hc_exc:
                 logger.debug("Graph %s: heating_circuit history pre-fill failed: %s", graph_id[:8], _hc_exc)
 
+        api_client_ids = {node.id for node in flow.nodes if node.type == "api_client"}
+        needs_api_client_replay_snapshot = any(edge.source in api_client_ids for edge in flow.edges)
         executor = GraphExecutor(flow, hyst, self._app_config)
         try:
-            outputs = executor.execute(aug_overrides)
+            pre_execute_hyst = copy.deepcopy(hyst) if needs_api_client_replay_snapshot else None
+            outputs = executor.execute(aug_overrides, commit_memory=False)
         except Exception as exc:
             logger.error("Graph %s (%s) execution error: %s", graph_id, name, exc)
             return {}
@@ -999,10 +1197,130 @@ class LogicManager:
                 ns["accumulated_hours"] += (execute_now - ns["last_start"]).total_seconds() / 3600
                 ns["last_start"] = None
 
+        # ── Handle wake_on_lan ────────────────────────────────────────────
+        # Runs BEFORE api_client/notify so that graphs with wol.sent →
+        # api_client or wol.sent → notify fire correctly in the same execution.
+        # Rising-edge: packet is sent only on the False→True transition of
+        # _trigger, preventing repeated broadcasts on sustained truthy inputs.
+        # Exception: cron-triggered executions are always treated as a fresh
+        # rising edge, since each cron tick is an independent scheduled event.
+        cron_node_ids = {n.id for n in flow.nodes if n.type == "timer_cron"}
+        # Forward-reachability from the cron nodes that actually fired this
+        # execution.  Used below to scope the cron-retrigger exception to WoL
+        # nodes that are driven by the firing cron, not every cron in the graph.
+        fired_crons = overrides.keys() & cron_node_ids
+        cron_reachable: set[str] = set(fired_crons)
+        if fired_crons:
+            _cq: list[str] = list(fired_crons)
+            while _cq:
+                _cn = _cq.pop()
+                for _ce in flow.edges:
+                    if _ce.source == _cn and _ce.target not in cron_reachable:
+                        cron_reachable.add(_ce.target)
+                        _cq.append(_ce.target)
+        triggered_wol_nodes: set[str] = set()
+        for node in flow.nodes:
+            if node.type != "wake_on_lan":
+                continue
+            out = outputs.get(node.id, {})
+            hyst_wol = hyst.setdefault(node.id, {})
+            is_triggered = GraphExecutor._to_bool(out.get("_trigger"))
+            was_triggered = hyst_wol.get("wol_prev_trigger", False)
+            # Cron-retrigger exception applies only when the firing cron node
+            # actually drives this specific WoL node (reachability check above).
+            is_cron_triggered = node.id in cron_reachable
+            if not is_triggered:
+                hyst_wol["wol_prev_trigger"] = False
+                continue
+            if was_triggered and not is_cron_triggered:
+                continue
+            mac = (node.data.get("mac_address") or "").strip()
+            if not mac:
+                logger.warning("wake_on_lan: mac_address missing on node %s", node.id[:8])
+                continue
+            broadcast = (node.data.get("broadcast_ip") or "").strip() or "255.255.255.255"
+            _port_raw = node.data.get("port")
+            try:
+                if isinstance(_port_raw, float) and not _port_raw.is_integer():
+                    raise ValueError(f"fractional port {_port_raw!r} — must be a whole number")
+                port = int(_port_raw) if _port_raw not in (None, "") else 9
+                if not (1 <= port <= 65535):
+                    raise ValueError(f"port {port!r} out of range 1–65535")
+                try:
+                    ipaddress.IPv4Address(broadcast)
+                except ValueError:
+                    raise ValueError(f"invalid broadcast IP {broadcast!r}") from None
+                await asyncio.to_thread(_send_wol_packet, mac, broadcast, port)
+                # Record the consumed rising edge only after a successful send so
+                # that a transient failure does not silently suppress the next attempt.
+                hyst_wol["wol_prev_trigger"] = True
+                outputs[node.id]["sent"] = True
+                triggered_wol_nodes.add(node.id)
+                mac_oui = ":".join(mac.upper().split(":")[:3]) + ":??:??:??" if ":" in mac else "??:??:??:??:??:??"
+                logger.info("Graph %s: WoL sent to %s via %s:%d", graph_id[:8], mac_oui, broadcast, port)
+            except Exception as exc:
+                mac_oui = ":".join(mac.upper().split(":")[:3]) + ":??:??:??" if ":" in mac else "??:??:??:??:??:??"
+                logger.warning("Graph %s: WoL failed (mac=%s): %s", graph_id[:8], mac_oui, exc)
+
+        # ── Re-propagate wake_on_lan sent=True to downstream nodes ───────────
+        # The first executor pass computed downstream nodes with sent=False.
+        # Re-run only the transitive downstream subgraph with the real sent
+        # value injected as an input override.
+        # Full aug_overrides (dp-read seeds + cron/event overrides from the
+        # call site) are carried into the second pass so that downstream nodes
+        # which also read from a cron pulse or a datapoint see correct values.
+        # Only transitively downstream nodes are updated from the second pass
+        # so that unrelated nodes (e.g. an api_client with its own trigger)
+        # keep their first-pass results.
+        if triggered_wol_nodes:
+            wol_downstream_overrides: dict[str, dict[str, Any]] = {}
+            for e in flow.edges:
+                if e.source in triggered_wol_nodes:
+                    src_handle = e.sourceHandle or "out"
+                    tgt_handle = e.targetHandle or "in"
+                    wol_downstream_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs[e.source], src_handle)
+            if wol_downstream_overrides:
+                wol_merged: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in aug_overrides.items()}
+                for nid, vals in wol_downstream_overrides.items():
+                    wol_merged.setdefault(nid, {}).update(vals)
+                # Use a deep copy of hyst so that stateful nodes (statistics,
+                # avg_multi, …) don't accumulate a second sample just because
+                # a WoL edge is present — we only want their *outputs*, not
+                # a second mutation of their persisted state.
+                wol_second_executor = GraphExecutor(flow, copy.deepcopy(hyst), self._app_config)
+                wol_second_outputs = wol_second_executor.execute(wol_merged, commit_memory=False)
+                # Compute transitive closure of WoL-triggered nodes so that only
+                # their descendants are updated, leaving unrelated nodes intact.
+                wol_descendants: set[str] = set()
+                queue = list(triggered_wol_nodes)
+                while queue:
+                    nid = queue.pop()
+                    for e in flow.edges:
+                        if e.source == nid and e.target not in wol_descendants:
+                            wol_descendants.add(e.target)
+                            queue.append(e.target)
+                wol_node_ids = {n.id for n in flow.nodes if n.type == "wake_on_lan"}
+                for nid, vals in wol_second_outputs.items():
+                    if nid not in wol_node_ids and nid in wol_descendants:
+                        outputs[nid] = vals
+
         # ── Handle api_client ─────────────────────────────────────────────
-        # Track which api_client nodes completed an HTTP call so we can
-        # re-propagate their real outputs to downstream nodes afterwards.
+        # Track api_client nodes with final manager-computed outputs so we can
+        # re-propagate success responses and explicit error details downstream.
         triggered_api_clients: set[str] = set()
+        execution_values_by_datapoint_id: dict[str, Any] = {}
+        execution_value_priority_by_datapoint_id: dict[str, int] = {}
+        for node in flow.nodes:
+            if node.type != "datapoint_read":
+                continue
+            dp_id_str = str(node.data.get("datapoint_id") or "").strip()
+            if not dp_id_str or node.id not in aug_overrides or "value" not in aug_overrides[node.id]:
+                continue
+            node_override = aug_overrides[node.id]
+            priority = 2 if node.id in overrides or GraphExecutor._to_bool(node_override.get("changed")) else 1
+            if priority >= execution_value_priority_by_datapoint_id.get(dp_id_str, 0):
+                execution_values_by_datapoint_id[dp_id_str] = node_override["value"]
+                execution_value_priority_by_datapoint_id[dp_id_str] = priority
         import json as _json  # noqa: PLC0415
 
         for node in flow.nodes:
@@ -1011,14 +1329,29 @@ class LogicManager:
             out = outputs.get(node.id, {})
             if not GraphExecutor._to_bool(out.get("_trigger")):
                 continue
-            url = (node.data.get("url") or "").strip()
-            if not url:
+            variable_resolver = _make_api_client_variable_resolver(
+                self._registry,
+                node.data.get("variables"),
+                execution_values_by_datapoint_id,
+            )
+            try:
+                url = _replace_api_client_url_placeholders(
+                    node.data.get("url") or "",
+                    variable_resolver,
+                ).strip()
+                if not url:
+                    continue
+            except _ApiClientVariableError as exc:
+                logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
+                outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                triggered_api_clients.add(node.id)
                 continue
             try:
                 request_urls, pinned_headers, request_extensions = _build_api_client_fetch_targets(url)
             except ValueError as exc:
                 logger.warning("Graph %s: blocked api_client target %s: %s", graph_id[:8], url, exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                triggered_api_clients.add(node.id)
                 continue
             method = (node.data.get("method", "GET") or "GET").upper()
             content_type = node.data.get("content_type", "application/json")
@@ -1043,30 +1376,55 @@ class LogicManager:
                     }
                 except Exception:
                     pass
-            body = out.get("_body")
+            try:
+                extra_headers = _replace_api_client_placeholders(extra_headers, variable_resolver)
+            except _ApiClientVariableError as exc:
+                logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
+                outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                triggered_api_clients.add(node.id)
+                continue
             # ── Authentication ──────────────────────────────────────────
             auth_type = (node.data.get("auth_type") or "none").lower()
             auth: Any = None
-            if auth_type in ("basic", "digest"):
-                username = (node.data.get("auth_username") or "").strip()
-                password = (node.data.get("auth_password") or "").strip()
-                if username:
-                    auth = httpx.BasicAuth(username, password) if auth_type == "basic" else httpx.DigestAuth(username, password)
-            elif auth_type == "bearer":
-                token = (node.data.get("auth_token") or "").strip()
-                if not token:
-                    token = _read_secret_file(node.data.get("auth_token_file") or "")
-                if token:
-                    extra_headers = {
-                        **extra_headers,
-                        "Authorization": f"Bearer {token}",
-                    }
+            try:
+                if auth_type in ("basic", "digest"):
+                    username = _replace_api_client_placeholders(
+                        node.data.get("auth_username") or "",
+                        variable_resolver,
+                    ).strip()
+                    password = _replace_api_client_placeholders(
+                        node.data.get("auth_password") or "",
+                        variable_resolver,
+                    )
+                    if username:
+                        auth = httpx.BasicAuth(username, password) if auth_type == "basic" else httpx.DigestAuth(username, password)
+                elif auth_type == "bearer":
+                    token = _replace_api_client_placeholders(
+                        node.data.get("auth_token") or "",
+                        variable_resolver,
+                    ).strip()
+                    if not token:
+                        token = _replace_api_client_placeholders(
+                            _read_secret_file(node.data.get("auth_token_file") or ""),
+                            variable_resolver,
+                        ).strip()
+                    if token:
+                        extra_headers = {
+                            **extra_headers,
+                            "Authorization": f"Bearer {token}",
+                        }
+            except _ApiClientVariableError as exc:
+                logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
+                outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                triggered_api_clients.add(node.id)
+                continue
             try:
                 req_kwargs: dict[str, Any] = {
                     "headers": extra_headers,
                     "timeout": timeout_s,
                 }
                 if method in ("POST", "PUT", "PATCH"):
+                    body = _replace_api_client_placeholders(out.get("_body"), variable_resolver)
                     if content_type == "application/json":
                         req_kwargs["content"] = _json.dumps(body) if not isinstance(body, (str, bytes)) else body
                         req_kwargs["headers"] = {
@@ -1127,6 +1485,7 @@ class LogicManager:
             except Exception as exc:
                 logger.warning("Graph %s: api_client failed: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                triggered_api_clients.add(node.id)
 
         # ── Re-propagate api_client outputs to downstream nodes ───────────
         # The first executor pass computed downstream nodes with the placeholder
@@ -1134,6 +1493,16 @@ class LogicManager:
         # executor for those downstream nodes using input overrides so their
         # outputs (and downstream datapoint writes, etc.) reflect the real values.
         if triggered_api_clients:
+            downstream_node_ids: set[str] = set()
+            pending_sources = list(triggered_api_clients)
+            while pending_sources:
+                source_id = pending_sources.pop()
+                for e in flow.edges:
+                    if e.source != source_id or e.target in downstream_node_ids:
+                        continue
+                    downstream_node_ids.add(e.target)
+                    pending_sources.append(e.target)
+
             downstream_overrides: dict[str, dict[str, Any]] = {}
             for e in flow.edges:
                 if e.source in triggered_api_clients:
@@ -1141,12 +1510,36 @@ class LogicManager:
                     tgt_handle = e.targetHandle or "in"
                     downstream_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs[e.source], src_handle)
             if downstream_overrides:
-                second_executor = GraphExecutor(flow, hyst, self._app_config)
-                second_outputs = second_executor.execute(downstream_overrides)
-                api_client_ids = {n.id for n in flow.nodes if n.type == "api_client"}
-                for nid, vals in second_outputs.items():
-                    if nid not in api_client_ids:
-                        outputs[nid] = vals
+                replay_overrides = {nid: dict(vals) for nid, vals in aug_overrides.items()}
+                for nid, vals in downstream_overrides.items():
+                    replay_overrides.setdefault(nid, {}).update(vals)
+                for e in flow.edges:
+                    if e.target not in downstream_node_ids or e.source in downstream_node_ids or e.source in triggered_api_clients:
+                        continue
+                    src_handle = e.sourceHandle or "out"
+                    tgt_handle = e.targetHandle or "in"
+                    replay_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs.get(e.source, {}), src_handle)
+                if pre_execute_hyst is not None:
+                    replay_hyst = copy.deepcopy(pre_execute_hyst)
+                    second_executor = GraphExecutor(flow, replay_hyst, self._app_config)
+                    second_outputs = second_executor.execute(replay_overrides, commit_memory=False)
+                    # Compute transitive descendants of triggered api_clients so that
+                    # only their subtree is updated. This prevents the api_client
+                    # second pass from overwriting WoL-propagated outputs that were
+                    # already written to outputs[] by the WoL second pass above.
+                    api_descendants: set[str] = set()
+                    _aq: list[str] = list(triggered_api_clients)
+                    while _aq:
+                        _an = _aq.pop()
+                        for _ae in flow.edges:
+                            if _ae.source == _an and _ae.target not in api_descendants:
+                                api_descendants.add(_ae.target)
+                                _aq.append(_ae.target)
+                    for nid, vals in second_outputs.items():
+                        if nid not in api_client_ids and nid in api_descendants:
+                            outputs[nid] = vals
+                            if nid in replay_hyst:
+                                hyst[nid] = replay_hyst[nid]
 
         # ── Handle notify_pushover ────────────────────────────────────────
         # Runs AFTER api_client second-pass so that graphs with api_client →
@@ -1318,6 +1711,11 @@ class LogicManager:
                     exc,
                 )
 
+        # Memory is the explicit tick boundary for feedback loops. Commit it
+        # after all async node re-propagation so the stored value always reflects
+        # the final graph outputs, not executor placeholders from an earlier pass.
+        executor.commit_memory_inputs(outputs, aug_overrides)
+
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
         from obs.core.event_bus import DataValueEvent
@@ -1388,6 +1786,7 @@ class LogicManager:
                     value=write_val,
                     quality="good",
                     source_adapter="logic",
+                    logic_depth=logic_depth + 1,
                 )
                 await self._event_bus.publish(event)
                 logger.debug("Graph %s: wrote dp %s = %s", graph_id, dp_id_str, write_val)

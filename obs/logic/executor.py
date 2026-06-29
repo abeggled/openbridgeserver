@@ -7,6 +7,7 @@ Returns a dict of node_id → output_values.
 from __future__ import annotations
 
 import ast
+import json
 import logging
 import math
 import operator
@@ -15,9 +16,11 @@ from datetime import date as _date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
+from obs.logic.graph_analysis import analyze_topology
 from obs.logic.models import FlowData, LogicNode
 
 logger = logging.getLogger(__name__)
+_AVG_MULTI_MAX_SAMPLES = 100_000
 
 _COMPARE_OPS = {
     ">": operator.gt,
@@ -34,6 +37,12 @@ _COMPARE_OPS = {
     "!=": operator.ne,
     "ne": operator.ne,
 }
+_TEXT_COMPARE_OPS = {"text", "text_eq", "equals_text"}
+_RANGE_OPS = {"range", "between"}
+_CONTAINS_OPS = {"contains"}
+_STARTS_WITH_OPS = {"starts_with", "startswith", "begins_with"}
+_ENDS_WITH_OPS = {"ends_with", "endswith"}
+_REGEX_OPS = {"regex", "regexp"}
 
 
 class ExecutionError(Exception):
@@ -60,25 +69,28 @@ class GraphExecutor:
         self.hysteresis_state = hysteresis_state if hysteresis_state is not None else {}
         self.app_config = app_config or {}
 
-    def execute(self, input_overrides: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+    def execute(
+        self,
+        input_overrides: dict[str, dict[str, Any]] | None = None,
+        *,
+        commit_memory: bool = True,
+    ) -> dict[str, dict[str, Any]]:
         """Run the graph. Returns output values for every node."""
         input_overrides = input_overrides or {}
 
         # Build adjacency: edge target_node.handle ← source_node.handle value
         # edge_map[target_node_id][target_handle] = (source_node_id, source_handle)
-        edge_map: dict[str, dict[str, tuple[str, str]]] = {}
-        for edge in self.flow.edges:
-            src_handle = edge.sourceHandle or "out"
-            tgt_handle = edge.targetHandle or "in"
-            edge_map.setdefault(edge.target, {})[tgt_handle] = (edge.source, src_handle)
+        edge_map = self._build_edge_map()
 
-        # Topological sort (Kahn's algorithm)
-        order = self._topo_sort()
+        # Topological sort (Kahn's algorithm). Nodes left behind by the sort
+        # are not executable in this single-pass DAG executor, so surface them
+        # explicitly instead of silently dropping them from the result.
+        topo = self._topo_sort()
 
         # Evaluate
         outputs: dict[str, dict[str, Any]] = {}
 
-        for node in order:
+        for node in topo.order:
             # Resolve inputs for this node
             inputs: dict[str, Any] = {}
             for handle, (src_id, src_handle) in edge_map.get(node.id, {}).items():
@@ -93,37 +105,96 @@ class GraphExecutor:
                 result = self._eval_node(node, inputs)
             except Exception as exc:
                 logger.warning("Node %s (%s) error: %s", node.id, node.type, exc)
-                result = {}
+                result = {"__error__": str(exc)}
 
             outputs[node.id] = result
 
+        if topo.skipped_node_ids:
+            ordered_cyclic = [n.id for n in self.flow.nodes if n.id in topo.cyclic_node_ids]
+            ordered_blocked = [n.id for n in self.flow.nodes if n.id in topo.blocked_node_ids]
+            logger.warning(
+                "Logic graph contains cycle(s); cyclic nodes=%s, blocked nodes=%s",
+                ordered_cyclic,
+                ordered_blocked,
+            )
+            cycle_summary = ", ".join(ordered_cyclic[:5])
+            if len(ordered_cyclic) > 5:
+                cycle_summary = f"{cycle_summary}, ..."
+            for node in self.flow.nodes:
+                if node.id in topo.cyclic_node_ids:
+                    outputs[node.id] = {
+                        "__error__": f"Graph cycle detected; node was not executed. Cycle nodes: {cycle_summary}",
+                        "__diagnostic__": "graph_cycle",
+                        "__cycle_nodes__": ordered_cyclic,
+                    }
+                elif node.id in topo.blocked_node_ids:
+                    outputs[node.id] = {
+                        "__error__": f"Graph cycle detected upstream; node was not executed. Cycle nodes: {cycle_summary}",
+                        "__diagnostic__": "graph_cycle_blocked",
+                        "__cycle_nodes__": ordered_cyclic,
+                    }
+
+        if commit_memory:
+            self._commit_memory_inputs(outputs, input_overrides, edge_map)
         return outputs
 
     # ── Topological Sort ──────────────────────────────────────────────────
 
-    def _topo_sort(self) -> list[LogicNode]:
-        node_map = {n.id: n for n in self.flow.nodes}
-        in_degree: dict[str, int] = {n.id: 0 for n in self.flow.nodes}
-        adj: dict[str, list[str]] = {n.id: [] for n in self.flow.nodes}
+    def _topo_sort(self):
+        return analyze_topology(self.flow)
 
+    def _build_edge_map(self) -> dict[str, dict[str, tuple[str, str]]]:
+        edge_map: dict[str, dict[str, tuple[str, str]]] = {}
         for edge in self.flow.edges:
-            if edge.source in adj and edge.target in in_degree:
-                adj[edge.source].append(edge.target)
-                in_degree[edge.target] += 1
+            src_handle = edge.sourceHandle or "out"
+            tgt_handle = edge.targetHandle or "in"
+            edge_map.setdefault(edge.target, {})[tgt_handle] = (edge.source, src_handle)
+        return edge_map
 
-        queue = [nid for nid, deg in in_degree.items() if deg == 0]
-        order: list[LogicNode] = []
+    def commit_memory_inputs(
+        self,
+        outputs: dict[str, dict[str, Any]],
+        input_overrides: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        self._commit_memory_inputs(outputs, input_overrides or {}, self._build_edge_map())
 
-        while queue:
-            nid = queue.pop(0)
-            if nid in node_map:
-                order.append(node_map[nid])
-            for neighbor in adj.get(nid, []):
-                in_degree[neighbor] -= 1
-                if in_degree[neighbor] == 0:
-                    queue.append(neighbor)
+    def _commit_memory_inputs(
+        self,
+        outputs: dict[str, dict[str, Any]],
+        input_overrides: dict[str, dict[str, Any]],
+        edge_map: dict[str, dict[str, tuple[str, str]]],
+    ) -> None:
+        for node in self.flow.nodes:
+            if node.type != "memory":
+                continue
+            node_overrides = input_overrides.get(node.id, {})
+            has_reset, reset_value = self._memory_input_value(node, "reset", outputs, node_overrides, edge_map)
+            if has_reset and self._to_bool(reset_value):
+                self._set_memory_value(node, self._memory_initial_value(node))
+                continue
+            has_input, input_value = self._memory_input_value(node, "in", outputs, node_overrides, edge_map)
+            if has_input:
+                self._set_memory_value(node, self._coerce_memory_value(node, input_value))
+                continue
 
-        return order
+    def _memory_input_value(
+        self,
+        node: LogicNode,
+        handle: str,
+        outputs: dict[str, dict[str, Any]],
+        node_overrides: dict[str, Any],
+        edge_map: dict[str, dict[str, tuple[str, str]]],
+    ) -> tuple[bool, Any]:
+        if handle in node_overrides:
+            return True, node_overrides[handle]
+        src = edge_map.get(node.id, {}).get(handle)
+        if src is None:
+            return False, None
+        src_id, src_handle = src
+        src_outputs = outputs.get(src_id)
+        if not isinstance(src_outputs, dict) or "__diagnostic__" in src_outputs:
+            return False, None
+        return self._try_get_output_value(src_outputs, src_handle)
 
     # ── Type coercion helpers ─────────────────────────────────────────────
 
@@ -137,6 +208,16 @@ class GraphExecutor:
         if handle == "out" and "result" in outputs:
             return outputs.get("result")
         return None
+
+    @classmethod
+    def _try_get_output_value(cls, outputs: dict[str, Any], handle: str) -> tuple[bool, Any]:
+        if handle in outputs:
+            return True, outputs.get(handle)
+        if handle == "result" and "out" in outputs:
+            return True, outputs.get("out")
+        if handle == "out" and "result" in outputs:
+            return True, outputs.get("result")
+        return False, None
 
     @staticmethod
     def _to_num(v: Any, default: float = 0.0) -> float:
@@ -161,6 +242,28 @@ class GraphExecutor:
             return None
 
     @staticmethod
+    def _try_bool_literal(v: Any) -> bool | None:
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s in {"true", "1", "yes", "on"}:
+                return True
+            if s in {"false", "0", "no", "off"}:
+                return False
+        return None
+
+    @classmethod
+    def _values_equal(cls, left: Any, right: Any) -> bool:
+        bool_left, bool_right = cls._try_bool_literal(left), cls._try_bool_literal(right)
+        if bool_left is not None and bool_right is not None:
+            return bool_left == bool_right
+        num_left, num_right = cls._try_num(left), cls._try_num(right)
+        if num_left is not None and num_right is not None:
+            return num_left == num_right
+        return str(left) == str(right)
+
+    @staticmethod
     def _to_bool(v: Any) -> bool:
         """Coerce any value to bool. Strings '0'/'false'/'off' → False."""
         if v is None:
@@ -168,6 +271,120 @@ class GraphExecutor:
         if isinstance(v, str):
             return v.strip().lower() not in ("0", "false", "no", "off", "")
         return bool(v)
+
+    def _memory_initial_value(self, node: LogicNode) -> Any:
+        return self._coerce_memory_value(node, node.data.get("initial_value"))
+
+    def _memory_value(self, node: LogicNode) -> Any:
+        state = self.hysteresis_state.get(node.id)
+        if isinstance(state, dict) and "value" in state:
+            return state["value"]
+        if state is not None and not isinstance(state, dict):
+            return state
+        return self._memory_initial_value(node)
+
+    def _set_memory_value(self, node: LogicNode, value: Any) -> None:
+        self.hysteresis_state[node.id] = {"value": value}
+
+    def _coerce_memory_value(self, node: LogicNode, value: Any) -> Any:
+        dtype = node.data.get("data_type", "auto")
+        if dtype == "bool":
+            return self._to_bool(value)
+        if dtype == "number":
+            return self._to_num(value)
+        if dtype == "string":
+            return "" if value is None else str(value)
+        return value
+
+    @staticmethod
+    def _load_rule_list(value: Any) -> list[dict[str, Any]]:
+        if isinstance(value, list):
+            return [r for r in value if isinstance(r, dict)]
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value or "[]")
+            except (TypeError, ValueError):
+                return []
+            if isinstance(parsed, list):
+                return [r for r in parsed if isinstance(r, dict)]
+        return []
+
+    @staticmethod
+    def _condition_value(rule: dict[str, Any], key: str, fallback: Any = None, *, blank_is_missing: bool = False) -> Any:
+        value = rule.get(key, fallback)
+        if blank_is_missing and isinstance(value, str) and value.strip() == "":
+            return fallback
+        return value
+
+    @classmethod
+    def _condition_matches(cls, input_value: Any, rule: dict[str, Any]) -> bool:
+        operator_key = str(rule.get("operator") or rule.get("op") or "eq").strip().lower()
+        expected = cls._condition_value(rule, "value")
+        if input_value is None:
+            return False
+
+        if operator_key in _RANGE_OPS:
+            lo = cls._condition_value(rule, "min", expected, blank_is_missing=True)
+            hi = cls._condition_value(rule, "max", cls._condition_value(rule, "value_to", blank_is_missing=True), blank_is_missing=True)
+            num_value, num_lo, num_hi = cls._try_num(input_value), cls._try_num(lo), cls._try_num(hi)
+            if num_value is None or num_lo is None or num_hi is None:
+                return False
+            lower, upper = sorted((num_lo, num_hi))
+            return lower <= num_value <= upper
+
+        if operator_key in _REGEX_OPS:
+            pattern = str(expected or "")
+            if not pattern:
+                return False
+            flags = 0 if rule.get("case_sensitive") else re.IGNORECASE
+            try:
+                return re.search(pattern, str(input_value), flags=flags) is not None
+            except re.error:
+                return False
+
+        if operator_key in _CONTAINS_OPS | _STARTS_WITH_OPS | _ENDS_WITH_OPS | _TEXT_COMPARE_OPS:
+            left = str(input_value)
+            right = str(expected if expected is not None else "")
+            if operator_key in _CONTAINS_OPS | _STARTS_WITH_OPS | _ENDS_WITH_OPS and right == "":
+                return False
+            if not rule.get("case_sensitive"):
+                left = left.casefold()
+                right = right.casefold()
+            if operator_key in _CONTAINS_OPS:
+                return right in left
+            if operator_key in _STARTS_WITH_OPS:
+                return left.startswith(right)
+            if operator_key in _ENDS_WITH_OPS:
+                return left.endswith(right)
+            return left == right
+
+        if input_value is None or expected is None:
+            return False
+        equality_ops = {"=", "==", "eq"}
+        inequality_ops = {"!=", "ne"}
+        if operator_key in equality_ops:
+            return cls._values_equal(input_value, expected)
+        if operator_key in inequality_ops:
+            return not cls._values_equal(input_value, expected)
+        op = _COMPARE_OPS.get(operator_key, operator.eq)
+        num_left, num_right = cls._try_num(input_value), cls._try_num(expected)
+        if num_left is not None and num_right is not None:
+            return op(num_left, num_right)
+        return False
+
+    @classmethod
+    def _coerce_mapping_result(cls, value: Any, output_type: str) -> Any:
+        output_type = str(output_type or "string").lower()
+        if output_type == "bool":
+            return cls._to_bool(value)
+        if output_type == "int":
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return 0
+        if output_type == "float":
+            return cls._to_num(value)
+        return "" if value is None else str(value)
 
     # ── Node Evaluators ───────────────────────────────────────────────────
 
@@ -226,6 +443,9 @@ class GraphExecutor:
                     out_val = str(raw) if raw is not None else None
                 return {"out": out_val}
 
+            case "memory":
+                return {"out": self._memory_value(node)}
+
             case "compare":
                 operator_key = str(d.get("operator", ">")).strip().lower()
                 op = _COMPARE_OPS.get(operator_key, operator.gt)
@@ -268,6 +488,27 @@ class GraphExecutor:
                     state = prev
                 self.hysteresis_state[node.id] = state
                 return {"out": state}
+
+            case "decision":
+                value = inputs.get("value")
+                conditions = self._load_rule_list(d.get("conditions"))
+                if not conditions:
+                    conditions = [{"handle": "out_1"}, {"handle": "out_2"}]
+                result: dict[str, Any] = {}
+                for idx, rule in enumerate(conditions):
+                    handle = str(rule.get("handle") or f"out_{idx + 1}")
+                    result[handle] = self._condition_matches(value, rule)
+                return result
+
+            case "value_mapping":
+                value = inputs.get("value")
+                output_type = str(d.get("output_type", "string")).lower()
+                for rule in self._load_rule_list(d.get("rules")):
+                    if self._condition_matches(value, rule):
+                        return {"result": self._coerce_mapping_result(rule.get("result"), output_type)}
+                if self._to_bool(d.get("has_default")):
+                    return {"result": self._coerce_mapping_result(d.get("default_value"), output_type)}
+                return {"result": None}
 
             case "math_formula":
                 formula = d.get("formula", "a + b")
@@ -443,6 +684,12 @@ class GraphExecutor:
                 return {
                     "_trigger": msg is not None or triggered,
                     "_message": msg,
+                    "sent": False,
+                }
+
+            case "wake_on_lan":
+                return {
+                    "_trigger": self._to_bool(inputs.get("trigger")),
                     "sent": False,
                 }
 
@@ -837,9 +1084,11 @@ class GraphExecutor:
                     current_avg: float | None = sum(values) / len(values)
                     now_utc = _dt.datetime.now(_dt.UTC)
                     state["samples"].append([now_utc.isoformat(), current_avg])
-                    # Trim buffer: keep only samples within the max window (365 days)
+                    # Keep the 365-day window bounded even for high-frequency inputs.
                     cutoff_iso = (now_utc - _dt.timedelta(days=365)).isoformat()
                     state["samples"] = [s for s in state["samples"] if s[0] >= cutoff_iso]
+                    if len(state["samples"]) > _AVG_MULTI_MAX_SAMPLES:
+                        state["samples"] = state["samples"][-_AVG_MULTI_MAX_SAMPLES:]
                 else:
                     current_avg = None
                 # Compute moving averages for each time window

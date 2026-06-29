@@ -1050,22 +1050,29 @@ class TestWriteRouterHandle:
         router._write_to_dest_bindings.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_handle_calls_write_to_dest_bindings(self):
+    async def test_handle_publishes_value_event(self):
+        from obs.core.event_bus import DataValueEvent
         from obs.core.write_router import WriteRouter
 
         dp = SimpleNamespace(name="dp", data_type="FLOAT")
         router = WriteRouter.__new__(WriteRouter)
         router._db = _DbStub()
         router._registry = SimpleNamespace(get=lambda _: dp)
+        router._bus = SimpleNamespace(publish=AsyncMock())
         router._last_sent = {}
         router._last_value = {}
         router._write_to_dest_bindings = AsyncMock()
 
         dp_id = uuid.uuid4()
         await router.handle(dp_id, "42.0")
-        router._write_to_dest_bindings.assert_awaited_once()
-        assert router._write_to_dest_bindings.call_args[0][0] == dp_id
-        assert router._write_to_dest_bindings.call_args[1]["skip_binding_id"] is None
+        router._bus.publish.assert_awaited_once()
+        event = router._bus.publish.await_args.args[0]
+        assert isinstance(event, DataValueEvent)
+        assert event.datapoint_id == dp_id
+        assert event.value == pytest.approx(42.0)
+        assert event.quality == "good"
+        assert event.source_adapter == "mqtt_set"
+        router._write_to_dest_bindings.assert_not_awaited()
 
 
 class TestWriteRouterHandleValueEvent:
@@ -2061,7 +2068,7 @@ class TestFetchWeather:
         from obs.api.v1.weather import fetch_weather
 
         with pytest.raises(HTTPException) as exc_info:
-            await fetch_weather(url="ftp://example.com/file", current_user="admin")
+            await fetch_weather(url="ftp://example.com/file", _user="admin")
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -2093,7 +2100,7 @@ class TestFetchWeather:
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
 
-        result = await fetch_weather(url="http://example.com/weather", current_user="admin")
+        result = await fetch_weather(url="http://example.com/weather", _user="admin")
         assert result.status_code == 200
 
     @pytest.mark.asyncio
@@ -2125,7 +2132,7 @@ class TestFetchWeather:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
 
         with pytest.raises(HTTPException) as exc_info:
-            await fetch_weather(url="http://example.com/weather", current_user="admin")
+            await fetch_weather(url="http://example.com/weather", _user="admin")
         assert exc_info.value.status_code == 502
 
     @pytest.mark.asyncio
@@ -2156,7 +2163,7 @@ class TestFetchWeather:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
 
         with pytest.raises(HTTPException) as exc_info:
-            await fetch_weather(url="http://example.com/weather", current_user="admin")
+            await fetch_weather(url="http://example.com/weather", _user="admin")
         assert exc_info.value.status_code == 502
 
     @pytest.mark.asyncio
@@ -2187,7 +2194,7 @@ class TestFetchWeather:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
 
         with pytest.raises(HTTPException) as exc_info:
-            await fetch_weather(url="http://example.com/weather", current_user="admin")
+            await fetch_weather(url="http://example.com/weather", _user="admin")
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -2215,7 +2222,7 @@ class TestFetchWeather:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
 
         with pytest.raises(HTTPException) as exc_info:
-            await fetch_weather(url="http://example.com/weather", current_user="admin")
+            await fetch_weather(url="http://example.com/weather", _user="admin")
         assert exc_info.value.status_code == 502
 
     @pytest.mark.asyncio
@@ -2246,5 +2253,5 @@ class TestFetchWeather:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient())
 
         with pytest.raises(HTTPException) as exc_info:
-            await fetch_weather(url="http://example.com/weather", current_user="admin")
+            await fetch_weather(url="http://example.com/weather", _user="admin")
         assert exc_info.value.status_code == 502

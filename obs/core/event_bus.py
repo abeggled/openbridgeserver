@@ -39,6 +39,7 @@ class DataValueEvent:
     source_adapter: str  # adapter_type string
     ts: datetime = field(default_factory=lambda: datetime.now(UTC))
     binding_id: uuid.UUID | None = None
+    logic_depth: int = 0
 
 
 @dataclass
@@ -57,6 +58,10 @@ class AdapterStatusEvent:
     instance_id: uuid.UUID | None = None
     instance_name: str = ""
     severity: Severity = "ok"
+    # i18n (issue #779): stable key suffix under `adapters.statusDetail.*` plus
+    # interpolation params. `detail` remains the non-localized fallback.
+    detail_code: str | None = None
+    detail_params: dict[str, Any] = field(default_factory=dict)
     ts: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 

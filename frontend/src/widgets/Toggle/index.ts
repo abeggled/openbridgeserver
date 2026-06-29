@@ -14,6 +14,7 @@ WidgetRegistry.register({
   defaultConfig: {
     label: '',
     mode: 'switch',
+    label_size: 'xs',
     on:  { icon: '', color: '#3b82f6', text: 'EIN' },
     off: { icon: '', color: '#6b7280', text: 'AUS' },
   },

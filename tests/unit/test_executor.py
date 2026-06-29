@@ -13,6 +13,8 @@ Covers:
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from obs.logic.executor import ExecutionError, GraphExecutor
@@ -369,6 +371,315 @@ class TestCompareNode:
 
 
 # ===========================================================================
+# decision / value_mapping nodes
+# ===========================================================================
+
+
+class TestDecisionNode:
+    def test_conditions_are_evaluated_independently(self):
+        out = run_single(
+            "decision",
+            {
+                "conditions": [
+                    {"handle": "hot", "operator": "gte", "value": 25},
+                    {"handle": "comfortable", "operator": "range", "min": 20, "max": 26},
+                    {"handle": "cold", "operator": "lt", "value": 18},
+                ],
+            },
+            {"value": 25},
+        )
+
+        assert out == {"hot": True, "comfortable": True, "cold": False}
+
+    def test_text_and_regex_conditions(self):
+        out = run_single(
+            "decision",
+            {
+                "conditions": [
+                    {"handle": "contains", "operator": "contains", "value": "open"},
+                    {"handle": "starts", "operator": "starts_with", "value": "Door"},
+                    {"handle": "regex", "operator": "regex", "value": r"open-\d+"},
+                ],
+            },
+            {"value": "Door open-42"},
+        )
+
+        assert out == {"contains": True, "starts": True, "regex": True}
+
+    def test_default_outputs_exist_without_configuration(self):
+        out = run_single("decision", {}, {"value": "anything"})
+
+        assert out == {"out_1": False, "out_2": False}
+
+    def test_condition_without_compare_value_is_inert(self):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "empty_default", "operator": "eq"}]},
+            {"value": ""},
+        )
+
+        assert out["empty_default"] is False
+
+    def test_conditions_can_be_loaded_from_json_string(self):
+        out = run_single(
+            "decision",
+            {"conditions": json.dumps([{"handle": "match", "operator": "eq", "value": "on"}])},
+            {"value": "on"},
+        )
+
+        assert out["match"] is True
+
+    def test_equality_condition_can_match_empty_string(self):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "empty", "operator": "eq", "value": ""}]},
+            {"value": ""},
+        )
+
+        assert out["empty"] is True
+
+    @pytest.mark.parametrize(
+        "input_value, expected_value, expected",
+        [
+            (True, "true", True),
+            (False, "false", True),
+            (True, "false", False),
+            ("false", False, True),
+        ],
+    )
+    def test_equality_condition_normalizes_boolean_literals(self, input_value, expected_value, expected):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "bool_match", "operator": "eq", "value": expected_value}]},
+            {"value": input_value},
+        )
+
+        assert out["bool_match"] is expected
+
+    def test_invalid_rule_json_falls_back_to_default_outputs(self):
+        out = run_single("decision", {"conditions": "not json"}, {"value": "on"})
+
+        assert out == {"out_1": False, "out_2": False}
+
+    def test_non_list_rule_json_falls_back_to_default_outputs(self):
+        out = run_single("decision", {"conditions": json.dumps({"operator": "eq", "value": "on"})}, {"value": "on"})
+
+        assert out == {"out_1": False, "out_2": False}
+
+    def test_non_dict_rule_entries_are_ignored(self):
+        out = run_single(
+            "decision",
+            {"conditions": ["ignored", {"handle": "match", "operator": "eq", "value": "on"}]},
+            {"value": "on"},
+        )
+
+        assert out == {"match": True}
+
+    def test_invalid_regex_condition_returns_false(self):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "bad_re", "operator": "regex", "value": "["}]},
+            {"value": "abc"},
+        )
+
+        assert out["bad_re"] is False
+
+    def test_case_sensitive_text_condition(self):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "case", "operator": "contains", "value": "OPEN", "case_sensitive": True}]},
+            {"value": "door open"},
+        )
+
+        assert out["case"] is False
+
+    def test_text_operators_support_case_insensitive_variants(self):
+        out = run_single(
+            "decision",
+            {
+                "conditions": [
+                    {"handle": "text", "operator": "text_eq", "value": "OPEN"},
+                    {"handle": "ends", "operator": "ends_with", "value": "42"},
+                ],
+            },
+            {"value": "open-42"},
+        )
+
+        assert out == {"text": False, "ends": True}
+
+    @pytest.mark.parametrize("operator_key", ["contains", "starts_with", "ends_with"])
+    def test_blank_substring_conditions_do_not_match_everything(self, operator_key):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "blank", "operator": operator_key, "value": ""}]},
+            {"value": "anything"},
+        )
+
+        assert out["blank"] is False
+
+    def test_range_accepts_value_and_value_to_aliases(self):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "in_range", "operator": "range", "value": 10, "value_to": 20}]},
+            {"value": 15},
+        )
+
+        assert out["in_range"] is True
+
+    def test_range_with_non_numeric_input_returns_false(self):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "bad_range", "operator": "range", "min": 10, "max": 20}]},
+            {"value": "hot"},
+        )
+
+        assert out["bad_range"] is False
+
+    def test_numeric_compare_with_non_numeric_value_returns_false(self):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "gt", "operator": "gt", "value": 10}]},
+            {"value": "hot"},
+        )
+
+        assert out["gt"] is False
+
+    def test_none_input_returns_false_for_condition(self):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "match", "operator": "eq", "value": ""}]},
+            {"value": None},
+        )
+
+        assert out["match"] is False
+
+
+class TestValueMappingNode:
+    def test_first_matching_rule_wins(self):
+        out = run_single(
+            "value_mapping",
+            {
+                "output_type": "string",
+                "rules": [
+                    {"operator": "gte", "value": 20, "result": "warm"},
+                    {"operator": "gte", "value": 10, "result": "mild"},
+                ],
+                "has_default": True,
+                "default_value": "cold",
+            },
+            {"value": 25},
+        )
+
+        assert out["result"] == "warm"
+
+    @pytest.mark.parametrize(
+        "output_type, result, expected",
+        [
+            ("bool", "true", True),
+            ("int", "42.8", 42),
+            ("float", "21.5", 21.5),
+            ("string", 7, "7"),
+        ],
+    )
+    def test_result_is_coerced_to_selected_output_type(self, output_type, result, expected):
+        out = run_single(
+            "value_mapping",
+            {
+                "output_type": output_type,
+                "rules": [{"operator": "eq", "value": "on", "result": result}],
+            },
+            {"value": "on"},
+        )
+
+        assert out["result"] == expected
+
+    def test_default_value_is_used_when_no_rule_matches(self):
+        out = run_single(
+            "value_mapping",
+            {
+                "output_type": "int",
+                "rules": [{"operator": "eq", "value": "open", "result": 1}],
+                "has_default": True,
+                "default_value": "0",
+            },
+            {"value": "closed"},
+        )
+
+        assert out["result"] == 0
+
+    def test_no_match_without_default_returns_none(self):
+        out = run_single(
+            "value_mapping",
+            {"rules": [{"operator": "eq", "value": "open", "result": "yes"}]},
+            {"value": "closed"},
+        )
+
+        assert out["result"] is None
+
+    def test_rule_without_compare_value_is_inert(self):
+        out = run_single(
+            "value_mapping",
+            {"rules": [{"operator": "eq", "result": "blank"}]},
+            {"value": ""},
+        )
+
+        assert out["result"] is None
+
+    def test_string_false_default_flag_is_not_treated_as_enabled(self):
+        out = run_single(
+            "value_mapping",
+            {
+                "rules": [{"operator": "eq", "value": "open", "result": "yes"}],
+                "has_default": "false",
+                "default_value": "fallback",
+            },
+            {"value": "closed"},
+        )
+
+        assert out["result"] is None
+
+    def test_invalid_int_result_coerces_to_zero(self):
+        out = run_single(
+            "value_mapping",
+            {
+                "output_type": "int",
+                "rules": [{"operator": "eq", "value": "on", "result": "not-int"}],
+            },
+            {"value": "on"},
+        )
+
+        assert out["result"] == 0
+
+    def test_invalid_float_default_coerces_to_zero(self):
+        out = run_single(
+            "value_mapping",
+            {
+                "output_type": "float",
+                "rules": [{"operator": "eq", "value": "on", "result": "1.5"}],
+                "has_default": True,
+                "default_value": "not-float",
+            },
+            {"value": "off"},
+        )
+
+        assert out["result"] == 0.0
+
+    def test_string_default_none_coerces_to_empty_string(self):
+        out = run_single(
+            "value_mapping",
+            {
+                "output_type": "string",
+                "rules": [{"operator": "eq", "value": "on", "result": "yes"}],
+                "has_default": True,
+                "default_value": None,
+            },
+            {"value": "off"},
+        )
+
+        assert out["result"] == ""
+
+
+# ===========================================================================
 # hysteresis node
 # ===========================================================================
 
@@ -717,6 +1028,11 @@ class TestDatapointNodes:
         out = run_single("datapoint_read", {"value_map": m}, {"value": 99})
         assert out["value"] == 99
 
+    def test_read_value_map_string_lookup_is_case_insensitive(self):
+        m = {"on": "true", "off": "false"}
+        out = run_single("datapoint_read", {"value_map": m}, {"value": "OFF"})
+        assert out["value"] == "false"
+
     def test_read_formula_then_value_map(self):
         # Formula runs first: x*2 → 2; then map: "2" → "Zwei"
         m = {"2": "Zwei"}
@@ -773,29 +1089,58 @@ class TestPythonScriptNode:
         out = run_single("python_script", {"script": "result = math.sqrt(inputs['a'])"}, {"a": 9})
         assert out["result"] == pytest.approx(3.0)
 
-    def test_script_error_returns_empty_output(self):
-        # execute() catches all errors internally and logs them — never raises to caller
+    def test_script_error_sets_error_key(self):
+        # execute() catches all errors internally and logs them — never raises to caller;
+        # the failing node gets {"__error__": "<msg>"} so callers can surface the failure.
         n1 = node("p", "python_script", {"script": "result = 1 / 0"})
         exc = make_executor([n1])
         out = exc.execute({"p": {}})
-        assert out.get("p") == {}  # node output is empty on error
+        assert "__error__" in out.get("p", {})
+        assert isinstance(out["p"]["__error__"], str)
+        assert out["p"]["__error__"]  # non-empty message
 
-    def test_os_import_blocked_returns_empty_output(self):
-        # __import__ is not in builtins → ExecutionError caught internally → empty output
+    def test_os_import_blocked_sets_error_key(self):
+        # __import__ is not in builtins → ExecutionError caught internally → __error__ set
         n1 = node("p", "python_script", {"script": "import os; result = os.getcwd()"})
         exc = make_executor([n1])
         out = exc.execute({"p": {}})
-        assert out.get("p") == {}
+        assert "__error__" in out.get("p", {})
 
     def test_round_uses_mathematical_rounding(self):
         out = run_single("python_script", {"script": "result = round(inputs['a'], 1)"}, {"a": 21.15})
         assert out["result"] == pytest.approx(21.2)
 
-    def test_math_dunder_attribute_blocked_returns_empty_output(self):
+    def test_math_dunder_attribute_blocked_sets_error_key(self):
         n1 = node("p", "python_script", {"script": "result = math.__dict__"})
         exc = make_executor([n1])
         out = exc.execute({"p": {}})
-        assert out.get("p") == {}
+        assert "__error__" in out.get("p", {})
+
+    def test_error_node_downstream_receives_none(self):
+        # A node downstream of a failing node gets None as input (not the error dict).
+        nodes = [
+            node("bad", "python_script", {"script": "result = 1 / 0"}),
+            node("good", "math_formula", {"formula": "a + 1"}),
+        ]
+        edges = [edge("bad", "good", source_handle="result", target_handle="in1")]
+        exc = make_executor(nodes, edges)
+        out = exc.execute()
+        assert "__error__" in out["bad"]
+        # in1 resolves to None (handle "result" absent from error dict) → 0.0 + 1 = 1.0
+        assert out["good"]["result"] == pytest.approx(1.0)
+
+    def test_graph_continues_after_node_error(self):
+        # When one node fails, the rest of the graph still executes.
+        nodes = [
+            node("ok", "const_value", {"value": "5", "data_type": "number"}),
+            node("bad", "python_script", {"script": "result = 1 / 0"}),
+            node("out", "math_formula", {"formula": "a"}),
+        ]
+        edges = [edge("ok", "out", source_handle="value", target_handle="in1")]
+        exc = make_executor(nodes, edges)
+        out = exc.execute()
+        assert "__error__" in out["bad"]
+        assert out["out"]["result"] == pytest.approx(5.0)
 
 
 # ===========================================================================
@@ -859,6 +1204,140 @@ class TestMultiNodeGraph:
         # Override in1 input of formula node to 100
         out = exc.execute({"f": {"in1": 100, "in2": 0}})
         assert out["f"]["result"] == pytest.approx(100.0)
+
+    def test_cycle_nodes_are_reported_instead_of_dropped(self, caplog):
+        nodes = [
+            node("a", "not", {}),
+            node("b", "not", {}),
+        ]
+        edges = [
+            edge("a", "b", source_handle="out", target_handle="in1"),
+            edge("b", "a", source_handle="out", target_handle="in1"),
+        ]
+        exc = make_executor(nodes, edges)
+
+        out = exc.execute()
+
+        assert set(out) == {"a", "b"}
+        assert out["a"]["__diagnostic__"] == "graph_cycle"
+        assert out["b"]["__diagnostic__"] == "graph_cycle"
+        assert set(out["a"]["__cycle_nodes__"]) == {"a", "b"}
+        assert "Logic graph contains cycle" in caplog.text
+
+    def test_cycle_keeps_acyclic_branch_and_marks_blocked_descendants(self):
+        nodes = [
+            node("root", "const_value", {"value": "7", "data_type": "number"}),
+            node("ok", "math_formula", {"formula": "a + 1"}),
+            node("a", "not", {}),
+            node("b", "not", {}),
+            node("blocked", "math_formula", {"formula": "a + 1"}),
+        ]
+        edges = [
+            edge("root", "ok", source_handle="value", target_handle="in1"),
+            edge("a", "b", source_handle="out", target_handle="in1"),
+            edge("b", "a", source_handle="out", target_handle="in1"),
+            edge("b", "blocked", source_handle="out", target_handle="in1"),
+        ]
+        exc = make_executor(nodes, edges)
+
+        out = exc.execute()
+
+        assert out["ok"]["result"] == pytest.approx(8.0)
+        assert out["a"]["__diagnostic__"] == "graph_cycle"
+        assert out["b"]["__diagnostic__"] == "graph_cycle"
+        assert out["blocked"]["__diagnostic__"] == "graph_cycle_blocked"
+
+    def test_memory_outputs_previous_value_and_commits_current_input_after_run(self):
+        nodes = [
+            node("src", "const_value", {"value": "10", "data_type": "number"}),
+            node("mem", "memory", {"initial_value": "2", "data_type": "number"}),
+        ]
+        edges = [edge("src", "mem", source_handle="value", target_handle="in")]
+        state = {}
+        exc = make_executor(nodes, edges, hysteresis_state=state)
+
+        first = exc.execute()
+        second = exc.execute()
+
+        assert first["mem"]["out"] == pytest.approx(2.0)
+        assert second["mem"]["out"] == pytest.approx(10.0)
+        assert state["mem"]["value"] == pytest.approx(10.0)
+
+    def test_memory_commit_can_be_deferred_and_applied_later(self):
+        nodes = [
+            node("src", "const_value", {"value": "10", "data_type": "number"}),
+            node("mem", "memory", {"initial_value": "2", "data_type": "number"}),
+        ]
+        edges = [edge("src", "mem", source_handle="value", target_handle="in")]
+        state = {}
+        exc = make_executor(nodes, edges, hysteresis_state=state)
+
+        out = exc.execute(commit_memory=False)
+
+        assert out["mem"]["out"] == pytest.approx(2.0)
+        assert state == {}
+
+        exc.commit_memory_inputs(out)
+        assert state["mem"]["value"] == pytest.approx(10.0)
+
+    def test_memory_honors_wired_reset_before_committing_input(self):
+        nodes = [
+            node("src", "const_value", {"value": "10", "data_type": "number"}),
+            node("rst", "const_value", {"value": "true", "data_type": "bool"}),
+            node("mem", "memory", {"initial_value": "2", "data_type": "number"}),
+        ]
+        edges = [
+            edge("src", "mem", source_handle="value", target_handle="in"),
+            edge("rst", "mem", source_handle="value", target_handle="reset"),
+        ]
+        state = {"mem": {"value": 7.0}}
+        exc = make_executor(nodes, edges, hysteresis_state=state)
+
+        out = exc.execute()
+
+        assert out["mem"]["out"] == pytest.approx(7.0)
+        assert state["mem"]["value"] == pytest.approx(2.0)
+
+    def test_memory_does_not_commit_diagnostic_source_value(self):
+        nodes = [
+            node("a", "not", {}),
+            node("b", "not", {}),
+            node("mem", "memory", {"initial_value": "2", "data_type": "number"}),
+        ]
+        edges = [
+            edge("a", "b", source_handle="out", target_handle="in1"),
+            edge("b", "a", source_handle="out", target_handle="in1"),
+            edge("a", "mem", source_handle="out", target_handle="in"),
+        ]
+        state = {"mem": {"value": 7.0}}
+        exc = make_executor(nodes, edges, hysteresis_state=state)
+
+        out = exc.execute()
+
+        assert out["a"]["__diagnostic__"] == "graph_cycle"
+        assert out["mem"]["out"] == pytest.approx(7.0)
+        assert state["mem"]["value"] == pytest.approx(7.0)
+
+    def test_memory_breaks_feedback_cycle_by_one_run(self):
+        nodes = [
+            node("mem", "memory", {"initial_value": "false", "data_type": "bool"}),
+            node("not", "not", {}),
+        ]
+        edges = [
+            edge("mem", "not", source_handle="out", target_handle="in1"),
+            edge("not", "mem", source_handle="out", target_handle="in"),
+        ]
+        exc = make_executor(nodes, edges, hysteresis_state={})
+
+        first = exc.execute()
+        second = exc.execute()
+
+        assert "__diagnostic__" not in first["mem"]
+        assert "__diagnostic__" not in first["not"]
+        assert first["mem"]["out"] is False
+        assert first["not"]["out"] is True
+        assert second["mem"]["out"] is True
+        assert second["not"]["out"] is False
 
 
 # ===========================================================================
