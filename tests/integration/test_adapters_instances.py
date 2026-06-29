@@ -492,3 +492,28 @@ async def test_migrate_instance_bindings_non_admin_forbidden(client, auth_header
         assert resp.status_code == 403
     finally:
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
+async def test_migrate_message_bindings_rejects_missing_target_on_target_instance(client, auth_headers):
+    source = await _create_message_instance(client, auth_headers, config=_message_instance_config(target="default"))
+    target = await _create_message_instance(client, auth_headers, config=_message_instance_config(target="other"))
+    dp = await _create_dp(client, auth_headers)
+    create_resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={
+            "adapter_instance_id": source["id"],
+            "direction": "SOURCE",
+            "config": {"providers": [{"provider": "pushover", "target": "default"}]},
+        },
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+
+    resp = await client.post(
+        f"/api/v1/adapters/instances/{source['id']}/bindings/migrate",
+        json={"target_instance_id": target["id"]},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 422
+    assert "MESSAGE target not configured" in resp.text

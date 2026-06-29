@@ -409,6 +409,49 @@ async def test_any_operator_continues_draining_after_suppressed_pending_duplicat
 
 
 @pytest.mark.asyncio
+async def test_send_on_change_coalesces_duplicate_pending_failure_retries(bus, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id, unit=None)))
+    release = asyncio.Event()
+    messages: list[str] = []
+
+    class _FailingSlowProvider(_DummyProvider):
+        provider_type = "slow-failing-duplicate"
+
+        def __init__(self) -> None:
+            pass
+
+        async def send(self, **kwargs):
+            messages.append(kwargs["message"])
+            await release.wait()
+            return MessageSendResult("slow-failing-duplicate", "default", False, "down")
+
+    provider = _FailingSlowProvider()
+    register_provider(provider)
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"slow-failing-duplicate": {"enabled": True, "targets": {"default": {}}}}},
+    )
+    binding = _message_binding(
+        dp_id,
+        operator="any",
+        compare_value=None,
+        message="###DP###",
+        providers=[{"provider": "slow-failing-duplicate", "target": "default"}],
+    )
+    await adapter.reload_bindings([binding])
+
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value="A", quality="good", source_adapter="test"))
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value="A", quality="good", source_adapter="test"))
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value="A", quality="good", source_adapter="test"))
+
+    release.set()
+    await _drain_sends(adapter)
+
+    assert messages == ["A"]
+
+
+@pytest.mark.asyncio
 async def test_in_flight_pending_events_are_bounded_to_newest_values(bus, monkeypatch):
     monkeypatch.setattr("obs.adapters.message.adapter.MAX_PENDING_EVENTS_PER_BINDING", 2)
     dp_id = uuid.uuid4()

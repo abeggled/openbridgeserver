@@ -457,7 +457,7 @@ async def migrate_instance_bindings(
     if source_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Quell-Instanz nicht gefunden")
 
-    target_row = await db.fetchone("SELECT id, adapter_type FROM adapter_instances WHERE id=?", (target_id,))
+    target_row = await db.fetchone("SELECT id, adapter_type, config FROM adapter_instances WHERE id=?", (target_id,))
     if target_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Ziel-Instanz nicht gefunden")
 
@@ -468,7 +468,7 @@ async def migrate_instance_bindings(
         )
 
     source_bindings = await db.fetchall(
-        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=? ORDER BY created_at",
+        "SELECT id, datapoint_id, direction, config, enabled FROM adapter_bindings WHERE adapter_instance_id=? ORDER BY created_at",
         (source_id,),
     )
     target_bindings = await db.fetchall(
@@ -481,11 +481,20 @@ async def migrate_instance_bindings(
     skipped = 0
     total_source_bindings = len(source_bindings)
     now = datetime.now(UTC).isoformat()
+    target_message_config = _json_config(target_row["config"]) if target_row["adapter_type"] == "MESSAGE" else None
 
     for binding_row in source_bindings:
         if binding_row["datapoint_id"] in target_datapoint_ids:
             skipped += 1
             continue
+        if target_message_config is not None:
+            _validate_adapter_binding(
+                "MESSAGE",
+                binding_row["direction"],
+                _json_config(binding_row["config"]),
+                enabled=bool(binding_row["enabled"]),
+                instance_config=target_message_config,
+            )
         await db.execute(
             "UPDATE adapter_bindings SET adapter_instance_id=?, updated_at=? WHERE id=?",
             (target_id, now, binding_row["id"]),

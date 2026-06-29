@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 MessageOperator = Literal["any", "=", "==", "<", "<=", ">", ">=", "!=", "contains", "contains not", "starts with", "ends with"]
 MAX_PENDING_EVENTS_PER_BINDING = 100
+_NO_PENDING_COALESCE = object()
 
 
 class ProviderTargetRef(BaseModel):
@@ -88,13 +89,21 @@ class _BindingState:
         self.last_sent_monotonic: float | None = None
         self.last_value: Any = object()
         self.in_flight: bool = False
+        self.in_flight_key: Any = _NO_PENDING_COALESCE
         self.reset_version: int = 0
-        self.pending_events: deque[tuple[Any, DataValueEvent]] = deque()
+        self.pending_events: deque[tuple[Any, DataValueEvent, Any]] = deque()
 
-    def queue_pending_event(self, binding: Any, event: DataValueEvent) -> None:
+    def queue_pending_event(self, binding: Any, event: DataValueEvent, coalesce_key: Any = _NO_PENDING_COALESCE) -> None:
+        if coalesce_key is not _NO_PENDING_COALESCE:
+            if _values_equal(coalesce_key, self.in_flight_key):
+                return
+            for index, (_binding, _event, pending_key) in enumerate(self.pending_events):
+                if _values_equal(coalesce_key, pending_key):
+                    self.pending_events[index] = (binding, event, coalesce_key)
+                    return
         if len(self.pending_events) >= MAX_PENDING_EVENTS_PER_BINDING:
             self.pending_events.popleft()
-        self.pending_events.append((binding, event))
+        self.pending_events.append((binding, event, coalesce_key))
 
 
 def _binding_config(binding: Any) -> MessageBindingConfig:
@@ -108,6 +117,19 @@ def _as_number(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _values_equal(left: Any, right: Any) -> bool:
+    try:
+        return left == right
+    except Exception:
+        return False
+
+
+def _pending_coalesce_key(cfg: MessageBindingConfig, event: DataValueEvent) -> Any:
+    if not cfg.send_on_change:
+        return _NO_PENDING_COALESCE
+    return event.value if cfg.operator == "any" else True
 
 
 def _as_bool(value: Any) -> bool | None:
@@ -269,6 +291,7 @@ class MessageAdapter(AdapterBase):
         state = self._states.setdefault(binding.id, _BindingState())
         if not condition:
             state.last_condition = False
+            state.in_flight_key = _NO_PENDING_COALESCE
             state.reset_version += 1
             state.pending_events.clear()
             return
@@ -296,9 +319,10 @@ class MessageAdapter(AdapterBase):
         )
         reset_version = state.reset_version
         if state.in_flight and not ignore_repetition:
-            state.queue_pending_event(binding, event)
+            state.queue_pending_event(binding, event, _pending_coalesce_key(cfg, event))
             return
         state.in_flight = True
+        state.in_flight_key = _pending_coalesce_key(cfg, event) if not ignore_repetition else _NO_PENDING_COALESCE
         task = asyncio.create_task(self._send_and_record(binding, event, cfg, rendered, state, reset_version))
         self._send_tasks.add(task)
         task.add_done_callback(self._send_tasks.discard)
@@ -333,9 +357,10 @@ class MessageAdapter(AdapterBase):
             await self._publish_status(True, "MESSAGE sent", code="messageSent")
 
         state.in_flight = False
+        state.in_flight_key = _NO_PENDING_COALESCE
         while state.pending_events:
             pending = state.pending_events.popleft()
-            pending_binding, pending_event = pending
+            pending_binding, pending_event, _pending_key = pending
             if not self._is_current_binding(pending_binding):
                 continue
             await self._handle_binding_event(pending_binding, pending_event)
