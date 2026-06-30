@@ -89,6 +89,61 @@ describe('RingBufferView mounts', () => {
     expect(wrapper.find('[data-modal-open="true"]').exists()).toBe(true)
   })
 
+  it('reloads the table after monitor config changes when the monitor remains enabled', async () => {
+    const { mountRingBufferView, flushPromises } = await import('../helpers/mountRingBufferView.js')
+    const { wrapper, ringbufferApi } = await mountRingBufferView()
+
+    expect(ringbufferApi.queryV2).toHaveBeenCalledTimes(1)
+
+    wrapper.findComponent({ name: 'MonitorConfigModal' }).vm.$emit('saved')
+    await flushPromises()
+
+    expect(ringbufferApi.queryV2).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not query stopped monitor storage after a config save leaves the monitor disabled', async () => {
+    const { mountRingBufferView, makeRingbufferApiMock, flushPromises } = await import('../helpers/mountRingBufferView.js')
+    const ringbufferApi = makeRingbufferApiMock({
+      queryV2: vi.fn().mockResolvedValue({
+        data: [
+          {
+            id: 1,
+            ts: '2026-06-03T07:00:01.000Z',
+            datapoint_id: 'dp-existing',
+            topic: 'dp/dp-existing/value',
+            old_value: null,
+            new_value: 1,
+            source_adapter: 'api',
+            quality: 'good',
+            matched_set_ids: [],
+          },
+        ],
+      }),
+    })
+
+    const { wrapper } = await mountRingBufferView({ ringbufferApi })
+    wrapper.findComponent({ name: 'TopbarStats' }).vm.$emit('stats', { enabled: false })
+    await flushPromises()
+
+    wrapper.findComponent({ name: 'MonitorConfigModal' }).vm.$emit('saved')
+    await flushPromises()
+
+    expect(ringbufferApi.queryV2).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="ringbuffer-empty"]').exists()).toBe(true)
+  })
+
+  it('hides the disabled notice when the stats refresh fails', async () => {
+    const { mountRingBufferView, makeRingbufferApiMock } = await import('../helpers/mountRingBufferView.js')
+    const ringbufferApi = makeRingbufferApiMock({
+      stats: vi.fn().mockRejectedValue(new Error('stats unavailable')),
+    })
+
+    const { wrapper } = await mountRingBufferView({ ringbufferApi })
+
+    expect(wrapper.find('[data-testid="ringbuffer-disabled-notice"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="ringbuffer-recovery-notice"]').exists()).toBe(false)
+  })
+
   it('refreshes the recovery notice after live entries', async () => {
     const { mountRingBufferView, makeRingbufferApiMock, flushPromises } = await import('../helpers/mountRingBufferView.js')
     const ringbufferApi = makeRingbufferApiMock({
