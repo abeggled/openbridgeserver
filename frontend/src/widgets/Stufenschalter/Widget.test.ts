@@ -52,6 +52,14 @@ function baseOptions() {
   ]
 }
 
+function deferredWrite() {
+  let resolve!: () => void
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 function mountWidget(config: Record<string, unknown>, value: unknown = 0) {
   wrapper = mount(StufenschalterWidget, {
     props: {
@@ -120,6 +128,19 @@ describe('Stufenschalter widget', () => {
     expect(writeMock).toHaveBeenCalledWith('dp-1', 1)
   })
 
+  it('shows the next sequence step while the write is still pending', async () => {
+    const write = deferredWrite()
+    writeMock.mockReturnValueOnce(write.promise)
+    mountWidget({ steps: baseOptions() }, 0)
+
+    await wrapper!.trigger('click')
+
+    expect(wrapper!.get('[data-testid="stufenschalter-label"]').text()).toBe('Eco')
+
+    write.resolve()
+    await flushPromises()
+  })
+
   it('prefers legacy steps over injected default options in sequence mode', async () => {
     mountWidget({
       mode: 'sequence',
@@ -165,12 +186,20 @@ describe('Stufenschalter widget', () => {
     await wrapper!.findAll('[data-testid="stufenschalter-option"]')[2].trigger('click')
     await wrapper!.get('[data-testid="stufenschalter-save"]').trigger('click')
     await flushPromises()
+    expect(wrapper!.get('[data-testid="stufenschalter-error"]').text()).toBe('Schreiben fehlgeschlagen')
+
     await wrapper!.setProps({ value: dataPointValue(0, '2026-06-04T00:00:01Z') })
 
     const options = wrapper!.findAll('[data-testid="stufenschalter-option"]')
     expect(options[0].attributes('aria-pressed')).toBe('false')
     expect(options[2].attributes('aria-pressed')).toBe('true')
     expect((wrapper!.get('[data-testid="stufenschalter-save"]').element as HTMLButtonElement).disabled).toBe(false)
+    expect(wrapper!.get('[data-testid="stufenschalter-error"]').text()).toBe('Schreiben fehlgeschlagen')
+
+    await wrapper!.setProps({ value: dataPointValue(2, '2026-06-04T00:00:02Z') })
+
+    expect(wrapper!.find('[data-testid="stufenschalter-error"]').exists()).toBe(false)
+    expect((wrapper!.get('[data-testid="stufenschalter-save"]').element as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('renders SVG option icons through the icon renderer instead of raw text', () => {
@@ -225,6 +254,24 @@ describe('Stufenschalter widget', () => {
     expect(writeMock).toHaveBeenCalledWith('dp-1', 2)
     expect(options[0].attributes('aria-pressed')).toBe('true')
     expect(options[2].attributes('aria-pressed')).toBe('false')
+    expect(wrapper!.get('[data-testid="stufenschalter-error"]').text()).toBe('Schreiben fehlgeschlagen')
+  })
+
+  it('reverts failed direct selections to the previous optimistic value', async () => {
+    writeMock
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce('write-failed')
+    mountWidget({ mode: 'select-direct', options: baseOptions() }, 0)
+
+    await wrapper!.findAll('[data-testid="stufenschalter-option"]')[2].trigger('click')
+    await flushPromises()
+    await wrapper!.findAll('[data-testid="stufenschalter-option"]')[1].trigger('click')
+    await flushPromises()
+
+    const options = wrapper!.findAll('[data-testid="stufenschalter-option"]')
+    expect(writeMock).toHaveBeenCalledTimes(2)
+    expect(options[1].attributes('aria-pressed')).toBe('false')
+    expect(options[2].attributes('aria-pressed')).toBe('true')
     expect(wrapper!.get('[data-testid="stufenschalter-error"]').text()).toBe('Schreiben fehlgeschlagen')
   })
 

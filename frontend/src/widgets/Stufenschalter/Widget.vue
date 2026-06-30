@@ -133,12 +133,13 @@ watch(
     const selectionShapeChanged = !previous
       || current.mode !== previous.mode
       || current.optionValues !== previous.optionValues
+    const shouldResetSelection = current.mode !== 'select-save' || valueChanged || selectionShapeChanged
 
     optimisticValue.value = null
-    if (current.mode !== 'select-save' || valueChanged || selectionShapeChanged) {
+    if (shouldResetSelection) {
       selectedValue.value = committedValue.value
     }
-    error.value = ''
+    if (shouldResetSelection || selectedValue.value === committedValue.value) error.value = ''
   },
   { immediate: true },
 )
@@ -161,6 +162,8 @@ const canSave = computed(() => mode.value === 'select-save' && !isLocked.value &
 
 async function writeValue(value: string) {
   if (isLocked.value || pending.value || !props.datapointId) return
+  const rollbackValue = committedValue.value
+  if (mode.value === 'sequence') optimisticValue.value = value
   pending.value = true
   error.value = ''
   try {
@@ -168,8 +171,8 @@ async function writeValue(value: string) {
     optimisticValue.value = value
     selectedValue.value = value
   } catch (e) {
-    optimisticValue.value = null
-    if (mode.value === 'select-direct') selectedValue.value = committedValue.value
+    optimisticValue.value = rollbackValue
+    if (mode.value === 'select-direct') selectedValue.value = rollbackValue
     error.value = e instanceof Error ? e.message : t('widgets.stufenschalter.writeError')
   } finally {
     pending.value = false
