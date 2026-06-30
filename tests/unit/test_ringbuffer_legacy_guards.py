@@ -12,6 +12,21 @@ from obs.ringbuffer import ringbuffer as rb_mod
 from obs.ringbuffer.ringbuffer import RingBuffer, _is_sqlite_corruption, _safe_loads, get_ringbuffer, reset_ringbuffer
 
 
+@pytest.fixture(autouse=True)
+async def _cleanup_ringbuffer_singleton():
+    rb = rb_mod.get_optional_ringbuffer()
+    if rb is not None:
+        await rb.stop()
+    rb_mod.reset_ringbuffer()
+    try:
+        yield
+    finally:
+        rb = rb_mod.get_optional_ringbuffer()
+        if rb is not None:
+            await rb.stop()
+        rb_mod.reset_ringbuffer()
+
+
 @pytest.mark.asyncio
 async def test_constructor_and_reconfigure_reject_invalid_storage():
     with pytest.raises(ValueError, match="storage must be one of: file, disk, memory"):

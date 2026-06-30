@@ -17,7 +17,7 @@ from fastapi import HTTPException
 
 from obs.api.v1 import ringbuffer as rb_api
 from obs.db.database import Database
-from obs.ringbuffer.ringbuffer import init_ringbuffer, reset_ringbuffer
+from obs.ringbuffer.ringbuffer import get_optional_ringbuffer, init_ringbuffer, reset_ringbuffer
 
 
 class _RegistryStub:
@@ -39,6 +39,21 @@ class _RingbufferStub:
         if self.exc:
             raise self.exc
         return list(self.rows)
+
+
+@pytest.fixture(autouse=True)
+async def _cleanup_ringbuffer_singleton():
+    rb = get_optional_ringbuffer()
+    if rb is not None:
+        await rb.stop()
+    reset_ringbuffer()
+    try:
+        yield
+    finally:
+        rb = get_optional_ringbuffer()
+        if rb is not None:
+            await rb.stop()
+        reset_ringbuffer()
 
 
 class _FetchDbStub:
