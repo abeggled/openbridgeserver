@@ -69,8 +69,15 @@ function normalizeOptionLabel(raw: unknown, value: unknown, index: number): stri
   return raw
 }
 
+function optionInput(config: Record<string, unknown>): unknown {
+  if (Array.isArray(config.steps) && config.mode !== 'select-save' && config.mode !== 'select-direct') {
+    return config.steps
+  }
+  return config.options ?? config.steps
+}
+
 const options = computed<Option[]>(() => {
-  const raw = (props.config.options ?? props.config.steps) as Partial<Option>[] | undefined
+  const raw = optionInput(props.config) as Partial<Option>[] | undefined
   return (Array.isArray(raw) ? raw : []).map((option, index) => ({
     label: normalizeOptionLabel(option.label, option.value, index),
     value: String(option.value ?? ''),
@@ -116,7 +123,8 @@ const committedValue = computed(() =>
 watch(
   () => [
     displayValue.value?.v,
-    props.statusValue?.v,
+    displayValue.value?.t,
+    displayValue.value?.q,
     mode.value,
     options.value.map((option) => option.value).join('\u0000'),
   ],
@@ -286,7 +294,7 @@ const saveLabel = computed(() => t('widgets.stufenschalter.save'))
       class="mb-2 w-full shrink-0 truncate text-center text-xs text-gray-500 dark:text-gray-400"
     >{{ label }}</span>
 
-    <div class="grid min-h-0 flex-1 auto-rows-fr gap-1.5">
+    <div class="grid min-h-0 flex-1 auto-rows-fr gap-1.5 overflow-y-auto pr-1" data-testid="stufenschalter-options">
       <button
         v-for="option in options"
         :key="option.value"

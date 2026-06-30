@@ -34,12 +34,12 @@ const writeMock = vi.mocked(datapoints.write)
 
 let wrapper: VueWrapper | null = null
 
-function dataPointValue(value: unknown): DataPointValue {
+function dataPointValue(value: unknown, t = '2026-06-04T00:00:00Z'): DataPointValue {
   return {
     id: 'dp-1',
     v: value,
     u: null,
-    t: '2026-06-04T00:00:00Z',
+    t,
     q: 'good',
   }
 }
@@ -120,6 +120,23 @@ describe('Stufenschalter widget', () => {
     expect(writeMock).toHaveBeenCalledWith('dp-1', 1)
   })
 
+  it('prefers legacy steps over injected default options in sequence mode', async () => {
+    mountWidget({
+      mode: 'sequence',
+      options: baseOptions(),
+      steps: [
+        { label: 'Low', value: '10', icon: '', color: '#6b7280' },
+        { label: 'High', value: '20', icon: '', color: '#3b82f6' },
+      ],
+    }, 10)
+
+    expect(wrapper!.get('[data-testid="stufenschalter-label"]').text()).toBe('Low')
+
+    await wrapper!.trigger('click')
+
+    expect(writeMock).toHaveBeenCalledWith('dp-1', 20)
+  })
+
   it('does not write when an option is selected in select-save mode', async () => {
     mountWidget({ mode: 'select-save', options: baseOptions() }, 0)
 
@@ -181,6 +198,25 @@ describe('Stufenschalter widget', () => {
     expect(options[0].attributes('aria-pressed')).toBe('true')
     expect(options[2].attributes('aria-pressed')).toBe('false')
     expect(wrapper!.get('[data-testid="stufenschalter-error"]').text()).toBe('Schreiben fehlgeschlagen')
+  })
+
+  it('clears optimistic direct selection on same-value datapoint updates', async () => {
+    mountWidget({ mode: 'select-direct', options: baseOptions() }, 0)
+
+    await wrapper!.findAll('[data-testid="stufenschalter-option"]')[2].trigger('click')
+    await flushPromises()
+
+    await wrapper!.setProps({ value: dataPointValue(0, '2026-06-04T00:00:01Z') })
+
+    const options = wrapper!.findAll('[data-testid="stufenschalter-option"]')
+    expect(options[0].attributes('aria-pressed')).toBe('true')
+    expect(options[2].attributes('aria-pressed')).toBe('false')
+  })
+
+  it('allows select-mode options to scroll in compact widgets', () => {
+    mountWidget({ mode: 'select-save', options: baseOptions() }, 0)
+
+    expect(wrapper!.get('[data-testid="stufenschalter-options"]').classes()).toContain('overflow-y-auto')
   })
 
   it('accepts options for sequence mode', async () => {

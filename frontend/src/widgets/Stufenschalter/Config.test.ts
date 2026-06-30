@@ -13,17 +13,17 @@ vi.mock('vue-i18n', () => ({
   }),
 }))
 
-function mountConfig() {
+function mountConfig(modelValue: Record<string, unknown> = {
+  label: '',
+  steps: [
+    { label: 'widgets.stufenschalter.defaultOffLabel', value: '0', icon: '', color: '#6b7280' },
+    { label: 'widgets.stufenschalter.defaultStepLabel', value: '1', icon: '', color: '#3b82f6' },
+    { label: 'widgets.stufenschalter.defaultStepLabel', value: '2', icon: '', color: '#10b981' },
+  ],
+}) {
   return mount(StufenschalterConfig, {
     props: {
-      modelValue: {
-        label: '',
-        steps: [
-          { label: 'widgets.stufenschalter.defaultOffLabel', value: '0', icon: '', color: '#6b7280' },
-          { label: 'widgets.stufenschalter.defaultStepLabel', value: '1', icon: '', color: '#3b82f6' },
-          { label: 'widgets.stufenschalter.defaultStepLabel', value: '2', icon: '', color: '#10b981' },
-        ],
-      },
+      modelValue,
     },
     global: {
       mocks: {
@@ -65,6 +65,38 @@ describe('Stufenschalter config serialization', () => {
         { label: 'widgets.stufenschalter.defaultOffLabel', value: '0' },
         { label: 'widgets.stufenschalter.defaultStepLabel', value: '1' },
         { label: 'widgets.stufenschalter.defaultStepLabel', value: '2' },
+      ],
+    })
+  })
+
+  it('preserves legacy steps when editor defaults inject options', async () => {
+    const wrapper = mountConfig({
+      label: '',
+      mode: 'sequence',
+      options: [
+        { label: 'widgets.stufenschalter.defaultOffLabel', value: '0', icon: '', color: '#6b7280' },
+        { label: 'widgets.stufenschalter.defaultStepLabel', value: '1', icon: '', color: '#3b82f6' },
+        { label: 'widgets.stufenschalter.defaultStepLabel', value: '2', icon: '', color: '#10b981' },
+      ],
+      steps: [
+        { label: 'Low', value: '10', icon: '', color: '#6b7280' },
+        { label: 'High', value: '20', icon: '', color: '#3b82f6' },
+      ],
+    })
+
+    const textInputs = wrapper.findAll('input[type="text"]')
+    expect((textInputs[1].element as HTMLInputElement).value).toBe('Low')
+    expect((textInputs[3].element as HTMLInputElement).value).toBe('High')
+
+    await textInputs[0].setValue('FanSpeed')
+
+    const emitted = wrapper.emitted('update:modelValue')
+    expect(emitted![0][0]).toMatchObject({
+      label: 'FanSpeed',
+      mode: 'sequence',
+      options: [
+        { label: 'Low', value: '10' },
+        { label: 'High', value: '20' },
       ],
     })
   })

@@ -76,6 +76,13 @@ function parseOptions(raw: unknown): Option[] {
   }))
 }
 
+function optionInput(config: Record<string, unknown>): unknown {
+  if (Array.isArray(config.steps) && config.mode !== 'select-save' && config.mode !== 'select-direct') {
+    return config.steps
+  }
+  return config.options ?? config.steps
+}
+
 function parseMode(raw: unknown): Mode {
   if (raw === 'select-save' || raw === 'select-direct') return raw
   return 'sequence'
@@ -84,7 +91,7 @@ function parseMode(raw: unknown): Mode {
 const cfg = reactive<Cfg>({
   label: (props.modelValue.label as string) ?? '',
   mode: parseMode(props.modelValue.mode),
-  options: parseOptions(props.modelValue.options ?? props.modelValue.steps),
+  options: parseOptions(optionInput(props.modelValue)),
 })
 
 function serializedConfig(): Record<string, unknown> {
