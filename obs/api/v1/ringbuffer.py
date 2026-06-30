@@ -32,6 +32,7 @@ from obs.api.auth import get_current_user
 from obs.db.database import Database, get_db
 from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config, persist_ringbuffer_config
 from obs.ringbuffer.ringbuffer import (
+    default_ringbuffer_disk_path,
     delete_ringbuffer_storage_files,
     get_optional_ringbuffer,
     get_ringbuffer,
@@ -74,7 +75,7 @@ _DEFAULT_COLOR = "#3b82f6"
 def _ringbuffer_disk_path() -> str:
     from obs.config import get_settings
 
-    return get_settings().database.path.replace(".db", "_ringbuffer.db")
+    return default_ringbuffer_disk_path(get_settings().database.path)
 
 
 def _subscribe_ringbuffer(rb: Any) -> None:

@@ -24,6 +24,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import aiosqlite
@@ -942,6 +943,11 @@ class RingBuffer:
 
     def _can_recover_from(self, exc: Exception) -> bool:
         return self._storage in {"disk", "file"} and _is_sqlite_corruption(exc)
+
+
+def default_ringbuffer_disk_path(database_path: str) -> str:
+    path = Path(database_path)
+    return str(path.with_name(f"{path.stem}_ringbuffer.db"))
 
 
 def delete_ringbuffer_storage_files(disk_path: str) -> None:

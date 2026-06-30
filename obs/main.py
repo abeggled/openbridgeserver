@@ -40,7 +40,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.db.database import get_db, init_db
     from obs.history.factory import init_history_plugin
     from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config
-    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer, init_ringbuffer, set_ringbuffer_enabled
+    from obs.ringbuffer.ringbuffer import (
+        default_ringbuffer_disk_path,
+        get_optional_ringbuffer,
+        init_ringbuffer,
+        set_ringbuffer_enabled,
+    )
 
     settings = get_settings()
 
@@ -87,7 +92,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 5. RingBuffer — config is persisted in app_settings (see persisted_config.py).
     # Defaults apply only when nothing has been configured via the API yet.
-    rb_path = settings.database.path.replace(".db", "_ringbuffer.db")
+    rb_path = default_ringbuffer_disk_path(settings.database.path)
     rb_cfg = await load_persisted_ringbuffer_config(db)
     rb = None
     set_ringbuffer_enabled(bool(rb_cfg["enabled"]))

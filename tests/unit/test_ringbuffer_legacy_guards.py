@@ -180,3 +180,9 @@ def test_delete_ringbuffer_storage_files_removes_sqlite_sidecars(tmp_path):
     assert not db_path.exists()
     assert not (tmp_path / "obs_ringbuffer.db-wal").exists()
     assert not (tmp_path / "obs_ringbuffer.db-shm").exists()
+
+
+def test_default_ringbuffer_disk_path_never_reuses_app_database_path():
+    assert rb_mod.default_ringbuffer_disk_path("/data/obs.db") == "/data/obs_ringbuffer.db"
+    assert rb_mod.default_ringbuffer_disk_path("/data/obs.sqlite") == "/data/obs_ringbuffer.db"
+    assert rb_mod.default_ringbuffer_disk_path("/data/obs") == "/data/obs_ringbuffer.db"

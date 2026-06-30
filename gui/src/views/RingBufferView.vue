@@ -226,6 +226,7 @@ async function onTopbarChanged() {
 
 async function onMonitorConfigSaved() {
   await topbarStatsRef.value?.reload?.()
+  clearLiveQueue()
   await load()
 }
 
