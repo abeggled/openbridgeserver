@@ -90,6 +90,22 @@ def _flow(*dp_ids: uuid.UUID) -> str:
     return json.dumps({"nodes": nodes, "edges": []})
 
 
+def _flow_with_nodes(nodes: list[dict]) -> str:
+    return json.dumps({"nodes": nodes, "edges": []})
+
+
+def _api_client_node(dp_id: uuid.UUID, node_id: str = "api-client") -> dict:
+    return {
+        "id": node_id,
+        "type": "api_client",
+        "position": {"x": 0, "y": 0},
+        "data": {
+            "url": "https://example.test/###OBS1###",
+            "variables": [{"slot": 1, "datapoint_id": str(dp_id), "datapoint_name": "Secret"}],
+        },
+    }
+
+
 async def _insert_graph(db: Database, graph_id: str, name: str, *dp_ids: uuid.UUID, enabled: bool = True) -> None:
     await db.execute_and_commit(
         """
@@ -97,6 +113,16 @@ async def _insert_graph(db: Database, graph_id: str, name: str, *dp_ids: uuid.UU
         VALUES (?, ?, '', ?, ?, ?, ?)
         """,
         (graph_id, name, int(enabled), _flow(*dp_ids), NOW, NOW),
+    )
+
+
+async def _insert_graph_flow(db: Database, graph_id: str, name: str, flow_data: str, *, enabled: bool = True) -> None:
+    await db.execute_and_commit(
+        """
+        INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at)
+        VALUES (?, ?, '', ?, ?, ?, ?)
+        """,
+        (graph_id, name, int(enabled), flow_data, NOW, NOW),
     )
 
 
@@ -151,6 +177,32 @@ async def test_get_graph_requires_read_scope_for_all_referenced_datapoints(db: D
     with pytest.raises(HTTPException) as exc_info:
         await logic_api.get_graph(
             graph_id="graph-mixed",
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_graph_requires_read_scope_for_api_client_variable_datapoints(db: Database):
+    allowed_dp, blocked_dp = await _seed_scope(db)
+    flow = _flow_with_nodes(
+        [
+            {
+                "id": "read",
+                "type": "datapoint_read",
+                "position": {"x": 0, "y": 0},
+                "data": {"datapoint_id": str(allowed_dp)},
+            },
+            _api_client_node(blocked_dp),
+        ]
+    )
+    await _insert_graph_flow(db, "graph-api-client-mixed", "API client mixed graph", flow)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await logic_api.get_graph(
+            graph_id="graph-api-client-mixed",
             _user=Principal(subject="alice", type="user", is_admin=False),
             db=db,
         )

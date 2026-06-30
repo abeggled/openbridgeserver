@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -77,9 +77,20 @@ def _page_config_contains_camera_url(page_config: Any, url: str, username: str =
     expected_username = username.strip()
     expected_password = password
 
+    def _normalize_camera_auth_type(value: Any) -> str:
+        raw = str(value or "none").strip()
+        if raw in {"basic", "apikey", "none"}:
+            return raw
+        lower = raw.lower()
+        if lower.startswith("basic auth"):
+            return "basic"
+        if lower.startswith("api-key") or lower.startswith("apikey"):
+            return "apikey"
+        return "none"
+
     def _camera_target(config: dict[str, Any]) -> str:
         target = str(config.get("url", "")).strip()
-        if str(config.get("authType", "")) == "apikey":
+        if _normalize_camera_auth_type(config.get("authType")) == "apikey":
             api_key_param = str(config.get("apiKeyParam", "")).strip()
             api_key_value = str(config.get("apiKeyValue", "")).strip()
             if api_key_param and api_key_value:
@@ -88,7 +99,7 @@ def _page_config_contains_camera_url(page_config: Any, url: str, username: str =
         return target
 
     def _camera_credentials_match(config: dict[str, Any]) -> bool:
-        auth_type = str(config.get("authType", "none"))
+        auth_type = _normalize_camera_auth_type(config.get("authType"))
         if auth_type == "basic":
             return str(config.get("username", "")).strip() == expected_username and str(config.get("password", "")) == expected_password
         return not expected_username and not expected_password

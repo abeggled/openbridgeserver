@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -43,7 +44,7 @@ class _TransportFailWebSocket(_FakeWebSocket):
 async def test_ringbuffer_entry_payload_contains_documented_fields(monkeypatch):
     ws = _FakeWebSocket()
     manager = WebSocketManager()
-    await manager.connect(ws)
+    await manager.connect(ws, ringbuffer_metadata=True)
 
     dp_id = uuid4()
     fixed_ts = datetime(2026, 5, 6, 19, 44, 49, 123000, tzinfo=UTC)
@@ -320,7 +321,7 @@ async def test_ringbuffer_push_is_scoped_for_anonymous_page_connections(monkeypa
     unrestricted_ws = _FakeWebSocket()
     scoped_ws = _FakeWebSocket()
     manager = WebSocketManager()
-    await manager.connect(unrestricted_ws)
+    await manager.connect(unrestricted_ws, ringbuffer_metadata=True)
     await manager.connect(scoped_ws, allowed_dp_ids={allowed_id})
 
     class _RegistryStub:
@@ -360,7 +361,43 @@ async def test_ringbuffer_push_is_scoped_for_anonymous_page_connections(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_handle_value_event_accepts_six_field_connection_entries(monkeypatch):
+async def test_handle_value_event_includes_metadata_for_authenticated_scoped_connections(monkeypatch):
+    dp_uuid = uuid4()
+    dp_id = str(dp_uuid)
+    ws = _FakeWebSocket()
+    manager = WebSocketManager()
+    await manager.connect(ws, allowed_dp_ids={dp_id}, ringbuffer_metadata=True)
+
+    class _RegistryStub:
+        def get(self, _dp_id):
+            return SimpleNamespace(name="Contract DP", unit="W", data_type="FLOAT", tags=["heizung"])
+
+        def get_value(self, _dp_id):
+            return SimpleNamespace(old_value=1.0)
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+    monkeypatch.setattr(
+        "obs.ringbuffer.ringbuffer.build_ringbuffer_metadata_snapshot",
+        AsyncMock(return_value={"datapoint": {"id": dp_id}, "bindings": [], "hierarchy_nodes": []}),
+    )
+
+    await manager.handle_value_event(
+        DataValueEvent(
+            datapoint_id=dp_uuid,
+            value=1.0,
+            quality="good",
+            source_adapter="api",
+            ts=datetime(2026, 5, 6, 19, 44, 49, 123000, tzinfo=UTC),
+        )
+    )
+
+    ringbuffer = [m for m in ws.messages if m.get("action") == "ringbuffer_entry"]
+    assert ringbuffer[0]["entry"]["metadata_version"] == 1
+    assert ringbuffer[0]["entry"]["metadata"]["datapoint"]["id"] == dp_id
+
+
+@pytest.mark.asyncio
+async def test_handle_value_event_accepts_seven_field_connection_entries(monkeypatch):
     dp_uuid = uuid4()
     dp_id = str(dp_uuid)
     ws = _FakeWebSocket()
@@ -369,7 +406,7 @@ async def test_handle_value_event_accepts_six_field_connection_entries(monkeypat
     manager.subscribe(conn_id, [dp_id])
 
     ws_entry = manager._connections[conn_id]  # noqa: SLF001
-    manager._connections[conn_id] = (ws_entry[0], ws_entry[1], asyncio.Lock(), ws_entry[3], False, None)  # noqa: SLF001
+    manager._connections[conn_id] = (ws_entry[0], ws_entry[1], asyncio.Lock(), ws_entry[3], False, None, False)  # noqa: SLF001
 
     class _RegistryStub:
         def get(self, _dp_id):

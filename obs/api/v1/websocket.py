@@ -49,14 +49,18 @@ class WebSocketManager:
     """Tracks all connected WebSocket clients and their DataPoint subscriptions."""
 
     def __init__(self) -> None:
-        # conn_id → (websocket, subscribed_dp_ids, send_lock, allowed_dp_ids, log_access, log_access_check)
+        # conn_id → (websocket, subscribed_dp_ids, send_lock, allowed_dp_ids,
+        #            log_access, log_access_check, ringbuffer_metadata)
         # allowed_dp_ids: None = unrestricted (authenticated user),
         # otherwise page-scoped allowlist for anonymous viewer sessions.
         # log_access: authenticated non-page connections receive log_entry pushes.
         # log_access_check: revalidates API-key existence before every log_entry push.
         # send_lock serialises concurrent sends on the same WebSocket;
         # concurrent asyncio.gather calls in EventBus would otherwise race.
-        self._connections: dict[str, tuple[WebSocket, set[str], asyncio.Lock, set[str] | None, bool, LogAccessCheck | None]] = {}
+        self._connections: dict[
+            str,
+            tuple[WebSocket, set[str], asyncio.Lock, set[str] | None, bool, LogAccessCheck | None, bool],
+        ] = {}
 
     async def connect(
         self,
@@ -64,6 +68,7 @@ class WebSocketManager:
         allowed_dp_ids: set[str] | None = None,
         log_access: bool = False,
         log_access_check: LogAccessCheck | None = None,
+        ringbuffer_metadata: bool = False,
         subprotocol: str | None = None,
     ) -> str:
         if subprotocol is None:
@@ -75,7 +80,7 @@ class WebSocketManager:
                 # Test doubles may not support the subprotocol kwarg.
                 await ws.accept()
         conn_id = str(uuid.uuid4())
-        self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access, log_access_check)
+        self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access, log_access_check, ringbuffer_metadata)
         logger.debug("WS client connected: %s  (total: %d)", conn_id[:8], len(self._connections))
         return conn_id
 
@@ -201,7 +206,7 @@ class WebSocketManager:
         log_only = msg.get("action") == "log_entry"
         scoped_dp_id = self._message_datapoint_id(msg)
         for conn_id, entry in list(self._connections.items()):
-            _, _subs, _lock, allowed_ids, log_access, log_access_check = entry
+            _, _subs, _lock, allowed_ids, log_access, log_access_check, _ringbuffer_metadata = entry
             if log_only:
                 if not log_access:
                     continue
@@ -263,7 +268,7 @@ class WebSocketManager:
             "unit": dp.unit if dp else None,
         }
         metadata: dict[str, Any] | None = None
-        if any(entry[3] is None for entry in self._connections.values()):
+        if any(entry[6] for entry in self._connections.values()):
             from obs.ringbuffer.ringbuffer import build_ringbuffer_metadata_snapshot
 
             metadata = await build_ringbuffer_metadata_snapshot(
@@ -277,7 +282,7 @@ class WebSocketManager:
             if allowed_ids is not None and dp_id_str not in allowed_ids:
                 continue
             rb_entry = base_rb_entry
-            if allowed_ids is None and metadata is not None:
+            if entry[6] and metadata is not None:
                 rb_entry = {
                     **base_rb_entry,
                     "metadata_version": 1,
@@ -297,8 +302,8 @@ class WebSocketManager:
         entry = self._connections.get(conn_id)
         if entry is None:
             return
-        ws, subs, lock, allowed_dp_ids, _old_log_access, log_access_check = entry
-        self._connections[conn_id] = (ws, subs, lock, allowed_dp_ids, log_access, log_access_check)
+        ws, subs, lock, allowed_dp_ids, _old_log_access, log_access_check, ringbuffer_metadata = entry
+        self._connections[conn_id] = (ws, subs, lock, allowed_dp_ids, log_access, log_access_check, ringbuffer_metadata)
 
 
 async def _page_allowed_datapoints(
@@ -553,7 +558,14 @@ async def _ws_authenticated_page_scope(
 
     if not await _can_access_page(page_id):
         return None
-    return await _page_allowed_datapoints(db, page_id, widget_ref_access_check=_can_access_page)
+    page_scope_ids = await _page_allowed_datapoints(db, page_id, widget_ref_access_check=_can_access_page)
+    if page_scope_ids is None:
+        return None
+    access, _ = await _resolve_access_with_node(db, page_id)
+    if access == "user":
+        allowed_ids = set(await filter_authorized_datapoints(db, principal, page_scope_ids, action=AuthzAction.READ))
+        return page_scope_ids & allowed_ids
+    return page_scope_ids
 
 
 async def _merge_authenticated_page_scope(
@@ -659,7 +671,7 @@ async def websocket_endpoint(
 
     allowed_dp_ids: set[str] | None = None
     db: Database | None = None
-    if api_key:
+    if api_key and user == "__api_key__":
         db = get_db()
         principal = await get_current_principal(credentials=None, api_key=api_key, db=db)
         allowed_dp_ids = await _ws_authorized_datapoint_scope(db, principal)
@@ -672,6 +684,7 @@ async def websocket_endpoint(
         if page_id and allowed_dp_ids is not None:
             await _merge_authenticated_page_scope(db, allowed_dp_ids, page_id, principal, subprotocol_session or ws.query_params.get("session_token"))
 
+    authenticated_user = user is not None
     if user is None:
         if not page_id:
             await ws.close(code=4001, reason="Authentication required")
@@ -711,14 +724,16 @@ async def websocket_endpoint(
             # page config cannot be parsed (e.g. lightweight test doubles).
             allowed_dp_ids = set()
 
-    log_access = await _ws_has_log_access(user, api_key)
+    effective_api_key = api_key if user == "__api_key__" else None
+    log_access = await _ws_has_log_access(user, effective_api_key) if allowed_dp_ids is None else False
 
     manager = get_ws_manager()
     conn_id = await manager.connect(
         ws,
         allowed_dp_ids=allowed_dp_ids,
         log_access=log_access,
-        log_access_check=(lambda: _ws_has_log_access(user, api_key)) if log_access else None,
+        log_access_check=(lambda: _ws_has_log_access(user, effective_api_key)) if log_access else None,
+        ringbuffer_metadata=authenticated_user,
         subprotocol=selected_subprotocol,
     )
 
