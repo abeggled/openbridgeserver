@@ -190,6 +190,43 @@ async def test_filter_authorized_datapoints_honors_direct_grants_on_linked_datap
 
 
 @pytest.mark.asyncio
+async def test_filter_authorized_datapoints_honors_direct_write_grants_on_linked_datapoints(db: Database):
+    await _insert_tree(db)
+    await _insert_node(db, "room")
+    await _insert_datapoint(db, "dp-1")
+    await _link_datapoint(db, "dp-1", "room", "link")
+    await _insert_grant(db, node_type="datapoint", node_id="dp-1", role="resident", effect="allow")
+
+    allowed = await filter_authorized_datapoints(
+        db,
+        Principal(subject="alice", type="user", is_admin=False),
+        ["dp-1"],
+        action=AuthzAction.WRITE,
+    )
+
+    assert allowed == ["dp-1"]
+
+
+@pytest.mark.asyncio
+async def test_filter_authorized_datapoints_keeps_explicit_deny_over_direct_write_grant(db: Database):
+    await _insert_tree(db)
+    await _insert_node(db, "room")
+    await _insert_datapoint(db, "dp-1")
+    await _link_datapoint(db, "dp-1", "room", "link")
+    await _insert_grant(db, node_id="room", role="resident", effect="deny")
+    await _insert_grant(db, node_type="datapoint", node_id="dp-1", role="resident", effect="allow")
+
+    allowed = await filter_authorized_datapoints(
+        db,
+        Principal(subject="alice", type="user", is_admin=False),
+        ["dp-1"],
+        action=AuthzAction.WRITE,
+    )
+
+    assert allowed == []
+
+
+@pytest.mark.asyncio
 async def test_resolve_datapoint_targets_ignores_other_principals_direct_grants(db: Database):
     await _insert_tree(db)
     await _insert_node(db, "room")

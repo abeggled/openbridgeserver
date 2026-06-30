@@ -529,7 +529,14 @@ async def _ws_authenticated_page_scope(
 
     if not await _can_access_page(page_id):
         return None
-    return await _page_allowed_datapoints(db, page_id, widget_ref_access_check=_can_access_page)
+    page_scope_ids = await _page_allowed_datapoints(db, page_id, widget_ref_access_check=_can_access_page)
+    if page_scope_ids is None:
+        return None
+    access, _ = await _resolve_access_with_node(db, page_id)
+    if access == "user":
+        allowed_ids = set(await filter_authorized_datapoints(db, principal, page_scope_ids, action=AuthzAction.READ))
+        return page_scope_ids & allowed_ids
+    return page_scope_ids
 
 
 async def _merge_authenticated_page_scope(
@@ -635,7 +642,7 @@ async def websocket_endpoint(
 
     allowed_dp_ids: set[str] | None = None
     db: Database | None = None
-    if api_key:
+    if api_key and user == "__api_key__":
         db = get_db()
         principal = await get_current_principal(credentials=None, api_key=api_key, db=db)
         allowed_dp_ids = await _ws_authorized_datapoint_scope(db, principal)
