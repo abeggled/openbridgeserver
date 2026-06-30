@@ -1,1 +1,9 @@
-{}
+{
+    "login": {
+        "submitting": "Accesso in corso…",
+        "title": "Registrazione",
+        "submit": "Registrazione",
+        "username": "Nome utente",
+        "password": "Password"
+    }
+}
