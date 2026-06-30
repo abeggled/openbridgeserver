@@ -248,6 +248,14 @@ def create_app() -> FastAPI:
         async def admin_apple_touch_icon():
             return FileResponse(_gui_dist / "apple-touch-icon.png")
 
+        @app.get("/obs_logo_light.svg", include_in_schema=False)
+        async def obs_logo_light():
+            return FileResponse(_gui_dist / "obs_logo_light.svg")
+
+        @app.get("/obs_logo_dark.svg", include_in_schema=False)
+        async def obs_logo_dark():
+            return FileResponse(_gui_dist / "obs_logo_dark.svg")
+
     # ── Serve Visu SPA (frontend_dist → /visu) ────────────────────────────
     _visu_dist = Path(__file__).parent.parent / "frontend_dist"
     if _visu_dist.is_dir():
