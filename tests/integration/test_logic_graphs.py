@@ -25,14 +25,14 @@ _MISSING_ID = "00000000-0000-0000-0000-000000000000"
 _EMPTY_FLOW = {"nodes": [], "edges": []}
 
 
-async def _create_graph(client, auth_headers, name: str = "", enabled: bool = True) -> dict:
+async def _create_graph(client, auth_headers, name: str = "", enabled: bool = True, flow_data: dict | None = None) -> dict:
     resp = await client.post(
         "/api/v1/logic/graphs",
         json={
             "name": name or f"LG-{uuid.uuid4().hex[:8]}",
             "description": "test",
             "enabled": enabled,
-            "flow_data": _EMPTY_FLOW,
+            "flow_data": flow_data or _EMPTY_FLOW,
         },
         headers=auth_headers,
     )
@@ -80,6 +80,47 @@ async def test_list_graphs_includes_created(client, auth_headers):
     resp = await client.get("/api/v1/logic/graphs", headers=auth_headers)
     ids = {g["id"] for g in resp.json()}
     assert graph["id"] in ids
+
+
+# ---------------------------------------------------------------------------
+# POST /logic/graphs/validate
+# ---------------------------------------------------------------------------
+
+
+async def test_validate_graph_reports_direct_cycles(client, auth_headers):
+    flow_data = {
+        "nodes": [
+            {"id": "a", "type": "not", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "b", "type": "not", "position": {"x": 160, "y": 0}, "data": {}},
+        ],
+        "edges": [
+            {"id": "a-b", "source": "a", "target": "b", "sourceHandle": "out", "targetHandle": "in1"},
+            {"id": "b-a", "source": "b", "target": "a", "sourceHandle": "out", "targetHandle": "in1"},
+        ],
+    }
+
+    resp = await client.post("/api/v1/logic/graphs/validate", json=flow_data, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert {warning["node_id"] for warning in resp.json()["warnings"]} == {"a", "b"}
+
+
+async def test_validate_graph_allows_feedback_through_memory(client, auth_headers):
+    flow_data = {
+        "nodes": [
+            {"id": "mem", "type": "memory", "position": {"x": 0, "y": 0}, "data": {"initial_value": "false", "data_type": "bool"}},
+            {"id": "not", "type": "not", "position": {"x": 160, "y": 0}, "data": {}},
+        ],
+        "edges": [
+            {"id": "mem-not", "source": "mem", "target": "not", "sourceHandle": "out", "targetHandle": "in1"},
+            {"id": "not-mem", "source": "not", "target": "mem", "sourceHandle": "out", "targetHandle": "in"},
+        ],
+    }
+
+    resp = await client.post("/api/v1/logic/graphs/validate", json=flow_data, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["warnings"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +369,30 @@ async def test_run_graph_empty_flow_returns_ok(client, auth_headers):
     resp = await client.post(f"/api/v1/logic/graphs/{graph['id']}/run", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+    assert resp.json()["warnings"] == []
+
+
+async def test_run_graph_cycle_returns_node_warnings(client, auth_headers):
+    flow_data = {
+        "nodes": [
+            {"id": "a", "type": "not", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "b", "type": "not", "position": {"x": 160, "y": 0}, "data": {}},
+        ],
+        "edges": [
+            {"id": "a-b", "source": "a", "target": "b", "sourceHandle": "out", "targetHandle": "in1"},
+            {"id": "b-a", "source": "b", "target": "a", "sourceHandle": "out", "targetHandle": "in1"},
+        ],
+    }
+    graph = await _create_graph(client, auth_headers, flow_data=flow_data)
+
+    resp = await client.post(f"/api/v1/logic/graphs/{graph['id']}/run", headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["outputs"]["a"]["__diagnostic__"] == "graph_cycle"
+    assert body["outputs"]["b"]["__diagnostic__"] == "graph_cycle"
+    assert {warning["node_id"] for warning in body["warnings"]} == {"a", "b"}
 
 
 async def test_run_disabled_graph_returns_422(client, auth_headers):

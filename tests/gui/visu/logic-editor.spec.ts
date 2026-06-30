@@ -526,6 +526,8 @@ test('Logic-Editor Palette zeigt neue Node-Typen an', async ({ page }) => {
   await expect(page.getByText('Sommer/Winter (DIN)', { exact: true })).toBeVisible({ timeout: 8_000 })
   await expect(page.getByText('Min/Max Tracker',  { exact: true })).toBeVisible({ timeout: 3_000 })
   await expect(page.getByText('Verbrauchszähler', { exact: true })).toBeVisible({ timeout: 3_000 })
+  await expect(page.getByText('Entscheidung', { exact: true })).toBeVisible({ timeout: 3_000 })
+  await expect(page.getByText('Zuordnung', { exact: true })).toBeVisible({ timeout: 3_000 })
 })
 
 // ---------------------------------------------------------------------------

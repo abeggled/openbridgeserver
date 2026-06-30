@@ -607,3 +607,89 @@ class TestHaBindingConfig:
         assert bc.service_domain == "light"
         assert bc.service_name == "turn_on"
         assert bc.service_data_key == "brightness"
+
+
+# ---------------------------------------------------------------------------
+# _ws_loop — auth / connect / error status codes (issue #779)
+# ---------------------------------------------------------------------------
+
+
+class _FakeWS:
+    """Minimal async-context-manager websocket that replays scripted messages."""
+
+    def __init__(self, messages):
+        self._messages = list(messages)
+        self.sent = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def recv(self):
+        import asyncio as _asyncio
+
+        if not self._messages:
+            raise _asyncio.CancelledError
+        item = self._messages.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def send(self, data):
+        self.sent.append(data)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+async def _run_ws_loop(adapter, messages, monkeypatch):
+    import asyncio
+    import contextlib
+    import sys
+
+    async def _cancel_sleep(*_a, **_k):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(asyncio, "sleep", _cancel_sleep)
+    fake_ws = _FakeWS(messages)
+    fake_websockets = MagicMock()
+    fake_websockets.connect = MagicMock(return_value=fake_ws)
+    monkeypatch.setitem(sys.modules, "websockets", fake_websockets)
+
+    with contextlib.suppress(asyncio.CancelledError):
+        await adapter._ws_loop()
+    return fake_ws
+
+
+@pytest.mark.asyncio
+async def test_ws_loop_auth_invalid_emits_token_invalid(adapter, monkeypatch):
+    import json
+
+    messages = [json.dumps({"type": "auth_required"}), json.dumps({"type": "auth_invalid"})]
+    await _run_ws_loop(adapter, messages, monkeypatch)
+    assert adapter.last_detail_code == "tokenInvalid"
+
+
+@pytest.mark.asyncio
+async def test_ws_loop_auth_ok_emits_connected_ha(adapter, monkeypatch):
+    import json
+
+    messages = [
+        json.dumps({"type": "auth_required"}),
+        json.dumps({"type": "auth_ok", "ha_version": "2025.1"}),
+        json.dumps({"success": True}),
+    ]
+    await _run_ws_loop(adapter, messages, monkeypatch)
+    assert adapter.last_detail_code == "connectedHa"
+    assert adapter.last_detail_params == {"version": "2025.1"}
+
+
+@pytest.mark.asyncio
+async def test_ws_loop_exception_emits_ws_error(adapter, monkeypatch):
+    await _run_ws_loop(adapter, [RuntimeError("boom")], monkeypatch)
+    assert adapter.last_detail_code == "wsErrorReconnecting"

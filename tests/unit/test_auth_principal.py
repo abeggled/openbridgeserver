@@ -52,7 +52,28 @@ async def test_get_current_principal_api_key_uses_non_username_subject(monkeypat
 
     principal = await get_current_principal(credentials=None, api_key="obs_valid", db=db)
 
-    assert principal == Principal(subject="api_key:3ff3e934-8d4d-45f6-b4d0-5f6f2272681d", type="api_key", is_admin=False)
+    assert principal == Principal(
+        subject="api_key:3ff3e934-8d4d-45f6-b4d0-5f6f2272681d",
+        type="api_key",
+        is_admin=False,
+        owner="admin",
+    )
+    assert db.updated is True
+
+
+@pytest.mark.asyncio
+async def test_get_current_principal_api_key_keeps_ownerless_legacy_key_owner_empty(monkeypatch):
+    monkeypatch.setattr("obs.api.auth.hash_api_key", lambda key: f"hash:{key}")
+    db = _DbStub(api_key_row={"id": "3ff3e934-8d4d-45f6-b4d0-5f6f2272681d", "owner": ""})
+
+    principal = await get_current_principal(credentials=None, api_key="obs_valid", db=db)
+
+    assert principal == Principal(
+        subject="api_key:3ff3e934-8d4d-45f6-b4d0-5f6f2272681d",
+        type="api_key",
+        is_admin=False,
+        owner=None,
+    )
     assert db.updated is True
 
 

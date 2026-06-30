@@ -14,6 +14,7 @@ WidgetRegistry.register({
   defaultConfig: {
     label: '',
     mode: 'dimm',
+    show_state_text: true,
     dp_switch: '',
     dp_switch_status: '',
     dp_dim: '',

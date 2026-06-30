@@ -18,6 +18,8 @@ export const useAdapterStore = defineStore('adapters', () => {
             existing.connected = updated.connected
             existing.severity = updated.severity ?? 'ok'
             existing.status_detail = updated.status_detail ?? ''
+            existing.status_detail_code = updated.status_detail_code ?? null
+            existing.status_detail_params = updated.status_detail_params ?? {}
           }
         }
       } else {

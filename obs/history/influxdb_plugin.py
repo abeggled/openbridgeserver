@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -55,6 +56,8 @@ _INFLUX_AGGFN: dict[str, str] = {
     "max": "MAX",
     "last": "LAST",
 }
+_WRITE_BACKOFF_INITIAL_SECONDS = 5.0
+_WRITE_BACKOFF_MAX_SECONDS = 60.0
 
 
 class InfluxDBHistoryPlugin(HistoryPlugin):
@@ -79,6 +82,10 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
         self._database = database  # v1/v3 db name
         self._username = username
         self._password = password
+        self._client: httpx.AsyncClient | None = None
+        self._write_backoff_until = 0.0
+        self._write_backoff_seconds = _WRITE_BACKOFF_INITIAL_SECONDS
+        self._write_skip_logged = False
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -128,6 +135,16 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
         elif self._token:
             h["Authorization"] = f"Bearer {self._token}"
         return h
+
+    def _get_write_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=10)
+        return self._client
+
+    async def disconnect(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     def _escape_tag(self, s: str) -> str:
         """Escape InfluxDB line-protocol tag value (no comma, space, equals)."""
@@ -229,16 +246,36 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
         url, params = self._write_url_params()
         headers = self._headers(content_type="text/plain; charset=utf-8")
 
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.post(
-                    url,
-                    content=line.encode(),
-                    params=params,
-                    headers=headers,
+        now = time.monotonic()
+        if now < self._write_backoff_until:
+            if not self._write_skip_logged:
+                logger.warning(
+                    "InfluxDB write suppressed for %.1fs after previous failure",
+                    self._write_backoff_until - now,
                 )
-                r.raise_for_status()
+                self._write_skip_logged = True
+            return
+
+        try:
+            client = self._get_write_client()
+            r = await client.post(
+                url,
+                content=line.encode(),
+                params=params,
+                headers=headers,
+            )
+            r.raise_for_status()
+            self._write_backoff_until = 0.0
+            self._write_backoff_seconds = _WRITE_BACKOFF_INITIAL_SECONDS
+            self._write_skip_logged = False
         except Exception as exc:
+            try:
+                await self.disconnect()
+            except Exception:
+                pass
+            self._write_backoff_until = time.monotonic() + self._write_backoff_seconds
+            self._write_backoff_seconds = min(self._write_backoff_seconds * 2, _WRITE_BACKOFF_MAX_SECONDS)
+            self._write_skip_logged = False
             logger.error("InfluxDB write failed: %s", exc)
             raise
 

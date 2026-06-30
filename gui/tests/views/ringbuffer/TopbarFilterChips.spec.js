@@ -64,7 +64,7 @@ async function mountChips(props = {}) {
 
   const { useAuthStore } = await import('@/stores/auth')
   const auth = useAuthStore()
-  auth.user = { username: 'tester', is_admin: true }
+  auth.user = props.authUser ?? { username: 'tester', is_admin: true }
 
   const mod = await import('@/views/ringbuffer/TopbarFilterChips.vue')
   const TopbarFilterChips = mod.default
@@ -246,6 +246,49 @@ describe('TopbarFilterChips', () => {
     await flushPromises()
     await bodyFind('[data-testid="topbar-add-filter-search"]').setValue('zzz-no-match')
     expect(bodyFind('[data-testid="topbar-add-filter-empty"]').text()).toContain('Keine Treffer')
+  })
+
+  it('hides the new-filter action for non-admin users', async () => {
+    const { wrapper } = await mountChips({ authUser: { username: 'viewer', is_admin: false } })
+
+    await wrapper.find('[data-testid="topbar-add-filter-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(document.body.querySelector('[data-testid="topbar-add-filter-new"]')).toBeNull()
+  })
+
+  it('keeps the dropdown open for inside clicks and closes it on outside clicks', async () => {
+    const { wrapper } = await mountChips()
+
+    await wrapper.find('[data-testid="topbar-add-filter-btn"]').trigger('click')
+    await flushPromises()
+    const menu = document.body.querySelector('[data-testid="topbar-add-filter-menu"]')
+    expect(menu).not.toBeNull()
+
+    wrapper.vm.onDocumentClick({ target: menu })
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="topbar-add-filter-menu"]')).not.toBeNull()
+
+    wrapper.vm.onDocumentClick({ target: document.createElement('div') })
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="topbar-add-filter-menu"]')).toBeNull()
+  })
+
+  it('keeps menu scroll local and closes the dropdown on document scroll', async () => {
+    const { wrapper } = await mountChips()
+
+    await wrapper.find('[data-testid="topbar-add-filter-btn"]').trigger('click')
+    await flushPromises()
+    const menu = document.body.querySelector('[data-testid="topbar-add-filter-menu"]')
+    expect(menu).not.toBeNull()
+
+    wrapper.vm.onDocumentScroll({ target: menu })
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="topbar-add-filter-menu"]')).not.toBeNull()
+
+    wrapper.vm.onDocumentScroll({ target: document.createElement('div') })
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="topbar-add-filter-menu"]')).toBeNull()
   })
 
   // ---------------------------------------------------------------------

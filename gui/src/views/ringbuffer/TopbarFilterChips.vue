@@ -114,6 +114,7 @@
         >
           <!-- pinned "+ Neu" as the first option (#36 UX) -->
           <button
+            v-if="auth.isAdmin"
             type="button"
             data-testid="topbar-add-filter-new"
             class="block w-full text-left px-3 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-700"
@@ -322,6 +323,7 @@ function toggleAddMenu() {
 }
 
 function onCreateNew() {
+  if (!auth.isAdmin) return
   addMenuOpen.value = false
   addMenuQuery.value = ''
   emit('new-set')

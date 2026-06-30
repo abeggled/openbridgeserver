@@ -44,7 +44,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     settings = get_settings()
 
-    log_level = getattr(logging, settings.server.log_level.upper(), logging.INFO)
+    configured_log_level = settings.server.log_level.upper()
+    log_level = getattr(logging, configured_log_level, logging.INFO)
     logging.basicConfig(level=log_level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
     import asyncio
@@ -56,6 +57,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 1. Database
     db = await init_db(settings.database.path)
+    persistent_log_level = await _read_persistent_log_level(db)
+    if persistent_log_level and persistent_log_level != configured_log_level:
+        log_level = getattr(logging, persistent_log_level, log_level)
+        logging.getLogger().setLevel(log_level)
+        try:
+            from obs.log_buffer import set_log_buffer_level
+
+            set_log_buffer_level(persistent_log_level)
+        except Exception:
+            logger.exception("Failed to apply persistent log level")
+        logger.info("Applied persistent log level from app_settings: %s", persistent_log_level)
     await ensure_default_user(db)
 
     # Rebuild Mosquitto passwd file from DB on every startup (keeps it in sync).
@@ -111,7 +123,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # 6. Write Router
     #    Path A: MQTT dp/{uuid}/set → adapters (external commands)
     #    Path B: DataValueEvent → DEST/BOTH bindings (cross-protocol propagation)
-    write_router = init_write_router(db, registry)
+    write_router = init_write_router(db, registry, event_bus=bus)
     mqtt.on_write_request(write_router.handle)
     bus.subscribe(DataValueEvent, write_router.handle_value_event)
 
@@ -126,6 +138,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     import obs.adapters.knx.adapter
     import obs.adapters.modbus_rtu.adapter
     import obs.adapters.modbus_tcp.adapter
+    import obs.adapters.message.adapter
     import obs.adapters.mqtt.adapter
     import obs.adapters.onewire.adapter
     import obs.adapters.snmp.adapter  # noqa: F401
@@ -227,12 +240,32 @@ def create_app() -> FastAPI:
         async def favicon():
             return FileResponse(_gui_dist / "favicon.svg")
 
+        @app.get("/manifest.webmanifest", include_in_schema=False)
+        async def admin_manifest():
+            return FileResponse(_gui_dist / "manifest.webmanifest")
+
+        @app.get("/apple-touch-icon.png", include_in_schema=False)
+        async def admin_apple_touch_icon():
+            return FileResponse(_gui_dist / "apple-touch-icon.png")
+
     # ── Serve Visu SPA (frontend_dist → /visu) ────────────────────────────
     _visu_dist = Path(__file__).parent.parent / "frontend_dist"
     if _visu_dist.is_dir():
         _visu_assets = _visu_dist / "assets"
         if _visu_assets.is_dir():
             app.mount("/visu/assets", StaticFiles(directory=_visu_assets), name="visu_assets")
+
+        @app.get("/visu/favicon.svg", include_in_schema=False)
+        async def visu_favicon():
+            return FileResponse(_visu_dist / "favicon.svg")
+
+        @app.get("/visu/manifest.webmanifest", include_in_schema=False)
+        async def visu_manifest():
+            return FileResponse(_visu_dist / "manifest.webmanifest")
+
+        @app.get("/visu/apple-touch-icon.png", include_in_schema=False)
+        async def visu_apple_touch_icon():
+            return FileResponse(_visu_dist / "apple-touch-icon.png")
 
         @app.get("/visu/{path:path}", include_in_schema=False)
         async def visu_spa(path: str):
@@ -260,6 +293,19 @@ def create_app() -> FastAPI:
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     return app
+
+
+async def _read_persistent_log_level(db: object) -> str | None:
+    try:
+        row = await db.fetchone("SELECT value FROM app_settings WHERE key='server.log_level'")
+    except Exception:
+        return None
+    if row is None:
+        return None
+    level = str(row["value"] or "").upper()
+    if level in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        return level
+    return None
 
 
 async def main() -> None:

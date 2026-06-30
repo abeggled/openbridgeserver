@@ -511,7 +511,7 @@
     </div>
 
     <!-- ── Datenmanagement ── -->
-    <div v-if="activeTab === 'importexport'" class="flex flex-col gap-4 max-w-lg" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
+    <div v-if="activeTab === 'importexport' && (auth.isAdmin || isDemo)" class="flex flex-col gap-4 max-w-lg" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
 
       <!-- Sicherung erstellen (download) -->
       <div class="card p-5 flex flex-col gap-3">
@@ -1473,7 +1473,7 @@ const tabs = computed(() => [
   ...(auth.isAdmin || isDemo.value ? [{ id: 'support', label: t('settings.tabs.support') }] : []),
   { id: 'links',        label: t('settings.tabs.links') },
   { id: 'hierarchy',    label: t('settings.tabs.hierarchy') },
-  { id: 'importexport', label: t('settings.tabs.importexport') },
+  ...(auth.isAdmin || isDemo.value ? [{ id: 'importexport', label: t('settings.tabs.importexport') }] : []),
   { id: 'icons',        label: t('settings.tabs.icons') },
   { id: 'history',      label: t('settings.tabs.history') },
   { id: 'dangerzone',   label: t('settings.tabs.dangerzone') },
@@ -2161,6 +2161,7 @@ function _ts() {
 }
 
 async function doExport() {
+  if (!auth.isAdmin) return
   const { data } = await configApi.export()
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
   const url  = URL.createObjectURL(blob)
@@ -2169,6 +2170,7 @@ async function doExport() {
 }
 
 async function doExportDb() {
+  if (!auth.isAdmin) return
   const { data: blob } = await configApi.exportDb()
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a'); a.href = url; a.download = `obs_DB_${_ts()}.sqlite`; a.click()

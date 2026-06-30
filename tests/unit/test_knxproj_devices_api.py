@@ -137,3 +137,106 @@ async def test_get_knx_device_by_pa_returns_404_for_unknown_pa():
         assert exc_info.value.status_code == 404
     finally:
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_list_knx_devices_without_knx_device_schema(monkeypatch: pytest.MonkeyPatch):
+    db = await _prepare_db()
+
+    async def _schema_not_ready(_db):
+        return False
+
+    monkeypatch.setattr(knxproj_api, "_knx_device_schema_ready", _schema_not_ready)
+    try:
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="",
+            page=0,
+            size=10,
+            _user="admin",
+            db=db,
+        )
+        assert result.total == 0
+        assert result.items == []
+        assert result.pages == 1
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_knx_device_without_knx_device_schema(monkeypatch: pytest.MonkeyPatch):
+    db = await _prepare_db()
+
+    async def _schema_not_ready(_db):
+        return False
+
+    monkeypatch.setattr(knxproj_api, "_knx_device_schema_ready", _schema_not_ready)
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await knxproj_api.get_knx_device(pa="1.1.1", _user="admin", db=db)
+        assert exc_info.value.status_code == 404
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_list_knx_devices_for_group_address_without_knx_device_schema(monkeypatch: pytest.MonkeyPatch):
+    db = await _prepare_db()
+
+    async def _schema_not_ready(_db):
+        return False
+
+    monkeypatch.setattr(knxproj_api, "_knx_device_schema_ready", _schema_not_ready)
+    try:
+        result = await knxproj_api.list_knx_devices_for_group_address(
+            ga="1/2/3",
+            page=0,
+            size=50,
+            _user="admin",
+            db=db,
+        )
+        assert result.total == 0
+        assert result.items == []
+        assert result.pages == 1
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_list_knx_devices_manufacturer_filter():
+    db = await _prepare_db()
+    try:
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="abb",
+            order_number="",
+            page=0,
+            size=50,
+            _user="admin",
+            db=db,
+        )
+        assert result.total == 1
+        assert result.items[0].manufacturer == "ABB"
+        assert result.items[0].order_number == "LD-200"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_list_knx_devices_order_number_filter():
+    db = await _prepare_db()
+    try:
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="hs-10",
+            page=0,
+            size=50,
+            _user="admin",
+            db=db,
+        )
+        assert result.total == 1
+        assert result.items[0].order_number == "HS-10"
+    finally:
+        await db.disconnect()

@@ -333,80 +333,87 @@ async def _import_knx_devices_and_comm_objects(
     # stall the event loop.
     devices, comm_objects, co_ga_links = await run_in_threadpool(parse_knxproj_devices, file_bytes, password)
 
-    # Keep the latest project snapshot deterministic: tables mirror the current
-    # imported .knxproj payload.
-    await db.execute("DELETE FROM knx_co_ga_links")
-    await db.execute("DELETE FROM knx_comm_objects")
-    await db.execute("DELETE FROM knx_space_device_links")
-    await db.execute("DELETE FROM knx_devices")
+    await db.execute("SAVEPOINT knx_device_snapshot")
+    try:
+        # Keep the latest project snapshot deterministic: tables mirror the current
+        # imported .knxproj payload.
+        await db.execute("DELETE FROM knx_co_ga_links")
+        await db.execute("DELETE FROM knx_comm_objects")
+        await db.execute("DELETE FROM knx_space_device_links")
+        await db.execute("DELETE FROM knx_devices")
 
-    if devices:
-        await db.executemany(
-            """INSERT INTO knx_devices
-                   (id, individual_address, name, description, product_name, product_refid, hardware2program_refid, imported_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
+        if devices:
+            await db.executemany(
+                """INSERT INTO knx_devices
+                       (id, individual_address, name, description, product_name, product_refid, hardware2program_refid, imported_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        d.identifier,
+                        d.individual_address,
+                        d.name,
+                        d.description,
+                        d.manufacturer_name,
+                        d.order_number,
+                        d.application or "",
+                        now,
+                    )
+                    for d in devices
+                    if d.identifier and d.individual_address
+                ],
+            )
+
+        device_id_by_pa = {d.individual_address: d.identifier for d in devices if d.individual_address and d.identifier}
+        imported_comm_ids: set[str] = set()
+        comm_rows: list[tuple[str, str, str, str, str, str, str, str]] = []
+        for co in comm_objects:
+            if not co.identifier:
+                continue
+            device_id = device_id_by_pa.get(co.device_address)
+            if not device_id:
+                continue
+            imported_comm_ids.add(co.identifier)
+            comm_rows.append(
                 (
-                    d.identifier,
-                    d.individual_address,
-                    d.name,
-                    d.description,
-                    d.manufacturer_name,
-                    d.order_number,
-                    d.application or "",
+                    co.identifier,
+                    device_id,
+                    str(co.number),
+                    co.name,
+                    co.text,
+                    co.function_text,
+                    ",".join(co.dpts),
                     now,
                 )
-                for d in devices
-                if d.identifier and d.individual_address
-            ],
-        )
-
-    device_id_by_pa = {d.individual_address: d.identifier for d in devices if d.individual_address and d.identifier}
-    imported_comm_ids: set[str] = set()
-    comm_rows: list[tuple[str, str, str, str, str, str, str, str]] = []
-    for co in comm_objects:
-        if not co.identifier:
-            continue
-        device_id = device_id_by_pa.get(co.device_address)
-        if not device_id:
-            continue
-        imported_comm_ids.add(co.identifier)
-        comm_rows.append(
-            (
-                co.identifier,
-                device_id,
-                str(co.number),
-                co.name,
-                co.text,
-                co.function_text,
-                ",".join(co.dpts),
-                now,
             )
-        )
 
-    if comm_rows:
-        await db.executemany(
-            """INSERT INTO knx_comm_objects
-                   (id, device_id, number, name, text, function_text, datapoint_type, imported_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            comm_rows,
-        )
+        if comm_rows:
+            await db.executemany(
+                """INSERT INTO knx_comm_objects
+                       (id, device_id, number, name, text, function_text, datapoint_type, imported_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                comm_rows,
+            )
 
-    link_rows: list[tuple[str, str]] = []
-    for link in co_ga_links:
-        if link.comm_object_id in imported_comm_ids and link.ga_address:
-            link_rows.append((link.comm_object_id, link.ga_address))
+        link_rows: list[tuple[str, str]] = []
+        for link in co_ga_links:
+            if link.comm_object_id in imported_comm_ids and link.ga_address:
+                link_rows.append((link.comm_object_id, link.ga_address))
 
-    if link_rows:
-        # Ensure FK target exists even if a downstream tool inserted links first.
-        await db.executemany(
-            "INSERT OR IGNORE INTO knx_group_addresses (address) VALUES (?)",
-            [(ga,) for _, ga in link_rows],
-        )
-        await db.executemany(
-            "INSERT OR IGNORE INTO knx_co_ga_links (comm_object_id, ga_address) VALUES (?, ?)",
-            link_rows,
-        )
+        if link_rows:
+            # Ensure FK target exists even if a downstream tool inserted links first.
+            await db.executemany(
+                "INSERT OR IGNORE INTO knx_group_addresses (address) VALUES (?)",
+                [(ga,) for _, ga in link_rows],
+            )
+            await db.executemany(
+                "INSERT OR IGNORE INTO knx_co_ga_links (comm_object_id, ga_address) VALUES (?, ?)",
+                link_rows,
+            )
+        await db.execute("RELEASE SAVEPOINT knx_device_snapshot")
+    except Exception:
+        await db.execute("ROLLBACK TO SAVEPOINT knx_device_snapshot")
+        await db.execute("RELEASE SAVEPOINT knx_device_snapshot")
+        raise
 
     await db.commit()
     return len(devices), len(comm_rows)

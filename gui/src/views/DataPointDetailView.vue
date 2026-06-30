@@ -29,7 +29,8 @@
         <div v-if="dp.mqtt_alias" class="font-mono text-xs text-slate-600 break-all">{{ dp.mqtt_alias }}</div>
         <div class="border-t border-slate-200 dark:border-slate-700 pt-4 mt-1">
           <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{{ $t('datapoints.detail.writeValue') }}</div>
-          <div v-if="hasWritableBinding" class="flex flex-wrap items-center gap-2">
+          <div v-if="bindingsLoading" class="flex items-center py-1"><Spinner size="sm" /></div>
+          <div v-else-if="canWriteValue" class="flex flex-wrap items-center gap-2">
             <template v-if="dp.data_type === 'BOOLEAN'">
               <button
                 @click="writeDetailValue(true)"
@@ -119,8 +120,8 @@
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
                 <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ b.adapter_type }}</span>
-                <Badge :variant="b.direction === 'SOURCE' ? 'info' : b.direction === 'DEST' ? 'warning' : 'success'" size="xs">
-                  {{ b.direction === 'SOURCE' ? $t('datapoints.detail.bindingRead') : b.direction === 'DEST' ? $t('datapoints.detail.bindingWrite') : $t('datapoints.detail.bindingReadWrite') }}
+                <Badge :variant="bindingBadgeVariant(b)" size="xs">
+                  {{ bindingDirectionLabel(b) }}
                 </Badge>
                 <Badge v-if="!b.enabled" variant="danger" size="xs">{{ $t('datapoints.detail.bindingDisabled') }}</Badge>
               </div>
@@ -160,10 +161,10 @@
                 <Badge v-if="!u.graph_enabled" variant="muted" size="xs">{{ $t('datapoints.detail.graphDisabled') }}</Badge>
               </div>
               <div class="text-xs text-slate-500 mt-1">
-                {{ u.node_type === 'datapoint_read' ? $t('datapoints.detail.logicReads') : $t('datapoints.detail.logicWrites') }}
+                {{ u.direction === 'SOURCE' ? $t('datapoints.detail.logicReads') : $t('datapoints.detail.logicWrites') }}
               </div>
             </div>
-            <RouterLink :to="`/logic?graph=${u.graph_id}`" class="btn-icon shrink-0" title="Logic-Sheet öffnen">
+            <RouterLink :to="`/logic?graph=${u.graph_id}`" class="btn-icon shrink-0" :title="$t('datapoints.detail.openLogicSheet')">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
             </RouterLink>
           </div>
@@ -212,6 +213,7 @@ const ws      = useWebSocketStore()
 const dp                  = ref(null)
 const bindings            = ref([])
 const bindingsLoading     = ref(false)
+const bindingsLoaded      = ref(false)
 const logicUsages         = ref([])
 const logicUsagesLoading  = ref(false)
 const showEdit            = ref(false)
@@ -231,10 +233,11 @@ const displayVal = computed(() => {
   if (v === null || v === undefined) return '—'
   return dp.value?.unit ? `${v} ${dp.value.unit}` : String(v)
 })
-const hasWritableBinding = computed(() =>
-  bindings.value.some(b => b.enabled && ['DEST', 'BOTH'].includes(b.direction))
+const activeBindings = computed(() => bindings.value.filter(b => b.enabled))
+const activeWritableBindings = computed(() => activeBindings.value.filter(b => b.adapter_type !== 'MESSAGE'))
+const canWriteValue = computed(() =>
+  bindingsLoaded.value && (activeWritableBindings.value.length === 0 || activeWritableBindings.value.some(b => ['DEST', 'BOTH'].includes(b.direction)))
 )
-
 watch(currentRawValue, (value) => {
   if (!writeBusy.value && value !== undefined && value !== null) writeDraft.value = String(value)
 })
@@ -252,9 +255,25 @@ onMounted(async () => {
 })
 onUnmounted(() => unsubWs?.())
 
+function bindingBadgeVariant(binding) {
+  if (binding.adapter_type === 'MESSAGE') return 'info'
+  return binding.direction === 'SOURCE' ? 'info' : binding.direction === 'DEST' ? 'warning' : 'success'
+}
+
+function bindingDirectionLabel(binding) {
+  if (binding.direction === 'SOURCE') return t('datapoints.detail.bindingRead')
+  if (binding.direction === 'DEST') return t('datapoints.detail.bindingWrite')
+  return t('datapoints.detail.bindingReadWrite')
+}
+
 async function loadBindings() {
   bindingsLoading.value = true
-  try { const { data } = await dpApi.listBindings(props.id); bindings.value = data }
+  bindingsLoaded.value = false
+  try {
+    const { data } = await dpApi.listBindings(props.id)
+    bindings.value = data
+    bindingsLoaded.value = true
+  }
   finally { bindingsLoading.value = false }
 }
 
@@ -283,7 +302,35 @@ function coerceWriteValue(raw) {
   if (dp.value?.data_type === 'BOOLEAN') return raw === true || raw === 'true' || raw === '1' || raw === 1
   if (dp.value?.data_type === 'INTEGER') return Number.parseInt(raw, 10)
   if (dp.value?.data_type === 'FLOAT') return Number.parseFloat(raw)
+  if (dp.value?.data_type === 'DATE') return coerceDate(raw)
+  if (dp.value?.data_type === 'TIME') return coerceTime(raw)
+  if (dp.value?.data_type === 'DATETIME') return coerceDateTime(raw)
   return raw
+}
+
+function coerceDate(raw) {
+  const value = String(raw).trim()
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) throw new Error(t('datapoints.detail.invalidTemporal'))
+  const [, year, month, day] = match.map(Number)
+  const dt = new Date(Date.UTC(year, month - 1, day))
+  if (dt.getUTCFullYear() !== year || dt.getUTCMonth() !== month - 1 || dt.getUTCDate() !== day) {
+    throw new Error(t('datapoints.detail.invalidTemporal'))
+  }
+  return value
+}
+
+function coerceTime(raw) {
+  const value = String(raw).trim()
+  const match = value.match(/^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.\d{1,6})?)?$/)
+  if (!match) throw new Error(t('datapoints.detail.invalidTemporal'))
+  return value
+}
+
+function coerceDateTime(raw) {
+  const value = String(raw).trim()
+  if (!value || Number.isNaN(Date.parse(value))) throw new Error(t('datapoints.detail.invalidTemporal'))
+  return value
 }
 
 async function writeDetailValue(raw) {

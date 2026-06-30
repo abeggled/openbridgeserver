@@ -132,6 +132,7 @@ class Principal(BaseModel):
     subject: str
     type: Literal["user", "api_key"]
     is_admin: bool
+    owner: str | None = None
 
 
 async def get_current_principal(
@@ -148,7 +149,7 @@ async def get_current_principal(
     if api_key:
         key_hash = hash_api_key(api_key)
         row = await db.fetchone(
-            "SELECT id FROM api_keys WHERE key_hash=?",
+            "SELECT id, owner FROM api_keys WHERE key_hash=?",
             (key_hash,),
         )
         if not row:
@@ -160,10 +161,14 @@ async def get_current_principal(
             api_key_id = row["id"]
         except (IndexError, KeyError):
             api_key_id = None
+        try:
+            api_key_owner = row["owner"] or None
+        except (IndexError, KeyError):
+            api_key_owner = None
         if api_key_id is not None:
-            return Principal(subject=f"api_key:{api_key_id}", type="api_key", is_admin=False)
+            return Principal(subject=f"api_key:{api_key_id}", type="api_key", is_admin=False, owner=api_key_owner)
 
-        return Principal(subject=str(row["subject"]), type="api_key", is_admin=False)
+        return Principal(subject=str(row["subject"]), type="api_key", is_admin=False, owner=api_key_owner)
 
     raise HTTPException(
         status.HTTP_401_UNAUTHORIZED,
@@ -393,15 +398,18 @@ async def list_api_keys(
 async def create_api_key(
     request: Request,
     body: ApiKeyCreate,
-    _user: str = Depends(get_current_user),
+    principal: Principal = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> ApiKeyResponse:
+    owner = principal.subject if principal.type == "user" else principal.owner
+    if not owner:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "API key owner is required")
     key = generate_api_key()
     key_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
     await db.execute_and_commit(
         "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?,?,?,?,?)",
-        (key_id, body.name, hash_api_key(key), _user, now),
+        (key_id, body.name, hash_api_key(key), owner, now),
     )
     return ApiKeyResponse(id=key_id, name=body.name, key=key, created_at=now)
 

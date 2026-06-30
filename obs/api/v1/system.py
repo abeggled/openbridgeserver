@@ -422,24 +422,42 @@ async def update_history_settings(
 async def test_history_connection(
     body: HistorySettingsIn,
     _admin: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
 ) -> HistoryTestResult:
     """Test connectivity for the given history backend configuration. Admin only."""
     try:
         if body.plugin == "sqlite":
             return HistoryTestResult(ok=True, message="SQLite is always available.")
 
+        data: dict[str, str] = {
+            "influx_url": body.influx_url,
+            "influx_version": str(body.influx_version),
+            "influx_token": body.influx_token,
+            "influx_org": body.influx_org,
+            "influx_bucket": body.influx_bucket,
+            "influx_database": body.influx_database,
+            "influx_username": body.influx_username,
+            "influx_password": body.influx_password,
+            "timescale_dsn": body.timescale_dsn,
+        }
+        if any(data[field] == REDACTED for field in _HISTORY_SENSITIVE_FIELDS):
+            existing_cfg = await _read_history_cfg(db)
+            for field in _HISTORY_SENSITIVE_FIELDS:
+                if data[field] == REDACTED:
+                    data[field] = existing_cfg[field]
+
         if body.plugin == "influxdb":
             from obs.history.influxdb_plugin import InfluxDBHistoryPlugin
 
             plugin = InfluxDBHistoryPlugin(
-                url=body.influx_url,
-                version=body.influx_version,
-                token=body.influx_token,
-                org=body.influx_org,
-                bucket=body.influx_bucket,
-                database=body.influx_database,
-                username=body.influx_username,
-                password=body.influx_password,
+                url=data["influx_url"],
+                version=int(data["influx_version"]),
+                token=data["influx_token"],
+                org=data["influx_org"],
+                bucket=data["influx_bucket"],
+                database=data["influx_database"],
+                username=data["influx_username"],
+                password=data["influx_password"],
             )
             ok = await plugin.ping()
             if ok:
@@ -455,7 +473,7 @@ async def test_history_connection(
         if body.plugin == "timescaledb":
             from obs.history.timescaledb_plugin import TimescaleDBHistoryPlugin
 
-            plugin = TimescaleDBHistoryPlugin(dsn=body.timescale_dsn)
+            plugin = TimescaleDBHistoryPlugin(dsn=data["timescale_dsn"])
             ok = await plugin.ping()
             if ok:
                 return HistoryTestResult(ok=True, message="PostgreSQL/TimescaleDB reachable.")

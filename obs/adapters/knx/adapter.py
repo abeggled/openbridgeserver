@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections import deque
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -173,7 +174,7 @@ class KnxAdapter(AdapterBase):
             from xknx.telegram.address import IndividualAddress
         except ImportError:
             logger.error("xknx not installed — KNX adapter disabled")
-            await self._publish_status(False, "xknx not installed", severity="error")
+            await self._publish_status(False, "xknx not installed", severity="error", code="libNotInstalled", params={"lib": "xknx"})
             return
 
         # Clean up any previous xknx instance before creating a new one
@@ -217,9 +218,11 @@ class KnxAdapter(AdapterBase):
                     if keyfile_result is None:
                         if cfg.connection_type == "routing_secure":
                             detail = "Kein Backbone-Key im Keyfile — das Keyfile enthält keinen Backbone-Eintrag für Routing Secure."
+                            keyfile_code = "knxNoBackboneKeyInKeyfile"
                         else:
                             detail = "Keine Tunneling-Interfaces im Keyfile gefunden — bitte Individual Address im Keyfile prüfen."
-                        await self._publish_status(False, detail, severity="error")
+                            keyfile_code = "knxNoTunnelingInterfaces"
+                        await self._publish_status(False, detail, severity="error", code=keyfile_code)
                         return
                     secure_config, resolved_individual_address = keyfile_result
                     logger.info("KNX IP Secure: Keyfile-Modus (%s), Credentials direkt extrahiert", cfg.knxkeys_file_path)
@@ -238,6 +241,7 @@ class KnxAdapter(AdapterBase):
                             False,
                             "routing_secure erfordert backbone_key oder knxkeys_file_path",
                             severity="error",
+                            code="knxRoutingSecureRequiresKey",
                         )
                         logger.error("KNX IP Secure (Routing): backbone_key und knxkeys_file_path fehlen")
                         return
@@ -246,11 +250,23 @@ class KnxAdapter(AdapterBase):
                     secure_config = SecureConfig(backbone_key=backbone_hex)
                     logger.info("KNX IP Secure: Manueller Modus (Routing, backbone_key)")
             except ValueError as exc:
-                await self._publish_status(False, f"KNX Backbone-Key ungültig (kein Hex-String): {exc}", severity="error")
+                await self._publish_status(
+                    False,
+                    f"KNX Backbone-Key ungültig (kein Hex-String): {exc}",
+                    severity="error",
+                    code="knxBackboneKeyInvalid",
+                    params={"error": str(exc)},
+                )
                 logger.error("KNX IP Secure backbone_key Parse-Fehler: %s", exc)
                 return
             except Exception as exc:
-                await self._publish_status(False, f"KNX IP Secure Konfigurationsfehler: {exc}", severity="error")
+                await self._publish_status(
+                    False,
+                    f"KNX IP Secure Konfigurationsfehler: {exc}",
+                    severity="error",
+                    code="knxIpSecureConfigError",
+                    params={"error": str(exc)},
+                )
                 logger.error("KNX IP Secure Konfigurationsfehler: %s", exc)
                 return
 
@@ -283,10 +299,20 @@ class KnxAdapter(AdapterBase):
         try:
             await self._xknx.start()
             if is_routing:
-                await self._publish_status(True, f"Connected (routing {cfg.multicast_group}:{cfg.multicast_port})")
+                await self._publish_status(
+                    True,
+                    f"Connected (routing {cfg.multicast_group}:{cfg.multicast_port})",
+                    code="knxConnectedRouting",
+                    params={"group": cfg.multicast_group, "port": cfg.multicast_port},
+                )
                 logger.info("KNX adapter connected: routing %s:%d", cfg.multicast_group, cfg.multicast_port)
             else:
-                await self._publish_status(True, f"Connected to {cfg.host}:{cfg.port}")
+                await self._publish_status(
+                    True,
+                    f"Connected to {cfg.host}:{cfg.port}",
+                    code="connectedTo",
+                    params={"host": cfg.host, "port": cfg.port},
+                )
                 logger.info(
                     "KNX adapter connected: %s:%d (%s)",
                     cfg.host,
@@ -344,6 +370,7 @@ class KnxAdapter(AdapterBase):
                 connected=self._connected,
                 detail=TUNNEL_OVERLOAD_DETAIL,
                 severity="warning",
+                code="knxTunnelOverload",
             )
             logger.warning(
                 "KNX tunnel-pool overload suspected: %d disconnects in last %ss",
@@ -361,6 +388,7 @@ class KnxAdapter(AdapterBase):
                 connected=self._connected,
                 detail="Tunnel-Pool wieder stabil.",
                 severity="ok",
+                code="knxTunnelStable",
             )
             logger.info("KNX tunnel-pool warning cleared (quiet window).")
 
@@ -395,7 +423,7 @@ class KnxAdapter(AdapterBase):
                 await self._xknx.stop()
             except Exception:
                 logger.exception("KNX disconnect error")
-        await self._publish_status(False, "Disconnected")
+        await self._publish_status(False, "Disconnected", code="disconnected")
         self._xknx = None
 
     # ------------------------------------------------------------------
@@ -508,11 +536,21 @@ class KnxAdapter(AdapterBase):
                     value = raw.hex() if isinstance(raw, (bytes, bytearray)) else raw
                     quality = "uncertain"
 
+                if isinstance(value, float) and not math.isfinite(value):
+                    logger.warning(
+                        "KNX DPT decoded non-finite float for GA=%s (%s): %s — quality=bad",
+                        ga,
+                        dpt.dpt_id,
+                        value,
+                    )
+                    quality = "bad"
+                    value = None
+
                 if binding.value_formula and quality == "good":
                     from obs.core.formula import apply_formula
 
                     value = apply_formula(binding.value_formula, value)
-                if binding.value_map:
+                if binding.value_map and quality != "bad":
                     from obs.core.transformation import apply_value_map
 
                     value = apply_value_map(value, binding.value_map)

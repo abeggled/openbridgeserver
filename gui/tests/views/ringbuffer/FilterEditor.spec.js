@@ -156,7 +156,7 @@ async function populateMinimalFilter(wrapper, tags = ['heizung']) {
   await wrapper.vm.$nextTick()
 }
 
-async function mountEditor({ props = {}, ringbufferApi, searchApi, hierarchyApi, leaveEmpty = false } = {}) {
+async function mountEditor({ props = {}, ringbufferApi, searchApi, hierarchyApi, leaveEmpty = false, authStore = null } = {}) {
   ringbufferApi = ringbufferApi ?? makeRingbufferApi()
   searchApi = searchApi ?? makeSearchApi()
   hierarchyApi = hierarchyApi ?? makeHierarchyApi()
@@ -167,7 +167,7 @@ async function mountEditor({ props = {}, ringbufferApi, searchApi, hierarchyApi,
     hierarchyApi,
   }))
   vi.doMock('@/stores/auth', () => ({
-    useAuthStore: () => ({
+    useAuthStore: () => authStore ?? ({
       isAdmin: true,
       username: 'test-user',
     }),
@@ -280,6 +280,24 @@ describe('FilterEditor (#436)', () => {
     // Adding any criterion enables the button.
     await populateMinimalFilter(wrapper)
     expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(false)
+  })
+
+  it('keeps new filtersets read-only for non-admin users', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({
+      props: { setId: null },
+      ringbufferApi,
+      authStore: { isAdmin: false, username: 'viewer' },
+    })
+
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('NoCreate')
+    await populateMinimalFilter(wrapper)
+
+    const save = wrapper.find('[data-testid="filter-editor-save-topbar"]')
+    expect(save.element.disabled).toBe(true)
+    await save.trigger('click')
+    await flushPromises()
+    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
   })
 
   it('Enter outside a text field triggers Save & in Topleiste', async () => {

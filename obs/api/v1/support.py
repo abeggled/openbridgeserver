@@ -61,8 +61,11 @@ _SENSITIVE_KEY_PARTS = (
 _SENSITIVE_KEYS = {
     "backbone_key",
     "community",
+    "chat_id",
     "knxkeys_file_path",
+    "to",
     "priv_key",
+    "user_key",
 }
 _PASSTHROUGH_KEYS = {
     "auth_protocol",

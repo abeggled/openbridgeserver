@@ -2,18 +2,30 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
+let routeLeaveHandlers
+let intersectionCallback
+
 beforeEach(() => {
   vi.resetModules()
+  routeLeaveHandlers = []
+  intersectionCallback = null
   globalThis.ResizeObserver = class {
     observe() {}
     unobserve() {}
     disconnect() {}
   }
   globalThis.IntersectionObserver = class {
+    constructor(callback) {
+      intersectionCallback = callback
+    }
     observe() {}
     disconnect() {}
   }
-  vi.doMock('vue-router', () => ({ onBeforeRouteLeave: vi.fn() }))
+  vi.doMock('vue-router', () => ({
+    onBeforeRouteLeave: vi.fn((callback) => {
+      routeLeaveHandlers.push(callback)
+    }),
+  }))
 })
 
 afterEach(() => {
@@ -21,18 +33,20 @@ afterEach(() => {
   vi.doUnmock('vue-router')
 })
 
-async function mountDataPointsView({ items = [], nodeResults = [] } = {}) {
+async function mountDataPointsView({ items = [], nodeResults = [], isAdmin = true, pages = 1 } = {}) {
   const searchApi = {
     search: vi.fn().mockResolvedValue({
       data: {
         items,
         total: items.length,
-        pages: 1,
+        pages,
       },
     }),
   }
   const dpApi = {
     tags: vi.fn().mockResolvedValue({ data: [] }),
+    create: vi.fn().mockImplementation(payload => Promise.resolve({ data: { id: 'dp-created', ...payload } })),
+    update: vi.fn().mockImplementation((id, payload) => Promise.resolve({ data: { id, ...payload } })),
     delete: vi.fn().mockResolvedValue({}),
   }
   const systemApi = {
@@ -50,6 +64,8 @@ async function mountDataPointsView({ items = [], nodeResults = [] } = {}) {
 
   const pinia = createPinia()
   setActivePinia(pinia)
+  const { useAuthStore } = await import('@/stores/auth')
+  useAuthStore().user = { id: 'u1', username: 'tester', is_admin: isAdmin }
   const mod = await import('@/views/DataPointsView.vue')
   const wrapper = mount(mod.default, {
     global: {
@@ -68,10 +84,127 @@ async function mountDataPointsView({ items = [], nodeResults = [] } = {}) {
   })
   await flushPromises()
   await flushPromises()
-  return { wrapper, hierarchyApi, searchApi }
+  return { wrapper, dpApi, hierarchyApi, searchApi }
 }
 
 describe('DataPointsView hierarchy rendering', () => {
+  it('hides datapoint CRUD controls for non-admin users', async () => {
+    const { wrapper } = await mountDataPointsView({
+      isAdmin: false,
+      items: [
+        {
+          id: 'dp-readonly',
+          name: 'Readonly DP',
+          data_type: 'FLOAT',
+          tags: [],
+          value: 1,
+          quality: 'good',
+          hierarchy_nodes: [],
+        },
+      ],
+    })
+
+    expect(wrapper.find('[data-testid="btn-new-datapoint"]').exists()).toBe(false)
+    expect(wrapper.find('[title="Bearbeiten"]').exists()).toBe(false)
+    expect(wrapper.find('[title="Löschen"]').exists()).toBe(false)
+  })
+
+  it('lets admins create, update and delete datapoints', async () => {
+    const item = {
+      id: 'dp-admin',
+      name: 'Admin DP',
+      data_type: 'FLOAT',
+      tags: [],
+      value: 1,
+      quality: 'good',
+      hierarchy_nodes: [],
+    }
+    const { wrapper, dpApi } = await mountDataPointsView({ items: [item] })
+
+    expect(wrapper.find('[data-testid="btn-new-datapoint"]').exists()).toBe(true)
+
+    wrapper.vm.openCreate()
+    expect(wrapper.vm.showForm).toBe(true)
+    await wrapper.vm.onSave({ name: 'Created DP', data_type: 'FLOAT', tags: [] })
+    expect(dpApi.create).toHaveBeenCalledWith({ name: 'Created DP', data_type: 'FLOAT', tags: [] })
+    expect(wrapper.vm.showForm).toBe(false)
+
+    wrapper.vm.openEdit(item)
+    expect(wrapper.vm.editTarget.id).toBe('dp-admin')
+    await wrapper.vm.onSave({ name: 'Updated DP', data_type: 'FLOAT', tags: [] })
+    expect(dpApi.update).toHaveBeenCalledWith('dp-admin', { name: 'Updated DP', data_type: 'FLOAT', tags: [] })
+
+    wrapper.vm.confirmDelete(item)
+    expect(wrapper.vm.deleteTarget.id).toBe('dp-admin')
+    expect(wrapper.vm.showConfirm).toBe(true)
+    await wrapper.vm.doDelete()
+    expect(dpApi.delete).toHaveBeenCalledWith('dp-admin')
+  })
+
+  it('applies and clears datapoint list filters', async () => {
+    const { wrapper } = await mountDataPointsView()
+
+    wrapper.vm.filters.q = 'temp'
+    wrapper.vm.filters.tags = ['hvac']
+    wrapper.vm.filters.adapters = ['knx']
+    wrapper.vm.filters.quality = 'good'
+    wrapper.vm.filters.type = 'FLOAT'
+    wrapper.vm.filters.node_ids = [{ node_id: 12, node_name: 'Küche', tree_name: 'Haus' }]
+    wrapper.vm.filters.tree_ids = [{ tree_id: 1, tree_name: 'Haus' }]
+
+    expect(wrapper.vm.apiFilters()).toEqual({
+      q: 'temp',
+      tag: 'hvac',
+      adapter: 'knx',
+      quality: 'good',
+      type: 'FLOAT',
+      node_id: '12',
+      tree_id: '1',
+    })
+
+    wrapper.vm.toggleQuality('bad')
+    expect(wrapper.vm.filters.quality).toBe('bad')
+    wrapper.vm.toggleQuality('bad')
+    expect(wrapper.vm.filters.quality).toBe('')
+
+    wrapper.vm.toggleTag('hvac')
+    expect(wrapper.vm.filters.tags).toEqual([])
+    wrapper.vm.toggleTag('hvac')
+    wrapper.vm.setTagFilter('energy')
+    expect(wrapper.vm.filters.tags).toEqual(['hvac', 'energy'])
+
+    wrapper.vm.setAdapterFilter(['mqtt'])
+    expect(wrapper.vm.filters.adapters).toEqual(['mqtt'])
+    wrapper.vm.setAdapterFilter(null)
+    expect(wrapper.vm.filters.adapters).toEqual([])
+
+    wrapper.vm.toggleTreeFilter({ tree_id: 2, tree_name: 'Etage' })
+    expect(wrapper.vm.isTreeSelected(2)).toBe(true)
+    wrapper.vm.toggleTreeFilter({ tree_id: 2, tree_name: 'Etage' })
+    expect(wrapper.vm.isTreeSelected(2)).toBe(false)
+
+    wrapper.vm.toggleNode({ node_id: 44, node_name: 'Bad', tree_name: 'Haus', path: ['EG', 'Bad'], display_depth: 1 })
+    expect(wrapper.vm.isNodeSelected(44)).toBe(true)
+    wrapper.vm.toggleNode({ node_id: 44, node_name: 'Bad', tree_name: 'Haus', path: ['EG', 'Bad'], display_depth: 1 })
+    expect(wrapper.vm.isNodeSelected(44)).toBe(false)
+
+    wrapper.vm.clearFilter('node_ids')
+    expect(wrapper.vm.filters.node_ids).toEqual([])
+    wrapper.vm.clearFilter('tree_ids')
+    expect(wrapper.vm.filters.tree_ids).toEqual([])
+    wrapper.vm.clearFilter('tags')
+    expect(wrapper.vm.filters.tags).toEqual([])
+    wrapper.vm.clearFilter('adapters')
+    expect(wrapper.vm.filters.adapters).toEqual([])
+    wrapper.vm.clearFilter('type')
+    expect(wrapper.vm.filters.type).toBe('')
+
+    wrapper.vm.clearAllFilters()
+    expect(wrapper.vm.filters).toEqual({ q: '', tags: [], adapters: [], quality: '', type: '', node_ids: [], tree_ids: [] })
+    wrapper.vm.clearHierarchyFilters()
+    expect(wrapper.vm.nodeResults).toEqual([])
+  })
+
   it('keeps the full hierarchy path as title on datapoint row chips', async () => {
     const { wrapper } = await mountDataPointsView({
       items: [
@@ -261,5 +394,55 @@ describe('DataPointsView hierarchy rendering', () => {
     expect(badge.exists()).toBe(true)
     expect(badge.attributes('title')).toContain('—')
     expect(badge.attributes('title')).toContain('1')
+  })
+
+  it('persists scroll state before opening datapoint details', async () => {
+    const { wrapper } = await mountDataPointsView({
+      items: [
+        {
+          id: 'dp-scroll',
+          name: 'Scrollable',
+          data_type: 'FLOAT',
+          tags: ['hvac'],
+          value: 1,
+          quality: 'good',
+          hierarchy_nodes: [],
+        },
+      ],
+    })
+    const scrollSpy = vi.spyOn(window, 'scrollY', 'get').mockReturnValue(321)
+
+    wrapper.vm.filters.q = 'scrollable'
+    wrapper.vm.filters.tags = ['hvac']
+    routeLeaveHandlers[0]({ name: 'DataPointDetail' })
+
+    const saved = JSON.parse(sessionStorage.getItem('obs.dp.scroll'))
+    expect(saved.scrollY).toBe(321)
+    expect(saved.filters.q).toBe('scrollable')
+    expect(saved.filters.tags).toEqual(['hvac'])
+
+    scrollSpy.mockRestore()
+  })
+
+  it('loads another page when the infinite-scroll sentinel intersects', async () => {
+    const { searchApi } = await mountDataPointsView({
+      pages: 2,
+      items: [
+        {
+          id: 'dp-page-1',
+          name: 'Page 1',
+          data_type: 'FLOAT',
+          tags: [],
+          value: 1,
+          quality: 'good',
+          hierarchy_nodes: [],
+        },
+      ],
+    })
+
+    await intersectionCallback([{ isIntersecting: true }])
+    await flushPromises()
+
+    expect(searchApi.search).toHaveBeenCalledWith(expect.objectContaining({ page: 1, size: 50 }))
   })
 })

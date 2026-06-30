@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from obs.adapters import registry as adapter_registry
 from obs.adapters.knx.dpt_registry import DPTRegistry
 from obs.api.auth import get_admin_user, get_current_user
+from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.db.database import Database, get_db
 
 router = APIRouter(tags=["adapters"])
@@ -52,7 +53,9 @@ class AdapterInstanceOut(BaseModel):
     running: bool
     connected: bool
     severity: str = "ok"  # "ok" | "warning" | "error" — last AdapterStatusEvent
-    status_detail: str = ""
+    status_detail: str = ""  # non-localized fallback (issue #779)
+    status_detail_code: str | None = None  # key suffix under adapters.statusDetail.*
+    status_detail_params: dict = {}
     bindings: int
     created_at: str
     updated_at: str
@@ -112,7 +115,9 @@ class TestRequest(BaseModel):
 
 class TestResult(BaseModel):
     success: bool
-    detail: str
+    detail: str  # non-localized fallback (issue #779)
+    detail_code: str | None = None  # key suffix under adapters.testResult.*
+    detail_params: dict = {}
 
 
 class IoBrokerStateOut(BaseModel):
@@ -178,10 +183,32 @@ def _instance_out(row: Any, instance: Any | None) -> AdapterInstanceOut:
         connected=instance.connected if instance else False,
         severity=getattr(instance, "last_severity", "ok") if instance else "ok",
         status_detail=getattr(instance, "last_detail", "") if instance else "",
+        status_detail_code=getattr(instance, "last_detail_code", None) if instance else None,
+        status_detail_params=getattr(instance, "last_detail_params", {}) if instance else {},
         bindings=len(instance.get_bindings()) if instance else 0,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+async def _validate_message_config_preserves_binding_targets(
+    instance_id: str,
+    config: dict[str, Any],
+    db: Database,
+) -> None:
+    rows = await db.fetchall(
+        """SELECT direction, config, enabled FROM adapter_bindings
+           WHERE adapter_instance_id=? AND adapter_type='MESSAGE'""",
+        (instance_id,),
+    )
+    for binding_row in rows:
+        _validate_adapter_binding(
+            "MESSAGE",
+            binding_row["direction"],
+            _json_config(binding_row["config"]),
+            enabled=bool(binding_row["enabled"]),
+            instance_config=config,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +324,8 @@ async def update_instance(
                     status.HTTP_422_UNPROCESSABLE_CONTENT,
                     f"Config-Validierungsfehler: {exc}",
                 ) from exc
+        if row["adapter_type"] == "MESSAGE":
+            await _validate_message_config_preserves_binding_targets(str(instance_id), body.config, db)
         config_raw = json.dumps(body.config)
 
     now = datetime.now(UTC).isoformat()
@@ -353,6 +382,8 @@ async def test_instance(
         return TestResult(
             success=False,
             detail=f"Adapter-Typ '{row['adapter_type']}' nicht registriert",
+            detail_code="typeNotRegistered",
+            detail_params={"type": row["adapter_type"]},
         )
 
     if body and body.config:
@@ -364,7 +395,7 @@ async def test_instance(
     try:
         cls.config_schema(**config_dict)
     except Exception as exc:
-        return TestResult(success=False, detail=f"Config-Fehler: {exc}")
+        return TestResult(success=False, detail=f"Config-Fehler: {exc}", detail_code="configError", detail_params={"error": str(exc)})
 
     from obs.core.event_bus import EventBus
 
@@ -380,8 +411,13 @@ async def test_instance(
         connected = test_instance.connected
         await test_instance.disconnect()
         if connected:
-            return TestResult(success=True, detail=f"Verbindung zu {row['adapter_type']} erfolgreich")
-        return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen")
+            return TestResult(
+                success=True,
+                detail=f"Verbindung zu {row['adapter_type']} erfolgreich",
+                detail_code="connectOk",
+                detail_params={"type": row["adapter_type"]},
+            )
+        return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed")
     except Exception as exc:
         return TestResult(success=False, detail=str(exc))
 
@@ -421,7 +457,7 @@ async def migrate_instance_bindings(
     if source_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Quell-Instanz nicht gefunden")
 
-    target_row = await db.fetchone("SELECT id, adapter_type FROM adapter_instances WHERE id=?", (target_id,))
+    target_row = await db.fetchone("SELECT id, adapter_type, config FROM adapter_instances WHERE id=?", (target_id,))
     if target_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Ziel-Instanz nicht gefunden")
 
@@ -432,7 +468,7 @@ async def migrate_instance_bindings(
         )
 
     source_bindings = await db.fetchall(
-        "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=? ORDER BY created_at",
+        "SELECT id, datapoint_id, direction, config, enabled FROM adapter_bindings WHERE adapter_instance_id=? ORDER BY created_at",
         (source_id,),
     )
     target_bindings = await db.fetchall(
@@ -445,11 +481,24 @@ async def migrate_instance_bindings(
     skipped = 0
     total_source_bindings = len(source_bindings)
     now = datetime.now(UTC).isoformat()
+    target_message_config = _json_config(target_row["config"]) if target_row["adapter_type"] == "MESSAGE" else None
 
+    bindings_to_migrate = []
     for binding_row in source_bindings:
         if binding_row["datapoint_id"] in target_datapoint_ids:
             skipped += 1
             continue
+        if target_message_config is not None:
+            _validate_adapter_binding(
+                "MESSAGE",
+                binding_row["direction"],
+                _json_config(binding_row["config"]),
+                enabled=bool(binding_row["enabled"]),
+                instance_config=target_message_config,
+            )
+        bindings_to_migrate.append(binding_row)
+
+    for binding_row in bindings_to_migrate:
         await db.execute(
             "UPDATE adapter_bindings SET adapter_instance_id=?, updated_at=? WHERE id=?",
             (target_id, now, binding_row["id"]),
@@ -1242,7 +1291,12 @@ async def test_adapter(
     try:
         cls.config_schema(**body.config)
     except Exception as exc:
-        return TestResult(success=False, detail=f"Config-Validierungsfehler: {exc}")
+        return TestResult(
+            success=False,
+            detail=f"Config-Validierungsfehler: {exc}",
+            detail_code="configValidationError",
+            detail_params={"error": str(exc)},
+        )
 
     from obs.core.event_bus import EventBus
 
@@ -1258,8 +1312,13 @@ async def test_adapter(
         connected = test_instance.connected
         await test_instance.disconnect()
         if connected:
-            return TestResult(success=True, detail=f"Verbindung zu {adapter_type} erfolgreich")
-        return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen")
+            return TestResult(
+                success=True,
+                detail=f"Verbindung zu {adapter_type} erfolgreich",
+                detail_code="connectOk",
+                detail_params={"type": adapter_type},
+            )
+        return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed")
     except Exception as exc:
         return TestResult(success=False, detail=str(exc))
 

@@ -53,8 +53,8 @@
                 {{ a.severity === 'error' ? $t('common.error') : $t('common.warning') }}
               </Badge>
             </div>
-            <div v-if="a.status_detail" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              {{ a.status_detail }}
+            <div v-if="a.status_detail || a.status_detail_code" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              {{ statusDetailText(a) }}
             </div>
           </div>
         </RouterLink>
@@ -121,7 +121,11 @@ import { useAdapterStore } from '@/stores/adapters'
 import Badge   from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import StatCard from '@/components/ui/StatCard.vue'
-import { adapterDotClass as adapterDot, adapterBadgeVariant, adapterStatusLabel } from '@/utils/adapterStatus'
+import { adapterDotClass as adapterDot, adapterBadgeVariant, adapterStatusLabel, adapterStatusDetailText } from '@/utils/adapterStatus'
+import { useI18n } from 'vue-i18n'
+
+const { t, te } = useI18n()
+const statusDetailText = (a) => adapterStatusDetailText(a, t, te)
 
 const dpStore  = useDatapointStore()
 const ws       = useWebSocketStore()

@@ -7,7 +7,7 @@
         <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('datapoints.title') }}</h2>
         <p class="text-sm text-slate-500 mt-0.5">{{ $t('datapoints.subtitle', { count: store.total }) }}</p>
       </div>
-      <button @click="openCreate" class="btn-primary" data-testid="btn-new-datapoint">
+      <button v-if="auth.isAdmin" @click="openCreate" class="btn-primary" data-testid="btn-new-datapoint">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
         </svg>
@@ -362,12 +362,12 @@
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.5 6.5l4-4a4.95 4.95 0 017 7l-4 4m-10 4l-4 4a4.95 4.95 0 01-7-7l4-4m5.5 3.5l5-5"/>
                     </svg>
                   </RouterLink>
-                  <button @click="openEdit(dp)" class="btn-icon" :title="$t('common.edit')">
+                  <button v-if="auth.isAdmin" @click="openEdit(dp)" class="btn-icon" :title="$t('common.edit')">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                     </svg>
                   </button>
-                  <button @click="confirmDelete(dp)" class="btn-icon text-red-400" :title="$t('common.delete')">
+                  <button v-if="auth.isAdmin" @click="confirmDelete(dp)" class="btn-icon text-red-400" :title="$t('common.delete')">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                     </svg>
@@ -412,6 +412,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useDatapointStore } from '@/stores/datapoints'
+import { useAuthStore } from '@/stores/auth'
 import { useWebSocketStore } from '@/stores/websocket'
 import { hierarchyApi } from '@/api/client'
 import Badge         from '@/components/ui/Badge.vue'
@@ -441,6 +442,7 @@ const qualityOptions = computed(() => [
 
 const { t } = useI18n()
 const store = useDatapointStore()
+const auth  = useAuthStore()
 const ws    = useWebSocketStore()
 
 const filters      = ref({ q: '', tags: [], adapters: [], quality: '', type: '', node_ids: [], tree_ids: [] })
@@ -731,17 +733,33 @@ function hierarchyNodeFullPathAttrs(node) {
 // CRUD
 // --------------------------------------------------------------------------
 
-function openCreate() { editTarget.value = null; showForm.value = true }
-function openEdit(dp) { editTarget.value = dp;   showForm.value = true }
+function openCreate() {
+  if (!auth.isAdmin) return
+  editTarget.value = null
+  showForm.value = true
+}
+function openEdit(dp) {
+  if (!auth.isAdmin) return
+  editTarget.value = dp
+  showForm.value = true
+}
 
 async function onSave(payload) {
+  if (!auth.isAdmin) return
   if (editTarget.value) await store.update(editTarget.value.id, payload)
   else await store.create(payload)
   showForm.value = false
 }
 
-function confirmDelete(dp) { deleteTarget.value = dp; showConfirm.value = true }
-async function doDelete()  { await store.remove(deleteTarget.value.id) }
+function confirmDelete(dp) {
+  if (!auth.isAdmin) return
+  deleteTarget.value = dp
+  showConfirm.value = true
+}
+async function doDelete() {
+  if (!auth.isAdmin) return
+  await store.remove(deleteTarget.value.id)
+}
 
 // --------------------------------------------------------------------------
 // Hierarchy path helpers

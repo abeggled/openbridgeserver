@@ -49,6 +49,33 @@ async def _make_instance(client, auth_headers) -> dict:
     return resp.json()
 
 
+def _message_instance_config(target: str = "default") -> dict:
+    return {
+        "providers": {
+            "pushover": {
+                "enabled": True,
+                "api_token": "app-token",
+                "targets": {target: {"user_key": "user-key"}},
+            }
+        }
+    }
+
+
+async def _make_message_instance(client, auth_headers, config: dict | None = None) -> dict:
+    resp = await client.post(
+        "/api/v1/adapters/instances",
+        json={
+            "adapter_type": "MESSAGE",
+            "name": f"CfgMsgInst-{uuid.uuid4().hex[:6]}",
+            "config": config or _message_instance_config(),
+            "enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
 async def _make_graph(client, auth_headers) -> dict:
     resp = await client.post(
         "/api/v1/logic/graphs",
@@ -403,6 +430,279 @@ async def test_import_binding_invalid_formula_records_error(client, auth_headers
     assert resp.status_code == 200
     # The invalid formula should be rejected and an error recorded
     assert len(resp.json()["errors"]) > 0
+
+
+async def test_import_message_binding_non_source_direction_records_error(client, auth_headers):
+    dp_id = str(uuid.uuid4())
+    inst_id = str(uuid.uuid4())
+    binding_id = str(uuid.uuid4())
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [{"id": dp_id, "name": f"MsgDP-{uuid.uuid4().hex[:6]}", "data_type": "FLOAT", "unit": None, "tags": [], "mqtt_alias": None}],
+        "bindings": [
+            {
+                "id": binding_id,
+                "datapoint_id": dp_id,
+                "adapter_type": "MESSAGE",
+                "adapter_instance_id": inst_id,
+                "direction": "DEST",
+                "config": {"providers": [{"provider": "pushover", "target": "default"}]},
+                "enabled": True,
+            }
+        ],
+        "adapter_instances": [{"id": inst_id, "adapter_type": "MESSAGE", "name": f"MsgInst-{uuid.uuid4().hex[:6]}", "config": {}, "enabled": False}],
+    }
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert any("MESSAGE-Bindings" in error for error in resp.json()["errors"])
+
+
+async def test_import_disabled_message_binding_allows_no_targets(client, auth_headers):
+    dp_id = str(uuid.uuid4())
+    inst_id = str(uuid.uuid4())
+    binding_id = str(uuid.uuid4())
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [{"id": dp_id, "name": f"MsgDP-{uuid.uuid4().hex[:6]}", "data_type": "FLOAT", "unit": None, "tags": [], "mqtt_alias": None}],
+        "bindings": [
+            {
+                "id": binding_id,
+                "datapoint_id": dp_id,
+                "adapter_type": "MESSAGE",
+                "adapter_instance_id": inst_id,
+                "direction": "SOURCE",
+                "config": {"providers": []},
+                "enabled": False,
+            }
+        ],
+        "adapter_instances": [{"id": inst_id, "adapter_type": "MESSAGE", "name": f"MsgInst-{uuid.uuid4().hex[:6]}", "config": {}, "enabled": False}],
+    }
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["bindings_created"] == 1
+    assert body["errors"] == []
+
+
+async def test_import_message_binding_rejects_unknown_instance_target(client, auth_headers):
+    dp_id = str(uuid.uuid4())
+    inst_id = str(uuid.uuid4())
+    binding_id = str(uuid.uuid4())
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [{"id": dp_id, "name": f"MsgDP-{uuid.uuid4().hex[:6]}", "data_type": "FLOAT", "unit": None, "tags": [], "mqtt_alias": None}],
+        "bindings": [
+            {
+                "id": binding_id,
+                "datapoint_id": dp_id,
+                "adapter_type": "MESSAGE",
+                "adapter_instance_id": inst_id,
+                "direction": "SOURCE",
+                "config": {"providers": [{"provider": "pushover", "target": "missing"}]},
+                "enabled": True,
+            }
+        ],
+        "adapter_instances": [
+            {
+                "id": inst_id,
+                "adapter_type": "MESSAGE",
+                "name": f"MsgInst-{uuid.uuid4().hex[:6]}",
+                "config": {
+                    "providers": {
+                        "pushover": {
+                            "enabled": True,
+                            "api_token": "app-token",
+                            "targets": {"default": {"user_key": "user-key"}},
+                        }
+                    }
+                },
+                "enabled": False,
+            }
+        ],
+    }
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["bindings_created"] == 0
+    assert any("MESSAGE target not configured" in error for error in body["errors"])
+
+
+async def test_import_message_binding_rejects_missing_instance(client, auth_headers):
+    dp_id = str(uuid.uuid4())
+    inst_id = str(uuid.uuid4())
+    binding_id = str(uuid.uuid4())
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [{"id": dp_id, "name": f"MsgDP-{uuid.uuid4().hex[:6]}", "data_type": "FLOAT", "unit": None, "tags": [], "mqtt_alias": None}],
+        "bindings": [
+            {
+                "id": binding_id,
+                "datapoint_id": dp_id,
+                "adapter_type": "MESSAGE",
+                "adapter_instance_id": inst_id,
+                "direction": "SOURCE",
+                "config": {"providers": [{"provider": "pushover", "target": "default"}]},
+                "enabled": True,
+            }
+        ],
+    }
+
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["bindings_created"] == 0
+    assert any(f"MESSAGE adapter instance not found: {inst_id}" in error for error in body["errors"])
+
+
+async def test_import_message_binding_rejects_blank_message_body(client, auth_headers):
+    dp_id = str(uuid.uuid4())
+    inst_id = str(uuid.uuid4())
+    binding_id = str(uuid.uuid4())
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [{"id": dp_id, "name": f"MsgDP-{uuid.uuid4().hex[:6]}", "data_type": "FLOAT", "unit": None, "tags": [], "mqtt_alias": None}],
+        "bindings": [
+            {
+                "id": binding_id,
+                "datapoint_id": dp_id,
+                "adapter_type": "MESSAGE",
+                "adapter_instance_id": inst_id,
+                "direction": "SOURCE",
+                "config": {
+                    "message": "",
+                    "providers": [{"provider": "pushover", "target": "default"}],
+                },
+                "enabled": True,
+            }
+        ],
+        "adapter_instances": [
+            {
+                "id": inst_id,
+                "adapter_type": "MESSAGE",
+                "name": f"MsgInst-{uuid.uuid4().hex[:6]}",
+                "config": {
+                    "providers": {
+                        "pushover": {
+                            "enabled": True,
+                            "api_token": "app-token",
+                            "targets": {"default": {"user_key": "user-key"}},
+                        }
+                    }
+                },
+                "enabled": False,
+            }
+        ],
+    }
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["bindings_created"] == 0
+    assert any("message must not be empty" in error for error in body["errors"])
+
+
+async def test_import_message_instance_config_does_not_orphan_existing_binding(client, auth_headers):
+    dp = await _make_dp(client, auth_headers)
+    inst = await _make_message_instance(client, auth_headers, config=_message_instance_config(target="default"))
+    create_resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={
+            "adapter_instance_id": inst["id"],
+            "direction": "SOURCE",
+            "config": {"providers": [{"provider": "pushover", "target": "default"}]},
+        },
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [],
+        "bindings": [],
+        "adapter_instances": [
+            {
+                "id": inst["id"],
+                "adapter_type": "MESSAGE",
+                "name": inst["name"],
+                "config": _message_instance_config(target="renamed"),
+                "enabled": False,
+            }
+        ],
+    }
+
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["adapter_instances_upserted"] == 0
+    assert any("MESSAGE target not configured" in error for error in body["errors"])
+    get_resp = await client.get(f"/api/v1/adapters/instances/{inst['id']}", headers=auth_headers)
+    assert set(get_resp.json()["config"]["providers"]["pushover"]["targets"]) == {"default"}
+
+
+async def test_import_message_binding_update_validates_against_existing_instance(client, auth_headers):
+    dp = await _make_dp(client, auth_headers)
+    old_inst = await _make_message_instance(client, auth_headers, config=_message_instance_config(target="default"))
+    new_inst = await _make_message_instance(client, auth_headers, config=_message_instance_config(target="other"))
+    create_resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={
+            "adapter_instance_id": old_inst["id"],
+            "direction": "SOURCE",
+            "config": {"providers": [{"provider": "pushover", "target": "default"}]},
+        },
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    binding = create_resp.json()
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [],
+        "bindings": [
+            {
+                "id": binding["id"],
+                "datapoint_id": dp["id"],
+                "adapter_type": "MESSAGE",
+                "adapter_instance_id": new_inst["id"],
+                "direction": "SOURCE",
+                "config": {"providers": [{"provider": "pushover", "target": "other"}]},
+                "enabled": True,
+            }
+        ],
+        "adapter_instances": [
+            {
+                "id": old_inst["id"],
+                "adapter_type": "MESSAGE",
+                "name": old_inst["name"],
+                "config": _message_instance_config(target="renamed"),
+                "enabled": False,
+            }
+        ],
+    }
+
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["adapter_instances_upserted"] == 0
+    assert body["bindings_updated"] == 0
+    assert any("MESSAGE target not configured" in error for error in body["errors"])
+    old_get_resp = await client.get(f"/api/v1/adapters/instances/{old_inst['id']}", headers=auth_headers)
+    assert set(old_get_resp.json()["config"]["providers"]["pushover"]["targets"]) == {"default"}
+    export_resp = await client.get("/api/v1/config/export", headers=auth_headers)
+    imported_binding = next(item for item in export_resp.json()["bindings"] if item["id"] == binding["id"])
+    assert imported_binding["adapter_instance_id"] == old_inst["id"]
+    assert imported_binding["config"] == {"providers": [{"provider": "pushover", "target": "default"}]}
 
 
 # ---------------------------------------------------------------------------

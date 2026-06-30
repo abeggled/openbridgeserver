@@ -622,6 +622,27 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_entries_action     ON audit_log_entries
 """
 
 
+_MIGRATION_V37 = """
+CREATE TABLE IF NOT EXISTS authz_node_roles (
+    principal_type TEXT NOT NULL CHECK (principal_type IN ('user', 'api_key')),
+    principal_id   TEXT NOT NULL,
+    node_type      TEXT NOT NULL,
+    node_id        TEXT NOT NULL,
+    role           TEXT NOT NULL CHECK (role IN ('owner', 'resident', 'operator', 'guest')),
+    effect         TEXT NOT NULL DEFAULT 'allow' CHECK (effect IN ('allow', 'deny')),
+    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (principal_type, principal_id, node_type, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_authz_node_roles_principal
+    ON authz_node_roles(principal_type, principal_id);
+CREATE INDEX IF NOT EXISTS idx_authz_node_roles_node
+    ON authz_node_roles(node_type, node_id);
+CREATE INDEX IF NOT EXISTS idx_authz_node_roles_role
+    ON authz_node_roles(role);
+"""
+
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -662,6 +683,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (34, _MIGRATION_V34),
     (35, _MIGRATION_V35),
     (36, _migration_v36),
+    (37, _MIGRATION_V37),
 ]
 
 

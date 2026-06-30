@@ -247,6 +247,37 @@ async def test_support_package_sanitizes_adapter_config_and_counts(client, auth_
     assert adapter["metrics_source"] == "ringbuffer_metadata_adapter_instance_60s"
 
 
+async def test_support_package_redacts_message_telegram_chat_id(client, auth_headers):
+    instance_resp = await client.post(
+        "/api/v1/adapters/instances",
+        json={
+            "adapter_type": "MESSAGE",
+            "name": "Support Message Telegram",
+            "enabled": False,
+            "config": {
+                "providers": {
+                    "telegram": {
+                        "enabled": True,
+                        "bot_token": "telegram-token",
+                        "targets": {"default": {"chat_id": "123456789"}},
+                    }
+                }
+            },
+        },
+        headers=auth_headers,
+    )
+    assert instance_resp.status_code == 201, instance_resp.text
+    instance_id = instance_resp.json()["id"]
+
+    resp = await client.post("/api/v1/support/package", headers=auth_headers)
+
+    assert resp.status_code == 200
+    adapter = next(entry for entry in resp.json()["adapters"] if entry["id"] == instance_id)
+    telegram = adapter["config"]["providers"]["telegram"]
+    assert telegram["bot_token"] == "[REDACTED]"
+    assert telegram["targets"]["default"]["chat_id"] == "[REDACTED]"
+
+
 async def test_support_package_reports_ringbuffer_tps_for_adapter(client, auth_headers):
     instance_resp = await client.post(
         "/api/v1/adapters/instances",
@@ -550,6 +581,9 @@ def test_sanitize_support_data_redacts_dictionary_keys_and_preserves_path_basena
                 "sniffer.process.com": {"status": "ok"},
             },
             "logger": "mqtt.customer.local api_key=logger-secret",
+            "to": "+41000000000",
+            "user_key": "pushover-user-key",
+            "chat_id": "123456789",
             "path": "obs.db",
             "config_source": r"C:\Users\Alice\obs\customer.com.key",
         }
@@ -565,6 +599,9 @@ def test_sanitize_support_data_redacts_dictionary_keys_and_preserves_path_basena
     assert "[REDACTED_IP] (2)" in sanitized["devices"]
     assert "[REDACTED_DOMAIN]" in sanitized["devices"]
     assert sanitized["devices"]["access_token"] == "[REDACTED]"
+    assert sanitized["to"] == "[REDACTED]"
+    assert sanitized["user_key"] == "[REDACTED]"
+    assert sanitized["chat_id"] == "[REDACTED]"
     assert "mqtt.customer.local" not in sanitized["logger"]
     assert "logger-secret" not in sanitized["logger"]
     assert "[REDACTED_DOMAIN]" in sanitized["logger"]

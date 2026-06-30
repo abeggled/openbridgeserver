@@ -5,6 +5,8 @@ import { useIcons } from '@/composables/useIcons'
 const props = defineProps<{
   /** Either an emoji string (e.g. "🔗") or an SVG icon reference ("svg:{name}") */
   icon: string
+  /** When true, imported SVGs are rendered with their original fill colors instead of brightness-0/invert */
+  preserveColor?: boolean
 }>()
 
 const { getSvg, isSvgIcon, svgIconName } = useIcons()
@@ -50,7 +52,8 @@ onBeforeUnmount(() => {
     v-else-if="svgBlobUrl"
     :src="svgBlobUrl"
     alt=""
-    class="inline-block w-[1em] h-[1em] object-contain brightness-0 dark:invert"
+    class="inline-block w-[1em] h-[1em] object-contain"
+    :class="preserveColor ? '' : 'brightness-0 dark:invert'"
     loading="lazy"
     decoding="async"
   />

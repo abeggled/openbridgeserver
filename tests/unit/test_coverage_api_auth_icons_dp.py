@@ -458,10 +458,61 @@ class TestCreateApiKey:
         db = _DbStub()
         request = MagicMock()
         body = ApiKeyCreate(name="automation-key")
-        result = await auth_module.create_api_key.__wrapped__(request=request, body=body, _user="admin", db=db)
+        result = await auth_module.create_api_key.__wrapped__(
+            request=request,
+            body=body,
+            principal=auth_module.Principal(subject="admin", type="user", is_admin=True),
+            db=db,
+        )
         assert result.key.startswith("obs_")
         assert result.name == "automation-key"
         assert len(db.executed) == 1
+
+    @pytest.mark.asyncio
+    async def test_api_key_principal_creates_key_for_owner(self):
+        from obs.api.auth import ApiKeyCreate
+
+        db = _DbStub()
+        request = MagicMock()
+        body = ApiKeyCreate(name="replacement-key")
+        result = await auth_module.create_api_key.__wrapped__(
+            request=request,
+            body=body,
+            principal=auth_module.Principal(
+                subject="api_key:k1",
+                type="api_key",
+                is_admin=False,
+                owner="alice",
+            ),
+            db=db,
+        )
+
+        assert result.name == "replacement-key"
+        assert db.executed[0][1][3] == "alice"
+
+    @pytest.mark.asyncio
+    async def test_ownerless_api_key_principal_cannot_create_replacement_key(self):
+        from obs.api.auth import ApiKeyCreate
+
+        db = _DbStub()
+        request = MagicMock()
+        body = ApiKeyCreate(name="replacement-key")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_module.create_api_key.__wrapped__(
+                request=request,
+                body=body,
+                principal=auth_module.Principal(
+                    subject="api_key:k1",
+                    type="api_key",
+                    is_admin=False,
+                    owner=None,
+                ),
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert db.executed == []
 
 
 # ---------------------------------------------------------------------------
@@ -1518,6 +1569,28 @@ class TestWriteValue:
         bus_mock.publish.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_write_value_coerces_temporal_value_before_publish(self, monkeypatch):
+        from datetime import time
+
+        from obs.api.v1.datapoints import WriteValueIn
+
+        dp = _DpStub(data_type="TIME")
+        reg = _RegistryStub(dps=[dp])
+        monkeypatch.setattr(dp_api, "get_registry", lambda: reg)
+
+        bus_mock = MagicMock()
+        bus_mock.publish = AsyncMock()
+        monkeypatch.setattr(dp_api, "get_event_bus", lambda: bus_mock)
+
+        request = MagicMock()
+        db = _DbStub()
+        body = WriteValueIn(value="10:30:00")
+        await dp_api.write_value(dp_id=dp.id, body=body, request=request, user="admin", db=db)
+
+        event = bus_mock.publish.await_args.args[0]
+        assert event.value == time(10, 30, 0)
+
+    @pytest.mark.asyncio
     async def test_write_value_not_found_raises_404(self, monkeypatch):
         from obs.api.v1.datapoints import WriteValueIn
 
@@ -1717,6 +1790,16 @@ class TestCreateBinding:
         body = AdapterBindingCreate(adapter_instance_id=inst_id, direction="SOURCE")
         result = await bindings_api.create_binding(dp_id=dp.id, body=body, _user="admin", db=db)
         assert result.adapter_type == "MQTT"
+
+    def test_validate_message_binding_rejects_non_source_direction(self):
+        with pytest.raises(HTTPException) as exc:
+            bindings_api._validate_adapter_binding(
+                "MESSAGE",
+                "DEST",
+                {"providers": [{"provider": "pushover", "target": "default"}]},
+            )
+
+        assert exc.value.status_code == 422
 
 
 # ---------------------------------------------------------------------------

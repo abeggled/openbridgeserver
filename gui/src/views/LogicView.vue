@@ -10,12 +10,12 @@
         <option value="">{{ $t('logic.selectGraph') }}</option>
         <option v-for="g in store.graphs" :key="g.id" :value="g.id">{{ g.name }}{{ g.enabled ? '' : $t('logic.graphDisabledSuffix') }}</option>
       </select>
-      <button @click="newGraph" class="btn-primary btn-sm">{{ $t('logic.newGraphBtn') }}</button>
-      <button v-if="activeGraphId" @click="saveGraph" class="btn-secondary btn-sm" :disabled="saving">
+      <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm">{{ $t('logic.newGraphBtn') }}</button>
+      <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph" class="btn-secondary btn-sm" :disabled="saving">
         <Spinner v-if="saving" size="sm" color="white" />
         {{ $t('common.save') }}
       </button>
-      <button v-if="activeGraphId" @click="runGraph"
+      <button v-if="auth.isAdmin && activeGraphId" @click="runGraph"
         :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
         :disabled="!activeGraph?.enabled"
         :title="activeGraph?.enabled ? $t('logic.runTitle') : $t('logic.runDisabledTitle')"
@@ -27,26 +27,26 @@
         :title="$t('logic.debugMode')" data-testid="btn-debug">
         &#128270; {{ $t('logic.debugBtn') }}
       </button>
-      <button v-if="activeGraphId" @click="doToggleEnabled"
+      <button v-if="auth.isAdmin && activeGraphId" @click="doToggleEnabled"
         :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-orange-400 ring-1 ring-orange-400/50']"
         :title="activeGraph?.enabled ? $t('logic.toggleActiveTitle') : $t('logic.toggleDisabledTitle')"
         data-testid="btn-toggle-enabled">
         {{ activeGraph?.enabled ? $t('logic.toggleActive') : $t('logic.toggleDisabled') }}
       </button>
-      <button v-if="activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm" :title="$t('logic.renameGraph')" data-testid="btn-rename">
+      <button v-if="auth.isAdmin && activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm" :title="$t('logic.renameGraph')" data-testid="btn-rename">
         ✏ {{ $t('logic.rename') }}
       </button>
-      <button v-if="activeGraphId" @click="doDuplicateGraph" class="btn-secondary btn-sm" :title="$t('logic.duplicateGraph')" data-testid="btn-duplicate">
+      <button v-if="auth.isAdmin && activeGraphId" @click="doDuplicateGraph" class="btn-secondary btn-sm" :title="$t('logic.duplicateGraph')" data-testid="btn-duplicate">
         ⧉ {{ $t('logic.duplicate') }}
       </button>
       <button v-if="activeGraphId" @click="doExportGraph" class="btn-secondary btn-sm" :title="$t('logic.exportJson')" data-testid="btn-export">
         ↓ {{ $t('logic.export') }}
       </button>
-      <label class="btn-secondary btn-sm cursor-pointer" :title="$t('logic.importJson')" data-testid="btn-import">
+      <label v-if="auth.isAdmin" class="btn-secondary btn-sm cursor-pointer" :title="$t('logic.importJson')" data-testid="btn-import">
         ↑ {{ $t('logic.import') }}
         <input type="file" accept=".json" class="hidden" @change="onImportFile" data-testid="input-import-file" />
       </label>
-      <button v-if="activeGraphId" @click="confirmDeleteGraph" class="btn-icon text-red-400">
+      <button v-if="auth.isAdmin && activeGraphId" @click="confirmDeleteGraph" class="btn-icon text-red-400" data-testid="btn-delete">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
         </svg>
@@ -57,11 +57,19 @@
     <div v-if="statusMsg" :class="['px-4 py-1.5 text-xs flex-shrink-0', statusMsg.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">
       {{ statusMsg.text }}
     </div>
+    <div v-else-if="validationWarnings.length" class="px-4 py-1.5 text-xs flex-shrink-0 bg-amber-500/10 text-amber-500">
+      {{ $t('logic.graphValidationCycle', { count: validationWarnings.length }) }}
+    </div>
 
     <!-- Main area -->
     <div class="flex flex-1 overflow-hidden">
       <!-- Node Palette -->
-      <NodePalette :node-types="store.nodeTypes" />
+      <NodePalette
+        v-if="auth.isAdmin"
+        :node-types="store.nodeTypes"
+        :collapsed="paletteCollapsed"
+        @toggle="paletteCollapsed = !paletteCollapsed"
+      />
 
       <!-- Canvas -->
       <div class="flex-1 relative" ref="canvasWrapper"
@@ -73,7 +81,10 @@
           v-model:edges="edges"
           :node-types="nodeTypeComponents"
           :default-edge-options="defaultEdgeOptions"
-          :delete-key-code="['Backspace', 'Delete']"
+          :delete-key-code="auth.isAdmin ? ['Backspace', 'Delete'] : []"
+          :nodes-draggable="auth.isAdmin"
+          :nodes-connectable="auth.isAdmin"
+          :edges-updatable="auth.isAdmin"
           fit-view-on-init
           class="logic-canvas"
           @connect="onConnect"
@@ -81,7 +92,13 @@
         >
           <Background :pattern-color="bgPatternColor" :gap="20" />
           <Controls class="logic-controls" />
-          <MiniMap class="logic-minimap" node-color="#475569" />
+          <MiniMap
+            ref="minimapRef"
+            class="logic-minimap"
+            :class="{ 'logic-minimap--dragging': minimapDragging }"
+            node-color="#475569"
+            :style="minimapStyle"
+          />
         </VueFlow>
 
         <div v-else class="absolute inset-0 flex items-center justify-center text-slate-600 flex-col gap-3">
@@ -94,7 +111,7 @@
 
       <!-- Config Panel -->
       <NodeConfigPanel
-        v-if="selectedNode"
+        v-if="selectedNode && auth.isAdmin"
         :node="selectedNode"
         :node-types="store.nodeTypes"
         :node-outputs="lastRunOutputs"
@@ -148,7 +165,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, markRaw } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, watchEffect, markRaw } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { VueFlow, useVueFlow, addEdge } from '@vue-flow/core'
@@ -162,6 +179,7 @@ import '@vue-flow/minimap/dist/style.css'
 
 import { useLogicStore }    from '@/stores/logic'
 import { useSettingsStore } from '@/stores/settings'
+import { useAuthStore }     from '@/stores/auth'
 import { logicApi }        from '@/api/client'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
@@ -180,6 +198,7 @@ const { t }    = useI18n()
 const route    = useRoute()
 const store    = useLogicStore()
 const settings = useSettingsStore()
+const auth     = useAuthStore()
 // Reactive background pattern colour — recomputes when theme changes
 const bgPatternColor = computed(() => {
   void settings.theme   // track reactively
@@ -201,8 +220,8 @@ const nodeTypeComponents = {
   // Constant
   const_value: _generic,
   // Logic
-  and: _generic, or: _generic, not: _generic, xor: _generic, gate: _generic,
-  compare: _generic, hysteresis: _generic,
+  and: _generic, or: _generic, not: _generic, xor: _generic, gate: _generic, memory: _generic,
+  compare: _generic, hysteresis: _generic, decision: _generic, value_mapping: _generic,
   // Math
   math_formula: _generic, math_map: _generic,
   // Timer
@@ -219,7 +238,7 @@ const nodeTypeComponents = {
   // String
   string_concat: _generic,
   // Notification
-  notify_pushover: _generic, notify_sms: _generic,
+  notify_pushover: _generic, notify_sms: _generic, wake_on_lan: _generic, host_check: _generic,
   // Integration
   api_client: _generic, json_extractor: _generic, xml_extractor: _generic, substring_extractor: _generic,
   ical: _generic,
@@ -261,6 +280,9 @@ watch(() => activeGraph.value?.enabled, (enabled) => {
     },
   }))
 })
+const paletteCollapsed = ref(localStorage.getItem('logic_palette_collapsed') === '1')
+watch(paletteCollapsed, v => localStorage.setItem('logic_palette_collapsed', v ? '1' : '0'))
+
 const saving        = ref(false)
 const statusMsg     = ref(null)
 const canvasWrapper = ref(null)
@@ -270,12 +292,108 @@ function showStatus(ok, text, ms = 3000) {
   setTimeout(() => { statusMsg.value = null }, ms)
 }
 
+const validationWarnings = computed(() => analyzeFlowWarnings(nodes.value, edges.value))
+
+function currentFlowData() {
+  return {
+    nodes: nodes.value.map(n => {
+      // eslint-disable-next-line no-unused-vars
+      const { _dbg, _dbg_title, ...nodeData } = n.data ?? {}
+      return { id: n.id, type: n.type, position: n.position, data: nodeData }
+    }),
+    edges: edges.value.map(e => ({
+      id: e.id, source: e.source, target: e.target,
+      sourceHandle: e.sourceHandle, targetHandle: e.targetHandle
+    })),
+  }
+}
+
+function analyzeFlowWarnings(flowNodes, flowEdges) {
+  const nodeMap = new Map(flowNodes.map(n => [n.id, n]))
+  const inDegree = new Map(flowNodes.map(n => [n.id, 0]))
+  const adj = new Map(flowNodes.map(n => [n.id, []]))
+
+  for (const edge of flowEdges) {
+    if (!adj.has(edge.source) || !inDegree.has(edge.target)) continue
+    if (nodeMap.get(edge.target)?.type === 'memory') continue
+    adj.get(edge.source).push(edge.target)
+    inDegree.set(edge.target, inDegree.get(edge.target) + 1)
+  }
+
+  const queue = [...inDegree.entries()].filter(([, deg]) => deg === 0).map(([id]) => id)
+  const ordered = new Set()
+  while (queue.length) {
+    const id = queue.shift()
+    ordered.add(id)
+    for (const next of adj.get(id) || []) {
+      inDegree.set(next, inDegree.get(next) - 1)
+      if (inDegree.get(next) === 0) queue.push(next)
+    }
+  }
+
+  const unresolved = new Set(flowNodes.map(n => n.id).filter(id => !ordered.has(id)))
+  const cyclic = findCyclicNodeIds(adj, unresolved)
+  const cycleList = flowNodes.filter(n => cyclic.has(n.id)).map(n => n.id)
+  return flowNodes
+    .filter(n => unresolved.has(n.id))
+    .map(n => ({
+      node_id: n.id,
+      code: cyclic.has(n.id) ? 'graph_cycle' : 'graph_cycle_blocked',
+      message: `${n.id}: ${cycleList.slice(0, 5).join(', ')}`,
+    }))
+}
+
+function findCyclicNodeIds(adj, candidates) {
+  let index = 0
+  const stack = []
+  const indices = new Map()
+  const lowlinks = new Map()
+  const onStack = new Set()
+  const cyclic = new Set()
+
+  function strongconnect(id) {
+    indices.set(id, index)
+    lowlinks.set(id, index)
+    index += 1
+    stack.push(id)
+    onStack.add(id)
+
+    for (const next of adj.get(id) || []) {
+      if (!candidates.has(next)) continue
+      if (!indices.has(next)) {
+        strongconnect(next)
+        lowlinks.set(id, Math.min(lowlinks.get(id), lowlinks.get(next)))
+      } else if (onStack.has(next)) {
+        lowlinks.set(id, Math.min(lowlinks.get(id), indices.get(next)))
+      }
+    }
+
+    if (lowlinks.get(id) !== indices.get(id)) return
+    const component = []
+    while (stack.length) {
+      const member = stack.pop()
+      onStack.delete(member)
+      component.push(member)
+      if (member === id) break
+    }
+    const hasSelfLoop = component.length === 1 && (adj.get(component[0]) || []).includes(component[0])
+    if (component.length > 1 || hasSelfLoop) {
+      for (const member of component) cyclic.add(member)
+    }
+  }
+
+  for (const id of candidates) {
+    if (!indices.has(id)) strongconnect(id)
+  }
+  return cyclic
+}
+
 async function loadGraph() {
   if (!activeGraphId.value) { nodes.value = []; edges.value = []; return }
   const { data } = await logicApi.getGraph(activeGraphId.value)
   nodes.value = (data.flow_data.nodes || []).map(n => {
     // eslint-disable-next-line no-unused-vars
-    const { _dbg, ...nodeData } = n.data ?? {}
+    const { _dbg, _dbg_title, ...nodeData } = n.data ?? {}
     return { ...n, position: n.position || { x: 100, y: 100 }, data: nodeData }
   })
   edges.value = data.flow_data.edges || []
@@ -283,21 +401,19 @@ async function loadGraph() {
 }
 
 async function saveGraph() {
-  if (!activeGraphId.value) return
+  if (!auth.isAdmin || !activeGraphId.value) return
+  const graphWarnings = analyzeFlowWarnings(nodes.value, edges.value)
+  if (graphWarnings.length) {
+    showStatus(false, t('logic.graphValidationSaveBlocked', { count: graphWarnings.length }), 6000)
+    applyDebugValues(Object.fromEntries(
+      graphWarnings.map(w => [w.node_id, { __error__: t('logic.graphValidationNodeError'), __diagnostic__: w.code }])
+    ))
+    return
+  }
   saving.value = true
   try {
     const graph = store.graphs.find(g => g.id === activeGraphId.value)
-    await store.saveGraph(activeGraphId.value, graph.name, graph.description, graph.enabled, {
-      nodes: nodes.value.map(n => {
-        // eslint-disable-next-line no-unused-vars
-        const { _dbg, ...nodeData } = n.data ?? {}
-        return { id: n.id, type: n.type, position: n.position, data: nodeData }
-      }),
-      edges: edges.value.map(e => ({
-        id: e.id, source: e.source, target: e.target,
-        sourceHandle: e.sourceHandle, targetHandle: e.targetHandle
-      })),
-    })
+    await store.saveGraph(activeGraphId.value, graph.name, graph.description, graph.enabled, currentFlowData())
     showStatus(true, t('logic.saved'))
   } catch (err) {
     showStatus(false, err.response?.data?.detail ?? t('logic.errorSave'))
@@ -308,15 +424,33 @@ async function saveGraph() {
 
 // ── Debug mode ─────────────────────────────────────────────────────────────
 const debugMode = ref(localStorage.getItem('logic_debug_mode') === '1')
+const DEBUG_TOOLTIP_MAX_CHARS = 1000
 
-function fmtDebugVal(nodeOut) {
+function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
   if (!nodeOut || typeof nodeOut !== 'object') return null
+
+  function maybeClip(text) {
+    return maxChars !== null && text.length > maxChars ? `${text.slice(0, maxChars)}…` : text
+  }
 
   function fv(v) {
     if (v === null || v === undefined) return '—'
     if (typeof v === 'boolean') return v ? '✓' : '✗'
     if (typeof v === 'number') return String(parseFloat(v.toPrecision(5)))
-    return String(v).slice(0, 18)
+    const text = String(v)
+    return full ? maybeClip(text) : text.slice(0, 18)
+  }
+
+  function clipped(v, limit) {
+    if (v === null || v === undefined) return '—'
+    const text = String(v)
+    if (full) return maybeClip(text)
+    return text.length <= limit ? text : `${text.slice(0, limit)}…`
+  }
+
+  // node execution error — show prominently before any other key handling
+  if ('__error__' in nodeOut) {
+    return `${t('logic.nodeError')}: ${clipped(nodeOut.__error__, 50)}`
   }
 
   // notify nodes — show message content + sent status (before generic key loop)
@@ -338,6 +472,11 @@ function fmtDebugVal(nodeOut) {
     return `→ ${fv(nodeOut._write_value)}`
   }
 
+  // api_client — response text is often the useful error and needs more room
+  if ('response' in nodeOut && 'status' in nodeOut && 'success' in nodeOut) {
+    return `response=${clipped(nodeOut.response, 80)}   status=${fv(nodeOut.status)}   success=${fv(nodeOut.success)}`
+  }
+
   // Public keys (no leading _) — generic fallback
   const pairs = Object.entries(nodeOut)
     .filter(([k]) => !k.startsWith('_'))
@@ -355,16 +494,29 @@ function applyDebugValues(outputs) {
   lastRunOutputs.value = outputs
   nodes.value = nodes.value.map(n => ({
     ...n,
-    data: { ...n.data, _dbg: fmtDebugVal(outputs[n.id]) ?? undefined }
+    data: {
+      ...n.data,
+      _dbg: fmtDebugVal(outputs[n.id]) ?? undefined,
+      _dbg_title: fmtDebugVal(outputs[n.id], { full: true, maxChars: DEBUG_TOOLTIP_MAX_CHARS }) ?? undefined,
+    }
   }))
 }
 
 function clearDebugValues() {
   nodes.value = nodes.value.map(n => {
     // eslint-disable-next-line no-unused-vars
-    const { _dbg, ...rest } = n.data
+    const { _dbg, _dbg_title, ...rest } = n.data
     return { ...n, data: rest }
   })
+}
+
+function countGraphDiagnostics(outputs) {
+  return Object.values(outputs || {}).filter(out =>
+    out &&
+    typeof out === 'object' &&
+    typeof out.__diagnostic__ === 'string' &&
+    out.__diagnostic__.startsWith('graph_cycle')
+  ).length
 }
 
 function toggleDebug() {
@@ -374,13 +526,23 @@ function toggleDebug() {
 }
 
 async function runGraph() {
+  if (!auth.isAdmin || !activeGraphId.value) return
   try {
     const { data } = await logicApi.runGraph(activeGraphId.value)
-    const evalCount = Object.keys(data.outputs || {}).length
-    showStatus(true, t('logic.runResult', { count: evalCount }))
+    const outputs = data.outputs || {}
+    const evalCount = Object.keys(outputs).length
+    const diagnosticCount = Array.isArray(data.warnings) ? data.warnings.length : countGraphDiagnostics(outputs)
+    showStatus(
+      diagnosticCount === 0,
+      diagnosticCount > 0
+        ? t('logic.runResultWithWarnings', { count: evalCount, warnings: diagnosticCount })
+        : t('logic.runResult', { count: evalCount }),
+      diagnosticCount > 0 ? 6000 : 3000
+    )
     // Always update lastRunOutputs (needed for extractor config panels)
-    lastRunOutputs.value = data.outputs || {}
-    if (debugMode.value) applyDebugValues(data.outputs || {})
+    lastRunOutputs.value = outputs
+    if (debugMode.value || diagnosticCount > 0) applyDebugValues(outputs)
+    else clearDebugValues()
   } catch (err) {
     showStatus(false, err.response?.data?.detail ?? t('common.error'))
   }
@@ -391,8 +553,14 @@ const showNewGraph  = ref(false)
 const newGraphName  = ref('')
 const newGraphDesc  = ref('')
 
-function newGraph() { newGraphName.value = ''; newGraphDesc.value = ''; showNewGraph.value = true }
+function newGraph() {
+  if (!auth.isAdmin) return
+  newGraphName.value = ''
+  newGraphDesc.value = ''
+  showNewGraph.value = true
+}
 async function doCreateGraph() {
+  if (!auth.isAdmin) return
   const g = await store.createGraph(newGraphName.value, newGraphDesc.value)
   showNewGraph.value = false
   activeGraphId.value = g.id
@@ -401,7 +569,7 @@ async function doCreateGraph() {
 
 // ── Toggle enabled ─────────────────────────────────────────────────────────
 async function doToggleEnabled() {
-  if (!activeGraphId.value) return
+  if (!auth.isAdmin || !activeGraphId.value) return
   try {
     const updated = await store.toggleEnabled(activeGraphId.value)
     showStatus(true, updated.enabled ? t('logic.activated') : t('logic.deactivated'))
@@ -412,8 +580,12 @@ async function doToggleEnabled() {
 
 // ── Delete graph ───────────────────────────────────────────────────────────
 const showDeleteConfirm = ref(false)
-function confirmDeleteGraph() { showDeleteConfirm.value = true }
+function confirmDeleteGraph() {
+  if (!auth.isAdmin || !activeGraphId.value) return
+  showDeleteConfirm.value = true
+}
 async function doDeleteGraph() {
+  if (!auth.isAdmin || !activeGraphId.value) return
   await store.deleteGraph(activeGraphId.value)
   activeGraphId.value = ''
   nodes.value = []; edges.value = []
@@ -421,7 +593,7 @@ async function doDeleteGraph() {
 
 // ── Duplizieren ────────────────────────────────────────────────────────────
 async function doDuplicateGraph() {
-  if (!activeGraphId.value) return
+  if (!auth.isAdmin || !activeGraphId.value) return
   try {
     const copy = await store.duplicateGraph(activeGraphId.value)
     activeGraphId.value = copy.id
@@ -457,6 +629,7 @@ const renameGraphName  = ref('')
 const renameGraphDesc  = ref('')
 
 function openRenameGraph() {
+  if (!auth.isAdmin || !activeGraphId.value) return
   const g = store.graphs.find(g => g.id === activeGraphId.value)
   renameGraphName.value = g?.name ?? ''
   renameGraphDesc.value = g?.description ?? ''
@@ -464,7 +637,7 @@ function openRenameGraph() {
 }
 
 async function doRenameGraph() {
-  if (!activeGraphId.value || !renameGraphName.value.trim()) return
+  if (!auth.isAdmin || !activeGraphId.value || !renameGraphName.value.trim()) return
   try {
     await store.renameGraph(activeGraphId.value, renameGraphName.value.trim(), renameGraphDesc.value)
     showRenameGraph.value = false
@@ -476,6 +649,7 @@ async function doRenameGraph() {
 
 // ── Importieren ────────────────────────────────────────────────────────────
 async function onImportFile(event) {
+  if (!auth.isAdmin) return
   const file = event.target.files?.[0]
   if (!file) return
   event.target.value = ''   // Reset input für erneuten Import derselben Datei
@@ -502,17 +676,25 @@ async function onImportFile(event) {
 
 // ── Connect handler — REQUIRED to actually create edges ────────────────────
 function onConnect(params) {
+  if (!auth.isAdmin) return
   const opts = defaultEdgeOptions.value
-  edges.value = addEdge({
+  const nextEdges = addEdge({
     ...params,
     type: opts.type,
     animated: opts.animated,
     style: opts.style,
   }, edges.value)
+  const graphWarnings = analyzeFlowWarnings(nodes.value, nextEdges)
+  if (graphWarnings.length) {
+    showStatus(false, t('logic.graphValidationConnectBlocked', { count: graphWarnings.length }), 6000)
+    return
+  }
+  edges.value = nextEdges
 }
 
 // ── Drop node from palette ─────────────────────────────────────────────────
 function onDrop(event) {
+  if (!auth.isAdmin) return
   const type = event.dataTransfer.getData('application/vueflow-node-type')
   if (!type || !activeGraphId.value) return
 
@@ -542,12 +724,13 @@ function onDrop(event) {
 const selectedNode = ref(null)
 
 function onNodeClick({ node }) {
+  if (!auth.isAdmin) return
   selectedNode.value = { ...node }
 }
 
 let _autoSaveTimer = null
 function onNodeDataUpdate(newData) {
-  if (!selectedNode.value) return
+  if (!auth.isAdmin || !selectedNode.value) return
   nodes.value = nodes.value.map(n =>
     n.id === selectedNode.value.id ? { ...n, data: { ...n.data, ...newData } } : n
   )
@@ -624,7 +807,81 @@ onMounted(async () => {
 
 onUnmounted(() => {
   _wsDisconnect()
+  window.removeEventListener('mousemove', _onMinimapMouseMove, { capture: true })
+  window.removeEventListener('mouseup',   _onMinimapMouseUp,   { capture: true })
 })
+
+// ── Draggable minimap ─────────────────────────────────────────────────────
+// MiniMap uses inheritAttrs:false and D3 captures mousedown internally,
+// so we attach directly to the DOM element in capture phase and use a
+// movement threshold to distinguish a drag from a normal click-to-pan.
+const MINIMAP_POS_KEY = 'obs-logic-minimap-pos'
+const DRAG_THRESHOLD  = 5
+
+const minimapRef     = ref(null)
+const minimapPos     = ref((() => {
+  try { return JSON.parse(localStorage.getItem(MINIMAP_POS_KEY)) } catch { return null }
+})())
+const minimapDragging = ref(false)
+
+const minimapStyle = computed(() => {
+  if (!minimapPos.value) return {}
+  return { left: minimapPos.value.x + 'px', top: minimapPos.value.y + 'px', right: 'auto', bottom: 'auto' }
+})
+
+let _mmDragStart  = null
+let _mmIsDragging = false
+
+watchEffect((onCleanup) => {
+  const el = minimapRef.value?.$el
+  if (!el) return
+  el.addEventListener('mousedown', _onMinimapMouseDown, { capture: true })
+  onCleanup(() => el.removeEventListener('mousedown', _onMinimapMouseDown, { capture: true }))
+})
+
+function _defaultMinimapPos() {
+  const rect = canvasWrapper.value?.getBoundingClientRect()
+  const w = rect ? rect.width  : window.innerWidth
+  const h = rect ? rect.height : window.innerHeight
+  return { x: w - 208, y: h - 152 }
+}
+
+function _onMinimapMouseDown(e) {
+  if (e.button !== 0) return
+  _mmIsDragging = false
+  const pos = minimapPos.value ?? _defaultMinimapPos()
+  _mmDragStart = { mouseX: e.clientX, mouseY: e.clientY, posX: pos.x, posY: pos.y }
+  window.addEventListener('mousemove', _onMinimapMouseMove, { capture: true })
+  window.addEventListener('mouseup',   _onMinimapMouseUp,   { capture: true })
+}
+
+function _onMinimapMouseMove(e) {
+  const dx = e.clientX - _mmDragStart.mouseX
+  const dy = e.clientY - _mmDragStart.mouseY
+  if (!_mmIsDragging) {
+    if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return
+    _mmIsDragging = true
+    minimapDragging.value = true
+  }
+  e.stopImmediatePropagation()
+  const rawX = _mmDragStart.posX + dx
+  const rawY = _mmDragStart.posY + dy
+  const rect = canvasWrapper.value?.getBoundingClientRect()
+  const maxX = rect ? rect.width  - 208 : rawX
+  const maxY = rect ? rect.height - 152 : rawY
+  minimapPos.value = { x: Math.max(0, Math.min(rawX, maxX)), y: Math.max(0, Math.min(rawY, maxY)) }
+}
+
+function _onMinimapMouseUp(e) {
+  if (_mmIsDragging) {
+    e.stopImmediatePropagation()
+    localStorage.setItem(MINIMAP_POS_KEY, JSON.stringify(minimapPos.value))
+  }
+  _mmIsDragging = false
+  minimapDragging.value = false
+  window.removeEventListener('mousemove', _onMinimapMouseMove, { capture: true })
+  window.removeEventListener('mouseup',   _onMinimapMouseUp,   { capture: true })
+}
 </script>
 
 <style>
@@ -632,7 +889,8 @@ onUnmounted(() => {
 .logic-canvas .vue-flow__edge-path { stroke: #475569; }
 .logic-canvas .vue-flow__handle { width: 10px; height: 10px; border-radius: 50%; }
 .logic-controls { bottom: 1rem; left: 1rem; }
-.logic-minimap { bottom: 1rem; right: 1rem; background: var(--logic-minimap-bg); border: 1px solid var(--node-card-border); border-radius: 6px; }
+.logic-minimap { bottom: 1rem; right: 1rem; background: var(--logic-minimap-bg); border: 1px solid var(--node-card-border); border-radius: 6px; cursor: grab; user-select: none; }
+.logic-minimap--dragging { cursor: grabbing; }
 
 /* Edge interaction — breite unsichtbare Klickfläche */
 .logic-canvas .vue-flow__edge .vue-flow__edge-interaction {
