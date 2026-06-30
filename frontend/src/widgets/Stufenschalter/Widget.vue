@@ -40,6 +40,7 @@ const pending = ref(false)
 const error = ref('')
 const selectedValue = ref<string | null>(null)
 const optimisticValue = ref<string | null>(null)
+const displayRevision = ref(0)
 
 function sanitizeColor(value: unknown, fallback = '#6b7280'): string {
   if (typeof value !== 'string') return fallback
@@ -129,6 +130,7 @@ watch(
     optionValues: options.value.map((option) => option.value).join('\u0000'),
   }),
   (current, previous) => {
+    displayRevision.value += 1
     const valueChanged = !previous || !Object.is(current.value, previous.value)
     const selectionShapeChanged = !previous
       || current.mode !== previous.mode
@@ -163,16 +165,22 @@ const canSave = computed(() => mode.value === 'select-save' && !isLocked.value &
 async function writeValue(value: string) {
   if (isLocked.value || pending.value || !props.datapointId) return
   const rollbackValue = committedValue.value
+  const writeDisplayRevision = displayRevision.value
   if (mode.value === 'sequence') optimisticValue.value = value
   pending.value = true
   error.value = ''
   try {
     await datapoints.write(props.datapointId, parseValue(value))
-    optimisticValue.value = value
-    selectedValue.value = value
+    if (displayRevision.value === writeDisplayRevision) {
+      optimisticValue.value = value
+      selectedValue.value = value
+    }
   } catch (e) {
-    optimisticValue.value = rollbackValue
-    if (mode.value === 'select-direct') selectedValue.value = rollbackValue
+    const displayChangedDuringWrite = displayRevision.value !== writeDisplayRevision
+    optimisticValue.value = displayChangedDuringWrite ? null : rollbackValue
+    if (mode.value === 'select-direct') {
+      selectedValue.value = displayChangedDuringWrite ? committedValue.value : rollbackValue
+    }
     error.value = e instanceof Error ? e.message : t('widgets.stufenschalter.writeError')
   } finally {
     pending.value = false

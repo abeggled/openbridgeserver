@@ -141,6 +141,22 @@ describe('Stufenschalter widget', () => {
     await flushPromises()
   })
 
+  it('does not restore stale optimistic sequence state after a live datapoint update', async () => {
+    const write = deferredWrite()
+    writeMock.mockReturnValueOnce(write.promise)
+    mountWidget({ steps: baseOptions() }, 0)
+
+    await wrapper!.trigger('click')
+    await wrapper!.setProps({ value: dataPointValue(2, '2026-06-04T00:00:01Z') })
+
+    expect(wrapper!.get('[data-testid="stufenschalter-label"]').text()).toBe('Komfort')
+
+    write.resolve()
+    await flushPromises()
+
+    expect(wrapper!.get('[data-testid="stufenschalter-label"]').text()).toBe('Komfort')
+  })
+
   it('prefers legacy steps over injected default options in sequence mode', async () => {
     mountWidget({
       mode: 'sequence',
