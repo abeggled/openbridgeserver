@@ -46,6 +46,11 @@ _MAX_QUARANTINE_FILES_PER_STORAGE_FILE = 3
 _DELETE_OLDEST_BATCH_SIZE = 500
 _enabled = True
 
+
+class RingBufferStorageDeleteIncompleteError(OSError):
+    """Raised when ringbuffer storage deletion fails after unlinking started."""
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ringbuffer (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -933,6 +938,8 @@ def default_ringbuffer_disk_path(database_path: str) -> str:
 
 def delete_ringbuffer_storage_files(disk_path: str) -> None:
     """Remove the file-backed ringbuffer database and SQLite sidecar files."""
+    if _is_sqlite_memory_path(disk_path):
+        return
     disk_path = _sqlite_filesystem_path(disk_path)
     storage_paths = (f"{disk_path}-wal", f"{disk_path}-shm", disk_path)
     existing_paths = [Path(path) for path in storage_paths if Path(path).exists()]
@@ -950,12 +957,16 @@ def delete_ringbuffer_storage_files(disk_path: str) -> None:
                 os.replace(delete_path, original_path)
         raise
 
+    unlinked_any = False
     for delete_path, _original_path in renamed_paths:
         try:
             os.remove(delete_path)
+            unlinked_any = True
         except FileNotFoundError:
-            pass
-        except OSError:
+            unlinked_any = True
+        except OSError as exc:
+            if unlinked_any:
+                raise RingBufferStorageDeleteIncompleteError(str(exc)) from exc
             for rollback_path, original_path in reversed(renamed_paths):
                 with suppress(Exception):
                     if rollback_path.exists() and not original_path.exists():

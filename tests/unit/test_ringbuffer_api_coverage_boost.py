@@ -19,7 +19,12 @@ from fastapi import HTTPException
 
 from obs.api.v1 import ringbuffer as rb_api
 from obs.db.database import Database
-from obs.ringbuffer.ringbuffer import get_optional_ringbuffer, init_ringbuffer, reset_ringbuffer
+from obs.ringbuffer.ringbuffer import (
+    RingBufferStorageDeleteIncompleteError,
+    get_optional_ringbuffer,
+    init_ringbuffer,
+    reset_ringbuffer,
+)
 
 
 class _RegistryStub:
@@ -398,6 +403,37 @@ async def test_configure_disable_restores_running_ringbuffer_when_disable_fails(
         active_rb = rb_api.get_optional_ringbuffer()
         if active_rb is not None:
             await active_rb.stop()
+        reset_ringbuffer()
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_configure_disable_does_not_restart_after_partial_storage_delete(tmp_path, monkeypatch):
+    db = Database(":memory:")
+    await db.connect()
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    rb = await init_ringbuffer("file", max_entries=10, disk_path=str(rb_path), max_file_size_bytes=1024 * 1024)
+    subscribed: list[object] = []
+
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    monkeypatch.setattr(rb_api, "_subscribe_ringbuffer", lambda restored_rb: subscribed.append(restored_rb))
+
+    def _fail_partial_delete(_path):
+        raise RingBufferStorageDeleteIncompleteError("locked db")
+
+    monkeypatch.setattr(rb_api, "delete_ringbuffer_storage_files", _fail_partial_delete)
+
+    try:
+        with pytest.raises(RingBufferStorageDeleteIncompleteError, match="locked db"):
+            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=False), _user="admin", db=db)
+
+        cfg = await rb_api.load_persisted_ringbuffer_config(db)
+        assert rb_api.is_ringbuffer_enabled() is False
+        assert rb_api.get_optional_ringbuffer() is None
+        assert subscribed == []
+        assert cfg["enabled"] is False
+    finally:
+        await rb.stop()
         reset_ringbuffer()
         await db.disconnect()
 

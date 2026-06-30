@@ -246,6 +246,18 @@ def test_delete_ringbuffer_storage_files_normalizes_sqlite_file_uri(tmp_path):
     assert not (tmp_path / "obs_ringbuffer.db-shm").exists()
 
 
+def test_delete_ringbuffer_storage_files_skips_in_memory_sqlite_uri(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for path in (tmp_path / "memdb1", tmp_path / "memdb1-wal", tmp_path / "memdb1-shm"):
+        path.write_text("x", encoding="utf-8")
+
+    rb_mod.delete_ringbuffer_storage_files("file:memdb1?mode=memory&cache=shared")
+
+    assert (tmp_path / "memdb1").exists()
+    assert (tmp_path / "memdb1-wal").exists()
+    assert (tmp_path / "memdb1-shm").exists()
+
+
 def test_delete_ringbuffer_storage_files_restores_files_when_prepare_fails(tmp_path, monkeypatch):
     db_path = tmp_path / "obs_ringbuffer.db"
     wal_path = tmp_path / "obs_ringbuffer.db-wal"
@@ -271,7 +283,7 @@ def test_delete_ringbuffer_storage_files_restores_files_when_prepare_fails(tmp_p
     assert list(tmp_path.glob("*.deleting-*")) == []
 
 
-def test_delete_ringbuffer_storage_files_surfaces_unlink_failures(tmp_path, monkeypatch):
+def test_delete_ringbuffer_storage_files_restores_files_when_first_unlink_fails(tmp_path, monkeypatch):
     db_path = tmp_path / "obs_ringbuffer.db"
     wal_path = tmp_path / "obs_ringbuffer.db-wal"
     for path in (db_path, wal_path):
@@ -293,6 +305,30 @@ def test_delete_ringbuffer_storage_files_surfaces_unlink_failures(tmp_path, monk
     assert db_path.read_text(encoding="utf-8") == "obs_ringbuffer.db"
     assert wal_path.read_text(encoding="utf-8") == "obs_ringbuffer.db-wal"
     assert list(tmp_path.glob("*.deleting-*")) == []
+
+
+def test_delete_ringbuffer_storage_files_surfaces_partial_unlink_failures(tmp_path, monkeypatch):
+    db_path = tmp_path / "obs_ringbuffer.db"
+    wal_path = tmp_path / "obs_ringbuffer.db-wal"
+    for path in (db_path, wal_path):
+        path.write_text(path.name, encoding="utf-8")
+
+    original_remove = rb_mod.os.remove
+
+    def fail_on_db(path):
+        if path.name.startswith("obs_ringbuffer.db.deleting-"):
+            raise PermissionError("locked db")
+        original_remove(path)
+
+    monkeypatch.setattr(rb_mod, "uuid4", lambda: SimpleNamespace(hex="test"))
+    monkeypatch.setattr(rb_mod.os, "remove", fail_on_db)
+
+    with pytest.raises(rb_mod.RingBufferStorageDeleteIncompleteError, match="locked db"):
+        rb_mod.delete_ringbuffer_storage_files(str(db_path))
+
+    assert not wal_path.exists()
+    assert not db_path.exists()
+    assert len(list(tmp_path.glob("obs_ringbuffer.db.deleting-*-test"))) == 1
 
 
 def test_default_ringbuffer_disk_path_never_reuses_app_database_path():

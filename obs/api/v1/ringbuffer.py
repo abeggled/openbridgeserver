@@ -33,6 +33,7 @@ from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config, persist_ringbuffer_config
 from obs.ringbuffer.ringbuffer import (
+    RingBufferStorageDeleteIncompleteError,
     default_ringbuffer_disk_path,
     delete_ringbuffer_storage_files,
     get_optional_ringbuffer,
@@ -1873,6 +1874,11 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 await stopped_rb.stop()
                 stopped = True
             delete_ringbuffer_storage_files(_ringbuffer_disk_path())
+        except RingBufferStorageDeleteIncompleteError:
+            if stopped_rb is not None:
+                reset_ringbuffer()
+            set_ringbuffer_enabled(False)
+            raise
         except Exception:
             set_ringbuffer_enabled(previous_enabled)
             if stopped_rb is not None:
