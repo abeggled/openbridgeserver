@@ -255,6 +255,19 @@
       "result": "{migrated} Verknüpfungen migriert, {skipped} übersprungen.",
       "failed": "Migration fehlgeschlagen"
     },
+    "message": {
+      "addTarget": "Ziel hinzufügen",
+      "targetName": "Zielname",
+      "channel": "Kanal",
+      "apiToken": "API-Token",
+      "botToken": "Bot-Token",
+      "apiKey": "API-Schlüssel",
+      "sender": "Absender",
+      "userKey": "User-Key",
+      "chatId": "Chat-ID",
+      "to": "Empfänger",
+      "recipient": "Empfänger"
+    },
     "anwesenheit": {
       "modalTitle": "Anwesenheitssimulation",
       "modalTitleFull": "Anwesenheitssimulation — {name}",
@@ -552,6 +565,15 @@
       "anwSetValuePlaceholder": "z.B. 0 / 1 / false / true / 21.5",
       "anwOnPresenceHint": "Leer = Verhalten aus der Adapter-Konfiguration verwenden.",
       "snmpSection": "SNMP Binding",
+      "messageSection": "MESSAGE Binding",
+      "operatorLabel": "Operator",
+      "compareValueLabel": "Vergleichswert",
+      "titleLabel": "Titel",
+      "cooldownSecondsLabel": "Cooldown (Sekunden)",
+      "messageTemplateLabel": "Nachrichtenvorlage",
+      "targetsLabel": "Ziele",
+      "addTarget": "Ziel hinzufügen",
+      "messageSendOnChange": "Nur beim Wechsel in den erfüllten Zustand senden",
       "snmpHostLabel": "Gerät (IP/DNS) *",
       "snmpHostPlaceholder": "z.B. 192.168.1.100 oder switch.local",
       "snmpPortLabel": "UDP-Port",
@@ -989,7 +1011,9 @@
       "knxNoTunnelingInterfaces": "Keine Tunneling-Interfaces im Keyfile gefunden — bitte Individual Address im Keyfile prüfen.",
       "knxTunnelOverload": "KNX-Tunnel-Slot wahrscheinlich von anderem Client belegt — Gateway-Pool überlastet.",
       "knxTunnelStable": "Tunnel-Pool wieder stabil.",
-      "invalidBindingsSkipped": "{count} ungültige Verknüpfung(en) übersprungen ({examples})"
+      "invalidBindingsSkipped": "{count} ungültige Verknüpfung(en) übersprungen ({examples})",
+      "messageProviderFailures": "MESSAGE-Provider-Fehler: {count} Ziel(e)",
+      "messageSent": "MESSAGE gesendet"
     },
     "testResult": {
       "typeNotRegistered": "Adapter-Typ '{type}' nicht registriert",
