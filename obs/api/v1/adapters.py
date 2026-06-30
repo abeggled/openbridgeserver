@@ -33,6 +33,7 @@ from obs.adapters import registry as adapter_registry
 from obs.adapters.knx.dpt_registry import DPTRegistry
 from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.bindings import _json_config, _validate_adapter_binding
+from obs.api.v1.redaction import REDACTED
 from obs.db.database import Database, get_db
 
 router = APIRouter(tags=["adapters"])
@@ -170,13 +171,67 @@ class ConfigPatch(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _redact_message_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Redact MESSAGE provider credentials and recipient identifiers for API output."""
+    redacted = dict(config)
+    providers = redacted.get("providers")
+    if not isinstance(providers, dict):
+        return redacted
+
+    redacted_providers = dict(providers)
+    redacted["providers"] = redacted_providers
+
+    sensitive_fields = {
+        "pushover": ("api_token",),
+        "telegram": ("bot_token",),
+        "sevenio": ("api_key",),
+    }
+    sensitive_target_fields = {
+        "pushover": ("user_key",),
+        "telegram": ("chat_id",),
+        "sevenio": ("to",),
+    }
+
+    for provider_name, provider_fields in sensitive_fields.items():
+        provider_config = redacted_providers.get(provider_name)
+        if not isinstance(provider_config, dict):
+            continue
+        provider_redacted = dict(provider_config)
+        redacted_providers[provider_name] = provider_redacted
+        for field in provider_fields:
+            if provider_redacted.get(field):
+                provider_redacted[field] = REDACTED
+
+        targets = provider_redacted.get("targets")
+        if not isinstance(targets, dict):
+            continue
+        targets_redacted = dict(targets)
+        provider_redacted["targets"] = targets_redacted
+        for target_name, target_config in targets.items():
+            if not isinstance(target_config, dict):
+                continue
+            target_redacted = dict(target_config)
+            targets_redacted[target_name] = target_redacted
+            for field in sensitive_target_fields[provider_name]:
+                if target_redacted.get(field):
+                    target_redacted[field] = REDACTED
+
+    return redacted
+
+
+def _redact_instance_config(adapter_type: str, config: dict[str, Any]) -> dict[str, Any]:
+    if adapter_type == "MESSAGE":
+        return _redact_message_config(config)
+    return config
+
+
 def _instance_out(row: Any, instance: Any | None) -> AdapterInstanceOut:
     cls = adapter_registry.get_class(row["adapter_type"])
     return AdapterInstanceOut(
         id=uuid.UUID(row["id"]),
         adapter_type=row["adapter_type"],
         name=row["name"],
-        config=json.loads(row["config"]) if row["config"] else {},
+        config=_redact_instance_config(row["adapter_type"], json.loads(row["config"]) if row["config"] else {}),
         enabled=bool(row["enabled"]),
         registered=cls is not None,
         running=instance is not None,

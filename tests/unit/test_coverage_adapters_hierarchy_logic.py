@@ -103,6 +103,45 @@ class TestInstanceOut:
         assert result.severity == "ok"
         assert result.bindings == 0
 
+    def test_instance_out_redacts_message_provider_secrets(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.redaction import REDACTED
+
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        row = _inst_row(
+            adapter_type="MESSAGE",
+            config={
+                "providers": {
+                    "pushover": {
+                        "enabled": True,
+                        "api_token": "pushover-token",
+                        "targets": {"ops": {"user_key": "pushover-user"}},
+                    },
+                    "telegram": {
+                        "enabled": True,
+                        "bot_token": "telegram-token",
+                        "targets": {"ops": {"chat_id": "telegram-chat"}},
+                    },
+                    "sevenio": {
+                        "enabled": True,
+                        "api_key": "sevenio-key",
+                        "sender": "OpenBridge",
+                        "targets": {"ops": {"to": "+49123456789"}},
+                    },
+                }
+            },
+        )
+
+        result = adp_api._instance_out(row, None)
+
+        assert result.config["providers"]["pushover"]["api_token"] == REDACTED
+        assert result.config["providers"]["pushover"]["targets"]["ops"]["user_key"] == REDACTED
+        assert result.config["providers"]["telegram"]["bot_token"] == REDACTED
+        assert result.config["providers"]["telegram"]["targets"]["ops"]["chat_id"] == REDACTED
+        assert result.config["providers"]["sevenio"]["api_key"] == REDACTED
+        assert result.config["providers"]["sevenio"]["targets"]["ops"]["to"] == REDACTED
+        assert result.config["providers"]["sevenio"]["sender"] == "OpenBridge"
+
     def test_instance_out_with_instance(self, monkeypatch):
         from obs.api.v1 import adapters as adp_api
 
