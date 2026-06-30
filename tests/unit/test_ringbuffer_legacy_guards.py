@@ -234,6 +234,18 @@ def test_delete_ringbuffer_storage_files_removes_sqlite_sidecars(tmp_path):
     assert not (tmp_path / "obs_ringbuffer.db-shm").exists()
 
 
+def test_delete_ringbuffer_storage_files_normalizes_sqlite_file_uri(tmp_path):
+    db_path = tmp_path / "obs_ringbuffer.db"
+    for path in (db_path, tmp_path / "obs_ringbuffer.db-wal", tmp_path / "obs_ringbuffer.db-shm"):
+        path.write_text("x", encoding="utf-8")
+
+    rb_mod.delete_ringbuffer_storage_files(f"file:{db_path}?mode=rwc")
+
+    assert not db_path.exists()
+    assert not (tmp_path / "obs_ringbuffer.db-wal").exists()
+    assert not (tmp_path / "obs_ringbuffer.db-shm").exists()
+
+
 def test_delete_ringbuffer_storage_files_restores_files_when_prepare_fails(tmp_path, monkeypatch):
     db_path = tmp_path / "obs_ringbuffer.db"
     wal_path = tmp_path / "obs_ringbuffer.db-wal"
@@ -259,6 +271,30 @@ def test_delete_ringbuffer_storage_files_restores_files_when_prepare_fails(tmp_p
     assert list(tmp_path.glob("*.deleting-*")) == []
 
 
+def test_delete_ringbuffer_storage_files_surfaces_unlink_failures(tmp_path, monkeypatch):
+    db_path = tmp_path / "obs_ringbuffer.db"
+    wal_path = tmp_path / "obs_ringbuffer.db-wal"
+    for path in (db_path, wal_path):
+        path.write_text(path.name, encoding="utf-8")
+
+    original_remove = rb_mod.os.remove
+
+    def fail_on_wal(path):
+        if "-wal.deleting-" in str(path):
+            raise PermissionError("locked wal")
+        original_remove(path)
+
+    monkeypatch.setattr(rb_mod, "uuid4", lambda: SimpleNamespace(hex="test"))
+    monkeypatch.setattr(rb_mod.os, "remove", fail_on_wal)
+
+    with pytest.raises(PermissionError, match="locked wal"):
+        rb_mod.delete_ringbuffer_storage_files(str(db_path))
+
+    assert db_path.read_text(encoding="utf-8") == "obs_ringbuffer.db"
+    assert wal_path.read_text(encoding="utf-8") == "obs_ringbuffer.db-wal"
+    assert list(tmp_path.glob("*.deleting-*")) == []
+
+
 def test_default_ringbuffer_disk_path_never_reuses_app_database_path():
     assert rb_mod.default_ringbuffer_disk_path("/data/obs.db") == "/data/obs_ringbuffer.db"
     assert rb_mod.default_ringbuffer_disk_path("/data/obs.sqlite") == "/data/obs_ringbuffer.db"
@@ -269,3 +305,10 @@ def test_default_ringbuffer_disk_path_preserves_in_memory_sqlite_paths():
     assert rb_mod.default_ringbuffer_disk_path(":memory:") == ":memory:"
     assert rb_mod.default_ringbuffer_disk_path("file::memory:?cache=shared") == "file::memory:?cache=shared"
     assert rb_mod.default_ringbuffer_disk_path("file:memdb1?mode=memory&cache=shared") == "file:memdb1?mode=memory&cache=shared"
+
+
+def test_default_ringbuffer_disk_path_normalizes_sqlite_file_uris(tmp_path):
+    db_path = tmp_path / "obs.db"
+
+    assert rb_mod.default_ringbuffer_disk_path(f"file:{db_path}?mode=rwc") == str(tmp_path / "obs_ringbuffer.db")
+    assert rb_mod.default_ringbuffer_disk_path(f"file://localhost{db_path}?mode=rwc") == str(tmp_path / "obs_ringbuffer.db")
