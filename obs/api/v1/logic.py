@@ -77,13 +77,17 @@ def _logic_datapoint_ids(flow: FlowData) -> list[str]:
     ids: list[str] = []
     seen: set[str] = set()
     for node in flow.nodes:
-        if node.type not in {"datapoint_read", "datapoint_write"}:
+        if node.type in {"datapoint_read", "datapoint_write"}:
+            candidate_ids = [node.data.get("datapoint_id")]
+        elif node.type == "api_client":
+            candidate_ids = [variable["datapoint_id"] for variable in _normalise_api_client_variables(node.data.get("variables")).values()]
+        else:
             continue
-        dp_id = node.data.get("datapoint_id")
-        if not isinstance(dp_id, str) or not dp_id or dp_id in seen:
-            continue
-        seen.add(dp_id)
-        ids.append(dp_id)
+        for dp_id in candidate_ids:
+            if not isinstance(dp_id, str) or not dp_id or dp_id in seen:
+                continue
+            seen.add(dp_id)
+            ids.append(dp_id)
     return ids
 
 

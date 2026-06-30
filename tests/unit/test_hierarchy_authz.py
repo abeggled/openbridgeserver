@@ -146,3 +146,15 @@ async def test_search_nodes_filters_unreadable_results(db: Database):
     results = await hierarchy_api.search_nodes(q="room", limit=10, _user=_principal(), db=db)
 
     assert [result.node_id for result in results] == ["allowed-room"]
+
+
+@pytest.mark.asyncio
+async def test_search_nodes_applies_auth_before_limit(db: Database):
+    await _insert_tree(db)
+    await _insert_node(db, "a-blocked-room")
+    await _insert_node(db, "z-readable-room")
+    await _insert_grant(db, node_id="z-readable-room")
+
+    results = await hierarchy_api.search_nodes(q="room", limit=1, _user=_principal(), db=db)
+
+    assert [result.node_id for result in results] == ["z-readable-room"]

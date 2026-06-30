@@ -687,7 +687,7 @@ async def websocket_endpoint(
             # page config cannot be parsed (e.g. lightweight test doubles).
             allowed_dp_ids = set()
 
-    log_access = await _ws_has_log_access(user, api_key)
+    log_access = await _ws_has_log_access(user, api_key) if allowed_dp_ids is None else False
 
     manager = get_ws_manager()
     conn_id = await manager.connect(

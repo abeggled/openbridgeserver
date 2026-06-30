@@ -628,9 +628,8 @@ async def search_nodes(
                   OR ht.display_depth <= 0
                   OR COALESCE(td.max_depth, 0) < ht.display_depth
                   OR COALESCE(nd.depth, 1) >= ht.display_depth
-               ORDER BY ht.name, hn.name
-               LIMIT ?""",
-            (like, like, limit),
+               ORDER BY ht.name, hn.name""",
+            (like, like),
         )
     else:
         rows = await db.fetchall(
@@ -654,15 +653,13 @@ async def search_nodes(
                   OR ht.display_depth <= 0
                   OR COALESCE(td.max_depth, 0) < ht.display_depth
                   OR COALESCE(nd.depth, 1) >= ht.display_depth
-               ORDER BY ht.name, hn.name
-               LIMIT ?""",
-            (limit,),
+               ORDER BY ht.name, hn.name""",
         )
 
     principal = _principal_from_dependency(_user)
     node_ids = [r["node_id"] for r in rows]
     allowed_node_ids = set(await filter_authorized_hierarchy_nodes(db, principal, node_ids, action=AuthzAction.READ))
-    rows = [r for r in rows if r["node_id"] in allowed_node_ids]
+    rows = [r for r in rows if r["node_id"] in allowed_node_ids][:limit]
 
     # Build ancestor paths so callers can disambiguate same-named leaves under
     # different parents (#433). The result query is already limited, so path
