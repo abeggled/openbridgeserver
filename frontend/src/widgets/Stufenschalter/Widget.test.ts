@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { datapoints } from '@/api/client'
 import type { DataPointValue } from '@/types'
@@ -167,6 +167,20 @@ describe('Stufenschalter widget', () => {
 
     expect(writeMock).toHaveBeenCalledTimes(1)
     expect(writeMock).toHaveBeenCalledWith('dp-1', 2)
+  })
+
+  it('reverts direct selection when the write fails', async () => {
+    writeMock.mockRejectedValueOnce('write-failed')
+    mountWidget({ mode: 'select-direct', options: baseOptions() }, 0)
+
+    await wrapper!.findAll('[data-testid="stufenschalter-option"]')[2].trigger('click')
+    await flushPromises()
+
+    const options = wrapper!.findAll('[data-testid="stufenschalter-option"]')
+    expect(writeMock).toHaveBeenCalledWith('dp-1', 2)
+    expect(options[0].attributes('aria-pressed')).toBe('true')
+    expect(options[2].attributes('aria-pressed')).toBe('false')
+    expect(wrapper!.get('[data-testid="stufenschalter-error"]').text()).toBe('Schreiben fehlgeschlagen')
   })
 
   it('accepts options for sequence mode', async () => {

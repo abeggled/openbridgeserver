@@ -154,6 +154,7 @@ async function writeValue(value: string) {
     selectedValue.value = value
   } catch (e) {
     optimisticValue.value = null
+    if (mode.value === 'select-direct') selectedValue.value = committedValue.value
     error.value = e instanceof Error ? e.message : t('widgets.stufenschalter.writeError')
   } finally {
     pending.value = false

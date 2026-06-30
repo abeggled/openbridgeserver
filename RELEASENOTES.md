@@ -9,6 +9,7 @@
 * Backend: `.knxproj` imports can now create selected ETS hierarchies in the same backend request, reporting per-hierarchy node/link counts and non-fatal failures for unavailable ETS data. https://github.com/abeggled/openbridgeserver/issues/728
 * Admin GUI: `.knxproj` imports now offer hierarchy creation for topology, buildings/rooms, and trades in the same import flow, including per-hierarchy result feedback and optional auto-linking to created objects. https://github.com/abeggled/openbridgeserver/issues/729
 * Backend/Admin GUI: Repeated `.knxproj` imports now replace automatically generated ETS hierarchies per selected mode by default, while manual hierarchy trees remain untouched; the import dialog also offers an opt-out to keep a separate tree for each import run. https://github.com/abeggled/openbridgeserver/issues/730
+* Visu: Stufenschalter now supports configurable operation modes for sequence cycling, selection with save, and direct selection while remaining compatible with existing step configurations. https://github.com/abeggled/openbridgeserver/pull/716
 
 ### Fixes 🐞
 * none
@@ -70,7 +71,6 @@
 * Visu: Bar chart mode for history/chart widget. https://github.com/abeggled/openbridgeserver/pull/444
 * Visu: Added configurable ButtonGroup widget for one-shot actions, scene triggers, and grouped command buttons. https://github.com/abeggled/openbridgeserver/issues/675
 * Visu: Widgets können per Drag & Drop aus der Palette direkt an eine bestimmte Position auf der Seite gezogen werden; eine blaue Vorschau zeigt die Zielposition. Klick auf ein Widget fügt es weiterhin automatisch an der ersten freien Position ein. Die Widget-Liste ist jetzt sprachspezifisch alphabetisch sortiert. https://github.com/abeggled/openbridgeserver/issues/667
-* Visu: Stufenschalter now supports configurable operation modes for sequence cycling, selection with save, and direct selection while remaining compatible with existing step configurations.
 * QA/CI: Monitor baseline, characterization and coverage/dependency audit tasks. https://github.com/abeggled/openbridgeserver/issues/383 https://github.com/abeggled/openbridgeserver/issues/428 https://github.com/abeggled/openbridgeserver/issues/429 https://github.com/abeggled/openbridgeserver/issues/439
 * QA/CI: Vitest unit and integration tests for the Admin GUI, including local pre-push gating, coverage hints for changed GUI files, and Codecov upload for GUI coverage. https://github.com/abeggled/openbridgeserver/issues/698
 
