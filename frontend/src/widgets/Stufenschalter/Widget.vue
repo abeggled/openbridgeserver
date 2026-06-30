@@ -121,16 +121,23 @@ const committedValue = computed(() =>
 )
 
 watch(
-  () => [
-    displayValue.value?.v,
-    displayValue.value?.t,
-    displayValue.value?.q,
-    mode.value,
-    options.value.map((option) => option.value).join('\u0000'),
-  ],
-  () => {
+  () => ({
+    value: displayValue.value?.v,
+    t: displayValue.value?.t,
+    q: displayValue.value?.q,
+    mode: mode.value,
+    optionValues: options.value.map((option) => option.value).join('\u0000'),
+  }),
+  (current, previous) => {
+    const valueChanged = !previous || !Object.is(current.value, previous.value)
+    const selectionShapeChanged = !previous
+      || current.mode !== previous.mode
+      || current.optionValues !== previous.optionValues
+
     optimisticValue.value = null
-    selectedValue.value = committedValue.value
+    if (current.mode !== 'select-save' || valueChanged || selectionShapeChanged) {
+      selectedValue.value = committedValue.value
+    }
     error.value = ''
   },
   { immediate: true },
@@ -294,7 +301,7 @@ const saveLabel = computed(() => t('widgets.stufenschalter.save'))
       class="mb-2 w-full shrink-0 truncate text-center text-xs text-gray-500 dark:text-gray-400"
     >{{ label }}</span>
 
-    <div class="grid min-h-0 flex-1 auto-rows-fr gap-1.5 overflow-y-auto pr-1" data-testid="stufenschalter-options">
+    <div class="grid min-h-0 flex-1 auto-rows-min gap-1.5 overflow-y-auto pr-1" data-testid="stufenschalter-options">
       <button
         v-for="option in options"
         :key="option.value"

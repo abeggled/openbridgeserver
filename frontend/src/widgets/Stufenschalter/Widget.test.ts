@@ -145,6 +145,34 @@ describe('Stufenschalter widget', () => {
     expect(writeMock).not.toHaveBeenCalled()
   })
 
+  it('preserves pending select-save selections across same-value datapoint refreshes', async () => {
+    mountWidget({ mode: 'select-save', options: baseOptions() }, 0)
+
+    await wrapper!.findAll('[data-testid="stufenschalter-option"]')[2].trigger('click')
+    await wrapper!.setProps({ value: dataPointValue(0, '2026-06-04T00:00:01Z') })
+
+    const options = wrapper!.findAll('[data-testid="stufenschalter-option"]')
+    expect(options[0].attributes('aria-pressed')).toBe('false')
+    expect(options[2].attributes('aria-pressed')).toBe('true')
+    expect((wrapper!.get('[data-testid="stufenschalter-save"]').element as HTMLButtonElement).disabled).toBe(false)
+    expect(writeMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps failed select-save selections retryable across same-value datapoint refreshes', async () => {
+    writeMock.mockRejectedValueOnce('write-failed')
+    mountWidget({ mode: 'select-save', options: baseOptions() }, 0)
+
+    await wrapper!.findAll('[data-testid="stufenschalter-option"]')[2].trigger('click')
+    await wrapper!.get('[data-testid="stufenschalter-save"]').trigger('click')
+    await flushPromises()
+    await wrapper!.setProps({ value: dataPointValue(0, '2026-06-04T00:00:01Z') })
+
+    const options = wrapper!.findAll('[data-testid="stufenschalter-option"]')
+    expect(options[0].attributes('aria-pressed')).toBe('false')
+    expect(options[2].attributes('aria-pressed')).toBe('true')
+    expect((wrapper!.get('[data-testid="stufenschalter-save"]').element as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('renders SVG option icons through the icon renderer instead of raw text', () => {
     mountWidget({
       mode: 'select-save',
@@ -216,7 +244,10 @@ describe('Stufenschalter widget', () => {
   it('allows select-mode options to scroll in compact widgets', () => {
     mountWidget({ mode: 'select-save', options: baseOptions() }, 0)
 
-    expect(wrapper!.get('[data-testid="stufenschalter-options"]').classes()).toContain('overflow-y-auto')
+    const classes = wrapper!.get('[data-testid="stufenschalter-options"]').classes()
+    expect(classes).toContain('overflow-y-auto')
+    expect(classes).toContain('auto-rows-min')
+    expect(classes).not.toContain('auto-rows-fr')
   })
 
   it('accepts options for sequence mode', async () => {
