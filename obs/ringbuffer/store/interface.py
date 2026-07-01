@@ -65,6 +65,26 @@ class StoreQuery:
 
     Bewusst KEINE Segment-Auswahl — das Backend entscheidet intern, welche
     Partitionen/Segmente es liest.
+
+    ``value_filters`` ist eine engine-neutrale Liste von Prädikaten auf den
+    Wert eines Events. Jedes Prädikat ist ein ``dict`` mit den Feldern:
+
+    * ``field`` (optional, Default ``"new_value"``): ``"new_value"`` oder
+      ``"old_value"`` — auf welchen Wert das Prädikat wirkt.
+    * ``operator``: einer von ``eq``, ``ne``, ``gt``, ``gte``, ``lt``, ``lte``,
+      ``between``, ``contains``, ``regex``.
+    * ``value``: Vergleichswert für ``eq``/``ne``/``gt``/``gte``/``lt``/``lte``
+      und (als Nadel) für ``contains``.
+    * ``lower`` / ``upper``: inklusive Grenzen für ``between``.
+    * ``pattern``: Regex-Muster für ``regex``.
+    * ``ignore_case`` (optional, Default ``False``): für ``contains``/``regex``.
+
+    Backends mit ``supports_typed_pushdown`` schieben die einfachen Operatoren
+    (``eq``..``between``) als typisierte WHERE-Prädikate in die Engine, damit
+    ``limit`` nicht durch einen Post-Filter ausgehebelt wird. ``contains`` und
+    ``regex`` sind Sonderfälle: nur mit einem eng gebundenen Query (Zeitfenster
+    ``from_ts``+``to_ts`` oder ``candidate_cap``) erlaubt, sonst wird ein
+    ``ValueError`` geworfen (422-tauglich), um unbounded Full-Scans zu verhindern.
     """
 
     from_ts: str | None = None
@@ -74,6 +94,10 @@ class StoreQuery:
     quality: str | None = None
     limit: int = 100
     offset: int = 0
+    value_filters: list[dict[str, Any]] = field(default_factory=list)
+    # Obergrenze für Kandidatenzeilen bei unbounded contains/regex ohne
+    # Zeitfenster. ``None`` = kein Cap → contains/regex erfordern ein Zeitfenster.
+    candidate_cap: int | None = None
 
 
 @dataclass
