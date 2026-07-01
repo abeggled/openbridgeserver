@@ -10,7 +10,12 @@ from uuid import uuid4
 
 import pytest
 
-from obs.api.v1.websocket import WebSocketManager, _extract_subprotocol_tokens, _page_allowed_datapoints
+from obs.api.v1.websocket import (
+    WebSocketManager,
+    _extract_subprotocol_tokens,
+    _page_allowed_datapoints,
+    _page_allowed_message_archives,
+)
 from obs.core.event_bus import DataValueEvent
 
 
@@ -215,6 +220,37 @@ async def test_log_broadcast_revalidates_existing_log_access_connections():
     await manager.broadcast(second)
 
     assert admin_ws.messages == [first]
+
+
+@pytest.mark.asyncio
+async def test_message_archive_push_is_filtered_for_page_scoped_connections():
+    manager = WebSocketManager()
+    scoped_ws = _FakeWebSocket()
+    unrestricted_ws = _FakeWebSocket()
+
+    await manager.connect(scoped_ws, allowed_dp_ids=set(), allowed_message_archive_ids={"system"})
+    await manager.connect(unrestricted_ws)
+
+    allowed = {"id": "entry-1", "archive_id": "system", "message": "allowed"}
+    blocked = {"id": "entry-2", "archive_id": "security", "message": "blocked"}
+
+    await manager.broadcast_message_archive_entry(allowed)
+    await manager.broadcast_message_archive_entry(blocked)
+
+    assert [msg["entry"]["id"] for msg in scoped_ws.messages] == ["entry-1"]
+    assert [msg["entry"]["id"] for msg in unrestricted_ws.messages] == ["entry-1", "entry-2"]
+
+
+@pytest.mark.asyncio
+async def test_message_archive_push_allows_page_widget_without_archive_filter():
+    manager = WebSocketManager()
+    ws = _FakeWebSocket()
+
+    await manager.connect(ws, allowed_dp_ids=set(), allowed_message_archive_ids=None)
+    await manager.broadcast_message_archive_entry({"id": "entry-1", "archive_id": "any"})
+
+    assert ws.messages[0]["action"] == "message_archive_entry"
+    assert ws.messages[0]["entry"]["archive_id"] == "any"
 
 
 @pytest.mark.asyncio
@@ -447,6 +483,64 @@ async def test_page_allowed_datapoints_collects_only_datapoint_fields():
     assert mini_widget_status_dp_id in ids
     assert not_a_datapoint_uuid not in ids
     assert source_page_id_uuid not in ids
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_message_archives_collects_message_archive_widget_ids():
+    page_config = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "archive-widget",
+                "type": "MessageArchive",
+                "name": "Archiv",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {"archive_ids": ["System", "security"]},
+            }
+        ],
+    }
+
+    class _DbStub:
+        async def fetchone(self, _query, _params):
+            return {"page_config": json.dumps(page_config)}
+
+    ids = await _page_allowed_message_archives(_DbStub(), "page-1")
+
+    assert ids == {"system", "security"}
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_message_archives_returns_unrestricted_for_empty_widget_filter():
+    page_config = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "archive-widget",
+                "type": "MessageArchive",
+                "name": "Archiv",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {"archive_ids": []},
+            }
+        ],
+    }
+
+    class _DbStub:
+        async def fetchone(self, _query, _params):
+            return {"page_config": json.dumps(page_config)}
+
+    ids = await _page_allowed_message_archives(_DbStub(), "page-1")
+
+    assert ids is None
 
 
 @pytest.mark.asyncio

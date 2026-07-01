@@ -2576,6 +2576,48 @@ class LogicManager:
                     exc,
                 )
 
+        # ── Handle message_archive ────────────────────────────────────────────
+        for node in flow.nodes:
+            if node.type != "message_archive":
+                continue
+            out = outputs.get(node.id, {})
+            if not GraphExecutor._to_bool(out.get("_trigger")):
+                continue
+
+            archive_id = (node.data.get("archive_id") or "").strip().lower()
+            if not archive_id:
+                logger.warning("Message archive: archive_id missing on node %s", node.id[:8])
+                continue
+
+            _raw_msg = out.get("_message")
+            msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
+            _raw_title = out.get("_title")
+            title = _msg_to_str(_raw_title) if _raw_title is not None else str(node.data.get("title") or "")
+            message_type = str(node.data.get("type") or "automation")
+            severity = str(node.data.get("severity") or "info")
+
+            try:
+                from obs.message_archive import get_message_archive_service
+
+                await get_message_archive_service().record(
+                    archive_id,
+                    type=message_type,
+                    severity=severity,
+                    source=f"logic.graph.{graph_id}.node.{node.id}",
+                    title=title,
+                    message=msg,
+                    payload={
+                        "graph_id": graph_id,
+                        "graph_name": name,
+                        "node_id": node.id,
+                        "node_label": node.data.get("label") or node.data.get("name") or "",
+                    },
+                )
+                outputs[node.id]["stored"] = True
+                logger.info("Graph %s: message archived in %s (msg=%r)", graph_id[:8], archive_id, msg[:40])
+            except Exception as exc:
+                logger.warning("Graph %s: message archive write failed (node=%s): %s", graph_id[:8], node.id[:8], exc)
+
         # Deferred hc_prev_trigger=False: clear only for HC nodes that did NOT
         # fire in any async pass. Clearing inside _run_host_check_node was wrong
         # for async-driven triggers (e.g. api_client.success→hc._trigger) because

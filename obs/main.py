@@ -55,6 +55,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 1. Database
     db = await init_db(settings.database.path)
+    from obs.message_archive import init_message_archive_store
+
+    await init_message_archive_store(settings)
     persistent_log_level = await _read_persistent_log_level(db)
     if persistent_log_level and persistent_log_level != configured_log_level:
         log_level = getattr(logging, persistent_log_level, log_level)
@@ -152,6 +155,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         registry.count(),
         len(adapter_registry.all_types()),
     )
+    try:
+        from obs.message_archive import get_message_archive_service
+
+        await get_message_archive_service().record(
+            "system",
+            type="system",
+            severity="info",
+            source="system.startup",
+            title="OBS started",
+            message=f"open bridge server v{__version__} ready",
+            payload={"datapoints": registry.count(), "adapters_registered": len(adapter_registry.all_types())},
+        )
+    except Exception:
+        logger.exception("Failed to write startup event to message archive")
 
     yield  # ← application running
 
@@ -161,6 +178,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     await adapter_registry.stop_all()
     await mqtt.stop()
     await _stop_optional_ringbuffer()
+    from obs.message_archive import close_message_archive_store
+
+    await close_message_archive_store()
     await get_db().disconnect()
     logger.info("open bridge server stopped.")
 

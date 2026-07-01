@@ -45,6 +45,8 @@ class AutobackupEntry(BaseModel):
     name: str  # z.B. "20240506-0300"
     created_at: str  # ISO-Timestamp aus dem Dateinamen
     size_bytes: int
+    archive_db_included: bool = False
+    archive_db_size_bytes: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -88,23 +90,45 @@ def _list_backups() -> list[AutobackupEntry]:
     entries: list[AutobackupEntry] = []
     for f in sorted(backup_dir.glob("*.json"), reverse=True):
         stem = f.stem  # z.B. "20240506-0300"
+        if not re.fullmatch(r"\d{8}-\d{4}", stem):
+            continue
         try:
             dt = datetime.strptime(stem, "%Y%m%d-%H%M")
             created_at = dt.isoformat()
         except ValueError:
             created_at = stem
-        entries.append(AutobackupEntry(name=stem, created_at=created_at, size_bytes=f.stat().st_size))
+        archive_db = backup_dir / f"{stem}.message-archive.sqlite3"
+        entries.append(
+            AutobackupEntry(
+                name=stem,
+                created_at=created_at,
+                size_bytes=f.stat().st_size,
+                archive_db_included=archive_db.exists(),
+                archive_db_size_bytes=archive_db.stat().st_size if archive_db.exists() else None,
+            )
+        )
     return entries
 
 
 def _prune_old_backups(retention_days: int) -> int:
     backup_dir = _autobackup_dir()
     files = sorted(backup_dir.glob("*.json"), reverse=True)
+    files = [f for f in files if re.fullmatch(r"\d{8}-\d{4}", f.stem)]
     deleted = 0
     for f in files[retention_days:]:
+        deleted += _delete_backup_files(f.stem)
+    return deleted
+
+
+def _delete_backup_files(stem: str) -> int:
+    backup_dir = _autobackup_dir()
+    deleted = 0
+    for suffix in (".json", ".message-archive.sqlite3", ".message-archive.json"):
+        path = backup_dir / f"{stem}{suffix}"
         try:
-            f.unlink()
-            deleted += 1
+            if path.exists():
+                path.unlink()
+                deleted += 1
         except OSError:
             pass
     return deleted
@@ -120,6 +144,30 @@ async def _create_backup_now(db: Database) -> str:
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M")
     backup_path = _autobackup_dir() / f"{ts}.json"
     backup_path.write_text(json.dumps(export.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        from obs.message_archive import get_message_archive_store
+
+        store = get_message_archive_store()
+        archive_path = _autobackup_dir() / f"{ts}.message-archive.sqlite3"
+        await store.sqlite_snapshot(archive_path)
+        integrity = await store.integrity_check()
+        metadata_path = _autobackup_dir() / f"{ts}.message-archive.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "included": True,
+                    "path": store.path,
+                    "snapshot": archive_path.name,
+                    "integrity_ok": integrity["ok"],
+                    "integrity_result": integrity["result"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.error("Autobackup: Archiv-DB-Snapshot fehlgeschlagen: %s", exc)
     logger.info("Autobackup erstellt: %s (%d Bytes)", backup_path.name, backup_path.stat().st_size)
     return ts
 
@@ -238,7 +286,7 @@ async def delete_autobackup(
 
     if not backup_path.exists():
         raise HTTPException(status_code=404, detail=f"Sicherung '{safe_name}' nicht gefunden.")
-    backup_path.unlink()
+    _delete_backup_files(matched.name)
     return {"ok": True, "name": safe_name}
 
 

@@ -396,6 +396,8 @@ const cfg = reactive({
   priority: null,
   cooldown_seconds: 0,
   send_on_change: true,
+  archive_id: '',
+  archive_strategy: 'send_only',
   // ZEITSCHALTUHR
   timer_type: 'daily', meta_type: 'none',
   weekdays: [0,1,2,3,4,5,6], months: [], day_of_month: 0,
@@ -661,6 +663,8 @@ watch(() => props.initial, val => {
   if (cfg.priority === undefined) cfg.priority = null
   if (cfg.cooldown_seconds == null) cfg.cooldown_seconds = 0
   if (cfg.send_on_change == null) cfg.send_on_change = true
+  if (cfg.archive_id == null) cfg.archive_id = ''
+  if (cfg.archive_strategy == null || cfg.archive_strategy === 'none') cfg.archive_strategy = 'send_only'
   {
     const ANW_PRESETS = ['1', '7', '14']
     if (cfg.offset_override != null) {
@@ -1232,6 +1236,7 @@ function buildConfig() {
     return c
   }
   if (type === 'MESSAGE') {
+    const strategy = cfg.archive_strategy || 'send_only'
     const c = {
       operator: cfg.operator || '==',
       compare_value: cfg.compare_value,
@@ -1239,6 +1244,10 @@ function buildConfig() {
       providers: [...(cfg.providers ?? [])],
       send_on_change: cfg.send_on_change ?? true,
       cooldown_seconds: cfg.cooldown_seconds ?? 0,
+      archive_strategy: strategy,
+    }
+    if (['archive_only', 'send_and_archive'].includes(strategy) && cfg.archive_id?.trim()) {
+      c.archive_id = cfg.archive_id.trim().toLowerCase()
     }
     if (cfg.title?.trim()) c.title = cfg.title.trim()
     if (cfg.priority != null) c.priority = cfg.priority

@@ -23,6 +23,7 @@ from obs.adapters.message.providers.registry import register_provider
 from obs.adapters.message.providers.sevenio import SevenIoProvider
 from obs.adapters.message.providers.telegram import TelegramProvider
 from obs.core.event_bus import DataValueEvent
+from obs.message_archive import EntryQuery, MessageArchiveService, MessageArchiveStore
 from tests.adapters.conftest import make_binding
 
 
@@ -178,6 +179,16 @@ def test_enabled_binding_requires_message_target():
     cfg = MessageBindingConfig(enabled=False, providers=[])
 
     assert cfg.enabled is False
+
+
+def test_archive_only_binding_requires_archive_but_no_provider_target():
+    with pytest.raises(ValueError, match="archive_id"):
+        MessageBindingConfig(providers=[], archive_strategy="archive_only")
+
+    cfg = MessageBindingConfig(providers=[], archive_strategy="archive_only", archive_id="notifications")
+
+    assert cfg.archive_strategy == "archive_only"
+    assert cfg.archive_id == "notifications"
 
 
 def test_binding_rejects_blank_message_body():
@@ -586,6 +597,39 @@ async def test_write_path_sends_message_to_provider(bus, dummy_provider, monkeyp
 
     dummy_provider.send.assert_awaited_once()
     assert dummy_provider.send.await_args.kwargs["message"] == "Temperatur kritisch: manual "
+
+
+@pytest.mark.asyncio
+async def test_archive_only_binding_writes_message_archive(bus, dummy_provider, monkeypatch, tmp_path):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    monkeypatch.setattr("obs.message_archive.get_message_archive_service", lambda: MessageArchiveService(store))
+    adapter = MessageAdapter(event_bus=bus, config={"providers": {}})
+    binding = _message_binding(
+        dp_id,
+        providers=[],
+        archive_strategy="archive_only",
+        archive_id="notifications",
+    )
+    await adapter.reload_bindings([binding])
+
+    try:
+        await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=31, quality="good", source_adapter="test"))
+        await _drain_sends(adapter)
+
+        dummy_provider.send.assert_not_awaited()
+        result = await store.query_entries(EntryQuery(archive_ids=["notifications"], username="admin"))
+        assert result["total"] == 1
+        entry = result["items"][0]
+        assert entry["type"] == "notification"
+        assert entry["title"] == "OBS Alarm"
+        assert entry["message"] == "Temperatur kritisch: 31 °C"
+        assert entry["payload"]["delivery_status"] == "archived"
+        assert "target" not in entry["payload"]
+    finally:
+        await store.disconnect()
 
 
 @pytest.mark.asyncio

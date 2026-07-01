@@ -1100,6 +1100,65 @@
       </div>
     </template>
 
+    <!-- ── message_archive: archive selection by display name ────────────── -->
+    <template v-else-if="isMessageArchiveNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.messageArchive.archive') }}</label>
+          <select v-model="localData.archive_id" class="input text-sm" @change="emitUpdate">
+            <option value="">{{ $t('logic.nodeConfig.messageArchive.selectArchive') }}</option>
+            <option v-for="archive in messageArchives" :key="archive.id" :value="archive.id">
+              {{ archive.name || archive.id }}
+            </option>
+            <option v-if="selectedMessageArchiveMissing" :value="localData.archive_id">
+              {{ $t('logic.nodeConfig.messageArchive.missingArchive') }}
+            </option>
+          </select>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.messageArchive.type') }}</label>
+            <select v-model="localData.type" class="input text-sm" @change="emitUpdate">
+              <option v-for="type in MESSAGE_TYPE_OPTIONS" :key="type" :value="type">
+                {{ $t(`messageArchives.types.${type}`) }}
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.messageArchive.severity') }}</label>
+            <select v-model="localData.severity" class="input text-sm" @change="emitUpdate">
+              <option v-for="severity in MESSAGE_SEVERITY_OPTIONS" :key="severity" :value="severity">
+                {{ $t(`messageArchives.severities.${severity}`) }}
+              </option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.messageArchive.title') }}</label>
+          <input
+            v-model="localData.title"
+            class="input text-sm"
+            :placeholder="$t('logic.nodeConfig.messageArchive.titlePlaceholder')"
+            @change="emitUpdate"
+          />
+        </div>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.messageArchive.message') }}</label>
+          <textarea
+            v-model="localData.message"
+            class="input text-sm min-h-24 resize-y"
+            :placeholder="$t('logic.nodeConfig.messageArchive.messagePlaceholder')"
+            @change="emitUpdate"
+          />
+        </div>
+      </div>
+    </template>
+
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -1133,7 +1192,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { dpApi, searchApi, securityApi } from '@/api/client'
+import { dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
 
@@ -1168,6 +1227,9 @@ const urlTargetDecision = ref(null)
 const urlTargetMsg = ref(null)
 const apiVariableSearches = ref([])
 const apiVariableResults = ref([])
+const messageArchives = ref([])
+const MESSAGE_TYPE_OPTIONS = ['automation', 'notification', 'system', 'security', 'adapter', 'diagnostic']
+const MESSAGE_SEVERITY_OPTIONS = ['info', 'success', 'warning', 'error', 'critical']
 
 const CONDITION_OPERATOR_OPTIONS = computed(() => [
   { value: 'eq',          label: t('logic.nodeConfig.rules.operators.eq') },
@@ -1345,8 +1407,13 @@ const isICalNode          = computed(() => props.node?.type === 'ical')
 const apiVariables = computed(() => Array.isArray(localData.value.variables) ? localData.value.variables : [])
 const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
 const isHostCheckNode     = computed(() => props.node?.type === 'host_check')
+const isMessageArchiveNode = computed(() => props.node?.type === 'message_archive')
 const isDecisionNode      = computed(() => props.node?.type === 'decision')
 const isValueMappingNode  = computed(() => props.node?.type === 'value_mapping')
+const selectedMessageArchiveMissing = computed(() => {
+  const id = localData.value.archive_id
+  return !!id && !messageArchives.value.some((archive) => archive.id === id)
+})
 
 const MAC_RE = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/
 const macAddressError = computed(() => {
@@ -1943,6 +2010,12 @@ watch(() => props.node, (n) => {
       apiVariableSearches.value = []
       apiVariableResults.value = []
     }
+    if (n.type === 'message_archive') {
+      if (!localData.value.type) localData.value.type = 'automation'
+      if (!localData.value.severity) localData.value.severity = 'info'
+      if (localData.value.archive_id) localData.value.archive_id = String(localData.value.archive_id).toLowerCase()
+      loadMessageArchives()
+    }
     if (n.type === 'datapoint_read' || n.type === 'datapoint_write') {
       searchDps()
       // Restore value_map UI state — but don't overwrite if user just picked 'custom'
@@ -2165,6 +2238,15 @@ async function allowApiClientTarget() {
     urlTargetMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.saveError') }
   } finally {
     urlTargetSaving.value = false
+  }
+}
+
+async function loadMessageArchives() {
+  try {
+    const { data } = await messageArchivesApi.list()
+    messageArchives.value = Array.isArray(data) ? data : (data?.archives ?? [])
+  } catch {
+    messageArchives.value = []
   }
 }
 

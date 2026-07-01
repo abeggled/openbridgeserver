@@ -162,6 +162,7 @@ async def app(mosquitto_port):
         ("obs.core.write_router", "reset_write_router"),
         ("obs.core.mqtt_client", "reset_mqtt_client"),
         ("obs.history.factory", "reset_history_plugin"),
+        ("obs.message_archive", "reset_message_archive_store"),
         ("obs.ringbuffer.ringbuffer", "reset_ringbuffer"),
         ("obs.core.registry", "reset_registry"),
         ("obs.core.event_bus", "reset_event_bus"),
@@ -183,6 +184,9 @@ async def app(mosquitto_port):
         db_path.replace(".db", "_ringbuffer.db"),
         db_path.replace(".db", "_ringbuffer.db-wal"),
         db_path.replace(".db", "_ringbuffer.db-shm"),
+        os.path.join(os.path.dirname(db_path), "archives", "messages.sqlite3"),
+        os.path.join(os.path.dirname(db_path), "archives", "messages.sqlite3-wal"),
+        os.path.join(os.path.dirname(db_path), "archives", "messages.sqlite3-shm"),
         allowlist_path,
     ]
     for cleanup_path in cleanup_paths:

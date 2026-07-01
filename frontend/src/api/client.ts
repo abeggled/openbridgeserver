@@ -441,3 +441,77 @@ export const history = {
     )
   },
 }
+
+// ── Message Archives ─────────────────────────────────────────────────────────
+
+export interface MessageArchiveOut {
+  id: string
+  name: string
+  description: string
+  tags: string[]
+  default_type: string | null
+  color: string
+  retention_max_entries: number | null
+  retention_max_age_days: number | null
+  created_at: string
+  updated_at: string
+  entry_count: number
+  oldest_entry_at: string | null
+  newest_entry_at: string | null
+  db_status: string
+  db_path: string
+}
+
+export interface MessageArchiveEntry {
+  id: string
+  archive_id: string
+  archive_name: string
+  archive_color: string
+  created_at: string
+  updated_at: string
+  type: string
+  severity: string
+  status: string
+  source: string
+  title: string
+  message: string
+  payload: Record<string, unknown>
+  acknowledged_at: string | null
+  acknowledged_by: string | null
+  read_at: string | null
+  is_read: boolean
+}
+
+export const messageArchives = {
+  list: () => {
+    const headers: Record<string, string> = {}
+    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
+    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    return request<MessageArchiveOut[]>('/message-archives', { headers, silent401: true })
+  },
+  entries: (params: Record<string, string | number | undefined>) => {
+    const query = new URLSearchParams()
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== '') query.set(key, String(value))
+    }
+    const headers: Record<string, string> = {}
+    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
+    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    return request<{ items: MessageArchiveEntry[]; total: number; limit: number; offset: number }>(
+      `/message-archives/entries?${query.toString()}`,
+      { headers, silent401: true },
+    )
+  },
+  markRead: (archiveId: string, entryId: string) => {
+    const headers: Record<string, string> = {}
+    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
+    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    return request<MessageArchiveEntry>(`/message-archives/${archiveId}/entries/${entryId}/read`, { method: 'POST', headers, silent401: true })
+  },
+  acknowledge: (archiveId: string, entryId: string) => {
+    const headers: Record<string, string> = {}
+    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
+    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    return request<MessageArchiveEntry>(`/message-archives/${archiveId}/entries/${entryId}/acknowledge`, { method: 'POST', headers, silent401: true })
+  },
+}
