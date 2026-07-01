@@ -14,9 +14,11 @@ import pytest
 import aiosqlite
 
 from obs.ringbuffer.store.manifest import (
+    LEGACY_SCHEMA_VERSION,
     SEGMENT_STATUS_ACTIVE,
     SEGMENT_STATUS_CHECKPOINT_PENDING,
     SEGMENT_STATUS_CLOSED,
+    SEGMENT_STATUS_LEGACY,
     SEGMENT_STATUS_QUARANTINED,
     Manifest,
     SegmentRecord,
@@ -180,6 +182,32 @@ async def test_open_migrates_legacy_manifest_without_quarantine_reason(tmp_path:
         assert segments[0].quarantine_reason is None
     finally:
         await m.close()
+
+
+async def test_register_legacy_segment_is_additive_and_readonly(manifest: Manifest):
+    seg = await manifest.register_legacy_segment(
+        source_path="/data/obs_ringbuffer.db",
+        size_bytes=123456,
+        dirty_wal=False,
+    )
+    assert seg.status == SEGMENT_STATUS_LEGACY
+    assert seg.schema_version == LEGACY_SCHEMA_VERSION
+    assert seg.filename == "/data/obs_ringbuffer.db"
+    assert seg.size_bytes == 123456
+    assert seg.recovery_status == "none"
+    # Legacy ist nie aktiv und nie retention-fähig.
+    assert await manifest.get_active_segment() is None
+    assert [s.segment_id for s in await manifest.list_closed_segments()] == []
+    assert [s.segment_id for s in await manifest.list_legacy_segments()] == [seg.segment_id]
+
+
+async def test_register_legacy_segment_flags_dirty_wal(manifest: Manifest):
+    seg = await manifest.register_legacy_segment(
+        source_path="/data/big.db",
+        size_bytes=30 * 1024**3,
+        dirty_wal=True,
+    )
+    assert seg.recovery_status == "dirty_wal"
 
 
 async def test_global_event_id_is_monotonic_and_persistent(tmp_path: Path):

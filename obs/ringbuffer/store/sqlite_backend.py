@@ -63,6 +63,7 @@ from obs.ringbuffer.store.interface import (
     StoreStats,
 )
 from obs.ringbuffer.store.manifest import (
+    LEGACY_SCHEMA_VERSION,
     SEGMENT_STATUS_ACTIVE,
     Manifest,
     SegmentRecord,
@@ -146,6 +147,20 @@ def _utc_now_compact() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S-%f")
 
 
+def _is_legacy_segment(segment: SegmentRecord) -> bool:
+    """True für read-only eingehängte v1/Legacy-Single-DBs (#934).
+
+    Erkennung über die Segment-Schema-Version — NICHT über den Status —, damit der
+    Read-Pfad unabhängig von der Manifest-Statusmaschine korrekt degradiert.
+    """
+    return segment.schema_version <= LEGACY_SCHEMA_VERSION
+
+
+# Legacy-Query darf ohne Zeitfenster nicht unbounded scannen: die JSON-basierte
+# Value-Filter-Degradation liest höchstens so viele Kandidatenzeilen.
+_LEGACY_DEFAULT_CANDIDATE_CAP = 10_000
+
+
 # Einfache Operatoren, die als typisiertes SQL-WHERE gepusht werden.
 _PUSHDOWN_OPERATORS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte", "between"})
 # contains/regex: nur mit gebundenem Query (Zeitfenster oder Kandidaten-Cap).
@@ -217,6 +232,93 @@ def _parse_ts(value: str | None) -> float | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
+
+
+def _legacy_row_matches_filters(record: dict[str, Any], value_filters: list[dict[str, Any]]) -> bool:
+    """Python-Fallback-Auswertung der Value-Filter für v1/Legacy-Zeilen (#934).
+
+    Ohne typisierte Wertspalten kann Legacy keinen SQL-Pushdown machen; die Filter
+    werden hier gegen die dekodierten JSON-Werte ausgewertet. Semantik spiegelt die
+    v2-Pushdown/Guarded-Operatoren, damit gemischte Legacy+v2-Queries konsistent sind.
+    Alle Prädikate müssen zutreffen (AND).
+    """
+    return all(_legacy_filter_matches(record, spec) for spec in value_filters)
+
+
+def _legacy_filter_matches(record: dict[str, Any], spec: dict[str, Any]) -> bool:
+    operator = str(spec.get("operator", "")).strip().lower()
+    if operator not in _VALID_OPERATORS:
+        raise ValueError(f"invalid value filter operator: {operator!r}")
+    field_name = str(spec.get("field", "new_value")).strip().lower()
+    if field_name not in _FILTER_FIELDS:
+        raise ValueError(f"invalid value filter field: {field_name!r}")
+    actual = record.get(field_name)
+
+    if operator == "between":
+        lower, upper = spec.get("lower"), spec.get("upper")
+        if not _is_number(lower) or not _is_number(upper):
+            raise ValueError("between requires numeric lower/upper bounds")
+        if lower > upper:
+            raise ValueError("value filter lower must be <= upper")
+        return _is_number(actual) and lower <= actual <= upper
+
+    if operator in _SQL_COMPARATORS:
+        return _legacy_compare(operator, actual, spec.get("value"))
+
+    ignore_case = bool(spec.get("ignore_case", False))
+    if operator == "contains":
+        needle = spec.get("value")
+        if not isinstance(needle, str):
+            raise ValueError("contains requires a string value")
+        if not isinstance(actual, str):
+            return False
+        haystack = actual.lower() if ignore_case else actual
+        return (needle.lower() if ignore_case else needle) in haystack
+
+    # regex — dieselbe Härtung wie der v2-Guarded-Zweig.
+    pattern = spec.get("pattern")
+    if not isinstance(pattern, str) or not pattern:
+        raise ValueError("regex requires a non-empty pattern")
+    if len(pattern) > _REGEX_MAX_PATTERN_LEN:
+        raise ValueError("unsafe regex pattern: pattern too long")
+    if _RE_UNSAFE_NESTED_QUANTIFIERS.search(pattern):
+        raise ValueError("unsafe regex pattern: nested quantifiers are not allowed")
+    if not isinstance(actual, str):
+        return False
+    flags = re.IGNORECASE if ignore_case else 0
+    try:
+        return re.compile(pattern, flags).search(actual) is not None
+    except re.error as exc:  # pragma: no cover - Muster wurde oben bereits kompiliert
+        raise ValueError(f"invalid regex pattern: {exc}") from exc
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _legacy_compare(operator: str, actual: Any, expected: Any) -> bool:
+    """eq/ne/gt/gte/lt/lte — typtreu wie der v2-Pushdown (kein Cross-Typ-Match)."""
+    # bool vor numeric prüfen (bool ist int-Subklasse); Cross-Typ-Vergleiche matchen nicht.
+    if isinstance(expected, bool):
+        if not isinstance(actual, bool):
+            return operator == "ne"
+    elif _is_number(expected):
+        if not _is_number(actual):
+            return operator == "ne"
+    elif isinstance(expected, str):
+        if not isinstance(actual, str):
+            return operator == "ne"
+    if operator == "eq":
+        return actual == expected
+    if operator == "ne":
+        return actual != expected
+    if operator == "gt":
+        return actual > expected
+    if operator == "gte":
+        return actual >= expected
+    if operator == "lt":
+        return actual < expected
+    return actual <= expected  # lte
 
 
 class SqliteSegmentStore(RingBufferStore):
@@ -408,7 +510,12 @@ class SqliteSegmentStore(RingBufferStore):
             conn = await self._connection_for_read(segment)
             close_after = conn is not self._active_conn
             try:
-                collected.extend(await self._query_segment(conn, query))
+                if _is_legacy_segment(segment):
+                    # v1/Legacy-Single-DB: kein global_event_id, keine typisierten
+                    # Spalten → eigener degradierender Read-Zweig (#934).
+                    collected.extend(await self._query_legacy_segment(conn, segment, query))
+                else:
+                    collected.extend(await self._query_segment(conn, query))
             finally:
                 if close_after:
                     await conn.close()
@@ -417,6 +524,15 @@ class SqliteSegmentStore(RingBufferStore):
     async def _connection_for_read(self, segment: SegmentRecord) -> aiosqlite.Connection:
         if self._active_segment is not None and segment.segment_id == self._active_segment.segment_id and self._active_conn is not None:
             return self._active_conn
+        if _is_legacy_segment(segment):
+            # Legacy-Datei liegt in place (absoluter Pfad im ``filename``), NICHT unter
+            # ``segments/``. Read-only + kein WAL-Checkpoint: eine große Legacy-Datei mit
+            # dirty -wal darf beim ersten Open NICHT im Startup gecheckpointet werden
+            # (unbounded). ``immutable=1`` verhindert genau diese WAL-Recovery.
+            uri = f"file:{Path(segment.filename).as_posix()}?mode=ro&immutable=1"
+            conn = await aiosqlite.connect(uri, uri=True)
+            conn.row_factory = aiosqlite.Row
+            return conn
         conn = await aiosqlite.connect(str(self._segments_dir / segment.filename))
         conn.row_factory = aiosqlite.Row
         return conn
@@ -430,6 +546,99 @@ class SqliteSegmentStore(RingBufferStore):
         async with conn.execute(sql, params) as cur:
             rows = await cur.fetchall()
         return [self._row_to_dict(row) for row in rows]
+
+    async def _query_legacy_segment(
+        self,
+        conn: aiosqlite.Connection,
+        segment: SegmentRecord,
+        query: StoreQuery,
+    ) -> list[dict[str, Any]]:
+        """Degradierender Read-Zweig für eine v1/Legacy-Single-DB (#934).
+
+        Legacy-Segmente haben weder ``global_event_id`` noch typisierte Wertspalten:
+
+        * **Ordering** wird aus ``ts`` + segment-lokaler rowid ``id`` abgeleitet
+          (neueste zuerst) und in einen synthetischen, streng **negativen**
+          ``global_event_id`` übersetzt. Damit sortieren alle Legacy-Zeilen unter
+          jeder v2-Zeile (positive IDs) — Legacy-Daten sind per Definition älter als
+          jedes nach Aktivierung geschriebene v2-Segment — und behalten intern ihre
+          ts/rowid-Ordnung.
+        * **Value-Filter** werden NICHT typisiert in SQL gepusht (die Spalten fehlen),
+          sondern kontrolliert **bounded** in Python auf den dekodierten JSON-Werten
+          ausgewertet. Der Kandidatensatz ist auf ``candidate_cap`` bzw. einen Default-
+          Cap begrenzt, damit ein Value-Filter über Legacy nicht in einen unbounded
+          Full-Scan über 20–30 GB kippt.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if query.from_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(query.from_ts)
+        if query.to_ts is not None:
+            clauses.append("ts <= ?")
+            params.append(query.to_ts)
+        if query.datapoint_id is not None:
+            clauses.append("datapoint_id = ?")
+            params.append(query.datapoint_id)
+        if query.source_adapter is not None:
+            clauses.append("source_adapter = ?")
+            params.append(query.source_adapter)
+        if query.quality is not None:
+            clauses.append("quality = ?")
+            params.append(query.quality)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        has_value_filters = bool(query.value_filters)
+        # Ohne Value-Filter reicht das strukturelle LIMIT (offset+limit). Mit
+        # Value-Filter muss ein größerer, aber gebundener Kandidatensatz gelesen
+        # und in Python nachgefiltert werden.
+        if has_value_filters:
+            fetch_limit = self._legacy_candidate_cap(query)
+        else:
+            fetch_limit = max(query.offset, 0) + max(query.limit, 0)
+        sql = (
+            "SELECT id, ts, datapoint_id, topic, old_value, new_value, "
+            "source_adapter, quality, metadata_version, metadata "
+            f"FROM ringbuffer{where} ORDER BY ts DESC, id DESC LIMIT ?"
+        )
+        params.append(fetch_limit)
+        async with conn.execute(sql, params) as cur:
+            raw_rows = await cur.fetchall()
+
+        results: list[dict[str, Any]] = []
+        for order, row in enumerate(raw_rows):
+            record = self._legacy_row_to_dict(row, segment.segment_id, order)
+            if has_value_filters and not _legacy_row_matches_filters(record, query.value_filters):
+                continue
+            results.append(record)
+        return results
+
+    @staticmethod
+    def _legacy_candidate_cap(query: StoreQuery) -> int:
+        """Gebundener Kandidaten-Cap für Legacy-Value-Filter (kein Full-Scan)."""
+        if query.candidate_cap is not None and query.candidate_cap > 0:
+            return query.candidate_cap
+        return _LEGACY_DEFAULT_CANDIDATE_CAP
+
+    @staticmethod
+    def _legacy_row_to_dict(row: aiosqlite.Row, segment_id: int, order: int) -> dict[str, Any]:
+        # Synthetischer global_event_id: streng negativ und mit ``order`` (ts/rowid
+        # DESC) fallend, damit die newest-first-Ordnung erhalten bleibt und Legacy
+        # unter allen positiven v2-IDs einsortiert. ``segment_id`` bricht Gleichstände
+        # deterministisch zwischen mehreren Legacy-Segmenten.
+        synthetic_gid = -1 - (order << 16) - (segment_id & 0xFFFF)
+        return {
+            "global_event_id": synthetic_gid,
+            "ts": row["ts"],
+            "datapoint_id": row["datapoint_id"],
+            "topic": row["topic"],
+            "old_value": json.loads(row["old_value"]) if row["old_value"] is not None else None,
+            "new_value": json.loads(row["new_value"]) if row["new_value"] is not None else None,
+            "source_adapter": row["source_adapter"],
+            "quality": row["quality"],
+            "metadata_version": row["metadata_version"],
+            "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+        }
 
     def _build_segment_sql(self, query: StoreQuery) -> tuple[str, list[Any]]:
         """Baut das segment-lokale SELECT inkl. gepushter Wertfilter.

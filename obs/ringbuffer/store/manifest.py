@@ -30,6 +30,15 @@ SEGMENT_STATUS_ACTIVE = "active"
 SEGMENT_STATUS_CLOSED = "closed"
 SEGMENT_STATUS_QUARANTINED = "quarantined"
 SEGMENT_STATUS_CHECKPOINT_PENDING = "checkpoint_pending"
+# Read-only eingehängte Legacy-Single-DB (#934): nie aktiv, nie writable, nie
+# rowweise/segmentweise löschbar. Bleibt lesbar, bis eine explizite (optionale)
+# Migration die Daten in v2-Segmente kopiert hat.
+SEGMENT_STATUS_LEGACY = "legacy"
+
+# Schema-Version einer Legacy-Single-DB: kein ``global_event_id``, keine
+# typisierten Wertspalten, segment-lokale rowid. Der Read-Pfad degradiert für
+# diese Version kontrolliert (Ordering aus ts+rowid, kein typed pushdown).
+LEGACY_SCHEMA_VERSION = 1
 
 # Geschlossene, für Retention löschbare Status: ein Segment ist erst freigebbar,
 # wenn sein DB/WAL/SHM-Zustand konsistent behandelt wurde (nicht mehr pending).
@@ -156,6 +165,44 @@ class Manifest:
         await self._db.commit()
         segment_id = cursor.lastrowid
         return await self.get_segment(segment_id)
+
+    async def register_legacy_segment(
+        self,
+        *,
+        source_path: str,
+        size_bytes: int,
+        dirty_wal: bool = False,
+    ) -> SegmentRecord:
+        """Hängt eine bestehende Legacy-Single-DB additiv als read-only Segment ein (#934).
+
+        Das Segment bekommt Status ``legacy`` und ``schema_version=LEGACY_SCHEMA_VERSION``.
+        Es ist damit nie aktiv, nie writable und nie retention-/checkpoint-fähig; der
+        Read-Pfad erkennt es an der Schema-Version und degradiert kontrolliert.
+
+        ``source_path`` ist der **absolute Pfad** der Legacy-Datei; sie wird NICHT
+        nach ``segments/`` verschoben, sondern in place read-only gelesen. ``dirty_wal``
+        markiert eine große Legacy-Datei mit dirty ``-wal`` (aus dem #936-Kommentar),
+        die beim ersten Open NICHT im Startup gecheckpointet werden darf; der Fall wird
+        in ``recovery_status`` als ``dirty_wal`` festgehalten.
+        """
+        created_at = _utc_now_iso()
+        recovery_status = "dirty_wal" if dirty_wal else "none"
+        cursor = await self._db.execute(
+            """INSERT INTO segments (filename, status, created_at, schema_version, size_bytes, recovery_status)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (source_path, SEGMENT_STATUS_LEGACY, created_at, LEGACY_SCHEMA_VERSION, size_bytes, recovery_status),
+        )
+        await self._db.commit()
+        return await self.get_segment(cursor.lastrowid)
+
+    async def list_legacy_segments(self) -> list[SegmentRecord]:
+        """Read-only eingehängte Legacy-Single-DBs, älteste zuerst."""
+        async with self._db.execute(
+            "SELECT * FROM segments WHERE status = ? ORDER BY segment_id ASC",
+            (SEGMENT_STATUS_LEGACY,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_segment(row) for row in rows]
 
     async def get_segment(self, segment_id: int) -> SegmentRecord | None:
         async with self._db.execute("SELECT * FROM segments WHERE segment_id = ?", (segment_id,)) as cur:
