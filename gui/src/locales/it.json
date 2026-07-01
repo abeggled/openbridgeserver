@@ -1,8 +1,8 @@
 {
-    "login": {
-        "submitting": "Accesso in corso…",
-        "submit": "Registrazione",
-        "username": "Nome utente",
-        "password": "Password"
-    }
+  "login": {
+    "submitting": "Accesso in corso…",
+    "submit": "Accedi",
+    "username": "Nome utente",
+    "password": "Password"
+  }
 }
