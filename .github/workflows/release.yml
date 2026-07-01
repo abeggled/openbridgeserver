@@ -22,6 +22,73 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v7
 
+      - name: Validate tag format
+        run: |
+          TAG="${GITHUB_REF##*/}"
+          if [[ ! "$TAG" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(-RC[0-9]+)?$ ]]; then
+            echo "::error::Tag '$TAG' does not match CalVer format YYYY.M.PATCH(-RC<N>). Aborting release."
+            exit 1
+          fi
+          echo "Tag format OK: $TAG"
+
+      - name: Validate tag origin branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${GITHUB_REF##*/}"
+          export TAG_NAME
+          python3 <<'EOF'
+          import json, os, re, sys, urllib.request, urllib.error
+
+          tag        = os.environ['TAG_NAME']
+          commit_sha = os.environ['GITHUB_SHA']
+          repo       = os.environ['GITHUB_REPOSITORY']
+          token      = os.environ['GITHUB_TOKEN']
+
+          m = re.match(r'^(\d{4}\.\d+)\.', tag)
+          release_branch = m.group(1) + '.x'
+          print(f'Expected release branch: {release_branch}')
+
+          headers = {
+              'Authorization': f'Bearer {token}',
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+          }
+
+          def gh_get(path):
+              req = urllib.request.Request(f'https://api.github.com/{path}', headers=headers)
+              with urllib.request.urlopen(req) as r:
+                  return json.load(r)
+
+          try:
+              gh_get(f'repos/{repo}/branches/{release_branch}')
+          except urllib.error.HTTPError as e:
+              if e.code == 404:
+                  print(f'::error::Release branch "{release_branch}" does not exist. Cut it before tagging.')
+              else:
+                  print(f'::error::GitHub API error checking branch: {e}')
+              sys.exit(1)
+
+          # compare/{base}...{head}: status "behind" or "identical" means the commit IS on the branch
+          try:
+              cmp = gh_get(f'repos/{repo}/compare/{release_branch}...{commit_sha}')
+          except urllib.error.HTTPError as e:
+              print(f'::error::Could not compare branch to tag commit: {e}')
+              sys.exit(1)
+
+          status   = cmp.get('status', 'unknown')
+          ahead_by = cmp.get('ahead_by', -1)
+          if status not in ('behind', 'identical'):
+              print(
+                  f'::error::Tag "{tag}" (commit {commit_sha[:8]}) is not on branch '
+                  f'"{release_branch}" (compare status: {status}, ahead_by: {ahead_by}). '
+                  f'Tags must be created from the release branch.'
+              )
+              sys.exit(1)
+
+          print(f'Tag origin OK: "{tag}" is on branch "{release_branch}" (status: {status}).')
+          EOF
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
