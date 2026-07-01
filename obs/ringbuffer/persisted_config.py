@@ -29,6 +29,9 @@ def _defaults() -> dict[str, Any]:
         "max_entries": None,
         "max_file_size_bytes": DEFAULT_MAX_FILE_SIZE_BYTES,
         "max_age": None,
+        # Segmentierter Store (#919) — OPT-IN, Default AUS. Bei ``False`` bleibt
+        # der Legacy-Single-File-Pfad exakt wie bisher aktiv.
+        "segmented": False,
         # Segment-Parameter (#930) — standardmäßig deaktiviert (Legacy-
         # Single-File-Verhalten); Segmentierung ist opt-in.
         "segment_max_bytes": None,
@@ -54,6 +57,7 @@ async def load_persisted_ringbuffer_config(db: Database) -> dict[str, Any]:
         "max_entries": data.get("max_entries", defaults["max_entries"]),
         "max_file_size_bytes": data.get("max_file_size_bytes", defaults["max_file_size_bytes"]),
         "max_age": data.get("max_age", defaults["max_age"]),
+        "segmented": bool(data.get("segmented", defaults["segmented"])),
         "segment_max_bytes": data.get("segment_max_bytes", defaults["segment_max_bytes"]),
         "segment_max_rows": data.get("segment_max_rows", defaults["segment_max_rows"]),
         "segment_max_age": data.get("segment_max_age", defaults["segment_max_age"]),
@@ -67,6 +71,7 @@ async def persist_ringbuffer_config(
     max_entries: int | None,
     max_file_size_bytes: int | None,
     max_age: int | None,
+    segmented: bool = False,
     segment_max_bytes: int | None = None,
     segment_max_rows: int | None = None,
     segment_max_age: int | None = None,
@@ -77,6 +82,7 @@ async def persist_ringbuffer_config(
             "max_entries": max_entries,
             "max_file_size_bytes": max_file_size_bytes,
             "max_age": max_age,
+            "segmented": bool(segmented),
             "segment_max_bytes": segment_max_bytes,
             "segment_max_rows": segment_max_rows,
             "segment_max_age": segment_max_age,
