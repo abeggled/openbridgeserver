@@ -484,6 +484,13 @@ class SqliteSegmentStore(RingBufferStore):
         ``capabilities().supports_streaming_export``), NICHT dieser Merge.
         """
         rows = await self._collect_rows_across_segments(query)
+        # Defensiver finaler Sort auf der bereits gebundenen Kandidatenmenge:
+        # Die Segment-Iteration liefert v2-Segmente neueste-zuerst und Legacy
+        # zuletzt, ist also i. d. R. schon global absteigend. Der Sort ist billig
+        # (nur offset+limit-nahe Zeilen) und macht die Ordnung robust gegen
+        # Sonderfälle wie mehrere Legacy-Segmente oder künftige Backfill-Importe,
+        # statt sie implizit an die Manifest-Reihenfolge zu koppeln.
+        rows.sort(key=lambda r: r["global_event_id"], reverse=True)
         start = max(query.offset, 0)
         end = start + max(query.limit, 0)
         return rows[start:end]

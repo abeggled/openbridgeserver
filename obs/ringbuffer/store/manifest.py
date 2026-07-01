@@ -323,8 +323,14 @@ class Manifest:
             clauses.append("(to_ts IS NULL OR to_ts >= ?)")
             params.append(from_ts)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        # Legacy-Segmente (#934) tragen synthetische, streng negative
+        # global_event_ids und sind per Definition älter als jedes v2-Segment —
+        # unabhängig von ihrer segment_id (sie werden ggf. NACH dem aktiven
+        # v2-Segment eingehängt). Sie müssen daher immer ZULETZT iteriert werden,
+        # sonst bricht die neueste-zuerst-Ordnung und das bounded Early-Termination
+        # in #932. Primär also nach Legacy-Zugehörigkeit, dann segment_id DESC.
         async with self._db.execute(
-            f"SELECT * FROM segments{where} ORDER BY segment_id DESC",
+            f"SELECT * FROM segments{where} ORDER BY CASE WHEN status = '{SEGMENT_STATUS_LEGACY}' THEN 1 ELSE 0 END, segment_id DESC",
             params,
         ) as cur:
             rows = await cur.fetchall()
