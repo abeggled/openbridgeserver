@@ -113,6 +113,9 @@ async def _disabled_stats(db: Database) -> RingBufferStats:
         effective_retention_seconds=None,
         max_file_size_bytes=cfg["max_file_size_bytes"],
         max_age=cfg["max_age"],
+        segment_max_bytes=cfg.get("segment_max_bytes"),
+        segment_max_rows=cfg.get("segment_max_rows"),
+        segment_max_age=cfg.get("segment_max_age"),
         file_size_bytes=0,
     )
 
@@ -166,6 +169,11 @@ class RingBufferStats(BaseModel):
     max_file_size_bytes: int | None
     max_age: int | None
     file_size_bytes: int
+    # Persistierte Segment-Rotations-Config (#919/#938) — damit der Config-Dialog
+    # die GESPEICHERTEN Werte hydratisiert (nicht die runtime-abgeleiteten).
+    segment_max_bytes: int | None = None
+    segment_max_rows: int | None = None
+    segment_max_age: int | None = None
     last_recovery_at: str | None = None
     last_recovery_file_count: int = 0
     # Segmentierter Store (#919) — nur im segmentierten Modus befüllt (``common``
@@ -1838,7 +1846,16 @@ async def ringbuffer_stats(
     if not is_ringbuffer_enabled() or rb is None:
         return await _disabled_stats(db)
     stats = await rb.stats()
-    return RingBufferStats(enabled=True, **stats)
+    # Persistierte Segment-Config mitgeben, damit der Config-Dialog die
+    # gespeicherten Werte anzeigt (``rb.stats()`` liefert nur den Store-Snapshot).
+    persisted = await load_persisted_ringbuffer_config(db)
+    return RingBufferStats(
+        enabled=True,
+        segment_max_bytes=persisted.get("segment_max_bytes"),
+        segment_max_rows=persisted.get("segment_max_rows"),
+        segment_max_age=persisted.get("segment_max_age"),
+        **stats,
+    )
 
 
 @router.post("/config", response_model=RingBufferStats)

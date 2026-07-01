@@ -332,13 +332,27 @@ function hydrateForm(currentStats) {
     configForm.retentionValue = '30'
     configForm.retentionUnit = 'days'
   }
-  // /stats liefert die persistierten Segment-Parameter nicht zurück, daher wird
-  // das Alter auf den Backend-Default (6 h) gesetzt und die optionalen
-  // Erweitert-Felder bleiben leer (= automatisch abgeleitet).
-  configForm.segmentMaxAgeHours = String(DEFAULT_SEGMENT_MAX_AGE_HOURS)
-  configForm.segmentMaxBytesValue = ''
-  configForm.segmentMaxBytesUnit = 'mb'
-  configForm.segmentMaxRowsValue = ''
+  // /stats liefert die persistierten Segment-Parameter mit (#919/#938): das Alter
+  // wird aus dem gespeicherten Wert (Sekunden → Stunden) hydratisiert, sonst auf
+  // den Backend-Default (6 h). Die optionalen Erweitert-Felder zeigen den
+  // gespeicherten Wert bzw. bleiben leer (= automatisch abgeleitet).
+  const segmentMaxAge = Number(currentStats?.segment_max_age)
+  if (Number.isFinite(segmentMaxAge) && segmentMaxAge > 0) {
+    configForm.segmentMaxAgeHours = String(Math.round(segmentMaxAge / 3600))
+  } else {
+    configForm.segmentMaxAgeHours = String(DEFAULT_SEGMENT_MAX_AGE_HOURS)
+  }
+  const segmentMaxBytes = Number(currentStats?.segment_max_bytes)
+  if (Number.isFinite(segmentMaxBytes) && segmentMaxBytes > 0) {
+    const picked = pickSizeUnit(segmentMaxBytes)
+    configForm.segmentMaxBytesValue = picked.value
+    configForm.segmentMaxBytesUnit = picked.unit
+  } else {
+    configForm.segmentMaxBytesValue = ''
+    configForm.segmentMaxBytesUnit = 'mb'
+  }
+  const segmentMaxRows = Number(currentStats?.segment_max_rows)
+  configForm.segmentMaxRowsValue = Number.isFinite(segmentMaxRows) && segmentMaxRows > 0 ? String(Math.round(segmentMaxRows)) : ''
 }
 
 function buildPayload() {

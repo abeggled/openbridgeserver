@@ -138,3 +138,20 @@ async def test_load_persisted_ringbuffer_config_after_post_matches_payload(clien
     }
 
     await _reset_to_defaults(client, auth_headers)
+
+
+async def test_stats_returns_persisted_segment_config(client, auth_headers):
+    """/stats gibt die persistierten Segment-Parameter zurück, damit der
+    Config-Dialog die gespeicherten Werte hydratisiert (#919/#938)."""
+    resp = await client.post(
+        "/api/v1/ringbuffer/config",
+        json={"segment_max_age": 43200},  # 12 h; max_age=None → keine Ratio-Verletzung
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    stats = await client.get("/api/v1/ringbuffer/stats", headers=auth_headers)
+    assert stats.status_code == 200, stats.text
+    assert stats.json()["segment_max_age"] == 43200
+
+    await _reset_to_defaults(client, auth_headers)
