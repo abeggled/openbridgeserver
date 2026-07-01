@@ -1,17 +1,19 @@
-# Branch Protection Checklist (`main`)
+# Branch Protection Checklist
+
+## `main`
 
 Use this checklist to configure robust pull request safety for `main`.
 
-## 1) Protect the branch
+### 1) Protect the branch
 
-- [ ] Settings -> Branches -> Add branch protection rule
+- [ ] Settings → Branches → Add branch protection rule
 - [ ] Branch name pattern: `main`
 - [ ] Require a pull request before merging
 - [ ] Require approvals: at least `1`
 - [ ] Dismiss stale pull request approvals when new commits are pushed
 - [ ] Require conversation resolution before merging
 
-## 2) Require CI checks
+### 2) Require CI checks
 
 - [ ] Require status checks to pass before merging
 - [ ] Require branches to be up to date before merging
@@ -25,15 +27,59 @@ Optional, if enabled:
 - [ ] `codecov/project`
 - [ ] `codecov/patch`
 
-## 3) Tighten merge safety
+### 3) Tighten merge safety
 
 - [ ] Do not allow bypassing the above settings
 - [ ] Restrict who can push to matching branches (maintainers only)
 - [ ] Allow force pushes: disabled
 - [ ] Allow deletions: disabled
 
-## 4) Dependency update hardening
+### 4) Dependency update hardening
 
 - [ ] Require all above checks for Renovate/Dependabot PRs as well
 - [ ] Enable auto-merge only for update classes with stable tests (for example patch-level updates)
 - [ ] Keep major dependency updates manual (review required)
+
+---
+
+## `[0-9][0-9][0-9][0-9].*.x` (Release-Branches, z. B. `2026.7.x`)
+
+Release-Branches stabilisieren ein laufendes Release und nehmen ausschließlich Bug-Fixes,
+Security-Fixes und Release-Engineering auf. Das gleiche Ruleset wie `main` gilt, ergänzt um
+die Backport-Disziplin.
+
+### 1) Protect the branch
+
+- [ ] Settings → Branches → Add branch protection rule
+- [ ] Branch name pattern: `[0-9][0-9][0-9][0-9].*.x`
+- [ ] Require a pull request before merging
+- [ ] Require approvals: at least `1`
+- [ ] Dismiss stale pull request approvals when new commits are pushed
+- [ ] Require conversation resolution before merging
+
+### 2) Require CI checks
+
+Identisch zu `main`:
+
+- [ ] Require status checks to pass before merging
+- [ ] Require branches to be up to date before merging
+- [ ] `Tests (3.13)`
+- [ ] `Tests (3.14)`
+- [ ] `Ruff`
+
+### 3) Tighten merge safety
+
+- [ ] Do not allow bypassing the above settings
+- [ ] Restrict who can push to matching branches (maintainers only)
+- [ ] Allow force pushes: disabled
+- [ ] Allow deletions: disabled
+
+### 4) Backport-Disziplin (Konvention, kein CI-Gate)
+
+PRs auf `YYYY.M.x` brauchen:
+- das Label `backport-YYYY.M` (z. B. `backport-2026.7`)
+- Maintainer-Freigabe (1 Review)
+- Cherry-pick-Bezug im PR-Body (Ursprungs-PR oder Commit-SHA)
+
+Wird durch das PR-Template und Review-Disziplin sichergestellt — kein blockierender CI-Gate,
+da bei einem 3-Personen-Team die Absprache schneller und zuverlässiger ist.
