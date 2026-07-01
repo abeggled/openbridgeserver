@@ -217,3 +217,49 @@ async def test_db_access_before_open_raises(tmp_path: Path):
 async def test_reserve_zero_ids_is_rejected(manifest: Manifest):
     with pytest.raises(ValueError, match="count must be >= 1"):
         await manifest.reserve_global_event_ids(0)
+
+
+async def _seg_with_bounds(manifest: Manifest, filename: str, from_ts: str | None, to_ts: str | None) -> SegmentRecord:
+    seg = await manifest.create_segment(filename=filename, schema_version=1)
+    await manifest.update_segment_stats(seg.segment_id, row_count=1, size_bytes=1, from_ts=from_ts, to_ts=to_ts)
+    return await manifest.get_segment(seg.segment_id)
+
+
+async def test_list_segments_for_query_without_filter_is_newest_first(manifest: Manifest):
+    a = await manifest.create_segment(filename="a.sqlite", schema_version=1)
+    b = await manifest.create_segment(filename="b.sqlite", schema_version=1)
+    c = await manifest.create_segment(filename="c.sqlite", schema_version=1)
+    selected = await manifest.list_segments_for_query()
+    assert [s.segment_id for s in selected] == [c.segment_id, b.segment_id, a.segment_id]
+
+
+async def test_list_segments_for_query_time_filter_picks_overlapping(manifest: Manifest):
+    await _seg_with_bounds(manifest, "a.sqlite", "2026-01-01T00:00:00.000Z", "2026-01-10T00:00:00.000Z")
+    b = await _seg_with_bounds(manifest, "b.sqlite", "2026-02-01T00:00:00.000Z", "2026-02-10T00:00:00.000Z")
+    await _seg_with_bounds(manifest, "c.sqlite", "2026-03-01T00:00:00.000Z", "2026-03-10T00:00:00.000Z")
+    selected = await manifest.list_segments_for_query(
+        from_ts="2026-01-20T00:00:00.000Z",
+        to_ts="2026-02-20T00:00:00.000Z",
+    )
+    assert [s.segment_id for s in selected] == [b.segment_id]
+
+
+async def test_list_segments_for_query_includes_segments_with_unknown_bounds(manifest: Manifest):
+    # Frisch angelegtes Segment ohne from_ts/to_ts wird konservativ einbezogen.
+    unknown = await manifest.create_segment(filename="active.sqlite", schema_version=1)
+    await _seg_with_bounds(manifest, "old.sqlite", "2020-01-01T00:00:00.000Z", "2020-01-02T00:00:00.000Z")
+    selected = await manifest.list_segments_for_query(
+        from_ts="2026-01-01T00:00:00.000Z",
+        to_ts="2026-01-02T00:00:00.000Z",
+    )
+    ids = {s.segment_id for s in selected}
+    # Segment mit unbekannten Grenzen ist dabei, das eindeutig ältere nicht.
+    assert unknown.segment_id in ids
+    assert len(selected) == 1
+
+
+async def test_list_segments_for_query_only_from_ts(manifest: Manifest):
+    await _seg_with_bounds(manifest, "a.sqlite", "2026-01-01T00:00:00.000Z", "2026-01-10T00:00:00.000Z")
+    b = await _seg_with_bounds(manifest, "b.sqlite", "2026-03-01T00:00:00.000Z", "2026-03-10T00:00:00.000Z")
+    selected = await manifest.list_segments_for_query(from_ts="2026-02-01T00:00:00.000Z")
+    assert [s.segment_id for s in selected] == [b.segment_id]

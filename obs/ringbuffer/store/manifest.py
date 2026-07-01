@@ -240,6 +240,49 @@ class Manifest:
             rows = await cur.fetchall()
         return [_row_to_segment(row) for row in rows]
 
+    async def list_segments_for_query(
+        self,
+        from_ts: str | None = None,
+        to_ts: str | None = None,
+    ) -> list[SegmentRecord]:
+        """Wählt Segmente für eine Read-Query aus, **neueste zuerst** (#932).
+
+        Segmentauswahl geschieht zuerst hier über die Manifest-Metadaten, statt
+        blind über alle Segment-Dateien zu mergen:
+
+        * **Mit Zeitfilter** werden nur Segmente zurückgegeben, deren
+          ``[from_ts, to_ts]`` das angefragte Fenster überlappt. Ein Segment ohne
+          bekannte Grenzen (``from_ts``/``to_ts`` NULL — z. B. frisch angelegt,
+          noch ohne Append) wird konservativ **immer** einbezogen, weil sein
+          Inhalt nicht ausgeschlossen werden kann.
+        * **Ohne Zeitfilter** werden alle Segmente geliefert.
+
+        Sortierung ist ``segment_id DESC`` (neueste zuerst). Da ``segment_id``
+        AUTOINCREMENT ist und globale Event-IDs beim Append streng monoton
+        vergeben werden, hält ein später angelegtes Segment ausschließlich höhere
+        ``global_event_id``-Werte als jedes ältere — die Segmentreihenfolge nach
+        ``segment_id DESC`` entspricht damit exakt der ``global_event_id``-DESC-
+        Ordnung über Segmentgrenzen. Das trägt das frühe Paging-Terminieren in
+        #932.
+        """
+        clauses: list[str] = []
+        params: list[str] = []
+        if to_ts is not None:
+            # Segment beginnt nicht nach dem Fensterende (oder Beginn unbekannt).
+            clauses.append("(from_ts IS NULL OR from_ts <= ?)")
+            params.append(to_ts)
+        if from_ts is not None:
+            # Segment endet nicht vor dem Fensterbeginn (oder Ende unbekannt).
+            clauses.append("(to_ts IS NULL OR to_ts >= ?)")
+            params.append(from_ts)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        async with self._db.execute(
+            f"SELECT * FROM segments{where} ORDER BY segment_id DESC",
+            params,
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_segment(row) for row in rows]
+
     async def list_checkpoint_pending_segments(self) -> list[SegmentRecord]:
         """Segmente, deren WAL-Truncate beim Close busy war, älteste zuerst."""
         async with self._db.execute(

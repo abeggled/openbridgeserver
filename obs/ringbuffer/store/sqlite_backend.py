@@ -29,9 +29,12 @@ rowweise, nie das aktive Segment, nie ein noch nicht konsistentes (pending/
 quarantäniertes) Segment. Integrity läuft on-demand pro Segment, NICHT als
 globaler Startup-Scan über 20–30 GB.
 
-Volle segmentbewusste Query (#932) und Legacy-Migration inkl. Dirty-WAL-Handling
-großer Single-DBs (#934) bleiben außerhalb dieses Kernels; die Nahtstellen sind
-mit ``# TODO(#…)`` markiert.
+Die segmentbewusste, bounded Query (#932) wählt Segmente zuerst über das
+Manifest (Zeitfenster-Overlap bzw. neueste zuerst), mergt sie nach
+``global_event_id`` DESC und terminiert früh, sobald ``offset+limit`` Zeilen
+sicher zusammengeführt sind (kein Voll-Merge über alle Segmente). Legacy-
+Migration inkl. Dirty-WAL-Handling großer Single-DBs (#934) bleibt außerhalb
+dieses Kernels; die Nahtstelle ist mit ``# TODO(#…)`` markiert.
 """
 
 from __future__ import annotations
@@ -250,7 +253,10 @@ class SqliteSegmentStore(RingBufferStore):
             # #933: typisierte Wertspalten + SQL-Pushdown für einfache Operatoren.
             supports_typed_pushdown=True,
             ordering_guarantee=OrderingGuarantee.GLOBAL_MONOTONIC,
-            # TODO(#932): streaming/segmentuebergreifender Export.
+            # #932 liefert den bounded Monitor-/Debug-Query-Pfad (query() ist stets
+            # auf offset+limit begrenzt). Ein streambarer Voll-Export über alle
+            # Segmente ist bewusst ein GETRENNTER Pfad mit eigenem Timeout/Limit und
+            # hier noch nicht implementiert → False.
             supports_streaming_export=False,
         )
 
@@ -368,19 +374,37 @@ class SqliteSegmentStore(RingBufferStore):
     # ------------------------------------------------------------------
 
     async def query(self, query: StoreQuery) -> list[dict[str, Any]]:
-        # Foundation-Query: liest über alle Segmente und führt nach globaler
-        # Event-ID (neueste zuerst) stabil zusammen.
-        # TODO(#932): segmentbewusste Auswahl per Zeitfenster + streambares,
-        # deterministisches Cross-Segment-Paging statt Voll-Merge.
+        """Segmentbewusste, bounded Read-Query (#932) — Monitor/Debug-Pfad.
+
+        Dies ist bewusst der **gebundene** Monitor-/Debug-Pfad: die Ausgabe ist
+        stets auf ``offset+limit`` Zeilen begrenzt. Voll-Export/Historie sind
+        getrennte Pfade mit eigenem Streaming/Timeout/Limit (siehe
+        ``capabilities().supports_streaming_export``), NICHT dieser Merge.
+        """
         rows = await self._collect_rows_across_segments(query)
-        rows.sort(key=lambda r: r["global_event_id"], reverse=True)
         start = max(query.offset, 0)
         end = start + max(query.limit, 0)
         return rows[start:end]
 
     async def _collect_rows_across_segments(self, query: StoreQuery) -> list[dict[str, Any]]:
+        """Merged Segmente **neueste zuerst** und terminiert früh (bounded).
+
+        Segmentauswahl läuft zuerst über das Manifest: mit Zeitfilter nur
+        überlappende Segmente, sonst neueste zuerst (``segment_id DESC``). Da
+        ``global_event_id`` beim Append streng monoton vergeben wird, hält ein
+        später angelegtes Segment ausschließlich höhere IDs als jedes ältere —
+        die per Segment bereits ``ORDER BY global_event_id DESC LIMIT ?``
+        begrenzten Kandidaten sind damit über die Segmentgrenze hinweg schon
+        korrekt absteigend sortiert. Sobald ``offset+limit`` Zeilen zusammen sind,
+        können die restlichen (älteren) Segmente NICHT mehr in das Ausgabefenster
+        gelangen und werden gar nicht erst geöffnet.
+        """
+        needed = max(query.offset, 0) + max(query.limit, 0)
         collected: list[dict[str, Any]] = []
-        for segment in await self.manifest.list_segments():
+        segments = await self.manifest.list_segments_for_query(query.from_ts, query.to_ts)
+        for segment in segments:
+            if needed and len(collected) >= needed:
+                break  # bounded: ältere Segmente können das Fenster nicht mehr treffen.
             conn = await self._connection_for_read(segment)
             close_after = conn is not self._active_conn
             try:
