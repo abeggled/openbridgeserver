@@ -1,1 +1,20 @@
-{}
+{
+  "login": {
+    "username": "Benutzername",
+    "password": "Passwort",
+    "submit": "Amäude",
+    "submitting": "Amäude …",
+    "logoAlt": "open bridge server"
+  },
+  "common": {
+    "save": "Sichere",
+    "cancel": "Abbräche",
+    "delete": "Lösche",
+    "edit": "Ändere",
+    "close": "Zuetue",
+    "confirm": "Bestätige",
+    "loading": "Lade …",
+    "yes": "Ja",
+    "no": "Nei"
+  }
+}
