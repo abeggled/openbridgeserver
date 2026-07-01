@@ -34,14 +34,17 @@ def test_updater_uses_release_bundle_filename_for_download_and_extract():
 def test_updater_verifies_checksum_against_downloaded_filenames():
     obs_update = _obs_update_text()
 
-    # Primary path: SHA-256 embedded in release notes body
+    # Primary path: SHA-256 embedded in release notes body (stable/RC)
     assert "sha256:" in obs_update
     assert "sha256sum -c -" in obs_update
-    # Fallback path: legacy .sha512 release asset for releases predating this
-    # migration (enables rollback/downgrade to older versions)
+    # Secondary path: .sha256 sidecar asset (nightly builds)
+    assert "sha256url:" in obs_update
+    assert "sha256sum -c" in obs_update
+    # Fallback path: legacy .sha512 release asset for releases predating the
+    # SHA-256 migration (enables rollback/downgrade to older versions)
     assert "sha512url:" in obs_update
     assert "sha512sum -c" in obs_update
-    # Both paths are dispatched from the same CHECKSUM_LINE variable
+    # All paths are dispatched from the same CHECKSUM_LINE variable
     assert "CHECKSUM_LINE" in obs_update
 
 

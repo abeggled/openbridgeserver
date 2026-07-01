@@ -139,16 +139,20 @@ if r:
         print(bundle['browser_download_url'])
     else:
         print('')
-    # Prefer SHA-256 embedded in release notes body (new format).
-    # Fall back to the legacy .sha512 release asset for releases
-    # published before this migration (enables rollback/downgrade).
+    # 1. SHA-256 embedded in release notes body (stable/RC releases).
+    # 2. .sha256 sidecar asset (nightly builds).
+    # 3. Legacy .sha512 sidecar asset (pre-migration stable/RC rollback targets).
     body = r.get('body') or ''
     m = re.search(r'app-bundle[^\n]*\n\x60\x60\x60\s*\n([0-9a-f]{64})', body)
     if m:
         print('sha256:' + m.group(1))
     else:
-        sha512 = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha512')), None)
-        print('sha512url:' + sha512['browser_download_url'] if sha512 else '')
+        sha256_asset = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha256')), None)
+        if sha256_asset:
+            print('sha256url:' + sha256_asset['browser_download_url'])
+        else:
+            sha512 = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha512')), None)
+            print('sha512url:' + sha512['browser_download_url'] if sha512 else '')
 ")
 
 BUNDLE_URL=$(echo "$ASSET_INFO" | sed -n '1p')
@@ -171,6 +175,13 @@ if [[ "$CHECKSUM_LINE" == sha256:* ]]; then
     EXPECTED_SHA256="${CHECKSUM_LINE#sha256:}"
     echo "Verifying integrity (SHA-256) ..."
     echo "${EXPECTED_SHA256}  ${BUNDLE_FILENAME}" | (cd "$TMP" && sha256sum -c -)
+elif [[ "$CHECKSUM_LINE" == sha256url:* ]]; then
+    CHECKSUM_URL="${CHECKSUM_LINE#sha256url:}"
+    CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
+    echo "Downloading checksum (SHA-256) ..."
+    curl -fL "$CHECKSUM_URL" -o "$TMP/$CHECKSUM_FILENAME"
+    echo "Verifying integrity (SHA-256) ..."
+    (cd "$TMP" && sha256sum -c "$CHECKSUM_FILENAME")
 elif [[ "$CHECKSUM_LINE" == sha512url:* ]]; then
     CHECKSUM_URL="${CHECKSUM_LINE#sha512url:}"
     CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
