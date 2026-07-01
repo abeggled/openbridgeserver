@@ -90,7 +90,7 @@ while IFS=' ' read -r TYPE TAG; do
     elif [[ "$TYPE" == "rc" ]]; then
         LABELS+=("$TAG  (release candidate${MARKER})")
     else
-        LABELS+=("$TAG  (nightly${MARKER})")
+        LABELS+=("$TAG${MARKER:+  (current)}")
     fi
 done <<< "$VERSION_LIST"
 
