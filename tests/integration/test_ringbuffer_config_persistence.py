@@ -63,6 +63,10 @@ async def test_config_post_persists_full_payload_to_app_settings(client, auth_he
         "max_entries": 42_000,
         "max_file_size_bytes": 5 * 1024 * 1024,
         "max_age": 7200,
+        "segmented": False,
+        "segment_max_bytes": None,
+        "segment_max_rows": None,
+        "segment_max_age": None,
     }
 
     await _reset_to_defaults(client, auth_headers)
@@ -87,6 +91,10 @@ async def test_config_post_persists_null_max_entries(client, auth_headers):
         "max_entries": None,
         "max_file_size_bytes": 3 * 1024 * 1024,
         "max_age": None,
+        "segmented": False,
+        "segment_max_bytes": None,
+        "segment_max_rows": None,
+        "segment_max_age": None,
     }
 
     await _reset_to_defaults(client, auth_headers)
@@ -112,6 +120,10 @@ async def test_load_persisted_ringbuffer_config_after_post_matches_payload(clien
         "max_entries": 25_000,
         "max_file_size_bytes": 8 * 1024 * 1024,
         "max_age": 3600,
+        "segmented": False,
+        "segment_max_bytes": None,
+        "segment_max_rows": None,
+        "segment_max_age": None,
     }
 
     await _reset_to_defaults(client, auth_headers)
