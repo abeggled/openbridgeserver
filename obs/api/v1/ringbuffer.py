@@ -168,6 +168,10 @@ class RingBufferStats(BaseModel):
     file_size_bytes: int
     last_recovery_at: str | None = None
     last_recovery_file_count: int = 0
+    # Segmentierter Store (#919) — nur im segmentierten Modus befüllt (``common``
+    # + ``backend_extra`` aus ``store.stats()``); im Legacy-Modus ``None``, damit
+    # die bestehende Stats-Form unverändert bleibt.
+    store: dict[str, Any] | None = None
 
 
 class RingBufferConfig(BaseModel):
@@ -176,9 +180,12 @@ class RingBufferConfig(BaseModel):
     max_entries: int | None = Field(default=None, ge=1)
     max_file_size_bytes: int | None = Field(default=None, ge=1)
     max_age: int | None = Field(default=None, ge=0)
+    # Segmentierter Store (#919) — OPT-IN, Default AUS. Bei ``False`` bleibt der
+    # Legacy-Single-File-Pfad unverändert; eine Umschaltung greift beim nächsten
+    # RingBuffer-(Neu-)Start.
+    segmented: bool = False
     # Segment-Parameter (#930) — Rotation, getrennt von den Retention-Feldern
-    # oben. Foundation-Kernel: werden validiert und persistiert; die eigentliche
-    # segmentierte Ausführung ist Welle-2 (#932/#936).
+    # oben.
     segment_max_bytes: int | None = Field(default=None, ge=1)
     segment_max_rows: int | None = Field(default=None, ge=1)
     segment_max_age: int | None = Field(default=None, ge=1)
@@ -1863,6 +1870,7 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     # Segment-Parameter (#930) leben nur in der persistierten Config, nicht im
     # laufenden RingBuffer. Bei Teil-Updates die nicht gesetzten Felder aus der
     # persistierten Config übernehmen.
+    resolved_segmented = body.segmented if "segmented" in body.model_fields_set else bool(persisted.get("segmented", False))
     resolved_segment_max_bytes = body.segment_max_bytes if "segment_max_bytes" in body.model_fields_set else persisted.get("segment_max_bytes")
     resolved_segment_max_rows = body.segment_max_rows if "segment_max_rows" in body.model_fields_set else persisted.get("segment_max_rows")
     resolved_segment_max_age = body.segment_max_age if "segment_max_age" in body.model_fields_set else persisted.get("segment_max_age")
@@ -1898,6 +1906,7 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 max_entries=resolved_max_entries,
                 max_file_size_bytes=resolved_max_file_size,
                 max_age=resolved_max_age,
+                segmented=resolved_segmented,
                 segment_max_bytes=resolved_segment_max_bytes,
                 segment_max_rows=resolved_segment_max_rows,
                 segment_max_age=resolved_segment_max_age,
@@ -1929,6 +1938,7 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                         max_entries=resolved_max_entries,
                         max_file_size_bytes=resolved_max_file_size,
                         max_age=resolved_max_age,
+                        segmented=resolved_segmented,
                         segment_max_bytes=resolved_segment_max_bytes,
                         segment_max_rows=resolved_segment_max_rows,
                         segment_max_age=resolved_segment_max_age,
@@ -1949,6 +1959,10 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 disk_path=_ringbuffer_disk_path(),
                 max_file_size_bytes=resolved_max_file_size,
                 max_age=resolved_max_age,
+                segmented=resolved_segmented,
+                segment_max_bytes=resolved_segment_max_bytes,
+                segment_max_rows=resolved_segment_max_rows,
+                segment_max_age=resolved_segment_max_age,
             )
             _subscribe_ringbuffer(rb)
             subscribed_new = True
@@ -1969,6 +1983,7 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             max_entries=stats["max_entries"],
             max_file_size_bytes=stats["max_file_size_bytes"],
             max_age=stats["max_age"],
+            segmented=resolved_segmented,
             segment_max_bytes=resolved_segment_max_bytes,
             segment_max_rows=resolved_segment_max_rows,
             segment_max_age=resolved_segment_max_age,

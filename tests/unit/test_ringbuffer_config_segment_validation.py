@@ -54,6 +54,49 @@ async def test_config_rejects_too_coarse_segmentation_with_422(db, field, segmen
 
 
 @pytest.mark.asyncio
+async def test_config_segmented_opt_in_persists_and_exposes_store_stats(db, monkeypatch, tmp_path):
+    """POST /config mit ``segmented=True`` persistiert das Flag und macht die
+    Store-Stats (``store``) additiv in der Stats-API sichtbar (#919)."""
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    try:
+        stats = await rb_api.configure_ringbuffer(
+            _cfg(segmented=True, segment_max_rows=100, max_entries=300),
+            _user="admin",
+            db=db,
+        )
+        assert stats.enabled is True
+        assert stats.store is not None
+        assert "common" in stats.store and "backend_extra" in stats.store
+        cfg = await rb_api.load_persisted_ringbuffer_config(db)
+        assert cfg["segmented"] is True
+        assert cfg["segment_max_rows"] == 100
+    finally:
+        active_rb = rb_api.get_optional_ringbuffer()
+        if active_rb is not None:
+            await active_rb.stop()
+        reset_ringbuffer()
+
+
+@pytest.mark.asyncio
+async def test_config_default_is_not_segmented_and_store_stats_absent(db, monkeypatch, tmp_path):
+    """Ohne ``segmented`` bleibt der Legacy-Pfad aktiv und ``store`` ist None."""
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    try:
+        stats = await rb_api.configure_ringbuffer(_cfg(), _user="admin", db=db)
+        assert stats.enabled is True
+        assert stats.store is None
+        cfg = await rb_api.load_persisted_ringbuffer_config(db)
+        assert cfg["segmented"] is False
+    finally:
+        active_rb = rb_api.get_optional_ringbuffer()
+        if active_rb is not None:
+            await active_rb.stop()
+        reset_ringbuffer()
+
+
+@pytest.mark.asyncio
 async def test_config_accepts_segments_at_valid_ratio(db, monkeypatch, tmp_path):
     rb_path = tmp_path / "obs_ringbuffer.db"
     monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
