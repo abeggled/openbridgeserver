@@ -37,7 +37,7 @@ jobs:
         run: |
           TAG_NAME="${GITHUB_REF##*/}"
           export TAG_NAME
-          python3 <<'EOF'
+          python3 <<'ORIGIN_EOF'
           import json, os, re, sys, urllib.request, urllib.error
 
           tag        = os.environ['TAG_NAME']
@@ -95,7 +95,7 @@ jobs:
               sys.exit(1)
 
           print(f'Tag origin OK: "{tag}" is on "{expected_branch}" (status: {status}).')
-          EOF
+          ORIGIN_EOF
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -346,39 +346,39 @@ jobs:
           git checkout -b "$BRANCH"
 
           NEXT_VERSION="$NEXT_VERSION" python3 - <<'PYEOF'
-import os
+          import os
 
-next_version = os.environ['NEXT_VERSION']
+          next_version = os.environ['NEXT_VERSION']
 
-new_lines = [
-    f"## {next_version}",
-    "### Breaking changes 🚨",
-    "* none",
-    "",
-    "### New features ✨",
-    "* none",
-    "",
-    "### Fixes 🐞",
-    "* none",
-    "",
-    "### Known Issues 🔔",
-    "* none",
-    "",
-]
+          new_lines = [
+              f"## {next_version}",
+              "### Breaking changes 🚨",
+              "* none",
+              "",
+              "### New features ✨",
+              "* none",
+              "",
+              "### Fixes 🐞",
+              "* none",
+              "",
+              "### Known Issues 🔔",
+              "* none",
+              "",
+          ]
 
-with open("RELEASENOTES.md", "r") as f:
-    content = f.read()
+          with open("RELEASENOTES.md", "r") as f:
+              content = f.read()
 
-lines = content.split("\n")
-insert_at = next((i for i, l in enumerate(lines) if l.startswith("## ")), len(lines))
-for nl in reversed(new_lines):
-    lines.insert(insert_at, nl)
+          lines = content.split("\n")
+          insert_at = next((i for i, l in enumerate(lines) if l.startswith("## ")), len(lines))
+          for nl in reversed(new_lines):
+              lines.insert(insert_at, nl)
 
-with open("RELEASENOTES.md", "w") as f:
-    f.write("\n".join(lines))
+          with open("RELEASENOTES.md", "w") as f:
+              f.write("\n".join(lines))
 
-print(f"Added section for {next_version}")
-PYEOF
+          print(f"Added section for {next_version}")
+          PYEOF
 
           git add RELEASENOTES.md
           git commit -m "chore: prepare RELEASENOTES.md for ${NEXT_VERSION}"
