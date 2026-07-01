@@ -168,12 +168,13 @@ class ArchivePatch:
     color: str | None = None
     retention_max_entries: int | None = None
     retention_max_age_days: int | None = None
+    fields_set: set[str] | None = None
 
 
 @dataclass(frozen=True)
 class EntryInput:
     archive_id: str
-    type: str = "system"
+    type: str | None = None
     severity: str = "info"
     status: str = "new"
     source: str = ""
@@ -357,6 +358,7 @@ class MessageArchiveStore:
         archive_id = _normalize_archive_id(archive_id)
         updates: list[str] = []
         params: list[Any] = []
+        fields_set = body.fields_set
         for field in (
             "name",
             "description",
@@ -366,18 +368,20 @@ class MessageArchiveStore:
             "retention_max_age_days",
         ):
             value = getattr(body, field)
-            if value is not None:
+            if value is not None or (fields_set is not None and field in fields_set):
                 updates.append(f"{field}=?")
                 params.append(value)
-        if body.tags is not None:
+        if body.tags is not None or (fields_set is not None and "tags" in fields_set):
             updates.append("tags=?")
-            params.append(json_dumps(body.tags))
+            params.append(json_dumps(body.tags or []))
         if updates:
             updates.append("updated_at=?")
             params.append(utc_now())
             params.append(archive_id)
             await self.conn.execute(f"UPDATE message_archives SET {', '.join(updates)} WHERE id=?", params)
             await self.conn.commit()
+            if fields_set and {"retention_max_entries", "retention_max_age_days"} & fields_set:
+                await self.enforce_retention(archive_id)
         return await self.get_archive(archive_id)
 
     async def delete_archive(self, archive_id: str) -> int:
@@ -399,8 +403,10 @@ class MessageArchiveStore:
     async def create_entry(self, body: EntryInput) -> dict[str, Any]:
         archive_id = _normalize_archive_id(body.archive_id)
         await self.ensure_archive(archive_id)
+        archive = await self.get_archive(archive_id)
         entry_id = str(uuid.uuid4())
         created_at = body.created_at or utc_now()
+        entry_type = body.type or (archive or {}).get("default_type") or "system"
         await self.conn.execute(
             """
             INSERT INTO message_archive_entries
@@ -412,7 +418,7 @@ class MessageArchiveStore:
                 archive_id,
                 created_at,
                 created_at,
-                body.type,
+                entry_type,
                 body.severity,
                 body.status,
                 body.source,
@@ -666,13 +672,11 @@ class MessageArchiveStore:
         return target
 
     async def export_jsonl(self, archive_id: str | None = None) -> str:
-        query = EntryQuery(archive_ids=[archive_id] if archive_id else None, limit=100_000)
-        result = await self.query_entries(query)
-        return "\n".join(json_dumps(item) for item in result["items"])
+        rows = await self._export_entries(archive_id)
+        return "\n".join(json_dumps(item) for item in rows)
 
     async def export_csv(self, archive_id: str | None = None) -> str:
-        query = EntryQuery(archive_ids=[archive_id] if archive_id else None, limit=100_000)
-        result = await self.query_entries(query)
+        rows = await self._export_entries(archive_id)
         output = io.StringIO()
         fieldnames = [
             "id",
@@ -689,9 +693,27 @@ class MessageArchiveStore:
         ]
         writer = csv.DictWriter(output, fieldnames=fieldnames)
         writer.writeheader()
-        for item in result["items"]:
+        for item in rows:
             writer.writerow({field: item.get(field) for field in fieldnames})
         return output.getvalue()
+
+    async def _export_entries(self, archive_id: str | None = None) -> list[dict[str, Any]]:
+        where = ""
+        params: list[Any] = []
+        if archive_id:
+            where = "WHERE e.archive_id=?"
+            params.append(_normalize_archive_id(archive_id))
+        rows = await self._fetchall(
+            f"""
+            SELECT e.*, a.name AS archive_name, a.color AS archive_color, NULL AS read_at
+            FROM message_archive_entries e
+            JOIN message_archives a ON a.id=e.archive_id
+            {where}
+            ORDER BY e.created_at ASC, e.id ASC
+            """,
+            params,
+        )
+        return [self._entry_row(row) for row in rows]
 
     def _archive_row(self, row: aiosqlite.Row) -> dict[str, Any]:
         return {

@@ -633,6 +633,34 @@ async def test_archive_only_binding_writes_message_archive(bus, dummy_provider, 
 
 
 @pytest.mark.asyncio
+async def test_archive_only_binding_does_not_mark_failed_archive_write_as_sent(bus, dummy_provider, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+
+    class _FailingArchiveService:
+        async def record(self, *_args, **_kwargs):
+            raise RuntimeError("archive down")
+
+    monkeypatch.setattr("obs.message_archive.get_message_archive_service", lambda: _FailingArchiveService())
+    adapter = MessageAdapter(event_bus=bus, config={"providers": {}})
+    binding = _message_binding(
+        dp_id,
+        providers=[],
+        archive_strategy="archive_only",
+        archive_id="notifications",
+    )
+    await adapter.reload_bindings([binding])
+
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=31, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
+
+    state = adapter._states[binding.id]
+    assert state.last_sent_monotonic is None
+    assert state.last_condition is False
+    dummy_provider.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_bad_quality_event_is_ignored(bus, dummy_provider):
     dp_id = uuid.uuid4()
     adapter = MessageAdapter(

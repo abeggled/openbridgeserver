@@ -45,8 +45,6 @@ class AutobackupEntry(BaseModel):
     name: str  # z.B. "20240506-0300"
     created_at: str  # ISO-Timestamp aus dem Dateinamen
     size_bytes: int
-    archive_db_included: bool = False
-    archive_db_size_bytes: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -97,14 +95,11 @@ def _list_backups() -> list[AutobackupEntry]:
             created_at = dt.isoformat()
         except ValueError:
             created_at = stem
-        archive_db = backup_dir / f"{stem}.message-archive.sqlite3"
         entries.append(
             AutobackupEntry(
                 name=stem,
                 created_at=created_at,
                 size_bytes=f.stat().st_size,
-                archive_db_included=archive_db.exists(),
-                archive_db_size_bytes=archive_db.stat().st_size if archive_db.exists() else None,
             )
         )
     return entries
@@ -144,30 +139,6 @@ async def _create_backup_now(db: Database) -> str:
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M")
     backup_path = _autobackup_dir() / f"{ts}.json"
     backup_path.write_text(json.dumps(export.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
-    try:
-        from obs.message_archive import get_message_archive_store
-
-        store = get_message_archive_store()
-        archive_path = _autobackup_dir() / f"{ts}.message-archive.sqlite3"
-        await store.sqlite_snapshot(archive_path)
-        integrity = await store.integrity_check()
-        metadata_path = _autobackup_dir() / f"{ts}.message-archive.json"
-        metadata_path.write_text(
-            json.dumps(
-                {
-                    "included": True,
-                    "path": store.path,
-                    "snapshot": archive_path.name,
-                    "integrity_ok": integrity["ok"],
-                    "integrity_result": integrity["result"],
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-    except Exception as exc:
-        logger.error("Autobackup: Archiv-DB-Snapshot fehlgeschlagen: %s", exc)
     logger.info("Autobackup erstellt: %s (%d Bytes)", backup_path.name, backup_path.stat().st_size)
     return ts
 

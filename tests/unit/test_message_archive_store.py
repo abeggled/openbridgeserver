@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from obs.message_archive import ArchiveInput, EntryInput, EntryQuery, MessageArchiveStore
+from obs.message_archive import ArchiveInput, ArchivePatch, EntryInput, EntryQuery, MessageArchiveStore
 
 
 async def test_message_archive_store_persists_entries_in_separate_db(tmp_path):
@@ -134,6 +134,44 @@ async def test_message_archive_store_enforces_max_entries_retention(tmp_path):
         )
         for idx in range(4):
             await store.create_entry(EntryInput(archive_id="system", title=f"Entry {idx}"))
+
+        result = await store.query_entries(EntryQuery(archive_ids=["system"], sort="asc", username="admin"))
+        assert result["total"] == 2
+        assert [item["title"] for item in result["items"]] == ["Entry 2", "Entry 3"]
+    finally:
+        await store.disconnect()
+
+
+async def test_message_archive_store_applies_default_type_and_clears_explicit_nulls(tmp_path):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    try:
+        await store.create_archive(ArchiveInput(id="system", name="System", default_type="adapter", retention_max_entries=3))
+
+        entry = await store.create_entry(EntryInput(archive_id="system", title="Default type"))
+        assert entry["type"] == "adapter"
+
+        await store.update_archive(
+            "system",
+            ArchivePatch(default_type=None, retention_max_entries=None, fields_set={"default_type", "retention_max_entries"}),
+        )
+        archive = await store.get_archive("system")
+        assert archive is not None
+        assert archive["default_type"] is None
+        assert archive["retention_max_entries"] is None
+    finally:
+        await store.disconnect()
+
+
+async def test_message_archive_store_enforces_retention_after_settings_update(tmp_path):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    try:
+        await store.create_archive(ArchiveInput(id="system", name="System"))
+        for idx in range(4):
+            await store.create_entry(EntryInput(archive_id="system", title=f"Entry {idx}"))
+
+        await store.update_archive("system", ArchivePatch(retention_max_entries=2, fields_set={"retention_max_entries"}))
 
         result = await store.query_entries(EntryQuery(archive_ids=["system"], sort="asc", username="admin"))
         assert result["total"] == 2

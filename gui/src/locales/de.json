@@ -2236,6 +2236,14 @@
       "dbImportWarning2": "Die Historiendaten werden durch den Inhalt der hochgeladenen Datei ersetzt",
       "dbImportWarning3": "Adapter und Logik-Engine werden nach dem Restore neu gestartet",
       "dbImportWarning4": "Nicht in der Sicherung enthaltene Daten gehen verloren",
+      "messageArchiveDbExportTitle": "Meldungsarchiv sichern (download)",
+      "messageArchiveDbExportDesc": "Die separate SQLite-Datenbank der Meldungsarchive als Datei sichern.",
+      "messageArchiveDbExportButton": "Meldungsarchiv-SQLite herunterladen",
+      "messageArchiveDbImportTitle": "Meldungsarchiv wiederherstellen (upload)",
+      "messageArchiveDbImportDesc": "SQLite-Datenbankdatei der Meldungsarchive hochladen und einspielen.",
+      "messageArchiveDbImportWarning": "⚠ Achtung — diese Aktion überschreibt alle aktuellen Meldungsarchive!",
+      "messageArchiveDbImportWarning1": "Alle aktuellen Meldungsarchive und Meldungen werden ersetzt",
+      "messageArchiveDbImportWarning2": "Die OBS-Konfigurationsdatenbank bleibt unverändert",
       "autobackupTitle": "Autobackup",
       "autobackupDesc": "Täglich automatische JSON-Sicherung aller Konfigurationsdaten (Adapter, Objekte, Logikmodul, Visu, Icons usw.). Die Sicherungen werden lokal im Datenverzeichnis gespeichert.",
       "autobackupEnable": "Autobackup aktivieren",
@@ -2303,7 +2311,9 @@
       "error_NO_GROUP_ADDRESSES": "Keine Gruppenadressen gefunden. Bitte das richtige ETS-Projekt exportieren.",
       "error_PARSE_ERROR": "Fehler beim Parsen der .knxproj-Datei.",
       "dbImportResultOk": "Datenbankwiederherstellung OK: {message} ({adapters} Adapter neu gestartet). Bitte Seite neu laden.",
-      "dbImportFailed": "Datenbankwiederherstellung fehlgeschlagen"
+      "dbImportFailed": "Datenbankwiederherstellung fehlgeschlagen",
+      "messageArchiveDbImportResultOk": "Meldungsarchiv-Wiederherstellung OK: {message}",
+      "messageArchiveDbImportFailed": "Meldungsarchiv-Wiederherstellung fehlgeschlagen"
     },
     "history": {
       "dbTitle": "Historie DB",

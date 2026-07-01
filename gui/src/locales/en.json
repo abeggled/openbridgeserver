@@ -2236,6 +2236,14 @@
       "dbImportWarning2": "History data will be replaced by the content of the uploaded file",
       "dbImportWarning3": "Adapters and Logic Engine will be restarted after restore",
       "dbImportWarning4": "Data not included in the backup will be lost",
+      "messageArchiveDbExportTitle": "Back up message archive (download)",
+      "messageArchiveDbExportDesc": "Save the separate SQLite database of the message archives as a file.",
+      "messageArchiveDbExportButton": "Download message archive SQLite",
+      "messageArchiveDbImportTitle": "Restore message archive (upload)",
+      "messageArchiveDbImportDesc": "Upload and apply a SQLite database file for message archives.",
+      "messageArchiveDbImportWarning": "⚠ Warning — this action overwrites all current message archives!",
+      "messageArchiveDbImportWarning1": "All current message archives and messages will be replaced",
+      "messageArchiveDbImportWarning2": "The OBS configuration database remains unchanged",
       "autobackupTitle": "Autobackup",
       "autobackupDesc": "Daily automatic JSON backup of all configuration data (adapters, objects, logic module, Visu, icons, etc.). Backups are stored locally in the data directory.",
       "autobackupEnable": "Enable Autobackup",
@@ -2303,7 +2311,9 @@
       "error_NO_GROUP_ADDRESSES": "No group addresses found. Please export the correct ETS project.",
       "error_PARSE_ERROR": "Error parsing the .knxproj file.",
       "dbImportResultOk": "Database restore OK: {message} ({adapters} adapters restarted). Please reload the page.",
-      "dbImportFailed": "Database restore failed"
+      "dbImportFailed": "Database restore failed",
+      "messageArchiveDbImportResultOk": "Message archive restore OK: {message}",
+      "messageArchiveDbImportFailed": "Message archive restore failed"
     },
     "history": {
       "dbTitle": "History DB",

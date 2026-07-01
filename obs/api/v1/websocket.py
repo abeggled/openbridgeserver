@@ -20,6 +20,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -35,6 +36,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["websocket"])
 
 LogAccessCheck = Callable[[], Awaitable[bool]]
+
+
+@dataclass(frozen=True)
+class MessageArchivePredicate:
+    archive_ids: set[str] | None = None
+    types: set[str] | None = None
+    severities: set[str] | None = None
+    statuses: set[str] | None = None
+    sources: set[str] | None = None
+
+
+MessageArchiveAccess = list[MessageArchivePredicate] | None
 
 
 # ---------------------------------------------------------------------------
@@ -54,14 +67,15 @@ class WebSocketManager:
         # send_lock serialises concurrent sends on the same WebSocket;
         # concurrent asyncio.gather calls in EventBus would otherwise race.
         self._connections: dict[str, tuple[WebSocket, set[str], asyncio.Lock, set[str] | None, bool, LogAccessCheck | None]] = {}
-        # conn_id -> allowed message archive IDs. None means unrestricted.
-        self._message_archive_access: dict[str, set[str] | None] = {}
+        # conn_id -> allowed message archive predicates. None means unrestricted.
+        self._message_archive_access: dict[str, MessageArchiveAccess] = {}
 
     async def connect(
         self,
         ws: WebSocket,
         allowed_dp_ids: set[str] | None = None,
         allowed_message_archive_ids: set[str] | None = None,
+        allowed_message_archive_access: MessageArchiveAccess = None,
         log_access: bool = False,
         log_access_check: LogAccessCheck | None = None,
         subprotocol: str | None = None,
@@ -76,7 +90,12 @@ class WebSocketManager:
                 await ws.accept()
         conn_id = str(uuid.uuid4())
         self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access, log_access_check)
-        self._message_archive_access[conn_id] = allowed_message_archive_ids
+        if allowed_message_archive_access is not None:
+            self._message_archive_access[conn_id] = allowed_message_archive_access
+        elif allowed_message_archive_ids is not None:
+            self._message_archive_access[conn_id] = [MessageArchivePredicate(archive_ids=allowed_message_archive_ids)]
+        else:
+            self._message_archive_access[conn_id] = None
         logger.debug("WS client connected: %s  (total: %d)", conn_id[:8], len(self._connections))
         return conn_id
 
@@ -196,11 +215,10 @@ class WebSocketManager:
     async def broadcast_message_archive_entry(self, entry: dict[str, Any]) -> None:
         """Push a newly stored message archive entry to allowed clients."""
         dead: list[str] = []
-        archive_id = str(entry.get("archive_id") or "")
         msg = {"action": "message_archive_entry", "entry": entry}
         for conn_id in list(self._connections):
-            allowed_archive_ids = self._message_archive_access.get(conn_id)
-            if allowed_archive_ids is not None and archive_id not in allowed_archive_ids:
+            access = self._message_archive_access.get(conn_id)
+            if access is not None and not _message_archive_entry_matches_access(entry, access):
                 continue
             if not await self._send(conn_id, msg):
                 dead.append(conn_id)
@@ -396,17 +414,46 @@ async def _page_allowed_message_archives(
     None means a page contains a MessageArchive widget without an archive
     filter, so it intentionally displays all message archives.
     """
+    predicates = await _page_allowed_message_archive_predicates(
+        db,
+        page_id,
+        widget_ref_access_check=widget_ref_access_check,
+    )
+    if not predicates:
+        return set()
+    ids: set[str] = set()
+    for predicate in predicates:
+        if predicate.archive_ids is None:
+            return None
+        ids.update(predicate.archive_ids)
+    return ids
+
+
+async def _page_allowed_message_archive_predicates(
+    db: Database,
+    page_id: str,
+    *,
+    widget_ref_access_check: Callable[[str], Awaitable[bool]] | None = None,
+) -> list[MessageArchivePredicate]:
+    """Return per-widget MessageArchive predicates for page-scoped pushes."""
 
     def _non_empty_str(value: Any) -> str | None:
         if isinstance(value, str) and value:
             return value
         return None
 
-    def _archive_ids_from_config(config: dict[str, Any]) -> set[str] | None:
-        raw_ids = config.get("archive_ids")
-        if not isinstance(raw_ids, list) or not raw_ids:
+    def _string_set_from_config(config: dict[str, Any], *keys: str, lower: bool = False) -> set[str] | None:
+        values: list[str] = []
+        for key in keys:
+            raw = config.get(key)
+            if isinstance(raw, list):
+                values.extend(item for item in raw if isinstance(item, str))
+            elif isinstance(raw, str) and raw:
+                values.extend(part.strip() for part in raw.split(","))
+        cleaned = {(value.strip().lower() if lower else value.strip()) for value in values if value.strip()}
+        if not cleaned:
             return None
-        return {item.strip().lower() for item in raw_ids if isinstance(item, str) and item.strip()}
+        return cleaned
 
     page_cache: dict[str, PageConfig | None] = {}
 
@@ -435,52 +482,74 @@ async def _page_allowed_message_archives(
 
     async def _collect_widget_archives(
         widget: Any,
-        out: set[str],
+        out: list[MessageArchivePredicate],
         visited_refs: set[tuple[str, str]],
-    ) -> bool:
+    ) -> None:
         if widget.type == "MessageArchive":
-            archive_ids = _archive_ids_from_config(widget.config)
-            if archive_ids is None:
-                return True
-            out.update(archive_ids)
+            config = widget.config if isinstance(widget.config, dict) else {}
+            out.append(
+                MessageArchivePredicate(
+                    archive_ids=_string_set_from_config(config, "archive_ids", "archive_id", lower=True),
+                    types=_string_set_from_config(config, "types", "type"),
+                    severities=_string_set_from_config(config, "severities", "severity"),
+                    statuses=_string_set_from_config(config, "statuses", "status"),
+                    sources=_string_set_from_config(config, "sources", "source"),
+                )
+            )
 
         if widget.type != "widget_ref":
-            return False
+            return
 
         source_page_id = _non_empty_str(widget.config.get("source_page_id"))
         source_widget_name = _non_empty_str(widget.config.get("source_widget_name"))
         if not source_page_id or not source_widget_name:
-            return False
+            return
         if widget_ref_access_check is not None and not await widget_ref_access_check(source_page_id):
-            return False
+            return
 
         ref_key = (source_page_id, source_widget_name)
         if ref_key in visited_refs:
-            return False
+            return
         visited_refs.add(ref_key)
 
         source_page = await _load_page_config(source_page_id)
         if source_page is None:
-            return False
+            return
 
         target_widget = next(
             (candidate for candidate in source_page.widgets if candidate.name == source_widget_name),
             None,
         )
         if target_widget is None:
-            return False
-        return await _collect_widget_archives(target_widget, out, visited_refs)
+            return
+        await _collect_widget_archives(target_widget, out, visited_refs)
 
     page = await _load_page_config(page_id)
     if page is None:
-        return set()
+        return []
 
-    ids: set[str] = set()
+    predicates: list[MessageArchivePredicate] = []
     visited_refs: set[tuple[str, str]] = set()
     for widget in page.widgets:
-        if await _collect_widget_archives(widget, ids, visited_refs):
-            return None
-    return ids
+        await _collect_widget_archives(widget, predicates, visited_refs)
+    return predicates
+
+
+def _message_archive_entry_matches_access(entry: dict[str, Any], access: list[MessageArchivePredicate]) -> bool:
+    for predicate in access:
+        archive_id = str(entry.get("archive_id") or "").lower()
+        if predicate.archive_ids is not None and archive_id not in predicate.archive_ids:
+            continue
+        if predicate.types and str(entry.get("type") or "") not in predicate.types:
+            continue
+        if predicate.severities and str(entry.get("severity") or "") not in predicate.severities:
+            continue
+        if predicate.statuses and str(entry.get("status") or "") not in predicate.statuses:
+            continue
+        if predicate.sources and str(entry.get("source") or "") not in predicate.sources:
+            continue
+        return True
+    return False
 
 
 def _extract_subprotocol_tokens(ws: WebSocket) -> tuple[str | None, str | None, str | None]:
@@ -681,7 +750,7 @@ async def websocket_endpoint(
         return
 
     allowed_dp_ids: set[str] | None = None
-    allowed_message_archive_ids: set[str] | None = None
+    allowed_message_archive_access: MessageArchiveAccess = None
     if user is None:
         if not page_id:
             await ws.close(code=4001, reason="Authentication required")
@@ -716,7 +785,7 @@ async def websocket_endpoint(
             page_id,
             widget_ref_access_check=_can_access_widget_ref_page,
         )
-        allowed_message_archive_ids = await _page_allowed_message_archives(
+        allowed_message_archive_access = await _page_allowed_message_archive_predicates(
             db,
             page_id,
             widget_ref_access_check=_can_access_widget_ref_page,
@@ -732,7 +801,7 @@ async def websocket_endpoint(
     conn_id = await manager.connect(
         ws,
         allowed_dp_ids=allowed_dp_ids,
-        allowed_message_archive_ids=allowed_message_archive_ids,
+        allowed_message_archive_access=allowed_message_archive_access,
         log_access=log_access,
         log_access_check=(lambda: _ws_has_log_access(user, api_key)) if log_access else None,
         subprotocol=selected_subprotocol,

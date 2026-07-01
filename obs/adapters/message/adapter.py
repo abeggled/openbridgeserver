@@ -352,11 +352,12 @@ class MessageAdapter(AdapterBase):
             logger.exception("MESSAGE send task failed unexpectedly")
             results = [MessageSendResult("message", "internal", False, str(exc))]
 
-        archive_only = cfg.archive_strategy == "archive_only"
-        success = archive_only or (bool(results) and all(result.ok for result in results))
-        partial_success = archive_only or (bool(results) and any(result.ok for result in results))
+        archive_ok = True
         if cfg.archive_strategy in {"archive_only", "send_and_archive"} and cfg.archive_id:
-            await self._archive_notification(cfg, binding, event, rendered, results)
+            archive_ok = await self._archive_notification(cfg, binding, event, rendered, results)
+        archive_only = cfg.archive_strategy == "archive_only"
+        success = (archive_only and archive_ok) or (bool(results) and all(result.ok for result in results) and archive_ok)
+        partial_success = (archive_only and archive_ok) or (bool(results) and any(result.ok for result in results))
         if success or partial_success:
             state.last_sent_monotonic = time.monotonic()
             if state.reset_version == reset_version:
@@ -445,7 +446,7 @@ class MessageAdapter(AdapterBase):
         event: DataValueEvent,
         rendered: str,
         results: list[MessageSendResult],
-    ) -> None:
+    ) -> bool:
         try:
             from obs.message_archive import get_message_archive_service
 
@@ -466,9 +467,11 @@ class MessageAdapter(AdapterBase):
                     "delivery_status": delivery_status,
                 },
             )
+            return True
         except Exception:
             logger.exception("MESSAGE archive write failed")
             await self._publish_status(True, "MESSAGE archive write failed", severity="warning", code="messageArchiveWriteFailed")
+            return False
 
 
 def _model_dump(value: Any) -> dict[str, Any]:
