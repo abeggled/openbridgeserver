@@ -60,9 +60,7 @@ class WriterLease:
     def _take_over_or_fail(self) -> None:
         holder_pid = self._read_holder_pid()
         if holder_pid is not None and _pid_is_alive(holder_pid):
-            raise WriterLockHeldError(
-                f"storage root {self._root} is locked by live writer pid={holder_pid}"
-            )
+            raise WriterLockHeldError(f"storage root {self._root} is locked by live writer pid={holder_pid}")
         # Verwaistes Lockfile eines toten/unbekannten Prozesses → übernehmen.
 
     def _read_holder_pid(self) -> int | None:

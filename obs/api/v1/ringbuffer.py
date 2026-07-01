@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config, persist_ringbuffer_config
+from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig, validate_store_config
 from obs.ringbuffer.ringbuffer import (
     RingBufferStorageDeleteIncompleteError,
     default_ringbuffer_disk_path,
@@ -175,6 +176,12 @@ class RingBufferConfig(BaseModel):
     max_entries: int | None = Field(default=None, ge=1)
     max_file_size_bytes: int | None = Field(default=None, ge=1)
     max_age: int | None = Field(default=None, ge=0)
+    # Segment-Parameter (#930) — Rotation, getrennt von den Retention-Feldern
+    # oben. Foundation-Kernel: werden validiert und persistiert; die eigentliche
+    # segmentierte Ausführung ist Welle-2 (#932/#936).
+    segment_max_bytes: int | None = Field(default=None, ge=1)
+    segment_max_rows: int | None = Field(default=None, ge=1)
+    segment_max_age: int | None = Field(default=None, ge=1)
 
 
 class RingBufferTimeFilterV2(BaseModel):
@@ -1853,6 +1860,31 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     resolved_max_file_size = body.max_file_size_bytes if "max_file_size_bytes" in body.model_fields_set else current_config["max_file_size_bytes"]
     resolved_max_age = body.max_age if "max_age" in body.model_fields_set else current_config["max_age"]
 
+    # Segment-Parameter (#930) leben nur in der persistierten Config, nicht im
+    # laufenden RingBuffer. Bei Teil-Updates die nicht gesetzten Felder aus der
+    # persistierten Config übernehmen.
+    resolved_segment_max_bytes = body.segment_max_bytes if "segment_max_bytes" in body.model_fields_set else persisted.get("segment_max_bytes")
+    resolved_segment_max_rows = body.segment_max_rows if "segment_max_rows" in body.model_fields_set else persisted.get("segment_max_rows")
+    resolved_segment_max_age = body.segment_max_age if "segment_max_age" in body.model_fields_set else persisted.get("segment_max_age")
+
+    # Segment-/Retention-Vertrag durchsetzen: zu grobe Segmentierung → HTTP 422
+    # (nicht auto-korrigieren, #930).
+    try:
+        validate_store_config(
+            SegmentConfig(
+                segment_max_bytes=resolved_segment_max_bytes,
+                segment_max_rows=resolved_segment_max_rows,
+                segment_max_age=resolved_segment_max_age,
+            ),
+            StoreRetentionConfig(
+                max_file_size_bytes=resolved_max_file_size,
+                max_entries=resolved_max_entries,
+                max_age=resolved_max_age,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
     if not requested_enabled:
         previous_enabled = is_ringbuffer_enabled()
         stopped_rb = rb
@@ -1866,6 +1898,9 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 max_entries=resolved_max_entries,
                 max_file_size_bytes=resolved_max_file_size,
                 max_age=resolved_max_age,
+                segment_max_bytes=resolved_segment_max_bytes,
+                segment_max_rows=resolved_segment_max_rows,
+                segment_max_age=resolved_segment_max_age,
             )
             persisted_disabled = True
             if stopped_rb is not None:
@@ -1894,6 +1929,9 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                         max_entries=resolved_max_entries,
                         max_file_size_bytes=resolved_max_file_size,
                         max_age=resolved_max_age,
+                        segment_max_bytes=resolved_segment_max_bytes,
+                        segment_max_rows=resolved_segment_max_rows,
+                        segment_max_age=resolved_segment_max_age,
                     )
             raise
         if stopped_rb is not None:
@@ -1931,6 +1969,9 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             max_entries=stats["max_entries"],
             max_file_size_bytes=stats["max_file_size_bytes"],
             max_age=stats["max_age"],
+            segment_max_bytes=resolved_segment_max_bytes,
+            segment_max_rows=resolved_segment_max_rows,
+            segment_max_age=resolved_segment_max_age,
         )
     except Exception:
         if created_rb and rb is not None:

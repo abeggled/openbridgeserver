@@ -129,3 +129,14 @@ async def test_reserve_global_event_ids_returns_contiguous_block(manifest: Manif
     following = await manifest.next_global_event_id()
     # Der reservierte Block [start, start+5) darf sich nicht mit späteren IDs überschneiden.
     assert following >= start + 5
+
+
+async def test_db_access_before_open_raises(tmp_path: Path):
+    m = Manifest(tmp_path / "manifest.sqlite")
+    with pytest.raises(RuntimeError, match="not open"):
+        await m.list_segments()
+
+
+async def test_reserve_zero_ids_is_rejected(manifest: Manifest):
+    with pytest.raises(ValueError, match="count must be >= 1"):
+        await manifest.reserve_global_event_ids(0)

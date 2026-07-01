@@ -142,9 +142,7 @@ class Manifest:
         return await self.get_segment(segment_id)
 
     async def get_segment(self, segment_id: int) -> SegmentRecord | None:
-        async with self._db.execute(
-            "SELECT * FROM segments WHERE segment_id = ?", (segment_id,)
-        ) as cur:
+        async with self._db.execute("SELECT * FROM segments WHERE segment_id = ?", (segment_id,)) as cur:
             row = await cur.fetchone()
         return _row_to_segment(row) if row else None
 

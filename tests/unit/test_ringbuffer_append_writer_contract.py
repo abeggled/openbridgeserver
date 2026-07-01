@@ -60,10 +60,7 @@ async def test_record_path_is_append_only_when_retention_is_disabled():
         assert any(statement.startswith("INSERT INTO RINGBUFFER ") for statement in statements)
         assert any(statement.startswith("INSERT OR IGNORE INTO RINGBUFFER_METADATA_TAGS ") for statement in statements)
         assert any(statement.startswith("INSERT INTO RINGBUFFER_METADATA_BINDINGS ") for statement in statements)
-        assert not any(
-            statement.startswith(("DELETE ", "UPDATE ", "REPLACE ", "VACUUM", "PRAGMA WAL_CHECKPOINT"))
-            for statement in statements
-        )
+        assert not any(statement.startswith(("DELETE ", "UPDATE ", "REPLACE ", "VACUUM", "PRAGMA WAL_CHECKPOINT")) for statement in statements)
     finally:
         await rb.stop()
 
@@ -89,12 +86,7 @@ async def test_concurrent_record_calls_are_serialized_by_single_instance_writer_
 
         rb._record_locked = _record_locked_with_probe  # type: ignore[method-assign]  # noqa: SLF001
 
-        await asyncio.gather(
-            *[
-                _record_value(rb, value, f"2026-01-01T00:00:0{value}.000Z")
-                for value in range(5)
-            ]
-        )
+        await asyncio.gather(*[_record_value(rb, value, f"2026-01-01T00:00:0{value}.000Z") for value in range(5)])
 
         assert max_active_writers == 1
         assert (await rb.stats())["total"] == 5

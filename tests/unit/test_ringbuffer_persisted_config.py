@@ -44,6 +44,9 @@ async def test_load_returns_defaults_when_nothing_persisted():
             "max_entries": None,
             "max_file_size_bytes": DEFAULT_MAX_FILE_SIZE_BYTES,
             "max_age": None,
+            "segment_max_bytes": None,
+            "segment_max_rows": None,
+            "segment_max_age": None,
         }
     finally:
         await db.disconnect()
@@ -67,6 +70,9 @@ async def test_persist_then_load_roundtrip():
             "max_entries": 50_000,
             "max_file_size_bytes": 20 * 1024 * 1024,
             "max_age": 3600,
+            "segment_max_bytes": None,
+            "segment_max_rows": None,
+            "segment_max_age": None,
         }
     finally:
         await db.disconnect()
@@ -90,6 +96,9 @@ async def test_persist_supports_unbounded_max_entries_and_age():
             "max_entries": None,
             "max_file_size_bytes": 5 * 1024 * 1024,
             "max_age": None,
+            "segment_max_bytes": None,
+            "segment_max_rows": None,
+            "segment_max_age": None,
         }
     finally:
         await db.disconnect()
@@ -108,6 +117,9 @@ async def test_persist_overwrites_existing_row():
             "max_entries": 200,
             "max_file_size_bytes": 2048,
             "max_age": 20,
+            "segment_max_bytes": None,
+            "segment_max_rows": None,
+            "segment_max_age": None,
         }
         rows = await db.fetchall("SELECT key FROM app_settings WHERE key=?", (PERSISTED_CONFIG_KEY,))
         assert len(rows) == 1
@@ -131,6 +143,9 @@ async def test_load_handles_corrupt_json_by_returning_defaults():
             "max_entries": None,
             "max_file_size_bytes": DEFAULT_MAX_FILE_SIZE_BYTES,
             "max_age": None,
+            "segment_max_bytes": None,
+            "segment_max_rows": None,
+            "segment_max_age": None,
         }
     finally:
         await db.disconnect()
@@ -152,6 +167,49 @@ async def test_load_fills_missing_keys_with_defaults():
             "max_entries": 1234,
             "max_file_size_bytes": DEFAULT_MAX_FILE_SIZE_BYTES,
             "max_age": None,
+            "segment_max_bytes": None,
+            "segment_max_rows": None,
+            "segment_max_age": None,
         }
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_persist_then_load_segment_params_roundtrip():
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await persist_ringbuffer_config(
+            db,
+            enabled=True,
+            max_entries=None,
+            max_file_size_bytes=None,
+            max_age=None,
+            segment_max_bytes=1000,
+            segment_max_rows=100,
+            segment_max_age=60,
+        )
+        cfg = await load_persisted_ringbuffer_config(db)
+        assert cfg["segment_max_bytes"] == 1000
+        assert cfg["segment_max_rows"] == 100
+        assert cfg["segment_max_age"] == 60
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_load_returns_defaults_when_persisted_value_is_not_a_dict():
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+            (PERSISTED_CONFIG_KEY, json.dumps([1, 2, 3])),
+        )
+        await db.commit()
+        cfg = await load_persisted_ringbuffer_config(db)
+        assert cfg["segment_max_bytes"] is None
+        assert cfg["max_file_size_bytes"] == DEFAULT_MAX_FILE_SIZE_BYTES
     finally:
         await db.disconnect()
