@@ -58,7 +58,21 @@ def test_release_lxc_workflow_packages_obs_admin():
     assert "BUNDLE_HAS_OBS_ADMIN=false" in obs_update
     assert "grep -Eq '^(\\./)?obs-admin$'" in obs_update
     assert 'if [[ "$BUNDLE_HAS_OBS_ADMIN" == "true" ]]; then' in obs_update
-    assert 'cp "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin' in obs_update
+    assert 'install -m 755 "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin' in obs_update
+
+
+def test_updater_supports_nightly_flag():
+    obs_update = _obs_update_text()
+
+    # Default-off
+    assert "SHOW_NIGHTLIES=false" in obs_update
+    # Both long and short flag are accepted
+    assert "--nightly|-n) SHOW_NIGHTLIES=true" in obs_update
+    # Nightly tags use the date-based naming pattern
+    assert "nightly-" in obs_update
+    assert r"nightly-(\d{4})(\d{2})(\d{2})" in obs_update
+    # Nightly builds are labelled distinctly in the menu
+    assert "(nightly" in obs_update
 
 
 def test_updater_fails_closed_when_sha256_missing():
