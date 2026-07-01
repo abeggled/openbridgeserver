@@ -42,16 +42,16 @@ Optional, if enabled:
 
 ---
 
-## `[0-9][0-9][0-9][0-9].*.x` (Release-Branches, z. B. `2026.7.x`)
+## `[0-9][0-9][0-9][0-9].[0-9]*` (Bugfix-Branches, z. B. `2026.7`)
 
-Release-Branches stabilisieren ein laufendes Release und nehmen ausschließlich Bug-Fixes,
-Security-Fixes und Release-Engineering auf. Das gleiche Ruleset wie `main` gilt, ergänzt um
-die Backport-Disziplin.
+Bugfix-Branches existieren nur auf Bedarf — wenn nach dem `.0`-Release ein Patch-Release
+notwendig ist. Sie nehmen ausschließlich Bug-Fixes, Security-Fixes und Release-Engineering auf.
+Das gleiche Ruleset wie `main` gilt, ergänzt um die Backport-Disziplin.
 
 ### 1) Protect the branch
 
 - [ ] Settings → Branches → Add branch protection rule
-- [ ] Branch name pattern: `[0-9][0-9][0-9][0-9].*.x`
+- [ ] Branch name pattern: `[0-9][0-9][0-9][0-9].[0-9]*`
 - [ ] Require a pull request before merging
 - [ ] Require approvals: at least `1`
 - [ ] Dismiss stale pull request approvals when new commits are pushed
@@ -76,7 +76,7 @@ Identisch zu `main`:
 
 ### 4) Backport-Disziplin (Konvention, kein CI-Gate)
 
-PRs auf `YYYY.M.x` brauchen:
+PRs auf `YYYY.M` brauchen:
 - das Label `backport-YYYY.M` (z. B. `backport-2026.7`)
 - Maintainer-Freigabe (1 Review)
 - Cherry-pick-Bezug im PR-Body (Ursprungs-PR oder Commit-SHA)

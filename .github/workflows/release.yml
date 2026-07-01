@@ -45,9 +45,15 @@ jobs:
           repo       = os.environ['GITHUB_REPOSITORY']
           token      = os.environ['GITHUB_TOKEN']
 
-          m = re.match(r'^(\d{4}\.\d+)\.', tag)
-          release_branch = m.group(1) + '.x'
-          print(f'Expected release branch: {release_branch}')
+          # YYYY.M.0(-RC<N>)? → must be on main (initial release or its RCs)
+          # YYYY.M.X(-RC<N>)? (X>0) → must be on YYYY.M bugfix branch
+          m = re.match(r'^(\d{4})\.(\d+)\.(\d+)(-RC\d+)?$', tag, re.IGNORECASE)
+          patch = int(m.group(3))
+          if patch == 0:
+              expected_branch = 'main'
+          else:
+              expected_branch = f'{m.group(1)}.{m.group(2)}'
+          print(f'Expected branch for "{tag}": {expected_branch}')
 
           headers = {
               'Authorization': f'Bearer {token}',
@@ -60,18 +66,20 @@ jobs:
               with urllib.request.urlopen(req) as r:
                   return json.load(r)
 
-          try:
-              gh_get(f'repos/{repo}/branches/{release_branch}')
-          except urllib.error.HTTPError as e:
-              if e.code == 404:
-                  print(f'::error::Release branch "{release_branch}" does not exist. Cut it before tagging.')
-              else:
-                  print(f'::error::GitHub API error checking branch: {e}')
-              sys.exit(1)
+          if expected_branch != 'main':
+              try:
+                  gh_get(f'repos/{repo}/branches/{expected_branch}')
+              except urllib.error.HTTPError as e:
+                  if e.code == 404:
+                      print(f'::error::Bugfix branch "{expected_branch}" does not exist. '
+                            f'Cut it from the {m.group(1)}.{m.group(2)}.0 tag before tagging a patch release.')
+                  else:
+                      print(f'::error::GitHub API error checking branch: {e}')
+                  sys.exit(1)
 
-          # compare/{base}...{head}: status "behind" or "identical" means the commit IS on the branch
+          # compare/{base}...{head}: "behind" or "identical" means commit IS on the branch
           try:
-              cmp = gh_get(f'repos/{repo}/compare/{release_branch}...{commit_sha}')
+              cmp = gh_get(f'repos/{repo}/compare/{expected_branch}...{commit_sha}')
           except urllib.error.HTTPError as e:
               print(f'::error::Could not compare branch to tag commit: {e}')
               sys.exit(1)
@@ -81,12 +89,12 @@ jobs:
           if status not in ('behind', 'identical'):
               print(
                   f'::error::Tag "{tag}" (commit {commit_sha[:8]}) is not on branch '
-                  f'"{release_branch}" (compare status: {status}, ahead_by: {ahead_by}). '
-                  f'Tags must be created from the release branch.'
+                  f'"{expected_branch}" (compare status: {status}, ahead_by: {ahead_by}). '
+                  f'Tags must be created from "{expected_branch}".'
               )
               sys.exit(1)
 
-          print(f'Tag origin OK: "{tag}" is on branch "{release_branch}" (status: {status}).')
+          print(f'Tag origin OK: "{tag}" is on "{expected_branch}" (status: {status}).')
           EOF
 
       - name: Set up Python
@@ -303,3 +311,87 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             OBS_VERSION=${{ env.OBS_VERSION }}
+
+  prepare-next-release:
+    name: Prepare next release on main
+    runs-on: ubuntu-latest
+    needs: release
+    # Only for stable .0 releases — not RCs, not patch releases (PATCH > 0)
+    if: ${{ !contains(github.ref_name, '-RC') && endsWith(github.ref_name, '.0') }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Create version bump PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          YEAR=$(echo "$TAG" | cut -d. -f1)
+          MINOR=$(echo "$TAG" | cut -d. -f2)
+          NEXT_MINOR=$((MINOR + 1))
+          NEXT_VERSION="${YEAR}.${NEXT_MINOR}.0"
+          BRANCH="release-prep/${NEXT_VERSION}"
+
+          echo "Preparing next release: $NEXT_VERSION on branch $BRANCH"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+
+          NEXT_VERSION="$NEXT_VERSION" python3 - <<'PYEOF'
+import os
+
+next_version = os.environ['NEXT_VERSION']
+
+new_lines = [
+    f"## {next_version}",
+    "### Breaking changes 🚨",
+    "* none",
+    "",
+    "### New features ✨",
+    "* none",
+    "",
+    "### Fixes 🐞",
+    "* none",
+    "",
+    "### Known Issues 🔔",
+    "* none",
+    "",
+]
+
+with open("RELEASENOTES.md", "r") as f:
+    content = f.read()
+
+lines = content.split("\n")
+insert_at = next((i for i, l in enumerate(lines) if l.startswith("## ")), len(lines))
+for nl in reversed(new_lines):
+    lines.insert(insert_at, nl)
+
+with open("RELEASENOTES.md", "w") as f:
+    f.write("\n".join(lines))
+
+print(f"Added section for {next_version}")
+PYEOF
+
+          git add RELEASENOTES.md
+          git commit -m "chore: prepare RELEASENOTES.md for ${NEXT_VERSION}"
+          git push -u origin "$BRANCH"
+
+          echo "Automatisch erstellt nach dem stabilen \`${TAG}\`-Release." > pr_body.md
+          echo "" >> pr_body.md
+          echo "Fügt einen leeren Abschnitt für \`${NEXT_VERSION}\` in \`RELEASENOTES.md\` ein." >> pr_body.md
+          echo "" >> pr_body.md
+          echo "→ Bitte reviewen und mergen, bevor der erste Feature-PR für das nächste Release landet." >> pr_body.md
+
+          gh pr create \
+            --title "chore: Prepare RELEASENOTES.md for ${NEXT_VERSION}" \
+            --body-file pr_body.md \
+            --base main \
+            --head "$BRANCH"
