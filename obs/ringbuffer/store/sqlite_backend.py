@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -53,11 +54,18 @@ from obs.ringbuffer.store.interface import (
 from obs.ringbuffer.store.manifest import Manifest, SegmentRecord
 from obs.ringbuffer.store.writer_lock import WriterLease
 
-SEGMENT_SCHEMA_VERSION = 1
+SEGMENT_SCHEMA_VERSION = 2
 
 # Segment-lokales Schema. Identisch je Segment; die globale Ordnung liegt in
 # der zusätzlichen Spalte ``global_event_id`` (aus dem Manifest-Zähler), nicht
 # in der segment-lokalen rowid ``id``.
+#
+# Die JSON-Spalten ``old_value``/``new_value`` bleiben erhalten (API-Kompat).
+# Zusätzlich (#933) tragen typisierte Spalten den Wert typgerecht, damit
+# einfache Wertfilter als SQL-WHERE gepusht werden können und ``LIMIT`` greift:
+# ``*_value_type`` ∈ {numeric, text, bool, null}; genau eine der Spalten
+# ``*_value_num`` (REAL) / ``*_value_text`` (TEXT) / ``*_value_bool`` (0/1) ist
+# je nach Typ befüllt.
 _SEGMENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ringbuffer (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,6 +75,14 @@ CREATE TABLE IF NOT EXISTS ringbuffer (
     topic            TEXT    NOT NULL,
     old_value        TEXT,
     new_value        TEXT,
+    old_value_type   TEXT,
+    old_value_num    REAL,
+    old_value_text   TEXT,
+    old_value_bool   INTEGER,
+    new_value_type   TEXT,
+    new_value_num    REAL,
+    new_value_text   TEXT,
+    new_value_bool   INTEGER,
     source_adapter   TEXT    NOT NULL,
     quality          TEXT    NOT NULL,
     metadata_version INTEGER NOT NULL DEFAULT 1,
@@ -77,6 +93,8 @@ CREATE INDEX IF NOT EXISTS idx_rb_ts_id_desc ON ringbuffer(ts DESC, global_event
 CREATE INDEX IF NOT EXISTS idx_rb_dp_ts_id ON ringbuffer(datapoint_id, ts DESC, global_event_id DESC);
 CREATE INDEX IF NOT EXISTS idx_rb_adp_ts_id ON ringbuffer(source_adapter, ts DESC, global_event_id DESC);
 CREATE INDEX IF NOT EXISTS idx_rb_quality_ts_id ON ringbuffer(quality, ts DESC, global_event_id DESC);
+CREATE INDEX IF NOT EXISTS idx_rb_new_num ON ringbuffer(new_value_num, global_event_id DESC);
+CREATE INDEX IF NOT EXISTS idx_rb_new_text ON ringbuffer(new_value_text, global_event_id DESC);
 
 CREATE TABLE IF NOT EXISTS ringbuffer_metadata_tags (
     entry_id INTEGER NOT NULL REFERENCES ringbuffer(id) ON DELETE CASCADE,
@@ -108,6 +126,65 @@ def _utc_now_compact() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S-%f")
 
 
+# Einfache Operatoren, die als typisiertes SQL-WHERE gepusht werden.
+_PUSHDOWN_OPERATORS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte", "between"})
+# contains/regex: nur mit gebundenem Query (Zeitfenster oder Kandidaten-Cap).
+_GUARDED_OPERATORS = frozenset({"contains", "regex"})
+_VALID_OPERATORS = _PUSHDOWN_OPERATORS | _GUARDED_OPERATORS
+# Erlaubte Zielspalten eines Wertfilters (engine-neutrale field-Namen).
+_FILTER_FIELDS = frozenset({"new_value", "old_value"})
+# Regex-Härtung (Referenz: Legacy _match_regex in ringbuffer.py).
+_REGEX_MAX_PATTERN_LEN = 256
+_RE_UNSAFE_NESTED_QUANTIFIERS = re.compile(r"\((?:[^()\\]|\\.)*[+*][^()]*\)[+*]")
+# SQL-Vergleichsoperatoren je Pushdown-Operator (between separat behandelt).
+_SQL_COMPARATORS = {"eq": "=", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
+
+
+def _derive_value_type(value: Any) -> str:
+    """Leitet den typisierten Spaltentyp aus einem Python-Wert ab.
+
+    Reihenfolge orientiert sich an den Legacy-Typ-Helfern (``_is_boolean_type``
+    vor ``_is_numeric_type``), weil ``bool`` in Python eine ``int``-Subklasse
+    ist und sonst fälschlich als numerisch klassifiziert würde.
+    """
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, (int, float)):
+        return "numeric"
+    if isinstance(value, str):
+        return "text"
+    # Listen/Dicts o.ä. sind für typisierte Pushdown-Filter nicht adressierbar.
+    return "null"
+
+
+def _obs_regexp_impl(pattern: str, flags: int, value: Any) -> int:
+    """SQLite-Callback für gepushtes ``regex``. 1 bei Treffer, sonst 0.
+
+    Das Muster ist beim Clause-Bau bereits gehärtet (Länge, nested quantifiers,
+    Kompilierbarkeit); der Query-Kontext ist gebunden (Zeitfenster/Cap).
+    """
+    if not isinstance(value, str):  # pragma: no cover - SQL filtert bereits text_col IS NOT NULL
+        return 0
+    try:
+        return 1 if re.compile(pattern, flags).search(value) else 0
+    except re.error:  # pragma: no cover - bereits beim Clause-Bau geprüft
+        return 0
+
+
+def _typed_columns_for(value: Any) -> tuple[str, float | None, str | None, int | None]:
+    """(type, num, text, bool) — genau eine Nutzspalte ist je nach Typ gesetzt."""
+    value_type = _derive_value_type(value)
+    if value_type == "bool":
+        return ("bool", None, None, 1 if value else 0)
+    if value_type == "numeric":
+        return ("numeric", float(value), None, None)
+    if value_type == "text":
+        return ("text", None, value, None)
+    return ("null", None, None, None)
+
+
 class SqliteSegmentStore(RingBufferStore):
     """Segmentiertes SQLite-Backend hinter der portablen Store-Grenze."""
 
@@ -134,8 +211,8 @@ class SqliteSegmentStore(RingBufferStore):
     def capabilities(self) -> StoreCapabilities:
         return StoreCapabilities(
             supports_native_retention=True,
-            # TODO(#933): typisierte Wertspalten → dann typed pushdown = True.
-            supports_typed_pushdown=False,
+            # #933: typisierte Wertspalten + SQL-Pushdown für einfache Operatoren.
+            supports_typed_pushdown=True,
             ordering_guarantee=OrderingGuarantee.GLOBAL_MONOTONIC,
             # TODO(#932): streaming/segmentuebergreifender Export.
             supports_streaming_export=False,
@@ -199,11 +276,16 @@ class SqliteSegmentStore(RingBufferStore):
         # anschließend enforce_retention() auf geschlossene Segmente.
 
     async def _insert_event(self, conn: aiosqlite.Connection, global_event_id: int, event: StoreEvent) -> None:
+        # JSON-Spalten bleiben (API-Kompat); typisierte Spalten für Pushdown (#933).
+        old_type, old_num, old_text, old_bool = _typed_columns_for(event.old_value)
+        new_type, new_num, new_text, new_bool = _typed_columns_for(event.new_value)
         cursor = await conn.execute(
             """INSERT INTO ringbuffer
                (global_event_id, ts, datapoint_id, topic, old_value, new_value,
+                old_value_type, old_value_num, old_value_text, old_value_bool,
+                new_value_type, new_value_num, new_value_text, new_value_bool,
                 source_adapter, quality, metadata_version, metadata)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 global_event_id,
                 event.ts,
@@ -211,6 +293,14 @@ class SqliteSegmentStore(RingBufferStore):
                 event.topic,
                 json_dumps(event.old_value),
                 json_dumps(event.new_value),
+                old_type,
+                old_num,
+                old_text,
+                old_bool,
+                new_type,
+                new_num,
+                new_text,
+                new_bool,
                 event.source_adapter,
                 event.quality,
                 event.metadata_version,
@@ -272,6 +362,24 @@ class SqliteSegmentStore(RingBufferStore):
         return conn
 
     async def _query_segment(self, conn: aiosqlite.Connection, query: StoreQuery) -> list[dict[str, Any]]:
+        sql, params = self._build_segment_sql(query)
+        if any(str(f.get("operator", "")).strip().lower() == "regex" for f in query.value_filters):
+            # REGEXP-Callback nur registrieren, wenn ein Regex-Filter vorliegt.
+            # Registrierung erfolgt lokal auf der übergebenen Read-Connection.
+            await conn.create_function("obs_regexp", 3, _obs_regexp_impl, deterministic=True)
+        async with conn.execute(sql, params) as cur:
+            rows = await cur.fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
+    def _build_segment_sql(self, query: StoreQuery) -> tuple[str, list[Any]]:
+        """Baut das segment-lokale SELECT inkl. gepushter Wertfilter.
+
+        Einfache Wertfilter (eq/ne/gt/gte/lt/lte/between) landen als typisiertes
+        WHERE-Prädikat, damit ``LIMIT`` NICHT durch einen Python-Post-Filter
+        ausgehebelt wird. ``contains``/``regex`` werden als SQL-``LIKE`` bzw.
+        ``REGEXP``-taugliches Prädikat nur zugelassen, wenn der Query gebunden ist
+        (Zeitfenster oder ``candidate_cap``); sonst ``ValueError`` (422-tauglich).
+        """
         clauses: list[str] = []
         params: list[Any] = []
         if query.from_ts is not None:
@@ -289,6 +397,10 @@ class SqliteSegmentStore(RingBufferStore):
         if query.quality is not None:
             clauses.append("quality = ?")
             params.append(query.quality)
+        for spec in query.value_filters:
+            clause, filter_params = self._value_filter_clause(spec, query)
+            clauses.append(clause)
+            params.extend(filter_params)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = (
             "SELECT global_event_id, ts, datapoint_id, topic, old_value, new_value, "
@@ -296,9 +408,91 @@ class SqliteSegmentStore(RingBufferStore):
             f"FROM ringbuffer{where} ORDER BY global_event_id DESC LIMIT ?"
         )
         params.append(max(query.offset, 0) + max(query.limit, 0))
-        async with conn.execute(sql, params) as cur:
-            rows = await cur.fetchall()
-        return [self._row_to_dict(row) for row in rows]
+        return sql, params
+
+    @staticmethod
+    def _query_is_bounded(query: StoreQuery) -> bool:
+        """contains/regex nur mit engem Zeitfenster oder Kandidaten-Cap zulassen."""
+        has_window = query.from_ts is not None and query.to_ts is not None
+        has_cap = query.candidate_cap is not None and query.candidate_cap > 0
+        return has_window or has_cap
+
+    def _value_filter_clause(self, spec: dict[str, Any], query: StoreQuery) -> tuple[str, list[Any]]:
+        """Übersetzt einen engine-neutralen Wertfilter in ein SQL-WHERE-Prädikat."""
+        operator = str(spec.get("operator", "")).strip().lower()
+        if operator not in _VALID_OPERATORS:
+            raise ValueError(f"invalid value filter operator: {operator!r}")
+        field_name = str(spec.get("field", "new_value")).strip().lower()
+        if field_name not in _FILTER_FIELDS:
+            raise ValueError(f"invalid value filter field: {field_name!r}")
+
+        if operator in _GUARDED_OPERATORS:
+            if not self._query_is_bounded(query):
+                raise ValueError(f"operator '{operator}' requires a bounded query (from_ts+to_ts or candidate_cap)")
+            return self._guarded_clause(operator, field_name, spec)
+        return self._pushdown_clause(operator, field_name, spec)
+
+    @staticmethod
+    def _pushdown_clause(operator: str, field_name: str, spec: dict[str, Any]) -> tuple[str, list[Any]]:
+        num_col = f"{field_name}_num"
+        text_col = f"{field_name}_text"
+        bool_col = f"{field_name}_bool"
+
+        if operator == "between":
+            lower = spec.get("lower")
+            upper = spec.get("upper")
+            lo = _typed_columns_for(lower)
+            up = _typed_columns_for(upper)
+            if lo[0] != "numeric" or up[0] != "numeric":
+                raise ValueError("between requires numeric lower/upper bounds")
+            if lo[1] > up[1]:
+                raise ValueError("value filter lower must be <= upper")
+            return (f"({num_col} IS NOT NULL AND {num_col} BETWEEN ? AND ?)", [lo[1], up[1]])
+
+        value = spec.get("value")
+        value_type, num, text, bool_val = _typed_columns_for(value)
+        comparator = _SQL_COMPARATORS[operator]
+        # Gemischte Typen dürfen nicht fälschlich matchen: der Vergleich läuft nur
+        # gegen die typgleiche Spalte, die anderen Typspalten sind NULL.
+        if value_type == "numeric":
+            return (f"({num_col} IS NOT NULL AND {num_col} {comparator} ?)", [num])
+        if value_type == "text":
+            return (f"({text_col} IS NOT NULL AND {text_col} {comparator} ?)", [text])
+        if value_type == "bool":
+            return (f"({bool_col} IS NOT NULL AND {bool_col} {comparator} ?)", [bool_val])
+        raise ValueError(f"operator '{operator}' needs a numeric, text or bool value")
+
+    @staticmethod
+    def _guarded_clause(operator: str, field_name: str, spec: dict[str, Any]) -> tuple[str, list[Any]]:
+        text_col = f"{field_name}_text"
+        ignore_case = bool(spec.get("ignore_case", False))
+        if operator == "contains":
+            needle = spec.get("value")
+            if not isinstance(needle, str):
+                raise ValueError("contains requires a string value")
+            escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            if ignore_case:
+                return (
+                    f"({text_col} IS NOT NULL AND LOWER({text_col}) LIKE ? ESCAPE '\\')",
+                    [f"%{escaped.lower()}%"],
+                )
+            return (f"({text_col} IS NOT NULL AND {text_col} LIKE ? ESCAPE '\\')", [f"%{escaped}%"])
+
+        # regex: Muster härten (Referenz: Legacy _match_regex), dann als Python-
+        # Callback über SQLite REGEXP pushen — der WHERE-Kontext bleibt gebunden.
+        pattern = spec.get("pattern")
+        if not isinstance(pattern, str) or not pattern:
+            raise ValueError("regex requires a non-empty pattern")
+        if len(pattern) > _REGEX_MAX_PATTERN_LEN:
+            raise ValueError("unsafe regex pattern: pattern too long")
+        if _RE_UNSAFE_NESTED_QUANTIFIERS.search(pattern):
+            raise ValueError("unsafe regex pattern: nested quantifiers are not allowed")
+        flags = re.IGNORECASE if ignore_case else 0
+        try:
+            re.compile(pattern, flags)
+        except re.error as exc:  # pragma: no cover - message details vary per version
+            raise ValueError(f"invalid regex pattern: {exc}") from exc
+        return (f"({text_col} IS NOT NULL AND obs_regexp(?, ?, {text_col}) = 1)", [pattern, flags])
 
     @staticmethod
     def _row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:

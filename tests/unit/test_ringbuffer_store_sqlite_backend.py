@@ -59,8 +59,8 @@ async def test_capabilities_describe_sqlite_backend(store: SqliteSegmentStore):
     caps = store.capabilities()
     assert caps.supports_native_retention is True
     assert caps.ordering_guarantee is OrderingGuarantee.GLOBAL_MONOTONIC
-    # Typed pushdown und Streaming-Export sind Welle-2 (#933/#932) → noch nicht nativ.
-    assert caps.supports_typed_pushdown is False
+    # Typed pushdown ist mit #933 nativ; Streaming-Export bleibt Welle-2 (#932).
+    assert caps.supports_typed_pushdown is True
     assert caps.supports_streaming_export is False
 
 
