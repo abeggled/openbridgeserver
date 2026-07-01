@@ -18,36 +18,61 @@ INSTALL_DIR="/opt/obs"
 SERVICE="obs"
 
 CURRENT=$(cat "$INSTALL_DIR/version" 2>/dev/null || echo "unknown")
+
+SHOW_NIGHTLIES=false
+for arg in "$@"; do
+    case "$arg" in
+        --nightly|-n) SHOW_NIGHTLIES=true ;;
+    esac
+done
+
 echo "Fetching release information..."
 ALL_RELEASES=$(curl -sf "https://api.github.com/repos/${REPO}/releases")
 
-# Build ordered list via semantic version sort, stopping after 2 stables
-VERSION_LIST=$(echo "$ALL_RELEASES" | python3 -c "
-import sys, json, re
+# Build ordered list: versioned releases (up to 2 stables) plus nightlies if requested
+VERSION_LIST=$(echo "$ALL_RELEASES" | SHOW_NIGHTLIES="$SHOW_NIGHTLIES" python3 -c "
+import sys, json, re, os
 
+show_nightlies = os.environ.get('SHOW_NIGHTLIES') == 'true'
 releases = json.load(sys.stdin)
 
 def sort_key(tag):
     m = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-RC(\d+))?\$', tag, re.IGNORECASE)
-    if not m:
-        return (0, 0, 0, 0, 0)
-    y, mn, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
-    rc = int(m.group(4)) if m.group(4) else None
-    return (y, mn, p, 1 if rc is None else 0, rc or 0)
+    if m:
+        y, mn, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        rc = int(m.group(4)) if m.group(4) else None
+        return (y, mn, p, 1 if rc is None else 0, rc or 0)
+    m = re.match(r'^nightly-(\d{4})(\d{2})(\d{2})\$', tag)
+    if m:
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)), -1, 0)
+    return (0, 0, 0, 0, 0)
 
-candidates = sorted(
-    [r for r in releases if not r['draft']],
-    key=lambda r: sort_key(r['tag_name']), reverse=True
-)
+non_draft = [r for r in releases if not r['draft']]
 
+versioned = []
 stables_seen = 0
-for r in candidates:
-    kind = 'rc' if r['prerelease'] else 'stable'
-    print(kind + ' ' + r['tag_name'])
+for r in sorted(non_draft, key=lambda r: sort_key(r['tag_name']), reverse=True):
+    if re.match(r'^nightly-', r['tag_name']) or sort_key(r['tag_name']) == (0, 0, 0, 0, 0):
+        continue
+    versioned.append(r)
     if not r['prerelease']:
         stables_seen += 1
         if stables_seen >= 2:
             break
+
+result = list(versioned)
+if show_nightlies:
+    result.extend(r for r in non_draft if re.match(r'^nightly-\d{8}\$', r['tag_name']))
+result.sort(key=lambda r: sort_key(r['tag_name']), reverse=True)
+
+for r in result:
+    tag = r['tag_name']
+    if re.match(r'^nightly-', tag):
+        print('nightly ' + tag)
+    elif r['prerelease']:
+        print('rc ' + tag)
+    else:
+        print('stable ' + tag)
 ")
 
 echo "Current version: $CURRENT"
@@ -62,8 +87,10 @@ while IFS=' ' read -r TYPE TAG; do
     [[ "$TAG" == "$CURRENT" ]] && MARKER=", current"
     if [[ "$TYPE" == "stable" ]]; then
         LABELS+=("$TAG  (stable${MARKER})")
-    else
+    elif [[ "$TYPE" == "rc" ]]; then
         LABELS+=("$TAG  (release candidate${MARKER})")
+    else
+        LABELS+=("$TAG  (nightly${MARKER})")
     fi
 done <<< "$VERSION_LIST"
 
@@ -175,12 +202,10 @@ tar -xzf "$TMP/$BUNDLE_FILENAME" -C "$INSTALL_DIR"
 "$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
 
 # Self-update: replace this script with the version from the bundle
-cp "$INSTALL_DIR/obs-update" /usr/local/bin/obs-update
-chmod +x /usr/local/bin/obs-update
+install -m 755 "$INSTALL_DIR/obs-update" /usr/local/bin/obs-update
 rm -f "$INSTALL_DIR/obs-update"
 if [[ "$BUNDLE_HAS_OBS_ADMIN" == "true" ]]; then
-    cp "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin
-    chmod +x /usr/local/bin/obs-admin
+    install -m 755 "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin
     rm -f "$INSTALL_DIR/obs-admin"
 else
     rm -f /usr/local/bin/obs-admin
