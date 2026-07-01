@@ -6,18 +6,10 @@
         <p class="text-sm text-slate-500 mt-0.5">
           {{ t('knxDevices.subtitle', { count: pageData.total }) }}
         </p>
+        <p class="text-xs text-slate-500 mt-1">
+          {{ t('knxDevices.snapshotHint') }}
+        </p>
       </div>
-      <button
-        class="btn-secondary"
-        data-testid="knx-devices-refresh"
-        :disabled="loading"
-        @click="loadDevices"
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5 19A8 8 0 0019 5M19 5h-5m5 0v5"/>
-        </svg>
-        {{ t('knxDevices.refresh') }}
-      </button>
       <RouterLink
         v-if="canImport"
         class="btn-primary"
@@ -28,7 +20,7 @@
       </RouterLink>
     </div>
 
-    <form class="grid grid-cols-1 lg:grid-cols-[1fr_12rem_12rem_auto] gap-2" @submit.prevent="applyFilters">
+    <form class="grid grid-cols-1 lg:grid-cols-[minmax(14rem,1fr)_12rem_12rem_minmax(16rem,1fr)_auto] gap-2" @submit.prevent="applyFilters">
       <div class="relative">
         <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z"/>
@@ -51,6 +43,11 @@
         class="input"
         data-testid="knx-devices-order-number"
         :placeholder="t('knxDevices.orderNumberPlaceholder')"
+      />
+      <HierarchyCombobox
+        v-model="filters.hierarchy_node_ids"
+        data-testid="knx-devices-hierarchy-filter"
+        :placeholder="t('knxDevices.hierarchyFilterPlaceholder')"
       />
       <button class="btn-primary justify-center" data-testid="knx-devices-apply">
         {{ t('common.search') }}
@@ -89,6 +86,7 @@
                 <th class="px-4 py-3 text-left font-semibold">{{ t('knxDevices.table.name') }}</th>
                 <th class="px-4 py-3 text-left font-semibold">{{ t('knxDevices.table.manufacturer') }}</th>
                 <th class="px-4 py-3 text-left font-semibold">{{ t('knxDevices.table.orderNumber') }}</th>
+                <th class="px-4 py-3 text-left font-semibold">{{ t('knxDevices.table.hierarchies') }}</th>
                 <th class="px-4 py-3 text-left font-semibold">{{ t('knxDevices.table.appRef') }}</th>
               </tr>
             </thead>
@@ -107,6 +105,19 @@
                 <td class="px-4 py-3 text-slate-700 dark:text-slate-200">{{ valueOrDash(device.name) }}</td>
                 <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ valueOrDash(device.manufacturer) }}</td>
                 <td class="px-4 py-3 font-mono text-slate-600 dark:text-slate-300">{{ valueOrDash(device.order_number) }}</td>
+                <td class="px-4 py-3 text-slate-600 dark:text-slate-300">
+                  <div v-if="device.hierarchy_links?.length" class="flex flex-wrap gap-1">
+                    <span
+                      v-for="link in device.hierarchy_links"
+                      :key="`${link.tree_id}:${link.node_id}`"
+                      class="inline-flex max-w-56 rounded bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-700 dark:text-emerald-300"
+                      :title="linkFullLabel(link)"
+                    >
+                      <PathLabel :segments="linkDisplayPath(link)" />
+                    </span>
+                  </div>
+                  <span v-else class="text-slate-400">{{ t('knxDevices.noHierarchyLinks') }}</span>
+                </td>
                 <td class="px-4 py-3 font-mono text-xs text-slate-500">{{ valueOrDash(device.app_ref) }}</td>
               </tr>
             </tbody>
@@ -117,9 +128,19 @@
         </div>
 
         <div class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 dark:border-slate-700 px-4 py-3 text-sm">
-          <span class="text-slate-500" data-testid="knx-devices-page-label">
-            {{ t('knxDevices.pageLabel', { page: pageData.page + 1, pages: pageData.pages }) }}
-          </span>
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="text-slate-500" data-testid="knx-devices-page-label">
+              {{ t('knxDevices.pageLabel', { page: pageData.page + 1, pages: pageData.pages }) }}
+            </span>
+            <button
+              class="btn-ghost text-sm"
+              data-testid="knx-devices-refresh"
+              :disabled="loading"
+              @click="loadDevices"
+            >
+              {{ t('knxDevices.reload') }}
+            </button>
+          </div>
           <div class="flex items-center gap-2">
             <button
               class="btn-secondary"
@@ -166,6 +187,40 @@
           </dl>
 
           <h4 class="mt-5 text-sm font-semibold text-slate-700 dark:text-slate-200">
+            {{ t('knxDevices.hierarchyAssignments') }}
+          </h4>
+          <div v-if="canImport" class="mt-2 flex flex-col gap-2">
+            <HierarchyCombobox
+              v-model="deviceHierarchyIds"
+              data-testid="knx-device-hierarchy-links"
+              :placeholder="t('knxDevices.hierarchyAssignPlaceholder')"
+            />
+            <div class="flex items-center justify-end">
+              <button
+                class="btn-secondary btn-sm"
+                data-testid="knx-device-save-hierarchy-links"
+                :disabled="assignmentSaving"
+                @click="saveDeviceHierarchyLinks"
+              >
+                {{ assignmentSaving ? t('common.saving') : t('common.save') }}
+              </button>
+            </div>
+          </div>
+          <div v-else class="mt-2 text-sm text-slate-500">
+            <span v-if="!selectedDevice.hierarchy_links?.length">{{ t('knxDevices.noHierarchyLinks') }}</span>
+            <span v-else class="flex flex-wrap gap-1">
+              <span
+                v-for="link in selectedDevice.hierarchy_links"
+                :key="`${link.tree_id}:${link.node_id}`"
+                class="inline-flex max-w-full rounded bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-700 dark:text-emerald-300"
+                :title="linkFullLabel(link)"
+              >
+                <PathLabel :segments="linkDisplayPath(link)" />
+              </span>
+            </span>
+          </div>
+
+          <h4 class="mt-5 text-sm font-semibold text-slate-700 dark:text-slate-200">
             {{ t('knxDevices.commObjectsTitle', { count: selectedDevice.comm_objects?.length ?? 0 }) }}
           </h4>
           <div v-if="!(selectedDevice.comm_objects?.length)" class="mt-2 text-sm text-slate-500">
@@ -207,7 +262,10 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { knxprojApi } from '@/api/client'
+import HierarchyCombobox from '@/components/ui/HierarchyCombobox.vue'
+import PathLabel from '@/components/ui/PathLabel.vue'
 import { useAuthStore } from '@/stores/auth'
+import { hierarchyDisplayPath } from '@/utils/hierarchyDisplay'
 
 const { t } = useI18n()
 const auth = useAuthStore()
@@ -216,6 +274,7 @@ const filters = reactive({
   q: '',
   manufacturer: '',
   order_number: '',
+  hierarchy_node_ids: [],
 })
 const pageData = reactive({
   page: 0,
@@ -231,13 +290,18 @@ const listRequestToken = ref(0)
 const detailLoading = ref(false)
 const detailRequestToken = ref(0)
 const detailRequestPa = ref('')
+const deviceHierarchyIds = ref([])
+const assignmentSaving = ref(false)
+const assignmentRequestToken = ref(0)
 const error = ref('')
 
 const canImport = computed(() => auth.isAdmin)
+const hierarchyFilterNodeIds = computed(() => hierarchyNodeIdsFromSelection(filters.hierarchy_node_ids))
 const requestParams = computed(() => ({
   q: filters.q.trim(),
   manufacturer: filters.manufacturer.trim(),
   order_number: filters.order_number.trim(),
+  hierarchy_node_id: hierarchyFilterNodeIds.value.join(','),
   page: pageData.page,
   size: pageData.size,
 }))
@@ -284,6 +348,8 @@ function goToPage(page) {
 }
 
 async function selectDevice(device) {
+  assignmentRequestToken.value += 1
+  assignmentSaving.value = false
   const requestToken = detailRequestToken.value + 1
   detailRequestToken.value = requestToken
   detailRequestPa.value = String(device.pa ?? '')
@@ -295,6 +361,7 @@ async function selectDevice(device) {
     const responsePa = String(data?.pa ?? device.pa ?? '')
     if (!devices.value.some((item) => String(item.pa ?? '') === responsePa)) return
     selectedDevice.value = data
+    deviceHierarchyIds.value = hierarchySelectionFromLinks(data.hierarchy_links)
     detailRequestPa.value = responsePa
   } catch (err) {
     if (detailRequestToken.value !== requestToken) return
@@ -309,9 +376,12 @@ async function selectDevice(device) {
 
 function clearSelectedDevice() {
   detailRequestToken.value += 1
+  assignmentRequestToken.value += 1
   detailRequestPa.value = ''
   selectedDevice.value = null
+  deviceHierarchyIds.value = []
   detailLoading.value = false
+  assignmentSaving.value = false
 }
 
 function clearDetailIfMissingFromList(nextDevices) {
@@ -324,5 +394,68 @@ function clearDetailIfMissingFromList(nextDevices) {
 
 function valueOrDash(value) {
   return value ? String(value) : '—'
+}
+
+function hierarchyNodeIdsFromSelection(selection) {
+  return (Array.isArray(selection) ? selection : [])
+    .map((id) => String(id).split(':').pop())
+    .filter(Boolean)
+}
+
+function hierarchySelectionFromLinks(links) {
+  return (Array.isArray(links) ? links : [])
+    .map((link) => `${link.tree_id}:${link.node_id}`)
+    .filter((id) => !id.endsWith(':'))
+}
+
+function linkNodePath(link) {
+  if (!link) return []
+  return [...(Array.isArray(link.node_path) ? link.node_path : []), link.node_name].filter(Boolean)
+}
+
+function linkDisplayPath(link) {
+  const path = linkNodePath(link)
+  const displayPath = hierarchyDisplayPath({
+    treeName: link?.tree_name,
+    path,
+    displayDepth: link?.display_depth,
+  })
+  return displayPath.length ? displayPath : path
+}
+
+function linkFullLabel(link) {
+  if (!link) return ''
+  return [link.tree_name, ...linkNodePath(link)].filter(Boolean).join(' › ')
+}
+
+async function saveDeviceHierarchyLinks() {
+  if (!selectedDevice.value) return
+  const targetPa = String(selectedDevice.value.pa ?? '')
+  const nodeIds = hierarchyNodeIdsFromSelection(deviceHierarchyIds.value)
+  const requestToken = assignmentRequestToken.value + 1
+  assignmentRequestToken.value = requestToken
+  assignmentSaving.value = true
+  error.value = ''
+  try {
+    const { data } = await knxprojApi.setDeviceHierarchyLinks(
+      targetPa,
+      { node_ids: nodeIds },
+    )
+    const idx = devices.value.findIndex((device) => String(device.pa) === String(data.pa))
+    if (idx >= 0) {
+      devices.value[idx] = { ...devices.value[idx], hierarchy_links: data.hierarchy_links || [] }
+    }
+    if (assignmentRequestToken.value !== requestToken) return
+    if (String(selectedDevice.value?.pa ?? '') !== targetPa) return
+    selectedDevice.value = data
+    deviceHierarchyIds.value = hierarchySelectionFromLinks(data.hierarchy_links)
+  } catch (err) {
+    if (assignmentRequestToken.value !== requestToken) return
+    error.value = err.response?.data?.detail ?? t('knxDevices.assignmentError')
+  } finally {
+    if (assignmentRequestToken.value === requestToken) {
+      assignmentSaving.value = false
+    }
+  }
 }
 </script>

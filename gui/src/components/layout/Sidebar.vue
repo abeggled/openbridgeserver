@@ -136,8 +136,8 @@ const { t }    = useI18n()
 const navItems = computed(() => [
   { to: '/',           label: t('nav.dashboard'),  icon: '&#9783;' },
   { to: '/datapoints', label: t('nav.datapoints'), icon: '&#9636;' },
-  { to: '/adapters',   label: t('nav.adapters'),   icon: '&#9741;' },
   { to: '/knx-devices', label: t('nav.knxDevices'), icon: '&#9783;' },
+  { to: '/adapters',   label: t('nav.adapters'),   icon: '&#9741;' },
   { to: '/history',    label: t('nav.history'),    icon: '&#9685;' },
   { to: '/ringbuffer', label: t('nav.ringbuffer'), icon: '&#9706;' },
   { to: '/logs',       label: t('nav.logs'),       icon: '&#9783;' },

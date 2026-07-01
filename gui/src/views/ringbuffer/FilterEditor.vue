@@ -842,6 +842,33 @@ async function datapointHasKnxGroupAddress(dpId, ga, bindingCache) {
   return bindingCache.get(dpId).some((binding) => bindingMatchesGroupAddress(binding, ga))
 }
 
+async function searchKnxDatapointsByGroupAddress(ga) {
+  const items = []
+  const size = 500
+  let page = 0
+  let pages = 1
+  do {
+    const { data: result } = await searchApi.search({
+      q: ga,
+      adapter: 'KNX',
+      page,
+      size,
+    })
+    items.push(...(Array.isArray(result?.items) ? result.items : []))
+    const total = Number(result?.total)
+    const reportedPages = Number(result?.pages)
+    if (Number.isFinite(reportedPages) && reportedPages > 0) {
+      pages = reportedPages
+    } else if (Number.isFinite(total) && total > 0) {
+      pages = Math.ceil(total / size)
+    } else {
+      pages = 1
+    }
+    page += 1
+  } while (page < pages)
+  return items
+}
+
 async function expandDeviceChip(item, index) {
   void item
   if (expandingDevice.value) return
@@ -856,18 +883,14 @@ async function expandDeviceChip(item, index) {
     const foundDpIds = []
     const bindingCache = new Map()
     for (const ga of groupAddresses) {
-      const { data: result } = await searchApi.search({
-        q: ga,
-        adapter: 'KNX',
-        size: 500,
-      })
-      for (const dp of result?.items || []) {
+      for (const dp of await searchKnxDatapointsByGroupAddress(ga)) {
         const dpId = dp?.id ? String(dp.id) : ''
         if (dpId && await datapointHasKnxGroupAddress(dpId, ga, bindingCache)) {
           foundDpIds.push(dpId)
         }
       }
     }
+    if (!form.devices.some((devicePa) => String(devicePa ?? '').trim() === pa)) return
     form.datapoints = Array.from(new Set([...form.datapoints, ...foundDpIds]))
     form.devices = form.devices.filter((devicePa) => String(devicePa ?? '').trim() !== pa)
     markDirty()

@@ -995,6 +995,113 @@ describe('FilterEditor (#436)', () => {
     expect(dpIds).toEqual(['dp-a', 'dp-b', 'dp-existing'])
   })
 
+  it('pages through KNX datapoint search results while expanding a device chip', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({
+        data: makeSampleSet({
+          filter: {
+            hierarchy_nodes: [],
+            datapoints: [],
+            devices: ['1.1.10'],
+            tags: [],
+            adapters: [],
+            q: null,
+            value_filter: null,
+          },
+        }),
+      }),
+    })
+    const knxprojApi = makeKnxprojApi({
+      getDevice: vi.fn().mockResolvedValue({
+        data: {
+          pa: '1.1.10',
+          comm_objects: [{ id: 'co-1', ga_addresses: ['1/2/3'] }],
+        },
+      }),
+    })
+    const searchApi = makeSearchApi({
+      search: vi
+        .fn()
+        .mockResolvedValueOnce({ data: { items: [{ id: 'dp-first' }], total: 501, page: 0, size: 500, pages: 2 } })
+        .mockResolvedValueOnce({ data: { items: [{ id: 'dp-late' }], total: 501, page: 1, size: 500, pages: 2 } }),
+    })
+    const dpApi = makeDpApi({
+      listBindings: vi.fn().mockImplementation((id) => Promise.resolve({
+        data: [{ adapter_type: 'KNX', config: { group_address: id === 'dp-late' ? '1/2/3' : '1/2/30' } }],
+      })),
+    })
+    const { wrapper } = await mountEditor({
+      props: { setId: 'fs-1' },
+      ringbufferApi,
+      knxprojApi,
+      searchApi,
+      dpApi,
+    })
+
+    await wrapper.find('[data-testid="device-expand-0"]').trigger('click')
+    await flushPromises()
+
+    expect(searchApi.search).toHaveBeenNthCalledWith(1, { q: '1/2/3', adapter: 'KNX', page: 0, size: 500 })
+    expect(searchApi.search).toHaveBeenNthCalledWith(2, { q: '1/2/3', adapter: 'KNX', page: 1, size: 500 })
+    const dpIds = wrapper.findAll('[data-testid^="stub-DpCombobox-chip-"]').map((c) => c.attributes('data-chip-id'))
+    expect(dpIds).toEqual(['dp-late'])
+    expect(wrapper.findAll('[data-testid^="device-expand-"]').length).toBe(0)
+  })
+
+  it('ignores resolved device expansion results when the device chip was removed', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({
+        data: makeSampleSet({
+          filter: {
+            hierarchy_nodes: [],
+            datapoints: ['dp-keep'],
+            devices: ['1.1.10'],
+            tags: [],
+            adapters: [],
+            q: null,
+            value_filter: null,
+          },
+        }),
+      }),
+    })
+    const pendingSearch = deferred()
+    const knxprojApi = makeKnxprojApi({
+      getDevice: vi.fn().mockResolvedValue({
+        data: {
+          pa: '1.1.10',
+          comm_objects: [{ id: 'co-1', ga_addresses: ['1/2/3'] }],
+        },
+      }),
+    })
+    const searchApi = makeSearchApi({
+      search: vi.fn().mockReturnValueOnce(pendingSearch.promise),
+    })
+    const dpApi = makeDpApi({
+      listBindings: vi.fn().mockResolvedValue({
+        data: [{ adapter_type: 'KNX', config: { group_address: '1/2/3' } }],
+      }),
+    })
+    const { wrapper } = await mountEditor({
+      props: { setId: 'fs-1' },
+      ringbufferApi,
+      knxprojApi,
+      searchApi,
+      dpApi,
+    })
+
+    await wrapper.find('[data-testid="device-expand-0"]').trigger('click')
+    await flushPromises()
+    const deviceStub = wrapper.findComponent({ name: 'KnxDeviceCombobox' })
+    await deviceStub.vm.$emit('update:modelValue', [])
+
+    pendingSearch.resolve({ data: { items: [{ id: 'dp-new' }], total: 1, page: 0, size: 500, pages: 1 } })
+    await flushPromises()
+
+    const dpIds = wrapper.findAll('[data-testid^="stub-DpCombobox-chip-"]').map((c) => c.attributes('data-chip-id'))
+    expect(dpIds).toEqual(['dp-keep'])
+    expect(wrapper.findAll('[data-testid^="device-expand-"]').length).toBe(0)
+  })
+
   it('shows device expansion progress and prevents duplicate expansion clicks', async () => {
     const ringbufferApi = makeRingbufferApi({
       getFilterset: vi.fn().mockResolvedValue({

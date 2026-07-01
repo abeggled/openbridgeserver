@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 let knxprojApi
+let hierarchyApi
 
 beforeEach(() => {
   vi.resetModules()
@@ -17,6 +18,7 @@ beforeEach(() => {
             order_number: '5WG1',
             app_ref: 'APP-KITCHEN',
             imported_at: '2026-06-01T00:00:00Z',
+            hierarchy_links: [],
           },
         ],
         total: 1,
@@ -33,6 +35,7 @@ beforeEach(() => {
         order_number: '5WG1',
         app_ref: 'APP-KITCHEN',
         imported_at: '2026-06-01T00:00:00Z',
+        hierarchy_links: [],
         comm_objects: [
           {
             id: 'co-1',
@@ -44,9 +47,27 @@ beforeEach(() => {
         ],
       },
     }),
+    setDeviceHierarchyLinks: vi.fn().mockResolvedValue({
+      data: {
+        pa: '1.1.1',
+        name: 'Kitchen Switch',
+        manufacturer: 'Siemens',
+        order_number: '5WG1',
+        app_ref: 'APP-KITCHEN',
+        imported_at: '2026-06-01T00:00:00Z',
+        hierarchy_links: [
+          { tree_id: 'tree-1', tree_name: 'Gebäude', node_id: 'node-kitchen', node_name: 'Küche' },
+        ],
+        comm_objects: [],
+      },
+    }),
+  }
+  hierarchyApi = {
+    listTrees: vi.fn().mockResolvedValue({ data: [] }),
+    getTreeNodes: vi.fn().mockResolvedValue({ data: [] }),
   }
 
-  vi.doMock('@/api/client', () => ({ knxprojApi }))
+  vi.doMock('@/api/client', () => ({ knxprojApi, hierarchyApi }))
 })
 
 afterEach(() => {
@@ -67,6 +88,12 @@ async function mountView() {
         RouterLink: {
           props: ['to'],
           template: '<a :data-to="JSON.stringify(to)"><slot /></a>',
+        },
+        HierarchyCombobox: {
+          name: 'HierarchyCombobox',
+          props: ['modelValue', 'placeholder'],
+          emits: ['update:modelValue'],
+          template: '<div><button type="button" data-testid="hierarchy-combobox-pick" @click="$emit(\'update:modelValue\', [\'tree-1:node-kitchen\'])">{{ placeholder }}</button></div>',
         },
       },
     },
@@ -93,6 +120,7 @@ describe('KnxDevicesView', () => {
       q: '',
       manufacturer: '',
       order_number: '',
+      hierarchy_node_id: '',
       page: 0,
       size: 25,
     })
@@ -118,6 +146,44 @@ describe('KnxDevicesView', () => {
     expect(wrapper.find('[data-testid="knx-device-row-1.1.9"]').text()).toContain('—')
   })
 
+  it('renders hierarchy chips with the configured shortened display path', async () => {
+    knxprojApi.listDevices.mockResolvedValueOnce({
+      data: {
+        items: [
+          {
+            pa: '1.1.5',
+            name: 'Kitchen Sensor',
+            manufacturer: 'MDT',
+            order_number: 'BE-04001',
+            app_ref: 'APP',
+            hierarchy_links: [
+              {
+                tree_id: 'tree-1',
+                tree_name: 'Gebäude',
+                node_id: 'node-kitchen',
+                node_name: 'Küche',
+                node_path: ['Haus', 'EG'],
+                display_depth: 2,
+              },
+            ],
+          },
+        ],
+        total: 1,
+        page: 0,
+        size: 25,
+        pages: 1,
+      },
+    })
+
+    const wrapper = await mountView()
+    const rowText = wrapper.find('[data-testid="knx-device-row-1.1.5"]').text()
+
+    expect(rowText).toContain('EG')
+    expect(rowText).toContain('Küche')
+    expect(rowText).not.toContain('Gebäude')
+    expect(rowText).not.toContain('Haus')
+  })
+
   it('applies filters and resets to the first page', async () => {
     const wrapper = await mountView()
 
@@ -131,6 +197,24 @@ describe('KnxDevicesView', () => {
       q: 'kitchen',
       manufacturer: 'siemens',
       order_number: '5WG',
+      hierarchy_node_id: '',
+      page: 0,
+      size: 25,
+    })
+  })
+
+  it('applies hierarchy filters', async () => {
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-testid="hierarchy-combobox-pick"]').trigger('click')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(knxprojApi.listDevices).toHaveBeenLastCalledWith({
+      q: '',
+      manufacturer: '',
+      order_number: '',
+      hierarchy_node_id: 'node-kitchen',
       page: 0,
       size: 25,
     })
@@ -228,6 +312,84 @@ describe('KnxDevicesView', () => {
     expect(wrapper.find('[data-testid="knx-device-detail"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('DPT1.001')
     expect(wrapper.text()).toContain('1/2/3')
+  })
+
+  it('saves hierarchy assignments for the selected device', async () => {
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-testid="knx-device-row-1.1.1"]').trigger('click')
+    await flushPromises()
+    await wrapper.findAll('[data-testid="hierarchy-combobox-pick"]')[1].trigger('click')
+    await wrapper.find('[data-testid="knx-device-save-hierarchy-links"]').trigger('click')
+    await flushPromises()
+
+    expect(knxprojApi.setDeviceHierarchyLinks).toHaveBeenCalledWith('1.1.1', {
+      node_ids: ['node-kitchen'],
+    })
+    expect(wrapper.text()).toContain('Küche')
+  })
+
+  it('does not overwrite the active detail panel with a stale hierarchy save response', async () => {
+    knxprojApi.listDevices.mockResolvedValueOnce({
+      data: {
+        items: [
+          { pa: '1.1.1', name: 'Kitchen Switch', manufacturer: 'Siemens', hierarchy_links: [] },
+          { pa: '1.1.2', name: 'Hall Dimmer', manufacturer: 'Gira', hierarchy_links: [] },
+        ],
+        total: 2,
+        page: 0,
+        size: 25,
+        pages: 1,
+      },
+    })
+    knxprojApi.getDevice
+      .mockResolvedValueOnce({
+        data: {
+          pa: '1.1.1',
+          name: 'Kitchen Switch',
+          manufacturer: 'Siemens',
+          hierarchy_links: [],
+          comm_objects: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          pa: '1.1.2',
+          name: 'Hall Dimmer',
+          manufacturer: 'Gira',
+          hierarchy_links: [],
+          comm_objects: [],
+        },
+      })
+    const saveResponse = deferred()
+    knxprojApi.setDeviceHierarchyLinks.mockReturnValueOnce(saveResponse.promise)
+
+    const wrapper = await mountView()
+    await wrapper.find('[data-testid="knx-device-row-1.1.1"]').trigger('click')
+    await flushPromises()
+    await wrapper.findAll('[data-testid="hierarchy-combobox-pick"]')[1].trigger('click')
+    await wrapper.find('[data-testid="knx-device-save-hierarchy-links"]').trigger('click')
+    await wrapper.find('[data-testid="knx-device-row-1.1.2"]').trigger('click')
+    await flushPromises()
+
+    saveResponse.resolve({
+      data: {
+        pa: '1.1.1',
+        name: 'Kitchen Switch',
+        manufacturer: 'Siemens',
+        hierarchy_links: [
+          { tree_id: 'tree-1', tree_name: 'Gebäude', node_id: 'node-kitchen', node_name: 'Küche' },
+        ],
+        comm_objects: [],
+      },
+    })
+    await flushPromises()
+
+    const detailText = wrapper.find('[data-testid="knx-device-detail"]').text()
+    expect(detailText).toContain('1.1.2')
+    expect(detailText).toContain('Hall Dimmer')
+    expect(detailText).not.toContain('Kitchen Switch')
+    expect(wrapper.find('[data-testid="knx-device-row-1.1.1"]').text()).toContain('Küche')
   })
 
   it('shows detail errors and clears the current detail panel', async () => {
@@ -337,6 +499,7 @@ describe('KnxDevicesView', () => {
             props: ['to'],
             template: '<a :data-to="JSON.stringify(to)"><slot /></a>',
           },
+          HierarchyCombobox: true,
         },
       },
     })
