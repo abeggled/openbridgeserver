@@ -615,6 +615,61 @@ async def test_page_allowed_message_archive_predicates_include_widget_filters():
 
 
 @pytest.mark.asyncio
+async def test_page_allowed_message_archive_predicates_follow_widgetref_target():
+    page_config_main = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "ref-host",
+                "type": "WidgetRef",
+                "name": "Ref",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {
+                    "source_page_id": "page-target",
+                    "source_widget_name": "archive-widget",
+                },
+            }
+        ],
+    }
+    page_config_target = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "archive-widget",
+                "type": "MessageArchive",
+                "name": "archive-widget",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {"archive_ids": ["System"], "severities": ["warning"]},
+            }
+        ],
+    }
+
+    class _DbStub:
+        async def fetchone(self, _query, params):
+            if params[0] == "page-main":
+                return {"page_config": json.dumps(page_config_main)}
+            if params[0] == "page-target":
+                return {"page_config": json.dumps(page_config_target)}
+            return None
+
+    predicates = await _page_allowed_message_archive_predicates(_DbStub(), "page-main")
+
+    assert len(predicates) == 1
+    assert predicates[0].archive_ids == {"system"}
+    assert predicates[0].severities == {"warning"}
+
+
+@pytest.mark.asyncio
 async def test_page_allowed_datapoints_includes_widgetref_target_datapoints():
     target_dp_id = str(uuid4())
     target_status_dp_id = str(uuid4())

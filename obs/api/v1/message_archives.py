@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from obs.api.audit import AuditLogWriter, get_audit_log_writer
 from obs.api.auth import Principal, decode_token, get_admin_user, get_current_principal, hash_api_key
@@ -59,6 +59,13 @@ class MessageArchiveUpdate(BaseModel):
     color: str | None = None
     retention_max_entries: int | None = Field(default=None, ge=1)
     retention_max_age_days: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_required_nulls(self) -> "MessageArchiveUpdate":
+        for field in ("name", "description", "color"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} must not be null")
+        return self
 
 
 class MessageArchiveOut(MessageArchiveBase):
@@ -194,6 +201,17 @@ def _validate_archive_id(value: str) -> str:
     return normalized
 
 
+def _has_foreign_key_cascade(foreign_keys: list[Any], table: str, from_column: str, to_column: str) -> bool:
+    for row in foreign_keys:
+        target_table = str(row[2])
+        source_column = str(row[3])
+        target_column = str(row[4])
+        on_delete = str(row[6]).upper()
+        if target_table == table and source_column == from_column and target_column == to_column and on_delete == "CASCADE":
+            return True
+    return False
+
+
 def _validate_sqlite_archive_db(path: str) -> None:
     with open(path, "rb") as handle:
         header = handle.read(16)
@@ -258,6 +276,15 @@ def _validate_sqlite_archive_db(path: str) -> None:
                 actual_columns = {str(col[1]) for col in table_info}
                 if columns - actual_columns:
                     raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Datei ist keine gültige Meldungsarchiv-Datenbank.")
+            entry_foreign_keys = conn.execute("PRAGMA foreign_key_list(message_archive_entries)").fetchall()
+            has_entry_archive_cascade = _has_foreign_key_cascade(entry_foreign_keys, "message_archives", "archive_id", "id")
+            read_state_foreign_keys = conn.execute("PRAGMA foreign_key_list(message_archive_read_states)").fetchall()
+            has_read_state_entry_cascade = _has_foreign_key_cascade(read_state_foreign_keys, "message_archive_entries", "entry_id", "id")
+            if not has_entry_archive_cascade or not has_read_state_entry_cascade:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Meldungsarchiv-Datenbank hat ungültige Fremdschlüssel.")
+            fk_violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if fk_violations:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Meldungsarchiv-Datenbank enthält ungültige Fremdschlüssel.")
         finally:
             conn.close()
     except HTTPException:

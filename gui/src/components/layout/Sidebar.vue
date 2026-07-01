@@ -22,7 +22,7 @@
         <line x1="36" y1="16" x2="36" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
         <line x1="42" y1="22" x2="42" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
       </svg>
-      <span v-if="!collapsed" class="font-bold text-slate-800 dark:text-slate-100 tracking-tight">open bridge server</span>
+      <span v-if="!collapsed" class="font-bold text-slate-800 dark:text-slate-100 tracking-tight">{{ $t('sidebar.productName') }}</span>
     </div>
 
     <!-- Nav -->
@@ -30,7 +30,7 @@
       <RouterLink
         v-for="item in navItems" :key="item.to"
         :to="item.to"
-        :title="collapsed ? (item.label + (item.to === '/adapters' && adapterWarningCount ? ` — ${adapterWarningCount} Warnung(en)` : '')) : ''"
+        :title="collapsed ? (item.to === '/adapters' && adapterWarningCount ? $t('sidebar.adapterWarningsTitle', { label: item.label, count: adapterWarningCount }) : item.label) : ''"
         :data-testid="'nav-' + (item.to === '/' ? 'home' : item.to.replace('/', ''))"
         :class="[
           'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
@@ -62,11 +62,11 @@
           href="/visu/"
           target="_blank"
           rel="noopener"
-          :title="collapsed ? 'Visu' : ''"
+          :title="collapsed ? $t('sidebar.visu') : ''"
           class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-800 dark:hover:text-slate-100"
         >
           <span class="shrink-0 text-lg w-5 text-center">&#9707;</span>
-          <span v-if="!collapsed" class="truncate">Visu</span>
+          <span v-if="!collapsed" class="truncate">{{ $t('sidebar.visu') }}</span>
         </a>
         <a
           v-for="link in navStore.links" :key="link.id"

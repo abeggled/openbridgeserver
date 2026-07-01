@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from obs.logic.manager import LogicManager
 from obs.logic.models import FlowData
 from obs.logic.node_types import get_node_type
-from tests.unit.conftest import node
+from tests.unit.conftest import edge, node
 
 
 def _flow(nodes: list[dict], edges: list[dict] | None = None) -> FlowData:
@@ -86,6 +86,58 @@ def test_message_archive_node_records_entry() -> None:
             "node_label": "",
         },
     )
+
+
+def test_message_archive_stored_output_replays_downstream_nodes() -> None:
+    manager = _make_manager()
+    flow = _flow(
+        [
+            node("ma", "message_archive", {"archive_id": "Alerts", "message": "Stored"}),
+            node("truth", "const_value", {"value": "true", "data_type": "bool"}),
+            node("gate", "and", {"input_count": 2}),
+        ],
+        [
+            edge("ma", "gate", "stored", "in1"),
+            edge("truth", "gate", "value", "in2"),
+        ],
+    )
+    service = MagicMock()
+    service.record = AsyncMock(return_value={"id": "entry-1"})
+
+    with patch("obs.message_archive.get_message_archive_service", return_value=service):
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = _run(manager, flow, {"ma": {"trigger": True}})
+
+    assert outputs["ma"]["stored"] is True
+    assert outputs["gate"]["out"] is True
+
+
+def test_message_archive_node_does_not_record_without_trigger() -> None:
+    manager = _make_manager()
+    flow = _flow([node("ma", "message_archive", {"archive_id": "Alerts", "message": "Fallback"})])
+    service = MagicMock()
+    service.record = AsyncMock()
+
+    with patch("obs.message_archive.get_message_archive_service", return_value=service):
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = _run(manager, flow, {"ma": {"trigger": False}})
+
+    assert outputs["ma"]["stored"] is False
+    service.record.assert_not_awaited()
+
+
+def test_message_archive_node_keeps_stored_false_when_record_fails() -> None:
+    manager = _make_manager()
+    flow = _flow([node("ma", "message_archive", {"archive_id": "Alerts", "message": "Fallback"})])
+    service = MagicMock()
+    service.record = AsyncMock(side_effect=RuntimeError("archive unavailable"))
+
+    with patch("obs.message_archive.get_message_archive_service", return_value=service):
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = _run(manager, flow, {"ma": {"trigger": True}})
+
+    assert outputs["ma"]["stored"] is False
+    service.record.assert_awaited_once()
 
 
 def test_message_archive_node_does_not_record_without_archive() -> None:

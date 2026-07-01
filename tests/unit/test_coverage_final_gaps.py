@@ -623,12 +623,11 @@ def test_get_autobackup_scheduler_raises_when_none():
 
 
 def test_list_backups_with_unparseable_stem(tmp_path, monkeypatch):
-    """_list_backups handles stems that don't match date format."""
+    """_list_backups ignores stems that don't match the backup date format."""
     monkeypatch.setattr(ab_api_2, "_autobackup_dir", lambda: tmp_path)
     (tmp_path / "notadate.json").write_text("{}")
     result = _list_backups()
-    assert len(result) == 1
-    assert result[0].name == "notadate"
+    assert result == []
 
 
 @pytest.mark.asyncio

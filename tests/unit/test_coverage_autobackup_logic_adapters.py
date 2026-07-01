@@ -151,13 +151,13 @@ class TestListBackups:
         assert len(result) == 1
         assert result[0].created_at == "2026-01-01T12:00:00"
 
-    def test_falls_back_to_stem_for_invalid_name(self, tmp_path):
+    def test_ignores_invalid_backup_name(self, tmp_path):
         from obs.api.v1.autobackup import _list_backups
 
         (tmp_path / "custom_backup.json").write_text("{}")
         with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
             result = _list_backups()
-        assert result[0].created_at == "custom_backup"
+        assert result == []
 
 
 class TestPruneOldBackups:

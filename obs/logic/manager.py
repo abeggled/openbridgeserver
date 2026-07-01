@@ -1023,8 +1023,10 @@ class LogicManager:
 
         api_client_ids = {node.id for node in flow.nodes if node.type == "api_client"}
         host_check_ids = {node.id for node in flow.nodes if node.type == "host_check"}
+        message_archive_ids = {node.id for node in flow.nodes if node.type == "message_archive"}
         operating_hour_ids = {node.id for node in flow.nodes if node.type == "operating_hours"}
-        needs_async_replay_snapshot = any(edge.source in api_client_ids or edge.source in host_check_ids for edge in flow.edges)
+        async_replay_source_ids = api_client_ids | host_check_ids | message_archive_ids
+        needs_async_replay_snapshot = any(edge.source in async_replay_source_ids for edge in flow.edges)
 
         # ── Pre-compute operating_hours values to inject as overrides ─────
         for node in flow.nodes:
@@ -1360,6 +1362,47 @@ class LogicManager:
                     resolved_async_edge_overrides.setdefault(_re.target, {})[_re.targetHandle or "in"] = GraphExecutor._get_output_value(
                         outputs.get(_re.source, {}), _re.sourceHandle or "out"
                     )
+
+        def _replay_async_descendants(node_ids: set[str], *, skip_node_ids: set[str] | None = None) -> set[str]:
+            descendants: set[str] = set()
+            queue: list[str] = list(node_ids)
+            while queue:
+                source_id = queue.pop()
+                for edge in flow.edges:
+                    if edge.source == source_id and edge.target not in descendants:
+                        descendants.add(edge.target)
+                        queue.append(edge.target)
+            if not descendants:
+                return descendants
+
+            replay_overrides: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in aug_overrides.items()}
+            for nid, vals in resolved_async_edge_overrides.items():
+                replay_overrides.setdefault(nid, {}).update(vals)
+            for edge in flow.edges:
+                if edge.source in node_ids:
+                    source_handle = edge.sourceHandle or "out"
+                    target_handle = edge.targetHandle or "in"
+                    source_value = GraphExecutor._get_output_value(outputs.get(edge.source, {}), source_handle)
+                    replay_overrides.setdefault(edge.target, {})[target_handle] = source_value
+            for edge in flow.edges:
+                if edge.target not in descendants or edge.source in descendants or edge.source in node_ids:
+                    continue
+                source_handle = edge.sourceHandle or "out"
+                target_handle = edge.targetHandle or "in"
+                source_value = GraphExecutor._get_output_value(outputs.get(edge.source, {}), source_handle)
+                replay_overrides.setdefault(edge.target, {})[target_handle] = source_value
+
+            replay_hyst = copy.deepcopy(pre_execute_hyst if pre_execute_hyst is not None else hyst)
+            replay_executor = GraphExecutor(flow, replay_hyst, self._app_config)
+            replay_outputs = replay_executor.execute(replay_overrides, commit_memory=False)
+            blocked_ids = skip_node_ids or set()
+            for nid, vals in replay_outputs.items():
+                if nid in descendants and nid not in blocked_ids:
+                    outputs[nid] = vals
+                    if nid in replay_hyst:
+                        hyst[nid] = replay_hyst[nid]
+            _apply_operating_hours_state(descendants, pre_execute_node_state)
+            return descendants
 
         triggered_host_check_nodes: set[str] = set()
         for node in flow.nodes:
@@ -2406,6 +2449,43 @@ class LogicManager:
                             _add_resolved_outputs(_fwolhc_chained)
                             _fwolhc_pending.update(_fwolhc_chained)
 
+        # ── Handle message_archive ────────────────────────────────────────────
+        triggered_message_archive_nodes: set[str] = set()
+        for node in flow.nodes:
+            if node.type != "message_archive":
+                continue
+            out = outputs.get(node.id, {})
+            if not GraphExecutor._to_bool(out.get("_trigger")):
+                continue
+
+            archive_id = (node.data.get("archive_id") or "").strip().lower()
+            if not archive_id:
+                logger.warning("Message archive: archive_id missing on node %s", node.id[:8])
+                continue
+
+            _raw_msg = out.get("_message")
+            msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
+            _raw_title = out.get("_title")
+            title = _msg_to_str(_raw_title) if _raw_title is not None else str(node.data.get("title") or "")
+            message_type = str(node.data.get("type") or "automation")
+            severity = str(node.data.get("severity") or "info")
+
+            try:
+                from obs.message_archive import get_message_archive_service
+
+                payload = dict(graph_id=graph_id, graph_name=name, node_id=node.id, node_label=node.data.get("label") or node.data.get("name") or "")
+                source = f"logic.graph.{graph_id}.node.{node.id}"
+                record_kwargs = dict(type=message_type, severity=severity, source=source, title=title, message=msg, payload=payload)
+                await get_message_archive_service().record(archive_id, **record_kwargs)
+                outputs[node.id]["stored"] = True
+                triggered_message_archive_nodes.add(node.id)
+                logger.info("Graph %s: message archived in %s (msg=%r)", graph_id[:8], archive_id, msg[:40])
+            except Exception as exc:
+                logger.warning("Graph %s: message archive write failed (node=%s): %s", graph_id[:8], node.id[:8], exc)
+        if triggered_message_archive_nodes:
+            _add_resolved_outputs(triggered_message_archive_nodes)
+            _replay_async_descendants(triggered_message_archive_nodes, skip_node_ids=triggered_message_archive_nodes)
+
         # ── Handle notify_pushover ────────────────────────────────────────
         # Runs AFTER api_client second-pass so that graphs with api_client →
         # json_extractor → notify see the real HTTP response, not placeholders.
@@ -2575,48 +2655,6 @@ class LogicManager:
                     msg[:40],
                     exc,
                 )
-
-        # ── Handle message_archive ────────────────────────────────────────────
-        for node in flow.nodes:
-            if node.type != "message_archive":
-                continue
-            out = outputs.get(node.id, {})
-            if not GraphExecutor._to_bool(out.get("_trigger")):
-                continue
-
-            archive_id = (node.data.get("archive_id") or "").strip().lower()
-            if not archive_id:
-                logger.warning("Message archive: archive_id missing on node %s", node.id[:8])
-                continue
-
-            _raw_msg = out.get("_message")
-            msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
-            _raw_title = out.get("_title")
-            title = _msg_to_str(_raw_title) if _raw_title is not None else str(node.data.get("title") or "")
-            message_type = str(node.data.get("type") or "automation")
-            severity = str(node.data.get("severity") or "info")
-
-            try:
-                from obs.message_archive import get_message_archive_service
-
-                await get_message_archive_service().record(
-                    archive_id,
-                    type=message_type,
-                    severity=severity,
-                    source=f"logic.graph.{graph_id}.node.{node.id}",
-                    title=title,
-                    message=msg,
-                    payload={
-                        "graph_id": graph_id,
-                        "graph_name": name,
-                        "node_id": node.id,
-                        "node_label": node.data.get("label") or node.data.get("name") or "",
-                    },
-                )
-                outputs[node.id]["stored"] = True
-                logger.info("Graph %s: message archived in %s (msg=%r)", graph_id[:8], archive_id, msg[:40])
-            except Exception as exc:
-                logger.warning("Graph %s: message archive write failed (node=%s): %s", graph_id[:8], node.id[:8], exc)
 
         # Deferred hc_prev_trigger=False: clear only for HC nodes that did NOT
         # fire in any async pass. Clearing inside _run_host_check_node was wrong

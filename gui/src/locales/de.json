@@ -12,6 +12,9 @@
     "visu": "Visu"
   },
   "sidebar": {
+    "productName": "open bridge server",
+    "adapterWarningsTitle": "{label} — {count} Warnung(en)",
+    "visu": "Visu",
     "liveConnected": "Live verbunden",
     "disconnected": "Getrennt",
     "live": "Live",
@@ -1020,6 +1023,7 @@
       "knxTunnelStable": "Tunnel-Pool wieder stabil.",
       "invalidBindingsSkipped": "{count} ungültige Verknüpfung(en) übersprungen ({examples})",
       "messageProviderFailures": "MESSAGE-Provider-Fehler: {count} Ziel(e)",
+      "messageArchiveWriteFailed": "Meldungsarchiv konnte nicht geschrieben werden",
       "messageSent": "MESSAGE gesendet"
     },
     "testResult": {

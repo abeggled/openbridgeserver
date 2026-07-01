@@ -367,7 +367,7 @@ async def _page_allowed_datapoints(
             out.add(widget.status_datapoint_id)
         collect_datapoint_ids_from_config(widget.config, out)
 
-        if widget.type != "widget_ref":
+        if widget.type not in {"widget_ref", "WidgetRef"}:
             return
 
         source_page_id = _non_empty_str(widget.config.get("source_page_id"))
@@ -507,7 +507,7 @@ async def _page_allowed_message_archive_predicates(
                 )
             )
 
-        if widget.type != "widget_ref":
+        if widget.type not in {"widget_ref", "WidgetRef"}:
             return
 
         source_page_id = _non_empty_str(widget.config.get("source_page_id"))
