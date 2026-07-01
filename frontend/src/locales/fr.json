@@ -1,9 +1,12 @@
 {
-    "login": {
-        "title": "Se connecter",
-        "username": "Nom d'utilisateur",
-        "password": "Mot de passe",
-        "submit": "Se connecter",
-        "submitting": "Connexion en cours…"
-    }
+  "login": {
+    "title": "Se connecter",
+    "username": "Nom d'utilisateur",
+    "password": "Mot de passe",
+    "submit": "Se connecter",
+    "submitting": "Connexion en cours…"
+  },
+  "common": {
+    "save": "Sauvegarder"
+  }
 }
