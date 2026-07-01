@@ -1,8 +1,11 @@
 {
-    "login": {
-        "submit": "Iniciar sesión",
-        "username": "Nombre de usuario",
-        "password": "Contraseña",
-        "submitting": "Iniciando sesión…"
-    }
+  "login": {
+    "submit": "Iniciar sesión",
+    "username": "Nombre de usuario",
+    "password": "Contraseña",
+    "submitting": "Iniciando sesión…"
+  },
+  "common": {
+    "save": "Ahorrar"
+  }
 }
