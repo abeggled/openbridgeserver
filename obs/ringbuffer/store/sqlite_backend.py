@@ -160,6 +160,13 @@ def _is_legacy_segment(segment: SegmentRecord) -> bool:
 # Value-Filter-Degradation liest höchstens so viele Kandidatenzeilen.
 _LEGACY_DEFAULT_CANDIDATE_CAP = 10_000
 
+# Synthetische global_event_id für Legacy-Zeilen: aus der chronologischen
+# Legacy-rowid abgeleitet (NICHT aus der Fetch-Reihenfolge), damit die Ordnung
+# unabhängig von der Sort-Richtung des Kandidaten-Fetches stabil bleibt. Der
+# große Offset hält alle Legacy-IDs strikt negativ (unter allen positiven
+# v2-IDs); höhere rowid (neuer) ⇒ höhere (weniger negative) ID.
+_LEGACY_GID_OFFSET = 1 << 62
+
 
 # Einfache Operatoren, die als typisiertes SQL-WHERE gepusht werden.
 _PUSHDOWN_OPERATORS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte", "between"})
@@ -636,18 +643,24 @@ class SqliteSegmentStore(RingBufferStore):
             fetch_limit = self._legacy_candidate_cap(query)
         else:
             fetch_limit = max(query.offset, 0) + max(query.limit, 0)
+        # Fetch-Richtung an die gewünschte Sortierung koppeln, damit die gebundene
+        # Kandidatenmenge die RICHTIGEN Extremwerte enthält: bei ``asc`` die
+        # ältesten, sonst die neuesten. Sonst liefert eine große Legacy-DB (mehr
+        # Zeilen als der Cap) bei ``sort=ts asc`` fälschlich die neuesten statt der
+        # ältesten Zeilen (die echte älteste Zeile liegt dann außerhalb des Caps).
+        direction = "ASC" if query.sort_order == "asc" else "DESC"
         sql = (
             "SELECT id, ts, datapoint_id, topic, old_value, new_value, "
             "source_adapter, quality, metadata_version, metadata "
-            f"FROM ringbuffer{where} ORDER BY ts DESC, id DESC LIMIT ?"
+            f"FROM ringbuffer{where} ORDER BY ts {direction}, id {direction} LIMIT ?"
         )
         params.append(fetch_limit)
         async with conn.execute(sql, params) as cur:
             raw_rows = await cur.fetchall()
 
         results: list[dict[str, Any]] = []
-        for order, row in enumerate(raw_rows):
-            record = self._legacy_row_to_dict(row, segment.segment_id, order)
+        for row in raw_rows:
+            record = self._legacy_row_to_dict(row, segment.segment_id)
             if query.value_filters and not _legacy_row_matches_filters(record, query.value_filters):
                 continue
             if not self._legacy_metadata_matches(record, query):
@@ -692,12 +705,12 @@ class SqliteSegmentStore(RingBufferStore):
         return _LEGACY_DEFAULT_CANDIDATE_CAP
 
     @staticmethod
-    def _legacy_row_to_dict(row: aiosqlite.Row, segment_id: int, order: int) -> dict[str, Any]:
-        # Synthetischer global_event_id: streng negativ und mit ``order`` (ts/rowid
-        # DESC) fallend, damit die newest-first-Ordnung erhalten bleibt und Legacy
-        # unter allen positiven v2-IDs einsortiert. ``segment_id`` bricht Gleichstände
-        # deterministisch zwischen mehreren Legacy-Segmenten.
-        synthetic_gid = -1 - (order << 16) - (segment_id & 0xFFFF)
+    def _legacy_row_to_dict(row: aiosqlite.Row, segment_id: int) -> dict[str, Any]:
+        # Synthetischer global_event_id aus der chronologischen Legacy-rowid
+        # (``id``): fetch-richtungsunabhängig, streng negativ (unter allen v2-IDs)
+        # und rowid-monoton — höhere rowid (neuer) ⇒ höhere (weniger negative) ID.
+        # ``segment_id`` bricht Gleichstände zwischen mehreren Legacy-Segmenten.
+        synthetic_gid = int(row["id"]) - _LEGACY_GID_OFFSET - (segment_id & 0xFFFF)
         return {
             "global_event_id": synthetic_gid,
             "ts": row["ts"],

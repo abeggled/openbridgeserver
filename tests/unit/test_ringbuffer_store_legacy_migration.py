@@ -269,6 +269,30 @@ async def test_legacy_query_applies_structural_filters(store: SqliteSegmentStore
     assert {r["new_value"] for r in rows} == {2, 3}
 
 
+async def test_legacy_sort_ts_asc_returns_true_oldest_beyond_fetch_window(store: SqliteSegmentStore, tmp_path: Path):
+    """Regression: ``sort=ts asc`` über einem Legacy-Segment, das größer als das
+    Fetch-Fenster ist, muss die ECHTEN ältesten Zeilen liefern — nicht die neuesten.
+
+    Der Bug (hartkodiertes ``ORDER BY ts DESC`` im Legacy-Fetch) zeigte sich erst
+    auf echten Daten (119k Zeilen vs. Kandidaten-Cap). Hier reproduziert ihn schon
+    ``limit=1``: ``fetch_limit`` = ``offset+limit`` = 1 < Zeilenzahl, sodass der
+    Fetch bei falscher Richtung die echte älteste Zeile ausschließt.
+    """
+    db = tmp_path / "obs_ringbuffer.db"
+    # ts steigt mit dem Index: 10 @ ...00 (ältester) .. 50 @ ...04 (neuester).
+    await _build_legacy_db(db, [10, 20, 30, 40, 50])
+    await LegacyMigrator(store, db).attach_readonly(LegacyMigrator(store, db).classify())
+
+    oldest = await store.query(StoreQuery(limit=1, sort_field="ts", sort_order="asc"))
+    assert [r["new_value"] for r in oldest] == [10]  # echte älteste, nicht 50
+
+    newest = await store.query(StoreQuery(limit=1, sort_field="ts", sort_order="desc"))
+    assert [r["new_value"] for r in newest] == [50]
+
+    first_two = await store.query(StoreQuery(limit=2, sort_field="ts", sort_order="asc"))
+    assert [r["new_value"] for r in first_two] == [10, 20]
+
+
 # ---------------------------------------------------------------------------
 # (e) Value-Filter über Legacy: bounded Fallback statt Bruch
 # ---------------------------------------------------------------------------
