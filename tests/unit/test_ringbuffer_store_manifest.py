@@ -11,10 +11,13 @@ from pathlib import Path
 
 import pytest
 
+import aiosqlite
+
 from obs.ringbuffer.store.manifest import (
     SEGMENT_STATUS_ACTIVE,
     SEGMENT_STATUS_CHECKPOINT_PENDING,
     SEGMENT_STATUS_CLOSED,
+    SEGMENT_STATUS_QUARANTINED,
     Manifest,
     SegmentRecord,
 )
@@ -103,6 +106,80 @@ async def test_mark_checkpoint_pending(manifest: Manifest):
     await manifest.mark_checkpoint_pending(seg.segment_id)
     reloaded = await manifest.get_segment(seg.segment_id)
     assert reloaded.status == SEGMENT_STATUS_CHECKPOINT_PENDING
+
+
+async def test_mark_checkpoint_done_reopens_retention_eligibility(manifest: Manifest):
+    seg = await manifest.create_segment(filename="a.sqlite", schema_version=1)
+    await manifest.close_segment(seg.segment_id)
+    await manifest.mark_checkpoint_pending(seg.segment_id)
+    # Solange pending, ist das Segment nicht in der retention-fähigen Liste.
+    assert [s.segment_id for s in await manifest.list_closed_segments()] == []
+    assert [s.segment_id for s in await manifest.list_checkpoint_pending_segments()] == [seg.segment_id]
+
+    await manifest.mark_checkpoint_done(seg.segment_id)
+    reloaded = await manifest.get_segment(seg.segment_id)
+    assert reloaded.status == SEGMENT_STATUS_CLOSED
+    assert [s.segment_id for s in await manifest.list_closed_segments()] == [seg.segment_id]
+
+
+async def test_mark_quarantined_records_reason_and_status(manifest: Manifest):
+    seg = await manifest.create_segment(filename="a.sqlite", schema_version=1)
+    await manifest.close_segment(seg.segment_id)
+    await manifest.mark_quarantined(seg.segment_id, reason="malformed database disk image")
+    reloaded = await manifest.get_segment(seg.segment_id)
+    assert reloaded.status == SEGMENT_STATUS_QUARANTINED
+    assert reloaded.integrity_status == "corrupt"
+    assert reloaded.quarantine_reason == "malformed database disk image"
+    # Quarantänierte Segmente sind nicht retention-fähig.
+    assert [s.segment_id for s in await manifest.list_closed_segments()] == []
+
+
+async def test_delete_segment_removes_manifest_entry(manifest: Manifest):
+    seg = await manifest.create_segment(filename="a.sqlite", schema_version=1)
+    await manifest.close_segment(seg.segment_id)
+    await manifest.delete_segment(seg.segment_id)
+    assert await manifest.get_segment(seg.segment_id) is None
+
+
+async def test_list_closed_segments_orders_oldest_first(manifest: Manifest):
+    a = await manifest.create_segment(filename="a.sqlite", schema_version=1)
+    b = await manifest.create_segment(filename="b.sqlite", schema_version=1)
+    await manifest.close_segment(a.segment_id)
+    await manifest.close_segment(b.segment_id)
+    assert [s.segment_id for s in await manifest.list_closed_segments()] == [a.segment_id, b.segment_id]
+
+
+async def test_open_migrates_legacy_manifest_without_quarantine_reason(tmp_path: Path):
+    path = tmp_path / "manifest.sqlite"
+    # Alt-Manifest ohne quarantine_reason-Spalte simulieren.
+    legacy = await aiosqlite.connect(str(path))
+    await legacy.executescript(
+        """
+        CREATE TABLE segments (
+            segment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'active',
+            from_ts TEXT, to_ts TEXT,
+            row_count INTEGER NOT NULL DEFAULT 0,
+            size_bytes INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL, closed_at TEXT,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            integrity_status TEXT NOT NULL DEFAULT 'ok',
+            recovery_status TEXT NOT NULL DEFAULT 'none'
+        );
+        INSERT INTO segments (filename, created_at) VALUES ('old.sqlite', '2026-01-01T00:00:00Z');
+        """
+    )
+    await legacy.commit()
+    await legacy.close()
+
+    m = Manifest(path)
+    await m.open()
+    try:
+        segments = await m.list_segments()
+        assert segments[0].quarantine_reason is None
+    finally:
+        await m.close()
 
 
 async def test_global_event_id_is_monotonic_and_persistent(tmp_path: Path):

@@ -31,6 +31,10 @@ SEGMENT_STATUS_CLOSED = "closed"
 SEGMENT_STATUS_QUARANTINED = "quarantined"
 SEGMENT_STATUS_CHECKPOINT_PENDING = "checkpoint_pending"
 
+# Geschlossene, für Retention löschbare Status: ein Segment ist erst freigebbar,
+# wenn sein DB/WAL/SHM-Zustand konsistent behandelt wurde (nicht mehr pending).
+SEGMENT_STATUS_RETENTION_ELIGIBLE = (SEGMENT_STATUS_CLOSED,)
+
 _MANIFEST_SCHEMA = """
 CREATE TABLE IF NOT EXISTS segments (
     segment_id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +48,8 @@ CREATE TABLE IF NOT EXISTS segments (
     closed_at        TEXT,
     schema_version   INTEGER NOT NULL DEFAULT 1,
     integrity_status TEXT    NOT NULL DEFAULT 'ok',
-    recovery_status  TEXT    NOT NULL DEFAULT 'none'
+    recovery_status  TEXT    NOT NULL DEFAULT 'none',
+    quarantine_reason TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_manifest_status ON segments(status);
 CREATE INDEX IF NOT EXISTS idx_manifest_from_ts ON segments(from_ts);
@@ -74,6 +79,7 @@ class SegmentRecord:
     schema_version: int
     integrity_status: str
     recovery_status: str
+    quarantine_reason: str | None = None
 
 
 def _utc_now_iso() -> str:
@@ -94,6 +100,7 @@ def _row_to_segment(row: aiosqlite.Row) -> SegmentRecord:
         schema_version=row["schema_version"],
         integrity_status=row["integrity_status"],
         recovery_status=row["recovery_status"],
+        quarantine_reason=row["quarantine_reason"] if "quarantine_reason" in row.keys() else None,
     )
 
 
@@ -112,8 +119,17 @@ class Manifest:
         conn.row_factory = aiosqlite.Row
         await conn.execute("PRAGMA journal_mode=WAL")
         await conn.executescript(_MANIFEST_SCHEMA)
+        await self._migrate_add_quarantine_reason(conn)
         await conn.commit()
         self._conn = conn
+
+    @staticmethod
+    async def _migrate_add_quarantine_reason(conn: aiosqlite.Connection) -> None:
+        """Idempotente Migration: ``quarantine_reason`` in Alt-Manifests nachziehen."""
+        async with conn.execute("PRAGMA table_info(segments)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if "quarantine_reason" not in columns:
+            await conn.execute("ALTER TABLE segments ADD COLUMN quarantine_reason TEXT")
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -189,6 +205,49 @@ class Manifest:
             (SEGMENT_STATUS_CHECKPOINT_PENDING, segment_id),
         )
         await self._db.commit()
+
+    async def mark_checkpoint_done(self, segment_id: int) -> None:
+        """Räumt ein ``checkpoint_pending``-Segment nach erfolgreichem Truncate ab.
+
+        Das Segment wird wieder als sauber ``closed`` markiert und damit erst
+        jetzt retention-fähig (DB/WAL/SHM konsistent).
+        """
+        await self._db.execute(
+            "UPDATE segments SET status = ? WHERE segment_id = ? AND status = ?",
+            (SEGMENT_STATUS_CLOSED, segment_id, SEGMENT_STATUS_CHECKPOINT_PENDING),
+        )
+        await self._db.commit()
+
+    async def mark_quarantined(self, segment_id: int, reason: str) -> None:
+        """Markiert ein geschlossenes, korruptes Segment als ``quarantined``."""
+        await self._db.execute(
+            "UPDATE segments SET status = ?, integrity_status = ?, quarantine_reason = ? WHERE segment_id = ?",
+            (SEGMENT_STATUS_QUARANTINED, "corrupt", reason, segment_id),
+        )
+        await self._db.commit()
+
+    async def delete_segment(self, segment_id: int) -> None:
+        """Entfernt einen Segment-Eintrag aus dem Manifest (Retention)."""
+        await self._db.execute("DELETE FROM segments WHERE segment_id = ?", (segment_id,))
+        await self._db.commit()
+
+    async def list_closed_segments(self) -> list[SegmentRecord]:
+        """Nur sauber geschlossene (retention-fähige) Segmente, älteste zuerst."""
+        async with self._db.execute(
+            "SELECT * FROM segments WHERE status = ? ORDER BY segment_id ASC",
+            (SEGMENT_STATUS_CLOSED,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_segment(row) for row in rows]
+
+    async def list_checkpoint_pending_segments(self) -> list[SegmentRecord]:
+        """Segmente, deren WAL-Truncate beim Close busy war, älteste zuerst."""
+        async with self._db.execute(
+            "SELECT * FROM segments WHERE status = ? ORDER BY segment_id ASC",
+            (SEGMENT_STATUS_CHECKPOINT_PENDING,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_segment(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Globale Event-ID (Vorbedingung für #932)

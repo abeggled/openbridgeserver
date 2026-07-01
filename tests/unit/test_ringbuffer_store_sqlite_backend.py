@@ -156,8 +156,8 @@ async def test_stats_split_common_and_backend_extra(store: SqliteSegmentStore):
     assert "wal_size_bytes" not in stats.common
 
 
-async def test_enforce_retention_returns_zero_stub(store: SqliteSegmentStore):
-    # Welle-2 (#936) fuellt die eigentliche Segment-Loeschung; hier nur die Naht.
+async def test_enforce_retention_is_noop_without_config(store: SqliteSegmentStore):
+    # Ohne konfigurierte Retention-Limits wird nichts freigegeben.
     await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
     removed = await store.enforce_retention()
     assert removed == 0

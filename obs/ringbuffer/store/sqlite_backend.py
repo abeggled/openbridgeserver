@@ -21,9 +21,17 @@ Reader-Modell (aus der #931-Plan-Validierung): OBS/ringbufferd lesen
 Dadurch kontrolliert der Writer alle Connections und Checkpoint-busy bleibt
 selten.
 
-Volle segmentbewusste Query (#932), Legacy-Migration (#934), die eigentliche
-Segment-Retention-Ausführung und Recovery-Details (#936) sind NICHT Teil dieses
-Foundation-Kernels; die Nahtstellen sind mit ``# TODO(#…)`` markiert.
+Segment-Retention (``enforce_retention``), die Betriebs-/Support-Stats
+(``backend_extra``), der Checkpoint-Läufer für ``checkpoint_pending`` und die
+Per-Segment-Recovery/Quarantäne sind hier umgesetzt (#936, Vertrag aus #930).
+Retention löscht ausschließlich ganze, sauber geschlossene Segmente — nie
+rowweise, nie das aktive Segment, nie ein noch nicht konsistentes (pending/
+quarantäniertes) Segment. Integrity läuft on-demand pro Segment, NICHT als
+globaler Startup-Scan über 20–30 GB.
+
+Volle segmentbewusste Query (#932) und Legacy-Migration inkl. Dirty-WAL-Handling
+großer Single-DBs (#934) bleiben außerhalb dieses Kernels; die Nahtstellen sind
+mit ``# TODO(#…)`` markiert.
 """
 
 from __future__ import annotations
@@ -51,10 +59,19 @@ from obs.ringbuffer.store.interface import (
     StoreQuery,
     StoreStats,
 )
-from obs.ringbuffer.store.manifest import Manifest, SegmentRecord
+from obs.ringbuffer.store.manifest import (
+    SEGMENT_STATUS_ACTIVE,
+    Manifest,
+    SegmentRecord,
+)
 from obs.ringbuffer.store.writer_lock import WriterLease
 
 SEGMENT_SCHEMA_VERSION = 2
+
+# Netzlaufwerk-Erkennung (WAL/mmap-Warnung): Dateisystemtypen bzw. mount-Optionen,
+# auf denen SQLite-WAL/shared-memory-mmap unzuverlässig ist. Rein diagnostisch —
+# der Store degradiert nicht still, sondern meldet den Fall in den Stats.
+_NETWORK_FS_TYPES = frozenset({"nfs", "nfs4", "smbfs", "cifs", "afpfs", "fuse.sshfs", "webdav"})
 
 # Segment-lokales Schema. Identisch je Segment; die globale Ordnung liegt in
 # der zusätzlichen Spalte ``global_event_id`` (aus dem Manifest-Zähler), nicht
@@ -185,6 +202,20 @@ def _typed_columns_for(value: Any) -> tuple[str, float | None, str | None, int |
     return ("null", None, None, None)
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _parse_ts(value: str | None) -> float | None:
+    """ISO-8601-Timestamp (mit ``Z``) → POSIX-Sekunden; None bei unparsebarem Wert."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 class SqliteSegmentStore(RingBufferStore):
     """Segmentiertes SQLite-Backend hinter der portablen Store-Grenze."""
 
@@ -203,6 +234,11 @@ class SqliteSegmentStore(RingBufferStore):
         self.manifest = Manifest(self._root / "manifest.sqlite")
         self._active_conn: aiosqlite.Connection | None = None
         self._active_segment: SegmentRecord | None = None
+        # Checkpoint-Betriebsdetails (SQLite-Interna → nur backend_extra).
+        self._last_checkpoint_at: str | None = None
+        self._last_checkpoint_mode: str | None = None
+        self._last_checkpoint_result: str | None = None
+        self._wal_checkpoint_busy_count = 0
 
     # ------------------------------------------------------------------
     # Contract: Capabilities
@@ -537,11 +573,21 @@ class SqliteSegmentStore(RingBufferStore):
         return new_segment
 
     async def _try_truncate_checkpoint(self, conn: aiosqlite.Connection) -> bool:
-        """Versucht ``wal_checkpoint(TRUNCATE)``. Liefert False bei busy."""
+        """Versucht ``wal_checkpoint(TRUNCATE)``. Liefert False bei busy.
+
+        Hält die Checkpoint-Betriebsdetails (``last_checkpoint_*``, busy-Zähler)
+        für die Support-/Admin-Stats fest. Reine SQLite-Interna → backend_extra.
+        """
         async with conn.execute("PRAGMA wal_checkpoint(TRUNCATE)") as cur:
             row = await cur.fetchone()
         # PRAGMA-Ergebnis (busy, log, checkpointed): busy != 0 → nicht vollständig.
-        return not (row is not None and row[0] != 0)
+        ok = not (row is not None and row[0] != 0)
+        self._last_checkpoint_at = _utc_now_iso()
+        self._last_checkpoint_mode = "TRUNCATE"
+        self._last_checkpoint_result = "ok" if ok else "busy"
+        if not ok:
+            self._wal_checkpoint_busy_count += 1
+        return ok
 
     async def _refresh_active_segment_stats(self) -> None:
         if self._active_conn is None or self._active_segment is None:
@@ -577,24 +623,230 @@ class SqliteSegmentStore(RingBufferStore):
             "segment_count": len(segments),
             "size_bytes": size_bytes,
         }
+        over_budget, pressure_reason = self._retention_pressure(segments)
         backend_extra = {
             "active_segment_id": self._active_segment.segment_id if self._active_segment else None,
-            "closed_segment_count": sum(1 for s in segments if s.status != "active"),
-            # TODO(#936): wal_size_bytes/shm_size_bytes/last_checkpoint_* ergänzen.
+            "closed_segment_count": sum(1 for s in segments if s.status != SEGMENT_STATUS_ACTIVE),
+            # WAL/SHM-Größen des aktiven Segments (SQLite-Interna, kein portables Feld).
+            "wal_size_bytes": self._active_wal_size(),
+            "shm_size_bytes": self._active_shm_size(),
+            "last_checkpoint_at": self._last_checkpoint_at,
+            "last_checkpoint_mode": self._last_checkpoint_mode,
+            "last_checkpoint_result": self._last_checkpoint_result,
+            "wal_checkpoint_busy": self._wal_checkpoint_busy_count,
+            "checkpoint_pending": sum(1 for s in segments if s.status == "checkpoint_pending"),
+            "retention_over_budget": over_budget,
+            "retention_pressure_reason": pressure_reason,
+            "storage_on_network_drive": self._storage_on_network_drive(),
+            "segments": [self._segment_stat(s) for s in segments],
         }
         return StoreStats(common=common, backend_extra=backend_extra)
 
+    @staticmethod
+    def _segment_stat(segment: SegmentRecord) -> dict[str, Any]:
+        return {
+            "segment_id": segment.segment_id,
+            "status": segment.status,
+            "row_count": segment.row_count,
+            "size_bytes": segment.size_bytes,
+            "from_ts": segment.from_ts,
+            "to_ts": segment.to_ts,
+            "integrity_status": segment.integrity_status,
+            "recovery_status": segment.recovery_status,
+            "quarantine_reason": segment.quarantine_reason,
+        }
+
+    def _active_wal_size(self) -> int:
+        if self._active_segment is None:
+            return 0
+        return self._sidecar_size(self._active_segment.filename, "-wal")
+
+    def _active_shm_size(self) -> int:
+        if self._active_segment is None:
+            return 0
+        return self._sidecar_size(self._active_segment.filename, "-shm")
+
+    def _sidecar_size(self, filename: str, suffix: str) -> int:
+        path = self._segments_dir / f"{filename}{suffix}"
+        return os.path.getsize(path) if path.exists() else 0
+
+    def _retention_pressure(self, segments: list[SegmentRecord]) -> tuple[bool, str | None]:
+        """Meldet, ob Retention trotz Löschung geschlossener Segmente über Budget bleibt.
+
+        ``retention_over_budget`` ist True, wenn nach Freigabe *aller* löschbaren
+        (sauber geschlossenen) Segmente das harte Size-Budget noch überschritten
+        bliebe — also nur das aktive/pending/quarantänierte, nicht löschbare
+        Restvolumen das Budget sprengt.
+        """
+        budget = self._retention_config.max_file_size_bytes
+        if budget is None:
+            return False, None
+        undeletable = sum(s.size_bytes for s in segments if s.status != "closed")
+        if undeletable > budget:
+            return True, "max_file_size_bytes exceeded by non-deletable segments"
+        return False, None
+
+    def _storage_on_network_drive(self) -> bool:
+        """Leichtgewichtige Netzlaufwerk-Erkennung für die Storage-Root (#936-Kommentar).
+
+        WAL/mmap ist auf NFS/SMB/manchen FUSE-Mounts unzuverlässig. Wir melden den
+        Fall als Flag in den Stats, statt still zu degradieren. Best-effort: wenn die
+        Plattform keine mount-Introspektion erlaubt, wird False angenommen.
+        """
+        try:
+            with open("/proc/mounts", encoding="utf-8") as handle:
+                mounts = [line.split() for line in handle if line.strip()]
+        except OSError:
+            return False
+        resolved = str(self._root.resolve())
+        best_match = ""
+        best_fstype = ""
+        for parts in mounts:
+            if len(parts) < 3:
+                continue
+            mount_point, fstype = parts[1], parts[2]
+            if resolved == mount_point or resolved.startswith(mount_point.rstrip("/") + "/"):
+                if len(mount_point) >= len(best_match):
+                    best_match = mount_point
+                    best_fstype = fstype
+        return best_fstype in _NETWORK_FS_TYPES
+
     # ------------------------------------------------------------------
-    # Contract: enforce_retention (Naht für #936)
+    # #936: Checkpoint-Läufer für checkpoint_pending-Segmente
+    # ------------------------------------------------------------------
+
+    async def run_pending_checkpoints(self) -> int:
+        """Versucht ``wal_checkpoint(TRUNCATE)`` erneut für ``checkpoint_pending``.
+
+        Erst nach erfolgreichem Truncate (DB/WAL/SHM konsistent) wird das Segment
+        wieder als sauber ``closed`` markiert und damit retention-fähig. Liefert die
+        Anzahl der jetzt konsistent geschlossenen Segmente.
+        """
+        recovered = 0
+        for segment in await self.manifest.list_checkpoint_pending_segments():
+            conn = await aiosqlite.connect(str(self._segments_dir / segment.filename))
+            try:
+                ok = await self._try_truncate_checkpoint(conn)
+            finally:
+                await conn.close()
+            if ok:
+                await self.manifest.mark_checkpoint_done(segment.segment_id)
+                recovered += 1
+        return recovered
+
+    # ------------------------------------------------------------------
+    # #936: Recovery/Integrity pro Segment (kein globaler Startup-Scan)
+    # ------------------------------------------------------------------
+
+    async def check_segment_integrity(self, segment_id: int) -> bool:
+        """Prüft *ein* geschlossenes Segment und quarantäniert es bei Korruption.
+
+        Bewusst on-demand pro Segment — NICHT im Startup über 20–30 GB. Ein
+        korruptes geschlossenes Segment wird als ``quarantined`` markiert, statt
+        den Store-Start zu blockieren. Liefert True, wenn das Segment intakt ist.
+        """
+        segment = await self.manifest.get_segment(segment_id)
+        if segment is None:
+            return False
+        if self._active_segment is not None and segment_id == self._active_segment.segment_id:
+            # Das aktive Segment wird nie quarantäniert/getrimmt.
+            return True
+        conn = await aiosqlite.connect(str(self._segments_dir / segment.filename))
+        try:
+            async with conn.execute("PRAGMA integrity_check") as cur:
+                row = await cur.fetchone()
+            ok = row is not None and row[0] == "ok"
+        except aiosqlite.DatabaseError as exc:
+            await self.manifest.mark_quarantined(segment_id, reason=str(exc))
+            return False
+        finally:
+            await conn.close()
+        if not ok:
+            reason = row[0] if row is not None else "integrity_check failed"
+            await self.manifest.mark_quarantined(segment_id, reason=reason)
+        return ok
+
+    # ------------------------------------------------------------------
+    # Contract: enforce_retention (#936, Vertrag aus #930)
     # ------------------------------------------------------------------
 
     async def enforce_retention(self) -> int:
-        """Segmentgenaue Retention — Foundation-Naht.
+        """Segmentgenaue Retention — löscht nur ganze, sauber geschlossene Segmente.
 
-        Der Vertrag steht (nur ganze geschlossene Segmente löschen, segmentgenau,
-        nie rowweise). Die eigentliche Ausführung (Size-/Age-/Rows-Budget gegen
-        geschlossene Segmente, Löschen inkl. Manifest-Update) ist #936-Scope.
+        Vertrag (#930): nie rowweise, nie das aktive Segment, nie ein
+        ``checkpoint_pending``/``quarantined`` Segment. Prioritäten:
+
+        1. ``max_file_size_bytes`` (hartes Budget): älteste geschlossene Segmente
+           löschen, bis das Gesamtvolumen unter das Budget fällt — auch wenn dadurch
+           weniger Age/Rows aufbewahrt werden als gewünscht.
+        2. ``max_age``: geschlossene Segmente löschen, deren ``to_ts`` vollständig
+           älter als der Cutoff ist.
+        3. ``max_entries``: Row-Budget mit Segmentgranularität — älteste geschlossene
+           Segmente löschen, bis die aufbewahrte Zeilenzahl unter das Budget fällt.
+
+        Liefert die Anzahl freigegebener Segmente.
         """
-        # TODO(#936): geschlossene Segmente gegen retention_config auswählen und
-        # als ganze Einheiten löschen; Anzahl freigegebener Segmente zurückgeben.
-        return 0
+        cfg = self._retention_config
+        if cfg.max_file_size_bytes is None and cfg.max_age is None and cfg.max_entries is None:
+            return 0
+
+        removed = 0
+        # Nur sauber geschlossene Segmente sind löschbar; älteste zuerst. Das aktive,
+        # checkpoint_pending- und quarantänierte Segment bleiben außen vor.
+        removed += await self._enforce_size_budget(cfg.max_file_size_bytes)
+        removed += await self._enforce_age_cutoff(cfg.max_age)
+        removed += await self._enforce_row_budget(cfg.max_entries)
+        return removed
+
+    async def _total_size_bytes(self) -> int:
+        return sum(s.size_bytes for s in await self.manifest.list_segments())
+
+    async def _total_row_count(self) -> int:
+        return sum(s.row_count for s in await self.manifest.list_segments())
+
+    async def _enforce_size_budget(self, budget: int | None) -> int:
+        if budget is None:
+            return 0
+        removed = 0
+        while await self._total_size_bytes() > budget:
+            closed = await self.manifest.list_closed_segments()
+            if not closed:
+                break  # kein löschbares Segment mehr → over_budget in stats sichtbar.
+            await self._delete_segment(closed[0])
+            removed += 1
+        return removed
+
+    async def _enforce_age_cutoff(self, max_age: int | None) -> int:
+        if max_age is None:
+            return 0
+        cutoff = datetime.now(UTC).timestamp() - max_age
+        removed = 0
+        for segment in await self.manifest.list_closed_segments():
+            to_ts = _parse_ts(segment.to_ts)
+            if to_ts is None or to_ts >= cutoff:
+                # Ältestes-zuerst: sobald ein Segment neu genug ist, sind alle
+                # folgenden ebenfalls neu genug.
+                break
+            await self._delete_segment(segment)
+            removed += 1
+        return removed
+
+    async def _enforce_row_budget(self, max_entries: int | None) -> int:
+        if max_entries is None:
+            return 0
+        removed = 0
+        while await self._total_row_count() > max_entries:
+            closed = await self.manifest.list_closed_segments()
+            if not closed:
+                break
+            await self._delete_segment(closed[0])
+            removed += 1
+        return removed
+
+    async def _delete_segment(self, segment: SegmentRecord) -> None:
+        """Entfernt Datei (inkl. -wal/-shm) und Manifest-Eintrag konsistent."""
+        for suffix in ("", "-wal", "-shm"):
+            path = self._segments_dir / f"{segment.filename}{suffix}"
+            if path.exists():
+                path.unlink()
+        await self.manifest.delete_segment(segment.segment_id)
