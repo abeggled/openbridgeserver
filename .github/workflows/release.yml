@@ -384,11 +384,13 @@ jobs:
           git commit -m "chore: prepare RELEASENOTES.md for ${NEXT_VERSION}"
           git push -u origin "$BRANCH"
 
-          echo "Automatisch erstellt nach dem stabilen \`${TAG}\`-Release." > pr_body.md
-          echo "" >> pr_body.md
-          echo "Fügt einen leeren Abschnitt für \`${NEXT_VERSION}\` in \`RELEASENOTES.md\` ein." >> pr_body.md
-          echo "" >> pr_body.md
-          echo "→ Bitte reviewen und mergen, bevor der erste Feature-PR für das nächste Release landet." >> pr_body.md
+          {
+            echo "Automatisch erstellt nach dem stabilen \`${TAG}\`-Release."
+            echo ""
+            echo "Fügt einen leeren Abschnitt für \`${NEXT_VERSION}\` in \`RELEASENOTES.md\` ein."
+            echo ""
+            echo "→ Bitte reviewen und mergen, bevor der erste Feature-PR für das nächste Release landet."
+          } > pr_body.md
 
           gh pr create \
             --title "chore: Prepare RELEASENOTES.md for ${NEXT_VERSION}" \
