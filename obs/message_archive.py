@@ -12,7 +12,6 @@ import io
 import json
 import logging
 import uuid
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -689,7 +688,7 @@ class MessageArchiveStore:
             self.status = "ok" if ok else "degraded"
             self.last_error = None if ok else result
             return {"ok": ok, "result": result, "path": self.path, "status": self.status}
-        except Exception as exc:
+        except Exception:
             self.status = "degraded"
             self.last_error = "integrity_check_failed"
             logger.exception("Message archive integrity check failed")

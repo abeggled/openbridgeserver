@@ -3,12 +3,29 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from obs.api.auth import create_access_token
 
 pytestmark = pytest.mark.integration
 
 
 def _archive_id(prefix: str = "test") -> str:
     return f"{prefix}-{uuid.uuid4().hex[:10]}"
+
+
+async def _create_non_admin_headers(client, auth_headers) -> tuple[dict[str, str], str]:
+    username = f"archive-user-{uuid.uuid4().hex[:8]}"
+    resp = await client.post(
+        "/api/v1/auth/users",
+        json={
+            "username": username,
+            "password": "pw-12345678",
+            "is_admin": False,
+            "mqtt_enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return {"Authorization": f"Bearer {create_access_token(username)}"}, username
 
 
 async def test_message_archives_require_auth(client):
@@ -339,6 +356,73 @@ async def test_message_archive_page_scoped_reads_preserve_per_widget_or_predicat
             )
 
 
+async def test_message_archive_page_scope_limits_non_admin_bearer_reads(client, auth_headers):
+    archive_id = _archive_id("page-nonadmin")
+    other_archive_id = _archive_id("page-hidden")
+    page_id = None
+    username = None
+    try:
+        for current_archive_id, name in ((archive_id, "Visible"), (other_archive_id, "Hidden")):
+            resp = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": current_archive_id, "name": name})
+            assert resp.status_code == 201, resp.text
+            entry = await client.post(
+                f"/api/v1/message-archives/{current_archive_id}/entries",
+                headers=auth_headers,
+                json={"title": name},
+            )
+            assert entry.status_code == 201, entry.text
+
+        page = await client.post(
+            "/api/v1/visu/nodes",
+            headers=auth_headers,
+            json={"name": "Public archive non-admin page", "type": "PAGE", "access": "public"},
+        )
+        assert page.status_code == 201, page.text
+        page_id = page.json()["id"]
+        page_config = {
+            "grid_cols": 12,
+            "grid_row_height": 80,
+            "background": None,
+            "widgets": [
+                {
+                    "id": "archive-widget",
+                    "type": "MessageArchive",
+                    "name": "Archiv",
+                    "x": 0,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                    "config": {"archive_ids": [archive_id]},
+                }
+            ],
+        }
+        save = await client.put(f"/api/v1/visu/pages/{page_id}", headers=auth_headers, json=page_config)
+        assert save.status_code == 204, save.text
+        non_admin_headers, username = await _create_non_admin_headers(client, auth_headers)
+
+        unrestricted = await client.get("/api/v1/message-archives/entries", headers=non_admin_headers)
+        assert unrestricted.status_code == 200, unrestricted.text
+        assert {item["title"] for item in unrestricted.json()["items"]} >= {"Visible", "Hidden"}
+
+        scoped = await client.get(
+            "/api/v1/message-archives/entries",
+            headers={**non_admin_headers, "X-Page-Id": page_id},
+        )
+        assert scoped.status_code == 200, scoped.text
+        assert {item["title"] for item in scoped.json()["items"]} == {"Visible"}
+    finally:
+        if username:
+            await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+        if page_id:
+            await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+        for current_archive_id in (archive_id, other_archive_id):
+            await client.delete(
+                f"/api/v1/message-archives/{current_archive_id}",
+                headers=auth_headers,
+                params={"confirm": "true"},
+            )
+
+
 async def test_message_archive_page_scoped_read_and_ack_require_widget_permissions(client, auth_headers):
     archive_id = _archive_id("page-actions")
     page_id = None
@@ -448,3 +532,42 @@ async def test_message_archive_entries_accept_multiple_filter_values(client, aut
 async def test_message_archive_path_operations_reject_malformed_archive_ids(client, auth_headers):
     resp = await client.get("/api/v1/message-archives/bad%20id", headers=auth_headers)
     assert resp.status_code == 400
+
+
+async def test_message_archive_entry_patch_requires_admin(client, auth_headers):
+    archive_id = _archive_id("patch")
+    username = None
+    try:
+        create = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": "Patch"})
+        assert create.status_code == 201, create.text
+        entry = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            json={"title": "Original"},
+        )
+        assert entry.status_code == 201, entry.text
+        entry_id = entry.json()["id"]
+        non_admin_headers, username = await _create_non_admin_headers(client, auth_headers)
+
+        forbidden = await client.patch(
+            f"/api/v1/message-archives/{archive_id}/entries/{entry_id}",
+            headers=non_admin_headers,
+            json={"title": "Changed"},
+        )
+        assert forbidden.status_code == 403
+
+        allowed = await client.patch(
+            f"/api/v1/message-archives/{archive_id}/entries/{entry_id}",
+            headers=auth_headers,
+            json={"title": "Changed"},
+        )
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.json()["title"] == "Changed"
+    finally:
+        if username:
+            await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )

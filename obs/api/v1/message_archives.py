@@ -228,7 +228,10 @@ async def _archive_read_access(request: Request, db: Database) -> ArchiveReadAcc
     if auth_header.startswith("Bearer "):
         try:
             username = decode_token(auth_header[7:])
-            return ArchiveReadAccess(username=username)
+            row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (username,))
+            if not page_id or bool(row and row["is_admin"]):
+                return ArchiveReadAccess(username=username)
+            return await _page_scoped_archive_access(request, db, username=username)
         except HTTPException:
             if not page_id:
                 raise
@@ -240,14 +243,25 @@ async def _archive_read_access(request: Request, db: Database) -> ArchiveReadAcc
         if not row:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API key")
         owner = row["owner"] if row["owner"] else None
-        return ArchiveReadAccess(username=owner or f"api_key:{row['id']}")
+        username = owner or f"api_key:{row['id']}"
+        if page_id:
+            return await _page_scoped_archive_access(request, db, username=username)
+        return ArchiveReadAccess(username=username)
 
     if not page_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Provide Authorization: Bearer {token} or X-API-Key: {key}")
 
+    return await _page_scoped_archive_access(request, db, username=f"visu-page:{page_id}")
+
+
+async def _page_scoped_archive_access(request: Request, db: Database, *, username: str) -> ArchiveReadAccess:
     from obs.api.v1 import sessions as sessions_api
     from obs.api.v1.visu import _resolve_access_with_node
     from obs.api.v1.websocket import _page_allowed_message_archive_predicates
+
+    page_id = request.headers.get("x-page-id") or request.query_params.get("page_id")
+    if not page_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Page context required")
 
     page_row = await db.fetchone("SELECT type FROM visu_nodes WHERE id = ?", (page_id,))
     if not page_row:
@@ -283,7 +297,7 @@ async def _archive_read_access(request: Request, db: Database) -> ArchiveReadAcc
     )
     if not predicates:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Message archive access is not configured for this page")
-    return ArchiveReadAccess(username=f"visu-page:{page_id}", predicates=predicates)
+    return ArchiveReadAccess(username=username, predicates=predicates)
 
 
 def _entry_predicates_for_page(predicates: list[Any] | None) -> list[EntryPredicate] | None:
@@ -316,14 +330,6 @@ def _entry_action_allowed_for_page(entry: dict[str, Any], predicates: list[Any] 
         if _message_archive_entry_matches_access(entry, [predicate]):
             return True
     return False
-
-
-def _entry_allowed_for_page(entry: dict[str, Any], predicates: list[Any] | None) -> bool:
-    if predicates is None:
-        return True
-    from obs.api.v1.websocket import _message_archive_entry_matches_access
-
-    return _message_archive_entry_matches_access(entry, predicates)
 
 
 def _strip_archive_storage_fields(archive: dict[str, Any]) -> dict[str, Any]:
@@ -372,7 +378,7 @@ async def create_message_archive(
                 retention_max_age_days=body.retention_max_age_days,
             )
         )
-    except ValueError as exc:
+    except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid message archive id") from None
     except Exception as exc:
         if "unique" in str(exc).lower():
@@ -717,7 +723,7 @@ async def update_message_archive_entry(
     archive_id: str,
     entry_id: str,
     body: MessageEntryUpdate,
-    principal: Principal = Depends(get_current_principal),
+    _admin: str = Depends(get_admin_user),
     store: MessageArchiveStore = Depends(_store),
 ) -> dict[str, Any]:
     archive_id = _validate_archive_id(archive_id)
@@ -736,7 +742,7 @@ async def update_message_archive_entry(
     )
     if not entry:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive entry not found")
-    return await store.get_entry(archive_id, entry_id, username=_principal_name(principal)) or entry
+    return await store.get_entry(archive_id, entry_id, username=_admin) or entry
 
 
 @router.post("/{archive_id}/entries/{entry_id}/read", response_model=MessageEntryOut)
