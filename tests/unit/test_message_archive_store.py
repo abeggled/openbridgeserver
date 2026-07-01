@@ -1,6 +1,20 @@
 from __future__ import annotations
 
-from obs.message_archive import ArchiveInput, ArchivePatch, EntryInput, EntryQuery, MessageArchiveStore
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from obs.config import MessageArchiveSettings, Settings
+from obs.message_archive import (
+    ArchiveInput,
+    ArchivePatch,
+    EntryInput,
+    EntryQuery,
+    MessageArchiveStore,
+    close_message_archive_store,
+    get_message_archive_service,
+    init_message_archive_store,
+)
 
 
 async def test_message_archive_store_persists_entries_in_separate_db(tmp_path):
@@ -142,6 +156,19 @@ async def test_message_archive_store_enforces_max_entries_retention(tmp_path):
         await store.disconnect()
 
 
+async def test_message_archive_store_rejects_entry_removed_by_retention(tmp_path):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    try:
+        await store.create_archive(ArchiveInput(id="system", name="System", retention_max_age_days=1))
+        old_created_at = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+
+        with pytest.raises(ValueError, match="removed by retention"):
+            await store.create_entry(EntryInput(archive_id="system", title="Zu alt", created_at=old_created_at))
+    finally:
+        await store.disconnect()
+
+
 async def test_message_archive_store_applies_default_type_and_clears_explicit_nulls(tmp_path):
     store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
     await store.connect()
@@ -161,6 +188,21 @@ async def test_message_archive_store_applies_default_type_and_clears_explicit_nu
         assert archive["retention_max_entries"] is None
     finally:
         await store.disconnect()
+
+
+async def test_message_archive_service_not_published_when_store_connect_fails(tmp_path):
+    await close_message_archive_store()
+    not_a_directory = tmp_path / "not-a-directory"
+    not_a_directory.write_text("x")
+    settings = Settings(message_archive=MessageArchiveSettings(path=str(not_a_directory / "messages.sqlite3")))
+    try:
+        store = await init_message_archive_store(settings)
+
+        assert store.status == "degraded"
+        with pytest.raises(RuntimeError, match="not initialized"):
+            get_message_archive_service()
+    finally:
+        await close_message_archive_store()
 
 
 async def test_message_archive_store_enforces_retention_after_settings_update(tmp_path):

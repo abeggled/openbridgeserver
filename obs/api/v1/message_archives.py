@@ -25,7 +25,9 @@ from obs.message_archive import (
     EntryPatch,
     EntryPredicate,
     EntryQuery,
+    MIGRATIONS,
     MessageArchiveStore,
+    activate_message_archive_service,
     broadcast_message_archive_entry,
     get_message_archive_store,
     init_message_archive_store,
@@ -140,9 +142,20 @@ class DatabaseImportResult(BaseModel):
 class ArchiveReadAccess:
     username: str
     predicates: list[Any] | None = None
+    is_admin: bool = False
 
 
 async def _store() -> MessageArchiveStore:
+    try:
+        store = get_message_archive_store()
+    except RuntimeError:
+        store = await init_message_archive_store(get_settings())
+    if store.status != "ok" or not store.is_connected:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Meldungsarchiv-Datenbank ist nicht verfügbar.")
+    return store
+
+
+async def _store_for_import() -> MessageArchiveStore:
     try:
         return get_message_archive_store()
     except RuntimeError:
@@ -193,6 +206,37 @@ def _validate_sqlite_archive_db(path: str) -> None:
         "message_archive_entries",
         "message_archive_read_states",
     }
+    required_columns = {
+        "schema_version": {"version", "applied_at"},
+        "message_archives": {
+            "id",
+            "name",
+            "description",
+            "tags",
+            "default_type",
+            "color",
+            "retention_max_entries",
+            "retention_max_age_days",
+            "created_at",
+            "updated_at",
+        },
+        "message_archive_entries": {
+            "id",
+            "archive_id",
+            "created_at",
+            "updated_at",
+            "type",
+            "severity",
+            "status",
+            "source",
+            "title",
+            "message",
+            "payload",
+            "acknowledged_at",
+            "acknowledged_by",
+        },
+        "message_archive_read_states": {"entry_id", "username", "read_at", "hidden_at"},
+    }
     try:
         conn = sqlite3.connect(path)
         try:
@@ -204,6 +248,16 @@ def _validate_sqlite_archive_db(path: str) -> None:
             missing = sorted(required_tables - tables)
             if missing:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Datei ist keine Meldungsarchiv-Datenbank.")
+            version_row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+            schema_version = int(version_row[0]) if version_row and version_row[0] is not None else 0
+            supported_version = max(version for version, _sql in MIGRATIONS)
+            if schema_version != supported_version:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Meldungsarchiv-Datenbank hat eine nicht unterstützte Schema-Version.")
+            for table, columns in required_columns.items():
+                table_info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+                actual_columns = {str(col[1]) for col in table_info}
+                if columns - actual_columns:
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Datei ist keine gültige Meldungsarchiv-Datenbank.")
         finally:
             conn.close()
     except HTTPException:
@@ -229,8 +283,9 @@ async def _archive_read_access(request: Request, db: Database) -> ArchiveReadAcc
         try:
             username = decode_token(auth_header[7:])
             row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (username,))
-            if not page_id or bool(row and row["is_admin"]):
-                return ArchiveReadAccess(username=username)
+            is_admin = bool(row and row["is_admin"])
+            if not page_id or is_admin:
+                return ArchiveReadAccess(username=username, is_admin=is_admin)
             return await _page_scoped_archive_access(request, db, username=username)
         except HTTPException:
             if not page_id:
@@ -256,7 +311,7 @@ async def _archive_read_access(request: Request, db: Database) -> ArchiveReadAcc
 
 async def _page_scoped_archive_access(request: Request, db: Database, *, username: str) -> ArchiveReadAccess:
     from obs.api.v1 import sessions as sessions_api
-    from obs.api.v1.visu import _resolve_access_with_node
+    from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
     from obs.api.v1.websocket import _page_allowed_message_archive_predicates
 
     page_id = request.headers.get("x-page-id") or request.query_params.get("page_id")
@@ -277,7 +332,10 @@ async def _page_scoped_archive_access(request: Request, db: Database, *, usernam
         if not session_token or not sessions_api.validate_session(session_token, validate_id):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Valid session token required")
     elif access == "user":
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required")
+        if username.startswith(("visu-page:", "api_key:")):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required")
+        if not await _check_user_access(db, page_id, username):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")
     elif access not in ("public", "readonly"):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required")
 
@@ -288,6 +346,8 @@ async def _page_scoped_archive_access(request: Request, db: Database, *, usernam
         if source_access == "protected":
             source_validate_id = source_defining_node_id or source_page_id
             return bool(session_token and sessions_api.validate_session(session_token, source_validate_id))
+        if source_access == "user":
+            return not username.startswith(("visu-page:", "api_key:")) and await _check_user_access(db, source_page_id, username)
         return False
 
     predicates = await _page_allowed_message_archive_predicates(
@@ -348,7 +408,7 @@ async def list_message_archives(
     access = await _archive_read_access(request, db)
     archives = await store.list_archives()
     if access.predicates is None:
-        return archives
+        return archives if access.is_admin else [_strip_archive_storage_fields(archive) for archive in archives]
     allowed_ids: set[str] | None = set()
     for predicate in access.predicates:
         if predicate.archive_ids is None:
@@ -426,7 +486,7 @@ async def export_message_archive_db(
 async def import_message_archive_db(
     file: UploadFile = File(...),
     _admin: str = Depends(get_admin_user),
-    store: MessageArchiveStore = Depends(_store),
+    store: MessageArchiveStore = Depends(_store_for_import),
 ) -> dict[str, Any]:
     if store.path == ":memory:":
         raise HTTPException(status.HTTP_409_CONFLICT, "Meldungsarchiv-Datenbank kann im In-Memory-Modus nicht wiederhergestellt werden.")
@@ -451,6 +511,7 @@ async def import_message_archive_db(
             integrity = await store.integrity_check()
             if not integrity.get("ok"):
                 raise RuntimeError("imported database failed integrity check")
+            activate_message_archive_service(store)
         except Exception:
             try:
                 await store.disconnect()
@@ -460,6 +521,7 @@ async def import_message_archive_db(
                 shutil.copy2(backup_path, target_path)
             _unlink_sqlite_sidecars(target_path)
             await store.connect()
+            activate_message_archive_service(store)
             logger.exception("Message archive database import failed")
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Meldungsarchiv-Wiederherstellung fehlgeschlagen.")
 
@@ -545,7 +607,7 @@ async def get_message_archive(
     archive = await store.get_archive(archive_id)
     if not archive:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive not found")
-    return archive if access.predicates is None else _strip_archive_storage_fields(archive)
+    return archive if access.is_admin else _strip_archive_storage_fields(archive)
 
 
 @router.patch("/{archive_id}", response_model=MessageArchiveOut)
@@ -701,19 +763,22 @@ async def create_message_archive_entry(
 ) -> dict[str, Any]:
     archive_id = _validate_archive_id(archive_id)
     source = body.source or _principal_name(principal)
-    entry = await store.create_entry(
-        EntryInput(
-            archive_id=archive_id,
-            type=body.type,
-            severity=body.severity,
-            status=body.status,
-            source=source,
-            title=body.title,
-            message=body.message,
-            payload=body.payload,
-            created_at=body.created_at,
+    try:
+        entry = await store.create_entry(
+            EntryInput(
+                archive_id=archive_id,
+                type=body.type,
+                severity=body.severity,
+                status=body.status,
+                source=source,
+                title=body.title,
+                message=body.message,
+                payload=body.payload,
+                created_at=body.created_at,
+            )
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
     await broadcast_message_archive_entry(entry)
     return entry
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import uuid
 
 import pytest
@@ -200,6 +201,28 @@ async def test_message_archive_database_export_and_import(client, auth_headers):
         headers=auth_headers,
         params={"confirm": "true"},
     )
+
+
+async def test_message_archive_database_import_rejects_malformed_schema(client, auth_headers, tmp_path):
+    malformed = tmp_path / "malformed-message-archives.sqlite"
+    conn = sqlite3.connect(malformed)
+    try:
+        conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (1, '2026-01-01T00:00:00Z')")
+        conn.execute("CREATE TABLE message_archives (id TEXT PRIMARY KEY)")
+        conn.execute("CREATE TABLE message_archive_entries (id TEXT PRIMARY KEY)")
+        conn.execute("CREATE TABLE message_archive_read_states (entry_id TEXT NOT NULL)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    imported = await client.post(
+        "/api/v1/message-archives/import/db",
+        headers=auth_headers,
+        files={"file": ("message-archives.sqlite", malformed.read_bytes(), "application/octet-stream")},
+    )
+
+    assert imported.status_code == 400
 
 
 async def test_message_archive_entries_allow_public_page_scoped_reads(client, auth_headers):
@@ -404,6 +427,11 @@ async def test_message_archive_page_scope_limits_non_admin_bearer_reads(client, 
         assert unrestricted.status_code == 200, unrestricted.text
         assert {item["title"] for item in unrestricted.json()["items"]} >= {"Visible", "Hidden"}
 
+        unrestricted_archives = await client.get("/api/v1/message-archives", headers=non_admin_headers)
+        assert unrestricted_archives.status_code == 200, unrestricted_archives.text
+        assert "db_path" not in unrestricted_archives.json()[0]
+        assert "db_status" not in unrestricted_archives.json()[0]
+
         scoped = await client.get(
             "/api/v1/message-archives/entries",
             headers={**non_admin_headers, "X-Page-Id": page_id},
@@ -421,6 +449,68 @@ async def test_message_archive_page_scope_limits_non_admin_bearer_reads(client, 
                 headers=auth_headers,
                 params={"confirm": "true"},
             )
+
+
+async def test_message_archive_user_scoped_page_allows_assigned_user(client, auth_headers):
+    archive_id = _archive_id("page-user")
+    page_id = None
+    username = None
+    try:
+        create = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": "User"})
+        assert create.status_code == 201, create.text
+        entry = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            json={"title": "Nur fuer Benutzer"},
+        )
+        assert entry.status_code == 201, entry.text
+
+        page = await client.post(
+            "/api/v1/visu/nodes",
+            headers=auth_headers,
+            json={"name": "User archive page", "type": "PAGE", "access": "user"},
+        )
+        assert page.status_code == 201, page.text
+        page_id = page.json()["id"]
+        page_config = {
+            "grid_cols": 12,
+            "grid_row_height": 80,
+            "background": None,
+            "widgets": [
+                {
+                    "id": "archive-widget",
+                    "type": "MessageArchive",
+                    "name": "Archiv",
+                    "x": 0,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                    "config": {"archive_ids": [archive_id]},
+                }
+            ],
+        }
+        save = await client.put(f"/api/v1/visu/pages/{page_id}", headers=auth_headers, json=page_config)
+        assert save.status_code == 204, save.text
+        non_admin_headers, username = await _create_non_admin_headers(client, auth_headers)
+        assign = await client.put(f"/api/v1/visu/nodes/{page_id}/users", headers=auth_headers, json={"usernames": [username]})
+        assert assign.status_code == 204, assign.text
+
+        scoped = await client.get(
+            "/api/v1/message-archives/entries",
+            headers={**non_admin_headers, "X-Page-Id": page_id},
+        )
+        assert scoped.status_code == 200, scoped.text
+        assert [item["title"] for item in scoped.json()["items"]] == ["Nur fuer Benutzer"]
+    finally:
+        if username:
+            await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+        if page_id:
+            await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
 
 
 async def test_message_archive_page_scoped_read_and_ack_require_widget_permissions(client, auth_headers):

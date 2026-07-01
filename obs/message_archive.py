@@ -258,6 +258,10 @@ class MessageArchiveStore:
             raise RuntimeError("MessageArchiveStore.connect() has not been called")
         return self._conn
 
+    @property
+    def is_connected(self) -> bool:
+        return self._conn is not None
+
     async def _current_version(self) -> int:
         await self.conn.execute(_SCHEMA_VERSION_DDL)
         await self.conn.commit()
@@ -438,7 +442,10 @@ class MessageArchiveStore:
         )
         await self.conn.commit()
         await self.enforce_retention(archive_id)
-        return await self.get_entry(archive_id, entry_id) or {}
+        entry = await self.get_entry(archive_id, entry_id)
+        if entry is None:
+            raise ValueError("Message archive entry was removed by retention before it could be returned")
+        return entry
 
     async def update_entry(self, archive_id: str, entry_id: str, body: EntryPatch) -> dict[str, Any] | None:
         archive_id = _normalize_archive_id(archive_id)
@@ -853,8 +860,10 @@ async def init_message_archive_store(settings: Settings | None = None) -> Messag
     except Exception as exc:
         _store.status = "degraded"
         _store.last_error = str(exc)
+        _service = None
         logger.error("Message archive database degraded: %s", exc)
-    _service = MessageArchiveService(_store)
+    else:
+        _service = MessageArchiveService(_store)
     return _store
 
 
@@ -864,8 +873,16 @@ def get_message_archive_store() -> MessageArchiveStore:
     return _store
 
 
+def activate_message_archive_service(store: MessageArchiveStore) -> None:
+    global _store, _service
+    if store.status != "ok" or not store.is_connected:
+        raise RuntimeError("Message archive store is not connected")
+    _store = store
+    _service = MessageArchiveService(store)
+
+
 def get_message_archive_service() -> MessageArchiveService:
-    if _service is None:
+    if _service is None or _store is None or not _store.is_connected or _store.status != "ok":
         raise RuntimeError("Message archive service not initialized")
     return _service
 
