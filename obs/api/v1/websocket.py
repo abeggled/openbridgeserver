@@ -45,6 +45,8 @@ class MessageArchivePredicate:
     severities: set[str] | None = None
     statuses: set[str] | None = None
     sources: set[str] | None = None
+    allow_read: bool = True
+    allow_acknowledge: bool = True
 
 
 MessageArchiveAccess = list[MessageArchivePredicate] | None
@@ -455,6 +457,12 @@ async def _page_allowed_message_archive_predicates(
             return None
         return cleaned
 
+    def _bool_from_config(config: dict[str, Any], *keys: str, default: bool = True) -> bool:
+        for key in keys:
+            if key in config:
+                return bool(config.get(key))
+        return default
+
     page_cache: dict[str, PageConfig | None] = {}
 
     async def _load_page_config(target_page_id: str) -> PageConfig | None:
@@ -494,6 +502,8 @@ async def _page_allowed_message_archive_predicates(
                     severities=_string_set_from_config(config, "severities", "severity"),
                     statuses=_string_set_from_config(config, "statuses", "status"),
                     sources=_string_set_from_config(config, "sources", "source"),
+                    allow_read=_bool_from_config(config, "allow_read", "allowRead", default=True),
+                    allow_acknowledge=_bool_from_config(config, "allow_acknowledge", "allowAcknowledge", default=True),
                 )
             )
 

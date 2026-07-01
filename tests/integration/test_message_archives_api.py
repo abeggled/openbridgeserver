@@ -244,6 +244,145 @@ async def test_message_archive_entries_allow_public_page_scoped_reads(client, au
         body = query.json()
         assert body["total"] == 1
         assert body["items"][0]["title"] == "Sichtbar"
+
+        stale_bearer_query = await client.get(
+            "/api/v1/message-archives/entries",
+            headers={"X-Page-Id": page_id, "Authorization": "Bearer stale.invalid.token"},
+            params={"archive_id": archive_id},
+        )
+        assert stale_bearer_query.status_code == 200, stale_bearer_query.text
+
+        archive_list = await client.get("/api/v1/message-archives", headers={"X-Page-Id": page_id})
+        assert archive_list.status_code == 200, archive_list.text
+        assert "db_path" not in archive_list.json()[0]
+        assert "db_status" not in archive_list.json()[0]
+    finally:
+        if page_id:
+            await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
+async def test_message_archive_page_scoped_reads_preserve_per_widget_or_predicates(client, auth_headers):
+    archive_a = _archive_id("page-a")
+    archive_b = _archive_id("page-b")
+    page_id = None
+    try:
+        for archive_id, name in ((archive_a, "A"), (archive_b, "B")):
+            resp = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": name})
+            assert resp.status_code == 201, resp.text
+
+        for archive_id, type_, title in (
+            (archive_a, "security", "A security allowed"),
+            (archive_a, "notification", "A notification blocked"),
+            (archive_b, "notification", "B notification allowed"),
+            (archive_b, "security", "B security blocked"),
+        ):
+            resp = await client.post(
+                f"/api/v1/message-archives/{archive_id}/entries",
+                headers=auth_headers,
+                json={"type": type_, "title": title},
+            )
+            assert resp.status_code == 201, resp.text
+
+        page = await client.post(
+            "/api/v1/visu/nodes",
+            headers=auth_headers,
+            json={"name": "Public archive OR page", "type": "PAGE", "access": "public"},
+        )
+        assert page.status_code == 201, page.text
+        page_id = page.json()["id"]
+        page_config = {
+            "grid_cols": 12,
+            "grid_row_height": 80,
+            "background": None,
+            "widgets": [
+                {
+                    "id": "archive-widget-a",
+                    "type": "MessageArchive",
+                    "name": "Archiv A",
+                    "x": 0,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                    "config": {"archive_ids": [archive_a], "types": ["security"]},
+                },
+                {
+                    "id": "archive-widget-b",
+                    "type": "MessageArchive",
+                    "name": "Archiv B",
+                    "x": 4,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                    "config": {"archive_ids": [archive_b], "types": ["notification"]},
+                },
+            ],
+        }
+        save = await client.put(f"/api/v1/visu/pages/{page_id}", headers=auth_headers, json=page_config)
+        assert save.status_code == 204, save.text
+
+        query = await client.get("/api/v1/message-archives/entries", headers={"X-Page-Id": page_id})
+        assert query.status_code == 200, query.text
+        assert {item["title"] for item in query.json()["items"]} == {"A security allowed", "B notification allowed"}
+    finally:
+        if page_id:
+            await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+        for archive_id in (archive_a, archive_b):
+            await client.delete(
+                f"/api/v1/message-archives/{archive_id}",
+                headers=auth_headers,
+                params={"confirm": "true"},
+            )
+
+
+async def test_message_archive_page_scoped_read_and_ack_require_widget_permissions(client, auth_headers):
+    archive_id = _archive_id("page-actions")
+    page_id = None
+    try:
+        create = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": "Actions"})
+        assert create.status_code == 201, create.text
+        entry_resp = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            json={"title": "Protected action"},
+        )
+        assert entry_resp.status_code == 201, entry_resp.text
+        entry_id = entry_resp.json()["id"]
+        page = await client.post(
+            "/api/v1/visu/nodes",
+            headers=auth_headers,
+            json={"name": "Public archive action page", "type": "PAGE", "access": "public"},
+        )
+        assert page.status_code == 201, page.text
+        page_id = page.json()["id"]
+        page_config = {
+            "grid_cols": 12,
+            "grid_row_height": 80,
+            "background": None,
+            "widgets": [
+                {
+                    "id": "archive-widget",
+                    "type": "MessageArchive",
+                    "name": "Archiv",
+                    "x": 0,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                    "config": {"archive_ids": [archive_id], "allow_read": False, "allow_acknowledge": False},
+                }
+            ],
+        }
+        save = await client.put(f"/api/v1/visu/pages/{page_id}", headers=auth_headers, json=page_config)
+        assert save.status_code == 204, save.text
+
+        read_resp = await client.post(f"/api/v1/message-archives/{archive_id}/entries/{entry_id}/read", headers={"X-Page-Id": page_id})
+        assert read_resp.status_code == 404
+        ack_resp = await client.post(f"/api/v1/message-archives/{archive_id}/entries/{entry_id}/acknowledge", headers={"X-Page-Id": page_id})
+        assert ack_resp.status_code == 404
     finally:
         if page_id:
             await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
@@ -304,3 +443,8 @@ async def test_message_archive_entries_accept_multiple_filter_values(client, aut
                 headers=auth_headers,
                 params={"confirm": "true"},
             )
+
+
+async def test_message_archive_path_operations_reject_malformed_archive_ids(client, auth_headers):
+    resp = await client.get("/api/v1/message-archives/bad%20id", headers=auth_headers)
+    assert resp.status_code == 400

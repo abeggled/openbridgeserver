@@ -23,6 +23,7 @@ from obs.message_archive import (
     ArchivePatch,
     EntryInput,
     EntryPatch,
+    EntryPredicate,
     EntryQuery,
     MessageArchiveStore,
     broadcast_message_archive_entry,
@@ -65,8 +66,8 @@ class MessageArchiveOut(MessageArchiveBase):
     entry_count: int
     oldest_entry_at: str | None
     newest_entry_at: str | None
-    db_status: str
-    db_path: str
+    db_status: str | None = None
+    db_path: str | None = None
 
 
 class MessageEntryCreate(BaseModel):
@@ -170,6 +171,16 @@ def _archive_ids(values: list[str] | None) -> list[str] | None:
     return _csv_values(values)
 
 
+def _validate_archive_id(value: str) -> str:
+    normalized = value.strip().lower()
+    if not normalized or len(normalized) > 80:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid message archive id")
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
+    if any(ch not in allowed for ch in normalized):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid message archive id")
+    return normalized
+
+
 def _validate_sqlite_archive_db(path: str) -> None:
     with open(path, "rb") as handle:
         header = handle.read(16)
@@ -197,8 +208,8 @@ def _validate_sqlite_archive_db(path: str) -> None:
             conn.close()
     except HTTPException:
         raise
-    except sqlite3.Error as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die hochgeladene Datei ist keine gültige SQLite-Datenbank.") from exc
+    except sqlite3.Error:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die hochgeladene Datei ist keine gültige SQLite-Datenbank.") from None
 
 
 def _unlink_sqlite_sidecars(path: str) -> None:
@@ -213,9 +224,14 @@ def _unlink_sqlite_sidecars(path: str) -> None:
 
 async def _archive_read_access(request: Request, db: Database) -> ArchiveReadAccess:
     auth_header = request.headers.get("authorization", "")
+    page_id = request.headers.get("x-page-id") or request.query_params.get("page_id")
     if auth_header.startswith("Bearer "):
-        username = decode_token(auth_header[7:])
-        return ArchiveReadAccess(username=username)
+        try:
+            username = decode_token(auth_header[7:])
+            return ArchiveReadAccess(username=username)
+        except HTTPException:
+            if not page_id:
+                raise
 
     api_key = request.headers.get("x-api-key")
     if api_key:
@@ -226,7 +242,6 @@ async def _archive_read_access(request: Request, db: Database) -> ArchiveReadAcc
         owner = row["owner"] if row["owner"] else None
         return ArchiveReadAccess(username=owner or f"api_key:{row['id']}")
 
-    page_id = request.headers.get("x-page-id") or request.query_params.get("page_id")
     if not page_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Provide Authorization: Bearer {token} or X-API-Key: {key}")
 
@@ -271,70 +286,36 @@ async def _archive_read_access(request: Request, db: Database) -> ArchiveReadAcc
     return ArchiveReadAccess(username=f"visu-page:{page_id}", predicates=predicates)
 
 
-def _intersect_values(requested: list[str] | None, allowed: set[str] | None) -> list[str] | None:
-    if allowed is None:
-        return requested
-    if requested:
-        values = [value for value in requested if value in allowed]
-    else:
-        values = sorted(allowed)
-    return values
-
-
-def _constrain_query_for_page(query: EntryQuery, predicates: list[Any] | None) -> EntryQuery | None:
+def _entry_predicates_for_page(predicates: list[Any] | None) -> list[EntryPredicate] | None:
     if predicates is None:
-        return query
-    archive_ids: set[str] | None = set()
-    types: set[str] | None = set()
-    severities: set[str] | None = set()
-    statuses: set[str] | None = set()
-    sources: set[str] | None = set()
-    for predicate in predicates:
-        if predicate.archive_ids is None:
-            archive_ids = None
-        elif archive_ids is not None:
-            archive_ids.update(predicate.archive_ids)
-        for attr, target in (
-            ("types", types),
-            ("severities", severities),
-            ("statuses", statuses),
-            ("sources", sources),
-        ):
-            values = getattr(predicate, attr)
-            if values:
-                target.update(values)
-    constrained_archive_ids = _intersect_values(query.archive_ids, archive_ids)
-    constrained_types = _intersect_values(query.types, types or None)
-    constrained_severities = _intersect_values(query.severities, severities or None)
-    constrained_statuses = _intersect_values(query.statuses, statuses or None)
-    constrained_sources = _intersect_values(query.sources, sources or None)
-    if (
-        constrained_archive_ids == []
-        or constrained_types == []
-        or constrained_severities == []
-        or constrained_statuses == []
-        or constrained_sources == []
-    ):
         return None
-    return EntryQuery(
-        archive_ids=constrained_archive_ids,
-        from_ts=query.from_ts,
-        to_ts=query.to_ts,
-        status=query.status,
-        statuses=constrained_statuses,
-        read_state=query.read_state,
-        type=query.type,
-        types=constrained_types,
-        severity=query.severity,
-        severities=constrained_severities,
-        source=query.source,
-        sources=constrained_sources,
-        q=query.q,
-        limit=query.limit,
-        offset=query.offset,
-        sort=query.sort,
-        username=query.username,
-    )
+    converted: list[EntryPredicate] = []
+    for predicate in predicates:
+        converted.append(
+            EntryPredicate(
+                archive_ids=sorted(predicate.archive_ids) if predicate.archive_ids is not None else None,
+                types=sorted(predicate.types) if predicate.types is not None else None,
+                severities=sorted(predicate.severities) if predicate.severities is not None else None,
+                statuses=sorted(predicate.statuses) if predicate.statuses is not None else None,
+                sources=sorted(predicate.sources) if predicate.sources is not None else None,
+            )
+        )
+    return converted
+
+
+def _entry_action_allowed_for_page(entry: dict[str, Any], predicates: list[Any] | None, action: Literal["read", "acknowledge"]) -> bool:
+    if predicates is None:
+        return True
+    from obs.api.v1.websocket import _message_archive_entry_matches_access
+
+    for predicate in predicates:
+        if action == "read" and not getattr(predicate, "allow_read", True):
+            continue
+        if action == "acknowledge" and not getattr(predicate, "allow_acknowledge", True):
+            continue
+        if _message_archive_entry_matches_access(entry, [predicate]):
+            return True
+    return False
 
 
 def _entry_allowed_for_page(entry: dict[str, Any], predicates: list[Any] | None) -> bool:
@@ -345,7 +326,14 @@ def _entry_allowed_for_page(entry: dict[str, Any], predicates: list[Any] | None)
     return _message_archive_entry_matches_access(entry, predicates)
 
 
-@router.get("", response_model=list[MessageArchiveOut])
+def _strip_archive_storage_fields(archive: dict[str, Any]) -> dict[str, Any]:
+    public_archive = dict(archive)
+    public_archive.pop("db_path", None)
+    public_archive.pop("db_status", None)
+    return public_archive
+
+
+@router.get("", response_model=list[MessageArchiveOut], response_model_exclude_none=True)
 async def list_message_archives(
     request: Request,
     db: Database = Depends(lambda: get_db()),
@@ -355,11 +343,14 @@ async def list_message_archives(
     archives = await store.list_archives()
     if access.predicates is None:
         return archives
-    allowed = _constrain_query_for_page(EntryQuery(limit=1, username=access.username), access.predicates)
-    if allowed is None or allowed.archive_ids is None:
-        return archives
-    allowed_ids = set(allowed.archive_ids)
-    return [archive for archive in archives if archive["id"] in allowed_ids]
+    allowed_ids: set[str] | None = set()
+    for predicate in access.predicates:
+        if predicate.archive_ids is None:
+            allowed_ids = None
+            break
+        allowed_ids.update(predicate.archive_ids)
+    page_archives = archives if allowed_ids is None else [archive for archive in archives if archive["id"] in allowed_ids]
+    return [_strip_archive_storage_fields(archive) for archive in page_archives]
 
 
 @router.post("", response_model=MessageArchiveOut, status_code=status.HTTP_201_CREATED)
@@ -382,12 +373,12 @@ async def create_message_archive(
             )
         )
     except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid message archive id") from exc
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid message archive id") from None
     except Exception as exc:
         if "unique" in str(exc).lower():
-            raise HTTPException(status.HTTP_409_CONFLICT, "Message archive already exists") from exc
+            raise HTTPException(status.HTTP_409_CONFLICT, "Message archive already exists") from None
         logger.exception("Message archive creation failed")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Message archive could not be created") from exc
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Message archive could not be created") from None
 
 
 @router.post("/integrity-check", response_model=IntegrityCheckResult)
@@ -410,13 +401,13 @@ async def export_message_archive_db(
     tmp.close()
     try:
         await store.sqlite_snapshot(tmp.name)
-    except Exception as exc:
+    except Exception:
         try:
             os.unlink(tmp.name)
         except OSError:
             pass
         logger.exception("Message archive database export failed")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Meldungsarchiv-Sicherung fehlgeschlagen.") from exc
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Meldungsarchiv-Sicherung fehlgeschlagen.") from None
     background_tasks.add_task(os.unlink, tmp.name)
     return FileResponse(
         path=tmp.name,
@@ -498,49 +489,57 @@ async def query_message_archive_entries(
     store: MessageArchiveStore = Depends(_store),
 ) -> dict[str, Any]:
     access = await _archive_read_access(request, db)
-    query = _constrain_query_for_page(
-        EntryQuery(
-            archive_ids=_archive_ids(archive_id),
-            from_ts=from_,
-            to_ts=to,
-            status=status_,
-            statuses=_csv_values(status_),
-            read_state=read_state,
-            type=type_,
-            types=_csv_values(type_),
-            severity=severity,
-            severities=_csv_values(severity),
-            source=source,
-            sources=_csv_values(source),
-            q=q,
-            limit=limit,
-            offset=offset,
-            sort=sort,
-            username=access.username,
-        ),
-        access.predicates,
+    query = EntryQuery(
+        archive_ids=_archive_ids(archive_id),
+        from_ts=from_,
+        to_ts=to,
+        status=status_,
+        statuses=_csv_values(status_),
+        read_state=read_state,
+        type=type_,
+        types=_csv_values(type_),
+        severity=severity,
+        severities=_csv_values(severity),
+        source=source,
+        sources=_csv_values(source),
+        q=q,
+        limit=limit,
+        offset=offset,
+        sort=sort,
+        username=access.username,
+        predicates=_entry_predicates_for_page(access.predicates),
     )
-    if query is None:
-        return {"items": [], "total": 0, "limit": limit, "offset": offset}
-    return await store.query_entries(query)
+    try:
+        return await store.query_entries(query)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid message archive id") from None
 
 
-@router.get("/{archive_id}", response_model=MessageArchiveOut)
+@router.get("/{archive_id}", response_model=MessageArchiveOut, response_model_exclude_none=True)
 async def get_message_archive(
     archive_id: str,
     request: Request,
     db: Database = Depends(lambda: get_db()),
     store: MessageArchiveStore = Depends(_store),
 ) -> dict[str, Any]:
+    archive_id = _validate_archive_id(archive_id)
     access = await _archive_read_access(request, db)
     if access.predicates is not None:
-        query = _constrain_query_for_page(EntryQuery(archive_ids=[archive_id], limit=1), access.predicates)
-        if query is None or query.archive_ids == []:
+        if not _entry_predicates_for_page(access.predicates):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Message archive access denied")
+        probe = await store.query_entries(
+            EntryQuery(archive_ids=[archive_id], limit=1, username=access.username, predicates=_entry_predicates_for_page(access.predicates))
+        )
+        if probe["total"] == 0:
+            allowed_ids = [predicate.archive_ids for predicate in access.predicates]
+            if any(ids is None for ids in allowed_ids):
+                pass
+            elif archive_id not in {item for ids in allowed_ids for item in (ids or set())}:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "Message archive access denied")
     archive = await store.get_archive(archive_id)
     if not archive:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive not found")
-    return archive
+    return archive if access.predicates is None else _strip_archive_storage_fields(archive)
 
 
 @router.patch("/{archive_id}", response_model=MessageArchiveOut)
@@ -550,6 +549,7 @@ async def update_message_archive(
     _admin: str = Depends(get_admin_user),
     store: MessageArchiveStore = Depends(_store),
 ) -> dict[str, Any]:
+    archive_id = _validate_archive_id(archive_id)
     archive = await store.update_archive(
         archive_id,
         ArchivePatch(
@@ -576,6 +576,7 @@ async def delete_message_archive(
     store: MessageArchiveStore = Depends(_store),
     audit: AuditLogWriter = Depends(get_audit_log_writer),
 ) -> dict[str, Any]:
+    archive_id = _validate_archive_id(archive_id)
     archive = await store.get_archive(archive_id)
     if not archive:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive not found")
@@ -602,6 +603,7 @@ async def clear_message_archive(
     store: MessageArchiveStore = Depends(_store),
     audit: AuditLogWriter = Depends(get_audit_log_writer),
 ) -> dict[str, Any]:
+    archive_id = _validate_archive_id(archive_id)
     archive = await store.get_archive(archive_id)
     if not archive:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive not found")
@@ -625,6 +627,7 @@ async def export_message_archive(
     _admin: str = Depends(get_admin_user),
     store: MessageArchiveStore = Depends(_store),
 ) -> Response:
+    archive_id = _validate_archive_id(archive_id)
     if not await store.get_archive(archive_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive not found")
     if format == "csv":
@@ -658,31 +661,28 @@ async def query_single_message_archive_entries(
     db: Database = Depends(lambda: get_db()),
     store: MessageArchiveStore = Depends(_store),
 ) -> dict[str, Any]:
+    archive_id = _validate_archive_id(archive_id)
     access = await _archive_read_access(request, db)
-    query = _constrain_query_for_page(
-        EntryQuery(
-            archive_ids=[archive_id],
-            from_ts=from_,
-            to_ts=to,
-            status=status_,
-            statuses=_csv_values(status_),
-            read_state=read_state,
-            type=type_,
-            types=_csv_values(type_),
-            severity=severity,
-            severities=_csv_values(severity),
-            source=source,
-            sources=_csv_values(source),
-            q=q,
-            limit=limit,
-            offset=offset,
-            sort=sort,
-            username=access.username,
-        ),
-        access.predicates,
+    query = EntryQuery(
+        archive_ids=[archive_id],
+        from_ts=from_,
+        to_ts=to,
+        status=status_,
+        statuses=_csv_values(status_),
+        read_state=read_state,
+        type=type_,
+        types=_csv_values(type_),
+        severity=severity,
+        severities=_csv_values(severity),
+        source=source,
+        sources=_csv_values(source),
+        q=q,
+        limit=limit,
+        offset=offset,
+        sort=sort,
+        username=access.username,
+        predicates=_entry_predicates_for_page(access.predicates),
     )
-    if query is None:
-        return {"items": [], "total": 0, "limit": limit, "offset": offset}
     return await store.query_entries(query)
 
 
@@ -693,6 +693,7 @@ async def create_message_archive_entry(
     principal: Principal = Depends(get_current_principal),
     store: MessageArchiveStore = Depends(_store),
 ) -> dict[str, Any]:
+    archive_id = _validate_archive_id(archive_id)
     source = body.source or _principal_name(principal)
     entry = await store.create_entry(
         EntryInput(
@@ -719,6 +720,7 @@ async def update_message_archive_entry(
     principal: Principal = Depends(get_current_principal),
     store: MessageArchiveStore = Depends(_store),
 ) -> dict[str, Any]:
+    archive_id = _validate_archive_id(archive_id)
     entry = await store.update_entry(
         archive_id,
         entry_id,
@@ -745,9 +747,10 @@ async def mark_message_archive_entry_read(
     db: Database = Depends(lambda: get_db()),
     store: MessageArchiveStore = Depends(_store),
 ) -> dict[str, Any]:
+    archive_id = _validate_archive_id(archive_id)
     access = await _archive_read_access(request, db)
     existing = await store.get_entry(archive_id, entry_id, username=access.username)
-    if not existing or not _entry_allowed_for_page(existing, access.predicates):
+    if not existing or not _entry_action_allowed_for_page(existing, access.predicates, "read"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive entry not found")
     entry = await store.mark_read(archive_id, entry_id, access.username)
     if not entry:
@@ -763,9 +766,10 @@ async def acknowledge_message_archive_entry(
     db: Database = Depends(lambda: get_db()),
     store: MessageArchiveStore = Depends(_store),
 ) -> dict[str, Any]:
+    archive_id = _validate_archive_id(archive_id)
     access = await _archive_read_access(request, db)
     existing = await store.get_entry(archive_id, entry_id, username=access.username)
-    if not existing or not _entry_allowed_for_page(existing, access.predicates):
+    if not existing or not _entry_action_allowed_for_page(existing, access.predicates, "acknowledge"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive entry not found")
     entry = await store.acknowledge_entry(archive_id, entry_id, access.username)
     if not entry:

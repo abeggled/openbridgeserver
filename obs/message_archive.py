@@ -196,6 +196,15 @@ class EntryPatch:
 
 
 @dataclass(frozen=True)
+class EntryPredicate:
+    archive_ids: list[str] | None = None
+    types: list[str] | None = None
+    severities: list[str] | None = None
+    statuses: list[str] | None = None
+    sources: list[str] | None = None
+
+
+@dataclass(frozen=True)
 class EntryQuery:
     archive_ids: list[str] | None = None
     from_ts: str | None = None
@@ -214,6 +223,7 @@ class EntryQuery:
     offset: int = 0
     sort: Literal["asc", "desc"] = "desc"
     username: str | None = None
+    predicates: list[EntryPredicate] | None = None
 
 
 class MessageArchiveStore:
@@ -542,6 +552,30 @@ class MessageArchiveStore:
             read_join = "LEFT JOIN message_archive_read_states rs ON rs.entry_id=e.id AND rs.username=?"
             params.append(query.username)
 
+        if query.predicates is not None:
+            predicate_sql: list[str] = []
+            for predicate in query.predicates:
+                group: list[str] = []
+                for field, attr, normalize in (
+                    ("archive_id", "archive_ids", True),
+                    ("type", "types", False),
+                    ("severity", "severities", False),
+                    ("status", "statuses", False),
+                    ("source", "sources", False),
+                ):
+                    values = getattr(predicate, attr)
+                    if values is None:
+                        continue
+                    cleaned = [_normalize_archive_id(value) if normalize else value for value in values if value]
+                    if not cleaned:
+                        group.append("0")
+                        continue
+                    placeholders = ",".join("?" for _ in cleaned)
+                    group.append(f"e.{field} IN ({placeholders})")
+                    params.extend(cleaned)
+                predicate_sql.append(f"({' AND '.join(group)})" if group else "1")
+            where.append(f"({' OR '.join(predicate_sql)})" if predicate_sql else "0")
+
         if query.archive_ids:
             query_archive_ids = [_normalize_archive_id(archive_id) for archive_id in query.archive_ids]
             placeholders = ",".join("?" for _ in query.archive_ids)
@@ -657,8 +691,9 @@ class MessageArchiveStore:
             return {"ok": ok, "result": result, "path": self.path, "status": self.status}
         except Exception as exc:
             self.status = "degraded"
-            self.last_error = str(exc)
-            return {"ok": False, "result": str(exc), "path": self.path, "status": self.status}
+            self.last_error = "integrity_check_failed"
+            logger.exception("Message archive integrity check failed")
+            return {"ok": False, "result": "integrity_check_failed", "path": self.path, "status": self.status}
 
     async def sqlite_snapshot(self, target_path: str | Path) -> Path:
         target = Path(target_path)

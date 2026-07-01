@@ -118,14 +118,13 @@ def _prune_old_backups(retention_days: int) -> int:
 def _delete_backup_files(stem: str) -> int:
     backup_dir = _autobackup_dir()
     deleted = 0
-    for suffix in (".json", ".message-archive.sqlite3", ".message-archive.json"):
-        path = backup_dir / f"{stem}{suffix}"
-        try:
-            if path.exists():
-                path.unlink()
-                deleted += 1
-        except OSError:
-            pass
+    path = backup_dir / f"{stem}.json"
+    try:
+        if path.exists():
+            path.unlink()
+            deleted += 1
+    except OSError:
+        pass
     return deleted
 
 
