@@ -13,6 +13,7 @@ import pytest
 
 from obs.db.database import get_db
 from obs.ringbuffer.persisted_config import (
+    DEFAULT_SEGMENT_MAX_AGE_SECONDS,
     PERSISTED_CONFIG_KEY,
     load_persisted_ringbuffer_config,
 )
@@ -45,6 +46,9 @@ async def _reset_to_defaults(client, auth_headers):
 
 
 async def test_config_post_persists_full_payload_to_app_settings(client, auth_headers):
+    # ``segmented`` is now the deployed default. ``segment_max_age`` is sent
+    # explicitly so the 3-segment age rule (max_age >= 3*segment_max_age) holds:
+    # 7200 >= 3*2400. The full payload must round-trip verbatim.
     resp = await client.post(
         "/api/v1/ringbuffer/config",
         json={
@@ -52,6 +56,7 @@ async def test_config_post_persists_full_payload_to_app_settings(client, auth_he
             "max_entries": 42_000,
             "max_file_size_bytes": 5 * 1024 * 1024,
             "max_age": 7200,
+            "segment_max_age": 2400,
         },
         headers=auth_headers,
     )
@@ -63,16 +68,18 @@ async def test_config_post_persists_full_payload_to_app_settings(client, auth_he
         "max_entries": 42_000,
         "max_file_size_bytes": 5 * 1024 * 1024,
         "max_age": 7200,
-        "segmented": False,
+        "segmented": True,
         "segment_max_bytes": None,
         "segment_max_rows": None,
-        "segment_max_age": None,
+        "segment_max_age": 2400,
     }
 
     await _reset_to_defaults(client, auth_headers)
 
 
 async def test_config_post_persists_null_max_entries(client, auth_headers):
+    # max_age=None → the age ratio rule is inactive, so the default 6-h
+    # segment_max_age passes through untouched and is persisted.
     resp = await client.post(
         "/api/v1/ringbuffer/config",
         json={
@@ -91,10 +98,10 @@ async def test_config_post_persists_null_max_entries(client, auth_headers):
         "max_entries": None,
         "max_file_size_bytes": 3 * 1024 * 1024,
         "max_age": None,
-        "segmented": False,
+        "segmented": True,
         "segment_max_bytes": None,
         "segment_max_rows": None,
-        "segment_max_age": None,
+        "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
     }
 
     await _reset_to_defaults(client, auth_headers)
@@ -109,6 +116,7 @@ async def test_load_persisted_ringbuffer_config_after_post_matches_payload(clien
             "max_entries": 25_000,
             "max_file_size_bytes": 8 * 1024 * 1024,
             "max_age": 3600,
+            "segment_max_age": 1200,
         },
         headers=auth_headers,
     )
@@ -120,10 +128,10 @@ async def test_load_persisted_ringbuffer_config_after_post_matches_payload(clien
         "max_entries": 25_000,
         "max_file_size_bytes": 8 * 1024 * 1024,
         "max_age": 3600,
-        "segmented": False,
+        "segmented": True,
         "segment_max_bytes": None,
         "segment_max_rows": None,
-        "segment_max_age": None,
+        "segment_max_age": 1200,
     }
 
     await _reset_to_defaults(client, auth_headers)

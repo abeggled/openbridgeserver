@@ -22,6 +22,12 @@ PERSISTED_CONFIG_KEY = "ringbuffer.runtime_config"
 
 DEFAULT_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MiB
 
+# Deployter Default für die zeitgetriebene Rotation (#919): alle 6 Stunden ein
+# neues Segment. Zeit ist im Normalbetrieb der PRIMÄRE Rotations-Trigger; die aus
+# ``max_file_size_bytes`` abgeleitete ``segment_max_bytes`` ist nur die Größen-
+# Notbremse. ``segment_max_rows`` bleibt None (kein row-getriebener Trigger).
+DEFAULT_SEGMENT_MAX_AGE_SECONDS = 6 * 60 * 60  # 21600 s (6 h)
+
 
 def _defaults() -> dict[str, Any]:
     return {
@@ -29,14 +35,17 @@ def _defaults() -> dict[str, Any]:
         "max_entries": None,
         "max_file_size_bytes": DEFAULT_MAX_FILE_SIZE_BYTES,
         "max_age": None,
-        # Segmentierter Store (#919) — OPT-IN, Default AUS. Bei ``False`` bleibt
-        # der Legacy-Single-File-Pfad exakt wie bisher aktiv.
-        "segmented": False,
-        # Segment-Parameter (#930) — standardmäßig deaktiviert (Legacy-
-        # Single-File-Verhalten); Segmentierung ist opt-in.
+        # Segmentierter Store (#919) — DEPLOYTER DEFAULT: segmentiert. Bestehende
+        # Installationen ohne persistierten ``segmented``-Key laufen damit
+        # automatisch segmentiert; der Legacy-Single-File-Pfad bleibt nur intern
+        # (Tests/Legacy) über ``segmented=False`` erreichbar.
+        "segmented": True,
+        # Segment-Parameter (#930/#919): ``segment_max_bytes`` wird beim Start aus
+        # ``max_file_size_bytes`` abgeleitet, wenn hier None (siehe RingBuffer).
+        # ``segment_max_age`` ist der zeitgetriebene Default-Trigger (6 h).
         "segment_max_bytes": None,
         "segment_max_rows": None,
-        "segment_max_age": None,
+        "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
     }
 
 

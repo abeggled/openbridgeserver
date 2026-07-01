@@ -1049,12 +1049,49 @@ class SqliteSegmentStore(RingBufferStore):
             return 0
         removed = 0
         while await self._total_size_bytes() > budget:
-            closed = await self.manifest.list_closed_segments()
-            if not closed:
+            victim = await self._next_size_retention_victim()
+            if victim is None:
                 break  # kein löschbares Segment mehr → over_budget in stats sichtbar.
-            await self._delete_segment(closed[0])
+            await self._delete_segment(victim)
             removed += 1
         return removed
+
+    async def _next_size_retention_victim(self) -> SegmentRecord | None:
+        """Wählt das nächste per Size-Budget löschbare Segment (ältestes zuerst, #919).
+
+        Für die Size-Budget-Retention ist zusätzlich zum sauber geschlossenen
+        v2-Segment auch das read-only eingehängte Legacy-Segment löschbar — es ist
+        per Definition am ältesten und zählt voll gegen das Size-Budget. Aber:
+
+        **No-Zero-History-Guard:** das Legacy-Segment darf NICHT gelöscht werden,
+        solange es die einzige Datenquelle ist. Erst wenn mindestens ein sauber
+        geschlossenes v2-Segment existiert (frische Daten sind gesichert), wird das
+        Legacy-Segment freigebbar. So verliert eine frische Umstellung nie sofort
+        die ganze Historie.
+
+        Reihenfolge: zuerst geschlossene v2-Segmente (älteste zuerst), dann — falls
+        keine mehr übrig und der Guard erfüllt ist — das Legacy-Segment.
+        """
+        closed = await self.manifest.list_closed_segments()
+        if closed:
+            return closed[0]
+        legacy_segments = await self.manifest.list_legacy_segments()
+        if not legacy_segments:
+            return None
+        # No-Zero-History-Guard: das Legacy-Segment nur freigeben, wenn eine
+        # nicht-Legacy-Datenquelle (aktives oder geschlossenes v2-Segment) bereits
+        # Zeilen hält. So bleibt bei einer frischen Umstellung die ganze Historie
+        # erhalten, bis wirklich neue Daten gesichert sind.
+        if not await self._has_nonlegacy_data_segment():
+            return None
+        return legacy_segments[0]
+
+    async def _has_nonlegacy_data_segment(self) -> bool:
+        """True, wenn ein nicht-Legacy-Segment (aktiv oder geschlossen) Zeilen hält."""
+        for segment in await self.manifest.list_segments():
+            if not _is_legacy_segment(segment) and segment.row_count > 0:
+                return True
+        return False
 
     async def _enforce_age_cutoff(self, max_age: int | None) -> int:
         if max_age is None:
@@ -1084,9 +1121,17 @@ class SqliteSegmentStore(RingBufferStore):
         return removed
 
     async def _delete_segment(self, segment: SegmentRecord) -> None:
-        """Entfernt Datei (inkl. -wal/-shm) und Manifest-Eintrag konsistent."""
-        for suffix in ("", "-wal", "-shm"):
-            path = self._segments_dir / f"{segment.filename}{suffix}"
-            if path.exists():
-                path.unlink()
+        """Entfernt Datei (inkl. -wal/-shm) und Manifest-Eintrag konsistent.
+
+        Für Legacy-Segmente (#919) wird die in-place liegende Original-Single-DB
+        NICHT vom Dateisystem gelöscht — nur der Manifest-Eintrag entfällt, sodass
+        sie nicht mehr gegen das Budget zählt und nicht mehr gelesen wird. Die Datei
+        selbst bleibt als Nutzer-Artefakt unangetastet (Grundgebot #934: keine
+        Legacy-Daten löschen).
+        """
+        if not _is_legacy_segment(segment):
+            for suffix in ("", "-wal", "-shm"):
+                path = self._segments_dir / f"{segment.filename}{suffix}"
+                if path.exists():
+                    path.unlink()
         await self.manifest.delete_segment(segment.segment_id)

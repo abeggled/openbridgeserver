@@ -37,6 +37,42 @@ from obs.core.json import json_dumps
 logger = logging.getLogger(__name__)
 _UNSET = object()
 _ALLOWED_STORAGE_MODELS = {"memory", "disk", "file"}
+
+# Ableitung von ``segment_max_bytes`` aus ``max_file_size_bytes`` (#919): das
+# Größen-Segment-Budget ist ein Achtel des Gesamt-Size-Budgets, geklemmt auf
+# [4 MiB, 256 MiB]. Der Faktor 8 (> RETENTION_SEGMENT_RATIO=3) hält das abgeleitete
+# Budget im Normalfall klar unter der 3-Segment-Grenze. Für sehr kleine
+# ``max_file_size_bytes`` (< 3*4 MiB) würde der 4-MiB-Floor die 3-Segment-Regel
+# aber verletzen; deshalb wird das Ergebnis zusätzlich hart auf
+# ``max_file_size_bytes // RETENTION_SEGMENT_RATIO`` gedeckelt. Damit gilt
+# ``max_file_size_bytes >= 3 * segment_max_bytes`` für JEDES positive
+# ``max_file_size_bytes`` automatisch — die Config-Validierung kann im
+# Auto-Startpfad also NIE fehlschlagen. Bei None (unbegrenzt) ein fester Default.
+_SEGMENT_MAX_BYTES_DIVISOR = 8
+_SEGMENT_MAX_BYTES_FLOOR = 4 * 1024 * 1024  # 4 MiB
+_SEGMENT_MAX_BYTES_CEIL = 256 * 1024 * 1024  # 256 MiB
+_SEGMENT_MAX_BYTES_UNBOUNDED_DEFAULT = 64 * 1024 * 1024  # 64 MiB
+
+
+def derive_segment_max_bytes(max_file_size_bytes: int | None) -> int:
+    """Leitet ``segment_max_bytes`` aus ``max_file_size_bytes`` ab (#919).
+
+    ``clamp(max_file_size_bytes // 8, 4 MiB, 256 MiB)``, zusätzlich hart gedeckelt
+    auf ``max_file_size_bytes // 3`` (RETENTION_SEGMENT_RATIO). Bei None
+    (unbegrenztes Size-Budget) ein fester Default von 64 MiB. Das Ergebnis erfüllt
+    die 3-Segment-Regel (``max_file_size_bytes >= 3 * segment_max_bytes``) für jedes
+    positive ``max_file_size_bytes`` automatisch — auch für sehr kleine Budgets,
+    bei denen der 4-MiB-Floor sonst die Regel verletzen würde.
+    """
+    from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO
+
+    if max_file_size_bytes is None:
+        return _SEGMENT_MAX_BYTES_UNBOUNDED_DEFAULT
+    clamped = max(_SEGMENT_MAX_BYTES_FLOOR, min(max_file_size_bytes // _SEGMENT_MAX_BYTES_DIVISOR, _SEGMENT_MAX_BYTES_CEIL))
+    ratio_cap = max_file_size_bytes // RETENTION_SEGMENT_RATIO
+    return max(1, min(clamped, ratio_cap))
+
+
 _SQLITE_CORRUPTION_MARKERS = (
     "database disk image is malformed",
     "file is not a database",
@@ -203,6 +239,13 @@ class RingBuffer:
         from obs.ringbuffer.store.migration import LegacyMigrator
         from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
 
+        # ``segment_max_bytes`` automatisch aus ``max_file_size_bytes`` ableiten,
+        # wenn nicht explizit gesetzt (#919). Das abgeleitete Budget erfüllt die
+        # 3-Segment-Regel immer → validate_store_config kann beim Auto-Start nicht
+        # fehlschlagen. Explizite Werte werden respektiert und weiter validiert.
+        if self._segment_max_bytes is None:
+            self._segment_max_bytes = derive_segment_max_bytes(self._max_file_size_bytes)
+
         root = self._segment_store_root()
         store = SqliteSegmentStore(
             root,
@@ -222,11 +265,23 @@ class RingBuffer:
         self._segment_created_at = _isoformat_utc(datetime.now(UTC))
 
         # Legacy-Single-DB (falls vorhanden) read-only einhängen — ohne Vollscan.
+        # Idempotent: bei Neustart darf dieselbe Datei NICHT doppelt eingehängt
+        # werden. Erkennung über den absoluten Pfad in den bereits registrierten
+        # Legacy-Segmenten.
         if not _is_sqlite_memory_path(self._disk_path) and Path(_sqlite_filesystem_path(self._disk_path)).exists():
-            migrator = LegacyMigrator(store, _sqlite_filesystem_path(self._disk_path))
-            classification = migrator.classify()
-            if classification is not None:
-                await migrator.attach_readonly(classification)
+            legacy_fs_path = _sqlite_filesystem_path(self._disk_path)
+            resolved_legacy = str(Path(legacy_fs_path).resolve())
+            existing = {seg.filename for seg in await store.manifest.list_legacy_segments()}
+            if resolved_legacy not in existing:
+                migrator = LegacyMigrator(store, legacy_fs_path)
+                classification = migrator.classify()
+                if classification is not None:
+                    await migrator.attach_readonly(classification)
+
+        # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
+        # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
+        # zügig getrimmt (No-Zero-History-Guard beachtet, siehe Store).
+        await store.enforce_retention()
 
     def _segment_store_root(self) -> str:
         """Storage-Root des Segment-Stores neben der Legacy-DB (``<stem>_segments``)."""

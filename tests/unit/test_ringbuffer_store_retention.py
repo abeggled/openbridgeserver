@@ -457,6 +457,76 @@ async def test_storage_network_drive_detection_skips_malformed_mount_lines(tmp_p
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# (#919) Legacy-Segment: zählt gegen das Size-Budget, wird per Size-Retention
+# löschbar (sobald ≥1 v2-Datenquelle existiert), aber nie als einzige Quelle.
+# ---------------------------------------------------------------------------
+
+
+async def _attach_legacy(store: SqliteSegmentStore, size_bytes: int):
+    """Hängt ein synthetisches Legacy-Segment gegebener Größe ins Manifest ein."""
+    legacy_file = store._root / "legacy_source.db"
+    legacy_file.write_bytes(b"\x00" * size_bytes)
+    return await store.manifest.register_legacy_segment(source_path=str(legacy_file), size_bytes=size_bytes), legacy_file
+
+
+async def test_legacy_segment_size_counts_against_total_and_budget(tmp_path: Path):
+    store = await _make_store(tmp_path / "root")
+    try:
+        await store.append([_event(1, _iso(0))])
+        base_total = await store._total_size_bytes()
+        legacy_size = 5 * 1024 * 1024
+        await _attach_legacy(store, legacy_size)
+        # Der Legacy-Blob ist voll in der Gesamtgröße enthalten.
+        assert await store._total_size_bytes() == base_total + legacy_size
+    finally:
+        await store.close()
+
+
+async def test_legacy_deleted_by_size_budget_once_v2_segment_exists(tmp_path: Path):
+    store = await _make_store(tmp_path / "root")
+    try:
+        # Ein geschlossenes v2-Segment mit echten Daten sichern.
+        await store.append([_event(1, _iso(0))])
+        await store.rotate()
+        # Aktives v2-Segment mit Daten.
+        await store.append([_event(2, _iso(1))])
+
+        legacy_size = 8 * 1024 * 1024
+        _, legacy_file = await _attach_legacy(store, legacy_size)
+
+        # Budget klein → Retention muss auch den Legacy-Blob freigeben können,
+        # nachdem die geschlossenen v2-Segmente allein das Budget nicht drücken.
+        store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
+        removed = await store.enforce_retention()
+        assert removed >= 1
+        # Legacy ist aus dem Manifest verschwunden …
+        assert await store.manifest.list_legacy_segments() == []
+        # … aber die in-place Legacy-Datei bleibt physisch erhalten (Grundgebot #934).
+        assert legacy_file.exists()
+        # Aktives v2-Segment (frische Daten) bleibt erhalten.
+        assert await store.manifest.get_active_segment() is not None
+    finally:
+        await store.close()
+
+
+async def test_legacy_not_deleted_when_only_data_source(tmp_path: Path):
+    store = await _make_store(tmp_path / "root")
+    try:
+        # Kein v2-Datensegment: aktives Segment ist leer, nur Legacy trägt Historie.
+        legacy_size = 8 * 1024 * 1024
+        await _attach_legacy(store, legacy_size)
+        assert await store._has_nonlegacy_data_segment() is False
+
+        store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
+        removed = await store.enforce_retention()
+        # No-Zero-History-Guard: Legacy bleibt, solange es die einzige Quelle ist.
+        assert removed == 0
+        assert len(await store.manifest.list_legacy_segments()) == 1
+    finally:
+        await store.close()
+
+
 async def test_enforce_retention_with_only_size_budget_skips_age_and_rows(tmp_path: Path):
     store = await _make_store(tmp_path / "root")
     try:

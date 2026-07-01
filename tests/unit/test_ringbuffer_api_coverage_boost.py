@@ -460,6 +460,9 @@ async def test_configure_enable_initializes_ringbuffer_when_missing(tmp_path, mo
                 max_entries=12,
                 max_file_size_bytes=1024 * 1024,
                 max_age=3600,
+                # Default segment_max_age (6 h) would violate max_age >= 3*age; set
+                # an explicit compatible value for this default-flip world (#919).
+                segment_max_age=1200,
             ),
             _user="admin",
             db=db,

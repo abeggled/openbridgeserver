@@ -18,7 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from obs.ringbuffer.ringbuffer import RingBuffer
+from obs.ringbuffer.ringbuffer import RingBuffer, derive_segment_max_bytes
+from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO, SegmentConfig, StoreRetentionConfig, validate_store_config
 
 
 def _rb(tmp_path: Path, **kwargs) -> RingBuffer:
@@ -309,5 +310,147 @@ async def test_segmented_query_supports_core_filters(tmp_path: Path):
         # value_filter (Kernfeld) wird an den Store gepusht.
         entries = await rb.query_v2(value_filters=[{"operator": "gte", "value": 2}], limit=10)
         assert [e.new_value for e in entries] == [2]
+    finally:
+        await rb.stop()
+
+
+# ---------------------------------------------------------------------------
+# (f) segment_max_bytes-Ableitung aus max_file_size_bytes erfüllt 3-Segment-Regel
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "max_file_size_bytes",
+    [
+        None,  # unbegrenzt → fester Default
+        3,  # kleinste Größe, für die die 3-Segment-Regel überhaupt erfüllbar ist
+        1024,  # klein (< 3*4 MiB → Floor darf 3-Regel nicht brechen)
+        10 * 1024 * 1024,  # 10 MiB (der deployte Default)
+        100 * 1024 * 1024,  # 100 MiB
+        4 * 1024 * 1024 * 1024,  # 4 GiB (Ceil greift)
+    ],
+)
+def test_derive_segment_max_bytes_satisfies_three_segment_rule(max_file_size_bytes):
+    derived = derive_segment_max_bytes(max_file_size_bytes)
+    assert derived >= 1
+    if max_file_size_bytes is None:
+        # Kein Size-Budget → Size-Regel inaktiv; nur ein sinnvoller Default.
+        assert derived == 64 * 1024 * 1024
+        return
+    # Die 3-Segment-Regel muss automatisch halten — kein 422 im Auto-Startpfad.
+    assert max_file_size_bytes >= RETENTION_SEGMENT_RATIO * derived
+    validate_store_config(
+        SegmentConfig(segment_max_bytes=derived),
+        StoreRetentionConfig(max_file_size_bytes=max_file_size_bytes),
+    )
+
+
+def test_derive_segment_max_bytes_ceiling_for_large_budget():
+    # 4 GiB // 8 = 512 MiB → auf 256 MiB gedeckelt, und 4 GiB >= 3*256 MiB.
+    derived = derive_segment_max_bytes(4 * 1024 * 1024 * 1024)
+    assert derived == 256 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_segmented_start_derives_segment_max_bytes_from_file_size(tmp_path: Path):
+    # 2 GiB Size-Budget → derived = clamp(2GiB//8=256MiB, 4MiB, 256MiB) = 256 MiB.
+    rb = _rb(tmp_path, segmented=True, max_file_size_bytes=2 * 1024 * 1024 * 1024)
+    await rb.start()
+    try:
+        assert rb._segment_max_bytes == 256 * 1024 * 1024
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_segmented_start_respects_explicit_segment_max_bytes(tmp_path: Path):
+    rb = _rb(tmp_path, segmented=True, max_file_size_bytes=None, segment_max_bytes=1234567)
+    await rb.start()
+    try:
+        assert rb._segment_max_bytes == 1234567
+    finally:
+        await rb.stop()
+
+
+# ---------------------------------------------------------------------------
+# (a)/(b) Legacy auto-attach beim Start + Idempotenz bei Neustart
+# ---------------------------------------------------------------------------
+
+
+async def _seed_legacy(disk_path: Path, count: int = 3) -> None:
+    legacy = RingBuffer(storage="file", disk_path=str(disk_path))
+    await legacy.start()
+    for value in range(count):
+        await legacy.record(
+            ts=f"2025-01-01T00:00:0{value}.000Z",
+            datapoint_id="dp-seg",
+            topic="dp/dp-seg/value",
+            old_value=None,
+            new_value=100 + value,
+            source_adapter="api",
+            quality="good",
+        )
+    await legacy.stop()
+
+
+@pytest.mark.asyncio
+async def test_segmented_start_auto_attaches_legacy_readonly(tmp_path: Path):
+    disk_path = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(disk_path)
+
+    rb = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True)
+    await rb.start()
+    try:
+        legacy_segments = await rb.store.manifest.list_legacy_segments()
+        assert len(legacy_segments) == 1
+        # Read-only in place: filename ist der absolute Legacy-Pfad, nicht unter segments/.
+        assert legacy_segments[0].filename == str(disk_path.resolve())
+        # Legacy-Daten sind lesbar.
+        entries = await rb.query_v2(limit=10)
+        assert {e.new_value for e in entries} == {100, 101, 102}
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_segmented_start_legacy_attach_is_idempotent_across_restarts(tmp_path: Path):
+    disk_path = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(disk_path)
+
+    rb1 = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True)
+    await rb1.start()
+    assert len(await rb1.store.manifest.list_legacy_segments()) == 1
+    await rb1.stop()
+
+    # Neustart auf derselben Root: darf NICHT ein zweites Legacy-Segment einhängen.
+    rb2 = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True)
+    await rb2.start()
+    try:
+        assert len(await rb2.store.manifest.list_legacy_segments()) == 1
+    finally:
+        await rb2.stop()
+
+
+# ---------------------------------------------------------------------------
+# Zeitgetriebene Rotation als PRIMÄRER Trigger — 6-h-Default (#919)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_segmented_rotation_after_default_six_hour_age(tmp_path: Path):
+    from obs.ringbuffer.persisted_config import DEFAULT_SEGMENT_MAX_AGE_SECONDS
+
+    # Zeitgetrieben: Segment altert über 6 h → nächster Write rotiert, unabhängig
+    # von der Größe (segment_max_bytes bleibt groß, wird nie erreicht).
+    rb = _rb(tmp_path, segmented=True, segment_max_age=DEFAULT_SEGMENT_MAX_AGE_SECONDS)
+    await rb.start()
+    try:
+        await _record(rb, 1, "2026-01-01T00:00:00.000Z")
+        segments_before = (await rb.store.stats()).as_dict()["common"]["segment_count"]
+        # Aktives Segment künstlich > 6 h altern lassen.
+        rb._segment_created_at = "2000-01-01T00:00:00.000Z"
+        await _record(rb, 2, "2026-01-01T00:00:01.000Z")
+        segments_after = (await rb.store.stats()).as_dict()["common"]["segment_count"]
+        assert segments_after > segments_before
     finally:
         await rb.stop()

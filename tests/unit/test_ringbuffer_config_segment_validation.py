@@ -79,12 +79,32 @@ async def test_config_segmented_opt_in_persists_and_exposes_store_stats(db, monk
 
 
 @pytest.mark.asyncio
-async def test_config_default_is_not_segmented_and_store_stats_absent(db, monkeypatch, tmp_path):
-    """Ohne ``segmented`` bleibt der Legacy-Pfad aktiv und ``store`` ist None."""
+async def test_config_default_is_segmented_and_store_stats_present(db, monkeypatch, tmp_path):
+    """Deployter Default (#919): ohne ``segmented`` läuft der Store segmentiert,
+    ``store`` ist in den Stats sichtbar und der Default wird persistiert."""
     rb_path = tmp_path / "obs_ringbuffer.db"
     monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
     try:
         stats = await rb_api.configure_ringbuffer(_cfg(), _user="admin", db=db)
+        assert stats.enabled is True
+        assert stats.store is not None
+        cfg = await rb_api.load_persisted_ringbuffer_config(db)
+        assert cfg["segmented"] is True
+    finally:
+        active_rb = rb_api.get_optional_ringbuffer()
+        if active_rb is not None:
+            await active_rb.stop()
+        reset_ringbuffer()
+
+
+@pytest.mark.asyncio
+async def test_config_explicit_opt_out_keeps_legacy_path(db, monkeypatch, tmp_path):
+    """Der Legacy-Single-File-Pfad bleibt über explizites ``segmented=False``
+    erreichbar (interner Test-/Legacy-Weg); ``store`` ist dann None."""
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    try:
+        stats = await rb_api.configure_ringbuffer(_cfg(segmented=False), _user="admin", db=db)
         assert stats.enabled is True
         assert stats.store is None
         cfg = await rb_api.load_persisted_ringbuffer_config(db)

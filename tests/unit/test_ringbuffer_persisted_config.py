@@ -23,6 +23,7 @@ import pytest
 from obs.db.database import Database
 from obs.ringbuffer.persisted_config import (
     DEFAULT_MAX_FILE_SIZE_BYTES,
+    DEFAULT_SEGMENT_MAX_AGE_SECONDS,
     PERSISTED_CONFIG_KEY,
     load_persisted_ringbuffer_config,
     persist_ringbuffer_config,
@@ -31,6 +32,10 @@ from obs.ringbuffer.persisted_config import (
 
 def test_default_max_file_size_is_ten_mebibytes():
     assert DEFAULT_MAX_FILE_SIZE_BYTES == 10 * 1024 * 1024
+
+
+def test_default_segment_max_age_is_six_hours():
+    assert DEFAULT_SEGMENT_MAX_AGE_SECONDS == 6 * 60 * 60
 
 
 @pytest.mark.asyncio
@@ -44,10 +49,11 @@ async def test_load_returns_defaults_when_nothing_persisted():
             "max_entries": None,
             "max_file_size_bytes": DEFAULT_MAX_FILE_SIZE_BYTES,
             "max_age": None,
-            "segmented": False,
+            # Deployter Default (#919): segmentiert + 6-h-Zeitrotation.
+            "segmented": True,
             "segment_max_bytes": None,
             "segment_max_rows": None,
-            "segment_max_age": None,
+            "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
         }
     finally:
         await db.disconnect()
@@ -147,10 +153,10 @@ async def test_load_handles_corrupt_json_by_returning_defaults():
             "max_entries": None,
             "max_file_size_bytes": DEFAULT_MAX_FILE_SIZE_BYTES,
             "max_age": None,
-            "segmented": False,
+            "segmented": True,
             "segment_max_bytes": None,
             "segment_max_rows": None,
-            "segment_max_age": None,
+            "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
         }
     finally:
         await db.disconnect()
@@ -172,10 +178,10 @@ async def test_load_fills_missing_keys_with_defaults():
             "max_entries": 1234,
             "max_file_size_bytes": DEFAULT_MAX_FILE_SIZE_BYTES,
             "max_age": None,
-            "segmented": False,
+            "segmented": True,
             "segment_max_bytes": None,
             "segment_max_rows": None,
-            "segment_max_age": None,
+            "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
         }
     finally:
         await db.disconnect()
