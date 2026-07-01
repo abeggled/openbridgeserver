@@ -73,15 +73,15 @@ git push origin 2026.7.1
 1. Entscheiden: Muss der Fix ins aktuelle Release? Bugfix-Branch vorhanden?
 2. Falls kein Bugfix-Branch vorhanden: erst Abschnitt B ausführen.
 3. Label `backport-2026.7` setzen und Maintainer-Freigabe einholen.
-4. Cherry-pick auf `2026.7`:
+4. Separaten Backport-Branch anlegen und Cherry-pick durchführen:
    ```bash
-   git checkout 2026.7
-   git pull
+   git fetch origin 2026.7
+   git checkout -b backport/2026.7/<fix-name> origin/2026.7
    git cherry-pick <commit-sha>
-   git push
+   git push -u origin backport/2026.7/<fix-name>
    ```
-5. PR auf `2026.7` öffnen (auch für Cherry-picks — kein Direkt-Push).
-6. Required Checks auf `2026.7` abwarten, dann mergen.
+5. PR auf `2026.7` öffnen (Ziel-Branch: `2026.7`, kein Direkt-Push auf den Release-Branch).
+6. Required Checks auf dem PR abwarten, dann mergen.
 7. Release Notes aktualisieren.
 
 ---

@@ -335,8 +335,14 @@ jobs:
           TAG="${{ github.ref_name }}"
           YEAR=$(echo "$TAG" | cut -d. -f1)
           MINOR=$(echo "$TAG" | cut -d. -f2)
-          NEXT_MINOR=$((MINOR + 1))
-          NEXT_VERSION="${YEAR}.${NEXT_MINOR}.0"
+          if [[ "$MINOR" -eq 12 ]]; then
+            NEXT_YEAR=$((YEAR + 1))
+            NEXT_MINOR=1
+          else
+            NEXT_YEAR=$YEAR
+            NEXT_MINOR=$((MINOR + 1))
+          fi
+          NEXT_VERSION="${NEXT_YEAR}.${NEXT_MINOR}.0"
           BRANCH="release-prep/${NEXT_VERSION}"
 
           echo "Preparing next release: $NEXT_VERSION on branch $BRANCH"
