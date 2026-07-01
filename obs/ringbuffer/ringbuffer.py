@@ -80,6 +80,10 @@ _SQLITE_CORRUPTION_MARKERS = (
 )
 _MAX_QUARANTINE_FILES_PER_STORAGE_FILE = 3
 _DELETE_OLDEST_BATCH_SIZE = 500
+# Bounded-Kandidaten-Cap für den segmentierten Read-Pfad (#919): begrenzt den
+# Legacy-Python-Fallback (Value-/Metadaten-Filter ohne typisierte Spalten) und
+# entsperrt guarded contains/regex ohne Zeitfenster — ohne unbounded Full-Scan.
+_SEGMENTED_CANDIDATE_CAP = 10_000
 _enabled = True
 
 
@@ -813,6 +817,7 @@ class RingBuffer:
                 adapter_any_of=adapter_any_of,
                 datapoint_ids=datapoint_ids,
                 value_filters=value_filters,
+                datapoint_types=datapoint_types,
                 metadata_tags_any_of=metadata_tags_any_of,
                 metadata_adapter_types_any_of=metadata_adapter_types_any_of,
                 metadata_adapter_instance_ids_any_of=metadata_adapter_instance_ids_any_of,
@@ -976,6 +981,7 @@ class RingBuffer:
         adapter_any_of: list[str] | None,
         datapoint_ids: list[str] | None,
         value_filters: list[dict[str, Any]] | None,
+        datapoint_types: dict[str, str] | None,
         metadata_tags_any_of: list[str] | None,
         metadata_adapter_types_any_of: list[str] | None,
         metadata_adapter_instance_ids_any_of: list[str] | None,
@@ -1001,35 +1007,22 @@ class RingBuffer:
         ``store.query(StoreQuery(...))`` und mappt das Ergebnis auf die
         bestehende ``query_v2``-Response-Form.
 
-        Nicht-triviale query_v2-Features sind im segmentierten Modus **noch nicht
-        unterstützt** und werden als ``ValueError`` (422-tauglich) abgewiesen,
-        statt still falsche/teilweise Ergebnisse zu liefern (capability-Lücke,
-        dokumentiert). Betroffen: freier ``q``/``dp_ids_by_name``-Namensfilter,
-        Multi-Filterset (mehr als ein datapoint_id bzw. adapter), sämtliche
-        Metadaten-Tag/Binding-Filter jenseits der Kernfelder sowie eine von der
-        stabilen newest-first-Ordnung (``id``/``desc``) abweichende Sortierung.
+        Feature-Parität mit dem Legacy-``query_v2`` (#919): Freitext-``q``,
+        namensaufgelöste ``dp_ids_by_name``, mehrere ``datapoint_ids``/Adapter
+        (``any_of``), Metadaten-Tag/Binding-Filter sowie Sortierung nach
+        ``id``/``ts`` × ``asc``/``desc`` werden echt und **gebunden** über die
+        Store-Grenze bedient (kein unbegrenzter Scan). Die Bounded-Garantie bleibt
+        erhalten: der Store liest je Segment höchstens ``offset+limit`` (bzw. für
+        Value-/contains/regex-/Metadaten-Fälle einen expliziten Kandidaten-Cap)
+        und sortiert/paginiert erst auf dieser gebundenen Kandidatenmenge.
         """
         if self._store is None:
             return []
 
-        _reject_unsupported_segmented(
-            q=q,
-            dp_ids_by_name=dp_ids_by_name,
-            adapter_any_of=adapter_any_of,
-            datapoint_ids=datapoint_ids,
-            metadata_filters=(
-                metadata_tags_any_of,
-                metadata_adapter_types_any_of,
-                metadata_adapter_instance_ids_any_of,
-                metadata_group_addresses_any_of,
-                metadata_topics_any_of,
-                metadata_entity_ids_any_of,
-                metadata_register_types_any_of,
-                metadata_register_addresses_any_of,
-            ),
-            sort_field=sort_field,
-            sort_order=sort_order,
-        )
+        if sort_field not in {"id", "ts"}:
+            raise ValueError("invalid sort field: expected 'id' or 'ts'")
+        if sort_order not in {"asc", "desc"}:
+            raise ValueError("invalid sort order: expected 'asc' or 'desc'")
         if limit < 1:
             raise ValueError("invalid pagination: limit must be >= 1")
         if offset < 0:
@@ -1040,19 +1033,58 @@ class RingBuffer:
         if effective_from and effective_to and effective_from >= effective_to:
             raise ValueError("invalid time filter: effective 'from' must be earlier than effective 'to'")
 
-        single_dp = datapoint_ids[0].strip() if datapoint_ids else None
-        single_adapter = adapter_any_of[0].strip() if adapter_any_of else None
+        normalized_dps = [dp_id.strip() for dp_id in (datapoint_ids or []) if dp_id.strip()]
+        normalized_adapters = [adapter.strip() for adapter in (adapter_any_of or []) if adapter.strip()]
+        normalized_names = [dp_id.strip() for dp_id in (dp_ids_by_name or []) if dp_id.strip()]
+
+        metadata_binding_filters = {
+            column: values
+            for column, values in {
+                "adapter_type": _normalize_string_filters(metadata_adapter_types_any_of),
+                "adapter_instance_id": _normalize_string_filters(metadata_adapter_instance_ids_any_of),
+                "group_address": _normalize_string_filters(metadata_group_addresses_any_of),
+                "topic": _normalize_string_filters(metadata_topics_any_of),
+                "entity_id": _normalize_string_filters(metadata_entity_ids_any_of),
+                "register_type": _normalize_string_filters(metadata_register_types_any_of),
+                "register_address": _normalize_string_filters(metadata_register_addresses_any_of),
+            }.items()
+            if values
+        }
+
+        # Typkonflikt-Validierung wie Legacy ``query_v2`` (z. B. numerischer
+        # Operator auf BOOLEAN-Datenpunkt → 422). Ist ein datapoint_id-Filter
+        # gesetzt, prüfen wir die Value-Filter gegen dessen data_type, bevor sie
+        # in den Store gepusht werden — sonst liefe ein Typkonflikt still leer.
+        if value_filters:
+            _validate_segmented_value_filter_types(
+                value_filters=value_filters,
+                datapoint_ids=normalized_dps,
+                datapoint_types=datapoint_types or {},
+            )
 
         from obs.ringbuffer.store.interface import StoreQuery
 
         store_query = StoreQuery(
             from_ts=effective_from,
             to_ts=effective_to,
-            datapoint_id=single_dp or None,
-            source_adapter=single_adapter or None,
+            # Legacy-``query_v2`` behandelt beide Zeitgrenzen exklusiv.
+            from_exclusive=True,
+            to_exclusive=True,
+            datapoint_ids=normalized_dps,
+            source_adapters=normalized_adapters,
+            q=q or None,
+            dp_ids_by_name=normalized_names,
+            metadata_tags_any_of=_normalize_string_filters(metadata_tags_any_of),
+            metadata_binding_filters=metadata_binding_filters,
             limit=limit,
             offset=offset,
+            sort_field=sort_field,
+            sort_order=sort_order,
             value_filters=list(value_filters or []),
+            # Bounded-Garantie für guarded contains/regex ohne Zeitfenster und für
+            # den Legacy-Python-Fallback: ohne engen Zeitrahmen wird höchstens diese
+            # Kandidatenzahl je Segment gelesen, statt unbounded zu scannen.
+            candidate_cap=_SEGMENTED_CANDIDATE_CAP,
         )
         rows = await self._store.query(store_query)
         return [
@@ -1536,38 +1568,6 @@ def _resolve_time_bound(
     return None
 
 
-def _reject_unsupported_segmented(
-    *,
-    q: str,
-    dp_ids_by_name: list[str] | None,
-    adapter_any_of: list[str] | None,
-    datapoint_ids: list[str] | None,
-    metadata_filters: tuple[list[str] | None, ...],
-    sort_field: str,
-    sort_order: str,
-) -> None:
-    """Wirft ``ValueError`` für query_v2-Features, die segmented (noch) nicht kann.
-
-    Bewusste, dokumentierte Capability-Lücke: der segmentierte Store deckt nur die
-    Kern-Query ab. Alles darüber hinaus wird abgewiesen, statt still falsche oder
-    teilweise Ergebnisse zu liefern. Der API-Layer übersetzt die Meldung in 422.
-    """
-    if q and q.strip():
-        raise ValueError("free-text 'q' filter is not supported in segmented mode")
-    if dp_ids_by_name:
-        raise ValueError("name-based datapoint filter is not supported in segmented mode")
-    normalized_adapters = [a.strip() for a in (adapter_any_of or []) if a.strip()]
-    if len(normalized_adapters) > 1:
-        raise ValueError("multiple adapters (any_of) are not supported in segmented mode")
-    normalized_dps = [d.strip() for d in (datapoint_ids or []) if d.strip()]
-    if len(normalized_dps) > 1:
-        raise ValueError("multiple datapoint ids are not supported in segmented mode")
-    if any(values for values in metadata_filters):
-        raise ValueError("metadata tag/binding filters are not supported in segmented mode")
-    if sort_field != "id" or sort_order != "desc":
-        raise ValueError("only newest-first ordering (sort id/desc) is supported in segmented mode")
-
-
 # ---------------------------------------------------------------------------
 # Application singleton
 # ---------------------------------------------------------------------------
@@ -1649,6 +1649,36 @@ async def _apply_value_filters(
         if match:
             result.append(entry)
     return result
+
+
+def _validate_segmented_value_filter_types(
+    *,
+    value_filters: list[dict[str, Any]],
+    datapoint_ids: list[str],
+    datapoint_types: dict[str, str],
+) -> None:
+    """Prüft Value-Filter-Operatoren gegen die data_types der gefilterten Datenpunkte.
+
+    Spiegelt die Legacy-``query_v2``-Semantik: ein numerischer Operator auf einem
+    BOOLEAN-Datenpunkt (oder ein sonst inkompatibler Operator/Typ) ergibt einen
+    ``ValueError`` (422-tauglich), statt im segmentierten SQL-Pushdown still leer
+    zu laufen. Ohne expliziten datapoint_id-Filter (Typ nicht eindeutig bestimmbar)
+    wird — wie Legacy row-lazy — nicht vorab abgewiesen.
+    """
+    if not datapoint_ids:
+        return
+    data_types = {(datapoint_types.get(dp_id) or "").strip().upper() for dp_id in datapoint_ids}
+    for spec in value_filters:
+        operator = str(spec.get("operator", "")).strip().lower()
+        if operator in {"eq", "ne"}:
+            continue
+        for data_type in data_types:
+            if data_type in _BOOLEAN_TYPES:
+                raise ValueError(f"operator '{operator}' is not supported for data_type 'BOOLEAN'")
+            if data_type in _NUMERIC_TYPES and operator not in {"gt", "gte", "lt", "lte", "between"}:
+                raise ValueError(f"operator '{operator}' is not supported for data_type '{data_type}'")
+            if data_type in _STRING_TYPES and operator not in {"contains", "regex"}:
+                raise ValueError(f"operator '{operator}' is not supported for data_type 'STRING'")
 
 
 def _normalize_value_filter(spec: dict[str, Any]) -> dict[str, Any]:

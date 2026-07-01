@@ -89,6 +89,12 @@ class StoreQuery:
 
     from_ts: str | None = None
     to_ts: str | None = None
+    # Legacy-``query_v2`` behandelt die Zeitgrenzen **exklusiv** (``ts > from``,
+    # ``ts < to``). Der Store ist per Default **inklusiv** (``>=``/``<=``); der
+    # segmentierte Read-Pfad setzt diese Flags, um die Legacy-Semantik zu treffen,
+    # ohne den inklusiven Store-Default für andere Aufrufer zu ändern.
+    from_exclusive: bool = False
+    to_exclusive: bool = False
     datapoint_id: str | None = None
     source_adapter: str | None = None
     quality: str | None = None
@@ -98,6 +104,25 @@ class StoreQuery:
     # Obergrenze für Kandidatenzeilen bei unbounded contains/regex ohne
     # Zeitfenster. ``None`` = kein Cap → contains/regex erfordern ein Zeitfenster.
     candidate_cap: int | None = None
+    # Additive Mehrfach-Filter (#919). ``datapoint_id``/``source_adapter`` oben
+    # bleiben für den Ein-Wert-Fall bestehen; die Listen decken den any_of-Fall ab
+    # und werden als ``IN (...)`` gepusht.
+    datapoint_ids: list[str] = field(default_factory=list)
+    source_adapters: list[str] = field(default_factory=list)
+    # Freitext-Namensfilter (#919): ``q`` matcht ``datapoint_id``/``source_adapter``
+    # per LIKE, ``dp_ids_by_name`` matcht bereits nach Namen aufgelöste IDs per
+    # ``IN (...)`` — beide werden OR-kombiniert (Legacy-Semantik).
+    q: str | None = None
+    dp_ids_by_name: list[str] = field(default_factory=list)
+    # Metadaten-Tag/Binding-Filter (#919): als ``EXISTS``-Subquery pro Segment
+    # gepusht (Semantik wie Legacy ``query_v2``). Tags = OR; Binding-Spalten je
+    # als OR innerhalb der Spalte, verschiedene Spalten AND-verknüpft.
+    metadata_tags_any_of: list[str] = field(default_factory=list)
+    metadata_binding_filters: dict[str, list[str]] = field(default_factory=dict)
+    # Sortierung (#919): ``id`` = ``global_event_id``, ``ts`` = Timestamp
+    # (Tiebreak ``global_event_id``). Ordnung ∈ {asc, desc}.
+    sort_field: str = "id"
+    sort_order: str = "desc"
 
 
 @dataclass

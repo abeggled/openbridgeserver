@@ -168,6 +168,18 @@ _GUARDED_OPERATORS = frozenset({"contains", "regex"})
 _VALID_OPERATORS = _PUSHDOWN_OPERATORS | _GUARDED_OPERATORS
 # Erlaubte Zielspalten eines Wertfilters (engine-neutrale field-Namen).
 _FILTER_FIELDS = frozenset({"new_value", "old_value"})
+# Reihenfolge der Binding-Index-Spalten — identisch zu
+# ``_extract_metadata_binding_index_rows`` (positionell), für den Legacy-
+# Python-Fallback der Metadaten-Binding-Filter.
+_BINDING_INDEX_COLUMNS = (
+    "adapter_type",
+    "adapter_instance_id",
+    "group_address",
+    "topic",
+    "entity_id",
+    "register_type",
+    "register_address",
+)
 # Regex-Härtung (Referenz: Legacy _match_regex in ringbuffer.py).
 _REGEX_MAX_PATTERN_LEN = 256
 _RE_UNSAFE_NESTED_QUANTIFIERS = re.compile(r"\((?:[^()\\]|\\.)*[+*][^()]*\)[+*]")
@@ -484,16 +496,23 @@ class SqliteSegmentStore(RingBufferStore):
         ``capabilities().supports_streaming_export``), NICHT dieser Merge.
         """
         rows = await self._collect_rows_across_segments(query)
-        # Defensiver finaler Sort auf der bereits gebundenen Kandidatenmenge:
-        # Die Segment-Iteration liefert v2-Segmente neueste-zuerst und Legacy
-        # zuletzt, ist also i. d. R. schon global absteigend. Der Sort ist billig
-        # (nur offset+limit-nahe Zeilen) und macht die Ordnung robust gegen
-        # Sonderfälle wie mehrere Legacy-Segmente oder künftige Backfill-Importe,
-        # statt sie implizit an die Manifest-Reihenfolge zu koppeln.
-        rows.sort(key=lambda r: r["global_event_id"], reverse=True)
+        # Finaler Sort auf der bereits gebundenen Kandidatenmenge in der
+        # gewünschten Ordnung. Für ``id`` sortiert ``global_event_id`` global
+        # stabil (v2 positiv, Legacy synthetisch negativ). Für ``ts`` bricht
+        # ``global_event_id`` Gleichstände deterministisch. Der Sort ist billig
+        # (nur offset+limit-nahe Kandidaten je Segment).
+        self._sort_rows_in_place(rows, query)
         start = max(query.offset, 0)
         end = start + max(query.limit, 0)
         return rows[start:end]
+
+    @staticmethod
+    def _sort_rows_in_place(rows: list[dict[str, Any]], query: StoreQuery) -> None:
+        reverse = query.sort_order != "asc"
+        if query.sort_field == "ts":
+            rows.sort(key=lambda r: (r["ts"], r["global_event_id"]), reverse=reverse)
+        else:
+            rows.sort(key=lambda r: r["global_event_id"], reverse=reverse)
 
     async def _collect_rows_across_segments(self, query: StoreQuery) -> list[dict[str, Any]]:
         """Merged Segmente **neueste zuerst** und terminiert früh (bounded).
@@ -511,8 +530,16 @@ class SqliteSegmentStore(RingBufferStore):
         needed = max(query.offset, 0) + max(query.limit, 0)
         collected: list[dict[str, Any]] = []
         segments = await self.manifest.list_segments_for_query(query.from_ts, query.to_ts)
+        # Early-Termination über Segmentgrenzen ist nur für die Default-Ordnung
+        # (``id``/``desc``) korrekt: dort entspricht die Manifest-Reihenfolge
+        # (neueste zuerst, Legacy zuletzt) exakt der ``global_event_id``-DESC-
+        # Ordnung. Bei abweichender Sortierung (``ts`` oder ``asc``) kann ein
+        # älteres Segment noch in das Ausgabefenster fallen; dann werden ALLE
+        # passenden Segmente je ``offset+limit``-bounded gelesen (kein Voll-Scan)
+        # und der finale Sort in ``query()` begrenzt die Ausgabe.
+        allow_early_termination = query.sort_field == "id" and query.sort_order == "desc"
         for segment in segments:
-            if needed and len(collected) >= needed:
+            if allow_early_termination and needed and len(collected) >= needed:
                 break  # bounded: ältere Segmente können das Fenster nicht mehr treffen.
             conn = await self._connection_for_read(segment)
             close_after = conn is not self._active_conn
@@ -576,30 +603,36 @@ class SqliteSegmentStore(RingBufferStore):
           Cap begrenzt, damit ein Value-Filter über Legacy nicht in einen unbounded
           Full-Scan über 20–30 GB kippt.
         """
-        clauses: list[str] = []
-        params: list[Any] = []
-        if query.from_ts is not None:
-            clauses.append("ts >= ?")
-            params.append(query.from_ts)
-        if query.to_ts is not None:
-            clauses.append("ts <= ?")
-            params.append(query.to_ts)
+        clauses, params = self._time_where(query)
         if query.datapoint_id is not None:
             clauses.append("datapoint_id = ?")
             params.append(query.datapoint_id)
+        if query.datapoint_ids:
+            placeholders = ",".join("?" * len(query.datapoint_ids))
+            clauses.append(f"datapoint_id IN ({placeholders})")
+            params.extend(query.datapoint_ids)
         if query.source_adapter is not None:
             clauses.append("source_adapter = ?")
             params.append(query.source_adapter)
+        if query.source_adapters:
+            placeholders = ",".join("?" * len(query.source_adapters))
+            clauses.append(f"source_adapter IN ({placeholders})")
+            params.extend(query.source_adapters)
         if query.quality is not None:
             clauses.append("quality = ?")
             params.append(query.quality)
+        q_clause, q_params = self._free_text_clause(query)
+        if q_clause:
+            clauses.append(q_clause)
+            params.extend(q_params)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
 
-        has_value_filters = bool(query.value_filters)
-        # Ohne Value-Filter reicht das strukturelle LIMIT (offset+limit). Mit
-        # Value-Filter muss ein größerer, aber gebundener Kandidatensatz gelesen
-        # und in Python nachgefiltert werden.
-        if has_value_filters:
+        # Metadaten-Tag/Binding-Filter kann eine v1/Legacy-DB nicht per Index-
+        # Subquery bedienen (die Index-Tabellen fehlen dort). Sie werden bounded
+        # in Python auf den dekodierten metadata-JSON ausgewertet — wie die
+        # Value-Filter. Beides zusammen erzwingt den Kandidaten-Cap.
+        has_python_post_filter = bool(query.value_filters) or self._has_metadata_filter(query)
+        if has_python_post_filter:
             fetch_limit = self._legacy_candidate_cap(query)
         else:
             fetch_limit = max(query.offset, 0) + max(query.limit, 0)
@@ -615,10 +648,41 @@ class SqliteSegmentStore(RingBufferStore):
         results: list[dict[str, Any]] = []
         for order, row in enumerate(raw_rows):
             record = self._legacy_row_to_dict(row, segment.segment_id, order)
-            if has_value_filters and not _legacy_row_matches_filters(record, query.value_filters):
+            if query.value_filters and not _legacy_row_matches_filters(record, query.value_filters):
+                continue
+            if not self._legacy_metadata_matches(record, query):
                 continue
             results.append(record)
         return results
+
+    @staticmethod
+    def _has_metadata_filter(query: StoreQuery) -> bool:
+        return bool(query.metadata_tags_any_of) or any(query.metadata_binding_filters.values())
+
+    def _legacy_metadata_matches(self, record: dict[str, Any], query: StoreQuery) -> bool:
+        """Python-Auswertung der Metadaten-Tag/Binding-Filter für Legacy-Zeilen.
+
+        Semantik wie die v2-EXISTS-Subquery: Tags OR-verknüpft, Binding-Spalten je
+        als OR innerhalb der Spalte und verschiedene Spalten AND-verknüpft. Alle
+        Vergleiche laufen normalisiert (getrimmt, lowercase) — identisch zu den
+        beim Append befüllten Index-Zeilen.
+        """
+        metadata = record.get("metadata") or {}
+        if query.metadata_tags_any_of:
+            row_tags = set(_extract_metadata_tags(metadata))
+            if not row_tags.intersection(query.metadata_tags_any_of):
+                return False
+        active_columns = {col: vals for col, vals in query.metadata_binding_filters.items() if vals}
+        if active_columns:
+            index = {col: idx for idx, col in enumerate(_BINDING_INDEX_COLUMNS)}
+            binding_rows = _extract_metadata_binding_index_rows(metadata)
+            for column, wanted in active_columns.items():
+                position = index.get(column)
+                if position is None:
+                    return False
+                if not any(binding[position] in wanted for binding in binding_rows):
+                    return False
+        return True
 
     @staticmethod
     def _legacy_candidate_cap(query: StoreQuery) -> int:
@@ -656,35 +720,132 @@ class SqliteSegmentStore(RingBufferStore):
         ``REGEXP``-taugliches Prädikat nur zugelassen, wenn der Query gebunden ist
         (Zeitfenster oder ``candidate_cap``); sonst ``ValueError`` (422-tauglich).
         """
-        clauses: list[str] = []
-        params: list[Any] = []
-        if query.from_ts is not None:
-            clauses.append("ts >= ?")
-            params.append(query.from_ts)
-        if query.to_ts is not None:
-            clauses.append("ts <= ?")
-            params.append(query.to_ts)
-        if query.datapoint_id is not None:
-            clauses.append("datapoint_id = ?")
-            params.append(query.datapoint_id)
-        if query.source_adapter is not None:
-            clauses.append("source_adapter = ?")
-            params.append(query.source_adapter)
-        if query.quality is not None:
-            clauses.append("quality = ?")
-            params.append(query.quality)
+        clauses, params = self._common_where(query)
         for spec in query.value_filters:
             clause, filter_params = self._value_filter_clause(spec, query)
             clauses.append(clause)
             params.extend(filter_params)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        order_by = self._segment_order_by(query)
         sql = (
             "SELECT global_event_id, ts, datapoint_id, topic, old_value, new_value, "
             "source_adapter, quality, metadata_version, metadata "
-            f"FROM ringbuffer{where} ORDER BY global_event_id DESC LIMIT ?"
+            f"FROM ringbuffer{where} ORDER BY {order_by} LIMIT ?"
         )
         params.append(max(query.offset, 0) + max(query.limit, 0))
         return sql, params
+
+    @staticmethod
+    def _time_where(query: StoreQuery) -> tuple[list[str], list[Any]]:
+        """Zeitfenster-Prädikate, inklusiv per Default, exklusiv wenn gefordert.
+
+        Der Store ist per Default inklusiv (``>=``/``<=``). Der segmentierte Read-
+        Pfad setzt ``from_exclusive``/``to_exclusive`` für die Legacy-``query_v2``-
+        Semantik (``ts > from``, ``ts < to``).
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if query.from_ts is not None:
+            clauses.append("ts > ?" if query.from_exclusive else "ts >= ?")
+            params.append(query.from_ts)
+        if query.to_ts is not None:
+            clauses.append("ts < ?" if query.to_exclusive else "ts <= ?")
+            params.append(query.to_ts)
+        return clauses, params
+
+    def _common_where(self, query: StoreQuery) -> tuple[list[str], list[Any]]:
+        """Baut die von v2- und (soweit anwendbar) Legacy-Segment geteilten WHERE-Prädikate.
+
+        Deckt Zeitfenster, Ein-Wert-Kern (datapoint_id/source_adapter/quality),
+        additive ``IN (...)``-Listen (mehrere datapoint_ids/adapter), den
+        Freitext-``q``/``dp_ids_by_name``-OR-Block sowie Metadaten-Tag/Binding-
+        Filter als ``EXISTS``-Subquery ab (Semantik wie Legacy ``query_v2``).
+        """
+        clauses, params = self._time_where(query)
+        if query.datapoint_id is not None:
+            clauses.append("datapoint_id = ?")
+            params.append(query.datapoint_id)
+        if query.datapoint_ids:
+            placeholders = ",".join("?" * len(query.datapoint_ids))
+            clauses.append(f"datapoint_id IN ({placeholders})")
+            params.extend(query.datapoint_ids)
+        if query.source_adapter is not None:
+            clauses.append("source_adapter = ?")
+            params.append(query.source_adapter)
+        if query.source_adapters:
+            placeholders = ",".join("?" * len(query.source_adapters))
+            clauses.append(f"source_adapter IN ({placeholders})")
+            params.extend(query.source_adapters)
+        if query.quality is not None:
+            clauses.append("quality = ?")
+            params.append(query.quality)
+        q_clause, q_params = self._free_text_clause(query)
+        if q_clause:
+            clauses.append(q_clause)
+            params.extend(q_params)
+        meta_clause, meta_params = self._metadata_clause(query)
+        if meta_clause:
+            clauses.append(meta_clause)
+            params.extend(meta_params)
+        return clauses, params
+
+    @staticmethod
+    def _free_text_clause(query: StoreQuery) -> tuple[str | None, list[Any]]:
+        """OR-Block für Freitext-``q`` (LIKE) + ``dp_ids_by_name`` (IN) — Legacy-Semantik."""
+        parts: list[str] = []
+        params: list[Any] = []
+        q = (query.q or "").strip()
+        if q:
+            parts.append("datapoint_id LIKE ?")
+            params.append(f"%{q}%")
+            parts.append("source_adapter LIKE ?")
+            params.append(f"%{q}%")
+        if query.dp_ids_by_name:
+            placeholders = ",".join("?" * len(query.dp_ids_by_name))
+            parts.append(f"datapoint_id IN ({placeholders})")
+            params.extend(query.dp_ids_by_name)
+        if not parts:
+            return None, []
+        return f"({' OR '.join(parts)})", params
+
+    @staticmethod
+    def _metadata_clause(query: StoreQuery) -> tuple[str | None, list[Any]]:
+        """EXISTS-Subqueries für Metadaten-Tags/Bindings (Semantik wie Legacy)."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        tags = query.metadata_tags_any_of
+        if tags:
+            placeholders = ",".join("?" * len(tags))
+            clauses.append(f"EXISTS (SELECT 1 FROM ringbuffer_metadata_tags rmt WHERE rmt.entry_id = ringbuffer.id AND rmt.tag IN ({placeholders}))")
+            params.extend(tags)
+        binding_clauses: list[str] = []
+        binding_params: list[Any] = []
+        for column, values in query.metadata_binding_filters.items():
+            if not values:
+                continue
+            placeholders = ",".join("?" * len(values))
+            binding_clauses.append(f"rmb.{column} IN ({placeholders})")
+            binding_params.extend(values)
+        if binding_clauses:
+            clauses.append(
+                f"EXISTS (SELECT 1 FROM ringbuffer_metadata_bindings rmb WHERE rmb.entry_id = ringbuffer.id AND {' AND '.join(binding_clauses)})"
+            )
+            params.extend(binding_params)
+        if not clauses:
+            return None, []
+        return " AND ".join(clauses), params
+
+    @staticmethod
+    def _segment_order_by(query: StoreQuery) -> str:
+        """Per-Segment ``ORDER BY`` passend zur gewünschten Sortierung.
+
+        Der Store liefert je Segment die ``offset+limit`` **relevanten** Zeilen in
+        der Zielordnung, damit der finale Merge in ``query()`` bounded bleibt.
+        """
+        direction = "ASC" if query.sort_order == "asc" else "DESC"
+        if query.sort_field == "ts":
+            return f"ts {direction}, global_event_id {direction}"
+        return f"global_event_id {direction}"
 
     @staticmethod
     def _query_is_bounded(query: StoreQuery) -> bool:

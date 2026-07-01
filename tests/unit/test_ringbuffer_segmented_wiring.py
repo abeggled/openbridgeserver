@@ -204,26 +204,122 @@ async def test_segmented_stats_expose_segment_info(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        {"q": "foo"},
-        {"dp_ids_by_name": ["dp-a"]},
-        {"adapter_any_of": ["a", "b"]},
-        {"datapoint_ids": ["dp-a", "dp-b"]},
-        {"metadata_tags_any_of": ["t1"]},
-        {"metadata_group_addresses_any_of": ["1/2/3"]},
-        {"sort_field": "ts"},
-        {"sort_order": "asc"},
-    ],
-)
-async def test_segmented_query_unsupported_features_raise(tmp_path: Path, kwargs: dict):
+async def test_segmented_query_multi_filters_and_sort_have_parity(tmp_path: Path):
+    """Features, die früher segmented abgelehnt wurden, liefern jetzt echte Ergebnisse (#919).
+
+    Freitext-``q``, ``dp_ids_by_name``, mehrere Adapter/datapoint_ids sowie
+    Sortierung nach ``id``/``ts`` × ``asc``/``desc`` werden gebunden über den Store
+    bedient statt als 422 abgewiesen.
+    """
+    rb = _rb(tmp_path, segmented=True)
+    await rb.start()
+    try:
+        await _record(rb, 1, "2026-01-01T00:00:00.000Z", datapoint_id="dp-a", adapter="api")
+        await _record(rb, 2, "2026-01-01T00:00:01.000Z", datapoint_id="dp-b", adapter="knx")
+
+        # Freitext-q matcht datapoint_id/source_adapter per LIKE (Legacy-Semantik).
+        by_q = await rb.query_v2(q="dp-a", limit=10)
+        assert [e.new_value for e in by_q] == [1]
+
+        # dp_ids_by_name → IN (...) auf datapoint_id.
+        by_name = await rb.query_v2(dp_ids_by_name=["dp-b"], limit=10)
+        assert [e.new_value for e in by_name] == [2]
+
+        # Mehrere Adapter (any_of) → IN (...).
+        by_adapters = await rb.query_v2(adapter_any_of=["api", "knx"], sort_field="ts", sort_order="asc", limit=10)
+        assert [e.new_value for e in by_adapters] == [1, 2]
+
+        # Mehrere datapoint_ids → IN (...).
+        by_dps = await rb.query_v2(datapoint_ids=["dp-a", "dp-b"], sort_field="id", sort_order="asc", limit=10)
+        assert [e.new_value for e in by_dps] == [1, 2]
+
+        # Sortierung: id/desc (Default), id/asc, ts/desc, ts/asc.
+        assert [e.new_value for e in await rb.query_v2(limit=10)] == [2, 1]
+        assert [e.new_value for e in await rb.query_v2(sort_field="id", sort_order="asc", limit=10)] == [1, 2]
+        assert [e.new_value for e in await rb.query_v2(sort_field="ts", sort_order="desc", limit=10)] == [2, 1]
+        assert [e.new_value for e in await rb.query_v2(sort_field="ts", sort_order="asc", limit=10)] == [1, 2]
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_segmented_query_metadata_tag_and_binding_pushdown(tmp_path: Path):
+    """Metadaten-Tag/Binding-Filter werden als EXISTS-Subquery pro Segment gepusht (#919)."""
+    rb = _rb(tmp_path, segmented=True)
+    await rb.start()
+    try:
+        await rb.record(
+            ts="2026-01-01T00:00:00.000Z",
+            datapoint_id="dp-knx",
+            topic="dp/dp-knx/value",
+            old_value=None,
+            new_value=10,
+            source_adapter="api",
+            quality="good",
+            metadata_version=1,
+            metadata={
+                "datapoint": {"tags": ["living-room"]},
+                "bindings": [{"adapter_type": "KNX", "normalized": {"group_address": "1/2/3"}}],
+            },
+        )
+        await rb.record(
+            ts="2026-01-01T00:00:01.000Z",
+            datapoint_id="dp-mqtt",
+            topic="dp/dp-mqtt/value",
+            old_value=None,
+            new_value=20,
+            source_adapter="api",
+            quality="good",
+            metadata_version=1,
+            metadata={
+                "datapoint": {"tags": ["garage"]},
+                "bindings": [{"adapter_type": "MQTT", "normalized": {"topic": "home/garage"}}],
+            },
+        )
+
+        by_tag = await rb.query_v2(metadata_tags_any_of=["living-room"], limit=10)
+        assert [e.new_value for e in by_tag] == [10]
+
+        by_binding = await rb.query_v2(
+            metadata_adapter_types_any_of=["knx"],
+            metadata_group_addresses_any_of=["1/2/3"],
+            limit=10,
+        )
+        assert [e.new_value for e in by_binding] == [10]
+
+        by_topic = await rb.query_v2(metadata_topics_any_of=["home/garage"], limit=10)
+        assert [e.new_value for e in by_topic] == [20]
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_segmented_value_filter_type_conflict_raises(tmp_path: Path):
+    """Numerischer Operator auf BOOLEAN-Datenpunkt → ValueError (Legacy-Parität, #919)."""
+    rb = _rb(tmp_path, segmented=True)
+    await rb.start()
+    try:
+        await _record(rb, True, "2026-01-01T00:00:00.000Z", datapoint_id="dp-bool")
+        with pytest.raises(ValueError, match="not supported for data_type 'BOOLEAN'"):
+            await rb.query_v2(
+                datapoint_ids=["dp-bool"],
+                value_filters=[{"operator": "gt", "value": 0}],
+                datapoint_types={"dp-bool": "BOOLEAN"},
+            )
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_segmented_query_rejects_invalid_sort(tmp_path: Path):
     rb = _rb(tmp_path, segmented=True)
     await rb.start()
     try:
         await _record(rb, 1, "2026-01-01T00:00:00.000Z")
-        with pytest.raises(ValueError, match="segmented"):
-            await rb.query_v2(**kwargs)
+        with pytest.raises(ValueError, match="invalid sort field"):
+            await rb.query_v2(sort_field="bogus")
+        with pytest.raises(ValueError, match="invalid sort order"):
+            await rb.query_v2(sort_order="bogus")
     finally:
         await rb.stop()
 

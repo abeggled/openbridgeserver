@@ -185,6 +185,8 @@ async def test_ringbuffer_config_rejects_memory_storage_mode(client, auth_header
 
 
 async def test_ringbuffer_config_accepts_retention_fields(client, auth_headers):
+    # ``segmented`` is now the deployed default; send a small ``segment_max_age``
+    # so the 3-segment age rule (max_age >= 3*segment_max_age) holds: 60 >= 3*20.
     resp = await client.post(
         "/api/v1/ringbuffer/config",
         json={
@@ -192,6 +194,7 @@ async def test_ringbuffer_config_accepts_retention_fields(client, auth_headers):
             "max_entries": 100,
             "max_file_size_bytes": 4096,
             "max_age": 60,
+            "segment_max_age": 20,
         },
         headers=auth_headers,
     )
@@ -216,6 +219,8 @@ async def test_ringbuffer_config_accepts_retention_fields(client, auth_headers):
 
 
 async def test_ringbuffer_config_accepts_null_max_entries(client, auth_headers):
+    # ``segmented`` default: send a small ``segment_max_age`` so the 3-segment
+    # age rule (max_age >= 3*segment_max_age) holds: 60 >= 3*20.
     resp = await client.post(
         "/api/v1/ringbuffer/config",
         json={
@@ -223,6 +228,7 @@ async def test_ringbuffer_config_accepts_null_max_entries(client, auth_headers):
             "max_entries": None,
             "max_file_size_bytes": 4096,
             "max_age": 60,
+            "segment_max_age": 20,
         },
         headers=auth_headers,
     )

@@ -32,6 +32,8 @@ async def _reset_to_defaults(client, auth_headers):
     Mirrors the reset pattern in ``test_ringbuffer_filters.py`` so tests can
     run in any order without leaking ringbuffer state between them.
     """
+    # ``segment_max_age`` is reset to the deployed default too, so a prior test's
+    # explicit value does not leak into the next test's persisted config.
     resp = await client.post(
         "/api/v1/ringbuffer/config",
         json={
@@ -39,6 +41,7 @@ async def _reset_to_defaults(client, auth_headers):
             "max_entries": 1000,
             "max_file_size_bytes": None,
             "max_age": None,
+            "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
         },
         headers=auth_headers,
     )
