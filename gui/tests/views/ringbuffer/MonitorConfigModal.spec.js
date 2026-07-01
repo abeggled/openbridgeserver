@@ -261,3 +261,73 @@ describe('MonitorConfigModal QA-01 coverage (#439)', () => {
     expect(wrapper.find('[data-testid="rb-config-stats-enabled"]').text()).toContain('Deaktiviert')
   })
 })
+
+describe('MonitorConfigModal segment rotation (#938)', () => {
+  it('renders the segment rotation field with the 6h default and no activation toggle', async () => {
+    const { wrapper } = await mountModal()
+    // Segmentation is automatic — there must be no "segmented" activation toggle.
+    expect(wrapper.find('[data-testid="rb-config-segmented"]').exists()).toBe(false)
+    const ageField = wrapper.find('[data-testid="rb-config-segment-max-age"]')
+    expect(ageField.exists()).toBe(true)
+    expect(ageField.element.value).toBe('6')
+  })
+
+  it('posts segment_max_age (in seconds) on submit', async () => {
+    const { wrapper, api } = await mountModal()
+    await wrapper.find('[data-testid="rb-config-segment-max-age"]').setValue('8')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).toHaveBeenCalledTimes(1)
+    const payload = api.config.mock.calls[0][0]
+    expect(payload.segment_max_age).toBe(8 * 60 * 60)
+    // Optional advanced fields stay unset unless the user fills them.
+    expect(payload.segment_max_bytes).toBeUndefined()
+    expect(payload.segment_max_rows).toBeUndefined()
+  })
+
+  it('includes the optional advanced segment thresholds when filled', async () => {
+    const { wrapper, api } = await mountModal()
+    await wrapper.find('[data-testid="rb-config-segment-max-bytes"]').setValue('4')
+    await wrapper.find('[data-testid="rb-config-segment-max-bytes-unit"]').setValue('mb')
+    await wrapper.find('[data-testid="rb-config-segment-max-rows"]').setValue('1000')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    const payload = api.config.mock.calls[0][0]
+    expect(payload.segment_max_bytes).toBe(4 * 1024 * 1024)
+    expect(payload.segment_max_rows).toBe(1000)
+  })
+
+  it('rejects a segment age below 1 hour with an inline error', async () => {
+    const { wrapper, api } = await mountModal()
+    await wrapper.find('[data-testid="rb-config-segment-max-age"]').setValue('0')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Segment-Alter')
+  })
+
+  it('renders a friendly message for the 3-segment-rule 422, not raw backend text', async () => {
+    const api = makeApi({
+      config: vi.fn().mockRejectedValue({
+        response: { data: { detail: 'max_age must be at least three times segment_max_age' } },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('zu grob für die gewählte Aufbewahrung')
+    expect(wrapper.text()).not.toContain('three times')
+  })
+
+  it('flattens a FastAPI validation error list into a readable line', async () => {
+    const api = makeApi({
+      config: vi.fn().mockRejectedValue({
+        response: { data: { detail: [{ loc: ['body', 'x'], msg: 'field required' }] } },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('field required')
+  })
+})

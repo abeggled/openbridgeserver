@@ -110,6 +110,75 @@
         </div>
       </div>
 
+      <!-- Segment-Rotation (#938) — Segmentierung ist automatisch aktiv, es gibt
+           KEINEN Aktivierungs-Toggle. Primärparameter: neues Segment alle N
+           Stunden. -->
+      <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-3" data-testid="rb-config-segment">
+        <div>
+          <label for="segment-max-age" class="text-sm font-medium">{{ $t('ringbuffer.segmentMaxAge') }}</label>
+          <p class="text-xs text-slate-500 mt-0.5">{{ $t('ringbuffer.segmentMaxAgeHint') }}</p>
+        </div>
+        <input
+          id="segment-max-age"
+          v-model.trim="configForm.segmentMaxAgeHours"
+          type="number"
+          min="1"
+          step="1"
+          class="input"
+          :disabled="!configForm.enabled"
+          data-testid="rb-config-segment-max-age"
+          :placeholder="$t('ringbuffer.segmentMaxAgePlaceholder')"
+        />
+
+        <details class="text-sm">
+          <summary class="cursor-pointer text-slate-600 dark:text-slate-300 select-none">{{ $t('ringbuffer.segmentAdvanced') }}</summary>
+          <div class="mt-3 flex flex-col gap-3">
+            <p class="text-xs text-slate-500">{{ $t('ringbuffer.segmentAdvancedHint') }}</p>
+            <div class="flex flex-col gap-1">
+              <label for="segment-max-bytes" class="text-xs font-medium text-slate-600 dark:text-slate-300">{{ $t('ringbuffer.segmentMaxBytes') }}</label>
+              <div class="grid grid-cols-2 gap-2">
+                <input
+                  id="segment-max-bytes"
+                  v-model.trim="configForm.segmentMaxBytesValue"
+                  type="number"
+                  min="1"
+                  step="1"
+                  class="input"
+                  :disabled="!configForm.enabled"
+                  data-testid="rb-config-segment-max-bytes"
+                  :placeholder="$t('ringbuffer.segmentOptionalPlaceholder')"
+                />
+                <select
+                  v-model="configForm.segmentMaxBytesUnit"
+                  class="input"
+                  :disabled="!configForm.enabled"
+                  data-testid="rb-config-segment-max-bytes-unit"
+                >
+                  <option value="mb">MB</option>
+                  <option value="gb">GB</option>
+                </select>
+              </div>
+            </div>
+            <div class="flex flex-col gap-1">
+              <label for="segment-max-rows" class="text-xs font-medium text-slate-600 dark:text-slate-300">{{ $t('ringbuffer.segmentMaxRows') }}</label>
+              <input
+                id="segment-max-rows"
+                v-model.trim="configForm.segmentMaxRowsValue"
+                type="number"
+                min="1"
+                step="1"
+                class="input"
+                :disabled="!configForm.enabled"
+                data-testid="rb-config-segment-max-rows"
+                :placeholder="$t('ringbuffer.segmentOptionalPlaceholder')"
+              />
+            </div>
+          </div>
+        </details>
+
+        <p class="text-xs text-slate-500">{{ $t('ringbuffer.segmentRatioHint') }}</p>
+      </div>
+
       <div v-if="configMsg" :class="['p-3 rounded-lg text-sm', configMsg.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">
         {{ configMsg.text }}
       </div>
@@ -164,6 +233,11 @@ const RETENTION_UNIT_SECONDS = {
   months: 30 * 24 * 60 * 60,
   years: 365 * 24 * 60 * 60,
 }
+// Segmentierung ist automatisch aktiv (#938). Default: neues Segment alle 6 h
+// (Backend-Default segment_max_age = 21600 s). /stats liefert den aktuell
+// persistierten Wert NICHT zurück, daher hydratisiert das Feld auf den Default.
+const DEFAULT_SEGMENT_MAX_AGE_HOURS = 6
+const SECONDS_PER_HOUR = 60 * 60
 
 const open = computed({
   get: () => props.modelValue,
@@ -186,6 +260,11 @@ const configForm = reactive({
   retentionEnabled: false,
   retentionValue: '30',
   retentionUnit: 'days',
+  // Segment-Rotation (#938). Alter ist der Primärtrigger; Bytes/Rows optional.
+  segmentMaxAgeHours: String(DEFAULT_SEGMENT_MAX_AGE_HOURS),
+  segmentMaxBytesValue: '',
+  segmentMaxBytesUnit: 'mb',
+  segmentMaxRowsValue: '',
 })
 
 function formatBytes(rawBytes) {
@@ -253,6 +332,13 @@ function hydrateForm(currentStats) {
     configForm.retentionValue = '30'
     configForm.retentionUnit = 'days'
   }
+  // /stats liefert die persistierten Segment-Parameter nicht zurück, daher wird
+  // das Alter auf den Backend-Default (6 h) gesetzt und die optionalen
+  // Erweitert-Felder bleiben leer (= automatisch abgeleitet).
+  configForm.segmentMaxAgeHours = String(DEFAULT_SEGMENT_MAX_AGE_HOURS)
+  configForm.segmentMaxBytesValue = ''
+  configForm.segmentMaxBytesUnit = 'mb'
+  configForm.segmentMaxRowsValue = ''
 }
 
 function buildPayload() {
@@ -277,7 +363,44 @@ function buildPayload() {
     if (retentionValue === null) throw new Error(t('ringbuffer.validationRetentionNaN'))
     payload.max_age = retentionValue * RETENTION_UNIT_SECONDS[configForm.retentionUnit]
   }
+
+  // Segment-Rotation (#938). Alter ist Pflicht (Primärtrigger); Bytes/Rows
+  // optional (leer = automatisch vom Backend abgeleitet).
+  const segmentAgeHours = parseNonNegativeInteger(configForm.segmentMaxAgeHours)
+  if (segmentAgeHours === null || segmentAgeHours < 1) throw new Error(t('ringbuffer.validationSegmentMaxAge'))
+  payload.segment_max_age = segmentAgeHours * SECONDS_PER_HOUR
+
+  if (configForm.segmentMaxBytesValue !== '') {
+    const segmentBytes = parseNonNegativeInteger(configForm.segmentMaxBytesValue)
+    if (segmentBytes === null || segmentBytes <= 0) throw new Error(t('ringbuffer.validationSegmentMaxBytes'))
+    payload.segment_max_bytes = segmentBytes * SIZE_UNIT_FACTORS[configForm.segmentMaxBytesUnit]
+  }
+  if (configForm.segmentMaxRowsValue !== '') {
+    const segmentRows = parseNonNegativeInteger(configForm.segmentMaxRowsValue)
+    if (segmentRows === null || segmentRows <= 0) throw new Error(t('ringbuffer.validationSegmentMaxRows'))
+    payload.segment_max_rows = segmentRows
+  }
   return payload
+}
+
+/**
+ * Übersetzt eine Backend-Fehlerantwort in eine anzeigbare Meldung. Der
+ * 422-Payload der 3-Segment-Regel liefert ``detail`` als String; FastAPI-
+ * Validierungsfehler liefern ``detail`` als Liste ({loc, msg}). Beide Formen
+ * werden zu einer lesbaren Zeile verdichtet, statt Rohtext/[object Object].
+ */
+function extractConfigError(error) {
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string' && detail.trim()) {
+    // Die 3-Segment-Regel erkennen und mit der lokalisierten Erklärung anzeigen.
+    if (/three times|dreifache|3\s*[x×]|segment/i.test(detail)) return t('ringbuffer.segmentRatioError')
+    return detail
+  }
+  if (Array.isArray(detail) && detail.length) {
+    const msg = detail.map((entry) => entry?.msg).filter(Boolean).join('; ')
+    if (msg) return msg
+  }
+  return error?.message || t('ringbuffer.saveFailed')
 }
 
 async function loadStats() {
@@ -305,7 +428,7 @@ async function onSubmit() {
     }
     await savePayload(payload)
   } catch (error) {
-    configMsg.value = { ok: false, text: error?.response?.data?.detail || error?.message || t('ringbuffer.saveFailed') }
+    configMsg.value = { ok: false, text: extractConfigError(error) }
   }
 }
 
@@ -323,7 +446,7 @@ async function savePayload(payload) {
       closeTimer = null
     }, 2000)
   } catch (error) {
-    configMsg.value = { ok: false, text: error?.response?.data?.detail || error?.message || t('ringbuffer.saveFailed') }
+    configMsg.value = { ok: false, text: extractConfigError(error) }
   } finally {
     saving.value = false
   }

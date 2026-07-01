@@ -97,6 +97,10 @@
       {{ recoveryNotice }}
     </div>
 
+    <!-- Segment-Status/Stats-Panel (#938) — nur im segmentierten Modus, wenn
+         stats.store != null. Im Legacy-Modus bleibt es ausgeblendet. -->
+    <SegmentStatsPanel v-if="storeStats" :store="storeStats" />
+
     <!-- Soft-modal CSV/TSV export dialog (#427) -->
     <ExportDialog
       v-model="showExportDialog"
@@ -169,6 +173,7 @@ import TopbarStats from '@/views/ringbuffer/TopbarStats.vue'
 import FilterEditor from '@/views/ringbuffer/FilterEditor.vue'
 import ExportDialog from '@/views/ringbuffer/ExportDialog.vue'
 import MonitorConfigModal from '@/views/ringbuffer/MonitorConfigModal.vue'
+import SegmentStatsPanel from '@/views/ringbuffer/SegmentStatsPanel.vue'
 
 const DEFAULT_QUERY_LIMIT = 500
 
@@ -205,6 +210,8 @@ const editorTargetId = ref(null)
 const topbarChipsRef = ref(null)
 const recoveryNotice = ref('')
 const monitorDisabled = ref(false)
+// Segmentierter Store (#938) — {common, backend_extra} oder null (Legacy).
+const storeStats = ref(null)
 let recoveryNoticeRefreshPromise = null
 let lastRecoveryNoticeRefreshAt = 0
 
@@ -262,6 +269,10 @@ async function onMonitorConfigSaved() {
 
 function onMonitorStats(stats) {
   monitorDisabled.value = stats?.enabled === false
+  // Segment-Panel-Quelle (#938): der segmentierte Store liefert ``store`` als
+  // ``{common, backend_extra}``; im Legacy-Modus ist es null → dann rendert die
+  // Sektion nicht. TopbarStats pollt /stats ohnehin, wir spiegeln nur das Feld.
+  storeStats.value = stats?.store ?? null
   if (!monitorDisabled.value) return
   clearLiveQueue()
   entries.value = []
