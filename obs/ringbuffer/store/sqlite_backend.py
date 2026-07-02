@@ -40,6 +40,7 @@ dieses Kernels; die Nahtstelle ist mit ``# TODO(#…)`` markiert.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from datetime import UTC, datetime
@@ -71,6 +72,8 @@ from obs.ringbuffer.store.manifest import (
     SegmentRecord,
 )
 from obs.ringbuffer.store.writer_lock import WriterLease
+
+_LOGGER = logging.getLogger(__name__)
 
 SEGMENT_SCHEMA_VERSION = 2
 
@@ -618,10 +621,18 @@ class SqliteSegmentStore(RingBufferStore):
         nie quarantäniert. Legacy-Segmente werden ebenfalls nur übersprungen (nie
         die in-place liegende Original-Datei anfassen).
         """
+        # Race (#951, Pkt 2): löscht die Retention ein geschlossenes Segment
+        # zwischen ``list_segments_for_query()`` und diesem Open, ist die Datei weg.
+        # Ein read-only-Open (``mode=ro``) auf einer fehlenden Datei wirft, statt —
+        # wie ein schreibendes ``connect`` — still eine leere Ersatz-DB anzulegen
+        # (die dann „no such table" → 500 liefern würde). Ein zwischenzeitlich
+        # gelöschtes/fehlendes, nicht-aktives Segment wird daher übersprungen.
+        if self._segment_read_file_missing(segment):
+            return None
         try:
             conn = await self._connection_for_read(segment)
         except aiosqlite.Error as exc:
-            return await self._quarantine_corrupt_read(segment, exc)
+            return await self._skip_or_quarantine_read(segment, exc)
         close_after = conn is not self._active_conn
         try:
             if _is_legacy_segment(segment):
@@ -630,10 +641,33 @@ class SqliteSegmentStore(RingBufferStore):
                 return await self._query_legacy_segment(conn, segment, query)
             return await self._query_segment(conn, query)
         except aiosqlite.Error as exc:
-            return await self._quarantine_corrupt_read(segment, exc)
+            return await self._skip_or_quarantine_read(segment, exc)
         finally:
             if close_after:
                 await conn.close()
+
+    def _segment_read_file_missing(self, segment: SegmentRecord) -> bool:
+        """True, wenn die zu lesende Segment-Datei nicht (mehr) existiert (#951, Pkt 2).
+
+        Das aktive Segment wird über die gehaltene Connection gelesen und nie als
+        fehlend behandelt. Legacy-Segmente liegen als absoluter Pfad in ``filename``,
+        v2-Segmente unter ``segments/``.
+        """
+        if self._active_segment is not None and segment.segment_id == self._active_segment.segment_id:
+            return False
+        path = Path(segment.filename) if _is_legacy_segment(segment) else self._segments_dir / segment.filename
+        return not path.exists()
+
+    async def _skip_or_quarantine_read(self, segment: SegmentRecord, exc: aiosqlite.Error) -> None:
+        """Überspringt ein zwischenzeitlich verschwundenes Segment, quarantäniert echte Korruption.
+
+        Race (#951, Pkt 2): ist die Datei zwischen Manifest-Auswahl und Open/Read
+        weggeräumt worden (Retention-Delete), wird das Segment sauber übersprungen
+        statt 500 zu werfen. Sonst greift der reguläre Korruptions-/Quarantäne-Pfad.
+        """
+        if self._segment_read_file_missing(segment):
+            return None
+        return await self._quarantine_corrupt_read(segment, exc)
 
     async def _quarantine_corrupt_read(self, segment: SegmentRecord, exc: aiosqlite.Error) -> None:
         """Quarantäniert ein beim Read als korrupt erkanntes Segment und überspringt es.
@@ -654,17 +688,71 @@ class SqliteSegmentStore(RingBufferStore):
         if self._active_segment is not None and segment.segment_id == self._active_segment.segment_id and self._active_conn is not None:
             return self._active_conn
         if _is_legacy_segment(segment):
-            # Legacy-Datei liegt in place (absoluter Pfad im ``filename``), NICHT unter
-            # ``segments/``. Read-only + kein WAL-Checkpoint: eine große Legacy-Datei mit
-            # dirty -wal darf beim ersten Open NICHT im Startup gecheckpointet werden
-            # (unbounded). ``immutable=1`` verhindert genau diese WAL-Recovery.
-            uri = f"file:{Path(segment.filename).as_posix()}?mode=ro&immutable=1"
-            conn = await aiosqlite.connect(uri, uri=True)
-            conn.row_factory = aiosqlite.Row
-            return conn
-        conn = await aiosqlite.connect(str(self._segments_dir / segment.filename))
+            return await self._open_legacy_read_conn(segment)
+        # v2-Segment (#951, Pkt 2): read-only-URI (``mode=ro``) statt schreibendem
+        # ``connect``. Ein schreibendes Open auf eine zwischenzeitlich gelöschte
+        # Datei legte still eine leere Ersatz-DB an → „no such table" → 500. ``mode=ro``
+        # wirft in dem Fall (der Aufrufer überspringt das Segment). Zusätzlich werden
+        # geschlossene Segmente so nie versehentlich schreibend geöffnet.
+        uri = f"file:{(self._segments_dir / segment.filename).as_posix()}?mode=ro"
+        conn = await aiosqlite.connect(uri, uri=True)
         conn.row_factory = aiosqlite.Row
         return conn
+
+    async def _open_legacy_read_conn(self, segment: SegmentRecord) -> aiosqlite.Connection:
+        """Öffnet eine Legacy-Single-DB read-only für den degradierenden Read-Zweig (#934).
+
+        Legacy-Datei liegt in place (absoluter Pfad im ``filename``), NICHT unter
+        ``segments/``.
+
+        Dirty-WAL-Handling (#951, Pkt 4): ``immutable=1`` ignoriert committete
+        WAL-Frames — jüngste Alt-Einträge einer dirty-WAL-Legacy-DB verschwänden
+        sonst aus dem Read. Für **kleine** Legacy-DBs (unter ``SMALL_MAX_BYTES``)
+        mit dirty WAL wird daher EINMAL sauber gecheckpointet (committete Frames in
+        die Haupt-DB übernehmen), danach read-only gelesen. Für **große** Dateien
+        bleibt es beim ``immutable=1``-Pfad (kein Startup-Checkpoint auf riesiger
+        Datei), auch wenn dadurch die WAL-Frames ungelesen bleiben.
+        """
+        legacy_path = Path(segment.filename)
+        if segment.recovery_status == "dirty_wal" and self._legacy_is_small(segment, legacy_path):
+            await self._checkpoint_small_legacy(legacy_path)
+        uri = f"file:{legacy_path.as_posix()}?mode=ro&immutable=1"
+        conn = await aiosqlite.connect(uri, uri=True)
+        conn.row_factory = aiosqlite.Row
+        return conn
+
+    @staticmethod
+    def _legacy_is_small(segment: SegmentRecord, legacy_path: Path) -> bool:
+        """True, wenn die Legacy-DB unter dem ``SMALL_MAX_BYTES``-Schwellwert liegt (#951, Pkt 4).
+
+        Nutzt die im Manifest hinterlegte ``size_bytes``; fällt bei fehlender/0-Größe
+        auf die tatsächliche Dateigröße zurück. Der Schwellwert wird lazy importiert,
+        weil ``migration`` seinerseits ``sqlite_backend`` importiert (Zyklusvermeidung).
+        """
+        from obs.ringbuffer.store.migration import SMALL_MAX_BYTES
+
+        size = segment.size_bytes if segment.size_bytes > 0 else _safe_getsize(legacy_path)
+        return size < SMALL_MAX_BYTES
+
+    @staticmethod
+    async def _checkpoint_small_legacy(legacy_path: Path) -> None:
+        """Einmaliger sauberer WAL-Checkpoint einer kleinen Legacy-DB (#951, Pkt 4).
+
+        Öffnet die Datei genau einmal schreibbar, checkpointet die committeten
+        WAL-Frames per ``wal_checkpoint(TRUNCATE)`` in die Haupt-DB und schließt
+        wieder. Danach liest der reguläre read-only-Pfad die vollständigen Daten.
+        Fehler (z. B. read-only-Filesystem) werden geschluckt — der Read degradiert
+        dann auf den ``immutable=1``-Pfad statt zu brechen.
+        """
+        try:
+            conn = await aiosqlite.connect(str(legacy_path))
+            try:
+                await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                await conn.commit()
+            finally:
+                await conn.close()
+        except aiosqlite.Error:
+            return
 
     async def _query_segment(self, conn: aiosqlite.Connection, query: StoreQuery) -> list[dict[str, Any]]:
         sql, params = self._build_segment_sql(query)
@@ -737,9 +825,17 @@ class SqliteSegmentStore(RingBufferStore):
         # Zeilen als der Cap) bei ``sort=ts asc`` fälschlich die neuesten statt der
         # ältesten Zeilen (die echte älteste Zeile liegt dann außerhalb des Caps).
         direction = "ASC" if query.sort_order == "asc" else "DESC"
+        # pre-#388 Legacy-Schema (#951, Pkt 1): eine sehr alte Single-DB hat noch
+        # KEINE ``metadata_version``/``metadata``-Spalten. Ein bedingungsloses
+        # SELECT dieser Spalten scheiterte mit „no such column" und machte die
+        # gesamte Alt-Historie unlesbar. Die Spalten werden daher nur selektiert,
+        # wenn sie existieren; fehlen sie, liefert ``_legacy_row_to_dict`` die
+        # Defaults (``metadata_version=1``, ``metadata={}``).
+        has_metadata_cols = await self._legacy_has_metadata_columns(conn)
+        metadata_select = "metadata_version, metadata" if has_metadata_cols else "NULL AS metadata_version, NULL AS metadata"
         sql = (
             "SELECT id, ts, datapoint_id, topic, old_value, new_value, "
-            "source_adapter, quality, metadata_version, metadata "
+            f"source_adapter, quality, {metadata_select} "
             f"FROM ringbuffer{where} ORDER BY ts {direction}, id {direction} LIMIT ?"
         )
         params.append(fetch_limit)
@@ -797,12 +893,29 @@ class SqliteSegmentStore(RingBufferStore):
         return _LEGACY_DEFAULT_CANDIDATE_CAP
 
     @staticmethod
+    async def _legacy_has_metadata_columns(conn: aiosqlite.Connection) -> bool:
+        """True, wenn die Legacy-``ringbuffer``-Tabelle ``metadata``-Spalten trägt (#951, Pkt 1).
+
+        pre-#388 Single-DBs haben die ``metadata_version``/``metadata``-Spalten noch
+        nicht. Ein bedingungsloses SELECT dieser Spalten würde mit „no such column"
+        scheitern und die komplette Alt-Historie unlesbar machen. Erkennung über
+        ``PRAGMA table_info`` (analog zum alten ``_ensure_compat_schema``), damit
+        der Read-Zweig fehlende Spalten als Defaults liefern kann.
+        """
+        async with conn.execute("PRAGMA table_info(ringbuffer)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        return {"metadata_version", "metadata"}.issubset(columns)
+
+    @staticmethod
     def _legacy_row_to_dict(row: aiosqlite.Row, segment_id: int) -> dict[str, Any]:
         # Synthetischer global_event_id aus der chronologischen Legacy-rowid
         # (``id``): fetch-richtungsunabhängig, streng negativ (unter allen v2-IDs)
         # und rowid-monoton — höhere rowid (neuer) ⇒ höhere (weniger negative) ID.
         # ``segment_id`` bricht Gleichstände zwischen mehreren Legacy-Segmenten.
         synthetic_gid = int(row["id"]) - _LEGACY_GID_OFFSET - (segment_id & 0xFFFF)
+        # pre-#388 Legacy-Schema (#951, Pkt 1): fehlt die metadata-Spalte, liefert
+        # das SELECT NULL → Default ``metadata_version=1``/``metadata={}``.
+        metadata_version = row["metadata_version"] if row["metadata_version"] is not None else 1
         return {
             "global_event_id": synthetic_gid,
             "ts": row["ts"],
@@ -812,7 +925,7 @@ class SqliteSegmentStore(RingBufferStore):
             "new_value": json.loads(row["new_value"]) if row["new_value"] is not None else None,
             "source_adapter": row["source_adapter"],
             "quality": row["quality"],
-            "metadata_version": row["metadata_version"],
+            "metadata_version": metadata_version,
             "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
         }
 
@@ -1164,7 +1277,16 @@ class SqliteSegmentStore(RingBufferStore):
         )
 
     def _segment_file_size(self, filename: str) -> int:
-        return _safe_getsize(self._segments_dir / filename)
+        """Reale Disk-Nutzung eines v2-Segments inkl. ``-wal``/``-shm`` (#951, Pkt 5).
+
+        ``size_bytes`` wandert ins Manifest und steuert ``_segment_rotation_due`` und
+        ``enforce_retention``. Zählte es nur die ``*.sqlite``-Hauptdatei, könnte ein
+        WAL-schweres aktives/pending Segment das harte Byte-Budget überschreiten, ohne
+        zu rotieren oder korrekt zu melden. Die Sidecars ``-wal``/``-shm`` werden daher
+        mitgezählt, damit Rotation und Budget die tatsächliche Disk-Nutzung sehen.
+        """
+        base = self._segments_dir / filename
+        return _safe_getsize(base) + _safe_getsize(Path(f"{base}-wal")) + _safe_getsize(Path(f"{base}-shm"))
 
     # ------------------------------------------------------------------
     # Contract: stats
@@ -1521,15 +1643,38 @@ class SqliteSegmentStore(RingBufferStore):
     async def _delete_segment(self, segment: SegmentRecord) -> None:
         """Entfernt Datei (inkl. -wal/-shm) und Manifest-Eintrag konsistent.
 
-        Für Legacy-Segmente (#919) wird die in-place liegende Original-Single-DB
-        NICHT vom Dateisystem gelöscht — nur der Manifest-Eintrag entfällt, sodass
-        sie nicht mehr gegen das Budget zählt und nicht mehr gelesen wird. Die Datei
-        selbst bleibt als Nutzer-Artefakt unangetastet (Grundgebot #934: keine
-        Legacy-Daten löschen).
+        Dies ist ausschließlich der **Retention-Delete-Pfad** (``_enforce_*``): wird
+        ein Segment hier gelöscht, hat die FIFO-Retention entschieden, dass diese
+        Alt-Daten verworfen werden. Read-only-Query-Fälle rufen ``_delete_segment``
+        nie auf — sie überspringen ein fehlendes Segment nur.
+
+        Für Legacy-Segmente (#951, Pkt 3) wird die zugrundeliegende in-place liegende
+        Original-Single-DB (inkl. ``-wal``/``-shm``) beim retention-bedingten Löschen
+        MIT-gelöscht. Sonst entfernte ``_delete_segment`` nur die Manifest-Zeile, die
+        Datei bliebe liegen und würde beim nächsten Start erneut registriert →
+        getrimmte Historie und Budgetdruck kehrten zurück. Das Löschen setzt den
+        FIFO-Retention-Vertrag durch (Platz wirklich freigeben; „Alt-Daten werden
+        verworfen"). Legacy-Datei liegt als absoluter Pfad in ``filename``, v2 unter
+        ``segments/``.
         """
-        if not _is_legacy_segment(segment):
-            for suffix in ("", "-wal", "-shm"):
-                path = self._segments_dir / f"{segment.filename}{suffix}"
-                if path.exists():
-                    path.unlink()
+        if _is_legacy_segment(segment):
+            base = Path(segment.filename)
+            self._unlink_with_sidecars(base)
+            _LOGGER.info(
+                "retention: removed legacy single-db %s (freed via FIFO retention; row/budget pressure)",
+                base,
+            )
+        else:
+            self._unlink_with_sidecars(self._segments_dir / segment.filename)
         await self.manifest.delete_segment(segment.segment_id)
+
+    @staticmethod
+    def _unlink_with_sidecars(base: Path) -> None:
+        """Löscht ``base`` samt ``-wal``/``-shm`` best-effort (Platz real freigeben)."""
+        for path in (base, Path(f"{base}-wal"), Path(f"{base}-shm")):
+            try:
+                path.unlink()
+            except OSError:
+                # Fehlt eine Sidecar-Datei (oder ist unlöschbar), stört das die
+                # Retention nicht — der Manifest-Eintrag entfällt trotzdem.
+                continue

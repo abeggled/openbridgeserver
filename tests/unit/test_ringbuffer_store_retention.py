@@ -502,8 +502,10 @@ async def test_legacy_deleted_by_size_budget_once_v2_segment_exists(tmp_path: Pa
         assert removed >= 1
         # Legacy ist aus dem Manifest verschwunden …
         assert await store.manifest.list_legacy_segments() == []
-        # … aber die in-place Legacy-Datei bleibt physisch erhalten (Grundgebot #934).
-        assert legacy_file.exists()
+        # … UND die in-place Legacy-Datei ist physisch entfernt (#951, Pkt 3): der
+        # retention-bedingte Delete gibt Platz wirklich frei, sonst würde die Datei
+        # beim nächsten Start erneut registriert (getrimmte Historie kehrt zurück).
+        assert not legacy_file.exists()
         # Aktives v2-Segment (frische Daten) bleibt erhalten.
         assert await store.manifest.get_active_segment() is not None
     finally:
