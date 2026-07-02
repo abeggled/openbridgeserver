@@ -188,6 +188,10 @@ class RingBuffer:
         # bleibt der gesamte Legacy-Single-File-Pfad unverändert und ``_store``
         # None; keine der Segment-Codepfade unten wird betreten.
         self._segmented = bool(segmented)
+        # Roh-Config (``None`` = auto) getrennt vom effektiven Wert halten: nur so
+        # kann ein späterer Budget-Wechsel die AUTO-Segmentgröße neu ableiten,
+        # statt auf dem einmal abgeleiteten ``budget/3`` einzufrieren (#919).
+        self._segment_max_bytes_config = segment_max_bytes
         self._segment_max_bytes = segment_max_bytes
         self._segment_max_rows = segment_max_rows
         self._segment_max_age = segment_max_age
@@ -243,7 +247,7 @@ class RingBuffer:
         # wenn nicht explizit gesetzt (#919). Das abgeleitete Budget erfüllt die
         # 3-Segment-Regel immer → validate_store_config kann beim Auto-Start nicht
         # fehlschlagen. Explizite Werte werden respektiert und weiter validiert.
-        if self._segment_max_bytes is None:
+        if self._segment_max_bytes_config is None:
             self._segment_max_bytes = derive_segment_max_bytes(self._max_file_size_bytes)
 
         root = self._segment_store_root()
@@ -343,7 +347,7 @@ class RingBuffer:
             # Segment-Rotations-Config: gesetzte Werte übernehmen, sonst aktuellen
             # Wert behalten. ``segment_max_bytes=None`` (auto) leitet aus dem
             # effektiven ``max_file_size_bytes`` neu ab.
-            resolved_segment_max_bytes = self._segment_max_bytes if segment_max_bytes is _UNSET else segment_max_bytes
+            resolved_segment_max_bytes = self._segment_max_bytes_config if segment_max_bytes is _UNSET else segment_max_bytes
             resolved_segment_max_rows = self._segment_max_rows if segment_max_rows is _UNSET else segment_max_rows
             resolved_segment_max_age = self._segment_max_age if segment_max_age is _UNSET else segment_max_age
 
@@ -434,8 +438,10 @@ class RingBuffer:
         """
         from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
 
-        # ``segment_max_bytes=None`` → aus dem effektiven Size-Budget neu ableiten
-        # (analog zum Auto-Start); explizite Werte bleiben unangetastet.
+        # Roh-Config (``None`` = auto) merken, DANN den effektiven Wert ableiten —
+        # so folgt die Auto-Segmentgröße auch künftigen Budget-Änderungen und friert
+        # nicht auf dem alten ``budget/3`` ein. Explizite Werte bleiben unangetastet.
+        self._segment_max_bytes_config = segment_max_bytes
         if segment_max_bytes is None:
             segment_max_bytes = derive_segment_max_bytes(self._max_file_size_bytes)
 

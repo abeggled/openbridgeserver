@@ -204,3 +204,42 @@ async def test_config_post_segment_max_age_applies_live_to_running_store(client,
     )
     assert resp.status_code == 200, resp.text
     await _reset_to_defaults(client, auth_headers)
+
+
+async def test_config_post_budget_change_rederives_auto_segment_max_bytes(client, auth_headers):
+    """Ein reiner Budget-Wechsel muss die AUTO-Segmentgröße live neu ableiten (#919).
+
+    Regression: ``segment_max_bytes=None`` (auto) wurde einmal aus ``budget/3``
+    abgeleitet und dann in ``_segment_max_bytes`` eingefroren. Änderte man später
+    NUR das Budget (ohne ``segment_max_bytes`` mitzusenden), blieb die effektive
+    Segmentgröße auf dem alten ``budget/3`` stehen — die Prognose (Größen-Cap,
+    Rotation) nahm das neue Budget nicht wahr.
+    """
+    from obs.ringbuffer.ringbuffer import derive_segment_max_bytes, get_optional_ringbuffer
+
+    rb = get_optional_ringbuffer()
+    assert rb is not None and rb.segmented and rb.store is not None
+
+    # Budget 300 MiB, segment_max_bytes auto → effektiv = derive(300 MiB) = 100 MiB.
+    resp = await client.post(
+        "/api/v1/ringbuffer/config",
+        json={"max_file_size_bytes": 300 * 1024 * 1024, "max_age": None, "max_entries": None, "segment_max_bytes": None},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert rb.store._segment_config.segment_max_bytes == derive_segment_max_bytes(300 * 1024 * 1024)
+
+    # NUR das Budget ändern (segment_max_bytes NICHT mitsenden → auto bleibt auto).
+    resp = await client.post(
+        "/api/v1/ringbuffer/config",
+        json={"max_file_size_bytes": 900 * 1024 * 1024},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    # Die effektive Auto-Segmentgröße muss dem neuen Budget folgen (nicht auf 300/3 einfrieren).
+    assert rb.store._segment_config.segment_max_bytes == derive_segment_max_bytes(900 * 1024 * 1024)
+    assert rb.store._segment_config.segment_max_bytes != derive_segment_max_bytes(300 * 1024 * 1024)
+    # Auto-Absicht bleibt erhalten: die persistierte/gemeldete Config ist weiter None.
+    assert resp.json()["segment_max_bytes"] is None
+
+    await _reset_to_defaults(client, auth_headers)
