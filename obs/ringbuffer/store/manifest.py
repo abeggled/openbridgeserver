@@ -259,6 +259,21 @@ class Manifest:
         )
         await self._db.commit()
 
+    async def mark_legacy_wal_recovered(self, segment_id: int, *, size_bytes: int) -> None:
+        """Frischt Größe + Recovery-Status eines Legacy-Segments nach WAL-Checkpoint auf (#951, Codex :758).
+
+        Nach einem erfolgreichen ``wal_checkpoint(TRUNCATE)`` einer kleinen dirty-WAL-
+        Legacy-DB sind die ``-wal``-Bytes real in die Haupt-DB gefaltet/getruncatet.
+        Die reale post-checkpoint-Größe wird nachgezogen und ``recovery_status`` von
+        ``dirty_wal`` auf ``none`` zurückgesetzt – sonst berichteten Stats/Size-Retention
+        Phantom-WAL-Bytes und der Checkpoint liefe bei jedem Read erneut.
+        """
+        await self._db.execute(
+            "UPDATE segments SET size_bytes = ?, recovery_status = 'none' WHERE segment_id = ?",
+            (size_bytes, segment_id),
+        )
+        await self._db.commit()
+
     async def close_segment(self, segment_id: int) -> None:
         await self._db.execute(
             "UPDATE segments SET status = ?, closed_at = ? WHERE segment_id = ?",

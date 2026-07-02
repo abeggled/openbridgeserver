@@ -265,12 +265,19 @@ async def test_between_lower_must_be_le_upper(store: SqliteSegmentStore):
         await store.query(StoreQuery(limit=10, value_filters=[{"operator": "between", "lower": 5, "upper": 2}]))
 
 
-async def test_pushdown_needs_addressable_value(store: SqliteSegmentStore):
-    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
-    # Liste ist als typisierter Vergleichswert nicht adressierbar.
-    # ``value=None`` ist KEIN Fehler mehr (siehe eq/ne-null-Tests, #951 Pkt 4).
-    with pytest.raises(ValueError, match="numeric, text or bool"):
-        await store.query(StoreQuery(limit=10, value_filters=[{"operator": "eq", "value": [1, 2]}]))
+async def test_eq_json_value_matches_instead_of_raising(store: SqliteSegmentStore):
+    # ``eq``/``ne`` auf einem komplexen (list/dict) Wert wirft KEIN 422 mehr
+    # (#951, Codex :1281): der Filter vergleicht kanonisch gegen die gespeicherte
+    # JSON-Spalte, statt „nicht adressierbar" abzulehnen. ``value=None`` (JSON-null)
+    # ist ebenfalls kein Fehler (siehe eq/ne-null-Tests, #951 Pkt 4).
+    await store.append(
+        [
+            _event([1, 2], "2026-01-01T00:00:00.000Z"),
+            _event([3, 4], "2026-01-01T00:00:01.000Z"),
+        ]
+    )
+    rows = await store.query(StoreQuery(limit=10, value_filters=[{"operator": "eq", "value": [1, 2]}]))
+    assert [r["new_value"] for r in rows] == [[1, 2]]
 
 
 async def test_contains_requires_string_value(store: SqliteSegmentStore):

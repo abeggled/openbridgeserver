@@ -49,7 +49,7 @@ from typing import Any
 
 import aiosqlite
 
-from obs.core.json import json_dumps
+from obs.core.json import json_default, json_dumps
 from obs.ringbuffer.ringbuffer import (
     _extract_metadata_binding_index_rows,
     _extract_metadata_tags,
@@ -242,6 +242,34 @@ def _derive_value_type(value: Any) -> str:
     # sich aber im ``*_value_type`` – so trifft ``eq/ne null`` ausschließlich echtes
     # JSON-null.
     return "json"
+
+
+def _canonical_json(value: Any) -> str:
+    """Order-unabhängige kanonische JSON-Repräsentation (sortierte Objekt-Keys).
+
+    Für den JSON-``eq/ne``-Vergleich (#951, Codex :1281): zwei inhaltsgleiche
+    Objekte müssen matchen, auch wenn ihre Key-Reihenfolge differiert. ``sort_keys``
+    normalisiert Objekte; Listen bleiben ordnungsempfindlich wie in der Referenz.
+    """
+    return json.dumps(value, default=json_default, sort_keys=True)
+
+
+def _obs_json_eq_impl(raw: Any, canonical_expected: str) -> int:
+    """SQLite-Callback: 1, wenn die gespeicherte JSON-Spalte kanonisch ``== expected`` ist.
+
+    Spiegelt die Legacy-Referenz ``actual == expected`` für komplexe (list/dict)
+    Werte (#951, Codex :1281): die gespeicherte ``new_value``/``old_value``-JSON-Spalte
+    wird dekodiert und kanonisch (sortierte Keys) re-serialisiert, dann String-gleich
+    mit dem ebenfalls kanonisierten Filterwert verglichen. So matchen gleiche Objekte
+    unabhängig von der Key-Reihenfolge; malformed/non-JSON-Spalten matchen nie.
+    """
+    if not isinstance(raw, str):
+        return 0
+    try:
+        decoded = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return 0
+    return 1 if _canonical_json(decoded) == canonical_expected else 0
 
 
 def _obs_regexp_impl(pattern: str, flags: int, value: Any) -> int:
@@ -755,7 +783,17 @@ class SqliteSegmentStore(RingBufferStore):
         """
         legacy_path = Path(segment.filename)
         if segment.recovery_status == "dirty_wal" and self._legacy_is_small(segment, legacy_path):
-            await self._checkpoint_small_legacy(legacy_path)
+            if await self._checkpoint_small_legacy(legacy_path):
+                # Checkpoint hat die committeten WAL-Frames in die Haupt-DB gefaltet/
+                # getruncatet (#951, Codex :758). Die im Manifest hinterlegte
+                # pre-checkpoint-``size_bytes`` überschätzt jetzt die reale Disk-Nutzung
+                # (Phantom-WAL-Bytes) und ``dirty_wal`` würde bei jedem weiteren Read
+                # erneut einen Checkpoint auslösen. Beides mit dem REALEN post-checkpoint-
+                # Zustand nachziehen – analog zum v2-Rotations-Checkpoint-Größen-Refresh.
+                await self.manifest.mark_legacy_wal_recovered(
+                    segment.segment_id,
+                    size_bytes=self._segment_file_size(segment.filename),
+                )
         uri = f"file:{legacy_path.as_posix()}?mode=ro&immutable=1"
         conn = await aiosqlite.connect(uri, uri=True)
         conn.row_factory = aiosqlite.Row
@@ -775,7 +813,7 @@ class SqliteSegmentStore(RingBufferStore):
         return size < SMALL_MAX_BYTES
 
     @staticmethod
-    async def _checkpoint_small_legacy(legacy_path: Path) -> None:
+    async def _checkpoint_small_legacy(legacy_path: Path) -> bool:
         """Einmaliger sauberer WAL-Checkpoint einer kleinen Legacy-DB (#951, Pkt 4).
 
         Öffnet die Datei genau einmal schreibbar, checkpointet die committeten
@@ -783,6 +821,9 @@ class SqliteSegmentStore(RingBufferStore):
         wieder. Danach liest der reguläre read-only-Pfad die vollständigen Daten.
         Fehler (z. B. read-only-Filesystem) werden geschluckt — der Read degradiert
         dann auf den ``immutable=1``-Pfad statt zu brechen.
+
+        Liefert ``True`` bei erfolgreichem Checkpoint (der Aufrufer frischt dann
+        Manifest-Größe + Recovery-Status auf, #951 Codex :758), ``False`` bei Fehler.
         """
         try:
             conn = await aiosqlite.connect(str(legacy_path))
@@ -792,7 +833,8 @@ class SqliteSegmentStore(RingBufferStore):
             finally:
                 await conn.close()
         except aiosqlite.Error:
-            return
+            return False
+        return True
 
     async def _query_segment(self, conn: aiosqlite.Connection, query: StoreQuery) -> list[dict[str, Any]]:
         sql, params = self._build_segment_sql(query)
@@ -800,6 +842,10 @@ class SqliteSegmentStore(RingBufferStore):
             # REGEXP-Callback nur registrieren, wenn ein Regex-Filter vorliegt.
             # Registrierung erfolgt lokal auf der übergebenen Read-Connection.
             await conn.create_function("obs_regexp", 3, _obs_regexp_impl, deterministic=True)
+        if self._has_json_eq_filter(query.value_filters):
+            # JSON-eq/ne-Callback nur registrieren, wenn ein komplexer (list/dict)
+            # eq/ne-Filterwert vorliegt (#951, Codex :1281).
+            await conn.create_function("obs_json_eq", 2, _obs_json_eq_impl, deterministic=True)
         async with conn.execute(sql, params) as cur:
             rows = await cur.fetchall()
         return [self._row_to_dict(row) for row in rows]
@@ -1251,6 +1297,20 @@ class SqliteSegmentStore(RingBufferStore):
         return (f"({num_col} IS NOT NULL AND {num_col} {comparator} ?)", [num])
 
     @staticmethod
+    def _has_json_eq_filter(value_filters: list[dict[str, Any]]) -> bool:
+        """True, wenn ein ``eq``/``ne``-Filter einen komplexen (list/dict) Wert trägt.
+
+        Nur dann muss der ``obs_json_eq``-Callback auf der Read-Connection registriert
+        werden (#951, Codex :1281). Skalare eq/ne pushen weiter über typisierte Spalten.
+        """
+        for spec in value_filters:
+            if str(spec.get("operator", "")).strip().lower() not in {"eq", "ne"}:
+                continue
+            if _derive_value_type(spec.get("value")) == "json":
+                return True
+        return False
+
+    @staticmethod
     def _eq_match_predicate(field_name: str, value: Any) -> tuple[str, list[Any]]:
         """SQL-Prädikat, das genau dann wahr ist, wenn die Zeile Python-``== value`` ist.
 
@@ -1278,7 +1338,14 @@ class SqliteSegmentStore(RingBufferStore):
             if num in (0.0, 1.0):
                 return (f"(IFNULL({num_col} = ?, 0) OR IFNULL({bool_col} = ?, 0))", [num, int(num)])
             return (f"IFNULL({num_col} = ?, 0)", [num])
-        raise ValueError("eq/ne needs a numeric, text or bool value")
+        # value_type == "json" (list/dict): kein 422 mehr (#951, Codex :1281). Der
+        # Legacy-Referenzfilter verglich Python-Werte direkt (``actual == expected``);
+        # ``eq`` auf dasselbe Objekt/Array matchte, ``ne`` lieferte das Inverse. Hier
+        # gegen die gespeicherte volle JSON-Spalte (``{field_name}``) vergleichen –
+        # kanonisch (sortierte Keys) über den ``obs_json_eq``-Callback, sodass gleiche
+        # Objekte unabhängig von der Key-Reihenfolge treffen. NULL-sicher via IFNULL,
+        # damit die ``ne``-Negation null-/andere-Typ-Zeilen einschließt.
+        return (f"IFNULL(obs_json_eq({field_name}, ?), 0)", [_canonical_json(value)])
 
     @staticmethod
     def _guarded_clause(operator: str, field_name: str, spec: dict[str, Any]) -> tuple[str, list[Any]]:

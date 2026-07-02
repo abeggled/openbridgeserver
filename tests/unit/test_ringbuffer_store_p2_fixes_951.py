@@ -502,6 +502,95 @@ async def test_rotate_keeps_pending_size_when_checkpoint_busy(store: SqliteSegme
 
 
 # ---------------------------------------------------------------------------
+# (Codex :758) Legacy-Größe + Recovery-Status nach small-legacy-WAL-Checkpoint auffrischen
+# ---------------------------------------------------------------------------
+
+
+def _build_small_dirty_wal_legacy(path: Path) -> None:
+    """Kleine Legacy-Single-DB im WAL-Modus mit uncheckpointeten Frames (dirty WAL)."""
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA wal_autocheckpoint=0")  # kein automatischer Checkpoint
+        conn.execute(
+            """CREATE TABLE ringbuffer (
+                   id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                   ts             TEXT NOT NULL,
+                   datapoint_id   TEXT NOT NULL,
+                   topic          TEXT NOT NULL,
+                   old_value      TEXT,
+                   new_value      TEXT,
+                   source_adapter TEXT NOT NULL,
+                   quality        TEXT NOT NULL,
+                   metadata_version INTEGER NOT NULL DEFAULT 1,
+                   metadata       TEXT NOT NULL DEFAULT '{}'
+               )"""
+        )
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO ringbuffer (ts, datapoint_id, topic, old_value, new_value, source_adapter, quality) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (f"2025-01-01T00:00:0{i}.000Z", "dp-legacy", "dp/dp-legacy/value", None, json.dumps(i), "legacy", "good"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def test_small_legacy_checkpoint_refreshes_size_and_recovery(store: SqliteSegmentStore, tmp_path: Path):
+    # Ein kleines dirty-WAL-Legacy-Segment: beim ersten Read checkpointet der Store
+    # die committeten WAL-Frames per TRUNCATE in die Haupt-DB. Ohne Fix behielte das
+    # Manifest die pre-checkpoint-Größe (inkl. WAL-Bytes) UND den dirty_wal-Status →
+    # Phantom-WAL-Bytes in Stats/Retention und ein Re-Checkpoint bei jedem Read.
+    from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+
+    legacy_file = tmp_path / "obs_ringbuffer.db"
+    _build_small_dirty_wal_legacy(legacy_file)
+
+    # Als dirty-WAL-Legacy einhängen mit bewusst zu hoch angesetzter (pre-checkpoint)
+    # size_bytes, wie sie ein WAL-schwerer Zustand hinterlassen hätte. Wert unter
+    # SMALL_MAX_BYTES (64 MiB), damit der small-legacy-Checkpoint-Pfad greift, aber
+    # weit über der realen post-checkpoint-Größe (wenige KB).
+    inflated = 10 * 1024 * 1024
+    rec = await store.manifest.register_legacy_segment(source_path=str(legacy_file), size_bytes=inflated, dirty_wal=True)
+    assert rec.recovery_status == "dirty_wal"
+    assert rec.schema_version == LEGACY_SCHEMA_VERSION
+
+    # Ein Read triggert den small-legacy-Checkpoint-Pfad.
+    rows = await store.query(StoreQuery(limit=50))
+    assert {r["new_value"] for r in rows} == {0, 1, 2, 3, 4}
+
+    seg = await store.manifest.get_segment(rec.segment_id)
+    # size_bytes wurde auf die REALE post-checkpoint-Größe (klein, via _segment_file_size) neu geschrieben.
+    assert seg.size_bytes != inflated
+    assert seg.size_bytes == store._segment_file_size(seg.filename)
+    # recovery_status ist nicht mehr dirty_wal → Re-Checkpoint bei folgenden Reads entfällt.
+    assert seg.recovery_status == "none"
+
+
+async def test_small_legacy_checkpoint_failure_keeps_dirty_status(store: SqliteSegmentStore, tmp_path: Path, monkeypatch):
+    # Scheitert der Checkpoint (z. B. read-only FS), darf weder die Größe noch der
+    # Recovery-Status verändert werden: die WAL-Bytes liegen weiter auf der Platte,
+    # der Read degradiert auf immutable=1. Kein stiller „recovered"-Zustand.
+    legacy_file = tmp_path / "obs_ringbuffer.db"
+    _build_small_dirty_wal_legacy(legacy_file)
+    inflated = 10 * 1024 * 1024  # unter SMALL_MAX_BYTES, damit der Checkpoint-Pfad überhaupt greift
+    rec = await store.manifest.register_legacy_segment(source_path=str(legacy_file), size_bytes=inflated, dirty_wal=True)
+
+    async def _fail_checkpoint(_self, _path):
+        return False
+
+    monkeypatch.setattr(SqliteSegmentStore, "_checkpoint_small_legacy", _fail_checkpoint)
+
+    rows = await store.query(StoreQuery(limit=50))
+    # Der Read degradiert auf immutable=1 und liefert weiter (mind. die Haupt-DB-Zeilen).
+    assert len(rows) >= 0
+
+    seg = await store.manifest.get_segment(rec.segment_id)
+    assert seg.size_bytes == inflated
+    assert seg.recovery_status == "dirty_wal"
+
+
+# ---------------------------------------------------------------------------
 # (Codex :724) Korruptes Legacy-Segment unter No-Zero-History-Guard bewahren
 # ---------------------------------------------------------------------------
 

@@ -283,6 +283,84 @@ async def test_eq_null_and_ne_null(store: SqliteSegmentStore, tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# 4b) eq/ne auf komplexen JSON-Werten (list/dict): kein 422, echtes Matching
+# ---------------------------------------------------------------------------
+
+
+async def test_eq_json_list_value_matches(store: SqliteSegmentStore, tmp_path: Path):
+    # Legacy verglich Python-Werte direkt: eq [1,2,3] matcht genau die gleiche Liste.
+    values: list[Any] = [[1, 2, 3], [1, 2], {"a": 1}, "x", None]
+    vf = [{"operator": "eq", "value": [1, 2, 3]}]
+
+    # Listen sind unhashbar → nicht über die Set-Projektion in ``_legacy_reference``,
+    # sondern direkt über die Referenz ``_apply_value_filters`` prüfen. Ergebnis: nur [1,2,3].
+    ref_entries = await _apply_value_filters(
+        entries=[
+            RingBufferEntry(
+                id=i,
+                ts=f"2026-01-01T00:00:{i:02d}.000Z",
+                datapoint_id="dp-1",
+                topic="t",
+                old_value=None,
+                new_value=v,
+                source_adapter="api",
+                quality="good",
+                metadata_version=1,
+                metadata={},
+            )
+            for i, v in enumerate(values)
+        ],
+        value_filters=vf,
+        datapoint_types={},
+    )
+    assert [e.new_value for e in ref_entries] == [[1, 2, 3]]
+
+    # v2-Segment: KEIN 422; genau die gleiche Liste matcht.
+    await store.append([_event(v, f"2026-01-01T00:00:{i:02d}.000Z") for i, v in enumerate(values)])
+    v2_rows = await store.query(StoreQuery(limit=50, value_filters=vf))
+    assert [r["new_value"] for r in v2_rows] == [[1, 2, 3]]
+
+
+async def test_eq_json_dict_matches_regardless_of_key_order(store: SqliteSegmentStore):
+    # Gleiche Objekte (nur andere Key-Reihenfolge) müssen matchen – Legacy vergleicht
+    # dekodierte Python-Dicts (order-unabhängig).
+    await store.append(
+        [
+            _event({"a": 1, "b": 2}, "2026-01-01T00:00:00.000Z"),
+            _event({"b": 9}, "2026-01-01T00:00:01.000Z"),
+        ]
+    )
+    # Filter mit vertauschter Key-Reihenfolge muss trotzdem das erste Objekt treffen.
+    rows = await store.query(StoreQuery(limit=50, value_filters=[{"operator": "eq", "value": {"b": 2, "a": 1}}]))
+    assert [r["new_value"] for r in rows] == [{"a": 1, "b": 2}]
+
+
+def test_obs_json_eq_impl_defensive_branches():
+    # Direkter Callback-Test: nicht-str/malformed Spaltenwerte matchen nie (0),
+    # ein kanonisch gleicher Wert matcht (1). Deckt die defensiven Zweige ab.
+    from obs.ringbuffer.store.sqlite_backend import _canonical_json, _obs_json_eq_impl
+
+    expected = _canonical_json([1, 2, 3])
+    assert _obs_json_eq_impl(None, expected) == 0  # nicht-str (z. B. NULL-Spalte)
+    assert _obs_json_eq_impl("definitely not json", expected) == 0  # malformed
+    assert _obs_json_eq_impl("[1, 2, 3]", expected) == 1  # kanonisch gleich
+    assert _obs_json_eq_impl("[3, 2, 1]", expected) == 0  # Liste ordnungsempfindlich
+
+
+async def test_ne_json_value_matches_cross_type_and_null(store: SqliteSegmentStore):
+    # ne [1,2,3] schließt nur die exakt gleiche Liste aus; alles andere (inkl. anderer
+    # Liste, Skalar, null) matcht – wie Legacy ``actual != expected``.
+    values: list[Any] = [[1, 2, 3], [1, 2], 5, None]
+    await store.append([_event(v, f"2026-01-01T00:00:{i:02d}.000Z") for i, v in enumerate(values)])
+    rows = await store.query(StoreQuery(limit=50, value_filters=[{"operator": "ne", "value": [1, 2, 3]}]))
+    got = [r["new_value"] for r in rows]
+    assert [1, 2, 3] not in got
+    assert [1, 2] in got
+    assert 5 in got
+    assert None in got
+
+
+# ---------------------------------------------------------------------------
 # 5) Multi-Column-Binding-Filter: EINE Binding-Zeile muss ALLE Spalten erfüllen
 # ---------------------------------------------------------------------------
 
