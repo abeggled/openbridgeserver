@@ -150,6 +150,7 @@ class ArchiveReadAccess:
     username: str
     predicates: list[Any] | None = None
     is_admin: bool = False
+    page_access: str | None = None
 
 
 async def _store() -> MessageArchiveStore:
@@ -208,6 +209,24 @@ def _has_foreign_key_cascade(foreign_keys: list[Any], table: str, from_column: s
         target_column = str(row[4])
         on_delete = str(row[6]).upper()
         if target_table == table and source_column == from_column and target_column == to_column and on_delete == "CASCADE":
+            return True
+    return False
+
+
+def _has_unique_key(conn: sqlite3.Connection, table: str, columns: tuple[str, ...]) -> bool:
+    table_info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    primary_key_columns = tuple(str(row[1]) for row in sorted((row for row in table_info if int(row[5]) > 0), key=lambda row: int(row[5])))
+    if primary_key_columns == columns:
+        return True
+
+    for index_row in conn.execute(f"PRAGMA index_list({table})").fetchall():
+        is_unique = bool(index_row[2])
+        is_partial = bool(index_row[4]) if len(index_row) > 4 else False
+        if not is_unique or is_partial:
+            continue
+        index_name = str(index_row[1])
+        index_columns = tuple(str(row[2]) for row in conn.execute(f"PRAGMA index_info({index_name})").fetchall())
+        if index_columns == columns:
             return True
     return False
 
@@ -282,6 +301,8 @@ def _validate_sqlite_archive_db(path: str) -> None:
             has_read_state_entry_cascade = _has_foreign_key_cascade(read_state_foreign_keys, "message_archive_entries", "entry_id", "id")
             if not has_entry_archive_cascade or not has_read_state_entry_cascade:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Meldungsarchiv-Datenbank hat ungültige Fremdschlüssel.")
+            if not _has_unique_key(conn, "message_archive_read_states", ("entry_id", "username")):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Meldungsarchiv-Datenbank hat ungültige Lesestatus-Schlüssel.")
             fk_violations = conn.execute("PRAGMA foreign_key_check").fetchall()
             if fk_violations:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Meldungsarchiv-Datenbank enthält ungültige Fremdschlüssel.")
@@ -384,7 +405,7 @@ async def _page_scoped_archive_access(request: Request, db: Database, *, usernam
     )
     if not predicates:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Message archive access is not configured for this page")
-    return ArchiveReadAccess(username=username, predicates=predicates)
+    return ArchiveReadAccess(username=username, predicates=predicates, page_access=access)
 
 
 def _entry_predicates_for_page(predicates: list[Any] | None) -> list[EntryPredicate] | None:
@@ -417,6 +438,11 @@ def _entry_action_allowed_for_page(entry: dict[str, Any], predicates: list[Any] 
         if _message_archive_entry_matches_access(entry, [predicate]):
             return True
     return False
+
+
+def _ensure_page_action_mutation_allowed(access: ArchiveReadAccess) -> None:
+    if access.page_access == "readonly":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Readonly visu pages cannot mutate message archives")
 
 
 def _strip_archive_storage_fields(archive: dict[str, Any]) -> dict[str, Any]:
@@ -789,6 +815,8 @@ async def create_message_archive_entry(
     store: MessageArchiveStore = Depends(_store),
 ) -> dict[str, Any]:
     archive_id = _validate_archive_id(archive_id)
+    if not await store.get_archive(archive_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive not found")
     source = body.source or _principal_name(principal)
     try:
         entry = await store.create_entry(
@@ -847,6 +875,7 @@ async def mark_message_archive_entry_read(
 ) -> dict[str, Any]:
     archive_id = _validate_archive_id(archive_id)
     access = await _archive_read_access(request, db)
+    _ensure_page_action_mutation_allowed(access)
     existing = await store.get_entry(archive_id, entry_id, username=access.username)
     if not existing or not _entry_action_allowed_for_page(existing, access.predicates, "read"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive entry not found")
@@ -866,6 +895,7 @@ async def acknowledge_message_archive_entry(
 ) -> dict[str, Any]:
     archive_id = _validate_archive_id(archive_id)
     access = await _archive_read_access(request, db)
+    _ensure_page_action_mutation_allowed(access)
     existing = await store.get_entry(archive_id, entry_id, username=access.username)
     if not existing or not _entry_action_allowed_for_page(existing, access.predicates, "acknowledge"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive entry not found")

@@ -5,6 +5,7 @@ import uuid
 
 import pytest
 from obs.api.auth import create_access_token
+from obs.message_archive import MIGRATIONS
 
 pytestmark = pytest.mark.integration
 
@@ -274,6 +275,72 @@ async def test_message_archive_database_import_rejects_missing_foreign_key_casca
                 read_at TEXT NOT NULL,
                 hidden_at TEXT,
                 PRIMARY KEY (entry_id, username)
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    imported = await client.post(
+        "/api/v1/message-archives/import/db",
+        headers=auth_headers,
+        files={"file": ("message-archives.sqlite", malformed.read_bytes(), "application/octet-stream")},
+    )
+
+    assert imported.status_code == 400
+
+
+async def test_message_archive_database_import_rejects_missing_read_state_unique_key(client, auth_headers, tmp_path):
+    malformed = tmp_path / "malformed-message-archives-read-state-key.sqlite"
+    supported_version = max(version for version, _sql in MIGRATIONS)
+    conn = sqlite3.connect(malformed)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (?, '2026-01-01T00:00:00Z')", (supported_version,))
+        conn.execute(
+            """
+            CREATE TABLE message_archives (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                tags TEXT NOT NULL DEFAULT '[]',
+                default_type TEXT,
+                color TEXT NOT NULL DEFAULT '#3b82f6',
+                retention_max_entries INTEGER,
+                retention_max_age_days INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE message_archive_entries (
+                id TEXT PRIMARY KEY,
+                archive_id TEXT NOT NULL REFERENCES message_archives(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'system',
+                severity TEXT NOT NULL DEFAULT 'info',
+                status TEXT NOT NULL DEFAULT 'new',
+                source TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                message TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL DEFAULT '{}',
+                acknowledged_at TEXT,
+                acknowledged_by TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE message_archive_read_states (
+                entry_id TEXT NOT NULL REFERENCES message_archive_entries(id) ON DELETE CASCADE,
+                username TEXT NOT NULL,
+                read_at TEXT NOT NULL,
+                hidden_at TEXT
             )
             """
         )
@@ -685,6 +752,60 @@ async def test_message_archive_page_scoped_read_and_ack_require_widget_permissio
         )
 
 
+async def test_message_archive_readonly_page_denies_read_and_ack_mutations(client, auth_headers):
+    archive_id = _archive_id("page-readonly")
+    page_id = None
+    try:
+        create = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": "Readonly"})
+        assert create.status_code == 201, create.text
+        entry_resp = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            json={"title": "Readonly action"},
+        )
+        assert entry_resp.status_code == 201, entry_resp.text
+        entry_id = entry_resp.json()["id"]
+        page = await client.post(
+            "/api/v1/visu/nodes",
+            headers=auth_headers,
+            json={"name": "Readonly archive page", "type": "PAGE", "access": "readonly"},
+        )
+        assert page.status_code == 201, page.text
+        page_id = page.json()["id"]
+        page_config = {
+            "grid_cols": 12,
+            "grid_row_height": 80,
+            "background": None,
+            "widgets": [
+                {
+                    "id": "archive-widget",
+                    "type": "MessageArchive",
+                    "name": "Archiv",
+                    "x": 0,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                    "config": {"archive_ids": [archive_id], "allow_read": True, "allow_acknowledge": True},
+                }
+            ],
+        }
+        save = await client.put(f"/api/v1/visu/pages/{page_id}", headers=auth_headers, json=page_config)
+        assert save.status_code == 204, save.text
+
+        read_resp = await client.post(f"/api/v1/message-archives/{archive_id}/entries/{entry_id}/read", headers={"X-Page-Id": page_id})
+        assert read_resp.status_code == 403
+        ack_resp = await client.post(f"/api/v1/message-archives/{archive_id}/entries/{entry_id}/acknowledge", headers={"X-Page-Id": page_id})
+        assert ack_resp.status_code == 403
+    finally:
+        if page_id:
+            await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
 async def test_message_archive_entries_accept_multiple_filter_values(client, auth_headers):
     system_archive_id = _archive_id("system")
     adapter_archive_id = _archive_id("adapter")
@@ -779,6 +900,26 @@ async def test_message_archive_entry_patch_requires_admin(client, auth_headers):
             headers=auth_headers,
             params={"confirm": "true"},
         )
+
+
+async def test_message_archive_entry_create_requires_existing_archive_for_non_admin(client, auth_headers):
+    archive_id = _archive_id("missing-entry")
+    username = None
+    try:
+        non_admin_headers, username = await _create_non_admin_headers(client, auth_headers)
+
+        resp = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=non_admin_headers,
+            json={"title": "Should not create archive"},
+        )
+
+        assert resp.status_code == 404
+        missing = await client.get(f"/api/v1/message-archives/{archive_id}", headers=auth_headers)
+        assert missing.status_code == 404
+    finally:
+        if username:
+            await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
 async def test_message_archive_patch_rejects_null_required_fields(client, auth_headers):
