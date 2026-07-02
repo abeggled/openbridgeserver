@@ -2000,6 +2000,19 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
         set_ringbuffer_enabled(False)
         return await _disabled_stats(db)
 
+    # Segmentierungs-Wechsel gegenüber der LAUFENDEN Instanz (#951): ``rb.reconfigure``
+    # kennt kein ``segmented`` und ändert ``_segmented`` nicht. Liefe der Monitor
+    # bereits im (unterstützten) Legacy-Modus und käme später ``segmented:true``
+    # (oder umgekehrt), persistierte die API den neuen Wert, während die laufende
+    # Instanz im alten Modus bliebe (Store fehlt bzw. bleibt fälschlich aktiv). Daher
+    # bei erkanntem Wechsel den RingBuffer stoppen und mit der neuen Segmentierung
+    # neu aufbauen — analog zum Model-Switch in ``RingBuffer.reconfigure``.
+    if rb is not None and rb.segmented != resolved_segmented:
+        _unsubscribe_ringbuffer(rb)
+        await rb.stop()
+        reset_ringbuffer()
+        rb = None
+
     created_rb = False
     subscribed_new = False
     try:

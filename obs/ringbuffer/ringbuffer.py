@@ -1423,9 +1423,6 @@ def delete_ringbuffer_storage_files(disk_path: str) -> None:
     if _is_sqlite_memory_path(disk_path):
         return
     disk_path = _sqlite_filesystem_path(disk_path)
-    segments_root = Path(disk_path).with_name(f"{Path(disk_path).stem}_segments")
-    if segments_root.exists():
-        shutil.rmtree(segments_root, ignore_errors=True)
     storage_paths = (f"{disk_path}-wal", f"{disk_path}-shm", disk_path)
     existing_paths = [Path(path) for path in storage_paths if Path(path).exists()]
     renamed_paths: list[tuple[Path, Path]] = []
@@ -1457,6 +1454,15 @@ def delete_ringbuffer_storage_files(disk_path: str) -> None:
                     if rollback_path.exists() and not original_path.exists():
                         os.replace(rollback_path, original_path)
             raise
+
+    # Segment-Store-Root (#919) erst NACH dem erfolgreichen Legacy-Teil entfernen (#951):
+    # Solange der rename/remove-Rollback der Legacy-DB noch fehlschlagen und den Monitor
+    # wieder auf enabled zurückstellen kann, dürfen die v2-Segmentdateien nicht bereits
+    # unwiderruflich weg sein. Ab hier ist der Legacy-Teil abgeschlossen (best effort –
+    # ein Fehler beim rmtree blockiert die Legacy-Löschung nicht mehr).
+    segments_root = Path(disk_path).with_name(f"{Path(disk_path).stem}_segments")
+    if segments_root.exists():
+        shutil.rmtree(segments_root, ignore_errors=True)
 
 
 def is_ringbuffer_enabled() -> bool:

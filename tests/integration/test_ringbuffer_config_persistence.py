@@ -206,6 +206,49 @@ async def test_config_post_segment_max_age_applies_live_to_running_store(client,
     await _reset_to_defaults(client, auth_headers)
 
 
+async def test_config_post_segmentation_toggle_rebuilds_running_instance(client, auth_headers):
+    """Ein Wechsel von ``segmented`` muss den laufenden RingBuffer neu aufbauen (#951).
+
+    Regression: lief der Monitor bereits (unterstützt) im Legacy-Modus, fiel ein
+    späterer ``segmented:true``-Request in den in-place-``reconfigure``-Pfad, der
+    ``_segmented`` nicht ändert. Die API persistierte dann ``segmented=true``, die
+    laufende Instanz blieb aber Legacy (kein Store) — persistierter und tatsächlicher
+    Zustand divergierten. Der Roundtrip true→false→true prüft beide Richtungen.
+    """
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer
+
+    rb = get_optional_ringbuffer()
+    assert rb is not None and rb.segmented and rb.store is not None
+
+    # true → false: Legacy-Neuaufbau, kein Store mehr.
+    resp = await client.post(
+        "/api/v1/ringbuffer/config",
+        json={"segmented": False, "max_entries": 1000, "max_file_size_bytes": None, "max_age": None},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    rb_legacy = get_optional_ringbuffer()
+    assert rb_legacy is not None
+    assert rb_legacy.segmented is False
+    assert rb_legacy.store is None
+    assert (await _read_persisted_row())["segmented"] is False
+
+    # false → true: Store-Neuaufbau, laufende Instanz ist wieder segmentiert.
+    resp = await client.post(
+        "/api/v1/ringbuffer/config",
+        json={"segmented": True, "max_entries": 1000, "max_file_size_bytes": None, "max_age": None},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    rb_seg = get_optional_ringbuffer()
+    assert rb_seg is not None
+    assert rb_seg.segmented is True
+    assert rb_seg.store is not None
+    assert (await _read_persisted_row())["segmented"] is True
+
+    await _reset_to_defaults(client, auth_headers)
+
+
 async def test_config_post_budget_change_rederives_auto_segment_max_bytes(client, auth_headers):
     """Ein reiner Budget-Wechsel muss die AUTO-Segmentgröße live neu ableiten (#919).
 
