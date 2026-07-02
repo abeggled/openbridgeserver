@@ -1229,10 +1229,7 @@ class TestApiClientVariables:
         mock_client.request.assert_not_called()
         assert outputs["ac"]["success"] is False
         assert outputs["ac"]["status"] is None
-        assert (
-            outputs["ac"]["response"]
-            == "API client URL variables are not allowed in the scheme, host, userinfo, or port"
-        )
+        assert outputs["ac"]["response"] == "API client URL variables are not allowed in the scheme, host, userinfo, or port"
 
     def test_url_variable_in_path_and_query_is_percent_encoded(self):
         def resolver(index: int) -> str:
