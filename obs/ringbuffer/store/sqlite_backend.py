@@ -1346,7 +1346,19 @@ class SqliteSegmentStore(RingBufferStore):
             checkpoint_ok = await self._try_truncate_checkpoint(old_conn)
             await old_conn.close()
             await self.manifest.close_segment(old_segment.segment_id)
-            if not checkpoint_ok:
+            if checkpoint_ok:
+                # Erfolgreicher TRUNCATE (#951, Codex :1346): die WAL/SHM-Bytes sind
+                # gerade in die Haupt-DB verschoben/getruncatet worden. Die von
+                # _refresh_active_segment_stats gesetzte pre-checkpoint-Größe (inkl.
+                # voller WAL) überschätzt jetzt die reale Disk-Nutzung. Größe daher
+                # mit der REALEN post-checkpoint-Größe neu schreiben, BEVOR die direkt
+                # folgende Retention greift – sonst löschte _enforce_size_budget()
+                # WAL-schwere Segmente unnötig zusätzliche geschlossene/Legacy-Segmente.
+                await self.manifest.update_segment_size(
+                    old_segment.segment_id,
+                    size_bytes=self._segment_file_size(old_segment.filename),
+                )
+            else:
                 await self.manifest.mark_checkpoint_pending(old_segment.segment_id)
                 # TODO(#936): Hintergrund-Checkpoint-Läufer räumt pending später ab.
 
@@ -1743,16 +1755,29 @@ class SqliteSegmentStore(RingBufferStore):
 
         Reihenfolge: Legacy zuerst (ältestes, Guard erfüllt), sonst ältestes
         retention-fähiges Segment (geschlossen oder quarantäniert, #919).
+
+        No-Zero-History-Guard über Herkunft, nicht Status (#951, Codex :724): ein
+        beim Read korrupt erkanntes Legacy wird als ``quarantined`` markiert und
+        damit retention-eligible – ``_delete_segment`` löschte über die Schema-
+        Erkennung dann die ORIGINALE Single-DB, obwohl der Guard nur ``status=
+        'legacy'`` prüfte. Legacy-Herkunft wird deshalb hier per Schema
+        (``_is_legacy_segment``) bestimmt und unter dem Guard geschützt; die
+        FIFO-Löschbarkeit quarantänierter NICHT-Legacy-Segmente bleibt unberührt.
         """
-        legacy_segments = await self.manifest.list_legacy_segments()
+        has_nonlegacy_data = await self._has_nonlegacy_data_segment()
         # Legacy ist das global älteste → zuerst löschen, sobald der Guard erfüllt
-        # ist (mindestens eine nicht-Legacy-Datenquelle hält Zeilen).
-        if legacy_segments and await self._has_nonlegacy_data_segment():
+        # ist (mindestens eine nicht-Legacy-Datenquelle hält Zeilen). Legacy-Herkunft
+        # per Schema, damit auch ein quarantäniertes Legacy hier (und nicht in der
+        # eligible-Liste) landet.
+        legacy_segments = [s for s in await self.manifest.list_segments() if _is_legacy_segment(s)]
+        if legacy_segments and has_nonlegacy_data:
             return legacy_segments[0]
         # Geschlossene und quarantänierte Segmente in FIFO-Reihenfolge (#919):
         # ein korruptes Segment wird nicht mehr für immer behalten, sondern
-        # gelöscht, wenn es an der Reihe ist (ältestes zuerst).
-        eligible = await self.manifest.list_retention_eligible_segments()
+        # gelöscht, wenn es an der Reihe ist (ältestes zuerst). Legacy-Herkunft
+        # (auch quarantäniert) wird ausgeschlossen – sie ist entweder oben schon
+        # freigegeben oder durch den Guard geschützt (nie hier gelöscht).
+        eligible = [s for s in await self.manifest.list_retention_eligible_segments() if not _is_legacy_segment(s)]
         if eligible:
             return eligible[0]
         return None

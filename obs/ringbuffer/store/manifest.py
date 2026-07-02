@@ -245,6 +245,20 @@ class Manifest:
         )
         await self._db.commit()
 
+    async def update_segment_size(self, segment_id: int, *, size_bytes: int) -> None:
+        """Aktualisiert nur die ``size_bytes`` eines Segments (#951, Codex :1346).
+
+        Nach einem erfolgreichen ``wal_checkpoint(TRUNCATE)`` beim Rotieren ist die
+        WAL/SHM real getruncatet; die reale post-checkpoint-Größe wird hier ohne
+        die übrigen Statistik-Felder nachgezogen, damit die direkt folgende
+        Retention die Disk-Nutzung nicht überschätzt.
+        """
+        await self._db.execute(
+            "UPDATE segments SET size_bytes = ? WHERE segment_id = ?",
+            (size_bytes, segment_id),
+        )
+        await self._db.commit()
+
     async def close_segment(self, segment_id: int) -> None:
         await self._db.execute(
             "UPDATE segments SET status = ?, closed_at = ? WHERE segment_id = ?",

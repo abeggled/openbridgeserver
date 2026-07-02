@@ -426,3 +426,142 @@ def test_effective_candidate_cap_falls_back_to_default():
 
     assert SqliteSegmentStore._effective_candidate_cap(StoreQuery(limit=5)) == _LEGACY_DEFAULT_CANDIDATE_CAP
     assert SqliteSegmentStore._effective_candidate_cap(StoreQuery(limit=5, candidate_cap=7)) == 7
+
+
+# ---------------------------------------------------------------------------
+# (Codex :1346) Segmentgröße nach erfolgreichem Checkpoint (TRUNCATE) auffrischen
+# ---------------------------------------------------------------------------
+
+
+async def test_rotate_refreshes_segment_size_after_successful_checkpoint(store: SqliteSegmentStore, monkeypatch):
+    # Vor dem Checkpoint zählt _refresh_active_segment_stats WAL+SHM voll mit
+    # (WAL-schweres Segment). Der erfolgreiche TRUNCATE verschiebt/truncatet die
+    # WAL-Bytes gerade in die Haupt-DB – ohne Auffrischung behielte das Manifest
+    # die pre-checkpoint-Größe und die direkt folgende Retention überschätzte die
+    # Disk-Nutzung. Nach dem Fix trägt das Manifest die REALE post-checkpoint-Größe.
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    rotated_id = (await store.manifest.get_active_segment()).segment_id
+    filename = (await store.manifest.get_segment(rotated_id)).filename
+
+    # _segment_file_size liefert vor dem Checkpoint eine große (WAL-schwere) Größe,
+    # danach die reale, kleine Größe – wie ein echter TRUNCATE, der die WAL leert.
+    real_size = SqliteSegmentStore._segment_file_size
+    state = {"checkpointed": False}
+
+    def _fake_size(self, name):
+        if name == filename and not state["checkpointed"]:
+            return 50_000_000  # WAL-schwer, pre-checkpoint
+        return real_size(self, name)
+
+    monkeypatch.setattr(SqliteSegmentStore, "_segment_file_size", _fake_size)
+
+    real_ckpt = store._try_truncate_checkpoint
+
+    async def _ok_and_shrink(conn):
+        result = await real_ckpt(conn)
+        state["checkpointed"] = True  # WAL ist ab jetzt getruncatet → kleine Größe
+        return result
+
+    monkeypatch.setattr(store, "_try_truncate_checkpoint", _ok_and_shrink)
+
+    await store.rotate()
+
+    seg = await store.manifest.get_segment(rotated_id)
+    # Ohne Fix bliebe size_bytes == 50_000_000 (pre-checkpoint). Mit Fix entspricht
+    # es der realen post-checkpoint-Größe (konsistent zu _segment_file_size).
+    assert seg.size_bytes != 50_000_000
+    assert seg.size_bytes == store._segment_file_size(filename)
+
+
+async def test_rotate_keeps_pending_size_when_checkpoint_busy(store: SqliteSegmentStore, monkeypatch):
+    # Scheitert der Checkpoint (busy), darf die Größe NICHT auf eine (falsche) post-
+    # checkpoint-Größe gesetzt werden: die WAL-Bytes liegen weiter auf der Platte,
+    # das Segment ist checkpoint_pending. Die pre-checkpoint-Größe bleibt maßgeblich.
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    pending_id = (await store.manifest.get_active_segment()).segment_id
+    filename = (await store.manifest.get_segment(pending_id)).filename
+
+    async def _busy(_conn):
+        return False
+
+    monkeypatch.setattr(store, "_try_truncate_checkpoint", _busy)
+
+    def _big_size(self, name):
+        return 50_000_000 if name == filename else SqliteSegmentStore._segment_file_size(self, name)
+
+    monkeypatch.setattr(SqliteSegmentStore, "_segment_file_size", _big_size)
+
+    await store.rotate()
+
+    from obs.ringbuffer.store.manifest import SEGMENT_STATUS_CHECKPOINT_PENDING
+
+    seg = await store.manifest.get_segment(pending_id)
+    assert seg.status == SEGMENT_STATUS_CHECKPOINT_PENDING
+    # WAL noch da → die (große) pre-checkpoint-Größe bleibt maßgeblich.
+    assert seg.size_bytes == 50_000_000
+
+
+# ---------------------------------------------------------------------------
+# (Codex :724) Korruptes Legacy-Segment unter No-Zero-History-Guard bewahren
+# ---------------------------------------------------------------------------
+
+
+async def _attach_legacy_blob(store: SqliteSegmentStore, size_bytes: int) -> tuple[int, Path]:
+    """Hängt eine synthetische Legacy-Single-DB gegebener Größe ins Manifest ein."""
+    legacy_file = store._root / "legacy_source.db"
+    legacy_file.write_bytes(b"\x00" * size_bytes)
+    rec = await store.manifest.register_legacy_segment(source_path=str(legacy_file), size_bytes=size_bytes)
+    return rec.segment_id, legacy_file
+
+
+async def test_quarantined_legacy_not_deleted_when_only_data_source(store: SqliteSegmentStore):
+    # Ein Read der eingehängten Legacy-DB traf auf Korruption → als quarantined
+    # markiert. quarantined ist retention-eligible und _delete_segment erkennt das
+    # Schema weiter als Legacy → ohne Fix würde die ORIGINALE Single-DB gelöscht,
+    # obwohl sie die EINZIGE Datenquelle ist (Datenverlust unter dem Guard).
+    legacy_id, legacy_file = await _attach_legacy_blob(store, 8 * 1024 * 1024)
+    await store.manifest.mark_quarantined(legacy_id, reason="malformed database disk image")
+    assert await store._has_nonlegacy_data_segment() is False
+
+    store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
+    # Der No-Zero-History-Guard muss das quarantänierte Legacy als Legacy-/History-
+    # Herkunft behandeln (Schema, nicht Status) → kein Opfer, keine Löschung.
+    assert await store._next_size_retention_victim() is None
+    removed = await store.enforce_retention()
+    assert removed == 0
+    assert await store.manifest.get_segment(legacy_id) is not None
+    assert legacy_file.exists()
+
+
+async def test_quarantined_legacy_deleted_once_v2_data_exists(store: SqliteSegmentStore):
+    # Sobald eine nicht-Legacy-Datenquelle existiert, ist auch das quarantänierte
+    # Legacy wieder freigebbar (Guard erfüllt) – die Legacy-Rückgewinnungs-Semantik
+    # bleibt erhalten, nur die Herkunfts-Erkennung darf nicht am Status scheitern.
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])  # frische v2-Daten
+    legacy_id, legacy_file = await _attach_legacy_blob(store, 8 * 1024 * 1024)
+    await store.manifest.mark_quarantined(legacy_id, reason="malformed database disk image")
+    assert await store._has_nonlegacy_data_segment() is True
+
+    store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
+    removed = await store.enforce_retention()
+    assert removed >= 1
+    assert await store.manifest.get_segment(legacy_id) is None
+    assert not legacy_file.exists()
+    # Frische v2-Daten (aktives Segment) bleiben erhalten.
+    assert await store.manifest.get_active_segment() is not None
+
+
+async def test_quarantined_v2_still_fifo_deletable_as_only_nonlegacy(store: SqliteSegmentStore):
+    # Regression-Guard: die zuvor eingeführte Semantik „quarantänierte v2-Segmente
+    # sind FIFO-löschbar" bleibt für NICHT-Legacy unverändert. Ein quarantäniertes
+    # geschlossenes v2 darf weiter gelöscht werden – nur Legacy-Herkunft schützt.
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    victim_id = (await store.manifest.get_active_segment()).segment_id
+    await store.rotate()
+    await store.append([_event(2, "2026-01-01T00:00:01.000Z")])  # aktives, frische Daten
+    await store.manifest.mark_quarantined(victim_id, reason="corrupt")
+
+    store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
+    removed = await store.enforce_retention()
+    assert removed >= 1
+    assert await store.manifest.get_segment(victim_id) is None
