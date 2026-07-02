@@ -2007,7 +2007,24 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     # Instanz im alten Modus bliebe (Store fehlt bzw. bleibt fälschlich aktiv). Daher
     # bei erkanntem Wechsel den RingBuffer stoppen und mit der neuen Segmentierung
     # neu aufbauen — analog zum Model-Switch in ``RingBuffer.reconfigure``.
+    # Rollback-sicher (#951, Pkt 2): Der alte Buffer muss abgebaut werden, bevor der
+    # neue denselben Disk-Pfad öffnet. Scheitert der Neuaufbau (Segment-Root gelockt,
+    # DB nicht öffenbar), darf NICHT „kein Buffer" zurückbleiben, obwohl die Config
+    # schon umgestellt ist – sonst zeichnet der Monitor nichts mehr auf. Daher die
+    # Config des alten Buffers festhalten, damit sie im Fehlerfall im ALTEN Modus
+    # (inkl. Subscription) wiederhergestellt werden kann.
+    switch_prev_config: dict[str, Any] | None = None
     if rb is not None and rb.segmented != resolved_segmented:
+        switch_prev_config = {
+            "storage": rb._storage,
+            "max_entries": rb._max_entries,
+            "max_file_size_bytes": rb._max_file_size_bytes,
+            "max_age": rb._max_age,
+            "segmented": rb.segmented,
+            "segment_max_bytes": rb._segment_max_bytes_config,
+            "segment_max_rows": rb._segment_max_rows,
+            "segment_max_age": rb._segment_max_age,
+        }
         _unsubscribe_ringbuffer(rb)
         await rb.stop()
         reset_ringbuffer()
@@ -2070,6 +2087,26 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             set_ringbuffer_enabled(False)
             with suppress(Exception):
                 delete_ringbuffer_storage_files(_ringbuffer_disk_path())
+        # Modus-Switch-Rebuild gescheitert (#951, Pkt 2): der alte Buffer wurde
+        # bereits abgebaut. Damit immer ein funktionierender Buffer läuft, den
+        # vorherigen Zustand im ALTEN Modus re-initialisieren und neu subscriben.
+        # Best-effort: schlägt auch das fehl, bleibt der ursprüngliche Fehler
+        # maßgeblich (kein neuer Zustand wird vorgetäuscht).
+        if switch_prev_config is not None:
+            with suppress(Exception):
+                restored = await init_ringbuffer(
+                    storage=switch_prev_config["storage"],
+                    max_entries=switch_prev_config["max_entries"],
+                    disk_path=_ringbuffer_disk_path(),
+                    max_file_size_bytes=switch_prev_config["max_file_size_bytes"],
+                    max_age=switch_prev_config["max_age"],
+                    segmented=switch_prev_config["segmented"],
+                    segment_max_bytes=switch_prev_config["segment_max_bytes"],
+                    segment_max_rows=switch_prev_config["segment_max_rows"],
+                    segment_max_age=switch_prev_config["segment_max_age"],
+                )
+                _subscribe_ringbuffer(restored)
+                set_ringbuffer_enabled(True)
         raise
     # Persistierte Segment-Config in die Response spiegeln (wie GET /stats),
     # damit das Config-Modal nach dem Speichern die GESPEICHERTEN Werte

@@ -743,6 +743,69 @@ async def test_segment_created_at_initialized_from_manifest_on_restart(tmp_path:
         await rb2.stop()
 
 
+# ---------------------------------------------------------------------------
+# Flag AN: Read/Rotate-Serialisierung (#951)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_segmented_read_survives_concurrent_rotation(tmp_path: Path):
+    """Ein Read, der das aktive Segment liest, darf durch eine gleichzeitige
+    Rotation (schließt die aktive Connection) nicht mit „closed database" brechen.
+
+    Reproduziert die #951-Pkt-1-Race: ``store.query`` läuft außerhalb ``self._lock``,
+    während der Write-Pfad ``_active_conn`` unter genau diesem Lock schließt/tauscht.
+    Wir lassen den ersten ``store.query``-Versuch die transiente „closed database" der
+    Rotation nachstellen; der Read muss dann korrekt (unter Lock) retryen statt 500.
+    """
+    rb = _rb(tmp_path, segmented=True, segment_max_rows=2)
+    await rb.start()
+    try:
+        for value in range(3):
+            await _record(rb, value, f"2026-01-01T00:00:0{value}.000Z")
+
+        real_query = rb.store.query
+        calls = {"n": 0}
+
+        async def flaky_query(store_query):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Genau die transiente Rotations-Fehlermeldung, die aiosqlite auf
+                # einer während des Reads geschlossenen Connection wirft.
+                raise ValueError("cannot operate on a closed database")
+            return await real_query(store_query)
+
+        rb.store.query = flaky_query
+        entries = await rb.query_v2(limit=10)
+        # Retry hat gegriffen: Ergebnis vollständig, kein 500.
+        assert calls["n"] == 2
+        assert [e.new_value for e in entries] == [2, 1, 0]
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_segmented_read_reraises_non_rotation_errors(tmp_path: Path):
+    """Nur die transiente Rotations-Race („closed database") wird geretryt.
+
+    Ein anderer, echter Fehler aus dem Store-Read darf NICHT als Rotationsrace
+    maskiert und still geschluckt werden, sondern muss unverändert propagieren.
+    """
+    rb = _rb(tmp_path, segmented=True, segment_max_rows=2)
+    await rb.start()
+    try:
+        await _record(rb, 1, "2026-01-01T00:00:00.000Z")
+
+        async def broken_query(store_query):
+            raise RuntimeError("boom")
+
+        rb.store.query = broken_query
+        with pytest.raises(RuntimeError, match="boom"):
+            await rb.query_v2(limit=10)
+    finally:
+        await rb.stop()
+
+
 @pytest.mark.asyncio
 async def test_segmented_rotation_after_default_six_hour_age(tmp_path: Path):
     from obs.ringbuffer.persisted_config import DEFAULT_SEGMENT_MAX_AGE_SECONDS

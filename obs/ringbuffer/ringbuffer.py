@@ -74,6 +74,15 @@ _SQLITE_CORRUPTION_MARKERS = (
     "file is not a database",
     "integrity_check failed",
 )
+# Transiente „closed database"-Marker (#951, Pkt 1): schließt der Write-Pfad die
+# aktive Segment-Connection (Rotation) genau während ein Read sie hält, wirft
+# aiosqlite je nach Zeitpunkt „cannot operate on a closed database" bzw. „no active
+# connection". Das ist KEINE Korruption, sondern eine reine Read/Rotate-Kollision,
+# die durch einen Retry unter ``self._lock`` (rotationsserialisiert) verschwindet.
+_CLOSED_DB_MARKERS = (
+    "cannot operate on a closed database",
+    "no active connection",
+)
 _MAX_QUARANTINE_FILES_PER_STORAGE_FILE = 3
 _DELETE_OLDEST_BATCH_SIZE = 500
 # Bounded-Kandidaten-Cap für den segmentierten Read-Pfad (#919): begrenzt den
@@ -1175,7 +1184,7 @@ class RingBuffer:
             # Kandidatenzahl je Segment gelesen, statt unbounded zu scannen.
             candidate_cap=_SEGMENTED_CANDIDATE_CAP,
         )
-        rows = await self._store.query(store_query)
+        rows = await self._store_query_serialized(store_query)
         return [
             RingBufferEntry(
                 id=row["global_event_id"],
@@ -1191,6 +1200,28 @@ class RingBuffer:
             )
             for row in rows
         ]
+
+    async def _store_query_serialized(self, store_query: Any) -> list[dict[str, Any]]:
+        """Führt den segmentierten Store-Read rotationssicher aus (#951, Pkt 1).
+
+        Sperr-/Retry-Strategie: Der Normalfall läuft bewusst **lockfrei**, damit
+        parallele Reads geschlossener Segmente nicht unnötig serialisiert werden.
+        Kollidiert ein Read jedoch mit einer gleichzeitigen Rotation – der
+        Write-Pfad (``_record_segmented_locked``) schließt/tauscht ``_active_conn``
+        unter ``self._lock`` –, wirft aiosqlite eine transiente „closed database"/
+        „no active connection". Dieser Fall wird **einmal unter ``self._lock``
+        retryt**: Da ``rotate()`` denselben Lock hält, kann während des Retries
+        keine Rotation dazwischenfunken, die aktive Connection bleibt für die Dauer
+        des Reads gültig. Nur der rotationskritische Retry zahlt die Lock-Kosten;
+        echte Fehler (keine „closed database"-Marker) werden unverändert propagiert.
+        """
+        try:
+            return await self._store.query(store_query)
+        except Exception as exc:
+            if not _is_closed_db_error(exc):
+                raise
+            async with self._lock:
+                return await self._store.query(store_query)
 
     async def stats(self) -> dict:
         def _effective_retention_seconds(oldest_ts: str | None) -> int | None:
@@ -1493,6 +1524,17 @@ def _is_sqlite_corruption(exc: Exception) -> bool:
         return False
     message = str(exc).lower()
     return any(marker in message for marker in _SQLITE_CORRUPTION_MARKERS)
+
+
+def _is_closed_db_error(exc: Exception) -> bool:
+    """True bei transienter „closed database"-Race durch Rotation (#951, Pkt 1).
+
+    aiosqlite meldet eine während des Reads geschlossene Connection als ``ValueError``
+    (``no active connection``) bzw. ``aiosqlite``-``ProgrammingError``
+    (``cannot operate on a closed database``) – beide sind reine Read/Rotate-Kollisionen,
+    keine Korruption. Erkennung über die stabilen Meldungsmarker.
+    """
+    return any(marker in str(exc).lower() for marker in _CLOSED_DB_MARKERS)
 
 
 def _normalize_string_filters(values: list[str] | None) -> list[str]:

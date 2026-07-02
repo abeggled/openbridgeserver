@@ -249,6 +249,60 @@ async def test_config_post_segmentation_toggle_rebuilds_running_instance(client,
     await _reset_to_defaults(client, auth_headers)
 
 
+async def test_config_post_segmentation_switch_rebuild_failure_restores_running_buffer(client, auth_headers, monkeypatch):
+    """Scheitert der Neuaufbau beim Segmentierungs-Wechsel, muss der alte, laufende
+    RingBuffer (inkl. Subscription) wiederhergestellt werden (#951, Pkt 2).
+
+    Regression: der alte Buffer wurde ge-``stop``/``reset`` BEVOR ``init_ringbuffer``
+    lief. Schlug der Neuaufbau fehl, blieb KEIN Singleton/Subscription übrig, obwohl
+    die persistierte Config schon umgestellt war → der Monitor zeichnete nichts mehr
+    auf. Erwartung: 5xx, aber ein funktionierender Buffer im ALTEN Modus läuft weiter
+    und empfängt weiterhin Events (Subscription intakt).
+    """
+    from obs.core.event_bus import DataValueEvent, get_event_bus
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer
+
+    rb_before = get_optional_ringbuffer()
+    assert rb_before is not None and rb_before.segmented and rb_before.store is not None
+
+    # NUR den Neuaufbau im Ziel-Modus (Legacy, ``segmented=False``) scheitern
+    # lassen; die Wiederherstellung des alten Modus (``segmented=True``) muss
+    # weiterhin gelingen – genau das ist das erwartete Rollback-Verhalten.
+    import obs.api.v1.ringbuffer as rb_api
+
+    real_init = rb_api.init_ringbuffer
+
+    async def boom(*args, **kwargs):
+        if kwargs.get("segmented") is False:
+            raise RuntimeError("simulated rebuild failure")
+        return await real_init(*args, **kwargs)
+
+    monkeypatch.setattr(rb_api, "init_ringbuffer", boom)
+
+    # Der Neuaufbau scheitert → der Request quittiert mit einem Fehler (ASGITransport
+    # propagiert die App-Exception in den Test). Entscheidend ist der Zustand DANACH.
+    with pytest.raises(RuntimeError, match="simulated rebuild failure"):
+        await client.post(
+            "/api/v1/ringbuffer/config",
+            json={"segmented": False, "max_entries": 1000, "max_file_size_bytes": None, "max_age": None},
+            headers=auth_headers,
+        )
+
+    monkeypatch.undo()
+
+    # Ein funktionierender Buffer läuft weiter (alter, segmentierter Modus).
+    rb_after = get_optional_ringbuffer()
+    assert rb_after is not None
+    assert rb_after.segmented is True
+    assert rb_after.store is not None
+
+    # Subscription intakt: der wiederhergestellte Buffer hängt weiter am EventBus.
+    handlers = get_event_bus()._handlers.get(DataValueEvent, [])
+    assert rb_after.handle_value_event in handlers
+
+    await _reset_to_defaults(client, auth_headers)
+
+
 async def test_config_post_budget_change_rederives_auto_segment_max_bytes(client, auth_headers):
     """Ein reiner Budget-Wechsel muss die AUTO-Segmentgröße live neu ableiten (#919).
 
