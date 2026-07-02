@@ -818,3 +818,377 @@ async def test_message_archive_patch_accepts_non_null_required_fields(client, au
             headers=auth_headers,
             params={"confirm": "true"},
         )
+
+
+async def test_message_archive_admin_paths_cover_update_clear_single_query_and_csv_export(client, auth_headers):
+    archive_id = _archive_id("admin-paths")
+    try:
+        invalid = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": "Bad ID", "name": "Invalid"})
+        assert invalid.status_code == 400
+
+        create = await client.post(
+            "/api/v1/message-archives",
+            headers=auth_headers,
+            json={"id": archive_id, "name": "Admin Paths", "default_type": "system"},
+        )
+        assert create.status_code == 201, create.text
+
+        duplicate = await client.post(
+            "/api/v1/message-archives",
+            headers=auth_headers,
+            json={"id": archive_id, "name": "Duplicate"},
+        )
+        assert duplicate.status_code == 409
+
+        entry = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            json={
+                "type": "adapter",
+                "severity": "error",
+                "status": "new",
+                "source": "knx",
+                "title": "CSV Export",
+                "message": "Single archive query",
+            },
+        )
+        assert entry.status_code == 201, entry.text
+
+        update = await client.patch(
+            f"/api/v1/message-archives/{archive_id.upper()}",
+            headers=auth_headers,
+            json={
+                "name": "Admin Paths Updated",
+                "description": "Updated",
+                "tags": ["ops", "csv"],
+                "default_type": None,
+                "color": "#654321",
+                "retention_max_entries": 20,
+                "retention_max_age_days": 5,
+            },
+        )
+        assert update.status_code == 200, update.text
+        assert update.json()["id"] == archive_id
+        assert update.json()["default_type"] is None
+
+        single_query = await client.get(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            params={
+                "from": "2000-01-01T00:00:00Z",
+                "to": "2999-01-01T00:00:00Z",
+                "status": "new,open",
+                "read_state": "unread",
+                "type": "adapter,system",
+                "severity": "error,warning",
+                "source": "knx,core",
+                "q": "CSV",
+                "limit": 10,
+                "offset": 0,
+                "sort": "asc",
+            },
+        )
+        assert single_query.status_code == 200, single_query.text
+        assert single_query.json()["total"] == 1
+
+        csv_export = await client.get(
+            f"/api/v1/message-archives/{archive_id}/export",
+            headers=auth_headers,
+            params={"format": "csv"},
+        )
+        assert csv_export.status_code == 200, csv_export.text
+        assert "CSV Export" in csv_export.text
+        assert csv_export.headers["content-disposition"] == f'attachment; filename="{archive_id}.csv"'
+
+        missing_export = await client.get("/api/v1/message-archives/missing-export/export", headers=auth_headers)
+        assert missing_export.status_code == 404
+
+        missing_update = await client.patch(
+            "/api/v1/message-archives/missing-update",
+            headers=auth_headers,
+            json={"name": "Missing"},
+        )
+        assert missing_update.status_code == 404
+
+        clear_without_confirm = await client.post(f"/api/v1/message-archives/{archive_id}/clear", headers=auth_headers)
+        assert clear_without_confirm.status_code == 409
+        assert clear_without_confirm.json()["detail"]["affected_entries"] == 1
+
+        clear = await client.post(
+            f"/api/v1/message-archives/{archive_id}/clear",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+        assert clear.status_code == 200, clear.text
+        assert clear.json() == {"ok": True, "affected_entries": 1}
+
+        missing_clear = await client.post("/api/v1/message-archives/missing-clear/clear", headers=auth_headers)
+        assert missing_clear.status_code == 404
+    finally:
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
+async def test_message_archive_api_key_read_access_and_invalid_key(client, auth_headers):
+    archive_id = _archive_id("api-key")
+    key_id = None
+    try:
+        create = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": "API Key"})
+        assert create.status_code == 201, create.text
+        entry = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            json={"title": "Readable with API key"},
+        )
+        assert entry.status_code == 201, entry.text
+
+        key_resp = await client.post("/api/v1/auth/apikeys", headers=auth_headers, json={"name": f"archive-{uuid.uuid4().hex[:6]}"})
+        assert key_resp.status_code == 201, key_resp.text
+        key_id = key_resp.json()["id"]
+        api_key = key_resp.json()["key"]
+
+        invalid = await client.get("/api/v1/message-archives", headers={"X-API-Key": "obs_" + "0" * 64})
+        assert invalid.status_code == 401
+
+        archives = await client.get("/api/v1/message-archives", headers={"X-API-Key": api_key})
+        assert archives.status_code == 200, archives.text
+        visible = [archive for archive in archives.json() if archive["id"] == archive_id]
+        assert visible
+        assert "db_path" not in visible[0]
+        assert "db_status" not in visible[0]
+
+        entries = await client.get(
+            "/api/v1/message-archives/entries",
+            headers={"X-API-Key": api_key},
+            params={"archive_id": archive_id},
+        )
+        assert entries.status_code == 200, entries.text
+        assert entries.json()["total"] == 1
+    finally:
+        if key_id:
+            await client.delete(f"/api/v1/auth/apikeys/{key_id}", headers=auth_headers)
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
+async def test_message_archive_page_scope_denies_unconfigured_and_hidden_archives(client, auth_headers):
+    visible_archive_id = _archive_id("visible-page")
+    hidden_archive_id = _archive_id("hidden-page")
+    empty_page_id = None
+    scoped_page_id = None
+    try:
+        for archive_id, name in ((visible_archive_id, "Visible"), (hidden_archive_id, "Hidden")):
+            create = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": name})
+            assert create.status_code == 201, create.text
+
+        empty_page = await client.post(
+            "/api/v1/visu/nodes",
+            headers=auth_headers,
+            json={"name": "Archive page without widget", "type": "PAGE", "access": "public"},
+        )
+        assert empty_page.status_code == 201, empty_page.text
+        empty_page_id = empty_page.json()["id"]
+        empty_save = await client.put(
+            f"/api/v1/visu/pages/{empty_page_id}",
+            headers=auth_headers,
+            json={"grid_cols": 12, "grid_row_height": 80, "background": None, "widgets": []},
+        )
+        assert empty_save.status_code == 204, empty_save.text
+
+        denied_unconfigured = await client.get("/api/v1/message-archives", headers={"X-Page-Id": empty_page_id})
+        assert denied_unconfigured.status_code == 403
+
+        scoped_page = await client.post(
+            "/api/v1/visu/nodes",
+            headers=auth_headers,
+            json={"name": "Archive page with visible widget", "type": "PAGE", "access": "public"},
+        )
+        assert scoped_page.status_code == 201, scoped_page.text
+        scoped_page_id = scoped_page.json()["id"]
+        page_config = {
+            "grid_cols": 12,
+            "grid_row_height": 80,
+            "background": None,
+            "widgets": [
+                {
+                    "id": "archive-widget",
+                    "type": "MessageArchive",
+                    "name": "Archiv",
+                    "x": 0,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                    "config": {"archive_ids": [visible_archive_id]},
+                }
+            ],
+        }
+        scoped_save = await client.put(f"/api/v1/visu/pages/{scoped_page_id}", headers=auth_headers, json=page_config)
+        assert scoped_save.status_code == 204, scoped_save.text
+
+        hidden = await client.get(f"/api/v1/message-archives/{hidden_archive_id}", headers={"X-Page-Id": scoped_page_id})
+        assert hidden.status_code == 403
+    finally:
+        for page_id in (empty_page_id, scoped_page_id):
+            if page_id:
+                await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+        for archive_id in (visible_archive_id, hidden_archive_id):
+            await client.delete(
+                f"/api/v1/message-archives/{archive_id}",
+                headers=auth_headers,
+                params={"confirm": "true"},
+            )
+
+
+async def test_message_archive_page_scoped_read_and_ack_allow_widget_permissions(client, auth_headers):
+    archive_id = _archive_id("page-allow")
+    page_id = None
+    try:
+        create = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": "Allow Actions"})
+        assert create.status_code == 201, create.text
+        entry_resp = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            json={"title": "Allowed action"},
+        )
+        assert entry_resp.status_code == 201, entry_resp.text
+        entry_id = entry_resp.json()["id"]
+
+        page = await client.post(
+            "/api/v1/visu/nodes",
+            headers=auth_headers,
+            json={"name": "Public archive allowed action page", "type": "PAGE", "access": "public"},
+        )
+        assert page.status_code == 201, page.text
+        page_id = page.json()["id"]
+        page_config = {
+            "grid_cols": 12,
+            "grid_row_height": 80,
+            "background": None,
+            "widgets": [
+                {
+                    "id": "archive-widget",
+                    "type": "MessageArchive",
+                    "name": "Archiv",
+                    "x": 0,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                    "config": {"archive_ids": [archive_id], "allow_read": True, "allow_acknowledge": True},
+                }
+            ],
+        }
+        save = await client.put(f"/api/v1/visu/pages/{page_id}", headers=auth_headers, json=page_config)
+        assert save.status_code == 204, save.text
+
+        read_resp = await client.post(f"/api/v1/message-archives/{archive_id}/entries/{entry_id}/read", headers={"X-Page-Id": page_id})
+        assert read_resp.status_code == 200, read_resp.text
+        assert read_resp.json()["is_read"] is True
+
+        ack_resp = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries/{entry_id}/acknowledge",
+            headers={"X-Page-Id": page_id},
+        )
+        assert ack_resp.status_code == 200, ack_resp.text
+        assert ack_resp.json()["status"] == "acknowledged"
+    finally:
+        if page_id:
+            await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
+async def test_message_archive_protected_page_requires_session_token(client, auth_headers):
+    archive_id = _archive_id("protected-page")
+    page_id = None
+    try:
+        create = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": "Protected"})
+        assert create.status_code == 201, create.text
+        page = await client.post(
+            "/api/v1/visu/nodes",
+            headers=auth_headers,
+            json={"name": "Protected archive page", "type": "PAGE", "access": "protected", "access_pin": "1234"},
+        )
+        assert page.status_code == 201, page.text
+        page_id = page.json()["id"]
+        save = await client.put(
+            f"/api/v1/visu/pages/{page_id}",
+            headers=auth_headers,
+            json={
+                "grid_cols": 12,
+                "grid_row_height": 80,
+                "background": None,
+                "widgets": [
+                    {
+                        "id": "archive-widget",
+                        "type": "MessageArchive",
+                        "name": "Archiv",
+                        "x": 0,
+                        "y": 0,
+                        "w": 4,
+                        "h": 4,
+                        "config": {"archive_ids": [archive_id]},
+                    }
+                ],
+            },
+        )
+        assert save.status_code == 204, save.text
+
+        denied = await client.get("/api/v1/message-archives/entries", headers={"X-Page-Id": page_id})
+        assert denied.status_code == 401
+
+        auth_resp = await client.post(f"/api/v1/visu/nodes/{page_id}/auth", json={"pin": "1234"})
+        assert auth_resp.status_code == 200, auth_resp.text
+        allowed = await client.get(
+            "/api/v1/message-archives/entries",
+            headers={"X-Page-Id": page_id, "X-Session-Token": auth_resp.json()["session_token"]},
+        )
+        assert allowed.status_code == 200, allowed.text
+    finally:
+        if page_id:
+            await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
+async def test_message_archive_database_import_rolls_back_when_imported_db_fails_integrity(client, auth_headers, monkeypatch):
+    from obs.api.v1 import message_archives as message_archives_api
+
+    archive_id = _archive_id("import-rollback")
+    try:
+        create = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": "Rollback"})
+        assert create.status_code == 201, create.text
+        exported = await client.get("/api/v1/message-archives/export/db", headers=auth_headers)
+        assert exported.status_code == 200, exported.text
+
+        async def failing_integrity_check(self):
+            return {"ok": False, "result": "not ok", "path": self.path, "status": "error"}
+
+        monkeypatch.setattr(message_archives_api.MessageArchiveStore, "integrity_check", failing_integrity_check)
+
+        imported = await client.post(
+            "/api/v1/message-archives/import/db",
+            headers=auth_headers,
+            files={"file": ("message-archives.sqlite", exported.content, "application/octet-stream")},
+        )
+        assert imported.status_code == 500
+
+        restored = await client.get(f"/api/v1/message-archives/{archive_id}", headers=auth_headers)
+        assert restored.status_code == 200, restored.text
+    finally:
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
