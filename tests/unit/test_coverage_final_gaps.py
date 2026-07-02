@@ -97,12 +97,11 @@ async def test_camera_auth_query_token(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_camera_auth_missing_raises_401():
+async def test_camera_auth_missing_returns_anonymous_identity():
     req = MagicMock()
     req.headers = {}
-    with pytest.raises(HTTPException) as exc_info:
-        await _camera_auth(req, _token="")
-    assert exc_info.value.status_code == 401
+    result = await _camera_auth(req, _token="")
+    assert result is None
 
 
 # ===========================================================================
@@ -440,6 +439,7 @@ async def test_proxy_camera_rejects_non_http(monkeypatch):
 @pytest.mark.asyncio
 async def test_proxy_camera_head_returns_redirect(monkeypatch):
     monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
+    monkeypatch.setattr("obs.api.v1.camera._ensure_camera_page_scope", AsyncMock(return_value=None))
     mock_head = MagicMock(status_code=301, headers={})
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -453,6 +453,7 @@ async def test_proxy_camera_head_returns_redirect(monkeypatch):
             password="",
             apikey_param="",
             apikey_value="",
+            page_id="page-camera",
             _user="admin",
         )
     assert exc_info.value.status_code == 400
@@ -461,6 +462,7 @@ async def test_proxy_camera_head_returns_redirect(monkeypatch):
 @pytest.mark.asyncio
 async def test_proxy_camera_head_returns_401(monkeypatch):
     monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
+    monkeypatch.setattr("obs.api.v1.camera._ensure_camera_page_scope", AsyncMock(return_value=None))
     mock_head = MagicMock(status_code=401, headers={})
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -474,6 +476,7 @@ async def test_proxy_camera_head_returns_401(monkeypatch):
             password="",
             apikey_param="",
             apikey_value="",
+            page_id="page-camera",
             _user="admin",
         )
     assert exc_info.value.status_code == 502
@@ -484,6 +487,7 @@ async def test_proxy_camera_head_request_error(monkeypatch):
     import httpx
 
     monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
+    monkeypatch.setattr("obs.api.v1.camera._ensure_camera_page_scope", AsyncMock(return_value=None))
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -496,6 +500,7 @@ async def test_proxy_camera_head_request_error(monkeypatch):
             password="",
             apikey_param="",
             apikey_value="",
+            page_id="page-camera",
             _user="admin",
         )
     assert exc_info.value.status_code == 502
@@ -506,6 +511,7 @@ async def test_proxy_camera_success_returns_streaming_response(monkeypatch):
     from fastapi.responses import StreamingResponse
 
     monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
+    monkeypatch.setattr("obs.api.v1.camera._ensure_camera_page_scope", AsyncMock(return_value=None))
     mock_head = MagicMock(status_code=200, headers={"content-type": "video/mjpeg"})
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -518,6 +524,7 @@ async def test_proxy_camera_success_returns_streaming_response(monkeypatch):
         password="pw",
         apikey_param="key",
         apikey_value="abc",
+        page_id="page-camera",
         _user="admin",
     )
     assert isinstance(result, StreamingResponse)
@@ -530,6 +537,7 @@ async def test_proxy_camera_head_405_optimistic(monkeypatch):
     from fastapi.responses import StreamingResponse
 
     monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
+    monkeypatch.setattr("obs.api.v1.camera._ensure_camera_page_scope", AsyncMock(return_value=None))
     mock_head = MagicMock(status_code=405, headers={})
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -542,6 +550,7 @@ async def test_proxy_camera_head_405_optimistic(monkeypatch):
         password="",
         apikey_param="",
         apikey_value="",
+        page_id="page-camera",
         _user="admin",
     )
     assert isinstance(result, StreamingResponse)
@@ -1060,7 +1069,7 @@ async def test_check_history_access_public_page(monkeypatch):
     """Public page allows unauthenticated access."""
     from obs.api.v1 import history as hist_api
 
-    monkeypatch.setattr(hist_api, "_resolve_page_access", AsyncMock(return_value="public"))
+    monkeypatch.setattr(hist_api, "_resolve_page_access_with_node", AsyncMock(return_value=("public", None)))
     req = MagicMock()
     req.headers = {"X-Page-Id": "page-1"}
     await _check_history_access(req, user=None, db=MagicMock())  # should not raise
@@ -1071,7 +1080,7 @@ async def test_check_history_access_private_page(monkeypatch):
     """Private page without user raises 401."""
     from obs.api.v1 import history as hist_api
 
-    monkeypatch.setattr(hist_api, "_resolve_page_access", AsyncMock(return_value="private"))
+    monkeypatch.setattr(hist_api, "_resolve_page_access_with_node", AsyncMock(return_value=("private", "page-1")))
     req = MagicMock()
     req.headers = {"X-Page-Id": "page-1"}
     with pytest.raises(HTTPException) as exc_info:
@@ -1592,7 +1601,7 @@ async def test_visu_save_page_success(monkeypatch):
     node_row = _make_node_row(id="p1", type="PAGE", name="Page")
     db = _make_visu_db(row=node_row)
     cfg = PageConfig(grid_cols=12, grid_row_height=80, background=None, widgets=[])
-    await save_page(node_id="p1", config=cfg, db=db, _user="admin")
+    await save_page(node_id="p1", config=cfg, db=db)
     assert db.conn.execute.called
     assert db.conn.commit.called
 

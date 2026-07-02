@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import KameraWidget from './Widget.vue'
 
-function mountWidget(config: Record<string, unknown>, editorMode = false) {
+function mountWidget(
+  config: Record<string, unknown> = {
+    url: 'http://camera.local/stream',
+    useProxy: true,
+  },
+  editorMode = false,
+  pageId?: string | null,
+  sessionToken?: string | null,
+) {
   return mount(KameraWidget, {
     props: {
       config,
@@ -11,12 +19,22 @@ function mountWidget(config: Record<string, unknown>, editorMode = false) {
       value: null,
       statusValue: null,
       editorMode,
+      pageId,
+      sessionToken,
     },
     global: {
       mocks: { $t: (key: string) => key },
     },
   })
 }
+
+beforeEach(() => {
+  localStorage.setItem('visu_jwt', 'jwt-1')
+})
+
+afterEach(() => {
+  localStorage.clear()
+})
 
 describe('Kamera Widget.vue', () => {
   it('embeds basic auth credentials in URL', () => {
@@ -80,6 +98,42 @@ describe('Kamera Widget.vue', () => {
     expect(src).toContain('/api/v1/camera/proxy')
     expect(src).toContain('username=admin')
     expect(src).toContain('password=secret')
+  })
+
+  it('adds the viewer page id to proxied camera URLs', () => {
+    const wrapper = mountWidget(undefined, false, 'page-1')
+
+    const src = wrapper.get('img').attributes('src')
+    expect(src).toBeDefined()
+    if (!src) return
+    const params = new URLSearchParams(src.split('?')[1])
+
+    expect(src.startsWith('/api/v1/camera/proxy?')).toBe(true)
+    expect(params.get('url')).toBe('http://camera.local/stream')
+    expect(params.get('_token')).toBe('jwt-1')
+    expect(params.get('page_id')).toBe('page-1')
+  })
+
+  it('adds the protected page session token to proxied camera URLs', () => {
+    const wrapper = mountWidget(undefined, false, 'page-1', 'session-1')
+
+    const src = wrapper.get('img').attributes('src')
+    expect(src).toBeDefined()
+    if (!src) return
+    const params = new URLSearchParams(src.split('?')[1])
+
+    expect(params.get('session_token')).toBe('session-1')
+  })
+
+  it('marks proxied editor previews so draft camera URLs are not page-config scoped', () => {
+    const wrapper = mountWidget(undefined, true, 'page-1', 'session-1')
+
+    const src = wrapper.get('img').attributes('src')
+    expect(src).toBeDefined()
+    if (!src) return
+    const params = new URLSearchParams(src.split('?')[1])
+
+    expect(params.get('editor_preview')).toBe('1')
   })
 
   it('shows placeholder in editor mode when no URL', () => {
