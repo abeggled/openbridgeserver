@@ -31,6 +31,7 @@
 * Visu: Link widget: the navigation arrow (→) can now be hidden independently of the icon via the "show_arrow" option (default: shown).
 
 ### Fixes 🐞
+* Security (Upstream PR #956): bind legacy SHA-512 fallback verification to the app bundle filename.
 * QA/CI: The i18n hard gate now runs reliably with macOS Bash 3.2 when no explicit diff range is provided, avoiding local pre-push failures caused by empty Bash arrays. https://github.com/abeggled/openbridgeserver/pull/898
 * Visu: Kamera widget — Basic Auth and API-Key credential fields are now always shown when the matching auth type is selected, including after loading a page saved with an older auth format. The config panel no longer renders blank when a widget with a null or missing config is selected. Legacy authType values stored as display text are normalised to canonical form on load. https://github.com/abeggled/openbridgeserver/issues/823
 * Backend: KNX adapter no longer forwards non-finite float values (`inf`, `-inf`, `nan`) produced by DPT decoders to the event bus. Such values are now published with `quality=bad` and `value=null` instead of propagating to the InfluxDB history plugin, which rejected them with HTTP 400 "invalid boolean". https://github.com/abeggled/openbridgeserver/issues/827
