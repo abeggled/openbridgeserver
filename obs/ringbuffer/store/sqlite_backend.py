@@ -291,6 +291,20 @@ def _obs_regexp_impl(pattern: str, flags: int, value: Any) -> int:
         return 0
 
 
+def _obs_icontains_impl(needle_lower: str, value: Any) -> int:
+    """SQLite-Callback für case-insensitive ``contains``. 1 bei Treffer, sonst 0.
+
+    Unicode-Folding-Parität (#951, Codex :1364): SQLite-``LOWER()`` foldet auf
+    Standard-Builds nur ASCII, sodass Nicht-ASCII-Text (z. B. deutsche Umlaute)
+    bei ``ignore_case`` NICHT matchte, obwohl der Legacy-Python-Pfad (``.lower()``)
+    ihn trifft. Der Callback lowert Nadel wie Heuhaufen in Python und ist damit
+    Unicode-fähig. ``needle_lower`` ist bereits gelowered (Clause-Bau).
+    """
+    if not isinstance(value, str):  # pragma: no cover - SQL filtert bereits text_col IS NOT NULL
+        return 0
+    return 1 if needle_lower in value.lower() else 0
+
+
 def _typed_columns_for(value: Any) -> tuple[str, float | None, str | None, int | None]:
     """(type, num, text, bool) — genau eine Nutzspalte ist je nach Typ gesetzt."""
     value_type = _derive_value_type(value)
@@ -372,8 +386,14 @@ def _legacy_filter_matches(record: dict[str, Any], spec: dict[str, Any]) -> bool
     if not isinstance(actual, str):
         return False
     flags = re.IGNORECASE if ignore_case else 0
+    # Ziel-Länge kappen wie der v2-``_obs_regexp_impl`` (#951, Codex :376): ein
+    # pathologisch langer gespeicherter Wert darf den synchronen ``re.search`` nicht
+    # den Event-Loop blockieren lassen. Vergleich auf die ersten
+    # ``_REGEX_MAX_TARGET_LEN`` Zeichen — gebounded statt blockierend, ``^``-Anker
+    # bleiben korrekt (vom Anfang gesucht).
+    target = actual if len(actual) <= _REGEX_MAX_TARGET_LEN else actual[:_REGEX_MAX_TARGET_LEN]
     try:
-        return re.compile(pattern, flags).search(actual) is not None
+        return re.compile(pattern, flags).search(target) is not None
     except re.error as exc:  # pragma: no cover - Muster wurde oben bereits kompiliert
         raise ValueError(f"invalid regex pattern: {exc}") from exc
 
@@ -425,16 +445,19 @@ def _legacy_compare(operator: str, actual: Any, expected: Any) -> bool:
         return actual == expected
     if operator == "ne":
         return actual != expected
-    # Range-Operatoren: Cross-Typ ist bedeutungslos → wie v2/Legacy kein Treffer.
-    if isinstance(expected, bool):
-        if not isinstance(actual, bool):
-            return False
-    elif _is_number(expected):
-        if not _is_number(actual):
-            return False
-    elif isinstance(expected, str):
-        if not isinstance(actual, str):
-            return False
+    # Range-Operatoren sind wie der v2-Pushdown UND ``_matches_value_filter`` nur für
+    # numerische Werte definiert (#951, Codex :439). Ein gt/gte/lt/lte gegen einen
+    # STRING/BOOLEAN-Vergleichswert würde sonst zu einem lexikografischen Text- bzw.
+    # 0/1-Bool-Vergleich degradieren — segment-abhängiges Verhalten. Daher hier mit
+    # demselben 422-tauglichen ValueError ablehnen, sodass eine upgegradete Instanz,
+    # die nur ihr Legacy-Segment bedient, identisch reagiert.
+    if isinstance(expected, bool) or isinstance(expected, str):
+        data_type = "BOOLEAN" if isinstance(expected, bool) else "STRING"
+        raise ValueError(f"operator '{operator}' is not supported for data_type '{data_type}'")
+    # Cross-Typ (numerischer Vergleichswert, nicht-numerische Zeile) ist bedeutungslos
+    # → wie v2/Legacy kein Treffer.
+    if _is_number(expected) and not _is_number(actual):
+        return False
     if operator == "gt":
         return actual > expected
     if operator == "gte":
@@ -846,6 +869,10 @@ class SqliteSegmentStore(RingBufferStore):
             # JSON-eq/ne-Callback nur registrieren, wenn ein komplexer (list/dict)
             # eq/ne-Filterwert vorliegt (#951, Codex :1281).
             await conn.create_function("obs_json_eq", 2, _obs_json_eq_impl, deterministic=True)
+        if self._has_icontains_filter(query.value_filters):
+            # Unicode-fähigen contains-Callback nur registrieren, wenn ein
+            # case-insensitives ``contains`` vorliegt (#951, Codex :1364).
+            await conn.create_function("obs_icontains", 2, _obs_icontains_impl, deterministic=True)
         async with conn.execute(sql, params) as cur:
             rows = await cur.fetchall()
         return [self._row_to_dict(row) for row in rows]
@@ -1311,6 +1338,20 @@ class SqliteSegmentStore(RingBufferStore):
         return False
 
     @staticmethod
+    def _has_icontains_filter(value_filters: list[dict[str, Any]]) -> bool:
+        """True, wenn ein ``contains``-Filter mit ``ignore_case`` vorliegt.
+
+        Nur dann muss der Unicode-fähige ``obs_icontains``-Callback auf der Read-
+        Connection registriert werden (#951, Codex :1364).
+        """
+        for spec in value_filters:
+            if str(spec.get("operator", "")).strip().lower() != "contains":
+                continue
+            if bool(spec.get("ignore_case", False)):
+                return True
+        return False
+
+    @staticmethod
     def _eq_match_predicate(field_name: str, value: Any) -> tuple[str, list[Any]]:
         """SQL-Prädikat, das genau dann wahr ist, wenn die Zeile Python-``== value`` ist.
 
@@ -1361,7 +1402,11 @@ class SqliteSegmentStore(RingBufferStore):
             # echter binärer Substring-Test — case-SENSITIV bei ignore_case=false —
             # und braucht kein LIKE-Escaping (``%``/``_`` sind keine Wildcards).
             if ignore_case:
-                return (f"({text_col} IS NOT NULL AND instr(LOWER({text_col}), ?) > 0)", [needle.lower()])
+                # SQLite-``LOWER()`` foldet auf Standard-Builds nur ASCII (#951, Codex
+                # :1364): „HÄLLO"→„häll o" scheiterte, sodass Nicht-ASCII-Text nicht
+                # matchte. Der Unicode-fähige Python-Callback (``.lower()``, analog
+                # ``obs_regexp``) stellt Parität zum Legacy-Python-Pfad her.
+                return (f"({text_col} IS NOT NULL AND obs_icontains(?, {text_col}) = 1)", [needle.lower()])
             return (f"({text_col} IS NOT NULL AND instr({text_col}, ?) > 0)", [needle])
 
         # regex: Muster härten (Referenz: Legacy _match_regex), dann als Python-
@@ -1694,6 +1739,18 @@ class SqliteSegmentStore(RingBufferStore):
                 await conn.close()
             if ok:
                 await self.manifest.mark_checkpoint_done(segment.segment_id)
+                # Erfolgreicher TRUNCATE (#951, Codex :1696): ein großes ``-wal``/``-shm``
+                # wurde gerade in die Haupt-DB verschoben/entfernt. Das Manifest hält
+                # aber noch die pre-checkpoint ``size_bytes`` (WAL-schwer). Da
+                # ``enforce_retention()`` diesen Läufer UNMITTELBAR vor
+                # ``_enforce_size_budget()`` aufruft, sähe die Budgetrechnung sonst die
+                # alte, überhöhte Größe und löschte ältere/Legacy-Segmente unnötig.
+                # Reale post-checkpoint-Größe (``_segment_file_size`` zählt WAL/SHM mit)
+                # neu schreiben – analog zum Rotate-Pfad (Codex :1346).
+                await self.manifest.update_segment_size(
+                    segment.segment_id,
+                    size_bytes=self._segment_file_size(segment.filename),
+                )
                 recovered += 1
         return recovered
 

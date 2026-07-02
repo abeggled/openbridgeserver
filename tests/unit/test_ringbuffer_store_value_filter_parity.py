@@ -225,13 +225,18 @@ async def test_range_operator_on_null_value_rejected(store: SqliteSegmentStore):
 
 
 def test_legacy_compare_range_cross_type_returns_false():
-    # Direkte Abdeckung der defensiven Cross-Typ-Zweige im Legacy-Vergleich:
-    # ein Range-Operator gegen einen inkompatiblen actual-Typ matcht nie.
+    # Direkte Abdeckung der Range-Typregeln im Legacy-Vergleich (Parität zum
+    # v2-Pushdown, #951 Codex :439):
+    #  * Range gegen einen STRING/BOOLEAN-Vergleichswert wird abgelehnt (422-tauglich),
+    #    statt lexikografisch/0-1 zu degradieren.
+    #  * Ein numerischer Vergleichswert gegen eine nicht-numerische Zeile matcht nie.
     from obs.ringbuffer.store.sqlite_backend import _legacy_compare
 
-    assert _legacy_compare("gt", 5, True) is False  # bool expected, numeric actual
-    assert _legacy_compare("lt", 5, "abc") is False  # str expected, numeric actual
-    assert _legacy_compare("gte", "abc", 5) is False  # numeric expected, str actual
+    with pytest.raises(ValueError, match="BOOLEAN"):
+        _legacy_compare("gt", 5, True)  # bool expected → abgelehnt
+    with pytest.raises(ValueError, match="STRING"):
+        _legacy_compare("lt", 5, "abc")  # str expected → abgelehnt
+    assert _legacy_compare("gte", "abc", 5) is False  # numeric expected, str actual → kein Treffer
     # eq/ne bleiben reine Python-Gleichheit (typübergreifend, kein Kurzschluss).
     assert _legacy_compare("ne", "abc", 5) is True
     assert _legacy_compare("eq", 1, True) is True

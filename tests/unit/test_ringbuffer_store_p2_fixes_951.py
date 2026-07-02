@@ -654,3 +654,240 @@ async def test_quarantined_v2_still_fifo_deletable_as_only_nonlegacy(store: Sqli
     removed = await store.enforce_retention()
     assert removed >= 1
     assert await store.manifest.get_segment(victim_id) is None
+
+
+# ---------------------------------------------------------------------------
+# (Codex :376) Legacy-Regex-Ziel vor der Suche kappen (Parität zum v2-Callback)
+# ---------------------------------------------------------------------------
+
+
+def _build_legacy_with_string_values(path: Path, rows: list[tuple[str, str]]) -> None:
+    """Legacy-Single-DB mit String-``new_value``en (``rows`` = ``(ts, string)``)."""
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            """CREATE TABLE ringbuffer (
+                   id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                   ts             TEXT NOT NULL,
+                   datapoint_id   TEXT NOT NULL,
+                   topic          TEXT NOT NULL,
+                   old_value      TEXT,
+                   new_value      TEXT,
+                   source_adapter TEXT NOT NULL,
+                   quality        TEXT NOT NULL,
+                   metadata_version INTEGER NOT NULL DEFAULT 1,
+                   metadata       TEXT NOT NULL DEFAULT '{}'
+               )"""
+        )
+        for ts, value in rows:
+            conn.execute(
+                "INSERT INTO ringbuffer (ts, datapoint_id, topic, old_value, new_value, source_adapter, quality) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ts, "dp-legacy", "dp/dp-legacy/value", None, json.dumps(value), "legacy", "good"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def _attach_legacy_db(store: SqliteSegmentStore, db: Path) -> None:
+    migrator = LegacyMigrator(store, db)
+    await migrator.attach_readonly(migrator.classify())
+
+
+def test_legacy_regex_caps_target_length_before_search(monkeypatch):
+    # Parität zum v2-``_obs_regexp_impl``: der Legacy-Python-Regex-Pfad
+    # (_legacy_filter_matches) darf ``re.search`` NICHT über einen beliebig langen
+    # gespeicherten Wert laufen lassen, sonst blockiert der synchrone Vergleich den
+    # Event-Loop. Das Ziel wird auf die ersten ``_REGEX_MAX_TARGET_LEN`` Zeichen
+    # gekappt – wie der v2-Callback.
+    import obs.ringbuffer.store.sqlite_backend as backend
+
+    seen = {"len": None}
+    real_compile = backend.re.compile
+
+    class _Spy:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def search(self, target):
+            seen["len"] = len(target)
+            return self._inner.search(target)
+
+    def _spy_compile(pattern, flags=0):
+        return _Spy(real_compile(pattern, flags))
+
+    monkeypatch.setattr(backend.re, "compile", _spy_compile)
+
+    # Ein Muster, das erst weit hinter dem Cap treffen würde, plus ein sehr langer Wert.
+    huge = "a" * (backend._REGEX_MAX_TARGET_LEN + 5000) + "NEEDLE"
+    record = {"new_value": huge}
+    spec = {"operator": "regex", "field": "new_value", "pattern": "NEEDLE"}
+    result = backend._legacy_filter_matches(record, spec)
+
+    # Ohne Cap sähe re.search den vollen Wert (len == len(huge)) und würde den Treffer
+    # jenseits des Caps finden. Mit Cap ist das Ziel gebounded und der Treffer hinter
+    # dem Cap wird – wie beim v2-Callback – bewusst NICHT gefunden.
+    assert seen["len"] == backend._REGEX_MAX_TARGET_LEN
+    assert result is False
+
+
+async def test_legacy_regex_cap_matches_v2_semantics(store: SqliteSegmentStore, tmp_path: Path):
+    # End-to-end über eine eingehängte Legacy-DB: ein Treffer INNERHALB des Caps wird
+    # gefunden, ein Treffer erst JENSEITS des Caps nicht (gebundener Ziel-Scan).
+    from obs.ringbuffer.store.sqlite_backend import _REGEX_MAX_TARGET_LEN
+
+    within = "MATCH" + "x" * 10
+    beyond = "y" * (_REGEX_MAX_TARGET_LEN + 100) + "MATCH"
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy_with_string_values(
+        db,
+        [
+            ("2025-01-01T00:00:00.000Z", within),
+            ("2025-01-01T00:00:01.000Z", beyond),
+        ],
+    )
+    await _attach_legacy_db(store, db)
+
+    rows = await store.query(StoreQuery(limit=10, candidate_cap=100, value_filters=[{"operator": "regex", "field": "new_value", "pattern": "MATCH"}]))
+    values = {r["new_value"] for r in rows}
+    assert within in values
+    assert beyond not in values
+
+
+# ---------------------------------------------------------------------------
+# (Codex :439) Legacy-String-Range-Vergleiche ablehnen (Parität zum v2-Pushdown)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("operator", ["gt", "gte", "lt", "lte"])
+def test_legacy_range_on_string_is_rejected(operator):
+    # v2-Pushdown UND _matches_value_filter lehnen gt/gte/lt/lte auf STRING ab. Der
+    # Legacy-Python-Fallback (_legacy_compare) darf NICHT auf lexikografische
+    # String-Vergleiche degradieren – sonst wäre das Verhalten segment-abhängig.
+    import obs.ringbuffer.store.sqlite_backend as backend
+
+    record = {"new_value": "banana"}
+    spec = {"operator": operator, "field": "new_value", "value": "apple"}
+    with pytest.raises(ValueError, match="STRING"):
+        backend._legacy_filter_matches(record, spec)
+
+
+async def test_legacy_range_on_string_raises_in_query(store: SqliteSegmentStore, tmp_path: Path):
+    # Bedient eine upgegradete Instanz nur ihr read-only Legacy-Segment, muss ein
+    # gt/gte/lt/lte auf STRING denselben 422-tauglichen ValueError werfen wie der
+    # v2-Pfad (segment-unabhängig identisches Verhalten).
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy_with_string_values(db, [("2025-01-01T00:00:00.000Z", "banana")])
+    await _attach_legacy_db(store, db)
+
+    with pytest.raises(ValueError, match="STRING"):
+        await store.query(StoreQuery(limit=10, value_filters=[{"operator": "gt", "field": "new_value", "value": "apple"}]))
+
+
+def test_legacy_range_on_numeric_still_works():
+    # Regression-Guard: numerische Range-Vergleiche bleiben im Legacy-Pfad erlaubt.
+    import obs.ringbuffer.store.sqlite_backend as backend
+
+    assert backend._legacy_filter_matches({"new_value": 5}, {"operator": "gt", "field": "new_value", "value": 3}) is True
+    assert backend._legacy_filter_matches({"new_value": 2}, {"operator": "gt", "field": "new_value", "value": 3}) is False
+
+
+# ---------------------------------------------------------------------------
+# (Codex :1364) Unicode-Folding für case-insensitive contains (Nicht-ASCII)
+# ---------------------------------------------------------------------------
+
+
+async def test_ignore_case_contains_matches_non_ascii(store: SqliteSegmentStore):
+    # v2-Segment mit deutschen Umlauten. SQLite-``LOWER()`` foldet nur ASCII, sodass
+    # „STRASSE"/„Straße" bei ignore_case per LOWER() NICHT auf „straße" matchten. Mit
+    # dem Unicode-fähigen Callback (Python ``.lower()``) matcht es – Parität zum
+    # Legacy-Python-Pfad.
+    await store.append(
+        [
+            _event("Grüße", "2026-01-01T00:00:00.000Z"),
+            _event("HÄLLO Welt", "2026-01-01T00:00:01.000Z"),
+            _event("nichts", "2026-01-01T00:00:02.000Z"),
+        ]
+    )
+    # Zeitfenster bindet den Query (guarded contains ist zulässig).
+    query = StoreQuery(
+        limit=10,
+        from_ts="2026-01-01T00:00:00.000Z",
+        to_ts="2026-01-01T00:00:03.000Z",
+        value_filters=[{"operator": "contains", "field": "new_value", "value": "grüße", "ignore_case": True}],
+    )
+    rows = await store.query(query)
+    assert {r["new_value"] for r in rows} == {"Grüße"}
+
+    query2 = StoreQuery(
+        limit=10,
+        from_ts="2026-01-01T00:00:00.000Z",
+        to_ts="2026-01-01T00:00:03.000Z",
+        value_filters=[{"operator": "contains", "field": "new_value", "value": "hällo", "ignore_case": True}],
+    )
+    rows2 = await store.query(query2)
+    assert {r["new_value"] for r in rows2} == {"HÄLLO Welt"}
+
+
+async def test_ignore_case_contains_ascii_unchanged(store: SqliteSegmentStore):
+    # Regression-Guard: ASCII-case-insensitive contains bleibt korrekt.
+    await store.append(
+        [
+            _event("Hello World", "2026-01-01T00:00:00.000Z"),
+            _event("goodbye", "2026-01-01T00:00:01.000Z"),
+        ]
+    )
+    query = StoreQuery(
+        limit=10,
+        from_ts="2026-01-01T00:00:00.000Z",
+        to_ts="2026-01-01T00:00:02.000Z",
+        value_filters=[{"operator": "contains", "field": "new_value", "value": "HELLO", "ignore_case": True}],
+    )
+    rows = await store.query(query)
+    assert {r["new_value"] for r in rows} == {"Hello World"}
+
+
+# ---------------------------------------------------------------------------
+# (Codex :1696) Größe nach Pending-Checkpoint-Recovery auffrischen
+# ---------------------------------------------------------------------------
+
+
+async def test_run_pending_checkpoints_refreshes_size(store: SqliteSegmentStore, monkeypatch):
+    # Ein checkpoint_pending-Segment (Truncate war busy) trägt eine überhöhte
+    # pre-checkpoint-Größe (inkl. WAL). Zieht run_pending_checkpoints den Truncate
+    # endlich durch, MUSS die Manifest-size_bytes auf die reale post-checkpoint-Größe
+    # aktualisiert werden – sonst rechnet die direkt folgende Budget-Retention mit der
+    # alten, überhöhten Größe und löscht ältere/Legacy-Segmente unnötig.
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    pending_id = (await store.manifest.get_active_segment()).segment_id
+    filename = (await store.manifest.get_segment(pending_id)).filename
+
+    async def _busy(_conn):
+        return False
+
+    monkeypatch.setattr(store, "_try_truncate_checkpoint", _busy)
+    await store.rotate()
+
+    from obs.ringbuffer.store.manifest import SEGMENT_STATUS_CHECKPOINT_PENDING
+
+    assert (await store.manifest.get_segment(pending_id)).status == SEGMENT_STATUS_CHECKPOINT_PENDING
+
+    # Überhöhte pre-checkpoint-Größe simulieren (WAL-schwer).
+    inflated = 50_000_000
+    await store.manifest.update_segment_size(pending_id, size_bytes=inflated)
+    assert (await store.manifest.get_segment(pending_id)).size_bytes == inflated
+
+    # Truncate klappt jetzt.
+    async def _ok(_conn):
+        return True
+
+    monkeypatch.setattr(store, "_try_truncate_checkpoint", _ok)
+
+    recovered = await store.run_pending_checkpoints()
+    assert recovered == 1
+
+    seg = await store.manifest.get_segment(pending_id)
+    # Ohne Fix bliebe size_bytes == inflated. Mit Fix entspricht es der realen
+    # post-checkpoint-Größe (konsistent zu _segment_file_size, zählt WAL/SHM mit).
+    assert seg.size_bytes != inflated
+    assert seg.size_bytes == store._segment_file_size(filename)
