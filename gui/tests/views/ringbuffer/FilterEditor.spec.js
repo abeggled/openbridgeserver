@@ -32,6 +32,7 @@ afterEach(() => {
   vi.doUnmock('@/components/ui/ConfirmDialog.vue')
   vi.doUnmock('@/components/ui/HierarchyCombobox.vue')
   vi.doUnmock('@/components/ui/DpCombobox.vue')
+  vi.doUnmock('@/components/ui/KnxDeviceCombobox.vue')
   vi.doUnmock('@/components/ui/TagCombobox.vue')
   vi.doUnmock('@/components/ui/AdapterCombobox.vue')
   vi.doUnmock('@/stores/datapoints')
@@ -61,6 +62,31 @@ function makeHierarchyApi(overrides = {}) {
     getTreeNodes: vi.fn().mockResolvedValue({ data: [] }),
     ...overrides,
   }
+}
+
+function makeKnxprojApi(overrides = {}) {
+  return {
+    getDevice: vi.fn().mockResolvedValue({ data: { pa: '1.1.10', comm_objects: [] } }),
+    listDevices: vi.fn().mockResolvedValue({ data: { items: [] } }),
+    ...overrides,
+  }
+}
+
+function makeDpApi(overrides = {}) {
+  return {
+    listBindings: vi.fn().mockResolvedValue({ data: [] }),
+    ...overrides,
+  }
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
 }
 
 function makeSampleSet(overrides = {}) {
@@ -95,6 +121,21 @@ function makeSampleSet(overrides = {}) {
  */
 function stubCombobox(name, multi) {
   function stubItem(id) {
+    if (name === 'KnxDeviceCombobox') {
+      if (id === '1.1.10') {
+        return {
+          id,
+          pa: id,
+          label: 'Kitchen Switch',
+          name: 'Kitchen Switch',
+          manufacturer: 'Siemens',
+          order_number: '5WG1',
+        }
+      }
+      if (id === 'pa-only') return { id, pa: id, label: id }
+      if (id === 'pa-fallback') return { pa: '1.1.12', name: 'Fallback Device', manufacturer: 'ABB' }
+      return { id, label: id }
+    }
     if (name !== 'HierarchyCombobox') return { id, label: id }
     if (id === 't1:display') {
       return {
@@ -156,15 +197,19 @@ async function populateMinimalFilter(wrapper, tags = ['heizung']) {
   await wrapper.vm.$nextTick()
 }
 
-async function mountEditor({ props = {}, ringbufferApi, searchApi, hierarchyApi, leaveEmpty = false, authStore = null } = {}) {
+async function mountEditor({ props = {}, ringbufferApi, searchApi, hierarchyApi, knxprojApi, dpApi, leaveEmpty = false, authStore = null } = {}) {
   ringbufferApi = ringbufferApi ?? makeRingbufferApi()
   searchApi = searchApi ?? makeSearchApi()
   hierarchyApi = hierarchyApi ?? makeHierarchyApi()
+  knxprojApi = knxprojApi ?? makeKnxprojApi()
+  dpApi = dpApi ?? makeDpApi()
 
   vi.doMock('@/api/client', () => ({
     ringbufferApi,
     searchApi,
     hierarchyApi,
+    knxprojApi,
+    dpApi,
   }))
   vi.doMock('@/stores/auth', () => ({
     useAuthStore: () => authStore ?? ({
@@ -210,6 +255,7 @@ async function mountEditor({ props = {}, ringbufferApi, searchApi, hierarchyApi,
 
   vi.doMock('@/components/ui/HierarchyCombobox.vue', () => ({ default: stubCombobox('HierarchyCombobox', true) }))
   vi.doMock('@/components/ui/DpCombobox.vue', () => ({ default: stubCombobox('DpCombobox', true) }))
+  vi.doMock('@/components/ui/KnxDeviceCombobox.vue', () => ({ default: stubCombobox('KnxDeviceCombobox', true) }))
   vi.doMock('@/components/ui/TagCombobox.vue', () => ({ default: stubCombobox('TagCombobox', true) }))
   vi.doMock('@/components/ui/AdapterCombobox.vue', () => ({ default: stubCombobox('AdapterCombobox', true) }))
 
@@ -864,15 +910,312 @@ describe('FilterEditor (#436)', () => {
     ])
   })
 
-  it('serialises device physical addresses into filter.devices', async () => {
+  it('serialises selected device physical addresses into filter.devices', async () => {
     const ringbufferApi = makeRingbufferApi()
     const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi, leaveEmpty: true })
     await wrapper.find('[data-testid="filter-editor-name"]').setValue('Mit Device-Filter')
-    await wrapper.find('[data-testid="filter-editor-devices"]').setValue('1.1.10, 1.1.11  1.1.10')
+    const deviceStub = wrapper.findComponent({ name: 'KnxDeviceCombobox' })
+    await deviceStub.vm.$emit('update:modelValue', ['1.1.10', '1.1.11'])
+    await flushPromises()
     await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
     await flushPromises()
     const payload = ringbufferApi.createFilterset.mock.calls[0][0]
     expect(payload.filter.devices).toEqual(['1.1.10', '1.1.11'])
+  })
+
+  it('clicking the device expand button materializes matching KNX datapoints and removes the device chip', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({
+        data: makeSampleSet({
+          filter: {
+            hierarchy_nodes: [],
+            datapoints: ['dp-existing'],
+            devices: ['1.1.10'],
+            tags: [],
+            adapters: [],
+            q: null,
+            value_filter: null,
+          },
+        }),
+      }),
+    })
+    const knxprojApi = makeKnxprojApi({
+      getDevice: vi.fn().mockResolvedValue({
+        data: {
+          pa: '1.1.10',
+          name: 'Kitchen Switch',
+          comm_objects: [
+            { id: 'co-1', ga_addresses: ['1/2/3', '1/2/4'] },
+            { id: 'co-2', ga_addresses: ['1/2/3'] },
+            { id: 'co-3' },
+            { id: 'co-4', ga_addresses: [null, '', '1/2/5'] },
+          ],
+        },
+      }),
+    })
+    const searchApi = makeSearchApi({
+      search: vi
+        .fn()
+        .mockResolvedValueOnce({ data: { items: [{ id: 'dp-a' }, { id: 'dp-existing' }, { id: 'dp-false-positive' }, { id: 'dp-non-knx' }, {}] } })
+        .mockResolvedValueOnce({ data: { items: [{ id: 'dp-b' }, { id: 'dp-existing' }] } })
+        .mockResolvedValueOnce({ data: {} }),
+    })
+    const dpApi = makeDpApi({
+      listBindings: vi.fn().mockImplementation((id) => Promise.resolve({
+        data: {
+          'dp-a': [{ adapter_type: 'KNX', config: { group_address: '1/2/3' } }],
+          'dp-existing': [{ adapter_type: 'KNX', config: { state_group_address: '1/2/3' } }],
+          'dp-b': [{ adapter_type: 'KNX', config: { group_address: '1/2/4' } }],
+          'dp-false-positive': [{ adapter_type: 'KNX', config: { group_address: '1/2/30' } }],
+          'dp-non-knx': [{ adapter_type: 'MQTT', config: { group_address: '1/2/3' } }],
+        }[id] || [],
+      })),
+    })
+    const { wrapper } = await mountEditor({
+      props: { setId: 'fs-1' },
+      ringbufferApi,
+      searchApi,
+      knxprojApi,
+      dpApi,
+    })
+
+    await wrapper.find('[data-testid="device-expand-0"]').trigger('click')
+    await flushPromises()
+
+    expect(knxprojApi.getDevice).toHaveBeenCalledWith('1.1.10')
+    expect(searchApi.search).toHaveBeenCalledTimes(3)
+    expect(searchApi.search.mock.calls[0][0]).toMatchObject({ q: '1/2/3', adapter: 'KNX', size: 500 })
+    expect(searchApi.search.mock.calls[1][0]).toMatchObject({ q: '1/2/4', adapter: 'KNX', size: 500 })
+    expect(searchApi.search.mock.calls[2][0]).toMatchObject({ q: '1/2/5', adapter: 'KNX', size: 500 })
+    expect(dpApi.listBindings).toHaveBeenCalledWith('dp-false-positive')
+    expect(dpApi.listBindings).toHaveBeenCalledWith('dp-non-knx')
+    expect(dpApi.listBindings.mock.calls.filter(([id]) => id === 'dp-existing')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid^="device-expand-"]').length).toBe(0)
+    const dpIds = wrapper.findAll('[data-testid^="stub-DpCombobox-chip-"]').map((c) => c.attributes('data-chip-id')).sort()
+    expect(dpIds).toEqual(['dp-a', 'dp-b', 'dp-existing'])
+  })
+
+  it('pages through KNX datapoint search results while expanding a device chip', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({
+        data: makeSampleSet({
+          filter: {
+            hierarchy_nodes: [],
+            datapoints: [],
+            devices: ['1.1.10'],
+            tags: [],
+            adapters: [],
+            q: null,
+            value_filter: null,
+          },
+        }),
+      }),
+    })
+    const knxprojApi = makeKnxprojApi({
+      getDevice: vi.fn().mockResolvedValue({
+        data: {
+          pa: '1.1.10',
+          comm_objects: [{ id: 'co-1', ga_addresses: ['1/2/3'] }],
+        },
+      }),
+    })
+    const searchApi = makeSearchApi({
+      search: vi
+        .fn()
+        .mockResolvedValueOnce({ data: { items: [{ id: 'dp-first' }], total: 501, page: 0, size: 500, pages: 2 } })
+        .mockResolvedValueOnce({ data: { items: [{ id: 'dp-late' }], total: 501, page: 1, size: 500, pages: 2 } }),
+    })
+    const dpApi = makeDpApi({
+      listBindings: vi.fn().mockImplementation((id) => Promise.resolve({
+        data: [{ adapter_type: 'KNX', config: { group_address: id === 'dp-late' ? '1/2/3' : '1/2/30' } }],
+      })),
+    })
+    const { wrapper } = await mountEditor({
+      props: { setId: 'fs-1' },
+      ringbufferApi,
+      knxprojApi,
+      searchApi,
+      dpApi,
+    })
+
+    await wrapper.find('[data-testid="device-expand-0"]').trigger('click')
+    await flushPromises()
+
+    expect(searchApi.search).toHaveBeenNthCalledWith(1, { q: '1/2/3', adapter: 'KNX', page: 0, size: 500 })
+    expect(searchApi.search).toHaveBeenNthCalledWith(2, { q: '1/2/3', adapter: 'KNX', page: 1, size: 500 })
+    const dpIds = wrapper.findAll('[data-testid^="stub-DpCombobox-chip-"]').map((c) => c.attributes('data-chip-id'))
+    expect(dpIds).toEqual(['dp-late'])
+    expect(wrapper.findAll('[data-testid^="device-expand-"]').length).toBe(0)
+  })
+
+  it('ignores resolved device expansion results when the device chip was removed', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({
+        data: makeSampleSet({
+          filter: {
+            hierarchy_nodes: [],
+            datapoints: ['dp-keep'],
+            devices: ['1.1.10'],
+            tags: [],
+            adapters: [],
+            q: null,
+            value_filter: null,
+          },
+        }),
+      }),
+    })
+    const pendingSearch = deferred()
+    const knxprojApi = makeKnxprojApi({
+      getDevice: vi.fn().mockResolvedValue({
+        data: {
+          pa: '1.1.10',
+          comm_objects: [{ id: 'co-1', ga_addresses: ['1/2/3'] }],
+        },
+      }),
+    })
+    const searchApi = makeSearchApi({
+      search: vi.fn().mockReturnValueOnce(pendingSearch.promise),
+    })
+    const dpApi = makeDpApi({
+      listBindings: vi.fn().mockResolvedValue({
+        data: [{ adapter_type: 'KNX', config: { group_address: '1/2/3' } }],
+      }),
+    })
+    const { wrapper } = await mountEditor({
+      props: { setId: 'fs-1' },
+      ringbufferApi,
+      knxprojApi,
+      searchApi,
+      dpApi,
+    })
+
+    await wrapper.find('[data-testid="device-expand-0"]').trigger('click')
+    await flushPromises()
+    const deviceStub = wrapper.findComponent({ name: 'KnxDeviceCombobox' })
+    await deviceStub.vm.$emit('update:modelValue', [])
+
+    pendingSearch.resolve({ data: { items: [{ id: 'dp-new' }], total: 1, page: 0, size: 500, pages: 1 } })
+    await flushPromises()
+
+    const dpIds = wrapper.findAll('[data-testid^="stub-DpCombobox-chip-"]').map((c) => c.attributes('data-chip-id'))
+    expect(dpIds).toEqual(['dp-keep'])
+    expect(wrapper.findAll('[data-testid^="device-expand-"]').length).toBe(0)
+  })
+
+  it('shows device expansion progress and prevents duplicate expansion clicks', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({
+        data: makeSampleSet({
+          filter: {
+            hierarchy_nodes: [],
+            datapoints: [],
+            devices: ['1.0.1'],
+            tags: [],
+            adapters: [],
+            q: null,
+            value_filter: null,
+          },
+        }),
+      }),
+    })
+    const pendingDevice = deferred()
+    const knxprojApi = makeKnxprojApi({
+      getDevice: vi.fn().mockReturnValue(pendingDevice.promise),
+    })
+    const { wrapper } = await mountEditor({
+      props: { setId: 'fs-1' },
+      ringbufferApi,
+      knxprojApi,
+    })
+
+    const expand = wrapper.find('[data-testid="device-expand-0"]')
+    await expand.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(knxprojApi.getDevice).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="filter-editor-device-expanding"]').text()).toContain('1.0.1')
+    expect(wrapper.find('[data-testid="device-expand-0"]').element.disabled).toBe(true)
+    expect(wrapper.find('[data-testid="device-expand-0"]').text()).toContain('Lädt')
+
+    await wrapper.find('[data-testid="device-expand-0"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(knxprojApi.getDevice).toHaveBeenCalledTimes(1)
+
+    pendingDevice.resolve({ data: { pa: '1.0.1', comm_objects: [] } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="filter-editor-device-expanding"]').exists()).toBe(false)
+  })
+
+  it('removes a device chip without searching when the device has no communication objects', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({
+        data: makeSampleSet({
+          filter: {
+            hierarchy_nodes: [],
+            datapoints: ['dp-keep'],
+            devices: ['1.1.10'],
+            tags: [],
+            adapters: [],
+            q: null,
+            value_filter: null,
+          },
+        }),
+      }),
+    })
+    const knxprojApi = makeKnxprojApi({
+      getDevice: vi.fn().mockResolvedValue({ data: { pa: '1.1.10' } }),
+    })
+    const searchApi = makeSearchApi()
+    const { wrapper } = await mountEditor({
+      props: { setId: 'fs-1' },
+      ringbufferApi,
+      knxprojApi,
+      searchApi,
+    })
+
+    await wrapper.find('[data-testid="device-expand-0"]').trigger('click')
+    await flushPromises()
+
+    expect(searchApi.search).not.toHaveBeenCalled()
+    expect(wrapper.findAll('[data-testid^="device-expand-"]').length).toBe(0)
+    const dpIds = wrapper.findAll('[data-testid^="stub-DpCombobox-chip-"]').map((c) => c.attributes('data-chip-id'))
+    expect(dpIds).toEqual(['dp-keep'])
+  })
+
+  it('removes an expanded device by captured PA when chips change while expansion is pending', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({
+        data: makeSampleSet({
+          filter: {
+            hierarchy_nodes: [],
+            datapoints: [],
+            devices: ['1.1.10', '1.1.11'],
+            tags: [],
+            adapters: [],
+            q: null,
+            value_filter: null,
+          },
+        }),
+      }),
+    })
+    const pendingDevice = deferred()
+    const knxprojApi = makeKnxprojApi({
+      getDevice: vi.fn().mockReturnValueOnce(pendingDevice.promise),
+    })
+    const { wrapper } = await mountEditor({
+      props: { setId: 'fs-1' },
+      ringbufferApi,
+      knxprojApi,
+    })
+
+    await wrapper.find('[data-testid="device-expand-0"]').trigger('click')
+    const deviceStub = wrapper.findComponent({ name: 'KnxDeviceCombobox' })
+    await deviceStub.vm.$emit('update:modelValue', ['1.1.11'])
+    pendingDevice.resolve({ data: { pa: '1.1.10', comm_objects: [] } })
+    await flushPromises()
+
+    const deviceChips = wrapper.findAll('[data-testid^="stub-KnxDeviceCombobox-chip-"]')
+    expect(deviceChips.map((chip) => chip.attributes('data-chip-id'))).toEqual(['1.1.11'])
   })
 
   it('hydrates existing filter.devices and roundtrips them on update', async () => {
@@ -892,11 +1235,97 @@ describe('FilterEditor (#436)', () => {
       }),
     })
     const { wrapper } = await mountEditor({ props: { setId: 'fs-1' }, ringbufferApi })
-    expect(wrapper.find('[data-testid="filter-editor-devices"]').element.value).toBe('1.2.3, 1.2.4')
+    const deviceStub = wrapper.findComponent({ name: 'KnxDeviceCombobox' })
+    expect(deviceStub.props('modelValue')).toEqual(['1.2.3', '1.2.4'])
     await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
     await flushPromises()
     const payload = ringbufferApi.updateFilterset.mock.calls[0][1]
     expect(payload.filter.devices).toEqual(['1.2.3', '1.2.4'])
+  })
+
+  it('renders device chip labels and titles from KNX device metadata', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({
+        data: makeSampleSet({
+          filter: {
+            hierarchy_nodes: [],
+            datapoints: [],
+            devices: ['1.1.10', 'pa-only', 'pa-fallback'],
+            tags: [],
+            adapters: [],
+            q: null,
+            value_filter: null,
+          },
+        }),
+      }),
+    })
+    const { wrapper } = await mountEditor({ props: { setId: 'fs-1' }, ringbufferApi })
+    const chips = wrapper.findAll('[data-testid^="stub-KnxDeviceCombobox-chip-"]')
+
+    expect(chips[0].text()).toContain('1.1.10 Kitchen Switch')
+    expect(chips[0].find('[title="1.1.10 · Kitchen Switch · Siemens · 5WG1"]').exists()).toBe(true)
+    expect(chips[1].text()).toContain('pa-only')
+    expect(chips[1].find('[title="pa-only · pa-only"]').exists()).toBe(true)
+    expect(chips[2].text()).toContain('1.1.12 Fallback Device')
+    expect(chips[2].find('[title="1.1.12 · Fallback Device · ABB"]').exists()).toBe(true)
+  })
+
+  it('normalizes non-array device combobox updates to an empty device filter', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('No Devices')
+    const deviceStub = wrapper.findComponent({ name: 'KnxDeviceCombobox' })
+
+    await deviceStub.vm.$emit('update:modelValue', ['1.1.10'])
+    await deviceStub.vm.$emit('update:modelValue', null)
+    await flushPromises()
+    await wrapper.find('[data-testid="filter-editor-save-topbar"]').trigger('click')
+    await flushPromises()
+
+    expect(ringbufferApi.createFilterset.mock.calls[0][0].filter.devices).toEqual([])
+  })
+
+  it('ignores device expansion when the chip does not resolve to a physical address', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const knxprojApi = makeKnxprojApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi, knxprojApi })
+    const deviceStub = wrapper.findComponent({ name: 'KnxDeviceCombobox' })
+    await deviceStub.vm.$emit('update:modelValue', [''])
+    await flushPromises()
+
+    await wrapper.find('[data-testid="device-expand-0"]').trigger('click')
+    await flushPromises()
+
+    expect(knxprojApi.getDevice).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="device-expand-0"]').exists()).toBe(true)
+  })
+
+  it('surfaces device expansion errors and keeps the device chip', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({
+        data: makeSampleSet({
+          filter: {
+            hierarchy_nodes: [],
+            datapoints: [],
+            devices: ['1.1.10'],
+            tags: [],
+            adapters: [],
+            q: null,
+            value_filter: null,
+          },
+        }),
+      }),
+    })
+    const knxprojApi = makeKnxprojApi({
+      getDevice: vi.fn().mockRejectedValue({ response: { data: { detail: 'device broke' } } }),
+    })
+    const { wrapper } = await mountEditor({ props: { setId: 'fs-1' }, ringbufferApi, knxprojApi })
+
+    await wrapper.find('[data-testid="device-expand-0"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-editor-error"]').text()).toContain('device broke')
+    expect(wrapper.find('[data-testid="device-expand-0"]').exists()).toBe(true)
   })
 
   it('hierarchy expand error path surfaces a message and keeps the chip', async () => {
