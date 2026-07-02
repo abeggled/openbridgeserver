@@ -288,9 +288,12 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
     expect(api.config).toHaveBeenCalledTimes(1)
     const payload = api.config.mock.calls[0][0]
     expect(payload.segment_max_age).toBe(8 * 60 * 60)
-    // Optional advanced fields stay unset unless the user fills them.
-    expect(payload.segment_max_bytes).toBeUndefined()
-    expect(payload.segment_max_rows).toBeUndefined()
+    // Optional advanced fields are sent as explicit null (= auto) when empty, so
+    // the backend does not keep a previously persisted value (#938, Codex #951).
+    expect('segment_max_bytes' in payload).toBe(true)
+    expect(payload.segment_max_bytes).toBeNull()
+    expect('segment_max_rows' in payload).toBe(true)
+    expect(payload.segment_max_rows).toBeNull()
   })
 
   it('includes the optional advanced segment thresholds when filled', async () => {
@@ -303,6 +306,41 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
     const payload = api.config.mock.calls[0][0]
     expect(payload.segment_max_bytes).toBe(4 * 1024 * 1024)
     expect(payload.segment_max_rows).toBe(1000)
+  })
+
+  it('sends explicit null when a hydrated segment threshold is cleared (reset to auto, #938 Codex #951)', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          max_entries: null,
+          max_file_size_bytes: 500 * 1024 * 1024,
+          max_age: null,
+          file_size_bytes: 0,
+          segment_max_age: 43200,
+          segment_max_bytes: 256 * 1024 * 1024, // hydratisiert → Feld zeigt 256
+          segment_max_rows: 1000, // hydratisiert → Feld zeigt 1000
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    // Beide Felder wurden aus den Stats vorbefüllt.
+    expect(wrapper.find('[data-testid="rb-config-segment-max-bytes"]').element.value).toBe('256')
+    expect(wrapper.find('[data-testid="rb-config-segment-max-rows"]').element.value).toBe('1000')
+    // Nutzer leert sie wieder (= auf auto zurückstellen).
+    await wrapper.find('[data-testid="rb-config-segment-max-bytes"]').setValue('')
+    await wrapper.find('[data-testid="rb-config-segment-max-rows"]').setValue('')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).toHaveBeenCalledTimes(1)
+    const payload = api.config.mock.calls[0][0]
+    // Explizites null muss im Payload landen, nicht fehlen – sonst behält das
+    // Backend den zuvor persistierten Wert.
+    expect('segment_max_bytes' in payload).toBe(true)
+    expect(payload.segment_max_bytes).toBeNull()
+    expect('segment_max_rows' in payload).toBe(true)
+    expect(payload.segment_max_rows).toBeNull()
   })
 
   it('rejects a segment age below 1 hour with an inline error', async () => {

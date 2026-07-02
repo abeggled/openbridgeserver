@@ -414,12 +414,20 @@ function buildPayload() {
   if (segmentAgeHours === null || segmentAgeHours < 1) throw new Error(t('ringbuffer.validationSegmentMaxAge'))
   payload.segment_max_age = segmentAgeHours * SECONDS_PER_HOUR
 
-  if (configForm.segmentMaxBytesValue !== '') {
+  // Leere Segment-Schwelle explizit als null senden (nicht weglassen): der
+  // Config-Endpoint behandelt ausgelassene Felder als „persistierten Wert
+  // behalten". Ohne explizites null könnte ein zuvor gesetzter Wert nie wieder
+  // auf auto zurückgestellt werden (#938, Codex #951).
+  if (String(configForm.segmentMaxBytesValue).trim() === '') {
+    payload.segment_max_bytes = null
+  } else {
     const segmentBytes = parseNonNegativeInteger(configForm.segmentMaxBytesValue)
     if (segmentBytes === null || segmentBytes <= 0) throw new Error(t('ringbuffer.validationSegmentMaxBytes'))
     payload.segment_max_bytes = segmentBytes * SIZE_UNIT_FACTORS[configForm.segmentMaxBytesUnit]
   }
-  if (configForm.segmentMaxRowsValue !== '') {
+  if (String(configForm.segmentMaxRowsValue).trim() === '') {
+    payload.segment_max_rows = null
+  } else {
     const segmentRows = parseNonNegativeInteger(configForm.segmentMaxRowsValue)
     if (segmentRows === null || segmentRows <= 0) throw new Error(t('ringbuffer.validationSegmentMaxRows'))
     payload.segment_max_rows = segmentRows
