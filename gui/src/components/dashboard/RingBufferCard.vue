@@ -54,6 +54,8 @@
             <div class="h-full rounded-full bg-blue-500 transition-all" :style="{ width: `${budgetBarWidth}%` }" />
           </div>
           <div v-else class="text-xs text-slate-500" data-testid="rb-card-budget-unlimited">{{ $t('dashboard.ringbuffer.unlimited') }}</div>
+          <!-- Super-kurzer Hinweis auf den Sägezahn-Überschwinger (Details im Config-Modal). -->
+          <p v-if="hasBudget" class="text-[11px] text-slate-400 mt-1" data-testid="rb-card-budget-peak-hint">{{ $t('dashboard.ringbuffer.budgetPeakHint') }}</p>
         </div>
 
         <!-- Kennzahlen -->

@@ -184,6 +184,10 @@ describe('RingBufferCard — segmented state', () => {
     const bar = wrapper.find('[data-testid="rb-card-budget-bar"] > div')
     expect(bar.classes().join(' ')).toContain('bg-blue-500')
     expect(bar.classes().join(' ')).not.toContain('bg-amber-500')
+    // Super-kurzer Sägezahn-Hinweis unter der Leiste.
+    const hint = wrapper.find('[data-testid="rb-card-budget-peak-hint"]')
+    expect(hint.exists()).toBe(true)
+    expect(hint.text()).toContain('133')
   })
 
   it('opens the segment details modal hosting SegmentStatsPanel', async () => {
