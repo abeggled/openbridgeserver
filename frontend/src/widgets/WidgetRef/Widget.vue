@@ -18,6 +18,7 @@ const props = defineProps<{
   value: DataPointValue | null
   statusValue: DataPointValue | null
   editorMode: boolean
+  readonly?: boolean
 }>()
 
 const dpStore = useDatapointsStore()
@@ -111,5 +112,6 @@ const refStatusValue = computed(() => sourceWidget.value?.status_datapoint_id ? 
     :value="refValue"
     :status-value="refStatusValue"
     :editor-mode="false"
+    :readonly="props.readonly"
   />
 </template>

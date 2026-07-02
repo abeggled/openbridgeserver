@@ -128,9 +128,11 @@ async def test_message_archive_acknowledge_broadcasts_updated_entry(client, auth
 
     archive_id = _archive_id("ack-broadcast")
     broadcasted: list[dict] = []
+    previous_entries: list[dict | None] = []
 
-    async def capture_broadcast(entry):
+    async def capture_broadcast(entry, previous_entry=None):
         broadcasted.append(entry)
+        previous_entries.append(previous_entry)
 
     monkeypatch.setattr(message_archives_api, "broadcast_message_archive_entry", capture_broadcast)
 
@@ -149,6 +151,7 @@ async def test_message_archive_acknowledge_broadcasts_updated_entry(client, auth
         assert entry_resp.status_code == 201, entry_resp.text
         entry_id = entry_resp.json()["id"]
         broadcasted.clear()
+        previous_entries.clear()
 
         ack_resp = await client.post(
             f"/api/v1/message-archives/{archive_id}/entries/{entry_id}/acknowledge",
@@ -157,9 +160,13 @@ async def test_message_archive_acknowledge_broadcasts_updated_entry(client, auth
 
         assert ack_resp.status_code == 200, ack_resp.text
         assert ack_resp.json()["status"] == "acknowledged"
+        assert ack_resp.json()["is_read"] is True
         assert [item["id"] for item in broadcasted] == [entry_id]
         assert broadcasted[0]["status"] == "acknowledged"
         assert broadcasted[0]["acknowledged_by"] == "admin"
+        assert broadcasted[0]["is_read"] is False
+        assert previous_entries[0] is not None
+        assert previous_entries[0]["status"] == "new"
     finally:
         await client.delete(
             f"/api/v1/message-archives/{archive_id}",

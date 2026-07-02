@@ -909,8 +909,10 @@ async def acknowledge_message_archive_entry(
     existing = await store.get_entry(archive_id, entry_id, username=access.username)
     if not existing or not _entry_action_allowed_for_page(existing, access.predicates, "acknowledge"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive entry not found")
+    previous_entry = await store.get_entry(archive_id, entry_id)
     entry = await store.acknowledge_entry(archive_id, entry_id, access.username)
     if not entry:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive entry not found")
-    await broadcast_message_archive_entry(entry)
+    broadcast_entry = await store.get_entry(archive_id, entry_id) or entry
+    await broadcast_message_archive_entry(broadcast_entry, previous_entry=previous_entry)
     return entry

@@ -86,7 +86,10 @@ function matchesFilters(entry: MessageArchiveEntry): boolean {
 }
 
 function applyLiveEntry(entry: MessageArchiveEntry) {
-  if (!matchesFilters(entry)) return
+  if (!matchesFilters(entry)) {
+    entries.value = entries.value.filter(item => item.id !== entry.id)
+    return
+  }
   entries.value = [
     entry,
     ...entries.value.filter(item => item.id !== entry.id),

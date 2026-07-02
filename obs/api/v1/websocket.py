@@ -215,13 +215,16 @@ class WebSocketManager:
         for conn_id in dead:
             await self.disconnect(conn_id)
 
-    async def broadcast_message_archive_entry(self, entry: dict[str, Any]) -> None:
+    async def broadcast_message_archive_entry(self, entry: dict[str, Any], previous_entry: dict[str, Any] | None = None) -> None:
         """Push a newly stored message archive entry to allowed clients."""
         dead: list[str] = []
         msg = {"action": "message_archive_entry", "entry": entry}
         for conn_id in list(self._connections):
             access = self._message_archive_access.get(conn_id)
-            if access is not None and not _message_archive_entry_matches_access(entry, access):
+            if access is not None and not (
+                _message_archive_entry_matches_access(entry, access)
+                or (previous_entry is not None and _message_archive_entry_matches_access(previous_entry, access))
+            ):
                 continue
             if not await self._send(conn_id, msg):
                 dead.append(conn_id)

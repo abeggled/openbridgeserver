@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { messageArchives, type MessageArchiveEntry } from '@/api/client'
 import MessageArchiveWidget from './Widget.vue'
 
+const wsHandlers = vi.hoisted(() => ({
+  current: [] as Array<(data: Record<string, unknown>) => void>,
+}))
+
 vi.mock('@/api/client', () => ({
   messageArchives: {
     entries: vi.fn(),
@@ -14,7 +18,12 @@ vi.mock('@/api/client', () => ({
 
 vi.mock('@/composables/useWebSocket', () => ({
   useWebSocket: () => ({
-    onMessage: vi.fn(() => vi.fn()),
+    onMessage: vi.fn((handler: (data: Record<string, unknown>) => void) => {
+      wsHandlers.current.push(handler)
+      return () => {
+        wsHandlers.current = wsHandlers.current.filter(item => item !== handler)
+      }
+    }),
   }),
 }))
 
@@ -45,6 +54,7 @@ const entry: MessageArchiveEntry = {
 }
 
 afterEach(() => {
+  wsHandlers.current = []
   vi.clearAllMocks()
 })
 
@@ -66,5 +76,30 @@ describe('MessageArchive Widget.vue', () => {
 
     expect(wrapper.text()).not.toContain('widgets.messageArchive.markRead')
     expect(wrapper.text()).not.toContain('widgets.messageArchive.acknowledge')
+  })
+
+  it('removes cached live entries that no longer match filters', async () => {
+    vi.mocked(messageArchives.entries).mockResolvedValue({ items: [entry], total: 1, limit: 25, offset: 0 })
+
+    const wrapper = mount(MessageArchiveWidget, {
+      props: {
+        config: { status: ['new'] },
+        editorMode: false,
+        readonly: false,
+      },
+      global: {
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Startup')
+    wsHandlers.current[0]({
+      action: 'message_archive_entry',
+      entry: { ...entry, status: 'acknowledged', acknowledged_at: '2026-01-01T10:01:00+00:00', acknowledged_by: 'admin' },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('Startup')
   })
 })

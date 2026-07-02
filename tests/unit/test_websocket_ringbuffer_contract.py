@@ -285,6 +285,31 @@ async def test_message_archive_push_is_filtered_by_page_widget_predicates():
 
 
 @pytest.mark.asyncio
+async def test_message_archive_push_uses_previous_entry_for_filter_transitions():
+    manager = WebSocketManager()
+    ws = _FakeWebSocket()
+
+    await manager.connect(
+        ws,
+        allowed_dp_ids=set(),
+        allowed_message_archive_access=[
+            MessageArchivePredicate(
+                archive_ids={"system"},
+                statuses={"new"},
+            )
+        ],
+    )
+
+    await manager.broadcast_message_archive_entry(
+        {"id": "entry-1", "archive_id": "system", "status": "acknowledged"},
+        previous_entry={"id": "entry-1", "archive_id": "system", "status": "new"},
+    )
+
+    assert [msg["entry"]["id"] for msg in ws.messages] == ["entry-1"]
+    assert ws.messages[0]["entry"]["status"] == "acknowledged"
+
+
+@pytest.mark.asyncio
 async def test_subscribe_filters_datapoints_for_page_scoped_connection():
     ws = _FakeWebSocket()
     manager = WebSocketManager()

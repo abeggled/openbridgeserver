@@ -420,7 +420,7 @@ async def test_message_archive_global_store_lifecycle_and_service_broadcast(tmp_
     broadcasted: list[dict] = []
 
     class _WsManager:
-        async def broadcast_message_archive_entry(self, entry):
+        async def broadcast_message_archive_entry(self, entry, previous_entry=None):
             broadcasted.append(entry)
 
     monkeypatch.setattr("obs.api.v1.websocket.get_ws_manager", lambda: _WsManager())
@@ -454,7 +454,7 @@ async def test_message_archive_broadcast_ignores_missing_or_failing_ws_manager(m
 
     async def _run_broadcast_failure():
         class _FailingManager:
-            async def broadcast_message_archive_entry(self, _entry):
+            async def broadcast_message_archive_entry(self, _entry, previous_entry=None):
                 raise ValueError("broadcast failed")
 
         monkeypatch.setattr("obs.api.v1.websocket.get_ws_manager", lambda: _FailingManager())

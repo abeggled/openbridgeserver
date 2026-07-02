@@ -147,6 +147,7 @@ describe('MessageArchivesView', () => {
     await buttonByText(wrapper, 'Speichern').trigger('click')
     await flushPromises()
     expect(api.update).toHaveBeenCalledWith('system', expect.objectContaining({ name: 'System aktualisiert' }))
+    expect(api.update.mock.calls[0][1]).not.toHaveProperty('tags')
 
     await buttonByText(wrapper, 'JSONL exportieren').trigger('click')
     expect(api.export).toHaveBeenCalledWith('system', 'jsonl')

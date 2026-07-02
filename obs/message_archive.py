@@ -847,7 +847,7 @@ class MessageArchiveService:
         return entry
 
 
-async def broadcast_message_archive_entry(entry: dict[str, Any]) -> None:
+async def broadcast_message_archive_entry(entry: dict[str, Any], previous_entry: dict[str, Any] | None = None) -> None:
     try:
         from obs.api.v1.websocket import get_ws_manager
 
@@ -859,7 +859,7 @@ async def broadcast_message_archive_entry(entry: dict[str, Any]) -> None:
         return
 
     try:
-        await manager.broadcast_message_archive_entry(entry)
+        await manager.broadcast_message_archive_entry(entry, previous_entry=previous_entry)
     except Exception:
         logger.exception("Message archive WebSocket broadcast failed")
 

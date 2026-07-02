@@ -369,7 +369,9 @@ async function saveArchive() {
   try {
     const payload = formPayload()
     if (selectedArchive.value) {
-      const { id, ...patch } = payload
+      const patch = { ...payload }
+      delete patch.id
+      delete patch.tags
       await messageArchivesApi.update(selectedArchive.value.id, patch)
     } else {
       await messageArchivesApi.create(payload)

@@ -1,0 +1,76 @@
+// @vitest-environment jsdom
+import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent } from 'vue'
+import { describe, expect, it, vi } from 'vitest'
+import { visu } from '@/api/client'
+import { WidgetRegistry } from '@/widgets/registry'
+import WidgetRef from './Widget.vue'
+
+vi.mock('@/api/client', () => ({
+  visu: {
+    getWidgetRef: vi.fn(),
+  },
+}))
+
+vi.mock('@/stores/datapoints', () => ({
+  useDatapointsStore: () => ({
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    fetchInitialValues: vi.fn(),
+    getValue: vi.fn(() => null),
+  }),
+}))
+
+const DummyWidget = defineComponent({
+  props: {
+    readonly: Boolean,
+  },
+  template: '<div data-testid="dummy-widget" :data-readonly="readonly"></div>',
+})
+
+WidgetRegistry.register({
+  type: 'DummyReadonlyWidget',
+  label: 'Dummy',
+  icon: 'D',
+  minW: 1,
+  minH: 1,
+  defaultW: 1,
+  defaultH: 1,
+  component: DummyWidget,
+  configComponent: DummyWidget,
+  defaultConfig: {},
+  compatibleTypes: ['*'],
+})
+
+describe('WidgetRef Widget.vue', () => {
+  it('forwards readonly mode to referenced widgets', async () => {
+    vi.mocked(visu.getWidgetRef).mockResolvedValue([
+      {
+        id: 'source-widget',
+        name: 'Archive',
+        type: 'DummyReadonlyWidget',
+        datapoint_id: null,
+        status_datapoint_id: null,
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 1,
+        config: {},
+      },
+    ])
+
+    const wrapper = mount(WidgetRef, {
+      props: {
+        config: { source_page_id: 'source-page', source_widget_name: 'Archive' },
+        datapointId: null,
+        value: null,
+        statusValue: null,
+        editorMode: false,
+        readonly: true,
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="dummy-widget"]').attributes('data-readonly')).toBe('true')
+  })
+})
