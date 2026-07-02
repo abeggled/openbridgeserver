@@ -61,7 +61,11 @@ def test_release_lxc_workflow_packages_obs_admin():
     assert "BUNDLE_HAS_OBS_ADMIN=false" in obs_update
     assert "grep -Eq '^(\\./)?obs-admin$'" in obs_update
     assert 'if [[ "$BUNDLE_HAS_OBS_ADMIN" == "true" ]]; then' in obs_update
-    assert 'install -m 755 "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin' in obs_update
+    # Self-update writes to a temp file and renames atomically (no in-place
+    # overwrite of a binary that may still be executing) — see issue #942 P1.
+    assert 'TMP_ADMIN=$(mktemp /usr/local/bin/obs-admin.XXXXXX)' in obs_update
+    assert 'install -m 755 "$INSTALL_DIR/obs-admin" "$TMP_ADMIN"' in obs_update
+    assert 'mv -f "$TMP_ADMIN" /usr/local/bin/obs-admin' in obs_update
 
 
 def test_updater_supports_nightly_flag():
