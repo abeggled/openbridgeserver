@@ -17,6 +17,8 @@ from obs.api.v1.support import (
     _ringbuffer_tps,
     sanitize_support_data,
 )
+from obs.db.database import get_db
+from obs.ringbuffer.persisted_config import persist_ringbuffer_config
 
 pytestmark = pytest.mark.integration
 
@@ -392,7 +394,11 @@ async def test_support_package_marks_ringbuffer_metrics_unavailable_on_query_fai
         async def query(self, **_kwargs):
             raise OSError("locked")
 
-    with patch("obs.ringbuffer.ringbuffer.get_ringbuffer", return_value=BrokenRingBuffer()):
+    with (
+        patch("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", return_value=True),
+        patch("obs.ringbuffer.ringbuffer.get_optional_ringbuffer", return_value=BrokenRingBuffer()),
+        patch("obs.ringbuffer.ringbuffer.get_ringbuffer", return_value=BrokenRingBuffer()),
+    ):
         resp = await client.post("/api/v1/support/package", headers=auth_headers)
 
     assert resp.status_code == 200
@@ -404,6 +410,33 @@ async def test_support_package_marks_ringbuffer_metrics_unavailable_on_query_fai
     assert body["monitor"] == {"available": False, "reason": "OSError"}
 
 
+async def test_support_package_preserves_disabled_monitor_config(client, auth_headers):
+    await persist_ringbuffer_config(
+        get_db(),
+        enabled=False,
+        max_entries=123,
+        max_file_size_bytes=456,
+        max_age=789,
+    )
+
+    with (
+        patch("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", return_value=False),
+        patch("obs.ringbuffer.ringbuffer.get_optional_ringbuffer", return_value=None),
+    ):
+        resp = await client.post("/api/v1/support/package", headers=auth_headers)
+
+    assert resp.status_code == 200
+    monitor = resp.json()["monitor"]
+    assert monitor["available"] is True
+    assert monitor["stats"]["enabled"] is False
+    assert monitor["stats"]["max_entries"] == 123
+    assert monitor["stats"]["max_file_size_bytes"] == 456
+    assert monitor["stats"]["max_age"] == 789
+    assert monitor["recent_sample_size"] == 0
+    assert monitor["recent_source_adapter_counts"] == {}
+    assert monitor["recent_quality_counts"] == {}
+
+
 async def test_ringbuffer_helpers_tolerate_query_failures():
     class BrokenRingBuffer:
         async def stats(self) -> dict[str, object]:
@@ -412,9 +445,13 @@ async def test_ringbuffer_helpers_tolerate_query_failures():
         async def query(self, **_kwargs):
             raise OSError("locked")
 
-    with patch("obs.ringbuffer.ringbuffer.get_ringbuffer", return_value=BrokenRingBuffer()):
+    with (
+        patch("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", return_value=True),
+        patch("obs.ringbuffer.ringbuffer.get_optional_ringbuffer", return_value=BrokenRingBuffer()),
+        patch("obs.ringbuffer.ringbuffer.get_ringbuffer", return_value=BrokenRingBuffer()),
+    ):
         assert await _ringbuffer_tps() == (False, {}, {})
-        assert await _build_monitor_info() == {"available": False, "reason": "OSError"}
+        assert await _build_monitor_info(object()) == {"available": False, "reason": "OSError"}
 
 
 async def test_support_package_contains_history_and_monitor_sections(client, auth_headers):

@@ -399,6 +399,8 @@ The Playwright suite lives in `tests/gui/` and requires a running full stack (ba
 2. Import it in `i18n.js` / `i18n.ts` and add to `messages` + `SUPPORTED_LOCALES`
 3. Run `wlc push gui-admin` to upload source; community translates on Weblate; `wlc pull gui-admin` to pull back
 
+**i18n-guard and non-ASCII language names:** The `label` field in `SUPPORTED_LOCALES` holds the native name of the language (e.g. `Español`, `Français`). These are intentionally hardcoded — `$t()` cannot be used here because the locale has not been bootstrapped yet when `SUPPORTED_LOCALES` is evaluated. The i18n-guard passes pure-ASCII names automatically (e.g. `Italiano`, `Schweizerdeutsch`) via its technical-token check, but **names containing non-ASCII characters** (accented letters, ñ, ç, etc.) must be added to `tools/i18n-allowlist.txt` with a short comment. Do this in the same commit that introduces the new locale.
+
 **Weblate** components are named `gui-admin` (Admin GUI) and `frontend-visu` (Visu SPA) under the `openbridgeserver` project on [hosted.weblate.org](https://hosted.weblate.org/projects/openbridgeserver/). Source language is `de`; file format is `JSON (simple)`. CLI tool: `pip install wlc`; credentials in `~/.config/weblate` or via `WLC_URL` / `WLC_KEY` env vars.
 
 ## Architecture

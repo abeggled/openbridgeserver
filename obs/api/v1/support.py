@@ -230,7 +230,7 @@ async def create_support_package(
         runtime=_build_runtime_info(now),
         adapters=await _build_adapter_info(db),
         history=await _build_history_info(db),
-        monitor=await _build_monitor_info(),
+        monitor=await _build_monitor_info(db),
         health=_build_health_info(now),
         warning_history=warning_history,
         error_history=error_history,
@@ -469,11 +469,23 @@ async def _build_history_info(db: Database) -> dict[str, Any]:
     )
 
 
-async def _build_monitor_info() -> dict[str, Any]:
+async def _build_monitor_info(db: Database) -> dict[str, Any]:
     try:
-        from obs.ringbuffer.ringbuffer import get_ringbuffer
+        from obs.api.v1.ringbuffer import _disabled_stats
+        from obs.ringbuffer.ringbuffer import get_optional_ringbuffer, is_ringbuffer_enabled
 
-        ringbuffer = get_ringbuffer()
+        ringbuffer = get_optional_ringbuffer()
+        if not is_ringbuffer_enabled() or ringbuffer is None:
+            stats = await _disabled_stats(db)
+            return sanitize_support_data(
+                {
+                    "available": True,
+                    "stats": stats.model_dump(),
+                    "recent_sample_size": 0,
+                    "recent_source_adapter_counts": {},
+                    "recent_quality_counts": {},
+                }
+            )
         stats = await ringbuffer.stats()
         recent_entries = await ringbuffer.query(limit=200)
     except Exception as exc:
