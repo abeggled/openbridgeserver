@@ -162,6 +162,15 @@ async def resolve_datapoint_targets(db: Database, dp_ids: Iterable[str]) -> dict
     return targets_by_dp
 
 
+def _datapoint_read_grants(grants: Sequence[RoleGrant], targets: Sequence[AuthzTarget]) -> list[RoleGrant]:
+    """Restrict datapoint READ hierarchy grants to linked nodes and ancestors."""
+    result: list[RoleGrant] = []
+    for grant in grants:
+        if any(grant.node_type == target.node_type and grant.node_id in target.path for target in targets):
+            result.append(grant)
+    return result
+
+
 async def filter_authorized_datapoints(
     db: Database,
     principal: Principal,
@@ -187,11 +196,12 @@ async def filter_authorized_datapoints(
     allowed: list[str] = []
     for dp_id in ordered_ids:
         targets = targets_by_dp.get(dp_id, [])
+        decision_grants = _datapoint_read_grants(resolved_grants, targets) if action_value == AuthzAction.READ else resolved_grants
         decision = authorize(
             principal=principal,
             action=action_value,
             targets=targets,
-            grants=resolved_grants,
+            grants=decision_grants,
         )
         if action_value != AuthzAction.READ and dp_id in direct_grant_ids:
             direct_decision = authorize(
