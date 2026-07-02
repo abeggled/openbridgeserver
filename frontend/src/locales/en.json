@@ -895,7 +895,9 @@
       "widget": "Widget (name)",
       "selectWidget": "— Select widget —",
       "noNamedWidgets": "— no named widgets —",
-      "noNamedWidgetsHint": "⚠ No widget on this page has a name. Add names in the editor."
+      "noNamedWidgetsHint": "⚠ No widget on this page has a name. Add names in the editor.",
+      "reference": "Reference",
+      "chooseReference": "Choose reference …"
     },
     "zeitschaltuhr": {
       "title": "Timer",
@@ -951,6 +953,7 @@
       "miniWidgetLabel": "Label",
       "miniWidgetLabelPlaceholder": "e.g. Hall light",
       "statusDatapoint": "Status data point (optional)",
+      "noImageConfigured": "No image configured",
       "widthPx": "Width (px)",
       "heightPx": "Height (px)",
       "showInVisu": "Show in visualisation",

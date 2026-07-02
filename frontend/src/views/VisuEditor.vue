@@ -35,7 +35,7 @@ import MissingWidget from '@/widgets/MissingWidget.vue'
 import DataPointPicker from '@/components/DataPointPicker.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
 import AuthButton from '@/components/AuthButton.vue'
-import { datapoints as dpApi, visuBackgrounds as bgApi } from '@/api/client'
+import { datapoints as dpApi, getSessionToken, visuBackgrounds as bgApi } from '@/api/client'
 import { useLocalizedText } from '@/composables/useLocalizedText'
 import { useVisuBackgrounds } from '@/composables/useVisuBackgrounds'
 import {
@@ -113,6 +113,20 @@ function withWidgetDefaults(type: string, raw: unknown): Record<string, unknown>
 
 const showPaletteMobile = ref(false)
 const showConfigMobile = ref(false)
+
+function resolveAccessNode(nodeId: string): { definingId: string } {
+  let cur = store.getNode(nodeId)
+  while (cur) {
+    if (cur.access !== null) return { definingId: cur.id }
+    cur = cur.parent_id ? store.getNode(cur.parent_id) : undefined
+  }
+  return { definingId: nodeId }
+}
+
+const editorPageSessionToken = computed(() => {
+  if (isNew.value) return null
+  return getSessionToken(resolveAccessNode(props.id).definingId)
+})
 
 // ── Datenpunkt-Validierung ────────────────────────────────────────────────────
 const brokenDpIds = ref<Set<string>>(new Set())
@@ -871,6 +885,8 @@ const showSettings = ref(false)
                 :value="null"
                 :status-value="null"
                 :editor-mode="true"
+                :page-id="isNew ? null : props.id"
+                :session-token="editorPageSessionToken"
                 :h="w.h"
               />
               <MissingWidget v-else :widget-type="w.type" />

@@ -27,8 +27,12 @@ from datetime import UTC, datetime
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
-from obs.api.auth import get_admin_user, get_current_user, limiter, optional_current_user
+from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user, limiter
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import filter_authorized_datapoints
+from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config, is_uuid_str
 from obs.api.v1.sessions import create_session, validate_session
 from obs.db.database import Database, get_db
 from obs.models.visu import (
@@ -46,6 +50,8 @@ from obs.models.visu import (
 )
 
 router = APIRouter(tags=["visu"])
+_visu_bearer = HTTPBearer(auto_error=False)
+_visu_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 # ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 
@@ -128,6 +134,72 @@ async def _check_user_access(db: Database, node_id: str, username: str) -> bool:
         (defining_node_id, username),
     )
     return auth_row is not None
+
+
+async def _optional_visu_principal(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_visu_bearer),
+    api_key: str | None = Depends(_visu_api_key_header),
+    db: Database = Depends(get_db),
+) -> Principal | None:
+    if credentials is None and api_key is None:
+        return None
+    try:
+        return await get_current_principal(credentials=credentials, api_key=api_key, db=db)
+    except HTTPException:
+        return None
+
+
+def _principal_from_dependency(value: Principal | str | None) -> Principal | None:
+    if value is None or isinstance(value, Principal):
+        return value
+    return Principal(
+        subject=value,
+        type="api_key" if value.startswith("api_key:") else "user",
+        is_admin=value == "admin",
+    )
+
+
+def _collect_page_datapoint_ids(config: PageConfig) -> list[str]:
+    datapoint_ids: set[str] = set()
+    for widget in config.widgets:
+        if widget.datapoint_id and is_uuid_str(widget.datapoint_id):
+            datapoint_ids.add(widget.datapoint_id)
+        if widget.status_datapoint_id and is_uuid_str(widget.status_datapoint_id):
+            datapoint_ids.add(widget.status_datapoint_id)
+        collect_datapoint_ids_from_config(widget.config, datapoint_ids)
+    return sorted(datapoint_ids)
+
+
+async def _check_page_datapoint_policy(
+    db: Database,
+    principal: Principal | None,
+    datapoint_ids: list[str],
+    action: AuthzAction,
+    *,
+    allow_empty: bool = True,
+) -> None:
+    if principal is None or (principal.type == "user" and principal.is_admin):
+        return
+    if not datapoint_ids:
+        if allow_empty:
+            return
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+
+    allowed_ids = set(await filter_authorized_datapoints(db, principal, datapoint_ids, action=action))
+    if not set(datapoint_ids).issubset(allowed_ids):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+
+
+async def _check_page_write_access(db: Database, node_id: str, principal: Principal | None) -> None:
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+    if principal.type == "user" and principal.is_admin:
+        return
+    access, _ = await _resolve_access_with_node(db, node_id)
+    if access in ("readonly", "protected"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+    if access == "user" and (principal.type != "user" or not await _check_user_access(db, node_id, principal.subject)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
 
 # ── Tree ──────────────────────────────────────────────────────────────────────
@@ -491,14 +563,15 @@ async def get_page(
     node_id: str,
     request: Request,
     db: Database = Depends(get_db),
-    user: str | None = Depends(optional_current_user),
+    user: Principal | str | None = Depends(_optional_visu_principal),
 ):
+    principal = _principal_from_dependency(user)
     node = await _get_node_or_404(db, node_id)
     if node.type != "PAGE":
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
 
     access, defining_node_id = await _resolve_access_with_node(db, node_id)
-    if user is None:
+    if principal is None:
         # Unauthentisierter Zugriff: Seitentyp prüfen
         if access == "user":
             raise HTTPException(
@@ -515,10 +588,13 @@ async def get_page(
                 )
     else:
         # Authentifizierter Benutzer: bei user-Pages explizite Zuweisung prüfen
-        if access == "user" and not await _check_user_access(db, node_id, user):
+        if access == "user" and (principal.type != "user" or not await _check_user_access(db, node_id, principal.subject)):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
-    return node.page_config or PageConfig()
+    config = node.page_config or PageConfig()
+    if access == "user":
+        await _check_page_datapoint_policy(db, principal, _collect_page_datapoint_ids(config), AuthzAction.READ)
+    return config
 
 
 @router.get("/widget-ref/{page_id}", response_model=list[WidgetInstance])
@@ -526,18 +602,19 @@ async def get_widget_ref(
     page_id: str,
     request: Request,
     db: Database = Depends(get_db),
-    user: str | None = Depends(optional_current_user),
+    user: Principal | str | None = Depends(_optional_visu_principal),
 ):
     """Gibt alle Widget-Instanzen einer Seite zurück.
     Wird von WidgetRef-Widgets verwendet, die einzelne Widgets aus einer anderen
     Seite einbetten. Zugriff richtet sich nach dem Access-Level der Quell-Seite.
     """
+    principal = _principal_from_dependency(user)
     node = await _get_node_or_404(db, page_id)
     if node.type != "PAGE":
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
 
     access, defining_node_id = await _resolve_access_with_node(db, page_id)
-    if user is None:
+    if principal is None:
         if access == "user":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -552,10 +629,12 @@ async def get_widget_ref(
                     detail="PIN-Authentifizierung erforderlich",
                 )
     else:
-        if access == "user" and not await _check_user_access(db, page_id, user):
+        if access == "user" and (principal.type != "user" or not await _check_user_access(db, page_id, principal.subject)):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
     pc = node.page_config or PageConfig()
+    if access == "user":
+        await _check_page_datapoint_policy(db, principal, _collect_page_datapoint_ids(pc), AuthzAction.READ)
     return pc.widgets
 
 
@@ -564,11 +643,16 @@ async def save_page(
     node_id: str,
     config: PageConfig,
     db: Database = Depends(get_db),
-    _user=Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
 ):
+    principal = _principal_from_dependency(_user)
     node = await _get_node_or_404(db, node_id)
     if node.type != "PAGE":
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
+
+    await _check_page_write_access(db, node_id, principal)
+    datapoint_ids = _collect_page_datapoint_ids(config)
+    await _check_page_datapoint_policy(db, principal, datapoint_ids, AuthzAction.WRITE, allow_empty=False)
 
     await db.conn.execute(
         "UPDATE visu_nodes SET page_config = ?, updated_at = ? WHERE id = ?",

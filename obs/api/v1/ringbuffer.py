@@ -29,7 +29,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from obs.api.auth import get_admin_user, get_current_user
+from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import filter_authorized_datapoints
 from obs.db.database import Database, get_db
 from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config, persist_ringbuffer_config
 from obs.ringbuffer.ringbuffer import (
@@ -122,6 +124,31 @@ def _now_iso() -> str:
 
 def _new_id() -> str:
     return str(uuid.uuid4())
+
+
+def _principal_from_dependency(value: Principal | str) -> Principal:
+    if isinstance(value, Principal):
+        return value
+    if not isinstance(value, str):
+        return Principal(subject="admin", type="user", is_admin=True)
+    return Principal(
+        subject=value,
+        type="api_key" if value.startswith("api_key:") else "user",
+        is_admin=value == "admin",
+    )
+
+
+def _is_admin_principal(principal: Principal) -> bool:
+    return principal.type == "user" and principal.is_admin
+
+
+async def _readable_datapoint_ids(db: Database, principal: Principal, datapoint_ids: list[str]) -> list[str]:
+    ordered_ids = list(dict.fromkeys(datapoint_ids))
+    if not ordered_ids:
+        return []
+    if _is_admin_principal(principal):
+        return ordered_ids
+    return await filter_authorized_datapoints(db, principal, ordered_ids, action=AuthzAction.READ)
 
 
 # ---------------------------------------------------------------------------
@@ -777,6 +804,8 @@ async def _query_v2_entries(
     *,
     limit_override: int | None = None,
     offset_override: int | None = None,
+    db: Database | None = None,
+    principal: Principal | None = None,
 ) -> list[RingBufferEntryOut]:
     if not is_ringbuffer_enabled():
         return []
@@ -843,12 +872,22 @@ async def _query_v2_entries(
 
     time_filter = body.filters.time
     datapoint_types = {str(dp.id): dp.data_type for dp in registry_entries}
+    scoped_datapoints = datapoints
+    if db is not None and principal is not None and not _is_admin_principal(principal):
+        candidate_ids = datapoints or list(name_map.keys())
+        allowed_ids = await _readable_datapoint_ids(db, principal, candidate_ids)
+        allowed_set = set(allowed_ids)
+        scoped_datapoints = [dp_id for dp_id in datapoints if dp_id in allowed_set] if datapoints else allowed_ids
+        dp_ids_by_name = [dp_id for dp_id in dp_ids_by_name if dp_id in allowed_set]
+        if not scoped_datapoints:
+            return []
+
     rb = get_ringbuffer()
     try:
         entries = await rb.query_v2(
             q=q,
             adapter_any_of=adapters or None,
-            datapoint_ids=datapoints or None,
+            datapoint_ids=scoped_datapoints or None,
             value_filters=value_filters or None,
             metadata_tags_any_of=metadata_tags or None,
             metadata_adapter_types_any_of=metadata_adapter_types or None,
@@ -1050,7 +1089,8 @@ async def query_ringbuffer(
     adapter: str = Query("", description="Exact source_adapter match"),
     from_ts: str = Query("", alias="from", description="ISO-8601 timestamp (exclusive lower bound)"),
     limit: int = Query(100, ge=1, le=10000),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(get_db),
 ) -> list[RingBufferEntryOut]:
     if not is_ringbuffer_enabled():
         return []
@@ -1064,15 +1104,29 @@ async def query_ringbuffer(
     dp_ids_by_name: list[str] = []
     if q:
         q_lower = q.lower()
-        dp_ids_by_name = [str(dp.id) for dp in registry.all() if q_lower in dp.name.lower()]
+        dp_ids_by_name = [str(dp.id) for dp in registry_entries if q_lower in dp.name.lower()]
+
+    principal = _principal_from_dependency(_user)
+    scoped_dp_ids: list[str] | None = None
+    if not _is_admin_principal(principal):
+        allowed_ids = await _readable_datapoint_ids(db, principal, list(name_map.keys()))
+        allowed_set = set(allowed_ids)
+        scoped_dp_ids = allowed_ids
+        dp_ids_by_name = [dp_id for dp_id in dp_ids_by_name if dp_id in allowed_set]
+        if not scoped_dp_ids:
+            return []
 
     rb = get_ringbuffer()
-    entries = await rb.query(
+    entries = await rb.query_v2(
         q=q,
-        adapter=adapter,
-        from_ts=from_ts,
+        adapter_any_of=[adapter] if adapter else None,
+        datapoint_ids=scoped_dp_ids or None,
+        from_ts=from_ts or None,
         limit=limit,
-        dp_ids=dp_ids_by_name or None,
+        offset=0,
+        sort_field="id",
+        sort_order="desc",
+        dp_ids_by_name=dp_ids_by_name or None,
     )
     return [
         RingBufferEntryOut(
@@ -1096,16 +1150,19 @@ async def query_ringbuffer(
 @router.post("/query", response_model=list[RingBufferEntryOut])
 async def query_ringbuffer_v2(
     body: RingBufferQueryV2,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(get_db),
 ) -> list[RingBufferEntryOut]:
-    return await _query_v2_entries(body)
+    principal = _principal_from_dependency(_user)
+    return await _query_v2_entries(body, db=db, principal=principal)
 
 
 @router.post("/export/csv")
 async def export_ringbuffer_csv(
     body: RingBufferQueryV2,
     background_tasks: BackgroundTasks,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(get_db),
 ) -> StreamingResponse:
     # CSV export always returns the full filtered result set independent of UI pagination.
     started = time.monotonic()
@@ -1120,6 +1177,7 @@ async def export_ringbuffer_csv(
     )
     writer = csv.DictWriter(spool, fieldnames=list(_CSV_EXPORT_HEADERS))
     writer.writeheader()
+    principal = _principal_from_dependency(_user)
 
     try:
         while True:
@@ -1140,6 +1198,8 @@ async def export_ringbuffer_csv(
                         body,
                         limit_override=chunk_size,
                         offset_override=offset,
+                        db=db,
+                        principal=principal,
                     ),
                     timeout=_CSV_EXPORT_QUERY_TIMEOUT_SECONDS,
                 )
@@ -1168,6 +1228,8 @@ async def export_ringbuffer_csv(
                     body,
                     limit_override=1,
                     offset_override=offset,
+                    db=db,
+                    principal=principal,
                 ),
                 timeout=_CSV_EXPORT_QUERY_TIMEOUT_SECONDS,
             )
@@ -1491,9 +1553,11 @@ async def patch_ringbuffer_filterset_topbar(
 @router.post("/filtersets/query", response_model=list[RingBufferMultiEntryOut])
 async def query_ringbuffer_filtersets_multi(
     body: RingBufferMultiQueryRequest,
-    current_user: str = Depends(get_current_user),
+    current_user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> list[RingBufferMultiEntryOut]:
+    principal = _principal_from_dependency(current_user)
+    username = principal.subject
     if len(body.set_ids) > _FILTERSET_MULTI_QUERY_SET_CAP:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -1514,7 +1578,7 @@ async def query_ringbuffer_filtersets_multi(
                 ),
             }
         )
-        entries = await _query_v2_entries(query)
+        entries = await _query_v2_entries(query, db=db, principal=principal)
         return [RingBufferMultiEntryOut(**entry.model_dump(), matched_set_ids=[]) for entry in entries]
 
     # Resolve sets — skip missing/inactive (per-user) ones rather than fail.
@@ -1522,7 +1586,7 @@ async def query_ringbuffer_filtersets_multi(
     # see different OR-unions across the same set_ids.
     resolved: list[RingBufferFiltersetOut] = []
     for set_id in body.set_ids:
-        current = await _fetch_filterset(db, set_id, username=current_user)
+        current = await _fetch_filterset(db, set_id, username=username)
         if current is None:
             continue
         if not current.is_active:
@@ -1551,7 +1615,7 @@ async def query_ringbuffer_filtersets_multi(
         if query is None:
             continue
         try:
-            rows = await _query_v2_entries(query)
+            rows = await _query_v2_entries(query, db=db, principal=principal)
         except HTTPException:
             # An empty-but-present filter criterion (e.g. tags=[]) reduces to a
             # no-op match — skip it instead of failing the whole multi-query.
@@ -1579,7 +1643,7 @@ async def query_ringbuffer_filtersets_multi(
 @router.post("/filtersets/{filterset_id}/query", response_model=list[RingBufferEntryOut])
 async def query_ringbuffer_filterset(
     filterset_id: str,
-    current_user: str = Depends(get_current_user),
+    current_user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> list[RingBufferEntryOut]:
     """Single-set query (back-compat for callers that target one set at a time).
@@ -1589,7 +1653,8 @@ async def query_ringbuffer_filterset(
     ``POST /filtersets/query`` with a single-element ``set_ids`` list. The
     set's ``is_active`` flag is taken from the caller's per-user state (#478).
     """
-    current = await _fetch_filterset(db, filterset_id, username=current_user)
+    principal = _principal_from_dependency(current_user)
+    current = await _fetch_filterset(db, filterset_id, username=principal.subject)
     if not current:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "ringbuffer filterset not found")
     if not current.is_active:
@@ -1598,7 +1663,7 @@ async def query_ringbuffer_filterset(
     query = await _build_query_from_filter_criteria(current.filter, time_filter=None, db=db)
     if query is None:
         return []
-    return await _query_v2_entries(query)
+    return await _query_v2_entries(query, db=db, principal=principal)
 
 
 # ---------------------------------------------------------------------------
@@ -1614,6 +1679,7 @@ async def _collect_multi_entries(
     db: Database,
     *,
     username: str | None = None,
+    principal: Principal | None = None,
 ) -> tuple[list[RingBufferEntryOut], dict[int, list[str]]]:
     """Collect the OR-union of entries across the requested filtersets.
 
@@ -1638,7 +1704,7 @@ async def _collect_multi_entries(
                 ),
             }
         )
-        entries = await _query_v2_entries(query)
+        entries = await _query_v2_entries(query, db=db, principal=principal)
         return entries, {e.id: [] for e in entries}
 
     resolved: list[RingBufferFiltersetOut] = []
@@ -1666,7 +1732,7 @@ async def _collect_multi_entries(
         if query is None:
             continue
         try:
-            rows = await _query_v2_entries(query)
+            rows = await _query_v2_entries(query, db=db, principal=principal)
         except HTTPException:
             continue
         for entry in rows:
@@ -1681,7 +1747,7 @@ async def _collect_multi_entries(
 @router.post("/filtersets/export/count", response_model=RingBufferMultiExportCountResponse)
 async def count_ringbuffer_filtersets_export(
     body: RingBufferMultiExportCountRequest,
-    current_user: str = Depends(get_current_user),
+    current_user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> RingBufferMultiExportCountResponse:
     """Preflight: how many rows would the corresponding CSV export produce?
@@ -1692,8 +1758,9 @@ async def count_ringbuffer_filtersets_export(
     Per-user ``is_active`` applies — a set the caller has deactivated for
     themselves is excluded from the count too (#478).
     """
+    principal = _principal_from_dependency(current_user)
     export_body = RingBufferMultiExportRequest(set_ids=body.set_ids, time=body.time)
-    entries, _ = await _collect_multi_entries(export_body, db, username=current_user)
+    entries, _ = await _collect_multi_entries(export_body, db, username=principal.subject, principal=principal)
     return RingBufferMultiExportCountResponse(row_count=len(entries))
 
 
@@ -1701,7 +1768,7 @@ async def count_ringbuffer_filtersets_export(
 async def export_ringbuffer_filtersets_csv(
     body: RingBufferMultiExportRequest,
     background_tasks: BackgroundTasks,
-    current_user: str = Depends(get_current_user),
+    current_user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> StreamingResponse:
     """Multi-set CSV/TSV export — OR-union of all requested active sets.
@@ -1711,7 +1778,8 @@ async def export_ringbuffer_filtersets_csv(
     persisted user defaults live behind ``GET/PUT /ringbuffer/export/settings``.
     Per-user ``is_active`` filters the OR-union to what the caller has enabled.
     """
-    entries, matched = await _collect_multi_entries(body, db, username=current_user)
+    principal = _principal_from_dependency(current_user)
+    entries, matched = await _collect_multi_entries(body, db, username=principal.subject, principal=principal)
     if len(entries) > _CSV_EXPORT_MAX_ROWS:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
