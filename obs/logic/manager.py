@@ -1458,14 +1458,7 @@ class LogicManager:
                 _add_resolved_outputs(newly_triggered_hc)
                 pending_host_check_replay.update(newly_triggered_hc)
 
-        # ── Handle wake_on_lan ────────────────────────────────────────────
-        # Runs AFTER host_check so that graphs with host_check → WoL read
-        # real reachability, and BEFORE api_client/notify so that wol.sent
-        # can propagate to downstream api_client or notify in the same tick.
-        triggered_wol_nodes: set[str] = set()
-        for node in flow.nodes:
-            if node.type != "wake_on_lan":
-                continue
+        async def _run_wake_on_lan_node(node: Any, target_set: set[str]) -> bool:
             out = outputs.get(node.id, {})
             hyst_wol = hyst.setdefault(node.id, {})
             is_triggered = GraphExecutor._to_bool(out.get("_trigger"))
@@ -1475,13 +1468,13 @@ class LogicManager:
             is_cron_triggered = node.id in cron_reachable
             if not is_triggered:
                 hyst_wol["wol_prev_trigger"] = False
-                continue
+                return False
             if was_triggered and not is_cron_triggered:
-                continue
+                return False
             mac = (node.data.get("mac_address") or "").strip()
             if not mac:
                 logger.warning("wake_on_lan: mac_address missing on node %s", node.id[:8])
-                continue
+                return False
             broadcast = (node.data.get("broadcast_ip") or "").strip() or "255.255.255.255"
             _port_raw = node.data.get("port")
             try:
@@ -1499,10 +1492,22 @@ class LogicManager:
                 # that a transient failure does not silently suppress the next attempt.
                 hyst_wol["wol_prev_trigger"] = True
                 outputs[node.id]["sent"] = True
-                triggered_wol_nodes.add(node.id)
+                target_set.add(node.id)
                 logger.info("Graph %s: WoL sent by node %s", graph_id[:8], node.id[:8])
+                return True
             except Exception as exc:
                 logger.warning("Graph %s: WoL failed on node %s: %s", graph_id[:8], node.id[:8], type(exc).__name__)
+                return False
+
+        # ── Handle wake_on_lan ────────────────────────────────────────────
+        # Runs AFTER host_check so that graphs with host_check → WoL read
+        # real reachability, and BEFORE api_client/notify so that wol.sent
+        # can propagate to downstream api_client or notify in the same tick.
+        triggered_wol_nodes: set[str] = set()
+        for node in flow.nodes:
+            if node.type != "wake_on_lan":
+                continue
+            await _run_wake_on_lan_node(node, triggered_wol_nodes)
 
         _add_resolved_outputs(triggered_wol_nodes)
 
@@ -1634,12 +1639,10 @@ class LogicManager:
                 execution_value_priority_by_datapoint_id[dp_id_str] = priority
         import json as _json  # noqa: PLC0415
 
-        for node in flow.nodes:
-            if node.type != "api_client":
-                continue
+        async def _run_api_client_node(node: Any, target_set: set[str]) -> bool:
             out = outputs.get(node.id, {})
             if not GraphExecutor._to_bool(out.get("_trigger")):
-                continue
+                return False
             variable_resolver = _make_api_client_variable_resolver(
                 self._registry,
                 node.data.get("variables"),
@@ -1651,19 +1654,19 @@ class LogicManager:
                     variable_resolver,
                 ).strip()
                 if not url:
-                    continue
+                    return False
             except _ApiClientVariableError as exc:
                 logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
-                triggered_api_clients.add(node.id)
-                continue
+                target_set.add(node.id)
+                return True
             try:
                 request_urls, pinned_headers, request_extensions = _build_api_client_fetch_targets(url)
             except ValueError as exc:
                 logger.warning("Graph %s: blocked api_client target %s: %s", graph_id[:8], url, exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
-                triggered_api_clients.add(node.id)
-                continue
+                target_set.add(node.id)
+                return True
             method = (node.data.get("method", "GET") or "GET").upper()
             content_type = node.data.get("content_type", "application/json")
             resp_type = node.data.get("response_type", "application/json")
@@ -1692,8 +1695,8 @@ class LogicManager:
             except _ApiClientVariableError as exc:
                 logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
-                triggered_api_clients.add(node.id)
-                continue
+                target_set.add(node.id)
+                return True
             # ── Authentication ──────────────────────────────────────────
             auth_type = (node.data.get("auth_type") or "none").lower()
             auth: Any = None
@@ -1727,8 +1730,8 @@ class LogicManager:
             except _ApiClientVariableError as exc:
                 logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
-                triggered_api_clients.add(node.id)
-                continue
+                target_set.add(node.id)
+                return True
             try:
                 req_kwargs: dict[str, Any] = {
                     "headers": extra_headers,
@@ -1792,11 +1795,18 @@ class LogicManager:
                     url,
                     resp.status_code,
                 )
-                triggered_api_clients.add(node.id)
+                target_set.add(node.id)
+                return True
             except Exception as exc:
                 logger.warning("Graph %s: api_client failed: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
-                triggered_api_clients.add(node.id)
+                target_set.add(node.id)
+                return True
+
+        for node in flow.nodes:
+            if node.type != "api_client":
+                continue
+            await _run_api_client_node(node, triggered_api_clients)
 
         _add_resolved_outputs(triggered_api_clients)
 
@@ -2451,17 +2461,16 @@ class LogicManager:
 
         # ── Handle message_archive ────────────────────────────────────────────
         triggered_message_archive_nodes: set[str] = set()
-        for node in flow.nodes:
-            if node.type != "message_archive":
-                continue
+
+        async def _run_message_archive_node(node: Any, target_set: set[str]) -> bool:
             out = outputs.get(node.id, {})
             if not GraphExecutor._to_bool(out.get("_trigger")):
-                continue
+                return False
 
             archive_id = (node.data.get("archive_id") or "").strip().lower()
             if not archive_id:
                 logger.warning("Message archive: archive_id missing on node %s", node.id[:8])
-                continue
+                return False
 
             _raw_msg = out.get("_message")
             msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
@@ -2478,13 +2487,54 @@ class LogicManager:
                 record_kwargs = dict(type=message_type, severity=severity, source=source, title=title, message=msg, payload=payload)
                 await get_message_archive_service().record(archive_id, **record_kwargs)
                 outputs[node.id]["stored"] = True
-                triggered_message_archive_nodes.add(node.id)
+                target_set.add(node.id)
                 logger.info("Graph %s: message archived in %s (msg=%r)", graph_id[:8], archive_id, msg[:40])
+                return True
             except Exception as exc:
                 logger.warning("Graph %s: message archive write failed (node=%s): %s", graph_id[:8], node.id[:8], exc)
+                return False
+
+        async def _run_replay_triggered_side_effects(candidate_ids: set[str]) -> None:
+            def _triggered_side_effect_ids() -> set[str]:
+                return triggered_message_archive_nodes | triggered_api_clients | triggered_wol_nodes | triggered_host_check_nodes
+
+            pending_candidates = set(candidate_ids)
+            while pending_candidates:
+                newly_triggered: set[str] = set()
+                for node in flow.nodes:
+                    if node.id not in pending_candidates:
+                        continue
+                    if node.type == "host_check" and node.id not in triggered_host_check_nodes:
+                        if await _run_host_check_node(node, newly_triggered, " (message-archive replay)"):
+                            triggered_host_check_nodes.add(node.id)
+                    elif node.type == "wake_on_lan" and node.id not in triggered_wol_nodes:
+                        if await _run_wake_on_lan_node(node, newly_triggered):
+                            triggered_wol_nodes.add(node.id)
+                    elif node.type == "api_client" and node.id not in triggered_api_clients:
+                        if await _run_api_client_node(node, newly_triggered):
+                            triggered_api_clients.add(node.id)
+                    elif node.type == "message_archive" and node.id not in triggered_message_archive_nodes:
+                        if await _run_message_archive_node(node, newly_triggered):
+                            triggered_message_archive_nodes.add(node.id)
+                if not newly_triggered:
+                    break
+                _add_resolved_outputs(newly_triggered)
+                pending_candidates = _replay_async_descendants(
+                    newly_triggered,
+                    skip_node_ids=_triggered_side_effect_ids(),
+                )
+
+        for node in flow.nodes:
+            if node.type != "message_archive":
+                continue
+            await _run_message_archive_node(node, triggered_message_archive_nodes)
         if triggered_message_archive_nodes:
             _add_resolved_outputs(triggered_message_archive_nodes)
-            _replay_async_descendants(triggered_message_archive_nodes, skip_node_ids=triggered_message_archive_nodes)
+            message_archive_descendants = _replay_async_descendants(
+                triggered_message_archive_nodes,
+                skip_node_ids=triggered_message_archive_nodes | triggered_api_clients | triggered_wol_nodes | triggered_host_check_nodes,
+            )
+            await _run_replay_triggered_side_effects(message_archive_descendants)
 
         # ── Handle notify_pushover ────────────────────────────────────────
         # Runs AFTER api_client second-pass so that graphs with api_client →
