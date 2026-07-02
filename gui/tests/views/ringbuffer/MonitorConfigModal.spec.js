@@ -121,6 +121,14 @@ describe('MonitorConfigModal QA-01 coverage (#439)', () => {
     expect(wrapper.find('[data-testid="rb-config-retention-unit"]').element.value).toBe('months')
   })
 
+  it('documents the effective-storage sawtooth (budget is a target, ~133% peak)', async () => {
+    const { wrapper } = await mountModal()
+    const note = wrapper.find('[data-testid="rb-config-effective-storage-note"]')
+    expect(note.exists()).toBe(true)
+    expect(note.text()).toContain('133')
+    expect(note.text()).toContain('Retention-Ziel')
+  })
+
   it('hydrates with sane defaults when stats reflects an empty system', async () => {
     // After ringbuffer-config persistence: an unconfigured system reports
     // max_entries=null, max_file_size_bytes=10 MiB (sane default), max_age=null.

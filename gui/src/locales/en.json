@@ -1124,6 +1124,7 @@
     "storageFixed": "Storage model is fixed server-side:",
     "maxDisk": "Max. disk space",
     "maxDiskPlaceholder": "e.g. 500",
+    "effectiveStorageNote": "Effective disk usage: the budget is a retention target, not a hard instantaneous cap. Between rotations the active segment grows on top of it (by up to one segment size) before the next rotation trims old segments. Peak ≈ budget + segment size (default segment size ≈ budget/3, i.e. up to ~133%).",
     "maxRetention": "Max. retention",
     "maxRetentionPlaceholder": "e.g. 30",
     "maxEntriesPlaceholder": "e.g. 10000",

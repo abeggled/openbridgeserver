@@ -102,6 +102,13 @@
         </div>
       </div>
 
+      <!-- Effektiver Speicherbedarf (#919): der Budget-Wert ist ein Retention-Ziel,
+           kein harter Momentan-Deckel. Zwischen zwei Rotationen wächst das aktive
+           Segment oben drauf → kurzzeitiger Sägezahn-Überschwinger. -->
+      <p class="text-xs text-slate-500 dark:text-slate-400" data-testid="rb-config-effective-storage-note">
+        {{ $t('ringbuffer.effectiveStorageNote') }}
+      </p>
+
       <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-3">
         <div class="flex items-center gap-2">
           <input id="retention-enabled" type="checkbox" v-model="configForm.retentionEnabled" :disabled="!configForm.enabled" data-testid="rb-config-retention-enabled" />

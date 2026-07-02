@@ -1124,6 +1124,7 @@
     "storageFixed": "Speichermodell ist serverseitig fix:",
     "maxDisk": "Max. Speicherplatz auf Platte",
     "maxDiskPlaceholder": "z. B. 500",
+    "effectiveStorageNote": "Effektiver Speicherbedarf: Das Budget ist ein Retention-Ziel, kein harter Momentan-Deckel. Zwischen zwei Rotationen wächst das aktive Segment oben drauf (bis zu einer Segmentgröße), bevor die nächste Rotation alte Segmente entfernt. Spitzenwert ≈ Budget + Segmentgröße (Standard: Segmentgröße ≈ Budget/3, also bis zu ~133 %).",
     "maxRetention": "Max. Retention",
     "maxRetentionPlaceholder": "z. B. 30",
     "maxEntriesPlaceholder": "z. B. 10000",
