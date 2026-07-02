@@ -53,7 +53,7 @@ from obs.ringbuffer.ringbuffer import (
     _extract_metadata_binding_index_rows,
     _extract_metadata_tags,
 )
-from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig, validate_store_config
+from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO, SegmentConfig, StoreRetentionConfig, validate_store_config
 from obs.ringbuffer.store.interface import (
     OrderingGuarantee,
     RingBufferStore,
@@ -65,6 +65,7 @@ from obs.ringbuffer.store.interface import (
 from obs.ringbuffer.store.manifest import (
     LEGACY_SCHEMA_VERSION,
     SEGMENT_STATUS_ACTIVE,
+    SEGMENT_STATUS_CLOSED,
     Manifest,
     SegmentRecord,
 )
@@ -1024,6 +1025,83 @@ class SqliteSegmentStore(RingBufferStore):
     # Contract: stats
     # ------------------------------------------------------------------
 
+    def _compute_prognosis(self, segments: list[SegmentRecord]) -> dict[str, Any]:
+        """Datengetriebene Wachstums-/Retention-Prognose aus geschlossenen v2-Segmenten (#919).
+
+        Reine Momentaufnahme: die Rate wird ausschließlich aus den geschlossenen
+        v2-Segmenten (nicht Legacy, nicht aktiv) im Manifest geschätzt. Sie wird
+        genauer, je mehr geschlossene Segmente vorliegen. Alle Felder fallen robust
+        auf ``None`` zurück, wenn zu wenig Daten vorliegen (< 1 geschlossenes
+        v2-Segment) oder eine Division durch 0 drohte.
+
+        Felder:
+
+        * ``sample_segment_count`` — Anzahl herangezogener geschlossener v2-Segmente.
+        * ``bytes_per_hour`` / ``rows_per_hour`` — Rate = Summe(size/rows) /
+          Summe(Segmentdauer aus ``from_ts``/``to_ts``) × 3600. None bei zu wenig Daten.
+        * ``avg_segment_seconds`` — Ø-Segmentdauer (effektives Rotationsintervall).
+        * ``estimated_retention_seconds`` — falls ``max_file_size_bytes`` gesetzt und
+          ``bytes_per_hour > 0``: ``(max_file_size_bytes / bytes_per_hour) * 3600``;
+          sonst None (unbegrenzt/unbekannt).
+        * ``recommended_budget_for_segment_age_bytes`` — Budget, damit
+          ``segment_max_age`` (Zeit) dominiert = ``3 * bytes_per_hour *
+          (segment_max_age/3600)`` (grobe Richtgröße); None wenn Rate unbekannt.
+        """
+        empty = {
+            "sample_segment_count": 0,
+            "bytes_per_hour": None,
+            "rows_per_hour": None,
+            "avg_segment_seconds": None,
+            "estimated_retention_seconds": None,
+            "recommended_budget_for_segment_age_bytes": None,
+        }
+        closed_v2 = [s for s in segments if s.status == SEGMENT_STATUS_CLOSED and not _is_legacy_segment(s)]
+        if not closed_v2:
+            return empty
+
+        total_seconds = 0.0
+        total_bytes = 0
+        total_rows = 0
+        for segment in closed_v2:
+            from_ts = _parse_ts(segment.from_ts)
+            to_ts = _parse_ts(segment.to_ts)
+            if from_ts is None or to_ts is None:
+                continue
+            duration = to_ts - from_ts
+            if duration <= 0:
+                continue
+            total_seconds += duration
+            total_bytes += segment.size_bytes
+            total_rows += segment.row_count
+
+        sample_count = len(closed_v2)
+        if total_seconds <= 0:
+            # Genug Segmente, aber keine verwertbare Dauer (fehlende/degenerierte ts).
+            return {**empty, "sample_segment_count": sample_count}
+
+        bytes_per_hour = total_bytes / total_seconds * 3600
+        rows_per_hour = total_rows / total_seconds * 3600
+        avg_segment_seconds = total_seconds / sample_count
+
+        estimated_retention_seconds: float | None = None
+        budget = self._retention_config.max_file_size_bytes
+        if budget is not None and bytes_per_hour > 0:
+            estimated_retention_seconds = budget / bytes_per_hour * 3600
+
+        recommended_budget: float | None = None
+        segment_max_age = self._segment_config.segment_max_age
+        if bytes_per_hour > 0 and segment_max_age is not None:
+            recommended_budget = RETENTION_SEGMENT_RATIO * bytes_per_hour * (segment_max_age / 3600)
+
+        return {
+            "sample_segment_count": sample_count,
+            "bytes_per_hour": bytes_per_hour,
+            "rows_per_hour": rows_per_hour,
+            "avg_segment_seconds": avg_segment_seconds,
+            "estimated_retention_seconds": estimated_retention_seconds,
+            "recommended_budget_for_segment_age_bytes": recommended_budget,
+        }
+
     async def stats(self) -> StoreStats:
         segments = await self.manifest.list_segments()
         total = sum(s.row_count for s in segments)
@@ -1036,6 +1114,9 @@ class SqliteSegmentStore(RingBufferStore):
             "newest_ts": newest,
             "segment_count": len(segments),
             "size_bytes": size_bytes,
+            # Datengetriebene Prognose (#919) — reine Momentaufnahme aus retained
+            # (geschlossenen v2-)Segmenten; robuste None-Behandlung.
+            "prognosis": self._compute_prognosis(segments),
         }
         over_budget, pressure_reason = self._retention_pressure(segments)
         backend_extra = {
@@ -1231,34 +1312,32 @@ class SqliteSegmentStore(RingBufferStore):
         return removed
 
     async def _next_size_retention_victim(self) -> SegmentRecord | None:
-        """Wählt das nächste per Size-Budget löschbare Segment (ältestes zuerst, #919).
+        """Wählt das nächste per Size-Budget löschbare Segment — global ältestes zuerst (#919).
 
-        Für die Size-Budget-Retention ist zusätzlich zum sauber geschlossenen
-        v2-Segment auch das read-only eingehängte Legacy-Segment löschbar — es ist
-        per Definition am ältesten und zählt voll gegen das Size-Budget. Aber:
+        FIFO / Legacy-Rückgewinnung: das read-only eingehängte Legacy-Segment ist
+        per Definition am ältesten und zählt voll gegen das Size-Budget. Unter
+        Budgetdruck wird es deshalb ZUERST als Einheit zurückgewonnen (Kanten-Drop,
+        wie abgestimmt) — SOBALD der No-Zero-History-Guard erfüllt ist —, statt
+        dauerhaft Budget zu belegen. Sonst das älteste geschlossene v2-Segment.
 
         **No-Zero-History-Guard:** das Legacy-Segment darf NICHT gelöscht werden,
-        solange es die einzige Datenquelle ist. Erst wenn mindestens ein sauber
-        geschlossenes v2-Segment existiert (frische Daten sind gesichert), wird das
-        Legacy-Segment freigebbar. So verliert eine frische Umstellung nie sofort
-        die ganze Historie.
+        solange es die einzige Datenquelle ist. Erst wenn mindestens ein
+        nicht-Legacy-Segment (aktiv oder geschlossen) Zeilen hält (frische Daten
+        sind gesichert), wird das Legacy-Segment freigebbar. So verliert eine
+        frische Umstellung nie sofort die ganze Historie.
 
-        Reihenfolge: zuerst geschlossene v2-Segmente (älteste zuerst), dann — falls
-        keine mehr übrig und der Guard erfüllt ist — das Legacy-Segment.
+        Reihenfolge: Legacy zuerst (ältestes, Guard erfüllt), sonst ältestes
+        geschlossenes v2-Segment.
         """
+        legacy_segments = await self.manifest.list_legacy_segments()
+        # Legacy ist das global älteste → zuerst löschen, sobald der Guard erfüllt
+        # ist (mindestens eine nicht-Legacy-Datenquelle hält Zeilen).
+        if legacy_segments and await self._has_nonlegacy_data_segment():
+            return legacy_segments[0]
         closed = await self.manifest.list_closed_segments()
         if closed:
             return closed[0]
-        legacy_segments = await self.manifest.list_legacy_segments()
-        if not legacy_segments:
-            return None
-        # No-Zero-History-Guard: das Legacy-Segment nur freigeben, wenn eine
-        # nicht-Legacy-Datenquelle (aktives oder geschlossenes v2-Segment) bereits
-        # Zeilen hält. So bleibt bei einer frischen Umstellung die ganze Historie
-        # erhalten, bis wirklich neue Daten gesichert sind.
-        if not await self._has_nonlegacy_data_segment():
-            return None
-        return legacy_segments[0]
+        return None
 
     async def _has_nonlegacy_data_segment(self) -> bool:
         """True, wenn ein nicht-Legacy-Segment (aktiv oder geschlossen) Zeilen hält."""

@@ -4,7 +4,7 @@ Stored in ``app_settings`` under ``ringbuffer.runtime_config`` as JSON. The
 values mirror the ``POST /api/v1/ringbuffer/config`` payload (``enabled``,
 ``max_entries``, ``max_file_size_bytes``, ``max_age``). When no row exists,
 ``load`` returns sane defaults — the monitor is enabled and only
-``max_file_size_bytes`` has a non-null fallback (10 MiB).
+``max_file_size_bytes`` has a non-null fallback (100 MiB).
 
 Why DB-backed rather than YAML/env: keeps UI-driven changes intact across
 container restarts and rebuilds, matches the pattern already used for
@@ -20,7 +20,7 @@ from obs.db.database import Database
 
 PERSISTED_CONFIG_KEY = "ringbuffer.runtime_config"
 
-DEFAULT_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MiB
+DEFAULT_MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MiB (Fresh-Install-Default, #919)
 
 # Deployter Default für die zeitgetriebene Rotation (#919): alle 6 Stunden ein
 # neues Segment. Zeit ist im Normalbetrieb der PRIMÄRE Rotations-Trigger; die aus

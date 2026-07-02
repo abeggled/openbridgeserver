@@ -38,39 +38,34 @@ logger = logging.getLogger(__name__)
 _UNSET = object()
 _ALLOWED_STORAGE_MODELS = {"memory", "disk", "file"}
 
-# Ableitung von ``segment_max_bytes`` aus ``max_file_size_bytes`` (#919): das
-# Größen-Segment-Budget ist ein Achtel des Gesamt-Size-Budgets, geklemmt auf
-# [4 MiB, 256 MiB]. Der Faktor 8 (> RETENTION_SEGMENT_RATIO=3) hält das abgeleitete
-# Budget im Normalfall klar unter der 3-Segment-Grenze. Für sehr kleine
-# ``max_file_size_bytes`` (< 3*4 MiB) würde der 4-MiB-Floor die 3-Segment-Regel
-# aber verletzen; deshalb wird das Ergebnis zusätzlich hart auf
-# ``max_file_size_bytes // RETENTION_SEGMENT_RATIO`` gedeckelt. Damit gilt
-# ``max_file_size_bytes >= 3 * segment_max_bytes`` für JEDES positive
-# ``max_file_size_bytes`` automatisch — die Config-Validierung kann im
-# Auto-Startpfad also NIE fehlschlagen. Bei None (unbegrenzt) ein fester Default.
-_SEGMENT_MAX_BYTES_DIVISOR = 8
-_SEGMENT_MAX_BYTES_FLOOR = 4 * 1024 * 1024  # 4 MiB
-_SEGMENT_MAX_BYTES_CEIL = 256 * 1024 * 1024  # 256 MiB
-_SEGMENT_MAX_BYTES_UNBOUNDED_DEFAULT = 64 * 1024 * 1024  # 64 MiB
+# Ableitung von ``segment_max_bytes`` aus ``max_file_size_bytes`` (#919): die
+# Segment-Größe ist von der Rotationszeit entkoppelt und dient nur noch als
+# Größen-Notbremse (Safety-Cap). Zeit (``segment_max_age``) ist im Normalbetrieb
+# der primäre Rotations-Trigger. Bei unbegrenztem Size-Budget (None) ein fester
+# Default von 256 MiB — NICHT budgetabhängig. Bei gesetztem Budget
+# ``min(256 MiB, max_file_size_bytes // 3)``: das ``//3`` (RETENTION_SEGMENT_RATIO)
+# garantiert die 3-Segment-Regel für jedes positive Budget; KEINE 4-MiB-Untergrenze
+# im Auto-Pfad, damit auch winzige Budgets im Auto-Start nie ein 422 auslösen.
+_SEGMENT_MAX_BYTES_DEFAULT = 256 * 1024 * 1024  # 256 MiB (fester Default, budget-unabhängig)
 
 
 def derive_segment_max_bytes(max_file_size_bytes: int | None) -> int:
     """Leitet ``segment_max_bytes`` aus ``max_file_size_bytes`` ab (#919).
 
-    ``clamp(max_file_size_bytes // 8, 4 MiB, 256 MiB)``, zusätzlich hart gedeckelt
-    auf ``max_file_size_bytes // 3`` (RETENTION_SEGMENT_RATIO). Bei None
-    (unbegrenztes Size-Budget) ein fester Default von 64 MiB. Das Ergebnis erfüllt
-    die 3-Segment-Regel (``max_file_size_bytes >= 3 * segment_max_bytes``) für jedes
-    positive ``max_file_size_bytes`` automatisch — auch für sehr kleine Budgets,
-    bei denen der 4-MiB-Floor sonst die Regel verletzen würde.
+    * Budget None (unbegrenztes Size-Budget) → **256 MiB** (fester Default, NICHT
+      budgetabhängig).
+    * Budget gesetzt → **min(256 MiB, max_file_size_bytes // 3)** (RETENTION_SEGMENT_RATIO).
+      Das ``//3`` garantiert die 3-Segment-Regel
+      (``max_file_size_bytes >= 3 * segment_max_bytes``) für jedes positive Budget —
+      es gibt bewusst KEINE 4-MiB-Untergrenze im Auto-Pfad, damit auch winzige
+      Budgets im Auto-Start nie ein 422 auslösen. Die Config-Validierung kann im
+      Auto-Startpfad also NIE fehlschlagen.
     """
     from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO
 
     if max_file_size_bytes is None:
-        return _SEGMENT_MAX_BYTES_UNBOUNDED_DEFAULT
-    clamped = max(_SEGMENT_MAX_BYTES_FLOOR, min(max_file_size_bytes // _SEGMENT_MAX_BYTES_DIVISOR, _SEGMENT_MAX_BYTES_CEIL))
-    ratio_cap = max_file_size_bytes // RETENTION_SEGMENT_RATIO
-    return max(1, min(clamped, ratio_cap))
+        return _SEGMENT_MAX_BYTES_DEFAULT
+    return max(1, min(_SEGMENT_MAX_BYTES_DEFAULT, max_file_size_bytes // RETENTION_SEGMENT_RATIO))
 
 
 _SQLITE_CORRUPTION_MARKERS = (
@@ -1131,6 +1126,9 @@ class RingBuffer:
                 "file_size_bytes": common.get("size_bytes", 0),
                 "last_recovery_at": self._last_recovery_at,
                 "last_recovery_file_count": len(self._last_recovery_files),
+                # Datengetriebene Prognose (#919) — aus den geschlossenen v2-Segmenten
+                # im Store berechnet; auf Top-Level gehoben für RingBufferStats.
+                "prognosis": common.get("prognosis"),
                 "store": store_stats.as_dict(),
             }
 

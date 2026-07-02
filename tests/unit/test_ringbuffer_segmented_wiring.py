@@ -418,22 +418,24 @@ async def test_segmented_query_supports_core_filters(tmp_path: Path):
 @pytest.mark.parametrize(
     "max_file_size_bytes",
     [
-        None,  # unbegrenzt → fester Default
+        None,  # unbegrenzt → fester Default (budget-unabhängig)
         3,  # kleinste Größe, für die die 3-Segment-Regel überhaupt erfüllbar ist
-        1024,  # klein (< 3*4 MiB → Floor darf 3-Regel nicht brechen)
-        10 * 1024 * 1024,  # 10 MiB (der deployte Default)
-        100 * 1024 * 1024,  # 100 MiB
-        4 * 1024 * 1024 * 1024,  # 4 GiB (Ceil greift)
+        1024,  # winziges Budget: KEIN Floor, damit Auto-Start nie 422 auslöst
+        10 * 1024 * 1024,  # 10 MiB
+        100 * 1024 * 1024,  # 100 MiB (der deployte Default)
+        4 * 1024 * 1024 * 1024,  # 4 GiB (Ceil = 256 MiB greift)
     ],
 )
 def test_derive_segment_max_bytes_satisfies_three_segment_rule(max_file_size_bytes):
     derived = derive_segment_max_bytes(max_file_size_bytes)
     assert derived >= 1
     if max_file_size_bytes is None:
-        # Kein Size-Budget → Size-Regel inaktiv; nur ein sinnvoller Default.
-        assert derived == 64 * 1024 * 1024
+        # Kein Size-Budget → fester Default von 256 MiB, NICHT budgetabhängig.
+        assert derived == 256 * 1024 * 1024
         return
-    # Die 3-Segment-Regel muss automatisch halten — kein 422 im Auto-Startpfad.
+    # Ableitung ist immer <= budget // 3 → die 3-Segment-Regel hält automatisch,
+    # kein 422 im Auto-Startpfad, auch für winzige Budgets.
+    assert derived == max(1, min(256 * 1024 * 1024, max_file_size_bytes // RETENTION_SEGMENT_RATIO))
     assert max_file_size_bytes >= RETENTION_SEGMENT_RATIO * derived
     validate_store_config(
         SegmentConfig(segment_max_bytes=derived),
@@ -442,14 +444,21 @@ def test_derive_segment_max_bytes_satisfies_three_segment_rule(max_file_size_byt
 
 
 def test_derive_segment_max_bytes_ceiling_for_large_budget():
-    # 4 GiB // 8 = 512 MiB → auf 256 MiB gedeckelt, und 4 GiB >= 3*256 MiB.
+    # 4 GiB // 3 = ~1.33 GiB → auf 256 MiB gedeckelt, und 4 GiB >= 3*256 MiB.
     derived = derive_segment_max_bytes(4 * 1024 * 1024 * 1024)
     assert derived == 256 * 1024 * 1024
 
 
+def test_derive_segment_max_bytes_small_budget_has_no_floor():
+    # 1024 Bytes // 3 = 341 → kein 4-MiB-Floor, damit Auto-Start nie 422 auslöst.
+    assert derive_segment_max_bytes(1024) == 341
+    # Winzigstes gültiges Budget: 3 // 3 = 1.
+    assert derive_segment_max_bytes(3) == 1
+
+
 @pytest.mark.asyncio
 async def test_segmented_start_derives_segment_max_bytes_from_file_size(tmp_path: Path):
-    # 2 GiB Size-Budget → derived = clamp(2GiB//8=256MiB, 4MiB, 256MiB) = 256 MiB.
+    # 2 GiB Size-Budget → derived = min(256 MiB, 2GiB//3) = 256 MiB.
     rb = _rb(tmp_path, segmented=True, max_file_size_bytes=2 * 1024 * 1024 * 1024)
     await rb.start()
     try:

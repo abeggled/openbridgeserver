@@ -30,8 +30,8 @@ from obs.ringbuffer.persisted_config import (
 )
 
 
-def test_default_max_file_size_is_ten_mebibytes():
-    assert DEFAULT_MAX_FILE_SIZE_BYTES == 10 * 1024 * 1024
+def test_default_max_file_size_is_hundred_mebibytes():
+    assert DEFAULT_MAX_FILE_SIZE_BYTES == 100 * 1024 * 1024
 
 
 def test_default_segment_max_age_is_six_hours():

@@ -32,7 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config, persist_ringbuffer_config
-from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig, validate_store_config
+from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig, validate_explicit_segment_bounds, validate_store_config
 from obs.ringbuffer.ringbuffer import (
     RingBufferStorageDeleteIncompleteError,
     default_ringbuffer_disk_path,
@@ -158,6 +158,21 @@ class RingBufferMultiEntryOut(RingBufferEntryOut):
     matched_set_ids: list[str]
 
 
+class RingBufferPrognosis(BaseModel):
+    """Datengetriebene Wachstums-/Retention-Prognose (#919).
+
+    Reine Momentaufnahme aus den geschlossenen v2-Segmenten. Alle Raten-Felder
+    sind ``None``, wenn zu wenig Daten vorliegen (< 1 geschlossenes v2-Segment).
+    """
+
+    sample_segment_count: int = 0
+    bytes_per_hour: float | None = None
+    rows_per_hour: float | None = None
+    avg_segment_seconds: float | None = None
+    estimated_retention_seconds: float | None = None
+    recommended_budget_for_segment_age_bytes: float | None = None
+
+
 class RingBufferStats(BaseModel):
     enabled: bool = True
     total: int
@@ -180,6 +195,8 @@ class RingBufferStats(BaseModel):
     # + ``backend_extra`` aus ``store.stats()``); im Legacy-Modus ``None``, damit
     # die bestehende Stats-Form unverändert bleibt.
     store: dict[str, Any] | None = None
+    # Datengetriebene Prognose (#919) — nur im segmentierten Modus befüllt.
+    prognosis: RingBufferPrognosis | None = None
 
 
 class RingBufferConfig(BaseModel):
@@ -1891,6 +1908,18 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     resolved_segment_max_bytes = body.segment_max_bytes if "segment_max_bytes" in body.model_fields_set else persisted.get("segment_max_bytes")
     resolved_segment_max_rows = body.segment_max_rows if "segment_max_rows" in body.model_fields_set else persisted.get("segment_max_rows")
     resolved_segment_max_age = body.segment_max_age if "segment_max_age" in body.model_fields_set else persisted.get("segment_max_age")
+
+    # Technische Grenzen NUR für EXPLIZIT gesetzte Segment-Werte durchsetzen (#919):
+    # 4 MiB…1 GiB / 300 s…30 d / >= 1000. Nicht gesetzte Felder (Auto-Ableitung)
+    # bleiben unangetastet → kein 422 im Auto-Startpfad.
+    try:
+        validate_explicit_segment_bounds(
+            segment_max_bytes=body.segment_max_bytes if "segment_max_bytes" in body.model_fields_set else None,
+            segment_max_age=body.segment_max_age if "segment_max_age" in body.model_fields_set else None,
+            segment_max_rows=body.segment_max_rows if "segment_max_rows" in body.model_fields_set else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
     # Segment-/Retention-Vertrag durchsetzen: zu grobe Segmentierung → HTTP 422
     # (nicht auto-korrigieren, #930).

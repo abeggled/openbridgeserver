@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from obs.ringbuffer.store.config import StoreRetentionConfig
+from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
 from obs.ringbuffer.store.interface import StoreEvent, StoreQuery
 from obs.ringbuffer.store.manifest import (
     SEGMENT_STATUS_CHECKPOINT_PENDING,
@@ -527,6 +527,32 @@ async def test_legacy_not_deleted_when_only_data_source(tmp_path: Path):
         await store.close()
 
 
+async def test_legacy_deleted_first_under_budget_pressure(tmp_path: Path):
+    # FIFO / Legacy-Rückgewinnung (#919): bei Budgetdruck mit Legacy + geschlossenem
+    # v2 wird ZUERST das (global älteste) Legacy-Segment gelöscht — nicht das v2.
+    store = await _make_store(tmp_path / "root")
+    try:
+        # Ein geschlossenes v2-Segment mit echten Daten sichern (erfüllt den Guard).
+        await store.append([_event(1, _iso(0))])
+        await store.rotate()
+        # Aktives v2-Segment mit Daten (bleibt ohnehin unantastbar).
+        await store.append([_event(2, _iso(1))])
+        closed_before = await store.manifest.list_closed_segments()
+        assert len(closed_before) == 1
+        closed_v2_id = closed_before[0].segment_id
+
+        await _attach_legacy(store, 8 * 1024 * 1024)
+        legacy_id = (await store.manifest.list_legacy_segments())[0].segment_id
+
+        # Erstes Opfer unter Budgetdruck ist das Legacy-Segment (global ältestes).
+        victim = await store._next_size_retention_victim()
+        assert victim is not None
+        assert victim.segment_id == legacy_id
+        assert victim.segment_id != closed_v2_id
+    finally:
+        await store.close()
+
+
 async def test_enforce_retention_with_only_size_budget_skips_age_and_rows(tmp_path: Path):
     store = await _make_store(tmp_path / "root")
     try:
@@ -536,6 +562,136 @@ async def test_enforce_retention_with_only_size_budget_skips_age_and_rows(tmp_pa
         store._retention_config = StoreRetentionConfig(max_file_size_bytes=10 * 1024 * 1024)
         # Age/Rows None → deren Zweige liefern früh 0, nur Size wird geprüft.
         assert await store.enforce_retention() == 0
+    finally:
+        await store.close()
+
+
+# ---------------------------------------------------------------------------
+# (#919) Datengetriebene Prognose aus geschlossenen v2-Segmenten
+# ---------------------------------------------------------------------------
+
+
+async def _closed_v2_with_stats(store: SqliteSegmentStore, *, from_ts: str, to_ts: str, size_bytes: int, row_count: int) -> None:
+    """Erzeugt ein geschlossenes v2-Segment mit exakt gesetzten Prognose-Stats."""
+    await store.append([_event(1, from_ts)])
+    seg = await store.manifest.get_active_segment()
+    await store.rotate()
+    await store.manifest.update_segment_stats(
+        seg.segment_id,
+        row_count=row_count,
+        size_bytes=size_bytes,
+        from_ts=from_ts,
+        to_ts=to_ts,
+    )
+
+
+async def test_prognosis_none_without_closed_v2_segment(tmp_path: Path):
+    store = await _make_store(tmp_path / "root")
+    try:
+        # Nur ein aktives Segment, kein geschlossenes v2 → keine Rate.
+        await store.append([_event(1, _iso(0))])
+        stats = await store.stats()
+        prog = stats.common["prognosis"]
+        assert prog["sample_segment_count"] == 0
+        assert prog["bytes_per_hour"] is None
+        assert prog["rows_per_hour"] is None
+        assert prog["avg_segment_seconds"] is None
+        assert prog["estimated_retention_seconds"] is None
+        assert prog["recommended_budget_for_segment_age_bytes"] is None
+    finally:
+        await store.close()
+
+
+async def test_prognosis_computes_rates_from_closed_v2(tmp_path: Path):
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def _at(seconds: int) -> str:
+        return (base + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+
+    store = await _make_store(
+        tmp_path / "root",
+        segments=SegmentConfig(segment_max_age=3600),
+        retention=StoreRetentionConfig(max_file_size_bytes=10_000_000),
+    )
+    try:
+        # Zwei geschlossene v2-Segmente: zusammen 3600 s Dauer, 3600 Bytes, 36 Zeilen.
+        await _closed_v2_with_stats(store, from_ts=_at(0), to_ts=_at(1800), size_bytes=1800, row_count=18)
+        await _closed_v2_with_stats(store, from_ts=_at(1800), to_ts=_at(3600), size_bytes=1800, row_count=18)
+
+        stats = await store.stats()
+        prog = stats.common["prognosis"]
+        assert prog["sample_segment_count"] == 2
+        # 3600 Bytes / 3600 s * 3600 = 3600 Bytes/h.
+        assert prog["bytes_per_hour"] == pytest.approx(3600.0)
+        assert prog["rows_per_hour"] == pytest.approx(36.0)
+        # Ø-Segmentdauer = 3600 s / 2 = 1800 s.
+        assert prog["avg_segment_seconds"] == pytest.approx(1800.0)
+        # 10_000_000 / 3600 * 3600 = 10_000_000 s.
+        assert prog["estimated_retention_seconds"] == pytest.approx(10_000_000.0)
+        # 3 * 3600 * (3600/3600) = 10800 Bytes.
+        assert prog["recommended_budget_for_segment_age_bytes"] == pytest.approx(10800.0)
+    finally:
+        await store.close()
+
+
+async def test_prognosis_estimated_retention_none_without_budget(tmp_path: Path):
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def _at(seconds: int) -> str:
+        return (base + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+
+    store = await _make_store(
+        tmp_path / "root",
+        segments=SegmentConfig(segment_max_age=3600),
+        retention=StoreRetentionConfig(max_file_size_bytes=None),
+    )
+    try:
+        await _closed_v2_with_stats(store, from_ts=_at(0), to_ts=_at(3600), size_bytes=3600, row_count=36)
+        stats = await store.stats()
+        prog = stats.common["prognosis"]
+        assert prog["bytes_per_hour"] == pytest.approx(3600.0)
+        # Kein Size-Budget → Retention unbegrenzt/unbekannt.
+        assert prog["estimated_retention_seconds"] is None
+        # segment_max_age gesetzt + Rate bekannt → Empfehlung vorhanden.
+        assert prog["recommended_budget_for_segment_age_bytes"] == pytest.approx(10800.0)
+    finally:
+        await store.close()
+
+
+async def test_prognosis_recommended_budget_none_without_segment_max_age(tmp_path: Path):
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def _at(seconds: int) -> str:
+        return (base + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+
+    store = await _make_store(
+        tmp_path / "root",
+        segments=SegmentConfig(segment_max_age=None),
+        retention=StoreRetentionConfig(max_file_size_bytes=10_000_000),
+    )
+    try:
+        await _closed_v2_with_stats(store, from_ts=_at(0), to_ts=_at(3600), size_bytes=3600, row_count=36)
+        stats = await store.stats()
+        prog = stats.common["prognosis"]
+        # segment_max_age None → keine Empfehlung berechenbar.
+        assert prog["recommended_budget_for_segment_age_bytes"] is None
+        assert prog["estimated_retention_seconds"] == pytest.approx(10_000_000.0)
+    finally:
+        await store.close()
+
+
+async def test_prognosis_handles_degenerate_durations(tmp_path: Path):
+    # Geschlossenes v2 mit gleicher from_ts/to_ts (Dauer 0) → keine verwertbare Rate.
+    same = datetime(2026, 1, 1, tzinfo=UTC).isoformat().replace("+00:00", "Z")
+    store = await _make_store(tmp_path / "root")
+    try:
+        await _closed_v2_with_stats(store, from_ts=same, to_ts=same, size_bytes=1000, row_count=10)
+        stats = await store.stats()
+        prog = stats.common["prognosis"]
+        # Segment gezählt, aber keine Rate (keine Division durch 0).
+        assert prog["sample_segment_count"] == 1
+        assert prog["bytes_per_hour"] is None
+        assert prog["estimated_retention_seconds"] is None
     finally:
         await store.close()
 
