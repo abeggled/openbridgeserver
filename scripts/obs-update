@@ -166,7 +166,7 @@ fi
 BUNDLE_FILENAME=$(basename "$BUNDLE_URL")
 
 TMP=$(mktemp -d)
-trap "rm -rf $TMP" EXIT
+trap 'rm -rf "$TMP"' EXIT
 
 echo "Downloading $BUNDLE_URL ..."
 curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"
@@ -212,11 +212,18 @@ systemctl stop "$SERVICE"
 tar -xzf "$TMP/$BUNDLE_FILENAME" -C "$INSTALL_DIR"
 "$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
 
-# Self-update: replace this script with the version from the bundle
-install -m 755 "$INSTALL_DIR/obs-update" /usr/local/bin/obs-update
+# Self-update: replace this script with the version from the bundle.
+# Write to a temp file in the same directory and rename atomically —
+# an `install`/`cp` in place would truncate the inode this script may
+# still be executing from, corrupting a concurrently running update.
+TMP_SELF=$(mktemp /usr/local/bin/obs-update.XXXXXX)
+install -m 755 "$INSTALL_DIR/obs-update" "$TMP_SELF"
+mv -f "$TMP_SELF" /usr/local/bin/obs-update
 rm -f "$INSTALL_DIR/obs-update"
 if [[ "$BUNDLE_HAS_OBS_ADMIN" == "true" ]]; then
-    install -m 755 "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin
+    TMP_ADMIN=$(mktemp /usr/local/bin/obs-admin.XXXXXX)
+    install -m 755 "$INSTALL_DIR/obs-admin" "$TMP_ADMIN"
+    mv -f "$TMP_ADMIN" /usr/local/bin/obs-admin
     rm -f "$INSTALL_DIR/obs-admin"
 else
     rm -f /usr/local/bin/obs-admin
