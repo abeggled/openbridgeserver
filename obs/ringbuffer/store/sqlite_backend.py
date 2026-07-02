@@ -234,8 +234,14 @@ def _derive_value_type(value: Any) -> str:
         return "numeric"
     if isinstance(value, str):
         return "text"
-    # Listen/Dicts o.ä. sind für typisierte Pushdown-Filter nicht adressierbar.
-    return "null"
+    # Listen/Dicts o.ä. sind für typisierte Pushdown-Filter nicht adressierbar,
+    # dürfen aber NICHT als ``null`` getaggt werden (#951, Pkt 1): sonst matchte
+    # der Pushdown ``eq value:null`` diese komplexen Werte (und ``ne null`` schlösse
+    # sie aus), obwohl der Referenz-Filter ``value == None`` sie nie als null wertet.
+    # Ein eigener ``json``-Typ hält alle Nutzspalten NULL wie bei null, unterscheidet
+    # sich aber im ``*_value_type`` – so trifft ``eq/ne null`` ausschließlich echtes
+    # JSON-null.
+    return "json"
 
 
 def _obs_regexp_impl(pattern: str, flags: int, value: Any) -> int:
@@ -266,7 +272,10 @@ def _typed_columns_for(value: Any) -> tuple[str, float | None, str | None, int |
         return ("numeric", float(value), None, None)
     if value_type == "text":
         return ("text", None, value, None)
-    return ("null", None, None, None)
+    # null UND json (list/dict) tragen keine typisierte Nutzspalte; nur der
+    # ``*_value_type`` unterscheidet sie, damit ``eq/ne null`` nur echtes JSON-null
+    # trifft (#951, Pkt 1).
+    return (value_type, None, None, None)
 
 
 def _utc_now_iso() -> str:
@@ -343,6 +352,36 @@ def _legacy_filter_matches(record: dict[str, Any], spec: dict[str, Any]) -> bool
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _safe_json_decode(raw: Any) -> Any:
+    """Dekodiert einen Legacy-JSON-Wert; gibt bei Fehler den Rohwert zurück (#951, Pkt 3).
+
+    ``old_value``/``new_value`` einer alten Single-DB können – durch fremde Schreiber
+    oder frühere Formate – malformed/non-JSON sein. Ein direktes ``json.loads`` würfe
+    dann eine ``JSONDecodeError``, die NICHT vom Korruptionspfad gefangen wird und die
+    gesamte Query/den Export abbräche. Der pre-Segmentierungs-Reader dekodierte sicher
+    und lieferte im Fehlerfall den Rohwert. ``None`` bleibt ``None``.
+    """
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return raw
+
+
+def _legacy_metadata_decode(raw: Any) -> dict[str, Any]:
+    """Dekodiert die Legacy-``metadata``-Spalte zu einem dict; leeres dict bei Fehler.
+
+    Nachgelagerte Metadaten-Filter erwarten ein ``dict``. Ein malformed/non-JSON-
+    Wert (oder ein JSON-Skalar) darf die Query nicht brechen (#951, Pkt 3) und
+    degradiert daher auf ``{}`` (kein Metadaten-Treffer) statt zu werfen.
+    """
+    if not raw:
+        return {}
+    decoded = _safe_json_decode(raw)
+    return decoded if isinstance(decoded, dict) else {}
 
 
 def _legacy_compare(operator: str, actual: Any, expected: Any) -> bool:
@@ -826,6 +865,15 @@ class SqliteSegmentStore(RingBufferStore):
         # Zeilen als der Cap) bei ``sort=ts asc`` fälschlich die neuesten statt der
         # ältesten Zeilen (die echte älteste Zeile liegt dann außerhalb des Caps).
         direction = "ASC" if query.sort_order == "asc" else "DESC"
+        # Kandidaten-Ordnung muss zur FINALEN Sortierung passen (#951, Pkt 2): der
+        # synthetische ``global_event_id`` einer Legacy-Zeile leitet sich aus der
+        # rowid (``id``) ab. Bei ``sort_field='id'`` (Default) sortiert die Query
+        # final nach id – also müssen die Kandidaten ebenfalls per id gedeckelt
+        # werden. Würde hier immer nach ``ts`` limitiert, schlössen out-of-order-
+        # Timestamps (eine hohe rowid mit frühem ts) genau die höchsten rowids aus,
+        # die der finale id-Sort dann nie mehr einholt. Nur bei ``sort_field='ts'``
+        # ist die ts-Ordnung die richtige Kandidatengrenze.
+        candidate_order = "ts" if query.sort_field == "ts" else "id"
         # pre-#388 Legacy-Schema (#951, Pkt 1): eine sehr alte Single-DB hat noch
         # KEINE ``metadata_version``/``metadata``-Spalten. Ein bedingungsloses
         # SELECT dieser Spalten scheiterte mit „no such column" und machte die
@@ -837,7 +885,7 @@ class SqliteSegmentStore(RingBufferStore):
         sql = (
             "SELECT id, ts, datapoint_id, topic, old_value, new_value, "
             f"source_adapter, quality, {metadata_select} "
-            f"FROM ringbuffer{where} ORDER BY ts {direction}, id {direction} LIMIT ?"
+            f"FROM ringbuffer{where} ORDER BY {candidate_order} {direction}, id {direction} LIMIT ?"
         )
         params.append(fetch_limit)
         async with conn.execute(sql, params) as cur:
@@ -922,12 +970,14 @@ class SqliteSegmentStore(RingBufferStore):
             "ts": row["ts"],
             "datapoint_id": row["datapoint_id"],
             "topic": row["topic"],
-            "old_value": json.loads(row["old_value"]) if row["old_value"] is not None else None,
-            "new_value": json.loads(row["new_value"]) if row["new_value"] is not None else None,
+            # Safe decode (#951, Pkt 3): malformed Legacy-JSON bricht die Query nicht,
+            # sondern liefert den Rohwert. metadata bleibt best-effort JSON-Objekt.
+            "old_value": _safe_json_decode(row["old_value"]),
+            "new_value": _safe_json_decode(row["new_value"]),
             "source_adapter": row["source_adapter"],
             "quality": row["quality"],
             "metadata_version": metadata_version,
-            "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+            "metadata": _legacy_metadata_decode(row["metadata"]),
         }
 
     def _build_segment_sql(self, query: StoreQuery) -> tuple[str, list[Any]]:
@@ -938,20 +988,62 @@ class SqliteSegmentStore(RingBufferStore):
         ausgehebelt wird. ``contains``/``regex`` werden als SQL-``LIKE`` bzw.
         ``REGEXP``-taugliches Prädikat nur zugelassen, wenn der Query gebunden ist
         (Zeitfenster oder ``candidate_cap``); sonst ``ValueError`` (422-tauglich).
+
+        Boundedness von contains/regex OHNE Zeitfenster (#951, Pkt 4): der teure
+        Match (``instr``/``obs_regexp``-Callback) würde als inline-WHERE-Prädikat
+        JEDE Zeile jedes Segments berühren, bis ``offset+limit`` Treffer gesammelt
+        sind – bei seltenem/fehlendem Treffer also einen Full-Scan. Ist der Query
+        nur per ``candidate_cap`` gebunden (kein Zeitfenster), wird der Match daher
+        AUF EINE gedeckelte Kandidatenmenge angewandt: die neuesten ``candidate_cap``
+        Zeilen (nach ``order_by``) bilden eine innere Subquery, der Match filtert nur
+        diese. So bleibt der Scan hart auf ``candidate_cap`` Zeilen je Segment
+        begrenzt. Preis der Deckelung: passt ein Treffer erst JENSEITS der neuesten
+        ``candidate_cap`` Zeilen, wird er nicht mehr gefunden – das ist die
+        dokumentierte, gewollte Begrenzung eines unwindowed contains/regex.
         """
         clauses, params = self._common_where(query)
-        for spec in query.value_filters:
+        guarded_specs = [s for s in query.value_filters if str(s.get("operator", "")).strip().lower() in _GUARDED_OPERATORS]
+        cheap_specs = [s for s in query.value_filters if s not in guarded_specs]
+        # Nicht-Guarded Filter (typisierter Pushdown) sind billig und bleiben inline.
+        for spec in cheap_specs:
             clause, filter_params = self._value_filter_clause(spec, query)
             clauses.append(clause)
             params.extend(filter_params)
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+
         order_by = self._segment_order_by(query)
-        sql = (
-            "SELECT global_event_id, ts, datapoint_id, topic, old_value, new_value, "
-            "source_adapter, quality, metadata_version, metadata "
-            f"FROM ringbuffer{where} ORDER BY {order_by} LIMIT ?"
-        )
-        params.append(max(query.offset, 0) + max(query.limit, 0))
+        final_limit = max(query.offset, 0) + max(query.limit, 0)
+
+        # Guarded Filter validieren (wirft bei ungebundenem Query) und Klauseln bauen.
+        guarded_clauses: list[str] = []
+        guarded_params: list[Any] = []
+        for spec in guarded_specs:
+            clause, filter_params = self._value_filter_clause(spec, query)
+            guarded_clauses.append(clause)
+            guarded_params.extend(filter_params)
+
+        select_cols = "global_event_id, ts, datapoint_id, topic, old_value, new_value, source_adapter, quality, metadata_version, metadata"
+
+        # Der teure Match wird nur dann auf eine gedeckelte Kandidaten-Subquery
+        # gelegt, wenn der Query ausschließlich per candidate_cap (ohne Zeitfenster)
+        # gebunden ist. Mit Zeitfenster bindet bereits das WHERE den Scan.
+        if guarded_clauses and not self._query_is_windowed(query):
+            cap = self._effective_candidate_cap(query)
+            inner_where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+            # Die innere Subquery muss auch die typisierten Text-Spalten
+            # durchreichen, auf denen die Guarded-Prädikate (instr/obs_regexp)
+            # arbeiten – sonst kennt die äußere Query ``*_value_text`` nicht.
+            inner_cols = f"{select_cols}, old_value_text, new_value_text"
+            inner_sql = f"SELECT {inner_cols} FROM ringbuffer{inner_where} ORDER BY {order_by} LIMIT ?"
+            outer_where = " AND ".join(guarded_clauses)
+            sql = f"SELECT {select_cols} FROM ({inner_sql}) AS capped WHERE {outer_where} ORDER BY {order_by} LIMIT ?"
+            return sql, [*params, cap, *guarded_params, final_limit]
+
+        # Mit Zeitfenster (oder ohne Guarded-Filter): alle Klauseln inline.
+        clauses.extend(guarded_clauses)
+        params.extend(guarded_params)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"SELECT {select_cols} FROM ringbuffer{where} ORDER BY {order_by} LIMIT ?"
+        params.append(final_limit)
         return sql, params
 
     @staticmethod
@@ -1067,11 +1159,27 @@ class SqliteSegmentStore(RingBufferStore):
         return f"global_event_id {direction}"
 
     @staticmethod
+    def _query_is_windowed(query: StoreQuery) -> bool:
+        """True, wenn ein beidseitiges Zeitfenster den Scan bereits bindet."""
+        return query.from_ts is not None and query.to_ts is not None
+
+    @staticmethod
     def _query_is_bounded(query: StoreQuery) -> bool:
         """contains/regex nur mit engem Zeitfenster oder Kandidaten-Cap zulassen."""
-        has_window = query.from_ts is not None and query.to_ts is not None
         has_cap = query.candidate_cap is not None and query.candidate_cap > 0
-        return has_window or has_cap
+        return SqliteSegmentStore._query_is_windowed(query) or has_cap
+
+    @staticmethod
+    def _effective_candidate_cap(query: StoreQuery) -> int:
+        """Harte Zeilenobergrenze für den unwindowed Guarded-Scan je Segment (#951, Pkt 4).
+
+        Nutzt den vom Aufrufer gesetzten ``candidate_cap``; fällt auf den Legacy-
+        Default zurück, falls (wider Erwartung) keiner gesetzt ist. So bleibt der
+        teure Match auf höchstens diese Zeilenzahl je Segment begrenzt.
+        """
+        if query.candidate_cap is not None and query.candidate_cap > 0:
+            return query.candidate_cap
+        return _LEGACY_DEFAULT_CANDIDATE_CAP
 
     def _value_filter_clause(self, spec: dict[str, Any], query: StoreQuery) -> tuple[str, list[Any]]:
         """Übersetzt einen engine-neutralen Wertfilter in ein SQL-WHERE-Prädikat."""
@@ -1562,6 +1670,15 @@ class SqliteSegmentStore(RingBufferStore):
         if cfg.max_file_size_bytes is None and cfg.max_age is None and cfg.max_entries is None:
             return 0
 
+        # Pending Checkpoints zuerst nachziehen (#951, Pkt 5): ein busy gebliebenes
+        # ``checkpoint_pending``-Segment ist retention-UNfähig. Würde der Truncate
+        # nie erneut versucht, bliebe es das dauerhaft und könnte ein hartes
+        # Byte-Budget dauerhaft überschritten halten. ``run_pending_checkpoints`` lief
+        # bisher nur aus Tests; hier im Retention-Pfad wird er bei jeder Erzwingung
+        # wiederholt versucht, sodass ein inzwischen freier WAL das Segment wieder
+        # ``closed`` (und damit retention-fähig) macht.
+        await self.run_pending_checkpoints()
+
         removed = 0
         # Retention-fähige Segmente sind löschbar; älteste zuerst. Das aktive und
         # checkpoint_pending-Segment bleiben außen vor; quarantänierte werden seit
@@ -1585,7 +1702,13 @@ class SqliteSegmentStore(RingBufferStore):
             victim = await self._next_size_retention_victim()
             if victim is None:
                 break  # kein löschbares Segment mehr → over_budget in stats sichtbar.
-            await self._delete_segment(victim)
+            if not await self._delete_segment(victim):
+                # Basisdatei nicht löschbar (#951, Pkt 6): Zeile bleibt für den
+                # nächsten Versuch erhalten. Nicht weiter loopen, sonst würde das
+                # ältestes-zuerst gewählte, undeletbare Segment endlos re-selektiert.
+                # over_budget bleibt in den Stats sichtbar; Retention versucht es beim
+                # nächsten Durchlauf erneut.
+                break
             removed += 1
         return removed
 
@@ -1638,7 +1761,10 @@ class SqliteSegmentStore(RingBufferStore):
                 # Ältestes-zuerst: sobald ein Segment neu genug ist, sind alle
                 # folgenden ebenfalls neu genug.
                 break
-            await self._delete_segment(segment)
+            if not await self._delete_segment(segment):
+                # Basisdatei nicht löschbar (#951, Pkt 6): Zeile bleibt, Retention
+                # versucht es beim nächsten Durchlauf erneut.
+                break
             removed += 1
         return removed
 
@@ -1650,12 +1776,19 @@ class SqliteSegmentStore(RingBufferStore):
             eligible = await self.manifest.list_retention_eligible_segments()
             if not eligible:
                 break
-            await self._delete_segment(eligible[0])
+            if not await self._delete_segment(eligible[0]):
+                # Basisdatei nicht löschbar (#951, Pkt 6): sonst würde das älteste,
+                # undeletbare Segment endlos re-selektiert.
+                break
             removed += 1
         return removed
 
-    async def _delete_segment(self, segment: SegmentRecord) -> None:
+    async def _delete_segment(self, segment: SegmentRecord) -> bool:
         """Entfernt Datei (inkl. -wal/-shm) und Manifest-Eintrag konsistent.
+
+        Liefert True, wenn Basisdatei UND Manifest-Zeile entfernt wurden; False,
+        wenn die Basisdatei nicht gelöscht werden konnte und die Zeile daher zum
+        erneuten Versuch erhalten bleibt (#951, Pkt 6).
 
         Dies ist ausschließlich der **Retention-Delete-Pfad** (``_enforce_*``): wird
         ein Segment hier gelöscht, hat die FIFO-Retention entschieden, dass diese
@@ -1670,25 +1803,57 @@ class SqliteSegmentStore(RingBufferStore):
         FIFO-Retention-Vertrag durch (Platz wirklich freigeben; „Alt-Daten werden
         verworfen"). Legacy-Datei liegt als absoluter Pfad in ``filename``, v2 unter
         ``segments/``.
+
+        Delete-Durability (#951, Pkt 6): die Manifest-Zeile wird NUR entfernt, wenn
+        die BASIS-Segmentdatei erfolgreich gelöscht wurde. Scheitert das Unlink der
+        Basisdatei (Permission/Lock/FS-Fehler), bleiben ihre Bytes auf der Platte –
+        der Manifest-Eintrag bleibt daher erhalten, damit Retention es beim nächsten
+        Durchlauf erneut versucht (statt die Bytes aus den Stats zu verlieren und die
+        Datei nie wieder anzufassen). Sidecar-Fehler (``-wal``/``-shm``) bleiben
+        tolerant und blockieren das Entfernen der Zeile nicht.
         """
         if _is_legacy_segment(segment):
             base = Path(segment.filename)
-            self._unlink_with_sidecars(base)
-            _LOGGER.info(
-                "retention: removed legacy single-db %s (freed via FIFO retention; row/budget pressure)",
-                base,
-            )
+            base_removed = self._unlink_with_sidecars(base)
+            if base_removed:
+                _LOGGER.info(
+                    "retention: removed legacy single-db %s (freed via FIFO retention; row/budget pressure)",
+                    base,
+                )
         else:
-            self._unlink_with_sidecars(self._segments_dir / segment.filename)
+            base_removed = self._unlink_with_sidecars(self._segments_dir / segment.filename)
+        if not base_removed:
+            # Basisdatei blieb liegen → Zeile behalten, Retention versucht es erneut.
+            _LOGGER.warning(
+                "retention: base segment file for segment_id=%s could not be removed; keeping manifest entry for retry",
+                segment.segment_id,
+            )
+            return False
         await self.manifest.delete_segment(segment.segment_id)
+        return True
 
     @staticmethod
-    def _unlink_with_sidecars(base: Path) -> None:
-        """Löscht ``base`` samt ``-wal``/``-shm`` best-effort (Platz real freigeben)."""
-        for path in (base, Path(f"{base}-wal"), Path(f"{base}-shm")):
+    def _unlink_with_sidecars(base: Path) -> bool:
+        """Löscht ``base`` samt ``-wal``/``-shm``; True nur bei erfolgreicher Basis-Löschung.
+
+        Sidecar-Fehler (``-wal``/``-shm`` fehlen oder sind unlöschbar) bleiben
+        tolerant. Nur das Ergebnis der BASIS-Datei entscheidet, ob der Aufrufer die
+        Manifest-Zeile entfernen darf (#951, Pkt 6). Eine bereits fehlende Basisdatei
+        gilt als erfolgreich gelöscht (Platz ist frei).
+        """
+        base_removed = True
+        try:
+            base.unlink()
+        except FileNotFoundError:
+            # Bereits weg → Ziel erreicht (Platz frei).
+            base_removed = True
+        except OSError:
+            base_removed = False
+        for sidecar in (Path(f"{base}-wal"), Path(f"{base}-shm")):
             try:
-                path.unlink()
+                sidecar.unlink()
             except OSError:
                 # Fehlt eine Sidecar-Datei (oder ist unlöschbar), stört das die
-                # Retention nicht — der Manifest-Eintrag entfällt trotzdem.
+                # Retention nicht – nur die Basisdatei entscheidet.
                 continue
+        return base_removed
