@@ -34,7 +34,7 @@
       <!-- Prognose (#919/#938): gemeinsame PrognosisBlock-Komponente. -->
       <PrognosisBlock
         :prognosis="stats?.prognosis ?? null"
-        :segment-age-hours="Number(configForm.segmentMaxAgeHours) || null"
+        :segment-age-hours="segmentAgeHoursForPrognosis"
         :max-file-size-bytes="stats?.max_file_size_bytes ?? null"
       />
 
@@ -146,17 +146,28 @@
           <label for="segment-max-age" class="text-sm font-medium">{{ $t('ringbuffer.segmentMaxAge') }}</label>
           <p class="text-xs text-slate-500 mt-0.5">{{ $t('ringbuffer.segmentMaxAgeHint') }}</p>
         </div>
-        <input
-          id="segment-max-age"
-          v-model.trim="configForm.segmentMaxAgeHours"
-          type="number"
-          min="1"
-          step="1"
-          class="input"
-          :disabled="!configForm.enabled"
-          data-testid="rb-config-segment-max-age"
-          :placeholder="$t('ringbuffer.segmentMaxAgePlaceholder')"
-        />
+        <div class="grid grid-cols-2 gap-2">
+          <input
+            id="segment-max-age"
+            v-model.trim="configForm.segmentMaxAgeValue"
+            type="number"
+            min="1"
+            step="1"
+            class="input"
+            :disabled="!configForm.enabled"
+            data-testid="rb-config-segment-max-age"
+            :placeholder="$t('ringbuffer.segmentMaxAgePlaceholder')"
+          />
+          <select
+            v-model="configForm.segmentMaxAgeUnit"
+            class="input"
+            :disabled="!configForm.enabled"
+            data-testid="rb-config-segment-max-age-unit"
+          >
+            <option value="minutes">{{ $t('ringbuffer.unitMinutes') }}</option>
+            <option value="hours">{{ $t('ringbuffer.unitHours') }}</option>
+          </select>
+        </div>
 
         <details class="text-sm">
           <summary class="cursor-pointer text-slate-600 dark:text-slate-300 select-none">{{ $t('ringbuffer.segmentAdvanced') }}</summary>
@@ -270,6 +281,13 @@ const RETENTION_UNIT_SECONDS = {
 // persistierten Wert NICHT zurück, daher hydratisiert das Feld auf den Default.
 const DEFAULT_SEGMENT_MAX_AGE_HOURS = 6
 const SECONDS_PER_HOUR = 60 * 60
+const SECONDS_PER_MINUTE = 60
+const SEGMENT_AGE_UNIT_SECONDS = { minutes: SECONDS_PER_MINUTE, hours: SECONDS_PER_HOUR }
+// Backend-Minimum für das Segment-Alter (#938): 300 s (5 min). Sub-Stunden-Werte
+// (z. B. aus einem migrierten 15-min-Retention-Fenster) müssen verlustfrei über
+// die Minuten-Einheit dargestellt und gespeichert werden – kein Runden auf ganze
+// Stunden (Codex #951).
+const SEGMENT_MAX_AGE_MIN_SECONDS = 300
 
 const open = computed({
   get: () => props.modelValue,
@@ -280,6 +298,14 @@ const stats = ref(null)
 // Retention-Signal (#919/#938): DRY über useSegmentProblems, hier direkt am
 // Config-Formular, wo der Nutzer Budget/Alter anpassen kann.
 const retentionSignal = computed(() => buildRetentionSignal(stats.value))
+// PrognosisBlock rechnet in Stunden; das Formular kann aber Minuten führen.
+// Wert+Einheit → Stunden (auch < 1 h, z. B. 15 min = 0,25 h) umrechnen.
+const segmentAgeHoursForPrognosis = computed(() => {
+  const value = Number(configForm.segmentMaxAgeValue)
+  if (!Number.isFinite(value) || value <= 0) return null
+  const seconds = value * SEGMENT_AGE_UNIT_SECONDS[configForm.segmentMaxAgeUnit]
+  return seconds / SECONDS_PER_HOUR
+})
 const saving = ref(false)
 const configMsg = ref(null)
 const showDisableConfirm = ref(false)
@@ -296,7 +322,9 @@ const configForm = reactive({
   retentionValue: '30',
   retentionUnit: 'days',
   // Segment-Rotation (#938). Alter ist der Primärtrigger; Bytes/Rows optional.
-  segmentMaxAgeHours: String(DEFAULT_SEGMENT_MAX_AGE_HOURS),
+  // Wert+Einheit (min/h), damit Sub-Stunden-Alter verlustfrei bleibt (Codex #951).
+  segmentMaxAgeValue: String(DEFAULT_SEGMENT_MAX_AGE_HOURS),
+  segmentMaxAgeUnit: 'hours',
   segmentMaxBytesValue: '',
   segmentMaxBytesUnit: 'mb',
   segmentMaxRowsValue: '',
@@ -321,6 +349,13 @@ function parseNonNegativeInteger(raw) {
 function pickSizeUnit(bytes) {
   if (bytes % SIZE_UNIT_FACTORS.gb === 0) return { value: String(bytes / SIZE_UNIT_FACTORS.gb), unit: 'gb' }
   return { value: String(Math.max(1, Math.round(bytes / SIZE_UNIT_FACTORS.mb))), unit: 'mb' }
+}
+
+// Segment-Alter (#938, Codex #951): Sub-Stunden-Werte (300..3599 s) verlustfrei
+// über die Minuten-Einheit anzeigen; glatte Stunden über die Stunden-Einheit.
+function pickSegmentAgeUnit(seconds) {
+  if (seconds % SECONDS_PER_HOUR === 0) return { value: String(seconds / SECONDS_PER_HOUR), unit: 'hours' }
+  return { value: String(seconds / SECONDS_PER_MINUTE), unit: 'minutes' }
 }
 
 function pickRetentionUnit(seconds) {
@@ -363,14 +398,18 @@ function hydrateForm(currentStats) {
     configForm.retentionUnit = 'days'
   }
   // /stats liefert die persistierten Segment-Parameter mit (#919/#938): das Alter
-  // wird aus dem gespeicherten Wert (Sekunden → Stunden) hydratisiert, sonst auf
-  // den Backend-Default (6 h). Die optionalen Erweitert-Felder zeigen den
-  // gespeicherten Wert bzw. bleiben leer (= automatisch abgeleitet).
+  // wird aus dem gespeicherten Wert (Sekunden) verlustfrei hydratisiert – glatte
+  // Stunden über die Stunden-Einheit, Sub-Stunden-Werte (z. B. 900 s = 15 min aus
+  // einem migrierten 15-min-Retention-Fenster) über die Minuten-Einheit, statt auf
+  // ganze Stunden zu runden (Codex #951). Fehlt der Wert: Backend-Default (6 h).
   const segmentMaxAge = Number(currentStats?.segment_max_age)
   if (Number.isFinite(segmentMaxAge) && segmentMaxAge > 0) {
-    configForm.segmentMaxAgeHours = String(Math.round(segmentMaxAge / 3600))
+    const picked = pickSegmentAgeUnit(segmentMaxAge)
+    configForm.segmentMaxAgeValue = picked.value
+    configForm.segmentMaxAgeUnit = picked.unit
   } else {
-    configForm.segmentMaxAgeHours = String(DEFAULT_SEGMENT_MAX_AGE_HOURS)
+    configForm.segmentMaxAgeValue = String(DEFAULT_SEGMENT_MAX_AGE_HOURS)
+    configForm.segmentMaxAgeUnit = 'hours'
   }
   const segmentMaxBytes = Number(currentStats?.segment_max_bytes)
   if (Number.isFinite(segmentMaxBytes) && segmentMaxBytes > 0) {
@@ -409,10 +448,14 @@ function buildPayload() {
   }
 
   // Segment-Rotation (#938). Alter ist Pflicht (Primärtrigger); Bytes/Rows
-  // optional (leer = automatisch vom Backend abgeleitet).
-  const segmentAgeHours = parseNonNegativeInteger(configForm.segmentMaxAgeHours)
-  if (segmentAgeHours === null || segmentAgeHours < 1) throw new Error(t('ringbuffer.validationSegmentMaxAge'))
-  payload.segment_max_age = segmentAgeHours * SECONDS_PER_HOUR
+  // optional (leer = automatisch vom Backend abgeleitet). Wert+Einheit → Sekunden;
+  // das 300-s-Backend-Minimum respektieren und Sub-Stunden-Werte exakt treffen
+  // (Codex #951).
+  const segmentAgeValue = Number(String(configForm.segmentMaxAgeValue ?? '').trim())
+  if (!Number.isFinite(segmentAgeValue) || segmentAgeValue <= 0) throw new Error(t('ringbuffer.validationSegmentMaxAge'))
+  const segmentAgeSeconds = Math.round(segmentAgeValue * SEGMENT_AGE_UNIT_SECONDS[configForm.segmentMaxAgeUnit])
+  if (segmentAgeSeconds < SEGMENT_MAX_AGE_MIN_SECONDS) throw new Error(t('ringbuffer.validationSegmentMaxAge'))
+  payload.segment_max_age = segmentAgeSeconds
 
   // Leere Segment-Schwelle explizit als null senden (nicht weglassen): der
   // Config-Endpoint behandelt ausgelassene Felder als „persistierten Wert

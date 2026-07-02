@@ -405,6 +405,52 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
     expect(wrapper.find('[data-testid="rb-config-segment-max-bytes"]').element.value).toBe('')
   })
 
+  it('hydrates a sub-hour segment age losslessly (900s = 15 min) and posts exactly 900s (#938 Codex #951)', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          max_entries: null,
+          max_file_size_bytes: 500 * 1024 * 1024,
+          max_age: null,
+          file_size_bytes: 0,
+          segment_max_age: 900, // 15 min — migriert aus einem 15-min-Retention-Fenster
+        },
+      }),
+    })
+    const { wrapper, api: mocked } = await mountModal({ api })
+    // Verlustfreie Anzeige: 15 Minuten, Einheit min — nicht 0, nicht auf 1 h aufgerundet.
+    expect(wrapper.find('[data-testid="rb-config-segment-max-age"]').element.value).toBe('15')
+    expect(wrapper.find('[data-testid="rb-config-segment-max-age-unit"]').element.value).toBe('minutes')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(mocked.config).toHaveBeenCalledTimes(1)
+    const payload = mocked.config.mock.calls[0][0]
+    expect(payload.segment_max_age).toBe(900)
+  })
+
+  it('respects the 300s (5 min) backend minimum for the segment age', async () => {
+    const { wrapper, api } = await mountModal()
+    await wrapper.find('[data-testid="rb-config-segment-max-age-unit"]').setValue('minutes')
+    await wrapper.find('[data-testid="rb-config-segment-max-age"]').setValue('4') // 240s < 300s
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Segment-Alter')
+  })
+
+  it('posts a whole-hour segment age losslessly (6h → 21600s) as a regression guard', async () => {
+    const { wrapper, api } = await mountModal()
+    // Default is 6 h; verify the hour path still round-trips exactly.
+    expect(wrapper.find('[data-testid="rb-config-segment-max-age"]').element.value).toBe('6')
+    expect(wrapper.find('[data-testid="rb-config-segment-max-age-unit"]').element.value).toBe('hours')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    const payload = api.config.mock.calls[0][0]
+    expect(payload.segment_max_age).toBe(6 * 60 * 60)
+  })
+
   it('renders MiB/GiB unit labels for size selects (binary, #919)', async () => {
     const { wrapper } = await mountModal()
     const sizeUnitOptions = wrapper.find('[data-testid="rb-config-max-size-unit"]').findAll('option').map((o) => o.text())
