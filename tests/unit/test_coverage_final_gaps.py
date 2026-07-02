@@ -1601,7 +1601,7 @@ async def test_visu_save_page_success(monkeypatch):
     node_row = _make_node_row(id="p1", type="PAGE", name="Page")
     db = _make_visu_db(row=node_row)
     cfg = PageConfig(grid_cols=12, grid_row_height=80, background=None, widgets=[])
-    await save_page(node_id="p1", config=cfg, db=db, _user="admin")
+    await save_page(node_id="p1", config=cfg, db=db)
     assert db.conn.execute.called
     assert db.conn.commit.called
 
