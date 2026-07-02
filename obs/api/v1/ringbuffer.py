@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config, persist_ringbuffer_config
+from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig, validate_explicit_segment_bounds, validate_store_config
 from obs.ringbuffer.ringbuffer import (
     RingBufferStorageDeleteIncompleteError,
     default_ringbuffer_disk_path,
@@ -112,6 +113,9 @@ async def _disabled_stats(db: Database) -> RingBufferStats:
         effective_retention_seconds=None,
         max_file_size_bytes=cfg["max_file_size_bytes"],
         max_age=cfg["max_age"],
+        segment_max_bytes=cfg.get("segment_max_bytes"),
+        segment_max_rows=cfg.get("segment_max_rows"),
+        segment_max_age=cfg.get("segment_max_age"),
         file_size_bytes=0,
     )
 
@@ -154,6 +158,21 @@ class RingBufferMultiEntryOut(RingBufferEntryOut):
     matched_set_ids: list[str]
 
 
+class RingBufferPrognosis(BaseModel):
+    """Datengetriebene Wachstums-/Retention-Prognose (#919).
+
+    Reine Momentaufnahme aus den geschlossenen v2-Segmenten. Alle Raten-Felder
+    sind ``None``, wenn zu wenig Daten vorliegen (< 1 geschlossenes v2-Segment).
+    """
+
+    sample_segment_count: int = 0
+    bytes_per_hour: float | None = None
+    rows_per_hour: float | None = None
+    avg_segment_seconds: float | None = None
+    estimated_retention_seconds: float | None = None
+    effective_segment_max_bytes: float | None = None
+
+
 class RingBufferStats(BaseModel):
     enabled: bool = True
     total: int
@@ -165,8 +184,19 @@ class RingBufferStats(BaseModel):
     max_file_size_bytes: int | None
     max_age: int | None
     file_size_bytes: int
+    # Persistierte Segment-Rotations-Config (#919/#938) — damit der Config-Dialog
+    # die GESPEICHERTEN Werte hydratisiert (nicht die runtime-abgeleiteten).
+    segment_max_bytes: int | None = None
+    segment_max_rows: int | None = None
+    segment_max_age: int | None = None
     last_recovery_at: str | None = None
     last_recovery_file_count: int = 0
+    # Segmentierter Store (#919) — nur im segmentierten Modus befüllt (``common``
+    # + ``backend_extra`` aus ``store.stats()``); im Legacy-Modus ``None``, damit
+    # die bestehende Stats-Form unverändert bleibt.
+    store: dict[str, Any] | None = None
+    # Datengetriebene Prognose (#919) — nur im segmentierten Modus befüllt.
+    prognosis: RingBufferPrognosis | None = None
 
 
 class RingBufferConfig(BaseModel):
@@ -175,6 +205,15 @@ class RingBufferConfig(BaseModel):
     max_entries: int | None = Field(default=None, ge=1)
     max_file_size_bytes: int | None = Field(default=None, ge=1)
     max_age: int | None = Field(default=None, ge=0)
+    # Segmentierter Store (#919) — OPT-IN, Default AUS. Bei ``False`` bleibt der
+    # Legacy-Single-File-Pfad unverändert; eine Umschaltung greift beim nächsten
+    # RingBuffer-(Neu-)Start.
+    segmented: bool = False
+    # Segment-Parameter (#930) — Rotation, getrennt von den Retention-Feldern
+    # oben.
+    segment_max_bytes: int | None = Field(default=None, ge=1)
+    segment_max_rows: int | None = Field(default=None, ge=1)
+    segment_max_age: int | None = Field(default=None, ge=1)
 
 
 class RingBufferTimeFilterV2(BaseModel):
@@ -1824,7 +1863,16 @@ async def ringbuffer_stats(
     if not is_ringbuffer_enabled() or rb is None:
         return await _disabled_stats(db)
     stats = await rb.stats()
-    return RingBufferStats(enabled=True, **stats)
+    # Persistierte Segment-Config mitgeben, damit der Config-Dialog die
+    # gespeicherten Werte anzeigt (``rb.stats()`` liefert nur den Store-Snapshot).
+    persisted = await load_persisted_ringbuffer_config(db)
+    return RingBufferStats(
+        enabled=True,
+        segment_max_bytes=persisted.get("segment_max_bytes"),
+        segment_max_rows=persisted.get("segment_max_rows"),
+        segment_max_age=persisted.get("segment_max_age"),
+        **stats,
+    )
 
 
 @router.post("/config", response_model=RingBufferStats)
@@ -1853,6 +1901,49 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     resolved_max_file_size = body.max_file_size_bytes if "max_file_size_bytes" in body.model_fields_set else current_config["max_file_size_bytes"]
     resolved_max_age = body.max_age if "max_age" in body.model_fields_set else current_config["max_age"]
 
+    # Segment-Parameter (#930) leben nur in der persistierten Config, nicht im
+    # laufenden RingBuffer. Bei Teil-Updates die nicht gesetzten Felder aus der
+    # persistierten Config übernehmen.
+    resolved_segmented = body.segmented if "segmented" in body.model_fields_set else bool(persisted.get("segmented", False))
+    resolved_segment_max_bytes = body.segment_max_bytes if "segment_max_bytes" in body.model_fields_set else persisted.get("segment_max_bytes")
+    resolved_segment_max_rows = body.segment_max_rows if "segment_max_rows" in body.model_fields_set else persisted.get("segment_max_rows")
+    resolved_segment_max_age = body.segment_max_age if "segment_max_age" in body.model_fields_set else persisted.get("segment_max_age")
+
+    # Technische Grenzen NUR für EXPLIZIT gesetzte Segment-Werte durchsetzen (#919):
+    # 4 MiB…1 GiB / 300 s…30 d / >= 1000. Nicht gesetzte Felder (Auto-Ableitung)
+    # bleiben unangetastet → kein 422 im Auto-Startpfad.
+    try:
+        validate_explicit_segment_bounds(
+            segment_max_bytes=body.segment_max_bytes if "segment_max_bytes" in body.model_fields_set else None,
+            segment_max_age=body.segment_max_age if "segment_max_age" in body.model_fields_set else None,
+            segment_max_rows=body.segment_max_rows if "segment_max_rows" in body.model_fields_set else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
+    # Segment-/Retention-Vertrag durchsetzen: zu grobe Segmentierung → HTTP 422
+    # (nicht auto-korrigieren, #930). NUR wenn der Request wirklich segmentiert
+    # auflöst (#951): der dokumentierte Legacy-Pfad (``segmented=false``) besitzt
+    # keine Segmente, für die die 3-Segment-Regel gälte — ein Client, der den
+    # Legacy-Store mit kurzer ``max_age`` behalten will, darf hier kein 422 gegen
+    # den (ungenutzten) Default-``segment_max_age`` bekommen.
+    if resolved_segmented:
+        try:
+            validate_store_config(
+                SegmentConfig(
+                    segment_max_bytes=resolved_segment_max_bytes,
+                    segment_max_rows=resolved_segment_max_rows,
+                    segment_max_age=resolved_segment_max_age,
+                ),
+                StoreRetentionConfig(
+                    max_file_size_bytes=resolved_max_file_size,
+                    max_entries=resolved_max_entries,
+                    max_age=resolved_max_age,
+                ),
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
     if not requested_enabled:
         previous_enabled = is_ringbuffer_enabled()
         stopped_rb = rb
@@ -1866,6 +1957,10 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 max_entries=resolved_max_entries,
                 max_file_size_bytes=resolved_max_file_size,
                 max_age=resolved_max_age,
+                segmented=resolved_segmented,
+                segment_max_bytes=resolved_segment_max_bytes,
+                segment_max_rows=resolved_segment_max_rows,
+                segment_max_age=resolved_segment_max_age,
             )
             persisted_disabled = True
             if stopped_rb is not None:
@@ -1894,12 +1989,46 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                         max_entries=resolved_max_entries,
                         max_file_size_bytes=resolved_max_file_size,
                         max_age=resolved_max_age,
+                        segmented=resolved_segmented,
+                        segment_max_bytes=resolved_segment_max_bytes,
+                        segment_max_rows=resolved_segment_max_rows,
+                        segment_max_age=resolved_segment_max_age,
                     )
             raise
         if stopped_rb is not None:
             reset_ringbuffer()
         set_ringbuffer_enabled(False)
         return await _disabled_stats(db)
+
+    # Segmentierungs-Wechsel gegenüber der LAUFENDEN Instanz (#951): ``rb.reconfigure``
+    # kennt kein ``segmented`` und ändert ``_segmented`` nicht. Liefe der Monitor
+    # bereits im (unterstützten) Legacy-Modus und käme später ``segmented:true``
+    # (oder umgekehrt), persistierte die API den neuen Wert, während die laufende
+    # Instanz im alten Modus bliebe (Store fehlt bzw. bleibt fälschlich aktiv). Daher
+    # bei erkanntem Wechsel den RingBuffer stoppen und mit der neuen Segmentierung
+    # neu aufbauen — analog zum Model-Switch in ``RingBuffer.reconfigure``.
+    # Rollback-sicher (#951, Pkt 2): Der alte Buffer muss abgebaut werden, bevor der
+    # neue denselben Disk-Pfad öffnet. Scheitert der Neuaufbau (Segment-Root gelockt,
+    # DB nicht öffenbar), darf NICHT „kein Buffer" zurückbleiben, obwohl die Config
+    # schon umgestellt ist – sonst zeichnet der Monitor nichts mehr auf. Daher die
+    # Config des alten Buffers festhalten, damit sie im Fehlerfall im ALTEN Modus
+    # (inkl. Subscription) wiederhergestellt werden kann.
+    switch_prev_config: dict[str, Any] | None = None
+    if rb is not None and rb.segmented != resolved_segmented:
+        switch_prev_config = {
+            "storage": rb._storage,
+            "max_entries": rb._max_entries,
+            "max_file_size_bytes": rb._max_file_size_bytes,
+            "max_age": rb._max_age,
+            "segmented": rb.segmented,
+            "segment_max_bytes": rb._segment_max_bytes_config,
+            "segment_max_rows": rb._segment_max_rows,
+            "segment_max_age": rb._segment_max_age,
+        }
+        _unsubscribe_ringbuffer(rb)
+        await rb.stop()
+        reset_ringbuffer()
+        rb = None
 
     created_rb = False
     subscribed_new = False
@@ -1911,6 +2040,10 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 disk_path=_ringbuffer_disk_path(),
                 max_file_size_bytes=resolved_max_file_size,
                 max_age=resolved_max_age,
+                segmented=resolved_segmented,
+                segment_max_bytes=resolved_segment_max_bytes,
+                segment_max_rows=resolved_segment_max_rows,
+                segment_max_age=resolved_segment_max_age,
             )
             _subscribe_ringbuffer(rb)
             subscribed_new = True
@@ -1923,6 +2056,15 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             reconfigure_kwargs["max_file_size_bytes"] = body.max_file_size_bytes
         if "max_age" in body.model_fields_set:
             reconfigure_kwargs["max_age"] = body.max_age
+        # Segment-Config live an den laufenden Store propagieren (#919/#938):
+        # gesetzte segment_max_* werden übernommen, im segmentierten Modus wirken
+        # sie sofort (Rotation/Retention/Prognose) ohne Neustart.
+        if "segment_max_bytes" in body.model_fields_set:
+            reconfigure_kwargs["segment_max_bytes"] = body.segment_max_bytes
+        if "segment_max_rows" in body.model_fields_set:
+            reconfigure_kwargs["segment_max_rows"] = body.segment_max_rows
+        if "segment_max_age" in body.model_fields_set:
+            reconfigure_kwargs["segment_max_age"] = body.segment_max_age
         await rb.reconfigure(body.storage, **reconfigure_kwargs)
         stats = await rb.stats()
         await persist_ringbuffer_config(
@@ -1931,6 +2073,10 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             max_entries=stats["max_entries"],
             max_file_size_bytes=stats["max_file_size_bytes"],
             max_age=stats["max_age"],
+            segmented=resolved_segmented,
+            segment_max_bytes=resolved_segment_max_bytes,
+            segment_max_rows=resolved_segment_max_rows,
+            segment_max_age=resolved_segment_max_age,
         )
     except Exception:
         if created_rb and rb is not None:
@@ -1939,7 +2085,45 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             await rb.stop()
             reset_ringbuffer()
             set_ringbuffer_enabled(False)
+            # Storage NUR löschen, wenn es KEIN Modus-Switch-Rollback ist (#951, Pkt 2):
+            # Bei einem Switch teilt sich der frisch erstellte Buffer denselben
+            # Disk-Pfad + Segment-Root mit dem alten Modus. ``switch_prev_config``
+            # signalisiert genau diesen Fall – die Storage-Dateien tragen die
+            # Historie, die der nachfolgende Rollback bewahren soll. Ein transienter
+            # Save-Fehler beim Switch darf sie daher NICHT löschen. Ohne aktiven
+            # Switch ist der Buffer wirklich frisch angelegt (z. B. aus dem
+            # deaktivierten Zustand) und wird sauber wieder abgebaut.
+            if switch_prev_config is None:
+                with suppress(Exception):
+                    delete_ringbuffer_storage_files(_ringbuffer_disk_path())
+        # Modus-Switch-Rebuild gescheitert (#951, Pkt 2): der alte Buffer wurde
+        # bereits abgebaut. Damit immer ein funktionierender Buffer läuft, den
+        # vorherigen Zustand im ALTEN Modus re-initialisieren und neu subscriben.
+        # Best-effort: schlägt auch das fehl, bleibt der ursprüngliche Fehler
+        # maßgeblich (kein neuer Zustand wird vorgetäuscht).
+        if switch_prev_config is not None:
             with suppress(Exception):
-                delete_ringbuffer_storage_files(_ringbuffer_disk_path())
+                restored = await init_ringbuffer(
+                    storage=switch_prev_config["storage"],
+                    max_entries=switch_prev_config["max_entries"],
+                    disk_path=_ringbuffer_disk_path(),
+                    max_file_size_bytes=switch_prev_config["max_file_size_bytes"],
+                    max_age=switch_prev_config["max_age"],
+                    segmented=switch_prev_config["segmented"],
+                    segment_max_bytes=switch_prev_config["segment_max_bytes"],
+                    segment_max_rows=switch_prev_config["segment_max_rows"],
+                    segment_max_age=switch_prev_config["segment_max_age"],
+                )
+                _subscribe_ringbuffer(restored)
+                set_ringbuffer_enabled(True)
         raise
-    return RingBufferStats(enabled=True, **stats)
+    # Persistierte Segment-Config in die Response spiegeln (wie GET /stats),
+    # damit das Config-Modal nach dem Speichern die GESPEICHERTEN Werte
+    # hydratisiert statt auf die Defaults zurueckzufallen (#919/#938).
+    return RingBufferStats(
+        enabled=True,
+        segment_max_bytes=resolved_segment_max_bytes,
+        segment_max_rows=resolved_segment_max_rows,
+        segment_max_age=resolved_segment_max_age,
+        **stats,
+    )

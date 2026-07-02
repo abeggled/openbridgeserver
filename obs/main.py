@@ -183,6 +183,11 @@ async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_eve
         disk_path=rb_path,
         max_file_size_bytes=rb_cfg["max_file_size_bytes"],
         max_age=rb_cfg["max_age"],
+        # Segmentierter Store (#919) — OPT-IN; Default AUS = unveränderter Legacy-Pfad.
+        segmented=rb_cfg.get("segmented", False),
+        segment_max_bytes=rb_cfg.get("segment_max_bytes"),
+        segment_max_rows=rb_cfg.get("segment_max_rows"),
+        segment_max_age=rb_cfg.get("segment_max_age"),
     )
     bus.subscribe(data_value_event_type, rb.handle_value_event)
 

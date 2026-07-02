@@ -642,6 +642,22 @@ CREATE INDEX IF NOT EXISTS idx_authz_node_roles_role
     ON authz_node_roles(role);
 """
 
+# Index-Audit #919/#935: Nur ein Index mit belegtem, heißem Query-Pfad wird
+# angelegt. Die Registry lädt bei jedem Adapter-Start/-Reload die Bindings via
+#   SELECT * FROM adapter_bindings WHERE adapter_instance_id=? AND enabled=1
+# (obs/adapters/registry.py:102/214/263, obs/api/v1/adapters.py:972). Bisher
+# existiert kein Index auf adapter_instance_id -> EXPLAIN QUERY PLAN zeigt einen
+# vollen 'SCAN adapter_bindings'. Der zusammengesetzte Index bringt den Plan auf
+# 'SEARCH ... USING INDEX (adapter_instance_id=? AND enabled=?)'. Schreibkosten
+# sind vertretbar: adapter_bindings wird nur bei Konfigänderungen geschrieben,
+# nicht im Datenpfad. Alle weiteren im Issue vorgeschlagenen OBS.db-Indexe wurden
+# per EXPLAIN als Duplikate oder ohne genutzten Query-Pfad verworfen (Details im
+# Audit-Skript tools/index-audit-919.py).
+_MIGRATION_V38 = """
+CREATE INDEX IF NOT EXISTS idx_bind_instance_enabled
+    ON adapter_bindings(adapter_instance_id, enabled);
+"""
+
 
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
@@ -684,6 +700,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (35, _MIGRATION_V35),
     (36, _migration_v36),
     (37, _MIGRATION_V37),
+    (38, _MIGRATION_V38),
 ]
 
 

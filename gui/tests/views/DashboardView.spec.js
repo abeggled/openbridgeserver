@@ -65,6 +65,7 @@ async function mountDashboard({
     authApi:    { login: vi.fn(), me: vi.fn() },
     settingsApi: { get: vi.fn().mockResolvedValue({ data: {} }) },
     navLinksApi: { list: vi.fn().mockResolvedValue({ data: [] }) },
+    ringbufferApi: { stats: vi.fn().mockResolvedValue({ data: { enabled: false } }) },
   }))
   vi.doMock('@/stores/websocket', () => ({
     useWebSocketStore: () => ({
@@ -93,6 +94,7 @@ async function mountDashboard({
           template: '<div class="stat-card" :data-label="label" :data-value="String(value)" :data-color="color" />',
           props: ['label', 'value', 'icon', 'color'],
         },
+        RingBufferCard: { template: '<div class="ringbuffer-card-stub" />' },
       },
     },
   })

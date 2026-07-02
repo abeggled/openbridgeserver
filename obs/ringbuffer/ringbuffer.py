@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -37,13 +38,57 @@ from obs.core.json import json_dumps
 logger = logging.getLogger(__name__)
 _UNSET = object()
 _ALLOWED_STORAGE_MODELS = {"memory", "disk", "file"}
+
+# Ableitung von ``segment_max_bytes`` aus ``max_file_size_bytes`` (#919): die
+# Segment-Größe ist von der Rotationszeit entkoppelt und dient nur noch als
+# Größen-Notbremse (Safety-Cap). Zeit (``segment_max_age``) ist im Normalbetrieb
+# der primäre Rotations-Trigger. Bei unbegrenztem Size-Budget (None) ein fester
+# Default von 256 MiB — NICHT budgetabhängig. Bei gesetztem Budget
+# ``min(256 MiB, max_file_size_bytes // 3)``: das ``//3`` (RETENTION_SEGMENT_RATIO)
+# garantiert die 3-Segment-Regel für jedes positive Budget; KEINE 4-MiB-Untergrenze
+# im Auto-Pfad, damit auch winzige Budgets im Auto-Start nie ein 422 auslösen.
+_SEGMENT_MAX_BYTES_DEFAULT = 256 * 1024 * 1024  # 256 MiB (fester Default, budget-unabhängig)
+
+
+def derive_segment_max_bytes(max_file_size_bytes: int | None) -> int:
+    """Leitet ``segment_max_bytes`` aus ``max_file_size_bytes`` ab (#919).
+
+    * Budget None (unbegrenztes Size-Budget) → **256 MiB** (fester Default, NICHT
+      budgetabhängig).
+    * Budget gesetzt → **min(256 MiB, max_file_size_bytes // 3)** (RETENTION_SEGMENT_RATIO).
+      Das ``//3`` garantiert die 3-Segment-Regel
+      (``max_file_size_bytes >= 3 * segment_max_bytes``) für jedes positive Budget —
+      es gibt bewusst KEINE 4-MiB-Untergrenze im Auto-Pfad, damit auch winzige
+      Budgets im Auto-Start nie ein 422 auslösen. Die Config-Validierung kann im
+      Auto-Startpfad also NIE fehlschlagen.
+    """
+    from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO
+
+    if max_file_size_bytes is None:
+        return _SEGMENT_MAX_BYTES_DEFAULT
+    return max(1, min(_SEGMENT_MAX_BYTES_DEFAULT, max_file_size_bytes // RETENTION_SEGMENT_RATIO))
+
+
 _SQLITE_CORRUPTION_MARKERS = (
     "database disk image is malformed",
     "file is not a database",
     "integrity_check failed",
 )
+# Transiente „closed database"-Marker (#951, Pkt 1): schließt der Write-Pfad die
+# aktive Segment-Connection (Rotation) genau während ein Read sie hält, wirft
+# aiosqlite je nach Zeitpunkt „cannot operate on a closed database" bzw. „no active
+# connection". Das ist KEINE Korruption, sondern eine reine Read/Rotate-Kollision,
+# die durch einen Retry unter ``self._lock`` (rotationsserialisiert) verschwindet.
+_CLOSED_DB_MARKERS = (
+    "cannot operate on a closed database",
+    "no active connection",
+)
 _MAX_QUARANTINE_FILES_PER_STORAGE_FILE = 3
 _DELETE_OLDEST_BATCH_SIZE = 500
+# Bounded-Kandidaten-Cap für den segmentierten Read-Pfad (#919): begrenzt den
+# Legacy-Python-Fallback (Value-/Metadaten-Filter ohne typisierte Spalten) und
+# entsperrt guarded contains/regex ohne Zeitfenster — ohne unbounded Full-Scan.
+_SEGMENTED_CANDIDATE_CAP = 10_000
 _enabled = True
 
 
@@ -128,6 +173,11 @@ class RingBuffer:
         disk_path: str = "/data/obs_ringbuffer.db",
         max_file_size_bytes: int | None = None,
         max_age: int | None = None,
+        *,
+        segmented: bool = False,
+        segment_max_bytes: int | None = None,
+        segment_max_rows: int | None = None,
+        segment_max_age: int | None = None,
     ) -> None:
         if storage not in _ALLOWED_STORAGE_MODELS:
             raise ValueError("storage must be one of: file, disk, memory")
@@ -143,6 +193,28 @@ class RingBuffer:
         self._last_recovery_at: str | None = None
         self._last_recovery_files: list[str] = []
         self._lock = asyncio.Lock()
+        # Segmentierter Store (#919) — OPT-IN. Solange ``segmented`` False ist,
+        # bleibt der gesamte Legacy-Single-File-Pfad unverändert und ``_store``
+        # None; keine der Segment-Codepfade unten wird betreten.
+        self._segmented = bool(segmented)
+        # Roh-Config (``None`` = auto) getrennt vom effektiven Wert halten: nur so
+        # kann ein späterer Budget-Wechsel die AUTO-Segmentgröße neu ableiten,
+        # statt auf dem einmal abgeleiteten ``budget/3`` einzufrieren (#919).
+        self._segment_max_bytes_config = segment_max_bytes
+        self._segment_max_bytes = segment_max_bytes
+        self._segment_max_rows = segment_max_rows
+        self._segment_max_age = segment_max_age
+        self._store: Any = None
+        self._segment_created_at: str | None = None
+
+    @property
+    def segmented(self) -> bool:
+        return self._segmented
+
+    @property
+    def store(self) -> Any:
+        """Der offene ``SqliteSegmentStore`` im segmentierten Modus, sonst ``None``."""
+        return self._store
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -150,21 +222,122 @@ class RingBuffer:
 
     async def start(self) -> None:
         async with self._lock:
-            try:
-                await self._open_connection_locked()
-            except Exception as exc:
-                if not self._can_recover_from(exc):
-                    raise
-                await self._recover_corrupt_storage_locked(exc)
+            if self._segmented:
+                await self._open_segment_store_locked()
+            else:
+                try:
+                    await self._open_connection_locked()
+                except Exception as exc:
+                    if not self._can_recover_from(exc):
+                        raise
+                    await self._recover_corrupt_storage_locked(exc)
         logger.info(
-            "RingBuffer started (%s, max_entries=%s, max_file_size_bytes=%s, max_age=%s)",
+            "RingBuffer started (%s, segmented=%s, max_entries=%s, max_file_size_bytes=%s, max_age=%s)",
             self._storage,
+            self._segmented,
             self._max_entries,
             self._max_file_size_bytes,
             self._max_age,
         )
 
+    async def _open_segment_store_locked(self) -> None:
+        """Öffnet den Segment-Store (#919) und hängt eine Legacy-DB read-only ein.
+
+        Startup darf NICHT blockieren: eine bestehende Legacy-``obs_ringbuffer.db``
+        wird über den ``LegacyMigrator`` **read-only** als Legacy-Segment
+        eingehängt (``attach_readonly`` — kein Startup-Scan, kein Checkpoint auf
+        einer ggf. sehr großen Datei). Neue Writes gehen sofort in v2-Segmente.
+        """
+        from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+        from obs.ringbuffer.store.migration import LegacyMigrator
+        from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
+
+        # ``segment_max_bytes`` automatisch aus ``max_file_size_bytes`` ableiten,
+        # wenn nicht explizit gesetzt (#919). Das abgeleitete Budget erfüllt die
+        # 3-Segment-Regel immer → validate_store_config kann beim Auto-Start nicht
+        # fehlschlagen. Explizite Werte werden respektiert und weiter validiert.
+        if self._segment_max_bytes_config is None:
+            self._segment_max_bytes = derive_segment_max_bytes(self._max_file_size_bytes)
+
+        root = self._segment_store_root()
+        store = SqliteSegmentStore(
+            root,
+            segments=SegmentConfig(
+                segment_max_bytes=self._segment_max_bytes,
+                segment_max_rows=self._segment_max_rows,
+                segment_max_age=self._segment_max_age,
+            ),
+            retention=StoreRetentionConfig(
+                max_file_size_bytes=self._max_file_size_bytes,
+                max_entries=self._max_entries,
+                max_age=self._max_age,
+            ),
+        )
+        await store.open()
+        # ``store.open()`` hat bereits die Writer-Lease belegt und SQLite-
+        # Connections geöffnet. Schlägt ein NACHFOLGENDER Startup-Schritt fehl
+        # (Legacy-Attach oder Startup-Retention, z. B. Manifest-/Permission-
+        # Fehler), dürfen diese Ressourcen nicht offen zurückbleiben: ohne
+        # Cleanup gibt ``start()`` nie einen Store zurück, den ``stop()``
+        # schließen könnte — die Lease/Connections leaken und ein späterer Retry
+        # scheitert am belegten Segment-Root. Daher best-effort schließen und
+        # ``self._store`` zurücksetzen, bevor der Originalfehler propagiert.
+        try:
+            self._store = store
+            # Segment-Alter aus dem Manifest, NICHT ab now() (#264): ``store.open()``
+            # kann ein aktives Segment WIEDERVERWENDEN, das lange vor diesem (Neu-)
+            # Start angelegt wurde. Würde ``_segment_created_at`` hier auf now()
+            # gesetzt, altert ein langlebiges aktives Segment nie über die
+            # ``segment_max_age``-Schwelle und wächst unbegrenzt. Daher aus dem
+            # ``created_at`` des aktiven Segments initialisieren; nur wenn (noch)
+            # kein aktives Segment existiert, ist now() der korrekte Boden.
+            active = await store.manifest.get_active_segment()
+            self._segment_created_at = active.created_at if active is not None else _isoformat_utc(datetime.now(UTC))
+
+            # Legacy-Single-DB (falls vorhanden) read-only einhängen — ohne Vollscan.
+            # Idempotent: bei Neustart darf dieselbe Datei NICHT doppelt eingehängt
+            # werden. Erkennung über den absoluten Pfad in den bereits registrierten
+            # Legacy-Zeilen. Bewusst SCHEMA-basiert (nicht status-basiert): ein
+            # Read-Fehler kann eine attached Legacy-Datei quarantinieren
+            # (``mark_quarantined`` behält Dateiname + schema_version, ändert nur den
+            # Status). Ein rein status-basierter ``list_legacy_segments()``-Guard
+            # (``status='legacy'``) sähe diese Zeile nicht → erneuter Insert desselben
+            # Dateinamens → Manifest-``UNIQUE``-Constraint bricht den Startup ab (#951,
+            # Pkt 1). ``LEGACY_SCHEMA_VERSION`` erfasst alle Legacy-Zeilen unabhängig
+            # vom Status; v2-Segmente (auch ``migrated``) tragen schema_version 2.
+            if not _is_sqlite_memory_path(self._disk_path) and Path(_sqlite_filesystem_path(self._disk_path)).exists():
+                legacy_fs_path = _sqlite_filesystem_path(self._disk_path)
+                resolved_legacy = str(Path(legacy_fs_path).resolve())
+                existing = {seg.filename for seg in await store.manifest.list_segments() if seg.schema_version == LEGACY_SCHEMA_VERSION}
+                if resolved_legacy not in existing:
+                    migrator = LegacyMigrator(store, legacy_fs_path)
+                    classification = migrator.classify()
+                    if classification is not None:
+                        await migrator.attach_readonly(classification)
+
+            # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
+            # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
+            # zügig getrimmt (No-Zero-History-Guard beachtet, siehe Store).
+            await store.enforce_retention()
+        except Exception:
+            try:
+                await store.close()
+            except Exception:
+                logger.exception("RingBuffer: Store-Cleanup nach fehlgeschlagenem segmentiertem Startup fehlgeschlagen")
+            self._store = None
+            self._segment_created_at = None
+            raise
+
+    def _segment_store_root(self) -> str:
+        """Storage-Root des Segment-Stores neben der Legacy-DB (``<stem>_segments``)."""
+        path = Path(_sqlite_filesystem_path(self._disk_path))
+        return str(path.with_name(f"{path.stem}_segments"))
+
     async def stop(self) -> None:
+        if self._store is not None:
+            await self._store.close()
+            self._store = None
         await self._close_connection()
 
     # ------------------------------------------------------------------
@@ -177,11 +350,21 @@ class RingBuffer:
         max_entries: int | None | object = _UNSET,
         max_file_size_bytes: int | None | object = _UNSET,
         max_age: int | None | object = _UNSET,
+        *,
+        segment_max_bytes: int | None | object = _UNSET,
+        segment_max_rows: int | None | object = _UNSET,
+        segment_max_age: int | None | object = _UNSET,
     ) -> None:
         """Switch storage model at runtime.
 
         Same model: apply config in-place (keeps entries).
         Model switch: restart empty (no migration).
+
+        Segment- und Retention-Config werden im segmentierten Modus (#919/#938)
+        live auf den laufenden Store propagiert — Rotation, Retention und Prognose
+        greifen sofort ohne Neustart. Ein Wechsel des ``segmented``-Flags ist
+        bewusst NICHT über ``reconfigure`` möglich und braucht weiterhin einen
+        Neustart (der API-Layer baut den RingBuffer dafür neu auf).
         """
         if storage not in _ALLOWED_STORAGE_MODELS:
             raise ValueError("storage must be one of: file, disk, memory")
@@ -195,11 +378,21 @@ class RingBuffer:
             resolved_max_file_size = self._max_file_size_bytes if max_file_size_bytes is _UNSET else max_file_size_bytes
             resolved_max_age = self._max_age if max_age is _UNSET else max_age
 
+            # Segment-Rotations-Config: gesetzte Werte übernehmen, sonst aktuellen
+            # Wert behalten. ``segment_max_bytes=None`` (auto) leitet aus dem
+            # effektiven ``max_file_size_bytes`` neu ab.
+            resolved_segment_max_bytes = self._segment_max_bytes_config if segment_max_bytes is _UNSET else segment_max_bytes
+            resolved_segment_max_rows = self._segment_max_rows if segment_max_rows is _UNSET else segment_max_rows
+            resolved_segment_max_age = self._segment_max_age if segment_max_age is _UNSET else segment_max_age
+
             if (
                 storage == self._storage
                 and resolved_max_entries == self._max_entries
                 and resolved_max_file_size == self._max_file_size_bytes
                 and resolved_max_age == self._max_age
+                and segment_max_bytes is _UNSET
+                and segment_max_rows is _UNSET
+                and segment_max_age is _UNSET
             ):
                 return
 
@@ -208,6 +401,12 @@ class RingBuffer:
                 self._max_entries = resolved_max_entries
                 self._max_file_size_bytes = int(resolved_max_file_size) if resolved_max_file_size is not None else None
                 self._max_age = int(resolved_max_age) if resolved_max_age is not None else None
+                if self._segmented and self._store is not None:
+                    await self._apply_segment_config_locked(
+                        resolved_segment_max_bytes,
+                        resolved_segment_max_rows,
+                        resolved_segment_max_age,
+                    )
                 try:
                     await self._trim()
                 except Exception as exc:
@@ -215,11 +414,15 @@ class RingBuffer:
                         raise
                     await self._recover_corrupt_storage_locked(exc)
                 logger.info(
-                    "RingBuffer reconfigured in-place → %s, max_entries=%s, max_file_size_bytes=%s, max_age=%s",
+                    "RingBuffer reconfigured in-place → %s, max_entries=%s, max_file_size_bytes=%s, max_age=%s, "
+                    "segment_max_bytes=%s, segment_max_rows=%s, segment_max_age=%s",
                     storage,
                     self._max_entries,
                     self._max_file_size_bytes,
                     self._max_age,
+                    self._segment_max_bytes,
+                    self._segment_max_rows,
+                    self._segment_max_age,
                 )
                 return
 
@@ -251,6 +454,57 @@ class RingBuffer:
                 self._max_age,
             )
 
+    async def _apply_segment_config_locked(
+        self,
+        segment_max_bytes: int | None,
+        segment_max_rows: int | None,
+        segment_max_age: int | None,
+    ) -> None:
+        """Propagiert Segment- + Retention-Config live an den laufenden Store (#919/#938).
+
+        Läuft nur im segmentierten Modus mit offenem Store und unter gehaltenem
+        ``self._lock``. ``segment_max_bytes=None`` (auto) wird aus dem bereits
+        aktualisierten ``self._max_file_size_bytes`` neu abgeleitet. Anschließend
+        werden ``SegmentConfig`` und ``StoreRetentionConfig`` des Stores neu
+        gesetzt, damit Rotation, Retention und Prognose sofort die neuen Werte
+        nutzen. Ein durch die neuen (kleineren) Schwellen bereits fälliges aktives
+        Segment wird unmittelbar rotiert; danach greift die Retention einmal.
+        """
+        from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
+
+        # Roh-Config (``None`` = auto) merken, DANN den effektiven Wert ableiten —
+        # so folgt die Auto-Segmentgröße auch künftigen Budget-Änderungen und friert
+        # nicht auf dem alten ``budget/3`` ein. Explizite Werte bleiben unangetastet.
+        self._segment_max_bytes_config = segment_max_bytes
+        if segment_max_bytes is None:
+            segment_max_bytes = derive_segment_max_bytes(self._max_file_size_bytes)
+
+        self._segment_max_bytes = segment_max_bytes
+        self._segment_max_rows = segment_max_rows
+        self._segment_max_age = segment_max_age
+
+        self._store.apply_config(
+            segments=SegmentConfig(
+                segment_max_bytes=self._segment_max_bytes,
+                segment_max_rows=self._segment_max_rows,
+                segment_max_age=self._segment_max_age,
+            ),
+            retention=StoreRetentionConfig(
+                max_file_size_bytes=self._max_file_size_bytes,
+                max_entries=self._max_entries,
+                max_age=self._max_age,
+            ),
+        )
+
+        # Sofort-Rotation: ein aktives Segment, das durch die neuen Schwellen jetzt
+        # über der Grenze liegt, wird unmittelbar rotiert — ohne auf das nächste
+        # Event zu warten. Danach Retention einmal anwenden (Budget/Alter kann sich
+        # geändert haben).
+        if await self._segment_rotation_due():
+            await self._store.rotate()
+            self._segment_created_at = _isoformat_utc(datetime.now(UTC))
+        await self._store.enforce_retention()
+
     # ------------------------------------------------------------------
     # Record
     # ------------------------------------------------------------------
@@ -267,9 +521,27 @@ class RingBuffer:
         metadata_version: int = 1,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        if not _enabled or not self._conn:
+        if not _enabled:
             return
         metadata_obj = metadata or {}
+        if self._segmented:
+            if self._store is None:
+                return
+            async with self._lock:
+                await self._record_segmented_locked(
+                    ts,
+                    datapoint_id,
+                    topic,
+                    old_value,
+                    new_value,
+                    source_adapter,
+                    quality,
+                    metadata_version,
+                    metadata_obj,
+                )
+            return
+        if not self._conn:
+            return
         async with self._lock:
             try:
                 await self._record_locked(
@@ -332,6 +604,62 @@ class RingBuffer:
         await self._persist_metadata_indexes(cursor.lastrowid, metadata_obj)
         await self._conn.commit()
         await self._trim(reference_ts=ts)
+
+    async def _record_segmented_locked(
+        self,
+        ts: str,
+        datapoint_id: str,
+        topic: str,
+        old_value: Any,
+        new_value: Any,
+        source_adapter: str,
+        quality: str,
+        metadata_version: int,
+        metadata_obj: dict[str, Any],
+    ) -> None:
+        """Schreibpfad im segmentierten Modus (#919).
+
+        Der Event geht über die portable Store-Grenze (``append``). Danach wird
+        auf Rotation (``segment_max_bytes``/``segment_max_rows``/``segment_max_age``)
+        geprüft und — falls rotiert wurde — ``enforce_retention`` auf die jetzt
+        geschlossenen Segmente angewandt.
+        """
+        from obs.ringbuffer.store.interface import StoreEvent
+
+        await self._store.append(
+            [
+                StoreEvent(
+                    ts=ts,
+                    datapoint_id=datapoint_id,
+                    topic=topic,
+                    old_value=old_value,
+                    new_value=new_value,
+                    source_adapter=source_adapter,
+                    quality=quality,
+                    metadata_version=metadata_version,
+                    metadata=metadata_obj,
+                )
+            ]
+        )
+        if await self._segment_rotation_due():
+            await self._store.rotate()
+            self._segment_created_at = _isoformat_utc(datetime.now(UTC))
+            await self._store.enforce_retention()
+
+    async def _segment_rotation_due(self) -> bool:
+        """True, wenn das aktive Segment eine ``segment_max_*``-Schwelle reißt."""
+        active = await self._store.manifest.get_active_segment()
+        if active is None:  # pragma: no cover - aktives Segment existiert nach append immer
+            return False
+        if self._segment_max_rows is not None and active.row_count >= self._segment_max_rows:
+            return True
+        if self._segment_max_bytes is not None and active.size_bytes >= self._segment_max_bytes:
+            return True
+        if self._segment_max_age is not None and self._segment_created_at is not None:
+            age = (_parse_iso_ts(_isoformat_utc(datetime.now(UTC))) - _parse_iso_ts(self._segment_created_at)).total_seconds()
+            if age >= self._segment_max_age:
+                return True
+        return False
 
     async def _trim(self, reference_ts: str | None = None) -> None:
         """Apply retention rules and keep max_entries compatibility."""
@@ -521,7 +849,7 @@ class RingBuffer:
 
     async def handle_value_event(self, event: Any) -> None:
         """Record a DataValueEvent into the ring buffer."""
-        if not _enabled or not self._conn:
+        if not _enabled or (not self._conn and self._store is None):
             return
 
         dp_id = str(event.datapoint_id)
@@ -606,6 +934,32 @@ class RingBuffer:
         sort_order: str = "desc",
         dp_ids_by_name: list[str] | None = None,
     ) -> list[RingBufferEntry]:
+        if self._segmented:
+            return await self._query_v2_segmented(
+                q=q,
+                adapter_any_of=adapter_any_of,
+                datapoint_ids=datapoint_ids,
+                value_filters=value_filters,
+                datapoint_types=datapoint_types,
+                metadata_tags_any_of=metadata_tags_any_of,
+                metadata_adapter_types_any_of=metadata_adapter_types_any_of,
+                metadata_adapter_instance_ids_any_of=metadata_adapter_instance_ids_any_of,
+                metadata_group_addresses_any_of=metadata_group_addresses_any_of,
+                metadata_topics_any_of=metadata_topics_any_of,
+                metadata_entity_ids_any_of=metadata_entity_ids_any_of,
+                metadata_register_types_any_of=metadata_register_types_any_of,
+                metadata_register_addresses_any_of=metadata_register_addresses_any_of,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                from_relative_seconds=from_relative_seconds,
+                to_relative_seconds=to_relative_seconds,
+                limit=limit,
+                offset=offset,
+                sort_field=sort_field,
+                sort_order=sort_order,
+                dp_ids_by_name=dp_ids_by_name,
+            )
+
         if not self._conn:
             return []
 
@@ -743,6 +1097,157 @@ class RingBuffer:
         )
         return filtered[offset : offset + limit]
 
+    async def _query_v2_segmented(
+        self,
+        *,
+        q: str,
+        adapter_any_of: list[str] | None,
+        datapoint_ids: list[str] | None,
+        value_filters: list[dict[str, Any]] | None,
+        datapoint_types: dict[str, str] | None,
+        metadata_tags_any_of: list[str] | None,
+        metadata_adapter_types_any_of: list[str] | None,
+        metadata_adapter_instance_ids_any_of: list[str] | None,
+        metadata_group_addresses_any_of: list[str] | None,
+        metadata_topics_any_of: list[str] | None,
+        metadata_entity_ids_any_of: list[str] | None,
+        metadata_register_types_any_of: list[str] | None,
+        metadata_register_addresses_any_of: list[str] | None,
+        from_ts: str | None,
+        to_ts: str | None,
+        from_relative_seconds: int | None,
+        to_relative_seconds: int | None,
+        limit: int,
+        offset: int,
+        sort_field: str,
+        sort_order: str,
+        dp_ids_by_name: list[str] | None,
+    ) -> list[RingBufferEntry]:
+        """Read-Pfad im segmentierten Modus (#919).
+
+        Routet die **Kern-Query** (Zeitfenster, ein datapoint_id, ein
+        source_adapter, quality, value_filters, limit, offset) auf
+        ``store.query(StoreQuery(...))`` und mappt das Ergebnis auf die
+        bestehende ``query_v2``-Response-Form.
+
+        Feature-Parität mit dem Legacy-``query_v2`` (#919): Freitext-``q``,
+        namensaufgelöste ``dp_ids_by_name``, mehrere ``datapoint_ids``/Adapter
+        (``any_of``), Metadaten-Tag/Binding-Filter sowie Sortierung nach
+        ``id``/``ts`` × ``asc``/``desc`` werden echt und **gebunden** über die
+        Store-Grenze bedient (kein unbegrenzter Scan). Die Bounded-Garantie bleibt
+        erhalten: der Store liest je Segment höchstens ``offset+limit`` (bzw. für
+        Value-/contains/regex-/Metadaten-Fälle einen expliziten Kandidaten-Cap)
+        und sortiert/paginiert erst auf dieser gebundenen Kandidatenmenge.
+        """
+        if self._store is None:
+            return []
+
+        if sort_field not in {"id", "ts"}:
+            raise ValueError("invalid sort field: expected 'id' or 'ts'")
+        if sort_order not in {"asc", "desc"}:
+            raise ValueError("invalid sort order: expected 'asc' or 'desc'")
+        if limit < 1:
+            raise ValueError("invalid pagination: limit must be >= 1")
+        if offset < 0:
+            raise ValueError("invalid pagination: offset must be >= 0")
+
+        effective_from = _resolve_time_bound(absolute_ts=from_ts, relative_seconds=from_relative_seconds, pick_newer=True)
+        effective_to = _resolve_time_bound(absolute_ts=to_ts, relative_seconds=to_relative_seconds, pick_newer=False)
+        if effective_from and effective_to and effective_from >= effective_to:
+            raise ValueError("invalid time filter: effective 'from' must be earlier than effective 'to'")
+
+        normalized_dps = [dp_id.strip() for dp_id in (datapoint_ids or []) if dp_id.strip()]
+        normalized_adapters = [adapter.strip() for adapter in (adapter_any_of or []) if adapter.strip()]
+        normalized_names = [dp_id.strip() for dp_id in (dp_ids_by_name or []) if dp_id.strip()]
+
+        metadata_binding_filters = {
+            column: values
+            for column, values in {
+                "adapter_type": _normalize_string_filters(metadata_adapter_types_any_of),
+                "adapter_instance_id": _normalize_string_filters(metadata_adapter_instance_ids_any_of),
+                "group_address": _normalize_string_filters(metadata_group_addresses_any_of),
+                "topic": _normalize_string_filters(metadata_topics_any_of),
+                "entity_id": _normalize_string_filters(metadata_entity_ids_any_of),
+                "register_type": _normalize_string_filters(metadata_register_types_any_of),
+                "register_address": _normalize_string_filters(metadata_register_addresses_any_of),
+            }.items()
+            if values
+        }
+
+        # Typkonflikt-Validierung wie Legacy ``query_v2`` (z. B. numerischer
+        # Operator auf BOOLEAN-Datenpunkt → 422). Ist ein datapoint_id-Filter
+        # gesetzt, prüfen wir die Value-Filter gegen dessen data_type, bevor sie
+        # in den Store gepusht werden — sonst liefe ein Typkonflikt still leer.
+        if value_filters:
+            _validate_segmented_value_filter_types(
+                value_filters=value_filters,
+                datapoint_ids=normalized_dps,
+                datapoint_types=datapoint_types or {},
+            )
+
+        from obs.ringbuffer.store.interface import StoreQuery
+
+        store_query = StoreQuery(
+            from_ts=effective_from,
+            to_ts=effective_to,
+            # Legacy-``query_v2`` behandelt beide Zeitgrenzen exklusiv.
+            from_exclusive=True,
+            to_exclusive=True,
+            datapoint_ids=normalized_dps,
+            source_adapters=normalized_adapters,
+            q=q or None,
+            dp_ids_by_name=normalized_names,
+            metadata_tags_any_of=_normalize_string_filters(metadata_tags_any_of),
+            metadata_binding_filters=metadata_binding_filters,
+            limit=limit,
+            offset=offset,
+            sort_field=sort_field,
+            sort_order=sort_order,
+            value_filters=list(value_filters or []),
+            # Bounded-Garantie für guarded contains/regex ohne Zeitfenster und für
+            # den Legacy-Python-Fallback: ohne engen Zeitrahmen wird höchstens diese
+            # Kandidatenzahl je Segment gelesen, statt unbounded zu scannen.
+            candidate_cap=_SEGMENTED_CANDIDATE_CAP,
+        )
+        rows = await self._store_query_serialized(store_query)
+        return [
+            RingBufferEntry(
+                id=row["global_event_id"],
+                ts=row["ts"],
+                datapoint_id=row["datapoint_id"],
+                topic=row["topic"],
+                old_value=row["old_value"],
+                new_value=row["new_value"],
+                source_adapter=row["source_adapter"],
+                quality=row["quality"],
+                metadata_version=row["metadata_version"],
+                metadata=row["metadata"] if isinstance(row["metadata"], dict) else {},
+            )
+            for row in rows
+        ]
+
+    async def _store_query_serialized(self, store_query: Any) -> list[dict[str, Any]]:
+        """Führt den segmentierten Store-Read rotationssicher aus (#951, Pkt 1).
+
+        Sperr-/Retry-Strategie: Der Normalfall läuft bewusst **lockfrei**, damit
+        parallele Reads geschlossener Segmente nicht unnötig serialisiert werden.
+        Kollidiert ein Read jedoch mit einer gleichzeitigen Rotation – der
+        Write-Pfad (``_record_segmented_locked``) schließt/tauscht ``_active_conn``
+        unter ``self._lock`` –, wirft aiosqlite eine transiente „closed database"/
+        „no active connection". Dieser Fall wird **einmal unter ``self._lock``
+        retryt**: Da ``rotate()`` denselben Lock hält, kann während des Retries
+        keine Rotation dazwischenfunken, die aktive Connection bleibt für die Dauer
+        des Reads gültig. Nur der rotationskritische Retry zahlt die Lock-Kosten;
+        echte Fehler (keine „closed database"-Marker) werden unverändert propagiert.
+        """
+        try:
+            return await self._store.query(store_query)
+        except Exception as exc:
+            if not _is_closed_db_error(exc):
+                raise
+            async with self._lock:
+                return await self._store.query(store_query)
+
     async def stats(self) -> dict:
         def _effective_retention_seconds(oldest_ts: str | None) -> int | None:
             if not oldest_ts:
@@ -752,6 +1257,30 @@ class RingBuffer:
             except ValueError:
                 return None
             return max(0, int((datetime.now(UTC) - oldest_dt).total_seconds()))
+
+        if self._segmented and self._store is not None:
+            store_stats = await self._store.stats()
+            common = store_stats.common
+            oldest_ts = common.get("oldest_ts")
+            # Legacy-Stats-Form additiv um ``store`` erweitern; die bestehenden
+            # Felder bleiben unverändert, damit Legacy-Consumer nicht brechen.
+            return {
+                "total": common.get("total", 0),
+                "oldest_ts": oldest_ts,
+                "newest_ts": common.get("newest_ts"),
+                "storage": self._storage,
+                "max_entries": self._max_entries,
+                "effective_retention_seconds": _effective_retention_seconds(oldest_ts),
+                "max_file_size_bytes": self._max_file_size_bytes,
+                "max_age": self._max_age,
+                "file_size_bytes": common.get("size_bytes", 0),
+                "last_recovery_at": self._last_recovery_at,
+                "last_recovery_file_count": len(self._last_recovery_files),
+                # Datengetriebene Prognose (#919) — aus den geschlossenen v2-Segmenten
+                # im Store berechnet; auf Top-Level gehoben für RingBufferStats.
+                "prognosis": common.get("prognosis"),
+                "store": store_stats.as_dict(),
+            }
 
         if not self._conn:
             return {
@@ -937,7 +1466,16 @@ def default_ringbuffer_disk_path(database_path: str) -> str:
 
 
 def delete_ringbuffer_storage_files(disk_path: str) -> None:
-    """Remove the file-backed ringbuffer database and SQLite sidecar files."""
+    """Remove the file-backed ringbuffer database and SQLite sidecar files.
+
+    Im segmentierten Store (#919) liegen Manifest und Segment-DBs NICHT in der
+    Legacy-Single-DB, sondern in einem ``<stem>_segments``-Verzeichnis neben ihr.
+    Ohne dessen Löschung würde ein Monitor-Disable nur die Legacy-DB entfernen und
+    den Speicher der Segmente belegt lassen; ein Re-Enable öffnete die alten Daten
+    wieder statt frei zu starten. Daher zusätzlich das Segment-Store-Root
+    rekursiv entfernen (best effort — schlägt es fehl, blockiert das nicht die
+    Legacy-Löschung).
+    """
     if _is_sqlite_memory_path(disk_path):
         return
     disk_path = _sqlite_filesystem_path(disk_path)
@@ -973,6 +1511,15 @@ def delete_ringbuffer_storage_files(disk_path: str) -> None:
                         os.replace(rollback_path, original_path)
             raise
 
+    # Segment-Store-Root (#919) erst NACH dem erfolgreichen Legacy-Teil entfernen (#951):
+    # Solange der rename/remove-Rollback der Legacy-DB noch fehlschlagen und den Monitor
+    # wieder auf enabled zurückstellen kann, dürfen die v2-Segmentdateien nicht bereits
+    # unwiderruflich weg sein. Ab hier ist der Legacy-Teil abgeschlossen (best effort –
+    # ein Fehler beim rmtree blockiert die Legacy-Löschung nicht mehr).
+    segments_root = Path(disk_path).with_name(f"{Path(disk_path).stem}_segments")
+    if segments_root.exists():
+        shutil.rmtree(segments_root, ignore_errors=True)
+
 
 def is_ringbuffer_enabled() -> bool:
     return _enabled
@@ -1002,6 +1549,17 @@ def _is_sqlite_corruption(exc: Exception) -> bool:
         return False
     message = str(exc).lower()
     return any(marker in message for marker in _SQLITE_CORRUPTION_MARKERS)
+
+
+def _is_closed_db_error(exc: Exception) -> bool:
+    """True bei transienter „closed database"-Race durch Rotation (#951, Pkt 1).
+
+    aiosqlite meldet eine während des Reads geschlossene Connection als ``ValueError``
+    (``no active connection``) bzw. ``aiosqlite``-``ProgrammingError``
+    (``cannot operate on a closed database``) – beide sind reine Read/Rotate-Kollisionen,
+    keine Korruption. Erkennung über die stabilen Meldungsmarker.
+    """
+    return any(marker in str(exc).lower() for marker in _CLOSED_DB_MARKERS)
 
 
 def _normalize_string_filters(values: list[str] | None) -> list[str]:
@@ -1217,9 +1775,24 @@ async def init_ringbuffer(
     disk_path: str,
     max_file_size_bytes: int | None = None,
     max_age: int | None = None,
+    *,
+    segmented: bool = False,
+    segment_max_bytes: int | None = None,
+    segment_max_rows: int | None = None,
+    segment_max_age: int | None = None,
 ) -> RingBuffer:
     global _rb, _enabled
-    rb = RingBuffer(storage, max_entries, disk_path, max_file_size_bytes, max_age)
+    rb = RingBuffer(
+        storage,
+        max_entries,
+        disk_path,
+        max_file_size_bytes,
+        max_age,
+        segmented=segmented,
+        segment_max_bytes=segment_max_bytes,
+        segment_max_rows=segment_max_rows,
+        segment_max_age=segment_max_age,
+    )
     await rb.start()
     _rb = rb
     _enabled = True
@@ -1253,6 +1826,36 @@ async def _apply_value_filters(
         if match:
             result.append(entry)
     return result
+
+
+def _validate_segmented_value_filter_types(
+    *,
+    value_filters: list[dict[str, Any]],
+    datapoint_ids: list[str],
+    datapoint_types: dict[str, str],
+) -> None:
+    """Prüft Value-Filter-Operatoren gegen die data_types der gefilterten Datenpunkte.
+
+    Spiegelt die Legacy-``query_v2``-Semantik: ein numerischer Operator auf einem
+    BOOLEAN-Datenpunkt (oder ein sonst inkompatibler Operator/Typ) ergibt einen
+    ``ValueError`` (422-tauglich), statt im segmentierten SQL-Pushdown still leer
+    zu laufen. Ohne expliziten datapoint_id-Filter (Typ nicht eindeutig bestimmbar)
+    wird — wie Legacy row-lazy — nicht vorab abgewiesen.
+    """
+    if not datapoint_ids:
+        return
+    data_types = {(datapoint_types.get(dp_id) or "").strip().upper() for dp_id in datapoint_ids}
+    for spec in value_filters:
+        operator = str(spec.get("operator", "")).strip().lower()
+        if operator in {"eq", "ne"}:
+            continue
+        for data_type in data_types:
+            if data_type in _BOOLEAN_TYPES:
+                raise ValueError(f"operator '{operator}' is not supported for data_type 'BOOLEAN'")
+            if data_type in _NUMERIC_TYPES and operator not in {"gt", "gte", "lt", "lte", "between"}:
+                raise ValueError(f"operator '{operator}' is not supported for data_type '{data_type}'")
+            if data_type in _STRING_TYPES and operator not in {"contains", "regex"}:
+                raise ValueError(f"operator '{operator}' is not supported for data_type 'STRING'")
 
 
 def _normalize_value_filter(spec: dict[str, Any]) -> dict[str, Any]:

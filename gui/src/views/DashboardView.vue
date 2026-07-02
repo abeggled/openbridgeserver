@@ -63,6 +63,9 @@
 
     <!-- Adapter status + recent values -->
     <div class="grid lg:grid-cols-2 gap-4">
+      <!-- RingBuffer / Retention (#919/#938) -->
+      <RingBufferCard />
+
       <!-- Adapters -->
       <div class="card">
         <div class="card-header">
@@ -121,6 +124,7 @@ import { useAdapterStore } from '@/stores/adapters'
 import Badge   from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import StatCard from '@/components/ui/StatCard.vue'
+import RingBufferCard from '@/components/dashboard/RingBufferCard.vue'
 import { adapterDotClass as adapterDot, adapterBadgeVariant, adapterStatusLabel, adapterStatusDetailText } from '@/utils/adapterStatus'
 import { useI18n } from 'vue-i18n'
 
