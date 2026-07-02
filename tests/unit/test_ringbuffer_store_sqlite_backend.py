@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import aiosqlite
 import pytest
 
 from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
@@ -19,7 +20,11 @@ from obs.ringbuffer.store.interface import (
     StoreEvent,
     StoreQuery,
 )
-from obs.ringbuffer.store.manifest import SEGMENT_STATUS_ACTIVE, SEGMENT_STATUS_CHECKPOINT_PENDING
+from obs.ringbuffer.store.manifest import (
+    SEGMENT_STATUS_ACTIVE,
+    SEGMENT_STATUS_CHECKPOINT_PENDING,
+    SEGMENT_STATUS_QUARANTINED,
+)
 from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
 from obs.ringbuffer.store.writer_lock import WriterLockHeldError
 
@@ -253,3 +258,171 @@ async def test_refresh_stats_noop_without_active_segment(store: SqliteSegmentSto
     store._active_segment = None
     # Darf ohne aktives Segment nicht werfen.
     await store._refresh_active_segment_stats()
+
+
+# ----------------------------------------------------------------------
+# #919: Isolation quarantänierter Segmente + Robustheit gegen ein WIRKLICH
+# defektes Segment-File.
+# ----------------------------------------------------------------------
+
+
+def _destroy_segment_file(store: SqliteSegmentStore, filename: str) -> None:
+    """Zerstört eine geschlossene Segment-Datei physisch (Müll-Bytes über den Header)."""
+    path = store._segments_dir / filename
+    with open(path, "r+b") as handle:
+        handle.seek(0)
+        handle.write(b"GARBAGE-NOT-A-DATABASE" * 64)
+
+
+async def _store_with_corrupt_closed_segment(tmp_path: Path):
+    """Store mit zwei geschlossenen Segmenten; das erste ist auf Platte zerstört.
+
+    Liefert (store, corrupt_segment_id, corrupt_filename). Segment 1 hält Wert 1,
+    Segment 2 hält Wert 2 (gesund), aktives Segment 3 hält Wert 3.
+    """
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    corrupt = await store.manifest.get_active_segment()
+    await store.rotate()  # schließt Segment 1
+    await store.append([_event(2, "2026-01-01T00:00:01.000Z")])
+    await store.rotate()  # schließt Segment 2
+    await store.append([_event(3, "2026-01-01T00:00:02.000Z")])
+    # Datei des geschlossenen Segments 1 physisch zerstören.
+    _destroy_segment_file(store, corrupt.filename)
+    return store, corrupt.segment_id, corrupt.filename
+
+
+async def test_stats_survive_corrupt_segment_file_from_manifest(tmp_path: Path):
+    store, corrupt_id, _ = await _store_with_corrupt_closed_segment(tmp_path)
+    try:
+        # stats() öffnet nie eine Segment-DB → liefert ALLE Segment-Infos aus dem
+        # Manifest, auch für das kaputte Segment, ohne Exception.
+        stats = await store.stats()
+        seg_ids = {s["segment_id"] for s in stats.backend_extra["segments"]}
+        assert corrupt_id in seg_ids
+        # Row-Count/from_ts stammen aus dem Manifest, nicht aus der Datei.
+        corrupt_stat = next(s for s in stats.backend_extra["segments"] if s["segment_id"] == corrupt_id)
+        assert corrupt_stat["row_count"] == 1
+        assert corrupt_stat["from_ts"] is not None
+    finally:
+        await store.close()
+
+
+async def test_query_quarantines_corrupt_segment_on_the_fly_and_returns_rest(tmp_path: Path):
+    store, corrupt_id, _ = await _store_with_corrupt_closed_segment(tmp_path)
+    try:
+        # Query, die das kaputte Segment einschließen würde, darf nicht brechen.
+        rows = await store.query(StoreQuery(limit=10))
+        values = {r["new_value"] for r in rows}
+        # Werte der gesunden Segmente (2, 3) kommen zurück; Wert 1 (kaputt) fehlt.
+        assert values == {2, 3}
+        # Das kaputte Segment wurde on-the-fly quarantäniert.
+        seg = await store.manifest.get_segment(corrupt_id)
+        assert seg.status == SEGMENT_STATUS_QUARANTINED
+        assert seg.integrity_status == "corrupt"
+        assert seg.quarantine_reason
+    finally:
+        await store.close()
+
+
+async def test_check_segment_integrity_quarantines_corrupt_without_raising(tmp_path: Path):
+    store, corrupt_id, _ = await _store_with_corrupt_closed_segment(tmp_path)
+    try:
+        ok = await store.check_segment_integrity(corrupt_id)
+        assert ok is False
+        seg = await store.manifest.get_segment(corrupt_id)
+        assert seg.status == SEGMENT_STATUS_QUARANTINED
+        assert seg.integrity_status == "corrupt"
+    finally:
+        await store.close()
+
+
+async def test_quarantined_segment_excluded_from_query_selection(tmp_path: Path):
+    store, corrupt_id, _ = await _store_with_corrupt_closed_segment(tmp_path)
+    try:
+        # Nach expliziter Integritätsprüfung ist das Segment quarantäniert.
+        await store.check_segment_integrity(corrupt_id)
+        # list_segments_for_query schließt es aus → Query öffnet es gar nicht mehr.
+        selected = await store.manifest.list_segments_for_query()
+        assert corrupt_id not in {s.segment_id for s in selected}
+        rows = await store.query(StoreQuery(limit=10))
+        assert {r["new_value"] for r in rows} == {2, 3}
+    finally:
+        await store.close()
+
+
+async def test_healthy_segments_query_unchanged_regression(tmp_path: Path):
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+        await store.rotate()
+        await store.append([_event(2, "2026-01-01T00:00:01.000Z")])
+        rows = await store.query(StoreQuery(limit=10))
+        assert [r["new_value"] for r in rows] == [2, 1]
+        # Keine gesunden Segmente werden quarantäniert.
+        segments = await store.manifest.list_segments()
+        assert all(s.status != SEGMENT_STATUS_QUARANTINED for s in segments)
+    finally:
+        await store.close()
+
+
+async def test_check_segment_integrity_healthy_segment_stays_ok(tmp_path: Path):
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+        closed = await store.manifest.get_active_segment()
+        await store.rotate()
+        ok = await store.check_segment_integrity(closed.segment_id)
+        assert ok is True
+        seg = await store.manifest.get_segment(closed.segment_id)
+        assert seg.status != SEGMENT_STATUS_QUARANTINED
+    finally:
+        await store.close()
+
+
+async def test_safe_getsize_returns_zero_for_missing_file(store: SqliteSegmentStore):
+    # _sidecar_size/_segment_file_size dürfen bei fehlender Datei nie werfen.
+    assert store._sidecar_size("does-not-exist.sqlite", "-wal") == 0
+    assert store._segment_file_size("does-not-exist.sqlite") == 0
+
+
+async def test_read_segment_quarantines_when_open_fails_with_corruption(tmp_path: Path, monkeypatch):
+    store, corrupt_id, _ = await _store_with_corrupt_closed_segment(tmp_path)
+    try:
+        # Simuliert Korruption bereits beim Öffnen der Read-Connection.
+        async def _boom_open(_segment):
+            raise aiosqlite.DatabaseError("database disk image is malformed")
+
+        monkeypatch.setattr(store, "_connection_for_read", _boom_open)
+        corrupt = await store.manifest.get_segment(corrupt_id)
+        rows = await store._read_segment_rows(corrupt, StoreQuery(limit=10))
+        assert rows is None
+        seg = await store.manifest.get_segment(corrupt_id)
+        assert seg.status == SEGMENT_STATUS_QUARANTINED
+    finally:
+        await store.close()
+
+
+async def test_read_segment_reraises_non_corruption_error(store: SqliteSegmentStore):
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    closed = await store.manifest.get_active_segment()
+    await store.rotate()
+    # Ein Nicht-Korruptions-Fehler (z. B. Programmierfehler) wird NICHT als
+    # Korruption maskiert, sondern propagiert; das Segment bleibt unangetastet.
+    seg = await store.manifest.get_segment(closed.segment_id)
+    with pytest.raises(aiosqlite.OperationalError):
+        await store._quarantine_corrupt_read(seg, aiosqlite.OperationalError("no such column: bogus"))
+    assert (await store.manifest.get_segment(closed.segment_id)).status != SEGMENT_STATUS_QUARANTINED
+
+
+async def test_read_segment_never_quarantines_active_segment(store: SqliteSegmentStore):
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    active = store._active_segment
+    # Selbst bei einer Korruptions-Exception wird das aktive Segment nie
+    # quarantäniert (es wird nie getrimmt) → Exception propagiert.
+    with pytest.raises(aiosqlite.DatabaseError):
+        await store._quarantine_corrupt_read(active, aiosqlite.DatabaseError("database disk image is malformed"))
+    assert (await store.manifest.get_segment(active.segment_id)).status != SEGMENT_STATUS_QUARANTINED

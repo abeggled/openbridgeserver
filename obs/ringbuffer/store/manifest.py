@@ -304,6 +304,10 @@ class Manifest:
           Inhalt nicht ausgeschlossen werden kann.
         * **Ohne Zeitfilter** werden alle Segmente geliefert.
 
+        Quarantänierte Segmente (Status ``quarantined``) werden **nie**
+        zurückgegeben (#919): ein als korrupt isoliertes Segment darf im Read-Pfad
+        nicht mehr geöffnet werden. ``checkpoint_pending`` bleibt dagegen lesbar.
+
         Sortierung ist ``segment_id DESC`` (neueste zuerst). Da ``segment_id``
         AUTOINCREMENT ist und globale Event-IDs beim Append streng monoton
         vergeben werden, hält ein später angelegtes Segment ausschließlich höhere
@@ -312,7 +316,8 @@ class Manifest:
         Ordnung über Segmentgrenzen. Das trägt das frühe Paging-Terminieren in
         #932.
         """
-        clauses: list[str] = []
+        # Quarantänierte (korrupte, isolierte) Segmente sind für Reads tabu (#919).
+        clauses: list[str] = [f"status != '{SEGMENT_STATUS_QUARANTINED}'"]
         params: list[str] = []
         if to_ts is not None:
             # Segment beginnt nicht nach dem Fensterende (oder Beginn unbekannt).

@@ -52,6 +52,7 @@ from obs.core.json import json_dumps
 from obs.ringbuffer.ringbuffer import (
     _extract_metadata_binding_index_rows,
     _extract_metadata_tags,
+    _is_sqlite_corruption,
 )
 from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO, SegmentConfig, StoreRetentionConfig, validate_store_config
 from obs.ringbuffer.store.interface import (
@@ -146,6 +147,19 @@ CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_register_entry ON ringbuffer_metadat
 
 def _utc_now_compact() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S-%f")
+
+
+def _safe_getsize(path: Path) -> int:
+    """Dateigröße in Bytes; 0 statt Exception, wenn die Datei fehlt/unlesbar ist (#919).
+
+    ``stats()`` liest Segment-Größen ausschließlich per ``os.path.getsize`` (nie
+    durch Öffnen der Segment-DB) und darf auch bei einem komplett kaputten oder
+    verschwundenen File nie werfen.
+    """
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
 
 
 def _is_legacy_segment(segment: SegmentRecord) -> bool:
@@ -549,19 +563,53 @@ class SqliteSegmentStore(RingBufferStore):
         for segment in segments:
             if allow_early_termination and needed and len(collected) >= needed:
                 break  # bounded: ältere Segmente können das Fenster nicht mehr treffen.
-            conn = await self._connection_for_read(segment)
-            close_after = conn is not self._active_conn
-            try:
-                if _is_legacy_segment(segment):
-                    # v1/Legacy-Single-DB: kein global_event_id, keine typisierten
-                    # Spalten → eigener degradierender Read-Zweig (#934).
-                    collected.extend(await self._query_legacy_segment(conn, segment, query))
-                else:
-                    collected.extend(await self._query_segment(conn, query))
-            finally:
-                if close_after:
-                    await conn.close()
+            rows = await self._read_segment_rows(segment, query)
+            if rows is not None:
+                collected.extend(rows)
         return collected
+
+    async def _read_segment_rows(self, segment: SegmentRecord, query: StoreQuery) -> list[dict[str, Any]] | None:
+        """Liest ein einzelnes Segment; quarantäniert es on-the-fly bei Korruption (#919).
+
+        Ein wirklich defektes (nicht-quarantäniertes) Segment-File darf die
+        gesamte Query nicht brechen: eine SQLite-Korruptions-Exception beim
+        Öffnen/Lesen wird gefangen, das Segment wird mit Grund als
+        ``quarantined``/``corrupt`` markiert und **übersprungen** (Rückgabe
+        ``None``). Die übrigen Segmente liefern normal. Das aktive Segment wird
+        nie quarantäniert. Legacy-Segmente werden ebenfalls nur übersprungen (nie
+        die in-place liegende Original-Datei anfassen).
+        """
+        try:
+            conn = await self._connection_for_read(segment)
+        except aiosqlite.Error as exc:
+            return await self._quarantine_corrupt_read(segment, exc)
+        close_after = conn is not self._active_conn
+        try:
+            if _is_legacy_segment(segment):
+                # v1/Legacy-Single-DB: kein global_event_id, keine typisierten
+                # Spalten → eigener degradierender Read-Zweig (#934).
+                return await self._query_legacy_segment(conn, segment, query)
+            return await self._query_segment(conn, query)
+        except aiosqlite.Error as exc:
+            return await self._quarantine_corrupt_read(segment, exc)
+        finally:
+            if close_after:
+                await conn.close()
+
+    async def _quarantine_corrupt_read(self, segment: SegmentRecord, exc: aiosqlite.Error) -> None:
+        """Quarantäniert ein beim Read als korrupt erkanntes Segment und überspringt es.
+
+        Nur echte SQLite-Korruption (malformed/not a database/…) führt zur
+        Quarantäne; andere ``aiosqlite.Error`` werden weitergereicht, damit echte
+        Fehler (z. B. Programmierfehler im SQL) nicht als Korruption maskiert werden.
+        Das aktive Segment wird nie quarantäniert.
+        """
+        if not _is_sqlite_corruption(exc):
+            raise exc
+        if self._active_segment is not None and segment.segment_id == self._active_segment.segment_id:
+            raise exc
+        await self.manifest.mark_quarantined(segment.segment_id, reason=str(exc))
+        return None
 
     async def _connection_for_read(self, segment: SegmentRecord) -> aiosqlite.Connection:
         if self._active_segment is not None and segment.segment_id == self._active_segment.segment_id and self._active_conn is not None:
@@ -1018,8 +1066,7 @@ class SqliteSegmentStore(RingBufferStore):
         )
 
     def _segment_file_size(self, filename: str) -> int:
-        path = self._segments_dir / filename
-        return os.path.getsize(path) if path.exists() else 0
+        return _safe_getsize(self._segments_dir / filename)
 
     # ------------------------------------------------------------------
     # Contract: stats
@@ -1162,8 +1209,7 @@ class SqliteSegmentStore(RingBufferStore):
         return self._sidecar_size(self._active_segment.filename, "-shm")
 
     def _sidecar_size(self, filename: str, suffix: str) -> int:
-        path = self._segments_dir / f"{filename}{suffix}"
-        return os.path.getsize(path) if path.exists() else 0
+        return _safe_getsize(self._segments_dir / f"{filename}{suffix}")
 
     def _retention_pressure(self, segments: list[SegmentRecord]) -> tuple[bool, str | None]:
         """Meldet, ob Retention trotz Löschung geschlossener Segmente über Budget bleibt.
@@ -1246,18 +1292,22 @@ class SqliteSegmentStore(RingBufferStore):
         if self._active_segment is not None and segment_id == self._active_segment.segment_id:
             # Das aktive Segment wird nie quarantäniert/getrimmt.
             return True
-        conn = await aiosqlite.connect(str(self._segments_dir / segment.filename))
+        # Read-only öffnen; jede Exception (Öffnen/Lesen/Korruption) wird als
+        # korrupt behandelt und quarantäniert, nie propagiert (#919).
+        conn: aiosqlite.Connection | None = None
         try:
+            conn = await aiosqlite.connect(str(self._segments_dir / segment.filename))
             async with conn.execute("PRAGMA integrity_check") as cur:
                 row = await cur.fetchone()
             ok = row is not None and row[0] == "ok"
-        except aiosqlite.DatabaseError as exc:
-            await self.manifest.mark_quarantined(segment_id, reason=str(exc))
-            return False
+            reason = None if ok else (row[0] if row is not None else "integrity_check failed")
+        except aiosqlite.Error as exc:
+            ok = False
+            reason = str(exc)
         finally:
-            await conn.close()
+            if conn is not None:
+                await conn.close()
         if not ok:
-            reason = row[0] if row is not None else "integrity_check failed"
             await self.manifest.mark_quarantined(segment_id, reason=reason)
         return ok
 
