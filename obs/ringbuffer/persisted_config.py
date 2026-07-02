@@ -20,6 +20,15 @@ from obs.db.database import Database
 
 PERSISTED_CONFIG_KEY = "ringbuffer.runtime_config"
 
+# Sentinel: unterscheidet "``segment_max_age`` fehlt in der persistierten Config"
+# (Alt-Config vor der Segmentierung) von einem explizit persistierten ``None``.
+_UNSET = object()
+
+# Muss zur ``RETENTION_SEGMENT_RATIO`` in ``obs.ringbuffer.store.config`` passen
+# (3-Segment-Regel). Bewusst dupliziert, um keinen Import-Zyklus/Store-Import in
+# diesem reinen DB-Config-Modul zu erzeugen.
+_RETENTION_SEGMENT_RATIO = 3
+
 DEFAULT_MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MiB (Fresh-Install-Default, #919)
 
 # Deployter Default für die zeitgetriebene Rotation (#919): alle 6 Stunden ein
@@ -49,6 +58,32 @@ def _defaults() -> dict[str, Any]:
     }
 
 
+def _resolve_migrated_segment_max_age(
+    *,
+    persisted_segment_max_age: Any,
+    default_segment_max_age: int | None,
+    max_age: int | None,
+) -> int | None:
+    """Leitet ``segment_max_age`` für migrierte Alt-Configs so ab, dass die 3-Segment-Regel hält (#951).
+
+    Eine Config aus der Zeit vor der Segmentierung kennt ``max_age`` (die Monitor-
+    Retention), aber keinen ``segment_max_age``-Key. Würde hier stur der 6-h-Default
+    (21600 s) eingesetzt, verlangt die 3-Segment-Regel des Stores
+    ``max_age >= 3 * segment_max_age`` (= 64800 s) — jede Installation mit kürzerer
+    Retention (z. B. 15 min / 1 h) crasht beim Ringbuffer-Init, bevor ein Admin die
+    Config ändern kann.
+
+    Fix: nur wenn ``segment_max_age`` FEHLT und ``max_age`` gesetzt ist, den
+    abgeleiteten Wert auf ``max_age // RATIO`` klemmen (mindestens 1). Explizit
+    persistierte Werte (auch ``None``) bleiben unangetastet.
+    """
+    if persisted_segment_max_age is not _UNSET:
+        return persisted_segment_max_age
+    if max_age is None or default_segment_max_age is None:
+        return default_segment_max_age
+    return min(default_segment_max_age, max(1, max_age // _RETENTION_SEGMENT_RATIO))
+
+
 async def load_persisted_ringbuffer_config(db: Database) -> dict[str, Any]:
     row = await db.fetchone("SELECT value FROM app_settings WHERE key=?", (PERSISTED_CONFIG_KEY,))
     if not row or not row["value"]:
@@ -61,15 +96,21 @@ async def load_persisted_ringbuffer_config(db: Database) -> dict[str, Any]:
         return _defaults()
 
     defaults = _defaults()
+    max_age = data.get("max_age", defaults["max_age"])
+    segment_max_age = _resolve_migrated_segment_max_age(
+        persisted_segment_max_age=data.get("segment_max_age", _UNSET),
+        default_segment_max_age=defaults["segment_max_age"],
+        max_age=max_age,
+    )
     return {
         "enabled": bool(data.get("enabled", defaults["enabled"])),
         "max_entries": data.get("max_entries", defaults["max_entries"]),
         "max_file_size_bytes": data.get("max_file_size_bytes", defaults["max_file_size_bytes"]),
-        "max_age": data.get("max_age", defaults["max_age"]),
+        "max_age": max_age,
         "segmented": bool(data.get("segmented", defaults["segmented"])),
         "segment_max_bytes": data.get("segment_max_bytes", defaults["segment_max_bytes"]),
         "segment_max_rows": data.get("segment_max_rows", defaults["segment_max_rows"]),
-        "segment_max_age": data.get("segment_max_age", defaults["segment_max_age"]),
+        "segment_max_age": segment_max_age,
     }
 
 

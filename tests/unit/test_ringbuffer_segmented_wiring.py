@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from obs.ringbuffer.ringbuffer import RingBuffer, derive_segment_max_bytes
+from obs.ringbuffer.ringbuffer import RingBuffer, delete_ringbuffer_storage_files, derive_segment_max_bytes
 from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO, SegmentConfig, StoreRetentionConfig, validate_store_config
 
 
@@ -670,6 +670,77 @@ async def test_reconfigure_noop_when_nothing_changes_keeps_segments(tmp_path: Pa
         assert rb.store._segment_config is before_seg
     finally:
         await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_delete_storage_files_removes_segment_store_root(tmp_path: Path):
+    """#951: Monitor-Disable muss auch das ``<stem>_segments``-Verzeichnis entfernen.
+
+    Der bisherige Disable-Pfad löschte nur die Legacy-Single-DB + Sidecars, nicht
+    aber Manifest und Segment-DBs → Re-Enable öffnete die alten Daten wieder statt
+    Speicher freizugeben.
+    """
+    disk_path = tmp_path / "obs_ringbuffer.db"
+    rb = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True)
+    await rb.start()
+    await _record(rb, 1, "2026-01-01T00:00:00.000Z")
+    await rb.stop()
+
+    segments_root = tmp_path / "obs_ringbuffer_segments"
+    assert segments_root.exists() and any(segments_root.iterdir())
+
+    delete_ringbuffer_storage_files(str(disk_path))
+
+    # Segment-Store-Root (Manifest + Segment-DBs) ist rekursiv weg.
+    assert not segments_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_segment_created_at_initialized_from_manifest_on_restart(tmp_path: Path):
+    """#264: Neustart übernimmt das Segment-Alter aus dem Manifest, NICHT ab now().
+
+    Kernbeleg: ein langlebiges aktives Segment, das Stunden vor dem (Neu-)Start
+    angelegt wurde, muss nach ``start()`` sein echtes ``created_at`` tragen — sonst
+    misst die Alters-Rotation ab dem Neustart und das Segment altert nie über die
+    Schwelle (Nutzer: 2,7-h-Segment rotiert bei segment_max_age=1h nicht).
+    """
+    disk_path = tmp_path / "obs_ringbuffer.db"
+
+    # 1) Segmentierten Store anlegen und ein aktives Segment schreiben.
+    rb1 = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True, segment_max_age=3600)
+    await rb1.start()
+    await _record(rb1, 1, "2026-01-01T00:00:00.000Z")
+    active = await rb1.store.manifest.get_active_segment()
+    original_created_at = active.created_at
+    await rb1.stop()
+
+    # 2) Das aktive Segment künstlich weit in die Vergangenheit datieren, um ein
+    #    langlebiges (vor dem Neustart angelegtes) Segment zu simulieren. Der
+    #    Manifest-Store liegt unter ``<stem>_segments/manifest.sqlite``.
+    old_created_at = "2020-01-01T00:00:00.000Z"
+    from obs.ringbuffer.store.manifest import Manifest
+
+    manifest = Manifest(disk_path.parent / "obs_ringbuffer_segments" / "manifest.sqlite")
+    await manifest.open()
+    await manifest._db.execute("UPDATE segments SET created_at=? WHERE status='active'", (old_created_at,))
+    await manifest._db.commit()
+    await manifest.close()
+
+    # 3) Neustart: _segment_created_at MUSS das alte Manifest-created_at sein,
+    #    NICHT now().
+    rb2 = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True, segment_max_age=3600)
+    await rb2.start()
+    try:
+        assert rb2._segment_created_at == old_created_at
+        assert rb2._segment_created_at != original_created_at
+        # Und die Alters-Rotation ist damit fällig: das Segment ist >> 1 h alt →
+        # der nächste Write rotiert (statt ab now() nie zu altern).
+        segments_before = (await rb2.store.stats()).as_dict()["common"]["segment_count"]
+        await _record(rb2, 2, "2026-01-01T01:00:00.000Z")
+        segments_after = (await rb2.store.stats()).as_dict()["common"]["segment_count"]
+        assert segments_after > segments_before
+    finally:
+        await rb2.stop()
 
 
 @pytest.mark.asyncio

@@ -52,16 +52,39 @@ class WriterLease:
 
     async def acquire(self) -> None:
         self._root.mkdir(parents=True, exist_ok=True)
-        if self._lock_path.exists():
+        # Atomarer Erwerb (#951): ``O_CREAT | O_EXCL`` legt das Lockfile in EINEM
+        # nicht-teilbaren Syscall an und schlägt fehl, wenn es schon existiert. So
+        # können zwei quasi-gleichzeitig startende Writer NICHT beide den alten
+        # ``exists()``-Check passieren und beide ``_owns=True`` setzen — genau ein
+        # Prozess gewinnt das Rennen. Existiert das File bereits, wird — wie
+        # bisher — entschieden, ob es ein verwaistes (übernehmbares) oder ein
+        # lebendes (fail-fast) Lock ist.
+        try:
+            self._create_lock_exclusive()
+        except FileExistsError:
             self._take_over_or_fail()
-        self._write_lock()
         self._owns = True
+
+    def _create_lock_exclusive(self) -> None:
+        fd = os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        try:
+            os.write(fd, self._lock_payload_bytes())
+        finally:
+            os.close(fd)
 
     def _take_over_or_fail(self) -> None:
         holder_pid = self._read_holder_pid()
         if holder_pid is not None and _pid_is_alive(holder_pid):
             raise WriterLockHeldError(f"storage root {self._root} is locked by live writer pid={holder_pid}")
-        # Verwaistes Lockfile eines toten/unbekannten Prozesses → übernehmen.
+        # Verwaistes Lockfile eines toten/unbekannten Prozesses → atomar übernehmen:
+        # altes File entfernen, dann exklusiv neu anlegen. Verliert man dabei das
+        # Rennen gegen einen anderen Übernehmer (erneut FileExistsError), gilt der
+        # andere als Halter → fail-fast.
+        try:
+            self._lock_path.unlink(missing_ok=True)
+            self._create_lock_exclusive()
+        except FileExistsError as exc:
+            raise WriterLockHeldError(f"storage root {self._root} was locked by a concurrent writer") from exc
 
     def _read_holder_pid(self) -> int | None:
         try:
@@ -71,12 +94,12 @@ class WriterLease:
         pid = payload.get("pid")
         return int(pid) if isinstance(pid, int) else None
 
-    def _write_lock(self) -> None:
+    def _lock_payload_bytes(self) -> bytes:
         payload = {
             "pid": os.getpid(),
             "acquired_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         }
-        self._lock_path.write_text(json.dumps(payload), encoding="utf-8")
+        return json.dumps(payload).encode("utf-8")
 
     async def release(self) -> None:
         if not self._owns:

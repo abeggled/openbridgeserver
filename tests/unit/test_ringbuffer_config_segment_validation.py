@@ -145,6 +145,35 @@ async def test_config_accepts_segments_at_valid_ratio(db, monkeypatch, tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_config_segmented_false_with_short_max_age_is_accepted(db, monkeypatch, tmp_path):
+    """#951: ``segmented=false`` + kurze ``max_age`` darf NICHT mit 422 abgelehnt werden.
+
+    Die 3-Segment-Regel läuft nur im segmentierten Modus. Ein Client, der den
+    Legacy-Store behalten will (``segmented=false``, ``max_age=3600``), traf früher
+    fälschlich den Default-``segment_max_age`` (21600 s) und bekam 422 —
+    obwohl im Legacy-Pfad gar keine Segmente existieren. Jetzt: 200.
+    """
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    try:
+        stats = await rb_api.configure_ringbuffer(
+            _cfg(segmented=False, max_age=3600),
+            _user="admin",
+            db=db,
+        )
+        assert stats.enabled is True
+        assert stats.store is None
+        cfg = await rb_api.load_persisted_ringbuffer_config(db)
+        assert cfg["segmented"] is False
+        assert cfg["max_age"] == 3600
+    finally:
+        active_rb = rb_api.get_optional_ringbuffer()
+        if active_rb is not None:
+            await active_rb.stop()
+        reset_ringbuffer()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("field", "segment_kwargs"),
     [

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -261,7 +262,15 @@ class RingBuffer:
         )
         await store.open()
         self._store = store
-        self._segment_created_at = _isoformat_utc(datetime.now(UTC))
+        # Segment-Alter aus dem Manifest, NICHT ab now() (#264): ``store.open()``
+        # kann ein aktives Segment WIEDERVERWENDEN, das lange vor diesem (Neu-)
+        # Start angelegt wurde. Würde ``_segment_created_at`` hier auf now()
+        # gesetzt, altert ein langlebiges aktives Segment nie über die
+        # ``segment_max_age``-Schwelle und wächst unbegrenzt. Daher aus dem
+        # ``created_at`` des aktiven Segments initialisieren; nur wenn (noch)
+        # kein aktives Segment existiert, ist now() der korrekte Boden.
+        active = await store.manifest.get_active_segment()
+        self._segment_created_at = active.created_at if active is not None else _isoformat_utc(datetime.now(UTC))
 
         # Legacy-Single-DB (falls vorhanden) read-only einhängen — ohne Vollscan.
         # Idempotent: bei Neustart darf dieselbe Datei NICHT doppelt eingehängt
@@ -1395,10 +1404,22 @@ def default_ringbuffer_disk_path(database_path: str) -> str:
 
 
 def delete_ringbuffer_storage_files(disk_path: str) -> None:
-    """Remove the file-backed ringbuffer database and SQLite sidecar files."""
+    """Remove the file-backed ringbuffer database and SQLite sidecar files.
+
+    Im segmentierten Store (#919) liegen Manifest und Segment-DBs NICHT in der
+    Legacy-Single-DB, sondern in einem ``<stem>_segments``-Verzeichnis neben ihr.
+    Ohne dessen Löschung würde ein Monitor-Disable nur die Legacy-DB entfernen und
+    den Speicher der Segmente belegt lassen; ein Re-Enable öffnete die alten Daten
+    wieder statt frei zu starten. Daher zusätzlich das Segment-Store-Root
+    rekursiv entfernen (best effort — schlägt es fehl, blockiert das nicht die
+    Legacy-Löschung).
+    """
     if _is_sqlite_memory_path(disk_path):
         return
     disk_path = _sqlite_filesystem_path(disk_path)
+    segments_root = Path(disk_path).with_name(f"{Path(disk_path).stem}_segments")
+    if segments_root.exists():
+        shutil.rmtree(segments_root, ignore_errors=True)
     storage_paths = (f"{disk_path}-wal", f"{disk_path}-shm", disk_path)
     existing_paths = [Path(path) for path in storage_paths if Path(path).exists()]
     renamed_paths: list[tuple[Path, Path]] = []

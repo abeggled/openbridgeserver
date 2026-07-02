@@ -1922,22 +1922,27 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
     # Segment-/Retention-Vertrag durchsetzen: zu grobe Segmentierung → HTTP 422
-    # (nicht auto-korrigieren, #930).
-    try:
-        validate_store_config(
-            SegmentConfig(
-                segment_max_bytes=resolved_segment_max_bytes,
-                segment_max_rows=resolved_segment_max_rows,
-                segment_max_age=resolved_segment_max_age,
-            ),
-            StoreRetentionConfig(
-                max_file_size_bytes=resolved_max_file_size,
-                max_entries=resolved_max_entries,
-                max_age=resolved_max_age,
-            ),
-        )
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    # (nicht auto-korrigieren, #930). NUR wenn der Request wirklich segmentiert
+    # auflöst (#951): der dokumentierte Legacy-Pfad (``segmented=false``) besitzt
+    # keine Segmente, für die die 3-Segment-Regel gälte — ein Client, der den
+    # Legacy-Store mit kurzer ``max_age`` behalten will, darf hier kein 422 gegen
+    # den (ungenutzten) Default-``segment_max_age`` bekommen.
+    if resolved_segmented:
+        try:
+            validate_store_config(
+                SegmentConfig(
+                    segment_max_bytes=resolved_segment_max_bytes,
+                    segment_max_rows=resolved_segment_max_rows,
+                    segment_max_age=resolved_segment_max_age,
+                ),
+                StoreRetentionConfig(
+                    max_file_size_bytes=resolved_max_file_size,
+                    max_entries=resolved_max_entries,
+                    max_age=resolved_max_age,
+                ),
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
     if not requested_enabled:
         previous_enabled = is_ringbuffer_enabled()
