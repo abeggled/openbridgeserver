@@ -124,3 +124,66 @@ describe('segmentProblemTitle', () => {
     expect(title).toContain(' · ')
   })
 })
+
+describe('retentionSignal (#919/#938)', () => {
+  const stats = (over = {}) => ({
+    max_age: null,
+    prognosis: { estimated_retention_seconds: 3 * 24 * 3600, bytes_per_hour: 50 * 1024 * 1024 },
+    store: { backend_extra: { retention_over_budget: false } },
+    ...over,
+  })
+
+  it('is silent in normal operation — a full budget is not an alarm', () => {
+    const { retentionSignal } = useApi()
+    expect(retentionSignal(stats()).level).toBe('none')
+  })
+
+  it('returns a RED error (Fall B) when the budget floor is breached', () => {
+    const { retentionSignal } = useApi()
+    const sig = retentionSignal(stats({ store: { backend_extra: { retention_over_budget: true } } }))
+    expect(sig.level).toBe('error')
+    expect(sig.text).toContain('Budget zu klein')
+  })
+
+  it('returns an AMBER warn (Fall A) with a budget recommendation when retention is below the max_age target', () => {
+    const { retentionSignal } = useApi()
+    const sig = retentionSignal(stats({
+      max_age: 5 * 24 * 3600,
+      prognosis: { estimated_retention_seconds: 12 * 3600, bytes_per_hour: 50 * 1024 * 1024 },
+    }))
+    expect(sig.level).toBe('warn')
+    expect(sig.text).toContain('Retention unter Ziel')
+    expect(sig.text).toContain('≥') // Budget-Empfehlung
+    expect(sig.text).not.toContain('NaN')
+  })
+
+  it('omits the budget recommendation when bytes_per_hour is unknown', () => {
+    const { retentionSignal } = useApi()
+    const sig = retentionSignal(stats({
+      max_age: 5 * 24 * 3600,
+      prognosis: { estimated_retention_seconds: 12 * 3600, bytes_per_hour: null },
+    }))
+    expect(sig.level).toBe('warn')
+    expect(sig.text).toContain('Retention unter Ziel')
+    expect(sig.text).not.toContain('≥')
+  })
+
+  it('stays silent when the estimated retention meets or exceeds the target', () => {
+    const { retentionSignal } = useApi()
+    const sig = retentionSignal(stats({
+      max_age: 5 * 24 * 3600,
+      prognosis: { estimated_retention_seconds: 10 * 24 * 3600, bytes_per_hour: 50 * 1024 * 1024 },
+    }))
+    expect(sig.level).toBe('none')
+  })
+
+  it('lets Fall B (budget floor) take precedence over Fall A', () => {
+    const { retentionSignal } = useApi()
+    const sig = retentionSignal(stats({
+      max_age: 5 * 24 * 3600,
+      prognosis: { estimated_retention_seconds: 12 * 3600, bytes_per_hour: 50 * 1024 * 1024 },
+      store: { backend_extra: { retention_over_budget: true } },
+    }))
+    expect(sig.level).toBe('error')
+  })
+})

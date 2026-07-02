@@ -48,12 +48,10 @@
             <span class="text-slate-500">{{ $t('dashboard.ringbuffer.budget') }}</span>
             <span class="tabular-nums text-slate-600 dark:text-slate-300" data-testid="rb-card-budget-text">{{ budgetText }}</span>
           </div>
+          <!-- FIFO füllt das Budget im Normalbetrieb immer aus → neutral, kein Alarm.
+               Echte Fehlanpassung signalisiert der Retention-Block unten (#919/#938). -->
           <div v-if="hasBudget" class="h-2 rounded-full bg-slate-200 dark:bg-slate-700/60 overflow-hidden" data-testid="rb-card-budget-bar">
-            <div
-              class="h-full rounded-full transition-all"
-              :class="budgetPercent >= 90 ? 'bg-amber-500' : 'bg-blue-500'"
-              :style="{ width: `${budgetBarWidth}%` }"
-            />
+            <div class="h-full rounded-full bg-blue-500 transition-all" :style="{ width: `${budgetBarWidth}%` }" />
           </div>
           <div v-else class="text-xs text-slate-500" data-testid="rb-card-budget-unlimited">{{ $t('dashboard.ringbuffer.unlimited') }}</div>
         </div>
@@ -86,13 +84,22 @@
           {{ problemSummary }}
         </div>
 
-        <!-- Dezenter Info-Hinweis bei retention_over_budget (Normalbetrieb) -->
+        <!-- Retention-Signal (#919/#938): nur bei echter Fehlanpassung, nicht bei
+             normalem Budget-Füllstand. error=rot (Budget-Boden gesprengt),
+             warn=amber (Retention unter Age-Ziel). -->
         <div
-          v-else-if="retentionOverBudget"
-          class="text-xs text-slate-500"
-          data-testid="rb-card-over-budget"
+          v-if="retentionSignal.level !== 'none'"
+          class="rounded-md border px-3 py-2 text-xs flex items-center gap-2"
+          :class="retentionSignal.level === 'error'
+            ? 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300'
+            : 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'"
+          data-testid="rb-card-retention-signal"
         >
-          {{ $t('dashboard.ringbuffer.overBudgetInfo') }}
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+          {{ retentionSignal.text }}
         </div>
 
         <!-- Aktionen -->
@@ -149,7 +156,7 @@ import SegmentStatsPanel from '@/views/ringbuffer/SegmentStatsPanel.vue'
 
 const REFRESH_INTERVAL_MS = 30_000
 
-const { problemCounts, problemSummary: buildProblemSummary } = useSegmentProblems()
+const { problemCounts, problemSummary: buildProblemSummary, retentionSignal: buildRetentionSignal } = useSegmentProblems()
 
 const stats = ref(null)
 const loading = ref(true)
@@ -238,7 +245,8 @@ const segmentAgeHours = computed(() => {
 // Kanonische Formulierung wie im Segment-Dialog (#919/#938), keine Duplikate.
 const problemCount = computed(() => problemCounts(segments.value).total)
 const problemSummary = computed(() => buildProblemSummary(segments.value))
-const retentionOverBudget = computed(() => Boolean(extra.value.retention_over_budget))
+// Retention-Signal aus dem vollen /stats-Objekt (Budget-Boden / Age-Ziel), DRY über useSegmentProblems.
+const retentionSignal = computed(() => buildRetentionSignal(stats.value))
 
 // ── Legacy ───────────────────────────────────────────────────────────────
 const legacyTotal = computed(() => fmtInt(stats.value?.total ?? 0))

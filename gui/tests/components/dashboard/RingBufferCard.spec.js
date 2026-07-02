@@ -19,13 +19,13 @@ afterEach(() => {
   vi.doUnmock('@/api/client')
 })
 
-function segmentedPayload({ segments = [], maxFileSizeBytes = 100 * 1024 * 1024, sizeBytes = 30 * 1024 * 1024, retentionSeconds = 3 * 24 * 3600, overBudget = false, prognosis, segmentMaxAge = 6 * 3600 } = {}) {
+function segmentedPayload({ segments = [], maxFileSizeBytes = 100 * 1024 * 1024, sizeBytes = 30 * 1024 * 1024, retentionSeconds = 3 * 24 * 3600, overBudget = false, prognosis, segmentMaxAge = 6 * 3600, maxAge = null } = {}) {
   return {
     enabled: true,
     total: 800,
     file_size_bytes: sizeBytes,
     max_file_size_bytes: maxFileSizeBytes,
-    max_age: null,
+    max_age: maxAge,
     segment_max_age: segmentMaxAge,
     // Volle Prognose (#919/#938): PrognosisBlock rendert Rate/Retention/Budget.
     // Default: nur der Retention-Horizont; einzelne Tests überschreiben prognosis.
@@ -152,10 +152,38 @@ describe('RingBufferCard — segmented state', () => {
     expect(banner.text()).not.toContain('betroffen')
   })
 
-  it('shows only a soft info hint for retention_over_budget (no alarm)', async () => {
+  it('shows a RED retention signal (Fall B) when the budget floor is breached (retention_over_budget)', async () => {
     const wrapper = await mountCard(segmentedPayload({ segments: healthySegments, overBudget: true }))
+    const sig = wrapper.find('[data-testid="rb-card-retention-signal"]')
+    expect(sig.exists()).toBe(true)
+    expect(sig.classes().join(' ')).toContain('bg-red-500/10')
+    expect(sig.text()).toContain('Budget zu klein')
+    // Ein voller Budget-Füllstand ist KEIN Segment-Problem.
     expect(wrapper.find('[data-testid="rb-card-problem"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="rb-card-over-budget"]').exists()).toBe(true)
+  })
+
+  it('shows NO retention signal in normal operation (budget filling is not an alarm)', async () => {
+    const wrapper = await mountCard(segmentedPayload({ segments: healthySegments }))
+    expect(wrapper.find('[data-testid="rb-card-retention-signal"]').exists()).toBe(false)
+  })
+
+  it('shows an AMBER retention signal (Fall A) when estimated retention is below the max_age target', async () => {
+    const wrapper = await mountCard(segmentedPayload({
+      segments: healthySegments,
+      prognosis: { ...fullPrognosis, estimated_retention_seconds: 12 * 3600 }, // ~12 h Ist
+      maxAge: 5 * 24 * 3600, // Ziel 5 Tage
+    }))
+    const sig = wrapper.find('[data-testid="rb-card-retention-signal"]')
+    expect(sig.exists()).toBe(true)
+    expect(sig.classes().join(' ')).toContain('bg-amber-500/10')
+    expect(sig.text()).toContain('Retention unter Ziel')
+  })
+
+  it('keeps the budget bar neutral (blue) even at high fill — full budget is normal', async () => {
+    const wrapper = await mountCard(segmentedPayload({ segments: healthySegments, sizeBytes: 98 * 1024 * 1024, maxFileSizeBytes: 100 * 1024 * 1024 }))
+    const bar = wrapper.find('[data-testid="rb-card-budget-bar"] > div')
+    expect(bar.classes().join(' ')).toContain('bg-blue-500')
+    expect(bar.classes().join(' ')).not.toContain('bg-amber-500')
   })
 
   it('opens the segment details modal hosting SegmentStatsPanel', async () => {

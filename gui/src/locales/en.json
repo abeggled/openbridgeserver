@@ -62,7 +62,6 @@
       "budget": "Budget usage",
       "unlimited": "unlimited",
       "segments": "Segments",
-      "overBudgetInfo": "Retention over budget (normal operation).",
       "segmentDetails": "Segment details",
       "configuration": "Configuration",
       "entries": "Entries",
@@ -1320,6 +1319,11 @@
     "segmentProblemQuarantined": "{n} isolated",
     "segmentProblemPending": "{n} recovery pending",
     "segmentProblemDirtyWal": "{n} dirty WAL",
+    "retentionSignal": {
+      "budgetFloor": "Budget too small: active/isolated segments permanently exceed it. Raise the budget or reduce the segment size.",
+      "belowTarget": "Retention below target: budget only holds ~{current}, configured is ~{target}. Raise budget to ≥ {budget} for the target.",
+      "belowTargetNoBudget": "Retention below target: budget only holds ~{current}, configured is ~{target}."
+    },
     "segmentQuarantineExplain": "Defective segment, isolated for analysis.",
     "unitMiB": "MiB",
     "unitGiB": "GiB",

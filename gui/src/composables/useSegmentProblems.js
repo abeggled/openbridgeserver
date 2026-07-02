@@ -10,9 +10,15 @@
  * Muss aus einem Vue-Setup-Kontext aufgerufen werden (nutzt ``useI18n``).
  */
 import { useI18n } from 'vue-i18n'
+import { formatBytesBinary } from '@/utils/formatBytesBinary'
 
 /** Recovery-Zustände, die ein Segment als problematisch markieren (#938). */
 export const PROBLEM_RECOVERY = new Set(['quarantined', 'pending', 'dirty_wal'])
+
+function posNumber(value) {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
 
 /** True, wenn das Segment nicht als gesund (integrity=ok, recovery=none) gilt. */
 export function isSegmentProblem(seg) {
@@ -93,5 +99,47 @@ export function useSegmentProblems() {
     return parts.join(' · ')
   }
 
-  return { isSegmentProblem, problemCounts, problemSummary, segmentProblemTitle }
+  /** Menschliche Dauer „~X h" (h<48) bzw. „~X Tage" — deckungsgleich mit PrognosisBlock. */
+  function humanDuration(seconds) {
+    const s = posNumber(seconds)
+    if (s === null) return null
+    const hours = s / 3600
+    if (hours < 48) {
+      return t('ringbuffer.prognosis.hours', { n: new Intl.NumberFormat('de-DE', { maximumFractionDigits: hours < 10 ? 1 : 0 }).format(hours) })
+    }
+    return t('ringbuffer.prognosis.days', { n: new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 }).format(hours / 24) })
+  }
+
+  /**
+   * Retention-Signal (#919/#938) — trennt Normalbetrieb von echter Fehlanpassung.
+   *
+   * Ein voller Budget-Füllstand ist NORMAL (FIFO füllt das Budget immer) und
+   * erzeugt KEIN Signal. Rot/Warn ist reserviert für „Durchsatz ist der Config
+   * entwachsen":
+   *   - Fall B (error): ``retention_over_budget`` — nicht löschbare Segmente
+   *     (aktiv/pending/isoliert) sprengen das harte Byte-Budget dauerhaft.
+   *   - Fall A (warn): ein Age-Ziel (``max_age``) ist gesetzt UND die datengetrieben
+   *     geschätzte Retention liegt darunter → Budget zu klein für Durchsatz+Ziel.
+   * Ohne ``max_age`` kann nur Fall B auslösen (bewusst fehlalarmarm).
+   *
+   * Liefert ``{ level: 'none'|'warn'|'error', text }`` aus dem vollen /stats-Objekt.
+   */
+  function retentionSignal(stats) {
+    if (stats?.store?.backend_extra?.retention_over_budget) {
+      return { level: 'error', text: t('ringbuffer.retentionSignal.budgetFloor') }
+    }
+    const maxAge = posNumber(stats?.max_age)
+    const est = posNumber(stats?.prognosis?.estimated_retention_seconds)
+    if (maxAge !== null && est !== null && est < maxAge) {
+      const bytesPerHour = posNumber(stats?.prognosis?.bytes_per_hour)
+      const params = { current: humanDuration(est), target: humanDuration(maxAge) }
+      if (bytesPerHour !== null) {
+        return { level: 'warn', text: t('ringbuffer.retentionSignal.belowTarget', { ...params, budget: formatBytesBinary(bytesPerHour * (maxAge / 3600)) }) }
+      }
+      return { level: 'warn', text: t('ringbuffer.retentionSignal.belowTargetNoBudget', params) }
+    }
+    return { level: 'none', text: '' }
+  }
+
+  return { isSegmentProblem, problemCounts, problemSummary, segmentProblemTitle, retentionSignal }
 }

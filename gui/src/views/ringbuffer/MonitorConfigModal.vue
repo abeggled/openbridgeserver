@@ -38,6 +38,20 @@
         :max-file-size-bytes="stats?.max_file_size_bytes ?? null"
       />
 
+      <!-- Retention-Signal (#919/#938): nur bei echter Fehlanpassung (Budget-Boden
+           gesprengt = rot, Retention unter Age-Ziel = amber). Normaler Budget-
+           Füllstand erzeugt hier bewusst KEIN Signal. -->
+      <div
+        v-if="retentionSignal.level !== 'none'"
+        class="rounded-md border px-3 py-2 text-xs"
+        :class="retentionSignal.level === 'error'
+          ? 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300'
+          : 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'"
+        data-testid="rb-config-retention-signal"
+      >
+        {{ retentionSignal.text }}
+      </div>
+
       <div class="text-xs text-slate-500">
         {{ $t('ringbuffer.storageFixed') }} <span class="font-semibold">file-only</span>.
       </div>
@@ -224,12 +238,14 @@ import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
 import { formatDurationDeutsch } from '@/composables/useTimeFilterParser'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
+import { useSegmentProblems } from '@/composables/useSegmentProblems'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import Modal from '@/components/ui/Modal.vue'
 import PrognosisBlock from '@/components/ringbuffer/PrognosisBlock.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
 const { t } = useI18n()
+const { retentionSignal: buildRetentionSignal } = useSegmentProblems()
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -254,6 +270,9 @@ const open = computed({
 })
 
 const stats = ref(null)
+// Retention-Signal (#919/#938): DRY über useSegmentProblems, hier direkt am
+// Config-Formular, wo der Nutzer Budget/Alter anpassen kann.
+const retentionSignal = computed(() => buildRetentionSignal(stats.value))
 const saving = ref(false)
 const configMsg = ref(null)
 const showDisableConfirm = ref(false)
