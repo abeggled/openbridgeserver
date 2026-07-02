@@ -60,7 +60,7 @@
       "disabledHint": "No value changes are recorded. Configure to enable.",
       "configure": "Configure",
       "budget": "Budget usage",
-      "budgetPeakHint": "Target, not a hard cap — peak up to ~133%",
+      "budgetPeakHint": "Target, not a hard cap – peak up to ~133%",
       "unlimited": "unlimited",
       "segments": "Segments",
       "segmentDetails": "Segment details",

@@ -60,7 +60,7 @@
       "disabledHint": "Es werden keine Wertänderungen aufgezeichnet. Zum Aktivieren konfigurieren.",
       "configure": "Konfigurieren",
       "budget": "Budget-Auslastung",
-      "budgetPeakHint": "Ziel, kein harter Deckel — Spitze bis ~133 %",
+      "budgetPeakHint": "Ziel, kein harter Deckel – Spitze bis ~133 %",
       "unlimited": "unbegrenzt",
       "segments": "Segmente",
       "segmentDetails": "Segment-Details",
