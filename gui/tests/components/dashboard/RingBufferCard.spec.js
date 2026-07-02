@@ -42,7 +42,7 @@ const fullPrognosis = {
   rows_per_hour: 12000,
   avg_segment_seconds: 6 * 3600,
   estimated_retention_seconds: 5 * 24 * 3600,
-  recommended_budget_for_segment_age_bytes: 2 * 1024 * 1024 * 1024,
+  effective_segment_max_bytes: 16 * 1024 * 1024,
 }
 
 const healthySegments = [
@@ -118,9 +118,10 @@ describe('RingBufferCard — segmented state', () => {
   it('shows segment count and the full prognosis block', async () => {
     const wrapper = await mountCard(segmentedPayload({ segments: healthySegments, prognosis: fullPrognosis }))
     expect(wrapper.find('[data-testid="rb-card-segments"]').text()).toBe('2')
-    // Volle Prognose (#919/#938) statt nur Retention-Horizont: Rate + Retention + Budget.
+    // Volle Prognose (#919/#938): Durchsatz + Rotation + Historie + Budget.
     expect(wrapper.find('[data-testid="prognosis-rate"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="prognosis-retention"]').text()).toContain('Tage')
+    expect(wrapper.find('[data-testid="prognosis-rotation"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="prognosis-history"]').text()).toContain('Tage')
     expect(wrapper.find('[data-testid="prognosis-budget"]').exists()).toBe(true)
   })
 

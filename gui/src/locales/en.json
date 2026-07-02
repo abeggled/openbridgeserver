@@ -1326,9 +1326,12 @@
     "prognosis": {
       "title": "Forecast",
       "warming": "Forecast is still warming up (too few segments).",
-      "rate": "At the current rate ~{mib} MiB/h (~{rows} events/h): new segment ~every {hours} h.",
-      "retention": "Budget lasts for ~{duration}.",
-      "budget": "For ~{age}h segments: budget ≥ {gib} GiB.",
+      "rate": "Currently ~{mib} MiB/h (~{rows} events/h).",
+      "rotation": "New segment currently ~every {hours} h",
+      "rotationSizeCap": " — the size cap (~{cap} MiB) kicks in before the configured {age} h.",
+      "history": "Budget {budget} lasts for ~{duration}.",
+      "historyUnlimited": "Budget unlimited — history keeps growing.",
+      "budget": "For ~{age}h segments: budget ≥ {budget} (for at least {segments} segments).",
       "hours": "{n} h",
       "days": "{n} days"
     }

@@ -387,7 +387,7 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
     const api = makeApi({
       stats: vi.fn().mockResolvedValue({
         data: {
-          total: 100, enabled: true, max_entries: null, max_file_size_bytes: null, max_age: null, file_size_bytes: 0,
+          total: 100, enabled: true, max_entries: null, max_file_size_bytes: 20 * 1024 * 1024 * 1024, max_age: null, file_size_bytes: 0,
           segment_max_age: 6 * 3600,
           prognosis: {
             sample_segment_count: 5,
@@ -395,7 +395,7 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
             rows_per_hour: 12000,
             avg_segment_seconds: 6 * 3600, // 6 h
             estimated_retention_seconds: 5 * 24 * 3600, // 5 days
-            recommended_budget_for_segment_age_bytes: 2 * 1024 * 1024 * 1024, // 2 GiB
+            effective_segment_max_bytes: 16 * 1024 * 1024, // 16 MiB
           },
         },
       }),
@@ -406,11 +406,14 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
     expect(rate).toContain('50')
     expect(rate).toContain('MiB/h')
     expect(rate).toContain('12.000') // Events/h, de-DE grouping
-    const retention = wrapper.find('[data-testid="prognosis-retention"]').text()
-    expect(retention).toContain('5 Tage')
+    expect(wrapper.find('[data-testid="prognosis-rotation"]').exists()).toBe(true)
+    const history = wrapper.find('[data-testid="prognosis-history"]').text()
+    expect(history).toContain('5 Tage')
+    // Budget frontend-berechnet aus dem Formular-Segment-Alter (6 h): 50 MiB * 6 * 3 = 900 MiB.
     const budget = wrapper.find('[data-testid="prognosis-budget"]').text()
-    expect(budget).toContain('GiB')
+    expect(budget).toContain('900 MiB')
     expect(budget).toContain('6') // current segment age in hours
+    expect(budget).toContain('mind. 3 Segmente')
   })
 
   it('shows the warming-up hint when prognosis fields are null (too few segments)', async () => {
@@ -424,7 +427,7 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
             rows_per_hour: null,
             avg_segment_seconds: null,
             estimated_retention_seconds: null,
-            recommended_budget_for_segment_age_bytes: null,
+            effective_segment_max_bytes: null,
           },
         },
       }),
@@ -441,11 +444,11 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
     expect(wrapper.find('[data-testid="prognosis-warming"]').exists()).toBe(true)
   })
 
-  it('omits only the retention/budget lines when those specific fields are null', async () => {
+  it('suppresses the history line when the retention estimate is null (budget set)', async () => {
     const api = makeApi({
       stats: vi.fn().mockResolvedValue({
         data: {
-          total: 100, enabled: true, max_entries: null, max_file_size_bytes: null, max_age: null, file_size_bytes: 0,
+          total: 100, enabled: true, max_entries: null, max_file_size_bytes: 20 * 1024 * 1024 * 1024, max_age: null, file_size_bytes: 0,
           segment_max_age: 6 * 3600,
           prognosis: {
             sample_segment_count: 5,
@@ -453,16 +456,17 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
             rows_per_hour: 3000,
             avg_segment_seconds: 3 * 3600,
             estimated_retention_seconds: null, // not enough data yet
-            recommended_budget_for_segment_age_bytes: null,
+            effective_segment_max_bytes: 16 * 1024 * 1024,
           },
         },
       }),
     })
     const { wrapper } = await mountModal({ api })
-    // Rate line renders, but retention + budget lines are suppressed (no NaN).
+    // Durchsatz + Rotation + Budget rendern, aber die Historie-Zeile ist unterdrückt (no NaN).
     expect(wrapper.find('[data-testid="prognosis-rate"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="prognosis-retention"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="prognosis-budget"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="prognosis-rotation"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="prognosis-history"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="prognosis-budget"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('NaN')
   })
 })

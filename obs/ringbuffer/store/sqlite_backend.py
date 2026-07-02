@@ -54,7 +54,7 @@ from obs.ringbuffer.ringbuffer import (
     _extract_metadata_tags,
     _is_sqlite_corruption,
 )
-from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO, SegmentConfig, StoreRetentionConfig, validate_store_config
+from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig, validate_store_config
 from obs.ringbuffer.store.interface import (
     OrderingGuarantee,
     RingBufferStore,
@@ -1111,9 +1111,11 @@ class SqliteSegmentStore(RingBufferStore):
         * ``estimated_retention_seconds`` — falls ``max_file_size_bytes`` gesetzt und
           ``bytes_per_hour > 0``: ``(max_file_size_bytes / bytes_per_hour) * 3600``;
           sonst None (unbegrenzt/unbekannt).
-        * ``recommended_budget_for_segment_age_bytes`` — Budget, damit
-          ``segment_max_age`` (Zeit) dominiert = ``3 * bytes_per_hour *
-          (segment_max_age/3600)`` (grobe Richtgröße); None wenn Rate unbekannt.
+        * ``effective_segment_max_bytes`` — der effektiv wirksame (ggf. beim
+          Auto-Start aus dem Size-Budget abgeleitete) Größen-Cap eines Segments
+          (``self._segment_config.segment_max_bytes``); None, wenn kein Cap gilt.
+          Die Budget-Empfehlung wird nicht mehr hier berechnet, sondern im
+          Frontend, damit Label und Wert live beim Tippen zusammenpassen.
         """
         empty = {
             "sample_segment_count": 0,
@@ -1121,7 +1123,7 @@ class SqliteSegmentStore(RingBufferStore):
             "rows_per_hour": None,
             "avg_segment_seconds": None,
             "estimated_retention_seconds": None,
-            "recommended_budget_for_segment_age_bytes": None,
+            "effective_segment_max_bytes": self._segment_config.segment_max_bytes,
         }
         closed_v2 = [s for s in segments if s.status == SEGMENT_STATUS_CLOSED and not _is_legacy_segment(s)]
         if not closed_v2:
@@ -1156,18 +1158,13 @@ class SqliteSegmentStore(RingBufferStore):
         if budget is not None and bytes_per_hour > 0:
             estimated_retention_seconds = budget / bytes_per_hour * 3600
 
-        recommended_budget: float | None = None
-        segment_max_age = self._segment_config.segment_max_age
-        if bytes_per_hour > 0 and segment_max_age is not None:
-            recommended_budget = RETENTION_SEGMENT_RATIO * bytes_per_hour * (segment_max_age / 3600)
-
         return {
             "sample_segment_count": sample_count,
             "bytes_per_hour": bytes_per_hour,
             "rows_per_hour": rows_per_hour,
             "avg_segment_seconds": avg_segment_seconds,
             "estimated_retention_seconds": estimated_retention_seconds,
-            "recommended_budget_for_segment_age_bytes": recommended_budget,
+            "effective_segment_max_bytes": self._segment_config.segment_max_bytes,
         }
 
     async def stats(self) -> StoreStats:

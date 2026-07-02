@@ -32,7 +32,11 @@
       </div>
 
       <!-- Prognose (#919/#938): gemeinsame PrognosisBlock-Komponente. -->
-      <PrognosisBlock :prognosis="stats?.prognosis ?? null" :segment-age-hours="Number(configForm.segmentMaxAgeHours) || null" />
+      <PrognosisBlock
+        :prognosis="stats?.prognosis ?? null"
+        :segment-age-hours="Number(configForm.segmentMaxAgeHours) || null"
+        :max-file-size-bytes="stats?.max_file_size_bytes ?? null"
+      />
 
       <div class="text-xs text-slate-500">
         {{ $t('ringbuffer.storageFixed') }} <span class="font-semibold">file-only</span>.

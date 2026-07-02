@@ -170,7 +170,7 @@ class RingBufferPrognosis(BaseModel):
     rows_per_hour: float | None = None
     avg_segment_seconds: float | None = None
     estimated_retention_seconds: float | None = None
-    recommended_budget_for_segment_age_bytes: float | None = None
+    effective_segment_max_bytes: float | None = None
 
 
 class RingBufferStats(BaseModel):

@@ -597,7 +597,7 @@ async def test_prognosis_none_without_closed_v2_segment(tmp_path: Path):
         assert prog["rows_per_hour"] is None
         assert prog["avg_segment_seconds"] is None
         assert prog["estimated_retention_seconds"] is None
-        assert prog["recommended_budget_for_segment_age_bytes"] is None
+        assert prog["effective_segment_max_bytes"] is None
     finally:
         await store.close()
 
@@ -610,8 +610,8 @@ async def test_prognosis_computes_rates_from_closed_v2(tmp_path: Path):
 
     store = await _make_store(
         tmp_path / "root",
-        segments=SegmentConfig(segment_max_age=3600),
-        retention=StoreRetentionConfig(max_file_size_bytes=10_000_000),
+        segments=SegmentConfig(segment_max_age=3600, segment_max_bytes=4 * 1024 * 1024),
+        retention=StoreRetentionConfig(max_file_size_bytes=36_000_000),
     )
     try:
         # Zwei geschlossene v2-Segmente: zusammen 3600 s Dauer, 3600 Bytes, 36 Zeilen.
@@ -626,10 +626,10 @@ async def test_prognosis_computes_rates_from_closed_v2(tmp_path: Path):
         assert prog["rows_per_hour"] == pytest.approx(36.0)
         # Ø-Segmentdauer = 3600 s / 2 = 1800 s.
         assert prog["avg_segment_seconds"] == pytest.approx(1800.0)
-        # 10_000_000 / 3600 * 3600 = 10_000_000 s.
-        assert prog["estimated_retention_seconds"] == pytest.approx(10_000_000.0)
-        # 3 * 3600 * (3600/3600) = 10800 Bytes.
-        assert prog["recommended_budget_for_segment_age_bytes"] == pytest.approx(10800.0)
+        # 36_000_000 / 3600 * 3600 = 36_000_000 s.
+        assert prog["estimated_retention_seconds"] == pytest.approx(36_000_000.0)
+        # Effektiver Segment-Cap = self._segment_config.segment_max_bytes.
+        assert prog["effective_segment_max_bytes"] == 4 * 1024 * 1024
     finally:
         await store.close()
 
@@ -652,13 +652,13 @@ async def test_prognosis_estimated_retention_none_without_budget(tmp_path: Path)
         assert prog["bytes_per_hour"] == pytest.approx(3600.0)
         # Kein Size-Budget → Retention unbegrenzt/unbekannt.
         assert prog["estimated_retention_seconds"] is None
-        # segment_max_age gesetzt + Rate bekannt → Empfehlung vorhanden.
-        assert prog["recommended_budget_for_segment_age_bytes"] == pytest.approx(10800.0)
+        # Kein Segment-Größen-Cap konfiguriert → None.
+        assert prog["effective_segment_max_bytes"] is None
     finally:
         await store.close()
 
 
-async def test_prognosis_recommended_budget_none_without_segment_max_age(tmp_path: Path):
+async def test_prognosis_effective_segment_max_bytes_reflects_config(tmp_path: Path):
     base = datetime(2026, 1, 1, tzinfo=UTC)
 
     def _at(seconds: int) -> str:
@@ -666,16 +666,16 @@ async def test_prognosis_recommended_budget_none_without_segment_max_age(tmp_pat
 
     store = await _make_store(
         tmp_path / "root",
-        segments=SegmentConfig(segment_max_age=None),
-        retention=StoreRetentionConfig(max_file_size_bytes=10_000_000),
+        segments=SegmentConfig(segment_max_age=3600, segment_max_bytes=4 * 1024 * 1024),
+        retention=StoreRetentionConfig(max_file_size_bytes=36_000_000),
     )
     try:
         await _closed_v2_with_stats(store, from_ts=_at(0), to_ts=_at(3600), size_bytes=3600, row_count=36)
         stats = await store.stats()
         prog = stats.common["prognosis"]
-        # segment_max_age None → keine Empfehlung berechenbar.
-        assert prog["recommended_budget_for_segment_age_bytes"] is None
-        assert prog["estimated_retention_seconds"] == pytest.approx(10_000_000.0)
+        # Effektiver Segment-Cap = self._segment_config.segment_max_bytes.
+        assert prog["effective_segment_max_bytes"] == 4 * 1024 * 1024
+        assert prog["estimated_retention_seconds"] == pytest.approx(36_000_000.0)
     finally:
         await store.close()
 

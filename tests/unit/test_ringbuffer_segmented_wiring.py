@@ -560,8 +560,8 @@ async def test_reconfigure_segment_max_age_updates_store_and_prognosis(tmp_path:
         # RingBuffer-Feld + Store-SegmentConfig tragen sofort den neuen Wert.
         assert rb._segment_max_age == 600
         assert rb.store._segment_config.segment_max_age == 600
-        # Die Prognose zieht den neuen segment_max_age über self._segment_config.
-        assert rb.store._compute_prognosis([])["recommended_budget_for_segment_age_bytes"] is None
+        # Die Prognose spiegelt den effektiven Segment-Cap über self._segment_config.
+        assert rb.store._compute_prognosis([])["effective_segment_max_bytes"] == rb.store._segment_config.segment_max_bytes
     finally:
         await rb.stop()
 

@@ -67,7 +67,11 @@
         </div>
 
         <!-- Volle Prognose (#919/#938): gemeinsame PrognosisBlock-Komponente. -->
-        <PrognosisBlock :prognosis="stats?.prognosis ?? null" :segment-age-hours="segmentAgeHours" />
+        <PrognosisBlock
+          :prognosis="stats?.prognosis ?? null"
+          :segment-age-hours="segmentAgeHours"
+          :max-file-size-bytes="stats?.max_file_size_bytes ?? null"
+        />
 
         <!-- Problem-Hinweis (deutlich) -->
         <div
