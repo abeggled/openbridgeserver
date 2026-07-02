@@ -608,15 +608,19 @@ def _requested_jwt_subprotocol(ws: WebSocket) -> str | None:
     return None
 
 
-async def _authenticate_visu_page_scope(ws: WebSocket) -> tuple[bool, str]:
-    """Validate page-scoped visu websocket access without JWT."""
-    from obs.api.v1.visu import _resolve_access_with_node
+async def _authorize_visu_page_scope(
+    *,
+    db: Database,
+    page_id: str | None,
+    session_token: str | None,
+    username: str | None,
+) -> tuple[bool, str]:
+    """Validate that a websocket may use a visu page scope."""
+    from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
 
-    page_id = ws.query_params.get("page_id")
     if not page_id:
         return False, "Missing credentials"
 
-    db = get_db()
     page_row = await db.fetchone("SELECT type FROM visu_nodes WHERE id = ?", (page_id,))
     if not page_row:
         return False, "Page not found"
@@ -628,15 +632,34 @@ async def _authenticate_visu_page_scope(ws: WebSocket) -> tuple[bool, str]:
     if access in ("public", "readonly"):
         return True, "OK"
     if access == "protected":
-        _jwt_token, session_token_subprotocol, _selected = _extract_subprotocol_tokens(ws)
-        session_token = session_token_subprotocol or ws.query_params.get("session_token")
         validate_id = defining_node_id or page_id
         if session_token and sessions_api.validate_session(session_token, validate_id):
             return True, "OK"
         return False, "Valid session token required"
     if access == "user":
-        return False, "Authentication required"
+        if username is None:
+            return False, "Authentication required"
+        if username == "__api_key__":
+            return False, "Authentication required"
+        if await _check_user_access(db, page_id, username):
+            return True, "OK"
+        return False, "Zugriff verweigert"
     return False, "Authentication required"
+
+
+async def _authenticate_visu_page_scope(ws: WebSocket) -> tuple[bool, str]:
+    """Validate page-scoped visu websocket access without JWT."""
+    _jwt_token, session_token_subprotocol, _selected = _extract_subprotocol_tokens(ws)
+    session_token = session_token_subprotocol or ws.query_params.get("session_token")
+    page_id = ws.query_params.get("page_id")
+    if not page_id:
+        return False, "Missing credentials"
+    return await _authorize_visu_page_scope(
+        db=get_db(),
+        page_id=page_id,
+        session_token=session_token,
+        username=None,
+    )
 
 
 async def _authenticate_ws_request(ws: WebSocket) -> tuple[bool, str]:
@@ -743,7 +766,7 @@ async def websocket_endpoint(
     # - authenticated users: unrestricted subscriptions/live pushes
     # - anonymous users: only allowed with page context and page-scoped datapoints
     from obs.api.auth import decode_token
-    from obs.api.v1.visu import _resolve_access_with_node
+    from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
 
     resolved_token: str | None = None
     selected_subprotocol: str | None = None
@@ -785,7 +808,9 @@ async def websocket_endpoint(
             source_validate_id = source_defining_node_id or source_page_id
             return bool(session_token and sessions_api.validate_session(session_token, source_validate_id))
         if source_access == "user":
-            return user is not None
+            if user is None or user == "__api_key__":
+                return False
+            return await _check_user_access(db, source_page_id, user)
         return False
 
     async def _is_readonly_widget_ref_page(source_page_id: str) -> bool:
@@ -825,6 +850,15 @@ async def websocket_endpoint(
             # page config cannot be parsed (e.g. lightweight test doubles).
             allowed_dp_ids = set()
     if db is not None and page_id:
+        ok, reason = await _authorize_visu_page_scope(
+            db=db,
+            page_id=page_id,
+            session_token=session_token,
+            username=None if user == "__api_key__" else user,
+        )
+        if not ok:
+            await ws.close(code=4001, reason=reason)
+            return
         allowed_message_archive_access = await _page_allowed_message_archive_predicates(
             db,
             page_id,

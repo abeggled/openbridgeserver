@@ -47,8 +47,10 @@ function resetApi() {
   api.export.mockResolvedValue({ data: new Blob(['{}'], { type: 'application/jsonl' }) })
 }
 
-async function mountView() {
+async function mountView({ isAdmin = true } = {}) {
   vi.doMock('@/api/client', () => ({ messageArchivesApi: api }))
+  const { useAuthStore } = await import('@/stores/auth')
+  useAuthStore().user = { id: 'u1', username: isAdmin ? 'admin' : 'viewer', is_admin: isAdmin }
   const { default: MessageArchivesView } = await import('@/views/MessageArchivesView.vue')
   const wrapper = mount(MessageArchivesView, { attachTo: document.body })
   await flushPromises()
@@ -164,6 +166,21 @@ describe('MessageArchivesView', () => {
     await buttonByText(wrapper, 'Löschen').trigger('click')
     await flushPromises()
     expect(api.delete).toHaveBeenCalledWith('system', true)
+
+    wrapper.unmount()
+  })
+
+  it('hides admin archive controls from regular users', async () => {
+    const wrapper = await mountView({ isAdmin: false })
+
+    expect(wrapper.text()).not.toContain('Neues Archiv')
+    expect(wrapper.text()).not.toContain('Integrität prüfen')
+    expect(wrapper.text()).not.toContain('Bearbeiten')
+    expect(wrapper.text()).not.toContain('JSONL exportieren')
+    expect(wrapper.text()).not.toContain('CSV exportieren')
+    expect(wrapper.text()).not.toContain('Leeren')
+    expect(wrapper.text()).not.toContain('Löschen')
+    expect(wrapper.text()).toContain('Backup fehlgeschlagen')
 
     wrapper.unmount()
   })

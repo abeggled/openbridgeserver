@@ -5,7 +5,7 @@
         <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('messageArchives.title') }}</h2>
         <p class="text-sm text-slate-500 mt-0.5">{{ $t('messageArchives.subtitle') }}</p>
       </div>
-      <div class="flex items-center gap-2">
+      <div v-if="auth.isAdmin" class="flex items-center gap-2">
         <button class="btn-secondary btn-sm" @click="runIntegrityCheck">{{ $t('messageArchives.integrityCheck') }}</button>
         <button class="btn-primary btn-sm" @click="startCreate">{{ $t('messageArchives.newArchive') }}</button>
       </div>
@@ -110,7 +110,7 @@
                 {{ $t('messageArchives.dbPath') }}: <span class="font-mono">{{ selectedArchive.db_path }}</span>
               </p>
             </div>
-            <div class="flex flex-wrap gap-2">
+            <div v-if="auth.isAdmin" class="flex flex-wrap gap-2">
               <button class="btn-secondary btn-sm" @click="startEdit(selectedArchive)">{{ $t('common.edit') }}</button>
               <button class="btn-secondary btn-sm" @click="exportArchive('jsonl')">{{ $t('messageArchives.exportJsonl') }}</button>
               <button class="btn-secondary btn-sm" @click="exportArchive('csv')">{{ $t('messageArchives.exportCsv') }}</button>
@@ -178,8 +178,10 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { messageArchivesApi } from '@/api/client'
+import { useAuthStore } from '@/stores/auth'
 
 const { t, te } = useI18n()
+const auth = useAuthStore()
 const MESSAGE_TYPES = ['system', 'security', 'notification', 'automation', 'adapter', 'diagnostic']
 const MESSAGE_SEVERITIES = ['info', 'success', 'warning', 'error', 'critical']
 const MESSAGE_STATUSES = ['new', 'open', 'acknowledged', 'closed']
@@ -333,12 +335,14 @@ function selectArchive(archive) {
 }
 
 function startCreate() {
+  if (!auth.isAdmin) return
   selectedArchive.value = null
   resetForm()
   editing.value = true
 }
 
 function startEdit(archive) {
+  if (!auth.isAdmin) return
   const knownType = MESSAGE_TYPES.includes(archive.default_type)
   Object.assign(form, {
     id: archive.id,
@@ -360,6 +364,7 @@ function cancelEdit() {
 }
 
 async function saveArchive() {
+  if (!auth.isAdmin) return
   error.value = ''
   try {
     const payload = formPayload()
@@ -377,12 +382,14 @@ async function saveArchive() {
 }
 
 async function clearArchive(archive) {
+  if (!auth.isAdmin) return
   if (!window.confirm(t('messageArchives.confirmClear', { count: archive.entry_count }))) return
   await messageArchivesApi.clear(archive.id, true)
   await loadArchives()
 }
 
 async function deleteArchive(archive) {
+  if (!auth.isAdmin) return
   if (!window.confirm(t('messageArchives.confirmDelete', { count: archive.entry_count }))) return
   await messageArchivesApi.delete(archive.id, true)
   selectedArchive.value = null
@@ -390,12 +397,14 @@ async function deleteArchive(archive) {
 }
 
 async function runIntegrityCheck() {
+  if (!auth.isAdmin) return
   const { data } = await messageArchivesApi.integrityCheck()
   integrityResult.value = data
   await loadArchives()
 }
 
 async function exportArchive(format) {
+  if (!auth.isAdmin) return
   if (!currentArchiveId.value) return
   const { data } = await messageArchivesApi.export(currentArchiveId.value, format)
   const url = URL.createObjectURL(data)

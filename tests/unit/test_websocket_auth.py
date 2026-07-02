@@ -215,6 +215,7 @@ async def test_websocket_endpoint_applies_page_archive_predicates_for_authentica
     monkeypatch.setattr(auth_api, "decode_token", _decode_token)
     db = _DbStub(has_key=False, page_type="PAGE")
     monkeypatch.setattr(ws_api, "get_db", lambda: db)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", _resolve_public_access)
     monkeypatch.setattr(ws_api, "_page_allowed_message_archive_predicates", _page_predicates)
     manager = _ManagerStub()
     monkeypatch.setattr(ws_api, "get_ws_manager", lambda: manager)
@@ -229,6 +230,41 @@ async def test_websocket_endpoint_applies_page_archive_predicates_for_authentica
     assert predicate_calls == [(db, "page-public")]
     assert manager.allowed_dp_ids is None
     assert manager.allowed_message_archive_access is expected_access
+
+
+@pytest.mark.asyncio
+async def test_websocket_endpoint_rejects_authenticated_archive_scope_without_page_access(monkeypatch):
+    def _decode_token(token: str, expected_type: str = "access") -> str:
+        if token == "valid.jwt.token" and expected_type == "access":
+            return "alice"
+        raise HTTPException(401, "invalid")
+
+    class _ManagerStub:
+        async def connect(self, ws, **_kwargs):
+            await ws.accept()
+            return "conn-1"
+
+        async def disconnect(self, _conn_id: str) -> None:
+            return None
+
+    async def _deny_user_access(_db, _node_id: str, _username: str) -> bool:
+        return False
+
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+    db = _DbStub(has_key=False, page_type="PAGE")
+    monkeypatch.setattr(ws_api, "get_db", lambda: db)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", _resolve_user_access)
+    monkeypatch.setattr("obs.api.v1.visu._check_user_access", _deny_user_access)
+    monkeypatch.setattr(ws_api, "get_ws_manager", lambda: _ManagerStub())
+
+    ws = _FakeWebSocket(
+        headers={"authorization": "Bearer valid.jwt.token"},
+        query_params={"page_id": "page-user"},
+    )
+    await ws_api.websocket_endpoint(ws)
+
+    assert ws.accepted is False
+    assert ws.close_calls == [(4001, "Zugriff verweigert")]
 
 
 @pytest.mark.asyncio
@@ -315,3 +351,7 @@ async def _resolve_public_access(_db, _node_id: str) -> tuple[str, str | None]:
 
 async def _resolve_protected_access(_db, _node_id: str) -> tuple[str, str | None]:
     return "protected", "node-protected"
+
+
+async def _resolve_user_access(_db, _node_id: str) -> tuple[str, str | None]:
+    return "user", "node-user"

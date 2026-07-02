@@ -863,6 +863,31 @@ async def test_message_archive_path_operations_reject_malformed_archive_ids(clie
     assert resp.status_code == 400
 
 
+async def test_single_message_archive_entries_reject_malformed_time_filters(client, auth_headers):
+    archive_id = _archive_id("time-filter")
+    try:
+        create = await client.post(
+            "/api/v1/message-archives",
+            headers=auth_headers,
+            json={"id": archive_id, "name": "Time Filter"},
+        )
+        assert create.status_code == 201, create.text
+
+        resp = await client.get(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            params={"from": "not-a-date"},
+        )
+
+        assert resp.status_code == 400
+    finally:
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
 async def test_message_archive_entry_patch_requires_admin(client, auth_headers):
     archive_id = _archive_id("patch")
     username = None

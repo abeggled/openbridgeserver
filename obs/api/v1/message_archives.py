@@ -811,7 +811,10 @@ async def query_single_message_archive_entries(
         username=access.username,
         predicates=_entry_predicates_for_page(access.predicates),
     )
-    return await store.query_entries(query)
+    try:
+        return await store.query_entries(query)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid message archive query") from None
 
 
 @router.post("/{archive_id}/entries", response_model=MessageEntryOut, status_code=status.HTTP_201_CREATED)
