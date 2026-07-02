@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -101,6 +103,176 @@ async def test_age_trim_boundary_above_limit_removes_older_entries():
 
         await rb._trim(reference_ts="2026-01-01T00:00:20.000Z")
 
+        entries = await rb.query(q="dp-retention", limit=10)
+        assert [entry.new_value for entry in entries] == [2]
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_metadata_bindings_entry_id_is_indexed_for_cascade_deletes(tmp_path: Path):
+    rb = RingBuffer(
+        storage="file",
+        max_entries=None,
+        disk_path=str(tmp_path / "rb-metadata-index.db"),
+    )
+    await rb.start()
+    try:
+        assert rb._conn is not None  # noqa: SLF001
+
+        async with rb._conn.execute("PRAGMA index_list('ringbuffer_metadata_bindings')") as cur:  # noqa: SLF001
+            index_rows = await cur.fetchall()
+
+        indexed_columns: list[tuple[str, ...]] = []
+        for row in index_rows:
+            index_name = row["name"]
+            async with rb._conn.execute(f"PRAGMA index_info('{index_name}')") as cur:  # noqa: SLF001
+                columns = tuple(info["name"] for info in await cur.fetchall())
+            indexed_columns.append(columns)
+
+        assert any(columns[:1] == ("entry_id",) for columns in indexed_columns)
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_existing_ringbuffer_database_gets_metadata_binding_entry_id_index(tmp_path: Path):
+    db_path = tmp_path / "rb-legacy-metadata-index.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE ringbuffer (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts             TEXT    NOT NULL,
+                datapoint_id   TEXT    NOT NULL,
+                topic          TEXT    NOT NULL,
+                old_value      TEXT,
+                new_value      TEXT,
+                source_adapter TEXT    NOT NULL,
+                quality        TEXT    NOT NULL,
+                metadata_version INTEGER NOT NULL DEFAULT 1,
+                metadata       TEXT    NOT NULL DEFAULT '{}'
+            );
+            CREATE TABLE ringbuffer_metadata_bindings (
+                entry_id             INTEGER NOT NULL REFERENCES ringbuffer(id) ON DELETE CASCADE,
+                adapter_type         TEXT    NOT NULL DEFAULT '',
+                adapter_instance_id  TEXT    NOT NULL DEFAULT '',
+                group_address        TEXT    NOT NULL DEFAULT '',
+                topic                TEXT    NOT NULL DEFAULT '',
+                entity_id            TEXT    NOT NULL DEFAULT '',
+                register_type        TEXT    NOT NULL DEFAULT '',
+                register_address     TEXT    NOT NULL DEFAULT ''
+            );
+            CREATE INDEX idx_rb_meta_bind_adapter_type ON ringbuffer_metadata_bindings(adapter_type);
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rb = RingBuffer(
+        storage="file",
+        max_entries=None,
+        disk_path=str(db_path),
+    )
+    await rb.start()
+    try:
+        assert rb._conn is not None  # noqa: SLF001
+        async with rb._conn.execute("PRAGMA index_list('ringbuffer_metadata_bindings')") as cur:  # noqa: SLF001
+            indexes = {row["name"] for row in await cur.fetchall()}
+
+        assert "idx_rb_meta_bind_entry_id" in indexes
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_large_count_trim_uses_batched_delete_instead_of_one_huge_in_clause(tmp_path: Path):
+    rb = RingBuffer(
+        storage="file",
+        max_entries=None,
+        disk_path=str(tmp_path / "rb-large-trim.db"),
+    )
+    await rb.start()
+    try:
+        assert rb._conn is not None  # noqa: SLF001
+        for value in range(1200):
+            await _record_value(rb, value, f"2026-01-01T00:{value // 60:02d}:{value % 60:02d}.000Z")
+
+        delete_param_counts: list[int] = []
+        original_execute = rb._conn.execute  # noqa: SLF001
+
+        def _record_delete_shape(sql: str, parameters: Any = None):
+            if sql.strip().upper().startswith("DELETE FROM RINGBUFFER"):
+                delete_param_counts.append(len(parameters or ()))
+            return original_execute(sql, parameters)
+
+        rb._conn.execute = _record_delete_shape  # type: ignore[method-assign]  # noqa: SLF001
+
+        await rb.reconfigure("file", max_entries=50)
+
+        assert len(delete_param_counts) > 1
+        assert max(delete_param_counts) <= 1
+        stats = await rb.stats()
+        assert stats["total"] == 50
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_delete_oldest_returns_zero_for_invalid_limit_and_empty_buffer():
+    rb = RingBuffer(storage="memory", max_entries=None)
+    await rb.start()
+    try:
+        assert await rb._delete_oldest(0) == 0  # noqa: SLF001
+        assert await rb._delete_oldest(10) == 0  # noqa: SLF001
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_delete_oldest_uses_sqlite_changes_when_rowcount_unavailable():
+    rb = RingBuffer(storage="memory", max_entries=None)
+    await rb.start()
+    try:
+        assert rb._conn is not None  # noqa: SLF001
+        for value in range(3):
+            await _record_value(rb, value, f"2026-01-01T00:00:0{value}.000Z")
+
+        original_execute = rb._conn.execute  # noqa: SLF001
+
+        class CursorWithoutRowcount:
+            def __init__(self, cursor: Any) -> None:
+                self._cursor = cursor
+
+            @property
+            def rowcount(self) -> int:
+                return -1
+
+            async def close(self) -> None:
+                await self._cursor.close()
+
+        class ExecuteWithoutDeleteRowcount:
+            def __init__(self, result: Any) -> None:
+                self._result = result
+
+            def __await__(self):
+                async def _await_cursor():
+                    cursor = await self._result
+                    return CursorWithoutRowcount(cursor)
+
+                return _await_cursor().__await__()
+
+        def _hide_delete_rowcount(sql: str, parameters: Any = None):
+            result = original_execute(sql, parameters)
+            if sql.strip().upper().startswith("DELETE FROM RINGBUFFER"):
+                return ExecuteWithoutDeleteRowcount(result)
+            return result
+
+        rb._conn.execute = _hide_delete_rowcount  # type: ignore[method-assign]  # noqa: SLF001
+
+        assert await rb._delete_oldest(2) == 2  # noqa: SLF001
         entries = await rb.query(q="dp-retention", limit=10)
         assert [entry.new_value for entry in entries] == [2]
     finally:
