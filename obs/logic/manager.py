@@ -65,6 +65,11 @@ _SECRET_FILE_MAX_BYTES = 8192
 _SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
 _API_CLIENT_RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _API_CLIENT_VARIABLE_RE = re.compile(r"###OBS([1-9][0-9]*)###")
+_HOST_CHECK_MIN_TIMEOUT_S = 1.0
+_HOST_CHECK_MAX_TIMEOUT_S = 30.0
+_HOST_CHECK_MIN_COUNT = 1
+_HOST_CHECK_MAX_COUNT = 10
+_HOST_CHECK_RUNTIME_TOKEN = uuid.uuid4().hex
 
 
 class _ApiClientVariableError(ValueError):
@@ -539,6 +544,61 @@ def _send_wol_packet(mac: str, broadcast: str, port: int) -> None:
         sock.sendto(magic, (broadcast, port))
 
 
+def _normalise_host_check_ping_config(timeout_s_raw: Any, count_raw: Any) -> tuple[float, int]:
+    try:
+        timeout_s = float(timeout_s_raw or _HOST_CHECK_MIN_TIMEOUT_S)
+    except (TypeError, ValueError):
+        timeout_s = _HOST_CHECK_MIN_TIMEOUT_S
+    try:
+        count = int(count_raw or _HOST_CHECK_MIN_COUNT)
+    except (TypeError, ValueError):
+        count = _HOST_CHECK_MIN_COUNT
+    timeout_s = min(_HOST_CHECK_MAX_TIMEOUT_S, max(_HOST_CHECK_MIN_TIMEOUT_S, timeout_s))
+    count = min(_HOST_CHECK_MAX_COUNT, max(_HOST_CHECK_MIN_COUNT, count))
+    return timeout_s, count
+
+
+async def _ping_host(host: str, count: int, timeout_s: float) -> tuple[bool, float | None]:
+    """Ping *host* and return (reachable, latency_ms).
+
+    Uses the system ping binary so no elevated privileges are required.
+    timeout_s is passed to ping as the per-packet deadline; an additional
+    2-second asyncio safety timeout is layered on top to handle hangs.
+    """
+    import sys  # noqa: PLC0415
+
+    timeout_s, count = _normalise_host_check_ping_config(timeout_s, count)
+    timeout_int = int(timeout_s)
+    if sys.platform == "darwin":
+        cmd = ["ping", "-c", str(count), "-W", str(timeout_int * 1000), "--", host]
+    else:
+        cmd = ["ping", "-c", str(count), "-W", str(timeout_int), "--", host]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s * count + 2)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return False, None
+        reachable = proc.returncode == 0
+        latency_ms: float | None = None
+        if reachable:
+            m = re.search(r"time[<=](\d+(?:\.\d+)?)\s*ms", stdout.decode(errors="replace"))
+            if m:
+                latency_ms = float(m.group(1))
+        return reachable, latency_ms
+    except FileNotFoundError:
+        logger.warning("ping binary not found — install iputils-ping to enable Host Check")
+        return False, None
+    except Exception:
+        return False, None
+
+
 def _build_ical_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
     parsed = _parse_http_url(url)
     if not parsed:
@@ -961,6 +1021,11 @@ class LogicManager:
         # Event / manual overrides take priority over registry seed
         aug_overrides.update(overrides)
 
+        api_client_ids = {node.id for node in flow.nodes if node.type == "api_client"}
+        host_check_ids = {node.id for node in flow.nodes if node.type == "host_check"}
+        operating_hour_ids = {node.id for node in flow.nodes if node.type == "operating_hours"}
+        needs_async_replay_snapshot = any(edge.source in api_client_ids or edge.source in host_check_ids for edge in flow.edges)
+
         # ── Pre-compute operating_hours values to inject as overrides ─────
         for node in flow.nodes:
             if node.type == "operating_hours":
@@ -1169,45 +1234,47 @@ class LogicManager:
             except Exception as _hc_exc:
                 logger.debug("Graph %s: heating_circuit history pre-fill failed: %s", graph_id[:8], _hc_exc)
 
-        api_client_ids = {node.id for node in flow.nodes if node.type == "api_client"}
-        needs_api_client_replay_snapshot = any(edge.source in api_client_ids for edge in flow.edges)
         executor = GraphExecutor(flow, hyst, self._app_config)
         try:
-            pre_execute_hyst = copy.deepcopy(hyst) if needs_api_client_replay_snapshot else None
+            pre_execute_hyst = copy.deepcopy(hyst) if needs_async_replay_snapshot else None
+            pre_execute_node_state = copy.deepcopy(graph_state) if needs_async_replay_snapshot else None
             outputs = executor.execute(aug_overrides, commit_memory=False)
         except Exception as exc:
             logger.error("Graph %s (%s) execution error: %s", graph_id, name, exc)
             return {}
 
-        # ── Update operating_hours state ─────────────────────────────────
-        for node in flow.nodes:
-            if node.type != "operating_hours":
-                continue
-            out = outputs.get(node.id, {})
-            ns = graph_state.setdefault(node.id, {"accumulated_hours": 0.0, "last_start": None})
-            is_reset = out.get("_reset", False)
-            is_active = out.get("_active", False)
-            if is_reset:
-                ns["accumulated_hours"] = 0.0
-                ns["last_start"] = execute_now if is_active else None
-            elif is_active:
-                if not ns.get("last_start"):
-                    ns["last_start"] = execute_now
-            elif ns.get("last_start"):
-                ns["accumulated_hours"] += (execute_now - ns["last_start"]).total_seconds() / 3600
-                ns["last_start"] = None
+        def _apply_operating_hours_state(node_ids: set[str] | None = None, base_state: dict[str, Any] | None = None) -> None:
+            target_ids = operating_hour_ids if node_ids is None else operating_hour_ids & node_ids
+            for node in flow.nodes:
+                if node.id not in target_ids:
+                    continue
+                out = outputs.get(node.id, {})
+                if base_state is not None:
+                    graph_state[node.id] = copy.deepcopy(base_state.get(node.id, {"accumulated_hours": 0.0, "last_start": None}))
+                ns = graph_state.setdefault(node.id, {"accumulated_hours": 0.0, "last_start": None})
+                is_reset = out.get("_reset", False)
+                is_active = out.get("_active", False)
+                if is_reset:
+                    ns["accumulated_hours"] = 0.0
+                    ns["last_start"] = execute_now if is_active else None
+                elif is_active:
+                    if not ns.get("last_start"):
+                        ns["last_start"] = execute_now
+                elif ns.get("last_start"):
+                    ns["accumulated_hours"] += (execute_now - ns["last_start"]).total_seconds() / 3600
+                    ns["last_start"] = None
 
-        # ── Handle wake_on_lan ────────────────────────────────────────────
-        # Runs BEFORE api_client/notify so that graphs with wol.sent →
-        # api_client or wol.sent → notify fire correctly in the same execution.
-        # Rising-edge: packet is sent only on the False→True transition of
-        # _trigger, preventing repeated broadcasts on sustained truthy inputs.
-        # Exception: cron-triggered executions are always treated as a fresh
-        # rising edge, since each cron tick is an independent scheduled event.
+        # ── Update operating_hours state ─────────────────────────────────
+        _apply_operating_hours_state()
+
+        # ── Cron-reachability preamble ────────────────────────────────────
+        # Shared by host_check and wake_on_lan: each cron tick is treated as a
+        # fresh rising edge, so nodes that fire on sustained truthy inputs from
+        # cron are not suppressed by the rising-edge deduplication below.
         cron_node_ids = {n.id for n in flow.nodes if n.type == "timer_cron"}
         # Forward-reachability from the cron nodes that actually fired this
-        # execution.  Used below to scope the cron-retrigger exception to WoL
-        # nodes that are driven by the firing cron, not every cron in the graph.
+        # execution — scopes the cron-retrigger exception to only those async
+        # nodes driven by the firing cron, not every cron in the graph.
         fired_crons = overrides.keys() & cron_node_ids
         cron_reachable: set[str] = set(fired_crons)
         if fired_crons:
@@ -1218,6 +1285,140 @@ class LogicManager:
                     if _ce.source == _cn and _ce.target not in cron_reachable:
                         cron_reachable.add(_ce.target)
                         _cq.append(_ce.target)
+
+        async def _run_host_check_node(node: Any, target_set: set[str], log_suffix: str = "") -> bool:
+            out = outputs.get(node.id, {})
+            hyst_hc = hyst.setdefault(node.id, {})
+            is_triggered = GraphExecutor._to_bool(out.get("_trigger"))
+            was_triggered = hyst_hc.get("hc_prev_trigger", False)
+            is_cron_triggered = node.id in cron_reachable
+            if not is_triggered:
+                return False
+            host = (node.data.get("host") or "").strip()
+            if not host:
+                logger.warning("host_check: host missing on node %s", node.id[:8])
+                return False
+            try:
+                timeout_s, count = _normalise_host_check_ping_config(node.data.get("timeout_s"), node.data.get("count"))
+                config_sig = f"{host}\0{timeout_s:g}\0{count}"
+            except Exception as exc:
+                logger.warning("Graph %s: host_check %s failed: %s", graph_id[:8], host, exc)
+                return False
+            if (
+                was_triggered
+                and not is_cron_triggered
+                and hyst_hc.get("hc_config_sig") == config_sig
+                and hyst_hc.get("hc_runtime_token") == _HOST_CHECK_RUNTIME_TOKEN
+            ):
+                outputs[node.id]["reachable"] = hyst_hc.get("hc_last_reachable", False)
+                outputs[node.id]["latency_ms"] = hyst_hc.get("hc_last_latency_ms")
+                target_set.add(node.id)
+                return True
+            try:
+                reachable, latency_ms = await _ping_host(host, count, timeout_s)
+                hyst_hc["hc_prev_trigger"] = True
+                hyst_hc["hc_last_reachable"] = reachable
+                hyst_hc["hc_last_latency_ms"] = latency_ms
+                hyst_hc["hc_config_sig"] = config_sig
+                hyst_hc["hc_runtime_token"] = _HOST_CHECK_RUNTIME_TOKEN
+                outputs[node.id]["reachable"] = reachable
+                outputs[node.id]["latency_ms"] = latency_ms
+                target_set.add(node.id)
+                logger.info(
+                    "Graph %s: host_check%s %s → reachable=%s latency=%s ms",
+                    graph_id[:8],
+                    log_suffix,
+                    host,
+                    reachable,
+                    f"{latency_ms:.1f}" if latency_ms is not None else "—",
+                )
+                return True
+            except Exception as exc:
+                logger.warning("Graph %s: host_check %s failed: %s", graph_id[:8], host, exc)
+                return False
+
+        # ── Handle host_check ─────────────────────────────────────────────
+        # Rising-edge trigger (same cron-exemption logic as wake_on_lan):
+        # ping is sent only on the False→True transition of _trigger, or on
+        # every cron tick if this node is reachable from a firing cron node.
+        # Runs BEFORE wake_on_lan so that graphs with host_check → WoL see
+        # real reachability values, not executor placeholders.
+
+        # Accumulates edge-level input overrides from every resolved async node.
+        # Injected into every replay merge so that nodes downstream of multiple
+        # async sources see real values instead of first-pass placeholders.
+        resolved_async_edge_overrides: dict[str, dict[str, Any]] = {}
+
+        # Initialised here (before any replay pass) so that output-update guards
+        # in the HC and WoL replay loops can safely reference this set even before
+        # the api_client processing block populates it.
+        triggered_api_clients: set[str] = set()
+
+        def _add_resolved_outputs(node_ids: set[str]) -> None:
+            for _re in flow.edges:
+                if _re.source in node_ids:
+                    resolved_async_edge_overrides.setdefault(_re.target, {})[_re.targetHandle or "in"] = GraphExecutor._get_output_value(
+                        outputs.get(_re.source, {}), _re.sourceHandle or "out"
+                    )
+
+        triggered_host_check_nodes: set[str] = set()
+        for node in flow.nodes:
+            if node.type != "host_check":
+                continue
+            await _run_host_check_node(node, triggered_host_check_nodes)
+        _add_resolved_outputs(triggered_host_check_nodes)
+
+        # ── Re-propagate host_check outputs to downstream nodes ───────────
+        pending_host_check_replay = set(triggered_host_check_nodes)
+        processed_host_check_replay: set[str] = set()
+        while pending_host_check_replay:
+            replay_sources = pending_host_check_replay - processed_host_check_replay
+            if not replay_sources:
+                break
+            processed_host_check_replay.update(replay_sources)
+            hc_downstream_overrides: dict[str, dict[str, Any]] = {}
+            for e in flow.edges:
+                if e.source in replay_sources:
+                    src_handle = e.sourceHandle or "out"
+                    tgt_handle = e.targetHandle or "in"
+                    hc_downstream_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs[e.source], src_handle)
+            if not hc_downstream_overrides:
+                continue
+            hc_merged: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in aug_overrides.items()}
+            for nid, vals in resolved_async_edge_overrides.items():
+                hc_merged.setdefault(nid, {}).update(vals)
+            for nid, vals in hc_downstream_overrides.items():
+                hc_merged.setdefault(nid, {}).update(vals)
+            hc_hyst_snapshot = copy.deepcopy(pre_execute_hyst if pre_execute_hyst is not None else hyst)
+            hc_second_executor = GraphExecutor(flow, hc_hyst_snapshot, self._app_config)
+            hc_second_outputs = hc_second_executor.execute(hc_merged, commit_memory=False)
+            hc_descendants: set[str] = set()
+            hc_queue: list[str] = list(replay_sources)
+            while hc_queue:
+                nid = hc_queue.pop()
+                for e in flow.edges:
+                    if e.source == nid and e.target not in hc_descendants:
+                        hc_descendants.add(e.target)
+                        hc_queue.append(e.target)
+            for nid, vals in hc_second_outputs.items():
+                if nid in hc_descendants and nid not in triggered_api_clients:
+                    outputs[nid] = vals
+                    if nid not in host_check_ids and nid in hc_hyst_snapshot:
+                        hyst[nid] = hc_hyst_snapshot[nid]
+            _apply_operating_hours_state(hc_descendants, pre_execute_node_state)
+            newly_triggered_hc: set[str] = set()
+            for node in flow.nodes:
+                if node.type == "host_check" and node.id in hc_descendants and node.id not in triggered_host_check_nodes:
+                    await _run_host_check_node(node, newly_triggered_hc, " (replay)")
+            if newly_triggered_hc:
+                triggered_host_check_nodes.update(newly_triggered_hc)
+                _add_resolved_outputs(newly_triggered_hc)
+                pending_host_check_replay.update(newly_triggered_hc)
+
+        # ── Handle wake_on_lan ────────────────────────────────────────────
+        # Runs AFTER host_check so that graphs with host_check → WoL read
+        # real reachability, and BEFORE api_client/notify so that wol.sent
+        # can propagate to downstream api_client or notify in the same tick.
         triggered_wol_nodes: set[str] = set()
         for node in flow.nodes:
             if node.type != "wake_on_lan":
@@ -1256,11 +1457,11 @@ class LogicManager:
                 hyst_wol["wol_prev_trigger"] = True
                 outputs[node.id]["sent"] = True
                 triggered_wol_nodes.add(node.id)
-                mac_oui = ":".join(mac.upper().split(":")[:3]) + ":??:??:??" if ":" in mac else "??:??:??:??:??:??"
-                logger.info("Graph %s: WoL sent to %s via %s:%d", graph_id[:8], mac_oui, broadcast, port)
+                logger.info("Graph %s: WoL sent by node %s", graph_id[:8], node.id[:8])
             except Exception as exc:
-                mac_oui = ":".join(mac.upper().split(":")[:3]) + ":??:??:??" if ":" in mac else "??:??:??:??:??:??"
-                logger.warning("Graph %s: WoL failed (mac=%s): %s", graph_id[:8], mac_oui, exc)
+                logger.warning("Graph %s: WoL failed on node %s: %s", graph_id[:8], node.id[:8], type(exc).__name__)
+
+        _add_resolved_outputs(triggered_wol_nodes)
 
         # ── Re-propagate wake_on_lan sent=True to downstream nodes ───────────
         # The first executor pass computed downstream nodes with sent=False.
@@ -1281,6 +1482,8 @@ class LogicManager:
                     wol_downstream_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs[e.source], src_handle)
             if wol_downstream_overrides:
                 wol_merged: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in aug_overrides.items()}
+                for nid, vals in resolved_async_edge_overrides.items():
+                    wol_merged.setdefault(nid, {}).update(vals)
                 for nid, vals in wol_downstream_overrides.items():
                     wol_merged.setdefault(nid, {}).update(vals)
                 # Use a deep copy of hyst so that stateful nodes (statistics,
@@ -1303,6 +1506,71 @@ class LogicManager:
                 for nid, vals in wol_second_outputs.items():
                     if nid not in wol_node_ids and nid in wol_descendants:
                         outputs[nid] = vals
+
+        # ── Post-WoL host_check pass ──────────────────────────────────────
+        # WoL.sent may drive host_check._trigger via downstream edges. Run
+        # those checks now so the api_client loop below sees real reachability.
+        if triggered_wol_nodes:
+            _wol_all_desc: set[str] = set()
+            _wol_desc_q: list[str] = list(triggered_wol_nodes)
+            while _wol_desc_q:
+                _wn = _wol_desc_q.pop()
+                for _we in flow.edges:
+                    if _we.source == _wn and _we.target not in _wol_all_desc:
+                        _wol_all_desc.add(_we.target)
+                        _wol_desc_q.append(_we.target)
+            _post_wol_hc: set[str] = set()
+            for node in flow.nodes:
+                if node.type == "host_check" and node.id in _wol_all_desc and node.id not in triggered_host_check_nodes:
+                    await _run_host_check_node(node, _post_wol_hc, " (post-wol)")
+            if _post_wol_hc:
+                triggered_host_check_nodes.update(_post_wol_hc)
+                _add_resolved_outputs(_post_wol_hc)
+                _pending_pwol = set(_post_wol_hc)
+                _processed_pwol: set[str] = set()
+                while _pending_pwol:
+                    _pwol_src = _pending_pwol - _processed_pwol
+                    if not _pwol_src:
+                        break
+                    _processed_pwol.update(_pwol_src)
+                    _pwol_dn_ovr: dict[str, dict[str, Any]] = {}
+                    for _e in flow.edges:
+                        if _e.source in _pwol_src:
+                            _pwol_dn_ovr.setdefault(_e.target, {})[_e.targetHandle or "in"] = GraphExecutor._get_output_value(
+                                outputs[_e.source], _e.sourceHandle or "out"
+                            )
+                    if not _pwol_dn_ovr:
+                        continue
+                    _pwol_merged: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in aug_overrides.items()}
+                    for nid, vals in resolved_async_edge_overrides.items():
+                        _pwol_merged.setdefault(nid, {}).update(vals)
+                    for nid, vals in _pwol_dn_ovr.items():
+                        _pwol_merged.setdefault(nid, {}).update(vals)
+                    _pwol_hyst = copy.deepcopy(pre_execute_hyst if pre_execute_hyst is not None else hyst)
+                    _pwol_exec = GraphExecutor(flow, _pwol_hyst, self._app_config)
+                    _pwol_out = _pwol_exec.execute(_pwol_merged, commit_memory=False)
+                    _pwol_desc: set[str] = set()
+                    _pwol_dq: list[str] = list(_pwol_src)
+                    while _pwol_dq:
+                        _pn = _pwol_dq.pop()
+                        for _e in flow.edges:
+                            if _e.source == _pn and _e.target not in _pwol_desc:
+                                _pwol_desc.add(_e.target)
+                                _pwol_dq.append(_e.target)
+                    for nid, vals in _pwol_out.items():
+                        if nid in _pwol_desc and nid not in triggered_api_clients:
+                            outputs[nid] = vals
+                            if nid not in host_check_ids and nid in _pwol_hyst:
+                                hyst[nid] = _pwol_hyst[nid]
+                    _apply_operating_hours_state(_pwol_desc, pre_execute_node_state)
+                    _chained_pwol: set[str] = set()
+                    for node in flow.nodes:
+                        if node.type == "host_check" and node.id in _pwol_desc and node.id not in triggered_host_check_nodes:
+                            await _run_host_check_node(node, _chained_pwol, " (post-wol replay)")
+                    if _chained_pwol:
+                        triggered_host_check_nodes.update(_chained_pwol)
+                        _add_resolved_outputs(_chained_pwol)
+                        _pending_pwol.update(_chained_pwol)
 
         # ── Handle api_client ─────────────────────────────────────────────
         # Track api_client nodes with final manager-computed outputs so we can
@@ -1487,11 +1755,14 @@ class LogicManager:
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
                 triggered_api_clients.add(node.id)
 
+        _add_resolved_outputs(triggered_api_clients)
+
         # ── Re-propagate api_client outputs to downstream nodes ───────────
         # The first executor pass computed downstream nodes with the placeholder
         # success=False. Now that we have the real HTTP results, we re-run the
         # executor for those downstream nodes using input overrides so their
         # outputs (and downstream datapoint writes, etc.) reflect the real values.
+        api_replay_overrides: dict[str, dict[str, Any]] | None = None
         if triggered_api_clients:
             downstream_node_ids: set[str] = set()
             pending_sources = list(triggered_api_clients)
@@ -1519,6 +1790,7 @@ class LogicManager:
                     src_handle = e.sourceHandle or "out"
                     tgt_handle = e.targetHandle or "in"
                     replay_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs.get(e.source, {}), src_handle)
+                api_replay_overrides = {nid: dict(vals) for nid, vals in replay_overrides.items()}
                 if pre_execute_hyst is not None:
                     replay_hyst = copy.deepcopy(pre_execute_hyst)
                     second_executor = GraphExecutor(flow, replay_hyst, self._app_config)
@@ -1540,6 +1812,599 @@ class LogicManager:
                             outputs[nid] = vals
                             if nid in replay_hyst:
                                 hyst[nid] = replay_hyst[nid]
+
+        # ── Post-api-replay host_check pass ───────────────────────────────
+        # api_client outputs (via the second executor pass above) may have
+        # updated host_check trigger values. Re-run host_check for any nodes
+        # not fired in the first pass whose trigger is now true.
+        post_api_triggered_hc: set[str] = set()
+        for node in flow.nodes:
+            if node.type != "host_check" or node.id in triggered_host_check_nodes:
+                continue
+            if await _run_host_check_node(node, post_api_triggered_hc, " (post-api)"):
+                triggered_host_check_nodes.add(node.id)
+        if post_api_triggered_hc:
+            _add_resolved_outputs(post_api_triggered_hc)
+
+        post_api_hc_descendants: set[str] = set()
+        pending_post_api_hc_replay = set(post_api_triggered_hc)
+        processed_post_api_hc_replay: set[str] = set()
+        while pending_post_api_hc_replay:
+            replay_sources = pending_post_api_hc_replay - processed_post_api_hc_replay
+            if not replay_sources:
+                break
+            processed_post_api_hc_replay.update(replay_sources)
+            pat_hc_overrides: dict[str, dict[str, Any]] = {}
+            for e in flow.edges:
+                if e.source in replay_sources:
+                    src_handle = e.sourceHandle or "out"
+                    tgt_handle = e.targetHandle or "in"
+                    pat_hc_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs[e.source], src_handle)
+            if not pat_hc_overrides:
+                continue
+            pat_base_overrides = api_replay_overrides if api_replay_overrides is not None else aug_overrides
+            pat_merged: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in pat_base_overrides.items()}
+            for nid, vals in resolved_async_edge_overrides.items():
+                pat_merged.setdefault(nid, {}).update(vals)
+            for nid, vals in pat_hc_overrides.items():
+                pat_merged.setdefault(nid, {}).update(vals)
+            pat_hyst_snapshot = copy.deepcopy(pre_execute_hyst if pre_execute_hyst is not None else hyst)
+            pat_executor = GraphExecutor(flow, pat_hyst_snapshot, self._app_config)
+            pat_outputs = pat_executor.execute(pat_merged, commit_memory=False)
+            pat_descendants: set[str] = set()
+            pat_queue: list[str] = list(replay_sources)
+            while pat_queue:
+                nid = pat_queue.pop()
+                for e in flow.edges:
+                    if e.source == nid and e.target not in pat_descendants:
+                        pat_descendants.add(e.target)
+                        pat_queue.append(e.target)
+            post_api_hc_descendants.update(pat_descendants)
+            for nid, vals in pat_outputs.items():
+                if nid in pat_descendants and nid not in triggered_api_clients:
+                    outputs[nid] = vals
+                    if nid not in host_check_ids and nid in pat_hyst_snapshot:
+                        hyst[nid] = pat_hyst_snapshot[nid]
+            _apply_operating_hours_state(pat_descendants, pre_execute_node_state)
+            newly_triggered_hc: set[str] = set()
+            for node in flow.nodes:
+                if node.type == "host_check" and node.id in pat_descendants and node.id not in triggered_host_check_nodes:
+                    await _run_host_check_node(node, newly_triggered_hc, " (post-api replay)")
+            if newly_triggered_hc:
+                post_api_triggered_hc.update(newly_triggered_hc)
+                triggered_host_check_nodes.update(newly_triggered_hc)
+                _add_resolved_outputs(newly_triggered_hc)
+                pending_post_api_hc_replay.update(newly_triggered_hc)
+
+        # Post-api host_check replay can make downstream WoL nodes fire after
+        # the normal WoL loop has already run. Process those affected nodes once
+        # more so the side effect is not deferred to the next graph execution.
+        post_api_wol_nodes: set[str] = set()
+        if post_api_hc_descendants:
+            for node in flow.nodes:
+                if node.type != "wake_on_lan" or node.id not in post_api_hc_descendants or node.id in triggered_wol_nodes:
+                    continue
+                out = outputs.get(node.id, {})
+                hyst_wol = hyst.setdefault(node.id, {})
+                is_triggered = GraphExecutor._to_bool(out.get("_trigger"))
+                was_triggered = hyst_wol.get("wol_prev_trigger", False)
+                is_cron_triggered = node.id in cron_reachable
+                if not is_triggered:
+                    hyst_wol["wol_prev_trigger"] = False
+                    continue
+                if was_triggered and not is_cron_triggered:
+                    continue
+                mac = (node.data.get("mac_address") or "").strip()
+                if not mac:
+                    logger.warning("wake_on_lan: mac_address missing on node %s", node.id[:8])
+                    continue
+                broadcast = (node.data.get("broadcast_ip") or "").strip() or "255.255.255.255"
+                _port_raw = node.data.get("port")
+                try:
+                    if isinstance(_port_raw, float) and not _port_raw.is_integer():
+                        raise ValueError(f"fractional port {_port_raw!r} — must be a whole number")
+                    port = int(_port_raw) if _port_raw not in (None, "") else 9
+                    if not (1 <= port <= 65535):
+                        raise ValueError(f"port {port!r} out of range 1–65535")
+                    try:
+                        ipaddress.IPv4Address(broadcast)
+                    except ValueError:
+                        raise ValueError(f"invalid broadcast IP {broadcast!r}") from None
+                    await asyncio.to_thread(_send_wol_packet, mac, broadcast, port)
+                    hyst_wol["wol_prev_trigger"] = True
+                    outputs[node.id]["sent"] = True
+                    post_api_wol_nodes.add(node.id)
+                    triggered_wol_nodes.add(node.id)
+                    logger.info("Graph %s: WoL sent by node %s", graph_id[:8], node.id[:8])
+                except Exception as exc:
+                    logger.warning("Graph %s: WoL failed on node %s: %s", graph_id[:8], node.id[:8], type(exc).__name__)
+
+        if post_api_wol_nodes:
+            _add_resolved_outputs(post_api_wol_nodes)
+            post_api_wol_overrides: dict[str, dict[str, Any]] = {}
+            for e in flow.edges:
+                if e.source in post_api_wol_nodes:
+                    src_handle = e.sourceHandle or "out"
+                    tgt_handle = e.targetHandle or "in"
+                    post_api_wol_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs[e.source], src_handle)
+            if post_api_wol_overrides:
+                wol_base_overrides = api_replay_overrides if api_replay_overrides is not None else aug_overrides
+                post_api_wol_merged: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in wol_base_overrides.items()}
+                for nid, vals in resolved_async_edge_overrides.items():
+                    post_api_wol_merged.setdefault(nid, {}).update(vals)
+                for nid, vals in post_api_wol_overrides.items():
+                    post_api_wol_merged.setdefault(nid, {}).update(vals)
+                _pawol_hyst_snap = copy.deepcopy(hyst)
+                post_api_wol_executor = GraphExecutor(flow, _pawol_hyst_snap, self._app_config)
+                post_api_wol_outputs = post_api_wol_executor.execute(post_api_wol_merged, commit_memory=False)
+                post_api_wol_descendants: set[str] = set()
+                post_api_wol_queue = list(post_api_wol_nodes)
+                while post_api_wol_queue:
+                    nid = post_api_wol_queue.pop()
+                    for e in flow.edges:
+                        if e.source == nid and e.target not in post_api_wol_descendants:
+                            post_api_wol_descendants.add(e.target)
+                            post_api_wol_queue.append(e.target)
+                wol_node_ids = {n.id for n in flow.nodes if n.type == "wake_on_lan"}
+                for nid, vals in post_api_wol_outputs.items():
+                    if nid not in wol_node_ids and nid in post_api_wol_descendants:
+                        outputs[nid] = vals
+                        if nid not in host_check_ids and nid in _pawol_hyst_snap:
+                            hyst[nid] = _pawol_hyst_snap[nid]
+
+                # HC nodes driven by post-api WoL output
+                _pawol_hc: set[str] = set()
+                for node in flow.nodes:
+                    if node.type == "host_check" and node.id in post_api_wol_descendants and node.id not in triggered_host_check_nodes:
+                        await _run_host_check_node(node, _pawol_hc, " (post-api-wol)")
+                if _pawol_hc:
+                    triggered_host_check_nodes.update(_pawol_hc)
+                    _add_resolved_outputs(_pawol_hc)
+                    _pawol_pending = set(_pawol_hc)
+                    _pawol_processed: set[str] = set()
+                    while _pawol_pending:
+                        _pawol_replay_src = _pawol_pending - _pawol_processed
+                        if not _pawol_replay_src:
+                            break
+                        _pawol_processed.update(_pawol_replay_src)
+                        _pawol_dn_ovr: dict[str, dict[str, Any]] = {}
+                        for _e in flow.edges:
+                            if _e.source in _pawol_replay_src:
+                                _pawol_dn_ovr.setdefault(_e.target, {})[_e.targetHandle or "in"] = GraphExecutor._get_output_value(
+                                    outputs[_e.source], _e.sourceHandle or "out"
+                                )
+                        if not _pawol_dn_ovr:
+                            continue
+                        _pawol_base = api_replay_overrides if api_replay_overrides is not None else aug_overrides
+                        _pawol_merged: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in _pawol_base.items()}
+                        for nid, vals in resolved_async_edge_overrides.items():
+                            _pawol_merged.setdefault(nid, {}).update(vals)
+                        for nid, vals in _pawol_dn_ovr.items():
+                            _pawol_merged.setdefault(nid, {}).update(vals)
+                        _pawol_hyst = copy.deepcopy(pre_execute_hyst if pre_execute_hyst is not None else hyst)
+                        _pawol_exec = GraphExecutor(flow, _pawol_hyst, self._app_config)
+                        _pawol_out = _pawol_exec.execute(_pawol_merged, commit_memory=False)
+                        _pawol_desc: set[str] = set()
+                        _pawol_dq: list[str] = list(_pawol_replay_src)
+                        while _pawol_dq:
+                            _pn = _pawol_dq.pop()
+                            for _e in flow.edges:
+                                if _e.source == _pn and _e.target not in _pawol_desc:
+                                    _pawol_desc.add(_e.target)
+                                    _pawol_dq.append(_e.target)
+                        for nid, vals in _pawol_out.items():
+                            if nid in _pawol_desc and nid not in triggered_api_clients:
+                                outputs[nid] = vals
+                                if nid not in host_check_ids and nid in _pawol_hyst:
+                                    hyst[nid] = _pawol_hyst[nid]
+                        _apply_operating_hours_state(_pawol_desc, pre_execute_node_state)
+                        _pawol_chained: set[str] = set()
+                        for node in flow.nodes:
+                            if node.type == "host_check" and node.id in _pawol_desc and node.id not in triggered_host_check_nodes:
+                                await _run_host_check_node(node, _pawol_chained, " (post-api-wol replay)")
+                        if _pawol_chained:
+                            triggered_host_check_nodes.update(_pawol_chained)
+                            _add_resolved_outputs(_pawol_chained)
+                            _pawol_pending.update(_pawol_chained)
+
+        post_api_hc_api_clients: set[str] = set()
+        if post_api_hc_descendants:
+            for node in flow.nodes:
+                if node.type != "api_client" or node.id not in post_api_hc_descendants or node.id in triggered_api_clients:
+                    continue
+                out = outputs.get(node.id, {})
+                if not GraphExecutor._to_bool(out.get("_trigger")):
+                    continue
+                variable_resolver = _make_api_client_variable_resolver(
+                    self._registry,
+                    node.data.get("variables"),
+                    execution_values_by_datapoint_id,
+                )
+                try:
+                    url = _replace_api_client_url_placeholders(
+                        node.data.get("url") or "",
+                        variable_resolver,
+                    ).strip()
+                    if not url:
+                        continue
+                except _ApiClientVariableError as exc:
+                    logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
+                    outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                    post_api_hc_api_clients.add(node.id)
+                    triggered_api_clients.add(node.id)
+                    continue
+                try:
+                    request_urls, pinned_headers, request_extensions = _build_api_client_fetch_targets(url)
+                except ValueError as exc:
+                    logger.warning("Graph %s: blocked api_client target %s: %s", graph_id[:8], url, exc)
+                    outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                    post_api_hc_api_clients.add(node.id)
+                    triggered_api_clients.add(node.id)
+                    continue
+                method = (node.data.get("method", "GET") or "GET").upper()
+                content_type = node.data.get("content_type", "application/json")
+                resp_type = node.data.get("response_type", "application/json")
+                verify_ssl = node.data.get("verify_ssl", True)
+                if isinstance(verify_ssl, str):
+                    verify_ssl = verify_ssl.lower() not in ("false", "0", "no")
+                timeout_s = float(node.data.get("timeout_s", 10) or 10)
+                extra_headers: dict[str, str] = {}
+                hdr_str = (node.data.get("headers") or "").strip()
+                if hdr_str:
+                    try:
+                        extra_headers = _json.loads(hdr_str)
+                    except Exception:
+                        pass
+                hdr_file = (node.data.get("headers_secret_file") or "").strip()
+                if hdr_file:
+                    try:
+                        extra_headers = {
+                            **extra_headers,
+                            **_json.loads(_read_secret_file(hdr_file)),
+                        }
+                    except Exception:
+                        pass
+                try:
+                    extra_headers = _replace_api_client_placeholders(extra_headers, variable_resolver)
+                except _ApiClientVariableError as exc:
+                    logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
+                    outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                    post_api_hc_api_clients.add(node.id)
+                    triggered_api_clients.add(node.id)
+                    continue
+                auth_type = (node.data.get("auth_type") or "none").lower()
+                auth: Any = None
+                try:
+                    if auth_type in ("basic", "digest"):
+                        username = _replace_api_client_placeholders(
+                            node.data.get("auth_username") or "",
+                            variable_resolver,
+                        ).strip()
+                        password = _replace_api_client_placeholders(
+                            node.data.get("auth_password") or "",
+                            variable_resolver,
+                        )
+                        if username:
+                            auth = httpx.BasicAuth(username, password) if auth_type == "basic" else httpx.DigestAuth(username, password)
+                    elif auth_type == "bearer":
+                        token = _replace_api_client_placeholders(
+                            node.data.get("auth_token") or "",
+                            variable_resolver,
+                        ).strip()
+                        if not token:
+                            token = _replace_api_client_placeholders(
+                                _read_secret_file(node.data.get("auth_token_file") or ""),
+                                variable_resolver,
+                            ).strip()
+                        if token:
+                            extra_headers = {
+                                **extra_headers,
+                                "Authorization": f"Bearer {token}",
+                            }
+                except _ApiClientVariableError as exc:
+                    logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
+                    outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                    post_api_hc_api_clients.add(node.id)
+                    triggered_api_clients.add(node.id)
+                    continue
+                try:
+                    req_kwargs: dict[str, Any] = {
+                        "headers": extra_headers,
+                        "timeout": timeout_s,
+                    }
+                    if method in ("POST", "PUT", "PATCH"):
+                        body = _replace_api_client_placeholders(out.get("_body"), variable_resolver)
+                        if content_type == "application/json":
+                            req_kwargs["content"] = _json.dumps(body) if not isinstance(body, (str, bytes)) else body
+                            req_kwargs["headers"] = {
+                                **extra_headers,
+                                "Content-Type": "application/json",
+                            }
+                        elif content_type == "application/x-www-form-urlencoded":
+                            req_kwargs["data"] = body if isinstance(body, dict) else {"data": str(body)}
+                        else:
+                            req_kwargs["content"] = str(body or "")
+                            req_kwargs["headers"] = {
+                                **extra_headers,
+                                "Content-Type": "text/plain",
+                            }
+                    req_headers = {key: value for key, value in req_kwargs.get("headers", {}).items() if key.lower() != "host"}
+                    req_kwargs["headers"] = {**req_headers, **pinned_headers}
+                    if request_extensions:
+                        req_kwargs["extensions"] = request_extensions
+                    last_transport_error: Exception = ValueError(f"Could not fetch API target after trying {len(request_urls)} address(es)")
+                    resp: httpx.Response | Any | None = None
+                    async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
+                        for request_url in request_urls:
+                            try:
+                                resp = await client.request(method, request_url, **req_kwargs)
+                                break
+                            except httpx.RequestError as req_exc:
+                                last_transport_error = req_exc
+                                if method not in _API_CLIENT_RETRYABLE_METHODS:
+                                    break
+                                continue
+                    if resp is None:
+                        raise last_transport_error
+                    resp_text = resp.text
+                    if len(resp_text) > 1_000_000:
+                        resp_text = resp_text[:1_000_000]
+                    if resp_type in ("json", "application/json"):
+                        try:
+                            resp_data: Any = resp.json()
+                        except Exception:
+                            resp_data = resp_text
+                    else:
+                        resp_data = resp_text
+                    outputs[node.id].update(
+                        {
+                            "response": resp_data,
+                            "status": resp.status_code,
+                            "success": 200 <= resp.status_code < 300,
+                        },
+                    )
+                    logger.info(
+                        "Graph %s: API %s %s → %d",
+                        graph_id[:8],
+                        method,
+                        url,
+                        resp.status_code,
+                    )
+                    post_api_hc_api_clients.add(node.id)
+                    triggered_api_clients.add(node.id)
+                except Exception as exc:
+                    logger.warning("Graph %s: api_client failed: %s", graph_id[:8], exc)
+                    outputs[node.id].update({"response": str(exc), "status": None, "success": False})
+                    post_api_hc_api_clients.add(node.id)
+                    triggered_api_clients.add(node.id)
+
+        if post_api_hc_api_clients:
+            _add_resolved_outputs(post_api_hc_api_clients)
+            api_descendants: set[str] = set()
+            pending_sources = list(post_api_hc_api_clients)
+            while pending_sources:
+                source_id = pending_sources.pop()
+                for e in flow.edges:
+                    if e.source != source_id or e.target in api_descendants:
+                        continue
+                    api_descendants.add(e.target)
+                    pending_sources.append(e.target)
+
+            downstream_overrides: dict[str, dict[str, Any]] = {}
+            for e in flow.edges:
+                if e.source in post_api_hc_api_clients:
+                    src_handle = e.sourceHandle or "out"
+                    tgt_handle = e.targetHandle or "in"
+                    downstream_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs[e.source], src_handle)
+            if downstream_overrides:
+                replay_base = api_replay_overrides if api_replay_overrides is not None else aug_overrides
+                replay_overrides = {nid: dict(vals) for nid, vals in replay_base.items()}
+                for nid, vals in downstream_overrides.items():
+                    replay_overrides.setdefault(nid, {}).update(vals)
+                for e in flow.edges:
+                    if e.target not in api_descendants or e.source in api_descendants or e.source in post_api_hc_api_clients:
+                        continue
+                    src_handle = e.sourceHandle or "out"
+                    tgt_handle = e.targetHandle or "in"
+                    replay_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(outputs.get(e.source, {}), src_handle)
+                replay_hyst = copy.deepcopy(pre_execute_hyst if pre_execute_hyst is not None else hyst)
+                api_executor = GraphExecutor(flow, replay_hyst, self._app_config)
+                api_outputs = api_executor.execute(replay_overrides, commit_memory=False)
+                for nid, vals in api_outputs.items():
+                    if nid not in api_client_ids and nid in api_descendants:
+                        outputs[nid] = vals
+                        if nid in replay_hyst:
+                            hyst[nid] = replay_hyst[nid]
+                _apply_operating_hours_state(api_descendants, pre_execute_node_state)
+                final_api_triggered_hc: set[str] = set()
+                for node in flow.nodes:
+                    if node.type == "host_check" and node.id in api_descendants and node.id not in triggered_host_check_nodes:
+                        await _run_host_check_node(node, final_api_triggered_hc, " (post-api api replay)")
+                if final_api_triggered_hc:
+                    triggered_host_check_nodes.update(final_api_triggered_hc)
+                    _add_resolved_outputs(final_api_triggered_hc)
+                    pending_final_api_hc_replay = set(final_api_triggered_hc)
+                    processed_final_api_hc_replay: set[str] = set()
+                    while pending_final_api_hc_replay:
+                        replay_sources = pending_final_api_hc_replay - processed_final_api_hc_replay
+                        if not replay_sources:
+                            break
+                        processed_final_api_hc_replay.update(replay_sources)
+                        final_hc_descendants: set[str] = set()
+                        final_hc_queue = list(replay_sources)
+                        while final_hc_queue:
+                            nid = final_hc_queue.pop()
+                            for e in flow.edges:
+                                if e.source == nid and e.target not in final_hc_descendants:
+                                    final_hc_descendants.add(e.target)
+                                    final_hc_queue.append(e.target)
+                        final_hc_overrides: dict[str, dict[str, Any]] = {}
+                        for e in flow.edges:
+                            if e.source in replay_sources:
+                                src_handle = e.sourceHandle or "out"
+                                tgt_handle = e.targetHandle or "in"
+                                final_hc_overrides.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(
+                                    outputs[e.source],
+                                    src_handle,
+                                )
+                        if not final_hc_overrides:
+                            continue
+                        final_hc_merged = {nid: dict(vals) for nid, vals in replay_overrides.items()}
+                        for nid, vals in resolved_async_edge_overrides.items():
+                            final_hc_merged.setdefault(nid, {}).update(vals)
+                        for nid, vals in final_hc_overrides.items():
+                            final_hc_merged.setdefault(nid, {}).update(vals)
+                        for e in flow.edges:
+                            if e.target not in final_hc_descendants or e.source in final_hc_descendants or e.source in replay_sources:
+                                continue
+                            src_handle = e.sourceHandle or "out"
+                            tgt_handle = e.targetHandle or "in"
+                            final_hc_merged.setdefault(e.target, {})[tgt_handle] = GraphExecutor._get_output_value(
+                                outputs.get(e.source, {}),
+                                src_handle,
+                            )
+                        final_hc_hyst = copy.deepcopy(pre_execute_hyst if pre_execute_hyst is not None else hyst)
+                        final_hc_executor = GraphExecutor(flow, final_hc_hyst, self._app_config)
+                        final_hc_outputs = final_hc_executor.execute(final_hc_merged, commit_memory=False)
+                        for nid, vals in final_hc_outputs.items():
+                            if nid in final_hc_descendants and nid not in triggered_api_clients:
+                                outputs[nid] = vals
+                                if nid not in host_check_ids and nid in final_hc_hyst:
+                                    hyst[nid] = final_hc_hyst[nid]
+                        _apply_operating_hours_state(final_hc_descendants, pre_execute_node_state)
+                        chained_final_hc: set[str] = set()
+                        for node in flow.nodes:
+                            if node.type == "host_check" and node.id in final_hc_descendants and node.id not in triggered_host_check_nodes:
+                                await _run_host_check_node(node, chained_final_hc, " (post-api api replay)")
+                        if chained_final_hc:
+                            triggered_host_check_nodes.update(chained_final_hc)
+                            _add_resolved_outputs(chained_final_hc)
+                            pending_final_api_hc_replay.update(chained_final_hc)
+
+        # ── Final WoL pass ────────────────────────────────────────────────
+        # The final HC replay (above) can set wake_on_lan._trigger=True for
+        # WoL nodes that the earlier WoL loop never reached. Send those packets
+        # so that chains like api_client→hc→api_client→wol complete in one tick.
+        _final_wol_candidates: set[str] = set()
+        for _fw_node in flow.nodes:
+            if _fw_node.type != "wake_on_lan" or _fw_node.id in triggered_wol_nodes:
+                continue
+            _fw_out = outputs.get(_fw_node.id, {})
+            _fw_hyst = hyst.setdefault(_fw_node.id, {})
+            if not GraphExecutor._to_bool(_fw_out.get("_trigger")):
+                _fw_hyst["wol_prev_trigger"] = False
+                continue
+            if _fw_hyst.get("wol_prev_trigger") and _fw_node.id not in cron_reachable:
+                continue
+            _fw_mac = (_fw_node.data.get("mac_address") or "").strip()
+            if not _fw_mac:
+                logger.warning("wake_on_lan: mac_address missing on node %s", _fw_node.id[:8])
+                continue
+            _fw_broadcast = (_fw_node.data.get("broadcast_ip") or "").strip() or "255.255.255.255"
+            _fw_port_raw = _fw_node.data.get("port")
+            try:
+                if isinstance(_fw_port_raw, float) and not _fw_port_raw.is_integer():
+                    raise ValueError(f"fractional port {_fw_port_raw!r}")
+                _fw_port = int(_fw_port_raw) if _fw_port_raw not in (None, "") else 9
+                if not (1 <= _fw_port <= 65535):
+                    raise ValueError(f"port {_fw_port!r} out of range 1–65535")
+                try:
+                    ipaddress.IPv4Address(_fw_broadcast)
+                except ValueError:
+                    raise ValueError(f"invalid broadcast IP {_fw_broadcast!r}") from None
+                await asyncio.to_thread(_send_wol_packet, _fw_mac, _fw_broadcast, _fw_port)
+                _fw_hyst["wol_prev_trigger"] = True
+                outputs[_fw_node.id]["sent"] = True
+                _final_wol_candidates.add(_fw_node.id)
+                triggered_wol_nodes.add(_fw_node.id)
+                logger.info("Graph %s: WoL sent by node %s", graph_id[:8], _fw_node.id[:8])
+            except Exception as exc:
+                logger.warning("Graph %s: WoL failed on node %s: %s", graph_id[:8], _fw_node.id[:8], type(exc).__name__)
+        if _final_wol_candidates:
+            _add_resolved_outputs(_final_wol_candidates)
+            _fwol_dn_ovr: dict[str, dict[str, Any]] = {}
+            for _e in flow.edges:
+                if _e.source in _final_wol_candidates:
+                    _fwol_dn_ovr.setdefault(_e.target, {})[_e.targetHandle or "in"] = GraphExecutor._get_output_value(
+                        outputs[_e.source], _e.sourceHandle or "out"
+                    )
+            if _fwol_dn_ovr:
+                _fwol_base = api_replay_overrides if api_replay_overrides is not None else aug_overrides
+                _fwol_merged: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in _fwol_base.items()}
+                for nid, vals in resolved_async_edge_overrides.items():
+                    _fwol_merged.setdefault(nid, {}).update(vals)
+                for nid, vals in _fwol_dn_ovr.items():
+                    _fwol_merged.setdefault(nid, {}).update(vals)
+                _fwol_hyst_snap = copy.deepcopy(hyst)
+                _fwol_exec = GraphExecutor(flow, _fwol_hyst_snap, self._app_config)
+                _fwol_out = _fwol_exec.execute(_fwol_merged, commit_memory=False)
+                _fwol_desc: set[str] = set()
+                _fwol_q: list[str] = list(_final_wol_candidates)
+                while _fwol_q:
+                    _fn = _fwol_q.pop()
+                    for _e in flow.edges:
+                        if _e.source == _fn and _e.target not in _fwol_desc:
+                            _fwol_desc.add(_e.target)
+                            _fwol_q.append(_e.target)
+                _fwol_wol_ids = {n.id for n in flow.nodes if n.type == "wake_on_lan"}
+                for nid, vals in _fwol_out.items():
+                    if nid not in _fwol_wol_ids and nid in _fwol_desc and nid not in triggered_api_clients:
+                        outputs[nid] = vals
+                        if nid not in host_check_ids and nid in _fwol_hyst_snap:
+                            hyst[nid] = _fwol_hyst_snap[nid]
+                _fwol_hc: set[str] = set()
+                for node in flow.nodes:
+                    if node.type == "host_check" and node.id in _fwol_desc and node.id not in triggered_host_check_nodes:
+                        await _run_host_check_node(node, _fwol_hc, " (final-wol)")
+                if _fwol_hc:
+                    triggered_host_check_nodes.update(_fwol_hc)
+                    _add_resolved_outputs(_fwol_hc)
+                    _fwolhc_pending = set(_fwol_hc)
+                    _fwolhc_processed: set[str] = set()
+                    while _fwolhc_pending:
+                        _fwolhc_srcs = _fwolhc_pending - _fwolhc_processed
+                        if not _fwolhc_srcs:
+                            break
+                        _fwolhc_processed.update(_fwolhc_srcs)
+                        _fwolhc_dn_ovr: dict[str, dict[str, Any]] = {}
+                        for _e in flow.edges:
+                            if _e.source in _fwolhc_srcs:
+                                _fwolhc_dn_ovr.setdefault(_e.target, {})[_e.targetHandle or "in"] = GraphExecutor._get_output_value(
+                                    outputs[_e.source], _e.sourceHandle or "out"
+                                )
+                        if not _fwolhc_dn_ovr:
+                            continue
+                        _fwolhc_base = api_replay_overrides if api_replay_overrides is not None else aug_overrides
+                        _fwolhc_mrgd: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in _fwolhc_base.items()}
+                        for nid, vals in resolved_async_edge_overrides.items():
+                            _fwolhc_mrgd.setdefault(nid, {}).update(vals)
+                        for nid, vals in _fwolhc_dn_ovr.items():
+                            _fwolhc_mrgd.setdefault(nid, {}).update(vals)
+                        _fwolhc_hyst = copy.deepcopy(pre_execute_hyst if pre_execute_hyst is not None else hyst)
+                        _fwolhc_exec = GraphExecutor(flow, _fwolhc_hyst, self._app_config)
+                        _fwolhc_out = _fwolhc_exec.execute(_fwolhc_mrgd, commit_memory=False)
+                        _fwolhc_desc: set[str] = set()
+                        _fwolhc_dq: list[str] = list(_fwolhc_srcs)
+                        while _fwolhc_dq:
+                            _fn = _fwolhc_dq.pop()
+                            for _e in flow.edges:
+                                if _e.source == _fn and _e.target not in _fwolhc_desc:
+                                    _fwolhc_desc.add(_e.target)
+                                    _fwolhc_dq.append(_e.target)
+                        for nid, vals in _fwolhc_out.items():
+                            if nid in _fwolhc_desc and nid not in triggered_api_clients:
+                                outputs[nid] = vals
+                                if nid not in host_check_ids and nid in _fwolhc_hyst:
+                                    hyst[nid] = _fwolhc_hyst[nid]
+                        _apply_operating_hours_state(_fwolhc_desc, pre_execute_node_state)
+                        _fwolhc_chained: set[str] = set()
+                        for node in flow.nodes:
+                            if node.type == "host_check" and node.id in _fwolhc_desc and node.id not in triggered_host_check_nodes:
+                                await _run_host_check_node(node, _fwolhc_chained, " (final-wol-hc)")
+                        if _fwolhc_chained:
+                            triggered_host_check_nodes.update(_fwolhc_chained)
+                            _add_resolved_outputs(_fwolhc_chained)
+                            _fwolhc_pending.update(_fwolhc_chained)
 
         # ── Handle notify_pushover ────────────────────────────────────────
         # Runs AFTER api_client second-pass so that graphs with api_client →
@@ -1710,6 +2575,16 @@ class LogicManager:
                     msg[:40],
                     exc,
                 )
+
+        # Deferred hc_prev_trigger=False: clear only for HC nodes that did NOT
+        # fire in any async pass. Clearing inside _run_host_check_node was wrong
+        # for async-driven triggers (e.g. api_client.success→hc._trigger) because
+        # the first executor pass uses placeholder success=False → _trigger=False,
+        # but after the post-api pass the real trigger may be True. By deferring
+        # to here, triggered_host_check_nodes is final.
+        for node in flow.nodes:
+            if node.type == "host_check" and node.id not in triggered_host_check_nodes:
+                hyst.setdefault(node.id, {})["hc_prev_trigger"] = False
 
         # Memory is the explicit tick boundary for feedback loops. Commit it
         # after all async node re-propagation so the stored value always reflects

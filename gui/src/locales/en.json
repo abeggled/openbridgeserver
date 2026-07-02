@@ -255,6 +255,19 @@
       "result": "{migrated} bindings migrated, {skipped} skipped.",
       "failed": "Migration failed"
     },
+    "message": {
+      "addTarget": "Add target",
+      "targetName": "Target name",
+      "channel": "Channel",
+      "apiToken": "API token",
+      "botToken": "Bot token",
+      "apiKey": "API key",
+      "sender": "Sender",
+      "userKey": "User key",
+      "chatId": "Chat ID",
+      "to": "Recipient",
+      "recipient": "Recipient"
+    },
     "anwesenheit": {
       "modalTitle": "Presence simulation",
       "modalTitleFull": "Presence simulation — {name}",
@@ -552,6 +565,15 @@
       "anwSetValuePlaceholder": "e.g. 0 / 1 / false / true / 21.5",
       "anwOnPresenceHint": "Empty = use behavior from adapter configuration.",
       "snmpSection": "SNMP binding",
+      "messageSection": "MESSAGE binding",
+      "operatorLabel": "Operator",
+      "compareValueLabel": "Compare value",
+      "titleLabel": "Title",
+      "cooldownSecondsLabel": "Cooldown (seconds)",
+      "messageTemplateLabel": "Message template",
+      "targetsLabel": "Targets",
+      "addTarget": "Add target",
+      "messageSendOnChange": "Send only when the condition changes to fulfilled",
       "snmpHostLabel": "Device (IP/DNS) *",
       "snmpHostPlaceholder": "e.g. 192.168.1.100 or switch.local",
       "snmpPortLabel": "UDP port",
@@ -989,7 +1011,9 @@
       "knxNoTunnelingInterfaces": "No tunneling interfaces found in keyfile — please check the individual address in the keyfile.",
       "knxTunnelOverload": "KNX tunnel slot likely occupied by another client — gateway pool overloaded.",
       "knxTunnelStable": "Tunnel pool stable again.",
-      "invalidBindingsSkipped": "{count} invalid binding(s) skipped ({examples})"
+      "invalidBindingsSkipped": "{count} invalid binding(s) skipped ({examples})",
+      "messageProviderFailures": "MESSAGE provider failures: {count} target(s)",
+      "messageSent": "MESSAGE sent"
     },
     "testResult": {
       "typeNotRegistered": "Adapter type '{type}' not registered",
@@ -1069,11 +1093,25 @@
     "pause": "⏸ Pause",
     "resume": "▶ Resume",
     "statsTitle": "Ring Buffer Statistics",
+    "status": "Status",
+    "enabledStatus": "Active",
+    "disabledStatus": "Disabled",
+    "monitorDisabledTitle": "Monitor disabled",
+    "monitorDisabledBody": "The monitor is disabled. New value changes are not recorded or shown live.",
+    "monitorDisabledAction": "Enable monitor",
+    "monitorEnabled": "Monitor active",
+    "monitorEnabledHint": "When the monitor is disabled, value changes are not recorded and the ring buffer uses no database resources.",
+    "disableConfirmTitle": "Disable monitor?",
+    "disableConfirmMessage": "The monitor will be disabled and all existing monitor entries will be deleted to free storage. This action cannot be undone.",
+    "disableConfirmLabel": "Disable and delete",
     "statsDiskUsage": "Disk usage",
     "statsRetention": "Effective retention (oldest entry)",
     "storageFixed": "Storage model is fixed server-side:",
     "maxDisk": "Max. disk space",
+    "maxDiskPlaceholder": "e.g. 500",
     "maxRetention": "Max. retention",
+    "maxRetentionPlaceholder": "e.g. 30",
+    "maxEntriesPlaceholder": "e.g. 10000",
     "unitDays": "Days",
     "unitMonths": "Months",
     "unitYears": "Years",
@@ -1276,6 +1314,7 @@
       "notify_pushover": "Pushover",
       "notify_sms": "SMS (seven.io)",
       "wake_on_lan": "Wake on LAN",
+      "host_check": "Host Check",
       "json_extractor": "JSON Extractor",
       "xml_extractor": "XML Extractor",
       "substring_extractor": "Substring / RegEx",
@@ -1803,6 +1842,12 @@
         "sender": "Sender (max 11 chars)",
         "message": "Message (fallback)"
       },
+      "host_check": {
+        "host": "Host / IP address",
+        "hostPlaceholder": "e.g. 192.168.1.1 or hostname.local",
+        "timeout_s": "Timeout (seconds)",
+        "count": "Ping count"
+      },
       "wake_on_lan": {
         "mac_address": "MAC address (e.g. AA:BB:CC:DD:EE:FF)",
         "broadcast_ip": "Broadcast IP",
@@ -1900,7 +1945,9 @@
       "icalArray": "Array",
       "icalDate": "Date",
       "icalTomorrow": "Tomorrow",
-      "icalToday": "Today"
+      "icalToday": "Today",
+      "reachable": "Reachable",
+      "latencyMs": "Latency (ms)"
     },
     "nodeDescriptions": {
       "const_value": "Outputs a fixed value — number, bool or text. Useful as threshold or reference.",
@@ -1935,6 +1982,7 @@
       "notify_pushover": "Sends a push notification via the Pushover API (api.pushover.net). Triggered automatically when a message arrives at the input.",
       "notify_sms": "Sends an SMS via the seven.io gateway (gateway.seven.io). Triggered automatically when a message arrives at the input.",
       "wake_on_lan": "Sends a Wake-on-LAN magic packet to a device via UDP broadcast. Triggered when the trigger input is true.",
+      "host_check": "Pings a host and outputs the reachability status (true/false) and latency in milliseconds. Runs on the rising edge of the trigger input. Recommended: connect to a Timer/Cron node for periodic polling.",
       "json_extractor": "Parses a JSON string and extracts one or more values by key paths (dot notation, e.g. sensors.temperature). Multiple outputs configurable via + in the config panel.",
       "xml_extractor": "Parses an XML string and extracts one or more values by XPath expressions (ElementTree syntax, e.g. .//temperature). Multiple outputs configurable via + in the config panel.",
       "substring_extractor": "Extracts text from a string using substring operations or regular expressions. Modes: left_of / right_of (first or last occurrence), between (two markers), cut (position + length), regex (Python re syntax, capture groups selectable).",

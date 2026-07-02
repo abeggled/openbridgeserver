@@ -7,7 +7,7 @@
  * Plus a Floating-UI tooltip attached to a "ⓘ" help icon that explains
  * the storage behaviour.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
@@ -27,7 +27,7 @@ function makeApi(stats = {}) {
   }
 }
 
-async function mountStats(api = makeApi()) {
+async function mountStats(api = makeApi(), { waitForLoad = true } = {}) {
   vi.doMock('@/api/client', () => ({ ringbufferApi: api }))
   vi.doMock('@/stores/websocket', () => ({
     useWebSocketStore: () => ({
@@ -37,9 +37,11 @@ async function mountStats(api = makeApi()) {
   }))
   const mod = await import('@/views/ringbuffer/TopbarStats.vue')
   const wrapper = mount(mod.default, { attachTo: document.body })
-  await flushPromises()
-  await wrapper.vm.$nextTick()
-  await flushPromises()
+  if (waitForLoad) {
+    await flushPromises()
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+  }
   return { wrapper, api }
 }
 
@@ -50,10 +52,27 @@ describe('TopbarStats', () => {
     document.body.innerHTML = ''
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('calls ringbufferApi.stats() once on mount', async () => {
     const api = makeApi()
     await mountStats(api)
     expect(api.stats).toHaveBeenCalledTimes(1)
+  })
+
+  it('emits loaded stats so the parent view can react to disabled state', async () => {
+    const { wrapper } = await mountStats(makeApi({ enabled: false, total: 0 }))
+
+    expect(wrapper.emitted('stats')?.[0]?.[0]).toMatchObject({ enabled: false, total: 0 })
+  })
+
+  it('renders the disabled storage label through i18n', async () => {
+    const { wrapper } = await mountStats(makeApi({ enabled: false, total: 0 }))
+
+    expect(wrapper.find('[data-testid="topbar-stats"]').text()).toContain('Deaktiviert')
+    expect(wrapper.find('[data-testid="topbar-stats"]').text()).not.toContain('disabled')
   })
 
   it('renders total / max · storage in the compact format', async () => {
@@ -99,5 +118,49 @@ describe('TopbarStats', () => {
     expect(root.exists()).toBe(true)
     // Either contains a dash or stays empty-ish; must not throw / not break.
     expect(root.text()).toBeDefined()
+  })
+
+  it('keeps polling while disabled so another tab can re-enable the monitor', async () => {
+    vi.useFakeTimers()
+    const api = makeApi({ enabled: false, total: 0 })
+    const { wrapper } = await mountStats(api)
+
+    expect(api.stats).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(10000)
+    await flushPromises()
+
+    expect(api.stats).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('does not restart polling after unmount while stats are still loading', async () => {
+    vi.useFakeTimers()
+    let resolveStats
+    const api = {
+      stats: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveStats = resolve
+          }),
+      ),
+    }
+
+    const { wrapper } = await mountStats(api, { waitForLoad: false })
+    expect(api.stats).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+    resolveStats({
+      data: {
+        total: 0,
+        max_entries: 50000,
+        storage: 'file',
+        file_size_bytes: 0,
+        enabled: true,
+      },
+    })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(10000)
+
+    expect(api.stats).toHaveBeenCalledTimes(1)
   })
 })

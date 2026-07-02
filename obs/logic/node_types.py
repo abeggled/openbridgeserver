@@ -798,6 +798,35 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         color="#0369a1",
     ),
     NodeTypeDef(
+        type="host_check",
+        label="Host Check (Ping)",
+        category="integration",
+        description="Pingt einen Host und liefert den Erreichbarkeitsstatus sowie die Latenz. Wird ausgelöst wenn der Trigger-Eingang true ist (Flanke). Empfehlung: mit einem Timer/Cron-Knoten verbinden.",
+        inputs=[_port("trigger", "Trigger", "trigger")],
+        outputs=[
+            _port("reachable", "Erreichbar", "boolean"),
+            _port("latency_ms", "Latenz (ms)", "number"),
+        ],
+        config_schema={
+            "host": {
+                "type": "string",
+                "default": "",
+                "label": "Host / IP-Adresse",
+            },
+            "timeout_s": {
+                "type": "number",
+                "default": 1,
+                "label": "Timeout (Sekunden)",
+            },
+            "count": {
+                "type": "number",
+                "default": 1,
+                "label": "Ping-Anzahl",
+            },
+        },
+        color="#0369a1",
+    ),
+    NodeTypeDef(
         type="json_extractor",
         label="JSON Extractor",
         category="integration",

@@ -1230,6 +1230,37 @@ Verbindet sich mit einem **externen** MQTT-Broker (getrennt vom internen Mosquit
 
 ---
 
+### MESSAGE-Adapter
+
+Sendet Benachrichtigungen, wenn sich ein verknüpfter Datenpunkt ändert und die Bedingung der Verknüpfung erfüllt ist. Der Adapter ist als lesende Verknüpfung (`SOURCE`) konfiguriert, weil er Wertänderungen beobachtet und daraus Nachrichten auslöst.
+
+**Unterstützte Provider:**
+
+| Provider | Instanz-Felder | Ziel-Felder |
+|---|---|---|
+| `pushover` | `api_token` | `user_key` |
+| `telegram` | `bot_token` | `chat_id` |
+| `seven.io` | `api_key`, optional `sender` | `to`, `channel` (`sms`/`voice`) |
+
+**Verknüpfungs-Konfiguration:**
+
+| Feld | Beschreibung |
+|---|---|
+| `operator` | Bedingung: `any`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `contains`, `contains not`, `starts with`, `ends with` |
+| `compare_value` | Vergleichswert; bei `any` nicht nötig |
+| `message` | Nachrichtenvorlage mit Platzhaltern |
+| `title` | Optionaler Nachrichtentitel |
+| `providers` | Liste aus Provider und Zielname, an die gesendet wird |
+| `send_on_change` | Sendet nur beim Wechsel in den erfüllten Zustand; bei `any` nur bei geändertem Wert |
+| `cooldown_seconds` | Mindestabstand zwischen zwei gesendeten Nachrichten |
+| `enabled` | Aktiviert/deaktiviert die Verknüpfung |
+
+Platzhalter in der Nachricht: `###DP###` = Wert, `###DPU###` = Einheit, `###DPN###` = Datenpunktname, `###DPI###` = Datenpunkt-ID, `###TS###` = Zeitstempel.
+
+> **Hinweis:** Signal wird im MESSAGE-Adapter vorerst nicht angeboten, weil dafür ein separater Signal-Gateway-Dienst betrieben werden müsste.
+
+---
+
 ### Home-Assistant-Adapter
 
 Verbindet **open bridge server** bidirektional mit einer Home-Assistant-Instanz. Empfängt Zustandsänderungen in Echtzeit über WebSocket (`state_changed`-Ereignisse) und schreibt Werte über die HA-REST-API (Dienst-Aufrufe).

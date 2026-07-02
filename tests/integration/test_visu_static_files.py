@@ -130,6 +130,8 @@ async def gui_dist_client(tmp_path):
             ("favicon.svg", b'<svg xmlns="http://www.w3.org/2000/svg"/>'),
             ("manifest.webmanifest", b'{"name":"OBS Admin"}'),
             ("apple-touch-icon.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 8),
+            ("obs_logo_light.svg", b'<svg xmlns="http://www.w3.org/2000/svg" id="light"/>'),
+            ("obs_logo_dark.svg", b'<svg xmlns="http://www.w3.org/2000/svg" id="dark"/>'),
             ("index.html", b"<html/>"),
         ]:
             target = gui_dist / name
@@ -192,3 +194,17 @@ async def test_admin_apple_touch_icon_returns_png(gui_dist_client):
     resp = await gui_dist_client.get("/apple-touch-icon.png")
     assert resp.status_code == 200
     assert resp.headers.get("content-type", "").startswith("image/png")
+
+
+@pytest.mark.asyncio
+async def test_obs_logo_light_returns_svg(gui_dist_client):
+    resp = await gui_dist_client.get("/obs_logo_light.svg")
+    assert resp.status_code == 200
+    assert "svg" in resp.headers.get("content-type", "")
+
+
+@pytest.mark.asyncio
+async def test_obs_logo_dark_returns_svg(gui_dist_client):
+    resp = await gui_dist_client.get("/obs_logo_dark.svg")
+    assert resp.status_code == 200
+    assert "svg" in resp.headers.get("content-type", "")
