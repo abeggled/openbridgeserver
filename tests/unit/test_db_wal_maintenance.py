@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,16 @@ async def test_checkpoint_noop_for_memory_db():
         assert await db.checkpoint() is False
     finally:
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_run_checkpoint_skips_named_memory_uri(tmp_path, monkeypatch):
+    """A named shared in-memory URI must be a no-op, not open a real on-disk file."""
+    monkeypatch.chdir(tmp_path)
+    db = Database("file:memdb_ckpt?mode=memory&cache=shared")
+    assert await db._run_checkpoint() is False
+    # The normalized name (memdb_ckpt) must not have been created as a disk database.
+    assert not (tmp_path / "memdb_ckpt").exists()
 
 
 @pytest.mark.asyncio
@@ -363,6 +374,56 @@ async def test_disconnect_swallows_checkpoint_error(tmp_path):
     # Must not raise despite the failing checkpoint.
     await db.disconnect()
     assert db._conn is None
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_waits_for_worker_thread_on_cancel(tmp_path, monkeypatch):
+    """Cancelling a checkpoint must hold the lock until the worker thread finishes.
+
+    Cancelling asyncio.to_thread/run_in_executor does not stop the worker, so the lock
+    must not be released (letting disconnect/restore proceed) until it is done. See #908.
+    """
+    db = Database(str(tmp_path / "obs.db"))
+    await db.connect()
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class _Cursor:
+        def fetchone(self):
+            return (0, -1, -1)
+
+    class _SlowConn:
+        def execute(self, _sql):
+            entered.set()
+            release.wait(2)  # block the worker until the test lets it finish
+            return _Cursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("obs.db.database.sqlite3.connect", lambda *a, **k: _SlowConn())
+
+    cp = asyncio.create_task(db.checkpoint())
+    while not entered.is_set():  # wait until the worker is running under the lock
+        await asyncio.sleep(0.01)
+
+    cp.cancel()
+    await asyncio.sleep(0.05)
+    # Cancellation is pending but the coroutine still awaits the worker → lock held.
+    assert not cp.done()
+    assert db._checkpoint_lock.locked()
+
+    release.set()  # let the worker finish
+    with pytest.raises(asyncio.CancelledError):
+        await cp
+    assert not db._checkpoint_lock.locked()  # lock released only after the worker was done
+
+    async def _noop() -> bool:
+        return False
+
+    db._run_checkpoint = _noop  # type: ignore[method-assign]  # keep disconnect fast
+    await db.disconnect()
 
 
 @pytest.mark.asyncio

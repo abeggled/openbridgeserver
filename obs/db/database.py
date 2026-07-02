@@ -792,9 +792,20 @@ class Database:
             return await self._run_checkpoint()
 
     async def _run_checkpoint(self) -> bool:
-        """Execute the TRUNCATE checkpoint. Caller must hold ``_checkpoint_lock``."""
-        from obs.ringbuffer.ringbuffer import _sqlite_filesystem_path
+        """Execute the TRUNCATE checkpoint. Caller must hold ``_checkpoint_lock``.
 
+        Skips in-memory databases (including named ``file:…?mode=memory`` URIs, which
+        would otherwise be normalized to a real on-disk filename). The checkpoint runs in
+        a worker thread that cannot be cancelled; if this coroutine is cancelled
+        (shutdown), we still wait for that worker to finish before propagating the
+        cancellation, so the caller keeps ``_checkpoint_lock`` until the thread has
+        released its SQLite locks and a following disconnect/restore can't race it. See
+        issue #908.
+        """
+        from obs.ringbuffer.ringbuffer import _is_sqlite_memory_path, _sqlite_filesystem_path
+
+        if _is_sqlite_memory_path(self._path):
+            return False
         fs_path = _sqlite_filesystem_path(self._path)
 
         def _run() -> bool:
@@ -812,7 +823,14 @@ class Database:
             # row = (busy, log_pages, checkpointed_pages); busy != 0 → WAL not reset.
             return bool(row is not None and row[0] == 0)
 
-        return await asyncio.to_thread(_run)
+        fut = asyncio.get_running_loop().run_in_executor(None, _run)
+        try:
+            return await asyncio.shield(fut)
+        except asyncio.CancelledError:
+            # The worker thread can't be cancelled — wait for it to finish (releasing its
+            # SQLite locks) before we unwind and release _checkpoint_lock.
+            await asyncio.wait({fut})
+            raise
 
     # ------------------------------------------------------------------
     # Migrations
