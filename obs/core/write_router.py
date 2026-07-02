@@ -158,14 +158,15 @@ class WriteRouter:
             return
 
         rows = await self._db.fetchall(
-            """SELECT direction, enabled FROM adapter_bindings
+            """SELECT direction, enabled, adapter_type FROM adapter_bindings
                WHERE datapoint_id=?""",
             (str(dp_id),),
         )
-        has_bindings = bool(rows)
         active_rows = [row for row in rows if _row_is_enabled(row)]
-        has_writable_bindings = any(_row_value(row, "direction") in {"DEST", "BOTH"} for row in active_rows)
-        if has_bindings and not has_writable_bindings:
+        write_semantic_rows = [row for row in active_rows if _row_value(row, "adapter_type") != "MESSAGE"]
+        has_write_semantic_bindings = bool(write_semantic_rows)
+        has_writable_bindings = any(_row_value(row, "direction") in {"DEST", "BOTH"} for row in write_semantic_rows)
+        if has_write_semantic_bindings and not has_writable_bindings:
             logger.warning("Write request for non-writable DataPoint %s — ignored", dp_id)
             return
 
@@ -267,7 +268,7 @@ class WriteRouter:
 
         rows = await self._db.fetchall(
             """SELECT * FROM adapter_bindings
-               WHERE datapoint_id=? AND direction IN ('DEST','BOTH') AND enabled=1""",
+               WHERE datapoint_id=? AND direction IN ('DEST','BOTH') AND enabled=1 AND adapter_type <> 'MESSAGE'""",
             (str(dp_id),),
         )
         if not rows:
@@ -288,6 +289,9 @@ class WriteRouter:
                 continue
             if skip_binding_id and binding.id == skip_binding_id:
                 logger.debug("WriteRouter: skipping originating binding %s", binding.id)
+                continue
+            if binding.adapter_type == "MESSAGE":
+                logger.debug("WriteRouter: skipping MESSAGE observer binding %s", binding.id)
                 continue
 
             # Phase 5: Lookup per Instance-ID (bevorzugt), Fallback auf Typ

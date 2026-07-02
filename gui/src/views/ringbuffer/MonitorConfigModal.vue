@@ -1,8 +1,22 @@
 <template>
   <Modal v-model="open" :title="$t('ringbuffer.configureTitle')" max-width="md">
     <form @submit.prevent="onSubmit" class="flex flex-col gap-4">
+      <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-2">
+        <div class="flex items-center gap-2">
+          <input id="monitor-enabled" type="checkbox" v-model="configForm.enabled" data-testid="rb-config-enabled" />
+          <label for="monitor-enabled" class="text-sm font-medium">{{ $t('ringbuffer.monitorEnabled') }}</label>
+        </div>
+        <p class="text-xs text-slate-500">{{ $t('ringbuffer.monitorEnabledHint') }}</p>
+      </div>
+
       <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-2" data-testid="rb-config-stats">
         <h4 class="text-sm font-semibold">{{ $t('ringbuffer.statsTitle') }}</h4>
+        <div class="text-xs text-slate-500 flex items-center justify-between">
+          <span>{{ $t('ringbuffer.status') }}</span>
+          <span class="font-medium text-slate-700 dark:text-slate-200" data-testid="rb-config-stats-enabled">
+            {{ stats?.enabled === false ? $t('ringbuffer.disabledStatus') : $t('ringbuffer.enabledStatus') }}
+          </span>
+        </div>
         <div class="text-xs text-slate-500 flex items-center justify-between">
           <span>{{ $t('ringbuffer.entries') }}</span>
           <span class="font-medium text-slate-700 dark:text-slate-200" data-testid="rb-config-stats-total">{{ stats?.total ?? '-' }}</span>
@@ -23,7 +37,7 @@
 
       <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-3">
         <div class="flex items-center gap-2">
-          <input id="max-entries-enabled" type="checkbox" v-model="configForm.maxEntriesEnabled" data-testid="rb-config-max-entries-enabled" />
+          <input id="max-entries-enabled" type="checkbox" v-model="configForm.maxEntriesEnabled" :disabled="!configForm.enabled" data-testid="rb-config-max-entries-enabled" />
           <label for="max-entries-enabled" class="text-sm font-medium">{{ $t('ringbuffer.maxEntries') }}</label>
         </div>
         <input
@@ -33,15 +47,15 @@
           max="1000000"
           step="100"
           class="input"
-          :disabled="!configForm.maxEntriesEnabled"
+          :disabled="!configForm.enabled || !configForm.maxEntriesEnabled"
           data-testid="rb-config-max-entries"
-          placeholder="z. B. 10000"
+          :placeholder="$t('ringbuffer.maxEntriesPlaceholder')"
         />
       </div>
 
       <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-3">
         <div class="flex items-center gap-2">
-          <input id="max-size-enabled" type="checkbox" v-model="configForm.maxSizeEnabled" data-testid="rb-config-max-size-enabled" />
+          <input id="max-size-enabled" type="checkbox" v-model="configForm.maxSizeEnabled" :disabled="!configForm.enabled" data-testid="rb-config-max-size-enabled" />
           <label for="max-size-enabled" class="text-sm font-medium">{{ $t('ringbuffer.maxDisk') }}</label>
         </div>
         <div class="grid grid-cols-2 gap-2">
@@ -51,14 +65,14 @@
             min="1"
             step="1"
             class="input"
-            :disabled="!configForm.maxSizeEnabled"
+            :disabled="!configForm.enabled || !configForm.maxSizeEnabled"
             data-testid="rb-config-max-size-value"
-            placeholder="z. B. 500"
+            :placeholder="$t('ringbuffer.maxDiskPlaceholder')"
           />
           <select
             v-model="configForm.maxSizeUnit"
             class="input"
-            :disabled="!configForm.maxSizeEnabled"
+            :disabled="!configForm.enabled || !configForm.maxSizeEnabled"
             data-testid="rb-config-max-size-unit"
           >
             <option value="mb">MB</option>
@@ -69,7 +83,7 @@
 
       <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-3">
         <div class="flex items-center gap-2">
-          <input id="retention-enabled" type="checkbox" v-model="configForm.retentionEnabled" data-testid="rb-config-retention-enabled" />
+          <input id="retention-enabled" type="checkbox" v-model="configForm.retentionEnabled" :disabled="!configForm.enabled" data-testid="rb-config-retention-enabled" />
           <label for="retention-enabled" class="text-sm font-medium">{{ $t('ringbuffer.maxRetention') }}</label>
         </div>
         <div class="grid grid-cols-2 gap-2">
@@ -79,14 +93,14 @@
             min="0"
             step="1"
             class="input"
-            :disabled="!configForm.retentionEnabled"
+            :disabled="!configForm.enabled || !configForm.retentionEnabled"
             data-testid="rb-config-retention-value"
-            placeholder="z. B. 30"
+            :placeholder="$t('ringbuffer.maxRetentionPlaceholder')"
           />
           <select
             v-model="configForm.retentionUnit"
             class="input"
-            :disabled="!configForm.retentionEnabled"
+            :disabled="!configForm.enabled || !configForm.retentionEnabled"
             data-testid="rb-config-retention-unit"
           >
             <option value="days">{{ $t('ringbuffer.unitDays') }}</option>
@@ -108,6 +122,13 @@
       </div>
     </form>
   </Modal>
+  <ConfirmDialog
+    v-model="showDisableConfirm"
+    :title="$t('ringbuffer.disableConfirmTitle')"
+    :message="$t('ringbuffer.disableConfirmMessage')"
+    :confirm-label="$t('ringbuffer.disableConfirmLabel')"
+    @confirm="confirmDisable"
+  />
 </template>
 
 <script setup>
@@ -126,6 +147,7 @@ import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
 import { formatDurationDeutsch } from '@/composables/useTimeFilterParser'
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import Modal from '@/components/ui/Modal.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
@@ -134,7 +156,7 @@ const { t } = useI18n()
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
 })
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'saved'])
 
 const SIZE_UNIT_FACTORS = { mb: 1024 * 1024, gb: 1024 * 1024 * 1024 }
 const RETENTION_UNIT_SECONDS = {
@@ -151,8 +173,11 @@ const open = computed({
 const stats = ref(null)
 const saving = ref(false)
 const configMsg = ref(null)
+const showDisableConfirm = ref(false)
+const pendingDisablePayload = ref(null)
 let closeTimer = null
 const configForm = reactive({
+  enabled: true,
   maxEntriesEnabled: false,
   maxEntriesValue: '50000',
   maxSizeEnabled: true,
@@ -197,6 +222,7 @@ function pickRetentionUnit(seconds) {
 }
 
 function hydrateForm(currentStats) {
+  configForm.enabled = currentStats?.enabled !== false
   const maxEntries = Number(currentStats?.max_entries)
   if (Number.isFinite(maxEntries) && maxEntries > 0) {
     configForm.maxEntriesEnabled = true
@@ -230,7 +256,12 @@ function hydrateForm(currentStats) {
 }
 
 function buildPayload() {
-  const payload = { storage: 'file', max_entries: null, max_file_size_bytes: null, max_age: null }
+  const payload = { enabled: Boolean(configForm.enabled), storage: 'file' }
+  if (!configForm.enabled) return payload
+
+  payload.max_entries = null
+  payload.max_file_size_bytes = null
+  payload.max_age = null
   if (configForm.maxEntriesEnabled) {
     const maxEntries = parseNonNegativeInteger(configForm.maxEntriesValue)
     if (maxEntries === null || maxEntries < 100) throw new Error(t('ringbuffer.validationMinEntries'))
@@ -260,7 +291,6 @@ async function loadStats() {
 }
 
 async function onSubmit() {
-  saving.value = true
   configMsg.value = null
   if (closeTimer) {
     clearTimeout(closeTimer)
@@ -268,9 +298,24 @@ async function onSubmit() {
   }
   try {
     const payload = buildPayload()
+    if (stats.value?.enabled !== false && payload.enabled === false) {
+      pendingDisablePayload.value = payload
+      showDisableConfirm.value = true
+      return
+    }
+    await savePayload(payload)
+  } catch (error) {
+    configMsg.value = { ok: false, text: error?.response?.data?.detail || error?.message || t('ringbuffer.saveFailed') }
+  }
+}
+
+async function savePayload(payload) {
+  saving.value = true
+  try {
     const { data } = await ringbufferApi.config(payload)
     stats.value = data
     hydrateForm(data)
+    emit('saved', data)
     configMsg.value = { ok: true, text: t('ringbuffer.configSavedModal') }
     closeTimer = setTimeout(() => {
       open.value = false
@@ -282,6 +327,13 @@ async function onSubmit() {
   } finally {
     saving.value = false
   }
+}
+
+async function confirmDisable() {
+  const payload = pendingDisablePayload.value
+  pendingDisablePayload.value = null
+  if (!payload) return
+  await savePayload(payload)
 }
 
 watch(open, (val) => {

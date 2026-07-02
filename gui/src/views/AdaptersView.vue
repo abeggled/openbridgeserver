@@ -58,6 +58,10 @@
               v-else-if="newForm.adapter_type === 'KNX'"
               v-model="newForm.config"
             />
+            <MessageConfigForm
+              v-else-if="newForm.adapter_type === 'MESSAGE'"
+              v-model="newForm.config"
+            />
             <template v-else>
               <SchemaForm
                 :schema="newSchema"
@@ -171,6 +175,10 @@
                 v-else-if="a.adapter_type === 'KNX'"
                 v-model="drafts[a.id].config"
               />
+              <MessageConfigForm
+                v-else-if="a.adapter_type === 'MESSAGE'"
+                v-model="drafts[a.id].config"
+              />
               <template v-else>
                 <SchemaForm
                   :schema="schemas[a.adapter_type]"
@@ -208,7 +216,7 @@
           </div>
 
           <div v-if="!isDemo" class="flex gap-3 flex-wrap">
-            <button v-if="a.adapter_type !== 'ANWESENHEITSSIMULATION' && a.adapter_type !== 'SNMP'" @click="testConnection(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'test'"
+            <button v-if="a.adapter_type !== 'ANWESENHEITSSIMULATION' && a.adapter_type !== 'SNMP' && a.adapter_type !== 'MESSAGE'" @click="testConnection(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'test'"
               :title="$t('adapters.testConnectionTitle')">
               <Spinner v-if="busy[a.id] === 'test'" size="xs" color="slate" />
               {{ $t('adapters.testConnection') }}
@@ -402,6 +410,7 @@ import ZeitschaltuhrCustomHolidaysEditor from '@/components/adapters/Zeitschaltu
 import AnwesenheitDatapointSelector from '@/components/adapters/AnwesenheitDatapointSelector.vue'
 import AnwesenheitConfigForm from '@/components/adapters/AnwesenheitConfigForm.vue'
 import KnxConfigForm        from '@/components/adapters/KnxConfigForm.vue'
+import MessageConfigForm    from '@/components/adapters/MessageConfigForm.vue'
 import Modal         from '@/components/ui/Modal.vue'
 import { adapterDotClass as dotClass, adapterBadgeVariant as statusBadgeVariant, adapterStatusLabel as statusLabel, adapterStatusDetailText } from '@/utils/adapterStatus'
 

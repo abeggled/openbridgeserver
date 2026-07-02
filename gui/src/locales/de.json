@@ -255,6 +255,19 @@
       "result": "{migrated} Verknüpfungen migriert, {skipped} übersprungen.",
       "failed": "Migration fehlgeschlagen"
     },
+    "message": {
+      "addTarget": "Ziel hinzufügen",
+      "targetName": "Zielname",
+      "channel": "Kanal",
+      "apiToken": "API-Token",
+      "botToken": "Bot-Token",
+      "apiKey": "API-Schlüssel",
+      "sender": "Absender",
+      "userKey": "User-Key",
+      "chatId": "Chat-ID",
+      "to": "Empfänger",
+      "recipient": "Empfänger"
+    },
     "anwesenheit": {
       "modalTitle": "Anwesenheitssimulation",
       "modalTitleFull": "Anwesenheitssimulation — {name}",
@@ -552,6 +565,15 @@
       "anwSetValuePlaceholder": "z.B. 0 / 1 / false / true / 21.5",
       "anwOnPresenceHint": "Leer = Verhalten aus der Adapter-Konfiguration verwenden.",
       "snmpSection": "SNMP Binding",
+      "messageSection": "MESSAGE Binding",
+      "operatorLabel": "Operator",
+      "compareValueLabel": "Vergleichswert",
+      "titleLabel": "Titel",
+      "cooldownSecondsLabel": "Cooldown (Sekunden)",
+      "messageTemplateLabel": "Nachrichtenvorlage",
+      "targetsLabel": "Ziele",
+      "addTarget": "Ziel hinzufügen",
+      "messageSendOnChange": "Nur beim Wechsel in den erfüllten Zustand senden",
       "snmpHostLabel": "Gerät (IP/DNS) *",
       "snmpHostPlaceholder": "z.B. 192.168.1.100 oder switch.local",
       "snmpPortLabel": "UDP-Port",
@@ -989,7 +1011,9 @@
       "knxNoTunnelingInterfaces": "Keine Tunneling-Interfaces im Keyfile gefunden — bitte Individual Address im Keyfile prüfen.",
       "knxTunnelOverload": "KNX-Tunnel-Slot wahrscheinlich von anderem Client belegt — Gateway-Pool überlastet.",
       "knxTunnelStable": "Tunnel-Pool wieder stabil.",
-      "invalidBindingsSkipped": "{count} ungültige Verknüpfung(en) übersprungen ({examples})"
+      "invalidBindingsSkipped": "{count} ungültige Verknüpfung(en) übersprungen ({examples})",
+      "messageProviderFailures": "MESSAGE-Provider-Fehler: {count} Ziel(e)",
+      "messageSent": "MESSAGE gesendet"
     },
     "testResult": {
       "typeNotRegistered": "Adapter-Typ '{type}' nicht registriert",
@@ -1069,11 +1093,25 @@
     "pause": "⏸ Pause",
     "resume": "▶ Resume",
     "statsTitle": "Ringbuffer Statistik",
+    "status": "Status",
+    "enabledStatus": "Aktiv",
+    "disabledStatus": "Deaktiviert",
+    "monitorDisabledTitle": "Monitor disabled",
+    "monitorDisabledBody": "Der Monitor ist deaktiviert. Es werden keine neuen Wertänderungen aufgezeichnet oder live angezeigt.",
+    "monitorDisabledAction": "Monitor aktivieren",
+    "monitorEnabled": "Monitor aktiv",
+    "monitorEnabledHint": "Wenn der Monitor deaktiviert ist, werden keine Wertänderungen aufgezeichnet und der Ringbuffer belegt keine Datenbankressourcen.",
+    "disableConfirmTitle": "Monitor deaktivieren?",
+    "disableConfirmMessage": "Der Monitor wird deaktiviert und alle bisherigen Monitor-Einträge werden gelöscht, um Speicherplatz freizugeben. Diese Aktion kann nicht rückgängig gemacht werden.",
+    "disableConfirmLabel": "Deaktivieren und löschen",
     "statsDiskUsage": "Belegter Speicherplatz",
     "statsRetention": "Effektive Retention (ältester Eintrag)",
     "storageFixed": "Speichermodell ist serverseitig fix:",
     "maxDisk": "Max. Speicherplatz auf Platte",
+    "maxDiskPlaceholder": "z. B. 500",
     "maxRetention": "Max. Retention",
+    "maxRetentionPlaceholder": "z. B. 30",
+    "maxEntriesPlaceholder": "z. B. 10000",
     "unitDays": "Tage",
     "unitMonths": "Monate",
     "unitYears": "Jahre",
@@ -1276,6 +1314,7 @@
       "notify_pushover": "Pushover",
       "notify_sms": "SMS (seven.io)",
       "wake_on_lan": "Wake on LAN",
+      "host_check": "Host Check",
       "json_extractor": "JSON Extraktor",
       "xml_extractor": "XML Extraktor",
       "substring_extractor": "Substring / RegEx",
@@ -1803,6 +1842,12 @@
         "sender": "Absender (max 11 Zeichen)",
         "message": "Nachricht (Fallback)"
       },
+      "host_check": {
+        "host": "Host / IP-Adresse",
+        "hostPlaceholder": "z.B. 192.168.1.1 oder hostname.local",
+        "timeout_s": "Timeout (Sekunden)",
+        "count": "Ping-Anzahl"
+      },
       "wake_on_lan": {
         "mac_address": "MAC-Adresse (z.B. AA:BB:CC:DD:EE:FF)",
         "broadcast_ip": "Broadcast-IP",
@@ -1900,7 +1945,9 @@
       "icalArray": "Array",
       "icalDate": "Datum",
       "icalTomorrow": "Morgen",
-      "icalToday": "Heute"
+      "icalToday": "Heute",
+      "reachable": "Erreichbar",
+      "latencyMs": "Latenz (ms)"
     },
     "nodeDescriptions": {
       "const_value": "Gibt einen festen Wert aus — Zahl, Bool oder Text. Nützlich als Schwellwert oder Referenz.",
@@ -1935,6 +1982,7 @@
       "notify_pushover": "Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "notify_sms": "Sendet eine SMS via seven.io Gateway (gateway.seven.io). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "wake_on_lan": "Sendet ein Wake-on-LAN Magic-Paket an ein Gerät per UDP-Broadcast. Wird ausgelöst wenn der Trigger-Eingang true ist.",
+      "host_check": "Pingt einen Host und liefert den Erreichbarkeitsstatus (true/false) sowie die Latenz in Millisekunden. Wird bei steigender Flanke am Trigger-Eingang ausgeführt. Empfehlung: mit einem Timer/Cron-Knoten verbinden.",
       "json_extractor": "Parst einen JSON-String und extrahiert einen oder mehrere Werte anhand von Schlüsselpfaden (Punkt-Notation, z.B. sensors.temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
       "xml_extractor": "Parst einen XML-String und extrahiert einen oder mehrere Werte anhand von XPath-Ausdrücken (ElementTree-Syntax, z.B. .//temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
       "substring_extractor": "Extrahiert Text aus einem String per Substring-Operation oder regulärem Ausdruck. Modi: links_von / rechts_von (erstes oder letztes Vorkommen), zwischen (zwei Markierungen), ausschneiden (Position + Länge), regex (Python re-Syntax, Gruppen wählbar).",

@@ -246,7 +246,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
 
           apt-get update
-          apt-get install -y python3 python3-pip python3-venv gcc libffi-dev libssl-dev mosquitto mosquitto-clients
+          apt-get install -y python3 python3-pip python3-venv gcc libffi-dev libssl-dev iputils-ping mosquitto mosquitto-clients
 
           # Isolated venv — mirrors the --prefix=/install pattern from the Dockerfile
           python3 -m venv /opt/obs/venv

@@ -22,9 +22,13 @@ import json
 import logging
 import os
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, unquote, urlsplit
+from uuid import uuid4
 
 import aiosqlite
 
@@ -39,6 +43,13 @@ _SQLITE_CORRUPTION_MARKERS = (
     "integrity_check failed",
 )
 _MAX_QUARANTINE_FILES_PER_STORAGE_FILE = 3
+_DELETE_OLDEST_BATCH_SIZE = 500
+_enabled = True
+
+
+class RingBufferStorageDeleteIncompleteError(OSError):
+    """Raised when ringbuffer storage deletion fails after unlinking started."""
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ringbuffer (
@@ -76,6 +87,7 @@ CREATE TABLE IF NOT EXISTS ringbuffer_metadata_bindings (
 );
 CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_adapter_type ON ringbuffer_metadata_bindings(adapter_type);
 CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_adapter_instance ON ringbuffer_metadata_bindings(adapter_instance_id);
+CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_entry_id ON ringbuffer_metadata_bindings(entry_id);
 CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_group_address ON ringbuffer_metadata_bindings(group_address);
 CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_topic ON ringbuffer_metadata_bindings(topic);
 CREATE INDEX IF NOT EXISTS idx_rb_meta_bind_entity_id ON ringbuffer_metadata_bindings(entity_id);
@@ -255,7 +267,7 @@ class RingBuffer:
         metadata_version: int = 1,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        if not self._conn:
+        if not _enabled or not self._conn:
             return
         metadata_obj = metadata or {}
         async with self._lock:
@@ -413,24 +425,37 @@ class RingBuffer:
         if not self._conn or limit <= 0:
             return 0
 
-        async with self._conn.execute(
-            "SELECT id FROM ringbuffer ORDER BY id ASC LIMIT ?",
-            (limit,),
-        ) as cur:
-            rows = await cur.fetchall()
-        if not rows:
+        removed_total = 0
+        remaining = limit
+        while remaining > 0:
+            batch_size = min(remaining, _DELETE_OLDEST_BATCH_SIZE)
+            cur = await self._conn.execute(
+                """
+                DELETE FROM ringbuffer
+                WHERE id IN (
+                    SELECT id FROM ringbuffer ORDER BY id ASC LIMIT ?
+                )
+                """,
+                (batch_size,),
+            )
+            removed = cur.rowcount
+            await cur.close()
+            if removed is None or removed < 0:
+                async with self._conn.execute("SELECT changes()") as changes_cur:
+                    row = await changes_cur.fetchone()
+                removed = row[0] if row else 0
+            if removed <= 0:
+                break
+            removed_total += removed
+            remaining -= removed
+
+        if removed_total == 0:
             return 0
 
-        ids = [row[0] for row in rows]
-        placeholders = ",".join("?" for _ in ids)
-        await self._conn.execute(
-            f"DELETE FROM ringbuffer WHERE id IN ({placeholders})",
-            ids,
-        )
         await self._conn.commit()
         if self._storage in {"disk", "file"}:
             await self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        return len(ids)
+        return removed_total
 
     async def _current_storage_bytes(self) -> int:
         if not self._conn or self._storage == "memory":
@@ -496,6 +521,9 @@ class RingBuffer:
 
     async def handle_value_event(self, event: Any) -> None:
         """Record a DataValueEvent into the ring buffer."""
+        if not _enabled or not self._conn:
+            return
+
         dp_id = str(event.datapoint_id)
         dp = None
 
@@ -879,6 +907,82 @@ class RingBuffer:
         return self._storage in {"disk", "file"} and _is_sqlite_corruption(exc)
 
 
+def _is_sqlite_memory_path(database_path: str) -> bool:
+    if database_path == ":memory:":
+        return True
+    if not database_path.startswith("file:"):
+        return False
+    parsed = urlsplit(database_path)
+    if parsed.path == ":memory:":
+        return True
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    return query.get("mode", "").lower() == "memory"
+
+
+def _sqlite_filesystem_path(database_path: str) -> str:
+    if not database_path.startswith("file:"):
+        return database_path
+    parsed = urlsplit(database_path)
+    if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
+        return database_path
+    return unquote(parsed.path)
+
+
+def default_ringbuffer_disk_path(database_path: str) -> str:
+    if _is_sqlite_memory_path(database_path):
+        return database_path
+    database_path = _sqlite_filesystem_path(database_path)
+    path = Path(database_path)
+    return str(path.with_name(f"{path.stem}_ringbuffer.db"))
+
+
+def delete_ringbuffer_storage_files(disk_path: str) -> None:
+    """Remove the file-backed ringbuffer database and SQLite sidecar files."""
+    if _is_sqlite_memory_path(disk_path):
+        return
+    disk_path = _sqlite_filesystem_path(disk_path)
+    storage_paths = (f"{disk_path}-wal", f"{disk_path}-shm", disk_path)
+    existing_paths = [Path(path) for path in storage_paths if Path(path).exists()]
+    renamed_paths: list[tuple[Path, Path]] = []
+    delete_suffix = f".deleting-{os.getpid()}-{uuid4().hex}"
+
+    try:
+        for path in existing_paths:
+            delete_path = path.with_name(f"{path.name}{delete_suffix}")
+            os.replace(path, delete_path)
+            renamed_paths.append((delete_path, path))
+    except Exception:
+        for delete_path, original_path in reversed(renamed_paths):
+            with suppress(Exception):
+                os.replace(delete_path, original_path)
+        raise
+
+    unlinked_any = False
+    for delete_path, _original_path in renamed_paths:
+        try:
+            os.remove(delete_path)
+            unlinked_any = True
+        except FileNotFoundError:
+            unlinked_any = True
+        except OSError as exc:
+            if unlinked_any:
+                raise RingBufferStorageDeleteIncompleteError(str(exc)) from exc
+            for rollback_path, original_path in reversed(renamed_paths):
+                with suppress(Exception):
+                    if rollback_path.exists() and not original_path.exists():
+                        os.replace(rollback_path, original_path)
+            raise
+
+
+def is_ringbuffer_enabled() -> bool:
+    return _enabled
+
+
+def set_ringbuffer_enabled(enabled: bool) -> None:
+    global _enabled
+    _enabled = bool(enabled)
+
+
 def _safe_loads(s: str | None) -> Any:
     if s is None:
         return None
@@ -1096,10 +1200,15 @@ def get_ringbuffer() -> RingBuffer:
     return _rb
 
 
+def get_optional_ringbuffer() -> RingBuffer | None:
+    return _rb
+
+
 def reset_ringbuffer() -> None:
     """Reset the RingBuffer singleton. For testing only."""
-    global _rb
+    global _rb, _enabled
     _rb = None
+    _enabled = True
 
 
 async def init_ringbuffer(
@@ -1109,10 +1218,12 @@ async def init_ringbuffer(
     max_file_size_bytes: int | None = None,
     max_age: int | None = None,
 ) -> RingBuffer:
-    global _rb
-    _rb = RingBuffer(storage, max_entries, disk_path, max_file_size_bytes, max_age)
-    await _rb.start()
-    return _rb
+    global _rb, _enabled
+    rb = RingBuffer(storage, max_entries, disk_path, max_file_size_bytes, max_age)
+    await rb.start()
+    _rb = rb
+    _enabled = True
+    return rb
 
 
 _NUMERIC_TYPES = {"FLOAT", "INTEGER"}
@@ -1120,7 +1231,7 @@ _BOOLEAN_TYPES = {"BOOLEAN"}
 _STRING_TYPES = {"STRING"}
 _REGEX_MAX_PATTERN_LEN = 256
 _REGEX_MAX_TARGET_LEN = 4096
-_REGEX_TIMEOUT_SECONDS = 0.05
+_REGEX_TIMEOUT_SECONDS = 0.5
 _RE_UNSAFE_NESTED_QUANTIFIERS = re.compile(r"\((?:[^()\\]|\\.)*[+*][^()]*\)[+*]")
 
 
