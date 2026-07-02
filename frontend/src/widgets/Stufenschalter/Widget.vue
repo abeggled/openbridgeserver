@@ -2,10 +2,13 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { datapoints } from '@/api/client'
+import VisuIcon from '@/components/VisuIcon.vue'
 import { useIcons } from '@/composables/useIcons'
 import type { DataPointValue } from '@/types'
 
-interface Step {
+type Mode = 'sequence' | 'select-save' | 'select-direct'
+
+interface Option {
   label: string
   value: string
   icon: string
@@ -27,6 +30,17 @@ const DEFAULT_OFF_LABEL = 'widgets.stufenschalter.defaultOffLabel'
 const DEFAULT_STEP_LABEL = 'widgets.stufenschalter.defaultStepLabel'
 
 const label = computed(() => (props.config.label as string | undefined) ?? '')
+const mode = computed<Mode>(() => {
+  const raw = props.config.mode
+  if (raw === 'select-save' || raw === 'select-direct') return raw
+  return 'sequence'
+})
+
+const pending = ref(false)
+const error = ref('')
+const selectedValue = ref<string | null>(null)
+const optimisticValue = ref<string | null>(null)
+const displayRevision = ref(0)
 
 function sanitizeColor(value: unknown, fallback = '#6b7280'): string {
   if (typeof value !== 'string') return fallback
@@ -36,7 +50,7 @@ function sanitizeColor(value: unknown, fallback = '#6b7280'): string {
   return fallback
 }
 
-function defaultStepLabel(value: unknown, index: number): string {
+function defaultOptionLabel(value: unknown, index: number): string {
   const numericValue = Number(value)
   if (String(value ?? '') === '0') return t(DEFAULT_OFF_LABEL)
   if (Number.isInteger(numericValue) && numericValue > 0) {
@@ -45,91 +59,159 @@ function defaultStepLabel(value: unknown, index: number): string {
   return t(DEFAULT_STEP_LABEL, { n: index + 1 })
 }
 
-function normalizeStepLabel(raw: unknown, value: unknown, index: number): string {
-  if (typeof raw !== 'string') return defaultStepLabel(value, index)
+function normalizeOptionLabel(raw: unknown, value: unknown, index: number): string {
+  if (typeof raw !== 'string') return defaultOptionLabel(value, index)
   const label = raw.trim()
   if (raw === DEFAULT_OFF_LABEL) return t(DEFAULT_OFF_LABEL)
-  if (raw === DEFAULT_STEP_LABEL) return defaultStepLabel(value, index)
+  if (raw === DEFAULT_STEP_LABEL) return defaultOptionLabel(value, index)
   if (label === 'Aus') return t(DEFAULT_OFF_LABEL)
   const legacyStepMatch = label.match(/^Stufe\s+(\d+)$/)
   if (legacyStepMatch) return t(DEFAULT_STEP_LABEL, { n: Number(legacyStepMatch[1]) })
   return raw
 }
 
-const steps = computed<Step[]>(() => {
-  const raw = props.config.steps as Partial<Step>[] | undefined
-  return (raw ?? []).map((s, index) => ({
-    label: normalizeStepLabel(s.label, s.value, index),
-    value: String(s.value ?? ''),
-    icon:  s.icon  ?? '',
-    color: sanitizeColor(s.color),
+function optionInput(config: Record<string, unknown>): unknown {
+  if (Array.isArray(config.steps) && config.mode !== 'select-save' && config.mode !== 'select-direct') {
+    return config.steps
+  }
+  return config.options ?? config.steps
+}
+
+const options = computed<Option[]>(() => {
+  const raw = optionInput(props.config) as Partial<Option>[] | undefined
+  return (Array.isArray(raw) ? raw : []).map((option, index) => ({
+    label: normalizeOptionLabel(option.label, option.value, index),
+    value: String(option.value ?? ''),
+    icon: option.icon ?? '',
+    color: sanitizeColor(option.color),
   }))
 })
 
-// Wert aus String parsen: 'true'/'false' → bool, Zahl → number, sonst string
 function parseValue(s: string): unknown {
-  if (s === 'true')  return true
+  if (s === 'true') return true
   if (s === 'false') return false
   const n = Number(s)
   if (s.trim() !== '' && !isNaN(n)) return n
   return s
 }
 
-function valuesMatch(dpVal: unknown, stepVal: string): boolean {
-  const parsed = parseValue(stepVal)
+function valuesMatch(dpVal: unknown, optionVal: string): boolean {
+  const parsed = parseValue(optionVal)
   if (typeof dpVal === 'boolean') return dpVal === parsed
-  if (typeof dpVal === 'number')  return dpVal === parsed
-  if (typeof dpVal === 'string')  return dpVal === stepVal
+  if (typeof dpVal === 'number') return dpVal === parsed
+  if (typeof dpVal === 'string') return dpVal === optionVal
   return false
 }
 
-// Status-Datenpunkt hat Vorrang
 const displayValue = computed(() => props.statusValue ?? props.value)
 
-function findStepIndex(v: DataPointValue | null): number {
+function findOptionIndex(v: DataPointValue | null): number {
   if (v === null) return -1
-  return steps.value.findIndex((s) => valuesMatch(v.v, s.value))
+  return options.value.findIndex((option) => valuesMatch(v.v, option.value))
 }
 
-// Optimistischer Schritt-Index: -1 = unbekannt
-const optimisticIndex = ref<number | null>(null)
-
-watch(displayValue, () => { optimisticIndex.value = null })
-
-const currentIndex = computed<number>(() => {
-  if (optimisticIndex.value !== null) return optimisticIndex.value
-  return findStepIndex(displayValue.value)
+const committedIndex = computed(() => {
+  if (optimisticValue.value !== null) {
+    return options.value.findIndex((option) => option.value === optimisticValue.value)
+  }
+  return findOptionIndex(displayValue.value)
 })
 
-const currentStep = computed<Step | null>(() =>
-  currentIndex.value >= 0 ? steps.value[currentIndex.value] : null,
+const committedValue = computed(() =>
+  committedIndex.value >= 0 ? options.value[committedIndex.value].value : null,
 )
 
-const pending = ref(false)
+watch(
+  () => ({
+    value: displayValue.value?.v,
+    t: displayValue.value?.t,
+    q: displayValue.value?.q,
+    mode: mode.value,
+    optionValues: options.value.map((option) => option.value).join('\u0000'),
+  }),
+  (current, previous) => {
+    displayRevision.value += 1
+    const valueChanged = !previous || !Object.is(current.value, previous.value)
+    const selectionShapeChanged = !previous
+      || current.mode !== previous.mode
+      || current.optionValues !== previous.optionValues
+    const shouldResetSelection = current.mode !== 'select-save' || valueChanged || selectionShapeChanged
 
-async function advance() {
-  if (props.editorMode || props.readonly || !props.datapointId || pending.value) return
-  if (steps.value.length === 0) return
-  const nextIndex = currentIndex.value < 0
-    ? 0
-    : (currentIndex.value + 1) % steps.value.length
-  const nextStep = steps.value[nextIndex]
-  optimisticIndex.value = nextIndex
+    optimisticValue.value = null
+    if (shouldResetSelection) {
+      selectedValue.value = committedValue.value
+    }
+    if (shouldResetSelection || selectedValue.value === committedValue.value) error.value = ''
+  },
+  { immediate: true },
+)
+
+const isLocked = computed(() => props.editorMode || props.readonly || !props.datapointId)
+const isSelectMode = computed(() => mode.value !== 'sequence')
+
+const activeValue = computed(() =>
+  isSelectMode.value ? (selectedValue.value ?? committedValue.value) : committedValue.value,
+)
+
+const activeOption = computed<Option | null>(() =>
+  options.value.find((option) => option.value === activeValue.value) ?? null,
+)
+
+const hasChanges = computed(() =>
+  selectedValue.value !== null && selectedValue.value !== committedValue.value,
+)
+const canSave = computed(() => mode.value === 'select-save' && !isLocked.value && !pending.value && hasChanges.value)
+
+async function writeValue(value: string) {
+  if (isLocked.value || pending.value || !props.datapointId) return
+  const rollbackValue = committedValue.value
+  const writeDisplayRevision = displayRevision.value
+  if (mode.value === 'sequence') optimisticValue.value = value
   pending.value = true
+  error.value = ''
   try {
-    await datapoints.write(props.datapointId, parseValue(nextStep.value))
-  } catch {
-    optimisticIndex.value = null
+    await datapoints.write(props.datapointId, parseValue(value))
+    if (displayRevision.value === writeDisplayRevision) {
+      optimisticValue.value = value
+      selectedValue.value = value
+    }
+  } catch (e) {
+    const displayChangedDuringWrite = displayRevision.value !== writeDisplayRevision
+    optimisticValue.value = displayChangedDuringWrite ? null : rollbackValue
+    if (mode.value === 'select-direct') {
+      selectedValue.value = displayChangedDuringWrite ? committedValue.value : rollbackValue
+    }
+    error.value = e instanceof Error ? e.message : t('widgets.stufenschalter.writeError')
   } finally {
     pending.value = false
   }
 }
 
-// SVG-Icon laden und einfärben
+async function advance() {
+  if (mode.value !== 'sequence' || isLocked.value || pending.value) return
+  if (options.value.length === 0) return
+  const nextIndex = committedIndex.value < 0
+    ? 0
+    : (committedIndex.value + 1) % options.value.length
+  await writeValue(options.value[nextIndex].value)
+}
+
+async function selectOption(value: string) {
+  if (isLocked.value || pending.value) return
+  selectedValue.value = value
+  error.value = ''
+  if (mode.value === 'select-direct') await writeValue(value)
+}
+
+async function save() {
+  if (!canSave.value || selectedValue.value === null) return
+  await writeValue(selectedValue.value)
+}
+
 const svgContent = ref('')
 
 watch(
-  () => currentStep.value?.icon,
+  () => activeOption.value?.icon,
   async (icon) => {
     if (!icon || !isSvgIcon(icon)) { svgContent.value = ''; return }
     svgContent.value = await getSvg(svgIconName(icon))
@@ -138,8 +220,8 @@ watch(
 )
 
 const coloredSvg = computed(() => {
-  if (!svgContent.value || !currentStep.value) return ''
-  const color = sanitizeColor(currentStep.value.color)
+  if (!svgContent.value || !activeOption.value) return ''
+  const color = sanitizeColor(activeOption.value.color)
   const nonNoneFill = /\bfill\s*:\s*(?!none\b)/g
   return svgContent.value
     .replace(/<svg\b([^>]*)>/, (_, attrs: string) => {
@@ -160,60 +242,54 @@ const coloredSvg = computed(() => {
         .replace(/\bstroke\s*:\s*(?!none\b)[^;}\n]*/g, `stroke:${color}`)}${close}`)
 })
 
-const activeColor  = computed(() => sanitizeColor(currentStep.value?.color))
-const activeIcon   = computed(() => currentStep.value?.icon  ?? '')
-const activeLabel  = computed(() => currentStep.value?.label ?? '—')
+const activeColor = computed(() => sanitizeColor(activeOption.value?.color))
+const activeIcon = computed(() => activeOption.value?.icon ?? '')
+const activeLabel = computed(() => activeOption.value?.label || activeOption.value?.value || '—')
+const saveLabel = computed(() => t('widgets.stufenschalter.save'))
 </script>
 
 <template>
   <div
-    class="flex flex-col items-center h-full p-2 select-none"
-    :class="[editorMode || readonly ? 'opacity-60 cursor-default' : 'cursor-pointer']"
+    v-if="mode === 'sequence'"
+    class="flex h-full flex-col items-center p-2 select-none"
+    :class="[isLocked ? 'opacity-60 cursor-default' : 'cursor-pointer']"
     @click="advance"
   >
-    <!-- Widget-Beschriftung -->
     <span
       v-if="label"
-      class="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-center shrink-0 mb-1"
+      class="mb-1 w-full shrink-0 truncate text-center text-xs text-gray-500 dark:text-gray-400"
     >{{ label }}</span>
 
-    <!-- Abstandhalter oben -->
     <div style="flex: 1" />
 
-    <!-- Icon-Bereich -->
     <div
       data-testid="stufenschalter-icon"
-      class="min-h-0 flex items-center justify-center w-full"
+      class="flex min-h-0 w-full items-center justify-center"
       style="flex: 3; aspect-ratio: 1; max-width: 100%"
       :style="{ color: activeColor }"
     >
-      <!-- Emoji-Icon -->
       <span
         v-if="activeIcon && !isSvgIcon(activeIcon)"
-        class="leading-none select-none h-full flex items-center"
+        class="flex h-full items-center leading-none select-none"
         style="font-size: min(100%, 4rem)"
       >{{ activeIcon }}</span>
 
-      <!-- SVG-Icon -->
       <span
         v-else-if="activeIcon && coloredSvg"
-        class="h-full max-w-full [&>svg]:w-full [&>svg]:h-full"
+        class="h-full max-w-full [&>svg]:h-full [&>svg]:w-full"
         style="aspect-ratio: 1"
         v-html="coloredSvg"
       />
 
-      <!-- Kein Icon: Fallback-Punkt in Aktivfarbe -->
       <span
         v-else
         class="text-4xl leading-none opacity-60"
       >●</span>
     </div>
 
-    <!-- Abstandhalter Mitte -->
     <div style="flex: 0.5" />
 
-    <!-- Stufen-Bezeichnung -->
-    <div class="min-h-0 flex items-center justify-center text-center" style="flex: 1.5">
+    <div class="flex min-h-0 items-center justify-center text-center" style="flex: 1.5">
       <span
         data-testid="stufenschalter-label"
         class="text-sm font-semibold leading-tight"
@@ -221,7 +297,63 @@ const activeLabel  = computed(() => currentStep.value?.label ?? '—')
       >{{ activeLabel }}</span>
     </div>
 
-    <!-- Abstandhalter unten -->
+    <p
+      v-if="error"
+      class="w-full truncate text-center text-xs text-red-600 dark:text-red-400"
+      data-testid="stufenschalter-error"
+    >{{ error }}</p>
+
     <div style="flex: 0.5" />
+  </div>
+
+  <div v-else class="flex h-full min-h-0 flex-col p-2 select-none" :class="isLocked ? 'opacity-60' : ''">
+    <span
+      v-if="label"
+      class="mb-2 w-full shrink-0 truncate text-center text-xs text-gray-500 dark:text-gray-400"
+    >{{ label }}</span>
+
+    <div class="grid min-h-0 flex-1 auto-rows-min gap-1.5 overflow-y-auto pr-1" data-testid="stufenschalter-options">
+      <button
+        v-for="option in options"
+        :key="option.value"
+        type="button"
+        class="flex min-h-[2rem] items-center justify-center gap-1 rounded border px-2 py-1 text-xs font-semibold transition-colors disabled:cursor-not-allowed"
+        :class="activeValue === option.value
+          ? 'border-transparent bg-gray-900 text-white shadow-sm dark:bg-gray-100 dark:text-gray-950'
+          : 'border-gray-300 bg-white text-gray-700 hover:border-gray-400 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-gray-500'"
+        :style="activeValue === option.value ? { backgroundColor: option.color } : { color: option.color }"
+        :disabled="isLocked || pending"
+        :aria-pressed="activeValue === option.value"
+        data-testid="stufenschalter-option"
+        @click="selectOption(option.value)"
+      >
+        <span
+          v-if="option.icon"
+          class="flex h-4 w-4 shrink-0 items-center justify-center text-base leading-none [&>img]:h-full [&>img]:w-full"
+          data-testid="stufenschalter-option-icon"
+        >
+          <VisuIcon :icon="option.icon" />
+        </span>
+        <span class="min-w-0 truncate">{{ option.label || option.value }}</span>
+      </button>
+    </div>
+
+    <div v-if="mode === 'select-save'" class="mt-2 flex shrink-0 items-center gap-2">
+      <button
+        type="button"
+        class="min-h-[2rem] flex-1 rounded bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-gray-500 dark:disabled:bg-gray-700 dark:disabled:text-gray-400"
+        :disabled="!canSave"
+        data-testid="stufenschalter-save"
+        @click="save"
+      >
+        {{ pending ? '...' : saveLabel }}
+      </button>
+    </div>
+
+    <p
+      v-if="error"
+      class="mt-1 shrink-0 truncate text-center text-xs text-red-600 dark:text-red-400"
+      data-testid="stufenschalter-error"
+    >{{ error }}</p>
   </div>
 </template>
