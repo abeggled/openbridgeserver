@@ -1329,6 +1329,7 @@
     "segmentQuarantineExplain": "Defektes Segment, zur Analyse isoliert.",
     "unitMiB": "MiB",
     "unitGiB": "GiB",
+    "unitSeconds": "Sekunden",
     "unitMinutes": "Minuten",
     "unitHours": "Stunden",
     "prognosis": {

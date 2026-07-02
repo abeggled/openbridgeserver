@@ -164,6 +164,7 @@
             :disabled="!configForm.enabled"
             data-testid="rb-config-segment-max-age-unit"
           >
+            <option value="seconds">{{ $t('ringbuffer.unitSeconds') }}</option>
             <option value="minutes">{{ $t('ringbuffer.unitMinutes') }}</option>
             <option value="hours">{{ $t('ringbuffer.unitHours') }}</option>
           </select>
@@ -282,7 +283,7 @@ const RETENTION_UNIT_SECONDS = {
 const DEFAULT_SEGMENT_MAX_AGE_HOURS = 6
 const SECONDS_PER_HOUR = 60 * 60
 const SECONDS_PER_MINUTE = 60
-const SEGMENT_AGE_UNIT_SECONDS = { minutes: SECONDS_PER_MINUTE, hours: SECONDS_PER_HOUR }
+const SEGMENT_AGE_UNIT_SECONDS = { seconds: 1, minutes: SECONDS_PER_MINUTE, hours: SECONDS_PER_HOUR }
 // Backend-Minimum für das Segment-Alter (#938): 300 s (5 min). Sub-Stunden-Werte
 // (z. B. aus einem migrierten 15-min-Retention-Fenster) müssen verlustfrei über
 // die Minuten-Einheit dargestellt und gespeichert werden – kein Runden auf ganze
@@ -308,6 +309,12 @@ const segmentAgeHoursForPrognosis = computed(() => {
 })
 const saving = ref(false)
 const configMsg = ref(null)
+// Codex #951: der zuletzt hydratisierte Segment-Alter-Wert (Sekunden) plus das
+// hydratisierte Anzeige-Paar (Wert+Einheit). Solange der Nutzer das Alter-Feld
+// nicht selbst anfasst, reichen wir diesen Original-Sekundenwert unverändert
+// durch – auch < 300 s (migrierter Wert). So scheitert das Speichern einer
+// UNRELATED-Einstellung nicht am 300-s-UI-Minimum.
+const hydratedSegmentAge = ref(null)
 const showDisableConfirm = ref(false)
 const pendingDisablePayload = ref(null)
 let closeTimer = null
@@ -351,11 +358,15 @@ function pickSizeUnit(bytes) {
   return { value: String(Math.max(1, Math.round(bytes / SIZE_UNIT_FACTORS.mb))), unit: 'mb' }
 }
 
-// Segment-Alter (#938, Codex #951): Sub-Stunden-Werte (300..3599 s) verlustfrei
-// über die Minuten-Einheit anzeigen; glatte Stunden über die Stunden-Einheit.
+// Segment-Alter (#938, Codex #951): glatte Stunden über die Stunden-Einheit,
+// glatte Minuten über die Minuten-Einheit; alles andere (insb. migrierte
+// Sub-300s-Werte wie 200 s aus max_age // 3) verlustfrei über die Sekunden-
+// Einheit, statt eine krumme Nachkommazahl in Minuten anzuzeigen oder auf ganze
+// Stunden zu runden.
 function pickSegmentAgeUnit(seconds) {
   if (seconds % SECONDS_PER_HOUR === 0) return { value: String(seconds / SECONDS_PER_HOUR), unit: 'hours' }
-  return { value: String(seconds / SECONDS_PER_MINUTE), unit: 'minutes' }
+  if (seconds % SECONDS_PER_MINUTE === 0) return { value: String(seconds / SECONDS_PER_MINUTE), unit: 'minutes' }
+  return { value: String(seconds), unit: 'seconds' }
 }
 
 function pickRetentionUnit(seconds) {
@@ -407,9 +418,13 @@ function hydrateForm(currentStats) {
     const picked = pickSegmentAgeUnit(segmentMaxAge)
     configForm.segmentMaxAgeValue = picked.value
     configForm.segmentMaxAgeUnit = picked.unit
+    // Original-Sekundenwert + Anzeige-Paar merken, um ihn beim Speichern eines
+    // unangetasteten (ggf. migrierten Sub-300s-) Feldes verlustfrei durchzureichen.
+    hydratedSegmentAge.value = { seconds: segmentMaxAge, value: picked.value, unit: picked.unit }
   } else {
     configForm.segmentMaxAgeValue = String(DEFAULT_SEGMENT_MAX_AGE_HOURS)
     configForm.segmentMaxAgeUnit = 'hours'
+    hydratedSegmentAge.value = null
   }
   const segmentMaxBytes = Number(currentStats?.segment_max_bytes)
   if (Number.isFinite(segmentMaxBytes) && segmentMaxBytes > 0) {
@@ -451,11 +466,24 @@ function buildPayload() {
   // optional (leer = automatisch vom Backend abgeleitet). Wert+Einheit → Sekunden;
   // das 300-s-Backend-Minimum respektieren und Sub-Stunden-Werte exakt treffen
   // (Codex #951).
-  const segmentAgeValue = Number(String(configForm.segmentMaxAgeValue ?? '').trim())
-  if (!Number.isFinite(segmentAgeValue) || segmentAgeValue <= 0) throw new Error(t('ringbuffer.validationSegmentMaxAge'))
-  const segmentAgeSeconds = Math.round(segmentAgeValue * SEGMENT_AGE_UNIT_SECONDS[configForm.segmentMaxAgeUnit])
-  if (segmentAgeSeconds < SEGMENT_MAX_AGE_MIN_SECONDS) throw new Error(t('ringbuffer.validationSegmentMaxAge'))
-  payload.segment_max_age = segmentAgeSeconds
+  // Hat der Nutzer das Alter-Feld nicht angetastet, den ursprünglich
+  // hydratisierten Sekundenwert unverändert durchreichen – auch < 300 s (aus
+  // einer migrierten pre-Segmentierungs-Config). Das 300-s-Minimum greift nur,
+  // wenn der Nutzer AKTIV einen neuen (zu kleinen) Wert eingibt (Codex #951).
+  const pristine = hydratedSegmentAge.value
+  const untouched =
+    pristine &&
+    String(configForm.segmentMaxAgeValue) === pristine.value &&
+    configForm.segmentMaxAgeUnit === pristine.unit
+  if (untouched) {
+    payload.segment_max_age = pristine.seconds
+  } else {
+    const segmentAgeValue = Number(String(configForm.segmentMaxAgeValue ?? '').trim())
+    if (!Number.isFinite(segmentAgeValue) || segmentAgeValue <= 0) throw new Error(t('ringbuffer.validationSegmentMaxAge'))
+    const segmentAgeSeconds = Math.round(segmentAgeValue * SEGMENT_AGE_UNIT_SECONDS[configForm.segmentMaxAgeUnit])
+    if (segmentAgeSeconds < SEGMENT_MAX_AGE_MIN_SECONDS) throw new Error(t('ringbuffer.validationSegmentMaxAge'))
+    payload.segment_max_age = segmentAgeSeconds
+  }
 
   // Leere Segment-Schwelle explizit als null senden (nicht weglassen): der
   // Config-Endpoint behandelt ausgelassene Felder als „persistierten Wert

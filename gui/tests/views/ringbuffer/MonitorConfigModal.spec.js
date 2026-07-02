@@ -430,6 +430,65 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
     expect(payload.segment_max_age).toBe(900)
   })
 
+  it('hydrates a migrated sub-300s segment age losslessly (200s) and posts exactly 200s when the age field is untouched (#938 Codex #951)', async () => {
+    // Eine pre-Segmentierungs-Config mit einem Retention-Fenster < 15 min leitet
+    // segment_max_age = max_age // 3 ab (z. B. max_age=600 → 200 s). Der Wert ist
+    // startup-gültig, liegt aber unter dem 300-s-UI-Minimum. Das Modal muss ihn
+    // verlustfrei anzeigen und beim Speichern (ohne dass der Nutzer das Alter-Feld
+    // anfasst) unverändert als 200 s durchreichen – kein Clamp auf 300, kein
+    // client-seitiger Reject.
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          max_entries: null,
+          max_file_size_bytes: 500 * 1024 * 1024,
+          max_age: null,
+          file_size_bytes: 0,
+          segment_max_age: 200, // migriert, < 300 s
+        },
+      }),
+    })
+    const { wrapper, api: mocked } = await mountModal({ api })
+    // Verlustfreie Anzeige: 200 Sekunden, Einheit seconds – nicht geklemmt, nicht gerundet.
+    expect(wrapper.find('[data-testid="rb-config-segment-max-age"]').element.value).toBe('200')
+    expect(wrapper.find('[data-testid="rb-config-segment-max-age-unit"]').element.value).toBe('seconds')
+    // Nutzer ändert eine UNRELATED-Einstellung (max-entries), NICHT das Alter-Feld.
+    await wrapper.find('#max-entries-enabled').setValue(true)
+    await wrapper.find('[data-testid="rb-config-max-entries"]').setValue('12345')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(mocked.config).toHaveBeenCalledTimes(1)
+    const payload = mocked.config.mock.calls[0][0]
+    // Migrierter Sub-300s-Wert bleibt erhalten – exakt 200 s, kein Clamp auf 300.
+    expect(payload.segment_max_age).toBe(200)
+    expect(payload.max_entries).toBe(12345)
+  })
+
+  it('rejects when the user actively edits the age field to a sub-300s value, even after hydrating a migrated sub-300s value (#938 Codex #951)', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          max_entries: null,
+          max_file_size_bytes: 500 * 1024 * 1024,
+          max_age: null,
+          file_size_bytes: 0,
+          segment_max_age: 200, // migriert, < 300 s
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    // Nutzer tippt AKTIV einen neuen, zu kleinen Wert ins Alter-Feld.
+    await wrapper.find('[data-testid="rb-config-segment-max-age"]').setValue('120') // 120 s < 300 s
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Segment-Alter')
+  })
+
   it('respects the 300s (5 min) backend minimum for the segment age', async () => {
     const { wrapper, api } = await mountModal()
     await wrapper.find('[data-testid="rb-config-segment-max-age-unit"]').setValue('minutes')
