@@ -35,6 +35,16 @@ SEGMENT_STATUS_CHECKPOINT_PENDING = "checkpoint_pending"
 # Migration die Daten in v2-Segmente kopiert hat.
 SEGMENT_STATUS_LEGACY = "legacy"
 
+# Aus einer Legacy-Single-DB migriertes v2-Segment (#951, Pkt 2): trägt echte
+# v2-Tabellen (``schema_version=2``), aber ausschließlich synthetische NEGATIVE
+# ``global_event_id``s. Es muss in ``list_segments_for_query`` – wie ein Legacy-
+# Segment – ZULETZT iteriert werden, damit das frühe Paging-Terminieren des
+# ``id desc``-Query nicht abbricht, bevor die echten neueren (positiven) Segmente
+# gelesen sind. Im Gegensatz zu ``legacy`` ist es aber ein normales v2-Segment und
+# bleibt retention-fähig (Row-/Byte-/Age-Budget) und wird über die Schema-Version
+# im v2-Read-Zweig gelesen.
+SEGMENT_STATUS_MIGRATED = "migrated"
+
 # Schema-Version einer Legacy-Single-DB: kein ``global_event_id``, keine
 # typisierten Wertspalten, segment-lokale rowid. Der Read-Pfad degradiert für
 # diese Version kontrolliert (Ordering aus ts+rowid, kein typed pushdown).
@@ -48,7 +58,7 @@ LEGACY_SCHEMA_VERSION = 1
 # Metadaten fahren. Sie werden damit nicht mehr für immer behalten, sondern in
 # normaler FIFO-Reihenfolge (ältestes zuerst) mitgelöscht, wenn sie an der Reihe
 # sind.
-SEGMENT_STATUS_RETENTION_ELIGIBLE = (SEGMENT_STATUS_CLOSED, SEGMENT_STATUS_QUARANTINED)
+SEGMENT_STATUS_RETENTION_ELIGIBLE = (SEGMENT_STATUS_CLOSED, SEGMENT_STATUS_QUARANTINED, SEGMENT_STATUS_MIGRATED)
 
 _MANIFEST_SCHEMA = """
 CREATE TABLE IF NOT EXISTS segments (
@@ -281,6 +291,23 @@ class Manifest:
         )
         await self._db.commit()
 
+    async def mark_migrated(self, segment_id: int) -> None:
+        """Markiert ein geschlossenes v2-Segment als ``migrated`` (#951, Pkt 2).
+
+        Nur für Segmente gedacht, die ausschließlich aus einer Legacy-Single-DB
+        migrierte Zeilen mit synthetischen NEGATIVEN ``global_event_id``s halten. Der
+        Status sorgt dafür, dass ``list_segments_for_query`` das Segment – wie ein
+        Legacy-Segment – zuletzt iteriert (frühes Paging-Terminieren des ``id desc``-
+        Query bleibt korrekt), ohne die Retention-Fähigkeit zu verlieren. Nur ein
+        ``closed`` Segment wird umgesetzt (Guard), damit ein aktives/pending Segment
+        nie versehentlich umgestuft wird.
+        """
+        await self._db.execute(
+            "UPDATE segments SET status = ? WHERE segment_id = ? AND status = ?",
+            (SEGMENT_STATUS_MIGRATED, segment_id, SEGMENT_STATUS_CLOSED),
+        )
+        await self._db.commit()
+
     async def mark_checkpoint_pending(self, segment_id: int) -> None:
         await self._db.execute(
             "UPDATE segments SET status = ? WHERE segment_id = ?",
@@ -381,14 +408,17 @@ class Manifest:
             clauses.append("(to_ts IS NULL OR to_ts >= ?)")
             params.append(from_ts)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        # Legacy-Segmente (#934) tragen synthetische, streng negative
-        # global_event_ids und sind per Definition älter als jedes v2-Segment —
-        # unabhängig von ihrer segment_id (sie werden ggf. NACH dem aktiven
-        # v2-Segment eingehängt). Sie müssen daher immer ZULETZT iteriert werden,
-        # sonst bricht die neueste-zuerst-Ordnung und das bounded Early-Termination
-        # in #932. Primär also nach Legacy-Zugehörigkeit, dann segment_id DESC.
+        # Legacy-Segmente (#934) UND aus Legacy migrierte v2-Segmente (#951, Pkt 2)
+        # tragen synthetische, streng negative global_event_ids und sind per
+        # Definition älter als jedes echte v2-Segment – unabhängig von ihrer
+        # segment_id (sie werden ggf. NACH dem aktiven v2-Segment eingehängt bzw.
+        # nach den ersten v2-Writes migriert). Sie müssen daher immer ZULETZT
+        # iteriert werden, sonst bricht die neueste-zuerst-Ordnung und das bounded
+        # Early-Termination in #932. Primär also nach Legacy-/Migrated-Zugehörigkeit,
+        # dann segment_id DESC.
         async with self._db.execute(
-            f"SELECT * FROM segments{where} ORDER BY CASE WHEN status = '{SEGMENT_STATUS_LEGACY}' THEN 1 ELSE 0 END, segment_id DESC",
+            f"SELECT * FROM segments{where} "
+            f"ORDER BY CASE WHEN status IN ('{SEGMENT_STATUS_LEGACY}', '{SEGMENT_STATUS_MIGRATED}') THEN 1 ELSE 0 END, segment_id DESC",
             params,
         ) as cur:
             rows = await cur.fetchall()

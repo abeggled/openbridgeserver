@@ -334,3 +334,302 @@ async def test_migrate_chunk_no_endless_rotation_on_small_batch(small_segment_st
     # Genau ein v2-Segment mit beiden Zeilen (keine Rotation ausgelöst).
     assert len(v2_segments) == 1
     assert v2_segments[0].row_count == 2
+
+
+# ===========================================================================
+# Codex-P2-Fixes im OPTIONALEN Chunk-Migrationspfad (#919, PR #951, 2. Runde)
+# ===========================================================================
+
+
+def _build_legacy_raw(path: Path, *, with_metadata: bool, rows: list[tuple]) -> None:
+    """Legacy-Single-DB mit/ohne metadata-Spalten; ``rows`` mit rohen Spaltenwerten.
+
+    Ohne ``with_metadata`` fehlen ``metadata_version``/``metadata`` (pre-#388-Schema).
+    ``rows`` sind ``(ts, old_value, new_value)`` – old/new als rohe TEXT-Zellen.
+    """
+    conn = sqlite3.connect(str(path))
+    try:
+        if with_metadata:
+            conn.execute(
+                """CREATE TABLE ringbuffer (
+                       id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
+                       datapoint_id TEXT NOT NULL, topic TEXT NOT NULL,
+                       old_value TEXT, new_value TEXT, source_adapter TEXT NOT NULL,
+                       quality TEXT NOT NULL, metadata_version INTEGER NOT NULL DEFAULT 1,
+                       metadata TEXT NOT NULL DEFAULT '{}')"""
+            )
+        else:
+            conn.execute(
+                """CREATE TABLE ringbuffer (
+                       id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
+                       datapoint_id TEXT NOT NULL, topic TEXT NOT NULL,
+                       old_value TEXT, new_value TEXT, source_adapter TEXT NOT NULL,
+                       quality TEXT NOT NULL)"""
+            )
+        for ts, old_value, new_value in rows:
+            conn.execute(
+                "INSERT INTO ringbuffer (ts, datapoint_id, topic, old_value, new_value, source_adapter, quality) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ts, "dp-legacy", "dp/dp-legacy/value", old_value, new_value, "legacy", "good"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# (Runde 2 / 1) Legacy-Manifest-Eintrag nach Migration abkoppeln (:238)
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_detaches_attached_legacy_entry_no_double_delivery(store: SqliteSegmentStore, tmp_path: Path):
+    # Normaler Upgrade-Pfad: die Legacy-DB wird zuerst read-only als Legacy-Segment
+    # eingehängt. Migriert ein späterer Wartungsjob dieselbe Datei vollständig nach
+    # v2, MUSS der Legacy-Eintrag abgekoppelt werden, sonst wird jedes Event doppelt
+    # geliefert (einmal v2, einmal aus dem noch eingehängten Legacy-Segment).
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy(db, [("2020-01-01T00:00:00.000Z", "one"), ("2020-01-02T00:00:00.000Z", "two")])
+
+    migrator = LegacyMigrator(store, db)
+    await migrator.attach_readonly(migrator.classify())
+    assert len(await store.manifest.list_legacy_segments()) == 1
+
+    total = await migrator.migrate_small(batch_rows=100)
+    assert total == 2
+
+    # Der Legacy-Eintrag ist nach Abschluss abgekoppelt.
+    assert await store.manifest.list_legacy_segments() == []
+
+    # Jedes Event genau EINMAL (kein Doppel aus v2 + noch eingehängtem Legacy).
+    rows = await store.query(StoreQuery(limit=100))
+    values = sorted(r["new_value"] for r in rows)
+    assert values == ["one", "two"]
+
+
+async def test_migration_detach_is_idempotent_without_attached_entry(store: SqliteSegmentStore, tmp_path: Path):
+    # Wird NICHT vorher eingehängt (kein Legacy-Segment), darf der Abschluss der
+    # Migration nicht scheitern – Abkoppeln ist ein No-op.
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy(db, [("2020-01-01T00:00:00.000Z", "solo")])
+    total = await LegacyMigrator(store, db).migrate_small(batch_rows=100)
+    assert total == 1
+    assert await store.manifest.list_legacy_segments() == []
+    rows = await store.query(StoreQuery(limit=100))
+    assert sorted(r["new_value"] for r in rows) == ["solo"]
+
+
+# ---------------------------------------------------------------------------
+# (Runde 2 / 2) id-Ordnung nach Chunk-Migration NACH Rotation bewahren (:278)
+# ---------------------------------------------------------------------------
+
+
+async def test_id_order_preserved_when_migration_runs_after_rotation(tmp_path: Path):
+    # Positive v2-Writes wurden bereits über eine Rotation verteilt; DANACH migriert
+    # ein Chunk-Job viele Legacy-Zeilen. Ohne Fix mischt das aktive Segment eine neue
+    # positive Zeile mit vielen migrierten negativen und der ``id desc``-Frühabbruch
+    # liefert die ALTEN Zeilen als „neueste". Mit Fix landen die Migrierten in einem
+    # dedizierten ``migrated``-Segment, das ZULETZT iteriert wird.
+    store = SqliteSegmentStore(tmp_path / "root", segments=SegmentConfig(segment_max_rows=2))
+    await store.open()
+    try:
+        await store.append([_event("v2-a", "2026-01-01T00:00:00.000Z")])
+        await store.append([_event("v2-b", "2026-01-02T00:00:00.000Z")])
+        await store.append([_event("v2-c", "2026-01-03T00:00:00.000Z")])  # aktives Segment: 1 positive Zeile
+
+        db = tmp_path / "obs_ringbuffer.db"
+        _build_legacy(db, [(f"2020-01-{i + 1:02d}T00:00:00.000Z", f"L{i}") for i in range(5)])
+        assert await LegacyMigrator(store, db).migrate_chunk(batch_rows=100) == 5
+
+        # Default id-desc-Query: die drei NEUESTEN müssen die positiven v2-Zeilen sein.
+        rows = await store.query(StoreQuery(limit=3, sort_field="id", sort_order="desc"))
+        assert [r["new_value"] for r in rows] == ["v2-c", "v2-b", "v2-a"]
+
+        # Alle Zeilen bleiben genau einmal lesbar, korrekt global sortiert.
+        allrows = await store.query(StoreQuery(limit=100, sort_field="id", sort_order="desc"))
+        assert [r["new_value"] for r in allrows] == ["v2-c", "v2-b", "v2-a", "L4", "L3", "L2", "L1", "L0"]
+        # Migrierte Zeilen tragen negative gids, positive v2-Zeilen positive.
+        assert all(r["global_event_id"] > 0 for r in allrows if r["new_value"].startswith("v2"))
+        assert all(r["global_event_id"] < 0 for r in allrows if r["new_value"].startswith("L"))
+    finally:
+        await store.close()
+
+
+async def test_id_order_preserved_with_positives_only_in_closed_segment(store: SqliteSegmentStore, tmp_path: Path):
+    # Positive v2-Zeilen liegen ausschließlich in einem GESCHLOSSENEN Segment; das
+    # aktive Segment ist leer (nach manuellem rotate). ``_store_has_positive_rows``
+    # muss die geschlossene Segmentdatei lesen und erkennen, dass Positive existieren,
+    # damit die Migrierten trotzdem als ``migrated`` hinter sie sortiert werden.
+    await store.append([_event("v2-a", "2026-01-01T00:00:00.000Z")])
+    await store.append([_event("v2-b", "2026-01-02T00:00:00.000Z")])
+    await store.rotate()  # positive Zeilen jetzt im geschlossenen Segment, aktiv leer
+
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy(db, [("2020-01-01T00:00:00.000Z", "L0"), ("2020-01-02T00:00:00.000Z", "L1")])
+    assert await LegacyMigrator(store, db).migrate_chunk(batch_rows=100) == 2
+
+    rows = await store.query(StoreQuery(limit=100, sort_field="id", sort_order="desc"))
+    assert [r["new_value"] for r in rows] == ["v2-b", "v2-a", "L1", "L0"]
+    migrated = [s for s in await store.manifest.list_segments() if s.status == "migrated"]
+    assert migrated, "migrierte Zeilen wurden nicht als 'migrated' markiert"
+
+
+async def test_migrated_only_store_needs_no_extra_segment(store: SqliteSegmentStore, tmp_path: Path):
+    # Rein legacy-migrierter Store OHNE positive Zeilen: segment_id-Ordnung == gid-
+    # Ordnung von selbst; kein ``migrated``-Marker/Extra-Rotate nötig, ein Segment.
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy(db, [("2020-01-01T00:00:00.000Z", "a"), ("2020-01-02T00:00:00.000Z", "b")])
+    assert await LegacyMigrator(store, db).migrate_chunk(batch_rows=100) == 2
+    v2 = [s for s in await store.manifest.list_segments() if s.schema_version > 1]
+    assert len(v2) == 1
+    assert v2[0].status == "active"  # nicht als migrated markiert
+    rows = await store.query(StoreQuery(limit=100, sort_field="id", sort_order="desc"))
+    assert [r["new_value"] for r in rows] == ["b", "a"]
+
+
+# ---------------------------------------------------------------------------
+# (Runde 2 / 3) Replay-Detection pro Quell-DB scopen (:337)
+# ---------------------------------------------------------------------------
+
+
+async def test_resume_floor_scoped_per_source_db(store: SqliteSegmentStore, tmp_path: Path):
+    # Zwei Legacy-DBs in denselben Store migriert. DB A hat rowids bis 5. Startet der
+    # Migrator für DB B mit verlorenem Cursor, DARF der aus DB A materialisierte Floor
+    # ihn NICHT dazu bringen, die ersten rowids von DB B zu überspringen.
+    db_a = tmp_path / "legacy_a.db"
+    _build_legacy(db_a, [(f"2020-01-{i + 1:02d}T00:00:00.000Z", f"A{i}") for i in range(5)])
+    db_b = tmp_path / "legacy_b.db"
+    _build_legacy(db_b, [(f"2021-01-{i + 1:02d}T00:00:00.000Z", f"B{i}") for i in range(3)])
+
+    assert await LegacyMigrator(store, db_a).migrate_small(batch_rows=100) == 5
+
+    migrator_b = LegacyMigrator(store, db_b)
+    # Crash zwischen Append und State-Write ist hier nicht nötig: mit leerem Cursor
+    # würde ein GLOBALER Floor (max rowid aus A = 5) die ersten 3 rowids von B (1..3)
+    # überspringen. Mit per-Quelle-Floor werden alle 3 migriert.
+    assert await migrator_b.migrate_small(batch_rows=100) == 3
+
+    rows = await store.query(StoreQuery(limit=100))
+    values = sorted(r["new_value"] for r in rows)
+    assert values == ["A0", "A1", "A2", "A3", "A4", "B0", "B1", "B2"]
+
+
+async def test_per_source_resume_idempotent_after_crash(store: SqliteSegmentStore, tmp_path: Path):
+    # Zwei Quellen; nach Crash (Cursor verloren) darf keine Quelle ihre schon
+    # migrierten Zeilen doppeln und keine überspringen.
+    db_a = tmp_path / "legacy_a.db"
+    _build_legacy(db_a, [("2020-01-01T00:00:00.000Z", "A0"), ("2020-01-02T00:00:00.000Z", "A1")])
+    db_b = tmp_path / "legacy_b.db"
+    _build_legacy(db_b, [("2021-01-01T00:00:00.000Z", "B0"), ("2021-01-02T00:00:00.000Z", "B1")])
+
+    ma = LegacyMigrator(store, db_a)
+    mb = LegacyMigrator(store, db_b)
+    assert await ma.migrate_chunk(batch_rows=100) == 2
+    assert await mb.migrate_chunk(batch_rows=100) == 2
+
+    # Crash: beide Cursor verloren.
+    ma._save_state(_ResumeState(last_rowid=0, done=False))
+    mb._save_state(_ResumeState(last_rowid=0, done=False))
+    assert await ma.migrate_chunk(batch_rows=100) == 0
+    assert await mb.migrate_chunk(batch_rows=100) == 0
+
+    rows = await store.query(StoreQuery(limit=100))
+    assert sorted(r["new_value"] for r in rows) == ["A0", "A1", "B0", "B1"]
+
+
+# ---------------------------------------------------------------------------
+# (Runde 2 / 4) Dirty-WAL-Frames bei kleiner Legacy-DB mitmigrieren (:346)
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_reads_committed_dirty_wal_frames(store: SqliteSegmentStore, tmp_path: Path):
+    # Eine kleine Legacy-DB mit committeten, noch ungecheckpointeten WAL-Frames: die
+    # jüngsten pre-upgrade-Events stehen nur im ``-wal``. Ohne Fix ignoriert
+    # ``immutable=1`` diese Frames und die Zeilen gehen still verloren.
+    #
+    # Dirty-WAL wird erzeugt, indem die DB im WAL-Modus geschrieben wird und die
+    # ``.db``+``-wal``-Dateien BEI NOCH OFFENER Writer-Connection an den Zielpfad
+    # kopiert werden – so läuft kein Checkpoint (der beim letzten Close den WAL
+    # falten würde) und der kopierte Snapshot behält einen nicht-leeren ``-wal``.
+    src = tmp_path / "src.db"
+    conn = sqlite3.connect(str(src))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA wal_autocheckpoint=0")
+    conn.execute(
+        """CREATE TABLE ringbuffer (
+               id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
+               datapoint_id TEXT NOT NULL, topic TEXT NOT NULL, old_value TEXT,
+               new_value TEXT, source_adapter TEXT NOT NULL, quality TEXT NOT NULL,
+               metadata_version INTEGER NOT NULL DEFAULT 1, metadata TEXT NOT NULL DEFAULT '{}')"""
+    )
+    for i in range(3):
+        conn.execute(
+            "INSERT INTO ringbuffer (ts, datapoint_id, topic, new_value, source_adapter, quality) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"2020-01-0{i + 1}T00:00:00.000Z", "dp-legacy", "t", json.dumps(f"wal-{i}"), "legacy", "good"),
+        )
+    conn.commit()  # committed, aber (autocheckpoint=0) noch im -wal
+
+    db = tmp_path / "obs_ringbuffer.db"
+    # Snapshot inkl. -wal kopieren, solange der Writer offen ist (kein Checkpoint).
+    db.write_bytes(src.read_bytes())
+    Path(f"{db}-wal").write_bytes(Path(f"{src}-wal").read_bytes())
+    conn.close()
+    # Sicherstellen, dass ein nicht-leeres -wal am Zielpfad existiert (dirty).
+    assert Path(f"{db}-wal").exists() and Path(f"{db}-wal").stat().st_size > 0
+
+    total = await LegacyMigrator(store, db).migrate_small(batch_rows=100)
+    assert total == 3
+    rows = await store.query(StoreQuery(limit=100))
+    assert sorted(r["new_value"] for r in rows) == ["wal-0", "wal-1", "wal-2"]
+
+
+# ---------------------------------------------------------------------------
+# (Runde 2 / 5) pre-Metadata-Schema in der Chunk-Migration behandeln (:353)
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_handles_pre_metadata_legacy_schema(store: SqliteSegmentStore, tmp_path: Path):
+    # Alte Legacy-DB OHNE metadata_version/metadata-Spalten: das bedingungslose SELECT
+    # dieser Spalten scheiterte mit „no such column" und machte die Historie unmigrierbar.
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy_raw(
+        db,
+        with_metadata=False,
+        rows=[
+            ("2020-01-01T00:00:00.000Z", None, json.dumps("old-1")),
+            ("2020-01-02T00:00:00.000Z", None, json.dumps("old-2")),
+        ],
+    )
+    total = await LegacyMigrator(store, db).migrate_small(batch_rows=100)
+    assert total == 2
+    rows = await store.query(StoreQuery(limit=100))
+    assert sorted(r["new_value"] for r in rows) == ["old-1", "old-2"]
+    # Fehlende metadata-Spalten degradieren auf Defaults.
+    assert all(r["metadata_version"] == 1 for r in rows)
+    assert all(r["metadata"] == {} for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# (Runde 2 / 6) Legacy-Werte bei Migration sicher decodieren (:386)
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_safe_decodes_malformed_values(store: SqliteSegmentStore, tmp_path: Path):
+    # Eine Zeile mit malformed (non-JSON) old_value/new_value darf die Migration NICHT
+    # mit JSONDecodeError abbrechen und damit alle späteren Zeilen dauerhaft blockieren.
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy_raw(
+        db,
+        with_metadata=True,
+        rows=[
+            ("2020-01-01T00:00:00.000Z", None, json.dumps("valid-1")),
+            ("2020-01-02T00:00:00.000Z", "{not json", "also not json}"),  # malformed
+            ("2020-01-03T00:00:00.000Z", None, json.dumps("valid-3")),
+        ],
+    )
+    total = await LegacyMigrator(store, db).migrate_small(batch_rows=100)
+    assert total == 3  # keine Zeile blockiert
+    rows = await store.query(StoreQuery(limit=100))
+    values = sorted(str(r["new_value"]) for r in rows)
+    # Der Rohwert der malformed-Zeile überlebt (statt Exception); gültige bleiben JSON.
+    assert "valid-1" in values
+    assert "valid-3" in values
+    assert "also not json}" in values

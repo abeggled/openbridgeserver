@@ -25,6 +25,7 @@ bleibt unangetastet erhalten. Die Migration ist optional, lazy und resume-fähig
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
@@ -33,8 +34,13 @@ from pathlib import Path
 import aiosqlite
 
 from obs.ringbuffer.store.interface import StoreEvent
-from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SegmentRecord
-from obs.ringbuffer.store.sqlite_backend import _LEGACY_GID_OFFSET, SqliteSegmentStore, _safe_getsize
+from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_MIGRATED, SegmentRecord
+from obs.ringbuffer.store.sqlite_backend import (
+    _LEGACY_GID_OFFSET,
+    SqliteSegmentStore,
+    _safe_getsize,
+    _safe_json_decode,
+)
 
 # Schwellwerte (Bytes). Klein: klein genug für eine vollständige Einmal-Kopie.
 # Groß: ab hier NUR read-only einhängen, nie scannen — eine 20–30-GB-Datei darf
@@ -44,6 +50,37 @@ LARGE_MIN_BYTES = 5 * 1024 * 1024 * 1024  # 5 GiB
 
 # Standard-Batchgröße für die chunked Migration (mittel).
 DEFAULT_CHUNK_ROWS = 5_000
+
+# Quell-Scoping der migrierten negativen global_event_ids (#951, Pkt 3).
+#
+# Der Resume-Floor muss PRO Quelldatei berechnet werden: werden zwei Legacy-DBs
+# in denselben Store migriert, dürfen sie sich beim idempotenten Nachziehen aus
+# der höchsten materialisierten Legacy-rowid nicht gegenseitig überspringen. Dazu
+# bekommt jede Quelldatei einen disjunkten gid-Bucket. Die migrierte gid ist:
+#
+#     gid = -_LEGACY_GID_OFFSET + rowid - source_bucket * _MIGRATION_SOURCE_STRIDE
+#
+# * Innerhalb einer Quelle bleibt die Ordnung rowid-monoton (höhere rowid ⇒ höhere,
+#   weniger negative gid) – identisch zum read-only-Legacy-Lesepfad.
+# * Verschiedene Quellen liegen in disjunkten Wertebereichen (Bucket-Trennung),
+#   sodass ``MAX(gid)`` je Bucket den Fortschritt genau EINER Quelle liefert.
+# * Alle gids bleiben strikt negativ (unter allen positiven v2-IDs), solange
+#   rowid < _MIGRATION_SOURCE_STRIDE und source_bucket < _MIGRATION_SOURCE_BUCKETS.
+_MIGRATION_SOURCE_STRIDE = 1 << 40  # bis ~1e12 rowids pro Quelldatei
+_MIGRATION_SOURCE_BUCKETS = 1 << 20  # bis ~1e6 unterscheidbare Quelldateien
+
+
+def _source_bucket_for(legacy_path: Path) -> int:
+    """Deterministischer gid-Bucket einer Quelldatei aus ihrem absoluten Pfad (#951, Pkt 3).
+
+    Stabil über Prozess-Neustarts (kein ``hash()``-Salt), damit ein Resume dieselbe
+    Quelle demselben Bucket zuordnet. Kollisionen zweier verschiedener Quellpfade auf
+    denselben Bucket sind bei ~1e6 Buckets extrem unwahrscheinlich; sie degradieren
+    im schlimmsten Fall auf das alte globale Verhalten (kein Datenverlust, nur ein
+    theoretisch möglicher Skip), sind aber praktisch ausgeschlossen.
+    """
+    digest = hashlib.blake2b(str(legacy_path.resolve()).encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big") % _MIGRATION_SOURCE_BUCKETS
 
 
 class LegacyClass(str, Enum):
@@ -140,6 +177,29 @@ class LegacyMigrator:
         # Resume-State liegt neben der Store-Root, nicht in der Legacy-Datei (die
         # bleibt read-only/unangetastet). Ein State pro Legacy-Datei.
         self._state_path = Path(store._root) / f"legacy_migration_{self._legacy_path.name}.json"
+        # Stabiler, deterministischer gid-Bucket dieser Quelldatei (#951, Pkt 3):
+        # aus dem absoluten Pfad abgeleitet, sodass verschiedene Quelldateien in
+        # disjunkte gid-Bereiche migrieren und ihr Resume-Floor pro Quelle scopt.
+        self._source_bucket = _source_bucket_for(self._legacy_path)
+
+    # ------------------------------------------------------------------
+    # Quell-Scoping (#951, Pkt 3)
+    # ------------------------------------------------------------------
+
+    def _gid_for_rowid(self, rowid: int) -> int:
+        """Negative, quell-gescopte gid einer Legacy-rowid (#951, Pkt 3)."""
+        return rowid - _LEGACY_GID_OFFSET - self._source_bucket * _MIGRATION_SOURCE_STRIDE
+
+    def _rowid_for_gid(self, gid: int) -> int:
+        """Rechnet eine quell-gescopte gid zurück in die Legacy-rowid."""
+        return gid + _LEGACY_GID_OFFSET + self._source_bucket * _MIGRATION_SOURCE_STRIDE
+
+    @property
+    def _bucket_gid_bounds(self) -> tuple[int, int]:
+        """Halb-offener gid-Bereich ``[low, high)`` dieser Quelle (rowid ≥ 1)."""
+        low = self._gid_for_rowid(1)
+        high = self._gid_for_rowid(_MIGRATION_SOURCE_STRIDE)
+        return low, high
 
     # ------------------------------------------------------------------
     # Klassifikation
@@ -234,13 +294,36 @@ class LegacyMigrator:
         rows = await self._read_batch(after_rowid=after_rowid, limit=batch_rows)
         if not rows:
             self._save_state(_ResumeState(last_rowid=after_rowid, done=True))
+            await self._detach_migrated_legacy_segment()
             return 0
         await self._append_with_legacy_gids(rows)
         last_rowid = rows[-1]["id"]
         # done erst markieren, wenn der Batch kleiner als angefordert war (= letzte Seite).
         done = len(rows) < batch_rows
         self._save_state(_ResumeState(last_rowid=last_rowid, done=done))
+        if done:
+            await self._detach_migrated_legacy_segment()
         return len(rows)
+
+    async def _detach_migrated_legacy_segment(self) -> None:
+        """Koppelt den read-only Legacy-Manifest-Eintrag DIESER Datei nach Abschluss ab (#951, Pkt 1).
+
+        Im normalen Upgrade registriert ``_open_segment_store_locked`` die Legacy-
+        Single-DB read-only als Legacy-Segment (``attach_readonly``). Migriert ein
+        späterer Wartungsjob dieselbe Datei per ``migrate_chunk``/``migrate_small``
+        vollständig nach v2, bleibt dieser Legacy-Eintrag OHNE Abkopplung weiterhin
+        lesbar – ohne Size-Druck (keine Retention, die ihn droppte) würde damit JEDES
+        migrierte Event DOPPELT geliefert: einmal als v2-Zeile, einmal aus dem noch
+        eingehängten Legacy-Segment. Nach erfolgreichem Abschluss der Migration wird
+        der zur migrierten Datei gehörende Legacy-Eintrag daher aus dem Manifest
+        entfernt; die Original-Datei selbst bleibt unangetastet (nur read-only
+        gelesen). Idempotent: ist kein passender Eintrag (mehr) vorhanden, passiert
+        nichts.
+        """
+        resolved = str(self._legacy_path.resolve())
+        for segment in await self._store.manifest.list_legacy_segments():
+            if segment.filename == resolved:
+                await self._store.manifest.delete_segment(segment.segment_id)
 
     async def _append_with_legacy_gids(self, rows: list[aiosqlite.Row]) -> None:
         """Fügt Legacy-Zeilen mit negativen gids ein und hält dabei die Rotations-/Retention-Schwellen ein.
@@ -270,20 +353,102 @@ class LegacyMigrator:
         cfg = store._segment_config
         max_rows = cfg.segment_max_rows
         max_bytes = cfg.segment_max_bytes
+        # id-Ordnung bewahren (#951, Pkt 2): das frühe Paging-Terminieren in
+        # ``_collect_rows_across_segments`` verlässt sich darauf, dass ein Segment mit
+        # höherer ``segment_id`` ausschließlich höhere ``global_event_id``s hält
+        # (Segmentreihenfolge == gid-Ordnung). Migrierte Alt-Zeilen tragen aber
+        # NEGATIVE gids. Landeten sie im aktiven Segment, das schon eine echte
+        # POSITIVE v2-Zeile enthält, mischte ein Segment positive und negative gids;
+        # der ``id desc``-Query bräche früh ab und lieferte die migrierten Alt-Zeilen
+        # fälschlich als „neueste". Daher: enthält das aktive Segment bereits
+        # positive v2-Zeilen, VOR der Migration einmal rotieren, sodass die negativen
+        # Zeilen in ein dediziertes, rein-negatives Segment gehen. Die so befüllten
+        # Segmente werden anschließend als ``migrated`` markiert und von
+        # ``list_segments_for_query`` – wie Legacy-Segmente – hinter allen positiven
+        # Segmenten iteriert; das Early-Termination bleibt korrekt.
+        # Nur wenn der Store bereits ECHTE positive v2-Zeilen hält, müssen die
+        # migrierten (negativen) Segmente aktiv hinter die positiven sortiert werden
+        # (``migrated``-Status). Ist der Store dagegen rein legacy-migriert (keine
+        # positiven gids), stimmt die segment_id-Ordnung bereits mit der gid-Ordnung
+        # überein (höhere segment_id ⇒ höhere rowid ⇒ höhere gid), und es ist weder
+        # ein Vor-Rotate noch ein ``migrated``-Marker nötig – so bleibt der Ein-
+        # Segment-Fall ohne Endlos-/Zusatzrotation.
+        has_positive = await self._store_has_positive_rows()
+        if has_positive and await self._active_segment_has_positive_rows():
+            await store.rotate()
+        # Segment-ids, die in diesem Batch NEGATIVE Zeilen erhielten (rein-negativ,
+        # da vor positiver Mischung rotiert wurde) – nach Abschluss als ``migrated``
+        # markieren (nur relevant, wenn positive Daten existieren).
+        migrated_ids: set[int] = set()
         # Zeilen im aktiven Segment seit dem letzten Rotate (Basis = bereits materialisierte).
         rows_in_active = await self._active_segment_row_count()
         for row in rows:
             conn = store._active_conn
-            gid = int(row["id"]) - _LEGACY_GID_OFFSET
+            gid = self._gid_for_rowid(int(row["id"]))
             await store._insert_event(conn, gid, _row_to_event(row))
             await conn.commit()
+            if store._active_segment is not None:
+                migrated_ids.add(store._active_segment.segment_id)
             rows_in_active += 1
             if await self._rotation_due(rows_in_active, max_rows, max_bytes):
                 await store.rotate()
                 rows_in_active = 0
         await store._refresh_active_segment_stats()
+        if has_positive:
+            # Das zuletzt befüllte (noch aktive) rein-negative Segment schließen, damit
+            # es als ``migrated`` markierbar wird und künftige POSITIVE Writes ein
+            # frisches, separates aktives Segment (höhere segment_id) bekommen – so
+            # mischt nie wieder ein Segment positive und negative gids (#951, Pkt 2).
+            if store._active_segment is not None and store._active_segment.segment_id in migrated_ids:
+                await store.rotate()
+            for segment_id in migrated_ids:
+                await store.manifest.mark_migrated(segment_id)
         if max_rows is not None or max_bytes is not None:
             await store.enforce_retention()
+
+    async def _store_has_positive_rows(self) -> bool:
+        """True, wenn irgendein v2-Segment des Stores echte positive gids hält (#951, Pkt 2).
+
+        Positive gids stammen ausschließlich aus regulären ``append()``-Writes. Nur
+        dann müssen migrierte negative Segmente per ``migrated``-Status hinter die
+        positiven sortiert werden; ein rein legacy-migrierter Store braucht das nicht.
+        """
+        store = self._store
+        for segment in await store.manifest.list_segments():
+            if segment.schema_version <= LEGACY_SCHEMA_VERSION or segment.status == SEGMENT_STATUS_MIGRATED:
+                continue
+            if segment.segment_id == (store._active_segment.segment_id if store._active_segment else None):
+                if await self._active_segment_has_positive_rows():
+                    return True
+                continue
+            path = store._segments_dir / segment.filename
+            if not path.exists():
+                continue
+            uri = f"file:{path.as_posix()}?mode=ro"
+            conn = await aiosqlite.connect(uri, uri=True)
+            try:
+                async with conn.execute("SELECT 1 FROM ringbuffer WHERE global_event_id >= 0 LIMIT 1") as cur:
+                    if await cur.fetchone() is not None:
+                        return True
+            except aiosqlite.Error:
+                continue
+            finally:
+                await conn.close()
+        return False
+
+    async def _active_segment_has_positive_rows(self) -> bool:
+        """True, wenn das aktive Segment mindestens eine echte v2-Zeile (positive gid) hält (#951, Pkt 2).
+
+        Migrierte Alt-Zeilen tragen negative gids; ein Segment, das positive UND
+        negative gids mischt, bricht das frühe Paging-Terminieren des ``id desc``-
+        Query. Vor dem Einspielen negativer Zeilen wird daher geprüft, ob im aktiven
+        Segment schon positive gids liegen.
+        """
+        store = self._store
+        if store._active_conn is None:
+            return False
+        async with store._active_conn.execute("SELECT 1 FROM ringbuffer WHERE global_event_id >= 0 LIMIT 1") as cur:
+            return await cur.fetchone() is not None
 
     async def _active_segment_row_count(self) -> int:
         """Aktueller Zeilen-Zähler des aktiven Segments (aus dem Manifest, 0 wenn keins)."""
@@ -310,13 +475,20 @@ class LegacyMigrator:
         return False
 
     async def _max_migrated_rowid(self) -> int:
-        """Höchste bereits in v2 materialisierte Legacy-rowid (0, wenn keine).
+        """Höchste bereits materialisierte Legacy-rowid DIESER Quelle (0, wenn keine).
 
-        Migrierte Zeilen tragen ``global_event_id = legacy_rowid - _LEGACY_GID_OFFSET``
-        (streng negativ). Über alle v2-Segmente wird ``MAX(global_event_id)`` unter den
-        negativen gids gesucht und zur rowid zurückgerechnet. Das macht ``migrate_chunk``
-        idempotent gegen einen verlorenen/veralteten Resume-Cursor (#951, Pkt 3).
+        Migrierte Zeilen tragen eine quell-gescopte negative gid
+        (``_gid_for_rowid``). Über alle v2-Segmente wird ``MAX(global_event_id)``
+        NUR im gid-Bucket DIESER Quelldatei gesucht und zur rowid zurückgerechnet.
+        Das macht ``migrate_chunk`` idempotent gegen einen verlorenen/veralteten
+        Resume-Cursor (#951, Pkt 3) – **pro Quelle**: werden zwei Legacy-DBs in
+        denselben Store migriert, überspringt der Migrator der einen Datei NICHT
+        mehr die Zeilen der anderen, weil er einen fremden (höheren) Floor sähe.
+        Ohne Bucket-Scoping lieferte ``MAX`` über ALLE negativen gids den
+        Fortschritt der zuerst migrierten Datei und ließe die zweite Datei ihre
+        ersten rowids still auslassen.
         """
+        low, high = self._bucket_gid_bounds
         best = 0
         for segment in await self._store.manifest.list_segments():
             if segment.schema_version <= LEGACY_SCHEMA_VERSION:
@@ -327,35 +499,83 @@ class LegacyMigrator:
             uri = f"file:{path.as_posix()}?mode=ro"
             conn = await aiosqlite.connect(uri, uri=True)
             try:
-                async with conn.execute("SELECT MAX(global_event_id) AS mx FROM ringbuffer WHERE global_event_id < 0") as cur:
+                async with conn.execute(
+                    "SELECT MAX(global_event_id) AS mx FROM ringbuffer WHERE global_event_id >= ? AND global_event_id < ?",
+                    (low, high),
+                ) as cur:
                     row = await cur.fetchone()
             except aiosqlite.Error:
                 continue
             finally:
                 await conn.close()
             if row is not None and row[0] is not None:
-                best = max(best, int(row[0]) + _LEGACY_GID_OFFSET)
+                best = max(best, self._rowid_for_gid(int(row[0])))
         return best
 
     async def _read_batch(self, *, after_rowid: int, limit: int) -> list[aiosqlite.Row]:
         """Liest den nächsten aufsteigenden rowid-Batch read-only aus der Legacy-DB.
 
-        ``immutable=1`` verhindert eine WAL-Recovery beim Open — auch eine dirty-WAL-
-        Legacy-Datei wird so ohne Checkpoint gelesen.
+        **Dirty-WAL (#951, Pkt 4):** ``immutable=1`` verhindert eine WAL-Recovery
+        beim Open, ignoriert damit aber auch committete Frames im ``-wal``. Eine
+        kleine Legacy-DB, deren jüngste pre-upgrade-Events noch ungecheckpointet im
+        ``-wal`` stehen, migrierte sonst nur den Haupt-DB-Snapshot und markierte den
+        Resume-State als „fertig" – die WAL-Frames gingen still verloren. Analog zum
+        read-only-Kompatibilitätspfad (``_open_legacy_read_conn`` →
+        ``_checkpoint_small_legacy``) wird eine dirty-WAL-Legacy-DB **unter dem
+        Small-Schwellwert** daher EINMAL sauber gecheckpointet, bevor read-only
+        gelesen wird; committete Frames wandern so in die Haupt-DB und werden
+        mitmigriert. Große Dateien bleiben beim ``immutable=1``-Pfad (kein Scan/
+        Checkpoint auf 20–30 GB).
+
+        **pre-Metadata-Schema (#951, Pkt 5):** Sehr alte Single-DBs (vor #388) haben
+        noch keine ``metadata_version``/``metadata``-Spalten. Ein bedingungsloses
+        SELECT dieser Spalten scheiterte mit „no such column" und machte die
+        gesamte Alt-Historie unmigrierbar. Die Spalten werden – wie im read-Pfad
+        (``_legacy_has_metadata_columns``) – nur selektiert, wenn sie existieren;
+        fehlen sie, liefert das SELECT ``NULL`` und ``_row_to_event`` die Defaults.
         """
-        uri = f"file:{self._legacy_path.resolve().as_posix()}?mode=ro&immutable=1"
+        legacy_path = self._legacy_path.resolve()
+        await self._checkpoint_dirty_wal_if_small(legacy_path)
+        uri = f"file:{legacy_path.as_posix()}?mode=ro&immutable=1"
         conn = await aiosqlite.connect(uri, uri=True)
         conn.row_factory = aiosqlite.Row
         try:
+            has_meta = await _legacy_has_metadata_columns(conn)
+            metadata_select = "metadata_version, metadata" if has_meta else "NULL AS metadata_version, NULL AS metadata"
             async with conn.execute(
-                """SELECT id, ts, datapoint_id, topic, old_value, new_value,
-                          source_adapter, quality, metadata_version, metadata
-                   FROM ringbuffer WHERE id > ? ORDER BY id ASC LIMIT ?""",
+                f"""SELECT id, ts, datapoint_id, topic, old_value, new_value,
+                           source_adapter, quality, {metadata_select}
+                    FROM ringbuffer WHERE id > ? ORDER BY id ASC LIMIT ?""",
                 (after_rowid, limit),
             ) as cur:
                 return await cur.fetchall()
         finally:
             await conn.close()
+
+    async def _checkpoint_dirty_wal_if_small(self, legacy_path: Path) -> None:
+        """Checkpointet eine kleine dirty-WAL-Legacy-DB einmalig (#951, Pkt 4).
+
+        Spiegelt ``SqliteSegmentStore._checkpoint_small_legacy``: nur für Dateien
+        unter ``SMALL_MAX_BYTES`` mit nicht-leerem ``-wal`` wird die DB genau einmal
+        schreibbar geöffnet und ``wal_checkpoint(TRUNCATE)`` ausgeführt, damit die
+        committeten Frames in die Haupt-DB fallen und die anschließende read-only-
+        Migration sie sieht. Fehler (read-only-Filesystem o. Ä.) werden geschluckt –
+        die Migration degradiert dann auf den ``immutable=1``-Pfad statt zu brechen.
+        Große Dateien werden NICHT gecheckpointet (kein Startup-Scan auf 20–30 GB).
+        """
+        if not _wal_is_dirty(legacy_path):
+            return
+        if _legacy_disk_size(legacy_path) >= SMALL_MAX_BYTES:
+            return
+        try:
+            conn = await aiosqlite.connect(str(legacy_path))
+            try:
+                await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                await conn.commit()
+            finally:
+                await conn.close()
+        except aiosqlite.Error:
+            return
 
     # ------------------------------------------------------------------
     # Resume-State (JSON neben der Store-Root)
@@ -372,20 +592,51 @@ class LegacyMigrator:
         self._state_path.write_text(json.dumps(state.as_dict()), encoding="utf-8")
 
 
+async def _legacy_has_metadata_columns(conn: aiosqlite.Connection) -> bool:
+    """True, wenn die Legacy-``ringbuffer``-Tabelle die ``metadata``-Spalten trägt (#951, Pkt 5).
+
+    Spiegelt ``SqliteSegmentStore._legacy_has_metadata_columns``: pre-#388-Single-DBs
+    haben ``metadata_version``/``metadata`` noch nicht. Erkennung über
+    ``PRAGMA table_info``, damit der Migrations-SELECT fehlende Spalten als Defaults
+    liefern kann statt mit „no such column" zu brechen.
+    """
+    async with conn.execute("PRAGMA table_info(ringbuffer)") as cur:
+        columns = {row["name"] for row in await cur.fetchall()}
+    return {"metadata_version", "metadata"}.issubset(columns)
+
+
 def _row_to_event(row: aiosqlite.Row) -> StoreEvent:
     """Übersetzt eine Legacy-v1-Zeile in ein engine-neutrales ``StoreEvent``.
 
-    Die JSON-Spalten ``old_value``/``new_value`` werden dekodiert; ``append``
-    schreibt sie im v2-Segment wieder als JSON **und** in die typisierten Spalten.
+    Die JSON-Spalten ``old_value``/``new_value`` werden **sicher** dekodiert
+    (#951, Pkt 6): ein einzelner malformed/non-JSON-Wert wirft hier NICHT mehr eine
+    ``JSONDecodeError``, die – vor dem Batch-Commit/Cursor-Vorrücken – die Migration
+    dieser Zeile UND aller späteren Alt-Historie dauerhaft blockierte. Stattdessen
+    liefert ``_safe_json_decode`` im Fehlerfall den Rohwert – dieselbe Semantik wie
+    der read-only-Kompatibilitätspfad (``_legacy_row_to_dict``). ``append`` schreibt
+    die Werte im v2-Segment wieder als JSON **und** in die typisierten Spalten.
     """
     return StoreEvent(
         ts=row["ts"],
         datapoint_id=row["datapoint_id"],
         topic=row["topic"],
-        old_value=json.loads(row["old_value"]) if row["old_value"] is not None else None,
-        new_value=json.loads(row["new_value"]) if row["new_value"] is not None else None,
+        old_value=_safe_json_decode(row["old_value"]),
+        new_value=_safe_json_decode(row["new_value"]),
         source_adapter=row["source_adapter"],
         quality=row["quality"],
-        metadata_version=row["metadata_version"],
-        metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+        metadata_version=row["metadata_version"] if row["metadata_version"] is not None else 1,
+        metadata=_safe_metadata_decode(row["metadata"]),
     )
+
+
+def _safe_metadata_decode(raw: object) -> dict:
+    """Dekodiert die Legacy-``metadata``-Spalte sicher zu einem dict (#951, Pkt 6).
+
+    Wie ``_legacy_metadata_decode`` im read-Pfad: leerer/fehlender oder
+    malformed/non-dict-Wert degradiert auf ``{}`` statt zu werfen, damit eine
+    einzelne kaputte Zeile die Migration nicht blockiert.
+    """
+    if not raw:
+        return {}
+    decoded = _safe_json_decode(raw)
+    return decoded if isinstance(decoded, dict) else {}
