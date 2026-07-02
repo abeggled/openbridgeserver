@@ -158,3 +158,49 @@ async def test_stats_returns_persisted_segment_config(client, auth_headers):
     assert stats.json()["segment_max_age"] == 43200
 
     await _reset_to_defaults(client, auth_headers)
+
+
+async def test_config_post_segment_max_age_applies_live_to_running_store(client, auth_headers):
+    """POST /config mit segment_max_age wirkt LIVE auf den laufenden Store (#919/#938).
+
+    Ohne Neustart müssen sich der RingBuffer-Wert UND die Store-``SegmentConfig``
+    ändern — die Prognose (``_compute_prognosis``) nutzt ``segment_max_age`` sofort.
+    """
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer
+
+    rb = get_optional_ringbuffer()
+    assert rb is not None and rb.segmented and rb.store is not None
+
+    resp = await client.post(
+        "/api/v1/ringbuffer/config",
+        json={
+            # Retention-Limits auf None → die 3-Segment-Ratio kann nicht verletzt
+            # werden; explizite Bytes/Rows liegen innerhalb der technischen Grenzen.
+            "max_entries": None,
+            "max_file_size_bytes": None,
+            "max_age": None,
+            "segment_max_age": 7200,  # 2 h
+            "segment_max_bytes": 8 * 1024 * 1024,  # 8 MiB (>= 4 MiB Untergrenze)
+            "segment_max_rows": 5000,  # >= 1000 Untergrenze
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Live, ohne Neustart: RingBuffer-Felder und Store-SegmentConfig tragen die Werte.
+    assert rb._segment_max_age == 7200
+    assert rb._segment_max_bytes == 8 * 1024 * 1024
+    assert rb._segment_max_rows == 5000
+    assert rb.store._segment_config.segment_max_age == 7200
+    assert rb.store._segment_config.segment_max_bytes == 8 * 1024 * 1024
+    assert rb.store._segment_config.segment_max_rows == 5000
+
+    # Explizite Bytes/Rows wieder auf Auto (None) zurücksetzen, damit sie nicht in
+    # nachfolgende Tests leaken (``_reset_to_defaults`` fasst sie nicht an).
+    resp = await client.post(
+        "/api/v1/ringbuffer/config",
+        json={"segment_max_bytes": None, "segment_max_rows": None},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    await _reset_to_defaults(client, auth_headers)

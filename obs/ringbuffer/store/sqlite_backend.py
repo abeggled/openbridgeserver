@@ -379,6 +379,27 @@ class SqliteSegmentStore(RingBufferStore):
         self._last_checkpoint_result: str | None = None
         self._wal_checkpoint_busy_count = 0
 
+    def apply_config(
+        self,
+        *,
+        segments: SegmentConfig | None = None,
+        retention: StoreRetentionConfig | None = None,
+    ) -> None:
+        """Übernimmt eine neue Segment-/Retention-Config in den laufenden Store (#919/#938).
+
+        Die Config-Dataclasses sind ``frozen`` — daher wird das jeweilige Attribut
+        neu zugewiesen. Rotation (``rotate``/Threshold-Checks im RingBuffer),
+        segmentgenaue Retention (``enforce_retention``) und die Prognose
+        (``_compute_prognosis``) lesen ``self._segment_config`` bzw.
+        ``self._retention_config`` bei jedem Aufruf live — die neuen Werte greifen
+        also ab dem nächsten Aufruf ohne Store-Neustart. Nur gesetzte Argumente
+        werden übernommen (``None`` lässt die jeweilige Ebene unverändert).
+        """
+        if segments is not None:
+            self._segment_config = segments
+        if retention is not None:
+            self._retention_config = retention
+
     # ------------------------------------------------------------------
     # Contract: Capabilities
     # ------------------------------------------------------------------

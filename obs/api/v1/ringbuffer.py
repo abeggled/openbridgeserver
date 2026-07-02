@@ -2021,6 +2021,15 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             reconfigure_kwargs["max_file_size_bytes"] = body.max_file_size_bytes
         if "max_age" in body.model_fields_set:
             reconfigure_kwargs["max_age"] = body.max_age
+        # Segment-Config live an den laufenden Store propagieren (#919/#938):
+        # gesetzte segment_max_* werden übernommen, im segmentierten Modus wirken
+        # sie sofort (Rotation/Retention/Prognose) ohne Neustart.
+        if "segment_max_bytes" in body.model_fields_set:
+            reconfigure_kwargs["segment_max_bytes"] = body.segment_max_bytes
+        if "segment_max_rows" in body.model_fields_set:
+            reconfigure_kwargs["segment_max_rows"] = body.segment_max_rows
+        if "segment_max_age" in body.model_fields_set:
+            reconfigure_kwargs["segment_max_age"] = body.segment_max_age
         await rb.reconfigure(body.storage, **reconfigure_kwargs)
         stats = await rb.stats()
         await persist_ringbuffer_config(

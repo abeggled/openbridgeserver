@@ -541,6 +541,137 @@ async def test_segmented_start_legacy_attach_is_idempotent_across_restarts(tmp_p
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Live-Reconfigure der Segment-/Retention-Config (#919/#938)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_segment_max_age_updates_store_and_prognosis(tmp_path: Path):
+    """reconfigure(segment_max_age=…) aktualisiert self._segment_max_age UND den Store-SegmentConfig live."""
+    rb = _rb(tmp_path, segmented=True, segment_max_age=3600)
+    await rb.start()
+    try:
+        assert rb._segment_max_age == 3600
+        assert rb.store._segment_config.segment_max_age == 3600
+
+        await rb.reconfigure("file", segment_max_age=600)
+
+        # RingBuffer-Feld + Store-SegmentConfig tragen sofort den neuen Wert.
+        assert rb._segment_max_age == 600
+        assert rb.store._segment_config.segment_max_age == 600
+        # Die Prognose zieht den neuen segment_max_age über self._segment_config.
+        assert rb.store._compute_prognosis([])["recommended_budget_for_segment_age_bytes"] is None
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_segment_max_age_triggers_immediate_rotation(tmp_path: Path):
+    """Sofort-Rotation: ein künstlich gealtertes aktives Segment wird bei reconfigure sofort rotiert."""
+    rb = _rb(tmp_path, segmented=True, segment_max_age=86400)
+    await rb.start()
+    try:
+        await _record(rb, 1, "2026-01-01T00:00:00.000Z")
+        segments_before = (await rb.store.stats()).as_dict()["common"]["segment_count"]
+
+        # Aktives Segment weit in die Vergangenheit setzen → mit kleinem
+        # segment_max_age liegt es sofort über der Schwelle.
+        rb._segment_created_at = "2000-01-01T00:00:00.000Z"
+        await rb.reconfigure("file", segment_max_age=300)
+
+        segments_after = (await rb.store.stats()).as_dict()["common"]["segment_count"]
+        # SOFORT rotiert, ohne weiteres Append.
+        assert segments_after > segments_before
+        # Nach der Rotation ist das aktive Segment frisch (created_at zurückgesetzt).
+        assert rb._segment_created_at > "2000-01-01T00:00:00.000Z"
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_max_file_size_propagates_retention_to_store(tmp_path: Path):
+    """reconfigure(max_file_size_bytes=…) propagiert Retention live an den Store; enforce_retention wirkt."""
+    rb = _rb(tmp_path, segmented=True, segment_max_rows=2)
+    await rb.start()
+    try:
+        # Mehrere geschlossene Segmente erzeugen (rotate alle 2 Zeilen).
+        for value in range(8):
+            await _record(rb, value, f"2026-01-01T00:00:0{value}.000Z")
+        stats_before = (await rb.store.stats()).as_dict()["common"]
+        total_before = stats_before["total"]
+        assert total_before == 8
+
+        # Size-Budget knapp unter dem aktuellen Volumen setzen → Store-Retention
+        # muss die ältesten geschlossenen Segmente sofort freigeben, ohne alles zu
+        # löschen (die jüngsten Segmente bleiben unter Budget erhalten).
+        budget = int(stats_before["size_bytes"] * 0.6)
+        await rb.reconfigure("file", max_file_size_bytes=budget)
+
+        assert rb.store._retention_config.max_file_size_bytes == budget
+        total_after = (await rb.store.stats()).as_dict()["common"]["total"]
+        assert 0 < total_after < total_before
+        # Jüngstes Event bleibt erhalten (aktives/neuestes Segment nie zuerst gelöscht).
+        entries = await rb.query_v2(limit=1)
+        assert entries[0].new_value == 7
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_segment_max_bytes_none_rederives_from_file_size(tmp_path: Path):
+    """segment_max_bytes=None → Neu-Ableitung aus dem effektiven max_file_size_bytes."""
+    rb = _rb(tmp_path, segmented=True, max_file_size_bytes=None, segment_max_bytes=1234567)
+    await rb.start()
+    try:
+        assert rb._segment_max_bytes == 1234567
+
+        # Neues Size-Budget + Auto-Ableitung (segment_max_bytes=None) in einem Schritt.
+        await rb.reconfigure("file", max_file_size_bytes=30 * 1024 * 1024, segment_max_bytes=None)
+
+        expected = derive_segment_max_bytes(30 * 1024 * 1024)
+        assert rb._segment_max_bytes == expected
+        assert rb.store._segment_config.segment_max_bytes == expected
+        assert rb.store._retention_config.max_file_size_bytes == 30 * 1024 * 1024
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_legacy_path_unaffected_by_segment_args(tmp_path: Path):
+    """Legacy-Pfad (segmented=False): kein Store, Segment-Args ändern nur die Felder, kein Crash."""
+    rb = _rb(tmp_path, max_entries=100)
+    await rb.start()
+    try:
+        assert rb.segmented is False
+        assert rb.store is None
+        await _record(rb, 1, "2026-01-01T00:00:00.000Z")
+
+        # Segment-Args im Legacy-Pfad: keine Store-Propagation, kein Crash.
+        await rb.reconfigure("file", max_entries=50, segment_max_age=600)
+        assert rb._max_entries == 50
+        assert rb.store is None
+
+        entries = await rb.query(q="dp-seg", limit=10)
+        assert [e.new_value for e in entries] == [1]
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_noop_when_nothing_changes_keeps_segments(tmp_path: Path):
+    """Kein gesetzter Parameter → früher Return, Store-Config unverändert."""
+    rb = _rb(tmp_path, segmented=True, segment_max_rows=5, segment_max_age=3600)
+    await rb.start()
+    try:
+        before_seg = rb.store._segment_config
+        await rb.reconfigure("file")
+        # Identisches Objekt → apply_config wurde nicht aufgerufen.
+        assert rb.store._segment_config is before_seg
+    finally:
+        await rb.stop()
+
+
 @pytest.mark.asyncio
 async def test_segmented_rotation_after_default_six_hour_age(tmp_path: Path):
     from obs.ringbuffer.persisted_config import DEFAULT_SEGMENT_MAX_AGE_SECONDS

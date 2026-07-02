@@ -303,11 +303,21 @@ class RingBuffer:
         max_entries: int | None | object = _UNSET,
         max_file_size_bytes: int | None | object = _UNSET,
         max_age: int | None | object = _UNSET,
+        *,
+        segment_max_bytes: int | None | object = _UNSET,
+        segment_max_rows: int | None | object = _UNSET,
+        segment_max_age: int | None | object = _UNSET,
     ) -> None:
         """Switch storage model at runtime.
 
         Same model: apply config in-place (keeps entries).
         Model switch: restart empty (no migration).
+
+        Segment- und Retention-Config werden im segmentierten Modus (#919/#938)
+        live auf den laufenden Store propagiert — Rotation, Retention und Prognose
+        greifen sofort ohne Neustart. Ein Wechsel des ``segmented``-Flags ist
+        bewusst NICHT über ``reconfigure`` möglich und braucht weiterhin einen
+        Neustart (der API-Layer baut den RingBuffer dafür neu auf).
         """
         if storage not in _ALLOWED_STORAGE_MODELS:
             raise ValueError("storage must be one of: file, disk, memory")
@@ -321,11 +331,21 @@ class RingBuffer:
             resolved_max_file_size = self._max_file_size_bytes if max_file_size_bytes is _UNSET else max_file_size_bytes
             resolved_max_age = self._max_age if max_age is _UNSET else max_age
 
+            # Segment-Rotations-Config: gesetzte Werte übernehmen, sonst aktuellen
+            # Wert behalten. ``segment_max_bytes=None`` (auto) leitet aus dem
+            # effektiven ``max_file_size_bytes`` neu ab.
+            resolved_segment_max_bytes = self._segment_max_bytes if segment_max_bytes is _UNSET else segment_max_bytes
+            resolved_segment_max_rows = self._segment_max_rows if segment_max_rows is _UNSET else segment_max_rows
+            resolved_segment_max_age = self._segment_max_age if segment_max_age is _UNSET else segment_max_age
+
             if (
                 storage == self._storage
                 and resolved_max_entries == self._max_entries
                 and resolved_max_file_size == self._max_file_size_bytes
                 and resolved_max_age == self._max_age
+                and segment_max_bytes is _UNSET
+                and segment_max_rows is _UNSET
+                and segment_max_age is _UNSET
             ):
                 return
 
@@ -334,6 +354,12 @@ class RingBuffer:
                 self._max_entries = resolved_max_entries
                 self._max_file_size_bytes = int(resolved_max_file_size) if resolved_max_file_size is not None else None
                 self._max_age = int(resolved_max_age) if resolved_max_age is not None else None
+                if self._segmented and self._store is not None:
+                    await self._apply_segment_config_locked(
+                        resolved_segment_max_bytes,
+                        resolved_segment_max_rows,
+                        resolved_segment_max_age,
+                    )
                 try:
                     await self._trim()
                 except Exception as exc:
@@ -341,11 +367,15 @@ class RingBuffer:
                         raise
                     await self._recover_corrupt_storage_locked(exc)
                 logger.info(
-                    "RingBuffer reconfigured in-place → %s, max_entries=%s, max_file_size_bytes=%s, max_age=%s",
+                    "RingBuffer reconfigured in-place → %s, max_entries=%s, max_file_size_bytes=%s, max_age=%s, "
+                    "segment_max_bytes=%s, segment_max_rows=%s, segment_max_age=%s",
                     storage,
                     self._max_entries,
                     self._max_file_size_bytes,
                     self._max_age,
+                    self._segment_max_bytes,
+                    self._segment_max_rows,
+                    self._segment_max_age,
                 )
                 return
 
@@ -376,6 +406,55 @@ class RingBuffer:
                 self._max_file_size_bytes,
                 self._max_age,
             )
+
+    async def _apply_segment_config_locked(
+        self,
+        segment_max_bytes: int | None,
+        segment_max_rows: int | None,
+        segment_max_age: int | None,
+    ) -> None:
+        """Propagiert Segment- + Retention-Config live an den laufenden Store (#919/#938).
+
+        Läuft nur im segmentierten Modus mit offenem Store und unter gehaltenem
+        ``self._lock``. ``segment_max_bytes=None`` (auto) wird aus dem bereits
+        aktualisierten ``self._max_file_size_bytes`` neu abgeleitet. Anschließend
+        werden ``SegmentConfig`` und ``StoreRetentionConfig`` des Stores neu
+        gesetzt, damit Rotation, Retention und Prognose sofort die neuen Werte
+        nutzen. Ein durch die neuen (kleineren) Schwellen bereits fälliges aktives
+        Segment wird unmittelbar rotiert; danach greift die Retention einmal.
+        """
+        from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
+
+        # ``segment_max_bytes=None`` → aus dem effektiven Size-Budget neu ableiten
+        # (analog zum Auto-Start); explizite Werte bleiben unangetastet.
+        if segment_max_bytes is None:
+            segment_max_bytes = derive_segment_max_bytes(self._max_file_size_bytes)
+
+        self._segment_max_bytes = segment_max_bytes
+        self._segment_max_rows = segment_max_rows
+        self._segment_max_age = segment_max_age
+
+        self._store.apply_config(
+            segments=SegmentConfig(
+                segment_max_bytes=self._segment_max_bytes,
+                segment_max_rows=self._segment_max_rows,
+                segment_max_age=self._segment_max_age,
+            ),
+            retention=StoreRetentionConfig(
+                max_file_size_bytes=self._max_file_size_bytes,
+                max_entries=self._max_entries,
+                max_age=self._max_age,
+            ),
+        )
+
+        # Sofort-Rotation: ein aktives Segment, das durch die neuen Schwellen jetzt
+        # über der Grenze liegt, wird unmittelbar rotiert — ohne auf das nächste
+        # Event zu warten. Danach Retention einmal anwenden (Budget/Alter kann sich
+        # geändert haben).
+        if await self._segment_rotation_due():
+            await self._store.rotate()
+            self._segment_created_at = _isoformat_utc(datetime.now(UTC))
+        await self._store.enforce_retention()
 
     # ------------------------------------------------------------------
     # Record
