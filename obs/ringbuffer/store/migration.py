@@ -219,6 +219,10 @@ class LegacyMigrator:
         Crasht der Prozess zwischen Append-Commit und State-Write (oder scheitert
         der State-Write), überspringt der nächste Lauf die schon persistierten
         Zeilen anhand dieser materialisierten Grenze – kein Doppel-Import.
+
+        **Rotation/Retention (#951):** Der Append respektiert die Segment-Schwellen
+        (``segment_max_rows``/``segment_max_bytes``) und rotiert bei Erreichen, gefolgt
+        von ``enforce_retention()`` – Details siehe ``_append_with_legacy_gids``.
         """
         state = self._load_state()
         if state.done:
@@ -239,22 +243,71 @@ class LegacyMigrator:
         return len(rows)
 
     async def _append_with_legacy_gids(self, rows: list[aiosqlite.Row]) -> None:
-        """Fügt Legacy-Zeilen mit synthetischen NEGATIVEN gids ins aktive v2-Segment ein.
+        """Fügt Legacy-Zeilen mit negativen gids ein und hält dabei die Rotations-/Retention-Schwellen ein.
 
         Umgeht bewusst ``store.append()`` (das positive gids reserviert) und schreibt
         stattdessen direkt über ``store._insert_event`` mit ``legacy_rowid -
         _LEGACY_GID_OFFSET`` – derselbe Ordnungsmechanismus wie der read-only-
-        Legacy-Lesepfad. Ein einziger Commit über den ganzen Batch.
+        Legacy-Lesepfad.
+
+        **Rotations-/Retention-Strategie (#951):** Ein Legacy-Batch kann größer sein
+        als ``segment_max_rows``/``segment_max_bytes``; ein einziger Low-Level-Append
+        über den ganzen Batch würde ein übergroßes Segment hinterlassen und die
+        Segmentierungs-Invariante des normalen Schreibpfads verletzen. Deshalb wird
+        der Batch – wie der reguläre Schreibpfad in ``RingBuffer._segment_rotation_due``
+        – in schwellengerechten Häppchen appended: Nach jedem committeten Insert wird
+        geprüft, ob das aktive Segment ``segment_max_rows`` oder (via aufgefrischter
+        Stats) ``segment_max_bytes`` erreicht; ist eine Schwelle gerissen und das
+        Segment nicht leer, wird über ``store.rotate()`` ein frisches aktives Segment
+        geöffnet (kein Rotieren leerer Segmente → keine Endlos-Rotation). Nach dem
+        gesamten Batch läuft ``store.enforce_retention()``, damit auch das
+        Byte-/Row-Budget eingehalten wird. Ohne konfigurierte Schwellen bleibt das
+        Verhalten ein einzelner Commit über den ganzen Batch.
         """
         store = self._store
-        conn = store._active_conn
-        if conn is None or store._active_segment is None:
+        if store._active_conn is None or store._active_segment is None:
             return
+        cfg = store._segment_config
+        max_rows = cfg.segment_max_rows
+        max_bytes = cfg.segment_max_bytes
+        # Zeilen im aktiven Segment seit dem letzten Rotate (Basis = bereits materialisierte).
+        rows_in_active = await self._active_segment_row_count()
         for row in rows:
+            conn = store._active_conn
             gid = int(row["id"]) - _LEGACY_GID_OFFSET
             await store._insert_event(conn, gid, _row_to_event(row))
-        await conn.commit()
+            await conn.commit()
+            rows_in_active += 1
+            if await self._rotation_due(rows_in_active, max_rows, max_bytes):
+                await store.rotate()
+                rows_in_active = 0
         await store._refresh_active_segment_stats()
+        if max_rows is not None or max_bytes is not None:
+            await store.enforce_retention()
+
+    async def _active_segment_row_count(self) -> int:
+        """Aktueller Zeilen-Zähler des aktiven Segments (aus dem Manifest, 0 wenn keins)."""
+        active = await self._store.manifest.get_active_segment()
+        return active.row_count if active is not None else 0
+
+    async def _rotation_due(self, rows_in_active: int, max_rows: int | None, max_bytes: int | None) -> bool:
+        """True, wenn das aktive Segment eine Schwelle reißt (analog ``_segment_rotation_due``).
+
+        Ein leeres Segment (``rows_in_active == 0``) rotiert nie, um Endlos-Rotation
+        zu vermeiden. Der Byte-Check frischt die Segment-Stats auf, damit die reale
+        Disk-Nutzung (inkl. WAL/SHM) gegen ``segment_max_bytes`` geprüft wird.
+        """
+        if rows_in_active <= 0:
+            return False
+        if max_rows is not None and rows_in_active >= max_rows:
+            return True
+        if max_bytes is not None:
+            store = self._store
+            await store._refresh_active_segment_stats()
+            active = await store.manifest.get_active_segment()
+            if active is not None and active.size_bytes >= max_bytes:
+                return True
+        return False
 
     async def _max_migrated_rowid(self) -> int:
         """Höchste bereits in v2 materialisierte Legacy-rowid (0, wenn keine).

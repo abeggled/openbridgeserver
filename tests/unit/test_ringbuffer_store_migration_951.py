@@ -15,6 +15,11 @@ er reproduziert den Bug ohne Fix und wird durch den Fix grün:
 3. ``migrate_chunk()`` ist idempotent gegen Wiederholung: crasht der Prozess
    zwischen Append und Resume-State-Write, importiert der nächste Lauf dieselben
    Legacy-Zeilen NICHT erneut (keine Duplikate).
+4. ``migrate_chunk()``/``migrate_small()`` halten die Rotations-/Retention-
+   Schwellen ein: ein Batch, der ``segment_max_rows``/``segment_max_bytes``
+   reißt, wird in schwellengerechten Häppchen appended und rotiert, statt ein
+   übergroßes Segment zu hinterlassen; anschließend läuft ``enforce_retention``,
+   damit das Byte-Budget nicht gesprengt wird.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
 from obs.ringbuffer.store.interface import StoreEvent, StoreQuery
 from obs.ringbuffer.store.migration import LegacyMigrator, _ResumeState
 from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
@@ -242,3 +248,89 @@ async def test_migrate_chunk_resumes_partial_without_duplicates(store: SqliteSeg
     rows = await store.query(StoreQuery(limit=100))
     values = sorted(r["new_value"] for r in rows)
     assert values == ["row-1", "row-2", "row-3", "row-4"]
+
+
+# ---------------------------------------------------------------------------
+# (4) Rotation/Retention-Schwellen bei Chunk-Migration einhalten (:234)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def small_segment_store(tmp_path: Path) -> SqliteSegmentStore:
+    # segment_max_rows=3 → jedes Segment darf höchstens 3 Zeilen halten.
+    s = SqliteSegmentStore(
+        tmp_path / "root",
+        segments=SegmentConfig(segment_max_rows=3),
+    )
+    await s.open()
+    try:
+        yield s
+    finally:
+        await s.close()
+
+
+async def test_migrate_chunk_rotates_at_segment_max_rows(small_segment_store: SqliteSegmentStore, tmp_path: Path):
+    # 7 Legacy-Zeilen in EINEM Batch bei segment_max_rows=3: ohne Fix schreibt der
+    # Low-Level-Append den ganzen Batch ins EINE aktive Segment (7 Zeilen > 3) und
+    # verletzt die Segmentierungs-Invariante. Mit Fix wird schwellengerecht rotiert.
+    store = small_segment_store
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy(db, [(f"2020-01-{i + 1:02d}T00:00:00.000Z", f"row-{i}") for i in range(7)])
+
+    copied = await LegacyMigrator(store, db).migrate_chunk(batch_rows=100)
+    assert copied == 7
+
+    # Kein einzelnes Segment darf die segment_max_rows-Schwelle überschreiten.
+    segments = await store.manifest.list_segments()
+    v2_rowcounts = [seg.row_count for seg in segments if seg.schema_version > 1]
+    assert v2_rowcounts, "keine v2-Segmente materialisiert"
+    assert all(rc <= 3 for rc in v2_rowcounts), f"übergroßes Segment: {v2_rowcounts}"
+
+    # Alle 7 Zeilen sind trotz Rotation genau einmal lesbar.
+    rows = await store.query(StoreQuery(limit=100))
+    values = sorted(r["new_value"] for r in rows)
+    assert values == sorted(f"row-{i}" for i in range(7))
+
+
+async def test_migrate_small_respects_row_budget_retention(tmp_path: Path):
+    # Row-Budget-Retention: segment_max_rows=3, max_entries=9 (RATIO=3, Boden erfüllt).
+    # 30 Legacy-Zeilen migriert → nach Rotation/Retention werden die ältesten
+    # geschlossenen Segmente über dem Row-Budget gedroppt.
+    store = SqliteSegmentStore(
+        tmp_path / "root",
+        segments=SegmentConfig(segment_max_rows=3),
+        retention=StoreRetentionConfig(max_entries=9),
+    )
+    await store.open()
+    try:
+        db = tmp_path / "obs_ringbuffer.db"
+        _build_legacy(db, [(f"2020-{(i // 28) + 1:02d}-{(i % 28) + 1:02d}T00:00:00.000Z", f"e-{i:02d}") for i in range(30)])
+
+        total = await LegacyMigrator(store, db).migrate_small(batch_rows=100)
+        assert total == 30
+
+        # Retention hat geschlossene Segmente über dem Row-Budget entfernt.
+        rows = await store.query(StoreQuery(limit=100))
+        # Es bleibt deutlich weniger als die volle Menge übrig (Retention griff), aber
+        # die JÜNGSTEN Zeilen bleiben erhalten (FIFO drop der ältesten Segmente).
+        assert len(rows) < 30
+        remaining = {r["new_value"] for r in rows}
+        assert "e-29" in remaining  # jüngste migrierte Zeile bleibt
+        assert "e-00" not in remaining  # älteste ist gedroppt
+    finally:
+        await store.close()
+
+
+async def test_migrate_chunk_no_endless_rotation_on_small_batch(small_segment_store: SqliteSegmentStore, tmp_path: Path):
+    # Ein Batch UNTER der Schwelle darf NICHT rotieren (kein leeres Segment,
+    # keine Endlos-Rotation). Alle Zeilen liegen im selben aktiven Segment.
+    store = small_segment_store
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy(db, [("2020-01-01T00:00:00.000Z", "a"), ("2020-01-02T00:00:00.000Z", "b")])
+
+    assert await LegacyMigrator(store, db).migrate_chunk(batch_rows=100) == 2
+    segments = await store.manifest.list_segments()
+    v2_segments = [seg for seg in segments if seg.schema_version > 1]
+    # Genau ein v2-Segment mit beiden Zeilen (keine Rotation ausgelöst).
+    assert len(v2_segments) == 1
+    assert v2_segments[0].row_count == 2
