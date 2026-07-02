@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import tempfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
@@ -345,6 +346,7 @@ async def _archive_read_access(request: Request, db: Database) -> ArchiveReadAcc
         row = await db.fetchone("SELECT id, owner FROM api_keys WHERE key_hash=?", (key_hash,))
         if not row:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API key")
+        await db.execute_and_commit("UPDATE api_keys SET last_used_at=? WHERE key_hash=?", (datetime.now(UTC).isoformat(), key_hash))
         owner = row["owner"] if row["owner"] else None
         username = owner or f"api_key:{row['id']}"
         if page_id:
@@ -398,10 +400,15 @@ async def _page_scoped_archive_access(request: Request, db: Database, *, usernam
             return not username.startswith(("visu-page:", "api_key:")) and await _check_user_access(db, source_page_id, username)
         return False
 
+    async def _is_readonly_widget_ref_page(source_page_id: str) -> bool:
+        source_access, _source_defining_node_id = await _resolve_access_with_node(db, source_page_id)
+        return source_access == "readonly"
+
     predicates = await _page_allowed_message_archive_predicates(
         db,
         page_id,
         widget_ref_access_check=_can_access_widget_ref_page,
+        widget_ref_readonly_check=_is_readonly_widget_ref_page,
     )
     if not predicates:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Message archive access is not configured for this page")

@@ -410,6 +410,7 @@ async def _page_allowed_message_archives(
     page_id: str,
     *,
     widget_ref_access_check: Callable[[str], Awaitable[bool]] | None = None,
+    widget_ref_readonly_check: Callable[[str], Awaitable[bool]] | None = None,
 ) -> set[str] | None:
     """Return archive IDs referenced by MessageArchive widgets.
 
@@ -420,6 +421,7 @@ async def _page_allowed_message_archives(
         db,
         page_id,
         widget_ref_access_check=widget_ref_access_check,
+        widget_ref_readonly_check=widget_ref_readonly_check,
     )
     if not predicates:
         return set()
@@ -436,6 +438,7 @@ async def _page_allowed_message_archive_predicates(
     page_id: str,
     *,
     widget_ref_access_check: Callable[[str], Awaitable[bool]] | None = None,
+    widget_ref_readonly_check: Callable[[str], Awaitable[bool]] | None = None,
 ) -> list[MessageArchivePredicate]:
     """Return per-widget MessageArchive predicates for page-scoped pushes."""
 
@@ -491,7 +494,9 @@ async def _page_allowed_message_archive_predicates(
     async def _collect_widget_archives(
         widget: Any,
         out: list[MessageArchivePredicate],
-        visited_refs: set[tuple[str, str]],
+        visited_refs: set[tuple[str, str, bool]],
+        *,
+        inherited_readonly: bool = False,
     ) -> None:
         if widget.type == "MessageArchive":
             config = widget.config if isinstance(widget.config, dict) else {}
@@ -502,8 +507,10 @@ async def _page_allowed_message_archive_predicates(
                     severities=_string_set_from_config(config, "severities", "severity"),
                     statuses=_string_set_from_config(config, "statuses", "status"),
                     sources=_string_set_from_config(config, "sources", "source"),
-                    allow_read=_bool_from_config(config, "allow_read", "allowRead", default=True),
-                    allow_acknowledge=_bool_from_config(config, "allow_acknowledge", "allowAcknowledge", default=True),
+                    allow_read=False if inherited_readonly else _bool_from_config(config, "allow_read", "allowRead", default=True),
+                    allow_acknowledge=False
+                    if inherited_readonly
+                    else _bool_from_config(config, "allow_acknowledge", "allowAcknowledge", default=True),
                 )
             )
 
@@ -516,8 +523,12 @@ async def _page_allowed_message_archive_predicates(
             return
         if widget_ref_access_check is not None and not await widget_ref_access_check(source_page_id):
             return
+        source_is_readonly = False
+        if widget_ref_readonly_check is not None:
+            source_is_readonly = await widget_ref_readonly_check(source_page_id)
 
-        ref_key = (source_page_id, source_widget_name)
+        ref_readonly = inherited_readonly or source_is_readonly
+        ref_key = (source_page_id, source_widget_name, ref_readonly)
         if ref_key in visited_refs:
             return
         visited_refs.add(ref_key)
@@ -532,14 +543,14 @@ async def _page_allowed_message_archive_predicates(
         )
         if target_widget is None:
             return
-        await _collect_widget_archives(target_widget, out, visited_refs)
+        await _collect_widget_archives(target_widget, out, visited_refs, inherited_readonly=ref_readonly)
 
     page = await _load_page_config(page_id)
     if page is None:
         return []
 
     predicates: list[MessageArchivePredicate] = []
-    visited_refs: set[tuple[str, str]] = set()
+    visited_refs: set[tuple[str, str, bool]] = set()
     for widget in page.widgets:
         await _collect_widget_archives(widget, predicates, visited_refs)
     return predicates
@@ -777,6 +788,12 @@ async def websocket_endpoint(
             return user is not None
         return False
 
+    async def _is_readonly_widget_ref_page(source_page_id: str) -> bool:
+        if db is None:
+            return False
+        source_access, _source_defining_node_id = await _resolve_access_with_node(db, source_page_id)
+        return source_access == "readonly"
+
     if user is None:
         if not page_id:
             await ws.close(code=4001, reason="Authentication required")
@@ -812,6 +829,7 @@ async def websocket_endpoint(
             db,
             page_id,
             widget_ref_access_check=_can_access_widget_ref_page,
+            widget_ref_readonly_check=_is_readonly_widget_ref_page,
         )
 
     log_access = await _ws_has_log_access(user, api_key) if allowed_dp_ids is None else False

@@ -1108,6 +1108,11 @@ async def test_message_archive_api_key_read_access_and_invalid_key(client, auth_
         )
         assert entries.status_code == 200, entries.text
         assert entries.json()["total"] == 1
+
+        api_keys = await client.get("/api/v1/auth/apikeys", headers=auth_headers)
+        assert api_keys.status_code == 200, api_keys.text
+        used_key = next(item for item in api_keys.json() if item["id"] == key_id)
+        assert used_key["last_used_at"] is not None
     finally:
         if key_id:
             await client.delete(f"/api/v1/auth/apikeys/{key_id}", headers=auth_headers)

@@ -670,6 +670,73 @@ async def test_page_allowed_message_archive_predicates_follow_widgetref_target()
 
 
 @pytest.mark.asyncio
+async def test_page_allowed_message_archive_predicates_disable_actions_for_readonly_widgetref_target():
+    page_config_main = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "ref-host",
+                "type": "WidgetRef",
+                "name": "Ref",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {
+                    "source_page_id": "page-readonly",
+                    "source_widget_name": "archive-widget",
+                },
+            }
+        ],
+    }
+    page_config_target = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "archive-widget",
+                "type": "MessageArchive",
+                "name": "archive-widget",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {
+                    "archive_ids": ["System"],
+                    "allow_read": True,
+                    "allow_acknowledge": True,
+                },
+            }
+        ],
+    }
+
+    class _DbStub:
+        async def fetchone(self, _query, params):
+            if params[0] == "page-main":
+                return {"page_config": json.dumps(page_config_main)}
+            if params[0] == "page-readonly":
+                return {"page_config": json.dumps(page_config_target)}
+            return None
+
+    async def _is_readonly(page_id: str) -> bool:
+        return page_id == "page-readonly"
+
+    predicates = await _page_allowed_message_archive_predicates(
+        _DbStub(),
+        "page-main",
+        widget_ref_readonly_check=_is_readonly,
+    )
+
+    assert len(predicates) == 1
+    assert predicates[0].archive_ids == {"system"}
+    assert predicates[0].allow_read is False
+    assert predicates[0].allow_acknowledge is False
+
+
+@pytest.mark.asyncio
 async def test_page_allowed_datapoints_includes_widgetref_target_datapoints():
     target_dp_id = str(uuid4())
     target_status_dp_id = str(uuid4())
