@@ -24,6 +24,9 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from obs.api.auth import Principal, get_current_principal
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import filter_authorized_datapoints
 from obs.api.v1 import sessions as sessions_api
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config, is_uuid_str
 from obs.core.json import jsonable
@@ -488,6 +491,78 @@ async def _ws_has_log_access(user: str | None, api_key: str | None) -> bool:
     return False
 
 
+async def _jwt_principal(db: Database, username: str) -> Principal:
+    row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (username,))
+    return Principal(subject=username, type="user", is_admin=bool(row and row["is_admin"]))
+
+
+async def _ws_authorized_datapoint_scope(db: Database, principal: Principal) -> set[str] | None:
+    if principal.type == "user" and principal.is_admin:
+        return None
+
+    rows = await db.fetchall("SELECT id FROM datapoints ORDER BY id")
+    all_ids = [row["id"] for row in rows]
+    allowed = await filter_authorized_datapoints(
+        db,
+        principal,
+        all_ids,
+        action=AuthzAction.READ,
+    )
+    return set(allowed)
+
+
+async def _ws_authenticated_page_scope(
+    db: Database,
+    page_id: str,
+    principal: Principal,
+    session_token: str | None,
+) -> set[str] | None:
+    from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
+
+    async def _can_access_page(candidate_page_id: str) -> bool:
+        access, defining_node_id = await _resolve_access_with_node(db, candidate_page_id)
+        if access in ("public", "readonly"):
+            return True
+        if access == "protected":
+            if principal.type == "user":
+                return True
+            validate_id = defining_node_id or candidate_page_id
+            return bool(session_token and sessions_api.validate_session(session_token, validate_id))
+        if access == "user" and principal.type == "user":
+            return await _check_user_access(db, candidate_page_id, principal.subject)
+        return False
+
+    if not await _can_access_page(page_id):
+        return None
+    return await _page_allowed_datapoints(db, page_id, widget_ref_access_check=_can_access_page)
+
+
+async def _merge_authenticated_page_scope(
+    db: Database,
+    allowed_dp_ids: set[str],
+    page_id: str,
+    principal: Principal,
+    session_token: str | None,
+) -> None:
+    page_scope_ids = await _ws_authenticated_page_scope(db, page_id, principal, session_token)
+    if page_scope_ids is None:
+        return
+
+    from obs.api.v1.datapoints import _has_explicit_datapoint_read_deny
+
+    explicitly_denied: set[str] = set()
+    for dp_id in page_scope_ids:
+        try:
+            dp_uuid = uuid.UUID(dp_id)
+        except (TypeError, ValueError):
+            continue
+        if await _has_explicit_datapoint_read_deny(db, principal, dp_uuid):
+            explicitly_denied.add(dp_id)
+
+    allowed_dp_ids.difference_update(explicitly_denied)
+    allowed_dp_ids.update(page_scope_ids - explicitly_denied)
+
+
 # ---------------------------------------------------------------------------
 # Singleton
 # ---------------------------------------------------------------------------
@@ -564,6 +639,20 @@ async def websocket_endpoint(
         return
 
     allowed_dp_ids: set[str] | None = None
+    db: Database | None = None
+    if api_key:
+        db = get_db()
+        principal = await get_current_principal(credentials=None, api_key=api_key, db=db)
+        allowed_dp_ids = await _ws_authorized_datapoint_scope(db, principal)
+        if page_id and allowed_dp_ids is not None:
+            await _merge_authenticated_page_scope(db, allowed_dp_ids, page_id, principal, subprotocol_session or ws.query_params.get("session_token"))
+    elif user is not None:
+        db = get_db()
+        principal = await _jwt_principal(db, user)
+        allowed_dp_ids = await _ws_authorized_datapoint_scope(db, principal)
+        if page_id and allowed_dp_ids is not None:
+            await _merge_authenticated_page_scope(db, allowed_dp_ids, page_id, principal, subprotocol_session or ws.query_params.get("session_token"))
+
     if user is None:
         if not page_id:
             await ws.close(code=4001, reason="Authentication required")

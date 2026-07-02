@@ -75,7 +75,7 @@ export function setSessionToken(nodeId: string, token: string, expiresIn = 3600)
 // ── Write-Kontext ─────────────────────────────────────────────────────────────
 // Wird von VisuViewer gesetzt bevor Widgets rendern; automatisch bei Write mitgeschickt.
 
-interface WriteContext {
+export interface WriteContext {
   pageId?: string
   sessionToken?: string
   /** Knoten, der das Access-Level definiert (für Session-Token-Verwaltung bei Ablauf) */
@@ -201,8 +201,11 @@ export const visu = {
     request<PageConfig>(`/visu/pages/${id}`, { sessionToken }),
 
   /** Lädt alle Widget-Instanzen einer Seite ohne Zugriffsprüfung — für WidgetRef. */
-  getWidgetRef: (pageId: string) =>
-    request<import('@/types').WidgetInstance[]>(`/visu/widget-ref/${pageId}`, { silent401: true }),
+  getWidgetRef: (pageId: string, sessionNodeId = pageId) =>
+    request<import('@/types').WidgetInstance[]>(`/visu/widget-ref/${pageId}`, {
+      sessionToken: getSessionToken(sessionNodeId) ?? undefined,
+      silent401: true,
+    }),
 
   savePage: (id: string, config: PageConfig) =>
     request<void>(`/visu/pages/${id}`, {
@@ -260,10 +263,11 @@ export const datapoints = {
 
   get: (id: string) => request<DataPoint>(`/datapoints/${id}`),
 
-  getValue: (id: string, silent401 = false) => {
+  getValue: (id: string, silent401 = false, context?: WriteContext) => {
+    const effectiveContext = context ?? _writeContext
     const headers: Record<string, string> = {}
-    if (_writeContext.pageId)       headers['X-Page-Id']       = _writeContext.pageId
-    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    if (effectiveContext.pageId)       headers['X-Page-Id']       = effectiveContext.pageId
+    if (effectiveContext.sessionToken) headers['X-Session-Token'] = effectiveContext.sessionToken
     return request<{ value: unknown; unit: string | null; ts: string | null; quality: string }>(
       `/datapoints/${id}/value`, { silent401, headers }
     )
@@ -422,19 +426,21 @@ export const visuBackgrounds = {
 // ── History ───────────────────────────────────────────────────────────────────
 
 export const history = {
-  query: (id: string, from: string, to: string, limit = 10000) => {
+  query: (id: string, from: string, to: string, limit = 10000, context?: WriteContext) => {
+    const effectiveContext = context ?? _writeContext
     const headers: Record<string, string> = {}
-    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
-    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    if (effectiveContext.pageId)      headers['X-Page-Id']       = effectiveContext.pageId
+    if (effectiveContext.sessionToken) headers['X-Session-Token'] = effectiveContext.sessionToken
     return request<{ ts: string; v: unknown; u: string | null; q: string }[]>(
       `/history/${id}?from=${from}&to=${to}&limit=${limit}`,
       { headers, silent401: true },
     )
   },
-  aggregate: (id: string, from: string, to: string, interval: string, fn = 'avg') => {
+  aggregate: (id: string, from: string, to: string, interval: string, fn = 'avg', context?: WriteContext) => {
+    const effectiveContext = context ?? _writeContext
     const headers: Record<string, string> = {}
-    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
-    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    if (effectiveContext.pageId)      headers['X-Page-Id']       = effectiveContext.pageId
+    if (effectiveContext.sessionToken) headers['X-Session-Token'] = effectiveContext.sessionToken
     return request<{ bucket: string; v: unknown; n?: number | null }[]>(
       `/history/${id}/aggregate?fn=${fn}&interval=${interval}&from=${from}&to=${to}`,
       { headers, silent401: true },

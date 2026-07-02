@@ -461,12 +461,11 @@ from obs.api.v1.camera import _camera_auth
 
 class TestCameraAuth:
     @pytest.mark.asyncio
-    async def test_missing_auth_raises_401(self):
+    async def test_missing_auth_returns_anonymous_identity(self):
         request = MagicMock()
         request.headers = {"Authorization": ""}
-        with pytest.raises(HTTPException) as exc:
-            await _camera_auth(request=request, _token="")
-        assert exc.value.status_code == 401
+        result = await _camera_auth(request=request, _token="")
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_bearer_header_accepted(self):
