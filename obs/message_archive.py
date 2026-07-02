@@ -94,7 +94,7 @@ def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _normalize_entry_timestamp(value: str | None) -> str:
+def _normalize_entry_timestamp(value: str | None, *, field_name: str = "created_at") -> str:
     if value is None or not value.strip():
         return utc_now()
     raw = value.strip()
@@ -103,7 +103,7 @@ def _normalize_entry_timestamp(value: str | None) -> str:
     try:
         parsed = datetime.fromisoformat(raw)
     except ValueError:
-        raise ValueError("created_at must be a valid ISO timestamp") from None
+        raise ValueError(f"{field_name} must be a valid ISO timestamp") from None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     else:
@@ -606,10 +606,10 @@ class MessageArchiveStore:
             params.extend(query_archive_ids)
         if query.from_ts:
             where.append("e.created_at >= ?")
-            params.append(query.from_ts)
+            params.append(_normalize_entry_timestamp(query.from_ts, field_name="from_ts"))
         if query.to_ts:
             where.append("e.created_at <= ?")
-            params.append(query.to_ts)
+            params.append(_normalize_entry_timestamp(query.to_ts, field_name="to_ts"))
         for field, single_name, multi_name in (
             ("status", "status", "statuses"),
             ("type", "type", "types"),

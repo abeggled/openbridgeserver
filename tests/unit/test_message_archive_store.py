@@ -174,6 +174,35 @@ async def test_message_archive_store_validates_and_normalizes_entry_timestamps(t
         await store.disconnect()
 
 
+async def test_message_archive_store_normalizes_time_range_filters(tmp_path):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    try:
+        await store.create_entry(
+            EntryInput(
+                archive_id="system",
+                title="Boundary",
+                created_at="2026-07-02T10:00:00+00:00",
+            )
+        )
+
+        result = await store.query_entries(
+            EntryQuery(
+                archive_ids=["system"],
+                from_ts="2026-07-02T10:00:00Z",
+                to_ts="2026-07-02T10:00:00Z",
+                username="alice",
+            )
+        )
+
+        assert result["total"] == 1
+
+        with pytest.raises(ValueError, match="from_ts"):
+            await store.query_entries(EntryQuery(from_ts="not-a-date", username="alice"))
+    finally:
+        await store.disconnect()
+
+
 async def test_message_archive_acknowledge_marks_entry_read(tmp_path):
     store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
     await store.connect()
