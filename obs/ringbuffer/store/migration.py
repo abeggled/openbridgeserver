@@ -83,6 +83,20 @@ def _source_bucket_for(legacy_path: Path) -> int:
     return int.from_bytes(digest, "big") % _MIGRATION_SOURCE_BUCKETS
 
 
+def _source_state_token(legacy_path: Path) -> str:
+    """Eindeutiger, dateisystem-sicherer Resume-State-Token pro absolutem Quellpfad (#951, Pkt 1, 3. Runde).
+
+    Verschiedene Quellpfade mit GLEICHEM Basename (typisch ``obs_ringbuffer.db``)
+    dürfen sich keinen Resume-State teilen, sonst überspringt die zweite Quelle ihre
+    Historie still. Der Token kombiniert den Basename (menschenlesbar im Dateinamen)
+    mit einem stabilen blake2b-Hex-Digest des ABSOLUTEN Pfads – konsistent zum bereits
+    verwendeten ``_source_bucket_for``. Stabil über Prozess-Neustarts (kein ``hash()``-
+    Salt), damit ein Resume dieselbe State-Datei findet.
+    """
+    digest = hashlib.blake2b(str(legacy_path.resolve()).encode("utf-8"), digest_size=8).hexdigest()
+    return f"{legacy_path.name}_{digest}"
+
+
 class LegacyClass(str, Enum):
     """Migrationsklasse einer Legacy-Single-DB (rein größen-/WAL-basiert)."""
 
@@ -174,13 +188,21 @@ class LegacyMigrator:
     def __init__(self, store: SqliteSegmentStore, legacy_path: str | Path) -> None:
         self._store = store
         self._legacy_path = Path(legacy_path)
-        # Resume-State liegt neben der Store-Root, nicht in der Legacy-Datei (die
-        # bleibt read-only/unangetastet). Ein State pro Legacy-Datei.
-        self._state_path = Path(store._root) / f"legacy_migration_{self._legacy_path.name}.json"
         # Stabiler, deterministischer gid-Bucket dieser Quelldatei (#951, Pkt 3):
         # aus dem absoluten Pfad abgeleitet, sodass verschiedene Quelldateien in
         # disjunkte gid-Bereiche migrieren und ihr Resume-Floor pro Quelle scopt.
         self._source_bucket = _source_bucket_for(self._legacy_path)
+        # Resume-State liegt neben der Store-Root, nicht in der Legacy-Datei (die
+        # bleibt read-only/unangetastet). Ein State pro ABSOLUTEM Quellpfad (#951,
+        # Pkt 1, 3. Runde): zwei Legacy-DBs mit gleichem Basename (der Regelfall ist
+        # ``obs_ringbuffer.db``) in denselben Store migriert dürfen sich NICHT
+        # denselben ``legacy_migration_<name>.json``-State teilen – sonst läse die
+        # zweite Quelle den ``done``-State der ersten und ``migrate_chunk`` lieferte 0
+        # zurück, bevor eine Zeile gelesen wird (stiller Skip der zweiten Historie).
+        # Der Pfad-Hash ist derselbe stabile blake2b-Digest, der bereits den gid-
+        # Bucket bestimmt (``_source_bucket_for``), sodass State-Datei und Bucket
+        # konsistent aus demselben absoluten Pfad hervorgehen.
+        self._state_path = Path(store._root) / f"legacy_migration_{_source_state_token(self._legacy_path)}.json"
 
     # ------------------------------------------------------------------
     # Quell-Scoping (#951, Pkt 3)
@@ -295,6 +317,7 @@ class LegacyMigrator:
         if not rows:
             self._save_state(_ResumeState(last_rowid=after_rowid, done=True))
             await self._detach_migrated_legacy_segment()
+            await self._run_retention_after_detach()
             return 0
         await self._append_with_legacy_gids(rows)
         last_rowid = rows[-1]["id"]
@@ -303,7 +326,20 @@ class LegacyMigrator:
         self._save_state(_ResumeState(last_rowid=last_rowid, done=done))
         if done:
             await self._detach_migrated_legacy_segment()
+            await self._run_retention_after_detach()
         return len(rows)
+
+    async def _run_retention_after_detach(self) -> None:
+        """Zieht die während der Migration deferrte Retention nach Abkopplung der Quelle nach (#951, Pkt 3, 3. Runde).
+
+        Während die Quell-Legacy-DB attached ist, unterdrückt
+        ``_append_with_legacy_gids`` die Retention (sonst löschte sie die Quelle). Nach
+        der Abkopplung (Migrations-Abschluss) darf/muss Retention einmal regulär greifen,
+        damit ein konfiguriertes Byte-/Row-Budget über den nun rein-v2-Segmenten wieder
+        eingehalten wird. ``enforce_retention`` ist selbst ge-guarded (No-op ohne
+        konfigurierte Retention-Schwellen), daher unbedingter Aufruf.
+        """
+        await self._store.enforce_retention()
 
     async def _detach_migrated_legacy_segment(self) -> None:
         """Koppelt den read-only Legacy-Manifest-Eintrag DIESER Datei nach Abschluss ab (#951, Pkt 1).
@@ -373,8 +409,28 @@ class LegacyMigrator:
         # überein (höhere segment_id ⇒ höhere rowid ⇒ höhere gid), und es ist weder
         # ein Vor-Rotate noch ein ``migrated``-Marker nötig – so bleibt der Ein-
         # Segment-Fall ohne Endlos-/Zusatzrotation.
+        #
+        # Multi-Source (#951, Pkt 2, 3. Runde): sobald eine ZWEITE Quelle in denselben
+        # Store migriert, sind bereits negative gids einer FREMDEN Quelle materialisiert.
+        # Deren gid-Bereich ist über den quell-gescopten Bucket
+        # (``-source_bucket * _MIGRATION_SOURCE_STRIDE``) von der Segment-Erzeugungs-
+        # reihenfolge ENTKOPPELT – höhere segment_id ⇒ NICHT mehr zwingend höhere gid.
+        # Blieben die rein-migrierten Segmente dann als ``active``/``closed`` im
+        # POSITIVEN Query-Rang stehen, iterierte ``list_segments_for_query`` sie nach
+        # ``segment_id DESC`` VOR/zwischen den echten Segmenten und der ``id desc``-
+        # Frühabbruch könnte migrierte Alt-Zeilen als „neueste" liefern. Werden sie –
+        # wie im gemischten Fall – als ``migrated`` markiert, wandern sie in den
+        # Legacy-/Migrated-Trailing-Rang (zuletzt iteriert); der Frühabbruch über die
+        # echten Segmente bleibt korrekt und die migrierten Zeilen sortieren
+        # deterministisch dahinter. Ein Store mit GENAU EINER migrierten Quelle und
+        # ohne Positive braucht das nicht (segment_id-Ordnung == gid-Ordnung).
         has_positive = await self._store_has_positive_rows()
-        if has_positive and await self._active_segment_has_positive_rows():
+        has_foreign_migrated = await self._store_has_foreign_migrated_rows()
+        segregate = has_positive or has_foreign_migrated
+        if segregate and await self._active_segment_row_count() > 0:
+            # Vor der Migration einmal rotieren, damit die negativen Zeilen DIESER
+            # Quelle in ein frisches, isoliertes Segment gehen – nie gemischt mit
+            # positiven v2-Zeilen oder negativen Zeilen einer anderen Quelle.
             await store.rotate()
         # Segment-ids, die in diesem Batch NEGATIVE Zeilen erhielten (rein-negativ,
         # da vor positiver Mischung rotiert wurde) – nach Abschluss als ``migrated``
@@ -394,17 +450,44 @@ class LegacyMigrator:
                 await store.rotate()
                 rows_in_active = 0
         await store._refresh_active_segment_stats()
-        if has_positive:
+        if segregate:
             # Das zuletzt befüllte (noch aktive) rein-negative Segment schließen, damit
-            # es als ``migrated`` markierbar wird und künftige POSITIVE Writes ein
-            # frisches, separates aktives Segment (höhere segment_id) bekommen – so
-            # mischt nie wieder ein Segment positive und negative gids (#951, Pkt 2).
+            # es als ``migrated`` markierbar wird und künftige POSITIVE Writes (bzw.
+            # eine weitere Quelle) ein frisches, separates aktives Segment (höhere
+            # segment_id) bekommen – so mischt nie wieder ein Segment positive und
+            # negative gids und nie zwei Quellen (#951, Pkt 2).
             if store._active_segment is not None and store._active_segment.segment_id in migrated_ids:
                 await store.rotate()
             for segment_id in migrated_ids:
                 await store.manifest.mark_migrated(segment_id)
-        if max_rows is not None or max_bytes is not None:
+            # Eine frühere Ein-Quell-Migration (ohne Positive/Fremdquelle) ließ ihr
+            # Segment absichtlich unmarkiert als ``closed``/``active`` stehen. Kommt
+            # jetzt eine zweite Quelle hinzu, muss dieses fremde rein-migrierte Segment
+            # nachträglich als ``migrated`` markiert werden, damit ALLE migrierten
+            # Segmente gemeinsam im Trailing-Rang liegen (#951, Pkt 2, 3. Runde).
+            await self._mark_foreign_migrated_segments()
+        # Quellschutz während der Migration (#951, Pkt 3, 3. Runde): solange die
+        # aktuell migrierte Quell-Legacy-DB noch read-only eingehängt ist, DARF hier
+        # keine Retention laufen. Ist der Store über dem Byte-Budget, würde
+        # ``_next_size_retention_victim`` das (älteste, größte) Legacy-Segment ZUERST
+        # wählen – sobald nach dem ersten Batch eine nicht-Legacy-Datenquelle
+        # existiert, greift der No-Zero-History-Guard nicht mehr – und
+        # ``_delete_segment`` löschte die ORIGINAL-Quelldatei mitten in der Migration.
+        # Spätere Chunks fänden dann nichts mehr zu lesen (Datenverlust). Solange die
+        # Quelle attached ist, könnte Size-Retention ohnehin NUR sie treffen (sie ist
+        # das global älteste Segment), nie die wachsenden v2-Segmente – Deferral
+        # verliert also nichts. Retention läuft daher erst nach Abkopplung der Quelle
+        # (Abschluss der Migration, siehe ``migrate_chunk`` → ``_run_retention_after_detach``).
+        if (max_rows is not None or max_bytes is not None) and not await self._source_is_attached():
             await store.enforce_retention()
+
+    async def _source_is_attached(self) -> bool:
+        """True, wenn die aktuell migrierte Quell-Legacy-DB noch als Legacy-Segment eingehängt ist (#951, Pkt 3, 3. Runde)."""
+        resolved = str(self._legacy_path.resolve())
+        for segment in await self._store.manifest.list_legacy_segments():
+            if segment.filename == resolved:
+                return True
+        return False
 
     async def _store_has_positive_rows(self) -> bool:
         """True, wenn irgendein v2-Segment des Stores echte positive gids hält (#951, Pkt 2).
@@ -435,6 +518,100 @@ class LegacyMigrator:
             finally:
                 await conn.close()
         return False
+
+    async def _store_has_foreign_migrated_rows(self) -> bool:
+        """True, wenn ein v2-Segment migrierte Zeilen einer ANDEREN Quelle hält (#951, Pkt 2, 3. Runde).
+
+        Migrierte Zeilen tragen quell-gescopte negative gids. „Fremd" heißt: eine
+        negative gid AUSSERHALB des gid-Bereichs DIESER Quelle (``_bucket_gid_bounds``).
+        Sobald eine zweite Quelle in denselben Store migriert, ist die
+        segment_id-Ordnung von der gid-Ordnung entkoppelt und die migrierten Segmente
+        müssen – wie im gemischten Fall – als ``migrated`` in den Trailing-Rang.
+        """
+        low, high = self._bucket_gid_bounds
+        for segment in await self._iter_v2_segments():
+            path, own_active = segment
+            conn, close_after = await self._open_v2_segment_read(path, own_active)
+            if conn is None:
+                continue
+            try:
+                async with conn.execute(
+                    "SELECT 1 FROM ringbuffer WHERE global_event_id < 0 AND NOT (global_event_id >= ? AND global_event_id < ?) LIMIT 1",
+                    (low, high),
+                ) as cur:
+                    if await cur.fetchone() is not None:
+                        return True
+            except aiosqlite.Error:
+                continue
+            finally:
+                if close_after:
+                    await conn.close()
+        return False
+
+    async def _mark_foreign_migrated_segments(self) -> None:
+        """Markiert bereits geschlossene, rein-migrierte Fremdquell-Segmente als ``migrated``.
+
+        Eine frühere Ein-Quell-Migration ließ ihr Segment als ``closed``/``active``
+        stehen (segment_id-Ordnung == gid-Ordnung genügte). Kommt eine zweite Quelle
+        hinzu, muss dieses Segment nachträglich in den Trailing-Rang, damit ALLE
+        migrierten Segmente gemeinsam hinter den echten v2-Segmenten iteriert werden.
+        Nur geschlossene Segmente werden umgestuft (``mark_migrated``-Guard); ein
+        aktives Segment bleibt unangetastet.
+        """
+        store = self._store
+        active_id = store._active_segment.segment_id if store._active_segment else None
+        for segment in await store.manifest.list_segments():
+            if segment.schema_version <= LEGACY_SCHEMA_VERSION:
+                continue
+            if segment.status == SEGMENT_STATUS_MIGRATED:
+                continue
+            if segment.segment_id == active_id:
+                continue
+            path = store._segments_dir / segment.filename
+            if not path.exists():
+                continue
+            uri = f"file:{path.as_posix()}?mode=ro"
+            conn = await aiosqlite.connect(uri, uri=True)
+            try:
+                # Rein-migriert = ausschließlich negative gids, keine einzige positive.
+                async with conn.execute("SELECT 1 FROM ringbuffer WHERE global_event_id >= 0 LIMIT 1") as cur:
+                    if await cur.fetchone() is not None:
+                        continue
+                async with conn.execute("SELECT 1 FROM ringbuffer WHERE global_event_id < 0 LIMIT 1") as cur:
+                    if await cur.fetchone() is None:
+                        continue
+            except aiosqlite.Error:
+                continue
+            finally:
+                await conn.close()
+            await store.manifest.mark_migrated(segment.segment_id)
+
+    async def _iter_v2_segments(self) -> list[tuple[Path, bool]]:
+        """Existierende v2-Segment-Dateien als ``(Pfad, ist_aktiv)`` (Legacy ausgeschlossen)."""
+        store = self._store
+        active_id = store._active_segment.segment_id if store._active_segment else None
+        result: list[tuple[Path, bool]] = []
+        for segment in await store.manifest.list_segments():
+            if segment.schema_version <= LEGACY_SCHEMA_VERSION:
+                continue
+            if segment.segment_id == active_id:
+                result.append((store._segments_dir / segment.filename, True))
+                continue
+            path = store._segments_dir / segment.filename
+            if path.exists():
+                result.append((path, False))
+        return result
+
+    async def _open_v2_segment_read(self, path: Path, own_active: bool) -> tuple[aiosqlite.Connection | None, bool]:
+        """Öffnet ein v2-Segment read-only; das aktive Segment über die gehaltene Connection."""
+        store = self._store
+        if own_active:
+            return store._active_conn, False
+        uri = f"file:{path.as_posix()}?mode=ro"
+        try:
+            return await aiosqlite.connect(uri, uri=True), True
+        except aiosqlite.Error:
+            return None, False
 
     async def _active_segment_has_positive_rows(self) -> bool:
         """True, wenn das aktive Segment mindestens eine echte v2-Zeile (positive gid) hält (#951, Pkt 2).

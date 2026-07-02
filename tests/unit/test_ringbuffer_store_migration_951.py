@@ -633,3 +633,223 @@ async def test_migration_safe_decodes_malformed_values(store: SqliteSegmentStore
     assert "valid-1" in values
     assert "valid-3" in values
     assert "also not json}" in values
+
+
+# ===========================================================================
+# Codex-P2-Fixes im OPTIONALEN Chunk-Migrationspfad (#919, PR #951, 3. Runde)
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# (Runde 3 / 1) Resume-State-Dateiname pro absolutem Quellpfad scopen (:179)
+# ---------------------------------------------------------------------------
+
+
+async def test_resume_state_file_scoped_per_source_path(store: SqliteSegmentStore, tmp_path: Path):
+    # Zwei Legacy-DBs mit GLEICHEM Basename (obs_ringbuffer.db) in verschiedenen
+    # Ordnern, in denselben Store migriert. Ohne per-Quellpfad-Scoping des
+    # State-Dateinamens teilen sie sich dieselbe legacy_migration_<name>.json:
+    # nach done=true der ersten Quelle liefert migrate_chunk() der zweiten 0 zurück,
+    # BEVOR eine Zeile gelesen wird → die zweite Historie wird still übersprungen.
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    db_a = dir_a / "obs_ringbuffer.db"
+    db_b = dir_b / "obs_ringbuffer.db"
+    _build_legacy(db_a, [("2020-01-01T00:00:00.000Z", "A0"), ("2020-01-02T00:00:00.000Z", "A1")])
+    _build_legacy(db_b, [("2021-01-01T00:00:00.000Z", "B0"), ("2021-01-02T00:00:00.000Z", "B1")])
+
+    mig_a = LegacyMigrator(store, db_a)
+    mig_b = LegacyMigrator(store, db_b)
+    # Verschiedene Quellpfade ⇒ verschiedene State-Dateien.
+    assert mig_a._state_path != mig_b._state_path
+
+    assert await mig_a.migrate_small(batch_rows=100) == 2
+    # Die zweite Quelle darf NICHT den done-State der ersten sehen.
+    assert await mig_b.migrate_small(batch_rows=100) == 2
+
+    rows = await store.query(StoreQuery(limit=100))
+    assert sorted(r["new_value"] for r in rows) == ["A0", "A1", "B0", "B1"]
+
+
+async def test_resume_state_file_stable_across_migrator_instances(store: SqliteSegmentStore, tmp_path: Path):
+    # Der per-Pfad-gescopte State-Dateiname muss über Migrator-Neuinstanzen
+    # derselben Quelle STABIL sein (Resume nach Prozess-Neustart), sonst würde ein
+    # Neustart den Fortschritt verlieren bzw. neu importieren.
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy(db, [("2020-01-01T00:00:00.000Z", "x")])
+    assert LegacyMigrator(store, db)._state_path == LegacyMigrator(store, db)._state_path
+
+
+# ---------------------------------------------------------------------------
+# (Runde 3 / 2) Multi-Source-Ordnung: rein-migrierte Segmente konsistent hinter
+# positiven v2-Zeilen und untereinander deterministisch iterieren (:191)
+# ---------------------------------------------------------------------------
+
+
+async def test_multi_source_migrated_segments_marked_migrated(store: SqliteSegmentStore, tmp_path: Path):
+    # Zwei Quellen werden – vor JEDEM positiven v2-Write – in SEPARATE Segmente
+    # migriert. Ohne Fix bleiben sie als normale ``active``/``closed`` Segmente
+    # stehen; der per-Source-Bucket entkoppelt die negativen gids von der
+    # segment_id-Reihenfolge, sodass der ``id desc``-Frühabbruch in falscher
+    # Ordnung abbrechen kann. Mit Fix werden rein-migrierte Multi-Source-Segmente
+    # als ``migrated`` markiert und damit in ``list_segments_for_query`` zuletzt
+    # (und untereinander stabil) iteriert.
+    db_a = tmp_path / "legacy_a.db"
+    db_b = tmp_path / "legacy_b.db"
+    _build_legacy(db_a, [("2020-01-01T00:00:00.000Z", "A0"), ("2020-01-02T00:00:00.000Z", "A1")])
+    _build_legacy(db_b, [("2021-01-01T00:00:00.000Z", "B0"), ("2021-01-02T00:00:00.000Z", "B1")])
+
+    assert await LegacyMigrator(store, db_a).migrate_chunk(batch_rows=100) == 2
+    assert await LegacyMigrator(store, db_b).migrate_chunk(batch_rows=100) == 2
+
+    # Sobald mehr als eine Quelle migriert wurde, müssen die migrierten Segmente MIT
+    # Zeilen als ``migrated`` markiert sein (konsistente Iterationsreihenfolge). Das
+    # nach der Rotation verbleibende leere aktive Segment bleibt ``active`` (kein Inhalt).
+    segments = await store.manifest.list_segments()
+    v2_with_rows = [s for s in segments if s.schema_version > 1 and s.row_count > 0]
+    assert v2_with_rows, "keine befüllten v2-Segmente"
+    assert all(s.status == "migrated" for s in v2_with_rows), f"nicht alle migriert: {[(s.status, s.row_count) for s in v2_with_rows]}"
+
+    # Alle Zeilen bleiben genau einmal und global gid-konsistent lesbar. Mit
+    # begrenztem limit darf der Frühabbruch keine Zeile fälschlich weglassen.
+    rows = await store.query(StoreQuery(limit=100))
+    assert sorted(r["new_value"] for r in rows) == ["A0", "A1", "B0", "B1"]
+
+
+async def test_multi_source_bounded_query_does_not_drop_rows(store: SqliteSegmentStore, tmp_path: Path):
+    # Bounded id-desc-Query über zwei separat migrierte Quellen: der Frühabbruch
+    # (allow_early_termination) darf nicht in falscher Segmentreihenfolge stoppen
+    # und dadurch Zeilen der zweiten Quelle im Fenster verlieren.
+    db_a = tmp_path / "legacy_a.db"
+    db_b = tmp_path / "legacy_b.db"
+    _build_legacy(db_a, [(f"2020-01-{i + 1:02d}T00:00:00.000Z", f"A{i}") for i in range(3)])
+    _build_legacy(db_b, [(f"2021-01-{i + 1:02d}T00:00:00.000Z", f"B{i}") for i in range(3)])
+    assert await LegacyMigrator(store, db_a).migrate_chunk(batch_rows=100) == 3
+    assert await LegacyMigrator(store, db_b).migrate_chunk(batch_rows=100) == 3
+
+    # Die gesamte migrierte Menge ist über eine gebundene Query vollständig und
+    # deterministisch (gid-sortiert) abrufbar.
+    all_desc = await store.query(StoreQuery(limit=100, sort_field="id", sort_order="desc"))
+    gids = [r["global_event_id"] for r in all_desc]
+    assert gids == sorted(gids, reverse=True), "gids nicht global absteigend sortiert"
+    assert sorted(r["new_value"] for r in all_desc) == ["A0", "A1", "A2", "B0", "B1", "B2"]
+
+
+async def test_second_source_retro_marks_first_unmarked_migrated_segment(store: SqliteSegmentStore, tmp_path: Path):
+    # Die ERSTE Quelle wird rein legacy-migriert (keine Positive, eine Quelle) und ihr
+    # Segment bleibt bewusst UNMARKIERT (``active``). Kommt eine ZWEITE Quelle dazu,
+    # muss das Segment der ersten Quelle nachträglich als ``migrated`` markiert werden
+    # (``_mark_foreign_migrated_segments``), damit ALLE migrierten Segmente gemeinsam
+    # im Trailing-Rang liegen und der id-desc-Frühabbruch konsistent bleibt.
+    db_a = tmp_path / "legacy_a.db"
+    _build_legacy(db_a, [("2020-01-01T00:00:00.000Z", "A0"), ("2020-01-02T00:00:00.000Z", "A1")])
+    assert await LegacyMigrator(store, db_a).migrate_chunk(batch_rows=100) == 2
+    # Nach der Ein-Quell-Migration liegt genau ein befülltes, UNMARKIERTES Segment vor.
+    a_filled = [s for s in await store.manifest.list_segments() if s.schema_version > 1 and s.row_count > 0]
+    assert len(a_filled) == 1 and a_filled[0].status == "active"
+
+    db_b = tmp_path / "legacy_b.db"
+    _build_legacy(db_b, [("2021-01-01T00:00:00.000Z", "B0"), ("2021-01-02T00:00:00.000Z", "B1")])
+    assert await LegacyMigrator(store, db_b).migrate_chunk(batch_rows=100) == 2
+
+    filled = [s for s in await store.manifest.list_segments() if s.schema_version > 1 and s.row_count > 0]
+    assert all(s.status == "migrated" for s in filled), f"nicht alle migriert: {[(s.status, s.row_count) for s in filled]}"
+    rows = await store.query(StoreQuery(limit=100))
+    assert sorted(r["new_value"] for r in rows) == ["A0", "A1", "B0", "B1"]
+
+
+async def test_single_source_migrated_only_store_still_needs_no_marker(store: SqliteSegmentStore, tmp_path: Path):
+    # Regressionsschutz: EINE Quelle, rein legacy-migriert, KEINE positiven Zeilen:
+    # die segment_id-Ordnung stimmt bereits mit der gid-Ordnung überein – kein
+    # ``migrated``-Marker/Extra-Segment nötig (Ein-Segment-Fall bleibt schlank).
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy(db, [("2020-01-01T00:00:00.000Z", "a"), ("2020-01-02T00:00:00.000Z", "b")])
+    assert await LegacyMigrator(store, db).migrate_chunk(batch_rows=100) == 2
+    v2 = [s for s in await store.manifest.list_segments() if s.schema_version > 1]
+    assert len(v2) == 1
+    assert v2[0].status == "active"
+    rows = await store.query(StoreQuery(limit=100, sort_field="id", sort_order="desc"))
+    assert [r["new_value"] for r in rows] == ["b", "a"]
+
+
+# ---------------------------------------------------------------------------
+# (Runde 3 / 3) Aktuell migrierte Quell-Legacy-DB vor Migrations-Retention schützen (:407)
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_does_not_delete_source_via_retention(tmp_path: Path):
+    # Store über dem Byte-Budget, Quelle read-only attached, mehrere Chunk-Batches.
+    # Ohne Fix wählt die Size-Retention nach dem ersten Batch (jetzt existiert eine
+    # nicht-Legacy-Datenquelle) das Legacy-Segment ZUERST und ``_delete_segment``
+    # löscht die ORIGINAL-Quelldatei, bevor die Migration fertig ist → spätere
+    # Chunks lesen nichts mehr (Datenverlust). Mit Fix bleibt die in Migration
+    # befindliche Quelle bis zum Abschluss vor Retention geschützt.
+    store = SqliteSegmentStore(
+        tmp_path / "root",
+        segments=SegmentConfig(segment_max_rows=2),
+        # Budget so gewählt, dass der Store WÄHREND der Migration (Quelle attached +
+        # wachsende v2-Segmente) über dem Budget liegt – ohne Fix würde die
+        # Size-Retention dann die (älteste) Quelle als Victim wählen und löschen.
+        retention=StoreRetentionConfig(max_file_size_bytes=200 * 1024),
+    )
+    await store.open()
+    try:
+        db = tmp_path / "obs_ringbuffer.db"
+        _build_legacy(db, [(f"2020-01-{i + 1:02d}T00:00:00.000Z", f"L{i}") for i in range(6)])
+
+        migrator = LegacyMigrator(store, db)
+        # Normaler Upgrade: Quelle zuerst read-only einhängen.
+        await migrator.attach_readonly(migrator.classify())
+        assert len(await store.manifest.list_legacy_segments()) == 1
+
+        # Chunkweise migrieren (mehrere Batches bei batch_rows=2).
+        total = 0
+        for _ in range(10):
+            got = await migrator.migrate_chunk(batch_rows=2)
+            total += got
+            # Solange die Migration läuft, DARF die Quelldatei nicht gelöscht werden.
+            assert db.exists(), "Quell-Legacy-DB wurde während der Migration von Retention gelöscht"
+            if got == 0:
+                break
+        # Alle 6 Zeilen wurden vollständig migriert (kein Chunk lief ins Leere, weil
+        # die Quelle mitten in der Migration weggelöscht worden wäre).
+        assert total == 6
+        # Die Quelle ist nach Abschluss abgekoppelt; die JÜNGSTEN migrierten Zeilen
+        # bleiben nach der (nun nachgezogenen) Retention erhalten (FIFO über v2).
+        assert await store.manifest.list_legacy_segments() == []
+        rows = await store.query(StoreQuery(limit=100))
+        remaining = {r["new_value"] for r in rows}
+        assert "L5" in remaining, "jüngste migrierte Zeile fehlt"
+    finally:
+        await store.close()
+
+
+async def test_migration_retention_reclaims_after_completion(tmp_path: Path):
+    # Nach Abschluss (Abkopplung der Quelle) darf Retention wieder ganz normal
+    # greifen: der Legacy-Manifest-Eintrag ist abgekoppelt und über dem Byte-Budget
+    # werden migrierte v2-Segmente FIFO gedroppt.
+    store = SqliteSegmentStore(
+        tmp_path / "root",
+        segments=SegmentConfig(segment_max_rows=2),
+        retention=StoreRetentionConfig(max_file_size_bytes=200 * 1024),
+    )
+    await store.open()
+    try:
+        db = tmp_path / "obs_ringbuffer.db"
+        _build_legacy(db, [(f"2020-01-{i + 1:02d}T00:00:00.000Z", f"L{i}") for i in range(6)])
+        migrator = LegacyMigrator(store, db)
+        await migrator.attach_readonly(migrator.classify())
+
+        total = await migrator.migrate_small(batch_rows=2)
+        assert total == 6
+        # Legacy-Manifest-Eintrag abgekoppelt (kein Doppel-Delivery).
+        assert await store.manifest.list_legacy_segments() == []
+        # Über dem Byte-Budget hat Retention nach Abkopplung migrierte v2-Segmente
+        # FIFO reduziert; die jüngsten Zeilen bleiben erhalten.
+        rows = await store.query(StoreQuery(limit=100))
+        assert len(rows) < 6
+        assert "L5" in {r["new_value"] for r in rows}
+    finally:
+        await store.close()
