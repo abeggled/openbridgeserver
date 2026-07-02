@@ -48,12 +48,17 @@ export function createWebSocketClient() {
     return a.pageId === b.pageId && a.sessionToken === b.sessionToken && a.preferPageScope === b.preferPageScope
   }
 
+  function detachSocketHandlers(current: WebSocket) {
+    current.onclose = null
+    current.onerror = null
+    current.onmessage = null
+    current.onopen = null
+  }
+
   function connect(nextContext: ConnectContext = {}) {
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
       if (sameConnectContext(connectContext, nextContext)) return
-      socket.onclose = null
-      socket.onerror = null
-      socket.onmessage = null
+      detachSocketHandlers(socket)
       socket.close()
       socket = null
       connected.value = false
@@ -136,7 +141,10 @@ export function createWebSocketClient() {
         clearTimeout(reconnectTimer)
         reconnectTimer = null
       }
-      socket?.close()
+      if (socket) {
+        detachSocketHandlers(socket)
+        socket.close()
+      }
       socket = null
       connected.value = false
     },

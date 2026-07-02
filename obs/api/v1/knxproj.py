@@ -361,7 +361,7 @@ async def _authorized_knx_group_addresses(
         """SELECT ab.datapoint_id, ab.config
            FROM adapter_bindings ab
            LEFT JOIN adapter_instances ai ON ai.id = ab.adapter_instance_id
-           WHERE ab.adapter_type = 'KNX'
+           WHERE UPPER(ab.adapter_type) = 'KNX'
              AND ab.enabled = 1
              AND (ab.adapter_instance_id IS NULL OR ai.enabled = 1)""",
     )
