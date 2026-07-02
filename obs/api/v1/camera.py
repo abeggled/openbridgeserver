@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
 from collections.abc import AsyncGenerator
+from typing import Any
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -35,6 +36,13 @@ async def _build_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dic
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.decision.api_detail()) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+def _append_query_param(url: str, param: str, value: str) -> str:
+    parts = urlsplit(url)
+    pair = f"{quote(param, safe='')}={quote(value, safe='')}"
+    query = f"{parts.query}&{pair}" if parts.query else pair
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
 # ── Authentifizierung ──────────────────────────────────────────────────────────
@@ -91,8 +99,7 @@ def _page_config_contains_camera_url(page_config: Any, url: str, username: str =
             api_key_param = str(config.get("apiKeyParam", "")).strip()
             api_key_value = str(config.get("apiKeyValue", "")).strip()
             if api_key_param and api_key_value:
-                sep = "&" if "?" in target else "?"
-                target = f"{target}{sep}{api_key_param}={api_key_value}"
+                target = _append_query_param(target, api_key_param, api_key_value)
         return target
 
     def _camera_credentials_match(config: dict[str, Any]) -> bool:
@@ -197,8 +204,7 @@ async def proxy_camera(
     # 2. API-Key anhängen
     target = url
     if apikey_param and apikey_value:
-        sep = "&" if "?" in target else "?"
-        target = f"{target}{sep}{apikey_param}={apikey_value}"
+        target = _append_query_param(target, apikey_param, apikey_value)
 
     # 3. Verpflichtender Visu-Page-Scope für Viewer-Widgets.
     # Admin-Editor-Previews dürfen Draft-URLs testen, die noch nicht in

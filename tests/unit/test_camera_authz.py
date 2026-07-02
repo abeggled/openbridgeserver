@@ -300,6 +300,38 @@ async def test_proxy_camera_validates_api_key_target_against_page_scope(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_proxy_camera_encodes_api_key_query_target_against_page_scope(monkeypatch: pytest.MonkeyPatch, db: Database):
+    await _insert_camera_page(
+        db,
+        access="public",
+        config_extra=', "authType": "apikey", "apiKeyParam": "tok&en", "apiKeyValue": "abc&debug=1 +"',
+    )
+    scoped_url = f"{CAMERA_URL}?tok%26en=abc%26debug%3D1%20%2B"
+    build_targets = AsyncMock(return_value=([scoped_url], {}, {}))
+    monkeypatch.setattr(camera_api, "_build_fetch_targets", build_targets)
+    mock_head = MagicMock(status_code=200, headers={"content-type": "video/mjpeg"})
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.head = AsyncMock(return_value=mock_head)
+    monkeypatch.setattr(camera_api.httpx, "AsyncClient", lambda **kw: mock_client)
+
+    result = await camera_api.proxy_camera(
+        url=CAMERA_URL,
+        username="",
+        password="",
+        apikey_param="tok&en",
+        apikey_value="abc&debug=1 +",
+        page_id="page-camera",
+        _user=None,
+        db=db,
+    )
+
+    assert isinstance(result, StreamingResponse)
+    build_targets.assert_awaited_once_with(scoped_url)
+
+
+@pytest.mark.asyncio
 async def test_proxy_camera_normalizes_legacy_api_key_auth_for_page_scope(monkeypatch: pytest.MonkeyPatch, db: Database):
     await _insert_camera_page(
         db,

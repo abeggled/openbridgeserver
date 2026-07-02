@@ -375,60 +375,67 @@ async def import_nodes(
     root_node = body.nodes[0]
     root_new_id = id_map[root_node.id]
 
-    for node in body.nodes:
-        new_id = id_map[node.id]
-        if node.id == root_node.id:
-            new_parent_id = body.target_parent_id
-        else:
-            new_parent_id = id_map.get(node.parent_id or "") or body.target_parent_id
+    await db.conn.execute("SAVEPOINT visu_import_nodes")
+    try:
+        for node in body.nodes:
+            new_id = id_map[node.id]
+            if node.id == root_node.id:
+                new_parent_id = body.target_parent_id
+            else:
+                new_parent_id = id_map.get(node.parent_id or "") or body.target_parent_id
 
-        # Widget-UUIDs neu generieren
-        pc = node.page_config
-        if pc and "widgets" in pc:
-            for w in pc["widgets"]:
-                w["id"] = str(uuid.uuid4())
-        pc_json = (
-            json.dumps(pc)
-            if pc
-            else json.dumps(
-                {
-                    "grid_cols": 12,
-                    "grid_row_height": 80,
-                    "background": None,
-                    "widgets": [],
-                },
+            # Widget-UUIDs neu generieren
+            pc = node.page_config
+            if pc and "widgets" in pc:
+                for w in pc["widgets"]:
+                    w["id"] = str(uuid.uuid4())
+            pc_json = (
+                json.dumps(pc)
+                if pc
+                else json.dumps(
+                    {
+                        "grid_cols": 12,
+                        "grid_row_height": 80,
+                        "background": None,
+                        "widgets": [],
+                    },
+                )
             )
-        )
-        if node.type == "PAGE":
-            defining_node_id = await _imported_user_access_defining_node(
-                db,
-                node.id,
-                nodes_by_id=nodes_by_id,
-                id_map=id_map,
-                target_parent_id=body.target_parent_id,
-            )
-            if defining_node_id is not None:
-                await _check_user_page_target_datapoint_policy(db, defining_node_id, PageConfig.model_validate_json(pc_json))
+            if node.type == "PAGE":
+                defining_node_id = await _imported_user_access_defining_node(
+                    db,
+                    node.id,
+                    nodes_by_id=nodes_by_id,
+                    id_map=id_map,
+                    target_parent_id=body.target_parent_id,
+                )
+                if defining_node_id is not None:
+                    await _check_user_page_target_datapoint_policy(db, defining_node_id, PageConfig.model_validate_json(pc_json))
 
-        await db.conn.execute(
-            """INSERT INTO visu_nodes
-                   (id, parent_id, name, type, node_order, icon, access, access_pin,
-                    page_config, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                new_id,
-                new_parent_id,
-                node.name,
-                node.type,
-                node.node_order,
-                node.icon,
-                node.access,
-                None,
-                pc_json,
-                now,
-                now,
-            ),
-        )
+            await db.conn.execute(
+                """INSERT INTO visu_nodes
+                       (id, parent_id, name, type, node_order, icon, access, access_pin,
+                        page_config, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    new_id,
+                    new_parent_id,
+                    node.name,
+                    node.type,
+                    node.node_order,
+                    node.icon,
+                    node.access,
+                    None,
+                    pc_json,
+                    now,
+                    now,
+                ),
+            )
+    except Exception:
+        await db.conn.execute("ROLLBACK TO SAVEPOINT visu_import_nodes")
+        await db.conn.execute("RELEASE SAVEPOINT visu_import_nodes")
+        raise
+    await db.conn.execute("RELEASE SAVEPOINT visu_import_nodes")
     await db.conn.commit()
     return await _get_node_or_404(db, root_new_id)
 

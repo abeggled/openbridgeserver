@@ -406,6 +406,50 @@ async def test_import_page_under_user_access_validates_inherited_target_group(db
 
 
 @pytest.mark.asyncio
+async def test_import_page_under_user_access_rolls_back_prior_inserted_nodes(db: Database):
+    await _seed_scope(db)
+    await _insert_user(db)
+    await _insert_visu_location(db, "secure-folder", access="user")
+    await _assign_visu_user(db, node_id="secure-folder")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await visu_api.import_nodes(
+            visu_api.VisuImportRequest(
+                obs_export="visu_subtree",
+                version=1,
+                target_parent_id="secure-folder",
+                nodes=[
+                    {
+                        "id": "imported-folder",
+                        "parent_id": None,
+                        "name": "Imported Folder",
+                        "type": "LOCATION",
+                        "node_order": 0,
+                        "icon": None,
+                        "access": None,
+                        "page_config": None,
+                    },
+                    {
+                        "id": "imported-page",
+                        "parent_id": "imported-folder",
+                        "name": "Imported Page",
+                        "type": "PAGE",
+                        "node_order": 1,
+                        "icon": None,
+                        "access": None,
+                        "page_config": _page_config(BLOCKED_DP_ID).model_dump(mode="json"),
+                    },
+                ],
+            ),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert await db.fetchone("SELECT id FROM visu_nodes WHERE name = 'Imported Folder'") is None
+    assert await db.fetchone("SELECT id FROM visu_nodes WHERE name = 'Imported Page'") is None
+
+
+@pytest.mark.asyncio
 async def test_public_page_read_without_auth_remains_compatible(db: Database):
     await _seed_scope(db)
     await _insert_visu_page(db, "public-page", access="public", config=_page_config(BLOCKED_DP_ID))
