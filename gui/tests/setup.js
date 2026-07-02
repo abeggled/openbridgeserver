@@ -2,6 +2,22 @@
 // so views that import API client (which inspects localStorage at module load
 // for auth tokens) don't crash inside happy-dom.
 
+// localStorage shim: happy-dom does not reliably expose a working Storage in
+// this environment, so views/stores that read localStorage at init (settings
+// store, API client auth token) would crash. Guarded → no-op where the runtime
+// already provides a real Storage.
+if (typeof globalThis.localStorage === 'undefined' || typeof globalThis.localStorage.getItem !== 'function') {
+  const store = new Map()
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => { store.set(k, String(v)) },
+    removeItem: (k) => { store.delete(k) },
+    clear: () => { store.clear() },
+    key: (i) => [...store.keys()][i] ?? null,
+    get length() { return store.size },
+  }
+}
+
 if (typeof globalThis.matchMedia !== 'function') {
   globalThis.matchMedia = () => ({
     matches: false,
