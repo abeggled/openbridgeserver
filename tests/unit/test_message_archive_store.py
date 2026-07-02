@@ -9,11 +9,17 @@ from obs.message_archive import (
     ArchiveInput,
     ArchivePatch,
     EntryInput,
+    EntryPatch,
+    EntryPredicate,
     EntryQuery,
     MessageArchiveStore,
+    activate_message_archive_service,
+    broadcast_message_archive_entry,
     close_message_archive_store,
+    get_message_archive_store,
     get_message_archive_service,
     init_message_archive_store,
+    reset_message_archive_store,
 )
 
 
@@ -93,6 +99,61 @@ async def test_message_archive_store_filters_multiple_values(tmp_path):
         await store.disconnect()
 
 
+async def test_message_archive_store_filters_predicates_and_time_ranges(tmp_path):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    try:
+        await store.create_entry(
+            EntryInput(
+                archive_id="system",
+                type="system",
+                severity="info",
+                source="core",
+                title="System Start",
+                created_at="2026-01-01T10:00:00+00:00",
+            )
+        )
+        await store.create_entry(
+            EntryInput(
+                archive_id="security",
+                type="security",
+                severity="critical",
+                source="auth",
+                title="Login blocked",
+                message="User denied",
+                created_at="2026-01-02T10:00:00+00:00",
+            )
+        )
+        await store.create_entry(
+            EntryInput(
+                archive_id="adapter",
+                type="adapter",
+                severity="warning",
+                source="knx",
+                title="Adapter warning",
+                created_at="2026-01-03T10:00:00+00:00",
+            )
+        )
+
+        result = await store.query_entries(
+            EntryQuery(
+                from_ts="2026-01-01T12:00:00+00:00",
+                to_ts="2026-01-03T00:00:00+00:00",
+                q="blocked",
+                predicates=[
+                    EntryPredicate(archive_ids=["SECURITY"], types=["security"], severities=["critical"], statuses=["new"], sources=["auth"]),
+                    EntryPredicate(archive_ids=[]),
+                ],
+                username="alice",
+            )
+        )
+
+        assert result["total"] == 1
+        assert result["items"][0]["archive_id"] == "security"
+    finally:
+        await store.disconnect()
+
+
 async def test_message_archive_acknowledge_marks_entry_read(tmp_path):
     store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
     await store.connect()
@@ -112,11 +173,64 @@ async def test_message_archive_acknowledge_marks_entry_read(tmp_path):
         await store.disconnect()
 
 
+async def test_message_archive_store_update_entry_delete_clear_and_exports(tmp_path):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    try:
+        entry = await store.create_entry(
+            EntryInput(
+                archive_id="system",
+                type="system",
+                severity="info",
+                source="core",
+                title="Original",
+                message="Old",
+                payload={"a": 1},
+            )
+        )
+
+        updated = await store.update_entry(
+            "system",
+            entry["id"],
+            EntryPatch(type="adapter", severity="warning", status="closed", source="knx", title="Updated", message="New", payload={"b": 2}),
+        )
+        assert updated is not None
+        assert updated["type"] == "adapter"
+        assert updated["payload"] == {"b": 2}
+        assert await store.update_entry("system", "missing", EntryPatch(title="Missing")) is None
+
+        jsonl = await store.export_jsonl("SYSTEM")
+        assert '"title": "Updated"' in jsonl
+        csv_export = await store.export_csv("system")
+        assert "archive_id" in csv_export
+        assert "Updated" in csv_export
+
+        assert await store.clear_archive("missing") == 0
+        assert await store.delete_archive("missing") == -1
+        assert await store.clear_archive("system") == 1
+        assert await store.delete_archive("system") == 0
+    finally:
+        await store.disconnect()
+
+
 async def test_message_archive_store_names_auto_created_system_archive(tmp_path):
     store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
     await store.connect()
     try:
         await store.create_entry(EntryInput(archive_id="system", title="Startup"))
+        archive = await store.get_archive("system")
+        assert archive is not None
+        assert archive["name"] == "System"
+    finally:
+        await store.disconnect()
+
+
+async def test_message_archive_store_repairs_legacy_lowercase_system_name(tmp_path):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    try:
+        await store.ensure_archive("system", name="system")
+        await store.ensure_archive("system")
         archive = await store.get_archive("system")
         assert archive is not None
         assert archive["name"] == "System"
@@ -131,6 +245,22 @@ async def test_message_archive_store_normalizes_archive_ids_to_lowercase(tmp_pat
         entry = await store.create_entry(EntryInput(archive_id="System.Events", title="Mixed Case"))
         assert entry["archive_id"] == "system.events"
         assert await store.get_archive("System.Events") is not None
+    finally:
+        await store.disconnect()
+
+
+async def test_message_archive_store_rejects_invalid_archive_ids_and_unconnected_store(tmp_path):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    with pytest.raises(RuntimeError, match="connect"):
+        _ = store.conn
+    await store.connect()
+    try:
+        with pytest.raises(ValueError, match="empty"):
+            await store.ensure_archive(" ")
+        with pytest.raises(ValueError, match="at most 80"):
+            await store.ensure_archive("a" * 81)
+        with pytest.raises(ValueError, match="may only contain"):
+            await store.ensure_archive("invalid id!")
     finally:
         await store.disconnect()
 
@@ -156,6 +286,15 @@ async def test_message_archive_store_enforces_max_entries_retention(tmp_path):
         await store.disconnect()
 
 
+async def test_message_archive_store_enforce_retention_missing_archive(tmp_path):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    try:
+        assert await store.enforce_retention("missing") == 0
+    finally:
+        await store.disconnect()
+
+
 async def test_message_archive_store_rejects_entry_removed_by_retention(tmp_path):
     store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
     await store.connect()
@@ -165,6 +304,26 @@ async def test_message_archive_store_rejects_entry_removed_by_retention(tmp_path
 
         with pytest.raises(ValueError, match="removed by retention"):
             await store.create_entry(EntryInput(archive_id="system", title="Zu alt", created_at=old_created_at))
+    finally:
+        await store.disconnect()
+
+
+async def test_message_archive_store_json_helpers_fall_back_for_malformed_payloads(tmp_path):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    try:
+        entry = await store.create_entry(EntryInput(archive_id="system", title="Malformed"))
+        await store.conn.execute("UPDATE message_archive_entries SET payload=? WHERE id=?", ("[]", entry["id"]))
+        await store.conn.execute("UPDATE message_archives SET tags=? WHERE id=?", ('{"not":"a-list"}', "system"))
+        await store.conn.commit()
+
+        archive = await store.get_archive("system")
+        fetched = await store.get_entry("system", entry["id"])
+
+        assert archive is not None
+        assert archive["tags"] == []
+        assert fetched is not None
+        assert fetched["payload"] == {}
     finally:
         await store.disconnect()
 
@@ -199,6 +358,78 @@ async def test_message_archive_service_not_published_when_store_connect_fails(tm
         store = await init_message_archive_store(settings)
 
         assert store.status == "degraded"
+        with pytest.raises(RuntimeError, match="not initialized"):
+            get_message_archive_service()
+    finally:
+        await close_message_archive_store()
+
+
+async def test_message_archive_global_store_lifecycle_and_service_broadcast(tmp_path, monkeypatch):
+    await close_message_archive_store()
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    broadcasted: list[dict] = []
+
+    class _WsManager:
+        async def broadcast_message_archive_entry(self, entry):
+            broadcasted.append(entry)
+
+    monkeypatch.setattr("obs.api.v1.websocket.get_ws_manager", lambda: _WsManager())
+    try:
+        activate_message_archive_service(store)
+        assert get_message_archive_store() is store
+
+        service = get_message_archive_service()
+        entry = await service.record("system", type="system", severity="info", title="Broadcast")
+
+        assert entry["title"] == "Broadcast"
+        assert broadcasted[0]["id"] == entry["id"]
+    finally:
+        await close_message_archive_store()
+
+
+async def test_message_archive_broadcast_ignores_missing_or_failing_ws_manager(monkeypatch, caplog):
+    async def _run_missing():
+        def _missing_manager():
+            raise RuntimeError("no ws")
+
+        monkeypatch.setattr("obs.api.v1.websocket.get_ws_manager", _missing_manager)
+        await broadcast_message_archive_entry({"id": "entry-1"})
+
+    async def _run_unavailable():
+        def _broken_manager():
+            raise ValueError("boom")
+
+        monkeypatch.setattr("obs.api.v1.websocket.get_ws_manager", _broken_manager)
+        await broadcast_message_archive_entry({"id": "entry-2"})
+
+    async def _run_broadcast_failure():
+        class _FailingManager:
+            async def broadcast_message_archive_entry(self, _entry):
+                raise ValueError("broadcast failed")
+
+        monkeypatch.setattr("obs.api.v1.websocket.get_ws_manager", lambda: _FailingManager())
+        await broadcast_message_archive_entry({"id": "entry-3"})
+
+    await _run_missing()
+    await _run_unavailable()
+    await _run_broadcast_failure()
+
+    assert "WebSocket manager unavailable" in caplog.text
+    assert "WebSocket broadcast failed" in caplog.text
+
+
+async def test_message_archive_service_rejects_inactive_store(tmp_path):
+    await close_message_archive_store()
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    try:
+        await store.disconnect()
+        with pytest.raises(RuntimeError, match="not connected"):
+            activate_message_archive_service(store)
+        reset_message_archive_store()
+        with pytest.raises(RuntimeError, match="not initialized"):
+            get_message_archive_store()
         with pytest.raises(RuntimeError, match="not initialized"):
             get_message_archive_service()
     finally:
