@@ -204,8 +204,10 @@ async def test_migrate_small_copies_into_v2_segments(store: SqliteSegmentStore, 
 
     rows = await store.query(StoreQuery(limit=50))
     assert {r["new_value"] for r in rows} == {1, 2, 3, 4, 5}
-    # In v2 kopiert → positive global_event_ids, typisierter Value-Filter greift.
-    assert all(r["global_event_id"] > 0 for r in rows)
+    # In v2 kopiert, aber mit synthetischen NEGATIVEN gids (Legacy-Ordnung bewahrt,
+    # #951 Pkt 2): migrierte Historie sortiert hinter echten neueren v2-Events. Die
+    # typisierten Wertspalten werden trotzdem befüllt → Value-Pushdown greift weiter.
+    assert all(r["global_event_id"] < 0 for r in rows)
     filtered = await store.query(StoreQuery(limit=50, value_filters=[{"operator": "gte", "value": 3}]))
     assert {r["new_value"] for r in filtered} == {3, 4, 5}
 
