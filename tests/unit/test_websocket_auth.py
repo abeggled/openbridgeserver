@@ -185,6 +185,53 @@ async def test_websocket_endpoint_subscribe_sends_initial_registry_value(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_websocket_endpoint_applies_page_archive_predicates_for_authenticated_socket(monkeypatch):
+    def _decode_token(token: str, expected_type: str = "access") -> str:
+        if token == "valid.jwt.token" and expected_type == "access":
+            return "alice"
+        raise HTTPException(401, "invalid")
+
+    class _ManagerStub:
+        def __init__(self) -> None:
+            self.allowed_dp_ids = None
+            self.allowed_message_archive_access = None
+
+        async def connect(self, ws, *, allowed_dp_ids=None, allowed_message_archive_access=None, **_kwargs):
+            self.allowed_dp_ids = allowed_dp_ids
+            self.allowed_message_archive_access = allowed_message_archive_access
+            await ws.accept()
+            return "conn-1"
+
+        async def disconnect(self, _conn_id: str) -> None:
+            return None
+
+    expected_access = [ws_api.MessageArchivePredicate(archive_ids={"system"})]
+    predicate_calls: list[tuple[object, str]] = []
+
+    async def _page_predicates(db, page_id: str, **_kwargs):
+        predicate_calls.append((db, page_id))
+        return expected_access
+
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+    db = _DbStub(has_key=False, page_type="PAGE")
+    monkeypatch.setattr(ws_api, "get_db", lambda: db)
+    monkeypatch.setattr(ws_api, "_page_allowed_message_archive_predicates", _page_predicates)
+    manager = _ManagerStub()
+    monkeypatch.setattr(ws_api, "get_ws_manager", lambda: manager)
+
+    ws = _FakeWebSocket(
+        headers={"authorization": "Bearer valid.jwt.token"},
+        query_params={"page_id": "page-public"},
+    )
+    await ws_api.websocket_endpoint(ws)
+
+    assert ws.accepted is True
+    assert predicate_calls == [(db, "page-public")]
+    assert manager.allowed_dp_ids is None
+    assert manager.allowed_message_archive_access is expected_access
+
+
+@pytest.mark.asyncio
 async def test_ws_log_access_allows_authenticated_user_without_admin_lookup(monkeypatch):
     def fail_get_db():
         raise AssertionError("JWT log access should match REST read access without admin lookup")

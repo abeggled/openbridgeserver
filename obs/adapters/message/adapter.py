@@ -356,10 +356,10 @@ class MessageAdapter(AdapterBase):
         if cfg.archive_strategy in {"archive_only", "send_and_archive"} and cfg.archive_id:
             archive_ok = await self._archive_notification(cfg, binding, event, rendered, results)
         archive_only = cfg.archive_strategy == "archive_only"
-        success = (archive_only and archive_ok) or (bool(results) and all(result.ok for result in results) and archive_ok)
-        partial_success = (archive_only and archive_ok) or (
-            bool(results) and any(result.ok for result in results) and (archive_ok or cfg.archive_strategy == "send_only")
-        )
+        provider_success = bool(results) and any(result.ok for result in results)
+        provider_all_ok = bool(results) and all(result.ok for result in results)
+        success = (archive_only and archive_ok) or (provider_all_ok and archive_ok)
+        partial_success = (archive_only and archive_ok) or provider_success
         if success or partial_success:
             state.last_sent_monotonic = time.monotonic()
             if state.reset_version == reset_version:

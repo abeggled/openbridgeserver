@@ -761,13 +761,30 @@ async def websocket_endpoint(
 
     allowed_dp_ids: set[str] | None = None
     allowed_message_archive_access: MessageArchiveAccess = None
+    db = get_db() if page_id else None
+    session_token = subprotocol_session or ws.query_params.get("session_token")
+
+    async def _can_access_widget_ref_page(source_page_id: str) -> bool:
+        if db is None:
+            return False
+        source_access, source_defining_node_id = await _resolve_access_with_node(db, source_page_id)
+        if source_access in ("public", "readonly"):
+            return True
+        if source_access == "protected":
+            source_validate_id = source_defining_node_id or source_page_id
+            return bool(session_token and sessions_api.validate_session(session_token, source_validate_id))
+        if source_access == "user":
+            return user is not None
+        return False
+
     if user is None:
         if not page_id:
             await ws.close(code=4001, reason="Authentication required")
             return
 
-        db = get_db()
-        session_token = subprotocol_session or ws.query_params.get("session_token")
+        if db is None:
+            await ws.close(code=4001, reason="Authentication required")
+            return
         access, defining_node_id = await _resolve_access_with_node(db, page_id)
         if access == "protected":
             validate_id = defining_node_id or page_id
@@ -781,21 +798,7 @@ async def websocket_endpoint(
             await ws.close(code=4001, reason="Authentication required")
             return
 
-        async def _can_access_widget_ref_page(source_page_id: str) -> bool:
-            source_access, source_defining_node_id = await _resolve_access_with_node(db, source_page_id)
-            if source_access in ("public", "readonly"):
-                return True
-            if source_access == "protected":
-                source_validate_id = source_defining_node_id or source_page_id
-                return bool(session_token and sessions_api.validate_session(session_token, source_validate_id))
-            return False
-
         allowed_dp_ids = await _page_allowed_datapoints(
-            db,
-            page_id,
-            widget_ref_access_check=_can_access_widget_ref_page,
-        )
-        allowed_message_archive_access = await _page_allowed_message_archive_predicates(
             db,
             page_id,
             widget_ref_access_check=_can_access_widget_ref_page,
@@ -804,6 +807,12 @@ async def websocket_endpoint(
             # Keep the connection authenticated for page-scope sessions even if
             # page config cannot be parsed (e.g. lightweight test doubles).
             allowed_dp_ids = set()
+    if db is not None and page_id:
+        allowed_message_archive_access = await _page_allowed_message_archive_predicates(
+            db,
+            page_id,
+            widget_ref_access_check=_can_access_widget_ref_page,
+        )
 
     log_access = await _ws_has_log_access(user, api_key) if allowed_dp_ids is None else False
 

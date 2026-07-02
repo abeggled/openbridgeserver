@@ -154,6 +154,26 @@ async def test_message_archive_store_filters_predicates_and_time_ranges(tmp_path
         await store.disconnect()
 
 
+async def test_message_archive_store_validates_and_normalizes_entry_timestamps(tmp_path):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    try:
+        entry = await store.create_entry(
+            EntryInput(
+                archive_id="system",
+                title="Offset timestamp",
+                created_at="2026-01-01T12:30:00+02:00",
+            )
+        )
+
+        assert entry["created_at"] == "2026-01-01T10:30:00+00:00"
+
+        with pytest.raises(ValueError, match="created_at"):
+            await store.create_entry(EntryInput(archive_id="system", title="Invalid timestamp", created_at="not-a-date"))
+    finally:
+        await store.disconnect()
+
+
 async def test_message_archive_acknowledge_marks_entry_read(tmp_path):
     store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
     await store.connect()

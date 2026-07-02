@@ -94,6 +94,23 @@ def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _normalize_entry_timestamp(value: str | None) -> str:
+    if value is None or not value.strip():
+        return utc_now()
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        raise ValueError("created_at must be a valid ISO timestamp") from None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    else:
+        parsed = parsed.astimezone(UTC)
+    return parsed.isoformat()
+
+
 def default_message_archive_db_path(database_path: str) -> str:
     return str(Path(database_path).expanduser().parent / "archives" / "messages.sqlite3")
 
@@ -418,7 +435,7 @@ class MessageArchiveStore:
         await self.ensure_archive(archive_id)
         archive = await self.get_archive(archive_id)
         entry_id = str(uuid.uuid4())
-        created_at = body.created_at or utc_now()
+        created_at = _normalize_entry_timestamp(body.created_at)
         entry_type = body.type or (archive or {}).get("default_type") or "system"
         await self.conn.execute(
             """

@@ -661,7 +661,7 @@ async def test_archive_only_binding_does_not_mark_failed_archive_write_as_sent(b
 
 
 @pytest.mark.asyncio
-async def test_send_and_archive_binding_does_not_mark_failed_archive_write_as_sent(bus, dummy_provider, monkeypatch):
+async def test_send_and_archive_binding_preserves_throttle_when_archive_write_fails(bus, dummy_provider, monkeypatch):
     dp_id = uuid.uuid4()
     monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
 
@@ -683,10 +683,12 @@ async def test_send_and_archive_binding_does_not_mark_failed_archive_write_as_se
 
     await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=31, quality="good", source_adapter="test"))
     await _drain_sends(adapter)
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=31, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
 
     state = adapter._states[binding.id]
-    assert state.last_sent_monotonic is None
-    assert state.last_condition is False
+    assert state.last_sent_monotonic is not None
+    assert state.last_condition is True
     dummy_provider.send.assert_awaited_once()
 
 

@@ -7,6 +7,7 @@ import { useWebSocket } from '@/composables/useWebSocket'
 const props = defineProps<{
   config: Record<string, unknown>
   editorMode: boolean
+  readonly?: boolean
 }>()
 
 const { t } = useI18n()
@@ -22,6 +23,8 @@ const showArchive = computed(() => (props.config.show_archive as boolean | undef
 const showSource = computed(() => (props.config.show_source as boolean | undefined) ?? true)
 const allowRead = computed(() => (props.config.allow_read as boolean | undefined) ?? true)
 const allowAcknowledge = computed(() => (props.config.allow_acknowledge as boolean | undefined) ?? true)
+const canRead = computed(() => !props.readonly && allowRead.value)
+const canAcknowledge = computed(() => !props.readonly && allowAcknowledge.value)
 
 function filterValues(key: 'severity' | 'status' | 'type' | 'source'): string[] {
   const value = props.config[key]
@@ -121,14 +124,14 @@ async function load() {
 }
 
 async function markRead(entry: MessageArchiveEntry) {
-  if (props.editorMode || !allowRead.value) return
+  if (props.editorMode || !canRead.value) return
   const updated = await messageArchives.markRead(entry.archive_id, entry.id)
   entries.value = entries.value.map(item => item.id === updated.id ? updated : item)
   await load()
 }
 
 async function acknowledge(entry: MessageArchiveEntry) {
-  if (props.editorMode || !allowAcknowledge.value) return
+  if (props.editorMode || !canAcknowledge.value) return
   const updated = await messageArchives.acknowledge(entry.archive_id, entry.id)
   entries.value = entries.value.map(item => item.id === updated.id ? updated : item)
   await load()
@@ -190,9 +193,9 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
-        <div v-if="allowRead || allowAcknowledge" class="mt-2 flex gap-2 justify-end">
+        <div v-if="canRead || canAcknowledge" class="mt-2 flex gap-2 justify-end">
           <button
-            v-if="allowRead && !entry.is_read"
+            v-if="canRead && !entry.is_read"
             type="button"
             class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300"
             @click="markRead(entry)"
@@ -200,7 +203,7 @@ onUnmounted(() => {
             {{ $t('widgets.messageArchive.markRead') }}
           </button>
           <button
-            v-if="allowAcknowledge && entry.status !== 'acknowledged'"
+            v-if="canAcknowledge && entry.status !== 'acknowledged'"
             type="button"
             class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300"
             @click="acknowledge(entry)"
