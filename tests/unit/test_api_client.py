@@ -29,6 +29,7 @@ from obs.logic.manager import (
     _normalise_api_client_variables,
     _read_secret_file,
     _replace_api_client_placeholders,
+    _replace_api_client_url_placeholders,
 )
 from obs.logic.models import FlowData
 from obs.security.url_targets import add_allowed_url_target, evaluate_url_target
@@ -1203,26 +1204,15 @@ class TestApiClientVariables:
         assert captured["url"] == "http://93.184.216.34/api/fresh"
 
     @patch("obs.logic.manager.httpx.AsyncClient")
-    @patch(
-        "obs.security.url_targets.socket.getaddrinfo",
-        return_value=[(None, None, None, None, ("93.184.216.34", 8443))],
-    )
-    def test_url_variable_preserves_authority_host_port(self, _mock_resolve, mock_client_cls):
-        captured: dict = {}
+    def test_url_variable_in_authority_is_rejected(self, mock_client_cls):
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        async def _capture(method, url, **kwargs):
-            captured["url"] = url
-            captured["headers"] = kwargs.get("headers")
-            return _mock_response(200, {"ok": True})
-
-        mock_client.request = _capture
+        mock_client.request = AsyncMock()
 
         dp_id = uuid.uuid4()
         manager = _make_manager()
-        manager._registry.get_value.return_value = self._state("example.com:8443")
+        manager._registry.get_value.return_value = self._state("attacker.example")
         data = {
             "url": "http://###OBS1###/status",
             "method": "GET",
@@ -1236,9 +1226,31 @@ class TestApiClientVariables:
         with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
             outputs = asyncio.run(manager._execute_graph(graph_id, "t", flow, {"ac": {"trigger": True}}))
 
-        assert outputs["ac"]["success"] is True
-        assert captured["url"] == "http://93.184.216.34:8443/status"
-        assert captured["headers"]["Host"] == "example.com:8443"
+        mock_client.request.assert_not_called()
+        assert outputs["ac"]["success"] is False
+        assert outputs["ac"]["status"] is None
+        assert outputs["ac"]["response"] == "API client URL variables are not allowed in the scheme, host, userinfo, or port"
+
+    def test_url_variable_in_path_and_query_is_percent_encoded(self):
+        def resolver(index: int) -> str:
+            return {1: "device/7", 2: "42&admin=true"}[index]
+
+        assert (
+            _replace_api_client_url_placeholders(
+                "http://example.com/api/###OBS1###?value=###OBS2###",
+                resolver,
+            )
+            == "http://example.com/api/device%2F7?value=42%26admin%3Dtrue"
+        )
+
+    def test_url_variable_in_userinfo_and_port_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "secret"
+
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("http://user:###OBS1###@example.com/status", resolver)
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("http://example.com:###OBS1###/status", resolver)
 
     @patch("obs.logic.manager.httpx.AsyncClient")
     def test_missing_variable_configuration_sets_error_output(self, mock_client_cls):

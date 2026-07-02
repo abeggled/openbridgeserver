@@ -220,9 +220,11 @@ def _replace_api_client_url_placeholders(value: str, resolver: Any) -> str:
         authority_bounds = (authority_start, authority_end)
 
     def _replace(match: re.Match[str]) -> str:
-        replacement = resolver(int(match.group(1)))
         if authority_bounds is not None and authority_bounds[0] <= match.start() < authority_bounds[1]:
-            return quote(replacement, safe="-._~:[]")
+            raise _ApiClientVariableError(
+                "API client URL variables are not allowed in the scheme, host, userinfo, or port",
+            )
+        replacement = resolver(int(match.group(1)))
         return _quote_api_client_url_value(replacement)
 
     return _API_CLIENT_VARIABLE_RE.sub(_replace, value)
