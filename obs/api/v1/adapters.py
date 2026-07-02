@@ -200,6 +200,10 @@ def _principal_from_dependency(user: Principal | str) -> Principal:
     return Principal(subject=str(user), type="user", is_admin=str(user) == "admin")
 
 
+def _admin_principal(username: str) -> Principal:
+    return Principal(subject=username, type="user", is_admin=True)
+
+
 async def _filter_readable_datapoint_ids(
     db: Database,
     principal: Principal,
@@ -905,6 +909,7 @@ async def iobroker_import_states(
     candidates = await _iobroker_candidates(str(instance_id), body, db)
     result = IoBrokerImportResult(preview=candidates)
     registry = get_registry()
+    admin_principal = _admin_principal(_user)
 
     for item in candidates:
         if item.exists:
@@ -934,7 +939,7 @@ async def iobroker_import_states(
                     config=config,
                     enabled=True,
                 ),
-                _user,
+                admin_principal,
                 db,
             )
             result.created_bindings += 1
@@ -1141,6 +1146,7 @@ async def anwesenheit_sync_bindings(
     current_ids = set(current.keys())
 
     result = AnwesenheitSyncResult()
+    admin_principal = _admin_principal(_user)
 
     # Create missing bindings
     for dp_id_str in desired_ids - current_ids:
@@ -1154,7 +1160,7 @@ async def anwesenheit_sync_bindings(
                     config={},
                     enabled=True,
                 ),
-                _user,
+                admin_principal,
                 db,
             )
             result.created += 1
@@ -1166,7 +1172,7 @@ async def anwesenheit_sync_bindings(
         try:
             binding_uuid = uuid.UUID(current[dp_id_str])
             dp_uuid = uuid.UUID(dp_id_str)
-            await delete_binding(dp_uuid, binding_uuid, _user, db)
+            await delete_binding(dp_uuid, binding_uuid, admin_principal, db)
             result.removed += 1
         except Exception as exc:
             result.errors.append(f"{dp_id_str}: {exc}")

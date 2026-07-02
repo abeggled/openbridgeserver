@@ -175,10 +175,11 @@ async def filter_authorized_datapoints(
     if not ordered_ids:
         return []
 
+    action_value = AuthzAction(action)
     resolved_grants = list(grants) if grants is not None else await load_role_grants(db, principal)
     targets_by_dp = await resolve_datapoint_targets(db, ordered_ids)
     direct_grant_ids = {grant.node_id for grant in resolved_grants if grant.node_type == "datapoint" and grant.node_id in ordered_ids}
-    for dp_id in direct_grant_ids:
+    for dp_id in direct_grant_ids if action_value == AuthzAction.READ else ():
         targets = targets_by_dp.setdefault(dp_id, [])
         if not any(target.node_type == "datapoint" and target.node_id == dp_id for target in targets):
             targets.append(AuthzTarget(node_type="datapoint", node_id=dp_id))
@@ -187,11 +188,22 @@ async def filter_authorized_datapoints(
     for dp_id in ordered_ids:
         decision = authorize(
             principal=principal,
-            action=action,
+            action=action_value,
             targets=targets_by_dp.get(dp_id, []),
             grants=resolved_grants,
         )
         if decision.allowed:
+            allowed.append(dp_id)
+            continue
+        if decision.reason == "explicit_deny" or action_value == AuthzAction.READ or dp_id not in direct_grant_ids:
+            continue
+        direct_decision = authorize(
+            principal=principal,
+            action=action_value,
+            targets=[AuthzTarget(node_type="datapoint", node_id=dp_id)],
+            grants=resolved_grants,
+        )
+        if direct_decision.allowed:
             allowed.append(dp_id)
     return allowed
 
