@@ -33,6 +33,12 @@ Für Hintergründe und Regeln → `docs/release-policy.md`.
    an. In diesem Fall den Auto-PR schließen und den Abschnitt manuell auf die tatsächliche
    Folgeversion korrigieren, bevor gemergt wird.
 
+   **Bekannte Einschränkung:** Push und PR-Erstellung laufen mit dem Standard-`GITHUB_TOKEN`.
+   GitHub löst dadurch auf diesem Auto-PR keine `pull_request`-Workflows aus (Tests, Ruff) —
+   die für `main` als Required Checks konfiguriert sind. Vor dem Mergen daher einmal manuell
+   anstoßen, z. B. durch einen leeren Commit auf dem `release-prep/*`-Branch oder per
+   Schließen/Wiedereröffnen des PRs.
+
 ---
 
 ## B) Bugfix-Branch anlegen (nur bei Bedarf)

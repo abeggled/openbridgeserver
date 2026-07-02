@@ -300,7 +300,10 @@ jobs:
             echo "RELEASENOTES.md already has a section for ${NEXT_VERSION} — nothing to do."
             exit 0
           fi
-          EXISTING_PR="$(gh pr list --repo "${{ github.repository }}" --state all --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)"
+          # --state open only: a closed-but-unmerged prep PR must not be
+          # mistaken for completed work — a merged PR is already caught by
+          # the RELEASENOTES.md content check above.
+          EXISTING_PR="$(gh pr list --repo "${{ github.repository }}" --state open --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)"
           if [[ -n "$EXISTING_PR" ]]; then
             echo "PR #${EXISTING_PR} for ${BRANCH} already exists — nothing to do."
             exit 0
