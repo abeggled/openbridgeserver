@@ -12,6 +12,7 @@
 * Backend/Admin GUI: Repeated `.knxproj` imports now replace automatically generated ETS hierarchies per selected mode by default, while manual hierarchy trees remain untouched; the import dialog also offers an opt-out to keep a separate tree for each import run. https://github.com/abeggled/openbridgeserver/issues/730
 
 ### Fixes 🐞
+* Security (Upstream PR #PENDING): prevent MQTT writes from mutating bindingless internal datapoints.
 * Visu: Zeitschaltuhr widgets now only show and manage Schaltpunkte for the configured scheduler instance, preventing unrelated KNX or other adapter bindings on the same object from being listed or deleted. https://github.com/abeggled/openbridgeserver/issues/782
 * Visu: German string literals in backend adapter code reached the GUI untranslated, bypassing the i18n/Weblate pipeline. https://github.com/abeggled/openbridgeserver/issues/779
 
