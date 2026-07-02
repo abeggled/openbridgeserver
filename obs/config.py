@@ -48,6 +48,10 @@ class DatabaseSettings(BaseModel):
     history_plugin: str = "sqlite"  # sqlite | influxdb | timescaledb | questdb
 
 
+class MessageArchiveSettings(BaseModel):
+    path: str | None = None
+
+
 class SecuritySettings(BaseModel):
     jwt_secret: str = "changeme"
     jwt_expire_minutes: int = 1440
@@ -213,6 +217,7 @@ class Settings(BaseSettings):
     server: ServerSettings = Field(default_factory=ServerSettings)
     mqtt: MqttSettings = Field(default_factory=MqttSettings)
     database: DatabaseSettings = Field(default_factory=lambda: DatabaseSettings(path=_resolve_default_db_path()))
+    message_archive: MessageArchiveSettings = Field(default_factory=MessageArchiveSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     mosquitto: MosquittoSettings = Field(default_factory=MosquittoSettings)
     cors: CorsSettings = Field(default_factory=CorsSettings)

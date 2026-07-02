@@ -27,6 +27,7 @@ from obs.core.json import json_dumps
 logger = logging.getLogger(__name__)
 
 MessageOperator = Literal["any", "=", "==", "<", "<=", ">", ">=", "!=", "contains", "contains not", "starts with", "ends with"]
+ArchiveStrategy = Literal["none", "send_only", "archive_only", "send_and_archive"]
 MAX_PENDING_EVENTS_PER_BINDING = 100
 _NO_PENDING_COALESCE = object()
 _PLACEHOLDER_PATTERN = re.compile("###(?:DP|DPU|DPN|DPI|TS)###")
@@ -66,13 +67,19 @@ class MessageBindingConfig(BaseModel):
     send_on_change: bool = True
     cooldown_seconds: int = Field(default=0, ge=0)
     enabled: bool = True
+    archive_id: str | None = None
+    archive_strategy: ArchiveStrategy = "send_only"
 
     @model_validator(mode="after")
     def _validate_targets(self) -> "MessageBindingConfig":
         if not self.message.strip():
             raise ValueError("MESSAGE binding message must not be empty")
-        if self.enabled and not self.providers:
+        sends_notification = self.archive_strategy in {"send_only", "send_and_archive"}
+        archives_notification = self.archive_strategy in {"archive_only", "send_and_archive"}
+        if self.enabled and sends_notification and not self.providers:
             raise ValueError("MESSAGE binding requires at least one target")
+        if self.enabled and archives_notification and not self.archive_id:
+            raise ValueError("MESSAGE binding archive_id is required for archive strategies")
         seen_targets: set[tuple[str, str]] = set()
         for ref in self.providers:
             key = (ref.provider, ref.target)
@@ -338,13 +345,21 @@ class MessageAdapter(AdapterBase):
         reset_version: int,
     ) -> None:
         try:
-            results = await self._send_to_targets(cfg, binding, event, rendered)
+            results = []
+            if cfg.archive_strategy in {"send_only", "send_and_archive"}:
+                results = await self._send_to_targets(cfg, binding, event, rendered)
         except Exception as exc:  # pragma: no cover - defensive guard for unexpected task errors
             logger.exception("MESSAGE send task failed unexpectedly")
             results = [MessageSendResult("message", "internal", False, str(exc))]
 
-        success = bool(results) and all(result.ok for result in results)
-        partial_success = bool(results) and any(result.ok for result in results)
+        archive_ok = True
+        if cfg.archive_strategy in {"archive_only", "send_and_archive"} and cfg.archive_id:
+            archive_ok = await self._archive_notification(cfg, binding, event, rendered, results)
+        archive_only = cfg.archive_strategy == "archive_only"
+        provider_success = bool(results) and any(result.ok for result in results)
+        provider_all_ok = bool(results) and all(result.ok for result in results)
+        success = (archive_only and archive_ok) or (provider_all_ok and archive_ok)
+        partial_success = (archive_only and archive_ok) or provider_success
         if success or partial_success:
             state.last_sent_monotonic = time.monotonic()
             if state.reset_version == reset_version:
@@ -425,6 +440,40 @@ class MessageAdapter(AdapterBase):
                 logger.exception("MESSAGE provider '%s' target '%s' failed", ref.provider, ref.target)
                 results.append(MessageSendResult(ref.provider, ref.target, False, "send failed"))
         return results
+
+    async def _archive_notification(
+        self,
+        cfg: MessageBindingConfig,
+        binding: Any,
+        event: DataValueEvent,
+        rendered: str,
+        results: list[MessageSendResult],
+    ) -> bool:
+        try:
+            from obs.message_archive import get_message_archive_service
+
+            delivery_status = "archived"
+            if cfg.archive_strategy == "send_and_archive":
+                delivery_status = "sent" if results and all(result.ok for result in results) else "failed"
+            await get_message_archive_service().record(
+                cfg.archive_id or "notifications",
+                type="notification",
+                severity="info" if delivery_status in {"sent", "archived"} else "warning",
+                source=f"notification.binding.{binding.id}",
+                title=cfg.title or "",
+                message=rendered,
+                payload={
+                    "datapoint_id": str(event.datapoint_id),
+                    "binding_id": str(binding.id),
+                    "notification_providers": sorted({result.provider for result in results}) if results else [],
+                    "delivery_status": delivery_status,
+                },
+            )
+            return True
+        except Exception:
+            logger.exception("MESSAGE archive write failed")
+            await self._publish_status(True, "MESSAGE archive write failed", severity="warning", code="messageArchiveWriteFailed")
+            return False
 
 
 def _model_dump(value: Any) -> dict[str, Any]:

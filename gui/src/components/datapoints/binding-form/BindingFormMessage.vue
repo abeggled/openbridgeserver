@@ -31,7 +31,30 @@
     <p class="hint">###DP### · ###DPU### · ###DPN### · ###DPI### · ###TS###</p>
   </div>
 
-  <div class="form-group">
+  <div class="grid grid-cols-2 gap-4">
+    <div class="form-group">
+      <label class="label">{{ $t('adapters.bindingForm.messageArchiveStrategyLabel') }}</label>
+      <select v-model="cfg.archive_strategy" class="input">
+        <option value="send_only">{{ $t('adapters.bindingForm.messageArchiveStrategySendOnly') }}</option>
+        <option value="send_and_archive">{{ $t('adapters.bindingForm.messageArchiveStrategySendAndArchive') }}</option>
+        <option value="archive_only">{{ $t('adapters.bindingForm.messageArchiveStrategyArchiveOnly') }}</option>
+      </select>
+    </div>
+    <div v-if="archivesNotification" class="form-group">
+      <label class="label">{{ $t('adapters.bindingForm.messageArchiveLabel') }}</label>
+      <select
+        v-model="cfg.archive_id"
+        class="input"
+      >
+        <option value="">{{ $t('adapters.bindingForm.messageArchivePlaceholder') }}</option>
+        <option v-for="archive in archives" :key="archive.id" :value="archive.id">
+          {{ archive.name || archive.id }}
+        </option>
+      </select>
+    </div>
+  </div>
+
+  <div v-if="sendsNotification" class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.targetsLabel') }}</label>
     <div class="flex flex-col gap-2">
       <div v-for="(_, idx) in cfg.providers" :key="idx" class="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
@@ -56,7 +79,8 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { messageArchivesApi } from '@/api/client'
 
 const props = defineProps({
   cfg: { type: Object, required: true },
@@ -64,6 +88,10 @@ const props = defineProps({
 })
 
 const OPERATORS = ['any', '=', '==', '<', '<=', '>', '>=', '!=', 'contains', 'contains not', 'starts with', 'ends with']
+const archives = ref([])
+
+const sendsNotification = computed(() => ['send_only', 'send_and_archive'].includes(props.cfg.archive_strategy ?? 'send_only'))
+const archivesNotification = computed(() => ['archive_only', 'send_and_archive'].includes(props.cfg.archive_strategy ?? 'send_only'))
 
 function providerEnabled(config) {
   if (config?.enabled === true || config?.enabled === 1) return true
@@ -108,4 +136,13 @@ function addProviderTarget() {
   if (!first) return
   props.cfg.providers.push({ provider: first.provider, target: first.target })
 }
+
+onMounted(async () => {
+  try {
+    const { data } = await messageArchivesApi.list()
+    archives.value = data.archives ?? data ?? []
+  } catch {
+    archives.value = []
+  }
+})
 </script>

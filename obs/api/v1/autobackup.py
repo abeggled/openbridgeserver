@@ -88,25 +88,43 @@ def _list_backups() -> list[AutobackupEntry]:
     entries: list[AutobackupEntry] = []
     for f in sorted(backup_dir.glob("*.json"), reverse=True):
         stem = f.stem  # z.B. "20240506-0300"
+        if not re.fullmatch(r"\d{8}-\d{4}", stem):
+            continue
         try:
             dt = datetime.strptime(stem, "%Y%m%d-%H%M")
             created_at = dt.isoformat()
         except ValueError:
             created_at = stem
-        entries.append(AutobackupEntry(name=stem, created_at=created_at, size_bytes=f.stat().st_size))
+        entries.append(
+            AutobackupEntry(
+                name=stem,
+                created_at=created_at,
+                size_bytes=f.stat().st_size,
+            )
+        )
     return entries
 
 
 def _prune_old_backups(retention_days: int) -> int:
     backup_dir = _autobackup_dir()
     files = sorted(backup_dir.glob("*.json"), reverse=True)
+    files = [f for f in files if re.fullmatch(r"\d{8}-\d{4}", f.stem)]
     deleted = 0
     for f in files[retention_days:]:
-        try:
-            f.unlink()
+        deleted += _delete_backup_files(f.stem)
+    return deleted
+
+
+def _delete_backup_files(stem: str) -> int:
+    backup_dir = _autobackup_dir()
+    deleted = 0
+    path = backup_dir / f"{stem}.json"
+    try:
+        if path.exists():
+            path.unlink()
             deleted += 1
-        except OSError:
-            pass
+    except OSError:
+        pass
     return deleted
 
 
@@ -238,7 +256,7 @@ async def delete_autobackup(
 
     if not backup_path.exists():
         raise HTTPException(status_code=404, detail=f"Sicherung '{safe_name}' nicht gefunden.")
-    backup_path.unlink()
+    _delete_backup_files(matched.name)
     return {"ok": True, "name": safe_name}
 
 

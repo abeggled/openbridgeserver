@@ -687,6 +687,18 @@ class GraphExecutor:
                     "sent": False,
                 }
 
+            case "message_archive":
+                # Fires when message arrives OR trigger is truthy (both optional).
+                msg = inputs.get("message")
+                title = inputs.get("title")
+                triggered = self._to_bool(inputs.get("trigger")) if "trigger" in inputs else False
+                return {
+                    "_trigger": msg is not None or triggered,
+                    "_message": msg,
+                    "_title": title,
+                    "stored": False,
+                }
+
             case "wake_on_lan":
                 return {
                     "_trigger": self._to_bool(inputs.get("trigger")),

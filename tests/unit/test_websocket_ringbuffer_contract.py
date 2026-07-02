@@ -10,7 +10,14 @@ from uuid import uuid4
 
 import pytest
 
-from obs.api.v1.websocket import WebSocketManager, _extract_subprotocol_tokens, _page_allowed_datapoints
+from obs.api.v1.websocket import (
+    MessageArchivePredicate,
+    WebSocketManager,
+    _extract_subprotocol_tokens,
+    _page_allowed_datapoints,
+    _page_allowed_message_archives,
+    _page_allowed_message_archive_predicates,
+)
 from obs.core.event_bus import DataValueEvent
 
 
@@ -215,6 +222,66 @@ async def test_log_broadcast_revalidates_existing_log_access_connections():
     await manager.broadcast(second)
 
     assert admin_ws.messages == [first]
+
+
+@pytest.mark.asyncio
+async def test_message_archive_push_is_filtered_for_page_scoped_connections():
+    manager = WebSocketManager()
+    scoped_ws = _FakeWebSocket()
+    unrestricted_ws = _FakeWebSocket()
+
+    await manager.connect(scoped_ws, allowed_dp_ids=set(), allowed_message_archive_ids={"system"})
+    await manager.connect(unrestricted_ws)
+
+    allowed = {"id": "entry-1", "archive_id": "system", "message": "allowed"}
+    blocked = {"id": "entry-2", "archive_id": "security", "message": "blocked"}
+
+    await manager.broadcast_message_archive_entry(allowed)
+    await manager.broadcast_message_archive_entry(blocked)
+
+    assert [msg["entry"]["id"] for msg in scoped_ws.messages] == ["entry-1"]
+    assert [msg["entry"]["id"] for msg in unrestricted_ws.messages] == ["entry-1", "entry-2"]
+
+
+@pytest.mark.asyncio
+async def test_message_archive_push_allows_page_widget_without_archive_filter():
+    manager = WebSocketManager()
+    ws = _FakeWebSocket()
+
+    await manager.connect(ws, allowed_dp_ids=set(), allowed_message_archive_ids=None)
+    await manager.broadcast_message_archive_entry({"id": "entry-1", "archive_id": "any"})
+
+    assert ws.messages[0]["action"] == "message_archive_entry"
+    assert ws.messages[0]["entry"]["archive_id"] == "any"
+
+
+@pytest.mark.asyncio
+async def test_message_archive_push_is_filtered_by_page_widget_predicates():
+    manager = WebSocketManager()
+    ws = _FakeWebSocket()
+
+    await manager.connect(
+        ws,
+        allowed_dp_ids=set(),
+        allowed_message_archive_access=[
+            MessageArchivePredicate(
+                archive_ids={"system"},
+                types={"system"},
+                severities={"warning"},
+                statuses={"new"},
+                sources={"core"},
+            )
+        ],
+    )
+
+    await manager.broadcast_message_archive_entry(
+        {"id": "entry-1", "archive_id": "system", "type": "system", "severity": "warning", "status": "new", "source": "core"}
+    )
+    await manager.broadcast_message_archive_entry(
+        {"id": "entry-2", "archive_id": "system", "type": "system", "severity": "info", "status": "new", "source": "core"}
+    )
+
+    assert [msg["entry"]["id"] for msg in ws.messages] == ["entry-1"]
 
 
 @pytest.mark.asyncio
@@ -447,6 +514,226 @@ async def test_page_allowed_datapoints_collects_only_datapoint_fields():
     assert mini_widget_status_dp_id in ids
     assert not_a_datapoint_uuid not in ids
     assert source_page_id_uuid not in ids
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_message_archives_collects_message_archive_widget_ids():
+    page_config = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "archive-widget",
+                "type": "MessageArchive",
+                "name": "Archiv",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {"archive_ids": ["System", "security"]},
+            }
+        ],
+    }
+
+    class _DbStub:
+        async def fetchone(self, _query, _params):
+            return {"page_config": json.dumps(page_config)}
+
+    ids = await _page_allowed_message_archives(_DbStub(), "page-1")
+
+    assert ids == {"system", "security"}
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_message_archives_returns_unrestricted_for_empty_widget_filter():
+    page_config = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "archive-widget",
+                "type": "MessageArchive",
+                "name": "Archiv",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {"archive_ids": []},
+            }
+        ],
+    }
+
+    class _DbStub:
+        async def fetchone(self, _query, _params):
+            return {"page_config": json.dumps(page_config)}
+
+    ids = await _page_allowed_message_archives(_DbStub(), "page-1")
+
+    assert ids is None
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_message_archive_predicates_include_widget_filters():
+    page_config = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "archive-widget",
+                "type": "MessageArchive",
+                "name": "Archiv",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {
+                    "archive_ids": ["System"],
+                    "types": ["system"],
+                    "severities": ["warning"],
+                    "statuses": ["new"],
+                    "sources": ["core"],
+                },
+            }
+        ],
+    }
+
+    class _DbStub:
+        async def fetchone(self, _query, _params):
+            return {"page_config": json.dumps(page_config)}
+
+    predicates = await _page_allowed_message_archive_predicates(_DbStub(), "page-1")
+
+    assert len(predicates) == 1
+    assert predicates[0].archive_ids == {"system"}
+    assert predicates[0].types == {"system"}
+    assert predicates[0].severities == {"warning"}
+    assert predicates[0].statuses == {"new"}
+    assert predicates[0].sources == {"core"}
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_message_archive_predicates_follow_widgetref_target():
+    page_config_main = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "ref-host",
+                "type": "WidgetRef",
+                "name": "Ref",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {
+                    "source_page_id": "page-target",
+                    "source_widget_name": "archive-widget",
+                },
+            }
+        ],
+    }
+    page_config_target = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "archive-widget",
+                "type": "MessageArchive",
+                "name": "archive-widget",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {"archive_ids": ["System"], "severities": ["warning"]},
+            }
+        ],
+    }
+
+    class _DbStub:
+        async def fetchone(self, _query, params):
+            if params[0] == "page-main":
+                return {"page_config": json.dumps(page_config_main)}
+            if params[0] == "page-target":
+                return {"page_config": json.dumps(page_config_target)}
+            return None
+
+    predicates = await _page_allowed_message_archive_predicates(_DbStub(), "page-main")
+
+    assert len(predicates) == 1
+    assert predicates[0].archive_ids == {"system"}
+    assert predicates[0].severities == {"warning"}
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_message_archive_predicates_disable_actions_for_readonly_widgetref_target():
+    page_config_main = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "ref-host",
+                "type": "WidgetRef",
+                "name": "Ref",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {
+                    "source_page_id": "page-readonly",
+                    "source_widget_name": "archive-widget",
+                },
+            }
+        ],
+    }
+    page_config_target = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "archive-widget",
+                "type": "MessageArchive",
+                "name": "archive-widget",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {
+                    "archive_ids": ["System"],
+                    "allow_read": True,
+                    "allow_acknowledge": True,
+                },
+            }
+        ],
+    }
+
+    class _DbStub:
+        async def fetchone(self, _query, params):
+            if params[0] == "page-main":
+                return {"page_config": json.dumps(page_config_main)}
+            if params[0] == "page-readonly":
+                return {"page_config": json.dumps(page_config_target)}
+            return None
+
+    async def _is_readonly(page_id: str) -> bool:
+        return page_id == "page-readonly"
+
+    predicates = await _page_allowed_message_archive_predicates(
+        _DbStub(),
+        "page-main",
+        widget_ref_readonly_check=_is_readonly,
+    )
+
+    assert len(predicates) == 1
+    assert predicates[0].archive_ids == {"system"}
+    assert predicates[0].allow_read is False
+    assert predicates[0].allow_acknowledge is False
 
 
 @pytest.mark.asyncio

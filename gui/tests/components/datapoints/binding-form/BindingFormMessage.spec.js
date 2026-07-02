@@ -95,7 +95,7 @@ describe('BindingFormMessage', () => {
     const cfg = { providers: [{ provider: 'pushover', target: 'phone' }] }
     const wrapper = mk({ cfg })
 
-    await wrapper.findAll('select')[1].setValue('telegram')
+    await wrapper.findAll('select').find(select => select.element.value === 'pushover').setValue('telegram')
 
     expect(cfg.providers[0]).toEqual({ provider: 'telegram', target: 'family' })
   })

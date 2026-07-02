@@ -5,12 +5,16 @@
     "adapters": "Adapters",
     "history": "History",
     "ringbuffer": "Monitor",
+    "messageArchives": "Message Archives",
     "logs": "Logs",
     "logic": "Logic Engine",
     "settings": "Settings",
     "visu": "Visu"
   },
   "sidebar": {
+    "productName": "open bridge server",
+    "adapterWarningsTitle": "{label} — {count} warning(s)",
+    "visu": "Visu",
     "liveConnected": "Live connected",
     "disconnected": "Disconnected",
     "live": "Live",
@@ -573,6 +577,12 @@
       "messageTemplateLabel": "Message template",
       "targetsLabel": "Targets",
       "addTarget": "Add target",
+      "messageArchiveStrategyLabel": "Action",
+      "messageArchiveStrategySendOnly": "Send only",
+      "messageArchiveStrategySendAndArchive": "Send and archive",
+      "messageArchiveStrategyArchiveOnly": "Archive only",
+      "messageArchiveLabel": "Message archive",
+      "messageArchivePlaceholder": "Select message archive",
       "messageSendOnChange": "Send only when the condition changes to fulfilled",
       "snmpHostLabel": "Device (IP/DNS) *",
       "snmpHostPlaceholder": "e.g. 192.168.1.100 or switch.local",
@@ -1013,6 +1023,7 @@
       "knxTunnelStable": "Tunnel pool stable again.",
       "invalidBindingsSkipped": "{count} invalid binding(s) skipped ({examples})",
       "messageProviderFailures": "MESSAGE provider failures: {count} target(s)",
+      "messageArchiveWriteFailed": "MESSAGE archive write failed",
       "messageSent": "MESSAGE sent"
     },
     "testResult": {
@@ -1313,6 +1324,7 @@
       "astro_sun": "Astro Sun",
       "notify_pushover": "Pushover",
       "notify_sms": "SMS (seven.io)",
+      "message_archive": "Message Archive",
       "wake_on_lan": "Wake on LAN",
       "host_check": "Host Check",
       "json_extractor": "JSON Extractor",
@@ -1399,6 +1411,7 @@
       "body": "Body",
       "done": "Done",
       "sent": "Sent",
+      "stored": "Stored",
       "active": "Active",
       "reset": "Reset",
       "message": "Message",
@@ -1842,6 +1855,17 @@
         "sender": "Sender (max 11 chars)",
         "message": "Message (fallback)"
       },
+      "messageArchive": {
+        "archive": "Message archive",
+        "selectArchive": "Select message archive",
+        "missingArchive": "Message archive not found",
+        "type": "Message type",
+        "severity": "Severity",
+        "title": "Title (fallback)",
+        "titlePlaceholder": "Optional, can be overridden via input",
+        "message": "Message (fallback)",
+        "messagePlaceholder": "Used when no message input is connected"
+      },
       "host_check": {
         "host": "Host / IP address",
         "hostPlaceholder": "e.g. 192.168.1.1 or hostname.local",
@@ -1912,6 +1936,7 @@
       "sunset": "Sunset",
       "isDay": "Daytime",
       "urlTitle": "URL title",
+      "title": "Title",
       "imageUrl": "Image URL",
       "avgNow": "∅ now",
       "avg1m": "∅ 1 min",
@@ -1981,6 +2006,7 @@
       "astro_sun": "Calculates sunrise and sunset based on latitude/longitude. Requires: pip install astral",
       "notify_pushover": "Sends a push notification via the Pushover API (api.pushover.net). Triggered automatically when a message arrives at the input.",
       "notify_sms": "Sends an SMS via the seven.io gateway (gateway.seven.io). Triggered automatically when a message arrives at the input.",
+      "message_archive": "Writes a message to a message archive. Triggered automatically when a message arrives at the input or when the trigger is true.",
       "wake_on_lan": "Sends a Wake-on-LAN magic packet to a device via UDP broadcast. Triggered when the trigger input is true.",
       "host_check": "Pings a host and outputs the reachability status (true/false) and latency in milliseconds. Runs on the rising edge of the trigger input. Recommended: connect to a Timer/Cron node for periodic polling.",
       "json_extractor": "Parses a JSON string and extracts one or more values by key paths (dot notation, e.g. sensors.temperature). Multiple outputs configurable via + in the config panel.",
@@ -2214,6 +2240,14 @@
       "dbImportWarning2": "History data will be replaced by the content of the uploaded file",
       "dbImportWarning3": "Adapters and Logic Engine will be restarted after restore",
       "dbImportWarning4": "Data not included in the backup will be lost",
+      "messageArchiveDbExportTitle": "Back up message archive (download)",
+      "messageArchiveDbExportDesc": "Save the separate SQLite database of the message archives as a file.",
+      "messageArchiveDbExportButton": "Download message archive SQLite",
+      "messageArchiveDbImportTitle": "Restore message archive (upload)",
+      "messageArchiveDbImportDesc": "Upload and apply a SQLite database file for message archives.",
+      "messageArchiveDbImportWarning": "⚠ Warning — this action overwrites all current message archives!",
+      "messageArchiveDbImportWarning1": "All current message archives and messages will be replaced",
+      "messageArchiveDbImportWarning2": "The OBS configuration database remains unchanged",
       "autobackupTitle": "Autobackup",
       "autobackupDesc": "Daily automatic JSON backup of all configuration data (adapters, objects, logic module, Visu, icons, etc.). Backups are stored locally in the data directory.",
       "autobackupEnable": "Enable Autobackup",
@@ -2281,7 +2315,9 @@
       "error_NO_GROUP_ADDRESSES": "No group addresses found. Please export the correct ETS project.",
       "error_PARSE_ERROR": "Error parsing the .knxproj file.",
       "dbImportResultOk": "Database restore OK: {message} ({adapters} adapters restarted). Please reload the page.",
-      "dbImportFailed": "Database restore failed"
+      "dbImportFailed": "Database restore failed",
+      "messageArchiveDbImportResultOk": "Message archive restore OK: {message}",
+      "messageArchiveDbImportFailed": "Message archive restore failed"
     },
     "history": {
       "dbTitle": "History DB",
@@ -2575,5 +2611,72 @@
   },
   "topbar": {
     "logout": "Sign out"
+  },
+  "messageArchives": {
+    "title": "Message Archives",
+    "subtitle": "Administrative management of the separate archive database",
+    "newArchive": "New Archive",
+    "archives": "Archives",
+    "noArchives": "No archives available",
+    "selectArchive": "Select or create an archive.",
+    "dbPath": "Archive DB",
+    "integrityCheck": "Integrity Check",
+    "integrityResult": "Integrity check",
+    "exportJsonl": "Export JSONL",
+    "exportCsv": "Export CSV",
+    "clear": "Clear",
+    "refresh": "Refresh",
+    "entries": "entries",
+    "noEntries": "No messages found",
+    "confirmClear": "Permanently delete {count} entries from this archive?",
+    "confirmDelete": "Permanently delete archive and {count} entries?",
+    "form": {
+      "id": "Archive ID",
+      "name": "Name",
+      "description": "Description",
+      "defaultType": "Default message type",
+      "defaultTypeNone": "No default",
+      "defaultTypeCustom": "Custom …",
+      "defaultTypeCustomPlaceholder": "e.g. maintenance",
+      "defaultTypeHint": "Optional default for new entries, e.g. system, security or notification.",
+      "color": "Color",
+      "maxEntries": "Maximum entries",
+      "maxAgeDays": "Maximum age (days)"
+    },
+    "filters": {
+      "search": "Search title or text …",
+      "allSeverities": "All severities",
+      "allStatuses": "All statuses",
+      "allTypes": "All types"
+    },
+    "table": {
+      "time": "Time",
+      "message": "Message",
+      "type": "Type",
+      "severity": "Severity",
+      "status": "Status",
+      "source": "Source"
+    },
+    "types": {
+      "system": "System",
+      "security": "Security",
+      "notification": "Notification",
+      "automation": "Automation",
+      "adapter": "Adapter",
+      "diagnostic": "Diagnostic"
+    },
+    "severities": {
+      "info": "Info",
+      "success": "Success",
+      "warning": "Warning",
+      "error": "Error",
+      "critical": "Critical"
+    },
+    "statuses": {
+      "new": "New",
+      "open": "Open",
+      "acknowledged": "Acknowledged",
+      "closed": "Closed"
+    }
   }
 }

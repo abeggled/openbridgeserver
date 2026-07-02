@@ -11,8 +11,11 @@ Covers:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from obs.api.auth import create_access_token
+from obs.config import get_settings
 
 pytestmark = pytest.mark.integration
 
@@ -182,6 +185,9 @@ async def test_run_autobackup_creates_backup(client, auth_headers):
     assert body["ok"] is True
     assert "name" in body
     assert isinstance(body["old_backups_deleted"], int)
+    backup_dir = Path(get_settings().database.path).parent / "autobackup"
+    assert not (backup_dir / f"{body['name']}.message-archive.sqlite3").exists()
+    assert not (backup_dir / f"{body['name']}.message-archive.json").exists()
 
 
 async def test_run_autobackup_appears_in_list(client, auth_headers):
@@ -189,8 +195,12 @@ async def test_run_autobackup_appears_in_list(client, auth_headers):
     backup_name = run_resp.json()["name"]
 
     list_resp = await client.get("/api/v1/config/autobackup/list", headers=auth_headers)
-    names = [e["name"] for e in list_resp.json()]
+    entries = list_resp.json()
+    names = [e["name"] for e in entries]
     assert backup_name in names
+    entry = next(e for e in entries if e["name"] == backup_name)
+    assert "archive_db_included" not in entry
+    assert "archive_db_size_bytes" not in entry
 
 
 # ---------------------------------------------------------------------------
