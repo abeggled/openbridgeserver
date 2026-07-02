@@ -347,6 +347,23 @@ jobs:
 
           echo "Preparing next release: $NEXT_VERSION on branch $BRANCH"
 
+          # Idempotency: a workflow re-run for the same tag (e.g. after a
+          # transient failure in a later step) must not fail on an already
+          # pushed branch, open a duplicate PR, or insert a second
+          # "## ${NEXT_VERSION}" section once the first prep PR is merged.
+          if grep -qF "## ${NEXT_VERSION}" RELEASENOTES.md; then
+            echo "RELEASENOTES.md already has a section for ${NEXT_VERSION} — nothing to do."
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Branch ${BRANCH} already exists on origin — nothing to do."
+            exit 0
+          fi
+          if [[ -n "$(gh pr list --repo "${{ github.repository }}" --state all --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null)" ]]; then
+            echo "A PR for ${BRANCH} already exists — nothing to do."
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"

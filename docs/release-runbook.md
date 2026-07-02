@@ -27,6 +27,12 @@ Für Hintergründe und Regeln → `docs/release-policy.md`.
 6. CI erstellt automatisch einen PR auf `main`, der `## 2026.8.0` in `RELEASENOTES.md` vorbereitet.
    → Diesen PR reviewen und mergen, bevor der erste Feature-PR für 2026.8 einläuft.
 
+   **Bekannte Einschränkung:** Der Auto-PR leitet die Folgeversion strikt aus „Monat+1" ab
+   (konsistent mit der Monats-CalVer-Policy). Wird ein Monat ausgelassen — z. B. erscheint nach
+   `2026.6.0` direkt `2026.8.0` — legt der Job trotzdem einen nie released `## 2026.7.0`-Abschnitt
+   an. In diesem Fall den Auto-PR schließen und den Abschnitt manuell auf die tatsächliche
+   Folgeversion korrigieren, bevor gemergt wird.
+
 ---
 
 ## B) Bugfix-Branch anlegen (nur bei Bedarf)
