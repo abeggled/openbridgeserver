@@ -62,10 +62,6 @@
       "budget": "Budget usage",
       "unlimited": "unlimited",
       "segments": "Segments",
-      "retentionHorizon": "Retention horizon",
-      "retentionWarming": "warming up",
-      "horizonHours": "~{n} h",
-      "horizonDays": "~{n} days",
       "segmentsAffected": "{n} segment(s) affected",
       "overBudgetInfo": "Retention over budget (normal operation).",
       "segmentDetails": "Segment details",
@@ -1328,13 +1324,15 @@
     "segmentQuarantineExplain": "Defective segment, isolated for analysis.",
     "unitMiB": "MiB",
     "unitGiB": "GiB",
-    "prognosisTitle": "Forecast",
-    "prognosisWarming": "Forecast is still warming up (too few segments).",
-    "prognosisRate": "At the current rate ~{mib} MiB/h (~{rows} events/h): new segment ~every {hours} h.",
-    "prognosisRetention": "Budget lasts for ~{duration}.",
-    "prognosisBudget": "For ~{age}h segments: budget ≥ {gib} GiB.",
-    "prognosisHours": "{n} h",
-    "prognosisDays": "{n} days"
+    "prognosis": {
+      "title": "Forecast",
+      "warming": "Forecast is still warming up (too few segments).",
+      "rate": "At the current rate ~{mib} MiB/h (~{rows} events/h): new segment ~every {hours} h.",
+      "retention": "Budget lasts for ~{duration}.",
+      "budget": "For ~{age}h segments: budget ≥ {gib} GiB.",
+      "hours": "{n} h",
+      "days": "{n} days"
+    }
   },
   "logs": {
     "title": "Logs",

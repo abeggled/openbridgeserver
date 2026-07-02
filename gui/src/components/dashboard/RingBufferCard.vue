@@ -64,11 +64,10 @@
             <span class="text-xs text-slate-500">{{ $t('dashboard.ringbuffer.segments') }}</span>
             <span class="text-lg font-bold tabular-nums text-slate-800 dark:text-slate-100" data-testid="rb-card-segments">{{ segmentCount }}</span>
           </div>
-          <div class="flex flex-col gap-0.5">
-            <span class="text-xs text-slate-500">{{ $t('dashboard.ringbuffer.retentionHorizon') }}</span>
-            <span class="text-lg font-bold tabular-nums text-slate-800 dark:text-slate-100" data-testid="rb-card-retention">{{ retentionHorizon }}</span>
-          </div>
         </div>
+
+        <!-- Volle Prognose (#919/#938): gemeinsame PrognosisBlock-Komponente. -->
+        <PrognosisBlock :prognosis="stats?.prognosis ?? null" :segment-age-hours="segmentAgeHours" />
 
         <!-- Problem-Hinweis (deutlich) -->
         <div
@@ -135,15 +134,13 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
 import Spinner from '@/components/ui/Spinner.vue'
 import Modal from '@/components/ui/Modal.vue'
+import PrognosisBlock from '@/components/ringbuffer/PrognosisBlock.vue'
 import MonitorConfigModal from '@/views/ringbuffer/MonitorConfigModal.vue'
 import SegmentStatsPanel from '@/views/ringbuffer/SegmentStatsPanel.vue'
-
-const { t } = useI18n()
 
 const REFRESH_INTERVAL_MS = 30_000
 // Recovery-Zustände, die ein Segment als problematisch markieren (#938).
@@ -225,15 +222,11 @@ function fmtInt(n) {
 
 const segmentCount = computed(() => fmtInt(common.value.segment_count ?? segments.value.length))
 
-const retentionHorizon = computed(() => {
-  const seconds = Number(stats.value?.prognosis?.estimated_retention_seconds)
-  if (!Number.isFinite(seconds) || seconds <= 0) {
-    // null / kein sinnvoller Wert: Prognose läuft sich ein bzw. unbekannt.
-    return stats.value?.prognosis ? t('dashboard.ringbuffer.retentionWarming') : '—'
-  }
-  const hours = seconds / 3600
-  if (hours < 48) return t('dashboard.ringbuffer.horizonHours', { n: fmtInt(Math.round(hours)) })
-  return t('dashboard.ringbuffer.horizonDays', { n: fmtInt(Math.round(hours / 24)) })
+// Segment-Alter (Sekunden → Stunden) für die Budget-Empfehlung der Prognose.
+// null → PrognosisBlock lässt die Budget-Zeile weg.
+const segmentAgeHours = computed(() => {
+  const seconds = Number(stats.value?.segment_max_age)
+  return Number.isFinite(seconds) && seconds > 0 ? seconds / 3600 : null
 })
 
 // ── Problem-Hinweis ──────────────────────────────────────────────────────

@@ -62,10 +62,6 @@
       "budget": "Budget-Auslastung",
       "unlimited": "unbegrenzt",
       "segments": "Segmente",
-      "retentionHorizon": "Retention-Horizont",
-      "retentionWarming": "läuft sich ein",
-      "horizonHours": "~{n} h",
-      "horizonDays": "~{n} Tage",
       "segmentsAffected": "{n} Segment(e) betroffen",
       "overBudgetInfo": "Aufbewahrung über Budget (Normalbetrieb).",
       "segmentDetails": "Segment-Details",
@@ -1328,13 +1324,15 @@
     "segmentQuarantineExplain": "Defektes Segment, zur Analyse isoliert.",
     "unitMiB": "MiB",
     "unitGiB": "GiB",
-    "prognosisTitle": "Prognose",
-    "prognosisWarming": "Prognose läuft sich noch ein (zu wenige Segmente).",
-    "prognosisRate": "Bei aktueller Rate ~{mib} MiB/h (~{rows} Events/h): neues Segment ~alle {hours} h.",
-    "prognosisRetention": "Budget reicht für ~{duration}.",
-    "prognosisBudget": "Für ~{age}-h-Segmente: Budget ≥ {gib} GiB.",
-    "prognosisHours": "{n} h",
-    "prognosisDays": "{n} Tage"
+    "prognosis": {
+      "title": "Prognose",
+      "warming": "Prognose läuft sich noch ein (zu wenige Segmente).",
+      "rate": "Bei aktueller Rate ~{mib} MiB/h (~{rows} Events/h): neues Segment ~alle {hours} h.",
+      "retention": "Budget reicht für ~{duration}.",
+      "budget": "Für ~{age}-h-Segmente: Budget ≥ {gib} GiB.",
+      "hours": "{n} h",
+      "days": "{n} Tage"
+    }
   },
   "logs": {
     "title": "Logs",

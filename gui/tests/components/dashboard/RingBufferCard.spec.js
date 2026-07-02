@@ -19,19 +19,30 @@ afterEach(() => {
   vi.doUnmock('@/api/client')
 })
 
-function segmentedPayload({ segments = [], maxFileSizeBytes = 100 * 1024 * 1024, sizeBytes = 30 * 1024 * 1024, retentionSeconds = 3 * 24 * 3600, overBudget = false } = {}) {
+function segmentedPayload({ segments = [], maxFileSizeBytes = 100 * 1024 * 1024, sizeBytes = 30 * 1024 * 1024, retentionSeconds = 3 * 24 * 3600, overBudget = false, prognosis, segmentMaxAge = 6 * 3600 } = {}) {
   return {
     enabled: true,
     total: 800,
     file_size_bytes: sizeBytes,
     max_file_size_bytes: maxFileSizeBytes,
     max_age: null,
-    prognosis: { estimated_retention_seconds: retentionSeconds },
+    segment_max_age: segmentMaxAge,
+    // Volle Prognose (#919/#938): PrognosisBlock rendert Rate/Retention/Budget.
+    // Default: nur der Retention-Horizont; einzelne Tests überschreiben prognosis.
+    prognosis: prognosis ?? { estimated_retention_seconds: retentionSeconds },
     store: {
       common: { segment_count: segments.length, size_bytes: sizeBytes, oldest_ts: null, newest_ts: null },
       backend_extra: { segments, retention_over_budget: overBudget, retention_pressure_reason: null },
     },
   }
+}
+
+const fullPrognosis = {
+  bytes_per_hour: 50 * 1024 * 1024,
+  rows_per_hour: 12000,
+  avg_segment_seconds: 6 * 3600,
+  estimated_retention_seconds: 5 * 24 * 3600,
+  recommended_budget_for_segment_age_bytes: 2 * 1024 * 1024 * 1024,
 }
 
 const healthySegments = [
@@ -104,16 +115,24 @@ describe('RingBufferCard — segmented state', () => {
     expect(wrapper.find('[data-testid="rb-card-budget-unlimited"]').text()).toContain('unbegrenzt')
   })
 
-  it('shows segment count and a retention horizon', async () => {
-    const wrapper = await mountCard(segmentedPayload({ segments: healthySegments }))
+  it('shows segment count and the full prognosis block', async () => {
+    const wrapper = await mountCard(segmentedPayload({ segments: healthySegments, prognosis: fullPrognosis }))
     expect(wrapper.find('[data-testid="rb-card-segments"]').text()).toBe('2')
-    // 3 days → "~3 Tage"
-    expect(wrapper.find('[data-testid="rb-card-retention"]').text()).toContain('Tage')
+    // Volle Prognose (#919/#938) statt nur Retention-Horizont: Rate + Retention + Budget.
+    expect(wrapper.find('[data-testid="prognosis-rate"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="prognosis-retention"]').text()).toContain('Tage')
+    expect(wrapper.find('[data-testid="prognosis-budget"]').exists()).toBe(true)
   })
 
-  it('shows the warming-up hint when estimated_retention_seconds is null', async () => {
-    const wrapper = await mountCard(segmentedPayload({ segments: healthySegments, retentionSeconds: null }))
-    expect(wrapper.find('[data-testid="rb-card-retention"]').text()).toContain('läuft sich ein')
+  it('shows the warming-up hint when prognosis rate fields are unavailable', async () => {
+    const wrapper = await mountCard(segmentedPayload({ segments: healthySegments, prognosis: { estimated_retention_seconds: null } }))
+    expect(wrapper.find('[data-testid="prognosis-warming"]').text()).toContain('läuft sich noch ein')
+  })
+
+  it('omits the prognosis budget line when segment_max_age is missing', async () => {
+    const wrapper = await mountCard(segmentedPayload({ segments: healthySegments, prognosis: fullPrognosis, segmentMaxAge: null }))
+    expect(wrapper.find('[data-testid="prognosis-rate"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="prognosis-budget"]').exists()).toBe(false)
   })
 
   it('does NOT show the problem banner when all segments are healthy', async () => {

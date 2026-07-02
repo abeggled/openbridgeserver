@@ -380,6 +380,9 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
 })
 
 describe('MonitorConfigModal prognosis (#919/#938)', () => {
+  // Der Prognose-Block ist in die gemeinsame PrognosisBlock-Komponente
+  // ausgelagert (DRY). Die Integrationstests hier prüfen, dass das Modal ihn
+  // korrekt mit stats.prognosis + Segment-Alter füttert (data-testid prognosis-*).
   it('renders human-readable forecast lines from stats.prognosis', async () => {
     const api = makeApi({
       stats: vi.fn().mockResolvedValue({
@@ -398,14 +401,14 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
       }),
     })
     const { wrapper } = await mountModal({ api })
-    expect(wrapper.find('[data-testid="rb-config-prognosis-warming"]').exists()).toBe(false)
-    const rate = wrapper.find('[data-testid="rb-config-prognosis-rate"]').text()
+    expect(wrapper.find('[data-testid="prognosis-warming"]').exists()).toBe(false)
+    const rate = wrapper.find('[data-testid="prognosis-rate"]').text()
     expect(rate).toContain('50')
     expect(rate).toContain('MiB/h')
     expect(rate).toContain('12.000') // Events/h, de-DE grouping
-    const retention = wrapper.find('[data-testid="rb-config-prognosis-retention"]').text()
+    const retention = wrapper.find('[data-testid="prognosis-retention"]').text()
     expect(retention).toContain('5 Tage')
-    const budget = wrapper.find('[data-testid="rb-config-prognosis-budget"]').text()
+    const budget = wrapper.find('[data-testid="prognosis-budget"]').text()
     expect(budget).toContain('GiB')
     expect(budget).toContain('6') // current segment age in hours
   })
@@ -427,15 +430,15 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
       }),
     })
     const { wrapper } = await mountModal({ api })
-    expect(wrapper.find('[data-testid="rb-config-prognosis-warming"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="rb-config-prognosis-rate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="prognosis-warming"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="prognosis-rate"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('NaN')
     expect(wrapper.text()).not.toContain('undefined')
   })
 
   it('shows the warming-up hint when stats has no prognosis object at all', async () => {
     const { wrapper } = await mountModal() // default mock has no prognosis
-    expect(wrapper.find('[data-testid="rb-config-prognosis-warming"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="prognosis-warming"]').exists()).toBe(true)
   })
 
   it('omits only the retention/budget lines when those specific fields are null', async () => {
@@ -457,9 +460,9 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
     })
     const { wrapper } = await mountModal({ api })
     // Rate line renders, but retention + budget lines are suppressed (no NaN).
-    expect(wrapper.find('[data-testid="rb-config-prognosis-rate"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="rb-config-prognosis-retention"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="rb-config-prognosis-budget"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="prognosis-rate"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="prognosis-retention"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="prognosis-budget"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('NaN')
   })
 })

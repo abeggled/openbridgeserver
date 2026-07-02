@@ -31,22 +31,8 @@
         </div>
       </div>
 
-      <!-- Prognose (#919/#938): aus stats.prognosis menschlich formuliert. Jedes
-           Feld kann null sein (zu wenig Daten) → dann der Einlauf-Hinweis. -->
-      <div
-        class="rounded-lg border border-blue-500/30 bg-blue-500/5 p-3 flex flex-col gap-1.5"
-        data-testid="rb-config-prognosis"
-      >
-        <h4 class="text-sm font-semibold text-slate-700 dark:text-slate-200">{{ $t('ringbuffer.prognosisTitle') }}</h4>
-        <p v-if="!prognosisReady" class="text-xs text-slate-500" data-testid="rb-config-prognosis-warming">
-          {{ $t('ringbuffer.prognosisWarming') }}
-        </p>
-        <template v-else>
-          <p class="text-xs text-slate-600 dark:text-slate-300" data-testid="rb-config-prognosis-rate">{{ prognosisRateLine }}</p>
-          <p v-if="prognosisRetentionLine" class="text-xs text-slate-600 dark:text-slate-300" data-testid="rb-config-prognosis-retention">{{ prognosisRetentionLine }}</p>
-          <p v-if="prognosisBudgetLine" class="text-xs text-slate-600 dark:text-slate-300" data-testid="rb-config-prognosis-budget">{{ prognosisBudgetLine }}</p>
-        </template>
-      </div>
+      <!-- Prognose (#919/#938): gemeinsame PrognosisBlock-Komponente. -->
+      <PrognosisBlock :prognosis="stats?.prognosis ?? null" :segment-age-hours="Number(configForm.segmentMaxAgeHours) || null" />
 
       <div class="text-xs text-slate-500">
         {{ $t('ringbuffer.storageFixed') }} <span class="font-semibold">file-only</span>.
@@ -236,6 +222,7 @@ import { formatDurationDeutsch } from '@/composables/useTimeFilterParser'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import Modal from '@/components/ui/Modal.vue'
+import PrognosisBlock from '@/components/ringbuffer/PrognosisBlock.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
 const { t } = useI18n()
@@ -294,72 +281,6 @@ function formatRetention(rawSeconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return '—'
   return formatDurationDeutsch(seconds)
 }
-
-// ── Prognose (#919/#938) ─────────────────────────────────────────────────
-// Aus stats.prognosis abgeleitete, menschlich formulierte Hinweise. Jedes Feld
-// kann null sein (zu wenig Daten); dann greift der Einlauf-Hinweis / einzelne
-// Zeilen werden ausgeblendet. Kein NaN/undefined, keine Division-Artefakte.
-const MIB = 1024 * 1024
-const GIB = 1024 * 1024 * 1024
-
-const prognosis = computed(() => stats.value?.prognosis ?? null)
-
-function posNumber(value) {
-  const n = Number(value)
-  return Number.isFinite(n) && n > 0 ? n : null
-}
-
-const fmtNum = (value, digits = 0) => {
-  try {
-    return new Intl.NumberFormat('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value)
-  } catch {
-    return String(value)
-  }
-}
-
-/** Formatiert Sekunden menschlich als „~X h" bzw. „~X Tage" (sinnvoll gerundet). */
-function humanDuration(seconds) {
-  const s = posNumber(seconds)
-  if (s === null) return null
-  const hours = s / 3600
-  if (hours < 48) return t('ringbuffer.prognosisHours', { n: fmtNum(hours, hours < 10 ? 1 : 0) })
-  return t('ringbuffer.prognosisDays', { n: fmtNum(hours / 24, 0) })
-}
-
-// Rate-Zeile ist die Basis der Prognose; sie braucht Durchsatz + Segment-Takt.
-const prognosisReady = computed(() => {
-  const p = prognosis.value
-  if (!p) return false
-  return posNumber(p.bytes_per_hour) !== null && posNumber(p.rows_per_hour) !== null && posNumber(p.avg_segment_seconds) !== null
-})
-
-const prognosisRateLine = computed(() => {
-  const p = prognosis.value
-  if (!p) return ''
-  const mibPerHour = posNumber(p.bytes_per_hour)
-  const rowsPerHour = posNumber(p.rows_per_hour)
-  const segEverySeconds = posNumber(p.avg_segment_seconds)
-  if (mibPerHour === null || rowsPerHour === null || segEverySeconds === null) return ''
-  return t('ringbuffer.prognosisRate', {
-    mib: fmtNum(mibPerHour / MIB, 1),
-    rows: fmtNum(rowsPerHour, 0),
-    hours: fmtNum(segEverySeconds / 3600, segEverySeconds / 3600 < 10 ? 1 : 0),
-  })
-})
-
-const prognosisRetentionLine = computed(() => {
-  const dur = humanDuration(prognosis.value?.estimated_retention_seconds)
-  return dur ? t('ringbuffer.prognosisRetention', { duration: dur }) : ''
-})
-
-const prognosisBudgetLine = computed(() => {
-  const bytes = posNumber(prognosis.value?.recommended_budget_for_segment_age_bytes)
-  if (bytes === null) return ''
-  return t('ringbuffer.prognosisBudget', {
-    age: configForm.segmentMaxAgeHours,
-    gib: fmtNum(bytes / GIB, 1),
-  })
-})
 
 function parseNonNegativeInteger(raw) {
   const parsed = Number.parseInt(String(raw ?? '').trim(), 10)
