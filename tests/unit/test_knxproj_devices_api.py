@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
 
+from obs.api.auth import Principal
 from obs.api.v1 import knxproj as knxproj_api
 from obs.db.database import Database
 
@@ -56,6 +58,112 @@ async def _prepare_db() -> Database:
     )
     await db.commit()
 
+    return db
+
+
+async def _insert_authz_tree(db: Database) -> None:
+    now = datetime.now(UTC).isoformat()
+    await db.execute_and_commit(
+        """
+        INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at)
+        VALUES ('tree', 'tree', '', ?, ?)
+        """,
+        (now, now),
+    )
+    await db.executemany(
+        """
+        INSERT INTO hierarchy_nodes
+            (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+        VALUES (?, 'tree', NULL, ?, '', 0, NULL, ?, ?)
+        """,
+        [
+            ("allowed-room", "allowed-room", now, now),
+            ("blocked-room", "blocked-room", now, now),
+        ],
+    )
+    await db.commit()
+
+
+async def _insert_knx_instance(db: Database, *, instance_id: str = "knx-main", enabled: bool = True) -> None:
+    now = datetime.now(UTC).isoformat()
+    await db.execute_and_commit(
+        """
+        INSERT INTO adapter_instances (id, adapter_type, name, config, enabled, created_at, updated_at)
+        VALUES (?, 'KNX', ?, '{}', ?, ?, ?)
+        """,
+        (instance_id, instance_id, int(enabled), now, now),
+    )
+
+
+async def _insert_scoped_datapoint(
+    db: Database,
+    *,
+    dp_id: str,
+    name: str,
+    node_id: str,
+    ga: str,
+    state_ga: str | None = None,
+    binding_enabled: bool = True,
+    adapter_instance_id: str = "knx-main",
+) -> None:
+    now = datetime.now(UTC).isoformat()
+    config = {"group_address": ga}
+    if state_ga:
+        config["state_group_address"] = state_ga
+    await db.execute_and_commit(
+        """
+        INSERT INTO datapoints
+            (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, record_history, created_at, updated_at)
+        VALUES (?, ?, 'BOOLEAN', NULL, '[]', ?, NULL, 1, 1, ?, ?)
+        """,
+        (dp_id, name, f"dp/{dp_id}/value", now, now),
+    )
+    await db.execute_and_commit(
+        """
+        INSERT INTO hierarchy_datapoint_links (id, node_id, datapoint_id, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (f"link-{dp_id}", node_id, dp_id, now),
+    )
+    await db.execute_and_commit(
+        """
+        INSERT INTO adapter_bindings
+            (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled, created_at, updated_at)
+        VALUES (?, ?, 'KNX', ?, 'SOURCE', ?, ?, ?, ?)
+        """,
+        (f"binding-{dp_id}", dp_id, adapter_instance_id, json.dumps(config), int(binding_enabled), now, now),
+    )
+
+
+async def _grant_room(db: Database, *, principal_id: str = "alice", node_id: str = "allowed-room") -> None:
+    await db.execute_and_commit(
+        """
+        INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
+        VALUES ('user', ?, 'hierarchy', ?, 'guest', 'allow')
+        """,
+        (principal_id, node_id),
+    )
+
+
+async def _prepare_scoped_devices_db() -> Database:
+    db = await _prepare_db()
+    await _insert_authz_tree(db)
+    await _insert_knx_instance(db)
+    await _insert_scoped_datapoint(
+        db,
+        dp_id="00000000-0000-0000-0000-000000000101",
+        name="Allowed switch",
+        node_id="allowed-room",
+        ga="1/2/3",
+    )
+    await _insert_scoped_datapoint(
+        db,
+        dp_id="00000000-0000-0000-0000-000000000102",
+        name="Blocked status",
+        node_id="blocked-room",
+        ga="1/2/4",
+    )
+    await _grant_room(db)
     return db
 
 
@@ -238,5 +346,156 @@ async def test_list_knx_devices_order_number_filter():
         )
         assert result.total == 1
         assert result.items[0].order_number == "HS-10"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_list_knx_devices_only_returns_devices_with_readable_group_address():
+    db = await _prepare_scoped_devices_db()
+    try:
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="",
+            page=0,
+            size=50,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+        assert result.total == 2
+        assert [item.pa for item in result.items] == ["1.1.1", "1.1.2"]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_get_knx_device_hides_out_of_scope_comm_object_links():
+    db = await _prepare_scoped_devices_db()
+    try:
+        result = await knxproj_api.get_knx_device(
+            pa="1.1.1",
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+        assert result.pa == "1.1.1"
+        assert [co.id for co in result.comm_objects] == ["co-1"]
+        assert result.comm_objects[0].ga_addresses == ["1/2/3"]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_get_knx_device_returns_404_when_device_has_no_readable_group_address():
+    db = await _prepare_scoped_devices_db()
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await knxproj_api.get_knx_device(
+                pa="1.1.3",
+                _user=Principal(subject="alice", type="user", is_admin=False),
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 404
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_group_address_device_lookup_requires_readable_group_address():
+    db = await _prepare_scoped_devices_db()
+    try:
+        allowed = await knxproj_api.list_knx_devices_for_group_address(
+            ga="1/2/3",
+            page=0,
+            size=50,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+        blocked = await knxproj_api.list_knx_devices_for_group_address(
+            ga="1/2/4",
+            page=0,
+            size=50,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+        assert [item.pa for item in allowed.items] == ["1.1.1", "1.1.2"]
+        assert allowed.total == 2
+        assert blocked.items == []
+        assert blocked.total == 0
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_scope_includes_state_group_address():
+    db = await _prepare_db()
+    try:
+        await _insert_authz_tree(db)
+        await _insert_knx_instance(db)
+        await _insert_scoped_datapoint(
+            db,
+            dp_id="00000000-0000-0000-0000-000000000201",
+            name="Allowed state",
+            node_id="allowed-room",
+            ga="9/9/9",
+            state_ga="1/2/4",
+        )
+        await _grant_room(db)
+
+        result = await knxproj_api.list_knx_devices_for_group_address(
+            ga="1/2/4",
+            page=0,
+            size=50,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+        assert [item.pa for item in result.items] == ["1.1.1"]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_scope_ignores_disabled_knx_bindings_and_instances():
+    db = await _prepare_db()
+    try:
+        await _insert_authz_tree(db)
+        await _insert_knx_instance(db, instance_id="knx-enabled", enabled=True)
+        await _insert_knx_instance(db, instance_id="knx-disabled", enabled=False)
+        await _insert_scoped_datapoint(
+            db,
+            dp_id="00000000-0000-0000-0000-000000000301",
+            name="Disabled binding",
+            node_id="allowed-room",
+            ga="1/2/3",
+            binding_enabled=False,
+            adapter_instance_id="knx-enabled",
+        )
+        await _insert_scoped_datapoint(
+            db,
+            dp_id="00000000-0000-0000-0000-000000000302",
+            name="Disabled instance",
+            node_id="allowed-room",
+            ga="1/2/4",
+            adapter_instance_id="knx-disabled",
+        )
+        await _grant_room(db)
+
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="",
+            page=0,
+            size=50,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+        assert result.items == []
+        assert result.total == 0
     finally:
         await db.disconnect()
