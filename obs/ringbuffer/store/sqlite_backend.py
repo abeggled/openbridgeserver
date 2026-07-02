@@ -204,6 +204,12 @@ _BINDING_INDEX_COLUMNS = (
 )
 # Regex-Härtung (Referenz: Legacy _match_regex in ringbuffer.py).
 _REGEX_MAX_PATTERN_LEN = 256
+# Ziel-String-Längenbegrenzung wie Legacy ``_match_regex`` (#951, Pkt 6): der
+# SQLite-Callback läuft synchron je Kandidatenzeile; ohne diese Grenze könnte ein
+# sehr langer Wert (kombiniert mit einem Muster) die Query/den Event-Loop lange
+# blockieren. Der Vergleich wird daher auf die ersten ``_REGEX_MAX_TARGET_LEN``
+# Zeichen begrenzt — gebounded statt blockierend.
+_REGEX_MAX_TARGET_LEN = 4096
 _RE_UNSAFE_NESTED_QUANTIFIERS = re.compile(r"\((?:[^()\\]|\\.)*[+*][^()]*\)[+*]")
 # SQL-Vergleichsoperatoren je Pushdown-Operator (between separat behandelt).
 _SQL_COMPARATORS = {"eq": "=", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
@@ -236,8 +242,13 @@ def _obs_regexp_impl(pattern: str, flags: int, value: Any) -> int:
     """
     if not isinstance(value, str):  # pragma: no cover - SQL filtert bereits text_col IS NOT NULL
         return 0
+    # Ziel-Länge begrenzen (Legacy-Parität, #951 Pkt 6): ein pathologisch langer
+    # Wert darf den synchronen Callback nicht blockieren. re.search auf den ersten
+    # ``_REGEX_MAX_TARGET_LEN`` Zeichen ist gebounded; ``re.match``-Anker (^) bleiben
+    # korrekt, da vom Anfang gesucht wird.
+    target = value if len(value) <= _REGEX_MAX_TARGET_LEN else value[:_REGEX_MAX_TARGET_LEN]
     try:
-        return 1 if re.compile(pattern, flags).search(value) else 0
+        return 1 if re.compile(pattern, flags).search(target) else 0
     except re.error:  # pragma: no cover - bereits beim Clause-Bau geprüft
         return 0
 
@@ -331,21 +342,28 @@ def _is_number(value: Any) -> bool:
 
 
 def _legacy_compare(operator: str, actual: Any, expected: Any) -> bool:
-    """eq/ne/gt/gte/lt/lte — typtreu wie der v2-Pushdown (kein Cross-Typ-Match)."""
-    # bool vor numeric prüfen (bool ist int-Subklasse); Cross-Typ-Vergleiche matchen nicht.
-    if isinstance(expected, bool):
-        if not isinstance(actual, bool):
-            return operator == "ne"
-    elif _is_number(expected):
-        if not _is_number(actual):
-            return operator == "ne"
-    elif isinstance(expected, str):
-        if not isinstance(actual, str):
-            return operator == "ne"
+    """eq/ne/gt/gte/lt/lte für den v1/Legacy-Python-Fallback.
+
+    eq/ne folgen der verbindlichen Legacy-Referenz ``_matches_value_filter``
+    (``obs/ringbuffer/ringbuffer.py``): reine Python-Gleichheit ``actual == expected``
+    — typübergreifend inkl. der Python-Äquivalenz ``True == 1`` — sodass ``ne`` Zeilen
+    anderen Typs sowie null einschließt (#951, Pkt 1). Nur die Range-Operatoren
+    bleiben typtreu und lehnen inkompatible Typen ab.
+    """
     if operator == "eq":
         return actual == expected
     if operator == "ne":
         return actual != expected
+    # Range-Operatoren: Cross-Typ ist bedeutungslos → wie v2/Legacy kein Treffer.
+    if isinstance(expected, bool):
+        if not isinstance(actual, bool):
+            return False
+    elif _is_number(expected):
+        if not _is_number(actual):
+            return False
+    elif isinstance(expected, str):
+        if not isinstance(actual, str):
+            return False
     if operator == "gt":
         return actual > expected
     if operator == "gte":
@@ -758,13 +776,17 @@ class SqliteSegmentStore(RingBufferStore):
         active_columns = {col: vals for col, vals in query.metadata_binding_filters.items() if vals}
         if active_columns:
             index = {col: idx for idx, col in enumerate(_BINDING_INDEX_COLUMNS)}
+            positions = {col: index[col] for col in active_columns if col in index}
+            if len(positions) != len(active_columns):
+                # Eine angefragte Spalte existiert nicht im Binding-Index → nie erfüllbar.
+                return False
             binding_rows = _extract_metadata_binding_index_rows(metadata)
-            for column, wanted in active_columns.items():
-                position = index.get(column)
-                if position is None:
-                    return False
-                if not any(binding[position] in wanted for binding in binding_rows):
-                    return False
+            # Parität zur v2-EXISTS-Subquery (#951, Pkt 5): EINE einzelne Binding-
+            # Zeile muss ALLE angefragten Spalten erfüllen. Zuvor wurde jede Spalte
+            # unabhängig gegen IRGENDEINE Zeile geprüft, sodass mehrere verschiedene
+            # Zeilen die Bedingungen zusammen erfüllen konnten.
+            if not any(all(binding[pos] in active_columns[col] for col, pos in positions.items()) for binding in binding_rows):
+                return False
         return True
 
     @staticmethod
@@ -955,8 +977,6 @@ class SqliteSegmentStore(RingBufferStore):
     @staticmethod
     def _pushdown_clause(operator: str, field_name: str, spec: dict[str, Any]) -> tuple[str, list[Any]]:
         num_col = f"{field_name}_num"
-        text_col = f"{field_name}_text"
-        bool_col = f"{field_name}_bool"
 
         if operator == "between":
             lower = spec.get("lower")
@@ -970,17 +990,73 @@ class SqliteSegmentStore(RingBufferStore):
             return (f"({num_col} IS NOT NULL AND {num_col} BETWEEN ? AND ?)", [lo[1], up[1]])
 
         value = spec.get("value")
-        value_type, num, text, bool_val = _typed_columns_for(value)
         comparator = _SQL_COMPARATORS[operator]
-        # Gemischte Typen dürfen nicht fälschlich matchen: der Vergleich läuft nur
-        # gegen die typgleiche Spalte, die anderen Typspalten sind NULL.
-        if value_type == "numeric":
-            return (f"({num_col} IS NOT NULL AND {num_col} {comparator} ?)", [num])
+
+        # ``value is None`` (JSON-null) ist für eq/ne KEIN Fehler mehr (#951, Pkt 4):
+        # Legacy vergleicht ``value == None`` direkt, ``eq null`` liefert die Zeilen
+        # mit JSON-null, ``ne null`` deren Inverses. Range-Operatoren auf null bleiben
+        # sinnlos → wie Legacy (unsupported) abgelehnt.
+        if value is None:
+            if operator == "eq":
+                return (f"{field_name}_type = 'null'", [])
+            if operator == "ne":
+                return (f"{field_name}_type != 'null'", [])
+            raise ValueError(f"operator '{operator}' is not supported for null value")
+
+        value_type, num, text, bool_val = _typed_columns_for(value)
+
+        # Range-Operatoren sind wie Legacy nur für numerische Werte definiert. Ein
+        # gt/gte/lt/lte gegen einen text-/bool-Vergleichswert würde sonst zu einem
+        # lexikografischen Text- bzw. 0/1-Bool-Vergleich degradieren (#951, Pkt 3);
+        # Legacy lehnt Range auf STRING/BOOLEAN ab (422-tauglicher ValueError).
+        if operator in {"gt", "gte", "lt", "lte"} and value_type != "numeric":
+            data_type = "BOOLEAN" if value_type == "bool" else "STRING"
+            raise ValueError(f"operator '{operator}' is not supported for data_type '{data_type}'")
+
+        # eq/ne (#951, Pkt 1): Legacy wertet reine Python-Gleichheit ``value == row``
+        # aus. Das ist typübergreifend — inkl. der Python-Äquivalenz ``True == 1`` /
+        # ``False == 0`` — und schließt bei ``ne`` Zeilen anderen Typs sowie null EIN.
+        # ``_eq_match_predicate`` liefert genau das „Zeile gleicht value"-Prädikat;
+        # ``ne`` ist dessen Negation (NULL-sicher, sodass null-Zeilen mit-matchen).
+        if operator in {"eq", "ne"}:
+            eq_clause, eq_params = SqliteSegmentStore._eq_match_predicate(field_name, value)
+            if operator == "eq":
+                return (eq_clause, eq_params)
+            return (f"NOT ({eq_clause})", eq_params)
+
+        # numerische Range-Operatoren: Vergleich gegen die numerische Spalte. Nicht-
+        # numerische Range-Werte wurden oben bereits abgelehnt → value_type == numeric.
+        return (f"({num_col} IS NOT NULL AND {num_col} {comparator} ?)", [num])
+
+    @staticmethod
+    def _eq_match_predicate(field_name: str, value: Any) -> tuple[str, list[Any]]:
+        """SQL-Prädikat, das genau dann wahr ist, wenn die Zeile Python-``== value`` ist.
+
+        Spiegelt Legacy ``value == row`` inkl. der Python-Bool/Int-Äquivalenz
+        (``True == 1``, ``False == 0``): ein bool-Filter matcht auch die numerische
+        0/1-Zeile und umgekehrt. Textwerte matchen nur die Text-Spalte. Das Ergebnis
+        ist NULL-sicher, damit die Negation (``ne``) null-Zeilen einschließt.
+        """
+        num_col = f"{field_name}_num"
+        text_col = f"{field_name}_text"
+        bool_col = f"{field_name}_bool"
+        value_type, num, text, bool_val = _typed_columns_for(value)
+
+        # Jeder Teilvergleich wird via IFNULL(..., 0) auf ein definites 0/1
+        # reduziert, damit das Prädikat für Nicht-Treffer 0 (nicht NULL) ergibt und
+        # die ``ne``-Negation (``NOT (...)``) null-Spalten korrekt als Treffer wertet.
         if value_type == "text":
-            return (f"({text_col} IS NOT NULL AND {text_col} {comparator} ?)", [text])
+            return (f"IFNULL({text_col} = ?, 0)", [text])
         if value_type == "bool":
-            return (f"({bool_col} IS NOT NULL AND {bool_col} {comparator} ?)", [bool_val])
-        raise ValueError(f"operator '{operator}' needs a numeric, text or bool value")
+            # bool matcht die bool-Spalte UND — wegen True==1/False==0 — die
+            # numerische 1/0-Spalte.
+            return (f"(IFNULL({bool_col} = ?, 0) OR IFNULL({num_col} = ?, 0))", [bool_val, float(bool_val)])
+        if value_type == "numeric":
+            # numeric matcht die num-Spalte; für exakt 0/1 zusätzlich die bool-Spalte.
+            if num in (0.0, 1.0):
+                return (f"(IFNULL({num_col} = ?, 0) OR IFNULL({bool_col} = ?, 0))", [num, int(num)])
+            return (f"IFNULL({num_col} = ?, 0)", [num])
+        raise ValueError("eq/ne needs a numeric, text or bool value")
 
     @staticmethod
     def _guarded_clause(operator: str, field_name: str, spec: dict[str, Any]) -> tuple[str, list[Any]]:
@@ -990,13 +1066,14 @@ class SqliteSegmentStore(RingBufferStore):
             needle = spec.get("value")
             if not isinstance(needle, str):
                 raise ValueError("contains requires a string value")
-            escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            # ``instr`` statt ``LIKE``: SQLite-``LIKE`` ist für ASCII per Default
+            # case-INsensitiv (matcht ``Hello`` auf ``hello``), was der Legacy-
+            # Python-Substring-Semantik widerspricht (#951, Pkt 2). ``instr`` ist ein
+            # echter binärer Substring-Test — case-SENSITIV bei ignore_case=false —
+            # und braucht kein LIKE-Escaping (``%``/``_`` sind keine Wildcards).
             if ignore_case:
-                return (
-                    f"({text_col} IS NOT NULL AND LOWER({text_col}) LIKE ? ESCAPE '\\')",
-                    [f"%{escaped.lower()}%"],
-                )
-            return (f"({text_col} IS NOT NULL AND {text_col} LIKE ? ESCAPE '\\')", [f"%{escaped}%"])
+                return (f"({text_col} IS NOT NULL AND instr(LOWER({text_col}), ?) > 0)", [needle.lower()])
+            return (f"({text_col} IS NOT NULL AND instr({text_col}, ?) > 0)", [needle])
 
         # regex: Muster härten (Referenz: Legacy _match_regex), dann als Python-
         # Callback über SQLite REGEXP pushen — der WHERE-Kontext bleibt gebunden.

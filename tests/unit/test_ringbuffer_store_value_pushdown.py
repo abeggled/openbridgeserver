@@ -267,9 +267,8 @@ async def test_between_lower_must_be_le_upper(store: SqliteSegmentStore):
 
 async def test_pushdown_needs_addressable_value(store: SqliteSegmentStore):
     await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
-    # None/Liste ist als typisierter Vergleichswert nicht adressierbar.
-    with pytest.raises(ValueError, match="numeric, text or bool"):
-        await store.query(StoreQuery(limit=10, value_filters=[{"operator": "eq", "value": None}]))
+    # Liste ist als typisierter Vergleichswert nicht adressierbar.
+    # ``value=None`` ist KEIN Fehler mehr (siehe eq/ne-null-Tests, #951 Pkt 4).
     with pytest.raises(ValueError, match="numeric, text or bool"):
         await store.query(StoreQuery(limit=10, value_filters=[{"operator": "eq", "value": [1, 2]}]))
 
