@@ -172,6 +172,7 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("POST", "/api/v1/knxproj/import-csv"): "config_mutation",
     ("POST", "/api/v1/logic/graphs"): "config_mutation",
     ("POST", "/api/v1/logic/graphs/import"): "config_mutation",
+    ("POST", "/api/v1/logic/graphs/validate"): "read_live",
     ("POST", "/api/v1/logic/graphs/{graph_id}/duplicate"): "config_mutation",
     ("POST", "/api/v1/logic/graphs/{graph_id}/run"): "config_mutation",
     ("POST", "/api/v1/ringbuffer/config"): "config_mutation",

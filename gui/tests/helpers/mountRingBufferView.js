@@ -30,6 +30,7 @@ export function makeRingbufferApiMock(overrides = {}) {
         oldest_ts: null,
         newest_ts: null,
         storage: 'file',
+        enabled: true,
         max_entries: 10000,
         max_file_size_bytes: null,
         max_age: null,
@@ -73,11 +74,15 @@ export async function mountRingBufferView({
   searchApi = makeSearchApiMock(),
   hierarchyApi = makeHierarchyApiMock(),
   wsConnected = false,
+  isAdmin = true,
 } = {}) {
   // capture the live entry handler so tests can fire fake WS events
   let liveHandler = null
 
   vi.doMock('@/api/client', () => ({
+    authApi: {
+      me: vi.fn().mockResolvedValue({ data: { id: 'u1', username: 'tester', is_admin: isAdmin } }),
+    },
     ringbufferApi,
     searchApi,
     hierarchyApi,
@@ -128,6 +133,9 @@ export async function mountRingBufferView({
   const pinia = createPinia()
   setActivePinia(pinia)
 
+  const { useAuthStore } = await import('@/stores/auth')
+  useAuthStore().user = { id: 'u1', username: 'tester', is_admin: isAdmin }
+
   const mod = await import('@/views/RingBufferView.vue')
   const RingBufferView = mod.default
 
@@ -144,7 +152,14 @@ export async function mountRingBufferView({
         }),
         // Stub the topbar components so RingBufferView characterization tests
         // don't see their independent API calls (stats, listFiltersets).
-        TopbarStats: { name: 'TopbarStats', template: '<span data-testid="stub-topbar-stats" />' },
+        TopbarStats: defineComponent({
+          name: 'TopbarStats',
+          emits: ['stats'],
+          setup(_, { expose }) {
+            expose({ reload: vi.fn().mockResolvedValue({ enabled: true }) })
+            return () => h('span', { 'data-testid': 'stub-topbar-stats' })
+          },
+        }),
         TopbarFilterChips: {
           name: 'TopbarFilterChips',
           props: ['data-testid'],

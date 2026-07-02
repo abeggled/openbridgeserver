@@ -1297,6 +1297,32 @@ class TestOnTelegramEdgeCases:
         assert event.value == "ON"
 
     @pytest.mark.asyncio
+    async def test_value_map_is_applied_for_uncertain_quality(self, mock_bus):
+        """value_map must still run for quality='uncertain' (decode-error fallback).
+        Users can map raw hex strings to stable values for dashboards/logic."""
+        from unittest.mock import MagicMock
+
+        adapter = self._make_adapter(mock_bus)
+        bad_dpt = MagicMock()
+        bad_dpt.dpt_id = "DPT9.001"
+        bad_dpt.decoder = MagicMock(side_effect=ValueError("bad bytes"))
+        binding = make_binding(
+            {"group_address": "1/2/3", "dpt_id": "DPT9.001"},
+            value_map={"0c7a": "KNOWN_PATTERN"},
+        )
+        adapter._ga_source_map["1/2/3"] = [(binding, bad_dpt)]
+
+        telegram = Telegram(
+            destination_address=GroupAddress("1/2/3"),
+            payload=GroupValueWrite(DPTArray([0x0C, 0x7A])),
+        )
+        await adapter._on_telegram(telegram)
+
+        event = mock_bus.publish.call_args[0][0]
+        assert event.quality == "uncertain"
+        assert event.value == "KNOWN_PATTERN"
+
+    @pytest.mark.asyncio
     async def test_group_value_read_triggers_handle_read_request(self, mock_bus):
         from unittest.mock import AsyncMock, patch
 
@@ -2073,3 +2099,128 @@ class TestSecureConfigFromKeyfile:
         assert error_events
         assert "Backbone" in error_events[-1].detail or "backbone" in error_events[-1].detail.lower()
         assert "Individual Address" not in error_events[-1].detail
+
+
+# ---------------------------------------------------------------------------
+# _on_telegram — non-finite float guard (issue #827)
+# ---------------------------------------------------------------------------
+
+
+class TestOnTelegramNonFiniteFloat:
+    """Issue #827: DPT decoders that return inf / -inf / nan must not propagate
+    non-finite floats downstream to InfluxDB.  The adapter must set
+    quality='bad' and value=None instead of publishing the raw IEEE754 special."""
+
+    def _make_adapter(self, mock_bus) -> KnxAdapter:
+        return KnxAdapter(event_bus=mock_bus, config={"host": "127.0.0.1"})
+
+    def _make_bad_dpt(self, return_value: float):
+        from unittest.mock import MagicMock
+
+        bad_dpt = MagicMock()
+        bad_dpt.dpt_id = "DPT13.012"
+        bad_dpt.decoder = MagicMock(return_value=return_value)
+        return bad_dpt
+
+    def _make_telegram(self, ga: str, raw_bytes: bytes) -> Telegram:
+        return Telegram(
+            destination_address=GroupAddress(ga),
+            payload=GroupValueWrite(DPTArray(list(raw_bytes))),
+        )
+
+    @pytest.mark.asyncio
+    async def test_positive_infinity_sets_quality_bad_and_value_none(self, mock_bus):
+        """float('inf') from DPT decoder → quality='bad', value=None."""
+        adapter = self._make_adapter(mock_bus)
+        bad_dpt = self._make_bad_dpt(float("inf"))
+        binding = make_binding({"group_address": "9/6/29", "dpt_id": "DPT13.012"})
+        adapter._ga_source_map["9/6/29"] = [(binding, bad_dpt)]
+
+        await adapter._on_telegram(self._make_telegram("9/6/29", b"\x7f\xff\xff\xff"))
+
+        assert mock_bus.publish.called
+        event = mock_bus.publish.call_args[0][0]
+        assert event.quality == "bad", f"expected quality='bad', got {event.quality!r}"
+        assert event.value is None, f"expected value=None, got {event.value!r}"
+
+    @pytest.mark.asyncio
+    async def test_negative_infinity_sets_quality_bad_and_value_none(self, mock_bus):
+        """float('-inf') from DPT decoder → quality='bad', value=None."""
+        adapter = self._make_adapter(mock_bus)
+        bad_dpt = self._make_bad_dpt(float("-inf"))
+        binding = make_binding({"group_address": "9/6/29", "dpt_id": "DPT13.012"})
+        adapter._ga_source_map["9/6/29"] = [(binding, bad_dpt)]
+
+        await adapter._on_telegram(self._make_telegram("9/6/29", b"\x80\x00\x00\x00"))
+
+        assert mock_bus.publish.called
+        event = mock_bus.publish.call_args[0][0]
+        assert event.quality == "bad", f"expected quality='bad', got {event.quality!r}"
+        assert event.value is None, f"expected value=None, got {event.value!r}"
+
+    @pytest.mark.asyncio
+    async def test_nan_sets_quality_bad_and_value_none(self, mock_bus):
+        """float('nan') from DPT decoder → quality='bad', value=None."""
+        adapter = self._make_adapter(mock_bus)
+        bad_dpt = self._make_bad_dpt(float("nan"))
+        binding = make_binding({"group_address": "9/6/29", "dpt_id": "DPT13.012"})
+        adapter._ga_source_map["9/6/29"] = [(binding, bad_dpt)]
+
+        await adapter._on_telegram(self._make_telegram("9/6/29", b"\x00\x00\x00\x00"))
+
+        assert mock_bus.publish.called
+        event = mock_bus.publish.call_args[0][0]
+        assert event.quality == "bad", f"expected quality='bad', got {event.quality!r}"
+        assert event.value is None, f"expected value=None, got {event.value!r}"
+
+    @pytest.mark.asyncio
+    async def test_non_finite_skips_value_formula(self, mock_bus):
+        """The non-finite guard must fire BEFORE value_formula is applied.
+        Applying a formula to inf/nan would still yield inf/nan and reach InfluxDB."""
+        adapter = self._make_adapter(mock_bus)
+        bad_dpt = self._make_bad_dpt(float("inf"))
+        binding = make_binding(
+            {"group_address": "9/6/29", "dpt_id": "DPT13.012"},
+            value_formula="x * 2",
+        )
+        adapter._ga_source_map["9/6/29"] = [(binding, bad_dpt)]
+
+        await adapter._on_telegram(self._make_telegram("9/6/29", b"\x7f\xff\xff\xff"))
+
+        event = mock_bus.publish.call_args[0][0]
+        assert event.quality == "bad"
+        assert event.value is None
+
+    @pytest.mark.asyncio
+    async def test_non_finite_skips_value_map(self, mock_bus):
+        """value_map must not run after the non-finite guard sets value=None.
+        A value_map with a 'none' key would otherwise override the null sentinel."""
+        adapter = self._make_adapter(mock_bus)
+        bad_dpt = self._make_bad_dpt(float("nan"))
+        binding = make_binding(
+            {"group_address": "9/6/29", "dpt_id": "DPT13.012"},
+            value_map={"none": "MAPPED"},
+        )
+        adapter._ga_source_map["9/6/29"] = [(binding, bad_dpt)]
+
+        await adapter._on_telegram(self._make_telegram("9/6/29", b"\x00\x00\x00\x00"))
+
+        event = mock_bus.publish.call_args[0][0]
+        assert event.quality == "bad"
+        assert event.value is None
+
+    @pytest.mark.asyncio
+    async def test_finite_float_still_published_with_good_quality(self, mock_bus):
+        """Regression guard: a normal finite float is unaffected by the new check."""
+        adapter = self._make_adapter(mock_bus)
+        dpt = DPTRegistry.get("DPT9.001")
+        binding = make_binding({"group_address": "1/2/3", "dpt_id": "DPT9.001"})
+        adapter._ga_source_map["1/2/3"] = [(binding, dpt)]
+
+        raw = dpt.encoder(42.0)
+        await adapter._on_telegram(self._make_telegram("1/2/3", raw))
+
+        event = mock_bus.publish.call_args[0][0]
+        assert event.quality == "good"
+        assert event.value is not None
+        assert abs(event.value - 42.0) < 0.5

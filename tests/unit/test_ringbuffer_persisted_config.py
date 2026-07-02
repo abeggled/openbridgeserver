@@ -40,6 +40,7 @@ async def test_load_returns_defaults_when_nothing_persisted():
     try:
         cfg = await load_persisted_ringbuffer_config(db)
         assert cfg == {
+            "enabled": True,
             "max_entries": None,
             "max_file_size_bytes": DEFAULT_MAX_FILE_SIZE_BYTES,
             "max_age": None,
@@ -55,12 +56,14 @@ async def test_persist_then_load_roundtrip():
     try:
         await persist_ringbuffer_config(
             db,
+            enabled=True,
             max_entries=50_000,
             max_file_size_bytes=20 * 1024 * 1024,
             max_age=3600,
         )
         cfg = await load_persisted_ringbuffer_config(db)
         assert cfg == {
+            "enabled": True,
             "max_entries": 50_000,
             "max_file_size_bytes": 20 * 1024 * 1024,
             "max_age": 3600,
@@ -76,12 +79,14 @@ async def test_persist_supports_unbounded_max_entries_and_age():
     try:
         await persist_ringbuffer_config(
             db,
+            enabled=False,
             max_entries=None,
             max_file_size_bytes=5 * 1024 * 1024,
             max_age=None,
         )
         cfg = await load_persisted_ringbuffer_config(db)
         assert cfg == {
+            "enabled": False,
             "max_entries": None,
             "max_file_size_bytes": 5 * 1024 * 1024,
             "max_age": None,
@@ -95,10 +100,11 @@ async def test_persist_overwrites_existing_row():
     db = Database(":memory:")
     await db.connect()
     try:
-        await persist_ringbuffer_config(db, max_entries=100, max_file_size_bytes=1024, max_age=10)
-        await persist_ringbuffer_config(db, max_entries=200, max_file_size_bytes=2048, max_age=20)
+        await persist_ringbuffer_config(db, enabled=True, max_entries=100, max_file_size_bytes=1024, max_age=10)
+        await persist_ringbuffer_config(db, enabled=False, max_entries=200, max_file_size_bytes=2048, max_age=20)
         cfg = await load_persisted_ringbuffer_config(db)
         assert cfg == {
+            "enabled": False,
             "max_entries": 200,
             "max_file_size_bytes": 2048,
             "max_age": 20,
@@ -121,6 +127,7 @@ async def test_load_handles_corrupt_json_by_returning_defaults():
         await db.commit()
         cfg = await load_persisted_ringbuffer_config(db)
         assert cfg == {
+            "enabled": True,
             "max_entries": None,
             "max_file_size_bytes": DEFAULT_MAX_FILE_SIZE_BYTES,
             "max_age": None,
@@ -141,6 +148,7 @@ async def test_load_fills_missing_keys_with_defaults():
         await db.commit()
         cfg = await load_persisted_ringbuffer_config(db)
         assert cfg == {
+            "enabled": True,
             "max_entries": 1234,
             "max_file_size_bytes": DEFAULT_MAX_FILE_SIZE_BYTES,
             "max_age": None,

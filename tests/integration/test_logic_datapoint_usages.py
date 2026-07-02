@@ -63,6 +63,18 @@ def _write_node(dp_id: str, node_id: str = "n2") -> dict:
     }
 
 
+def _api_client_node(dp_id: str, node_id: str = "api1") -> dict:
+    return {
+        "id": node_id,
+        "type": "api_client",
+        "position": {"x": 200, "y": 0},
+        "data": {
+            "url": "https://example.com/###OBS1###",
+            "variables": [{"slot": 1, "datapoint_id": dp_id, "datapoint_name": "test"}],
+        },
+    }
+
+
 async def _cleanup(client, auth_headers, graph_ids: list[str] | None = None, dp_ids: list[str] | None = None) -> None:
     for gid in graph_ids or []:
         await client.delete(f"/api/v1/logic/graphs/{gid}", headers=auth_headers)
@@ -123,6 +135,37 @@ async def test_write_node_yields_dest_direction(client, auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_api_client_variable_yields_source_direction(client, auth_headers):
+    dp = await _create_dp(client, auth_headers, "dp_api_client_variable_test")
+    gid = await _create_graph(client, auth_headers, "graph_api_client_variable", [_api_client_node(dp["id"])])
+    try:
+        usages = await _get_usages(client, auth_headers, dp["id"])
+        assert len(usages) == 1
+        u = usages[0]
+        assert u["graph_id"] == gid
+        assert u["node_type"] == "api_client"
+        assert u["node_id"] == "api1"
+        assert u["direction"] == "SOURCE"
+    finally:
+        await _cleanup(client, auth_headers, graph_ids=[gid], dp_ids=[dp["id"]])
+
+
+@pytest.mark.asyncio
+async def test_api_client_variable_json_string_yields_source_direction(client, auth_headers):
+    dp = await _create_dp(client, auth_headers, "dp_api_client_variable_json_test")
+    api_node = _api_client_node(dp["id"])
+    api_node["data"]["variables"] = '[{"slot": 1, "datapoint_id": "%s", "datapoint_name": "test"}]' % dp["id"]
+    gid = await _create_graph(client, auth_headers, "graph_api_client_variable_json", [api_node])
+    try:
+        usages = await _get_usages(client, auth_headers, dp["id"])
+        assert len(usages) == 1
+        assert usages[0]["node_type"] == "api_client"
+        assert usages[0]["direction"] == "SOURCE"
+    finally:
+        await _cleanup(client, auth_headers, graph_ids=[gid], dp_ids=[dp["id"]])
+
+
+@pytest.mark.asyncio
 async def test_both_node_types_in_same_graph(client, auth_headers):
     dp = await _create_dp(client, auth_headers, "dp_both_types_test")
     gid = await _create_graph(
@@ -177,6 +220,22 @@ async def test_other_dp_not_included(client, auth_headers):
         assert usages_b == []
         usages_a = await _get_usages(client, auth_headers, dp_a["id"])
         assert len(usages_a) == 1
+    finally:
+        await _cleanup(client, auth_headers, graph_ids=[gid], dp_ids=[dp_a["id"], dp_b["id"]])
+
+
+@pytest.mark.asyncio
+async def test_other_dp_write_and_api_client_variable_not_included(client, auth_headers):
+    dp_a = await _create_dp(client, auth_headers, "dp_other_write_api_a_test")
+    dp_b = await _create_dp(client, auth_headers, "dp_other_write_api_b_test")
+    gid = await _create_graph(
+        client,
+        auth_headers,
+        "graph_only_write_api_a",
+        [_write_node(dp_a["id"]), _api_client_node(dp_a["id"])],
+    )
+    try:
+        assert await _get_usages(client, auth_headers, dp_b["id"]) == []
     finally:
         await _cleanup(client, auth_headers, graph_ids=[gid], dp_ids=[dp_a["id"], dp_b["id"]])
 

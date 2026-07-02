@@ -20,7 +20,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -72,14 +72,115 @@ jobs:
               out.write('\n'.join(notes).strip())
           EOF
 
+      - name: Inject contributors
+        # Skip for release candidates — the same contributors will appear on the final tag.
+        if: ${{ !contains(github.ref_name, '-RC') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 <<'EOF'
+          import json, os, re, subprocess, sys, urllib.error, urllib.request
+
+          current_tag = os.environ["GITHUB_REF"].split("/")[-1]
+          repo        = os.environ["GITHUB_REPOSITORY"]
+          token       = os.environ["GITHUB_TOKEN"]
+
+          # Previous full-release tag: exclude nightly builds and RC pre-releases.
+          result = subprocess.run(
+              ["git", "tag", "--list", "--sort=-version:refname"],
+              capture_output=True, text=True, check=True,
+          )
+          prev_tag = next(
+              (
+                  t for t in result.stdout.splitlines()
+                  if t
+                  and t != current_tag
+                  and not t.startswith("nightly-")
+                  and not re.search(r"-RC\d*$", t, re.IGNORECASE)
+              ),
+              None,
+          )
+          if not prev_tag:
+              print("No previous release tag found — skipping contributors section.")
+              sys.exit(0)
+          print(f"Contributors: comparing {prev_tag}...{current_tag}")
+
+          url = f"https://api.github.com/repos/{repo}/compare/{prev_tag}...{current_tag}"
+          req = urllib.request.Request(url, headers={
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          })
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  data = json.load(resp)
+          except urllib.error.URLError as exc:
+              print(f"GitHub API error ({exc}) — skipping contributors section.")
+              sys.exit(0)
+
+          logins = sorted({
+              c["author"]["login"]
+              for c in data.get("commits", [])
+              if c.get("author") and c["author"].get("type") != "Bot"
+          })
+          if not logins:
+              print("No human contributors found — skipping contributors section.")
+              sys.exit(0)
+
+          def gh_get(path: str) -> dict | list:
+              req = urllib.request.Request(
+                  f"https://api.github.com/{path}",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(req) as r:
+                  return json.load(r)
+
+          def get_display(login: str) -> str:
+              try:
+                  name = gh_get(f"users/{login}").get("name") or ""
+              except urllib.error.URLError:
+                  name = ""
+              display = f"{name} (@{login})" if name else f"@{login}"
+              try:
+                  prior = gh_get(
+                      f"repos/{repo}/commits?author={login}&sha={prev_tag}&per_page=1"
+                  )
+                  if not prior:
+                      display += " 🎉 _(first contribution!)_"
+              except urllib.error.URLError:
+                  pass
+              return display
+
+          lines = [f"- {get_display(login)}" for login in logins]
+
+          section = (
+              "### Contributors 🤝\n\n"
+              "Thank you to everyone who contributed to this release:\n\n"
+              + "\n".join(lines)
+              + "\n"
+          )
+
+          with open("release_notes.txt") as f:
+              content = f.read()
+          # Insert before the Docker Image section that was appended by the previous step.
+          content = content.replace("### Docker Image", section + "\n### Docker Image", 1)
+          with open("release_notes.txt", "w") as f:
+              f.write(content)
+          print(f"Added {len(logins)} contributor(s): {', '.join(logins)}")
+          EOF
+
       - name: Set version and hash variables
         run: |
-          echo "VERSION=${GITHUB_REF##*/}" >> $GITHUB_ENV
-          echo "GITHASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "VERSION=${GITHUB_REF##*/}" >> "$GITHUB_ENV"
+          echo "GITHASH=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           BASE=$(grep -m1 '^## ' RELEASENOTES.md | sed 's/^## *//')
           TAG="${GITHUB_REF##*/}"
           if [[ "$TAG" =~ (-RC[0-9]*)$ ]]; then RC="${BASH_REMATCH[1]}"; else RC=""; fi
-          echo "OBS_VERSION=${BASE}${RC}" >> $GITHUB_ENV
+          echo "OBS_VERSION=${BASE}${RC}" >> "$GITHUB_ENV"
 
       - name: Stamp gui/package.json version
         run: npm pkg set version="${VERSION}" --prefix gui
@@ -87,9 +188,9 @@ jobs:
       - name: Set prerelease flag
         run: |
           if [[ "${GITHUB_REF##*/}" =~ -RC ]]; then
-            echo "PRERELEASE=true" >> $GITHUB_ENV
+            echo "PRERELEASE=true" >> "$GITHUB_ENV"
           else
-            echo "PRERELEASE=false" >> $GITHUB_ENV
+            echo "PRERELEASE=false" >> "$GITHUB_ENV"
           fi
 
       - name: Create GitHub Release and Upload Asset

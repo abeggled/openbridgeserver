@@ -39,12 +39,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.core.write_router import init_write_router
     from obs.db.database import get_db, init_db
     from obs.history.factory import init_history_plugin
-    from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config
-    from obs.ringbuffer.ringbuffer import init_ringbuffer
 
     settings = get_settings()
 
-    log_level = getattr(logging, settings.server.log_level.upper(), logging.INFO)
+    configured_log_level = settings.server.log_level.upper()
+    log_level = getattr(logging, configured_log_level, logging.INFO)
     logging.basicConfig(level=log_level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
     import asyncio
@@ -56,6 +55,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 1. Database
     db = await init_db(settings.database.path)
+    persistent_log_level = await _read_persistent_log_level(db)
+    if persistent_log_level and persistent_log_level != configured_log_level:
+        log_level = getattr(logging, persistent_log_level, log_level)
+        logging.getLogger().setLevel(log_level)
+        try:
+            from obs.log_buffer import set_log_buffer_level
+
+            set_log_buffer_level(persistent_log_level)
+        except Exception:
+            logger.exception("Failed to apply persistent log level")
+        logger.info("Applied persistent log level from app_settings: %s", persistent_log_level)
     await ensure_default_user(db)
 
     # Rebuild Mosquitto passwd file from DB on every startup (keeps it in sync).
@@ -87,16 +97,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 5. RingBuffer — config is persisted in app_settings (see persisted_config.py).
     # Defaults apply only when nothing has been configured via the API yet.
-    rb_path = settings.database.path.replace(".db", "_ringbuffer.db")
-    rb_cfg = await load_persisted_ringbuffer_config(db)
-    rb = await init_ringbuffer(
-        storage="file",
-        max_entries=rb_cfg["max_entries"],
-        disk_path=rb_path,
-        max_file_size_bytes=rb_cfg["max_file_size_bytes"],
-        max_age=rb_cfg["max_age"],
-    )
-    bus.subscribe(DataValueEvent, rb.handle_value_event)
+    await _init_persisted_ringbuffer(db, bus, settings.database.path, DataValueEvent)
 
     # 6. History plugin
     await init_history_plugin(db)
@@ -126,6 +127,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     import obs.adapters.knx.adapter
     import obs.adapters.modbus_rtu.adapter
     import obs.adapters.modbus_tcp.adapter
+    import obs.adapters.message.adapter
     import obs.adapters.mqtt.adapter
     import obs.adapters.onewire.adapter
     import obs.adapters.snmp.adapter  # noqa: F401
@@ -158,9 +160,39 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     await logic_mgr.stop()
     await adapter_registry.stop_all()
     await mqtt.stop()
-    await rb.stop()
+    await _stop_optional_ringbuffer()
     await get_db().disconnect()
     logger.info("open bridge server stopped.")
+
+
+async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_event_type) -> None:
+    from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config
+    from obs.ringbuffer.ringbuffer import default_ringbuffer_disk_path, init_ringbuffer, reset_ringbuffer, set_ringbuffer_enabled
+
+    rb_path = default_ringbuffer_disk_path(database_path)
+    rb_cfg = await load_persisted_ringbuffer_config(db)
+    if not rb_cfg["enabled"]:
+        reset_ringbuffer()
+        set_ringbuffer_enabled(False)
+        return
+    set_ringbuffer_enabled(True)
+
+    rb = await init_ringbuffer(
+        storage="file",
+        max_entries=rb_cfg["max_entries"],
+        disk_path=rb_path,
+        max_file_size_bytes=rb_cfg["max_file_size_bytes"],
+        max_age=rb_cfg["max_age"],
+    )
+    bus.subscribe(data_value_event_type, rb.handle_value_event)
+
+
+async def _stop_optional_ringbuffer() -> None:
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer
+
+    active_rb = get_optional_ringbuffer()
+    if active_rb is not None:
+        await active_rb.stop()
 
 
 def create_app() -> FastAPI:
@@ -227,12 +259,40 @@ def create_app() -> FastAPI:
         async def favicon():
             return FileResponse(_gui_dist / "favicon.svg")
 
+        @app.get("/manifest.webmanifest", include_in_schema=False)
+        async def admin_manifest():
+            return FileResponse(_gui_dist / "manifest.webmanifest")
+
+        @app.get("/apple-touch-icon.png", include_in_schema=False)
+        async def admin_apple_touch_icon():
+            return FileResponse(_gui_dist / "apple-touch-icon.png")
+
+        @app.get("/obs_logo_light.svg", include_in_schema=False)
+        async def obs_logo_light():
+            return FileResponse(_gui_dist / "obs_logo_light.svg")
+
+        @app.get("/obs_logo_dark.svg", include_in_schema=False)
+        async def obs_logo_dark():
+            return FileResponse(_gui_dist / "obs_logo_dark.svg")
+
     # ── Serve Visu SPA (frontend_dist → /visu) ────────────────────────────
     _visu_dist = Path(__file__).parent.parent / "frontend_dist"
     if _visu_dist.is_dir():
         _visu_assets = _visu_dist / "assets"
         if _visu_assets.is_dir():
             app.mount("/visu/assets", StaticFiles(directory=_visu_assets), name="visu_assets")
+
+        @app.get("/visu/favicon.svg", include_in_schema=False)
+        async def visu_favicon():
+            return FileResponse(_visu_dist / "favicon.svg")
+
+        @app.get("/visu/manifest.webmanifest", include_in_schema=False)
+        async def visu_manifest():
+            return FileResponse(_visu_dist / "manifest.webmanifest")
+
+        @app.get("/visu/apple-touch-icon.png", include_in_schema=False)
+        async def visu_apple_touch_icon():
+            return FileResponse(_visu_dist / "apple-touch-icon.png")
 
         @app.get("/visu/{path:path}", include_in_schema=False)
         async def visu_spa(path: str):
@@ -260,6 +320,19 @@ def create_app() -> FastAPI:
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     return app
+
+
+async def _read_persistent_log_level(db: object) -> str | None:
+    try:
+        row = await db.fetchone("SELECT value FROM app_settings WHERE key='server.log_level'")
+    except Exception:
+        return None
+    if row is None:
+        return None
+    level = str(row["value"] or "").upper()
+    if level in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        return level
+    return None
 
 
 async def main() -> None:

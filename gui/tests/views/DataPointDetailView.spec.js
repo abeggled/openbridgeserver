@@ -90,6 +90,18 @@ describe('DataPointDetailView', () => {
     expect(wrapper.findAll('button').some(button => button.text() === 'Schreiben')).toBe(false)
   })
 
+  it('allows writing when only MESSAGE bindings are attached', async () => {
+    apiMocks.dpApi.listBindings.mockResolvedValue({
+      data: [{ id: 'binding-message', enabled: true, direction: 'DEST', adapter_type: 'MESSAGE', config: {} }],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('Kein schreibbares Binding vorhanden.')
+    expect(wrapper.find('input[type="text"]').exists()).toBe(true)
+  })
+
   it('does not expose the write form while bindings are still loading', async () => {
     let resolveBindings
     apiMocks.dpApi.listBindings.mockReturnValue(new Promise(resolve => { resolveBindings = resolve }))
@@ -136,5 +148,36 @@ describe('DataPointDetailView', () => {
 
     expect(apiMocks.dpApi.writeValue).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('Bitte ein gültiges Datum oder eine gültige Zeit eingeben.')
+  })
+
+  it('labels logic usages by direction instead of node type', async () => {
+    apiMocks.logicApi.datapointUsages.mockResolvedValue({
+      data: [
+        {
+          graph_id: 'graph-1',
+          graph_name: 'HTTP sync',
+          graph_enabled: true,
+          node_id: 'api-1',
+          node_type: 'api_client',
+          direction: 'SOURCE',
+        },
+        {
+          graph_id: 'graph-2',
+          graph_name: 'Write back',
+          graph_enabled: true,
+          node_id: 'write-1',
+          node_type: 'datapoint_write',
+          direction: 'DEST',
+        },
+      ],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('HTTP sync')
+    expect(wrapper.text()).toContain('Logik liest im verlinkten Blatt dieses Objekt')
+    expect(wrapper.text()).toContain('Write back')
+    expect(wrapper.text()).toContain('Logik schreibt im verlinkten Blatt auf dieses Objekt')
   })
 })

@@ -159,6 +159,7 @@ def apply_value_map(value: Any, value_map: dict[str, Any] | None) -> Any:
     - bool  → lowercase "true"/"false"  (JSON convention)
     - float with no fractional part (e.g. 5.0) → int string "5"
     - all other types → str(value)
+    - if no exact key matches, string keys are compared case-insensitively
 
     This allows N-entry maps like {"0": "Aus", "1": "Init", …, "10": "Standby"}
     to work even when values arrive as floats from Modbus or similar adapters.
@@ -176,14 +177,23 @@ def apply_value_map(value: Any, value_map: dict[str, Any] | None) -> Any:
     if not value_map:
         return value
     if isinstance(value, bool):
-        key = str(value).lower()  # "true" or "false"
+        keys = [str(value).lower()]  # "true" or "false"
         # Fall back to numeric "1"/"0" when the bool key is not in the map.
         # This allows numeric maps like {"0": "1", "1": "0"} to work with
         # boolean inputs (e.g. KNX DPT1.x decodes to Python bool).
-        if key not in value_map:
-            key = "1" if value else "0"
+        keys.append("1" if value else "0")
     elif isinstance(value, float) and value.is_integer():
-        key = str(int(value))
+        keys = [str(int(value))]
     else:
-        key = str(value)
-    return value_map.get(key, value)
+        keys = [str(value)]
+
+    for key in keys:
+        if key in value_map:
+            return value_map[key]
+
+        folded_key = key.casefold()
+        for map_key, mapped_value in value_map.items():
+            if str(map_key).casefold() == folded_key:
+                return mapped_value
+
+    return value

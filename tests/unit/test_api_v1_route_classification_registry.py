@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from fastapi.routing import APIRoute, APIWebSocketRoute
-
-from obs.api.router import router as api_v1_router
 from obs.api.v1.route_classification_registry import (
     PUBLIC_ROUTE_ALLOWLIST,
     ROUTE_CLASSIFICATIONS,
@@ -10,17 +7,32 @@ from obs.api.v1.route_classification_registry import (
 
 
 def _collect_v1_route_signatures() -> set[tuple[str, str]]:
-    signatures: set[tuple[str, str]] = set()
-    for route in api_v1_router.routes:
-        if isinstance(route, APIRoute):
-            for method in route.methods or set():
-                if method in {"HEAD", "OPTIONS"}:
-                    continue
-                signatures.add((method, f"/api/v1{route.path}"))
-            continue
+    # Import fresh to avoid isinstance() mismatches when FastAPI is reloaded.
+    import importlib
 
-        if isinstance(route, APIWebSocketRoute):
-            signatures.add(("WEBSOCKET", f"/api/v1{route.path}"))
+    fastapi_routing = importlib.import_module("fastapi.routing")
+    router_mod = importlib.import_module("obs.api.router")
+    APIRoute = fastapi_routing.APIRoute
+    APIWebSocketRoute = fastapi_routing.APIWebSocketRoute
+
+    signatures: set[tuple[str, str]] = set()
+
+    def _walk(routes: list, prefix: str) -> None:
+        for route in routes:
+            if isinstance(route, APIRoute):
+                for method in route.methods or set():
+                    if method not in {"HEAD", "OPTIONS"}:
+                        signatures.add((method, f"{prefix}{route.path}"))
+            elif isinstance(route, APIWebSocketRoute):
+                signatures.add(("WEBSOCKET", f"{prefix}{route.path}"))
+            elif hasattr(route, "original_router") and hasattr(route, "include_context"):
+                # FastAPI 0.137+ / Starlette 1.x: include_router() no longer flattens
+                # sub-routers into APIRoute copies — it stores them as lazy
+                # _IncludedRouter wrappers.  Recurse with the accumulated prefix.
+                sub_prefix = getattr(route.include_context, "prefix", "") or ""
+                _walk(route.original_router.routes, prefix + sub_prefix)
+
+    _walk(router_mod.router.routes, "/api/v1")
     return signatures
 
 

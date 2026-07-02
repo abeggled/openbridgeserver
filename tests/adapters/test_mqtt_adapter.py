@@ -167,6 +167,18 @@ class TestOnMessageValueMap:
         assert event.value == "on"
 
     @pytest.mark.asyncio
+    async def test_value_map_matches_case_insensitive_string_payload(self, adapter, mock_bus):
+        binding = make_binding(
+            {"topic": "t"},
+            value_map={"on": "true", "off": "false"},
+        )
+        adapter._topic_map["t"] = [binding]
+
+        await adapter._on_message("t", b"OFF")
+        event = mock_bus.publish.call_args[0][0]
+        assert event.value == "false"
+
+    @pytest.mark.asyncio
     async def test_value_map_no_match_passthrough(self, adapter, mock_bus):
         binding = make_binding(
             {"topic": "t"},

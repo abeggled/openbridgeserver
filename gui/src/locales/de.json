@@ -20,7 +20,8 @@
     "username": "Benutzername",
     "password": "Passwort",
     "submit": "Anmelden",
-    "submitting": "Anmelden …"
+    "submitting": "Anmelden …",
+    "logoAlt": "open bridge server"
   },
   "dashboard": {
     "title": "Übersicht",
@@ -253,6 +254,19 @@
       "confirmButton": "Migrieren",
       "result": "{migrated} Verknüpfungen migriert, {skipped} übersprungen.",
       "failed": "Migration fehlgeschlagen"
+    },
+    "message": {
+      "addTarget": "Ziel hinzufügen",
+      "targetName": "Zielname",
+      "channel": "Kanal",
+      "apiToken": "API-Token",
+      "botToken": "Bot-Token",
+      "apiKey": "API-Schlüssel",
+      "sender": "Absender",
+      "userKey": "User-Key",
+      "chatId": "Chat-ID",
+      "to": "Empfänger",
+      "recipient": "Empfänger"
     },
     "anwesenheit": {
       "modalTitle": "Anwesenheitssimulation",
@@ -551,6 +565,15 @@
       "anwSetValuePlaceholder": "z.B. 0 / 1 / false / true / 21.5",
       "anwOnPresenceHint": "Leer = Verhalten aus der Adapter-Konfiguration verwenden.",
       "snmpSection": "SNMP Binding",
+      "messageSection": "MESSAGE Binding",
+      "operatorLabel": "Operator",
+      "compareValueLabel": "Vergleichswert",
+      "titleLabel": "Titel",
+      "cooldownSecondsLabel": "Cooldown (Sekunden)",
+      "messageTemplateLabel": "Nachrichtenvorlage",
+      "targetsLabel": "Ziele",
+      "addTarget": "Ziel hinzufügen",
+      "messageSendOnChange": "Nur beim Wechsel in den erfüllten Zustand senden",
       "snmpHostLabel": "Gerät (IP/DNS) *",
       "snmpHostPlaceholder": "z.B. 192.168.1.100 oder switch.local",
       "snmpPortLabel": "UDP-Port",
@@ -988,7 +1011,9 @@
       "knxNoTunnelingInterfaces": "Keine Tunneling-Interfaces im Keyfile gefunden — bitte Individual Address im Keyfile prüfen.",
       "knxTunnelOverload": "KNX-Tunnel-Slot wahrscheinlich von anderem Client belegt — Gateway-Pool überlastet.",
       "knxTunnelStable": "Tunnel-Pool wieder stabil.",
-      "invalidBindingsSkipped": "{count} ungültige Verknüpfung(en) übersprungen ({examples})"
+      "invalidBindingsSkipped": "{count} ungültige Verknüpfung(en) übersprungen ({examples})",
+      "messageProviderFailures": "MESSAGE-Provider-Fehler: {count} Ziel(e)",
+      "messageSent": "MESSAGE gesendet"
     },
     "testResult": {
       "typeNotRegistered": "Adapter-Typ '{type}' nicht registriert",
@@ -1068,11 +1093,25 @@
     "pause": "⏸ Pause",
     "resume": "▶ Resume",
     "statsTitle": "Ringbuffer Statistik",
+    "status": "Status",
+    "enabledStatus": "Aktiv",
+    "disabledStatus": "Deaktiviert",
+    "monitorDisabledTitle": "Monitor disabled",
+    "monitorDisabledBody": "Der Monitor ist deaktiviert. Es werden keine neuen Wertänderungen aufgezeichnet oder live angezeigt.",
+    "monitorDisabledAction": "Monitor aktivieren",
+    "monitorEnabled": "Monitor aktiv",
+    "monitorEnabledHint": "Wenn der Monitor deaktiviert ist, werden keine Wertänderungen aufgezeichnet und der Ringbuffer belegt keine Datenbankressourcen.",
+    "disableConfirmTitle": "Monitor deaktivieren?",
+    "disableConfirmMessage": "Der Monitor wird deaktiviert und alle bisherigen Monitor-Einträge werden gelöscht, um Speicherplatz freizugeben. Diese Aktion kann nicht rückgängig gemacht werden.",
+    "disableConfirmLabel": "Deaktivieren und löschen",
     "statsDiskUsage": "Belegter Speicherplatz",
     "statsRetention": "Effektive Retention (ältester Eintrag)",
     "storageFixed": "Speichermodell ist serverseitig fix:",
     "maxDisk": "Max. Speicherplatz auf Platte",
+    "maxDiskPlaceholder": "z. B. 500",
     "maxRetention": "Max. Retention",
+    "maxRetentionPlaceholder": "z. B. 30",
+    "maxEntriesPlaceholder": "z. B. 10000",
     "unitDays": "Tage",
     "unitMonths": "Monate",
     "unitYears": "Jahre",
@@ -1248,8 +1287,11 @@
       "not": "NOT",
       "xor": "XOR",
       "gate": "TOR",
+      "memory": "Speicher",
       "compare": "Vergleich",
       "hysteresis": "Hysterese",
+      "decision": "Entscheidung",
+      "value_mapping": "Zuordnung",
       "datapoint_read": "Objekt lesen",
       "datapoint_write": "Objekt schreiben",
       "math_formula": "Formel",
@@ -1271,6 +1313,8 @@
       "astro_sun": "Astro Sonne",
       "notify_pushover": "Pushover",
       "notify_sms": "SMS (seven.io)",
+      "wake_on_lan": "Wake on LAN",
+      "host_check": "Host Check",
       "json_extractor": "JSON Extraktor",
       "xml_extractor": "XML Extraktor",
       "substring_extractor": "Substring / RegEx",
@@ -1305,6 +1349,12 @@
     "saved": "Graph gespeichert",
     "errorSave": "Fehler beim Speichern",
     "runResult": "Graph ausgeführt — {count} Nodes evaluiert",
+    "runResultWithWarnings": "Graph ausgeführt — {count} Nodes geprüft, {warnings} Warnungen",
+    "nodeError": "⚠ Fehler",
+    "graphValidationCycle": "Zyklus erkannt: {count} Node(s) benötigen eine Speicher-Node als Tick-Grenze.",
+    "graphValidationConnectBlocked": "Verbindung nicht erstellt: Zyklus erkannt ({count} Node(s)). Nutze eine Speicher-Node für Rückkopplungen.",
+    "graphValidationSaveBlocked": "Speichern blockiert: Zyklus erkannt ({count} Node(s)). Nutze eine Speicher-Node für Rückkopplungen.",
+    "graphValidationNodeError": "Zyklus erkannt; direkte Rückkopplung benötigt eine Speicher-Node.",
     "duplicated": "Graph dupliziert als „{name}“",
     "errorDuplicate": "Fehler beim Duplizieren",
     "errorExport": "Fehler beim Exportieren",
@@ -1319,6 +1369,8 @@
     "negatePort": "{id} negieren",
     "palette": {
       "title": "Blöcke",
+      "collapse": "Blockpalette einklappen",
+      "expand": "Blockpalette ausklappen",
       "categories": {
         "logic": "Logik",
         "datapoint": "Objekte",
@@ -1363,6 +1415,7 @@
     "summary": {
       "inputs": "{n} Eingänge",
       "parts": "{n} Teile",
+      "rules": "{n} Regeln",
       "hold": "→ halten",
       "filters": "{n} Filter",
       "negateEnable": "¬Freigabe",
@@ -1513,6 +1566,7 @@
         "methodLabel": "Methode",
         "responseContentType": "Response Content-Type",
         "headersLabel": "Header (JSON-Objekt, optional)",
+        "headersPlaceholder": "{'{'}\"X-Api-Key\": \"abc\"{'}'}",
         "timeoutLabel": "Timeout (s)",
         "verifySsl": "SSL-Zertifikat prüfen",
         "authSection": "Authentifizierung",
@@ -1530,7 +1584,12 @@
         "targetBlocked": "Dieses Ziel wird blockiert",
         "allowTarget": "{target} freigeben",
         "allowSaved": "Ziel wurde freigegeben.",
-        "defaultAllowReason": "Freigabe aus API-Client-Konfiguration"
+        "defaultAllowReason": "Freigabe aus API-Client-Konfiguration",
+        "variablesSection": "Variablen",
+        "addVariable": "Variable hinzufügen",
+        "removeVariable": "Entfernen",
+        "variablesHint": "Variablen referenzieren bestehende Objekte und können als ###OBS1###, ###OBS2### usw. in URL, Headern, Auth-Feldern und Body verwendet werden.",
+        "noVariables": "Keine Variablen konfiguriert."
       },
       "stringConcat": {
         "inputCount": "Anzahl Eingänge",
@@ -1539,6 +1598,45 @@
         "staticSection": "Statischer Text pro Eingang",
         "staticHint": "Verbundene Eingänge überschreiben den statischen Text. Leere Felder ergeben einen leeren Teilstring.",
         "inputPlaceholder": "Eingang {n} …"
+      },
+      "rules": {
+        "add": "+ Regel",
+        "remove": "Regel entfernen",
+        "removeShort": "−",
+        "namePlaceholder": "Name",
+        "operator": "Operator",
+        "compareValue": "Vergleichswert",
+        "valuePlaceholder": "Wert",
+        "regexPlaceholder": "RegEx-Muster",
+        "minValue": "Von",
+        "maxValue": "Bis",
+        "minPlaceholder": "Minimum",
+        "maxPlaceholder": "Maximum",
+        "caseSensitive": "Gross-/Kleinschreibung beachten",
+        "operators": {
+          "eq": "gleich",
+          "ne": "ungleich",
+          "gt": "größer als",
+          "lt": "kleiner als",
+          "gte": "größer oder gleich",
+          "lte": "kleiner oder gleich",
+          "range": "Wertebereich",
+          "text_eq": "Textvergleich",
+          "contains": "enthält",
+          "starts_with": "beginnt mit",
+          "ends_with": "endet mit",
+          "regex": "regulärer Ausdruck"
+        }
+      },
+      "mapping": {
+        "rules": "Regeln",
+        "outputType": "Ausgangstyp",
+        "resultValue": "Rückgabewert",
+        "resultPlaceholder": "Ergebnis",
+        "hasDefault": "Sonst-Wert verwenden",
+        "defaultValue": "Sonst-Wert",
+        "defaultPlaceholder": "Wert wenn keine Regel passt",
+        "defaultRule": "Regel {n}"
       },
       "extractor": {
         "receivedData": "Empfangene Daten",
@@ -1643,11 +1741,26 @@
         "negate_enable": "Freigabe invertieren",
         "persist_state": "Zustand nach Neustart wiederherstellen"
       },
+      "memory": {
+        "initial_value": "Initialwert",
+        "data_type": "Datentyp",
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
       "hysteresis": {
         "persist_state": "Zustand nach Neustart wiederherstellen"
       },
       "compare": {
         "operator": "Operator"
+      },
+      "decision": {
+        "conditions": "Bedingungen",
+        "defaultOutput": "Ausgang {n}"
+      },
+      "value_mapping": {
+        "output_type": "Ausgangstyp",
+        "rules": "Regeln",
+        "has_default": "Sonst-Wert verwenden",
+        "default_value": "Sonst-Wert"
       },
       "clamp": {
         "min": "Minimum",
@@ -1728,6 +1841,20 @@
         "to": "Empfänger (+41…)",
         "sender": "Absender (max 11 Zeichen)",
         "message": "Nachricht (Fallback)"
+      },
+      "host_check": {
+        "host": "Host / IP-Adresse",
+        "hostPlaceholder": "z.B. 192.168.1.1 oder hostname.local",
+        "timeout_s": "Timeout (Sekunden)",
+        "count": "Ping-Anzahl"
+      },
+      "wake_on_lan": {
+        "mac_address": "MAC-Adresse (z.B. AA:BB:CC:DD:EE:FF)",
+        "broadcast_ip": "Broadcast-IP",
+        "port": "UDP-Port",
+        "invalidMac": "Ungültige MAC-Adresse – bitte im Format AA:BB:CC:DD:EE:FF eingeben",
+        "invalidBroadcastIp": "Ungültige IP-Adresse – bitte eine gültige IPv4-Adresse eingeben",
+        "invalidPort": "Ungültiger Port – bitte eine Zahl zwischen 1 und 65535 eingeben"
       },
       "json_extractor": {
         "json_path": "Schlüsselpfad (Legacy)",
@@ -1818,7 +1945,9 @@
       "icalArray": "Array",
       "icalDate": "Datum",
       "icalTomorrow": "Morgen",
-      "icalToday": "Heute"
+      "icalToday": "Heute",
+      "reachable": "Erreichbar",
+      "latencyMs": "Latenz (ms)"
     },
     "nodeDescriptions": {
       "const_value": "Gibt einen festen Wert aus — Zahl, Bool oder Text. Nützlich als Schwellwert oder Referenz.",
@@ -1827,8 +1956,11 @@
       "not": "Invertiert den Eingang",
       "xor": "Ausgang ist true wenn GENAU EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
       "gate": "Signal-Tor: lässt den Eingang durch wenn Freigabe=true, sperrt sonst. Verhalten bei gesperrtem Tor: letzten Wert halten (retain) oder Standardwert ausgeben.",
+      "memory": "Gibt den gespeicherten Wert aus dem vorherigen Logiklauf aus und speichert den aktuellen Eingangswert für den nächsten Lauf. Explizite Tick-Grenze für kontrollierte Rückkopplungen.",
       "compare": "Vergleicht zwei Werte (>, <, =, >=, <=, !=)",
       "hysteresis": "Schaltet bei Überschreitung ON, erst bei Unterschreitung OFF",
+      "decision": "Prüft einen Eingangswert gegen mehrere unabhängige Bedingungen. Jeder Ausgang liefert unabhängig TRUE oder FALSE; mehrere Ausgänge können gleichzeitig TRUE sein.",
+      "value_mapping": "Prüft eine geordnete Regelliste und gibt den Rückgabewert der ersten passenden Regel aus. Optional liefert ein Sonst-Wert ein Ergebnis, wenn keine Regel passt.",
       "datapoint_read": "Gibt den aktuellen Wert eines DataPoints aus. Triggert bei Wertänderung.",
       "datapoint_write": "Schreibt einen Wert in einen DataPoint",
       "math_formula": "Berechnet einen Ausdruck. Variablen: a (= IN 1), b (= IN 2)",
@@ -1849,6 +1981,8 @@
       "astro_sun": "Berechnet Sonnenauf- und -untergang basierend auf Breitengrad/Längengrad. Benötigt: pip install astral",
       "notify_pushover": "Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "notify_sms": "Sendet eine SMS via seven.io Gateway (gateway.seven.io). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
+      "wake_on_lan": "Sendet ein Wake-on-LAN Magic-Paket an ein Gerät per UDP-Broadcast. Wird ausgelöst wenn der Trigger-Eingang true ist.",
+      "host_check": "Pingt einen Host und liefert den Erreichbarkeitsstatus (true/false) sowie die Latenz in Millisekunden. Wird bei steigender Flanke am Trigger-Eingang ausgeführt. Empfehlung: mit einem Timer/Cron-Knoten verbinden.",
       "json_extractor": "Parst einen JSON-String und extrahiert einen oder mehrere Werte anhand von Schlüsselpfaden (Punkt-Notation, z.B. sensors.temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
       "xml_extractor": "Parst einen XML-String und extrahiert einen oder mehrere Werte anhand von XPath-Ausdrücken (ElementTree-Syntax, z.B. .//temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
       "substring_extractor": "Extrahiert Text aus einem String per Substring-Operation oder regulärem Ausdruck. Modi: links_von / rechts_von (erstes oder letztes Vorkommen), zwischen (zwei Markierungen), ausschneiden (Position + Länge), regex (Python re-Syntax, Gruppen wählbar).",
@@ -2307,6 +2441,7 @@
     "success": "Erfolgreich",
     "details": "Details",
     "remove": "Entfernen",
+    "enabled": "Aktiviert",
     "active": "Aktiv",
     "inactive": "Inaktiv",
     "on": "An",

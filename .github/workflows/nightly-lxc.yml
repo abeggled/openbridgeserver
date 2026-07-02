@@ -110,7 +110,7 @@ jobs:
           fi
 
           mapfile -t ASSETS < <(find artifacts -type f \
-            \( -name '*.tar.zst' -o -name '*.tar.gz' -o -name '*.sha512' \) | sort)
+            \( -name '*.tar.zst' -o -name '*.tar.gz' -o -name '*.sha256' \) | sort)
 
           if [[ ${#ASSETS[@]} -eq 0 ]]; then
             echo "No build assets found to publish." >&2
@@ -160,7 +160,7 @@ jobs:
           done < releases.tsv
 
       - name: Delete dispatched run artifacts
-        # The .tar.zst / .tar.gz / .sha512 files now live on the nightly
+        # The .tar.zst / .tar.gz / .sha256 files now live on the nightly
         # pre-release, so the source Actions artifacts are redundant. Delete
         # them to avoid storage growth (lxc-template.yml sets no retention-days,
         # so they would otherwise linger at the repo default ~90 days).

@@ -335,3 +335,9 @@ def override_settings(s: Settings) -> None:
     """Replace the singleton (useful in tests)."""
     global _settings
     _settings = s
+
+
+def reset_settings() -> None:
+    """Reset the singleton to None so the next get_settings() call re-reads config (useful in test teardown)."""
+    global _settings
+    _settings = None

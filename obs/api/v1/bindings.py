@@ -81,6 +81,69 @@ async def _reload_adapter_instance(instance_id: str, db: Database) -> None:
     await adapter_registry.reload_instance_bindings(instance_id, db)
 
 
+def _validate_adapter_binding(
+    adapter_type: str,
+    direction: str,
+    config: dict[str, Any],
+    *,
+    validate_schema: bool = True,
+    enabled: bool = True,
+    instance_config: dict[str, Any] | None = None,
+) -> None:
+    if adapter_type == "MESSAGE" and direction != "SOURCE":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "MESSAGE-Bindings unterstützen nur Richtung SOURCE",
+        )
+    if adapter_type != "MESSAGE" and not validate_schema:
+        return
+
+    from obs.adapters.registry import get_class
+
+    cls = get_class(adapter_type)
+    if cls and hasattr(cls, "binding_config_schema"):
+        try:
+            schema_config = {**config, "enabled": enabled} if adapter_type == "MESSAGE" else config
+            binding_config = cls.binding_config_schema(**schema_config)
+            if adapter_type == "MESSAGE" and enabled and instance_config is not None:
+                _validate_message_target_refs(binding_config, instance_config)
+        except Exception as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"Ungültige Binding-Config: {exc}",
+            ) from exc
+
+
+def _json_config(raw: Any) -> dict[str, Any]:
+    if raw is None or raw == "":
+        return {}
+    if isinstance(raw, str):
+        return json.loads(raw)
+    if isinstance(raw, dict):
+        return raw
+    return dict(raw)
+
+
+def _validate_message_target_refs(binding_config: Any, instance_config: dict[str, Any]) -> None:
+    from obs.adapters.message.adapter import MessageAdapterConfig
+    from obs.adapters.message.providers.registry import get_provider
+
+    adapter_config = MessageAdapterConfig(**instance_config)
+    for ref in binding_config.providers:
+        provider_config = adapter_config.providers.get(ref.provider)
+        if provider_config is None:
+            raise ValueError(f"MESSAGE provider not configured: {ref.provider}")
+        provider = get_provider(ref.provider)
+        if provider is None:
+            raise ValueError(f"MESSAGE provider not registered: {ref.provider}")
+        parsed_provider_config = provider.config_schema(**provider_config)
+        if not getattr(parsed_provider_config, "enabled", False):
+            raise ValueError(f"MESSAGE provider is disabled: {ref.provider}")
+        targets = getattr(parsed_provider_config, "targets", {}) or {}
+        if ref.target not in targets:
+            raise ValueError(f"MESSAGE target not configured: {ref.provider}/{ref.target}")
+
+
 def _row_out(row: Any, name_map: dict[str, str] | None = None) -> BindingOut:
     instance_id = row["adapter_instance_id"]
     throttle = row["send_throttle_ms"]
@@ -93,7 +156,7 @@ def _row_out(row: Any, name_map: dict[str, str] | None = None) -> BindingOut:
         adapter_instance_id=uuid.UUID(instance_id) if instance_id else None,
         instance_name=name_map.get(instance_id) if name_map and instance_id else None,
         direction=row["direction"],
-        config=json.loads(row["config"]),
+        config=_json_config(row["config"]),
         enabled=bool(row["enabled"]),
         send_throttle_ms=int(throttle) if throttle is not None else None,
         send_on_change=bool(row["send_on_change"]),
@@ -145,18 +208,13 @@ async def create_binding(
         )
     adapter_type = instance_row["adapter_type"]
 
-    # Binding-Config gegen Schema validieren
-    from obs.adapters.registry import get_class
-
-    cls = get_class(adapter_type)
-    if cls and hasattr(cls, "binding_config_schema"):
-        try:
-            cls.binding_config_schema(**body.config)
-        except Exception as exc:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                f"Ungültige Binding-Config: {exc}",
-            ) from exc
+    _validate_adapter_binding(
+        adapter_type,
+        body.direction,
+        body.config,
+        enabled=body.enabled,
+        instance_config=_json_config(instance_row["config"]) if adapter_type == "MESSAGE" else None,
+    )
 
     # Formel validieren
     if body.value_formula:
@@ -219,7 +277,8 @@ async def update_binding(
     now = datetime.now(UTC).isoformat()
 
     direction = updates.get("direction", row["direction"])
-    config_val = json.dumps(updates.get("config", json.loads(row["config"])))
+    config = updates.get("config", _json_config(row["config"]))
+    config_val = json.dumps(config)
     enabled = int(updates.get("enabled", bool(row["enabled"])))
     throttle_ms = updates.get("send_throttle_ms", row["send_throttle_ms"])
     on_change = int(updates.get("send_on_change", bool(row["send_on_change"])))
@@ -228,6 +287,21 @@ async def update_binding(
     formula = updates.get("value_formula", row["value_formula"]) or None
     value_map_new = updates.get("value_map", json.loads(row["value_map"]) if row["value_map"] else None)
     value_map_json = json.dumps(value_map_new) if value_map_new else None
+    instance_config: dict[str, Any] | None = None
+    if row["adapter_type"] == "MESSAGE" and row["adapter_instance_id"]:
+        instance_row = await db.fetchone("SELECT config FROM adapter_instances WHERE id=?", (row["adapter_instance_id"],))
+        if instance_row is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "MESSAGE adapter instance not found")
+        instance_config = _json_config(instance_row["config"])
+
+    _validate_adapter_binding(
+        row["adapter_type"],
+        direction,
+        config,
+        validate_schema="config" in updates or (row["adapter_type"] == "MESSAGE" and "enabled" in updates),
+        enabled=bool(enabled),
+        instance_config=instance_config,
+    )
 
     # Formel validieren
     if formula:

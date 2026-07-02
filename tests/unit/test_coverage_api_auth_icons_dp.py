@@ -1791,6 +1791,16 @@ class TestCreateBinding:
         result = await bindings_api.create_binding(dp_id=dp.id, body=body, _user="admin", db=db)
         assert result.adapter_type == "MQTT"
 
+    def test_validate_message_binding_rejects_non_source_direction(self):
+        with pytest.raises(HTTPException) as exc:
+            bindings_api._validate_adapter_binding(
+                "MESSAGE",
+                "DEST",
+                {"providers": [{"provider": "pushover", "target": "default"}]},
+            )
+
+        assert exc.value.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # bindings.py — update_binding endpoint

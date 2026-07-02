@@ -12,6 +12,7 @@ interface ButtonConfig {
   resetEnabled: boolean
   resetValue: string
   resetDelayMs: number
+  preserveIconColor: boolean
 }
 
 interface Cfg {
@@ -81,6 +82,7 @@ function parseButtons(raw: unknown): ButtonConfig[] {
     resetEnabled: parseBoolean(button.resetEnabled, false),
     resetValue: String(button.resetValue ?? 'false'),
     resetDelayMs: parseDelay(button.resetDelayMs),
+    preserveIconColor: parseBoolean(button.preserveIconColor, false),
   }))
 }
 
@@ -94,6 +96,7 @@ function createButton(): ButtonConfig {
     resetEnabled: false,
     resetValue: 'false',
     resetDelayMs: 300,
+    preserveIconColor: false,
   }
 }
 
@@ -254,6 +257,11 @@ function moveDown(index: number) {
               :title="$t('widgets.buttongroup.color')"
             />
           </div>
+
+          <label v-if="button.icon" class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" v-model="button.preserveIconColor" class="rounded" />
+            <span class="text-xs text-gray-500">{{ $t('widgets.buttongroup.preserveIconColor') }}</span>
+          </label>
 
           <div class="grid grid-cols-2 gap-2">
             <label class="block">

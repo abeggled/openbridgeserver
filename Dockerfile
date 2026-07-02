@@ -57,12 +57,18 @@ LABEL org.opencontainers.image.title="open bridge server" \
       org.opencontainers.image.description="Open-Source Multiprotocol Server for Building Automation" \
       org.opencontainers.image.licenses="MIT"
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
+
 # Python packages from builder
 COPY --from=py-builder /install /usr/local
 
 # Application source
 WORKDIR /app
 COPY obs/ ./obs/
+COPY scripts/obs-admin /usr/local/bin/obs-admin
+RUN chmod +x /usr/local/bin/obs-admin
 # Stamp the version into the image without touching the working tree
 RUN echo "$OBS_VERSION" > ./obs/version
 

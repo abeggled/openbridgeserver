@@ -17,6 +17,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.doUnmock('@/api/client')
+  vi.doUnmock('@/components/ui/ConfirmDialog.vue')
   vi.doUnmock('@/components/ui/Modal.vue')
   vi.doUnmock('@/components/ui/Spinner.vue')
 })
@@ -26,6 +27,7 @@ function makeApi(overrides = {}) {
     stats: vi.fn().mockResolvedValue({
       data: {
         total: 1234,
+        enabled: true,
         max_entries: 50000,
         max_file_size_bytes: 2 * 1024 * 1024 * 1024, // 2 GB
         max_age: 30 * 24 * 60 * 60, // 30 days
@@ -36,6 +38,7 @@ function makeApi(overrides = {}) {
     config: vi.fn().mockResolvedValue({
       data: {
         total: 1234,
+        enabled: true,
         max_entries: 50000,
         max_file_size_bytes: 2 * 1024 * 1024 * 1024,
         max_age: 30 * 24 * 60 * 60,
@@ -60,7 +63,10 @@ async function mountModal({ initialOpen = true, api } = {}) {
       setup(props, { slots }) {
         return () =>
           props.modelValue
-            ? h('div', { 'data-testid': 'config-modal' }, slots.default ? slots.default() : null)
+            ? h('div', { 'data-testid': 'config-modal' }, [
+                slots.default ? slots.default() : null,
+                slots.footer ? slots.footer() : null,
+              ])
             : null
       },
     }),
@@ -188,6 +194,7 @@ describe('MonitorConfigModal QA-01 coverage (#439)', () => {
     expect(api.config).toHaveBeenCalledTimes(1)
     const payload = api.config.mock.calls[0][0]
     expect(payload.max_entries).toBe(75000)
+    expect(payload.enabled).toBe(true)
     expect(payload.storage).toBe('file')
     // Success banner
     expect(wrapper.text()).toContain('Monitor-Konfiguration gespeichert')
@@ -221,5 +228,36 @@ describe('MonitorConfigModal QA-01 coverage (#439)', () => {
     await wrapper.find('form').trigger('submit')
     await flushPromises()
     expect(wrapper.text()).toContain('server says no')
+  })
+
+  it('warns before disabling and only posts after confirmation', async () => {
+    const api = makeApi({
+      config: vi.fn().mockResolvedValue({
+        data: {
+          enabled: false,
+          total: 0,
+          max_entries: 50000,
+          max_file_size_bytes: 2 * 1024 * 1024 * 1024,
+          max_age: 30 * 24 * 60 * 60,
+          effective_retention_seconds: null,
+          file_size_bytes: 0,
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+
+    await wrapper.find('[data-testid="rb-config-enabled"]').setValue(false)
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(api.config).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('alle bisherigen Monitor-Einträge werden gelöscht')
+
+    await wrapper.find('[data-testid="btn-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(api.config).toHaveBeenCalledTimes(1)
+    expect(api.config.mock.calls[0][0]).toEqual({ enabled: false, storage: 'file' })
+    expect(wrapper.find('[data-testid="rb-config-stats-enabled"]').text()).toContain('Deaktiviert')
   })
 })

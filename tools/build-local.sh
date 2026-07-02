@@ -217,7 +217,7 @@ build_clean() {
     # dist/ artifacts
     if [[ -d "$OUTPUT_DIR" ]]; then
         local files
-        files=$(find "$OUTPUT_DIR" -maxdepth 1 \( -name "*.tar.zst" -o -name "*.tar.gz" -o -name "*.sha512" \) 2>/dev/null)
+        files=$(find "$OUTPUT_DIR" -maxdepth 1 \( -name "*.tar.zst" -o -name "*.tar.gz" -o -name "*.sha256" -o -name "*.sha512" \) 2>/dev/null)
         if [[ -n "$files" ]]; then
             echo "$files" | xargs rm -f
             echo "    Removed artifacts from $OUTPUT_DIR/"

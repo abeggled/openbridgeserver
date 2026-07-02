@@ -55,7 +55,7 @@ function makeGraph(id = 'graph-1', overrides = {}) {
     enabled: true,
     flow_data: {
       nodes: [
-        { id: 'n1', type: 'const_value', position: { x: 10, y: 20 }, data: { value: 1, _dbg: 'old' } },
+        { id: 'n1', type: 'const_value', position: { x: 10, y: 20 }, data: { value: 1, _dbg: 'old', _dbg_title: 'old title' } },
       ],
       edges: [
         { id: 'e1', source: 'n1', target: 'n2', sourceHandle: 'out', targetHandle: 'in' },
@@ -203,6 +203,8 @@ describe('LogicView auth gates', () => {
 
     expect(logicApi.getGraph).toHaveBeenCalledWith('graph-1')
     expect(wrapper.find('[data-testid="btn-run"]').exists()).toBe(true)
+    expect(wrapper.vm.nodes[0].data).not.toHaveProperty('_dbg')
+    expect(wrapper.vm.nodes[0].data).not.toHaveProperty('_dbg_title')
 
     wrapper.vm.onConnect({ source: 'n1', target: 'n3', sourceHandle: 'out', targetHandle: 'in' })
     expect(wrapper.vm.edges).toEqual(expect.arrayContaining([
@@ -233,6 +235,12 @@ describe('LogicView auth gates', () => {
     wrapper.vm.toggleDebug()
     await wrapper.vm.runGraph()
     expect(wrapper.vm.nodes[0].data._dbg).toBe('= 42')
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBe('= 42')
+
+    await wrapper.vm.saveGraph()
+    const savedPayload = logicApi.saveGraph.mock.calls.at(-1)[1]
+    expect(savedPayload.flow_data.nodes[0].data).not.toHaveProperty('_dbg')
+    expect(savedPayload.flow_data.nodes[0].data).not.toHaveProperty('_dbg_title')
 
     await wrapper.vm.doToggleEnabled()
     expect(logicApi.patchGraph).toHaveBeenCalledWith('graph-1', { enabled: false })
@@ -266,5 +274,512 @@ describe('LogicView auth gates', () => {
     clickSpy.mockRestore()
     createObjectURL.mockRestore()
     revokeObjectURL.mockRestore()
+  })
+})
+
+describe('LogicView fmtDebugVal branches', () => {
+  async function mountWithActiveGraph() {
+    const graph = makeGraph('graph-1')
+    return mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+  }
+
+  it('formats __error__ output prominently before other key handling', async () => {
+    const { wrapper } = await mountWithActiveGraph()
+    wrapper.vm.applyDebugValues({ n1: { __error__: 'Division by zero' } })
+    expect(wrapper.vm.nodes[0].data._dbg).toMatch(/Division by zero/)
+  })
+
+  it('marks graph cycle diagnostics even when debug mode is off', async () => {
+    const { wrapper, logicApi } = await mountWithActiveGraph()
+    logicApi.runGraph.mockResolvedValueOnce({
+      data: {
+        outputs: {
+          n1: {
+            __error__: 'Graph cycle detected; node was not executed.',
+            __diagnostic__: 'graph_cycle',
+            __cycle_nodes__: ['n1'],
+          },
+        },
+      },
+    })
+
+    await wrapper.vm.runGraph()
+
+    expect(wrapper.vm.debugMode).toBe(false)
+    expect(wrapper.vm.nodes[0].data._dbg).toMatch(/Graph cycle detected/)
+
+    logicApi.runGraph.mockResolvedValueOnce({ data: { outputs: { n1: { value: 42, changed: true } } } })
+    await wrapper.vm.runGraph()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+  })
+
+  it('formats _message output for notify nodes', async () => {
+    const { wrapper } = await mountWithActiveGraph()
+
+    wrapper.vm.applyDebugValues({ n1: { _message: 'Alert!', sent: true } })
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('"Alert!"')
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('sent=✓')
+
+    wrapper.vm.applyDebugValues({ n1: { _message: null } })
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('—')
+
+    wrapper.vm.applyDebugValues({ n1: { _message: 'hi' } })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('"hi"')
+  })
+
+  it('formats _write_value output for datapoint_write nodes', async () => {
+    const { wrapper } = await mountWithActiveGraph()
+    wrapper.vm.applyDebugValues({ n1: { _write_value: 99 } })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('→ 99')
+  })
+
+  it('formats api_client responses with short strip text and full tooltip text', async () => {
+    const { wrapper } = await mountWithActiveGraph()
+    const longResponse = 'x'.repeat(1200)
+
+    wrapper.vm.applyDebugValues({ n1: { response: longResponse, status: 500, success: false } })
+
+    expect(wrapper.vm.nodes[0].data._dbg).toContain(`response=${'x'.repeat(80)}…`)
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('status=500')
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('success=✗')
+    expect(wrapper.vm.nodes[0].data._dbg_title).toContain(`response=${'x'.repeat(1000)}…`)
+  })
+
+  it('formats generic public-key pairs as fallback', async () => {
+    const { wrapper } = await mountWithActiveGraph()
+
+    wrapper.vm.applyDebugValues({ n1: { active: true } })
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('active=✓')
+
+    wrapper.vm.applyDebugValues({ n1: { active: false } })
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('active=✗')
+
+    wrapper.vm.applyDebugValues({ n1: { state: null } })
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('state=—')
+
+    wrapper.vm.applyDebugValues({ n1: { label: 'hello' } })
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('label=hello')
+  })
+
+  it('returns undefined _dbg when output is null or non-object', async () => {
+    const { wrapper } = await mountWithActiveGraph()
+
+    wrapper.vm.applyDebugValues({ n1: null })
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+
+    wrapper.vm.applyDebugValues({ n1: 'string' })
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+  })
+
+  it('returns undefined _dbg when all keys are private', async () => {
+    const { wrapper } = await mountWithActiveGraph()
+    wrapper.vm.applyDebugValues({ n1: { _internal: 42 } })
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+  })
+
+  it('clears _dbg from all nodes when debug mode is toggled off', async () => {
+    const { wrapper } = await mountWithActiveGraph()
+
+    wrapper.vm.toggleDebug() // false → true
+    wrapper.vm.applyDebugValues({ n1: { value: 1, changed: false } })
+    expect(wrapper.vm.nodes[0].data._dbg).toBeDefined()
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBeDefined()
+
+    wrapper.vm.toggleDebug() // true → false, triggers clearDebugValues
+    expect(wrapper.vm.debugMode).toBe(false)
+    expect(wrapper.vm.nodes[0].data).not.toHaveProperty('_dbg')
+    expect(wrapper.vm.nodes[0].data).not.toHaveProperty('_dbg_title')
+  })
+})
+
+describe('LogicView WebSocket', () => {
+  let savedWebSocket
+  beforeEach(() => { savedWebSocket = global.WebSocket })
+  afterEach(() => { global.WebSocket = savedWebSocket })
+
+  function overrideStorage(overrides = {}) {
+    const storage = {
+      getItem: vi.fn().mockImplementation(k => overrides[k] ?? null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+    }
+    Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
+    Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true })
+  }
+
+  it('skips WebSocket when no access_token in storage', async () => {
+    let wsCreated = false
+    global.WebSocket = class { constructor() { wsCreated = true } }
+    const { wrapper } = await mountLogicView({ isAdmin: true })
+    expect(wsCreated).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('connects WebSocket on mount and closes it on unmount', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const { wrapper } = await mountLogicView({ isAdmin: true })
+    expect(wsInstance).toBeTruthy()
+
+    wrapper.unmount()
+    expect(wsInstance.close).toHaveBeenCalled()
+  })
+
+  it('applies debug values from a logic_run WebSocket message when debug mode is on', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok', logic_debug_mode: '1' })
+
+    const graph = makeGraph('graph-1')
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { n1: { value: 77, changed: true } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('= 77')
+  })
+
+  it('ignores logic_run message for a different graph_id', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok', logic_debug_mode: '1' })
+
+    const graph = makeGraph('graph-1')
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'OTHER', outputs: { n1: { value: 99, changed: true } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+  })
+
+  it('ignores logic_run message when debug mode is off', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const graph = makeGraph('graph-1')
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { n1: { value: 99, changed: true } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+  })
+
+  it('does not reconnect after close code 4001', async () => {
+    let wsInstance = null
+    let wsCreatedCount = 0
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn(); wsCreatedCount++ } }
+    overrideStorage({ access_token: 'tok' })
+
+    const { wrapper } = await mountLogicView({ isAdmin: true })
+    expect(wsCreatedCount).toBe(1)
+
+    wsInstance.onclose({ code: 4001 })
+    vi.advanceTimersByTime(4100)
+    expect(wsCreatedCount).toBe(1)
+
+    wrapper.unmount()
+  })
+
+  it('reconnects automatically after an abnormal close', async () => {
+    let wsInstance = null
+    let wsCreatedCount = 0
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn(); wsCreatedCount++ } }
+    overrideStorage({ access_token: 'tok' })
+
+    const { wrapper } = await mountLogicView({ isAdmin: true })
+    expect(wsCreatedCount).toBe(1)
+
+    wsInstance.onclose({ code: 1006 })
+    vi.advanceTimersByTime(4100)
+    expect(wsCreatedCount).toBe(2)
+
+    wrapper.unmount()
+  })
+
+  it('handles WebSocket constructor error gracefully', async () => {
+    global.WebSocket = class { constructor() { throw new Error('blocked by browser') } }
+    overrideStorage({ access_token: 'tok' })
+
+    const { wrapper } = await mountLogicView({ isAdmin: true })
+    expect(wrapper.vm).toBeTruthy()
+    wrapper.unmount()
+  })
+})
+
+describe('LogicView graph cycle validation', () => {
+  it('blocks direct cycle connections', async () => {
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'a', type: 'not', position: { x: 0, y: 0 }, data: {} },
+          { id: 'b', type: 'not', position: { x: 160, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: 'a-b', source: 'a', target: 'b', sourceHandle: 'out', targetHandle: 'in1' },
+        ],
+      },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    wrapper.vm.onConnect({ source: 'b', target: 'a', sourceHandle: 'out', targetHandle: 'in1' })
+
+    expect(wrapper.vm.edges).toHaveLength(1)
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+  })
+
+  it('allows feedback connections through memory nodes', async () => {
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'mem', type: 'memory', position: { x: 0, y: 0 }, data: { initial_value: 'false', data_type: 'bool' } },
+          { id: 'not', type: 'not', position: { x: 160, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: 'mem-not', source: 'mem', target: 'not', sourceHandle: 'out', targetHandle: 'in1' },
+        ],
+      },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    wrapper.vm.onConnect({ source: 'not', target: 'mem', sourceHandle: 'out', targetHandle: 'in' })
+
+    expect(wrapper.vm.edges).toHaveLength(2)
+    expect(wrapper.vm.validationWarnings).toEqual([])
+  })
+
+  it('blocks saving graphs with direct cycles and marks the nodes', async () => {
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'a', type: 'not', position: { x: 0, y: 0 }, data: {} },
+          { id: 'b', type: 'not', position: { x: 160, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: 'a-b', source: 'a', target: 'b', sourceHandle: 'out', targetHandle: 'in1' },
+          { id: 'b-a', source: 'b', target: 'a', sourceHandle: 'out', targetHandle: 'in1' },
+        ],
+      },
+    })
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    await wrapper.vm.saveGraph()
+
+    expect(logicApi.saveGraph).not.toHaveBeenCalled()
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+    expect(wrapper.vm.validationWarnings).toHaveLength(2)
+    expect(wrapper.vm.nodes.map(n => n.data._dbg)).toEqual([
+      expect.stringContaining('Zyklus'),
+      expect.stringContaining('Zyklus'),
+    ])
+  })
+
+  it('uses API warning counts from runGraph responses', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    logicApi.runGraph.mockResolvedValueOnce({
+      data: {
+        outputs: {
+          n1: {
+            __error__: 'Graph cycle detected; node was not executed.',
+            __diagnostic__: 'graph_cycle',
+          },
+        },
+        warnings: [{ node_id: 'n1', code: 'graph_cycle', message: 'cycle' }],
+      },
+    })
+
+    await wrapper.vm.runGraph()
+
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+    expect(wrapper.vm.statusMsg.text).toContain('Warnungen')
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('Graph cycle detected')
+  })
+})
+
+describe('LogicView operation error handling', () => {
+  it('shows error status when doDuplicateGraph fails', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    logicApi.duplicateGraph.mockRejectedValue({ response: { data: { detail: 'Duplicate failed' } } })
+
+    await wrapper.vm.doDuplicateGraph()
+
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+  })
+
+  it('shows error status when doExportGraph fails', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    logicApi.exportGraph.mockRejectedValue({ response: { data: { detail: 'Export failed' } } })
+
+    await wrapper.vm.doExportGraph()
+
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+  })
+
+  it('shows error status when doRenameGraph fails', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    logicApi.patchGraph.mockRejectedValue({ response: { data: { detail: 'Rename failed' } } })
+
+    wrapper.vm.openRenameGraph()
+    wrapper.vm.renameGraphName = 'Updated Name'
+    await wrapper.vm.doRenameGraph()
+
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+  })
+
+  it('shows error status when saveGraph fails', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    logicApi.saveGraph.mockRejectedValue({ response: { data: { detail: 'Save failed' } } })
+
+    await wrapper.vm.saveGraph()
+
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+  })
+
+  it('shows error status when runGraph fails', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    logicApi.runGraph.mockRejectedValue({ response: { data: { detail: 'Run failed' } } })
+
+    await wrapper.vm.runGraph()
+
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+  })
+
+  it('shows error status when doToggleEnabled fails', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    logicApi.patchGraph.mockRejectedValue({ response: { data: { detail: 'Toggle failed' } } })
+
+    await wrapper.vm.doToggleEnabled()
+
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+  })
+})
+
+describe('LogicView palette collapse', () => {
+  it('initialises paletteCollapsed from localStorage and persists changes', async () => {
+    const store = { logic_palette_collapsed: '1' }
+    const storage = {
+      getItem: vi.fn(k => store[k] ?? null),
+      setItem: vi.fn((k, v) => { store[k] = v }),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+    }
+    Object.defineProperty(window,     'localStorage', { value: storage, configurable: true })
+    Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true })
+
+    const { wrapper } = await mountLogicView({ isAdmin: true })
+
+    expect(wrapper.vm.paletteCollapsed).toBe(true)
+
+    wrapper.vm.paletteCollapsed = false
+    await flushPromises()
+    expect(storage.setItem).toHaveBeenCalledWith('logic_palette_collapsed', '0')
+  })
+})
+
+describe('LogicView import edge cases', () => {
+  it('opens rename dialog when imported graph name already exists', async () => {
+    const graph = makeGraph('graph-1')
+    const dup = makeGraph('graph-dup', { name: 'Main Graph' })
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      graphDetails: { 'graph-1': graph, 'graph-dup': dup },
+    })
+
+    logicApi.importGraph.mockResolvedValue({ data: dup })
+
+    const file = new File([JSON.stringify({})], 'logic.json', { type: 'application/json' })
+    await wrapper.vm.onImportFile({ target: { files: [file], value: 'logic.json' } })
+    await flushPromises()
+
+    expect(wrapper.vm.showRenameGraph).toBe(true)
+    expect(wrapper.vm.renameGraphName).toBe('Main Graph')
+  })
+
+  it('shows error status when the import file contains invalid JSON', async () => {
+    const { wrapper } = await mountLogicView({ isAdmin: true })
+
+    const badFile = new File(['not valid json {{'], 'logic.json', { type: 'application/json' })
+    await wrapper.vm.onImportFile({ target: { files: [badFile], value: 'logic.json' } })
+    await flushPromises()
+
+    expect(wrapper.vm.statusMsg).toBeTruthy()
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
   })
 })

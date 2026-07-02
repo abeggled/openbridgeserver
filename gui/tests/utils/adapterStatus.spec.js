@@ -53,4 +53,54 @@ describe('adapterStatusLabel', () => {
     expect(adapterStatusLabel({ running: true, severity: 'warning' })).toBe('adapters.status.degraded')
     expect(adapterStatusLabel({ running: true, connected: true })).toBe('adapters.status.connected')
   })
+
+  it('returns running key when running + no severity + not connected', () => {
+    expect(adapterStatusLabel({ running: true })).toBe('adapters.status.running')
+  })
+})
+
+import { adapterDotClass, adapterBadgeVariant } from '@/utils/adapterStatus'
+
+describe('adapterDotClass', () => {
+  it('returns slate when not running', () => {
+    expect(adapterDotClass({ running: false })).toBe('bg-slate-600')
+  })
+
+  it('returns red for error severity', () => {
+    expect(adapterDotClass({ running: true, severity: 'error' })).toBe('bg-red-500')
+  })
+
+  it('returns amber for warning severity', () => {
+    expect(adapterDotClass({ running: true, severity: 'warning' })).toBe('bg-amber-400')
+  })
+
+  it('returns green when connected', () => {
+    expect(adapterDotClass({ running: true, connected: true })).toBe('bg-green-400')
+  })
+
+  it('returns pulsing amber when running but not connected and no severity', () => {
+    expect(adapterDotClass({ running: true, connected: false })).toBe('bg-amber-400 animate-pulse')
+  })
+})
+
+describe('adapterBadgeVariant', () => {
+  it('returns muted when not running', () => {
+    expect(adapterBadgeVariant({ running: false })).toBe('muted')
+  })
+
+  it('returns danger for error severity', () => {
+    expect(adapterBadgeVariant({ running: true, severity: 'error' })).toBe('danger')
+  })
+
+  it('returns warning for warning severity', () => {
+    expect(adapterBadgeVariant({ running: true, severity: 'warning' })).toBe('warning')
+  })
+
+  it('returns success when connected', () => {
+    expect(adapterBadgeVariant({ running: true, connected: true })).toBe('success')
+  })
+
+  it('returns warning when running but not connected and no severity', () => {
+    expect(adapterBadgeVariant({ running: true, connected: false })).toBe('warning')
+  })
 })

@@ -61,7 +61,7 @@ GUI_CHANGED_FILES="$(
 )"
 
 echo "[pre-push] i18n hard gate"
-"$WITH_VENV" ./scripts/check-i18n-hardcoded-strings.sh
+"$WITH_VENV" ./tools/check-i18n-hardcoded-strings.sh
 
 if [ -n "$GUI_CHANGED_FILES" ]; then
   echo "[pre-push] gui vitest"

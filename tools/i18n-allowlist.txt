@@ -45,6 +45,16 @@ Zähler
 String Verketten
 API Client
 Substring / RegEx
+Wake on LAN
+
+# SUPPORTED_LOCALES native language names (i18n.js / i18n.ts).
+# These are intentionally hardcoded: they must appear in their own script before
+# any locale is loaded (bootstrapping), so $t() cannot be used here.
+# ASCII-only names (Deutsch, English, Italiano, Schweizerdeutsch) pass the guard
+# automatically via is_technical_token; only names with non-ASCII characters need
+# an explicit entry.
+Español
+Français
 
 # SchemaForm.vue — defaultPlaceholder() returns a schema default value (e.g. "502", "3.0")
 # from the backend JSON schema, not a hardcoded user-facing string.
