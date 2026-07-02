@@ -510,7 +510,7 @@ async def create_message_archive(
 @router.post("/integrity-check", response_model=IntegrityCheckResult)
 async def run_message_archive_integrity_check(
     _admin: str = Depends(get_admin_user),
-    store: MessageArchiveStore = Depends(_store),
+    store: MessageArchiveStore = Depends(_store_for_import),
 ) -> dict[str, Any]:
     return await store.integrity_check()
 
@@ -912,4 +912,5 @@ async def acknowledge_message_archive_entry(
     entry = await store.acknowledge_entry(archive_id, entry_id, access.username)
     if not entry:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive entry not found")
+    await broadcast_message_archive_entry(entry)
     return entry

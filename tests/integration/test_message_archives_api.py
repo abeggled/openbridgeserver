@@ -123,6 +123,51 @@ async def test_message_archive_crud_entries_read_ack_and_delete(client, auth_hea
     assert delete.json() == {"ok": True, "affected_entries": 1}
 
 
+async def test_message_archive_acknowledge_broadcasts_updated_entry(client, auth_headers, monkeypatch):
+    from obs.api.v1 import message_archives as message_archives_api
+
+    archive_id = _archive_id("ack-broadcast")
+    broadcasted: list[dict] = []
+
+    async def capture_broadcast(entry):
+        broadcasted.append(entry)
+
+    monkeypatch.setattr(message_archives_api, "broadcast_message_archive_entry", capture_broadcast)
+
+    try:
+        create = await client.post(
+            "/api/v1/message-archives",
+            headers=auth_headers,
+            json={"id": archive_id, "name": "Ack Broadcast"},
+        )
+        assert create.status_code == 201, create.text
+        entry_resp = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            json={"title": "Needs acknowledgement"},
+        )
+        assert entry_resp.status_code == 201, entry_resp.text
+        entry_id = entry_resp.json()["id"]
+        broadcasted.clear()
+
+        ack_resp = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries/{entry_id}/acknowledge",
+            headers=auth_headers,
+        )
+
+        assert ack_resp.status_code == 200, ack_resp.text
+        assert ack_resp.json()["status"] == "acknowledged"
+        assert [item["id"] for item in broadcasted] == [entry_id]
+        assert broadcasted[0]["status"] == "acknowledged"
+        assert broadcasted[0]["acknowledged_by"] == "admin"
+    finally:
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
 async def test_message_archive_integrity_check_and_export(client, auth_headers):
     archive_id = _archive_id("export")
     try:
@@ -155,6 +200,34 @@ async def test_message_archive_integrity_check_and_export(client, auth_headers):
             headers=auth_headers,
             params={"confirm": "true"},
         )
+
+
+async def test_message_archive_integrity_check_can_run_while_degraded(client, auth_headers, monkeypatch):
+    from obs.api.v1 import message_archives as message_archives_api
+
+    calls = 0
+
+    async def integrity_check(self):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            self.status = "degraded"
+            self.last_error = "simulated failure"
+            return {"ok": False, "result": "simulated failure", "path": self.path, "status": self.status}
+        self.status = "ok"
+        self.last_error = None
+        return {"ok": True, "result": "ok", "path": self.path, "status": self.status}
+
+    monkeypatch.setattr(message_archives_api.MessageArchiveStore, "integrity_check", integrity_check)
+
+    first = await client.post("/api/v1/message-archives/integrity-check", headers=auth_headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "degraded"
+
+    second = await client.post("/api/v1/message-archives/integrity-check", headers=auth_headers)
+    assert second.status_code == 200, second.text
+    assert second.json()["status"] == "ok"
+    assert calls == 2
 
 
 async def test_message_archive_database_export_and_import(client, auth_headers):
