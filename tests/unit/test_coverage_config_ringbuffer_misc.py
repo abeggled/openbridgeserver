@@ -1368,7 +1368,7 @@ async def test_query_history_dp_not_found(monkeypatch):
                 to_ts=None,
                 limit=100,
                 request=request,
-                user="admin",
+                principal=None,
                 db=db,
             )
     assert exc_info.value.status_code == 404
@@ -1389,6 +1389,7 @@ async def test_query_history_success(monkeypatch):
 
     with (
         patch.object(history_api, "_check_history_access", AsyncMock()),
+        patch.object(history_api, "_check_datapoint_read_access", AsyncMock()),
         patch("obs.api.v1.history.get_history_plugin", return_value=mock_plugin),
     ):
         result = await history_api.query_history(
@@ -1397,7 +1398,7 @@ async def test_query_history_success(monkeypatch):
             to_ts=None,
             limit=100,
             request=request,
-            user="admin",
+            principal=None,
             db=db,
         )
 
@@ -1415,7 +1416,10 @@ async def test_aggregate_history_invalid_fn(monkeypatch):
     db = _DbStub(fetchone_result=None)
     request = MagicMock()
 
-    with patch.object(history_api, "_check_history_access", AsyncMock()):
+    with (
+        patch.object(history_api, "_check_history_access", AsyncMock()),
+        patch.object(history_api, "_check_datapoint_read_access", AsyncMock()),
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await history_api.aggregate_history(
                 dp_id=dp.id,
@@ -1424,7 +1428,7 @@ async def test_aggregate_history_invalid_fn(monkeypatch):
                 from_ts=None,
                 to_ts=None,
                 request=request,
-                user="admin",
+                principal=None,
                 db=db,
             )
     assert exc_info.value.status_code == 422
@@ -1445,6 +1449,7 @@ async def test_aggregate_history_success(monkeypatch):
 
     with (
         patch.object(history_api, "_check_history_access", AsyncMock()),
+        patch.object(history_api, "_check_datapoint_read_access", AsyncMock()),
         patch("obs.api.v1.history.get_history_plugin", return_value=mock_plugin),
     ):
         result = await history_api.aggregate_history(
@@ -1454,7 +1459,7 @@ async def test_aggregate_history_success(monkeypatch):
             from_ts=None,
             to_ts=None,
             request=request,
-            user="admin",
+            principal=None,
             db=db,
         )
 
@@ -1480,7 +1485,7 @@ async def test_aggregate_history_dp_not_found(monkeypatch):
                 from_ts=None,
                 to_ts=None,
                 request=request,
-                user="admin",
+                principal=None,
                 db=db,
             )
     assert exc_info.value.status_code == 404
