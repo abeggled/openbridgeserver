@@ -176,6 +176,26 @@ async def test_checkpoint_skipped_when_disconnected(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_rechecks_disconnect_after_acquiring_lock(tmp_path):
+    """If the DB is closed while a checkpoint waits for the lock, it must skip on re-check."""
+    db = Database(str(tmp_path / "obs.db"))
+    await db.connect()
+    conn = db._conn
+
+    await db._checkpoint_lock.acquire()  # force the next checkpoint to wait
+    cp = asyncio.create_task(db.checkpoint())
+    await asyncio.sleep(0.05)
+    assert not cp.done()
+
+    # Simulate a disconnect completing while the checkpoint waits for the lock.
+    db._conn = None
+    db._checkpoint_lock.release()
+    assert await asyncio.wait_for(cp, timeout=2) is False
+
+    await conn.close()  # clean up the connection we detached
+
+
+@pytest.mark.asyncio
 async def test_connect_checkpoints_before_migrations(tmp_path, monkeypatch):
     """An initial checkpoint runs before migrations so a full WAL is reclaimed first."""
     calls: list[str] = []
@@ -339,7 +359,29 @@ async def test_disconnect_swallows_checkpoint_error(tmp_path):
     async def boom() -> bool:
         raise RuntimeError("checkpoint exploded")
 
-    db.checkpoint = boom  # type: ignore[method-assign]
+    db._run_checkpoint = boom  # type: ignore[method-assign]
     # Must not raise despite the failing checkpoint.
     await db.disconnect()
+    assert db._conn is None
+
+
+@pytest.mark.asyncio
+async def test_disconnect_waits_for_inflight_checkpoint(tmp_path):
+    """Disconnect must not proceed while a checkpoint worker still runs on the DB file.
+
+    Cancelling asyncio.to_thread does not stop the worker, so an admin restore that
+    disconnects and rewrites the file would otherwise race an in-flight checkpoint. The
+    shared checkpoint lock serializes them. See issue #908.
+    """
+    db = Database(str(tmp_path / "obs.db"))
+    await db.connect()
+
+    # Simulate an in-flight checkpoint holding the lock.
+    await db._checkpoint_lock.acquire()
+    disc = asyncio.create_task(db.disconnect())
+    await asyncio.sleep(0.05)
+    assert not disc.done()  # blocked until the checkpoint releases the lock
+
+    db._checkpoint_lock.release()
+    await asyncio.wait_for(disc, timeout=2)
     assert db._conn is None

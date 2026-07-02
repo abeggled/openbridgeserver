@@ -706,6 +706,11 @@ class Database:
     def __init__(self, path: str) -> None:
         self._path = path
         self._conn: aiosqlite.Connection | None = None
+        # Serializes WAL checkpoints and pairs them with disconnect: a restore
+        # (POST /config/import/db) disconnects the DB and rewrites the file, and
+        # cancelling asyncio.to_thread does not stop the worker thread — so disconnect
+        # must wait for any in-flight checkpoint to finish before returning. See #908.
+        self._checkpoint_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -743,15 +748,20 @@ class Database:
         logger.info("Database connected: %s", self._path)
 
     async def disconnect(self) -> None:
-        if self._conn is not None:
-            # Leave the -wal sidecar bounded on graceful shutdown.
-            try:
-                await self.checkpoint()
-            except Exception:
-                logger.exception("WAL checkpoint on disconnect failed")
-            await self._conn.close()
-            self._conn = None
-            logger.info("Database disconnected")
+        # Hold the checkpoint lock across the whole teardown: this waits for any
+        # in-flight maintenance checkpoint to finish (its worker thread cannot be
+        # cancelled) before closing, so a restore that rewrites the file right after
+        # disconnect never races a checkpoint still holding locks on it. See #908.
+        async with self._checkpoint_lock:
+            if self._conn is not None:
+                # Leave the -wal sidecar bounded on graceful shutdown.
+                try:
+                    await self._run_checkpoint()
+                except Exception:
+                    logger.exception("WAL checkpoint on disconnect failed")
+                await self._conn.close()
+                self._conn = None
+                logger.info("Database disconnected")
 
     async def checkpoint(self) -> bool:
         """Force a TRUNCATE WAL checkpoint to keep the ``-wal`` sidecar bounded.
@@ -765,19 +775,26 @@ class Database:
         event loop (via a worker thread) rather than the shared ``aiosqlite``
         connection. That way it never commits another coroutine's in-flight
         transaction/savepoint and never blocks the shared connection's operation queue
-        behind SQLite's busy timeout. ``PRAGMA wal_checkpoint(TRUNCATE)`` blocked by an
-        open reader returns a *busy* result row (and a contended lock raises
-        ``OperationalError`` with the non-waiting busy timeout) instead of completing;
-        both are treated as a failed checkpoint and retried on the next tick. Returns
+        behind SQLite's busy timeout. Runs are serialized with ``disconnect()`` via
+        ``_checkpoint_lock`` so a restore that disconnects and rewrites the file never
+        races an in-flight checkpoint (the worker thread cannot be cancelled). Returns
         ``True`` only when the WAL was actually checkpointed, ``False`` for in-memory
-        databases, a disconnected ``Database``, or a busy/locked result. Skipping while
-        disconnected keeps maintenance from taking file locks during an admin DB restore
-        (which disconnects first). See issue #908.
+        databases, a disconnected ``Database``, or a busy/locked result. See issue #908.
         """
-        from obs.ringbuffer.ringbuffer import _is_sqlite_memory_path, _sqlite_filesystem_path
+        from obs.ringbuffer.ringbuffer import _is_sqlite_memory_path
 
         if self._conn is None or _is_sqlite_memory_path(self._path):
             return False
+        async with self._checkpoint_lock:
+            # Re-check under the lock: disconnect may have closed the DB while we waited.
+            if self._conn is None:
+                return False
+            return await self._run_checkpoint()
+
+    async def _run_checkpoint(self) -> bool:
+        """Execute the TRUNCATE checkpoint. Caller must hold ``_checkpoint_lock``."""
+        from obs.ringbuffer.ringbuffer import _sqlite_filesystem_path
+
         fs_path = _sqlite_filesystem_path(self._path)
 
         def _run() -> bool:
