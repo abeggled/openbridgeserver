@@ -10,6 +10,7 @@ let authApi
 let dpApi
 let historySettingsApi
 let adapterApi
+let messageArchivesApi
 
 beforeEach(() => {
   vi.resetModules()
@@ -65,6 +66,10 @@ beforeEach(() => {
     importDb: vi.fn().mockResolvedValue({
       data: { message: 'DB restored', adapters_restarted: 2 },
     }),
+  }
+  messageArchivesApi = {
+    exportDb: vi.fn().mockResolvedValue({ data: new Blob(['message-archive-db']) }),
+    importDb: vi.fn().mockResolvedValue({ data: { message: 'Message archive restored' } }),
   }
   autobackupApi = {
     getConfig: vi.fn().mockResolvedValue({ data: { enabled: true, hour: 3, retention_days: 7 } }),
@@ -160,6 +165,7 @@ beforeEach(() => {
     authApi,
     adapterApi,
     configApi,
+    messageArchivesApi,
     autobackupApi,
     knxprojApi,
     iconsApi,
@@ -431,6 +437,16 @@ describe('SettingsView import/export coverage', () => {
     expect(configApi.importDb).toHaveBeenCalled()
     expect(wrapper.text()).toContain('Datenbankwiederherstellung OK')
     expect(wrapper.text()).toContain('2 Adapter neu gestartet')
+
+    await findButton(wrapper, 'Meldungsarchiv-SQLite herunterladen').trigger('click')
+    await flushPromises()
+    expect(messageArchivesApi.exportDb).toHaveBeenCalled()
+
+    const messageArchiveDbInput = wrapper.find('input[accept=".sqlite,.sqlite3,.db"]')
+    await selectFile(messageArchiveDbInput, new File(['sqlite'], 'messages.sqlite3', { type: 'application/octet-stream' }))
+    expect(messageArchivesApi.importDb).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Meldungsarchiv-Wiederherstellung OK')
+    expect(wrapper.text()).toContain('Message archive restored')
 
     const enableAutobackup = wrapper
       .findAll('label')
