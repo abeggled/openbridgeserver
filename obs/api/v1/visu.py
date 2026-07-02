@@ -651,7 +651,7 @@ async def save_page(
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
 
     await _check_page_write_access(db, node_id, principal)
-    datapoint_ids = sorted(set(_collect_page_datapoint_ids(node.page_config or PageConfig())) | set(_collect_page_datapoint_ids(config)))
+    datapoint_ids = _collect_page_datapoint_ids(config)
     await _check_page_datapoint_policy(db, principal, datapoint_ids, AuthzAction.WRITE, allow_empty=False)
 
     await db.conn.execute(

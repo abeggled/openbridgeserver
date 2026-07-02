@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from obs.api.auth import Principal, get_current_principal
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import filter_authorized_datapoints
-from obs.api.v1.datapoints import _has_explicit_datapoint_read_deny, _page_context_allows_datapoint_read, _user_visu_page_has_datapoint
+from obs.api.v1.datapoints import _has_explicit_datapoint_read_deny, _page_context_allows_datapoint_read
 from obs.api.v1.sessions import validate_session
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
@@ -179,10 +179,7 @@ async def _check_datapoint_read_access(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
     if await _page_context_allows_datapoint_read(db, request, dp_id, principal):
         return
-    if principal.type == "user" and await _user_visu_page_has_datapoint(db, principal.subject, dp_id):
-        return
-    else:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+    raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
 
 
 # ---------------------------------------------------------------------------

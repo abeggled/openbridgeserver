@@ -516,7 +516,7 @@ async def test_get_value_authenticated_protected_source_page_remains_compatible_
 
 
 @pytest.mark.asyncio
-async def test_get_value_assigned_user_visu_page_remains_compatible_without_grant(monkeypatch, db: Database):
+async def test_get_value_assigned_user_visu_page_requires_read_grant(monkeypatch, db: Database):
     datapoint = _dp("00000000-0000-0000-0000-000000000051", "User page value")
     await _insert_datapoint(db, datapoint)
     await db.execute_and_commit(
@@ -565,12 +565,12 @@ async def test_get_value_assigned_user_visu_page_remains_compatible_without_gran
 
     request = MagicMock()
     request.headers = {}
-    result = await dp_api.get_value(
-        dp_id=datapoint.id,
-        request=request,
-        user=Principal(subject="alice", type="user", is_admin=False),
-        db=db,
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        await dp_api.get_value(
+            dp_id=datapoint.id,
+            request=request,
+            user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
 
-    assert result.value == 23.0
-    assert result.quality == "good"
+    assert exc_info.value.status_code == 404

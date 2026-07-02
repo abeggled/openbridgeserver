@@ -247,22 +247,6 @@ async def _has_explicit_datapoint_read_deny(db: Database, principal: Principal, 
     return decision.reason == "explicit_deny"
 
 
-async def _user_visu_page_has_datapoint(db: Database, username: str, dp_id: uuid.UUID) -> bool:
-    from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
-
-    rows = await db.fetchall("SELECT id FROM visu_nodes WHERE type = 'PAGE' AND page_config IS NOT NULL")
-    for row in rows:
-        page_id = row["id"]
-        access, _ = await _resolve_access_with_node(db, page_id)
-        if access != "user":
-            continue
-        if not await _check_user_access(db, page_id, username):
-            continue
-        if await _page_has_datapoint(db, page_id, dp_id):
-            return True
-    return False
-
-
 async def _page_context_allows_datapoint_read(
     db: Database,
     request: Request,
@@ -273,7 +257,7 @@ async def _page_context_allows_datapoint_read(
     if not page_id or not await _page_has_datapoint(db, page_id, dp_id):
         return False
 
-    from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
+    from obs.api.v1.visu import _resolve_access_with_node
 
     access, defining_node_id = await _resolve_access_with_node(db, page_id)
     if access in ("public", "readonly"):
@@ -284,8 +268,6 @@ async def _page_context_allows_datapoint_read(
         session_token = request.headers.get("X-Session-Token")
         validate_id = defining_node_id or page_id
         return bool(session_token and validate_session(session_token, validate_id))
-    if access == "user" and principal is not None and principal.type == "user":
-        return await _check_user_access(db, page_id, principal.subject)
     return False
 
 
@@ -472,9 +454,7 @@ async def get_value(
         if not await _can_read_datapoint(db, principal, dp_id):
             if await _has_explicit_datapoint_read_deny(db, principal, dp_id):
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
-            if not await _page_context_allows_datapoint_read(db, request, dp_id, principal) and (
-                principal.type != "user" or not await _user_visu_page_has_datapoint(db, principal.subject, dp_id)
-            ):
+            if not await _page_context_allows_datapoint_read(db, request, dp_id, principal):
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
 
     state = reg.get_value(dp_id)

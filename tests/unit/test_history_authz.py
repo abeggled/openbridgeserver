@@ -415,7 +415,7 @@ async def test_query_history_page_fallback_honors_explicit_deny(monkeypatch, db:
 
 
 @pytest.mark.asyncio
-async def test_query_history_assigned_user_page_remains_compatible_without_page_header(monkeypatch, db: Database):
+async def test_query_history_assigned_user_page_requires_read_grant(monkeypatch, db: Database):
     dp_id = uuid.uuid4()
     await _seed_datapoint_scope(db, dp_id)
     await _insert_user_visu_page(db, "page-user-history", "alice", dp_id)
@@ -427,18 +427,19 @@ async def test_query_history_assigned_user_page_remains_compatible_without_page_
     monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", AsyncMock(return_value=("user", None)))
     monkeypatch.setattr("obs.api.v1.visu._check_user_access", AsyncMock(return_value=True))
 
-    result = await history_api.query_history(
-        dp_id=dp_id,
-        from_ts=None,
-        to_ts=None,
-        limit=100,
-        request=_request(),
-        principal=_principal("alice"),
-        db=db,
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        await history_api.query_history(
+            dp_id=dp_id,
+            from_ts=None,
+            to_ts=None,
+            limit=100,
+            request=_request(),
+            principal=_principal("alice"),
+            db=db,
+        )
 
-    assert result == []
-    plugin.query.assert_awaited_once()
+    assert exc_info.value.status_code == 404
+    plugin.query.assert_not_called()
 
 
 @pytest.mark.asyncio
