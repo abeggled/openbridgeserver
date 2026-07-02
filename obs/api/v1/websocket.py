@@ -213,6 +213,8 @@ class WebSocketManager:
                 if log_access_check is not None and not await log_access_check():
                     self._set_log_access(conn_id, False)
                     continue
+            if allowed_ids is not None and scoped_dp_id is None:
+                continue
             if scoped_dp_id is not None and allowed_ids is not None and scoped_dp_id not in allowed_ids:
                 continue
             if not await self._send(conn_id, msg):

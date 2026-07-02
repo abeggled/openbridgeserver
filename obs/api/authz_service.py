@@ -186,23 +186,26 @@ async def filter_authorized_datapoints(
 
     allowed: list[str] = []
     for dp_id in ordered_ids:
+        targets = targets_by_dp.get(dp_id, [])
         decision = authorize(
             principal=principal,
             action=action_value,
-            targets=targets_by_dp.get(dp_id, []),
+            targets=targets,
             grants=resolved_grants,
         )
+        if action_value != AuthzAction.READ and dp_id in direct_grant_ids:
+            direct_decision = authorize(
+                principal=principal,
+                action=action_value,
+                targets=[AuthzTarget(node_type="datapoint", node_id=dp_id)],
+                grants=resolved_grants,
+            )
+            if decision.reason == "explicit_deny" or direct_decision.reason == "explicit_deny":
+                continue
+            if decision.allowed or direct_decision.allowed:
+                allowed.append(dp_id)
+            continue
         if decision.allowed:
             allowed.append(dp_id)
             continue
-        if decision.reason == "explicit_deny" or action_value == AuthzAction.READ or dp_id not in direct_grant_ids:
-            continue
-        direct_decision = authorize(
-            principal=principal,
-            action=action_value,
-            targets=[AuthzTarget(node_type="datapoint", node_id=dp_id)],
-            grants=resolved_grants,
-        )
-        if direct_decision.allowed:
-            allowed.append(dp_id)
     return allowed

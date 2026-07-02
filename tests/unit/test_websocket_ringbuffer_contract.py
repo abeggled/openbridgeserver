@@ -226,6 +226,22 @@ async def test_broadcast_filters_entry_datapoint_messages_for_scoped_connections
 
 
 @pytest.mark.asyncio
+async def test_broadcast_blocks_unscoped_messages_for_scoped_connections():
+    manager = WebSocketManager()
+    unrestricted_ws = _FakeWebSocket()
+    scoped_ws = _FakeWebSocket()
+
+    await manager.connect(unrestricted_ws)
+    await manager.connect(scoped_ws, allowed_dp_ids={"allowed-dp"})
+
+    msg = {"action": "logic_run", "graph_id": "graph-1", "outputs": {"blocked-dp": 1}}
+    await manager.broadcast(msg)
+
+    assert unrestricted_ws.messages == [msg]
+    assert scoped_ws.messages == []
+
+
+@pytest.mark.asyncio
 async def test_subscribe_filters_datapoints_for_page_scoped_connection():
     ws = _FakeWebSocket()
     manager = WebSocketManager()

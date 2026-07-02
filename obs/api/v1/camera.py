@@ -143,7 +143,7 @@ async def _ensure_camera_page_scope(
     from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
 
     access, defining_node_id = await _resolve_access_with_node(db, page_id)
-    if access == "protected":
+    if access == "protected" and user is None:
         validate_id = defining_node_id or page_id
         if not session_token or not validate_session(session_token, validate_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Valid session token required")
