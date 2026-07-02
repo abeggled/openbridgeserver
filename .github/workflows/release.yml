@@ -14,6 +14,12 @@ env:
 jobs:
   validate-tag:
     name: Validate tag
+    # Reusable-workflow tokens can only be reduced, never elevated, from the
+    # caller's permissions — the workflow-level `permissions: {}` above would
+    # otherwise strip the `contents: read` the callee needs for its branch/
+    # compare API checks.
+    permissions:
+      contents: read
     uses: ./.github/workflows/validate-release-tag.yml
 
   release:
@@ -305,8 +311,12 @@ jobs:
           # instead of being treated as already done.
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
             echo "Branch ${BRANCH} already exists without a PR — resuming."
+            # actions/checkout only has "main" (fetch-depth: 1); a plain
+            # `git fetch origin "$BRANCH"` only updates FETCH_HEAD, it does
+            # not create a local or origin/$BRANCH ref to check out. Force
+            # the local branch to point at FETCH_HEAD explicitly instead.
             git fetch origin "$BRANCH"
-            git checkout "$BRANCH"
+            git checkout -B "$BRANCH" FETCH_HEAD
           else
             git checkout -b "$BRANCH"
           fi

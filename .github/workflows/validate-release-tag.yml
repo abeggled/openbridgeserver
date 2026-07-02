@@ -21,9 +21,9 @@ jobs:
     steps:
       - name: Validate tag format
         run: |
-          TAG="${GITHUB_REF##*/}"
-          if [[ ! "$TAG" =~ ^[0-9]{4}\.(1[0-2]|[1-9])\.[0-9]+(-RC[0-9]+)?$ ]]; then
-            echo "::error::Tag '$TAG' does not match CalVer format YYYY.M.PATCH(-RC<N>) with M in 1-12 and no leading zero. Aborting release."
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ ! "$TAG" =~ ^[0-9]{4}\.(1[0-2]|[1-9])\.(0|[1-9][0-9]*)(-RC[0-9]+)?$ ]]; then
+            echo "::error::Tag '$TAG' does not match CalVer format YYYY.M.PATCH(-RC<N>) with M in 1-12 and no leading zero on M/PATCH. Aborting release."
             exit 1
           fi
           echo "Tag format OK: $TAG"
@@ -32,7 +32,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG_NAME="${GITHUB_REF##*/}"
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
           export TAG_NAME
           python3 <<'ORIGIN_EOF'
           import json, os, re, sys, urllib.request, urllib.error
