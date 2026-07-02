@@ -62,7 +62,6 @@ _ICAL_MAX_REDIRECTS = 5
 _ICAL_ALLOWED_CONTENT_TYPES = ("text/calendar", "application/ics", "application/octet-stream", "text/plain")
 _PUSHOVER_ATTACHMENT_MAX_BYTES = 5_000_000
 _SECRET_FILE_MAX_BYTES = 8192
-_SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
 _API_CLIENT_RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _API_CLIENT_VARIABLE_RE = re.compile(r"###OBS([1-9][0-9]*)###")
 _HOST_CHECK_MIN_TIMEOUT_S = 1.0
@@ -77,7 +76,31 @@ class _ApiClientVariableError(ValueError):
 
 
 def _secret_file_root() -> Path:
-    return Path(os.environ.get("OBS_SECRET_FILE_DIR", _SECRET_FILE_DEFAULT_ROOT)).resolve()
+    configured = os.environ.get("OBS_SECRET_FILE_DIR") or os.environ.get("OPENTWS_SECRET_FILE_DIR")
+    if configured:
+        return Path(configured).resolve()
+
+    from obs.config import get_settings
+
+    return (Path(get_settings().database.path).resolve().parent / "secrets").resolve()
+
+
+def _secret_path_from_name(name: str) -> Path | None:
+    secret_name = (name or "").strip()
+    if not secret_name:
+        return None
+    secret_path = Path(secret_name)
+    if secret_path.is_absolute() or len(secret_path.parts) != 1 or "/" in secret_name or "\\" in secret_name or secret_name in {".", ".."}:
+        logger.warning("Refusing unsafe secret name: %s", secret_name)
+        return None
+    return _secret_file_root() / secret_name
+
+
+def _read_secret_name(name: str) -> str:
+    secret_path = _secret_path_from_name(name)
+    if secret_path is None:
+        return ""
+    return _read_secret_file(str(secret_path))
 
 
 def _read_secret_file(path: str) -> str:
@@ -2415,8 +2438,8 @@ class LogicManager:
             out = outputs.get(node.id, {})
             if not GraphExecutor._to_bool(out.get("_trigger")):
                 continue
-            app_token = (node.data.get("app_token") or "").strip()
-            user_key = (node.data.get("user_key") or "").strip()
+            app_token = _read_secret_name(node.data.get("app_token_secret") or "") or (node.data.get("app_token") or "").strip()
+            user_key = _read_secret_name(node.data.get("user_key_secret") or "") or (node.data.get("user_key") or "").strip()
             if not app_token or not user_key:
                 logger.warning("Pushover: app_token or user_key missing on node %s", node.id[:8])
                 continue
