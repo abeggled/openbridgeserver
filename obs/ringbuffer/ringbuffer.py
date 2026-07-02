@@ -274,35 +274,52 @@ class RingBuffer:
             ),
         )
         await store.open()
-        self._store = store
-        # Segment-Alter aus dem Manifest, NICHT ab now() (#264): ``store.open()``
-        # kann ein aktives Segment WIEDERVERWENDEN, das lange vor diesem (Neu-)
-        # Start angelegt wurde. Würde ``_segment_created_at`` hier auf now()
-        # gesetzt, altert ein langlebiges aktives Segment nie über die
-        # ``segment_max_age``-Schwelle und wächst unbegrenzt. Daher aus dem
-        # ``created_at`` des aktiven Segments initialisieren; nur wenn (noch)
-        # kein aktives Segment existiert, ist now() der korrekte Boden.
-        active = await store.manifest.get_active_segment()
-        self._segment_created_at = active.created_at if active is not None else _isoformat_utc(datetime.now(UTC))
+        # ``store.open()`` hat bereits die Writer-Lease belegt und SQLite-
+        # Connections geöffnet. Schlägt ein NACHFOLGENDER Startup-Schritt fehl
+        # (Legacy-Attach oder Startup-Retention, z. B. Manifest-/Permission-
+        # Fehler), dürfen diese Ressourcen nicht offen zurückbleiben: ohne
+        # Cleanup gibt ``start()`` nie einen Store zurück, den ``stop()``
+        # schließen könnte — die Lease/Connections leaken und ein späterer Retry
+        # scheitert am belegten Segment-Root. Daher best-effort schließen und
+        # ``self._store`` zurücksetzen, bevor der Originalfehler propagiert.
+        try:
+            self._store = store
+            # Segment-Alter aus dem Manifest, NICHT ab now() (#264): ``store.open()``
+            # kann ein aktives Segment WIEDERVERWENDEN, das lange vor diesem (Neu-)
+            # Start angelegt wurde. Würde ``_segment_created_at`` hier auf now()
+            # gesetzt, altert ein langlebiges aktives Segment nie über die
+            # ``segment_max_age``-Schwelle und wächst unbegrenzt. Daher aus dem
+            # ``created_at`` des aktiven Segments initialisieren; nur wenn (noch)
+            # kein aktives Segment existiert, ist now() der korrekte Boden.
+            active = await store.manifest.get_active_segment()
+            self._segment_created_at = active.created_at if active is not None else _isoformat_utc(datetime.now(UTC))
 
-        # Legacy-Single-DB (falls vorhanden) read-only einhängen — ohne Vollscan.
-        # Idempotent: bei Neustart darf dieselbe Datei NICHT doppelt eingehängt
-        # werden. Erkennung über den absoluten Pfad in den bereits registrierten
-        # Legacy-Segmenten.
-        if not _is_sqlite_memory_path(self._disk_path) and Path(_sqlite_filesystem_path(self._disk_path)).exists():
-            legacy_fs_path = _sqlite_filesystem_path(self._disk_path)
-            resolved_legacy = str(Path(legacy_fs_path).resolve())
-            existing = {seg.filename for seg in await store.manifest.list_legacy_segments()}
-            if resolved_legacy not in existing:
-                migrator = LegacyMigrator(store, legacy_fs_path)
-                classification = migrator.classify()
-                if classification is not None:
-                    await migrator.attach_readonly(classification)
+            # Legacy-Single-DB (falls vorhanden) read-only einhängen — ohne Vollscan.
+            # Idempotent: bei Neustart darf dieselbe Datei NICHT doppelt eingehängt
+            # werden. Erkennung über den absoluten Pfad in den bereits registrierten
+            # Legacy-Segmenten.
+            if not _is_sqlite_memory_path(self._disk_path) and Path(_sqlite_filesystem_path(self._disk_path)).exists():
+                legacy_fs_path = _sqlite_filesystem_path(self._disk_path)
+                resolved_legacy = str(Path(legacy_fs_path).resolve())
+                existing = {seg.filename for seg in await store.manifest.list_legacy_segments()}
+                if resolved_legacy not in existing:
+                    migrator = LegacyMigrator(store, legacy_fs_path)
+                    classification = migrator.classify()
+                    if classification is not None:
+                        await migrator.attach_readonly(classification)
 
-        # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
-        # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
-        # zügig getrimmt (No-Zero-History-Guard beachtet, siehe Store).
-        await store.enforce_retention()
+            # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
+            # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
+            # zügig getrimmt (No-Zero-History-Guard beachtet, siehe Store).
+            await store.enforce_retention()
+        except Exception:
+            try:
+                await store.close()
+            except Exception:
+                logger.exception("RingBuffer: Store-Cleanup nach fehlgeschlagenem segmentiertem Startup fehlgeschlagen")
+            self._store = None
+            self._segment_created_at = None
+            raise
 
     def _segment_store_root(self) -> str:
         """Storage-Root des Segment-Stores neben der Legacy-DB (``<stem>_segments``)."""

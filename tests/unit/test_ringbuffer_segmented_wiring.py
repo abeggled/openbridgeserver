@@ -824,3 +824,53 @@ async def test_segmented_rotation_after_default_six_hour_age(tmp_path: Path):
         assert segments_after > segments_before
     finally:
         await rb.stop()
+
+
+# ---------------------------------------------------------------------------
+# Flag AN: fehlgeschlagener Startup NACH store.open() schließt den Store (#951)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_segmented_startup_failure_after_open_closes_store_and_allows_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Wirft ein Folge-Schritt nach ``store.open()``, wird der Store geschlossen.
+
+    ``store.open()`` gelingt (Writer-Lease + Connections offen), aber der
+    Startup-Retention-Schritt wirft. Ohne Cleanup bliebe der Store an einer
+    Instanz hängen, die ``start()`` nie zurückgibt → Lease/Root belegt, Retry
+    scheitert. Erwartet: (a) Fehler propagiert, (b) Store geschlossen und
+    ``self._store``/``_segment_created_at`` zurückgesetzt, (c) erneuter Start
+    gelingt (kein belegter Segment-Root).
+    """
+    from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
+
+    calls = {"n": 0}
+    real_enforce = SqliteSegmentStore.enforce_retention
+
+    async def flaky_enforce(self):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PermissionError("simulierter Manifest-/Permission-Fehler beim Startup")
+        return await real_enforce(self)
+
+    monkeypatch.setattr(SqliteSegmentStore, "enforce_retention", flaky_enforce)
+
+    rb = _rb(tmp_path, segmented=True)
+
+    # (a) Der Originalfehler propagiert unverschluckt.
+    with pytest.raises(PermissionError):
+        await rb.start()
+
+    # (b) Kein Leak: Store geschlossen, Instanzzustand zurückgesetzt.
+    assert rb.store is None
+    assert rb._segment_created_at is None
+
+    # (c) Retry setzt sauber neu auf (Writer-Lease frei, Segment-Root nicht belegt).
+    await rb.start()
+    try:
+        assert rb.store is not None
+        await _record(rb, 1, "2026-01-01T00:00:00.000Z")
+        entries = await rb.query_v2(limit=10)
+        assert [e.new_value for e in entries] == [1]
+    finally:
+        await rb.stop()
