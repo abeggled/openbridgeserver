@@ -300,17 +300,30 @@ jobs:
             exit 0
           fi
 
+          # An existing prep branch without a PR (e.g. `gh pr create` failed
+          # transiently right after the push) is resumed by checking it out
+          # instead of being treated as already done.
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            echo "Branch ${BRANCH} already exists without a PR — resuming by opening the PR."
+            echo "Branch ${BRANCH} already exists without a PR — resuming."
             git fetch origin "$BRANCH"
             git checkout "$BRANCH"
           else
             git checkout -b "$BRANCH"
+          fi
 
+          # Idempotent on its own: no-ops if the section is already present
+          # on the checked-out branch (the resume case above).
           NEXT_VERSION="$NEXT_VERSION" python3 - <<'PYEOF'
-          import os
+          import os, sys
 
           next_version = os.environ['NEXT_VERSION']
+
+          with open("RELEASENOTES.md", "r") as f:
+              content = f.read()
+
+          if f"## {next_version}" in content:
+              print(f"Section for {next_version} already present on this branch — nothing to insert.")
+              sys.exit(0)
 
           new_lines = [
               f"## {next_version}",
@@ -328,9 +341,6 @@ jobs:
               "",
           ]
 
-          with open("RELEASENOTES.md", "r") as f:
-              content = f.read()
-
           lines = content.split("\n")
           insert_at = next((i for i, l in enumerate(lines) if l.startswith("## ")), len(lines))
           for nl in reversed(new_lines):
@@ -342,6 +352,9 @@ jobs:
           print(f"Added section for {next_version}")
           PYEOF
 
+          if git diff --quiet RELEASENOTES.md; then
+            echo "RELEASENOTES.md unchanged on ${BRANCH} — skipping commit/push."
+          else
             git add RELEASENOTES.md
             git commit -m "chore: prepare RELEASENOTES.md for ${NEXT_VERSION}"
             git push -u origin "$BRANCH"
