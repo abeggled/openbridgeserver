@@ -1327,7 +1327,7 @@
       "title": "Forecast",
       "warming": "Forecast is still warming up (too few segments).",
       "rate": "Currently ~{mib} MiB/h (~{rows} events/h).",
-      "rotation": "New segment currently ~every {hours} h",
+      "rotation": "New segment ~every {hours} h",
       "rotationSizeCap": " — the size cap (~{cap} MiB) kicks in before the configured {age} h.",
       "history": "Budget {budget} lasts for ~{duration}.",
       "historyUnlimited": "Budget unlimited — history keeps growing.",

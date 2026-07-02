@@ -106,17 +106,33 @@ const rateLine = computed(() => {
   })
 })
 
-// 2. Rotation — mit Größen-Cap-Zusatz, wenn der Cap vor der eingestellten Zeit
-// greift (avg_segment_seconds < segmentAgeHours*3600).
+// 2. Rotation — ERWARTETES Intervall aus der Config, nicht der historische
+// Messwert: min(segment_max_age, Zeit-bis-Größen-Cap). Füllt sich die Größe
+// schneller als das Alter, greift der Cap (größengetrieben); sonst rotiert die
+// Zeit (zeitgetrieben). So passt die Zeile zur eingestellten Segmentgröße —
+// z. B. „~alle 1 h" bei segment_max_age=1 h, statt dem 1,8-h-Durchschnitt alter
+// Segmente.
 const rotationLine = computed(() => {
-  const segEverySeconds = posNumber(props.prognosis?.avg_segment_seconds)
-  if (segEverySeconds === null) return ''
+  const age = posNumber(props.segmentAgeHours) // Stunden
+  const cap = posNumber(props.prognosis?.effective_segment_max_bytes) // Bytes
+  const bytesPerHour = posNumber(props.prognosis?.bytes_per_hour)
+  const fillHours = cap !== null && bytesPerHour !== null ? cap / bytesPerHour : null
+  let expectedHours = null
+  let sizeDriven = false
+  if (age !== null && fillHours !== null) {
+    sizeDriven = fillHours < age
+    expectedHours = sizeDriven ? fillHours : age
+  } else if (age !== null) {
+    expectedHours = age
+  } else if (fillHours !== null) {
+    expectedHours = fillHours
+    sizeDriven = true
+  }
+  if (expectedHours === null) return ''
   const base = t('ringbuffer.prognosis.rotation', {
-    hours: fmtNum(segEverySeconds / 3600, segEverySeconds / 3600 < 10 ? 1 : 0),
+    hours: fmtNum(expectedHours, expectedHours < 10 ? 1 : 0),
   })
-  const age = posNumber(props.segmentAgeHours)
-  const cap = posNumber(props.prognosis?.effective_segment_max_bytes)
-  if (age !== null && cap !== null && segEverySeconds < age * 3600) {
+  if (sizeDriven && cap !== null && age !== null) {
     return base + t('ringbuffer.prognosis.rotationSizeCap', {
       cap: fmtNum(cap / MIB, cap / MIB < 10 ? 1 : 0),
       age: fmtNum(age, age < 10 ? 1 : 0),

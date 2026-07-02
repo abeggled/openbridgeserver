@@ -1327,7 +1327,7 @@
       "title": "Prognose",
       "warming": "Prognose läuft sich noch ein (zu wenige Segmente).",
       "rate": "Aktuell ~{mib} MiB/h (~{rows} Events/h).",
-      "rotation": "Neues Segment aktuell ~alle {hours} h",
+      "rotation": "Neues Segment ~alle {hours} h",
       "rotationSizeCap": " — der Größen-Cap (~{cap} MiB) greift vor den eingestellten {age} h.",
       "history": "Budget {budget} reicht für ~{duration}.",
       "historyUnlimited": "Budget unbegrenzt — Historie wächst.",

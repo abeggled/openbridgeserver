@@ -23,15 +23,16 @@ function mountBlock(props = {}) {
 
 const GIB = 1024 * 1024 * 1024
 
-// avg_segment_seconds (6 h) >= segmentAgeHours*3600 (6 h) → Zeit greift zuerst,
-// kein Größen-Cap-Zusatz.
+// Rotation = min(segment_max_age, Größen-Füllzeit). Bei 50 MiB/h und Cap 400 MiB
+// ist die Füllzeit 8 h > segmentAgeHours (6 h) → ZEIT greift zuerst (zeitgetrieben,
+// kein Größen-Cap-Zusatz).
 const fullPrognosis = {
   sample_segment_count: 5,
   bytes_per_hour: 50 * 1024 * 1024, // 50 MiB/h
   rows_per_hour: 12000,
-  avg_segment_seconds: 6 * 3600, // 6 h
+  avg_segment_seconds: 6 * 3600, // gemessen; für die Rotations-Zeile nicht mehr genutzt
   estimated_retention_seconds: 5 * 24 * 3600, // 5 days
-  effective_segment_max_bytes: 16 * 1024 * 1024, // 16 MiB
+  effective_segment_max_bytes: 400 * 1024 * 1024, // Cap 400 MiB → Füllzeit 8 h
 }
 
 describe('PrognosisBlock — fully populated', () => {
@@ -72,27 +73,26 @@ describe('PrognosisBlock — fully populated', () => {
 
 describe('PrognosisBlock — rotation size cap', () => {
   it('appends the size-cap clause when the cap kicks in before the configured time', () => {
-    // avg_segment_seconds (1 h) < segmentAgeHours*3600 (6 h) → Cap greift vor der Zeit.
+    // Cap 50 MiB / 50 MiB/h = 1 h Füllzeit < segmentAgeHours (6 h) → größengetrieben.
     const wrapper = mountBlock({
-      prognosis: { ...fullPrognosis, avg_segment_seconds: 1 * 3600, effective_segment_max_bytes: 16 * 1024 * 1024 },
+      prognosis: { ...fullPrognosis, bytes_per_hour: 50 * 1024 * 1024, effective_segment_max_bytes: 50 * 1024 * 1024 },
       segmentAgeHours: 6,
       maxFileSizeBytes: 20 * GIB,
     })
     const rotation = wrapper.find('[data-testid="prognosis-rotation"]').text()
-    expect(rotation).toContain('~alle 1,0 h')
+    expect(rotation).toContain('~alle 1,0 h') // Füllzeit, nicht das 6-h-Alter
     expect(rotation).toContain('Größen-Cap')
-    expect(rotation).toContain('16') // cap in MiB
+    expect(rotation).toContain('50') // cap in MiB
     expect(rotation).toContain('6,0 h') // configured age
     expect(rotation).not.toContain('NaN')
   })
 
-  it('omits the size-cap clause when time kicks in first (avg >= age)', () => {
-    const wrapper = mountBlock({
-      prognosis: { ...fullPrognosis, avg_segment_seconds: 8 * 3600 },
-      segmentAgeHours: 6,
-      maxFileSizeBytes: 20 * GIB,
-    })
-    expect(wrapper.find('[data-testid="prognosis-rotation"]').text()).not.toContain('Größen-Cap')
+  it('omits the size-cap clause when time kicks in first (fill time >= age)', () => {
+    // fullPrognosis: Cap 400 MiB / 50 MiB/h = 8 h Füllzeit >= 6 h Alter → zeitgetrieben.
+    const wrapper = mountBlock({ prognosis: fullPrognosis, segmentAgeHours: 6, maxFileSizeBytes: 20 * GIB })
+    const rotation = wrapper.find('[data-testid="prognosis-rotation"]').text()
+    expect(rotation).toContain('~alle 6,0 h') // das eingestellte Alter
+    expect(rotation).not.toContain('Größen-Cap')
   })
 })
 
@@ -162,10 +162,11 @@ describe('PrognosisBlock — warming up', () => {
 })
 
 describe('PrognosisBlock — individual null fields blank only their line', () => {
-  it('omits the rotation line when avg_segment_seconds is null', () => {
+  it('omits the rotation line when neither age nor size cap is known', () => {
+    // Kein segment_max_age UND kein effektiver Cap → weder Zeit noch Größe bekannt.
     const wrapper = mountBlock({
-      prognosis: { ...fullPrognosis, avg_segment_seconds: null },
-      segmentAgeHours: 6,
+      prognosis: { ...fullPrognosis, effective_segment_max_bytes: null },
+      segmentAgeHours: null,
       maxFileSizeBytes: 20 * GIB,
     })
     expect(wrapper.find('[data-testid="prognosis-rate"]').exists()).toBe(true)
