@@ -21,6 +21,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -466,6 +467,10 @@ async def _page_allowed_message_archive_predicates(
                 return bool(config.get(key))
         return default
 
+    def _mini_widgets_from_config(config: dict[str, Any]) -> list[Any]:
+        raw = config.get("miniWidgets")
+        return raw if isinstance(raw, list) else []
+
     page_cache: dict[str, PageConfig | None] = {}
 
     async def _load_page_config(target_page_id: str) -> PageConfig | None:
@@ -498,8 +503,8 @@ async def _page_allowed_message_archive_predicates(
         *,
         inherited_readonly: bool = False,
     ) -> None:
+        config = widget.config if isinstance(widget.config, dict) else {}
         if widget.type == "MessageArchive":
-            config = widget.config if isinstance(widget.config, dict) else {}
             out.append(
                 MessageArchivePredicate(
                     archive_ids=_string_set_from_config(config, "archive_ids", "archive_id", lower=True),
@@ -512,6 +517,20 @@ async def _page_allowed_message_archive_predicates(
                     if inherited_readonly
                     else _bool_from_config(config, "allow_acknowledge", "allowAcknowledge", default=True),
                 )
+            )
+
+        for mini_widget in _mini_widgets_from_config(config):
+            if not isinstance(mini_widget, dict):
+                continue
+            mini_type = _non_empty_str(mini_widget.get("widgetType")) or _non_empty_str(mini_widget.get("type"))
+            if not mini_type:
+                continue
+            mini_config = mini_widget.get("config")
+            await _collect_widget_archives(
+                SimpleNamespace(type=mini_type, config=mini_config if isinstance(mini_config, dict) else {}),
+                out,
+                visited_refs,
+                inherited_readonly=inherited_readonly,
             )
 
         if widget.type not in {"widget_ref", "WidgetRef"}:

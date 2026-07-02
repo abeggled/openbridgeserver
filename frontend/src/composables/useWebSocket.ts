@@ -37,6 +37,33 @@ const subscribedIds = new Set<string>()
 
 // ── Interne Funktionen ────────────────────────────────────────────────────────
 
+function contextKey(context: ConnectContext, jwt: string | null): string {
+  return JSON.stringify({
+    jwt: jwt || '',
+    pageId: context.pageId || '',
+    sessionToken: context.sessionToken || '',
+  })
+}
+
+function socketUrl(context: ConnectContext): string {
+  let url = WS_URL()
+  if (!context.pageId) return url
+  const params = new URLSearchParams({ page_id: context.pageId })
+  if (context.sessionToken) params.set('session_token', context.sessionToken)
+  return `${url}?${params.toString()}`
+}
+
+function closeCurrentSocket() {
+  if (!socket) return
+  socket.onopen = null
+  socket.onclose = null
+  socket.onerror = null
+  socket.onmessage = null
+  socket.close()
+  socket = null
+  connected.value = false
+}
+
 function send(data: unknown) {
   if (socket?.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(data))
@@ -44,24 +71,29 @@ function send(data: unknown) {
 }
 
 function connect(nextContext: ConnectContext = {}) {
+  const jwt = getJwt()
+  const nextKey = contextKey(nextContext, jwt)
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-    return
+    if (contextKey(connectContext, jwt) === nextKey) return
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    closeCurrentSocket()
   }
 
   connectContext = nextContext
-  const jwt = getJwt()
-  let url = WS_URL()
+  const url = socketUrl(connectContext)
   if (jwt) {
     socket = new WebSocket(url, [`obs.jwt.${jwt}`])
   } else {
     if (!connectContext.pageId) return
-    const params = new URLSearchParams({ page_id: connectContext.pageId })
-    if (connectContext.sessionToken) params.set('session_token', connectContext.sessionToken)
-    url = `${url}?${params.toString()}`
     socket = new WebSocket(url)
   }
+  const activeSocket = socket
 
   socket.onopen = () => {
+    if (socket !== activeSocket) return
     connected.value = true
     reconnectDelay = 1000
     if (reconnectTimer) {
@@ -75,6 +107,7 @@ function connect(nextContext: ConnectContext = {}) {
   }
 
   socket.onclose = (event) => {
+    if (socket !== activeSocket) return
     connected.value = false
     socket = null
     if (event.code === 4001) return
@@ -121,9 +154,7 @@ export function useWebSocket() {
         clearTimeout(reconnectTimer)
         reconnectTimer = null
       }
-      socket?.close()
-      socket = null
-      connected.value = false
+      closeCurrentSocket()
     },
 
     /** DataPoint-IDs abonnieren — puffert und sendet bei Verbindungsaufbau */

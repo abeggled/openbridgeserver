@@ -615,6 +615,52 @@ async def test_page_allowed_message_archive_predicates_include_widget_filters():
 
 
 @pytest.mark.asyncio
+async def test_page_allowed_message_archive_predicates_include_grundriss_mini_widgets():
+    page_config = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "floorplan",
+                "type": "Grundriss",
+                "name": "Grundriss",
+                "x": 0,
+                "y": 0,
+                "w": 8,
+                "h": 6,
+                "config": {
+                    "miniWidgets": [
+                        {
+                            "id": "archive-mini",
+                            "widgetType": "MessageArchive",
+                            "config": {
+                                "archive_ids": ["System"],
+                                "severities": ["warning"],
+                                "statuses": ["new"],
+                                "allow_read": False,
+                            },
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+
+    class _DbStub:
+        async def fetchone(self, _query, _params):
+            return {"page_config": json.dumps(page_config)}
+
+    predicates = await _page_allowed_message_archive_predicates(_DbStub(), "page-1")
+
+    assert len(predicates) == 1
+    assert predicates[0].archive_ids == {"system"}
+    assert predicates[0].severities == {"warning"}
+    assert predicates[0].statuses == {"new"}
+    assert predicates[0].allow_read is False
+
+
+@pytest.mark.asyncio
 async def test_page_allowed_message_archive_predicates_follow_widgetref_target():
     page_config_main = {
         "grid_cols": 12,
