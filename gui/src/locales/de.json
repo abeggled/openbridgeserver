@@ -51,7 +51,28 @@
       "noDatapoints": "Keine Objekte vorhanden"
     },
     "activeWarnings": "Aktive Warnungen",
-    "toAdapters": "Zu Adaptern →"
+    "toAdapters": "Zu Adaptern →",
+    "ringbuffer": {
+      "title": "Monitor / Retention",
+      "toMonitor": "Zum Monitor →",
+      "loadError": "Monitor-Status konnte nicht geladen werden",
+      "disabledTitle": "Monitor deaktiviert",
+      "disabledHint": "Es werden keine Wertänderungen aufgezeichnet. Zum Aktivieren konfigurieren.",
+      "configure": "Konfigurieren",
+      "budget": "Budget-Auslastung",
+      "unlimited": "unbegrenzt",
+      "segments": "Segmente",
+      "retentionHorizon": "Retention-Horizont",
+      "retentionWarming": "läuft sich ein",
+      "horizonHours": "~{n} h",
+      "horizonDays": "~{n} Tage",
+      "segmentsAffected": "{n} Segment(e) betroffen",
+      "overBudgetInfo": "Aufbewahrung über Budget (Normalbetrieb).",
+      "segmentDetails": "Segment-Details",
+      "configuration": "Konfiguration",
+      "entries": "Einträge",
+      "diskUsage": "Belegter Speicherplatz"
+    }
   },
   "datapoints": {
     "title": "Objekte",

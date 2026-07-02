@@ -51,7 +51,28 @@
       "noDatapoints": "No data points"
     },
     "activeWarnings": "Active warnings",
-    "toAdapters": "To adapters →"
+    "toAdapters": "To adapters →",
+    "ringbuffer": {
+      "title": "Monitor / Retention",
+      "toMonitor": "To monitor →",
+      "loadError": "Failed to load monitor status",
+      "disabledTitle": "Monitor disabled",
+      "disabledHint": "No value changes are recorded. Configure to enable.",
+      "configure": "Configure",
+      "budget": "Budget usage",
+      "unlimited": "unlimited",
+      "segments": "Segments",
+      "retentionHorizon": "Retention horizon",
+      "retentionWarming": "warming up",
+      "horizonHours": "~{n} h",
+      "horizonDays": "~{n} days",
+      "segmentsAffected": "{n} segment(s) affected",
+      "overBudgetInfo": "Retention over budget (normal operation).",
+      "segmentDetails": "Segment details",
+      "configuration": "Configuration",
+      "entries": "Entries",
+      "diskUsage": "Disk usage"
+    }
   },
   "datapoints": {
     "title": "Data Points",
