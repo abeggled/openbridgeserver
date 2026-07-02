@@ -96,14 +96,18 @@ git push origin 2026.7.1
 
 1. Fix-PR auf `2026.7` erstellen und mergen (Required Checks müssen grün sein).
 2. Neuen RC- oder Patch-Tag setzen (→ Abschnitt C).
-3. Denselben Fix nach `main` übernehmen:
+3. Denselben Fix über einen separaten Forward-Port-Branch nach `main` übernehmen
+   (kein Direkt-Push auf `main` — `main` ist Protected und verlangt Review/Checks):
    ```bash
-   git checkout main
+   git fetch origin main
+   git checkout -b forward-port/2026.7/<fix-name> origin/main
    git cherry-pick <merge-commit-auf-2026.7>
    # oder Forward-Merge wenn passend
-   git push
+   git push -u origin forward-port/2026.7/<fix-name>
    ```
-4. Verifizieren, dass beide Branches konsistent sind.
+4. PR auf `main` öffnen (Ziel-Branch: `main`).
+5. Required Checks auf dem PR abwarten, dann mergen.
+6. Verifizieren, dass beide Branches konsistent sind.
 
 ---
 

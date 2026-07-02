@@ -13,7 +13,20 @@ env:
   BASE_OS: ubuntu-resolute
 
 jobs:
+  # Tag pushes trigger release.yml and this workflow independently. If a tag
+  # is moved to a commit off the expected branch, release.yml's own gate
+  # aborts — but without this same gate here, this workflow would still
+  # rebuild and `--clobber` the LXC/app-bundle assets of an existing release
+  # with artifacts built from that wrong commit (issue #948 Codex review).
+  # Only runs for tag pushes; workflow_dispatch has no tag to validate.
+  validate-tag:
+    name: Validate tag
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/validate-release-tag.yml
+
   build:
+    needs: validate-tag
+    if: always() && (needs.validate-tag.result == 'success' || needs.validate-tag.result == 'skipped')
     strategy:
       matrix:
         include:
