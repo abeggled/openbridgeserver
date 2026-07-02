@@ -536,6 +536,59 @@ async def test_segmented_start_legacy_attach_is_idempotent_across_restarts(tmp_p
         await rb2.stop()
 
 
+@pytest.mark.asyncio
+async def test_segmented_start_does_not_reattach_quarantined_legacy(tmp_path: Path):
+    """#951 Pkt 1: eine quarantänierte Legacy-Datei darf beim Neustart NICHT erneut eingehängt werden.
+
+    Quarantiniert ein Read-Fehler die attached Legacy-DB, ändert ``mark_quarantined``
+    den Status von ``legacy`` auf ``quarantined``, behält aber Dateiname +
+    ``schema_version``. Der bisherige Idempotenz-Guard prüfte nur
+    ``list_legacy_segments()`` (``status='legacy'``) und sah die quarantänierte
+    Legacy-Zeile NICHT → beim nächsten Startup versuchte er, denselben absoluten
+    Dateinamen erneut zu inserten → Manifest-``UNIQUE``-Constraint → Startup-Abbruch.
+    Der Guard muss schema-version-basiert ALLE Legacy-Zeilen (auch ``quarantined``)
+    berücksichtigen.
+    """
+    from obs.ringbuffer.store.manifest import SEGMENT_STATUS_QUARANTINED
+
+    disk_path = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(disk_path)
+
+    # 1) Segmentierter Start hängt die Legacy-DB read-only ein.
+    rb1 = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True)
+    await rb1.start()
+    legacy = await rb1.store.manifest.list_legacy_segments()
+    assert len(legacy) == 1
+    legacy_segment_id = legacy[0].segment_id
+    # 2) Ein Read-Fehler quarantiniert genau diese Legacy-Zeile: Status wechselt
+    #    von ``legacy`` weg, Dateiname + schema_version bleiben.
+    await rb1.store.manifest.mark_quarantined(legacy_segment_id, "simulierter Read-Fehler")
+    await rb1.stop()
+
+    # Vorbedingung: die Legacy-Zeile ist jetzt quarantiniert, nicht mehr ``legacy``.
+    from obs.ringbuffer.store.manifest import Manifest
+
+    manifest = Manifest(disk_path.parent / "obs_ringbuffer_segments" / "manifest.sqlite")
+    await manifest.open()
+    assert await manifest.list_legacy_segments() == []
+    quarantined = await manifest.get_segment(legacy_segment_id)
+    assert quarantined.status == SEGMENT_STATUS_QUARANTINED
+    assert quarantined.filename == str(disk_path.resolve())
+    await manifest.close()
+
+    # 3) Neustart auf derselben Root darf NICHT erneut einhängen (kein UNIQUE-Crash),
+    #    d.h. start() gelingt und es entsteht KEINE zweite Zeile für dieselbe Datei.
+    rb2 = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True)
+    await rb2.start()
+    try:
+        all_segments = await rb2.store.manifest.list_segments()
+        matches = [s for s in all_segments if s.filename == str(disk_path.resolve())]
+        assert len(matches) == 1
+        assert matches[0].status == SEGMENT_STATUS_QUARANTINED
+    finally:
+        await rb2.stop()
+
+
 # ---------------------------------------------------------------------------
 # Zeitgetriebene Rotation als PRIMÄRER Trigger — 6-h-Default (#919)
 # ---------------------------------------------------------------------------

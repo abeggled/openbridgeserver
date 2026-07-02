@@ -96,7 +96,13 @@ async def load_persisted_ringbuffer_config(db: Database) -> dict[str, Any]:
         return _defaults()
 
     defaults = _defaults()
+    # Persistierte ``max_age: 0`` als ``None`` (unbegrenzt) normalisieren (#951): Das
+    # API-Modell erlaubte frueher die 0. ``StoreRetentionConfig`` verlangt aber
+    # ``>= 1`` oder ``null`` – wuerde die rohe 0 an den Store-Init durchgereicht,
+    # crashte der Ringbuffer beim Startup, bevor ein Admin es korrigieren kann.
     max_age = data.get("max_age", defaults["max_age"])
+    if max_age == 0:
+        max_age = None
     segment_max_age = _resolve_migrated_segment_max_age(
         persisted_segment_max_age=data.get("segment_max_age", _UNSET),
         default_segment_max_age=defaults["segment_max_age"],

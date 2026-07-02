@@ -249,6 +249,7 @@ class RingBuffer:
         einer ggf. sehr großen Datei). Neue Writes gehen sofort in v2-Segmente.
         """
         from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
         from obs.ringbuffer.store.migration import LegacyMigrator
         from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
 
@@ -297,11 +298,18 @@ class RingBuffer:
             # Legacy-Single-DB (falls vorhanden) read-only einhängen — ohne Vollscan.
             # Idempotent: bei Neustart darf dieselbe Datei NICHT doppelt eingehängt
             # werden. Erkennung über den absoluten Pfad in den bereits registrierten
-            # Legacy-Segmenten.
+            # Legacy-Zeilen. Bewusst SCHEMA-basiert (nicht status-basiert): ein
+            # Read-Fehler kann eine attached Legacy-Datei quarantinieren
+            # (``mark_quarantined`` behält Dateiname + schema_version, ändert nur den
+            # Status). Ein rein status-basierter ``list_legacy_segments()``-Guard
+            # (``status='legacy'``) sähe diese Zeile nicht → erneuter Insert desselben
+            # Dateinamens → Manifest-``UNIQUE``-Constraint bricht den Startup ab (#951,
+            # Pkt 1). ``LEGACY_SCHEMA_VERSION`` erfasst alle Legacy-Zeilen unabhängig
+            # vom Status; v2-Segmente (auch ``migrated``) tragen schema_version 2.
             if not _is_sqlite_memory_path(self._disk_path) and Path(_sqlite_filesystem_path(self._disk_path)).exists():
                 legacy_fs_path = _sqlite_filesystem_path(self._disk_path)
                 resolved_legacy = str(Path(legacy_fs_path).resolve())
-                existing = {seg.filename for seg in await store.manifest.list_legacy_segments()}
+                existing = {seg.filename for seg in await store.manifest.list_segments() if seg.schema_version == LEGACY_SCHEMA_VERSION}
                 if resolved_legacy not in existing:
                     migrator = LegacyMigrator(store, legacy_fs_path)
                     classification = migrator.classify()

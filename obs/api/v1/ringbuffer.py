@@ -2085,8 +2085,17 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             await rb.stop()
             reset_ringbuffer()
             set_ringbuffer_enabled(False)
-            with suppress(Exception):
-                delete_ringbuffer_storage_files(_ringbuffer_disk_path())
+            # Storage NUR löschen, wenn es KEIN Modus-Switch-Rollback ist (#951, Pkt 2):
+            # Bei einem Switch teilt sich der frisch erstellte Buffer denselben
+            # Disk-Pfad + Segment-Root mit dem alten Modus. ``switch_prev_config``
+            # signalisiert genau diesen Fall – die Storage-Dateien tragen die
+            # Historie, die der nachfolgende Rollback bewahren soll. Ein transienter
+            # Save-Fehler beim Switch darf sie daher NICHT löschen. Ohne aktiven
+            # Switch ist der Buffer wirklich frisch angelegt (z. B. aus dem
+            # deaktivierten Zustand) und wird sauber wieder abgebaut.
+            if switch_prev_config is None:
+                with suppress(Exception):
+                    delete_ringbuffer_storage_files(_ringbuffer_disk_path())
         # Modus-Switch-Rebuild gescheitert (#951, Pkt 2): der alte Buffer wurde
         # bereits abgebaut. Damit immer ein funktionierender Buffer läuft, den
         # vorherigen Zustand im ALTEN Modus re-initialisieren und neu subscriben.

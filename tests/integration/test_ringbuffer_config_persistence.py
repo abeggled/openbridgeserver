@@ -303,6 +303,73 @@ async def test_config_post_segmentation_switch_rebuild_failure_restores_running_
     await _reset_to_defaults(client, auth_headers)
 
 
+async def test_config_post_switch_rollback_preserves_existing_storage(client, auth_headers, monkeypatch):
+    """Ein transienter Save-Fehler beim Modus-Switch darf die Historie NICHT löschen (#951, Pkt 2).
+
+    Szenario: Der Monitor läuft segmentiert und hat Historie. Ein Wechsel auf
+    ``segmented=false`` baut den neuen (Legacy-)Buffer erfolgreich auf
+    (``created_rb=True``), aber ``persist_ringbuffer_config`` wirft danach. Beide
+    Cleanup-Bedingungen sind gesetzt (``created_rb`` UND ``switch_prev_config``).
+    Regression: der Cleanup löschte die geteilte Ringbuffer-DB + den Segment-Root,
+    BEVOR der alte Modus wiederhergestellt wurde → genau die Historie, die der
+    Rollback bewahren soll, war weg. Erwartung: Storage bleibt erhalten, der alte
+    segmentierte Buffer läuft mit seinen Daten weiter.
+    """
+    from pathlib import Path
+
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer
+
+    rb_before = get_optional_ringbuffer()
+    assert rb_before is not None and rb_before.segmented and rb_before.store is not None
+
+    # Historie anlegen, die der Rollback bewahren muss.
+    await rb_before.record(
+        ts="2026-01-01T00:00:00.000Z",
+        datapoint_id="dp-rollback",
+        topic="dp/dp-rollback/value",
+        old_value=None,
+        new_value=4242,
+        source_adapter="api",
+        quality="good",
+    )
+    entries_before = await rb_before.query_v2(datapoint_ids=["dp-rollback"], limit=10)
+    assert [e.new_value for e in entries_before] == [4242]
+
+    disk_path = rb_api._ringbuffer_disk_path()
+    segments_root = Path(disk_path).with_name(f"{Path(disk_path).stem}_segments")
+    assert segments_root.exists() and any(segments_root.iterdir())
+
+    # Der neue (Legacy-)Buffer wird erfolgreich gebaut; erst die anschließende
+    # Persistierung wirft → created_rb UND switch_prev_config sind beide gesetzt.
+    async def boom_persist(*args, **kwargs):
+        raise RuntimeError("simulated persist failure")
+
+    monkeypatch.setattr(rb_api, "persist_ringbuffer_config", boom_persist)
+
+    with pytest.raises(RuntimeError, match="simulated persist failure"):
+        await client.post(
+            "/api/v1/ringbuffer/config",
+            json={"segmented": False, "max_entries": 1000, "max_file_size_bytes": None, "max_age": None},
+            headers=auth_headers,
+        )
+
+    monkeypatch.undo()
+
+    # Kern-Assertion: der Segment-Root (Historie) wurde NICHT gelöscht.
+    assert segments_root.exists() and any(segments_root.iterdir())
+
+    # Der alte segmentierte Buffer läuft weiter und liest seine Historie zurück.
+    rb_after = get_optional_ringbuffer()
+    assert rb_after is not None
+    assert rb_after.segmented is True
+    assert rb_after.store is not None
+    entries_after = await rb_after.query_v2(datapoint_ids=["dp-rollback"], limit=10)
+    assert [e.new_value for e in entries_after] == [4242]
+
+    await _reset_to_defaults(client, auth_headers)
+
+
 async def test_config_post_budget_change_rederives_auto_segment_max_bytes(client, auth_headers):
     """Ein reiner Budget-Wechsel muss die AUTO-Segmentgröße live neu ableiten (#919).
 

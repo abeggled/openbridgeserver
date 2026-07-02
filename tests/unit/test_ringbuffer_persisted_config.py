@@ -277,6 +277,57 @@ async def test_explicit_persisted_segment_max_age_is_not_clamped():
 
 
 @pytest.mark.asyncio
+async def test_migrated_config_with_zero_max_age_is_normalized_to_none():
+    """#951: Eine Alt-Config mit ``max_age: 0`` darf den Startup nicht crashen.
+
+    Das API-Modell erlaubte frueher ``max_age: 0``. Ohne Segment-Keys schaltet der
+    Default jetzt Segmentierung ein und reichte die persistierte ``0`` unveraendert
+    an ``StoreRetentionConfig`` weiter, dessen Validierung ``>= 1`` oder ``null``
+    verlangt → Ringbuffer-Init crasht, bevor ein Admin es korrigieren kann. ``load``
+    muss ``max_age: 0`` daher als ``None`` (unbegrenzt) normalisieren.
+    """
+    from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig, validate_store_config
+
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+            (PERSISTED_CONFIG_KEY, json.dumps({"max_age": 0})),
+        )
+        await db.commit()
+        cfg = await load_persisted_ringbuffer_config(db)
+        assert cfg["max_age"] is None
+        # Ohne max_age greift die 3-Segment-Regel nicht → 6-h-Default bleibt.
+        assert cfg["segment_max_age"] == DEFAULT_SEGMENT_MAX_AGE_SECONDS
+        # StoreRetentionConfig akzeptiert None → kein Startup-Crash.
+        StoreRetentionConfig(max_age=cfg["max_age"])
+        validate_store_config(
+            SegmentConfig(segment_max_age=cfg["segment_max_age"]),
+            StoreRetentionConfig(max_age=cfg["max_age"]),
+        )
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_persisted_positive_max_age_is_preserved():
+    """Ein gueltiges positives ``max_age`` bleibt unveraendert (kein Ueberklemmen auf None)."""
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+            (PERSISTED_CONFIG_KEY, json.dumps({"max_age": 7200})),
+        )
+        await db.commit()
+        cfg = await load_persisted_ringbuffer_config(db)
+        assert cfg["max_age"] == 7200
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_load_returns_defaults_when_persisted_value_is_not_a_dict():
     db = Database(":memory:")
     await db.connect()
