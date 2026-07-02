@@ -9,10 +9,20 @@ Writer auf derselben Root wird **fail-fast** mit ``WriterLockHeldError``
 abgewiesen. Ein verwaistes Lockfile eines nicht mehr laufenden Prozesses (PID
 existiert nicht mehr) darf übernommen werden, damit ein Absturz die Root nicht
 dauerhaft blockiert.
+
+Rennsicherheit (#951): Der Besitz wird über einen **flock (``LOCK_EX | LOCK_NB``)
+auf dem geöffneten Lockfile-fd** entschieden und für die gesamte Lease-Lebensdauer
+gehalten. Der flock ist kernel-serialisiert – zwei quasi-gleichzeitige Writer
+können ihn NIE beide halten. Damit ist auch der Stale-Takeover atomar: statt das
+alte File blind zu ``unlink()``en (was das frisch erzeugte Lock eines anderen
+Übernehmers löschen könnte), gewinnt genau der Prozess, der den flock exklusiv
+erhält, überschreibt die Payload **in place** (ohne unlink) und hält den fd.
+Jeder weitere Übernehmer scheitert am ``LOCK_NB`` → fail-fast.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from datetime import UTC, datetime
@@ -39,60 +49,72 @@ def _pid_is_alive(pid: int) -> bool:
 
 
 class WriterLease:
-    """Root-weite Writer-Lease über ein Lockfile."""
+    """Root-weite Writer-Lease über ein Lockfile mit gehaltenem flock."""
 
     def __init__(self, root: str | Path) -> None:
         self._root = Path(root)
         self._lock_path = self._root / LOCK_FILENAME
         self._owns = False
+        self._fd: int | None = None
 
     @property
     def owns_lock(self) -> bool:
         return self._owns
 
     async def acquire(self) -> None:
+        self._acquire_sync()
+
+    def _acquire_sync(self) -> None:
+        """Synchroner Kern des Erwerbs – rennsicher über einen gehaltenen flock.
+
+        1. Lockfile ``O_CREAT``-öffnen (legt es an, falls es fehlt; teilt es sonst).
+        2. ``flock(LOCK_EX | LOCK_NB)`` – kernel-serialisiert. Wer ihn erhält, ist
+           der einzige Kandidat; wer ihn nicht bekommt, muss entscheiden, ob der
+           aktuelle Halter lebt (fail-fast) oder das Lock verwaist ist.
+        3. Unter gehaltenem flock die (evtl. verwaiste) Payload verifizieren und
+           **in place** mit der eigenen Identität überschreiben. Kein unlink →
+           kein Fenster, in dem ein zweiter Übernehmer das frische Lock löscht.
+        """
         self._root.mkdir(parents=True, exist_ok=True)
-        # Atomarer Erwerb (#951): ``O_CREAT | O_EXCL`` legt das Lockfile in EINEM
-        # nicht-teilbaren Syscall an und schlägt fehl, wenn es schon existiert. So
-        # können zwei quasi-gleichzeitig startende Writer NICHT beide den alten
-        # ``exists()``-Check passieren und beide ``_owns=True`` setzen — genau ein
-        # Prozess gewinnt das Rennen. Existiert das File bereits, wird — wie
-        # bisher — entschieden, ob es ein verwaistes (übernehmbares) oder ein
-        # lebendes (fail-fast) Lock ist.
+        fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o644)
         try:
-            self._create_lock_exclusive()
-        except FileExistsError:
-            self._take_over_or_fail()
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                # flock von einem lebenden Halter gehalten → fail-fast. Der Halter
+                # ist definitionsgemäß am Leben (er hält den fd offen).
+                holder_pid = self._read_holder_pid(fd)
+                raise WriterLockHeldError(f"storage root {self._root} is locked by live writer pid={holder_pid}") from exc
+            # flock erhalten. Prüfen, ob eine *lebende* PID in der Payload steht –
+            # das kann nur passieren, wenn ein Vorbesitzer die Datei ohne flock
+            # (Altbestand) hinterlassen hat; ein lebender flock-Halter hätte uns
+            # oben blockiert. Ein toter/unbekannter PID gilt als verwaist.
+            holder_pid = self._read_holder_pid(fd)
+            if holder_pid is not None and _pid_is_alive(holder_pid):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                raise WriterLockHeldError(f"storage root {self._root} is locked by live writer pid={holder_pid}")
+            self._write_payload(fd)
+        except BaseException:
+            os.close(fd)
+            raise
+        self._fd = fd
         self._owns = True
 
-    def _create_lock_exclusive(self) -> None:
-        fd = os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    def _read_holder_pid(self, fd: int) -> int | None:
         try:
-            os.write(fd, self._lock_payload_bytes())
-        finally:
-            os.close(fd)
-
-    def _take_over_or_fail(self) -> None:
-        holder_pid = self._read_holder_pid()
-        if holder_pid is not None and _pid_is_alive(holder_pid):
-            raise WriterLockHeldError(f"storage root {self._root} is locked by live writer pid={holder_pid}")
-        # Verwaistes Lockfile eines toten/unbekannten Prozesses → atomar übernehmen:
-        # altes File entfernen, dann exklusiv neu anlegen. Verliert man dabei das
-        # Rennen gegen einen anderen Übernehmer (erneut FileExistsError), gilt der
-        # andere als Halter → fail-fast.
-        try:
-            self._lock_path.unlink(missing_ok=True)
-            self._create_lock_exclusive()
-        except FileExistsError as exc:
-            raise WriterLockHeldError(f"storage root {self._root} was locked by a concurrent writer") from exc
-
-    def _read_holder_pid(self) -> int | None:
-        try:
-            payload = json.loads(self._lock_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, ValueError):
+            os.lseek(fd, 0, os.SEEK_SET)
+            raw = os.read(fd, 4096)
+            payload = json.loads(raw.decode("utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError, UnicodeDecodeError):
             return None
         pid = payload.get("pid")
         return int(pid) if isinstance(pid, int) else None
+
+    def _write_payload(self, fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, self._lock_payload_bytes())
+        os.fsync(fd)
 
     def _lock_payload_bytes(self) -> bytes:
         payload = {
@@ -104,7 +126,14 @@ class WriterLease:
     async def release(self) -> None:
         if not self._owns:
             return
+        fd = self._fd
         try:
             self._lock_path.unlink(missing_ok=True)
+            if fd is not None:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd)
         finally:
+            self._fd = None
             self._owns = False

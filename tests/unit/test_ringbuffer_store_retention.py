@@ -214,6 +214,57 @@ async def test_stats_not_over_budget_when_within_limits(tmp_path: Path):
         await store.close()
 
 
+async def test_stats_over_budget_when_guarded_legacy_is_only_source(tmp_path: Path):
+    """#951 [P2]: Nicht freigebbares Legacy (No-Zero-History-Guard) zählt als over-budget.
+
+    Ist die einzige Datenquelle eine übergroße read-only Legacy-DB, kann
+    ``enforce_retention()`` sie wegen des Guards NICHT löschen. ``/stats`` muss
+    dann ``retention_over_budget=True`` melden – das harte Byte-Budget ist real
+    überschritten und das Volumen aktuell nicht freigebbar.
+    """
+    store = await _make_store(tmp_path / "root")
+    try:
+        legacy_size = 8 * 1024 * 1024
+        await _attach_legacy(store, legacy_size)
+        # Guard NICHT erfüllt: kein nicht-Legacy-Segment mit Zeilen → Legacy bleibt.
+        assert await store._has_nonlegacy_data_segment() is False
+
+        store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
+        removed = await store.enforce_retention()
+        assert removed == 0  # Guard blockiert die Löschung.
+
+        stats = await store.stats()
+        assert stats.backend_extra["retention_over_budget"] is True
+        assert stats.backend_extra["retention_pressure_reason"] is not None
+    finally:
+        await store.close()
+
+
+async def test_stats_not_over_budget_when_legacy_is_freeable(tmp_path: Path):
+    """Ist der Guard erfüllt (nicht-Legacy hält Daten), ist Legacy freigebbar → kein over-budget.
+
+    Gegenprobe zur guarded-Legacy-Meldung: sobald ein nicht-Legacy-Segment Zeilen
+    hält, ist das Legacy-Volumen per Size-Retention löschbar und darf NICHT als
+    undeletable gegen das Budget zählen.
+    """
+    store = await _make_store(tmp_path / "root")
+    try:
+        # Nicht-Legacy-Datensegment (aktiv, klein) sichert die Historie.
+        await store.append([_event(1, _iso(0))])
+        await _attach_legacy(store, 8 * 1024 * 1024)
+        assert await store._has_nonlegacy_data_segment() is True
+
+        # Budget größer als das kleine aktive Segment allein → nach Freigabe des
+        # freigebbaren Legacy bliebe das nicht-löschbare Volumen unter Budget.
+        active_size = (await store.manifest.get_active_segment()).size_bytes
+        store._retention_config = StoreRetentionConfig(max_file_size_bytes=active_size + 1)
+        stats = await store.stats()
+        assert stats.backend_extra["retention_over_budget"] is False
+        assert stats.backend_extra["retention_pressure_reason"] is None
+    finally:
+        await store.close()
+
+
 # ---------------------------------------------------------------------------
 # (f) checkpoint_pending → später getruncatet → dann retention-fähig
 # ---------------------------------------------------------------------------

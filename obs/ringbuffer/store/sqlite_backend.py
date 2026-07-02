@@ -1491,7 +1491,7 @@ class SqliteSegmentStore(RingBufferStore):
             # (geschlossenen v2-)Segmenten; robuste None-Behandlung.
             "prognosis": self._compute_prognosis(segments),
         }
-        over_budget, pressure_reason = self._retention_pressure(segments)
+        over_budget, pressure_reason = await self._retention_pressure(segments)
         backend_extra = {
             "active_segment_id": self._active_segment.segment_id if self._active_segment else None,
             "closed_segment_count": sum(1 for s in segments if s.status != SEGMENT_STATUS_ACTIVE),
@@ -1537,21 +1537,35 @@ class SqliteSegmentStore(RingBufferStore):
     def _sidecar_size(self, filename: str, suffix: str) -> int:
         return _safe_getsize(self._segments_dir / f"{filename}{suffix}")
 
-    def _retention_pressure(self, segments: list[SegmentRecord]) -> tuple[bool, str | None]:
+    async def _retention_pressure(self, segments: list[SegmentRecord]) -> tuple[bool, str | None]:
         """Meldet, ob Retention trotz Löschung löschbarer Segmente über Budget bleibt.
 
         ``retention_over_budget`` ist True, wenn nach Freigabe *aller* löschbaren
-        Segmente (sauber geschlossen, quarantäniert und Legacy) das harte
-        Size-Budget noch überschritten bliebe — also nur das wirklich nicht
-        löschbare Restvolumen (``active`` + ``checkpoint_pending``) das Budget
-        sprengt. Quarantänierte Segmente sind seit #919 in FIFO-Retention
-        löschbar und zählen daher NICHT mehr als undeletable — ein einzelnes
-        korruptes Segment löst damit kein retention_over_budget mehr aus.
+        Segmente (sauber geschlossen, quarantäniert und – sofern freigebbar –
+        Legacy) das harte Size-Budget noch überschritten bliebe — also nur das
+        wirklich nicht löschbare Restvolumen das Budget sprengt. Quarantänierte
+        Segmente sind seit #919 in FIFO-Retention löschbar und zählen daher NICHT
+        mehr als undeletable — ein einzelnes korruptes Segment löst damit kein
+        retention_over_budget mehr aus.
+
+        #951 [P2]: Ein Legacy-Segment, das aktuell NICHT löschbar ist, weil der
+        No-Zero-History-Guard greift (es ist die einzige/letzte Datenquelle),
+        zählt ebenfalls als undeletable. Sonst meldete ``/stats``
+        ``retention_over_budget=false``, obwohl eine übergroße read-only Legacy-DB
+        das Byte-Budget real überschreitet und ``enforce_retention()`` sie wegen
+        des Guards nicht freigeben kann. Der Guard-Check ist derselbe wie in
+        ``_next_size_retention_victim`` (``_has_nonlegacy_data_segment()``), damit
+        Meldung und Löschentscheidung konsistent bleiben.
         """
         budget = self._retention_config.max_file_size_bytes
         if budget is None:
             return False, None
         undeletable = sum(s.size_bytes for s in segments if s.status in (SEGMENT_STATUS_ACTIVE, SEGMENT_STATUS_CHECKPOINT_PENDING))
+        # Legacy zählt nur solange als undeletable, wie es NICHT freigebbar ist
+        # (Guard greift). Sobald ein nicht-Legacy-Segment Zeilen hält, ist Legacy
+        # per Size-Retention löschbar und darf das Budget nicht künstlich sprengen.
+        if not await self._has_nonlegacy_data_segment():
+            undeletable += sum(s.size_bytes for s in segments if _is_legacy_segment(s))
         if undeletable > budget:
             return True, "max_file_size_bytes exceeded by non-deletable segments"
         return False, None

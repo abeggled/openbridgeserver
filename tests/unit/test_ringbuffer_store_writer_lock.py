@@ -124,12 +124,18 @@ async def test_acquire_is_atomic_no_double_owns_on_race(tmp_path: Path):
         await first.release()
 
 
-async def test_exclusive_create_raises_file_exists_when_present(tmp_path: Path):
-    """Der exklusive Create schlägt fehl, wenn das Lockfile bereits existiert (Basis der Atomizität)."""
-    lease = WriterLease(tmp_path)
-    (tmp_path / "writer.lock").write_text("{}", encoding="utf-8")
-    with pytest.raises(FileExistsError):
-        lease._create_lock_exclusive()
+async def test_held_flock_blocks_second_acquire(tmp_path: Path):
+    """Solange der erste Lease den flock hält, wird ein zweiter Erwerb fail-fast abgewiesen (Basis der Atomizität)."""
+    first = WriterLease(tmp_path)
+    await first.acquire()
+    try:
+        assert first.owns_lock
+        second = WriterLease(tmp_path)
+        with pytest.raises(WriterLockHeldError):
+            await second.acquire()
+        assert second.owns_lock is False
+    finally:
+        await first.release()
 
 
 async def test_concurrent_acquire_only_one_wins(tmp_path: Path):
@@ -154,28 +160,25 @@ async def test_concurrent_acquire_only_one_wins(tmp_path: Path):
             await le.release()
 
 
-async def test_stale_takeover_loses_race_is_fail_fast(tmp_path: Path, monkeypatch):
-    """#951: Verliert ein Übernehmer das Rennen um ein verwaistes Lock, gilt fail-fast.
+async def test_stale_takeover_blocked_by_live_flock_holder_is_fail_fast(tmp_path: Path):
+    """#951: Hält bereits ein lebender Übernehmer den flock, wird der zweite fail-fast abgewiesen.
 
-    Ein zweiter Prozess kann zwischen ``unlink`` und dem exklusiven Neu-Anlegen des
-    verwaisten Locks das File belegt haben → der exklusive Create wirft erneut
-    ``FileExistsError`` und muss als ``WriterLockHeldError`` durchschlagen, statt
-    stillschweigend ``_owns=True`` zu setzen.
+    Der Übernahme-Pfad ``unlink()``t das verwaiste Lock NICHT mehr, sondern gewinnt
+    es über den kernel-serialisierten ``flock``. Hält der erste Übernehmer den flock
+    (lebendig), scheitert der zweite am ``LOCK_NB`` → ``WriterLockHeldError`` statt
+    stillschweigend ``_owns=True``.
     """
-    # Verwaistes Lock (toter PID) → Übernahme-Pfad wird betreten.
+    # Verwaistes Lock (toter PID) → wird vom ersten Übernehmer live übernommen.
     (tmp_path / "writer.lock").write_text('{"pid": 999999}', encoding="utf-8")
-    lease = WriterLease(tmp_path)
-
-    # Jeder exklusive Create schlägt fehl: der initiale trifft das verwaiste File
-    # (→ Übernahme-Zweig), der Create im Übernahme-Zweig simuliert einen
-    # Konkurrenten, der das File zwischenzeitlich neu belegt hat.
-    def _racy_create():
-        raise FileExistsError
-
-    monkeypatch.setattr(lease, "_create_lock_exclusive", _racy_create)
-    with pytest.raises(WriterLockHeldError, match="concurrent writer"):
-        await lease.acquire()
-    assert lease.owns_lock is False
+    winner = WriterLease(tmp_path)
+    await winner.acquire()
+    try:
+        loser = WriterLease(tmp_path)
+        with pytest.raises(WriterLockHeldError):
+            await loser.acquire()
+        assert loser.owns_lock is False
+    finally:
+        await winner.release()
 
 
 async def test_permission_error_on_kill_treats_holder_as_alive(tmp_path: Path, monkeypatch):
@@ -189,3 +192,53 @@ async def test_permission_error_on_kill_treats_holder_as_alive(tmp_path: Path, m
     lease = WriterLease(tmp_path)
     with pytest.raises(WriterLockHeldError):
         await lease.acquire()
+
+
+async def test_stale_takeover_two_concurrent_takers_only_one_owns(tmp_path: Path):
+    """#951 [P1]: Zwei quasi-gleichzeitige Übernahmen eines verwaisten Locks – genau einer gewinnt.
+
+    Vorher: der Übernahme-Pfad ``unlink()``te das verwaiste Lockfile, BEVOR er die
+    Ersatzdatei anlegte. Übernahm Prozess A das Lock (unlink+create → besitzt es),
+    konnte Prozess B – der dasselbe verwaiste Lock gesehen hatte – A's frisch
+    erzeugtes Lockfile weg-``unlink()``en und sein eigenes anlegen: beide
+    ``_owns=True``. Mit atomarer/flock-basierter Übernahme darf das NIE passieren.
+    """
+    lock_path = tmp_path / "writer.lock"
+    lock_path.write_text('{"pid": 999999, "acquired_at": "2000-01-01T00:00:00Z"}', encoding="utf-8")
+
+    leases = [WriterLease(tmp_path) for _ in range(6)]
+
+    def _try(lease):
+        try:
+            lease._acquire_sync()
+            return True
+        except WriterLockHeldError:
+            return False
+
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(leases)) as pool:
+        results = list(pool.map(_try, leases))
+    try:
+        assert sum(results) == 1
+        assert sum(le.owns_lock for le in leases) == 1
+    finally:
+        for le in leases:
+            await le.release()
+
+
+async def test_live_holder_that_took_over_stale_lock_rejects_next_writer(tmp_path: Path):
+    """Nach einer Übernahme hält der Gewinner das Lock live – ein Folgeschreiber wird abgewiesen."""
+    lock_path = tmp_path / "writer.lock"
+    lock_path.write_text('{"pid": 999999}', encoding="utf-8")
+
+    winner = WriterLease(tmp_path)
+    await winner.acquire()
+    try:
+        assert winner.owns_lock
+        loser = WriterLease(tmp_path)
+        with pytest.raises(WriterLockHeldError):
+            await loser.acquire()
+        assert loser.owns_lock is False
+    finally:
+        await winner.release()
