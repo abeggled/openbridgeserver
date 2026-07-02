@@ -2044,4 +2044,13 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             with suppress(Exception):
                 delete_ringbuffer_storage_files(_ringbuffer_disk_path())
         raise
-    return RingBufferStats(enabled=True, **stats)
+    # Persistierte Segment-Config in die Response spiegeln (wie GET /stats),
+    # damit das Config-Modal nach dem Speichern die GESPEICHERTEN Werte
+    # hydratisiert statt auf die Defaults zurueckzufallen (#919/#938).
+    return RingBufferStats(
+        enabled=True,
+        segment_max_bytes=resolved_segment_max_bytes,
+        segment_max_rows=resolved_segment_max_rows,
+        segment_max_age=resolved_segment_max_age,
+        **stats,
+    )

@@ -149,6 +149,9 @@ async def test_stats_returns_persisted_segment_config(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 200, resp.text
+    # Die POST-/config-Response selbst muss den gespeicherten Wert zurueckgeben,
+    # damit das Modal nach dem Speichern korrekt hydratisiert (nicht auf 6h faellt).
+    assert resp.json()["segment_max_age"] == 43200
 
     stats = await client.get("/api/v1/ringbuffer/stats", headers=auth_headers)
     assert stats.status_code == 200, stats.text
