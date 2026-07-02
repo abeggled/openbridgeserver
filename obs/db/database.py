@@ -18,10 +18,11 @@ import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-# Busy timeout for the dedicated checkpoint connection. Kept short so a pinned reader
-# (e.g. a DB export/backup) only delays this off-thread maintenance briefly instead of
-# holding up the shared connection's operation queue. See issue #908.
-_CHECKPOINT_BUSY_TIMEOUT_SECONDS = 5.0
+# Busy timeout for the dedicated checkpoint connection. Zero → non-waiting: if a reader
+# (DB export/backup) or writer holds the DB, the checkpoint gives up immediately and is
+# retried on the next maintenance tick rather than stalling application write traffic
+# behind maintenance. See issue #908.
+_CHECKPOINT_BUSY_TIMEOUT_SECONDS = 0.0
 
 # ---------------------------------------------------------------------------
 # Migration SQL
@@ -729,6 +730,15 @@ class Database:
         await self._conn.execute("PRAGMA journal_size_limit=67108864")
         await self._conn.commit()
 
+        # Reclaim any oversized WAL left by a previous run *before* migrations or other
+        # startup writes: on a restart recovering from the full-disk condition behind
+        # issue #908, this frees space so the following writes don't hit ENOSPC. Best
+        # effort — a failure here must not block startup.
+        try:
+            await self.checkpoint()
+        except Exception:
+            logger.exception("Initial WAL checkpoint on connect failed")
+
         await self._run_migrations()
         logger.info("Database connected: %s", self._path)
 
@@ -756,13 +766,17 @@ class Database:
         connection. That way it never commits another coroutine's in-flight
         transaction/savepoint and never blocks the shared connection's operation queue
         behind SQLite's busy timeout. ``PRAGMA wal_checkpoint(TRUNCATE)`` blocked by an
-        open reader returns a *busy* result row instead of raising; that case is treated
-        as a failed checkpoint. Returns ``True`` only when the WAL was actually
-        checkpointed, ``False`` for in-memory databases or a busy result. See issue #908.
+        open reader returns a *busy* result row (and a contended lock raises
+        ``OperationalError`` with the non-waiting busy timeout) instead of completing;
+        both are treated as a failed checkpoint and retried on the next tick. Returns
+        ``True`` only when the WAL was actually checkpointed, ``False`` for in-memory
+        databases, a disconnected ``Database``, or a busy/locked result. Skipping while
+        disconnected keeps maintenance from taking file locks during an admin DB restore
+        (which disconnects first). See issue #908.
         """
         from obs.ringbuffer.ringbuffer import _is_sqlite_memory_path, _sqlite_filesystem_path
 
-        if _is_sqlite_memory_path(self._path):
+        if self._conn is None or _is_sqlite_memory_path(self._path):
             return False
         fs_path = _sqlite_filesystem_path(self._path)
 
@@ -770,6 +784,12 @@ class Database:
             conn = sqlite3.connect(fs_path, timeout=_CHECKPOINT_BUSY_TIMEOUT_SECONDS)
             try:
                 row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            except sqlite3.OperationalError as exc:
+                # Non-waiting busy timeout surfaces contention as "database is locked";
+                # treat it as a skipped checkpoint rather than an error to retry later.
+                if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+                    return False
+                raise
             finally:
                 conn.close()
             # row = (busy, log_pages, checkpointed_pages); busy != 0 → WAL not reset.

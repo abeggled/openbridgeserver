@@ -505,7 +505,15 @@ async def _build_monitor_info(db: Database) -> dict[str, Any]:
         ringbuffer = get_optional_ringbuffer()
         if not is_ringbuffer_enabled() or ringbuffer is None:
             stats = await _disabled_stats(db)
-            disk_files = ringbuffer.disk_file_sizes() if ringbuffer is not None else _sqlite_file_sizes(None)
+            if ringbuffer is not None:
+                disk_files = ringbuffer.disk_file_sizes()
+            else:
+                # No live instance: stat the default ringbuffer path derived from the DB
+                # path so a leftover obs_ringbuffer.db/-wal still consuming disk while the
+                # monitor is disabled is surfaced rather than reported as zero (#908).
+                from obs.ringbuffer.ringbuffer import default_ringbuffer_disk_path
+
+                disk_files = _sqlite_file_sizes(default_ringbuffer_disk_path(get_settings().database.path))
             return sanitize_support_data(
                 {
                     "available": True,

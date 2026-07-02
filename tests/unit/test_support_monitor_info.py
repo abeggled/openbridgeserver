@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from obs.api.v1.support import _build_monitor_info, _sqlite_file_sizes
@@ -24,10 +25,15 @@ class _FakeDb:
         }
 
 
-async def test_build_monitor_info_preserves_disabled_config():
+def _fake_settings(db_path):
+    return SimpleNamespace(database=SimpleNamespace(path=str(db_path)))
+
+
+async def test_build_monitor_info_preserves_disabled_config(tmp_path: Path):
     with (
         patch("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", return_value=False),
         patch("obs.ringbuffer.ringbuffer.get_optional_ringbuffer", return_value=None),
+        patch("obs.api.v1.support.get_settings", return_value=_fake_settings(tmp_path / "obs.db")),
     ):
         monitor = await _build_monitor_info(_FakeDb())
 
@@ -39,8 +45,37 @@ async def test_build_monitor_info_preserves_disabled_config():
     assert monitor["recent_sample_size"] == 0
     assert monitor["recent_source_adapter_counts"] == {}
     assert monitor["recent_quality_counts"] == {}
-    # No ringbuffer instance → zeroed storage files, still present in the package.
+    # No ringbuffer instance and no leftover DB → zeroed storage files, still present.
     assert monitor["storage_files"] == {"db_bytes": 0, "wal_bytes": 0, "shm_bytes": 0, "total_bytes": 0}
+
+
+async def test_build_monitor_info_reports_leftover_ringbuffer_when_disabled(tmp_path: Path):
+    # A monitor disabled at startup can leave obs_ringbuffer.db/-wal on disk; the support
+    # package must surface those bytes, not report zero (#908).
+    (tmp_path / "obs_ringbuffer.db").write_bytes(b"r" * 8192)
+    (tmp_path / "obs_ringbuffer.db-wal").write_bytes(b"w" * 4096)
+
+    with (
+        patch("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", return_value=False),
+        patch("obs.ringbuffer.ringbuffer.get_optional_ringbuffer", return_value=None),
+        patch("obs.api.v1.support.get_settings", return_value=_fake_settings(tmp_path / "obs.db")),
+    ):
+        monitor = await _build_monitor_info(_FakeDb())
+
+    assert monitor["storage_files"] == {"db_bytes": 8192, "wal_bytes": 4096, "shm_bytes": 0, "total_bytes": 12288}
+
+
+async def test_build_monitor_info_uses_instance_files_when_disabled_but_present():
+    # Monitor disabled but a live instance still exists → report its own file sizes.
+    fake_rb = MagicMock()
+    fake_rb.disk_file_sizes = MagicMock(return_value={"db_bytes": 5, "wal_bytes": 6, "shm_bytes": 0, "total_bytes": 11})
+    with (
+        patch("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", return_value=False),
+        patch("obs.ringbuffer.ringbuffer.get_optional_ringbuffer", return_value=fake_rb),
+    ):
+        monitor = await _build_monitor_info(_FakeDb())
+
+    assert monitor["storage_files"] == {"db_bytes": 5, "wal_bytes": 6, "shm_bytes": 0, "total_bytes": 11}
 
 
 def test_sqlite_file_sizes_reports_db_and_wal(tmp_path: Path):

@@ -8,6 +8,7 @@ file on disk.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -102,7 +103,7 @@ async def test_checkpoint_reports_busy_result_as_failure(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_does_not_commit_shared_connection(tmp_path, monkeypatch):
+async def test_checkpoint_does_not_commit_shared_connection(tmp_path):
     db_path = tmp_path / "obs.db"
     db = Database(str(db_path))
     await db.connect()
@@ -111,7 +112,6 @@ async def test_checkpoint_does_not_commit_shared_connection(tmp_path, monkeypatc
         await db.commit()
         # Open — but do not commit — a write transaction on the shared connection.
         await db.execute("INSERT INTO t (v) VALUES ('pending')")
-        monkeypatch.setattr("obs.db.database._CHECKPOINT_BUSY_TIMEOUT_SECONDS", 0.5)
 
         # Maintenance checkpoint runs on its own connection and must not commit the
         # in-flight transaction behind the application's back.
@@ -120,6 +120,100 @@ async def test_checkpoint_does_not_commit_shared_connection(tmp_path, monkeypatc
         await db.conn.rollback()
         rows = await db.fetchall("SELECT * FROM t")
         assert rows == []
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_treats_locked_db_as_skip(tmp_path, monkeypatch):
+    """A non-waiting busy timeout surfaces contention as 'database is locked' → skip."""
+    db = Database(str(tmp_path / "obs.db"))
+    await db.connect()
+    try:
+
+        class _LockedConn:
+            def execute(self, _sql):
+                raise sqlite3.OperationalError("database is locked")
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("obs.db.database.sqlite3.connect", lambda *a, **k: _LockedConn())
+        assert await db.checkpoint() is False
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_reraises_non_lock_operational_error(tmp_path, monkeypatch):
+    """A non-lock OperationalError (e.g. I/O error) is a real fault and must propagate."""
+    db = Database(str(tmp_path / "obs.db"))
+    await db.connect()
+
+    class _BrokenConn:
+        def execute(self, _sql):
+            raise sqlite3.OperationalError("disk I/O error")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("obs.db.database.sqlite3.connect", lambda *a, **k: _BrokenConn())
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            await db.checkpoint()
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_skipped_when_disconnected(tmp_path):
+    """Maintenance must not touch the DB file while disconnected (e.g. admin restore)."""
+    db = Database(str(tmp_path / "obs.db"))
+    await db.connect()
+    await db.disconnect()
+    assert db._conn is None
+    assert await db.checkpoint() is False
+
+
+@pytest.mark.asyncio
+async def test_connect_checkpoints_before_migrations(tmp_path, monkeypatch):
+    """An initial checkpoint runs before migrations so a full WAL is reclaimed first."""
+    calls: list[str] = []
+    orig_checkpoint = Database.checkpoint
+    orig_migrations = Database._run_migrations
+
+    async def spy_checkpoint(self):
+        calls.append("checkpoint")
+        return await orig_checkpoint(self)
+
+    async def spy_migrations(self):
+        calls.append("migrations")
+        return await orig_migrations(self)
+
+    monkeypatch.setattr(Database, "checkpoint", spy_checkpoint)
+    monkeypatch.setattr(Database, "_run_migrations", spy_migrations)
+
+    db = Database(str(tmp_path / "obs.db"))
+    await db.connect()
+    try:
+        assert calls == ["checkpoint", "migrations"]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_connect_survives_initial_checkpoint_failure(tmp_path, monkeypatch):
+    """A failing initial checkpoint must not block startup; migrations still run."""
+
+    async def boom(self) -> bool:
+        raise RuntimeError("checkpoint exploded")
+
+    monkeypatch.setattr(Database, "checkpoint", boom)
+    db = Database(str(tmp_path / "obs.db"))
+    await db.connect()  # must not raise despite the checkpoint failing
+    try:
+        row = await db.fetchone("SELECT COUNT(*) AS c FROM schema_version")
+        assert row is not None
     finally:
         await db.disconnect()
 
