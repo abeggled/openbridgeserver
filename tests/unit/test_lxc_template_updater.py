@@ -63,7 +63,7 @@ def test_release_lxc_workflow_packages_obs_admin():
     assert 'if [[ "$BUNDLE_HAS_OBS_ADMIN" == "true" ]]; then' in obs_update
     # Self-update writes to a temp file and renames atomically (no in-place
     # overwrite of a binary that may still be executing) — see issue #942 P1.
-    assert 'TMP_ADMIN=$(mktemp /usr/local/bin/obs-admin.XXXXXX)' in obs_update
+    assert "TMP_ADMIN=$(mktemp /usr/local/bin/obs-admin.XXXXXX)" in obs_update
     assert 'install -m 755 "$INSTALL_DIR/obs-admin" "$TMP_ADMIN"' in obs_update
     assert 'mv -f "$TMP_ADMIN" /usr/local/bin/obs-admin' in obs_update
 
@@ -78,8 +78,11 @@ def test_updater_supports_nightly_flag():
     # Nightly tags use the date-based naming pattern
     assert "nightly-" in obs_update
     assert r"nightly-(\d{4})(\d{2})(\d{2})" in obs_update
-    # Nightly builds are labelled distinctly in the menu
-    assert "(nightly" in obs_update
+    # Menu labels carry no type suffix — the tag name itself (stable "X.Y.Z",
+    # RC "X.Y.Z-RCn", nightly "nightly-YYYYMMDD") already makes the type
+    # obvious; only the installed version gets a "(current)" marker.
+    assert 'MARKER="  (current)"' in obs_update
+    assert 'LABELS+=("$TAG${MARKER}")' in obs_update
 
 
 def test_updater_fails_closed_when_sha256_missing():

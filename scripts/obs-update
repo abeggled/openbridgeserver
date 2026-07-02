@@ -81,17 +81,11 @@ echo ""
 OPTIONS=()
 LABELS=()
 
-while IFS=' ' read -r TYPE TAG; do
+while IFS=' ' read -r _TYPE TAG; do
     OPTIONS+=("$TAG")
     MARKER=""
-    [[ "$TAG" == "$CURRENT" ]] && MARKER=", current"
-    if [[ "$TYPE" == "stable" ]]; then
-        LABELS+=("$TAG  (stable${MARKER})")
-    elif [[ "$TYPE" == "rc" ]]; then
-        LABELS+=("$TAG  (release candidate${MARKER})")
-    else
-        LABELS+=("$TAG${MARKER:+  (current)}")
-    fi
+    [[ "$TAG" == "$CURRENT" ]] && MARKER="  (current)"
+    LABELS+=("$TAG${MARKER}")
 done <<< "$VERSION_LIST"
 
 if [[ ${#OPTIONS[@]} -eq 0 ]]; then
