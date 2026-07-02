@@ -55,7 +55,19 @@ def test_sqlite_file_sizes_reports_db_and_wal(tmp_path: Path):
 
 def test_sqlite_file_sizes_zero_for_memory_db():
     assert _sqlite_file_sizes(":memory:") == {"db_bytes": 0, "wal_bytes": 0, "shm_bytes": 0, "total_bytes": 0}
+    assert _sqlite_file_sizes("file::memory:?cache=shared") == {"db_bytes": 0, "wal_bytes": 0, "shm_bytes": 0, "total_bytes": 0}
     assert _sqlite_file_sizes(None)["total_bytes"] == 0
+
+
+def test_sqlite_file_sizes_normalizes_file_uri(tmp_path: Path):
+    db = tmp_path / "obs.db"
+    db.write_bytes(b"d" * 512)
+    (tmp_path / "obs.db-wal").write_bytes(b"w" * 2048)
+
+    # A SQLite file URI must be normalized to a filesystem path before statting sidecars.
+    sizes = _sqlite_file_sizes(f"file:{db}?mode=rwc")
+
+    assert sizes == {"db_bytes": 512, "wal_bytes": 2048, "shm_bytes": 0, "total_bytes": 2560}
 
 
 def test_ringbuffer_disk_file_sizes_splits_db_and_wal(tmp_path: Path):

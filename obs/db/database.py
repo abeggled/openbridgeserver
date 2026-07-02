@@ -6,7 +6,9 @@ Includes a simple version-based migration system.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import sqlite3
 from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
@@ -15,6 +17,11 @@ from typing import Any
 import aiosqlite
 
 logger = logging.getLogger(__name__)
+
+# Busy timeout for the dedicated checkpoint connection. Kept short so a pinned reader
+# (e.g. a DB export/backup) only delays this off-thread maintenance briefly instead of
+# holding up the shared connection's operation queue. See issue #908.
+_CHECKPOINT_BUSY_TIMEOUT_SECONDS = 5.0
 
 # ---------------------------------------------------------------------------
 # Migration SQL
@@ -739,20 +746,36 @@ class Database:
     async def checkpoint(self) -> bool:
         """Force a TRUNCATE WAL checkpoint to keep the ``-wal`` sidecar bounded.
 
-        Mirrors the ringbuffer maintenance (``obs/ringbuffer/ringbuffer.py``). The
-        default PASSIVE auto-checkpoint writes WAL pages back into the DB but never
+        The default PASSIVE auto-checkpoint writes WAL pages back into the DB but never
         shrinks the WAL file on disk, so under continuous history writes it can grow
         without bound. A TRUNCATE checkpoint resets the file once no read snapshot is
-        pinning it. Returns ``True`` when a checkpoint ran, ``False`` for in-memory
-        databases (which have no WAL). See issue #908.
+        pinning it.
+
+        The checkpoint runs on a short-lived private ``sqlite3`` connection off the
+        event loop (via a worker thread) rather than the shared ``aiosqlite``
+        connection. That way it never commits another coroutine's in-flight
+        transaction/savepoint and never blocks the shared connection's operation queue
+        behind SQLite's busy timeout. ``PRAGMA wal_checkpoint(TRUNCATE)`` blocked by an
+        open reader returns a *busy* result row instead of raising; that case is treated
+        as a failed checkpoint. Returns ``True`` only when the WAL was actually
+        checkpointed, ``False`` for in-memory databases or a busy result. See issue #908.
         """
-        if self._conn is None or self._path in (":memory:", "file::memory:?cache=shared"):
+        from obs.ringbuffer.ringbuffer import _is_sqlite_memory_path, _sqlite_filesystem_path
+
+        if _is_sqlite_memory_path(self._path):
             return False
-        # Commit any pending implicit transaction first so the checkpoint can fully
-        # reset the WAL rather than being blocked by an open write snapshot.
-        await self._conn.commit()
-        await self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        return True
+        fs_path = _sqlite_filesystem_path(self._path)
+
+        def _run() -> bool:
+            conn = sqlite3.connect(fs_path, timeout=_CHECKPOINT_BUSY_TIMEOUT_SECONDS)
+            try:
+                row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            finally:
+                conn.close()
+            # row = (busy, log_pages, checkpointed_pages); busy != 0 → WAL not reset.
+            return bool(row is not None and row[0] == 0)
+
+        return await asyncio.to_thread(_run)
 
     # ------------------------------------------------------------------
     # Migrations

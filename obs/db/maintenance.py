@@ -42,14 +42,20 @@ class DatabaseMaintenanceScheduler:
         logger.info("DB-Wartung gestoppt.")
 
     async def _loop(self) -> None:
+        # Checkpoint once up front, before the first sleep: a restart that recovers from
+        # the exact full-disk WAL condition this guards against must reclaim space
+        # immediately rather than waiting a full interval. See issue #908.
         while True:
             try:
-                await asyncio.sleep(self._interval)
                 await self._db.checkpoint()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.error("DB-Wartung: WAL-Checkpoint fehlgeschlagen: %s", exc)
+            try:
+                await asyncio.sleep(self._interval)
+            except asyncio.CancelledError:
+                raise
 
 
 _scheduler: DatabaseMaintenanceScheduler | None = None

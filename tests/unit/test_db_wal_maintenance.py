@@ -77,6 +77,54 @@ async def test_checkpoint_noop_for_memory_db():
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_reports_busy_result_as_failure(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "obs.db"))
+    await db.connect()
+    try:
+        # A TRUNCATE checkpoint blocked by an open reader completes with a *busy* result
+        # row (busy != 0) instead of raising. That must be reported as a failed
+        # checkpoint, not a silent success that hides an ever-growing WAL.
+        class _Cursor:
+            def fetchone(self):
+                return (1, -1, -1)  # busy, log_pages, checkpointed_pages
+
+        class _BusyConn:
+            def execute(self, _sql):
+                return _Cursor()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("obs.db.database.sqlite3.connect", lambda *a, **k: _BusyConn())
+        assert await db.checkpoint() is False
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_does_not_commit_shared_connection(tmp_path, monkeypatch):
+    db_path = tmp_path / "obs.db"
+    db = Database(str(db_path))
+    await db.connect()
+    try:
+        await db.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+        await db.commit()
+        # Open — but do not commit — a write transaction on the shared connection.
+        await db.execute("INSERT INTO t (v) VALUES ('pending')")
+        monkeypatch.setattr("obs.db.database._CHECKPOINT_BUSY_TIMEOUT_SECONDS", 0.5)
+
+        # Maintenance checkpoint runs on its own connection and must not commit the
+        # in-flight transaction behind the application's back.
+        await db.checkpoint()
+
+        await db.conn.rollback()
+        rows = await db.fetchall("SELECT * FROM t")
+        assert rows == []
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_scheduler_checkpoints_periodically(tmp_path):
     db_path = tmp_path / "obs.db"
     db = Database(str(db_path))
@@ -136,6 +184,35 @@ async def test_scheduler_survives_checkpoint_error(tmp_path):
         assert calls["n"] >= 2
     finally:
         await scheduler.stop()
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_cancellation_during_checkpoint_stops_cleanly(tmp_path):
+    """Cancelling while a checkpoint is in flight must terminate the loop, not swallow it."""
+    db = Database(str(tmp_path / "obs.db"))
+    await db.connect()
+
+    in_checkpoint = asyncio.Event()
+
+    async def slow_checkpoint() -> bool:
+        in_checkpoint.set()
+        await asyncio.sleep(10)  # block so stop() cancels us mid-checkpoint
+        return True
+
+    async def noop_checkpoint() -> bool:
+        return False
+
+    db.checkpoint = slow_checkpoint  # type: ignore[method-assign]
+    scheduler = DatabaseMaintenanceScheduler(db, interval_seconds=0.001)
+    try:
+        scheduler.start()
+        await asyncio.wait_for(in_checkpoint.wait(), timeout=2)
+        # stop() cancels the task while it awaits checkpoint(); the loop re-raises.
+        await scheduler.stop()
+        assert scheduler._task.cancelled()
+    finally:
+        db.checkpoint = noop_checkpoint  # type: ignore[method-assign]  # keep disconnect fast
         await db.disconnect()
 
 

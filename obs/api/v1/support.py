@@ -354,12 +354,17 @@ def _sqlite_file_sizes(path: str | None) -> dict[str, int]:
     proportion to the DB (the failure mode behind issue #908). Returns zeros for
     in-memory databases or when a file is absent/unreadable.
     """
+    from obs.ringbuffer.ringbuffer import _is_sqlite_memory_path, _sqlite_filesystem_path
+
     sizes = {"db_bytes": 0, "wal_bytes": 0, "shm_bytes": 0, "total_bytes": 0}
-    if not path or path in (":memory:", "file::memory:?cache=shared") or "mode=memory" in path:
+    if not path or _is_sqlite_memory_path(path):
         return sizes
+    # Normalize SQLite file URIs (e.g. file:/data/obs.db?mode=rwc) to a filesystem path
+    # so the -wal/-shm sidecars are stat'd correctly rather than as literal URI strings.
+    fs_path = _sqlite_filesystem_path(path)
     for key, suffix in (("db_bytes", ""), ("wal_bytes", "-wal"), ("shm_bytes", "-shm")):
         try:
-            sizes[key] = os.path.getsize(f"{path}{suffix}")
+            sizes[key] = os.path.getsize(f"{fs_path}{suffix}")
         except OSError:
             sizes[key] = 0
     sizes["total_bytes"] = sizes["db_bytes"] + sizes["wal_bytes"] + sizes["shm_bytes"]
