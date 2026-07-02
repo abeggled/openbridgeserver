@@ -67,6 +67,7 @@ from obs.ringbuffer.store.interface import (
 from obs.ringbuffer.store.manifest import (
     LEGACY_SCHEMA_VERSION,
     SEGMENT_STATUS_ACTIVE,
+    SEGMENT_STATUS_CHECKPOINT_PENDING,
     SEGMENT_STATUS_CLOSED,
     Manifest,
     SegmentRecord,
@@ -1429,17 +1430,20 @@ class SqliteSegmentStore(RingBufferStore):
         return _safe_getsize(self._segments_dir / f"{filename}{suffix}")
 
     def _retention_pressure(self, segments: list[SegmentRecord]) -> tuple[bool, str | None]:
-        """Meldet, ob Retention trotz Löschung geschlossener Segmente über Budget bleibt.
+        """Meldet, ob Retention trotz Löschung löschbarer Segmente über Budget bleibt.
 
         ``retention_over_budget`` ist True, wenn nach Freigabe *aller* löschbaren
-        (sauber geschlossenen) Segmente das harte Size-Budget noch überschritten
-        bliebe — also nur das aktive/pending/quarantänierte, nicht löschbare
-        Restvolumen das Budget sprengt.
+        Segmente (sauber geschlossen, quarantäniert und Legacy) das harte
+        Size-Budget noch überschritten bliebe — also nur das wirklich nicht
+        löschbare Restvolumen (``active`` + ``checkpoint_pending``) das Budget
+        sprengt. Quarantänierte Segmente sind seit #919 in FIFO-Retention
+        löschbar und zählen daher NICHT mehr als undeletable — ein einzelnes
+        korruptes Segment löst damit kein retention_over_budget mehr aus.
         """
         budget = self._retention_config.max_file_size_bytes
         if budget is None:
             return False, None
-        undeletable = sum(s.size_bytes for s in segments if s.status != "closed")
+        undeletable = sum(s.size_bytes for s in segments if s.status in (SEGMENT_STATUS_ACTIVE, SEGMENT_STATUS_CHECKPOINT_PENDING))
         if undeletable > budget:
             return True, "max_file_size_bytes exceeded by non-deletable segments"
         return False, None
@@ -1533,18 +1537,24 @@ class SqliteSegmentStore(RingBufferStore):
     # ------------------------------------------------------------------
 
     async def enforce_retention(self) -> int:
-        """Segmentgenaue Retention — löscht nur ganze, sauber geschlossene Segmente.
+        """Segmentgenaue Retention — löscht nur ganze, retention-fähige Segmente.
 
-        Vertrag (#930): nie rowweise, nie das aktive Segment, nie ein
-        ``checkpoint_pending``/``quarantined`` Segment. Prioritäten:
+        Vertrag (#930/#919): nie rowweise, nie das aktive Segment, nie ein
+        ``checkpoint_pending`` Segment. Retention-fähig sind sauber geschlossene
+        **und** quarantänierte Segmente: ein korruptes Segment wird nicht mehr
+        für immer behalten, sondern in normaler FIFO-Reihenfolge (ältestes
+        zuerst) mitgelöscht, wenn es an der Reihe ist — seine Manifest-Metadaten
+        (from_ts/to_ts/row_count) bleiben intakt, nur die Datei ist korrupt.
+        Prioritäten:
 
-        1. ``max_file_size_bytes`` (hartes Budget): älteste geschlossene Segmente
+        1. ``max_file_size_bytes`` (hartes Budget): älteste retention-fähige Segmente
            löschen, bis das Gesamtvolumen unter das Budget fällt — auch wenn dadurch
            weniger Age/Rows aufbewahrt werden als gewünscht.
-        2. ``max_age``: geschlossene Segmente löschen, deren ``to_ts`` vollständig
+        2. ``max_age``: retention-fähige Segmente löschen, deren ``to_ts`` vollständig
            älter als der Cutoff ist.
-        3. ``max_entries``: Row-Budget mit Segmentgranularität — älteste geschlossene
-           Segmente löschen, bis die aufbewahrte Zeilenzahl unter das Budget fällt.
+        3. ``max_entries``: Row-Budget mit Segmentgranularität — älteste retention-
+           fähige Segmente löschen, bis die aufbewahrte Zeilenzahl unter das Budget
+           fällt.
 
         Liefert die Anzahl freigegebener Segmente.
         """
@@ -1553,8 +1563,9 @@ class SqliteSegmentStore(RingBufferStore):
             return 0
 
         removed = 0
-        # Nur sauber geschlossene Segmente sind löschbar; älteste zuerst. Das aktive,
-        # checkpoint_pending- und quarantänierte Segment bleiben außen vor.
+        # Retention-fähige Segmente sind löschbar; älteste zuerst. Das aktive und
+        # checkpoint_pending-Segment bleiben außen vor; quarantänierte werden seit
+        # #919 in FIFO-Reihenfolge mitgelöscht.
         removed += await self._enforce_size_budget(cfg.max_file_size_bytes)
         removed += await self._enforce_age_cutoff(cfg.max_age)
         removed += await self._enforce_row_budget(cfg.max_entries)
@@ -1594,16 +1605,19 @@ class SqliteSegmentStore(RingBufferStore):
         frische Umstellung nie sofort die ganze Historie.
 
         Reihenfolge: Legacy zuerst (ältestes, Guard erfüllt), sonst ältestes
-        geschlossenes v2-Segment.
+        retention-fähiges Segment (geschlossen oder quarantäniert, #919).
         """
         legacy_segments = await self.manifest.list_legacy_segments()
         # Legacy ist das global älteste → zuerst löschen, sobald der Guard erfüllt
         # ist (mindestens eine nicht-Legacy-Datenquelle hält Zeilen).
         if legacy_segments and await self._has_nonlegacy_data_segment():
             return legacy_segments[0]
-        closed = await self.manifest.list_closed_segments()
-        if closed:
-            return closed[0]
+        # Geschlossene und quarantänierte Segmente in FIFO-Reihenfolge (#919):
+        # ein korruptes Segment wird nicht mehr für immer behalten, sondern
+        # gelöscht, wenn es an der Reihe ist (ältestes zuerst).
+        eligible = await self.manifest.list_retention_eligible_segments()
+        if eligible:
+            return eligible[0]
         return None
 
     async def _has_nonlegacy_data_segment(self) -> bool:
@@ -1618,7 +1632,7 @@ class SqliteSegmentStore(RingBufferStore):
             return 0
         cutoff = datetime.now(UTC).timestamp() - max_age
         removed = 0
-        for segment in await self.manifest.list_closed_segments():
+        for segment in await self.manifest.list_retention_eligible_segments():
             to_ts = _parse_ts(segment.to_ts)
             if to_ts is None or to_ts >= cutoff:
                 # Ältestes-zuerst: sobald ein Segment neu genug ist, sind alle
@@ -1633,10 +1647,10 @@ class SqliteSegmentStore(RingBufferStore):
             return 0
         removed = 0
         while await self._total_row_count() > max_entries:
-            closed = await self.manifest.list_closed_segments()
-            if not closed:
+            eligible = await self.manifest.list_retention_eligible_segments()
+            if not eligible:
                 break
-            await self._delete_segment(closed[0])
+            await self._delete_segment(eligible[0])
             removed += 1
         return removed
 

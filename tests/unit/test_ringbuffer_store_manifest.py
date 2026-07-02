@@ -132,8 +132,29 @@ async def test_mark_quarantined_records_reason_and_status(manifest: Manifest):
     assert reloaded.status == SEGMENT_STATUS_QUARANTINED
     assert reloaded.integrity_status == "corrupt"
     assert reloaded.quarantine_reason == "malformed database disk image"
-    # Quarantänierte Segmente sind nicht retention-fähig.
+    # Quarantänierte Segmente sind nicht "closed", aber seit #919 retention-fähig.
     assert [s.segment_id for s in await manifest.list_closed_segments()] == []
+    assert [s.segment_id for s in await manifest.list_retention_eligible_segments()] == [seg.segment_id]
+
+
+async def test_list_retention_eligible_includes_closed_and_quarantined_fifo(manifest: Manifest):
+    """list_retention_eligible_segments liefert closed+quarantined, älteste zuerst; nie active/pending (#919)."""
+    a = await manifest.create_segment(filename="a.sqlite", schema_version=2)  # wird closed
+    b = await manifest.create_segment(filename="b.sqlite", schema_version=2)  # wird quarantined
+    c = await manifest.create_segment(filename="c.sqlite", schema_version=2)  # wird checkpoint_pending
+    d = await manifest.create_segment(filename="d.sqlite", schema_version=2)  # bleibt active
+
+    await manifest.close_segment(a.segment_id)
+    await manifest.close_segment(b.segment_id)
+    await manifest.mark_quarantined(b.segment_id, reason="corrupt")
+    await manifest.close_segment(c.segment_id)
+    await manifest.mark_checkpoint_pending(c.segment_id)
+
+    eligible = await manifest.list_retention_eligible_segments()
+    # FIFO (segment_id ASC): closed a, dann quarantined b. c (pending) und d (active) fehlen.
+    assert [s.segment_id for s in eligible] == [a.segment_id, b.segment_id]
+    assert d.segment_id not in {s.segment_id for s in eligible}
+    assert c.segment_id not in {s.segment_id for s in eligible}
 
 
 async def test_delete_segment_removes_manifest_entry(manifest: Manifest):

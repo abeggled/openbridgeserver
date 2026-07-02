@@ -40,9 +40,15 @@ SEGMENT_STATUS_LEGACY = "legacy"
 # diese Version kontrolliert (Ordering aus ts+rowid, kein typed pushdown).
 LEGACY_SCHEMA_VERSION = 1
 
-# Geschlossene, für Retention löschbare Status: ein Segment ist erst freigebbar,
-# wenn sein DB/WAL/SHM-Zustand konsistent behandelt wurde (nicht mehr pending).
-SEGMENT_STATUS_RETENTION_ELIGIBLE = (SEGMENT_STATUS_CLOSED,)
+# Für Retention löschbare Status (#919): ein Segment ist freigebbar, wenn sein
+# DB/WAL/SHM-Zustand konsistent behandelt wurde (nicht mehr ``active`` oder
+# ``checkpoint_pending``). Quarantänierte Segmente sind ebenfalls löschbar: nur
+# ihre Segment-DATEI ist korrupt, die Manifest-Metadaten (from_ts/to_ts/
+# row_count) bleiben intakt, also lässt sich FIFO-/Age-Retention sicher über die
+# Metadaten fahren. Sie werden damit nicht mehr für immer behalten, sondern in
+# normaler FIFO-Reihenfolge (ältestes zuerst) mitgelöscht, wenn sie an der Reihe
+# sind.
+SEGMENT_STATUS_RETENTION_ELIGIBLE = (SEGMENT_STATUS_CLOSED, SEGMENT_STATUS_QUARANTINED)
 
 _MANIFEST_SCHEMA = """
 CREATE TABLE IF NOT EXISTS segments (
@@ -279,10 +285,28 @@ class Manifest:
         await self._db.commit()
 
     async def list_closed_segments(self) -> list[SegmentRecord]:
-        """Nur sauber geschlossene (retention-fähige) Segmente, älteste zuerst."""
+        """Nur sauber geschlossene Segmente, älteste zuerst."""
         async with self._db.execute(
             "SELECT * FROM segments WHERE status = ? ORDER BY segment_id ASC",
             (SEGMENT_STATUS_CLOSED,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_segment(row) for row in rows]
+
+    async def list_retention_eligible_segments(self) -> list[SegmentRecord]:
+        """Für Retention löschbare Segmente, älteste zuerst (FIFO, #919).
+
+        Das sind sauber geschlossene **und** quarantänierte Segmente
+        (``SEGMENT_STATUS_RETENTION_ELIGIBLE``). Quarantänierte werden nicht mehr
+        für immer behalten, sondern in normaler FIFO-Reihenfolge mitgelöscht,
+        wenn sie an der Reihe sind — ihre Manifest-Metadaten bleiben intakt,
+        nur die Segment-Datei ist korrupt. ``active`` und ``checkpoint_pending``
+        sind bewusst nicht enthalten und werden nie über diese Liste gelöscht.
+        """
+        placeholders = ", ".join("?" for _ in SEGMENT_STATUS_RETENTION_ELIGIBLE)
+        async with self._db.execute(
+            f"SELECT * FROM segments WHERE status IN ({placeholders}) ORDER BY segment_id ASC",
+            SEGMENT_STATUS_RETENTION_ELIGIBLE,
         ) as cur:
             rows = await cur.fetchall()
         return [_row_to_segment(row) for row in rows]

@@ -278,12 +278,6 @@ async def test_corrupt_closed_segment_is_quarantined_per_segment(tmp_path: Path)
         reloaded = await store.manifest.get_segment(corrupt_id)
         assert reloaded.status == SEGMENT_STATUS_QUARANTINED
         assert reloaded.quarantine_reason is not None
-
-        # Quarantänierte Segmente werden von Retention nicht angefasst.
-        store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
-        removed = await store.enforce_retention()
-        assert removed == 0
-        assert (await store.manifest.get_segment(corrupt_id)).status == SEGMENT_STATUS_QUARANTINED
     finally:
         await store.close()
 
@@ -781,5 +775,192 @@ async def test_integrity_check_quarantines_on_non_ok_result(tmp_path: Path, monk
         reloaded = await store.manifest.get_segment(seg_id)
         assert reloaded.status == SEGMENT_STATUS_QUARANTINED
         assert "row 3 missing" in reloaded.quarantine_reason
+    finally:
+        await store.close()
+
+
+# ---------------------------------------------------------------------------
+# (i) #919: quarantänierte Segmente sind in FIFO-Retention löschbar statt
+# unantastbar. Nur die Datei ist korrupt; die Manifest-Metadaten (from_ts/
+# to_ts/row_count) bleiben intakt, also ist FIFO-/Age-Retention sicher.
+# ---------------------------------------------------------------------------
+
+
+async def test_quarantined_oldest_segment_is_size_retention_victim(tmp_path: Path):
+    """Ältestes (quarantäniertes) Segment wird unter Size-Budgetdruck gelöscht — Datei + Manifest weg."""
+    store = await _make_store(tmp_path / "root")
+    try:
+        # Zwei geschlossene Segmente + aktives; das älteste wird quarantäniert.
+        await store.append([_event(1, _iso(0))])
+        oldest_id = (await store.manifest.get_active_segment()).segment_id
+        await store.rotate()
+        await store.append([_event(2, _iso(1))])
+        await store.rotate()
+        await store.append([_event(3, _iso(2))])  # aktives
+
+        oldest = await store.manifest.get_segment(oldest_id)
+        oldest_path = store._segments_dir / oldest.filename
+        assert oldest_path.exists()
+        await store.manifest.mark_quarantined(oldest_id, reason="malformed database disk image")
+
+        # Härtestes Budget → alles Löschbare weg. Das quarantänierte, älteste
+        # Segment ist das erste Opfer.
+        store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
+        removed = await store.enforce_retention()
+        assert removed >= 1
+        # Manifest-Zeile weg und Datei (inkl. -wal/-shm) entfernt.
+        assert await store.manifest.get_segment(oldest_id) is None
+        assert not oldest_path.exists()
+        # Aktives Segment bleibt.
+        assert await store.manifest.get_active_segment() is not None
+    finally:
+        await store.close()
+
+
+async def test_quarantined_segment_deleted_when_its_turn_in_fifo(tmp_path: Path):
+    """FIFO-Reihenfolge: ein quarantäniertes Segment in der Mitte wird erst gelöscht, wenn es an der Reihe ist."""
+    store = await _make_store(tmp_path / "root")
+    try:
+        ids = []
+        for i in range(3):
+            await store.append([_event(i, _iso(i))])
+            ids.append((await store.manifest.get_active_segment()).segment_id)
+            await store.rotate()
+        await store.append([_event(99, _iso(99))])  # aktives
+
+        # Mittleres Segment quarantänieren.
+        await store.manifest.mark_quarantined(ids[1], reason="corrupt")
+
+        # Retention-eligible-Liste ist FIFO über closed+quarantined.
+        eligible = await store.manifest.list_retention_eligible_segments()
+        assert [s.segment_id for s in eligible] == ids  # ältestes zuerst, quarantäniert eingereiht
+
+        # Budget, das genau ein Segment freigibt: das älteste (ids[0]), NICHT das
+        # quarantänierte in der Mitte — Reihenfolge bleibt FIFO.
+        total = sum(s.size_bytes for s in await store.manifest.list_segments())
+        oldest_size = eligible[0].size_bytes
+        store._retention_config = StoreRetentionConfig(max_file_size_bytes=total - oldest_size)
+        removed = await store.enforce_retention()
+        assert removed == 1
+        assert await store.manifest.get_segment(ids[0]) is None
+        assert (await store.manifest.get_segment(ids[1])).status == SEGMENT_STATUS_QUARANTINED
+        assert await store.manifest.get_segment(ids[2]) is not None
+    finally:
+        await store.close()
+
+
+async def test_age_cutoff_deletes_quarantined_segment(tmp_path: Path):
+    """Age-Cutoff löscht ein quarantäniertes Segment, dessen to_ts vor dem Cutoff liegt (Metadaten intakt)."""
+    store = await _make_store(tmp_path / "root")
+    try:
+        # Altes Segment (to_ts weit in der Vergangenheit), dann quarantänieren.
+        await store.append([_event(1, _iso(-100000))])
+        old_id = (await store.manifest.get_active_segment()).segment_id
+        await store.rotate()
+        # Junges Segment + aktives.
+        await store.append([_event(2, _iso(-1))])
+        young_id = (await store.manifest.get_active_segment()).segment_id
+        await store.rotate()
+        await store.append([_event(3, _iso(0))])
+
+        await store.manifest.mark_quarantined(old_id, reason="corrupt")
+
+        store._retention_config = StoreRetentionConfig(max_age=3600)  # 1h
+        removed = await store.enforce_retention()
+        assert removed == 1
+        assert await store.manifest.get_segment(old_id) is None
+        assert await store.manifest.get_segment(young_id) is not None
+    finally:
+        await store.close()
+
+
+async def test_row_budget_deletes_quarantined_segment(tmp_path: Path):
+    """Row-Budget löscht ein quarantäniertes Segment, wenn es das älteste retention-fähige ist."""
+    store = await _make_store(tmp_path / "root")
+    try:
+        for i in range(3):
+            await store.append([_event(i, _iso(i)), _event(i + 100, _iso(i))])
+            if i == 0:
+                oldest_id = (await store.manifest.get_active_segment()).segment_id
+            await store.rotate()
+        await store.append([_event(99, _iso(99))])  # aktives, 1 Row
+
+        await store.manifest.mark_quarantined(oldest_id, reason="corrupt")
+
+        # Budget 5 → ältestes 2-Row-Segment (quarantäniert) muss weichen.
+        store._retention_config = StoreRetentionConfig(max_entries=5)
+        removed = await store.enforce_retention()
+        assert removed == 1
+        assert await store.manifest.get_segment(oldest_id) is None
+    finally:
+        await store.close()
+
+
+async def test_quarantined_segment_alone_does_not_trigger_over_budget(tmp_path: Path):
+    """Ein quarantäniertes Segment allein löst kein retention_over_budget mehr aus (#919)."""
+    store = await _make_store(tmp_path / "root")
+    try:
+        await store.append([_event(1, _iso(0))])
+        quarantined_id = (await store.manifest.get_active_segment()).segment_id
+        await store.rotate()
+        await store.append([_event(2, _iso(1))])  # kleines aktives Segment
+
+        await store.manifest.mark_quarantined(quarantined_id, reason="corrupt")
+        q_size = (await store.manifest.get_segment(quarantined_id)).size_bytes
+        active_size = (await store.manifest.get_active_segment()).size_bytes
+
+        # Budget passt zum aktiven Segment, ist aber kleiner als aktiv + quarantäniert.
+        # Früher hätte das quarantänierte Segment fälschlich over_budget getrieben.
+        store._retention_config = StoreRetentionConfig(max_file_size_bytes=max(active_size, q_size) + 1)
+        stats = await store.stats()
+        assert stats.backend_extra["retention_over_budget"] is False
+        assert stats.backend_extra["retention_pressure_reason"] is None
+    finally:
+        await store.close()
+
+
+async def test_checkpoint_pending_still_triggers_over_budget(tmp_path: Path, monkeypatch):
+    """checkpoint_pending bleibt undeletable → sprengt es das Budget, gilt weiter retention_over_budget."""
+    store = await _make_store(tmp_path / "root")
+    try:
+        await store.append([_event(1, _iso(0))])
+        pending_id = (await store.manifest.get_active_segment()).segment_id
+
+        async def _busy(_conn):
+            return False
+
+        monkeypatch.setattr(store, "_try_truncate_checkpoint", _busy)
+        await store.rotate()  # → checkpoint_pending
+        assert (await store.manifest.get_segment(pending_id)).status == SEGMENT_STATUS_CHECKPOINT_PENDING
+
+        pending_size = (await store.manifest.get_segment(pending_id)).size_bytes
+        store._retention_config = StoreRetentionConfig(max_file_size_bytes=max(pending_size - 1, 1))
+        # Nicht löschbar → over_budget bleibt True.
+        assert await store.enforce_retention() == 0
+        stats = await store.stats()
+        assert stats.backend_extra["retention_over_budget"] is True
+    finally:
+        await store.close()
+
+
+async def test_retention_never_deletes_checkpoint_pending_under_pressure(tmp_path: Path, monkeypatch):
+    """Regressionsschutz: checkpoint_pending wird auch unter härtestem Budgetdruck nie gelöscht."""
+    store = await _make_store(tmp_path / "root")
+    try:
+        await store.append([_event(1, _iso(0))])
+        pending_id = (await store.manifest.get_active_segment()).segment_id
+
+        async def _busy(_conn):
+            return False
+
+        monkeypatch.setattr(store, "_try_truncate_checkpoint", _busy)
+        await store.rotate()  # → checkpoint_pending
+        await store.append([_event(2, _iso(1))])  # neues aktives Segment
+
+        store._retention_config = StoreRetentionConfig(max_file_size_bytes=1, max_entries=1, max_age=1)
+        await store.enforce_retention()
+        # Weder das aktive noch das checkpoint_pending-Segment darf verschwinden.
+        assert (await store.manifest.get_segment(pending_id)).status == SEGMENT_STATUS_CHECKPOINT_PENDING
+        assert await store.manifest.get_active_segment() is not None
     finally:
         await store.close()
