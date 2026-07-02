@@ -62,7 +62,6 @@
       "budget": "Budget-Auslastung",
       "unlimited": "unbegrenzt",
       "segments": "Segmente",
-      "segmentsAffected": "{n} Segment(e) betroffen",
       "overBudgetInfo": "Aufbewahrung über Budget (Normalbetrieb).",
       "segmentDetails": "Segment-Details",
       "configuration": "Konfiguration",

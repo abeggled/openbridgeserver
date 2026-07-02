@@ -79,7 +79,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
               d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
           </svg>
-          {{ $t('dashboard.ringbuffer.segmentsAffected', { n: problemCount }) }}
+          {{ problemSummary }}
         </div>
 
         <!-- Dezenter Info-Hinweis bei retention_over_budget (Normalbetrieb) -->
@@ -135,6 +135,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ringbufferApi } from '@/api/client'
+import { useSegmentProblems } from '@/composables/useSegmentProblems'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
 import Spinner from '@/components/ui/Spinner.vue'
 import Modal from '@/components/ui/Modal.vue'
@@ -143,8 +144,8 @@ import MonitorConfigModal from '@/views/ringbuffer/MonitorConfigModal.vue'
 import SegmentStatsPanel from '@/views/ringbuffer/SegmentStatsPanel.vue'
 
 const REFRESH_INTERVAL_MS = 30_000
-// Recovery-Zustände, die ein Segment als problematisch markieren (#938).
-const PROBLEM_RECOVERY = new Set(['quarantined', 'pending', 'dirty_wal'])
+
+const { problemCounts, problemSummary: buildProblemSummary } = useSegmentProblems()
 
 const stats = ref(null)
 const loading = ref(true)
@@ -230,13 +231,9 @@ const segmentAgeHours = computed(() => {
 })
 
 // ── Problem-Hinweis ──────────────────────────────────────────────────────
-const problemCount = computed(() => {
-  let count = 0
-  for (const seg of segments.value) {
-    if (seg?.integrity_status === 'corrupt' || PROBLEM_RECOVERY.has(seg?.recovery_status)) count += 1
-  }
-  return count
-})
+// Kanonische Formulierung wie im Segment-Dialog (#919/#938), keine Duplikate.
+const problemCount = computed(() => problemCounts(segments.value).total)
+const problemSummary = computed(() => buildProblemSummary(segments.value))
 const retentionOverBudget = computed(() => Boolean(extra.value.retention_over_budget))
 
 // ── Legacy ───────────────────────────────────────────────────────────────

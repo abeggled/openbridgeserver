@@ -140,11 +140,15 @@ describe('RingBufferCard — segmented state', () => {
     expect(wrapper.find('[data-testid="rb-card-problem"]').exists()).toBe(false)
   })
 
-  it('shows the problem banner when a segment is corrupt/quarantined', async () => {
+  it('shows the problem banner with the canonical summary wording (same as the dialog)', async () => {
     const wrapper = await mountCard(segmentedPayload({ segments: problemSegments }))
     const banner = wrapper.find('[data-testid="rb-card-problem"]')
     expect(banner.exists()).toBe(true)
-    expect(banner.text()).toContain('1')
+    // Kanonische Formulierung wie im Segment-Dialog (#919/#938), nicht mehr „betroffen".
+    expect(banner.text()).toContain('Probleme:')
+    expect(banner.text()).toContain('1 beschädigt')
+    expect(banner.text()).toContain('1 isoliert')
+    expect(banner.text()).not.toContain('betroffen')
   })
 
   it('shows only a soft info hint for retention_over_budget (no alarm)', async () => {
