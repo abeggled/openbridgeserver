@@ -1260,7 +1260,7 @@
       "closed": "Geschlossen",
       "legacy": "Altdaten",
       "checkpoint_pending": "Checkpoint ausstehend",
-      "quarantined": "Quarantäne"
+      "quarantined": "Isoliert"
     },
     "integrityStatus": {
       "ok": "OK",
@@ -1269,7 +1269,7 @@
     },
     "recoveryStatus": {
       "recovered": "Wiederhergestellt",
-      "quarantined": "Quarantäne",
+      "quarantined": "Isoliert",
       "pending": "Ausstehend",
       "failed": "Fehlgeschlagen",
       "dirty_wal": "Unsauberes WAL"
@@ -1294,7 +1294,26 @@
     "segmentRatioError": "Die Segmentierung ist zu grob für die gewählte Aufbewahrung: Jedes gesetzte Retention-Limit (Größe, Zeilen, Alter) muss mindestens das Dreifache der zugehörigen Segment-Schwelle betragen.",
     "validationSegmentMaxAge": "Das Segment-Alter muss mindestens 1 Stunde betragen.",
     "validationSegmentMaxBytes": "Die Segmentgröße muss größer als 0 sein.",
-    "validationSegmentMaxRows": "Die Segment-Zeilenzahl muss größer als 0 sein."
+    "validationSegmentMaxRows": "Die Segment-Zeilenzahl muss größer als 0 sein.",
+    "segmentsButton": "Segmente",
+    "segmentsButtonTitle": "Segmentierten Speicher anzeigen",
+    "segmentProblemsBadgeTitle": "Es gibt Segment-Probleme — zum Ansehen öffnen.",
+    "segmentProblemBadge": "Problem",
+    "segmentProblemPrefix": "Probleme:",
+    "segmentProblemCorrupt": "{n} beschädigt",
+    "segmentProblemQuarantined": "{n} isoliert",
+    "segmentProblemPending": "{n} Wiederherstellung ausstehend",
+    "segmentProblemDirtyWal": "{n} unsauberes WAL",
+    "segmentQuarantineExplain": "Defektes Segment, zur Analyse isoliert.",
+    "unitMiB": "MiB",
+    "unitGiB": "GiB",
+    "prognosisTitle": "Prognose",
+    "prognosisWarming": "Prognose läuft sich noch ein (zu wenige Segmente).",
+    "prognosisRate": "Bei aktueller Rate ~{mib} MiB/h (~{rows} Events/h): neues Segment ~alle {hours} h.",
+    "prognosisRetention": "Budget reicht für ~{duration}.",
+    "prognosisBudget": "Für ~{age}-h-Segmente: Budget ≥ {gib} GiB.",
+    "prognosisHours": "{n} h",
+    "prognosisDays": "{n} Tage"
   },
   "logs": {
     "title": "Logs",

@@ -1,15 +1,16 @@
 <template>
   <!--
-    Segment-Status/Stats-Panel (#938). Rendert ausschließlich aus dem
+    Segment-Status/Stats-Panel (#938/#919). Rendert ausschließlich aus dem
     segmentierten Store (``store = {common, backend_extra}``). Der Aufrufer
     (RingBufferView) gibt ``store`` nur weiter, wenn es != null ist — im
     Legacy-Modus wird diese Sektion daher gar nicht gemountet.
-  -->
-  <section class="card p-4 flex flex-col gap-4 shrink-0" data-testid="segment-stats-panel">
-    <div class="flex items-center justify-between gap-2">
-      <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-100">{{ $t('ringbuffer.segmentSectionTitle') }}</h3>
-    </div>
 
+    Nach Nutzer-Feedback (#938): gesunde Segmente werden schlank dargestellt
+    (nur Kern-Infos). Integrität/Wiederherstellung sind KEINE Dauer-Spalten mehr.
+    Anomalien erscheinen als Warn-Badge am betroffenen Segment plus einer
+    kompakten Probleme-Zeile oben; Details stehen im Tooltip.
+  -->
+  <section class="flex flex-col gap-4" data-testid="segment-stats-panel">
     <!-- Überblick -->
     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3" data-testid="segment-overview">
       <div class="flex flex-col gap-0.5">
@@ -32,6 +33,15 @@
         <span class="text-xs text-slate-500">{{ $t('ringbuffer.segmentNewestEvent') }}</span>
         <span class="text-sm font-medium tabular-nums text-slate-700 dark:text-slate-200" data-testid="segment-newest">{{ newest }}</span>
       </div>
+    </div>
+
+    <!-- Kompakte Probleme-Zeile (#938): fasst alle Segment-Anomalien zusammen. -->
+    <div
+      v-if="problemSummary"
+      class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
+      data-testid="segment-problems"
+    >
+      {{ problemSummary }}
     </div>
 
     <!-- Betriebs-Hinweise -->
@@ -68,7 +78,7 @@
       </span>
     </div>
 
-    <!-- Segment-Liste -->
+    <!-- Segment-Liste — gesunde Segmente schlank: nur Kern-Infos. -->
     <div class="table-wrap overflow-x-auto" data-testid="segment-list">
       <h4 class="sr-only">{{ $t('ringbuffer.segmentsListTitle') }}</h4>
       <table class="table text-xs">
@@ -79,32 +89,37 @@
             <th class="text-right">{{ $t('ringbuffer.segmentColRows') }}</th>
             <th class="text-right">{{ $t('ringbuffer.segmentColSize') }}</th>
             <th>{{ $t('ringbuffer.segmentColTimespan') }}</th>
-            <th>{{ $t('ringbuffer.segmentColIntegrity') }}</th>
-            <th>{{ $t('ringbuffer.segmentColRecovery') }}</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="seg in segments" :key="seg.segment_id" data-testid="segment-row" :data-segment-id="seg.segment_id">
             <td class="font-mono tabular-nums text-slate-500">{{ seg.segment_id }}</td>
             <td>
-              <Badge :variant="statusVariant(seg.status)" size="xs" dot>{{ statusLabel(seg.status) }}</Badge>
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <Badge
+                  :variant="statusVariant(seg.status)"
+                  size="xs"
+                  dot
+                  :title="seg.status === 'quarantined' ? $t('ringbuffer.segmentQuarantineExplain') : null"
+                >{{ statusLabel(seg.status) }}</Badge>
+                <!-- Warn-Badge nur bei Anomalie; Details im Tooltip. -->
+                <Badge
+                  v-if="segmentProblemTitle(seg)"
+                  variant="danger"
+                  size="xs"
+                  data-testid="segment-warn-badge"
+                  :title="segmentProblemTitle(seg)"
+                >{{ $t('ringbuffer.segmentProblemBadge') }}</Badge>
+              </div>
               <span
                 v-if="seg.status === 'legacy'"
                 class="block mt-0.5 text-[11px] text-slate-500"
                 data-testid="segment-legacy-note"
               >{{ $t('ringbuffer.segmentLegacyNote') }}</span>
-              <span
-                v-if="seg.status === 'quarantined' && seg.quarantine_reason"
-                class="block mt-0.5 text-[11px] text-red-600 dark:text-red-400"
-                data-testid="segment-quarantine-reason"
-                :title="seg.quarantine_reason"
-              >{{ seg.quarantine_reason }}</span>
             </td>
             <td class="text-right tabular-nums text-slate-600 dark:text-slate-300">{{ fmtInt(seg.row_count) }}</td>
             <td class="text-right tabular-nums text-slate-600 dark:text-slate-300">{{ fmtBytes(seg.size_bytes) }}</td>
             <td class="text-slate-500 whitespace-nowrap">{{ fmtTimespan(seg.from_ts, seg.to_ts) }}</td>
-            <td class="text-slate-500">{{ integrityLabel(seg.integrity_status) }}</td>
-            <td class="text-slate-500">{{ recoveryLabel(seg.recovery_status) }}</td>
           </tr>
         </tbody>
       </table>
@@ -114,7 +129,7 @@
 
 <script setup>
 /**
- * SegmentStatsPanel (#938) — read-only Übersicht des segmentierten
+ * SegmentStatsPanel (#938/#919) — read-only Übersicht des segmentierten
  * RingBuffer-Stores. Reine Präsentation: nimmt ``store`` (das
  * ``{common, backend_extra}``-Objekt aus /stats) als Prop und leitet alle
  * Anzeigen daraus ab. Segmentierung ist im aktuellen Design immer aktiv; es
@@ -123,6 +138,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useTz } from '@/composables/useTz'
+import { formatBytesBinary } from '@/utils/formatBytesBinary'
 import Badge from '@/components/ui/Badge.vue'
 
 const props = defineProps({
@@ -137,6 +153,9 @@ const { fmtDateTime } = useTz()
 const common = computed(() => props.store?.common ?? {})
 const extra = computed(() => props.store?.backend_extra ?? {})
 const segments = computed(() => (Array.isArray(extra.value.segments) ? extra.value.segments : []))
+
+// Recovery-Zustände, die ein Segment als problematisch markieren (#938).
+const PROBLEM_RECOVERY = new Set(['quarantined', 'pending', 'dirty_wal'])
 
 const STATUS_VARIANTS = {
   active: 'success',
@@ -162,7 +181,6 @@ function statusLabel(status) {
 }
 
 function integrityLabel(value) {
-  if (!value) return '—'
   const map = {
     ok: t('ringbuffer.integrityStatus.ok'),
     corrupt: t('ringbuffer.integrityStatus.corrupt'),
@@ -172,7 +190,6 @@ function integrityLabel(value) {
 }
 
 function recoveryLabel(value) {
-  if (!value || value === 'none') return '—'
   const map = {
     recovered: t('ringbuffer.recoveryStatus.recovered'),
     quarantined: t('ringbuffer.recoveryStatus.quarantined'),
@@ -181,6 +198,25 @@ function recoveryLabel(value) {
     dirty_wal: t('ringbuffer.recoveryStatus.dirty_wal'),
   }
   return map[value] ?? value
+}
+
+/** True, wenn das Segment nicht als gesund (integrity=ok, recovery=none) gilt. */
+function isSegmentProblem(seg) {
+  return seg?.integrity_status === 'corrupt' || PROBLEM_RECOVERY.has(seg?.recovery_status)
+}
+
+/** Tooltip-Detailtext für ein problematisches Segment (Integrität/Recovery/Grund). */
+function segmentProblemTitle(seg) {
+  if (!isSegmentProblem(seg)) return null
+  const parts = []
+  if (seg.integrity_status && seg.integrity_status !== 'ok') {
+    parts.push(`${t('ringbuffer.segmentColIntegrity')}: ${integrityLabel(seg.integrity_status)}`)
+  }
+  if (seg.recovery_status && seg.recovery_status !== 'none') {
+    parts.push(`${t('ringbuffer.segmentColRecovery')}: ${recoveryLabel(seg.recovery_status)}`)
+  }
+  if (seg.quarantine_reason) parts.push(seg.quarantine_reason)
+  return parts.join(' · ')
 }
 
 function fmtInt(n) {
@@ -194,20 +230,7 @@ function fmtInt(n) {
 }
 
 function fmtBytes(rawBytes) {
-  const bytes = Number(rawBytes)
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let i = 0
-  let v = bytes
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024
-    i += 1
-  }
-  const formatter = new Intl.NumberFormat('de-DE', {
-    minimumFractionDigits: v >= 100 || i === 0 ? 0 : 1,
-    maximumFractionDigits: v >= 100 || i === 0 ? 0 : 1,
-  })
-  return `${formatter.format(v)} ${units[i]}`
+  return formatBytesBinary(rawBytes)
 }
 
 function fmtTs(iso) {
@@ -233,6 +256,31 @@ const activeSegmentLabel = computed(() => {
 const walSize = computed(() => fmtBytes(extra.value.wal_size_bytes ?? 0))
 const checkpointPending = computed(() => Number(extra.value.checkpoint_pending ?? 0))
 const lastCheckpointAt = computed(() => (extra.value.last_checkpoint_at ? fmtTs(extra.value.last_checkpoint_at) : null))
+
+/**
+ * Kompakte Probleme-Zeile (#938): zählt korrupte Segmente und die einzelnen
+ * Recovery-Anomalien und verdichtet sie zu einer menschlich lesbaren Zeile,
+ * z. B. „1 Segment beschädigt, 1 isoliert". Leer, wenn alles gesund ist.
+ */
+const problemSummary = computed(() => {
+  let corrupt = 0
+  let quarantined = 0
+  let pending = 0
+  let dirtyWal = 0
+  for (const seg of segments.value) {
+    if (seg?.integrity_status === 'corrupt') corrupt += 1
+    if (seg?.recovery_status === 'quarantined') quarantined += 1
+    else if (seg?.recovery_status === 'pending') pending += 1
+    else if (seg?.recovery_status === 'dirty_wal') dirtyWal += 1
+  }
+  const parts = []
+  if (corrupt > 0) parts.push(t('ringbuffer.segmentProblemCorrupt', { n: corrupt }))
+  if (quarantined > 0) parts.push(t('ringbuffer.segmentProblemQuarantined', { n: quarantined }))
+  if (pending > 0) parts.push(t('ringbuffer.segmentProblemPending', { n: pending }))
+  if (dirtyWal > 0) parts.push(t('ringbuffer.segmentProblemDirtyWal', { n: dirtyWal }))
+  if (!parts.length) return ''
+  return `${t('ringbuffer.segmentProblemPrefix')} ${parts.join(', ')}`
+})
 
 const operationalNotices = computed(() => {
   const notices = []

@@ -358,4 +358,108 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
     expect(wrapper.find('[data-testid="rb-config-segment-max-age"]').element.value).toBe('6')
     expect(wrapper.find('[data-testid="rb-config-segment-max-bytes"]').element.value).toBe('')
   })
+
+  it('renders MiB/GiB unit labels for size selects (binary, #919)', async () => {
+    const { wrapper } = await mountModal()
+    const sizeUnitOptions = wrapper.find('[data-testid="rb-config-max-size-unit"]').findAll('option').map((o) => o.text())
+    expect(sizeUnitOptions).toEqual(['MiB', 'GiB'])
+    expect(wrapper.text()).not.toContain('500 MB')
+  })
+
+  it('formats the disk usage stat in binary MiB (#919)', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: { total: 1, enabled: true, max_entries: null, max_file_size_bytes: null, max_age: null, file_size_bytes: 500 * 1024 * 1024 },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    const text = wrapper.find('[data-testid="rb-config-stats-file-size"]').text()
+    expect(text).toContain('MiB')
+    expect(text).not.toContain('MB ')
+  })
+})
+
+describe('MonitorConfigModal prognosis (#919/#938)', () => {
+  it('renders human-readable forecast lines from stats.prognosis', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 100, enabled: true, max_entries: null, max_file_size_bytes: null, max_age: null, file_size_bytes: 0,
+          segment_max_age: 6 * 3600,
+          prognosis: {
+            sample_segment_count: 5,
+            bytes_per_hour: 50 * 1024 * 1024, // 50 MiB/h
+            rows_per_hour: 12000,
+            avg_segment_seconds: 6 * 3600, // 6 h
+            estimated_retention_seconds: 5 * 24 * 3600, // 5 days
+            recommended_budget_for_segment_age_bytes: 2 * 1024 * 1024 * 1024, // 2 GiB
+          },
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    expect(wrapper.find('[data-testid="rb-config-prognosis-warming"]').exists()).toBe(false)
+    const rate = wrapper.find('[data-testid="rb-config-prognosis-rate"]').text()
+    expect(rate).toContain('50')
+    expect(rate).toContain('MiB/h')
+    expect(rate).toContain('12.000') // Events/h, de-DE grouping
+    const retention = wrapper.find('[data-testid="rb-config-prognosis-retention"]').text()
+    expect(retention).toContain('5 Tage')
+    const budget = wrapper.find('[data-testid="rb-config-prognosis-budget"]').text()
+    expect(budget).toContain('GiB')
+    expect(budget).toContain('6') // current segment age in hours
+  })
+
+  it('shows the warming-up hint when prognosis fields are null (too few segments)', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 1, enabled: true, max_entries: null, max_file_size_bytes: null, max_age: null, file_size_bytes: 0,
+          prognosis: {
+            sample_segment_count: 1,
+            bytes_per_hour: null,
+            rows_per_hour: null,
+            avg_segment_seconds: null,
+            estimated_retention_seconds: null,
+            recommended_budget_for_segment_age_bytes: null,
+          },
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    expect(wrapper.find('[data-testid="rb-config-prognosis-warming"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="rb-config-prognosis-rate"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('NaN')
+    expect(wrapper.text()).not.toContain('undefined')
+  })
+
+  it('shows the warming-up hint when stats has no prognosis object at all', async () => {
+    const { wrapper } = await mountModal() // default mock has no prognosis
+    expect(wrapper.find('[data-testid="rb-config-prognosis-warming"]').exists()).toBe(true)
+  })
+
+  it('omits only the retention/budget lines when those specific fields are null', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 100, enabled: true, max_entries: null, max_file_size_bytes: null, max_age: null, file_size_bytes: 0,
+          segment_max_age: 6 * 3600,
+          prognosis: {
+            sample_segment_count: 5,
+            bytes_per_hour: 10 * 1024 * 1024,
+            rows_per_hour: 3000,
+            avg_segment_seconds: 3 * 3600,
+            estimated_retention_seconds: null, // not enough data yet
+            recommended_budget_for_segment_age_bytes: null,
+          },
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    // Rate line renders, but retention + budget lines are suppressed (no NaN).
+    expect(wrapper.find('[data-testid="rb-config-prognosis-rate"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="rb-config-prognosis-retention"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="rb-config-prognosis-budget"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('NaN')
+  })
 })

@@ -1260,7 +1260,7 @@
       "closed": "Closed",
       "legacy": "Legacy",
       "checkpoint_pending": "Checkpoint pending",
-      "quarantined": "Quarantined"
+      "quarantined": "Isolated"
     },
     "integrityStatus": {
       "ok": "OK",
@@ -1269,7 +1269,7 @@
     },
     "recoveryStatus": {
       "recovered": "Recovered",
-      "quarantined": "Quarantined",
+      "quarantined": "Isolated",
       "pending": "Pending",
       "failed": "Failed",
       "dirty_wal": "Dirty WAL"
@@ -1294,7 +1294,26 @@
     "segmentRatioError": "The segmentation is too coarse for the chosen retention: each retention limit that is set (size, rows, age) must be at least three times the corresponding segment threshold.",
     "validationSegmentMaxAge": "The segment age must be at least 1 hour.",
     "validationSegmentMaxBytes": "The segment size must be greater than 0.",
-    "validationSegmentMaxRows": "The segment row count must be greater than 0."
+    "validationSegmentMaxRows": "The segment row count must be greater than 0.",
+    "segmentsButton": "Segments",
+    "segmentsButtonTitle": "Show segmented storage",
+    "segmentProblemsBadgeTitle": "There are segment problems — open to review.",
+    "segmentProblemBadge": "Problem",
+    "segmentProblemPrefix": "Problems:",
+    "segmentProblemCorrupt": "{n} corrupt",
+    "segmentProblemQuarantined": "{n} isolated",
+    "segmentProblemPending": "{n} recovery pending",
+    "segmentProblemDirtyWal": "{n} dirty WAL",
+    "segmentQuarantineExplain": "Defective segment, isolated for analysis.",
+    "unitMiB": "MiB",
+    "unitGiB": "GiB",
+    "prognosisTitle": "Forecast",
+    "prognosisWarming": "Forecast is still warming up (too few segments).",
+    "prognosisRate": "At the current rate ~{mib} MiB/h (~{rows} events/h): new segment ~every {hours} h.",
+    "prognosisRetention": "Budget lasts for ~{duration}.",
+    "prognosisBudget": "For ~{age}h segments: budget ≥ {gib} GiB.",
+    "prognosisHours": "{n} h",
+    "prognosisDays": "{n} days"
   },
   "logs": {
     "title": "Logs",

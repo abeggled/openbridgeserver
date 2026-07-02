@@ -21,9 +21,15 @@ import SegmentStatsPanel from '@/views/ringbuffer/SegmentStatsPanel.vue'
 
 const BadgeStub = defineComponent({
   name: 'Badge',
+  inheritAttrs: false,
   props: ['variant', 'size', 'dot'],
-  setup(props, { slots }) {
-    return () => h('span', { 'data-variant': props.variant }, slots.default ? slots.default() : [])
+  setup(props, { slots, attrs }) {
+    return () =>
+      h(
+        'span',
+        { 'data-variant': props.variant, 'data-testid': attrs['data-testid'], title: attrs.title },
+        slots.default ? slots.default() : [],
+      )
   },
 })
 
@@ -75,9 +81,21 @@ describe('SegmentStatsPanel', () => {
     const wrapper = mountPanel(makeStore())
     expect(wrapper.find('[data-testid="segment-count"]').text()).toBe('3')
     expect(wrapper.find('[data-testid="segment-active"]').text()).toBe('#42')
-    expect(wrapper.find('[data-testid="segment-total-size"]').text()).toContain('MB')
+    // Binary units (#919): MiB, not MB.
+    expect(wrapper.find('[data-testid="segment-total-size"]').text()).toContain('MiB')
     expect(wrapper.find('[data-testid="segment-oldest"]').text()).not.toBe('—')
     expect(wrapper.find('[data-testid="segment-newest"]').text()).not.toBe('—')
+  })
+
+  it('slims healthy segments — no integrity/recovery columns, no warn badge', () => {
+    const wrapper = mountPanel(makeStore())
+    // The old integrity/recovery duration columns are gone.
+    const headers = wrapper.findAll('th').map((th) => th.text())
+    expect(headers).not.toContain('Integrität')
+    expect(headers).not.toContain('Wiederherstellung')
+    // A healthy store has no problems line and no per-row warn badge.
+    expect(wrapper.find('[data-testid="segment-problems"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="segment-warn-badge"]').exists()).toBe(false)
   })
 
   it('renders one row per segment with a status badge', () => {
@@ -97,19 +115,41 @@ describe('SegmentStatsPanel', () => {
     expect(note.text()).toContain('Nur-Lese-Altdaten')
   })
 
-  it('shows the quarantine reason for quarantined segments', () => {
+  it('flags an anomalous segment with a warn badge and a problems line (#938)', () => {
     const store = makeStore({
       backend_extra: {
         segments: [
+          { segment_id: 42, status: 'active', row_count: 500, size_bytes: 1024 * 1024, from_ts: null, to_ts: null, integrity_status: 'ok', recovery_status: 'none', quarantine_reason: null },
           { segment_id: 7, status: 'quarantined', row_count: 0, size_bytes: 0, from_ts: null, to_ts: null, integrity_status: 'corrupt', recovery_status: 'quarantined', quarantine_reason: 'checksum mismatch' },
         ],
       },
     })
     const wrapper = mountPanel(store)
-    const reason = wrapper.find('[data-testid="segment-quarantine-reason"]')
-    expect(reason.exists()).toBe(true)
-    expect(reason.text()).toBe('checksum mismatch')
+    // Compact problems line summarises the anomalies.
+    const problems = wrapper.find('[data-testid="segment-problems"]')
+    expect(problems.exists()).toBe(true)
+    expect(problems.text()).toContain('1 beschädigt')
+    expect(problems.text()).toContain('1 isoliert')
+    // The affected segment carries a warn badge; the healthy one does not.
+    const warnBadges = wrapper.findAll('[data-testid="segment-warn-badge"]')
+    expect(warnBadges).toHaveLength(1)
+    // Details (integrity/recovery/reason) live in the warn-badge tooltip.
+    expect(warnBadges[0].attributes('title')).toContain('checksum mismatch')
     expect(wrapper.find('[data-variant="danger"]').exists()).toBe(true)
+  })
+
+  it('uses the "isoliert" wording for quarantined status, not "Quarantäne" (#919)', () => {
+    const store = makeStore({
+      backend_extra: {
+        segments: [
+          { segment_id: 7, status: 'quarantined', row_count: 0, size_bytes: 0, from_ts: null, to_ts: null, integrity_status: 'corrupt', recovery_status: 'quarantined', quarantine_reason: null },
+        ],
+      },
+    })
+    const wrapper = mountPanel(store)
+    const text = wrapper.find('[data-testid="segment-row"]').text()
+    expect(text).toContain('Isoliert')
+    expect(wrapper.text()).not.toContain('Quarantäne')
   })
 
   it('renders a retention-over-budget notice with the pressure reason', () => {
@@ -133,7 +173,7 @@ describe('SegmentStatsPanel', () => {
   it('surfaces WAL size and a pending-checkpoint counter', () => {
     const store = makeStore({ backend_extra: { checkpoint_pending: 2 } })
     const wrapper = mountPanel(store)
-    expect(wrapper.find('[data-testid="segment-wal-size"]').text()).toContain('KB')
+    expect(wrapper.find('[data-testid="segment-wal-size"]').text()).toContain('KiB')
     expect(wrapper.find('[data-testid="segment-checkpoint-pending"]').text()).toContain('2')
   })
 

@@ -12,6 +12,21 @@
            single baseline; status badge matches the button height. -->
       <div class="flex items-center gap-2">
         <button v-if="auth.isAdmin" @click="showConfig = true" class="btn-secondary btn-sm" data-testid="btn-open-monitor-config">{{ $t('ringbuffer.configure') }}</button>
+        <button
+          v-if="storeStats"
+          @click="showSegments = true"
+          class="btn-secondary btn-sm relative"
+          data-testid="btn-open-segments"
+          :title="$t('ringbuffer.segmentSectionTitle')"
+        >
+          {{ $t('ringbuffer.segmentsButton') }}
+          <span
+            v-if="segmentProblems"
+            class="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 ring-2 ring-surface-900"
+            data-testid="btn-segments-badge"
+            :title="$t('ringbuffer.segmentProblemsBadgeTitle')"
+          />
+        </button>
         <button @click="applyFilters" class="btn-secondary btn-sm" data-testid="btn-refresh-ringbuffer">{{ $t('ringbuffer.refresh') }}</button>
         <button
           v-if="!paused"
@@ -97,9 +112,11 @@
       {{ recoveryNotice }}
     </div>
 
-    <!-- Segment-Status/Stats-Panel (#938) — nur im segmentierten Modus, wenn
-         stats.store != null. Im Legacy-Modus bleibt es ausgeblendet. -->
-    <SegmentStatsPanel v-if="storeStats" :store="storeStats" />
+    <!-- Segment-Status/Stats (#938) — nicht mehr inline, sondern in einem Modal
+         hinter dem Toolbar-Button. Nur im segmentierten Modus (stats.store != null). -->
+    <Modal v-model="showSegments" :title="$t('ringbuffer.segmentSectionTitle')" max-width="2xl">
+      <SegmentStatsPanel v-if="storeStats" :store="storeStats" />
+    </Modal>
 
     <!-- Soft-modal CSV/TSV export dialog (#427) -->
     <ExportDialog
@@ -174,6 +191,7 @@ import FilterEditor from '@/views/ringbuffer/FilterEditor.vue'
 import ExportDialog from '@/views/ringbuffer/ExportDialog.vue'
 import MonitorConfigModal from '@/views/ringbuffer/MonitorConfigModal.vue'
 import SegmentStatsPanel from '@/views/ringbuffer/SegmentStatsPanel.vue'
+import Modal from '@/components/ui/Modal.vue'
 
 const DEFAULT_QUERY_LIMIT = 500
 
@@ -204,6 +222,7 @@ const entries = ref([])
 const loading = ref(false)
 const listError = ref('')
 const showConfig = ref(false)
+const showSegments = ref(false)
 const showFilterEditor = ref(false)
 const showExportDialog = ref(false)
 const editorTargetId = ref(null)
@@ -214,6 +233,16 @@ const monitorDisabled = ref(false)
 const storeStats = ref(null)
 let recoveryNoticeRefreshPromise = null
 let lastRecoveryNoticeRefreshAt = 0
+
+// Warn-Badge am Segmente-Button (#938): true, sobald irgendein Segment
+// integrity_status='corrupt' oder recovery_status ∈ {quarantined, pending,
+// dirty_wal} meldet. Im Normalfall (alle gesund) false → kein Badge.
+const PROBLEM_RECOVERY = new Set(['quarantined', 'pending', 'dirty_wal'])
+const segmentProblems = computed(() => {
+  const segs = storeStats.value?.backend_extra?.segments
+  if (!Array.isArray(segs)) return false
+  return segs.some((s) => s?.integrity_status === 'corrupt' || PROBLEM_RECOVERY.has(s?.recovery_status))
+})
 
 function onEditSet(id) {
   editorTargetId.value = id
