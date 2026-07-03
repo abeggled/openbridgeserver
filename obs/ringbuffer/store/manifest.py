@@ -45,6 +45,20 @@ SEGMENT_STATUS_LEGACY = "legacy"
 # im v2-Read-Zweig gelesen.
 SEGMENT_STATUS_MIGRATED = "migrated"
 
+# In-Progress-Migration (#951, :375): ein v2-Segment, das WÄHREND einer noch
+# laufenden chunked Legacy-Migration mit bereits kopierten (negativen) Zeilen befüllt
+# wurde, SOLANGE die Original-Legacy-Quelle noch read-only eingehängt (``legacy``)
+# und damit voll abfragbar ist. Beide Quellen (das v2-Segment UND das attached
+# Legacy-Segment) hielten dann dieselben Alt-Zeilen – aber mit VERSCHIEDENEN
+# synthetischen gids (der Migrator scopt per Quell-Bucket, der read-only-Legacy-Pfad
+# per ``segment_id``), sodass keine gid-Dedup greift und jede kopierte Zeile DOPPELT
+# geliefert würde. Ein ``migrating``-Segment wird daher in ``list_segments_for_query``
+# vollständig AUSGESCHLOSSEN: solange die Quelle attached ist, liefert ausschließlich
+# das Legacy-Segment (autoritativ, vollständig). Nach Abkopplung der Quelle
+# (Migrations-Abschluss) werden die ``migrating``-Segmente in ihren finalen Status
+# (``closed`` bzw. ``migrated``) promotet und wieder abfragbar.
+SEGMENT_STATUS_MIGRATING = "migrating"
+
 # Schema-Version einer Legacy-Single-DB: kein ``global_event_id``, keine
 # typisierten Wertspalten, segment-lokale rowid. Der Read-Pfad degradiert für
 # diese Version kontrolliert (Ordering aus ts+rowid, kein typed pushdown).
@@ -315,6 +329,55 @@ class Manifest:
         )
         await self._db.commit()
 
+    async def mark_migrating(self, segment_id: int) -> None:
+        """Markiert ein geschlossenes v2-Segment als ``migrating`` (in-progress, #951, :375).
+
+        Nur für Segmente gedacht, die WÄHREND einer noch laufenden chunked Legacy-
+        Migration mit bereits kopierten (negativen) Zeilen befüllt wurden, solange die
+        Original-Legacy-Quelle noch attached ist. ``list_segments_for_query`` blendet
+        solche Segmente aus, damit die bereits kopierten Alt-Zeilen nicht DOPPELT (einmal
+        aus v2, einmal aus dem noch attached Legacy-Segment) geliefert werden. Nach
+        Abkopplung der Quelle werden sie über ``promote_migrating_segments`` in ihren
+        finalen Status promotet. Umgestuft werden ``closed`` UND ``checkpoint_pending``
+        Segmente (rotiert die Migration bei busy WAL); ein ``active`` Segment wird nie
+        umgestuft (Guard) – das beschreibbare Segment bleibt appendfähig.
+        """
+        await self._db.execute(
+            "UPDATE segments SET status = ? WHERE segment_id = ? AND status IN (?, ?)",
+            (SEGMENT_STATUS_MIGRATING, segment_id, SEGMENT_STATUS_CLOSED, SEGMENT_STATUS_CHECKPOINT_PENDING),
+        )
+        await self._db.commit()
+
+    async def list_migrating_segments(self) -> list[SegmentRecord]:
+        """Alle ``migrating`` (in-progress migrierten) Segmente, älteste zuerst (#951, :375)."""
+        async with self._db.execute(
+            "SELECT * FROM segments WHERE status = ? ORDER BY segment_id ASC",
+            (SEGMENT_STATUS_MIGRATING,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_segment(row) for row in rows]
+
+    async def promote_migrating_segments(self, *, to_migrated: bool) -> None:
+        """Promotet alle ``migrating``-Segmente nach Abschluss der Migration (#951, :375).
+
+        Nach Abkopplung der Quelle sind die kopierten Alt-Zeilen nur noch in v2
+        vorhanden (kein Doppel-Delivery mehr), also werden die zuvor ausgeblendeten
+        ``migrating``-Segmente wieder abfragbar gemacht. Zielstatus:
+
+        * ``to_migrated=True`` – der Store hält echte POSITIVE v2-Zeilen oder Zeilen
+          einer anderen Quelle: die migrierten (negativen) Segmente müssen in den
+          Trailing-Rang (``migrated``), damit der ``id desc``-Frühabbruch korrekt bleibt.
+        * ``to_migrated=False`` – rein legacy-migrierter Store einer Quelle: die
+          segment_id-Ordnung entspricht bereits der gid-Ordnung, ein ``closed`` genügt
+          (kein Trailing-Rang nötig).
+        """
+        target = SEGMENT_STATUS_MIGRATED if to_migrated else SEGMENT_STATUS_CLOSED
+        await self._db.execute(
+            "UPDATE segments SET status = ? WHERE status = ?",
+            (target, SEGMENT_STATUS_MIGRATING),
+        )
+        await self._db.commit()
+
     async def mark_checkpoint_pending(self, segment_id: int) -> None:
         await self._db.execute(
             "UPDATE segments SET status = ? WHERE segment_id = ?",
@@ -416,7 +479,15 @@ class Manifest:
         #932.
         """
         # Quarantänierte (korrupte, isolierte) Segmente sind für Reads tabu (#919).
-        clauses: list[str] = [f"status != '{SEGMENT_STATUS_QUARANTINED}'"]
+        # ``migrating``-Segmente (#951, :375) sind während einer laufenden Legacy-
+        # Migration ebenfalls tabu: ihre bereits kopierten Alt-Zeilen werden zeitgleich
+        # aus dem noch attached ``legacy``-Segment geliefert; sie einzublenden ergäbe
+        # Doppel-Delivery (verschiedene synthetische gids, keine Dedup). Sie werden nach
+        # Abkopplung der Quelle in ``closed``/``migrated`` promotet und dann sichtbar.
+        clauses: list[str] = [
+            f"status != '{SEGMENT_STATUS_QUARANTINED}'",
+            f"status != '{SEGMENT_STATUS_MIGRATING}'",
+        ]
         params: list[str] = []
         if to_ts is not None:
             # Segment beginnt nicht nach dem Fensterende (oder Beginn unbekannt).

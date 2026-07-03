@@ -369,6 +369,7 @@ class LegacyMigrator:
             # Fehler, BEVOR der Resume-State als ``done`` persistiert wird – sonst
             # übersprungen ein späterer Lauf die Quelle trotz noch eingehängtem Legacy.
             await self._detach_migrated_legacy_segment()
+            await self._finalize_migrated_segments()
             self._save_state(_ResumeState(last_rowid=after_rowid, done=True))
             await self._run_retention_after_detach()
             return 0
@@ -383,6 +384,7 @@ class LegacyMigrator:
             # materialisiert; ein Abbruch hier lässt den nächsten Lauf ab last_rowid
             # fortsetzen und erneut detachen.
             await self._detach_migrated_legacy_segment()
+            await self._finalize_migrated_segments()
             self._save_state(_ResumeState(last_rowid=last_rowid, done=True))
             await self._run_retention_after_detach()
         else:
@@ -400,6 +402,62 @@ class LegacyMigrator:
         konfigurierte Retention-Schwellen), daher unbedingter Aufruf.
         """
         await self._store.enforce_retention()
+
+    async def _finalize_migrated_segments(self) -> None:
+        """Schließt die Migration nach Detach der Quelle ab (#951, :375, :507).
+
+        Reihenfolge nach dem Detach des ``legacy``-Segments:
+
+        1. Das aktive rein-negative Segment versiegeln (``_seal_pure_migrated_active_
+           segment``), damit spätere Live-Positives nicht hineingemischt werden.
+        2. Die während der laufenden Migration ausgeblendeten ``migrating``-Segmente
+           (In-Progress-Kopien) in ihren finalen, wieder abfragbaren Status promoten
+           (``promote_migrating_segments``). Ohne Positive/Fremdquelle genügt ``closed``
+           (segment_id-Ordnung == gid-Ordnung), sonst ``migrated`` (Trailing-Rang).
+
+        Der Detach VOR dieser Finalisierung stellt sicher, dass zwischen Ausblenden und
+        Wieder-Einblenden nie beide Quellen (Legacy + v2) gleichzeitig sichtbar sind –
+        kein Doppel-Delivery, aber auch kein Sichtbarkeits-Loch.
+        """
+        await self._seal_pure_migrated_active_segment()
+        migrating = await self._store.manifest.list_migrating_segments()
+        if not migrating:
+            return
+        to_migrated = await self._store_has_positive_rows() or await self._store_has_foreign_migrated_rows()
+        await self._store.manifest.promote_migrating_segments(to_migrated=to_migrated)
+
+    async def _seal_pure_migrated_active_segment(self) -> None:
+        """Schließt das aktive rein-negative Segment nach Abschluss der ERSTEN migrierten Quelle (#951, :507).
+
+        Wird die erste Legacy-Quelle migriert, BEVOR irgendein v2-Write existiert, ist
+        in ``_append_with_legacy_gids`` ``segregate`` false: die negativen Zeilen dieser
+        Quelle bleiben im aktiven NORMALEN Segment (keine Vor-Rotation, kein
+        ``migrated``-Marker – im Ein-Quell-Fall genügt die segment_id-Ordnung == gid-
+        Ordnung). Bliebe dieses Segment nach Migrations-Abschluss aber weiter ``active``,
+        mischte ein nachfolgender Live-Append POSITIVE gids HINEIN. Migrierte dann eine
+        ZWEITE Quelle, ließe sich dieses gemischte Segment nicht mehr als ``migrated``
+        markieren (es enthielte positive Zeilen) und die Multi-Source-Trailing-Ordnung
+        bräche.
+
+        Fix: nach Abschluss der ersten rein-migrierten Quelle (Detach) das aktive
+        Segment EINMAL rotieren, sodass es geschlossen wird und Live-Positives (bzw. eine
+        weitere Quelle) ein frisches, separates aktives Segment mit höherer segment_id
+        bekommen – nie wieder mischt ein Segment positive und negative gids. Nur relevant,
+        wenn der Store NOCH keine Positive hält (sonst hat ``_append_with_legacy_gids``
+        via ``segregate`` bereits rotiert und markiert) und das aktive Segment auch
+        wirklich rein-negativ und nicht leer ist (kein Rotieren leerer Segmente).
+        """
+        store = self._store
+        if store._active_conn is None or store._active_segment is None:
+            return
+        if await self._store_has_positive_rows():
+            return  # segregate-Pfad hat bereits rotiert/markiert
+        async with store._active_conn.execute("SELECT MIN(global_event_id) FROM ringbuffer") as cur:
+            row = await cur.fetchone()
+        min_gid = row[0] if row is not None else None
+        if min_gid is None or min_gid >= 0:
+            return  # leer oder keine negativen Zeilen → nichts zu versiegeln
+        await store.rotate()
 
     async def _detach_migrated_legacy_segment(self) -> None:
         """Koppelt den read-only Legacy-Manifest-Eintrag DIESER Datei nach Abschluss ab (#951, Pkt 1).
@@ -543,6 +601,23 @@ class LegacyMigrator:
             # nachträglich als ``migrated`` markiert werden, damit ALLE migrierten
             # Segmente gemeinsam im Trailing-Rang liegen (#951, Pkt 2, 3. Runde).
             await self._mark_foreign_migrated_segments()
+        # In-Progress-Schutz gegen Doppel-Delivery (#951, :375): solange die Quell-
+        # Legacy-DB noch attached (voll abfragbar) ist, liefert sie ALLE Alt-Zeilen –
+        # inklusive der in DIESEM/vorigen Batches bereits nach v2 kopierten. Deren v2-
+        # Segmente tragen andere synthetische gids als der read-only-Legacy-Pfad
+        # (Quell-Bucket vs. segment_id), sodass keine gid-Dedup greift und jede kopierte
+        # Zeile DOPPELT käme. Daher werden die im laufenden Batch mit Negativen befüllten
+        # Segmente – nach Rotation des aktiven Segments, damit KEINE Negative im
+        # (unausblendbaren) aktiven Segment verbleiben – als ``migrating`` markiert und
+        # von ``list_segments_for_query`` ausgeblendet, bis die Quelle abgekoppelt ist.
+        if await self._source_is_attached():
+            # Aktives Segment mit Negativen schließen (rotate), damit ALLE kopierten
+            # Zeilen in ausblendbaren (nicht-aktiven) Segmenten liegen. Das rotierte
+            # Segment wird dann ebenfalls als ``migrating`` markiert.
+            if store._active_segment is not None and store._active_segment.segment_id in migrated_ids:
+                await store.rotate()
+            for segment_id in migrated_ids:
+                await store.manifest.mark_migrating(segment_id)
         # Quellschutz während der Migration (#951, Pkt 3, 3. Runde): solange die
         # aktuell migrierte Quell-Legacy-DB noch read-only eingehängt ist, DARF hier
         # keine Retention laufen. Ist der Store über dem Byte-Budget, würde
@@ -817,8 +892,11 @@ class LegacyMigrator:
         unter ``SMALL_MAX_BYTES`` mit nicht-leerem ``-wal`` wird die DB genau einmal
         schreibbar geöffnet und ``wal_checkpoint(TRUNCATE)`` ausgeführt, damit die
         committeten Frames in die Haupt-DB fallen und die anschließende read-only-
-        Migration sie sieht. Fehler (read-only-Filesystem o. Ä.) werden geschluckt –
-        die Migration degradiert dann auf den ``immutable=1``-Pfad statt zu brechen.
+        Migration sie sieht. Ein Checkpoint-FEHLER (read-only-Filesystem o. Ä.) wird
+        NICHT geschluckt: der MIGRATIONS-Pfad darf dann NICHT auf ``immutable=1``
+        degradieren, weil das die committeten WAL-Frames ignorierte und ein
+        Batch-Ende ein falsches ``done`` samt Detach materialisierte (#951, P1) –
+        stattdessen bricht die Migration mit ``RuntimeError`` ab (späterer Retry).
         Große Dateien werden NICHT gecheckpointet (kein Startup-Scan auf 20–30 GB).
 
         WICHTIG (#951, Codex :802, P1): ``wal_checkpoint(TRUNCATE)`` wirft bei einem
@@ -859,8 +937,20 @@ class LegacyMigrator:
                 await conn.commit()
             finally:
                 await conn.close()
-        except aiosqlite.Error:
-            return
+        except aiosqlite.Error as exc:
+            # Checkpoint-EXCEPTION (z. B. read-only-FS/Permissions, #951, P1): der frühere
+            # ``return`` ließ ``_read_batch`` mit ``immutable=1`` fortfahren, das committete
+            # WAL-Frames ignoriert – erreichte der Batch das Ende der Haupt-DB, markierte
+            # ``migrate_chunk`` fälschlich ``done``/detachte und die jüngsten committeten
+            # Frames gingen dauerhaft verloren. Anders als der read-only-Kompatibilitätspfad
+            # (der rein liest und daher auf ``immutable=1`` degradieren DARF) darf der
+            # MIGRATIONS-Fortschritt keine committeten Frames verlieren. Daher hart abbrechen
+            # (kein done-Mark), konsistent zum busy-/zu-gross-Abbruch; ein späterer Lauf kann
+            # es erneut versuchen, sobald das Filesystem wieder schreibbar ist.
+            raise RuntimeError(
+                f"WAL-Checkpoint der Legacy-DB {legacy_path} ist fehlgeschlagen ({exc}) – Migration "
+                "abgebrochen, um committete WAL-Frames nicht via immutable=1 zu verlieren (spaeterer Retry)."
+            ) from exc
         # Ergebnis-Zeile (busy, log, checkpointed): busy != 0 → committete WAL-Frames
         # NICHT in die Haupt-DB übernommen. Nicht als gelesen behandeln – hart abbrechen,
         # statt via immutable=1 committete Frames zu verlieren (#951, P1).
