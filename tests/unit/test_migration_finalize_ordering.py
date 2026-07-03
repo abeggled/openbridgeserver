@@ -100,9 +100,9 @@ async def test_promote_runs_before_marker_and_detach(store: SqliteSegmentStore, 
     real_finalize = migrator._finalize_migrated_segments
     real_detach = migrator._detach_migrated_legacy_segment
 
-    async def _spy_finalize():
+    async def _spy_finalize(own_migrating_ids=None):
         calls.append("finalize")
-        await real_finalize()
+        await real_finalize(own_migrating_ids)
 
     async def _spy_detach():
         calls.append("detach")

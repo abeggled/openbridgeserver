@@ -49,6 +49,7 @@ from obs.ringbuffer.store.sqlite_backend import (
     SqliteSegmentStore,
     _safe_getsize,
     _safe_json_decode,
+    _sqlite_ro_uri,
 )
 
 logger = logging.getLogger(__name__)
@@ -428,9 +429,17 @@ class LegacyMigrator:
 
         Reihenfolge (Option B):
 
-        1. ``_finalize_migrated_segments`` – die ``migrating``-Segmente in ihren finalen,
-           query-sichtbaren Status promoten. Die IDs der zu promotenden Segmente werden
-           VORHER erfasst (``list_migrating_segments``), damit ein Rollback möglich ist.
+        1. ``_finalize_migrated_segments`` – die ``migrating``-Segmente DIESER Quelle in ihren
+           finalen, query-sichtbaren Status promoten. Die IDs der zu promotenden Segmente werden
+           VORHER erfasst (``_own_migrating_segment_ids``), damit ein Rollback möglich ist.
+
+        Source-Scoping (#951, Runde 26, Finding 2): promotet/detacht/rollbackt werden
+        AUSSCHLIESSLICH die migrierten Segmente DIESER Quelle (gid-Bucket). Sind zwei
+        Legacy-Quellen attached und eine ANDERE Quelle hat bereits ``migrating``-Chunks
+        versteckt, würde eine source-agnostische Promotion deren Historie query-sichtbar
+        machen, während deren Original-Legacy noch attached ist → dieselben Zeilen doppelt
+        (v2 + attached Legacy). Daher werden fremde ``migrating``-Segmente hier weder
+        promotet noch rollbackt.
         2. ``_detach_migrated_legacy_segment`` – schreibt den ``.migrated``-Marker
            (``_mark_source_migrated``) UND entfernt die Legacy-Manifest-Zeile. Der
            Marker-``touch`` ist der einzige fail-prone Schritt (evtl. read-only Legacy-
@@ -463,15 +472,18 @@ class LegacyMigrator:
         ``closed``/``checkpoint_pending``) den Rollback ins Leere laufen und die migrierten
         Zeilen kämen trotz Marker-Fehler doppelt.
         """
-        migrating_before = [seg.segment_id for seg in await self._store.manifest.list_migrating_segments()]
-        to_migrated = await self._finalize_migrated_segments()
+        # NUR die migrierten Segmente DIESER Quelle (gid-Bucket) – VOR der Promotion erfasst,
+        # solange sie noch ``migrating`` sind (#951, Runde 26, Finding 2). Fremde
+        # ``migrating``-Segmente einer anderen, noch attached Quelle bleiben unberührt.
+        own_migrating_before = await self._own_migrating_segment_ids()
+        to_migrated = await self._finalize_migrated_segments(own_migrating_before)
         try:
             await self._detach_migrated_legacy_segment()
         except (OSError, sqlite3.Error):
-            # Detach fehlgeschlagen: die in Schritt 1 promoteten (``closed``) Segmente wieder
-            # verstecken, damit sie nicht ZUSAMMEN mit der noch attached Legacy-Quelle doppelt
-            # geliefert werden. Danach re-raise, der done-Mark unterbleibt und ein Retry setzt
-            # sauber fort. Abgedeckt werden ALLE realistischen transienten Detach-Fehler:
+            # Detach fehlgeschlagen: die in Schritt 1 promoteten (``closed``) Segmente DIESER
+            # Quelle wieder verstecken, damit sie nicht ZUSAMMEN mit der noch attached Legacy-
+            # Quelle doppelt geliefert werden. Danach re-raise, der done-Mark unterbleibt und ein
+            # Retry setzt sauber fort. Abgedeckt werden ALLE realistischen transienten Detach-Fehler:
             #   * ``OSError`` – ``_mark_source_migrated`` kann den ``.migrated``-Marker im
             #     read-only Legacy-Verzeichnis nicht schreiben (touch).
             #   * ``sqlite3.Error`` (== ``aiosqlite.Error``, inkl. ``OperationalError``/
@@ -480,15 +492,17 @@ class LegacyMigrator:
             #     Ohne diesen Zweig blieben die Chunks sichtbar promotet, waehrend die Legacy
             #     noch attached ist → dieselbe Historie doppelt bis zum naechsten Retry (#951,
             #     P2, :653). Bewusst NICHT das breite ``Exception`` – nur die real auftretenden
-            #     Fehlerklassen des Detach-Schritts.
-            for segment_id in migrating_before:
+            #     Fehlerklassen des Detach-Schritts. Der Rollback ist ebenfalls source-gescopt:
+            #     nur die eigenen Segmente werden re-hidden, fremde ``migrating``-Chunks bleiben
+            #     unangetastet (#951, Runde 26, Finding 2).
+            for segment_id in own_migrating_before:
                 await self._store.manifest.mark_migrating(segment_id)
             raise
         # Detach erfolgreich (Quelle abgekoppelt): die nun ausschließlich in v2 vorhandenen
-        # migrierten Segmente ggf. in den Trailing-Rang (``migrated``) heben – erst jetzt
-        # gefahrlos, weil die Legacy-Quelle nicht mehr dieselben Zeilen liefert.
+        # migrierten Segmente DIESER Quelle ggf. in den Trailing-Rang (``migrated``) heben – erst
+        # jetzt gefahrlos, weil die Legacy-Quelle nicht mehr dieselben Zeilen liefert.
         if to_migrated:
-            for segment_id in migrating_before:
+            for segment_id in own_migrating_before:
                 await self._store.manifest.mark_migrated(segment_id)
 
     async def _recover_visible_migrated_while_attached(self) -> None:
@@ -590,7 +604,7 @@ class LegacyMigrator:
         path = self._store._segments_dir / segment.filename
         if not path.exists():
             return False
-        uri = f"file:{path.as_posix()}?mode=ro"
+        uri = _sqlite_ro_uri(path, params="mode=ro")
         conn = await aiosqlite.connect(uri, uri=True)
         try:
             async with conn.execute("SELECT 1 FROM ringbuffer WHERE global_event_id >= 0 LIMIT 1") as cur:
@@ -612,6 +626,25 @@ class LegacyMigrator:
         finally:
             await conn.close()
 
+    async def _own_migrating_segment_ids(self) -> list[int]:
+        """``migrating``-Segment-IDs, die AUSSCHLIESSLICH Zeilen DIESER Quelle halten (#951, Runde 26).
+
+        Source-Scoping der Promotion (Finding 2): sind zwei Legacy-Quellen attached und
+        eine ANDERE Quelle hat bereits kopierte Chunks als ``migrating`` versteckt, darf der
+        Abschluss DIESER Quelle nur ihre EIGENEN migrierten Segmente promoten/detachen –
+        nie die der Fremdquelle, deren Original-Legacy noch attached ist (sonst würde deren
+        Historie query-sichtbar UND weiterhin aus dem attached Legacy geliefert → Doppel-
+        Delivery). „Eigen" heißt: alle Zeilen des Segments liegen im gid-Bucket dieser Quelle
+        (``_bucket_gid_bounds`` via ``_segment_is_own_migrated_only``). Reihenfolge älteste
+        zuerst (``list_migrating_segments`` ist ``segment_id ASC``).
+        """
+        low, high = self._bucket_gid_bounds
+        own: list[int] = []
+        for segment in await self._store.manifest.list_migrating_segments():
+            if await self._segment_is_own_migrated_only(segment, low, high):
+                own.append(segment.segment_id)
+        return own
+
     async def _run_retention_after_detach(self) -> None:
         """Zieht die während der Migration deferrte Retention nach Abkopplung der Quelle nach (#951, Pkt 3, 3. Runde).
 
@@ -624,34 +657,44 @@ class LegacyMigrator:
         """
         await self._store.enforce_retention()
 
-    async def _finalize_migrated_segments(self) -> bool:
-        """Macht die kopierten Chunks sichtbar (``closed``) – VOR Detach (#951, :375, :507, P2 :386).
+    async def _finalize_migrated_segments(self, own_migrating_ids: list[int] | None = None) -> bool:
+        """Macht die kopierten Chunks DIESER Quelle sichtbar (``closed``) – VOR Detach (#951, :375, :507, P2 :386).
 
         Reihenfolge (läuft VOR ``_detach_migrated_legacy_segment``):
 
         1. Das aktive rein-negative Segment versiegeln (``_seal_pure_migrated_active_
            segment``), damit spätere Live-Positives nicht hineingemischt werden.
-        2. Die während der laufenden Migration ausgeblendeten ``migrating``-Segmente
-           (In-Progress-Kopien) nach ``closed`` promoten (``promote_migrating_segments(
-           to_migrated=False)``). Bewusst NUR nach ``closed`` – nicht direkt nach
-           ``migrated``: solange der Detach (Marker) noch fehlschlagen kann, müssen die
-           Segmente re-hidebar bleiben (``mark_migrating`` akzeptiert nur ``closed``/
-           ``checkpoint_pending``). Das endgültige Anheben in den Trailing-Rang (``migrated``)
-           erfolgt erst NACH erfolgreichem Detach in ``_finalize_and_detach``.
+        2. Die während der laufenden Migration ausgeblendeten ``migrating``-Segmente DIESER
+           Quelle (In-Progress-Kopien, ``own_migrating_ids``) nach ``closed`` promoten. Bewusst
+           NUR nach ``closed`` – nicht direkt nach ``migrated``: solange der Detach (Marker) noch
+           fehlschlagen kann, müssen die Segmente re-hidebar bleiben (``mark_migrating`` akzeptiert
+           nur ``closed``/``checkpoint_pending``). Das endgültige Anheben in den Trailing-Rang
+           (``migrated``) erfolgt erst NACH erfolgreichem Detach in ``_finalize_and_detach``.
+
+        Source-Scoping (#951, Runde 26, Finding 2): promotet werden AUSSCHLIESSLICH die
+        Segment-IDs DIESER Quelle (``own_migrating_ids``, im eigenen gid-Bucket), NICHT die
+        source-agnostische ``promote_migrating_segments``. Sind zwei Legacy-Quellen attached
+        und eine andere Quelle hält bereits ``migrating``-Chunks, blieben deren Chunks so
+        weiter versteckt (kein Doppel-Delivery), solange deren Original-Legacy attached ist.
 
         Liefert ``to_migrated`` zurück: ob der Store echte Positive oder Zeilen einer anderen
         Quelle hält und die migrierten Segmente daher nach dem Detach in den ``migrated``-
         Trailing-Rang müssen (sonst genügt ``closed``, segment_id-Ordnung == gid-Ordnung).
 
-        ``promote_migrating_segments`` ist idempotent (No-op ohne ``migrating``-Segmente),
-        sodass ein Retry nach Teil-Abschluss unschädlich bleibt.
+        Idempotent (No-op ohne eigene ``migrating``-Segmente), sodass ein Retry nach
+        Teil-Abschluss unschädlich bleibt.
         """
         await self._seal_pure_migrated_active_segment()
-        migrating = await self._store.manifest.list_migrating_segments()
-        if not migrating:
+        # ``own_migrating_ids`` wird von ``_finalize_and_detach`` VOR dem Seal erfasst (solange
+        # die Segmente noch ``migrating`` sind); wird die Methode ohne Argument aufgerufen,
+        # selbst bestimmen (Source-Scoping bleibt erhalten).
+        if own_migrating_ids is None:
+            own_migrating_ids = await self._own_migrating_segment_ids()
+        if not own_migrating_ids:
             return False
         to_migrated = await self._store_has_positive_rows() or await self._store_has_foreign_migrated_rows()
-        await self._store.manifest.promote_migrating_segments(to_migrated=False)
+        for segment_id in own_migrating_ids:
+            await self._store.manifest.close_segment(segment_id)
         return to_migrated
 
     async def _seal_pure_migrated_active_segment(self) -> None:
@@ -937,7 +980,7 @@ class LegacyMigrator:
             path = store._segments_dir / segment.filename
             if not path.exists():
                 continue
-            uri = f"file:{path.as_posix()}?mode=ro"
+            uri = _sqlite_ro_uri(path, params="mode=ro")
             conn = await aiosqlite.connect(uri, uri=True)
             try:
                 async with conn.execute("SELECT 1 FROM ringbuffer WHERE global_event_id >= 0 LIMIT 1") as cur:
@@ -1008,7 +1051,7 @@ class LegacyMigrator:
             path = store._segments_dir / segment.filename
             if not path.exists():
                 continue
-            uri = f"file:{path.as_posix()}?mode=ro"
+            uri = _sqlite_ro_uri(path, params="mode=ro")
             conn = await aiosqlite.connect(uri, uri=True)
             try:
                 # Rein-migriert = ausschließlich negative gids, keine einzige positive.
@@ -1045,7 +1088,7 @@ class LegacyMigrator:
         store = self._store
         if own_active:
             return store._active_conn, False
-        uri = f"file:{path.as_posix()}?mode=ro"
+        uri = _sqlite_ro_uri(path, params="mode=ro")
         try:
             return await aiosqlite.connect(uri, uri=True), True
         except aiosqlite.Error:
@@ -1111,7 +1154,7 @@ class LegacyMigrator:
             path = self._store._segments_dir / segment.filename
             if not path.exists():
                 continue
-            uri = f"file:{path.as_posix()}?mode=ro"
+            uri = _sqlite_ro_uri(path, params="mode=ro")
             conn = await aiosqlite.connect(uri, uri=True)
             try:
                 async with conn.execute(
@@ -1155,7 +1198,7 @@ class LegacyMigrator:
         """
         legacy_path = self._legacy_path.resolve()
         await self._checkpoint_dirty_wal_if_small(legacy_path)
-        uri = f"file:{legacy_path.as_posix()}?mode=ro&immutable=1"
+        uri = _sqlite_ro_uri(legacy_path, params="mode=ro&immutable=1")
         conn = await aiosqlite.connect(uri, uri=True)
         conn.row_factory = aiosqlite.Row
         try:

@@ -26,14 +26,21 @@ from obs.ringbuffer.store import sqlite_backend as backend_mod
 from obs.ringbuffer.store.sqlite_backend import (
     _LEGACY_GID_OFFSET,
     _LEGACY_GID_STRIDE,
+    _LEGACY_SOURCE_BUCKETS,
 )
 
 JS_MAX = 2**53 - 1  # größter exakt als IEEE-754-Double darstellbarer Integer
 
 
 def _read_path_gid(rowid: int, segment_id: int) -> int:
-    """Repliziert die Read-Pfad-Formel aus ``_legacy_row_to_dict`` (sqlite_backend.py)."""
-    return rowid - _LEGACY_GID_OFFSET - segment_id * _LEGACY_GID_STRIDE
+    """Repliziert die Read-Pfad-Formel aus ``_legacy_row_to_dict`` (sqlite_backend.py).
+
+    Cross-Source-Ordnung (#951, Codex :1558): ``segment_id`` wird an der Bucket-Schranke
+    gespiegelt, damit die neuere Quelle (höhere segment_id) weniger negativ = ``id desc``
+    zuerst liegt.
+    """
+    source_factor = _LEGACY_SOURCE_BUCKETS - 1 - (segment_id % _LEGACY_SOURCE_BUCKETS)
+    return rowid - _LEGACY_GID_OFFSET - source_factor * _LEGACY_GID_STRIDE
 
 
 def test_constants_shared_between_read_and_migration_paths():
@@ -50,12 +57,15 @@ def test_worst_case_read_path_gid_is_js_safe():
     Die dokumentierte Kapazitätsgrenze ist ``segment_id < _MIGRATION_SOURCE_BUCKETS``
     (= ``1<<20``); an dieser Grenze muss der Betrag noch ``<= JS_MAX`` sein.
     """
-    cap = migration_mod._MIGRATION_SOURCE_BUCKETS  # 1<<20
-    # höchster gerade noch zulässiger Index (strikt < cap)
-    worst = _read_path_gid(rowid=1, segment_id=cap - 1)
+    # Cross-Source-Spiegelung (#951, Codex :1558): der Betrag ist maximal beim NIEDRIGSTEN
+    # segment_id (Faktor ``B-1``), nicht mehr beim höchsten. Worst Case = rowid 1, seg 0.
+    worst = _read_path_gid(rowid=1, segment_id=0)
     assert -JS_MAX <= worst < 0
-    # eine Zeile am unteren rowid-Ende, oberster Index: ebenfalls sicher
     assert abs(worst) <= JS_MAX
+    # Auch der höchste dokumentierte Index (strikt < cap) bleibt sicher (weniger negativ).
+    cap = migration_mod._MIGRATION_SOURCE_BUCKETS  # 1<<20
+    top = _read_path_gid(rowid=1, segment_id=cap - 1)
+    assert -JS_MAX <= top < 0
 
 
 def test_worst_case_migration_gid_is_js_safe():
@@ -85,16 +95,17 @@ def test_read_path_rowid_monotone_within_segment():
         prev = gid
 
 
-def test_read_path_higher_segment_id_sorts_older():
-    """Höhere segment_id ⇒ tieferer (älterer) Block – Legacy insgesamt hinter v2.
+def test_read_path_higher_segment_id_sorts_newer():
+    """Höhere segment_id ⇒ weniger negativer Block – neuere Legacy-Quelle zuerst (id desc).
 
-    Ordnungsinvariante des Read-Pfads: eine später registrierte Legacy-Quelle
-    (höhere segment_id) sortiert als älter (mehr negativ). Ein beliebiger rowid der
-    höheren segment_id liegt unter dem gesamten Block der niedrigeren.
+    Cross-Source-Ordnung (#951, Codex :1558): eine später registrierte Legacy-Quelle
+    (höhere segment_id) ist die NEUERE und muss im ``id desc`` VOR der älteren liegen,
+    also weniger negativ. Der gesamte Block der höheren segment_id liegt ÜBER dem der
+    niedrigeren (jeder rowid der neueren Quelle > jeder rowid der älteren).
     """
-    low_seg_min = _read_path_gid(rowid=1, segment_id=1)
-    high_seg_max = _read_path_gid(rowid=_LEGACY_GID_STRIDE - 1, segment_id=2)
-    assert high_seg_max < low_seg_min
+    older_max = _read_path_gid(rowid=_LEGACY_GID_STRIDE - 1, segment_id=1)
+    newer_min = _read_path_gid(rowid=1, segment_id=2)
+    assert newer_min > older_max
 
 
 def test_read_path_buckets_disjoint_no_collision():

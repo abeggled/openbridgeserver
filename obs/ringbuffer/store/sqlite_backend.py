@@ -231,8 +231,20 @@ _LEGACY_GID_OFFSET = 1 << 52
 # (selbst bei ~30 Byte/Zeile ~1e9 Zeilen). Zusammen mit ``OFFSET = 1<<52`` bleibt
 # der Worst-Case-Betrag bis zu einem Segment-/Quell-Index von ``< 1<<20``
 # (~1 Mio) innerhalb ``±(2**53-1)`` – dokumentierte Obergrenze: ``segment_id`` bzw.
-# ``source_bucket`` müssen ``< _MIGRATION_SOURCE_BUCKETS`` (= ``1<<20``) bleiben.
+# ``source_bucket`` müssen ``< _LEGACY_SOURCE_BUCKETS`` (= ``1<<20``) bleiben.
 _LEGACY_GID_STRIDE = 1 << 32
+
+# Feste obere Bucket-Schranke ``B`` für die Cross-Source-Ordnung der read-only
+# attached Legacy-Segmente (#951, Codex :1558). Die synthetische-ID-Formel spiegelt
+# ``segment_id`` an dieser Schranke (``B - 1 - segment_id``), damit eine NEUERE Quelle
+# (höhere ``segment_id`` = später registriert) den WENIGER negativen Block bekommt und
+# im Default-``id desc`` VOR der älteren Quelle sortiert – konsistent zum FIFO-/
+# Retention-Vertrag (``_retention_victim_order``: ältestes Legacy = niedrigste
+# segment_id zuerst) und zur finalen ``global_event_id``-Ordnung in ``query()``.
+# Wert und Bedeutung sind identisch zu ``migration.py``'s ``_MIGRATION_SOURCE_BUCKETS``;
+# hier lokal definiert, weil ``migration.py`` aus ``sqlite_backend`` importiert (kein
+# Rück-Import ohne Zyklus). Beide MÜSSEN denselben Wert tragen (Kapazitätsgrenze).
+_LEGACY_SOURCE_BUCKETS = 1 << 20
 
 
 # Einfache Operatoren, die als typisiertes SQL-WHERE gepusht werden.
@@ -1549,13 +1561,32 @@ class SqliteSegmentStore(RingBufferStore):
         # Synthetischer global_event_id aus der chronologischen Legacy-rowid
         # (``id``): fetch-richtungsunabhängig, streng negativ (unter allen v2-IDs)
         # und rowid-monoton — höhere rowid (neuer) ⇒ höhere (weniger negative) ID.
-        # Die volle ``segment_id`` skaliert einen disjunkten Per-Quelle-Block
+        # Die ``segment_id`` skaliert einen disjunkten Per-Quelle-Block
         # (#951, Codex :1123): jede attached Legacy-DB belegt einen eigenen
         # ``_LEGACY_GID_STRIDE``-breiten rowid-Bereich, sodass zwei Legacy-Quellen
         # NIE dieselbe synthetische ID erzeugen (rowid r der einen kollidierte
-        # sonst mit rowid r+1 der nächsten). Höhere ``segment_id`` ⇒ tieferer
-        # (älterer) Block ⇒ „ältere Legacy zuerst", Legacy insgesamt hinter v2.
-        synthetic_gid = int(row["id"]) - _LEGACY_GID_OFFSET - segment_id * _LEGACY_GID_STRIDE
+        # sonst mit rowid r+1 der nächsten).
+        #
+        # Cross-Source-Ordnung (#951, Codex :1558): ``segment_id`` steigt mit der
+        # Registrierungsreihenfolge, d. h. eine HÖHERE ``segment_id`` ist die NEUERE
+        # Quelle (so behandelt auch ``_retention_victim_order`` ältestes Legacy =
+        # niedrigste segment_id zuerst). Damit die neuere Quelle im Default-``id desc``
+        # VOR der älteren pagt, muss sie den WENIGER negativen Block bekommen. Deshalb
+        # wird ``segment_id`` an der festen Bucket-Schranke ``B`` gespiegelt
+        # (``B - 1 - seg``): höhere segment_id ⇒ kleinerer Faktor ⇒ weniger negativ.
+        # (Die frühere ``- segment_id * STRIDE``-Formel gab der ÄLTEREN Quelle die
+        # weniger negativen IDs und invertierte so die Cross-Source-Chronologie.)
+        #
+        # Worst-Case-Grenzen (JS-sicher, ``[-(2**53-1), 0)``, #951, Runde 23): der Betrag
+        # ist maximal bei ``seg=0`` (Faktor ``B-1``) und rowid=1:
+        #   ``1 - (1<<52) - (2**20 - 1) * (1<<32) = -9_007_194_959_773_695`` (> -(2**53-1),
+        #   ~1 STRIDE Reserve). Am wenigsten negativ bei höchstem ``seg`` (Faktor 0) und
+        #   maximaler rowid (``STRIDE-1``): ``(1<<32-1) - (1<<52) < 0`` ⇒ strikt negativ,
+        #   nie ≥ 0. Positive v2-gids bleiben > 0, Legacy strikt < 0 ⇒ per Vorzeichen
+        #   disjunkt. Dokumentierte Kapazität: ``segment_id < _LEGACY_SOURCE_BUCKETS``.
+        segment_bounded = int(segment_id) % _LEGACY_SOURCE_BUCKETS
+        source_factor = _LEGACY_SOURCE_BUCKETS - 1 - segment_bounded
+        synthetic_gid = int(row["id"]) - _LEGACY_GID_OFFSET - source_factor * _LEGACY_GID_STRIDE
         # pre-#388 Legacy-Schema (#951, Pkt 1): fehlt die metadata-Spalte, liefert
         # das SELECT NULL → Default ``metadata_version=1``/``metadata={}``.
         metadata_version = row["metadata_version"] if row["metadata_version"] is not None else 1

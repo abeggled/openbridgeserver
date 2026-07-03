@@ -108,9 +108,9 @@ async def test_marker_failure_rolls_back_promotion_no_double_delivery(store: Sql
     calls: list[str] = []
     real_finalize = migrator._finalize_migrated_segments
 
-    async def _spy_finalize():
+    async def _spy_finalize(own_migrating_ids=None):
         calls.append("finalize")
-        return await real_finalize()
+        return await real_finalize(own_migrating_ids)
 
     monkeypatch.setattr(migrator, "_finalize_migrated_segments", _spy_finalize)
 

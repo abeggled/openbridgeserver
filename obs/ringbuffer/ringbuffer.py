@@ -2074,12 +2074,26 @@ def _validate_segmented_value_filter_types(
     Spiegelt die Legacy-``query_v2``-Semantik: ein numerischer Operator auf einem
     BOOLEAN-Datenpunkt (oder ein sonst inkompatibler Operator/Typ) ergibt einen
     ``ValueError`` (422-tauglich), statt im segmentierten SQL-Pushdown still leer
-    zu laufen. Ohne expliziten datapoint_id-Filter (Typ nicht eindeutig bestimmbar)
-    wird — wie Legacy row-lazy — nicht vorab abgewiesen.
+    zu laufen.
+
+    Ist ein ``datapoint_id``-Filter (scoped) gesetzt, wird gegen dessen data_types
+    geprüft. OHNE expliziten datapoint_id-Filter (unscoped, adapter-weite bzw.
+    all-datapoints Query) prüft der Legacy-Pfad row-lazy: sobald eine Zeile eines
+    STRING-/BOOLEAN-Datapoints in einen non-``eq``/``ne``-Operator läuft, wirft
+    ``_matches_value_filter`` einen ``ValueError`` (→ 422). Der segmentierte Pushdown
+    kann diese row-lazy-Prüfung nicht bounded nachziehen (er ließe inkompatible
+    Zeilen still fallen → Teilergebnisse). Daher validieren wir den unscoped Fall
+    gegen das VOLLE ``datapoint_types``-Universum (alle Registry-Datapoints, die der
+    API-Layer ohnehin übergibt): ist der Operator mit einem dort deklarierten Typ
+    inkompatibel, wird wie Legacy mit demselben 422-tauglichen ``ValueError``
+    abgewiesen. ``eq``/``ne`` (typunabhängig) bleiben unangetastet (#951, Codex :2081).
     """
-    if not datapoint_ids:
-        return
-    data_types = {(datapoint_types.get(dp_id) or "").strip().upper() for dp_id in datapoint_ids}
+    if datapoint_ids:
+        scoped_ids: set[str] = set(datapoint_ids)
+    else:
+        # Unscoped: gegen alle bekannten Registry-Typen prüfen (Legacy-Parität).
+        scoped_ids = set(datapoint_types)
+    data_types = {(datapoint_types.get(dp_id) or "").strip().upper() for dp_id in scoped_ids}
     for spec in value_filters:
         operator = str(spec.get("operator", "")).strip().lower()
         if operator in {"eq", "ne"}:

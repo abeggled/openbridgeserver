@@ -1088,8 +1088,10 @@ def test_legacy_row_to_dict_disjoint_across_adjacent_segments():
     assert gid_b2 > gid_b1
     # Kein Wert kommt doppelt vor – insbesondere NICHT gid_a2 == gid_b1 (der alte Bug).
     assert len({gid_a1, gid_a2, gid_b1, gid_b2}) == 4
-    # Ordnung: höhere segment_id ⇒ ältere Quelle ⇒ tiefere (negativere) IDs.
-    assert max(gid_b1, gid_b2) < min(gid_a1, gid_a2)
+    # Cross-Source-Ordnung (#951, Codex :1558): höhere segment_id ⇒ NEUERE Quelle ⇒
+    # weniger negative IDs (sortiert im ``id desc`` zuerst). segment_id=6 (neuer) liegt
+    # daher ÜBER segment_id=5 (älter).
+    assert min(gid_b1, gid_b2) > max(gid_a1, gid_a2)
     # Alle strikt negativ (unter allen positiven v2-IDs).
     assert gid_a1 < 0 and gid_b2 < 0
 
