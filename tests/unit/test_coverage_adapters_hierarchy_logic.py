@@ -628,6 +628,57 @@ class TestUpdateInstance:
         assert saved_config["providers"]["pushover"]["targets"]["developers"]["user_key"] == "dev-user"
         assert saved_config["providers"]["pushover"]["targets"]["new"]["user_key"] == "new-user"
 
+    @pytest.mark.asyncio
+    async def test_update_message_instance_does_not_reassign_deleted_target_secret(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceUpdate
+        from obs.api.v1.redaction import REDACTED
+
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": "pushover-token",
+                    "targets": {
+                        "ops": {"user_key": "ops-user"},
+                        "dev": {"user_key": "dev-user"},
+                    },
+                }
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": REDACTED,
+                    "targets": {
+                        "developers": {"user_key": REDACTED},
+                    },
+                }
+            }
+        }
+
+        row = _inst_row(adapter_type="MESSAGE", enabled=0, config=stored_config)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        async def _fake_stop(iid):
+            pass
+
+        monkeypatch.setattr(adp_api.adapter_registry, "stop_instance", _fake_stop)
+        db = _DbStub(one=row)
+
+        await adp_api.update_instance(
+            instance_id=uuid.UUID(row["id"]),
+            body=AdapterInstanceUpdate(config=incoming_config),
+            db=db,
+            _user="admin",
+        )
+
+        saved_config = json.loads(db.committed[0][1][1])
+        assert saved_config["providers"]["pushover"]["api_token"] == "pushover-token"
+        assert saved_config["providers"]["pushover"]["targets"]["developers"]["user_key"] == REDACTED
+
 
 class TestDeleteInstance:
     @pytest.mark.asyncio
@@ -857,6 +908,49 @@ class TestUpdateAdapterConfig:
             adapter_type="KNX", body=ConfigPatch(config={"host": "192.168.1.1"}), db=_DbStub(), _user="admin"
         )
         assert result.adapter_type == "KNX"
+
+    @pytest.mark.asyncio
+    async def test_update_config_preserves_legacy_message_redacted_secrets(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import ConfigPatch
+        from obs.api.v1.redaction import REDACTED
+
+        from pydantic import BaseModel
+
+        class Cfg(BaseModel):
+            providers: dict
+
+        mock_cls = MagicMock()
+        mock_cls.config_schema = Cfg
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: mock_cls)
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": "pushover-token",
+                    "targets": {"ops": {"user_key": "pushover-user"}},
+                },
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": REDACTED,
+                    "targets": {"ops": {"user_key": REDACTED}},
+                },
+            }
+        }
+        row = _row(adapter_type="MESSAGE", config=json.dumps(stored_config), enabled=1, updated_at="2024-01-01T00:00:00")
+        db = _DbStub(one=row)
+
+        result = await adp_api.update_adapter_config(adapter_type="MESSAGE", body=ConfigPatch(config=incoming_config), db=db, _user="admin")
+
+        saved_config = json.loads(db.committed[0][1][1])
+        assert saved_config["providers"]["pushover"]["api_token"] == "pushover-token"
+        assert saved_config["providers"]["pushover"]["targets"]["ops"]["user_key"] == "pushover-user"
+        assert result.config["providers"]["pushover"]["api_token"] == REDACTED
+        assert result.config["providers"]["pushover"]["targets"]["ops"]["user_key"] == REDACTED
 
 
 class TestGetAdapterConfig:

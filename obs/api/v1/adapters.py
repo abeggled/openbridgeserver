@@ -224,6 +224,22 @@ def _message_target_has_redacted_secret(provider_name: str, target_config: dict[
     return any(target_config.get(field) == REDACTED for field in _MESSAGE_PROVIDER_TARGET_SECRET_FIELDS[provider_name])
 
 
+def _message_redacted_target_rename_candidates(
+    provider_name: str,
+    stored_targets: dict[str, Any],
+    incoming_targets: dict[str, Any],
+) -> list[dict[str, Any]]:
+    removed_targets = [target for target_name, target in stored_targets.items() if target_name not in incoming_targets and isinstance(target, dict)]
+    added_redacted_targets = [
+        target
+        for target_name, target in incoming_targets.items()
+        if target_name not in stored_targets and isinstance(target, dict) and _message_target_has_redacted_secret(provider_name, target)
+    ]
+    if len(removed_targets) != len(added_redacted_targets):
+        return []
+    return removed_targets
+
+
 def _preserve_redacted_message_config_secrets(stored_config: dict[str, Any], incoming_config: dict[str, Any]) -> dict[str, Any]:
     merged = dict(incoming_config)
     stored_providers = stored_config.get("providers")
@@ -253,9 +269,7 @@ def _preserve_redacted_message_config_secrets(stored_config: dict[str, Any], inc
 
         merged_targets = dict(incoming_targets)
         merged_provider["targets"] = merged_targets
-        removed_targets_queue = [
-            target for target_name, target in stored_targets.items() if target_name not in incoming_targets and isinstance(target, dict)
-        ]
+        removed_targets_queue = _message_redacted_target_rename_candidates(provider_name, stored_targets, incoming_targets)
         for target_name, incoming_target in incoming_targets.items():
             stored_target = stored_targets.get(target_name)
             if not isinstance(stored_target, dict) or not isinstance(incoming_target, dict):
@@ -1446,8 +1460,13 @@ async def update_adapter_config(
     cls = adapter_registry.get_class(adapter_type)
     if cls is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Adapter '{adapter_type}' nicht registriert")
+    config_new = body.config
+    if adapter_type == "MESSAGE":
+        row = await db.fetchone("SELECT * FROM adapter_configs WHERE adapter_type=?", (adapter_type,))
+        stored_config = json.loads(row["config"]) if row is not None and row["config"] else {}
+        config_new = _preserve_redacted_message_config_secrets(stored_config, body.config)
     try:
-        cls.config_schema(**body.config)
+        cls.config_schema(**config_new)
     except Exception as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -1460,11 +1479,11 @@ async def update_adapter_config(
            VALUES (?,?,?,?)
            ON CONFLICT(adapter_type) DO UPDATE
            SET config=excluded.config, enabled=excluded.enabled, updated_at=excluded.updated_at""",
-        (adapter_type, json.dumps(body.config), int(body.enabled), now),
+        (adapter_type, json.dumps(config_new), int(body.enabled), now),
     )
     return AdapterConfigOut(
         adapter_type=adapter_type,
-        config=body.config,
+        config=_redact_instance_config(adapter_type, config_new),
         enabled=body.enabled,
         updated_at=now,
     )
