@@ -822,6 +822,7 @@ async def _query_v2_entries(
     *,
     limit_override: int | None = None,
     offset_override: int | None = None,
+    candidate_cap_override: int | None = None,
 ) -> list[RingBufferEntryOut]:
     if not is_ringbuffer_enabled():
         return []
@@ -913,6 +914,7 @@ async def _query_v2_entries(
             sort_field=body.sort.field,
             sort_order=body.sort.order,
             dp_ids_by_name=dp_ids_by_name or None,
+            candidate_cap_override=candidate_cap_override,
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
@@ -1185,6 +1187,13 @@ async def export_ringbuffer_csv(
                         body,
                         limit_override=chunk_size,
                         offset_override=offset,
+                        # Legacy-Segment-Cap mit dem wachsenden Export-Offset skalieren
+                        # (Codex #951, Pkt 2): der Monitor-Live-Cap würde ein Legacy-
+                        # Segment mit Value-/Metadaten-Post-Filter roh deckeln und ab
+                        # ``offset > cap`` Zeilen abschneiden. Mit ``offset+limit`` als Cap
+                        # deckt das Legacy-Fetch-Limit das gesamte paginierte Fenster ab,
+                        # sodass der Export die vollständige gefilterte Menge liefert.
+                        candidate_cap_override=offset + chunk_size,
                     ),
                     timeout=_CSV_EXPORT_QUERY_TIMEOUT_SECONDS,
                 )
@@ -1213,6 +1222,10 @@ async def export_ringbuffer_csv(
                     body,
                     limit_override=1,
                     offset_override=offset,
+                    # Probe muss dieselbe volle Legacy-Kandidatenmenge sehen wie die
+                    # Export-Schleife (Codex #951, Pkt 2), sonst meldete sie am hohen
+                    # Offset fälschlich „keine weiteren Zeilen".
+                    candidate_cap_override=offset + 1,
                 ),
                 timeout=_CSV_EXPORT_QUERY_TIMEOUT_SECONDS,
             )
@@ -1683,7 +1696,11 @@ async def _collect_multi_entries(
                 ),
             }
         )
-        entries = await _query_v2_entries(query)
+        # Export will alle Zeilen der Union (Codex #951, Pkt 2): den Legacy-Cap auf das
+        # volle Export-Limit heben, sonst deckelte ein Legacy-Segment mit Value-/
+        # Metadaten-Post-Filter die Kandidaten roh auf den Monitor-Cap und der Export
+        # verlöre alle Zeilen jenseits davon.
+        entries = await _query_v2_entries(query, candidate_cap_override=_CSV_EXPORT_MAX_ROWS)
         return entries, {e.id: [] for e in entries}
 
     resolved: list[RingBufferFiltersetOut] = []
@@ -1711,7 +1728,10 @@ async def _collect_multi_entries(
         if query is None:
             continue
         try:
-            rows = await _query_v2_entries(query)
+            # Export-Kandidaten-Cap auf das volle Export-Limit heben (Codex #951, Pkt 2),
+            # damit ein Legacy-Segment mit Value-/Metadaten-Post-Filter nicht auf den
+            # Monitor-Cap gedeckelt wird und Zeilen jenseits davon verschluckt.
+            rows = await _query_v2_entries(query, candidate_cap_override=_CSV_EXPORT_MAX_ROWS)
         except HTTPException:
             continue
         for entry in rows:
@@ -1919,6 +1939,17 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     # laufenden RingBuffer. Bei Teil-Updates die nicht gesetzten Felder aus der
     # persistierten Config übernehmen.
     resolved_segmented = body.segmented if "segmented" in body.model_fields_set else bool(persisted.get("segmented", False))
+    # Segmentierung an das aufgelöste ``storage`` koppeln (Codex #951, Pkt 1):
+    # Postet ein Client eine partielle Config wie ``{"storage": "memory"}`` ohne
+    # ``segmented``, bliebe sonst das persistierte/Default-``segmented=true`` erhalten.
+    # ``RingBuffer.start()`` nähme dann den segmentierten Pfad, dessen Store-Root aus
+    # ``disk_path`` abgeleitet wird → ein als ``memory`` konfigurierter RingBuffer
+    # schriebe persistente Segment-Dateien (Widerspruch zur memory-Semantik). Löst
+    # ``storage`` zu ``memory`` auf, wird die Segmentierung daher normalisiert
+    # abgeschaltet; der ``file``-Pfad bleibt unverändert (segmentiert per Default).
+    resolved_storage = body.storage if "storage" in body.model_fields_set else current_config.get("storage", "file")
+    if resolved_storage == "memory":
+        resolved_segmented = False
     resolved_segment_max_bytes = body.segment_max_bytes if "segment_max_bytes" in body.model_fields_set else persisted.get("segment_max_bytes")
     resolved_segment_max_rows = body.segment_max_rows if "segment_max_rows" in body.model_fields_set else persisted.get("segment_max_rows")
     resolved_segment_max_age = body.segment_max_age if "segment_max_age" in body.model_fields_set else persisted.get("segment_max_age")

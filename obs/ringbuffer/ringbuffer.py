@@ -1028,6 +1028,7 @@ class RingBuffer:
         sort_field: str = "id",
         sort_order: str = "desc",
         dp_ids_by_name: list[str] | None = None,
+        candidate_cap_override: int | None = None,
     ) -> list[RingBufferEntry]:
         if self._segmented:
             return await self._query_v2_segmented(
@@ -1053,6 +1054,7 @@ class RingBuffer:
                 sort_field=sort_field,
                 sort_order=sort_order,
                 dp_ids_by_name=dp_ids_by_name,
+                candidate_cap_override=candidate_cap_override,
             )
 
         if not self._conn:
@@ -1217,6 +1219,7 @@ class RingBuffer:
         sort_field: str,
         sort_order: str,
         dp_ids_by_name: list[str] | None,
+        candidate_cap_override: int | None = None,
     ) -> list[RingBufferEntry]:
         """Read-Pfad im segmentierten Modus (#919).
 
@@ -1306,7 +1309,16 @@ class RingBuffer:
             # Bounded-Garantie für guarded contains/regex ohne Zeitfenster und für
             # den Legacy-Python-Fallback: ohne engen Zeitrahmen wird höchstens diese
             # Kandidatenzahl je Segment gelesen, statt unbounded zu scannen.
-            candidate_cap=_SEGMENTED_CANDIDATE_CAP,
+            #
+            # Export-Pfad (Codex #951, Pkt 2): der CSV-Export paginiert mit WACHSENDEM
+            # ``offset`` und muss die vollständige gefilterte Menge liefern. Der Monitor-
+            # Live-View-Cap (fester ``_SEGMENTED_CANDIDATE_CAP``) würde ein Legacy-Segment
+            # mit Value-/Metadaten-Post-Filter roh auf diese Zeilenzahl deckeln – sobald
+            # ``offset`` den Cap übersteigt, gingen Zeilen VERLOREN. Der Export übergibt
+            # daher einen mit ``offset+limit`` mitwachsenden Cap (``candidate_cap_override``),
+            # sodass das Legacy-Fetch-Limit die gesamte paginierte Menge abdeckt. Der
+            # Monitor-Live-View (kleines Limit, kein Override) behält seinen festen Cap.
+            candidate_cap=candidate_cap_override if candidate_cap_override is not None else _SEGMENTED_CANDIDATE_CAP,
         )
         rows = await self._store_query_serialized(store_query)
         return [

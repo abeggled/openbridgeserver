@@ -464,3 +464,55 @@ async def test_config_post_budget_change_rederives_auto_segment_max_bytes(client
     assert resp.json()["segment_max_bytes"] is None
 
     await _reset_to_defaults(client, auth_headers)
+
+
+async def test_config_memory_storage_forces_segmented_off(client, auth_headers, monkeypatch, tmp_path):
+    """Memory-Storage darf die Segmentierung nicht persistent lassen (Codex #951, Pkt 1).
+
+    Postet ein Client eine partielle Config, die ``storage`` zu ``memory`` aufloest,
+    ohne ``segmented`` mitzusenden, bliebe sonst das persistierte/Default-``segmented=true``
+    erhalten. ``RingBuffer.start()`` naehme dann den segmentierten Pfad, dessen Store-Root
+    aus ``disk_path`` abgeleitet wird → ein als ``memory`` konfigurierter RingBuffer
+    schriebe persistente Segment-Dateien. Der Config-Resolver muss die Segmentierung an
+    das aufgeloeste ``storage`` koppeln: bei ``memory`` wird ``resolved_segmented`` auf
+    ``False`` normalisiert.
+
+    Der Endpoint selbst gattert ``storage != 'file'`` mit 422; der Resolver
+    ``_configure_ringbuffer_locked`` wird daher direkt geprueft.
+    """
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer, reset_ringbuffer
+
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+
+    # Laufende Session-Instanz sauber abbauen, damit der Resolver frisch aufbaut.
+    active = get_optional_ringbuffer()
+    if active is not None:
+        await active.stop()
+    reset_ringbuffer()
+
+    try:
+        # storage=memory, segmented ABSICHTLICH weggelassen → darf nicht auf true kleben.
+        body = rb_api.RingBufferConfig(enabled=True, storage="memory")
+        assert "segmented" not in body.model_fields_set
+        async with rb_api._CONFIGURE_LOCK:
+            await rb_api._configure_ringbuffer_locked(body, get_db())
+
+        persisted = await _read_persisted_row()
+        assert persisted["segmented"] is False
+
+        built = get_optional_ringbuffer()
+        assert built is not None
+        assert built.segmented is False
+        assert built.store is None
+        # Kein persistenter Segment-Store-Root fuer die memory-Config angelegt.
+        segments_root = rb_path.with_name(f"{rb_path.stem}_segments")
+        assert not segments_root.exists()
+    finally:
+        active = get_optional_ringbuffer()
+        if active is not None:
+            await active.stop()
+        reset_ringbuffer()
+        # Session-Default (segmentiert) wiederherstellen, damit Folge-Tests stabil sind.
+        await _reset_to_defaults(client, auth_headers)

@@ -1157,3 +1157,73 @@ async def test_segmented_startup_failure_after_open_closes_store_and_allows_retr
         assert [e.new_value for e in entries] == [1]
     finally:
         await rb.stop()
+
+
+# ---------------------------------------------------------------------------
+# (Codex #951, Pkt 2) CSV-Export darf nicht am Monitor-Candidate-Cap abschneiden
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_segmented_query_uses_default_candidate_cap_without_override(tmp_path: Path):
+    """Der Monitor-Live-View (kein Override) behält den festen ``_SEGMENTED_CANDIDATE_CAP``.
+
+    Der bounded Store-Read je Segment bleibt für die Live-Ansicht auf dem kleinen
+    Monitor-Cap gedeckelt – das ist die Bounded-Garantie gegen Full-Scans.
+    """
+    from obs.ringbuffer.ringbuffer import _SEGMENTED_CANDIDATE_CAP
+
+    rb = _rb(tmp_path, segmented=True)
+    await rb.start()
+    try:
+        await _record(rb, 1, "2026-01-01T00:00:00.000Z")
+
+        real_query = rb.store.query
+        seen: list[int | None] = []
+
+        async def capturing_query(store_query):
+            seen.append(store_query.candidate_cap)
+            return await real_query(store_query)
+
+        rb.store.query = capturing_query
+        await rb.query_v2(limit=100, offset=0)
+        assert seen == [_SEGMENTED_CANDIDATE_CAP]
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_segmented_query_candidate_cap_override_scales_with_offset(tmp_path: Path):
+    """Der Export-Pfad übergibt einen mitwachsenden ``candidate_cap_override``.
+
+    Regression Codex #951, Pkt 2: nutzt ``_query_legacy_segment`` bei Value-/
+    Metadaten-Post-Filtern ``candidate_cap`` als rohes Fetch-Limit, deckelte der
+    feste Monitor-Cap die Kandidaten UNABHÄNGIG vom wachsenden Export-Offset –
+    sobald ``offset`` den Cap übersteigt, gingen Zeilen verloren. Der Override
+    muss den auf dem ``StoreQuery`` gesetzten Cap 1:1 auf den Aufrufer-Wert
+    (``offset+limit``) heben, statt beim festen Monitor-Cap zu bleiben.
+    """
+    from obs.ringbuffer.ringbuffer import _SEGMENTED_CANDIDATE_CAP
+
+    rb = _rb(tmp_path, segmented=True)
+    await rb.start()
+    try:
+        await _record(rb, 1, "2026-01-01T00:00:00.000Z")
+
+        real_query = rb.store.query
+        seen: list[int | None] = []
+
+        async def capturing_query(store_query):
+            seen.append(store_query.candidate_cap)
+            return await real_query(store_query)
+
+        rb.store.query = capturing_query
+
+        # Export-Fenster jenseits des Monitor-Caps: der weitergereichte Cap muss
+        # mit offset+limit skalieren, nicht am festen Cap kleben.
+        override = _SEGMENTED_CANDIDATE_CAP * 2 + 1000
+        await rb.query_v2(limit=1000, offset=_SEGMENTED_CANDIDATE_CAP * 2, candidate_cap_override=override)
+        assert seen == [override]
+        assert seen[0] > _SEGMENTED_CANDIDATE_CAP
+    finally:
+        await rb.stop()
