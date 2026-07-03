@@ -125,7 +125,7 @@
                 </Badge>
                 <Badge v-if="!b.enabled" variant="danger" size="xs">{{ $t('datapoints.detail.bindingDisabled') }}</Badge>
               </div>
-              <div v-if="b.adapter_type === 'KNX'" class="mt-2 flex flex-col gap-2" data-testid="datapoint-knx-context">
+              <div v-if="b.adapter_type?.toUpperCase() === 'KNX'" class="mt-2 flex flex-col gap-2" data-testid="datapoint-knx-context">
                 <div v-if="knxContextLoading" class="text-xs text-slate-500">
                   {{ $t('common.loading') }}
                 </div>

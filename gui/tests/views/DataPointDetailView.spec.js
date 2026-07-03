@@ -236,4 +236,39 @@ describe('DataPointDetailView', () => {
     expect(wrapper.text()).toContain('Rückmelde-GA')
     expect(wrapper.text()).not.toContain('"group_address"')
   })
+
+  it('renders KNX context when adapter_type is lowercase "knx"', async () => {
+    apiMocks.dpApi.listBindings.mockResolvedValue({
+      data: [
+        {
+          id: 'binding-knx-lower',
+          enabled: true,
+          direction: 'BOTH',
+          adapter_type: 'knx',
+          config: { group_address: '2/3/4' },
+        },
+      ],
+    })
+    apiMocks.dpApi.knxContext.mockResolvedValue({
+      data: {
+        datapoint_id: 'dp-internal',
+        group_addresses: [
+          {
+            address: '2/3/4',
+            name: 'Licht Bad',
+            description: '',
+            dpt: 'DPT1.001',
+            roles: ['group_address'],
+            devices: [],
+          },
+        ],
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="datapoint-knx-context"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('2/3/4')
+  })
 })
