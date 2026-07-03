@@ -316,6 +316,31 @@ describe('BindingForm — MESSAGE create submit', () => {
     w.unmount()
   })
 
+  it('preserves disabled MESSAGE archive strategy in edit mode', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-message-disabled',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: {
+          archive_strategy: 'none',
+          providers: [],
+        },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding).toHaveBeenCalledWith('dp-1', 'binding-message-disabled', expect.objectContaining({
+      direction: 'SOURCE',
+      config: expect.objectContaining({
+        archive_strategy: 'none',
+      }),
+    }))
+    w.unmount()
+  })
+
   it('applies MESSAGE fallback defaults for empty optional config values', async () => {
     const w = await mountForm({
       initial: {

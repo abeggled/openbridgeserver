@@ -29,7 +29,12 @@ function configStringValues(...keys: string[]): string[] {
   return [...new Set(values)]
 }
 
-const archiveIds = computed<string[]>(() => configStringValues('archive_ids', 'archive_id'))
+const archiveIds = computed<string[]>(() => {
+  const normalized = configStringValues('archive_ids', 'archive_id')
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean)
+  return [...new Set(normalized)]
+})
 const limit = computed(() => Math.max(1, Math.min(100, Number(props.config.limit ?? 25))))
 const showArchive = computed(() => (props.config.show_archive as boolean | undefined) ?? true)
 const showSource = computed(() => (props.config.show_source as boolean | undefined) ?? true)
@@ -88,7 +93,7 @@ function severityLabel(value: string): string {
 }
 
 function matchesFilters(entry: MessageArchiveEntry): boolean {
-  if (archiveIds.value.length && !archiveIds.value.includes(entry.archive_id)) return false
+  if (archiveIds.value.length && !archiveIds.value.includes(entry.archive_id.toLowerCase())) return false
   for (const key of ['severity', 'status', 'type', 'source'] as const) {
     const values = filterValues(key)
     if (values.length && !values.includes(entry[key])) {

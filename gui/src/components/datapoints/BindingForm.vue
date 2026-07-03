@@ -664,7 +664,7 @@ watch(() => props.initial, val => {
   if (cfg.cooldown_seconds == null) cfg.cooldown_seconds = 0
   if (cfg.send_on_change == null) cfg.send_on_change = true
   if (cfg.archive_id == null) cfg.archive_id = ''
-  if (cfg.archive_strategy == null || cfg.archive_strategy === 'none') cfg.archive_strategy = 'send_only'
+  if (cfg.archive_strategy == null) cfg.archive_strategy = 'send_only'
   {
     const ANW_PRESETS = ['1', '7', '14']
     if (cfg.offset_override != null) {

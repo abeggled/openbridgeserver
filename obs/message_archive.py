@@ -304,25 +304,20 @@ class MessageArchiveStore:
 
     async def ensure_archive(self, archive_id: str, *, name: str | None = None) -> None:
         archive_id = _normalize_archive_id(archive_id)
-        existing = await self._fetchone("SELECT id, name FROM message_archives WHERE id=?", (archive_id,))
-        if existing:
-            if archive_id == "system" and existing["name"] == "system":
-                now = utc_now()
-                await self.conn.execute(
-                    "UPDATE message_archives SET name=?, updated_at=? WHERE id=?",
-                    ("System", now, archive_id),
-                )
-                await self.conn.commit()
-            return
         now = utc_now()
         await self.conn.execute(
             """
-            INSERT INTO message_archives
+            INSERT OR IGNORE INTO message_archives
                 (id, name, description, tags, default_type, color, retention_max_entries, retention_max_age_days, created_at, updated_at)
             VALUES (?, ?, '', '[]', NULL, '#3b82f6', NULL, NULL, ?, ?)
             """,
             (archive_id, name or _default_archive_name(archive_id), now, now),
         )
+        if archive_id == "system":
+            await self.conn.execute(
+                "UPDATE message_archives SET name=?, updated_at=? WHERE id=? AND name=?",
+                ("System", now, archive_id, "system"),
+            )
         await self.conn.commit()
 
     async def create_archive(self, body: ArchiveInput) -> dict[str, Any]:

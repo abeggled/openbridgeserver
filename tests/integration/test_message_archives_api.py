@@ -1388,8 +1388,7 @@ async def test_message_archive_page_scoped_read_and_ack_allow_widget_permissions
         assert save.status_code == 204, save.text
 
         read_resp = await client.post(f"/api/v1/message-archives/{archive_id}/entries/{entry_id}/read", headers={"X-Page-Id": page_id})
-        assert read_resp.status_code == 200, read_resp.text
-        assert read_resp.json()["is_read"] is True
+        assert read_resp.status_code == 403, read_resp.text
 
         ack_resp = await client.post(
             f"/api/v1/message-archives/{archive_id}/entries/{entry_id}/acknowledge",

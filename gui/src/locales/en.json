@@ -578,6 +578,7 @@
       "targetsLabel": "Targets",
       "addTarget": "Add target",
       "messageArchiveStrategyLabel": "Action",
+      "messageArchiveStrategyNone": "Disabled",
       "messageArchiveStrategySendOnly": "Send only",
       "messageArchiveStrategySendAndArchive": "Send and archive",
       "messageArchiveStrategyArchiveOnly": "Archive only",

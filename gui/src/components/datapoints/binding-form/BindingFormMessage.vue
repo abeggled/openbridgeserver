@@ -35,6 +35,7 @@
     <div class="form-group">
       <label class="label">{{ $t('adapters.bindingForm.messageArchiveStrategyLabel') }}</label>
       <select v-model="cfg.archive_strategy" class="input">
+        <option value="none">{{ $t('adapters.bindingForm.messageArchiveStrategyNone') }}</option>
         <option value="send_only">{{ $t('adapters.bindingForm.messageArchiveStrategySendOnly') }}</option>
         <option value="send_and_archive">{{ $t('adapters.bindingForm.messageArchiveStrategySendAndArchive') }}</option>
         <option value="archive_only">{{ $t('adapters.bindingForm.messageArchiveStrategyArchiveOnly') }}</option>

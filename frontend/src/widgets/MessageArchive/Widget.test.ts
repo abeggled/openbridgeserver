@@ -155,6 +155,34 @@ describe('MessageArchive Widget.vue', () => {
     wrapper.unmount()
   })
 
+  it('normalizes archive filters for loading and live entries', async () => {
+    vi.mocked(messageArchives.entries).mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0 })
+
+    const wrapper = mount(MessageArchiveWidget, {
+      props: {
+        config: { archive_ids: ['SYSTEM'] },
+        editorMode: false,
+        readonly: false,
+      },
+      global: {
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await flushPromises()
+
+    expect(messageArchives.entries).toHaveBeenCalledWith({
+      archive_id: 'system',
+      limit: 25,
+      sort: 'desc',
+    })
+
+    wsHandlers.current[0]({ action: 'message_archive_entry', entry })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Startup')
+    wrapper.unmount()
+  })
+
   it('keeps live updates sorted and preserves local read state', async () => {
     const readEntry = { ...entry, is_read: true, read_at: '2026-01-01T10:05:00+00:00' }
     vi.mocked(messageArchives.entries).mockResolvedValue({ items: [readEntry, olderEntry], total: 2, limit: 25, offset: 0 })

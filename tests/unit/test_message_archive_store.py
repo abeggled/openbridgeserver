@@ -287,6 +287,19 @@ async def test_message_archive_store_repairs_legacy_lowercase_system_name(tmp_pa
         await store.disconnect()
 
 
+async def test_message_archive_store_ensure_archive_is_idempotent(tmp_path):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    try:
+        await store.ensure_archive("alerts", name="Alerts")
+        await store.ensure_archive("alerts", name="Ignored")
+        archives = await store.list_archives()
+        assert [archive["id"] for archive in archives] == ["alerts"]
+        assert archives[0]["name"] == "Alerts"
+    finally:
+        await store.disconnect()
+
+
 async def test_message_archive_store_normalizes_archive_ids_to_lowercase(tmp_path):
     store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
     await store.connect()

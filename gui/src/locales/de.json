@@ -578,6 +578,7 @@
       "targetsLabel": "Ziele",
       "addTarget": "Ziel hinzufügen",
       "messageArchiveStrategyLabel": "Aktion",
+      "messageArchiveStrategyNone": "Deaktiviert",
       "messageArchiveStrategySendOnly": "Nur senden",
       "messageArchiveStrategySendAndArchive": "Senden und archivieren",
       "messageArchiveStrategyArchiveOnly": "Nur archivieren",

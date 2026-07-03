@@ -152,6 +152,7 @@ class ArchiveReadAccess:
     predicates: list[Any] | None = None
     is_admin: bool = False
     page_access: str | None = None
+    anonymous_page_scope: bool = False
 
 
 async def _store() -> MessageArchiveStore:
@@ -356,10 +357,16 @@ async def _archive_read_access(request: Request, db: Database) -> ArchiveReadAcc
     if not page_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Provide Authorization: Bearer {token} or X-API-Key: {key}")
 
-    return await _page_scoped_archive_access(request, db, username=f"visu-page:{page_id}")
+    return await _page_scoped_archive_access(request, db, username=f"visu-page:{page_id}", anonymous_page_scope=True)
 
 
-async def _page_scoped_archive_access(request: Request, db: Database, *, username: str) -> ArchiveReadAccess:
+async def _page_scoped_archive_access(
+    request: Request,
+    db: Database,
+    *,
+    username: str,
+    anonymous_page_scope: bool = False,
+) -> ArchiveReadAccess:
     from obs.api.v1 import sessions as sessions_api
     from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
     from obs.api.v1.websocket import _page_allowed_message_archive_predicates
@@ -412,7 +419,12 @@ async def _page_scoped_archive_access(request: Request, db: Database, *, usernam
     )
     if not predicates:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Message archive access is not configured for this page")
-    return ArchiveReadAccess(username=username, predicates=predicates, page_access=access)
+    return ArchiveReadAccess(
+        username=username,
+        predicates=predicates,
+        page_access=access,
+        anonymous_page_scope=anonymous_page_scope,
+    )
 
 
 def _entry_predicates_for_page(predicates: list[Any] | None) -> list[EntryPredicate] | None:
@@ -450,6 +462,11 @@ def _entry_action_allowed_for_page(entry: dict[str, Any], predicates: list[Any] 
 def _ensure_page_action_mutation_allowed(access: ArchiveReadAccess) -> None:
     if access.page_access == "readonly":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Readonly visu pages cannot mutate message archives")
+
+
+def _ensure_read_state_mutation_allowed(access: ArchiveReadAccess) -> None:
+    if access.anonymous_page_scope:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Anonymous page viewers cannot mutate read state")
 
 
 def _strip_archive_storage_fields(archive: dict[str, Any]) -> dict[str, Any]:
@@ -889,6 +906,7 @@ async def mark_message_archive_entry_read(
     existing = await store.get_entry(archive_id, entry_id, username=access.username)
     if not existing or not _entry_action_allowed_for_page(existing, access.predicates, "read"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive entry not found")
+    _ensure_read_state_mutation_allowed(access)
     previous_entry = await store.get_entry(archive_id, entry_id)
     entry = await store.mark_read(archive_id, entry_id, access.username)
     if not entry:
