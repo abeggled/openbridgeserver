@@ -35,7 +35,12 @@ from pathlib import Path
 import aiosqlite
 
 from obs.ringbuffer.store.interface import StoreEvent
-from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_MIGRATED, SegmentRecord
+from obs.ringbuffer.store.manifest import (
+    LEGACY_SCHEMA_VERSION,
+    SEGMENT_STATUS_MIGRATED,
+    SEGMENT_STATUS_MIGRATING,
+    SegmentRecord,
+)
 from obs.ringbuffer.store.sqlite_backend import (
     _LEGACY_GID_OFFSET,
     SqliteSegmentStore,
@@ -362,19 +367,13 @@ class LegacyMigrator:
         # Legacy-rowid). Deckt einen veralteten/verlorenen State nach Crash ab.
         materialized = await self._max_migrated_rowid()
         after_rowid = max(state.last_rowid, materialized)
+        # Invarianten-Recovery (#951, P2, :596): bevor ein neuer Batch läuft, einen nach
+        # Crash zurückgebliebenen inkonsistenten Zustand heilen – sichtbare, rein aus
+        # DIESER noch attached Quelle stammende (rein-negative) Segmente re-hidden.
+        await self._recover_visible_migrated_while_attached()
         rows = await self._read_batch(after_rowid=after_rowid, limit=batch_rows)
         if not rows:
-            # Sichtbar-machen VOR Marker/Detach (#951, P2, :386): erst die kopierten
-            # ``migrating``-Segmente query-sichtbar promoten, DANN den ``.migrated``-
-            # Marker schreiben + die Legacy-Manifest-Zeile entfernen. So ist die
-            # Publikation von Marker/Detach erst gültig, wenn die Chunks sichtbar sind
-            # – ein Crash/Raise zwischen beiden Schritten hinterlässt nie einen Zustand,
-            # in dem Marker/Detach publiziert ist, während kopierte Chunks noch
-            # versteckt (``migrating``) sind (verdeckter Datenverlust). Scheitert das
-            # Marker-Schreiben, propagiert ``_detach_migrated_legacy_segment`` einen
-            # Fehler VOR dem done-Mark – ein späterer Lauf setzt fort.
-            await self._finalize_migrated_segments()
-            await self._detach_migrated_legacy_segment()
+            await self._finalize_and_detach()
             self._save_state(_ResumeState(last_rowid=after_rowid, done=True))
             await self._run_retention_after_detach()
             return 0
@@ -383,18 +382,163 @@ class LegacyMigrator:
         # done erst markieren, wenn der Batch kleiner als angefordert war (= letzte Seite).
         done = len(rows) < batch_rows
         if done:
-            # Wie oben: erst promoten (sichtbar machen), dann Marker + Detach, dann
-            # done-Mark. Ein Marker-Fehler propagiert und verhindert den done-Mark
-            # (kein stiller Skip beim Retry, #951 P2). Der Zwischen-Cursor (last_rowid)
-            # wurde durch den Append bereits idempotent materialisiert; ein Abbruch hier
-            # lässt den nächsten Lauf ab last_rowid fortsetzen und erneut finalisieren.
-            await self._finalize_migrated_segments()
-            await self._detach_migrated_legacy_segment()
+            # Der Zwischen-Cursor (last_rowid) wurde durch den Append bereits idempotent
+            # materialisiert; ein Abbruch in ``_finalize_and_detach`` lässt den nächsten
+            # Lauf ab last_rowid fortsetzen und erneut finalisieren.
+            await self._finalize_and_detach()
             self._save_state(_ResumeState(last_rowid=last_rowid, done=True))
             await self._run_retention_after_detach()
         else:
             self._save_state(_ResumeState(last_rowid=last_rowid, done=False))
         return len(rows)
+
+    async def _finalize_and_detach(self) -> None:
+        """Schließt die Migration ab: Promote ZUERST, dann Marker/Detach mit Rollback (#951, P2, :392).
+
+        Leitinvariante: kopierte v2-Chunks sind query-sichtbar GENAU DANN, wenn die
+        Legacy-Quelle detached ist – nie beides (Doppel-Delivery), nie beides versteckt +
+        Marker publiziert (verdeckter Verlust).
+
+        Reihenfolge (Option B):
+
+        1. ``_finalize_migrated_segments`` – die ``migrating``-Segmente in ihren finalen,
+           query-sichtbaren Status promoten. Die IDs der zu promotenden Segmente werden
+           VORHER erfasst (``list_migrating_segments``), damit ein Rollback möglich ist.
+        2. ``_detach_migrated_legacy_segment`` – schreibt den ``.migrated``-Marker
+           (``_mark_source_migrated``) UND entfernt die Legacy-Manifest-Zeile. Der
+           Marker-``touch`` ist der einzige fail-prone Schritt (evtl. read-only Legacy-
+           Verzeichnis).
+        3. Schlägt Schritt 2 fehl (``OSError``), wird die Promotion aus Schritt 1
+           ZURÜCKGEROLLT: die gerade promoteten Segmente werden wieder ``migrating``
+           (versteckt) markiert und der Fehler RE-RAISED. Ergebnis: Chunks wieder
+           versteckt + Legacy noch attached → Single-Delivery, kein done-Mark, retry-sicher
+           (Finding 1).
+
+        Warum Promote ZUERST (und nicht Marker zuerst): ``classify()`` unterdrückt ein
+        Re-Attach allein anhand des Marker-Sidecars. Würde der Marker VOR der Promotion
+        geschrieben, hinterließe ein Crash zwischen Marker und Promote den Zustand „Marker
+        gesetzt + Chunks versteckt + Legacy nicht re-attachbar" → unsichtbare Historie
+        (verdeckter Datenverlust). Mit Promote-zuerst kann ein Crash NUR die Zustände
+        „promotet, aber Legacy noch attached" (transientes Doppel-Delivery, von
+        ``_recover_visible_migrated_while_attached`` beim nächsten Lauf re-hidden) oder
+        „promotet + Marker gesetzt + Legacy detached" (sichtbar, korrekt) erzeugen – nie
+        verdeckten Verlust.
+
+        Promotion erfolgt in ZWEI Phasen, damit der Rollback verlustfrei möglich bleibt:
+        ``_finalize_migrated_segments`` promotet ``migrating`` → ``closed`` (re-hidebar via
+        ``mark_migrating``). Erst NACH erfolgreichem Detach hebt ``_promote_closed_to_migrated_
+        if_needed`` diese Segmente ggf. in den Trailing-Rang (``migrated``). Würde bereits vor
+        dem Detach nach ``migrated`` promotet, ließe der ``mark_migrating``-Guard (nur
+        ``closed``/``checkpoint_pending``) den Rollback ins Leere laufen und die migrierten
+        Zeilen kämen trotz Marker-Fehler doppelt.
+        """
+        migrating_before = [seg.segment_id for seg in await self._store.manifest.list_migrating_segments()]
+        to_migrated = await self._finalize_migrated_segments()
+        try:
+            await self._detach_migrated_legacy_segment()
+        except OSError:
+            # Marker/Detach fehlgeschlagen (z. B. read-only Legacy-Verzeichnis): die in
+            # Schritt 1 promoteten (``closed``) Segmente wieder verstecken, damit sie nicht
+            # ZUSAMMEN mit der noch attached Legacy-Quelle doppelt geliefert werden. Danach
+            # re-raise, der done-Mark unterbleibt und ein Retry setzt sauber fort.
+            for segment_id in migrating_before:
+                await self._store.manifest.mark_migrating(segment_id)
+            raise
+        # Detach erfolgreich (Quelle abgekoppelt): die nun ausschließlich in v2 vorhandenen
+        # migrierten Segmente ggf. in den Trailing-Rang (``migrated``) heben – erst jetzt
+        # gefahrlos, weil die Legacy-Quelle nicht mehr dieselben Zeilen liefert.
+        if to_migrated:
+            for segment_id in migrating_before:
+                await self._store.manifest.mark_migrated(segment_id)
+
+    async def _recover_visible_migrated_while_attached(self) -> None:
+        """Stellt die Sichtbarkeits-Invariante nach einem Crash während der Migration her (#951, P2, :596).
+
+        Crasht der Prozess in ``_append_with_legacy_gids`` NACH dem Row-Commit, aber BEVOR
+        die frisch befüllten (rein-negativen) Batch-Segmente als ``migrating`` versteckt
+        wurden, bleiben sie durabel UND query-sichtbar (``closed``/``migrated``/``active``),
+        während die Original-Legacy-Quelle noch attached ist. ``list_segments_for_query``
+        lieferte dann dieselben Alt-Zeilen DOPPELT (einmal v2, einmal aus der attached
+        Legacy). Solange die Quelle attached ist, MÜSSEN alle rein aus DIESER Quelle
+        migrierten (rein-negativen, im eigenen gid-Bucket liegenden) NICHT-aktiven Segmente
+        versteckt (``migrating``) sein.
+
+        Läuft am Anfang jedes ``migrate_chunk`` (also auch beim ersten Lauf nach einem
+        Startup/Neustart, sobald der Migrationsjob wieder greift), bevor der neue Batch
+        gelesen wird. Idempotent: ohne inkonsistente Segmente ein No-op. Ist die Quelle
+        nicht (mehr) attached, ist die Sichtbarkeit korrekt und es passiert nichts.
+
+        Das aktive Segment kann nicht versteckt werden (``mark_migrating``-Guard); enthält
+        es rein-negative Zeilen dieser Quelle, wird es zuerst rotiert (nur wenn nicht leer),
+        sodass die Zeilen in ein verstecktbares, geschlossenes Segment wandern.
+        """
+        store = self._store
+        if not await self._source_is_attached():
+            return
+        low, high = self._bucket_gid_bounds
+        active_id = store._active_segment.segment_id if store._active_segment else None
+        # Aktives Segment prüfen: hält es rein-negative Zeilen DIESER Quelle, muss es
+        # zuerst rotiert werden, damit die Zeilen in ein versteckbares Segment gehen.
+        if active_id is not None and store._active_conn is not None:
+            if await self._active_segment_has_own_migrated_only_rows(low, high):
+                await store.rotate()
+                active_id = store._active_segment.segment_id if store._active_segment else None
+        for segment in await store.manifest.list_segments():
+            if segment.schema_version <= LEGACY_SCHEMA_VERSION:
+                continue
+            if segment.status == SEGMENT_STATUS_MIGRATING:
+                continue  # bereits versteckt
+            if segment.segment_id == active_id:
+                continue  # aktives Segment bleibt appendfähig
+            if await self._segment_is_own_migrated_only(segment, low, high):
+                await store.manifest.mark_migrating(segment.segment_id)
+
+    async def _active_segment_has_own_migrated_only_rows(self, low: int, high: int) -> bool:
+        """True, wenn das aktive Segment ausschließlich rein-negative Zeilen DIESER Quelle hält (#951, P2, :596)."""
+        conn = self._store._active_conn
+        if conn is None:
+            return False
+        async with conn.execute("SELECT 1 FROM ringbuffer WHERE global_event_id >= 0 LIMIT 1") as cur:
+            if await cur.fetchone() is not None:
+                return False
+        async with conn.execute(
+            "SELECT 1 FROM ringbuffer WHERE NOT (global_event_id >= ? AND global_event_id < ?) LIMIT 1",
+            (low, high),
+        ) as cur:
+            if await cur.fetchone() is not None:
+                return False  # fremde negative Zeilen → nicht rein DIESER Quelle
+        async with conn.execute(
+            "SELECT 1 FROM ringbuffer WHERE global_event_id >= ? AND global_event_id < ? LIMIT 1",
+            (low, high),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+    async def _segment_is_own_migrated_only(self, segment: SegmentRecord, low: int, high: int) -> bool:
+        """True, wenn ein geschlossenes v2-Segment ausschließlich rein-negative Zeilen DIESER Quelle hält (#951, P2, :596)."""
+        path = self._store._segments_dir / segment.filename
+        if not path.exists():
+            return False
+        uri = f"file:{path.as_posix()}?mode=ro"
+        conn = await aiosqlite.connect(uri, uri=True)
+        try:
+            async with conn.execute("SELECT 1 FROM ringbuffer WHERE global_event_id >= 0 LIMIT 1") as cur:
+                if await cur.fetchone() is not None:
+                    return False
+            async with conn.execute(
+                "SELECT 1 FROM ringbuffer WHERE NOT (global_event_id >= ? AND global_event_id < ?) LIMIT 1",
+                (low, high),
+            ) as cur:
+                if await cur.fetchone() is not None:
+                    return False  # fremde negative Zeilen → nicht rein DIESER Quelle
+            async with conn.execute(
+                "SELECT 1 FROM ringbuffer WHERE global_event_id >= ? AND global_event_id < ? LIMIT 1",
+                (low, high),
+            ) as cur:
+                return await cur.fetchone() is not None
+        except aiosqlite.Error:
+            return False
+        finally:
+            await conn.close()
 
     async def _run_retention_after_detach(self) -> None:
         """Zieht die während der Migration deferrte Retention nach Abkopplung der Quelle nach (#951, Pkt 3, 3. Runde).
@@ -408,39 +552,35 @@ class LegacyMigrator:
         """
         await self._store.enforce_retention()
 
-    async def _finalize_migrated_segments(self) -> None:
-        """Macht die kopierten Chunks sichtbar – VOR Marker/Detach (#951, :375, :507, P2 :386).
+    async def _finalize_migrated_segments(self) -> bool:
+        """Macht die kopierten Chunks sichtbar (``closed``) – VOR Detach (#951, :375, :507, P2 :386).
 
-        Reihenfolge (läuft jetzt VOR ``_detach_migrated_legacy_segment``):
+        Reihenfolge (läuft VOR ``_detach_migrated_legacy_segment``):
 
         1. Das aktive rein-negative Segment versiegeln (``_seal_pure_migrated_active_
            segment``), damit spätere Live-Positives nicht hineingemischt werden.
         2. Die während der laufenden Migration ausgeblendeten ``migrating``-Segmente
-           (In-Progress-Kopien) in ihren finalen, wieder abfragbaren Status promoten
-           (``promote_migrating_segments``). Ohne Positive/Fremdquelle genügt ``closed``
-           (segment_id-Ordnung == gid-Ordnung), sonst ``migrated`` (Trailing-Rang).
+           (In-Progress-Kopien) nach ``closed`` promoten (``promote_migrating_segments(
+           to_migrated=False)``). Bewusst NUR nach ``closed`` – nicht direkt nach
+           ``migrated``: solange der Detach (Marker) noch fehlschlagen kann, müssen die
+           Segmente re-hidebar bleiben (``mark_migrating`` akzeptiert nur ``closed``/
+           ``checkpoint_pending``). Das endgültige Anheben in den Trailing-Rang (``migrated``)
+           erfolgt erst NACH erfolgreichem Detach in ``_finalize_and_detach``.
 
-        Dieser Sichtbar-machen-Schritt läuft bewusst VOR dem Detach (Marker-Schreiben +
-        Entfernen der Legacy-Manifest-Zeile). Damit ist die Publikation von Marker/Detach
-        erst gültig, wenn die kopierten Chunks bereits query-sichtbar sind: es existiert
-        kein Zustand mehr, in dem der ``.migrated``-Marker gesetzt und die Legacy-Zeile
-        entfernt ist, während die kopierten Chunks noch versteckt (``migrating``) bleiben
-        (der frühere verdeckte Datenverlust bei Crash/Raise zwischen Detach und Promote,
-        #951 P2). ``promote_migrating_segments`` ist idempotent (No-op ohne ``migrating``-
-        Segmente), sodass ein Retry nach Teil-Abschluss unschädlich bleibt.
+        Liefert ``to_migrated`` zurück: ob der Store echte Positive oder Zeilen einer anderen
+        Quelle hält und die migrierten Segmente daher nach dem Detach in den ``migrated``-
+        Trailing-Rang müssen (sonst genügt ``closed``, segment_id-Ordnung == gid-Ordnung).
 
-        Das kurze Fenster zwischen Promote und Detach, in dem die noch attached Legacy-
-        Quelle UND die nun sichtbaren v2-Chunks parallel lesbar sind, kann höchstens ein
-        transientes Doppel-Delivery ergeben – kein verdeckter Datenverlust; und weil die
-        Legacy-Zeile bis zum Detach erhalten bleibt, setzt ein Retry die Finalisierung
-        idempotent fort und koppelt die Quelle ab.
+        ``promote_migrating_segments`` ist idempotent (No-op ohne ``migrating``-Segmente),
+        sodass ein Retry nach Teil-Abschluss unschädlich bleibt.
         """
         await self._seal_pure_migrated_active_segment()
         migrating = await self._store.manifest.list_migrating_segments()
         if not migrating:
-            return
+            return False
         to_migrated = await self._store_has_positive_rows() or await self._store_has_foreign_migrated_rows()
-        await self._store.manifest.promote_migrating_segments(to_migrated=to_migrated)
+        await self._store.manifest.promote_migrating_segments(to_migrated=False)
+        return to_migrated
 
     async def _seal_pure_migrated_active_segment(self) -> None:
         """Schließt das aktive rein-negative Segment nach Abschluss der ERSTEN migrierten Quelle (#951, :507).

@@ -780,6 +780,21 @@ class SqliteSegmentStore(RingBufferStore):
             row = await cur.fetchone()
         return not (row and row["has_rows"])
 
+    @staticmethod
+    async def _segment_missing_rows(conn: aiosqlite.Connection) -> bool:
+        """True, wenn das Segment keine Zeilen ODER gar keine ``ringbuffer``-Tabelle hat.
+
+        Robuster als ``_segment_is_empty`` für den pending-Checkpoint-Pfad (#951,
+        Codex :2220): eine auf 0 Bytes truncatete Datei öffnet als gültige, aber
+        LEERE DB ganz ohne Tabellen – ein ``SELECT ... FROM ringbuffer`` würfe dort
+        ``no such table``. Fehlt die Tabelle, gilt das als „keine Zeilen".
+        """
+        async with conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ringbuffer'") as cur:
+            has_table = await cur.fetchone()
+        if not has_table:
+            return True
+        return await SqliteSegmentStore._segment_is_empty(conn)
+
     async def _open_segment_conn(self, filename: str) -> aiosqlite.Connection:
         conn = await aiosqlite.connect(str(self._segments_dir / filename))
         try:
@@ -1504,6 +1519,21 @@ class SqliteSegmentStore(RingBufferStore):
             guarded_clauses.append(clause)
             guarded_params.extend(filter_params)
 
+        # Freitext-``q``-OR-Block (#951, Codex :1603): der leading-wildcard-LIKE auf
+        # datapoint_id/source_adapter ist index-untauglich. Trägt der Query einen
+        # nicht-leeren ``q``, wird der Block wie ein Guarded-Filter behandelt und (im
+        # unwindowed, nicht-Export-Fall) auf die gedeckelte Kandidatenmenge gelegt,
+        # statt jedes Segment voll zu scannen. Ohne ``q`` (nur ``dp_ids_by_name``-IN,
+        # index-tauglich) bzw. mit Zeitfenster/Export bleibt er inline.
+        free_text_clause, free_text_params = self._free_text_clause(query)
+        q_is_scan = bool((query.q or "").strip())
+        if free_text_clause and q_is_scan:
+            guarded_clauses.append(free_text_clause)
+            guarded_params.extend(free_text_params)
+        elif free_text_clause:
+            clauses.append(free_text_clause)
+            params.extend(free_text_params)
+
         select_cols = "global_event_id, ts, datapoint_id, topic, old_value, new_value, source_adapter, quality, metadata_version, metadata"
 
         # Der teure Match wird nur dann auf eine gedeckelte Kandidaten-Subquery
@@ -1580,10 +1610,10 @@ class SqliteSegmentStore(RingBufferStore):
         if query.quality is not None:
             clauses.append("quality = ?")
             params.append(query.quality)
-        q_clause, q_params = self._free_text_clause(query)
-        if q_clause:
-            clauses.append(q_clause)
-            params.extend(q_params)
+        # Der Freitext-``q``-OR-Block wird NICHT hier inline gehängt: sein leading-
+        # wildcard-LIKE ist index-untauglich und muss – wie ein Guarded-Filter – auf
+        # eine gedeckelte Kandidatenmenge gelegt werden (#951, Codex :1603). Das
+        # Routing (inner-capped vs. inline) übernimmt ``_build_segment_sql``.
         meta_clause, meta_params = self._metadata_clause(query)
         if meta_clause:
             clauses.append(meta_clause)
@@ -1699,15 +1729,16 @@ class SqliteSegmentStore(RingBufferStore):
                 raise ValueError("between requires numeric lower/upper bounds")
             if lo[1] > up[1]:
                 raise ValueError("value filter lower must be <= upper")
-            # Unsichere Integer-Grenzen (außerhalb ±2**53, #951 Codex :332) exakt gegen
-            # die JSON-Wertspalte prüfen, sonst kollabierte die REAL-Grenze auf einen
-            # benachbarten Wert. ``between`` == ``gte lower AND lte upper``.
-            if _is_unsafe_int(lower) or _is_unsafe_int(upper):
-                return (
-                    f"(IFNULL(obs_num_cmp({field_name}, 'gte', ?), 0) AND IFNULL(obs_num_cmp({field_name}, 'lte', ?), 0))",
-                    [str(int(lower)), str(int(upper))],
-                )
-            return (f"({num_col} IS NOT NULL AND {num_col} BETWEEN ? AND ?)", [lo[1], up[1]])
+            # ``between`` == ``gte lower AND lte upper``. Jede Grenze wird UNABHÄNGIG
+            # geroutet (#951, Codex :1708): nur eine UNSICHERE Integer-Grenze (außerhalb
+            # ±2**53) läuft über den exakten JSON-Vergleich ``obs_num_cmp`` – sonst
+            # kollabierte ihre REAL-Repräsentation auf einen benachbarten Wert. Eine
+            # SICHERE/fraktionale Grenze bleibt auf dem normalen REAL-Pfad; würde sie mit
+            # ``int(...)`` truncatet, matchten z. B. bei ``lower=1.5`` faelschlich Zeilen
+            # wie ``1.2`` (Parität zum Legacy/Python-``lower <= x <= upper``).
+            lo_clause, lo_params = SqliteSegmentStore._between_bound_clause(field_name, num_col, "gte", lower, lo[1])
+            up_clause, up_params = SqliteSegmentStore._between_bound_clause(field_name, num_col, "lte", upper, up[1])
+            return (f"({lo_clause} AND {up_clause})", [*lo_params, *up_params])
 
         value = spec.get("value")
         comparator = _SQL_COMPARATORS[operator]
@@ -1754,6 +1785,20 @@ class SqliteSegmentStore(RingBufferStore):
         # numerische Range-Operatoren: Vergleich gegen die numerische Spalte. Nicht-
         # numerische Range-Werte wurden oben bereits abgelehnt → value_type == numeric.
         return (f"({num_col} IS NOT NULL AND {num_col} {comparator} ?)", [num])
+
+    @staticmethod
+    def _between_bound_clause(field_name: str, num_col: str, op: str, bound: Any, bound_num: float | None) -> tuple[str, list[Any]]:
+        """Ein Grenz-Prädikat für ``between`` (#951, Codex :1708).
+
+        ``op`` ist ``gte`` (untere Grenze) bzw. ``lte`` (obere Grenze). Eine
+        UNSICHERE Integer-Grenze läuft exakt über ``obs_num_cmp`` (kein REAL-Kollaps);
+        eine sichere/fraktionale Grenze bleibt auf dem schnellen REAL-Pfad und wird
+        NICHT auf einen Integer truncatet.
+        """
+        if _is_unsafe_int(bound):
+            return (f"IFNULL(obs_num_cmp({field_name}, ?, ?), 0)", [op, str(int(bound))])
+        comparator = _SQL_COMPARATORS[op]
+        return (f"({num_col} IS NOT NULL AND {num_col} {comparator} ?)", [bound_num])
 
     @staticmethod
     def _has_json_eq_filter(value_filters: list[dict[str, Any]]) -> bool:
@@ -2207,6 +2252,16 @@ class SqliteSegmentStore(RingBufferStore):
         versteckt UND retention-fähig → gültige Historie könnte verworfen werden.
         Transiente Fehler lassen das Segment daher ``checkpoint_pending`` für einen
         späteren Retry, statt es zu isolieren.
+
+        Leere/truncatete pending-Datei als verloren behandeln (#951, Codex :2220):
+        eine ``checkpoint_pending``-Datei kann auf 0 Bytes truncated sein (abgeschnittener
+        Write/Crash). ``connect`` öffnet sie als GÜLTIGE leere DB, ``wal_checkpoint(TRUNCATE)``
+        meldet ``busy=0`` → ohne Prüfung würde das Segment fälschlich ``closed`` + auf 0
+        resized, obwohl das Manifest Zeilen erwartet. Spätere Reads träfen dann die leere DB
+        (fehlende ``ringbuffer``-Tabelle) statt das Segment zu überspringen und die alten
+        Zeilen wären still weg. Erwartet das Manifest Zeilen, die Datei enthält aber keine
+        (oder keine ``ringbuffer``-Tabelle), wird das Segment daher – analog zum aktiven
+        Segment (Codex :658) – quarantäniert statt als sauberer Checkpoint markiert.
         """
         recovered = 0
         for segment in await self.manifest.list_checkpoint_pending_segments():
@@ -2216,7 +2271,16 @@ class SqliteSegmentStore(RingBufferStore):
                 continue
             try:
                 conn = await aiosqlite.connect(str(segment_path))
+                conn.row_factory = aiosqlite.Row
                 try:
+                    if segment.row_count > 0 and await self._segment_missing_rows(conn):
+                        # Manifest erwartet Zeilen, die Datei ist aber leer/truncatet →
+                        # als verloren/korrupt behandeln, nicht als sauberen Checkpoint.
+                        await self.manifest.mark_quarantined(
+                            segment.segment_id,
+                            reason="checkpoint_pending file empty but manifest expects rows",
+                        )
+                        continue
                     ok = await self._try_truncate_checkpoint(conn)
                 finally:
                     await conn.close()
