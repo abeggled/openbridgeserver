@@ -353,16 +353,40 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
   })
 
   it('renders a friendly message for the 3-segment-rule 422, not raw backend text', async () => {
+    // Echter Ratio-Fehlertext aus obs/ringbuffer/store/config.py (_check_ratio).
     const api = makeApi({
       config: vi.fn().mockRejectedValue({
-        response: { data: { detail: 'max_age must be at least three times segment_max_age' } },
+        response: {
+          data: {
+            detail:
+              'max_age (100) must be >= 3 * segment_max_age (60) = 180; segmentation is too coarse for segment-granular retention',
+          },
+        },
       }),
     })
     const { wrapper } = await mountModal({ api })
     await wrapper.find('form').trigger('submit')
     await flushPromises()
     expect(wrapper.text()).toContain('zu grob für die gewählte Aufbewahrung')
-    expect(wrapper.text()).not.toContain('three times')
+    expect(wrapper.text()).not.toContain('too coarse')
+  })
+
+  it('shows the explicit segment bounds error, not the ratio message (#938, Codex #951)', async () => {
+    // Echter Grenz-Fehlertext aus validate_explicit_segment_bounds: das ``detail``
+    // nennt die konkrete 300-s-Untergrenze und darf NICHT auf die (unrelated)
+    // 3-Segment-Ratio-Meldung umgebogen werden.
+    const api = makeApi({
+      config: vi.fn().mockRejectedValue({
+        response: {
+          data: { detail: 'segment_max_age (60 s) must be between 300 s (5 min) and 2592000 s (30 d)' },
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('must be between 300 s')
+    expect(wrapper.text()).not.toContain('zu grob für die gewählte Aufbewahrung')
   })
 
   it('flattens a FastAPI validation error list into a readable line', async () => {

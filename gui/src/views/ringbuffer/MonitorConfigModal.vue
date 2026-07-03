@@ -515,8 +515,18 @@ function buildPayload() {
 function extractConfigError(error) {
   const detail = error?.response?.data?.detail
   if (typeof detail === 'string' && detail.trim()) {
-    // Die 3-Segment-Regel erkennen und mit der lokalisierten Erklärung anzeigen.
-    if (/three times|dreifache|3\s*[x×]|segment/i.test(detail)) return t('ringbuffer.segmentRatioError')
+    // NUR den echten 3-Segment-Ratio-Fehler auf die lokalisierte Erklärung
+    // abbilden. Das Backend liefert dafür die eindeutige Formulierung
+    // „segmentation is too coarse ...“ (obs/ringbuffer/store/config.py,
+    // ``_check_ratio``). Frueher wurde jedes ``detail`` mit dem blossen Wort
+    // ``segment`` als Ratio-Fehler behandelt – dadurch bekamen explizite
+    // Grenzfehler (``segment_max_age ... must be between 300 s ...``)
+    // faelschlich die unrelated Ratio-Meldung (#938, Codex #951).
+    if (/segmentation is too coarse|zu grob/i.test(detail)) return t('ringbuffer.segmentRatioError')
+    // Explizite Grenz-Fehler der Segment-Felder (``must be between ...`` bzw.
+    // ``must be >= ...``) tragen die konkrete Einschraenkung bereits im
+    // Backend-``detail``; unveraendert durchreichen, damit der Admin die
+    // RICHTIGE Grenze sieht statt der Ratio-Meldung.
     return detail
   }
   if (Array.isArray(detail) && detail.length) {
