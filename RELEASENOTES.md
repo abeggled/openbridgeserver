@@ -6,7 +6,7 @@
 
 ### New features ✨
 * Adapter: New MESSAGE notification adapter sends messages on data point value changes with configurable conditions, `any` matching, cooldowns, templates, and targets. Supported providers are Pushover, Telegram, and seven.io SMS/Voice; Signal is intentionally not included for now because it would require a separate gateway service. https://github.com/abeggled/openbridgeserver/issues/882
-* Backend/Admin GUI: OBS internal datapoints without adapter bindings can now be written through MQTT `dp/{uuid}/set` or the object detail view; the write is stored as the current value and propagated through the normal registry, retained MQTT value, history/ringbuffer, WebSocket, and logic event path. https://github.com/abeggled/openbridgeserver/issues/715
+* Backend/Admin GUI: OBS internal datapoints without adapter bindings can now be written through the object detail view; the write is stored as the current value and propagated through the normal registry, retained MQTT value, history/ringbuffer, WebSocket, and logic event path. MQTT `dp/{uuid}/set` writes to bindingless internal datapoints are intentionally ignored unless the datapoint has an explicit writable adapter binding. https://github.com/abeggled/openbridgeserver/issues/715
 * Backend/Admin GUI: ETS hierarchy import logic is now available as a reusable backend service while keeping `POST /api/v1/hierarchy/import-from-ets` behavior unchanged. This prepares the KNX project import to create selected ETS hierarchies in the same import flow. https://github.com/abeggled/openbridgeserver/issues/727
 * Backend/Admin GUI: `.knxproj` imports can now create selected ETS hierarchies in the same backend request, reporting per-hierarchy node/link counts and non-fatal failures for unavailable ETS data. https://github.com/abeggled/openbridgeserver/issues/728
 * Backend/Admin GUI: Repeated `.knxproj` imports now replace automatically generated ETS hierarchies per selected mode by default, while manual hierarchy trees remain untouched; the import dialog also offers an opt-out to keep a separate tree for each import run. https://github.com/abeggled/openbridgeserver/issues/730
@@ -34,6 +34,7 @@
 * Visu: Link widget: the navigation arrow (→) can now be hidden independently of the icon via the "show_arrow" option (default: shown).
 
 ### Fixes 🐞
+* Security (Upstream PR #952): prevent MQTT writes from mutating bindingless internal datapoints.
 * QA/CI: The i18n hard gate now runs reliably with macOS Bash 3.2 when no explicit diff range is provided, avoiding local pre-push failures caused by empty Bash arrays. https://github.com/abeggled/openbridgeserver/pull/898
 * Release: `obs-update` and `obs-admin` self-update steps now use atomic `install -m 755` instead of `cp + chmod`, preventing a self-overwrite race that could truncate the running script in-place. https://github.com/abeggled/openbridgeserver/issues/939
 * Visu: Kamera widget — Basic Auth and API-Key credential fields are now always shown when the matching auth type is selected, including after loading a page saved with an older auth format. The config panel no longer renders blank when a widget with a null or missing config is selected. Legacy authType values stored as display text are normalised to canonical form on load. https://github.com/abeggled/openbridgeserver/issues/823
