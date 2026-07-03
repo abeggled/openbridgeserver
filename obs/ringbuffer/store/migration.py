@@ -516,13 +516,17 @@ class LegacyMigrator:
         if not await self._source_is_attached():
             return
         low, high = self._bucket_gid_bounds
-        active_id = store._active_segment.segment_id if store._active_segment else None
-        # Aktives Segment prüfen: hält es rein-negative Zeilen DIESER Quelle, muss es
-        # zuerst rotiert werden, damit die Zeilen in ein versteckbares Segment gehen.
-        if active_id is not None and store._active_conn is not None:
-            if await self._active_segment_has_own_migrated_only_rows(low, high):
-                await store.rotate()
-                active_id = store._active_segment.segment_id if store._active_segment else None
+        # Aktives Segment prüfen/rotieren unter dem geteilten Write-Lock (#951, Runde 24):
+        # der Check ``_active_segment_has_own_migrated_only_rows`` + ``store.rotate()`` läuft
+        # sonst OHNE den Lock, den ``RingBuffer.record()`` hält. Ein Live-Append könnte
+        # zwischen Check und Rotate eine POSITIVE Zeile ins aktive Segment schieben; das jetzt
+        # gemischte Segment erfüllt ``_segment_is_own_migrated_only`` nicht mehr und bliebe
+        # query-sichtbar, während die Legacy-Quelle noch attached ist → Doppel-Delivery +
+        # dieselbe aktive-Connection-Rotation-Race, die der Lock in ``_append_with_legacy_gids``
+        # verhindert. ``None`` = No-Op. Der Lock wird hier und in ``_append_with_legacy_gids``
+        # je EINZELN (nacheinander, nicht verschachtelt) genommen – Recovery läuft am Anfang von
+        # ``migrate_chunk``, nicht unter ``record()``, also kein re-entrantes Acquire im selben Task.
+        active_id = await self._recover_active_segment_locked(low, high)
         for segment in await store.manifest.list_segments():
             if segment.schema_version <= LEGACY_SCHEMA_VERSION:
                 continue
@@ -532,6 +536,34 @@ class LegacyMigrator:
                 continue  # aktives Segment bleibt appendfähig
             if await self._segment_is_own_migrated_only(segment, low, high):
                 await store.manifest.mark_migrating(segment.segment_id)
+
+    async def _recover_active_segment_locked(self, low: int, high: int) -> int | None:
+        """Serialisiert Check+Rotate des aktiven Segments gegen Live-Appends und delegiert (#951, Runde 24).
+
+        Die Race-kritische Sektion (``_active_segment_has_own_migrated_only_rows`` →
+        ``store.rotate()``) läuft unter dem optionalen ``write_lock`` – demselben Lock, den
+        ``RingBuffer.record()`` hält. Ohne Lock (``None``) ist der ``async with`` ein No-Op.
+        Liefert die (ggf. nach Rotation aktualisierte) aktive segment_id zurück.
+        """
+        if self._write_lock is None:
+            return await self._recover_active_segment_inner(low, high)
+        async with self._write_lock:
+            return await self._recover_active_segment_inner(low, high)
+
+    async def _recover_active_segment_inner(self, low: int, high: int) -> int | None:
+        """Rotiert das aktive Segment, wenn es rein-negative Zeilen DIESER Quelle hält (#951, Runde 24).
+
+        Hält das aktive Segment ausschließlich die migrierten (rein-negativen) Zeilen dieser
+        Quelle, wird es rotiert, damit die Zeilen in ein versteckbares, geschlossenes Segment
+        wandern. Liefert die danach aktive segment_id.
+        """
+        store = self._store
+        active_id = store._active_segment.segment_id if store._active_segment else None
+        if active_id is not None and store._active_conn is not None:
+            if await self._active_segment_has_own_migrated_only_rows(low, high):
+                await store.rotate()
+                active_id = store._active_segment.segment_id if store._active_segment else None
+        return active_id
 
     async def _active_segment_has_own_migrated_only_rows(self, low: int, high: int) -> bool:
         """True, wenn das aktive Segment ausschließlich rein-negative Zeilen DIESER Quelle hält (#951, P2, :596)."""
@@ -794,8 +826,21 @@ class LegacyMigrator:
         for row in rows:
             conn = store._active_conn
             gid = self._gid_for_rowid(int(row["id"]))
-            await store._insert_event(conn, gid, _row_to_event(row))
-            await conn.commit()
+            # Rollback-on-error wie ``SqliteSegmentStore.append()`` (#951, Runde 24): scheitert
+            # ``_insert_event`` oder das folgende ``commit`` (z. B. disk-full/I/O NACH der Haupt-
+            # ``ringbuffer``-Zeile, aber vor Metadaten-Indizes/Commit), bliebe die partielle Zeile
+            # sonst uncommittet in der offenen Transaktion der aktiven Connection und würde von einer
+            # späteren Operation auf derselben Connection (nächster Live-Append/Retry) fremd-committet.
+            # Der Import überspränge sie dann via ``_max_migrated_rowid`` mit fehlenden Metadaten-Indizes
+            # ODER retryte sie in ein Duplikat (``global_event_id`` ist nicht unique). Daher die aktive
+            # Transaktion bei jedem Fehler zurückrollen und die Exception propagieren – so bleibt die
+            # Connection in sauberem Zustand (keine halbe, fremd-committbare Zeile).
+            try:
+                await store._insert_event(conn, gid, _row_to_event(row))
+                await conn.commit()
+            except BaseException:
+                await conn.rollback()
+                raise
             if store._active_segment is not None:
                 migrated_ids.add(store._active_segment.segment_id)
             rows_in_active += 1

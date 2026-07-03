@@ -1120,8 +1120,6 @@ class SqliteSegmentStore(RingBufferStore):
         return None
 
     async def _connection_for_read(self, segment: SegmentRecord) -> aiosqlite.Connection:
-        if self._active_segment is not None and segment.segment_id == self._active_segment.segment_id and self._active_conn is not None:
-            return self._active_conn
         if _is_legacy_segment(segment):
             return await self._open_legacy_read_conn(segment)
         # v2-Segment (#951, Pkt 2): read-only-URI (``mode=ro``) statt schreibendem
@@ -1129,6 +1127,18 @@ class SqliteSegmentStore(RingBufferStore):
         # Datei legte still eine leere Ersatz-DB an → „no such table" → 500. ``mode=ro``
         # wirft in dem Fall (der Aufrufer überspringt das Segment). Zusätzlich werden
         # geschlossene Segmente so nie versehentlich schreibend geöffnet.
+        #
+        # AKTIVES Segment (#951, Codex :1124): auch der Read des aktiven Segments läuft
+        # über eine SEPARATE read-only Connection, NICHT über die gehaltene Writer-
+        # Connection ``_active_conn``. Gäbe man ``_active_conn`` zurück, liefe ein SELECT
+        # zwischen einem Insert und dessen Commit auf derselben Connection – SQLite zeigt
+        # dort uncommittete Zeilen. Eine Monitor-/API-Query könnte so Zeilen sehen, deren
+        # Metadaten-Indizes noch unvollständig sind oder die bei einem fehlgeschlagenen
+        # Append zurückgerollt werden. Der Store läuft im WAL-Modus, daher sieht eine
+        # read-only Connection alle COMMITTETEN Transaktionen (konsistent damit, wie
+        # geschlossene Segmente bereits read-only geöffnet werden). Die Connection wird
+        # vom Aufrufer (``_read_segment_rows``) nach dem Read geschlossen (``close_after``
+        # greift, weil es nicht ``_active_conn`` ist) – kein Leak.
         uri = f"file:{(self._segments_dir / segment.filename).as_posix()}?mode=ro"
         conn = await aiosqlite.connect(uri, uri=True)
         conn.row_factory = aiosqlite.Row
@@ -2595,6 +2605,18 @@ class SqliteSegmentStore(RingBufferStore):
                 # Ein Legacy mit UNBEKANNTER to_ts deshalb ÜBERSPRINGEN (nicht break),
                 # damit die v2-Age-Retention weiterläuft. Ein Legacy wird per Age nur
                 # gelöscht, wenn seine to_ts bekannt UND vor dem Cutoff ist.
+                continue
+            if to_ts is None and not _is_legacy_segment(segment) and segment.row_count <= 0:
+                # LEERES geschlossenes v2-Segment mit to_ts=NULL (#951, Codex :2603):
+                # ein rotiertes idle-leeres aktives Segment hat row_count=0 und
+                # MAX(ts)=NULL. Steht es in der FIFO-Reihenfolge VOR älteren, über-
+                # Cutoff-Daten-Segmenten, würde ein break den gesamten Age-Pass
+                # beenden → alle späteren, tatsächlich zu alten v2-Segmente blieben
+                # unbegrenzt retained. Ein LEERES unknown-age-Segment trägt kein
+                # relevantes Alter, daher – wie unknown-age-Legacy – ÜBERSPRINGEN
+                # (continue), statt den Lauf abzubrechen. Ein NICHT-leeres v2-Segment
+                # mit to_ts=NULL (unbekanntes, evtl. relevantes Alter) fällt bewusst
+                # NICHT hierunter und wird unten konservativ per break behalten.
                 continue
             if to_ts is None or to_ts >= cutoff:
                 # Ältestes-zuerst: sobald ein nicht-Legacy-Segment neu genug ist (oder
