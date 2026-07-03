@@ -364,12 +364,17 @@ class LegacyMigrator:
         after_rowid = max(state.last_rowid, materialized)
         rows = await self._read_batch(after_rowid=after_rowid, limit=batch_rows)
         if not rows:
-            # Detach (inkl. Marker-Schreiben) VOR dem done-Mark (#951, P2): scheitert
-            # das Marker-Schreiben, propagiert ``_detach_migrated_legacy_segment`` einen
-            # Fehler, BEVOR der Resume-State als ``done`` persistiert wird – sonst
-            # übersprungen ein späterer Lauf die Quelle trotz noch eingehängtem Legacy.
-            await self._detach_migrated_legacy_segment()
+            # Sichtbar-machen VOR Marker/Detach (#951, P2, :386): erst die kopierten
+            # ``migrating``-Segmente query-sichtbar promoten, DANN den ``.migrated``-
+            # Marker schreiben + die Legacy-Manifest-Zeile entfernen. So ist die
+            # Publikation von Marker/Detach erst gültig, wenn die Chunks sichtbar sind
+            # – ein Crash/Raise zwischen beiden Schritten hinterlässt nie einen Zustand,
+            # in dem Marker/Detach publiziert ist, während kopierte Chunks noch
+            # versteckt (``migrating``) sind (verdeckter Datenverlust). Scheitert das
+            # Marker-Schreiben, propagiert ``_detach_migrated_legacy_segment`` einen
+            # Fehler VOR dem done-Mark – ein späterer Lauf setzt fort.
             await self._finalize_migrated_segments()
+            await self._detach_migrated_legacy_segment()
             self._save_state(_ResumeState(last_rowid=after_rowid, done=True))
             await self._run_retention_after_detach()
             return 0
@@ -378,13 +383,13 @@ class LegacyMigrator:
         # done erst markieren, wenn der Batch kleiner als angefordert war (= letzte Seite).
         done = len(rows) < batch_rows
         if done:
-            # Wie oben: Marker + Detach vor dem done-Mark, damit ein Marker-Fehler den
-            # done-Mark verhindert (kein stiller Skip beim Retry, #951 P2). Der
-            # Zwischen-Cursor (last_rowid) wurde durch den Append bereits idempotent
-            # materialisiert; ein Abbruch hier lässt den nächsten Lauf ab last_rowid
-            # fortsetzen und erneut detachen.
-            await self._detach_migrated_legacy_segment()
+            # Wie oben: erst promoten (sichtbar machen), dann Marker + Detach, dann
+            # done-Mark. Ein Marker-Fehler propagiert und verhindert den done-Mark
+            # (kein stiller Skip beim Retry, #951 P2). Der Zwischen-Cursor (last_rowid)
+            # wurde durch den Append bereits idempotent materialisiert; ein Abbruch hier
+            # lässt den nächsten Lauf ab last_rowid fortsetzen und erneut finalisieren.
             await self._finalize_migrated_segments()
+            await self._detach_migrated_legacy_segment()
             self._save_state(_ResumeState(last_rowid=last_rowid, done=True))
             await self._run_retention_after_detach()
         else:
@@ -404,9 +409,9 @@ class LegacyMigrator:
         await self._store.enforce_retention()
 
     async def _finalize_migrated_segments(self) -> None:
-        """Schließt die Migration nach Detach der Quelle ab (#951, :375, :507).
+        """Macht die kopierten Chunks sichtbar – VOR Marker/Detach (#951, :375, :507, P2 :386).
 
-        Reihenfolge nach dem Detach des ``legacy``-Segments:
+        Reihenfolge (läuft jetzt VOR ``_detach_migrated_legacy_segment``):
 
         1. Das aktive rein-negative Segment versiegeln (``_seal_pure_migrated_active_
            segment``), damit spätere Live-Positives nicht hineingemischt werden.
@@ -415,9 +420,20 @@ class LegacyMigrator:
            (``promote_migrating_segments``). Ohne Positive/Fremdquelle genügt ``closed``
            (segment_id-Ordnung == gid-Ordnung), sonst ``migrated`` (Trailing-Rang).
 
-        Der Detach VOR dieser Finalisierung stellt sicher, dass zwischen Ausblenden und
-        Wieder-Einblenden nie beide Quellen (Legacy + v2) gleichzeitig sichtbar sind –
-        kein Doppel-Delivery, aber auch kein Sichtbarkeits-Loch.
+        Dieser Sichtbar-machen-Schritt läuft bewusst VOR dem Detach (Marker-Schreiben +
+        Entfernen der Legacy-Manifest-Zeile). Damit ist die Publikation von Marker/Detach
+        erst gültig, wenn die kopierten Chunks bereits query-sichtbar sind: es existiert
+        kein Zustand mehr, in dem der ``.migrated``-Marker gesetzt und die Legacy-Zeile
+        entfernt ist, während die kopierten Chunks noch versteckt (``migrating``) bleiben
+        (der frühere verdeckte Datenverlust bei Crash/Raise zwischen Detach und Promote,
+        #951 P2). ``promote_migrating_segments`` ist idempotent (No-op ohne ``migrating``-
+        Segmente), sodass ein Retry nach Teil-Abschluss unschädlich bleibt.
+
+        Das kurze Fenster zwischen Promote und Detach, in dem die noch attached Legacy-
+        Quelle UND die nun sichtbaren v2-Chunks parallel lesbar sind, kann höchstens ein
+        transientes Doppel-Delivery ergeben – kein verdeckter Datenverlust; und weil die
+        Legacy-Zeile bis zum Detach erhalten bleibt, setzt ein Retry die Finalisierung
+        idempotent fort und koppelt die Quelle ab.
         """
         await self._seal_pure_migrated_active_segment()
         migrating = await self._store.manifest.list_migrating_segments()

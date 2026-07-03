@@ -676,6 +676,20 @@ class RingBuffer:
         """
         from obs.ringbuffer.store.interface import StoreEvent
 
+        # Append-getriebene Retention während laufender Live-Migration aussetzen
+        # (#951, Pkt „Defer legacy retention during live migration"): eine chunked
+        # Legacy-Migration legt versteckte ``migrating``-Segmente an
+        # (``mark_migrating``) und promotet sie erst nach Abkopplung der Quelle
+        # (``promote_migrating_segments``). Ein normaler Live-Append erzeugt jedoch
+        # bereits eine positive aktive Zeile und erfüllt damit den No-Zero-History-
+        # Guard – WÄHREND die Legacy-Quelle noch attached ist. Liefe der append-
+        # getriebene ``enforce_retention`` dann unter Size-/Row-Druck durch, löschte
+        # er die attached Legacy-Quelle, BEVOR alle Zeilen migriert sind → Datenverlust.
+        # Solange also mind. ein ``migrating``-Segment existiert, werden ALLE append-
+        # getriebenen enforce-Aufrufe zu No-Ops. Der reguläre (nicht append-getriebene)
+        # enforce-Pfad über die API/den Job bleibt ungegated.
+        migration_in_progress = await self._migration_in_progress()
+
         # Alters-Faelligkeit VOR dem Append pruefen (#951, Pkt 1): ist das aktive
         # Segment nach einer Idle-Phase bereits ueber ``segment_max_age``, zuerst
         # rotieren und DANN ins frische Segment schreiben. Andernfalls landete das
@@ -693,7 +707,8 @@ class RingBuffer:
             # ``max_file_size_bytes``/``max_age``/``max_entries`` würden verletzt,
             # weil der Post-Append-Rotationszweig (unten) bei diesem Traffic-Profil
             # nie fällig wird. Analog zum Post-Append-Zweig.
-            await self._store.enforce_retention()
+            if not migration_in_progress:
+                await self._store.enforce_retention()
 
         await self._store.append(
             [
@@ -713,14 +728,26 @@ class RingBuffer:
         if await self._segment_rotation_due():
             await self._store.rotate()
             self._segment_created_at = _isoformat_utc(datetime.now(UTC))
-            await self._store.enforce_retention()
-        elif await self._has_attached_legacy_segment():
+            if not migration_in_progress:
+                await self._store.enforce_retention()
+        elif not migration_in_progress and await self._has_attached_legacy_segment():
             # Post-Upgrade-Fenster (#951, Pkt 1): über-budget-Legacy zeitnah
             # zurückgewinnen, sobald der No-Zero-History-Guard nach diesem Append
             # erfüllt ist – auch ohne fällige Rotation. Kostenbegrenzt: nur solange
             # ein attached Legacy-Segment existiert; im Normalbetrieb (kein Legacy)
             # läuft dieser Zweig nie.
             await self._store.enforce_retention()
+
+    async def _migration_in_progress(self) -> bool:
+        """True, solange eine chunked Legacy-Migration läuft (#951).
+
+        Signalisiert über mind. ein ``migrating``-Segment, dass gerade Zeilen aus einer
+        noch attached Legacy-Quelle kopiert werden. Solange das der Fall ist, dürfen die
+        append-getriebenen ``enforce_retention``-Aufrufe die Legacy-Quelle NICHT löschen
+        (No-Op), sonst gingen noch nicht kopierte Zeilen verloren. Nach
+        ``promote_migrating_segments`` liefert dies wieder ``False``.
+        """
+        return bool(await self._store.manifest.list_migrating_segments())
 
     async def _has_attached_legacy_segment(self) -> bool:
         """True, solange (mind.) ein read-only attached Legacy-Segment existiert.

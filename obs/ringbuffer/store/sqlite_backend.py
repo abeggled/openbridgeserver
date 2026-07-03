@@ -233,6 +233,37 @@ _REGEX_MAX_PATTERN_LEN = 256
 # Zeichen begrenzt — gebounded statt blockierend.
 _REGEX_MAX_TARGET_LEN = 4096
 _RE_UNSAFE_NESTED_QUANTIFIERS = re.compile(r"\((?:[^()\\]|\\.)*[+*][^()]*\)[+*]")
+# Quantifizierte Alternations-Gruppe wie ``(a|a)*`` / ``(a|ab)+`` / ``(a|b){0,5}``
+# (#951, Codex :307). Der nested-quantifier-Check oben verwirft solche Muster NICHT
+# (kein innerer ``+``/``*``), aber sie können exponentielles Backtracking auslösen
+# (ambiguous alternation) und einen einzelnen ``re.search`` über Sekunden blockieren.
+# Der SQLite-Pushdown-Callback läuft SYNCHRON je Kandidatenzeile im aiosqlite-Worker
+# und hält dabei den GIL — ein Laufzeit-Timeout (auch der Legacy-``asyncio.wait_for``-
+# Weg) kann einen laufenden ``re.search`` in CPython nicht abbrechen. Der einzig
+# wirksame Schutz ist daher, das Muster VOR der Query als unsafe abzulehnen (422-
+# tauglicher ValueError) statt den Worker blockieren zu lassen. Bewusst konservativ:
+# auch harmlose/lineare quantifizierte Alternationen (``(a|b)+``) werden abgelehnt;
+# sie lassen sich verlustfrei als Zeichenklasse (``[ab]+``) umschreiben.
+_RE_UNSAFE_QUANTIFIED_ALTERNATION = re.compile(r"\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)(?:[*+]|\{\d*,\d*\})")
+
+
+def _assert_safe_regex(pattern: str) -> None:
+    """Statisches safe-regex-Gate für Pushdown UND Legacy-Fallback (#951, Codex :307).
+
+    Wirft einen 422-tauglichen ``ValueError`` für Muster, die im synchronen Callback
+    katastrophal backtracken könnten. Deckt Länge, nested quantifiers (bestehend) und
+    quantifizierte Alternationen (neu) ab. Die Muster-Ablehnung VOR der Ausführung ist
+    der einzige wirksame Schutz, weil ein laufender ``re.search`` in CPython (GIL) nicht
+    per Timeout abbrechbar ist.
+    """
+    if len(pattern) > _REGEX_MAX_PATTERN_LEN:
+        raise ValueError("unsafe regex pattern: pattern too long")
+    if _RE_UNSAFE_NESTED_QUANTIFIERS.search(pattern):
+        raise ValueError("unsafe regex pattern: nested quantifiers are not allowed")
+    if _RE_UNSAFE_QUANTIFIED_ALTERNATION.search(pattern):
+        raise ValueError("unsafe regex pattern: quantified alternation is not allowed")
+
+
 # SQL-Vergleichsoperatoren je Pushdown-Operator (between separat behandelt).
 _SQL_COMPARATORS = {"eq": "=", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
 
@@ -294,14 +325,16 @@ def _obs_regexp_impl(pattern: str, flags: int, value: Any) -> int:
     """SQLite-Callback für gepushtes ``regex``. 1 bei Treffer, sonst 0.
 
     Das Muster ist beim Clause-Bau bereits gehärtet (Länge, nested quantifiers,
-    Kompilierbarkeit); der Query-Kontext ist gebunden (Zeitfenster/Cap).
+    ambiguous alternation, Kompilierbarkeit); der Query-Kontext ist gebunden
+    (Zeitfenster/Cap). Der Callback läuft synchron je Kandidatenzeile im aiosqlite-
+    Worker-Thread — die Muster-Härtung VOR der Query ist daher der eigentliche
+    DoS-Schutz (siehe ``_assert_safe_regex``).
     """
     if not isinstance(value, str):  # pragma: no cover - SQL filtert bereits text_col IS NOT NULL
         return 0
     # Ziel-Länge begrenzen (Legacy-Parität, #951 Pkt 6): ein pathologisch langer
-    # Wert darf den synchronen Callback nicht blockieren. re.search auf den ersten
-    # ``_REGEX_MAX_TARGET_LEN`` Zeichen ist gebounded; ``re.match``-Anker (^) bleiben
-    # korrekt, da vom Anfang gesucht wird.
+    # Wert darf den synchronen Callback nicht unnötig lange scannen. ``^``-Anker
+    # bleiben korrekt, da vom Anfang gesucht wird.
     target = value if len(value) <= _REGEX_MAX_TARGET_LEN else value[:_REGEX_MAX_TARGET_LEN]
     try:
         return 1 if re.compile(pattern, flags).search(target) else 0
@@ -321,6 +354,63 @@ def _obs_icontains_impl(needle_lower: str, value: Any) -> int:
     if not isinstance(value, str):  # pragma: no cover - SQL filtert bereits text_col IS NOT NULL
         return 0
     return 1 if needle_lower in value.lower() else 0
+
+
+# Ab diesem Betrag sind benachbarte Integer in einem IEEE-754-double (REAL-Spalte)
+# nicht mehr eindeutig unterscheidbar (#951, Codex :332): ``float(2**53) ==
+# float(2**53+1)``, d. h. schon ``|v| >= 2**53`` kann bei der ``float()``-Konvertierung
+# in die REAL-Pushdown-Spalte mit einem benachbarten Integer kollidieren – sowohl beim
+# Filterwert als auch beim GESPEICHERTEN Wert. ``eq``/``ne``/Range gegen die REAL-Spalte
+# matchten dann falsche Zeilen ggü. dem JSON-Wert. Liegt der Filterwert in dieser
+# unsicheren Zone, wird daher NICHT über die REAL-Spalte verglichen, sondern exakt gegen
+# die JSON-Wertspalte (``obs_num_cmp``), analog zum Legacy-Python-Vergleich. Filterwerte
+# unter ``2**53`` bleiben exakt (kein anderer Integer kollabiert auf sie) und laufen
+# weiter über den schnellen REAL-Pfad.
+_MAX_EXACT_INT = 2**53
+
+
+def _is_unsafe_int(value: Any) -> bool:
+    """True für Integer in/über der IEEE-754-Kollisionszone (``|v| >= 2**53``).
+
+    ``bool`` ist eine ``int``-Subklasse, trägt aber nie einen unsicheren Betrag und
+    wird ausgeschlossen. Floats sind per Definition schon inexakt und laufen weiter
+    über die REAL-Spalte (Parität zum Legacy-Float-Vergleich).
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and abs(value) >= _MAX_EXACT_INT
+
+
+def _obs_num_cmp_impl(raw: Any, op: str, expected_text: str) -> int:
+    """SQLite-Callback: exakter numerischer Vergleich der JSON-Wertspalte (#951, Codex :332).
+
+    Für unsichere Integer (außerhalb ±2**53) reicht die lossy REAL-Spalte nicht. Der
+    Callback dekodiert den gespeicherten JSON-Wert (``old_value``/``new_value``) und
+    vergleicht ihn EXAKT gegen den (als Text übergebenen) int-Filterwert – genau wie der
+    Legacy-Python-Vergleich auf den dekodierten Werten. Nicht-numerische bzw.
+    malformed/non-JSON-Spalten matchen nie (Rückgabe 0). ``bool`` matcht nicht, weil der
+    Referenzvergleich Range/eq auf big-int-Ebene numerisch ist.
+    """
+    if not isinstance(raw, str):
+        return 0
+    try:
+        decoded = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return 0
+    if not isinstance(decoded, (int, float)) or isinstance(decoded, bool):
+        return 0
+    expected = int(expected_text)
+    if op == "eq":
+        return 1 if decoded == expected else 0
+    if op == "ne":
+        return 1 if decoded != expected else 0
+    if op == "gt":
+        return 1 if decoded > expected else 0
+    if op == "gte":
+        return 1 if decoded >= expected else 0
+    if op == "lt":
+        return 1 if decoded < expected else 0
+    if op == "lte":
+        return 1 if decoded <= expected else 0
+    return 0  # pragma: no cover - Operator wird beim Clause-Bau validiert
 
 
 def _typed_columns_for(value: Any) -> tuple[str, float | None, str | None, int | None]:
@@ -393,14 +483,13 @@ def _legacy_filter_matches(record: dict[str, Any], spec: dict[str, Any]) -> bool
         haystack = actual.lower() if ignore_case else actual
         return (needle.lower() if ignore_case else needle) in haystack
 
-    # regex — dieselbe Härtung wie der v2-Guarded-Zweig.
+    # regex — dieselbe Härtung wie der v2-Guarded-Zweig (inkl. quantifizierter
+    # Alternation, #951 Codex :307). Auch dieser Python-Fallback läuft synchron je
+    # Kandidatenzeile und ist nicht per Timeout abbrechbar.
     pattern = spec.get("pattern")
     if not isinstance(pattern, str) or not pattern:
         raise ValueError("regex requires a non-empty pattern")
-    if len(pattern) > _REGEX_MAX_PATTERN_LEN:
-        raise ValueError("unsafe regex pattern: pattern too long")
-    if _RE_UNSAFE_NESTED_QUANTIFIERS.search(pattern):
-        raise ValueError("unsafe regex pattern: nested quantifiers are not allowed")
+    _assert_safe_regex(pattern)
     if not isinstance(actual, str):
         return False
     flags = re.IGNORECASE if ignore_case else 0
@@ -661,11 +750,35 @@ class SqliteSegmentStore(RingBufferStore):
                 raise
             await self.manifest.mark_quarantined(active.segment_id, reason=str(exc))
             return await self._create_segment_locked()
-        else:
-            # Datei ist eine gültige SQLite-DB → die Probe-Connection schließen; der
-            # reguläre Pfad öffnet die aktive Connection gleich erneut.
-            await probe.close()
-            return active
+        # Leere/truncatete Datei als verloren behandeln (#951, Codex :658): wurde die
+        # aktive Segment-Datei auf 0 Bytes truncated (abgeschnittener Write/Crash) oder
+        # durch eine frische, gültige aber LEERE SQLite-DB ersetzt, wirft
+        # ``_open_segment_conn`` KEINE Korruption – es legt still das Segment-Schema neu
+        # an und liefert eine leere Tabelle. Das Manifest behauptet dann weiter
+        # ``row_count > 0`` (die alten Tail-Zeilen), die aber physisch weg sind →
+        # nachfolgende Queries verfehlen sie still. Erwartet das Manifest Zeilen, die
+        # Datei enthält aber keine, wird das Segment daher – analog zum Korruptionspfad –
+        # quarantäniert und ein frisches aktives Segment eröffnet. Der ``open()``-Fehler-
+        # pfad muss die Probe-Connection dabei auch bei einem COUNT-Fehler schließen.
+        try:
+            if active.row_count > 0 and await self._segment_is_empty(probe):
+                await probe.close()
+                probe = None
+                await self.manifest.mark_quarantined(active.segment_id, reason="active segment file empty but manifest expects rows")
+                return await self._create_segment_locked()
+        finally:
+            if probe is not None:
+                # Datei ist eine gültige, befüllte SQLite-DB → die Probe-Connection
+                # schließen; der reguläre Pfad öffnet die aktive Connection gleich erneut.
+                await probe.close()
+        return active
+
+    @staticmethod
+    async def _segment_is_empty(conn: aiosqlite.Connection) -> bool:
+        """True, wenn die ``ringbuffer``-Tabelle des Segments keine Zeile enthält."""
+        async with conn.execute("SELECT EXISTS(SELECT 1 FROM ringbuffer) AS has_rows") as cur:
+            row = await cur.fetchone()
+        return not (row and row["has_rows"])
 
     async def _open_segment_conn(self, filename: str) -> aiosqlite.Connection:
         conn = await aiosqlite.connect(str(self._segments_dir / filename))
@@ -1033,7 +1146,8 @@ class SqliteSegmentStore(RingBufferStore):
         sql, params = self._build_segment_sql(query)
         if any(str(f.get("operator", "")).strip().lower() == "regex" for f in query.value_filters):
             # REGEXP-Callback nur registrieren, wenn ein Regex-Filter vorliegt.
-            # Registrierung erfolgt lokal auf der übergebenen Read-Connection.
+            # Registrierung erfolgt lokal auf der übergebenen Read-Connection. Das Muster
+            # wurde beim Clause-Bau bereits als safe gehärtet (#951, Codex :307).
             await conn.create_function("obs_regexp", 3, _obs_regexp_impl, deterministic=True)
         if self._has_json_eq_filter(query.value_filters):
             # JSON-eq/ne-Callback nur registrieren, wenn ein komplexer (list/dict)
@@ -1043,6 +1157,10 @@ class SqliteSegmentStore(RingBufferStore):
             # Unicode-fähigen contains-Callback nur registrieren, wenn ein
             # case-insensitives ``contains`` vorliegt (#951, Codex :1364).
             await conn.create_function("obs_icontains", 2, _obs_icontains_impl, deterministic=True)
+        if self._has_num_cmp_filter(query.value_filters):
+            # Exakt-Integer-Callback nur registrieren, wenn ein Filter einen unsicheren
+            # Integer (außerhalb ±2**53) trägt (#951, Codex :332).
+            await conn.create_function("obs_num_cmp", 3, _obs_num_cmp_impl, deterministic=True)
         async with conn.execute(sql, params) as cur:
             rows = await cur.fetchall()
         return [self._row_to_dict(row) for row in rows]
@@ -1581,6 +1699,14 @@ class SqliteSegmentStore(RingBufferStore):
                 raise ValueError("between requires numeric lower/upper bounds")
             if lo[1] > up[1]:
                 raise ValueError("value filter lower must be <= upper")
+            # Unsichere Integer-Grenzen (außerhalb ±2**53, #951 Codex :332) exakt gegen
+            # die JSON-Wertspalte prüfen, sonst kollabierte die REAL-Grenze auf einen
+            # benachbarten Wert. ``between`` == ``gte lower AND lte upper``.
+            if _is_unsafe_int(lower) or _is_unsafe_int(upper):
+                return (
+                    f"(IFNULL(obs_num_cmp({field_name}, 'gte', ?), 0) AND IFNULL(obs_num_cmp({field_name}, 'lte', ?), 0))",
+                    [str(int(lower)), str(int(upper))],
+                )
             return (f"({num_col} IS NOT NULL AND {num_col} BETWEEN ? AND ?)", [lo[1], up[1]])
 
         value = spec.get("value")
@@ -1618,6 +1744,13 @@ class SqliteSegmentStore(RingBufferStore):
                 return (eq_clause, eq_params)
             return (f"NOT ({eq_clause})", eq_params)
 
+        # Range gegen einen unsicheren Integer (#951, Codex :332): der Filterwert liegt
+        # außerhalb ±2**53 und wäre als REAL nicht mehr exakt. Exakt gegen die JSON-
+        # Wertspalte vergleichen (``obs_num_cmp``), damit die Grenze nicht auf einen
+        # benachbarten Wert kollabiert (Parität zum Legacy-Python-Vergleich).
+        if _is_unsafe_int(value):
+            return (f"IFNULL(obs_num_cmp({field_name}, ?, ?), 0)", [operator, str(value)])
+
         # numerische Range-Operatoren: Vergleich gegen die numerische Spalte. Nicht-
         # numerische Range-Werte wurden oben bereits abgelehnt → value_type == numeric.
         return (f"({num_col} IS NOT NULL AND {num_col} {comparator} ?)", [num])
@@ -1633,6 +1766,23 @@ class SqliteSegmentStore(RingBufferStore):
             if str(spec.get("operator", "")).strip().lower() not in {"eq", "ne"}:
                 continue
             if _derive_value_type(spec.get("value")) == "json":
+                return True
+        return False
+
+    @staticmethod
+    def _has_num_cmp_filter(value_filters: list[dict[str, Any]]) -> bool:
+        """True, wenn ein Filter einen unsicheren Integer (außerhalb ±2**53) trägt.
+
+        Nur dann muss der Exakt-Vergleichs-Callback ``obs_num_cmp`` auf der Read-
+        Connection registriert werden (#951, Codex :332). Betrifft eq/ne/gt/gte/lt/lte
+        (über ``value``) sowie ``between`` (über ``lower``/``upper``).
+        """
+        for spec in value_filters:
+            operator = str(spec.get("operator", "")).strip().lower()
+            if operator == "between":
+                if _is_unsafe_int(spec.get("lower")) or _is_unsafe_int(spec.get("upper")):
+                    return True
+            elif operator in _PUSHDOWN_OPERATORS and _is_unsafe_int(spec.get("value")):
                 return True
         return False
 
@@ -1674,6 +1824,12 @@ class SqliteSegmentStore(RingBufferStore):
             # numerische 1/0-Spalte.
             return (f"(IFNULL({bool_col} = ?, 0) OR IFNULL({num_col} = ?, 0))", [bool_val, float(bool_val)])
         if value_type == "numeric":
+            # Unsicherer Integer (außerhalb ±2**53, #951 Codex :332): exakt gegen die
+            # JSON-Wertspalte vergleichen, weil die REAL-Spalte den Wert auf einen
+            # benachbarten Integer kollabiert hätte. Ein solcher Wert ist nie 0/1, also
+            # entfällt die Bool-Äquivalenz.
+            if _is_unsafe_int(value):
+                return (f"IFNULL(obs_num_cmp({field_name}, 'eq', ?), 0)", [str(value)])
             # numeric matcht die num-Spalte; für exakt 0/1 zusätzlich die bool-Spalte.
             if num in (0.0, 1.0):
                 return (f"(IFNULL({num_col} = ?, 0) OR IFNULL({bool_col} = ?, 0))", [num, int(num)])
@@ -1713,10 +1869,9 @@ class SqliteSegmentStore(RingBufferStore):
         pattern = spec.get("pattern")
         if not isinstance(pattern, str) or not pattern:
             raise ValueError("regex requires a non-empty pattern")
-        if len(pattern) > _REGEX_MAX_PATTERN_LEN:
-            raise ValueError("unsafe regex pattern: pattern too long")
-        if _RE_UNSAFE_NESTED_QUANTIFIERS.search(pattern):
-            raise ValueError("unsafe regex pattern: nested quantifiers are not allowed")
+        # Safe-regex-Gate (#951, Codex :307): unsafe Muster VOR der Query ablehnen — der
+        # synchrone Callback ist nicht per Timeout abbrechbar (GIL).
+        _assert_safe_regex(pattern)
         flags = re.IGNORECASE if ignore_case else 0
         try:
             re.compile(pattern, flags)
