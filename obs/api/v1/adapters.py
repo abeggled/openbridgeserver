@@ -279,7 +279,10 @@ def _preserve_redacted_message_config_secrets(stored_config: dict[str, Any], inc
                 if not isinstance(incoming_target, dict) or not _message_target_has_redacted_secret(provider_name, incoming_target):
                     continue
                 if not removed_targets_queue:
-                    continue
+                    raise ValueError(
+                        f"Unresolvable redacted secret in target '{target_name}' of provider "
+                        f"'{provider_name}': cannot determine mapping — please re-enter credentials"
+                    )
                 stored_target = removed_targets_queue.pop(0)
             merged_target = dict(incoming_target)
             merged_targets[target_name] = merged_target
@@ -444,7 +447,10 @@ async def update_instance(
         config_new = body.config
         if row["adapter_type"] == "MESSAGE":
             stored_config = json.loads(config_raw) if config_raw else {}
-            config_new = _preserve_redacted_message_config_secrets(stored_config, body.config)
+            try:
+                config_new = _preserve_redacted_message_config_secrets(stored_config, body.config)
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
         cls = adapter_registry.get_class(row["adapter_type"])
         if cls:
             try:
