@@ -298,13 +298,20 @@ class Manifest:
         migrierte Zeilen mit synthetischen NEGATIVEN ``global_event_id``s halten. Der
         Status sorgt dafür, dass ``list_segments_for_query`` das Segment – wie ein
         Legacy-Segment – zuletzt iteriert (frühes Paging-Terminieren des ``id desc``-
-        Query bleibt korrekt), ohne die Retention-Fähigkeit zu verlieren. Nur ein
-        ``closed`` Segment wird umgesetzt (Guard), damit ein aktives/pending Segment
-        nie versehentlich umgestuft wird.
+        Query bleibt korrekt), ohne die Retention-Fähigkeit zu verlieren.
+
+        Umgestuft werden ``closed`` UND ``checkpoint_pending`` Segmente (#951, Codex
+        :513): rotiert die Migration ihr rein-negatives Segment, während ein Reader
+        den WAL-Checkpoint busy hält, bleibt es ``checkpoint_pending`` statt ``closed``.
+        Ein Guard nur auf ``closed`` wäre dann ein No-op und das Segment mit
+        ausschließlich negativen Legacy-gids bliebe im POSITIVEN Query-Rang – ein
+        Default-``id desc``-Query behandelte die Alt-Zeilen fälschlich als „neueste".
+        Ein ``active`` Segment wird dagegen nie umgestuft (Guard), damit das
+        beschreibbare Segment nie versehentlich in den Trailing-Rang wandert.
         """
         await self._db.execute(
-            "UPDATE segments SET status = ? WHERE segment_id = ? AND status = ?",
-            (SEGMENT_STATUS_MIGRATED, segment_id, SEGMENT_STATUS_CLOSED),
+            "UPDATE segments SET status = ? WHERE segment_id = ? AND status IN (?, ?)",
+            (SEGMENT_STATUS_MIGRATED, segment_id, SEGMENT_STATUS_CLOSED, SEGMENT_STATUS_CHECKPOINT_PENDING),
         )
         await self._db.commit()
 

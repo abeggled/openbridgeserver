@@ -1514,11 +1514,23 @@ def delete_ringbuffer_storage_files(disk_path: str) -> None:
     # Segment-Store-Root (#919) erst NACH dem erfolgreichen Legacy-Teil entfernen (#951):
     # Solange der rename/remove-Rollback der Legacy-DB noch fehlschlagen und den Monitor
     # wieder auf enabled zurückstellen kann, dürfen die v2-Segmentdateien nicht bereits
-    # unwiderruflich weg sein. Ab hier ist der Legacy-Teil abgeschlossen (best effort –
-    # ein Fehler beim rmtree blockiert die Legacy-Löschung nicht mehr).
+    # unwiderruflich weg sein. Ab hier ist der Legacy-Teil abgeschlossen.
+    #
+    # Fehler-Sichtbarkeit (#951, Codex :1521): eine unvollständige/fehlgeschlagene
+    # Löschung des Segment-Roots (gelockte Datei/Permissions) darf NICHT still
+    # geschluckt werden. Ein ``ignore_errors=True`` ließe die API weitermachen, als
+    # wäre der Storage gelöscht, während die Segmentdaten auf der Platte bleiben – ein
+    # späteres Re-Enable öffnete die vermeintlich verworfene Historie wieder. Analog
+    # zum Legacy-Datei-Löschpfad wird eine verbliebene Segment-Root daher als
+    # ``RingBufferStorageDeleteIncompleteError`` gemeldet, sodass der Aufrufer den
+    # unvollständigen Zustand erkennt. Bei Erfolg bleibt das saubere Abräumen unverändert.
     segments_root = Path(disk_path).with_name(f"{Path(disk_path).stem}_segments")
     if segments_root.exists():
-        shutil.rmtree(segments_root, ignore_errors=True)
+        rmtree_errors: list[BaseException] = []
+        shutil.rmtree(segments_root, onexc=lambda _func, _path, exc: rmtree_errors.append(exc))
+        if segments_root.exists():
+            detail = str(rmtree_errors[0]) if rmtree_errors else str(segments_root)
+            raise RingBufferStorageDeleteIncompleteError(detail)
 
 
 def is_ringbuffer_enabled() -> bool:

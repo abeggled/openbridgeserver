@@ -510,6 +510,46 @@ async def test_id_order_preserved_with_positives_only_in_closed_segment(store: S
     assert migrated, "migrierte Zeilen wurden nicht als 'migrated' markiert"
 
 
+async def test_migrated_segment_ranked_migrated_even_when_checkpoint_pending(store: SqliteSegmentStore, tmp_path: Path, monkeypatch):
+    """#951, Codex :513: pending-migriertes Segment landet trotzdem im Migrated-Rang.
+
+    Rotiert die Migration ihr rein-negatives Segment, während ein Reader den
+    WAL-Checkpoint busy hält, markiert ``rotate()`` es als ``checkpoint_pending``
+    statt ``closed``. Der frühere ``mark_migrated``-Guard (nur ``closed``) machte
+    daraus ein No-op: das Segment mit ausschließlich negativen Legacy-gids bliebe im
+    POSITIVEN Query-Rang und ein Default-``id desc``-Query lieferte die Alt-Zeilen
+    fälschlich als „neueste". Mit dem Fix greift ``mark_migrated`` auch für
+    ``checkpoint_pending`` und die Ordnung bleibt korrekt.
+    """
+    # Positive v2-Zeile existiert bereits → Migrierte müssen segregiert + migrated-markiert werden.
+    await store.append([_event("v2-new", "2026-06-01T00:00:00.000Z")])
+
+    # Jeder rotate()-Checkpoint bleibt busy → das geschlossene Segment wird pending.
+    async def _always_busy(self, conn):
+        self._last_checkpoint_result = "busy"
+        self._wal_checkpoint_busy_count += 1
+        return False
+
+    monkeypatch.setattr(SqliteSegmentStore, "_try_truncate_checkpoint", _always_busy)
+
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy(db, [("2020-01-01T00:00:00.000Z", "L0"), ("2020-01-02T00:00:00.000Z", "L1")])
+    assert await LegacyMigrator(store, db).migrate_chunk(batch_rows=100) == 2
+
+    # Das rein-negative (migrierte) Segment wurde – obwohl der busy Checkpoint es
+    # ``checkpoint_pending`` statt ``closed`` hinterließ – trotzdem als ``migrated``
+    # markiert und liegt damit im Trailing-/Migrated-Rang. Ohne den Fix bliebe es
+    # ``checkpoint_pending`` im positiven Rang stehen.
+    v2 = [s for s in await store.manifest.list_segments() if s.schema_version > 1]
+    migrated = [s for s in v2 if s.status == "migrated"]
+    assert migrated, "pending-migriertes Segment wurde nicht als 'migrated' markiert"
+    assert not [s for s in migrated if s.status == "checkpoint_pending"]
+
+    # Default id-desc-Query: die positive v2-Zeile bleibt „neueste", Migrierte dahinter.
+    rows = await store.query(StoreQuery(limit=100, sort_field="id", sort_order="desc"))
+    assert [r["new_value"] for r in rows] == ["v2-new", "L1", "L0"]
+
+
 async def test_migrated_only_store_needs_no_extra_segment(store: SqliteSegmentStore, tmp_path: Path):
     # Rein legacy-migrierter Store OHNE positive Zeilen: segment_id-Ordnung == gid-
     # Ordnung von selbst; kein ``migrated``-Marker/Extra-Rotate nötig, ein Segment.

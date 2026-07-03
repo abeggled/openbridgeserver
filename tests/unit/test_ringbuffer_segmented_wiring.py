@@ -18,7 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from obs.ringbuffer.ringbuffer import RingBuffer, delete_ringbuffer_storage_files, derive_segment_max_bytes
+from obs.ringbuffer.ringbuffer import (
+    RingBuffer,
+    RingBufferStorageDeleteIncompleteError,
+    delete_ringbuffer_storage_files,
+    derive_segment_max_bytes,
+)
 from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO, SegmentConfig, StoreRetentionConfig, validate_store_config
 
 
@@ -746,6 +751,50 @@ async def test_delete_storage_files_removes_segment_store_root(tmp_path: Path):
 
     # Segment-Store-Root (Manifest + Segment-DBs) ist rekursiv weg.
     assert not segments_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_storage_files_surfaces_incomplete_segment_root_removal(tmp_path: Path, monkeypatch):
+    """#951, Codex :1521: unvollständige Segment-Root-Löschung wird gemeldet, nicht stillgeschluckt.
+
+    ``shutil.rmtree(..., ignore_errors=True)`` ließ die API weitermachen, als wäre der
+    Segment-Store gelöscht, obwohl gelockte/permission-blockierte Segmentdaten auf der
+    Platte blieben — ein späteres Re-Enable öffnete die vermeintlich verworfene
+    Historie wieder. Analog zum Legacy-Datei-Löschpfad muss eine unvollständige
+    Löschung des Segment-Roots SURFACED werden (raise), damit der Aufrufer den
+    unvollständigen Zustand erkennt.
+    """
+    disk_path = tmp_path / "obs_ringbuffer.db"
+    rb = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True)
+    await rb.start()
+    await _record(rb, 1, "2026-01-01T00:00:00.000Z")
+    await rb.stop()
+
+    segments_root = tmp_path / "obs_ringbuffer_segments"
+    assert segments_root.exists()
+
+    # Löschung des Segment-Roots scheitert realistisch (gelockte Datei/Permissions):
+    # das echte ``shutil.rmtree`` schluckt solche Fehler via ``onexc``-Callback und
+    # lässt das Verzeichnis physisch bestehen. Hier emuliert: ein rmtree-Ersatz, der
+    # den übergebenen ``onexc``-Callback mit einer PermissionError aufruft und den
+    # Segment-Root NICHT entfernt. Der Legacy-Teil (os.remove) läuft zuvor bereits real.
+    import obs.ringbuffer.ringbuffer as rbmod
+
+    def _rmtree_reports_via_onexc(path, *, onexc=None, **kwargs):
+        exc = PermissionError(f"segment file locked: {path}")
+        if onexc is not None:
+            onexc(_rmtree_reports_via_onexc, str(path), exc)
+        # Verzeichnis bleibt bewusst bestehen (unvollständige Löschung).
+
+    monkeypatch.setattr(rbmod.shutil, "rmtree", _rmtree_reports_via_onexc)
+
+    with pytest.raises(RingBufferStorageDeleteIncompleteError):
+        delete_ringbuffer_storage_files(str(disk_path))
+
+    # Der Legacy-Teil ist trotzdem abgeschlossen (Sidecars/Hauptdatei weg), nur der
+    # nicht vollständig gelöschte Segment-Root wird als Fehler gemeldet.
+    assert not disk_path.exists()
+    assert segments_root.exists()
 
 
 @pytest.mark.asyncio

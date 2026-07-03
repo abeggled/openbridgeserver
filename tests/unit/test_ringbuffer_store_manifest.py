@@ -19,6 +19,7 @@ from obs.ringbuffer.store.manifest import (
     SEGMENT_STATUS_CHECKPOINT_PENDING,
     SEGMENT_STATUS_CLOSED,
     SEGMENT_STATUS_LEGACY,
+    SEGMENT_STATUS_MIGRATED,
     SEGMENT_STATUS_QUARANTINED,
     Manifest,
     SegmentRecord,
@@ -122,6 +123,38 @@ async def test_mark_checkpoint_done_reopens_retention_eligibility(manifest: Mani
     reloaded = await manifest.get_segment(seg.segment_id)
     assert reloaded.status == SEGMENT_STATUS_CLOSED
     assert [s.segment_id for s in await manifest.list_closed_segments()] == [seg.segment_id]
+
+
+async def test_mark_migrated_from_closed(manifest: Manifest):
+    """mark_migrated setzt ein sauber geschlossenes Segment auf ``migrated`` (#951, Pkt 2)."""
+    seg = await manifest.create_segment(filename="a.sqlite", schema_version=2)
+    await manifest.close_segment(seg.segment_id)
+    await manifest.mark_migrated(seg.segment_id)
+    assert (await manifest.get_segment(seg.segment_id)).status == SEGMENT_STATUS_MIGRATED
+
+
+async def test_mark_migrated_from_checkpoint_pending(manifest: Manifest):
+    """mark_migrated greift auch bei ``checkpoint_pending`` (#951, Pkt 2, Codex :513).
+
+    Rotiert die Migration ein rein-migriertes Segment, während ein Reader den
+    WAL-Checkpoint busy hält, bleibt es ``checkpoint_pending`` statt ``closed``. Ein
+    mark_migrated, das nur ``closed`` umstuft, wäre dann ein No-op und das Segment
+    (nur negative Legacy-gids) bliebe im positiven Query-Rang → ``id desc`` behandelte
+    es fälschlich als „neueste". Daher muss mark_migrated auch ``checkpoint_pending``
+    in den Migrated-Rang heben.
+    """
+    seg = await manifest.create_segment(filename="a.sqlite", schema_version=2)
+    await manifest.close_segment(seg.segment_id)
+    await manifest.mark_checkpoint_pending(seg.segment_id)
+    await manifest.mark_migrated(seg.segment_id)
+    assert (await manifest.get_segment(seg.segment_id)).status == SEGMENT_STATUS_MIGRATED
+
+
+async def test_mark_migrated_ignores_active_segment(manifest: Manifest):
+    """mark_migrated stuft ein aktives Segment nie um (Guard bleibt für active)."""
+    seg = await manifest.create_segment(filename="a.sqlite", schema_version=2)
+    await manifest.mark_migrated(seg.segment_id)
+    assert (await manifest.get_segment(seg.segment_id)).status == SEGMENT_STATUS_ACTIVE
 
 
 async def test_mark_quarantined_records_reason_and_status(manifest: Manifest):
