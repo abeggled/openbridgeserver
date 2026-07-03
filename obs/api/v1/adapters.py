@@ -249,8 +249,18 @@ def _preserve_redacted_message_config_secrets(stored_config: dict[str, Any], inc
 
         merged_targets = dict(incoming_targets)
         merged_provider["targets"] = merged_targets
+        removed_targets = [
+            target for target_name, target in stored_targets.items() if target_name not in incoming_targets and isinstance(target, dict)
+        ]
+        added_target_names = [
+            target_name for target_name, target in incoming_targets.items() if target_name not in stored_targets and isinstance(target, dict)
+        ]
+        renamed_target = removed_targets[0] if len(removed_targets) == 1 and len(added_target_names) == 1 else None
+        renamed_target_name = added_target_names[0] if renamed_target is not None else None
         for target_name, incoming_target in incoming_targets.items():
             stored_target = stored_targets.get(target_name)
+            if not isinstance(stored_target, dict) and target_name == renamed_target_name:
+                stored_target = renamed_target
             if not isinstance(stored_target, dict) or not isinstance(incoming_target, dict):
                 continue
             merged_target = dict(incoming_target)

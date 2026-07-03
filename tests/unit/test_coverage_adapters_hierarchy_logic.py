@@ -505,6 +505,74 @@ class TestUpdateInstance:
         assert saved_config["providers"]["seven.io"]["api_key"] == "sevenio-key"
         assert saved_config["providers"]["seven.io"]["targets"]["ops"]["to"] == "+49123456789"
 
+    @pytest.mark.asyncio
+    async def test_update_message_instance_preserves_redacted_target_secrets_when_renamed(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceUpdate
+        from obs.api.v1.redaction import REDACTED
+
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": "pushover-token",
+                    "targets": {"ops": {"user_key": "pushover-user"}},
+                },
+                "telegram": {
+                    "enabled": True,
+                    "bot_token": "telegram-token",
+                    "targets": {"ops": {"chat_id": "telegram-chat"}},
+                },
+                "seven.io": {
+                    "enabled": True,
+                    "api_key": "sevenio-key",
+                    "targets": {"ops": {"to": "+49123456789", "channel": "sms"}},
+                },
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": REDACTED,
+                    "targets": {"oncall": {"user_key": REDACTED}},
+                },
+                "telegram": {
+                    "enabled": True,
+                    "bot_token": REDACTED,
+                    "targets": {"oncall": {"chat_id": REDACTED}},
+                },
+                "seven.io": {
+                    "enabled": True,
+                    "api_key": REDACTED,
+                    "targets": {"oncall": {"to": REDACTED, "channel": "voice"}},
+                },
+            }
+        }
+
+        row = _inst_row(adapter_type="MESSAGE", enabled=0, config=stored_config)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        async def _fake_stop(iid):
+            pass
+
+        monkeypatch.setattr(adp_api.adapter_registry, "stop_instance", _fake_stop)
+        db = _DbStub(one=row)
+
+        await adp_api.update_instance(
+            instance_id=uuid.UUID(row["id"]),
+            body=AdapterInstanceUpdate(config=incoming_config),
+            db=db,
+            _user="admin",
+        )
+
+        saved_config = json.loads(db.committed[0][1][1])
+        assert saved_config["providers"]["pushover"]["targets"]["oncall"]["user_key"] == "pushover-user"
+        assert saved_config["providers"]["telegram"]["targets"]["oncall"]["chat_id"] == "telegram-chat"
+        assert saved_config["providers"]["seven.io"]["targets"]["oncall"]["to"] == "+49123456789"
+        assert saved_config["providers"]["seven.io"]["targets"]["oncall"]["channel"] == "voice"
+
 
 class TestDeleteInstance:
     @pytest.mark.asyncio
