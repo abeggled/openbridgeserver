@@ -70,7 +70,6 @@ from obs.ringbuffer.store.manifest import (
     SEGMENT_STATUS_ACTIVE,
     SEGMENT_STATUS_CHECKPOINT_PENDING,
     SEGMENT_STATUS_CLOSED,
-    SEGMENT_STATUS_LEGACY,
     SEGMENT_STATUS_MIGRATED,
     SEGMENT_STATUS_MIGRATING,
     SEGMENT_STATUS_QUARANTINED,
@@ -180,6 +179,23 @@ def _is_legacy_segment(segment: SegmentRecord) -> bool:
     return segment.schema_version <= LEGACY_SCHEMA_VERSION
 
 
+def _is_missing_ringbuffer_table(exc: Exception) -> bool:
+    """True, wenn ein Read an einer fehlenden ``ringbuffer``-Tabelle scheitert (#951, Codex :1057).
+
+    Ein geschlossenes/retained v2-Segment kann auf 0 Bytes truncated oder durch eine
+    leere SQLite-DB ersetzt sein: der read-only-Open gelingt (gültige, aber schemalose
+    DB), das spätere SELECT wirft dann ``no such table: ringbuffer``. Das ist KEINE
+    von ``_is_sqlite_corruption`` erkannte Korruption (malformed/not a database), sodass
+    das Segment sonst bei JEDER Query, die es berührt, einen 500 lieferte statt isoliert
+    zu werden. Es wird daher – analog zum aktiven Segment (Codex :658) und
+    checkpoint_pending (Codex :2220) – als korrupt/verloren klassifiziert und
+    quarantäniert.
+    """
+    if not isinstance(exc, aiosqlite.Error):
+        return False
+    return "no such table: ringbuffer" in str(exc).lower()
+
+
 # Legacy-Query darf ohne Zeitfenster nicht unbounded scannen: die JSON-basierte
 # Value-Filter-Degradation liest höchstens so viele Kandidatenzeilen.
 _LEGACY_DEFAULT_CANDIDATE_CAP = 10_000
@@ -233,18 +249,21 @@ _REGEX_MAX_PATTERN_LEN = 256
 # Zeichen begrenzt — gebounded statt blockierend.
 _REGEX_MAX_TARGET_LEN = 4096
 _RE_UNSAFE_NESTED_QUANTIFIERS = re.compile(r"\((?:[^()\\]|\\.)*[+*][^()]*\)[+*]")
-# Quantifizierte Alternations-Gruppe wie ``(a|a)*`` / ``(a|ab)+`` / ``(a|b){0,5}``
-# (#951, Codex :307). Der nested-quantifier-Check oben verwirft solche Muster NICHT
-# (kein innerer ``+``/``*``), aber sie können exponentielles Backtracking auslösen
-# (ambiguous alternation) und einen einzelnen ``re.search`` über Sekunden blockieren.
-# Der SQLite-Pushdown-Callback läuft SYNCHRON je Kandidatenzeile im aiosqlite-Worker
-# und hält dabei den GIL — ein Laufzeit-Timeout (auch der Legacy-``asyncio.wait_for``-
-# Weg) kann einen laufenden ``re.search`` in CPython nicht abbrechen. Der einzig
-# wirksame Schutz ist daher, das Muster VOR der Query als unsafe abzulehnen (422-
-# tauglicher ValueError) statt den Worker blockieren zu lassen. Bewusst konservativ:
-# auch harmlose/lineare quantifizierte Alternationen (``(a|b)+``) werden abgelehnt;
-# sie lassen sich verlustfrei als Zeichenklasse (``[ab]+``) umschreiben.
-_RE_UNSAFE_QUANTIFIED_ALTERNATION = re.compile(r"\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)(?:[*+]|\{\d*,\d*\})")
+# Quantifizierte Alternations-Gruppe wie ``(a|a)*`` / ``(a|ab)+`` / ``(a|b){0,5}`` /
+# ``(a|aa){30}`` (#951, Codex :307). Der nested-quantifier-Check oben verwirft solche
+# Muster NICHT (kein innerer ``+``/``*``), aber sie können exponentielles Backtracking
+# auslösen (ambiguous alternation) und einen einzelnen ``re.search`` über Sekunden
+# blockieren. Der SQLite-Pushdown-Callback läuft SYNCHRON je Kandidatenzeile im
+# aiosqlite-Worker und hält dabei den GIL – ein Laufzeit-Timeout (auch der Legacy-
+# ``asyncio.wait_for``-Weg) kann einen laufenden ``re.search`` in CPython nicht
+# abbrechen. Der einzig wirksame Schutz ist daher, das Muster VOR der Query als unsafe
+# abzulehnen (422-tauglicher ValueError) statt den Worker blockieren zu lassen. Bewusst
+# konservativ: auch harmlose/lineare quantifizierte Alternationen (``(a|b)+``) werden
+# abgelehnt; sie lassen sich verlustfrei als Zeichenklasse (``[ab]+``) umschreiben.
+# Der Quantifier-Zweig deckt ``*``/``+`` UND alle counted quantifiers ab –
+# EXAKTE Zählung ``{m}`` (Codex :247) ebenso wie ``{m,}`` und ``{m,n}``; ein Muster
+# wie ``(a|aa){30}b`` umging die frühere komma-pflichtige Variante sonst.
+_RE_UNSAFE_QUANTIFIED_ALTERNATION = re.compile(r"\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)(?:[*+]|\{\d+(?:,\d*)?\})")
 
 
 def _assert_safe_regex(pattern: str) -> None:
@@ -972,15 +991,40 @@ class SqliteSegmentStore(RingBufferStore):
         # halten. ``list_segments_for_query`` iteriert migrierte Segmente nach
         # ``segment_id DESC`` – das korreliert dann NICHT mehr mit der gid-Ordnung. Ein
         # ``id desc``-Query mit kleinem limit/offset könnte im migrierten Bereich Zeilen
-        # überspringen oder falsch ordnen. Daher wird der Frühabbruch auch deaktiviert,
-        # sobald ``migrated``-Segmente im Abfrage-Set liegen; erst der finale Sort nach
-        # ``global_event_id`` in ``query()`` ordnet korrekt. Im reinen v2-Normalbetrieb
-        # (kein legacy, kein migrated) bleibt der Frühabbruch erhalten (Performance).
-        migration_in_progress = any(s.status in (SEGMENT_STATUS_LEGACY, SEGMENT_STATUS_MIGRATED) for s in segments)
-        allow_early_termination = query.sort_field == "id" and query.sort_order == "desc" and not migration_in_progress
+        # überspringen oder falsch ordnen.
+        #
+        # Zustandsabhängiger Frühabbruch (#951, Codex :980): den Frühabbruch NICHT global
+        # abschalten, sobald irgendein legacy/migrated-Segment im Set liegt, sondern nur
+        # den POSITIVEN v2-Prefix früh terminieren lassen. ``list_segments_for_query``
+        # liefert die positiven v2-Segmente (segment_id DESC = global_event_id DESC)
+        # ZUERST und alle legacy/migrated-Segmente (negative synthetische gids, per
+        # Definition älter) ZULETZT.
+        #
+        # KORREKTHEIT: Solange NUR positive v2-Prefix-Zeilen gesammelt wurden, sind alle
+        # noch NICHT gelesenen Segmente (älterer positiver v2 ODER legacy/migrated)
+        # garantiert kleiner-gid – ein Frühabbruch bei ``offset+limit`` gefüllten Zeilen
+        # ist dann korrekt. Eine latest-N-``id desc``-Query, die bereits aus positiven
+        # v2-Zeilen voll wird, bricht daher früh ab und fasst den Legacy-Tail NICHT an
+        # (bounded latest-page).
+        #
+        # Sobald der positive Prefix NICHT reicht und wir das ERSTE legacy/migrated-Segment
+        # lesen, ist der Frühabbruch NICHT mehr zulässig: die synthetischen negativen
+        # gid-Buckets migrierter Segmente sind von der ``segment_id DESC``-Iteration
+        # ENTKOPPELT (ein zuerst besuchtes migrated-Segment ist nicht zwingend das
+        # höchstwertige). Ab dem Tail werden daher ALLE verbliebenen relevanten Segmente
+        # ``offset+limit``-bounded gelesen und der finale Sort nach ``global_event_id`` in
+        # ``query()`` ordnet korrekt (positive vor negative gid). Bei abweichender
+        # Sortierung (``ts``/``asc``) greift der Frühabbruch gar nicht.
+        allow_early_termination = query.sort_field == "id" and query.sort_order == "desc"
+        entered_legacy_tail = False
         for segment in segments:
-            if allow_early_termination and needed and len(collected) >= needed:
-                break  # bounded: ältere Segmente können das Fenster nicht mehr treffen.
+            # Frühabbruch nur, solange ausschließlich positive v2-Prefix-Zeilen gesammelt
+            # wurden (``not entered_legacy_tail``). Danach ist die verbliebene gid-Ordnung
+            # nicht mehr an die Iterationsreihenfolge gebunden – nicht früh abbrechen.
+            if allow_early_termination and not entered_legacy_tail and needed and len(collected) >= needed:
+                break
+            if _is_legacy_segment(segment) or segment.status == SEGMENT_STATUS_MIGRATED:
+                entered_legacy_tail = True
             rows = await self._read_segment_rows(segment, query)
             if rows is not None:
                 collected.extend(rows)
@@ -1048,12 +1092,13 @@ class SqliteSegmentStore(RingBufferStore):
     async def _quarantine_corrupt_read(self, segment: SegmentRecord, exc: aiosqlite.Error) -> None:
         """Quarantäniert ein beim Read als korrupt erkanntes Segment und überspringt es.
 
-        Nur echte SQLite-Korruption (malformed/not a database/…) führt zur
-        Quarantäne; andere ``aiosqlite.Error`` werden weitergereicht, damit echte
+        Nur echte SQLite-Korruption (malformed/not a database/…) ODER ein
+        schemaloses Segment (fehlende ``ringbuffer``-Tabelle, #951 Codex :1057) führt
+        zur Quarantäne; andere ``aiosqlite.Error`` werden weitergereicht, damit echte
         Fehler (z. B. Programmierfehler im SQL) nicht als Korruption maskiert werden.
         Das aktive Segment wird nie quarantäniert.
         """
-        if not _is_sqlite_corruption(exc):
+        if not (_is_sqlite_corruption(exc) or _is_missing_ringbuffer_table(exc)):
             raise exc
         if self._active_segment is not None and segment.segment_id == self._active_segment.segment_id:
             raise exc
