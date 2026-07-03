@@ -272,8 +272,8 @@ async def _datapoints_by_group_address(group_addresses: list[str], db: Database)
             WHERE UPPER(ab.adapter_type) = 'KNX'
               AND json_valid(ab.config)
               AND (
-                    json_extract(ab.config, '$.group_address') IN ({placeholders})
-                 OR json_extract(ab.config, '$.state_group_address') IN ({placeholders})
+                    TRIM(json_extract(ab.config, '$.group_address')) IN ({placeholders})
+                 OR TRIM(json_extract(ab.config, '$.state_group_address')) IN ({placeholders})
               )
             ORDER BY dp.name, ab.created_at, ab.id""",
         [*normalized, *normalized],

@@ -231,3 +231,33 @@ async def test_knx_traceability_context_endpoints(client, auth_headers):
         )
         await db.execute("DELETE FROM knx_devices WHERE individual_address IN (?, ?)", (pa, state_pa))
         await db.commit()
+
+
+async def test_device_datapoints_found_when_binding_ga_has_whitespace(client, auth_headers):
+    """_datapoints_by_group_address must match even if the stored GA has extra whitespace."""
+    pa = f"1.1.{150 + (uuid.uuid4().int % 40)}"
+    ga = f"6/4/{10 + (uuid.uuid4().int % 40)}"
+    await _seed_device_graph(pa, ga)
+
+    dp = await _create_dp(client, auth_headers, f"KNX-WS-{uuid.uuid4()}")
+    # Store GA with surrounding whitespace in the binding config
+    await _insert_binding_config(dp["id"], '{"group_address": " %s "}' % ga)
+
+    try:
+        device_ctx_resp = await client.get(f"/api/v1/knxproj/devices/{pa}/datapoints", headers=auth_headers)
+        assert device_ctx_resp.status_code == 200, device_ctx_resp.text
+        device_ctx = device_ctx_resp.json()
+        assert any(item["id"] == dp["id"] for item in device_ctx["datapoints"]), (
+            "Binding with whitespace-padded GA should be matched by the device datapoints endpoint"
+        )
+    finally:
+        await client.delete(f"/api/v1/datapoints/{dp['id']}", headers=auth_headers)
+        db = get_db()
+        await db.execute("DELETE FROM knx_co_ga_links WHERE ga_address = ?", (ga,))
+        await db.execute("DELETE FROM knx_group_addresses WHERE address = ?", (ga,))
+        await db.execute(
+            "DELETE FROM knx_comm_objects WHERE device_id IN (SELECT id FROM knx_devices WHERE individual_address = ?)",
+            (pa,),
+        )
+        await db.execute("DELETE FROM knx_devices WHERE individual_address = ?", (pa,))
+        await db.commit()
