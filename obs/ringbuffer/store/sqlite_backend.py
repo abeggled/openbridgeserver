@@ -1196,6 +1196,18 @@ class SqliteSegmentStore(RingBufferStore):
         die Haupt-DB übernehmen), danach read-only gelesen. Für **große** Dateien
         bleibt es beim ``immutable=1``-Pfad (kein Startup-Checkpoint auf riesiger
         Datei), auch wenn dadurch die WAL-Frames ungelesen bleiben.
+
+        Immutable-vs-WAL-aware-Entscheidung (#951, Codex :1214): ``immutable=1`` ist
+        nur zulässig, wenn KEIN dirty ``-wal`` (mehr) neben der Datei liegt – also
+        entweder von vornherein keiner vorhanden war ODER der Checkpoint ihn
+        erfolgreich in die Haupt-DB gefaltet hat. Konnte der Checkpoint einer kleinen
+        dirty-WAL-Legacy-DB NICHT abgeschlossen werden (BUSY/Fehler), stünden die
+        jüngsten committeten Frames weiterhin nur im ``-wal``; ein ``immutable=1``-Open
+        ignorierte sie und die Monitor-/Export-Query ließe die NEUESTEN Alt-Zeilen
+        still weg, bis ein späterer Read den Checkpoint schafft. In diesem Fall wird
+        daher WAL-aware mit reinem ``mode=ro`` (OHNE ``immutable``) gelesen, sodass die
+        committeten WAL-Frames sichtbar sind. Die Entscheidung fällt anhand des
+        physischen ``-wal``-Dirty-Zustands NACH dem Checkpoint-Versuch (``_wal_is_dirty``).
         """
         legacy_path = Path(segment.filename)
         if segment.recovery_status == "dirty_wal" and self._legacy_is_small(segment, legacy_path):
@@ -1210,10 +1222,25 @@ class SqliteSegmentStore(RingBufferStore):
                     segment.segment_id,
                     size_bytes=self._segment_file_size(segment.filename),
                 )
-        uri = _sqlite_ro_uri(legacy_path, params="mode=ro&immutable=1")
+        params = "mode=ro" if self._legacy_wal_still_dirty(legacy_path) else "mode=ro&immutable=1"
+        uri = _sqlite_ro_uri(legacy_path, params=params)
         conn = await aiosqlite.connect(uri, uri=True)
         conn.row_factory = aiosqlite.Row
         return conn
+
+    @staticmethod
+    def _legacy_wal_still_dirty(legacy_path: Path) -> bool:
+        """True, wenn neben der Legacy-DB weiterhin ein nicht-leeres ``-wal`` liegt (#951, Codex :1214).
+
+        Entscheidet, ob der Read auf ``immutable=1`` (schnell, WAL-ignorierend) oder auf
+        WAL-awares ``mode=ro`` fällt. Nutzt die vorhandene physische Dirty-WAL-Erkennung
+        aus ``migration`` (nur Dateisystem-Metadaten, öffnet die DB nicht). Lazy
+        importiert, weil ``migration`` seinerseits ``sqlite_backend`` importiert
+        (Zyklusvermeidung, analog ``_legacy_is_small``).
+        """
+        from obs.ringbuffer.store.migration import _wal_is_dirty
+
+        return _wal_is_dirty(legacy_path)
 
     @staticmethod
     def _legacy_is_small(segment: SegmentRecord, legacy_path: Path) -> bool:

@@ -1380,6 +1380,21 @@ class RingBuffer:
             if values
         }
 
+        from obs.ringbuffer.store.interface import StoreQuery
+
+        # Kandidaten-Datapoints des Scopes bestimmen (#951, Codex :2095). Der
+        # Legacy-Pfad ist row-lazy: er filtert erst nach Adapter/Source/Metadaten
+        # und typ-checkt nur die ZURÜCKGEGEBENEN Zeilen. Ist die Query adapter-/
+        # source-/metadaten-scoped (aber ohne expliziten datapoint_id), sind die
+        # Kandidaten nur die Datapoints, die unter diesem Scope tatsächlich Zeilen
+        # haben – NICHT das ganze Registry-Universum. Der bounded Kandidaten-Scan
+        # (ohne value_filters, damit Typkonflikte nicht still weggefiltert werden)
+        # liefert genau diese erreichbare Datapoint-Menge.
+        scoped_ids = normalized_dps + normalized_names
+        is_scope_filtered = bool(
+            normalized_adapters or (q or "").strip() or metadata_binding_filters or _normalize_string_filters(metadata_tags_any_of)
+        )
+
         # Typkonflikt-Validierung wie Legacy ``query_v2`` (z. B. numerischer
         # Operator auf BOOLEAN-Datenpunkt → 422). Ist ein datapoint_id-Filter
         # gesetzt, prüfen wir die Value-Filter gegen dessen data_type, bevor sie
@@ -1389,13 +1404,51 @@ class RingBuffer:
         # Pkt 2): sonst übersprünge der segmentierte Pfad die Legacy-Typkonflikt-
         # Prüfung und ein inkompatibler Filter liefe still leer statt 422.
         if value_filters:
-            _validate_segmented_value_filter_types(
-                value_filters=value_filters,
-                datapoint_ids=normalized_dps + normalized_names,
-                datapoint_types=datapoint_types or {},
-            )
-
-        from obs.ringbuffer.store.interface import StoreQuery
+            if not scoped_ids and is_scope_filtered:
+                # Adapter-/source-/metadaten-scoped ohne expliziten datapoint_id:
+                # nur gegen die im Scope tatsächlich vorhandenen Datapoints prüfen.
+                # Ein unrelated STRING/BOOLEAN-Datapoint eines ANDEREN Adapters ist
+                # kein Kandidat und darf kein 422 erzwingen (Legacy-Parität). Hätte
+                # der Scope selbst einen inkompatiblen Datapoint, wirft die Prüfung
+                # wie Legacy 422 (statt still leer zu laufen).
+                candidate_ids = await self._scope_candidate_datapoint_ids(
+                    StoreQuery(
+                        from_ts=effective_from,
+                        to_ts=effective_to,
+                        from_exclusive=True,
+                        to_exclusive=True,
+                        datapoint_ids=normalized_dps,
+                        source_adapters=normalized_adapters,
+                        q=q or None,
+                        dp_ids_by_name=normalized_names,
+                        metadata_tags_any_of=_normalize_string_filters(metadata_tags_any_of),
+                        metadata_binding_filters=metadata_binding_filters,
+                        limit=_SEGMENTED_CANDIDATE_CAP,
+                        offset=0,
+                        sort_field=sort_field,
+                        sort_order=sort_order,
+                        value_filters=[],
+                        candidate_cap=_SEGMENTED_CANDIDATE_CAP,
+                        is_export=False,
+                    )
+                )
+                # Leere Kandidatenmenge = keine Zeilen im Scope: der Legacy-Pfad
+                # liefert dann still leer OHNE 422 (kein row-lazy Typ-Check feuert).
+                # Nur bei mindestens einem Kandidaten typ-prüfen; sonst würde die
+                # ``if datapoint_ids:``-Verzweigung des Validators auf das volle
+                # Registry-Universum zurückfallen und fälschlich 422 werfen.
+                if candidate_ids:
+                    _validate_segmented_value_filter_types(
+                        value_filters=value_filters,
+                        datapoint_ids=list(candidate_ids),
+                        datapoint_types={dp_id: (datapoint_types.get(dp_id, "") if datapoint_types else "") for dp_id in candidate_ids},
+                    )
+            else:
+                _validate_segmented_value_filter_types(
+                    value_filters=value_filters,
+                    datapoint_ids=scoped_ids,
+                    datapoint_types=datapoint_types or {},
+                )
 
         store_query = StoreQuery(
             from_ts=effective_from,
@@ -1470,6 +1523,18 @@ class RingBuffer:
                 raise
             async with self._lock:
                 return await self._store.query(store_query)
+
+    async def _scope_candidate_datapoint_ids(self, store_query: Any) -> set[str]:
+        """Distinkte Datapoint-IDs, die im gegebenen (value-filter-freien) Scope Zeilen haben.
+
+        Dient der adapter-/source-/metadaten-scoped Value-Filter-Typvalidierung
+        (#951, Codex :2095): der Kandidaten-Scan läuft mit demselben Scope wie die
+        eigentliche Query, aber OHNE ``value_filters`` (die würden einen Typkonflikt
+        still wegfiltern statt sichtbar zu machen). Er ist über ``candidate_cap`` und
+        ``limit`` genauso gebunden wie der Read-Pfad – kein unbounded Full-Scan.
+        """
+        rows = await self._store_query_serialized(store_query)
+        return {row["datapoint_id"] for row in rows}
 
     async def stats(self) -> dict:
         def _effective_retention_seconds(oldest_ts: str | None) -> int | None:
@@ -2076,17 +2141,25 @@ def _validate_segmented_value_filter_types(
     ``ValueError`` (422-tauglich), statt im segmentierten SQL-Pushdown still leer
     zu laufen.
 
-    Ist ein ``datapoint_id``-Filter (scoped) gesetzt, wird gegen dessen data_types
-    geprüft. OHNE expliziten datapoint_id-Filter (unscoped, adapter-weite bzw.
-    all-datapoints Query) prüft der Legacy-Pfad row-lazy: sobald eine Zeile eines
-    STRING-/BOOLEAN-Datapoints in einen non-``eq``/``ne``-Operator läuft, wirft
+    Die zu prüfende Datapoint-Menge (``datapoint_ids``) wird vom Aufrufer als
+    KANDIDATENMENGE übergeben und spiegelt die row-lazy Legacy-Semantik:
+
+    * datapoint_id-scoped: genau die adressierten Datapoints.
+    * adapter-/source-/metadaten-scoped (ohne datapoint_id): nur die Datapoints,
+      die im Scope tatsächlich Zeilen haben (bounded Kandidaten-Scan im Aufrufer,
+      #951 Codex :2095) – NICHT das volle Registry-Universum. So erzwingt ein
+      unrelated STRING/BOOLEAN-Datapoint eines ANDEREN Adapters kein 422, während
+      ein inkompatibler Datapoint IM Scope wie Legacy 422 wirft.
+    * vollständig unscoped (kein datapoint_id, kein adapter/source/metadata): der
+      Aufrufer übergibt eine leere ``datapoint_ids``-Liste, sodass gegen das VOLLE
+      ``datapoint_types``-Universum geprüft wird (Runde-26-Verhalten).
+
+    Hintergrund: der Legacy-Pfad prüft row-lazy – sobald eine Zeile eines STRING-/
+    BOOLEAN-Datapoints in einen non-``eq``/``ne``-Operator läuft, wirft
     ``_matches_value_filter`` einen ``ValueError`` (→ 422). Der segmentierte Pushdown
-    kann diese row-lazy-Prüfung nicht bounded nachziehen (er ließe inkompatible
-    Zeilen still fallen → Teilergebnisse). Daher validieren wir den unscoped Fall
-    gegen das VOLLE ``datapoint_types``-Universum (alle Registry-Datapoints, die der
-    API-Layer ohnehin übergibt): ist der Operator mit einem dort deklarierten Typ
-    inkompatibel, wird wie Legacy mit demselben 422-tauglichen ``ValueError``
-    abgewiesen. ``eq``/``ne`` (typunabhängig) bleiben unangetastet (#951, Codex :2081).
+    kann das nicht bounded nachziehen (er ließe inkompatible Zeilen still fallen →
+    Teilergebnisse), daher die Vorab-Typprüfung gegen die Kandidatenmenge.
+    ``eq``/``ne`` (typunabhängig) bleiben unangetastet (#951, Codex :2081/:2095).
     """
     if datapoint_ids:
         scoped_ids: set[str] = set(datapoint_ids)
