@@ -2262,9 +2262,13 @@ class SqliteSegmentStore(RingBufferStore):
         victims: list[SegmentRecord] = []
         legacy_segments = [s for s in await self.manifest.list_segments() if _is_legacy_segment(s)]
         if legacy_segments and has_nonlegacy_data:
-            # ältestes Legacy zuerst (list_segments ist segment_id DESC → umkehren
-            # auf ältestes zuerst passt zur FIFO-Semantik von list_legacy_segments).
-            victims.extend(sorted(legacy_segments, key=lambda s: s.segment_id, reverse=True))
+            # ältestes Legacy zuerst (#951, Codex :2267): segment_id steigt mit der
+            # Registrierung, list_legacy_segments dokumentiert ascending = ältestes
+            # zuerst. Bei MEHREREN attached Legacy-Quellen muss deshalb ASCENDING
+            # sortiert werden – FIFO-konform. Ein DESCENDING-Sort würde die NEUESTE
+            # Legacy-Quelle vor älteren für Size/Age/Row-Retention wählen und den
+            # FIFO-Vertrag umkehren (neuere Legacy-Historie verwerfen, ältere behalten).
+            victims.extend(sorted(legacy_segments, key=lambda s: s.segment_id))
         victims.extend(s for s in await self.manifest.list_retention_eligible_segments() if not _is_legacy_segment(s))
         return victims
 
@@ -2305,11 +2309,19 @@ class SqliteSegmentStore(RingBufferStore):
         # quarantäniertes Legacy bleibt unter dem Guard geschützt.
         for segment in await self._retention_victims_in_order():
             to_ts = _parse_ts(segment.to_ts)
+            if to_ts is None and _is_legacy_segment(segment):
+                # Attached read-only Legacy hat per Design to_ts=NULL (attach_readonly
+                # scannt die 20–30 GB-Datei bewusst nicht). Legacy steht als ältestes
+                # vorne; ein break hier würde spätere geschlossene v2-Segmente NIE per
+                # Alter trimmen, bis die Legacy-Zeile entfernt ist (#951, Codex :2313).
+                # Ein Legacy mit UNBEKANNTER to_ts deshalb ÜBERSPRINGEN (nicht break),
+                # damit die v2-Age-Retention weiterläuft. Ein Legacy wird per Age nur
+                # gelöscht, wenn seine to_ts bekannt UND vor dem Cutoff ist.
+                continue
             if to_ts is None or to_ts >= cutoff:
-                # Ältestes-zuerst: sobald ein Segment neu genug ist (oder keine
-                # to_ts-Grenze trägt), wird es und alles danach nicht mehr per Alter
-                # gelöscht. Legacy steht als ältestes vorne; ein Legacy ohne bekannte
-                # to_ts wird konservativ NICHT altersbedingt gelöscht.
+                # Ältestes-zuerst: sobald ein nicht-Legacy-Segment neu genug ist (oder
+                # keine to_ts-Grenze trägt), wird es und alles danach nicht mehr per
+                # Alter gelöscht.
                 break
             if not await self._delete_segment(segment):
                 # Basisdatei nicht löschbar (#951, Pkt 6): Zeile bleibt, Retention
@@ -2324,7 +2336,15 @@ class SqliteSegmentStore(RingBufferStore):
         removed = 0
         while await self._total_row_count() > max_entries:
             # Durch dieselbe guard-geschützte Victim-Liste wie Size/Age (#951, Pkt 7).
-            victims = await self._retention_victims_in_order()
+            # Legacy-Segmente mit UNBEKANNTEM (0/unscanned) row_count vom Row-Trimming
+            # AUSSCHLIESSEN (#951, Codex :2330): attach_readonly scannt die Datei nicht,
+            # daher hat attached Legacy meist row_count=0. Übersteigen allein die
+            # v2-Zeilen das Budget, wäre victims[0] sonst dieses Legacy → das Löschen
+            # wirft die GANZE Legacy-DB weg, senkt _total_row_count aber NICHT (war 0),
+            # sodass die Schleife weiterläuft und fälschlich auch v2-Segmente löscht.
+            # Nur Segmente mit bekannter row_count > 0 werden per Row-Budget getrimmt;
+            # Size-/FIFO-Retention über die bekannte Dateigröße bleibt für Legacy.
+            victims = [s for s in await self._retention_victims_in_order() if not (_is_legacy_segment(s) and s.row_count <= 0)]
             if not victims:
                 break
             if not await self._delete_segment(victims[0]):
