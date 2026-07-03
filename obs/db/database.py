@@ -643,6 +643,23 @@ CREATE INDEX IF NOT EXISTS idx_authz_node_roles_role
 """
 
 
+_MIGRATION_V38 = """
+CREATE TABLE IF NOT EXISTS hierarchy_device_links (
+    id         TEXT PRIMARY KEY,
+    node_id    TEXT NOT NULL REFERENCES hierarchy_nodes(id) ON DELETE CASCADE,
+    device_id  TEXT NOT NULL REFERENCES knx_devices(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    UNIQUE(node_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS idx_hierarchy_device_links_node
+    ON hierarchy_device_links(node_id);
+CREATE INDEX IF NOT EXISTS idx_hierarchy_device_links_device
+    ON hierarchy_device_links(device_id);
+"""
+
+_MIGRATION_V39 = _MIGRATION_V38
+
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -684,6 +701,8 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (35, _MIGRATION_V35),
     (36, _migration_v36),
     (37, _MIGRATION_V37),
+    (38, _MIGRATION_V38),
+    (39, _MIGRATION_V39),
 ]
 
 

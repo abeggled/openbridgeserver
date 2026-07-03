@@ -69,6 +69,7 @@ class DeviceRecord:
     identifier: str
     individual_address: str
     name: str = ""
+    space_id: str | None = None
     hardware_name: str = ""
     order_number: str = ""
     description: str = ""
@@ -252,6 +253,95 @@ def _parse_trades_from_xml(xml_bytes: bytes) -> list[TradeRecord]:
                     _walk_trade_el(child, None, records, sort_counter, fi_to_fn)
             break
     return records
+
+
+def _extract_device_space_id(device: Any) -> str | None:
+    """Return the ETS space/location identifier for a device when exposed by xknxproject."""
+
+    def _clean(value: Any) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
+    if isinstance(device, dict):
+        for key in ("space_id", "location_id", "room_id"):
+            value = _clean(device.get(key))
+            if value:
+                return value
+        for key in ("space", "location", "room"):
+            nested = device.get(key)
+            if isinstance(nested, dict):
+                for nested_key in ("identifier", "id", "space_id", "location_id"):
+                    value = _clean(nested.get(nested_key))
+                    if value:
+                        return value
+            else:
+                value = _clean(getattr(nested, "identifier", None) or getattr(nested, "id", None))
+                if value:
+                    return value
+        return None
+
+    for attr in ("space_id", "location_id", "room_id"):
+        value = _clean(getattr(device, attr, None))
+        if value:
+            return value
+    for attr in ("space", "location", "room"):
+        nested = getattr(device, attr, None)
+        value = _clean(getattr(nested, "identifier", None) or getattr(nested, "id", None))
+        if value:
+            return value
+    return None
+
+
+def _device_ref_identifier(ref: Any) -> str | None:
+    if isinstance(ref, str | int):
+        text = str(ref).strip()
+        return text or None
+
+    if isinstance(ref, dict):
+        for key in ("identifier", "id", "device_id", "ref_id"):
+            text = str(ref.get(key) or "").strip()
+            if text:
+                return text
+        return None
+
+    for attr in ("identifier", "id", "device_id", "ref_id"):
+        text = str(getattr(ref, attr, None) or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _collect_space_device_map(spaces: Any) -> dict[str, str]:
+    device_to_space: dict[str, str] = {}
+
+    def _walk(space_items: Any) -> None:
+        iterable = space_items.items() if isinstance(space_items, dict) else enumerate(space_items or [])
+
+        for space_key, space in iterable:
+            if isinstance(space, dict):
+                identifier = str(space.get("identifier") or space_key).strip()
+                devices = space.get("devices") or []
+                sub_spaces = space.get("spaces") or {}
+            else:
+                identifier = str(getattr(space, "identifier", space_key)).strip()
+                devices = getattr(space, "devices", []) or []
+                sub_spaces = getattr(space, "spaces", {}) or {}
+
+            if identifier:
+                if isinstance(devices, dict):
+                    device_refs = devices.items()
+                else:
+                    device_refs = [(None, device_ref) for device_ref in devices]
+                for device_key, device_ref in device_refs:
+                    device_id = _device_ref_identifier(device_ref) or _device_ref_identifier(device_key)
+                    if device_id and device_id not in device_to_space:
+                        device_to_space[device_id] = identifier
+
+            if sub_spaces:
+                _walk(sub_spaces)
+
+    _walk(spaces)
+    return device_to_space
 
 
 def parse_knxproj_trades(file_bytes: bytes, password: str | None = None) -> list[TradeRecord]:
@@ -493,10 +583,13 @@ def parse_knxproj_devices(
     if isinstance(project, dict):
         devices_raw = project.get("devices") or {}
         comm_raw = project.get("communication_objects") or {}
+        top_spaces = project.get("locations") or {}
     else:
         devices_raw = getattr(project, "devices", {}) or {}
         comm_raw = getattr(project, "communication_objects", {}) or {}
+        top_spaces = getattr(project, "locations", {}) or {}
 
+    device_space_map = _collect_space_device_map(top_spaces)
     device_records: list[DeviceRecord] = []
     for dev_id, device in devices_raw.items():
         if isinstance(device, dict):
@@ -510,6 +603,7 @@ def parse_knxproj_devices(
                     identifier=identifier,
                     individual_address=individual_address,
                     name=str(device.get("name") or "").strip(),
+                    space_id=_extract_device_space_id(device) or device_space_map.get(identifier),
                     hardware_name=str(device.get("hardware_name") or "").strip(),
                     order_number=str(device.get("order_number") or "").strip(),
                     description=str(device.get("description") or "").strip(),
@@ -529,6 +623,7 @@ def parse_knxproj_devices(
                     identifier=identifier,
                     individual_address=str(getattr(device, "individual_address", "") or "").strip(),
                     name=str(getattr(device, "name", "") or "").strip(),
+                    space_id=_extract_device_space_id(device) or device_space_map.get(identifier),
                     hardware_name=str(getattr(device, "hardware_name", "") or "").strip(),
                     order_number=str(getattr(device, "order_number", "") or "").strip(),
                     description=str(getattr(device, "description", "") or "").strip(),
