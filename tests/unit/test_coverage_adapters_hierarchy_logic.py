@@ -1051,6 +1051,48 @@ class TestUpdateAdapterConfig:
         assert result.config["providers"]["pushover"]["api_token"] == REDACTED
         assert result.config["providers"]["pushover"]["targets"]["ops"]["user_key"] == REDACTED
 
+    @pytest.mark.asyncio
+    async def test_update_config_legacy_message_unresolvable_redaction_returns_422(self, monkeypatch):
+        """PATCH /{type}/config must return 422 (not 500) when redacted target secret is unresolvable."""
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import ConfigPatch
+        from obs.api.v1.redaction import REDACTED
+
+        from pydantic import BaseModel
+
+        class Cfg(BaseModel):
+            providers: dict
+
+        mock_cls = MagicMock()
+        mock_cls.config_schema = Cfg
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: mock_cls)
+        # Two stored targets → rename-candidate queue is empty (ambiguous); new target with REDACTED → ValueError
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "api_token": "tok",
+                    "targets": {
+                        "alpha": {"user_key": "key_a"},
+                        "beta": {"user_key": "key_b"},
+                    },
+                }
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "api_token": "tok",
+                    "targets": {"gamma": {"user_key": REDACTED}},
+                }
+            }
+        }
+        row = _row(adapter_type="MESSAGE", config=json.dumps(stored_config), enabled=1, updated_at="2024-01-01T00:00:00")
+        db = _DbStub(one=row)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await adp_api.update_adapter_config(adapter_type="MESSAGE", body=ConfigPatch(config=incoming_config), db=db, _user="admin")
+        assert exc_info.value.status_code == 422
+
 
 class TestGetAdapterConfig:
     @pytest.mark.asyncio

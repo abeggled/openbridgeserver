@@ -1473,7 +1473,10 @@ async def update_adapter_config(
     if adapter_type == "MESSAGE":
         row = await db.fetchone("SELECT * FROM adapter_configs WHERE adapter_type=?", (adapter_type,))
         stored_config = json.loads(row["config"]) if row is not None and row["config"] else {}
-        config_new = _preserve_redacted_message_config_secrets(stored_config, body.config)
+        try:
+            config_new = _preserve_redacted_message_config_secrets(stored_config, body.config)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     try:
         cls.config_schema(**config_new)
     except Exception as exc:
