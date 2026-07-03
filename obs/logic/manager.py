@@ -209,7 +209,17 @@ def _quote_api_client_url_value(value: str) -> str:
 
 
 def _normalise_api_client_url_for_parse(value: str) -> str:
-    return value.lstrip(_API_CLIENT_URL_LEADING_STRIP_CHARS).translate(_API_CLIENT_URL_REMOVE_CHARS)
+    # The API-client call sites apply Python ``str.strip()`` to the resolved URL,
+    # which removes Unicode whitespace (e.g. U+00A0) on top of the C0 controls and
+    # ASCII space that ``urlparse`` itself trims. Mirror both here so the authority
+    # bounds are computed against the same leading run that is silently removed
+    # later; otherwise a leading Unicode-whitespace (or interleaved control /
+    # whitespace) prefix would hide the scheme and let a variable choose the host.
+    previous = None
+    while value != previous:
+        previous = value
+        value = value.lstrip(_API_CLIENT_URL_LEADING_STRIP_CHARS).lstrip()
+    return value.translate(_API_CLIENT_URL_REMOVE_CHARS)
 
 
 def _replace_api_client_url_placeholders(value: str, resolver: Any) -> str:

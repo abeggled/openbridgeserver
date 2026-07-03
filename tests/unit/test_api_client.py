@@ -1273,6 +1273,24 @@ class TestApiClientVariables:
         with pytest.raises(Exception, match="API client URL variables are not allowed"):
             _replace_api_client_url_placeholders("http:\n//###OBS1###/status", resolver)
 
+    def test_url_variable_in_authority_with_leading_unicode_whitespace_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "attacker.example"
+
+        # U+00A0 (non-breaking space) is removed by the call sites' str.strip()
+        # but not by urlparse; the authority guard must reject it too.
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("\u00a0http://###OBS1###/status", resolver)
+
+    def test_url_variable_in_authority_with_interleaved_control_and_whitespace_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "attacker.example"
+
+        # Interleaved C0 control + Unicode whitespace must be fully stripped so
+        # the scheme is not hidden from the authority-bounds check.
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("\x00\u00a0\x01http://###OBS1###/status", resolver)
+
     def test_url_variable_in_scheme_is_rejected(self):
         def resolver(index: int) -> str:
             return "https"
