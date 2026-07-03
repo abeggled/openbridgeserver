@@ -938,3 +938,84 @@ async def test_successful_batch_append_stays_atomic(store: SqliteSegmentStore):
     )
     rows = await store.query(StoreQuery(limit=50))
     assert {r["new_value"] for r in rows} == {10, 11, 12}
+
+
+# ---------------------------------------------------------------------------
+# (Codex :564) Partielle Store-Ressourcen bei open()-Fehler vollstaendig schliessen
+# ---------------------------------------------------------------------------
+
+
+async def test_open_failure_after_manifest_open_closes_all_resources(tmp_path: Path, monkeypatch):
+    # Gelingt manifest.open(), scheitert danach aber das Ermitteln/Oeffnen des aktiven
+    # Segments (_create_segment_locked / _open_segment_conn, z.B. weil ein vorhandenes
+    # aktives Segment korrupt oder nicht schreibbar ist), gibt der alte Fehlerpfad NUR die
+    # Writer-Lease frei. Die Manifest-aiosqlite-Connection/-Thread LEAKEN dann, weil der
+    # aufrufende RingBuffer erst NACH Rueckkehr von store.open() aufraeumt. Der Fix schliesst
+    # im Fehlerpfad ALLE bereits geoeffneten Ressourcen (Manifest-Connection + evtl. schon
+    # geoeffnete aktive Segment-Connection) und gibt die Lease frei, bevor der Fehler
+    # propagiert.
+    store = SqliteSegmentStore(tmp_path / "root")
+
+    boom = RuntimeError("segment open failed")
+
+    async def _fail_open_segment_conn(_filename: str):
+        raise boom
+
+    monkeypatch.setattr(store, "_open_segment_conn", _fail_open_segment_conn)
+
+    # (a) Der urspruengliche Fehler propagiert unveraendert.
+    with pytest.raises(RuntimeError, match="segment open failed"):
+        await store.open()
+
+    # (b) Manifest-Connection ist geschlossen (kein Leak) UND die Writer-Lease ist frei.
+    assert store.manifest._conn is None
+    assert store._lease.owns_lock is False
+    assert store._active_conn is None
+
+    # (c) Ein erneuter open() gelingt – keine belegten Ressourcen/kein gehaltenes Lock.
+    monkeypatch.undo()
+    await store.open()
+    try:
+        assert store._lease.owns_lock is True
+        assert store.manifest._conn is not None
+        await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+        rows = await store.query(StoreQuery(limit=10))
+        assert {r["new_value"] for r in rows} == {1}
+    finally:
+        await store.close()
+
+
+async def test_open_failure_closes_already_assigned_active_segment_conn(tmp_path: Path, monkeypatch):
+    # Ist die aktive Segment-Connection im Fehlerzeitpunkt bereits an self._active_conn
+    # zugewiesen, muss der Fehlerpfad AUCH diese Connection schliessen (nicht nur Manifest +
+    # Lease). Wir oeffnen im Wrapper eine echte Segment-Connection, weisen sie zu und werfen
+    # dann – wie ein Schritt, der NACH der Zuweisung scheitert.
+    store = SqliteSegmentStore(tmp_path / "root")
+
+    real_open_segment_conn = store._open_segment_conn
+    opened: list = []
+
+    async def _assign_then_fail(filename: str):
+        conn = await real_open_segment_conn(filename)
+        opened.append(conn)
+        store._active_conn = conn
+        raise RuntimeError("post-assign failure")
+
+    monkeypatch.setattr(store, "_open_segment_conn", _assign_then_fail)
+
+    with pytest.raises(RuntimeError, match="post-assign failure"):
+        await store.open()
+
+    # Die zugewiesene aktive Segment-Connection wurde geschlossen (Zugriff wirft nach close()).
+    assert opened, "active segment connection should have been opened before failure"
+    with pytest.raises(ValueError):
+        await opened[0].execute("SELECT 1")
+
+    assert store._active_conn is None
+    assert store.manifest._conn is None
+    assert store._lease.owns_lock is False
+
+    # Erneuter open() gelingt sauber.
+    monkeypatch.undo()
+    await store.open()
+    await store.close()

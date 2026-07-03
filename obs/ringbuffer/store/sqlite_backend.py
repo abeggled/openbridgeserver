@@ -39,6 +39,7 @@ dieses Kernels; die Nahtstelle ist mit ``# TODO(#…)`` markiert.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -561,7 +562,23 @@ class SqliteSegmentStore(RingBufferStore):
             self._active_segment = active
             self._active_conn = await self._open_segment_conn(active.filename)
         except Exception:
-            await self._lease.release()
+            # Scheitert ein Schritt NACH erfolgreichem manifest.open() (z.B. ein korruptes/
+            # nicht schreibbares aktives Segment in _create_segment_locked/_open_segment_conn),
+            # gab der alte Pfad nur die Lease frei. Da RingBuffer._open_segment_store_locked()
+            # erst NACH Rueckkehr von open() aufraeumt, leakten dann die Manifest-aiosqlite-
+            # Connection/-Thread (und eine evtl. schon geoeffnete aktive Segment-Connection).
+            # Daher hier ALLE bereits geoeffneten Ressourcen best-effort schliessen, bevor der
+            # Originalfehler propagiert (#951, Codex :564). Fehler beim Aufraeumen duerfen den
+            # Originalfehler nicht ueberdecken.
+            if self._active_conn is not None:
+                with contextlib.suppress(Exception):
+                    await self._active_conn.close()
+                self._active_conn = None
+            self._active_segment = None
+            with contextlib.suppress(Exception):
+                await self.manifest.close()
+            with contextlib.suppress(Exception):
+                await self._lease.release()
             raise
 
     async def close(self) -> None:
