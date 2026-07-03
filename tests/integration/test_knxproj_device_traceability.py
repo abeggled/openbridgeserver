@@ -73,6 +73,26 @@ async def _insert_binding(dp_id: str, ga: str) -> None:
     )
 
 
+async def _insert_binding_config(dp_id: str, config: str, *, direction: str = "SOURCE") -> None:
+    db = get_db()
+    now = datetime.now(UTC).isoformat()
+    await db.execute_and_commit(
+        """INSERT INTO adapter_bindings
+               (id, datapoint_id, adapter_type, direction, config, enabled, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            str(uuid.uuid4()),
+            dp_id,
+            "KNX",
+            direction,
+            config,
+            1,
+            now,
+            now,
+        ),
+    )
+
+
 async def _write_value(client, auth_headers, dp_id: str, value: float) -> None:
     resp = await client.post(
         f"/api/v1/datapoints/{dp_id}/value",
@@ -161,4 +181,53 @@ async def test_device_pa_filter_matches_same_ga_as_knxproj_lookup(client, auth_h
         )
         await db.execute("DELETE FROM knx_devices WHERE individual_address = ?", (pa,))
         await db.execute("DELETE FROM knx_group_addresses WHERE address = ?", (ga,))
+        await db.commit()
+
+
+async def test_knx_traceability_context_endpoints(client, auth_headers):
+    pa = f"1.1.{110 + (uuid.uuid4().int % 40)}"
+    state_pa = f"1.2.{10 + (uuid.uuid4().int % 40)}"
+    ga = f"5/2/{10 + (uuid.uuid4().int % 40)}"
+    state_ga = f"5/3/{10 + (uuid.uuid4().int % 40)}"
+    await _seed_device_graph(pa, ga)
+    await _seed_device_graph(state_pa, state_ga)
+
+    dp = await _create_dp(client, auth_headers, f"KNX-CTX-{uuid.uuid4()}")
+    await _insert_binding_config(
+        dp["id"],
+        '{"group_address": "%s", "state_group_address": "%s"}' % (ga, state_ga),
+        direction="BOTH",
+    )
+
+    try:
+        dp_ctx_resp = await client.get(f"/api/v1/datapoints/{dp['id']}/knx-context", headers=auth_headers)
+        assert dp_ctx_resp.status_code == 200, dp_ctx_resp.text
+        dp_ctx = dp_ctx_resp.json()
+        by_ga = {item["address"]: item for item in dp_ctx["group_addresses"]}
+        assert by_ga[ga]["roles"] == ["group_address"]
+        assert by_ga[state_ga]["roles"] == ["state_group_address"]
+        assert any(device["pa"] == pa for device in by_ga[ga]["devices"])
+
+        device_ctx_resp = await client.get(f"/api/v1/knxproj/devices/{pa}/datapoints", headers=auth_headers)
+        assert device_ctx_resp.status_code == 200, device_ctx_resp.text
+        device_ctx = device_ctx_resp.json()
+        assert device_ctx["pa"] == pa
+        assert any(item["id"] == dp["id"] and item["ga_address"] == ga for item in device_ctx["datapoints"])
+
+        detail_resp = await client.get(f"/api/v1/knxproj/devices/{pa}", headers=auth_headers)
+        assert detail_resp.status_code == 200, detail_resp.text
+        detail = detail_resp.json()
+        co_datapoints = detail["comm_objects"][0]["datapoints"]
+        assert any(item["id"] == dp["id"] and item["name"] == dp["name"] for item in co_datapoints)
+    finally:
+        await client.delete(f"/api/v1/datapoints/{dp['id']}", headers=auth_headers)
+        db = get_db()
+        for address in (ga, state_ga):
+            await db.execute("DELETE FROM knx_co_ga_links WHERE ga_address = ?", (address,))
+            await db.execute("DELETE FROM knx_group_addresses WHERE address = ?", (address,))
+        await db.execute(
+            "DELETE FROM knx_comm_objects WHERE device_id IN (SELECT id FROM knx_devices WHERE individual_address IN (?, ?))",
+            (pa, state_pa),
+        )
+        await db.execute("DELETE FROM knx_devices WHERE individual_address IN (?, ?)", (pa, state_pa))
         await db.commit()

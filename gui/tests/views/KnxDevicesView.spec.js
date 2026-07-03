@@ -43,6 +43,18 @@ beforeEach(() => {
             name: 'Switch',
             datapoint_type: 'DPT1.001',
             ga_addresses: ['1/2/3'],
+            datapoints: [
+              {
+                id: 'dp-1',
+                name: 'Kitchen Light',
+                data_type: 'BOOLEAN',
+                binding_id: 'binding-1',
+                direction: 'BOTH',
+                enabled: true,
+                ga_address: '1/2/3',
+                ga_role: 'group_address',
+              },
+            ],
           },
         ],
       },
@@ -128,6 +140,20 @@ describe('KnxDevicesView', () => {
     expect(wrapper.text()).toContain('Kitchen Switch')
     expect(wrapper.text()).toContain('Siemens')
     expect(wrapper.find('[data-testid="knx-devices-import-link"]').attributes('data-to')).toContain('importexport')
+  })
+
+  it('renders datapoints bound to a selected KNX device communication object', async () => {
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-testid="knx-device-row-1.1.1"]').trigger('click')
+    await flushPromises()
+
+    const detailText = wrapper.find('[data-testid="knx-device-detail"]').text()
+    expect(detailText).toContain('Gebundene Datenpunkte')
+    expect(detailText).toContain('Kitchen Light')
+    expect(detailText).toContain('dp-1')
+    expect(detailText).toContain('Lesen/Schreiben')
+    expect(wrapper.find('[data-testid="knx-device-bound-datapoint"]').exists()).toBe(true)
   })
 
   it('renders dashes for missing optional device fields', async () => {

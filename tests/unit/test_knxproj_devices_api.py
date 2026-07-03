@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
 
 from obs.api.v1 import knxproj as knxproj_api
+from obs.api.v1.services.knx_traceability import build_datapoint_knx_context
 from obs.db.database import Database
 
 
@@ -57,6 +59,33 @@ async def _prepare_db() -> Database:
     await db.commit()
 
     return db
+
+
+async def _insert_datapoint_binding(
+    db: Database,
+    *,
+    dp_id: str,
+    name: str,
+    config: str,
+    direction: str = "SOURCE",
+    enabled: int = 1,
+) -> str:
+    now = datetime.now(UTC).isoformat()
+    binding_id = str(uuid.uuid5(uuid.NAMESPACE_URL, dp_id))
+    await db.execute(
+        """INSERT INTO datapoints
+           (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, created_at, updated_at, persist_value, record_history)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (dp_id, name, "BOOLEAN", None, "[]", f"dp/{dp_id}/value", None, now, now, 1, 1),
+    )
+    await db.execute(
+        """INSERT INTO adapter_bindings
+           (id, datapoint_id, adapter_type, direction, config, enabled, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (binding_id, dp_id, "KNX", direction, config, enabled, now, now),
+    )
+    await db.commit()
+    return binding_id
 
 
 async def _insert_hierarchy(db: Database) -> tuple[str, str, str]:
@@ -113,6 +142,12 @@ async def test_list_knx_devices_with_filters_and_pagination():
 async def test_get_knx_device_by_pa_includes_comm_objects_and_ga_links():
     db = await _prepare_db()
     try:
+        binding_id = await _insert_datapoint_binding(
+            db,
+            dp_id="00000000-0000-0000-0000-000000000010",
+            name="Kitchen Light",
+            config='{"group_address": "1/2/3"}',
+        )
         result = await knxproj_api.get_knx_device(
             pa="1.1.1",
             _user="admin",
@@ -129,6 +164,8 @@ async def test_get_knx_device_by_pa_includes_comm_objects_and_ga_links():
         assert set(comm_objects.keys()) == {"co-1", "co-2"}
         assert comm_objects["co-1"].ga_addresses == ["1/2/3"]
         assert comm_objects["co-2"].ga_addresses == ["1/2/4"]
+        assert str(comm_objects["co-1"].datapoints[0].binding_id) == binding_id
+        assert comm_objects["co-1"].datapoints[0].name == "Kitchen Light"
     finally:
         await db.disconnect()
 
@@ -147,6 +184,85 @@ async def test_get_knx_devices_for_group_address():
 
         assert result.total == 2
         assert [item.pa for item in result.items] == ["1.1.1", "1.1.2"]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_knx_device_datapoints_context_groups_datapoints_by_comm_object_ga():
+    db = await _prepare_db()
+    try:
+        await _insert_datapoint_binding(
+            db,
+            dp_id="00000000-0000-0000-0000-000000000001",
+            name="Kitchen Light",
+            config='{"group_address": "1/2/3", "state_group_address": "1/2/4"}',
+            direction="BOTH",
+        )
+
+        result = await knxproj_api.get_knx_device_datapoints(
+            pa="1.1.1",
+            _user="admin",
+            db=db,
+        )
+
+        assert result.pa == "1.1.1"
+        assert [dp.name for dp in result.datapoints] == ["Kitchen Light", "Kitchen Light"]
+        by_co = {co.id: co for co in result.comm_objects}
+        assert by_co["co-1"].group_addresses[0].address == "1/2/3"
+        assert by_co["co-1"].group_addresses[0].datapoints[0].ga_role == "group_address"
+        assert by_co["co-2"].group_addresses[0].address == "1/2/4"
+        assert by_co["co-2"].group_addresses[0].datapoints[0].ga_role == "state_group_address"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_datapoint_knx_context_resolves_group_addresses_devices_and_comm_objects():
+    db = await _prepare_db()
+    try:
+        dp_id = "00000000-0000-0000-0000-000000000002"
+        await _insert_datapoint_binding(
+            db,
+            dp_id=dp_id,
+            name="Kitchen Status",
+            config='{"group_address": "1/2/3", "state_group_address": "1/2/4"}',
+            direction="BOTH",
+        )
+
+        result = await build_datapoint_knx_context(
+            dp_id=uuid.UUID(dp_id),
+            db=db,
+        )
+
+        by_ga = {ga.address: ga for ga in result.group_addresses}
+        assert by_ga["1/2/3"].name == "GA 1"
+        assert by_ga["1/2/3"].roles == ["group_address"]
+        assert [device.pa for device in by_ga["1/2/3"].devices] == ["1.1.1", "1.1.2"]
+        assert by_ga["1/2/3"].devices[0].comm_objects[0].name == "Switch"
+        assert by_ga["1/2/4"].roles == ["state_group_address"]
+        assert by_ga["1/2/4"].devices[0].comm_objects[0].name == "Status"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_knx_context_returns_empty_when_device_schema_missing(monkeypatch: pytest.MonkeyPatch):
+    db = await _prepare_db()
+
+    async def _schema_not_ready(_db):
+        return False
+
+    monkeypatch.setattr(knxproj_api, "_knx_device_schema_ready", _schema_not_ready)
+    try:
+        result = await knxproj_api.get_knx_device_datapoints(
+            pa="1.1.1",
+            _user="admin",
+            db=db,
+        )
+        assert result.pa == "1.1.1"
+        assert result.datapoints == []
+        assert result.comm_objects == []
     finally:
         await db.disconnect()
 

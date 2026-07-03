@@ -247,6 +247,33 @@
                 </span>
                 <span v-if="!co.ga_addresses?.length" class="text-xs text-slate-400">{{ t('knxDevices.noGaLinks') }}</span>
               </div>
+              <div class="mt-3 border-t border-slate-200 pt-2 dark:border-slate-700">
+                <div class="text-xs font-semibold text-slate-500">{{ t('knxDevices.boundDatapoints') }}</div>
+                <div v-if="co.datapoints?.length" class="mt-1 flex flex-col gap-1">
+                  <div
+                    v-for="dp in co.datapoints"
+                    :key="`${co.id}:${dp.binding_id}:${dp.ga_role}:${dp.ga_address}`"
+                    class="rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-900/50"
+                    data-testid="knx-device-bound-datapoint"
+                  >
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="font-medium text-slate-800 dark:text-slate-100">{{ dp.name }}</span>
+                      <span class="font-mono text-slate-500">{{ dp.id }}</span>
+                    </div>
+                    <div class="mt-0.5 flex flex-wrap items-center gap-2 text-slate-500">
+                      <span>{{ dp.data_type }}</span>
+                      <span>{{ deviceDatapointDirectionLabel(dp.direction) }}</span>
+                      <span class="font-mono">{{ dp.ga_address }}</span>
+                      <span :class="dp.enabled ? 'text-emerald-600 dark:text-emerald-300' : 'text-red-600 dark:text-red-300'">
+                        {{ dp.enabled ? t('common.enabled') : t('knxDevices.bindingDisabled') }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="mt-1 text-xs text-slate-500" data-testid="knx-device-no-bound-datapoints">
+                  {{ t('knxDevices.noBoundDatapoints') }}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -426,6 +453,12 @@ function linkDisplayPath(link) {
 function linkFullLabel(link) {
   if (!link) return ''
   return [link.tree_name, ...linkNodePath(link)].filter(Boolean).join(' › ')
+}
+
+function deviceDatapointDirectionLabel(direction) {
+  if (direction === 'SOURCE') return t('knxDevices.bindingRead')
+  if (direction === 'DEST') return t('knxDevices.bindingWrite')
+  return t('knxDevices.bindingReadWrite')
 }
 
 async function saveDeviceHierarchyLinks() {
