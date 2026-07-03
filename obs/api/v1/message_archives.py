@@ -28,6 +28,7 @@ from obs.message_archive import (
     EntryQuery,
     MIGRATIONS,
     MessageArchiveStore,
+    RESERVED_ARCHIVE_IDS,
     activate_message_archive_service,
     broadcast_message_archive_entry,
     broadcast_message_archive_refresh,
@@ -202,6 +203,8 @@ def _validate_archive_id(value: str) -> str:
     allowed = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
     if any(ch not in allowed for ch in normalized):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid message archive id")
+    if normalized in RESERVED_ARCHIVE_IDS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid message archive id")
     return normalized
 
 
@@ -304,6 +307,8 @@ def _validate_sqlite_archive_db(path: str) -> None:
             has_read_state_entry_cascade = _has_foreign_key_cascade(read_state_foreign_keys, "message_archive_entries", "entry_id", "id")
             if not has_entry_archive_cascade or not has_read_state_entry_cascade:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Meldungsarchiv-Datenbank hat ungültige Fremdschlüssel.")
+            if not _has_unique_key(conn, "message_archives", ("id",)) or not _has_unique_key(conn, "message_archive_entries", ("id",)):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Meldungsarchiv-Datenbank hat ungültige Primärschlüssel.")
             if not _has_unique_key(conn, "message_archive_read_states", ("entry_id", "username")):
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Meldungsarchiv-Datenbank hat ungültige Lesestatus-Schlüssel.")
             fk_violations = conn.execute("PRAGMA foreign_key_check").fetchall()
@@ -774,6 +779,7 @@ async def delete_message_archive(
         resource_id=archive_id,
         details={"affected_entries": affected},
     )
+    await broadcast_message_archive_refresh(archive_id)
     return {"ok": True, "affected_entries": affected}
 
 

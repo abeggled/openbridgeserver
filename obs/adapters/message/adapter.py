@@ -368,11 +368,12 @@ class MessageAdapter(AdapterBase):
                 state.last_value = event.value
 
         failures = [result for result in results if not result.ok]
-        if failures:
-            detail = f"MESSAGE provider failures: {len(failures)} target(s)"
-            await self._publish_status(True, detail, severity="warning", code="messageProviderFailures", params={"count": len(failures)})
-        elif results:
-            await self._publish_status(True, "MESSAGE sent", code="messageSent")
+        if archive_ok:
+            if failures:
+                detail = f"MESSAGE provider failures: {len(failures)} target(s)"
+                await self._publish_status(True, detail, severity="warning", code="messageProviderFailures", params={"count": len(failures)})
+            elif results:
+                await self._publish_status(True, "MESSAGE sent", code="messageSent")
 
         state.in_flight = False
         state.in_flight_key = _NO_PENDING_COALESCE

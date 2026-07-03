@@ -147,6 +147,36 @@ describe('MessageArchive Widget.vue', () => {
     expect(wrapper.text()).toContain('Older')
   })
 
+  it('refreshes when a visible live entry leaves a partial result page', async () => {
+    vi.mocked(messageArchives.entries)
+      .mockResolvedValueOnce({ items: [entry], total: 2, limit: 1, offset: 0 })
+      .mockResolvedValueOnce({ items: [olderEntry], total: 2, limit: 1, offset: 0 })
+
+    const wrapper = mount(MessageArchiveWidget, {
+      props: {
+        config: { status: ['new'], limit: 1 },
+        editorMode: false,
+        readonly: false,
+      },
+      global: {
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Startup')
+    wsHandlers.current[0]({
+      action: 'message_archive_entry',
+      entry: { ...entry, status: 'acknowledged', acknowledged_at: '2026-01-01T10:01:00+00:00', acknowledged_by: 'admin' },
+    })
+    await flushPromises()
+
+    expect(messageArchives.entries).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).not.toContain('Startup')
+    expect(wrapper.text()).toContain('Older')
+    wrapper.unmount()
+  })
+
   it('refreshes when the current archive is invalidated', async () => {
     vi.mocked(messageArchives.entries)
       .mockResolvedValueOnce({ items: [entry], total: 1, limit: 25, offset: 0 })

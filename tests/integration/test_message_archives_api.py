@@ -14,6 +14,66 @@ def _archive_id(prefix: str = "test") -> str:
     return f"{prefix}-{uuid.uuid4().hex[:10]}"
 
 
+def _write_message_archive_schema(path, *, archive_primary_key: bool = True, entry_primary_key: bool = True) -> None:
+    supported_version = max(version for version, _sql in MIGRATIONS)
+    archive_id_definition = "TEXT PRIMARY KEY" if archive_primary_key else "TEXT NOT NULL"
+    entry_id_definition = "TEXT PRIMARY KEY" if entry_primary_key else "TEXT NOT NULL"
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (?, '2026-01-01T00:00:00Z')", (supported_version,))
+        conn.execute(
+            f"""
+            CREATE TABLE message_archives (
+                id {archive_id_definition},
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                tags TEXT NOT NULL DEFAULT '[]',
+                default_type TEXT,
+                color TEXT NOT NULL DEFAULT '#3b82f6',
+                retention_max_entries INTEGER,
+                retention_max_age_days INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            f"""
+            CREATE TABLE message_archive_entries (
+                id {entry_id_definition},
+                archive_id TEXT NOT NULL REFERENCES message_archives(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'system',
+                severity TEXT NOT NULL DEFAULT 'info',
+                status TEXT NOT NULL DEFAULT 'new',
+                source TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                message TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL DEFAULT '{{}}',
+                acknowledged_at TEXT,
+                acknowledged_by TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE message_archive_read_states (
+                entry_id TEXT NOT NULL REFERENCES message_archive_entries(id) ON DELETE CASCADE,
+                username TEXT NOT NULL,
+                read_at TEXT NOT NULL,
+                hidden_at TEXT,
+                PRIMARY KEY (entry_id, username)
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 async def _create_non_admin_headers(client, auth_headers) -> tuple[dict[str, str], str]:
     username = f"archive-user-{uuid.uuid4().hex[:8]}"
     resp = await client.post(
@@ -33,6 +93,16 @@ async def _create_non_admin_headers(client, auth_headers) -> tuple[dict[str, str
 async def test_message_archives_require_auth(client):
     resp = await client.get("/api/v1/message-archives")
     assert resp.status_code == 401
+
+
+async def test_message_archive_rejects_ids_that_shadow_static_routes(client, auth_headers):
+    resp = await client.post(
+        "/api/v1/message-archives",
+        headers=auth_headers,
+        json={"id": "entries", "name": "Shadowed"},
+    )
+
+    assert resp.status_code == 400
 
 
 async def test_message_archive_crud_entries_read_ack_and_delete(client, auth_headers):
@@ -319,6 +389,41 @@ async def test_message_archive_clear_broadcasts_archive_refresh(client, auth_hea
         )
 
 
+async def test_message_archive_delete_broadcasts_archive_refresh(client, auth_headers, monkeypatch):
+    from obs.api.v1 import message_archives as message_archives_api
+
+    archive_id = _archive_id("delete-refresh")
+    refreshed: list[str | None] = []
+
+    async def capture_refresh(target_archive_id=None):
+        refreshed.append(target_archive_id)
+
+    monkeypatch.setattr(message_archives_api, "broadcast_message_archive_refresh", capture_refresh)
+
+    create = await client.post(
+        "/api/v1/message-archives",
+        headers=auth_headers,
+        json={"id": archive_id, "name": "Delete Refresh"},
+    )
+    assert create.status_code == 201, create.text
+    entry_resp = await client.post(
+        f"/api/v1/message-archives/{archive_id}/entries",
+        headers=auth_headers,
+        json={"title": "Before delete"},
+    )
+    assert entry_resp.status_code == 201, entry_resp.text
+
+    delete_resp = await client.delete(
+        f"/api/v1/message-archives/{archive_id}",
+        headers=auth_headers,
+        params={"confirm": "true"},
+    )
+
+    assert delete_resp.status_code == 200, delete_resp.text
+    assert delete_resp.json() == {"ok": True, "affected_entries": 1}
+    assert refreshed == [archive_id]
+
+
 async def test_message_archive_integrity_check_and_export(client, auth_headers):
     archive_id = _archive_id("export")
     try:
@@ -571,6 +676,26 @@ async def test_message_archive_database_import_rejects_missing_read_state_unique
         conn.commit()
     finally:
         conn.close()
+
+    imported = await client.post(
+        "/api/v1/message-archives/import/db",
+        headers=auth_headers,
+        files={"file": ("message-archives.sqlite", malformed.read_bytes(), "application/octet-stream")},
+    )
+
+    assert imported.status_code == 400
+
+
+@pytest.mark.parametrize(("archive_primary_key", "entry_primary_key"), [(False, True), (True, False)])
+async def test_message_archive_database_import_rejects_missing_primary_keys(
+    client,
+    auth_headers,
+    tmp_path,
+    archive_primary_key,
+    entry_primary_key,
+):
+    malformed = tmp_path / f"malformed-message-archives-primary-key-{archive_primary_key}-{entry_primary_key}.sqlite"
+    _write_message_archive_schema(malformed, archive_primary_key=archive_primary_key, entry_primary_key=entry_primary_key)
 
     imported = await client.post(
         "/api/v1/message-archives/import/db",

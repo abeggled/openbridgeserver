@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 ArchiveStatus = Literal["ok", "degraded"]
 
+RESERVED_ARCHIVE_IDS = frozenset({"entries", "export", "import", "integrity-check"})
+
 _SCHEMA_VERSION_DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
     version     INTEGER PRIMARY KEY,
@@ -154,6 +156,8 @@ def _normalize_archive_id(value: str) -> str:
     allowed = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
     if any(ch not in allowed for ch in normalized):
         raise ValueError("archive_id may only contain letters, numbers, '.', '_' and '-'")
+    if normalized in RESERVED_ARCHIVE_IDS:
+        raise ValueError("archive_id is reserved")
     return normalized
 
 

@@ -118,7 +118,7 @@ async function applyLiveEntry(entry: MessageArchiveEntry) {
   const loadedFullResult = total.value > 0 && entries.value.length >= total.value
   if (!matchesFilters(merged)) {
     entries.value = entries.value.filter(item => item.id !== merged.id)
-    if (loadedFullResult) await load()
+    if (existing) await load()
     return
   }
   entries.value = [...entries.value.filter(item => item.id !== merged.id), merged]

@@ -692,6 +692,12 @@ async def test_send_and_archive_binding_preserves_throttle_when_archive_write_fa
         event_bus=bus,
         config={"providers": {"dummy": {"enabled": True, "targets": {"default": {}}}}},
     )
+    statuses: list[dict] = []
+
+    async def capture_status(connected, detail="", severity="ok", *, code=None, params=None):
+        statuses.append({"connected": connected, "detail": detail, "severity": severity, "code": code, "params": params})
+
+    adapter._publish_status = capture_status
     binding = _message_binding(
         dp_id,
         archive_strategy="send_and_archive",
@@ -708,6 +714,8 @@ async def test_send_and_archive_binding_preserves_throttle_when_archive_write_fa
     assert state.last_sent_monotonic is not None
     assert state.last_condition is True
     dummy_provider.send.assert_awaited_once()
+    assert statuses[-1]["code"] == "messageArchiveWriteFailed"
+    assert all(status["code"] != "messageSent" for status in statuses)
 
 
 @pytest.mark.asyncio
