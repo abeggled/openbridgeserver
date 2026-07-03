@@ -110,6 +110,20 @@ describe('MessageArchivesView', () => {
     wrapper.unmount()
   })
 
+  it('clears visible entries when the selected archive is removed and none remain', async () => {
+    const wrapper = await mountView()
+    expect(wrapper.text()).toContain('Backup fehlgeschlagen')
+
+    api.list.mockResolvedValueOnce({ data: [] })
+    await buttonByText(wrapper, 'Löschen').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('Backup fehlgeschlagen')
+    expect(api.delete).toHaveBeenCalledWith('system', true)
+    expect(api.entries).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
   it('creates an archive with generated lowercase id and custom default type', async () => {
     const wrapper = await mountView()
 

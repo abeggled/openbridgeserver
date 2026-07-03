@@ -294,7 +294,7 @@ async function loadArchives() {
       selectedArchive.value = data.find(a => a.id === selectedArchive.value.id) ?? null
     }
     if (!selectedArchive.value && data.length) selectedArchive.value = data[0]
-    if (selectedArchive.value) await loadEntries()
+    await loadEntries()
   } catch (err) {
     error.value = err?.response?.data?.detail || err.message || t('common.loadError')
   } finally {

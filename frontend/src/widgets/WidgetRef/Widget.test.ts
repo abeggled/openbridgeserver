@@ -85,4 +85,41 @@ describe('WidgetRef Widget.vue', () => {
 
     expect(wrapper.get('[data-testid="dummy-widget"]').attributes('data-readonly')).toBe('true')
   })
+
+  it('forwards readonly mode from the referenced source page', async () => {
+    vi.mocked(visu.getWidgetRef).mockResolvedValue([
+      {
+        id: 'source-widget',
+        name: 'Archive',
+        type: 'DummyReadonlyWidget',
+        datapoint_id: null,
+        status_datapoint_id: null,
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 1,
+        config: {},
+        source_page_readonly: true,
+      },
+    ])
+
+    const wrapper = mount(WidgetRef, {
+      props: {
+        config: { source_page_id: 'source-page', source_widget_name: 'Archive' },
+        datapointId: null,
+        value: null,
+        statusValue: null,
+        editorMode: false,
+        readonly: false,
+      },
+      global: {
+        mocks: {
+          $t: (key: string) => key,
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="dummy-widget"]').attributes('data-readonly')).toBe('true')
+  })
 })

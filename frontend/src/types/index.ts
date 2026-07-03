@@ -44,6 +44,10 @@ export interface WidgetInstance {
   config: Record<string, unknown>
 }
 
+export interface WidgetRefInstance extends WidgetInstance {
+  source_page_readonly?: boolean
+}
+
 // ── DataPoint ─────────────────────────────────────────────────────────────────
 
 export interface DataPoint {

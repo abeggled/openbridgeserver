@@ -53,6 +53,15 @@ const entry: MessageArchiveEntry = {
   is_read: false,
 }
 
+const olderEntry: MessageArchiveEntry = {
+  ...entry,
+  id: 'entry-older',
+  created_at: '2025-12-31T10:00:00+00:00',
+  updated_at: '2025-12-31T10:00:00+00:00',
+  title: 'Older',
+  message: entry.message,
+}
+
 afterEach(() => {
   wsHandlers.current = []
   vi.clearAllMocks()
@@ -101,5 +110,93 @@ describe('MessageArchive Widget.vue', () => {
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('Startup')
+  })
+
+  it('honors plural filter keys when loading and matching live entries', async () => {
+    vi.mocked(messageArchives.entries).mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0 })
+
+    const wrapper = mount(MessageArchiveWidget, {
+      props: {
+        config: {
+          archive_ids: ['system'],
+          severity: [],
+          severities: ['warning'],
+          status: [],
+          statuses: ['new'],
+          type: [],
+          types: ['system'],
+          source: [],
+          sources: ['core'],
+        },
+        editorMode: false,
+        readonly: false,
+      },
+      global: {
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await flushPromises()
+
+    expect(messageArchives.entries).toHaveBeenCalledWith({
+      archive_id: 'system',
+      limit: 25,
+      severity: 'warning',
+      sort: 'desc',
+      source: 'core',
+      status: 'new',
+      type: 'system',
+    })
+
+    wsHandlers.current[0]({ action: 'message_archive_entry', entry: { ...entry, severity: 'info' } })
+    wsHandlers.current[0]({ action: 'message_archive_entry', entry: { ...entry, severity: 'warning' } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Startup')
+    wrapper.unmount()
+  })
+
+  it('keeps live updates sorted and preserves local read state', async () => {
+    const readEntry = { ...entry, is_read: true, read_at: '2026-01-01T10:05:00+00:00' }
+    vi.mocked(messageArchives.entries).mockResolvedValue({ items: [readEntry, olderEntry], total: 2, limit: 25, offset: 0 })
+
+    const wrapper = mount(MessageArchiveWidget, {
+      props: {
+        config: {},
+        editorMode: false,
+        readonly: false,
+      },
+      global: {
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await flushPromises()
+
+    wsHandlers.current[0]({
+      action: 'message_archive_entry',
+      entry: {
+        ...olderEntry,
+        status: 'acknowledged',
+        acknowledged_at: '2026-01-01T10:06:00+00:00',
+        acknowledged_by: 'admin',
+      },
+    })
+    wsHandlers.current[0]({
+      action: 'message_archive_entry',
+      entry: {
+        ...readEntry,
+        status: 'acknowledged',
+        acknowledged_at: '2026-01-01T10:07:00+00:00',
+        acknowledged_by: 'other-user',
+        is_read: false,
+        read_at: null,
+      },
+    })
+    await flushPromises()
+
+    const articles = wrapper.findAll('article')
+    expect(articles[0].text()).toContain('Startup')
+    expect(articles[1].text()).toContain('Older')
+    expect(articles[0].text()).not.toContain('widgets.messageArchive.unread')
+    wrapper.unmount()
   })
 })

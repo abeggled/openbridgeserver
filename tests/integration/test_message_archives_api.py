@@ -175,6 +175,56 @@ async def test_message_archive_acknowledge_broadcasts_updated_entry(client, auth
         )
 
 
+async def test_message_archive_mark_read_broadcasts_updated_entry(client, auth_headers, monkeypatch):
+    from obs.api.v1 import message_archives as message_archives_api
+
+    archive_id = _archive_id("read-broadcast")
+    broadcasted: list[dict] = []
+    previous_entries: list[dict | None] = []
+
+    async def capture_broadcast(entry, previous_entry=None):
+        broadcasted.append(entry)
+        previous_entries.append(previous_entry)
+
+    monkeypatch.setattr(message_archives_api, "broadcast_message_archive_entry", capture_broadcast)
+
+    try:
+        create = await client.post(
+            "/api/v1/message-archives",
+            headers=auth_headers,
+            json={"id": archive_id, "name": "Read Broadcast"},
+        )
+        assert create.status_code == 201, create.text
+        entry_resp = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            json={"title": "Needs reading"},
+        )
+        assert entry_resp.status_code == 201, entry_resp.text
+        entry_id = entry_resp.json()["id"]
+        broadcasted.clear()
+        previous_entries.clear()
+
+        read_resp = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries/{entry_id}/read",
+            headers=auth_headers,
+        )
+
+        assert read_resp.status_code == 200, read_resp.text
+        assert read_resp.json()["is_read"] is True
+        assert [item["id"] for item in broadcasted] == [entry_id]
+        assert broadcasted[0]["status"] == "open"
+        assert broadcasted[0]["is_read"] is False
+        assert previous_entries[0] is not None
+        assert previous_entries[0]["status"] == "new"
+    finally:
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
 async def test_message_archive_integrity_check_and_export(client, auth_headers):
     archive_id = _archive_id("export")
     try:

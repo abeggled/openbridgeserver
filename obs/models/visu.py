@@ -34,6 +34,10 @@ class WidgetInstance(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class WidgetRefInstance(WidgetInstance):
+    source_page_readonly: bool = False
+
+
 # ── PageConfig ────────────────────────────────────────────────────────────────
 
 

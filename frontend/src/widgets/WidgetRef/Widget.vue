@@ -25,6 +25,7 @@ const props = defineProps<{
 const { t } = useI18n()
 const dpStore = useDatapointsStore()
 const sourceWidget = ref<WidgetInstance | null>(null)
+const sourcePageReadonly = ref(false)
 const loading = ref(false)
 const errorMsg = ref('')
 let subscribedIds: string[] = []
@@ -35,6 +36,7 @@ const sourceWidgetName = computed(() => (props.config.source_widget_name as stri
 async function loadReference() {
   if (!sourcePageId.value || !sourceWidgetName.value) {
     sourceWidget.value = null
+    sourcePageReadonly.value = false
     return
   }
   loading.value = true
@@ -54,13 +56,16 @@ async function loadReference() {
         subscribedIds = ids
       }
       sourceWidget.value = found
+      sourcePageReadonly.value = found.source_page_readonly === true
     } else {
       errorMsg.value = t('widgets.widgetref.widgetNotFound', { name: sourceWidgetName.value })
       sourceWidget.value = null
+      sourcePageReadonly.value = false
     }
   } catch {
     errorMsg.value = t('widgets.widgetref.sourceUnavailable')
     sourceWidget.value = null
+    sourcePageReadonly.value = false
   } finally {
     loading.value = false
   }
@@ -73,6 +78,7 @@ onUnmounted(() => { if (subscribedIds.length) dpStore.unsubscribe(subscribedIds)
 const refDef         = computed(() => sourceWidget.value ? WidgetRegistry.get(sourceWidget.value.type) : null)
 const refValue       = computed(() => sourceWidget.value?.datapoint_id        ? dpStore.getValue(sourceWidget.value.datapoint_id)        : null)
 const refStatusValue = computed(() => sourceWidget.value?.status_datapoint_id ? dpStore.getValue(sourceWidget.value.status_datapoint_id) : null)
+const refReadonly    = computed(() => props.readonly || sourcePageReadonly.value)
 </script>
 
 <template>
@@ -115,6 +121,6 @@ const refStatusValue = computed(() => sourceWidget.value?.status_datapoint_id ? 
     :value="refValue"
     :status-value="refStatusValue"
     :editor-mode="false"
-    :readonly="props.readonly"
+    :readonly="refReadonly"
   />
 </template>

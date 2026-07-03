@@ -17,7 +17,19 @@ const loading = ref(false)
 const error = ref('')
 let unsubscribeWs: (() => void) | null = null
 
-const archiveIds = computed<string[]>(() => Array.isArray(props.config.archive_ids) ? props.config.archive_ids as string[] : [])
+function configStringValues(...keys: string[]): string[] {
+  const values: string[] = []
+  for (const key of keys) {
+    const value = props.config[key]
+    if (Array.isArray(value)) values.push(...value.map(String).filter(Boolean))
+    if (typeof value === 'string' && value.trim()) {
+      values.push(...value.split(',').map(item => item.trim()).filter(Boolean))
+    }
+  }
+  return [...new Set(values)]
+}
+
+const archiveIds = computed<string[]>(() => configStringValues('archive_ids', 'archive_id'))
 const limit = computed(() => Math.max(1, Math.min(100, Number(props.config.limit ?? 25))))
 const showArchive = computed(() => (props.config.show_archive as boolean | undefined) ?? true)
 const showSource = computed(() => (props.config.show_source as boolean | undefined) ?? true)
@@ -27,12 +39,13 @@ const canRead = computed(() => !props.readonly && allowRead.value)
 const canAcknowledge = computed(() => !props.readonly && allowAcknowledge.value)
 
 function filterValues(key: 'severity' | 'status' | 'type' | 'source'): string[] {
-  const value = props.config[key]
-  if (Array.isArray(value)) return value.map(String).filter(Boolean)
-  if (typeof value === 'string' && value.trim()) {
-    return value.split(',').map(item => item.trim()).filter(Boolean)
-  }
-  return []
+  const pluralKeys = {
+    severity: 'severities',
+    status: 'statuses',
+    type: 'types',
+    source: 'sources',
+  } as const
+  return configStringValues(key, pluralKeys[key])
 }
 
 function params(): Record<string, string | number | undefined> {
@@ -86,14 +99,17 @@ function matchesFilters(entry: MessageArchiveEntry): boolean {
 }
 
 function applyLiveEntry(entry: MessageArchiveEntry) {
-  if (!matchesFilters(entry)) {
-    entries.value = entries.value.filter(item => item.id !== entry.id)
+  const existing = entries.value.find(item => item.id === entry.id)
+  const merged = existing && existing.is_read && !entry.is_read
+    ? { ...entry, is_read: true, read_at: existing.read_at }
+    : entry
+  if (!matchesFilters(merged)) {
+    entries.value = entries.value.filter(item => item.id !== merged.id)
     return
   }
-  entries.value = [
-    entry,
-    ...entries.value.filter(item => item.id !== entry.id),
-  ].slice(0, limit.value)
+  entries.value = [...entries.value.filter(item => item.id !== merged.id), merged]
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, limit.value)
   error.value = ''
 }
 
