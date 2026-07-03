@@ -274,47 +274,127 @@ _REGEX_MAX_PATTERN_LEN = 256
 # blockieren. Der Vergleich wird daher auf die ersten ``_REGEX_MAX_TARGET_LEN``
 # Zeichen begrenzt — gebounded statt blockierend.
 _REGEX_MAX_TARGET_LEN = 4096
-# Nested quantifiers wie ``(a+)+`` / ``(a?){30}`` / ``(a*){5,}`` (#951, Codex :265).
-# Innerer Quantifier deckt ``+``/``*`` UND ``?`` ab – auch optionale gruppierte
-# Wiederholungen (``(a?){30}``) backtracken gegen einen ``a``-Lauf katastrophal.
-# Aeusserer Quantifier deckt ``+``/``*`` UND alle counted quantifiers
-# (``{m}``/``{m,}``/``{m,n}``) ab – ein Muster wie ``(a+){30}`` umging die frühere,
-# nur auf ``[+*]`` begrenzte Variante sonst. Konsistent zur Alternations-Variante
-# unten (Codex :247). Benigne Muster ohne inneren Quantifier (``(abc)+``,
-# ``(abc){2,5}``) bleiben erlaubt.
-_RE_UNSAFE_NESTED_QUANTIFIERS = re.compile(r"\((?:[^()\\]|\\.)*[+*?][^()]*\)(?:[*+]|\{\d+(?:,\d*)?\})")
-# Quantifizierte Alternations-Gruppe wie ``(a|a)*`` / ``(a|ab)+`` / ``(a|b){0,5}`` /
-# ``(a|aa){30}`` (#951, Codex :307). Der nested-quantifier-Check oben verwirft solche
-# Muster NICHT (kein innerer ``+``/``*``), aber sie können exponentielles Backtracking
-# auslösen (ambiguous alternation) und einen einzelnen ``re.search`` über Sekunden
-# blockieren. Der SQLite-Pushdown-Callback läuft SYNCHRON je Kandidatenzeile im
-# aiosqlite-Worker und hält dabei den GIL – ein Laufzeit-Timeout (auch der Legacy-
-# ``asyncio.wait_for``-Weg) kann einen laufenden ``re.search`` in CPython nicht
-# abbrechen. Der einzig wirksame Schutz ist daher, das Muster VOR der Query als unsafe
-# abzulehnen (422-tauglicher ValueError) statt den Worker blockieren zu lassen. Bewusst
-# konservativ: auch harmlose/lineare quantifizierte Alternationen (``(a|b)+``) werden
-# abgelehnt; sie lassen sich verlustfrei als Zeichenklasse (``[ab]+``) umschreiben.
-# Der Quantifier-Zweig deckt ``*``/``+`` UND alle counted quantifiers ab –
-# EXAKTE Zählung ``{m}`` (Codex :247) ebenso wie ``{m,}`` und ``{m,n}``; ein Muster
-# wie ``(a|aa){30}b`` umging die frühere komma-pflichtige Variante sonst.
-_RE_UNSAFE_QUANTIFIED_ALTERNATION = re.compile(r"\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)(?:[*+]|\{\d+(?:,\d*)?\})")
+# Ein Quantifier direkt nach einer schließenden Gruppe: ``*``/``+``/``?`` oder ein
+# counted quantifier (``{m}``/``{m,}``/``{m,n}``). Für den Look-ahead im Scanner unten.
+_RE_TRAILING_QUANTIFIER = re.compile(r"[*+?]|\{\d+(?:,\d*)?\}")
+
+
+def _scan_unsafe_group_repetition(pattern: str) -> str | None:
+    """Nesting-aware Erkennung katastrophaler gruppierter Wiederholungen (#951, Codex :285).
+
+    Ersetzt die früheren FLACHEN Regex-Guards (nested quantifier / quantifizierte
+    Alternation). Ein reiner Regex kann balancierte/geschachtelte Klammern nicht robust
+    parsen, sodass ein zusätzlicher Wrapper (``((a+))+``) die alten Muster passierte,
+    obwohl es dieselbe katastrophale nested-repeat-Form ist. Dieser kleine Scanner geht
+    die Regex-Struktur einmal durch, trackt die Gruppen-Verschachtelung über einen Stack
+    und flaggt eine quantifizierte Gruppe (Quantifier direkt nach ``)``), wenn sie
+    IRGENDWO – auch hinter zusätzlichen Wrapper-Klammern – einen inneren Quantifier oder
+    eine Alternation enthält.
+
+    Escapte Klammern (``\\(``/``\\)``) und Zeichenklassen (``[...]``) werden korrekt
+    ignoriert (nicht als Gruppen bzw. Sonderzeichen gezählt). Benigne Muster ohne inneren
+    Quantifier/Alternation (``(abc)+``, ``((abc))+``, ``a{3}``, ``foo.*bar``) bleiben
+    erlaubt.
+
+    Rückgabe: eine Fehlerursache (String) für ein unsicheres Muster, sonst ``None``.
+
+    Jede Stack-Frame beschreibt den INHALT einer offenen Gruppe:
+
+    * ``has_quant``   – enthält irgendwo einen Quantifier (auf einem Zeichen ODER auf
+                        einer inneren, quantifizierten Gruppe);
+    * ``has_alt``     – enthält eine Top-Level-Alternation (``|``) dieser Gruppe.
+
+    Schließt eine Gruppe und folgt ihr ein Quantifier, ist sie unsicher, sobald ihr
+    Inhalt ``has_quant`` oder ``has_alt`` trägt. Beide Flags des Inhalts blubbern beim
+    Schließen in die Elterngruppe hoch; ist die Gruppe selbst quantifiziert, zählt dieser
+    Quantifier zusätzlich als innerer Quantifier der Elterngruppe.
+    """
+    # Stack von [has_quant, has_alt] je offener Gruppe.
+    stack: list[list[bool]] = []
+    i = 0
+    n = len(pattern)
+    while i < n:
+        ch = pattern[i]
+        if ch == "\\":
+            # Escape-Sequenz: das nächste Zeichen ist literal, keine Gruppe/kein Meta.
+            i += 2
+            continue
+        if ch == "[":
+            # Zeichenklasse überspringen; enthaltene ``(``/``)``/``|`` sind literal.
+            i += 1
+            if i < n and pattern[i] == "^":
+                i += 1
+            if i < n and pattern[i] == "]":  # ``]`` direkt am Anfang ist literal
+                i += 1
+            while i < n and pattern[i] != "]":
+                if pattern[i] == "\\":
+                    i += 1
+                i += 1
+            i += 1  # schließende ``]``
+            continue
+        if ch == "(":
+            stack.append([False, False])
+            i += 1
+            continue
+        if ch == ")":
+            frame = stack.pop() if stack else [False, False]
+            # Ist die gerade geschlossene Gruppe quantifiziert?
+            m = _RE_TRAILING_QUANTIFIER.match(pattern, i + 1)
+            quantified = m is not None
+            if quantified and (frame[0] or frame[1]):
+                return "nested quantifiers are not allowed" if frame[0] else "quantified alternation is not allowed"
+            if stack:
+                parent = stack[-1]
+                # Inhalts-Flags der Gruppe blubbern in die Elterngruppe hoch.
+                parent[0] = parent[0] or frame[0]
+                parent[1] = parent[1] or frame[1]
+                # Ist die Gruppe selbst quantifiziert, ist das ein innerer Quantifier
+                # der Elterngruppe.
+                if quantified:
+                    parent[0] = True
+            if m is not None:
+                i = m.end()  # Quantifier mitüberspringen
+            else:
+                i += 1
+            continue
+        if ch == "|":
+            if stack:
+                stack[-1][1] = True
+            i += 1
+            continue
+        if ch in "*+?":
+            # Quantifier auf einem Zeichen: innerer Quantifier der aktuellen Gruppe.
+            if stack:
+                stack[-1][0] = True
+            i += 1
+            continue
+        if ch == "{":
+            m = _RE_TRAILING_QUANTIFIER.match(pattern, i)
+            if m is not None:
+                if stack:
+                    stack[-1][0] = True
+                i = m.end()
+                continue
+            i += 1
+            continue
+        i += 1
+    return None
 
 
 def _assert_safe_regex(pattern: str) -> None:
-    """Statisches safe-regex-Gate für Pushdown UND Legacy-Fallback (#951, Codex :307).
+    """Statisches safe-regex-Gate für Pushdown UND Legacy-Fallback (#951, Codex :285/:307).
 
     Wirft einen 422-tauglichen ``ValueError`` für Muster, die im synchronen Callback
-    katastrophal backtracken könnten. Deckt Länge, nested quantifiers (bestehend) und
-    quantifizierte Alternationen (neu) ab. Die Muster-Ablehnung VOR der Ausführung ist
-    der einzige wirksame Schutz, weil ein laufender ``re.search`` in CPython (GIL) nicht
-    per Timeout abbrechbar ist.
+    katastrophal backtracken könnten. Deckt Länge sowie – nesting-aware – nested
+    quantifiers und quantifizierte Alternationen ab (auch hinter Wrapper-Klammern wie
+    ``((a+))+``). Die Muster-Ablehnung VOR der Ausführung ist der einzige wirksame Schutz,
+    weil ein laufender ``re.search`` in CPython (GIL) nicht per Timeout abbrechbar ist.
     """
     if len(pattern) > _REGEX_MAX_PATTERN_LEN:
         raise ValueError("unsafe regex pattern: pattern too long")
-    if _RE_UNSAFE_NESTED_QUANTIFIERS.search(pattern):
-        raise ValueError("unsafe regex pattern: nested quantifiers are not allowed")
-    if _RE_UNSAFE_QUANTIFIED_ALTERNATION.search(pattern):
-        raise ValueError("unsafe regex pattern: quantified alternation is not allowed")
+    reason = _scan_unsafe_group_repetition(pattern)
+    if reason is not None:
+        raise ValueError(f"unsafe regex pattern: {reason}")
 
 
 def _sqlite_ro_uri(path: Path, *, params: str = "") -> str:

@@ -1434,7 +1434,19 @@ class RingBuffer:
                         sort_order="desc",
                         value_filters=[],
                         candidate_cap=_SEGMENTED_CANDIDATE_CAP,
-                        is_export=False,
+                        # Export-Modus des Aufrufers durchreichen (#951, Codex :1437,
+                        # Follow-up Runde 29): der Freitext-``q``-OR-Block ist ein
+                        # Guarded-Filter, den der Store nur im NICHT-Export-Fall auf die
+                        # gedeckelte Kandidatenmenge legt. Hart ``is_export=False`` würde
+                        # die ``q``-scoped Discovery AUCH beim CSV-Export deckeln und einen
+                        # älteren ``q``-matchenden STRING/BOOLEAN-Datapoint jenseits des
+                        # Caps übersehen → der Export inlinet ``q`` erschöpfend, pusht das
+                        # numerische Prädikat und dropt die inkompatiblen Zeilen still statt
+                        # das Legacy-422 zu werfen. Mit dem Aufrufer-Flag läuft die Discovery
+                        # beim Export erschöpfend (analog Runde-20-``is_export``-Verhalten für
+                        # ``q``) und erkennt den inkompatiblen Datapoint. Der NICHT-Export-
+                        # Monitorpfad bleibt gedeckelt (kein neuer unbounded-Scan).
+                        is_export=is_export,
                     ),
                     max_distinct=len(datapoint_types) if datapoint_types else None,
                 )

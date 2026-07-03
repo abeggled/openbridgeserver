@@ -231,13 +231,51 @@ def classify_legacy_db(path: str | Path) -> LegacyClassification | None:
 
 @dataclass
 class _ResumeState:
-    """Persistierter Resume-Zustand einer chunked Migration (Cursor = letzte rowid)."""
+    """Persistierter Resume-Zustand einer chunked Migration (Cursor = letzte rowid).
+
+    Datei-Identität (#951, P2, migration.py:610): der ``done``-State wird an dieselbe
+    Datei-Identität gebunden wie der ``.migrated``-Marker (``_current_identity_fields``:
+    mtime+size der Hauptdatei UND ``-wal``/``-shm``). ``identity is None`` bedeutet ENTWEDER
+    ein Alt-State ohne Identitätsfeld (vor diesem Fix geschrieben, rückwärtskompatibel
+    behandelt) ODER ein Zwischen-Stand ``done=False`` (die Identität ist erst bei Abschluss
+    aussagekräftig). Bindet ``migrate_chunk`` den ``done``-Kurzschluss: weicht die aktuelle
+    Datei-Identität von der gespeicherten ab (neue Legacy-Zeilen seit dem ``done``), gilt der
+    ``done``-State als STALE und wird als „nicht fertig" behandelt, damit die neuen Zeilen
+    ab der materialisierten Grenze eingefaltet werden (siehe ``done_is_stale``).
+    """
 
     last_rowid: int
     done: bool
+    identity: dict[str, int] | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return {"last_rowid": self.last_rowid, "done": self.done}
+        payload: dict[str, object] = {"last_rowid": self.last_rowid, "done": self.done}
+        if self.identity is not None:
+            payload["identity"] = self.identity
+        return payload
+
+    def done_is_stale(self, current_identity: dict[str, int] | None) -> bool:
+        """True, wenn ein ``done``-State durch eine geänderte Quelldatei ungültig geworden ist.
+
+        Semantik – bewusst konservativ, konsistent zur Marker-Staleness (``_marker_suppresses_
+        attach``), sodass „Marker stale ⟺ done stale" gilt:
+
+        * ``done`` nicht gesetzt → nie stale (Zwischen-Stand, ``migrate_chunk`` läuft ohnehin).
+        * ``done`` gesetzt, aber KEINE gespeicherte Identität (Alt-State vor diesem Fix) →
+          NICHT stale: der ``done``-Kurzschluss bleibt wie bisher wirksam (Rückwärtskompat,
+          keine unnötige Re-Migration bestehender Installs).
+        * ``done`` + gespeicherte Identität, aktuelle Datei-Identität nicht ermittelbar
+          (Hauptdatei fehlt) → NICHT stale: keine neuen Zeilen ohne Datei.
+        * ``done`` + gespeicherte Identität, die von der aktuellen ABWEICHT (neue Zeilen /
+          Rollback / ``segmented=false`` + Re-Insert, auch reine ``-wal``-Änderung) → STALE.
+          Verglichen werden NUR die im State vorhandenen Felder gegen ihr aktuelles Äquivalent,
+          analog zum Marker-Vergleich.
+        """
+        if not self.done or self.identity is None:
+            return False
+        if current_identity is None:
+            return False
+        return any(current_identity.get(key) != value for key, value in self.identity.items())
 
 
 class LegacyMigrator:
@@ -606,8 +644,14 @@ class LegacyMigrator:
         von ``enforce_retention()`` – Details siehe ``_append_with_legacy_gids``.
         """
         state = self._load_state()
-        if state.done:
+        if state.done and not state.done_is_stale(self._current_identity_fields()):
+            # Fertig UND Quelldatei seit dem ``done`` unverändert → kein Re-Scan.
             return 0
+        # Ist der ``done``-State STALE (Quelldatei nach dem ``done`` verändert, #951, P2,
+        # migration.py:610), NICHT hier kurzschließen: die neuen Legacy-Zeilen werden ab der
+        # materialisierten Grenze (``_max_migrated_rowid``) eingefaltet. Die bereits kopierten
+        # Zeilen liegen unter dieser Grenze und werden dadurch idempotent übersprungen; nur die
+        # nach dem ``done`` hinzugekommenen rowids landen (erneut) in v2.
         # Effektiver Cursor = max(JSON-Cursor, höchste bereits in v2 materialisierte
         # Legacy-rowid). Deckt einen veralteten/verlorenen State nach Crash ab.
         materialized = await self._max_migrated_rowid()
@@ -619,7 +663,7 @@ class LegacyMigrator:
         rows = await self._read_batch(after_rowid=after_rowid, limit=batch_rows)
         if not rows:
             await self._finalize_and_detach()
-            self._save_state(_ResumeState(last_rowid=after_rowid, done=True))
+            self._save_state(_ResumeState(last_rowid=after_rowid, done=True, identity=self._current_identity_fields()))
             await self._run_retention_after_detach()
             return 0
         await self._append_with_legacy_gids(rows)
@@ -631,7 +675,7 @@ class LegacyMigrator:
             # materialisiert; ein Abbruch in ``_finalize_and_detach`` lässt den nächsten
             # Lauf ab last_rowid fortsetzen und erneut finalisieren.
             await self._finalize_and_detach()
-            self._save_state(_ResumeState(last_rowid=last_rowid, done=True))
+            self._save_state(_ResumeState(last_rowid=last_rowid, done=True, identity=self._current_identity_fields()))
             await self._run_retention_after_detach()
         else:
             self._save_state(_ResumeState(last_rowid=last_rowid, done=False))
@@ -1565,7 +1609,26 @@ class LegacyMigrator:
             data = json.loads(self._state_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return _ResumeState(last_rowid=0, done=False)
-        return _ResumeState(last_rowid=int(data.get("last_rowid", 0)), done=bool(data.get("done", False)))
+        # Datei-Identität (#951, P2, migration.py:610): ein Alt-State ohne ``identity`` liefert
+        # ``None`` und wird in ``done_is_stale`` konservativ als „nicht stale" behandelt
+        # (Rückwärtskompat). Nur wohlgeformte int-Felder werden übernommen; unlesbare Werte
+        # degradieren auf ``None`` (= wie Alt-State).
+        identity = self._parse_state_identity(data.get("identity"))
+        return _ResumeState(
+            last_rowid=int(data.get("last_rowid", 0)),
+            done=bool(data.get("done", False)),
+            identity=identity,
+        )
+
+    @staticmethod
+    def _parse_state_identity(raw: object) -> dict[str, int] | None:
+        """Liest das gespeicherte Identitäts-dict aus dem State-JSON – ``None``, wenn fehlend/unlesbar."""
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return {str(key): int(value) for key, value in raw.items()}
+        except (ValueError, TypeError):
+            return None
 
     def _save_state(self, state: _ResumeState) -> None:
         self._state_path.write_text(json.dumps(state.as_dict()), encoding="utf-8")
