@@ -154,4 +154,28 @@ describe('RingBufferView live WebSocket queue', () => {
     expect(rows.length).toBe(2)
   })
 
+  it('clears stale rows and queued entries when stats report the monitor was disabled elsewhere', async () => {
+    const { mountRingBufferView, flushPromises, makeRingbufferApiMock } = await import('../helpers/mountRingBufferView.js')
+    const ringbufferApi = makeRingbufferApiMock({
+      queryV2: vi.fn().mockResolvedValue({
+        data: [makeEntry(1, { datapoint_id: 'dp-existing' })],
+      }),
+    })
+
+    const { wrapper, emitLive } = await mountRingBufferView({ wsConnected: true, ringbufferApi })
+    expect(wrapper.findAll('[data-testid="ringbuffer-entry"]').length).toBe(1)
+
+    await wrapper.find('[data-testid="btn-live-pause"]').trigger('click')
+    emitLive(makeEntry(2, { datapoint_id: 'dp-queued' }))
+    await flushPromises()
+    expect(wrapper.find('[data-testid="status-badge"]').text()).toBe('Pausiert (1 wartend)')
+
+    wrapper.findComponent({ name: 'TopbarStats' }).vm.$emit('stats', { enabled: false })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="ringbuffer-disabled-notice"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="ringbuffer-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="status-badge"]').text()).toBe('Pausiert (0 wartend)')
+  })
+
 })

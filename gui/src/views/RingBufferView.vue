@@ -11,7 +11,7 @@
       <!-- Right cluster: aligns buttons + status chip + ringbuffer stats on a
            single baseline; status badge matches the button height. -->
       <div class="flex items-center gap-2">
-        <button @click="showConfig = true" class="btn-secondary btn-sm" data-testid="btn-open-monitor-config">{{ $t('ringbuffer.configure') }}</button>
+        <button v-if="auth.isAdmin" @click="showConfig = true" class="btn-secondary btn-sm" data-testid="btn-open-monitor-config">{{ $t('ringbuffer.configure') }}</button>
         <button @click="applyFilters" class="btn-secondary btn-sm" data-testid="btn-refresh-ringbuffer">{{ $t('ringbuffer.refresh') }}</button>
         <button
           v-if="!paused"
@@ -38,7 +38,7 @@
           <span :class="['w-1.5 h-1.5 rounded-full', statusDotClass]" />
           {{ statusBadgeText }}
         </span>
-        <TopbarStats />
+        <TopbarStats ref="topbarStatsRef" @stats="onMonitorStats" />
       </div>
     </div>
 
@@ -65,6 +65,29 @@
       @saved="onFilterEditorSaved"
       @deleted="onFilterEditorDeleted"
     />
+
+    <div
+      v-if="monitorDisabled"
+      class="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-700 shadow-sm dark:text-red-200"
+      data-testid="ringbuffer-disabled-notice"
+      role="status"
+    >
+      <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p class="font-semibold">{{ $t('ringbuffer.monitorDisabledTitle') }}</p>
+          <p class="mt-1 text-xs text-red-700/80 dark:text-red-200/80">{{ $t('ringbuffer.monitorDisabledBody') }}</p>
+        </div>
+        <button
+          v-if="auth.isAdmin"
+          type="button"
+          class="self-start text-sm font-medium text-red-800 underline underline-offset-2 hover:text-red-950 dark:text-red-100 dark:hover:text-white sm:self-center"
+          data-testid="ringbuffer-disabled-open-config"
+          @click="showConfig = true"
+        >
+          {{ $t('ringbuffer.monitorDisabledAction') }}
+        </button>
+      </div>
+    </div>
 
     <div
       v-if="recoveryNotice"
@@ -123,7 +146,7 @@
       </div>
     </div>
 
-    <MonitorConfigModal v-model="showConfig" />
+    <MonitorConfigModal v-model="showConfig" @saved="onMonitorConfigSaved" />
   </div>
 </template>
 
@@ -136,6 +159,7 @@ import { useSetColors } from '@/composables/useSetColors'
 import { useLiveQueue } from '@/composables/useLiveQueue'
 import { timeFilterToPayload, entryInTimeWindow } from '@/composables/useTimeFilterPayload'
 import { matchedSetIds } from '@/composables/useClientSideMatch'
+import { useAuthStore } from '@/stores/auth'
 import { useWebSocketStore } from '@/stores/websocket'
 import Badge from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -150,6 +174,7 @@ const DEFAULT_QUERY_LIMIT = 500
 
 const { t } = useI18n()
 const { fmtDateTime } = useTz()
+const auth = useAuthStore()
 const wsStore = useWebSocketStore()
 const { getRowStyle, setSets, sets: topbarSetsRef } = useSetColors()
 
@@ -179,6 +204,7 @@ const showExportDialog = ref(false)
 const editorTargetId = ref(null)
 const topbarChipsRef = ref(null)
 const recoveryNotice = ref('')
+const monitorDisabled = ref(false)
 let recoveryNoticeRefreshPromise = null
 let lastRecoveryNoticeRefreshAt = 0
 
@@ -224,6 +250,23 @@ async function onTopbarChanged() {
   await load()
 }
 
+async function onMonitorConfigSaved() {
+  const stats = await topbarStatsRef.value?.reload?.()
+  clearLiveQueue()
+  if (stats?.enabled === false || monitorDisabled.value) {
+    entries.value = []
+    return
+  }
+  await load()
+}
+
+function onMonitorStats(stats) {
+  monitorDisabled.value = stats?.enabled === false
+  if (!monitorDisabled.value) return
+  clearLiveQueue()
+  entries.value = []
+}
+
 // TimeFilterPopover state (#432). See useTimeFilterPayload for the shape.
 const timeFilter = ref(null)
 
@@ -233,6 +276,7 @@ async function onTimeFilterChanged() {
 }
 
 const tableWrapRef = ref(null)
+const topbarStatsRef = ref(null)
 const filtersets = ref([])
 let liveIngressSeq = 0
 
@@ -320,6 +364,7 @@ async function loadFiltersets() {
 async function loadRecoveryNotice() {
   try {
     const { data } = await ringbufferApi.stats()
+    onMonitorStats(data)
     if (!data?.last_recovery_at) {
       recoveryNotice.value = ''
       return
@@ -330,6 +375,7 @@ async function loadRecoveryNotice() {
     })
   } catch {
     recoveryNotice.value = ''
+    monitorDisabled.value = false
   }
 }
 
