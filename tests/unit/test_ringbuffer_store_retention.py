@@ -574,6 +574,45 @@ async def test_legacy_not_deleted_when_only_data_source(tmp_path: Path):
         await store.close()
 
 
+async def test_quarantined_v2_segment_does_not_count_as_readable_history(tmp_path: Path):
+    # #951 [P2, Codex :1939]: Liegt die einzige nicht-Legacy-Zeile in einem
+    # QUARANTÄNIERTEN (korrupten) v2-Segment, ist sie NICHT abfragbar. Der Helper
+    # ``_has_nonlegacy_data_segment`` darf ein solches Segment daher nicht als
+    # lesbare Historie werten – sonst hebt der No-Zero-History-Guard ab und die
+    # attached LESBARE Legacy-DB würde unter Size-Druck gelöscht (Datenverlust).
+    store = await _make_store(tmp_path / "root")
+    try:
+        # Genau ein geschlossenes v2-Segment mit Daten – dann quarantänieren.
+        await store.append([_event(1, _iso(0))])
+        closed_id = (await store.manifest.get_active_segment()).segment_id
+        await store.rotate()
+        await store.manifest.mark_quarantined(closed_id, reason="corrupt")
+        quarantined = await store.manifest.get_segment(closed_id)
+        assert quarantined.status == SEGMENT_STATUS_QUARANTINED
+        assert quarantined.row_count > 0
+
+        # Attached lesbare Legacy-DB ist die EINZIGE abfragbare Historie.
+        await _attach_legacy(store, 8 * 1024 * 1024)
+
+        # Quarantäniertes v2 zählt nicht als lesbare nicht-Legacy-Historie …
+        assert await store._has_nonlegacy_data_segment() is False
+        # … also greift der No-Zero-History-Guard: das nächste Size-Opfer ist NICHT
+        # die lesbare Legacy-DB, sondern das quarantänierte (unlesbare) v2-Segment
+        # (FIFO-löschbar). So bleibt die einzige lesbare Historie erhalten.
+        victim = await store._next_size_retention_victim()
+        assert victim is not None
+        assert victim.segment_id == closed_id
+        assert victim.status == SEGMENT_STATUS_QUARANTINED
+
+        # Unter hartem Budget-Druck wird das korrupte v2 zurückgewonnen, das lesbare
+        # Legacy bleibt aber erhalten (kein Datenverlust der abfragbaren Historie).
+        store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
+        await store.enforce_retention()
+        assert len(await store.manifest.list_legacy_segments()) == 1
+    finally:
+        await store.close()
+
+
 async def test_legacy_deleted_first_under_budget_pressure(tmp_path: Path):
     # FIFO / Legacy-Rückgewinnung (#919): bei Budgetdruck mit Legacy + geschlossenem
     # v2 wird ZUERST das (global älteste) Legacy-Segment gelöscht — nicht das v2.

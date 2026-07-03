@@ -891,3 +891,50 @@ async def test_run_pending_checkpoints_refreshes_size(store: SqliteSegmentStore,
     # post-checkpoint-Größe (konsistent zu _segment_file_size, zählt WAL/SHM mit).
     assert seg.size_bytes != inflated
     assert seg.size_bytes == store._segment_file_size(filename)
+
+
+# ---------------------------------------------------------------------------
+# (Codex :584) Teil-Batch-Append bei Insert-Fehler zurückrollen
+# ---------------------------------------------------------------------------
+
+
+async def test_partial_batch_append_is_rolled_back_on_insert_error(store: SqliteSegmentStore):
+    # Scheitert ein späteres _insert_event in einem Mehr-Event-append() (hier: nicht
+    # serialisierbare Metadaten → TypeError beim json.dumps), bleiben die früheren
+    # Inserts sonst in der offenen SQLite-Transaktion liegen und würden vom nächsten
+    # erfolgreichen append() auf derselben Connection MIT-committet – obwohl der
+    # ursprüngliche Aufrufer einen Fehler sah. Der Fix rollt bei einem Batch-Fehler
+    # die aktive Transaktion zurück, sodass keine partiellen Zeilen später auftauchen.
+    class _Unserializable:
+        pass
+
+    ok = _event(1, "2026-01-01T00:00:00.000Z")
+    # Zweites Event scheitert beim Serialisieren der Metadaten (TypeError).
+    bad = _event(2, "2026-01-01T00:00:01.000Z")
+    bad.metadata = {"broken": _Unserializable()}
+
+    with pytest.raises(TypeError):
+        await store.append([ok, bad])
+
+    # Nach dem Fehler darf KEINE Zeile aus dem gescheiterten Batch persistiert sein.
+    assert await store._total_row_count() == 0
+
+    # Ein nachfolgender erfolgreicher append() committet NUR sein eigenes Event –
+    # die partielle Zeile aus dem ersten Batch darf nicht mit hochkommen.
+    await store.append([_event(3, "2026-01-01T00:00:02.000Z")])
+    rows = await store.query(StoreQuery(limit=50))
+    assert {r["new_value"] for r in rows} == {3}
+    assert await store._total_row_count() == 1
+
+
+async def test_successful_batch_append_stays_atomic(store: SqliteSegmentStore):
+    # Regression-Guard: ein fehlerfreier Mehr-Event-Batch bleibt vollständig committet.
+    await store.append(
+        [
+            _event(10, "2026-01-01T00:00:00.000Z"),
+            _event(11, "2026-01-01T00:00:01.000Z"),
+            _event(12, "2026-01-01T00:00:02.000Z"),
+        ]
+    )
+    rows = await store.query(StoreQuery(limit=50))
+    assert {r["new_value"] for r in rows} == {10, 11, 12}

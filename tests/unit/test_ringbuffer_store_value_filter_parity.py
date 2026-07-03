@@ -242,6 +242,28 @@ def test_legacy_compare_range_cross_type_returns_false():
     assert _legacy_compare("eq", 1, True) is True
 
 
+def test_legacy_compare_range_on_null_and_complex_value_rejected():
+    # Parität zum v2-Pushdown (#951, Codex :467): ein Range-Operator gegen einen
+    # ``null``- oder komplexen (list/dict) Vergleichswert ist bedeutungslos und muss
+    # als 422-tauglicher ValueError abgelehnt werden, BEVOR Pythons Roh-Vergleich
+    # (``actual > expected``) mit einem TypeError durchfällt (der nicht in den
+    # 422-Pfad konvertiert würde). null spiegelt die v2-Meldung ("null value"),
+    # list/dict die STRING-Ablehnung.
+    from obs.ringbuffer.store.sqlite_backend import _legacy_compare
+
+    for op in ("gt", "gte", "lt", "lte"):
+        with pytest.raises(ValueError, match="null"):
+            _legacy_compare(op, 5, None)  # null expected → abgelehnt
+        with pytest.raises(ValueError, match="STRING"):
+            _legacy_compare(op, 5, [1, 2])  # list expected → abgelehnt
+        with pytest.raises(ValueError, match="STRING"):
+            _legacy_compare(op, 5, {"a": 1})  # dict expected → abgelehnt
+    # eq/ne gegen null/komplex bleiben erlaubt (reine Python-Gleichheit).
+    assert _legacy_compare("eq", 5, None) is False
+    assert _legacy_compare("ne", 5, None) is True
+    assert _legacy_compare("eq", [1, 2], [1, 2]) is True
+
+
 async def test_legacy_range_filter_excludes_cross_type_rows(tmp_path: Path):
     # v1/Legacy-Fallback: gt (numerisch) über gemischte Werte matcht nur numerische
     # Zeilen > Schwelle; text-/bool-Zeilen (Cross-Typ) fallen wie in der Referenz raus.

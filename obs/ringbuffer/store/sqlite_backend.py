@@ -69,6 +69,7 @@ from obs.ringbuffer.store.manifest import (
     SEGMENT_STATUS_ACTIVE,
     SEGMENT_STATUS_CHECKPOINT_PENDING,
     SEGMENT_STATUS_CLOSED,
+    SEGMENT_STATUS_QUARANTINED,
     Manifest,
     SegmentRecord,
 )
@@ -451,9 +452,20 @@ def _legacy_compare(operator: str, actual: Any, expected: Any) -> bool:
     # 0/1-Bool-Vergleich degradieren — segment-abhängiges Verhalten. Daher hier mit
     # demselben 422-tauglichen ValueError ablehnen, sodass eine upgegradete Instanz,
     # die nur ihr Legacy-Segment bedient, identisch reagiert.
+    # null als Range-Vergleichswert ist bedeutungslos und würde beim Roh-Vergleich
+    # (``actual > None``) einen TypeError werfen, der NICHT in den 422-Pfad der API
+    # konvertiert wird (#951, Codex :467). Wie der v2-Pushdown mit derselben Meldung
+    # ablehnen, BEVOR verglichen wird.
+    if expected is None:
+        raise ValueError(f"operator '{operator}' is not supported for null value")
     if isinstance(expected, bool) or isinstance(expected, str):
         data_type = "BOOLEAN" if isinstance(expected, bool) else "STRING"
         raise ValueError(f"operator '{operator}' is not supported for data_type '{data_type}'")
+    # Komplexe (list/dict) Vergleichswerte werfen bei ``actual > [..]`` ebenfalls einen
+    # TypeError. Wie der v2-Pushdown (``value_type == 'json'`` → STRING-Ablehnung) und
+    # die Referenz als ungültigen Range-Filter ablehnen (#951, Codex :467).
+    if isinstance(expected, (list, dict)):
+        raise ValueError(f"operator '{operator}' is not supported for data_type 'STRING'")
     # Cross-Typ (numerischer Vergleichswert, nicht-numerische Zeile) ist bedeutungslos
     # → wie v2/Legacy kein Treffer.
     if _is_number(expected) and not _is_number(actual):
@@ -579,8 +591,18 @@ class SqliteSegmentStore(RingBufferStore):
             return
         # Zusammenhängenden Block globaler IDs reservieren → stabile Ordnung.
         start_id = await self.manifest.reserve_global_event_ids(len(events))
-        for offset, event in enumerate(events):
-            await self._insert_event(self._active_conn, start_id + offset, event)
+        try:
+            for offset, event in enumerate(events):
+                await self._insert_event(self._active_conn, start_id + offset, event)
+        except BaseException:
+            # Scheitert ein Insert mitten im Batch (z.B. nicht serialisierbare Metadaten
+            # oder ein fehlgeschlagener Metadaten-Index-Insert), bleiben die früheren
+            # Inserts sonst in der offenen Transaktion und würden vom nächsten
+            # erfolgreichen append() auf derselben Connection MIT-committet, obwohl der
+            # Aufrufer einen Fehler sah (#951, Codex :584). Aktive Transaktion daher
+            # zurückrollen – kein partieller Batch committet später.
+            await self._active_conn.rollback()
+            raise
         await self._active_conn.commit()
         await self._refresh_active_segment_stats()
         # TODO(#932/#936): hier greift später Rotation nach segment_max_* und
@@ -1933,9 +1955,19 @@ class SqliteSegmentStore(RingBufferStore):
         return None
 
     async def _has_nonlegacy_data_segment(self) -> bool:
-        """True, wenn ein nicht-Legacy-Segment (aktiv oder geschlossen) Zeilen hält."""
+        """True, wenn ein ABFRAGBARES nicht-Legacy-Segment Zeilen hält.
+
+        Ein quarantäniertes (korruptes) v2-Segment wird beim Read übersprungen und
+        ist damit KEINE lesbare Historie (#951, Codex :1939). Würde es hier trotzdem
+        zählen, hebt der No-Zero-History-Guard ab und die attached LESBARE Legacy-DB
+        könnte unter Size-Druck gelöscht werden, obwohl keine lesbare nicht-Legacy-
+        Historie existiert (Datenverlust). Nur aktive/geschlossene/pending – also
+        NICHT quarantänierte – nicht-Legacy-Segmente mit Zeilen werten.
+        """
         for segment in await self.manifest.list_segments():
-            if not _is_legacy_segment(segment) and segment.row_count > 0:
+            if _is_legacy_segment(segment) or segment.status == SEGMENT_STATUS_QUARANTINED:
+                continue
+            if segment.row_count > 0:
                 return True
         return False
 
