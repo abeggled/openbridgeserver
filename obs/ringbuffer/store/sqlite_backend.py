@@ -72,6 +72,7 @@ from obs.ringbuffer.store.manifest import (
     SEGMENT_STATUS_CLOSED,
     SEGMENT_STATUS_LEGACY,
     SEGMENT_STATUS_MIGRATED,
+    SEGMENT_STATUS_MIGRATING,
     SEGMENT_STATUS_QUARANTINED,
     Manifest,
     SegmentRecord,
@@ -574,6 +575,7 @@ class SqliteSegmentStore(RingBufferStore):
                 active = await self._create_segment_locked()
             else:
                 active = await self._recover_missing_active_segment(active)
+            active = await self._recover_corrupt_active_segment(active)
             self._active_segment = active
             self._active_conn = await self._open_segment_conn(active.filename)
         except Exception:
@@ -628,13 +630,59 @@ class SqliteSegmentStore(RingBufferStore):
         await self.manifest.mark_quarantined(active.segment_id, reason="active segment file missing on open")
         return await self._create_segment_locked()
 
+    async def _recover_corrupt_active_segment(self, active: SegmentRecord) -> SegmentRecord:
+        """Behandelt ein aktives Segment, dessen Datei beim Startup KORRUPT ist (#951, Pkt 2).
+
+        Ist die Datei des zuvor aktiven Segments vorhanden, aber keine gültige
+        SQLite-DB (Bitfehler/abgeschnittener Write/…), scheiterte
+        ``_open_segment_conn(active.filename)`` mit einer SQLite-Korruptions-
+        Exception. Der ``open()``-Fehlerpfad schloss dann nur Ressourcen und re-raiste
+        → ein EINZIGES kaputtes Tail-Segment blockierte den ganzen RingBuffer-/OBS-
+        Startup, obwohl geschlossene korrupte Segmente im Read-Pfad sonst isoliert
+        (quarantäniert + übersprungen) werden.
+
+        Konsistent zu ``_recover_missing_active_segment`` (fehlende Datei) wird ein
+        KORRUPTES aktives Segment daher als ``quarantined``/``corrupt`` markiert und ein
+        FRISCHES aktives Segment eröffnet. Nur echte SQLite-Korruption löst das aus;
+        andere Fehler (z. B. Permission) propagieren unverändert, damit sie nicht als
+        Korruption maskiert werden. Ist die Datei intakt (oder fehlt sie – dann hat
+        ``_recover_missing_active_segment`` bereits ein frisches Segment geliefert),
+        bleibt das aktive Segment unverändert.
+        """
+        # Nur eine echte (in-place liegende) Datei kann korrupt sein; ein frisch
+        # angelegtes Segment aus dem Missing-Recovery existiert noch nicht auf Platte.
+        if not (self._segments_dir / active.filename).exists():
+            return active
+        probe: aiosqlite.Connection | None = None
+        try:
+            probe = await self._open_segment_conn(active.filename)
+        except aiosqlite.Error as exc:
+            if not _is_sqlite_corruption(exc):
+                raise
+            await self.manifest.mark_quarantined(active.segment_id, reason=str(exc))
+            return await self._create_segment_locked()
+        else:
+            # Datei ist eine gültige SQLite-DB → die Probe-Connection schließen; der
+            # reguläre Pfad öffnet die aktive Connection gleich erneut.
+            await probe.close()
+            return active
+
     async def _open_segment_conn(self, filename: str) -> aiosqlite.Connection:
         conn = await aiosqlite.connect(str(self._segments_dir / filename))
-        conn.row_factory = aiosqlite.Row
-        await conn.execute("PRAGMA foreign_keys=ON")
-        await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.executescript(_SEGMENT_SCHEMA)
-        await conn.commit()
+        try:
+            conn.row_factory = aiosqlite.Row
+            await conn.execute("PRAGMA foreign_keys=ON")
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.executescript(_SEGMENT_SCHEMA)
+            await conn.commit()
+        except BaseException:
+            # Schlägt eine PRAGMA/Schema-Anweisung fehl (z. B. korruptes File beim
+            # Startup-Korruptions-Probe, #951, Pkt 2), darf die bereits geöffnete
+            # aiosqlite-Connection/-Thread nicht leaken. Best-effort schließen, bevor
+            # der Originalfehler propagiert.
+            with contextlib.suppress(Exception):
+                await conn.close()
+            raise
         return conn
 
     # ------------------------------------------------------------------
@@ -1039,17 +1087,33 @@ class SqliteSegmentStore(RingBufferStore):
         if query.quality is not None:
             clauses.append("quality = ?")
             params.append(query.quality)
-        q_clause, q_params = self._free_text_clause(query)
-        if q_clause:
-            clauses.append(q_clause)
-            params.extend(q_params)
+        # Freitext-``q`` NICHT in das SQL-WHERE pushen (#951, Pkt 3): ``q`` matcht
+        # ``datapoint_id``/``source_adapter`` per ``LIKE '%…%'`` und kann die
+        # vorhandenen datapoint/source-Indexe nicht nutzen. Als SQL-Prädikat mit dem
+        # ``LIMIT`` zusammen zwänge es SQLite bei seltenen/fehlenden Treffern zu einem
+        # Full-Scan über die 20–30 GB Legacy-Datei, bevor das ``LIMIT`` erfüllt ist.
+        # Stattdessen wird ``q`` – wie value/metadata – bounded in Python auf der
+        # gedeckelten Kandidatenmenge ausgewertet (siehe Post-Filter-Pfad unten).
+        #
+        # ``q`` und ``dp_ids_by_name`` sind per Legacy-Semantik OR-verknüpft. Ist ``q``
+        # gesetzt, muss deshalb der GESAMTE OR-Block in Python laufen: den index-
+        # tauglichen ``dp_ids_by_name``-``IN``-Teil als eigenes SQL-``AND`` zu pushen
+        # würde die OR- in eine AND-Semantik verwandeln (eine nur über ``q`` matchende
+        # Zeile fiele durch das SQL-``IN`` heraus). Nur wenn ``q`` FEHLT (kein Scan-
+        # Risiko), bleibt das reine ``dp_ids_by_name``-``IN`` index-tauglich im SQL.
+        if not (query.q or "").strip():
+            name_clause, name_params = self._legacy_dp_ids_by_name_clause(query)
+            if name_clause:
+                clauses.append(name_clause)
+                params.extend(name_params)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
 
         # Metadaten-Tag/Binding-Filter kann eine v1/Legacy-DB nicht per Index-
         # Subquery bedienen (die Index-Tabellen fehlen dort). Sie werden bounded
         # in Python auf den dekodierten metadata-JSON ausgewertet — wie die
-        # Value-Filter. Beides zusammen erzwingt den Kandidaten-Cap.
-        has_python_post_filter = bool(query.value_filters) or self._has_metadata_filter(query)
+        # Value-Filter. Beides zusammen (und der bounded Freitext-``q``) erzwingt den
+        # Kandidaten-Cap.
+        has_python_post_filter = bool(query.value_filters) or self._has_metadata_filter(query) or bool((query.q or "").strip())
         # Fetch-Richtung an die gewünschte Sortierung koppeln, damit die gebundene
         # Kandidatenmenge die RICHTIGEN Extremwerte enthält: bei ``asc`` die
         # ältesten, sonst die neuesten. Sonst liefert eine große Legacy-DB (mehr
@@ -1086,20 +1150,21 @@ class SqliteSegmentStore(RingBufferStore):
             batch, _fetched = await self._fetch_legacy_batch(conn, base_sql, params, segment, query, needed, 0)
             return batch
 
-        # Post-Filter aktiv. Zwei Modi, unterschieden am ``candidate_cap`` relativ zum
-        # angefragten Fenster:
+        # Post-Filter aktiv. Zwei Modi, unterschieden am EXPLIZITEN ``is_export``-Flag
+        # (#951, Pkt 4) statt an einer ``candidate_cap``-Heuristik:
         #
-        # * **Monitor-Live-View** (kleines ``limit``, ``candidate_cap`` als GROSSES
-        #   Roh-Scan-Budget, also ``candidate_cap > offset+limit``): der Cap deckelt
-        #   die betrachteten Roh-Kandidaten hart. Treffer jenseits der neuesten
+        # * **Monitor-Live-View** (``is_export=False``): der Cap deckelt die
+        #   betrachteten Roh-Kandidaten hart. Treffer jenseits der neuesten
         #   ``candidate_cap`` Zeilen werden bewusst NICHT gefunden — das hält den Scan
         #   auf einer 20–30 GB Legacy-DB gebunden statt in einen Full-Scan zu kippen.
-        # * **Gefilterter Export** (CSV-Export, ``candidate_cap == offset+limit`` = die
-        #   mit dem Export-Fenster mitwachsende Deckelung, also ``candidate_cap <=
-        #   offset+limit``): der Export MUSS die vollständige gematchte Menge liefern.
-        #   Der Roh-Cap darf die gematchte Ausgabe nicht abschneiden — sonst stoppte
-        #   die Export-Schleife bei spärlichen Treffern auf einem leeren/kurzen Chunk,
-        #   obwohl spätere Legacy-Zeilen matchen (unvollständiger Export).
+        #   Eine Live-Query mit großem ``limit``/Offset (z. B. ``limit=10000``) bleibt
+        #   damit bounded; die frühere ``candidate_cap <= offset+limit``-Heuristik hätte
+        #   sie fälschlich als Export eingestuft und über die ganze Legacy-Datei gescannt.
+        # * **Gefilterter Export** (``is_export=True``, CSV-Export): der Export MUSS die
+        #   vollständige gematchte Menge liefern. Der Roh-Cap darf die gematchte Ausgabe
+        #   nicht abschneiden – sonst stoppte die Export-Schleife bei spärlichen Treffern
+        #   auf einem leeren/kurzen Chunk, obwohl spätere Legacy-Zeilen matchen
+        #   (unvollständiger Export).
         #
         # Speicher-/Vollständigkeits-Abwägung (Export): im Export-Modus wird ``ringbuffer``
         # in ``candidate_cap``-großen Batches gescannt, bis genug GEMATCHTE Zeilen für
@@ -1109,7 +1174,7 @@ class SqliteSegmentStore(RingBufferStore):
         # nie mehr als ``offset+limit`` gematchte Records gleichzeitig im Speicher (die
         # nicht-matchenden Roh-Zeilen jedes Batches werden sofort verworfen).
         raw_cap = self._legacy_candidate_cap(query)
-        is_export = query.candidate_cap is not None and query.candidate_cap <= needed
+        is_export = query.is_export
         results: list[dict[str, Any]] = []
         raw_offset = 0
         while True:
@@ -1146,12 +1211,55 @@ class SqliteSegmentStore(RingBufferStore):
         matched: list[dict[str, Any]] = []
         for row in raw_rows:
             record = self._legacy_row_to_dict(row, segment.segment_id)
+            # Freitext-``q`` bounded in Python (#951, Pkt 3): auf der bereits
+            # gedeckelten Kandidatenmenge, nicht als unbounded SQL-``LIKE``-Scan.
+            if not self._legacy_q_matches(record, query):
+                continue
             if query.value_filters and not _legacy_row_matches_filters(record, query.value_filters):
                 continue
             if not self._legacy_metadata_matches(record, query):
                 continue
             matched.append(record)
         return matched, len(raw_rows)
+
+    @staticmethod
+    def _legacy_dp_ids_by_name_clause(query: StoreQuery) -> tuple[str | None, list[Any]]:
+        """Nur der index-taugliche ``dp_ids_by_name``-``IN (...)``-Teil des Freitext-Filters (#951, Pkt 3).
+
+        Der ``q``-``LIKE``-Teil wird bewusst NICHT hier gebaut, sondern bounded in
+        Python ausgewertet (``_legacy_q_matches``), damit ein seltener/fehlender
+        Freitext-Treffer keinen unbounded Full-Scan über die Legacy-Datei auslöst.
+        """
+        if not query.dp_ids_by_name:
+            return None, []
+        placeholders = ",".join("?" * len(query.dp_ids_by_name))
+        return f"datapoint_id IN ({placeholders})", list(query.dp_ids_by_name)
+
+    @staticmethod
+    def _legacy_q_matches(record: dict[str, Any], query: StoreQuery) -> bool:
+        """Python-Auswertung des Freitext-``q`` (#951, Pkt 3), Semantik wie das SQL-``LIKE``.
+
+        ``q`` matcht, wenn es (case-insensitiv, wie SQLite-``LIKE`` für ASCII) als
+        Teilstring in ``datapoint_id`` ODER ``source_adapter`` vorkommt. Der
+        ``dp_ids_by_name``-Teil (OR-verknüpft) ist bereits index-tauglich im SQL
+        abgehandelt; ist ``q`` leer, matcht alles (kein Freitext-Filter aktiv).
+
+        Parität zur Legacy-``query_v2``-Semantik: ``q`` und ``dp_ids_by_name`` sind
+        OR-verknüpft. Da der ``dp_ids_by_name``-Teil bereits per SQL-``IN`` selektiert
+        wurde, würde ein bereits über den Namen selektierter Datensatz hier vom
+        ``q``-Teilstring-Test fälschlich verworfen. Deshalb matcht eine Zeile, deren
+        ``datapoint_id`` in ``dp_ids_by_name`` liegt, unabhängig vom ``q``-Test (die
+        OR-Bedingung ist über den Namens-Zweig bereits erfüllt).
+        """
+        q = (query.q or "").strip()
+        if not q:
+            return True
+        if query.dp_ids_by_name and record.get("datapoint_id") in query.dp_ids_by_name:
+            return True
+        needle = q.lower()
+        dp_id = str(record.get("datapoint_id") or "").lower()
+        adapter = str(record.get("source_adapter") or "").lower()
+        return needle in dp_id or needle in adapter
 
     @staticmethod
     def _has_metadata_filter(query: StoreQuery) -> bool:
@@ -1282,8 +1390,15 @@ class SqliteSegmentStore(RingBufferStore):
 
         # Der teure Match wird nur dann auf eine gedeckelte Kandidaten-Subquery
         # gelegt, wenn der Query ausschließlich per candidate_cap (ohne Zeitfenster)
-        # gebunden ist. Mit Zeitfenster bindet bereits das WHERE den Scan.
-        if guarded_clauses and not self._query_is_windowed(query):
+        # gebunden ist UND es KEIN Export ist. Mit Zeitfenster bindet bereits das
+        # WHERE den Scan; im Export-Modus (#951, Pkt 5) darf die innere Deckelung die
+        # gematchte Menge NICHT abschneiden, sonst matchten die ersten (neuesten) ``cap``
+        # Roh-Zeilen nicht, obwohl ältere matchen → leerer Chunk, Export stoppt still.
+        # Im Export inlinet der guarded-Filter daher (voller Segment-Scan, nur durch das
+        # finale ``LIMIT`` = ``offset+limit`` GEMATCHTE Zeilen begrenzt) – analog zum
+        # bereits gefixten Legacy-Export-Batch-Scan. Kostenbegrenzt: SQLite terminiert
+        # den Scan, sobald ``offset+limit`` Treffer gefunden sind.
+        if guarded_clauses and not self._query_is_windowed(query) and not query.is_export:
             cap = self._effective_candidate_cap(query)
             inner_where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
             # Die innere Subquery muss auch die typisierten Text-Spalten
@@ -2117,23 +2232,41 @@ class SqliteSegmentStore(RingBufferStore):
         (``_is_legacy_segment``) bestimmt und unter dem Guard geschützt; die
         FIFO-Löschbarkeit quarantänierter NICHT-Legacy-Segmente bleibt unberührt.
         """
+        victims = await self._retention_victims_in_order()
+        return victims[0] if victims else None
+
+    async def _retention_victims_in_order(self) -> list[SegmentRecord]:
+        """FIFO-geordnete, guard-geschützte Löschkandidaten für ALLE Retention-Pfade (#951, Pkt 7).
+
+        Size-, Age- UND Row-Retention teilen sich diese eine Liste, damit sie
+        konsistent denselben No-Zero-History-Guard und dieselbe Legacy-Herkunfts-
+        Behandlung anwenden:
+
+        * **Legacy zuerst:** das read-only eingehängte Legacy-Segment ist per
+          Definition am ältesten → zuerst zurückgewinnen, SOBALD der Guard erfüllt
+          ist (mindestens eine lesbare nicht-Legacy-Datenquelle hält Zeilen).
+          Legacy-Herkunft wird per Schema (``_is_legacy_segment``) bestimmt, damit
+          auch ein quarantäniertes Legacy hier – und nicht in der eligible-Liste –
+          landet und unter dem Guard geschützt bleibt.
+        * **Dann** geschlossene/quarantänierte NICHT-Legacy-Segmente in FIFO-
+          Reihenfolge (ältestes zuerst). Legacy-Herkunft ist hier ausgeschlossen –
+          sie ist entweder oben schon freigegeben oder durch den Guard geschützt.
+
+        Ohne diese gemeinsame Route iterierten Age-/Row-Retention direkt
+        ``list_retention_eligible_segments()`` (schließt gesundes ``status='legacy'``
+        AUS, schließt quarantäniertes Legacy EIN): gesundes Legacy würde per
+        max_age/max_entries NIE zurückgewonnen, WÄHREND ein quarantäniertes Legacy
+        fälschlich – am Guard vorbei – gelöscht werden könnte.
+        """
         has_nonlegacy_data = await self._has_nonlegacy_data_segment()
-        # Legacy ist das global älteste → zuerst löschen, sobald der Guard erfüllt
-        # ist (mindestens eine nicht-Legacy-Datenquelle hält Zeilen). Legacy-Herkunft
-        # per Schema, damit auch ein quarantäniertes Legacy hier (und nicht in der
-        # eligible-Liste) landet.
+        victims: list[SegmentRecord] = []
         legacy_segments = [s for s in await self.manifest.list_segments() if _is_legacy_segment(s)]
         if legacy_segments and has_nonlegacy_data:
-            return legacy_segments[0]
-        # Geschlossene und quarantänierte Segmente in FIFO-Reihenfolge (#919):
-        # ein korruptes Segment wird nicht mehr für immer behalten, sondern
-        # gelöscht, wenn es an der Reihe ist (ältestes zuerst). Legacy-Herkunft
-        # (auch quarantäniert) wird ausgeschlossen – sie ist entweder oben schon
-        # freigegeben oder durch den Guard geschützt (nie hier gelöscht).
-        eligible = [s for s in await self.manifest.list_retention_eligible_segments() if not _is_legacy_segment(s)]
-        if eligible:
-            return eligible[0]
-        return None
+            # ältestes Legacy zuerst (list_segments ist segment_id DESC → umkehren
+            # auf ältestes zuerst passt zur FIFO-Semantik von list_legacy_segments).
+            victims.extend(sorted(legacy_segments, key=lambda s: s.segment_id, reverse=True))
+        victims.extend(s for s in await self.manifest.list_retention_eligible_segments() if not _is_legacy_segment(s))
+        return victims
 
     async def _has_nonlegacy_data_segment(self) -> bool:
         """True, wenn ein ABFRAGBARES nicht-Legacy-Segment Zeilen hält.
@@ -2144,9 +2277,19 @@ class SqliteSegmentStore(RingBufferStore):
         könnte unter Size-Druck gelöscht werden, obwohl keine lesbare nicht-Legacy-
         Historie existiert (Datenverlust). Nur aktive/geschlossene/pending – also
         NICHT quarantänierte – nicht-Legacy-Segmente mit Zeilen werten.
+
+        ``migrating``-Segmente ebenfalls NICHT werten (#951, Pkt 6): während einer
+        unterbrochenen gechunkten Legacy-Migration sind kopierte Chunks als
+        ``migrating`` markiert und aus Reads ausgeschlossen (``list_segments_for_query``
+        filtert sie). Ihre Zeilen sind daher – wie quarantänierte – KEINE lesbare
+        nicht-Legacy-Historie. Zählten sie hier mit, hübe der Guard ab und
+        ``_next_size_retention_victim()`` könnte die attached Legacy-QUELLE löschen,
+        BEVOR die Migration detached/finalisiert ist → unkopierte Zeilen verloren,
+        kopierte (im migrating-Chunk) versteckt.
         """
+        hidden_statuses = {SEGMENT_STATUS_QUARANTINED, SEGMENT_STATUS_MIGRATING}
         for segment in await self.manifest.list_segments():
-            if _is_legacy_segment(segment) or segment.status == SEGMENT_STATUS_QUARANTINED:
+            if _is_legacy_segment(segment) or segment.status in hidden_statuses:
                 continue
             if segment.row_count > 0:
                 return True
@@ -2157,11 +2300,16 @@ class SqliteSegmentStore(RingBufferStore):
             return 0
         cutoff = datetime.now(UTC).timestamp() - max_age
         removed = 0
-        for segment in await self.manifest.list_retention_eligible_segments():
+        # Durch dieselbe guard-geschützte Victim-Liste wie Size/Row (#951, Pkt 7):
+        # gesundes Legacy ist so age-retention-fähig (sobald der Guard erfüllt ist),
+        # quarantäniertes Legacy bleibt unter dem Guard geschützt.
+        for segment in await self._retention_victims_in_order():
             to_ts = _parse_ts(segment.to_ts)
             if to_ts is None or to_ts >= cutoff:
-                # Ältestes-zuerst: sobald ein Segment neu genug ist, sind alle
-                # folgenden ebenfalls neu genug.
+                # Ältestes-zuerst: sobald ein Segment neu genug ist (oder keine
+                # to_ts-Grenze trägt), wird es und alles danach nicht mehr per Alter
+                # gelöscht. Legacy steht als ältestes vorne; ein Legacy ohne bekannte
+                # to_ts wird konservativ NICHT altersbedingt gelöscht.
                 break
             if not await self._delete_segment(segment):
                 # Basisdatei nicht löschbar (#951, Pkt 6): Zeile bleibt, Retention
@@ -2175,10 +2323,11 @@ class SqliteSegmentStore(RingBufferStore):
             return 0
         removed = 0
         while await self._total_row_count() > max_entries:
-            eligible = await self.manifest.list_retention_eligible_segments()
-            if not eligible:
+            # Durch dieselbe guard-geschützte Victim-Liste wie Size/Age (#951, Pkt 7).
+            victims = await self._retention_victims_in_order()
+            if not victims:
                 break
-            if not await self._delete_segment(eligible[0]):
+            if not await self._delete_segment(victims[0]):
                 # Basisdatei nicht löschbar (#951, Pkt 6): sonst würde das älteste,
                 # undeletbare Segment endlos re-selektiert.
                 break

@@ -823,6 +823,7 @@ async def _query_v2_entries(
     limit_override: int | None = None,
     offset_override: int | None = None,
     candidate_cap_override: int | None = None,
+    is_export: bool = False,
 ) -> list[RingBufferEntryOut]:
     if not is_ringbuffer_enabled():
         return []
@@ -915,6 +916,7 @@ async def _query_v2_entries(
             sort_order=body.sort.order,
             dp_ids_by_name=dp_ids_by_name or None,
             candidate_cap_override=candidate_cap_override,
+            is_export=is_export,
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
@@ -1188,15 +1190,15 @@ async def export_ringbuffer_csv(
                         limit_override=chunk_size,
                         offset_override=offset,
                         # Export-Cap == Fenster (Codex #951, Pkt 1): ``offset+chunk_size``
-                        # (= ``offset+limit``). Ein gefilterter Legacy-Read wendet Value-/
-                        # Metadaten-Filter ERST NACH dem Fetch der gedeckelten Roh-Kandidaten
-                        # an. Setzt der Export den Cap GLEICH dem angefragten Fenster, erkennt
-                        # der Legacy-Reader den Export-Modus (``candidate_cap <= offset+limit``)
-                        # und liefert die VOLLSTÄNDIGE gematchte Menge (batch-scannt bis genug
-                        # Treffer oder Segment erschöpft), statt bei spärlichen Treffern auf
-                        # einem kurzen/leeren Chunk zu stoppen. Der Monitor-Live-View (großes
-                        # ``candidate_cap`` > Fenster) behält sein hartes Roh-Cap-Verhalten.
+                        # (= ``offset+limit``) hält die Batch-Größe des Legacy-/v2-Readers am
+                        # angefragten Fenster. ``is_export=True`` (Codex #951, Pkt 4/5) schaltet
+                        # den Legacy- UND den v2-guarded-Reader in den Batch-Scan-Modus: Value-/
+                        # Metadaten-/contains/regex-Filter werden über die vollständige Menge
+                        # gescannt (bis genug Treffer oder Segment erschöpft), statt bei
+                        # spärlichen Treffern auf einem kurzen/leeren Chunk zu stoppen. Der
+                        # Monitor-Live-View (``is_export=False``) behält sein hartes Roh-Cap.
                         candidate_cap_override=offset + chunk_size,
+                        is_export=True,
                     ),
                     timeout=_CSV_EXPORT_QUERY_TIMEOUT_SECONDS,
                 )
@@ -1225,11 +1227,12 @@ async def export_ringbuffer_csv(
                     body,
                     limit_override=1,
                     offset_override=offset,
-                    # Probe muss dieselbe volle Legacy-Kandidatenmenge sehen wie die
-                    # Export-Schleife (Codex #951, Pkt 1): ``candidate_cap == offset+1``
-                    # (= Fenster) hält den Legacy-Reader im Export-Modus, sonst meldete
-                    # die Probe am hohen Offset fälschlich „keine weiteren Zeilen".
+                    # Probe muss dieselbe volle Kandidatenmenge sehen wie die Export-
+                    # Schleife (Codex #951, Pkt 1/4): ``is_export=True`` hält den Legacy-/
+                    # v2-Reader im Batch-Scan-Modus, sonst meldete die Probe am hohen
+                    # Offset fälschlich „keine weiteren Zeilen".
                     candidate_cap_override=offset + 1,
+                    is_export=True,
                 ),
                 timeout=_CSV_EXPORT_QUERY_TIMEOUT_SECONDS,
             )
@@ -1704,7 +1707,7 @@ async def _collect_multi_entries(
         # volle Export-Limit heben, sonst deckelte ein Legacy-Segment mit Value-/
         # Metadaten-Post-Filter die Kandidaten roh auf den Monitor-Cap und der Export
         # verlöre alle Zeilen jenseits davon.
-        entries = await _query_v2_entries(query, candidate_cap_override=_CSV_EXPORT_MAX_ROWS)
+        entries = await _query_v2_entries(query, candidate_cap_override=_CSV_EXPORT_MAX_ROWS, is_export=True)
         return entries, {e.id: [] for e in entries}
 
     resolved: list[RingBufferFiltersetOut] = []
@@ -1735,7 +1738,7 @@ async def _collect_multi_entries(
             # Export-Kandidaten-Cap auf das volle Export-Limit heben (Codex #951, Pkt 2),
             # damit ein Legacy-Segment mit Value-/Metadaten-Post-Filter nicht auf den
             # Monitor-Cap gedeckelt wird und Zeilen jenseits davon verschluckt.
-            rows = await _query_v2_entries(query, candidate_cap_override=_CSV_EXPORT_MAX_ROWS)
+            rows = await _query_v2_entries(query, candidate_cap_override=_CSV_EXPORT_MAX_ROWS, is_export=True)
         except HTTPException:
             continue
         for entry in rows:

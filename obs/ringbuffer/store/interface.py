@@ -104,6 +104,16 @@ class StoreQuery:
     # Obergrenze für Kandidatenzeilen bei unbounded contains/regex ohne
     # Zeitfenster. ``None`` = kein Cap → contains/regex erfordern ein Zeitfenster.
     candidate_cap: int | None = None
+    # Export- vs. Live-Query-Unterscheidung (#951, Pkt 4). Der segmentierte Read-
+    # Pfad deckelt eine Live-Monitor-Query hart auf ``candidate_cap`` Roh-Zeilen je
+    # Segment (bounded, kein Full-Scan). Ein Voll-Export dagegen MUSS die
+    # vollständige gematchte Menge liefern und scannt daher – über ``is_export=True``
+    # explizit angefordert – batchweise, bis genug Treffer für ``offset+limit``
+    # zusammen sind oder das Segment erschöpft ist. Bewusst ein EXPLIZITES Flag statt
+    # der früheren ``candidate_cap <= offset+limit``-Heuristik: eine Live-Query mit
+    # großem ``limit``/Offset (z. B. ``limit=10000``) sonst fälschlich als Export
+    # eingestuft und in den vollen Legacy-Scan gekippt.
+    is_export: bool = False
     # Additive Mehrfach-Filter (#919). ``datapoint_id``/``source_adapter`` oben
     # bleiben für den Ein-Wert-Fall bestehen; die Listen decken den any_of-Fall ab
     # und werden als ``IN (...)`` gepusht.

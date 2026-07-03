@@ -1400,11 +1400,12 @@ async def test_legacy_export_returns_all_matches_beyond_raw_cap(store: SqliteSeg
     await LegacyMigrator(store, db).attach_readonly(LegacyMigrator(store, db).classify())
 
     value_filters = [{"operator": "contains", "field": "new_value", "value": "MATCH"}]
-    # Export-Semantik: candidate_cap == offset + limit (die vom CSV-Export gesetzte,
-    # mit dem Fenster wachsende Deckelung). Ohne Fix fetchte der Legacy-Reader nur die
-    # neuesten 5 ROH-Zeilen (rowid 50..46, allesamt Nicht-Treffer) → 0 Matches → der
-    # Export-Loop stoppte, obwohl 5 ältere Zeilen matchen.
-    query = StoreQuery(limit=5, offset=0, candidate_cap=5, sort_field="id", sort_order="desc", value_filters=value_filters)
+    # Export-Semantik über das EXPLIZITE is_export-Flag (#951, Pkt 4): candidate_cap ==
+    # offset + limit (die vom CSV-Export gesetzte, mit dem Fenster wachsende Deckelung).
+    # Ohne Fix fetchte der Legacy-Reader nur die neuesten 5 ROH-Zeilen (rowid 50..46,
+    # allesamt Nicht-Treffer) → 0 Matches → der Export-Loop stoppte, obwohl 5 ältere
+    # Zeilen matchen. Mit is_export=True batch-scannt er bis genug Matches.
+    query = StoreQuery(limit=5, offset=0, candidate_cap=5, is_export=True, sort_field="id", sort_order="desc", value_filters=value_filters)
     rows = await store.query(query)
     assert {r["new_value"] for r in rows} == {"MATCH"}
     assert len(rows) == 5
@@ -1422,7 +1423,9 @@ async def test_legacy_export_paginates_full_matched_window(store: SqliteSegmentS
     offset = 0
     chunk = 5
     while True:
-        query = StoreQuery(limit=chunk, offset=offset, candidate_cap=offset + chunk, sort_field="id", sort_order="desc", value_filters=value_filters)
+        query = StoreQuery(
+            limit=chunk, offset=offset, candidate_cap=offset + chunk, is_export=True, sort_field="id", sort_order="desc", value_filters=value_filters
+        )
         page = await store.query(query)
         if not page:
             break

@@ -686,6 +686,14 @@ class RingBuffer:
         if await self._segment_age_rotation_due():
             await self._store.rotate()
             self._segment_created_at = _isoformat_utc(datetime.now(UTC))
+            # Enforce nach der VOR-Append-Age-Rotation (#951, Pkt 1): bei zeit-
+            # getriebener Default-Rotation mit niedrigem/gleichmäßigem Traffic ist
+            # dies der EINZIGE Rotationspfad, der greift. Ohne enforce_retention()
+            # hier liefen geschlossene Segmente nie über die Retention –
+            # ``max_file_size_bytes``/``max_age``/``max_entries`` würden verletzt,
+            # weil der Post-Append-Rotationszweig (unten) bei diesem Traffic-Profil
+            # nie fällig wird. Analog zum Post-Append-Zweig.
+            await self._store.enforce_retention()
 
         await self._store.append(
             [
@@ -1047,6 +1055,7 @@ class RingBuffer:
         sort_order: str = "desc",
         dp_ids_by_name: list[str] | None = None,
         candidate_cap_override: int | None = None,
+        is_export: bool = False,
     ) -> list[RingBufferEntry]:
         if self._segmented:
             return await self._query_v2_segmented(
@@ -1073,6 +1082,7 @@ class RingBuffer:
                 sort_order=sort_order,
                 dp_ids_by_name=dp_ids_by_name,
                 candidate_cap_override=candidate_cap_override,
+                is_export=is_export,
             )
 
         if not self._conn:
@@ -1238,6 +1248,7 @@ class RingBuffer:
         sort_order: str,
         dp_ids_by_name: list[str] | None,
         candidate_cap_override: int | None = None,
+        is_export: bool = False,
     ) -> list[RingBufferEntry]:
         """Read-Pfad im segmentierten Modus (#919).
 
@@ -1337,6 +1348,10 @@ class RingBuffer:
             # sodass das Legacy-Fetch-Limit die gesamte paginierte Menge abdeckt. Der
             # Monitor-Live-View (kleines Limit, kein Override) behält seinen festen Cap.
             candidate_cap=candidate_cap_override if candidate_cap_override is not None else _SEGMENTED_CANDIDATE_CAP,
+            # Export- vs. Live-Query explizit (#951, Pkt 4): nur der Export scannt die
+            # gefilterte Legacy-/v2-Menge batchweise vollständig; die Live-Query bleibt
+            # hart auf den Cap gedeckelt – auch bei großem limit/Offset.
+            is_export=is_export,
         )
         rows = await self._store_query_serialized(store_query)
         return [
