@@ -17,6 +17,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.doUnmock('@/api/client')
+  vi.doUnmock('@/stores/auth')
 })
 
 function segmentedPayload({ segments = [], maxFileSizeBytes = 100 * 1024 * 1024, sizeBytes = 30 * 1024 * 1024, retentionSeconds = 3 * 24 * 3600, overBudget = false, prognosis, segmentMaxAge = 6 * 3600, maxAge = null } = {}) {
@@ -55,10 +56,14 @@ const problemSegments = [
   { segment_id: 1, status: 'quarantined', integrity_status: 'corrupt', recovery_status: 'quarantined' },
 ]
 
-async function mountCard(statsData) {
+async function mountCard(statsData, { isAdmin = true } = {}) {
   statsMock.mockResolvedValue({ data: statsData })
   vi.doMock('@/api/client', () => ({
     ringbufferApi: { stats: statsMock, config: vi.fn() },
+  }))
+  // Auth-Store mocken: nur isAdmin ist für das Gating der Konfig-Aktionen relevant (#938).
+  vi.doMock('@/stores/auth', () => ({
+    useAuthStore: () => ({ isAdmin }),
   }))
   const { default: RingBufferCard } = await import('@/components/dashboard/RingBufferCard.vue')
   const wrapper = mount(RingBufferCard, {
@@ -221,11 +226,49 @@ describe('RingBufferCard — legacy state', () => {
   })
 })
 
+// ── Admin-Gating der Konfig-Aktionen (#938) ────────────────────────────────
+// Die Dashboard-Route ist für alle authentifizierten Nutzer erreichbar, aber
+// das Speichern der Config ist admin-only (Backend gibt sonst 403). Deshalb
+// werden die Konfig-Einstiege wie in RingBufferView mit auth.isAdmin gegatet.
+describe('RingBufferCard — admin gating of config actions', () => {
+  it('non-admin: no configure button in the disabled state, rest stays', async () => {
+    const wrapper = await mountCard({ enabled: false }, { isAdmin: false })
+    expect(wrapper.find('[data-testid="rb-card-disabled"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="rb-card-configure-disabled"]').exists()).toBe(false)
+  })
+
+  it('admin: configure button present in the disabled state', async () => {
+    const wrapper = await mountCard({ enabled: false }, { isAdmin: true })
+    expect(wrapper.find('[data-testid="rb-card-configure-disabled"]').exists()).toBe(true)
+  })
+
+  it('non-admin: no configure button in the segmented state, stats/prognosis/details stay', async () => {
+    const wrapper = await mountCard(segmentedPayload({ segments: healthySegments, prognosis: fullPrognosis }), { isAdmin: false })
+    expect(wrapper.find('[data-testid="rb-card-configure"]').exists()).toBe(false)
+    // Read-only-Teile der Karte bleiben für alle sichtbar.
+    expect(wrapper.find('[data-testid="rb-card-segments"]').text()).toBe('2')
+    expect(wrapper.find('[data-testid="prognosis-rate"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="rb-card-open-segments"]').exists()).toBe(true)
+  })
+
+  it('admin: configure button present in the segmented state', async () => {
+    const wrapper = await mountCard(segmentedPayload({ segments: healthySegments }), { isAdmin: true })
+    expect(wrapper.find('[data-testid="rb-card-configure"]').exists()).toBe(true)
+  })
+
+  it('non-admin: no configure button in the legacy state, stats stay', async () => {
+    const wrapper = await mountCard({ enabled: true, store: null, total: 10, file_size_bytes: 0 }, { isAdmin: false })
+    expect(wrapper.find('[data-testid="rb-card-legacy"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="rb-card-configure"]').exists()).toBe(false)
+  })
+})
+
 // ── Fehler / Laden ─────────────────────────────────────────────────────────
 describe('RingBufferCard — error state', () => {
   it('shows the error message when stats() rejects', async () => {
     statsMock.mockRejectedValue(new Error('boom'))
     vi.doMock('@/api/client', () => ({ ringbufferApi: { stats: statsMock, config: vi.fn() } }))
+    vi.doMock('@/stores/auth', () => ({ useAuthStore: () => ({ isAdmin: true }) }))
     const { default: RingBufferCard } = await import('@/components/dashboard/RingBufferCard.vue')
     const wrapper = mount(RingBufferCard, {
       global: {

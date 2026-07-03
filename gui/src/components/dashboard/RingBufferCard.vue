@@ -35,7 +35,7 @@
           <div class="text-sm font-medium text-slate-600 dark:text-slate-300">{{ $t('dashboard.ringbuffer.disabledTitle') }}</div>
           <p class="text-xs text-slate-500 mt-0.5">{{ $t('dashboard.ringbuffer.disabledHint') }}</p>
         </div>
-        <button type="button" class="btn-secondary" data-testid="rb-card-configure-disabled" @click="showConfig = true">
+        <button v-if="auth.isAdmin" type="button" class="btn-secondary" data-testid="rb-card-configure-disabled" @click="showConfig = true">
           {{ $t('dashboard.ringbuffer.configure') }}
         </button>
       </div>
@@ -109,7 +109,7 @@
           <button type="button" class="btn-secondary btn-sm" data-testid="rb-card-open-segments" @click="showSegments = true">
             {{ $t('dashboard.ringbuffer.segmentDetails') }}
           </button>
-          <button type="button" class="btn-secondary btn-sm" data-testid="rb-card-configure" @click="showConfig = true">
+          <button v-if="auth.isAdmin" type="button" class="btn-secondary btn-sm" data-testid="rb-card-configure" @click="showConfig = true">
             {{ $t('dashboard.ringbuffer.configuration') }}
           </button>
         </div>
@@ -128,7 +128,7 @@
           </div>
         </div>
         <div class="flex flex-wrap gap-2 pt-1">
-          <button type="button" class="btn-secondary btn-sm" data-testid="rb-card-configure" @click="showConfig = true">
+          <button v-if="auth.isAdmin" type="button" class="btn-secondary btn-sm" data-testid="rb-card-configure" @click="showConfig = true">
             {{ $t('dashboard.ringbuffer.configuration') }}
           </button>
         </div>
@@ -148,6 +148,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ringbufferApi } from '@/api/client'
+import { useAuthStore } from '@/stores/auth'
 import { useSegmentProblems } from '@/composables/useSegmentProblems'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -159,6 +160,10 @@ import SegmentStatsPanel from '@/views/ringbuffer/SegmentStatsPanel.vue'
 const REFRESH_INTERVAL_MS = 30_000
 
 const { problemCounts, problemSummary: buildProblemSummary, retentionSignal: buildRetentionSignal } = useSegmentProblems()
+
+// Konfig-Aktionen sind admin-only (Backend gibt Nicht-Admins 403). Gleiches
+// Gating wie in RingBufferView (#938): Buttons für Nicht-Admins ausblenden.
+const auth = useAuthStore()
 
 const stats = ref(null)
 const loading = ref(true)
