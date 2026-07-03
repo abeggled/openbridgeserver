@@ -244,6 +244,63 @@ async def test_migrated_old_config_with_short_max_age_clamps_segment_max_age():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tiny_max_age", [1, 2])
+async def test_migrated_config_with_sub_three_second_max_age_does_not_crash_startup(tiny_max_age):
+    """#951: Alt-Config mit ``max_age`` = 1 oder 2 s (ohne Segment-Keys) darf nicht crashen.
+
+    ``max_age // 3`` ist hier 0; das frühere ``max(1, 0)`` = 1 setzte
+    ``segment_max_age = 1``, doch die 3-Segment-Regel verlangt
+    ``max_age >= 3 * segment_max_age`` (= 3) → 1 bzw. 2 < 3 → ``validate_store_config``
+    crasht beim Startup. Für diesen degenerierten Sub-3-Sekunden-Fall darf kein
+    positives ``segment_max_age`` abgeleitet werden; ``load`` liefert stattdessen
+    ``None`` (kein zeitgetriebener Rotations-Trigger), sodass die Regel nicht greift
+    und der Store-Init nicht crasht.
+    """
+    from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig, validate_store_config
+
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+            (PERSISTED_CONFIG_KEY, json.dumps({"max_age": tiny_max_age})),
+        )
+        await db.commit()
+        cfg = await load_persisted_ringbuffer_config(db)
+        assert cfg["segment_max_age"] is None
+        # 3-Segment-Regel greift bei segment_max_age=None nicht → kein Crash.
+        validate_store_config(
+            SegmentConfig(segment_max_age=cfg["segment_max_age"]),
+            StoreRetentionConfig(max_age=cfg["max_age"]),
+        )
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrated_config_with_max_age_three_derives_one_second_segment():
+    """Grenzfall ``max_age`` = 3 s: ``3 // 3`` = 1 erfüllt die Regel (``3 >= 3 * 1``) noch."""
+    from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig, validate_store_config
+
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+            (PERSISTED_CONFIG_KEY, json.dumps({"max_age": 3})),
+        )
+        await db.commit()
+        cfg = await load_persisted_ringbuffer_config(db)
+        assert cfg["segment_max_age"] == 1
+        validate_store_config(
+            SegmentConfig(segment_max_age=cfg["segment_max_age"]),
+            StoreRetentionConfig(max_age=cfg["max_age"]),
+        )
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_migrated_config_without_max_age_keeps_default_segment_max_age():
     """Ohne ``max_age`` (unbegrenzte Retention) greift die 3-Segment-Regel nicht → 6-h-Default bleibt."""
     db = Database(":memory:")

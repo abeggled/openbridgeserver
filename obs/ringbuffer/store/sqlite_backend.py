@@ -70,6 +70,7 @@ from obs.ringbuffer.store.manifest import (
     SEGMENT_STATUS_CHECKPOINT_PENDING,
     SEGMENT_STATUS_CLOSED,
     SEGMENT_STATUS_LEGACY,
+    SEGMENT_STATUS_MIGRATED,
     SEGMENT_STATUS_QUARANTINED,
     Manifest,
     SegmentRecord,
@@ -732,7 +733,21 @@ class SqliteSegmentStore(RingBufferStore):
         # Sort nach ``global_event_id`` in ``query()`` ordnet korrekt und begrenzt auf
         # ``offset+limit``. Im Normalbetrieb (kein attached Legacy) bleibt der
         # Frühabbruch erhalten (Performance).
-        migration_in_progress = any(s.status == SEGMENT_STATUS_LEGACY for s in segments)
+        #
+        # Migrierte Segmente (#951, Pkt 1, Erweiterung): auch NACH Abschluss der
+        # Migration (Quelle bereits detached, kein ``legacy``-Segment mehr) bleiben die
+        # aus mehreren Legacy-Quellen migrierten ``migrated``-Segmente im Abfrage-Set.
+        # Ihre quell-gescopten NEGATIVEN gid-Buckets sind von der ``segment_id``-
+        # Reihenfolge ENTKOPPELT: eine Quelle mit kleinerem Bucket trägt höhere (weniger
+        # negative) gids, kann aber je nach Migrationsreihenfolge niedrigere segment_ids
+        # halten. ``list_segments_for_query`` iteriert migrierte Segmente nach
+        # ``segment_id DESC`` – das korreliert dann NICHT mehr mit der gid-Ordnung. Ein
+        # ``id desc``-Query mit kleinem limit/offset könnte im migrierten Bereich Zeilen
+        # überspringen oder falsch ordnen. Daher wird der Frühabbruch auch deaktiviert,
+        # sobald ``migrated``-Segmente im Abfrage-Set liegen; erst der finale Sort nach
+        # ``global_event_id`` in ``query()`` ordnet korrekt. Im reinen v2-Normalbetrieb
+        # (kein legacy, kein migrated) bleibt der Frühabbruch erhalten (Performance).
+        migration_in_progress = any(s.status in (SEGMENT_STATUS_LEGACY, SEGMENT_STATUS_MIGRATED) for s in segments)
         allow_early_termination = query.sort_field == "id" and query.sort_order == "desc" and not migration_in_progress
         for segment in segments:
             if allow_early_termination and needed and len(collected) >= needed:

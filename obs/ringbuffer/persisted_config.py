@@ -83,14 +83,28 @@ def _resolve_migrated_segment_max_age(
     Config ändern kann.
 
     Fix: nur wenn ``segment_max_age`` FEHLT und ``max_age`` gesetzt ist, den
-    abgeleiteten Wert auf ``max_age // RATIO`` klemmen (mindestens 1). Explizit
-    persistierte Werte (auch ``None``) bleiben unangetastet.
+    abgeleiteten Wert auf ``max_age // RATIO`` klemmen. Explizit persistierte Werte
+    (auch ``None``) bleiben unangetastet.
+
+    Degenerierter Sub-3-Sekunden-Fall (#951): ist ``max_age`` kleiner als
+    ``RETENTION_SEGMENT_RATIO`` (= 3, also 1 oder 2 s), ergibt ``max_age // RATIO``
+    0 – es existiert KEIN positives ganzzahliges ``segment_max_age``, das die
+    3-Segment-Regel ``max_age >= 3 * segment_max_age`` erfüllt. Ein früher hier auf
+    1 hochgeklemmter Wert ließ ``validate_store_config`` beim Startup crashen. Für
+    diese entarteten Werte wird daher ``None`` zurückgegeben (kein zeitgetriebener
+    Segment-Trigger, analog zur Tiny-Budget-Behandlung): die Regel greift dann nicht,
+    Size-/Row-Trigger segmentieren weiterhin, und ein Admin kann ``max_age`` später
+    gefahrlos korrigieren. Ab ``max_age`` = 3 wird regulär auf ``max_age // RATIO``
+    (mindestens 1) geklemmt.
     """
     if persisted_segment_max_age is not _UNSET:
         return persisted_segment_max_age
     if max_age is None or default_segment_max_age is None:
         return default_segment_max_age
-    return min(default_segment_max_age, max(1, max_age // _RETENTION_SEGMENT_RATIO))
+    derived = max_age // _RETENTION_SEGMENT_RATIO
+    if derived < 1:
+        return None
+    return min(default_segment_max_age, derived)
 
 
 def _ringbuffer_storage_exists(storage_path: str | None) -> bool:

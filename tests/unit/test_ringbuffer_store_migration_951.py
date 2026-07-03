@@ -1089,6 +1089,50 @@ async def test_in_progress_migration_disables_early_termination(tmp_path: Path):
         await store.close()
 
 
+async def test_bounded_query_over_completed_multi_source_migration_keeps_order(tmp_path: Path):
+    # Nach ABSCHLUSS mehrerer Legacy-Migrationen (Quellen bereits DETACHED, also KEIN
+    # attached ``legacy``-Segment mehr) liegen mehrere ``migrated``-Segmente vor. Ihre
+    # quell-gescopten NEGATIVEN gid-Buckets sind von der ``segment_id``-Reihenfolge
+    # ENTKOPPELT: eine Quelle mit kleinerem Bucket traegt HOEHERE (weniger negative)
+    # gids, kann aber – je nach Migrationsreihenfolge – NIEDRIGERE segment_ids halten.
+    # ``list_segments_for_query`` iteriert migrierte Segmente nach ``segment_id DESC``;
+    # der ``id desc``-Frueh-Abbruch (nur bei attached Legacy deaktiviert) sammelte dann
+    # bei kleinem Limit die Zeilen des zuerst besuchten (aber NICHT hoechstwertigen)
+    # migrierten Segments und terminierte, bevor das Segment mit den WIRKLICH hoechsten
+    # gids gelesen wurde -> falsche/uebersprungene Zeilen. Fix: auch bei vorhandenen
+    # ``migrated``-Segmenten den Frueh-Abbruch deaktivieren und final nach
+    # ``global_event_id`` ordnen.
+    #
+    # ``legacy_b.db`` (kleiner Bucket -> HOHE gids) wird ZUERST migriert (niedrige
+    # segment_ids); ``legacy_c.db`` (grosser Bucket -> NIEDRIGE gids) danach (hoehere
+    # segment_ids). Ohne Fix besucht der Frueh-Abbruch legacy_c zuerst und liefert
+    # dessen (niedrigere) gids faelschlich als „neueste".
+    store = SqliteSegmentStore(tmp_path / "root", segments=SegmentConfig(segment_max_rows=2))
+    await store.open()
+    try:
+        db_b = tmp_path / "legacy_b.db"
+        db_c = tmp_path / "legacy_c.db"
+        _build_legacy(db_b, [(f"2020-01-{i + 1:02d}T00:00:00.000Z", f"B{i}") for i in range(4)])
+        _build_legacy(db_c, [(f"2021-01-{i + 1:02d}T00:00:00.000Z", f"C{i}") for i in range(4)])
+        assert await LegacyMigrator(store, db_b).migrate_small(batch_rows=100) == 4
+        assert await LegacyMigrator(store, db_c).migrate_small(batch_rows=100) == 4
+        # Migration abgeschlossen: keine Quelle mehr attached.
+        assert await store.manifest.list_legacy_segments() == []
+        # Mehrere migrierte Segmente ueber beide Buckets liegen vor.
+        migrated = [s for s in await store.manifest.list_segments() if s.status == "migrated"]
+        assert len(migrated) >= 2
+
+        # Gebundene id-desc-Query: die drei hoechstwertigen gids gehoeren zur Quelle mit
+        # dem kleineren Bucket (legacy_b) und muessen zurueckkommen – kein Frueh-Abbruch
+        # auf dem niedriger-wertigen legacy_c-Segment.
+        rows = await store.query(StoreQuery(limit=3, sort_field="id", sort_order="desc"))
+        gids = [r["global_event_id"] for r in rows]
+        assert gids == sorted(gids, reverse=True), f"gids nicht global absteigend: {gids}"
+        assert [r["new_value"] for r in rows] == ["B3", "B2", "B1"]
+    finally:
+        await store.close()
+
+
 async def test_early_termination_still_active_without_attached_legacy(tmp_path: Path):
     # Regression-Guard: ohne attached Legacy-Segment bleibt der Frueh-Abbruch aktiv
     # (Performance). Ein rein-v2-Store mit mehreren Segmenten darf bei kleinem Limit
