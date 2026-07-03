@@ -79,7 +79,12 @@ def derive_segment_max_bytes(max_file_size_bytes: int | None) -> int:
     return max(1, min(_SEGMENT_MAX_BYTES_DEFAULT, max_file_size_bytes // RETENTION_SEGMENT_RATIO))
 
 
-def _effective_store_max_file_size_bytes(max_file_size_bytes: int | None, segment_max_bytes: int) -> int | None:
+def _effective_store_max_file_size_bytes(
+    max_file_size_bytes: int | None,
+    segment_max_bytes: int,
+    *,
+    explicit_segment: bool,
+) -> int | None:
     """Hebt das Retention-Budget auf die 3-Segment-Untergrenze an, wenn nötig (#951, P2).
 
     Für degenerierte Budgets (1/2 Byte) ist die 3-Segment-Regel mit einem positiven
@@ -88,11 +93,22 @@ def _effective_store_max_file_size_bytes(max_file_size_bytes: int | None, segmen
     Fall auf ``RETENTION_SEGMENT_RATIO * segment_max_bytes`` angehoben – der kleinste
     Wert, der die Regel erfüllt. Für alle regelkonformen Budgets (>= 3 Byte, der
     Normalfall) bleibt der Wert unverändert.
+
+    Der Uplift greift NUR im auto-abgeleiteten Pfad (``explicit_segment=False``, der
+    Tiny-Budget-Clamp aus ``derive_segment_max_bytes``). Ist ``segment_max_bytes``
+    EXPLIZIT konfiguriert (Config/Konstruktor, ``explicit_segment=True``), bleibt das
+    konfigurierte ``max_file_size_bytes`` ein harter Deckel: eine zu grobe explizite
+    Segmentgröße darf das Retention-Budget NICHT still aufblähen, sondern muss die
+    3-Segment-Ablehnung in ``validate_store_config`` auslösen (#951, F1). Sonst liefe
+    z. B. ``max_file_size_bytes=100 MiB`` mit explizitem ``segment_max_bytes=64 MiB``
+    still mit 192 MiB Store-Budget, statt zu scheitern oder 100 MiB zu honorieren.
     """
     from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO
 
     if max_file_size_bytes is None:
         return None
+    if explicit_segment:
+        return max_file_size_bytes
     return max(max_file_size_bytes, RETENTION_SEGMENT_RATIO * segment_max_bytes)
 
 
@@ -288,8 +304,14 @@ class RingBuffer:
             self._segment_max_bytes = derive_segment_max_bytes(self._max_file_size_bytes)
 
         # Degenerierte Budgets (1/2 Byte) auf die 3-Segment-Untergrenze anheben, damit
-        # die Auto-Ableitung nie über validate_store_config crasht (#951, P2).
-        effective_max_file_size = _effective_store_max_file_size_bytes(self._max_file_size_bytes, self._segment_max_bytes)
+        # die Auto-Ableitung nie über validate_store_config crasht (#951, P2). Nur im
+        # auto-abgeleiteten Pfad: ist ``segment_max_bytes`` explizit gesetzt, bleibt das
+        # konfigurierte Budget harter Deckel und die 3-Segment-Validierung greift (#951, F1).
+        effective_max_file_size = _effective_store_max_file_size_bytes(
+            self._max_file_size_bytes,
+            self._segment_max_bytes,
+            explicit_segment=self._segment_max_bytes_config is not None,
+        )
 
         root = self._segment_store_root()
         store = SqliteSegmentStore(
@@ -350,7 +372,18 @@ class RingBuffer:
             # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
             # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
             # zügig getrimmt (No-Zero-History-Guard beachtet, siehe Store).
-            await store.enforce_retention()
+            #
+            # ABER: dieselbe Migrations-Deferral wie im Append-Pfad (#951, F2). Startet
+            # der Server WÄHREND einer chunked Legacy-Migration neu, kann das Manifest
+            # versteckte ``migrating``-v2-Chunks enthalten, während die Original-Legacy-DB
+            # noch als einzige vollständige Quelle attached ist. Hätte ein Live-v2-Segment
+            # bereits Zeilen (No-Zero-History-Guard erfüllt) und läge die Legacy-Datei über
+            # dem Byte-Budget, löschte dieser Startup-Pass die attached Legacy-Quelle, BEVOR
+            # die restlichen Legacy-Zeilen kopiert sind → Datenverlust. Solange also
+            # ``list_migrating_segments()`` non-empty ist, wird der Startup-Retention-Pass
+            # ausgesetzt; die Migration holt die Retention später nach (nach Detach/Abschluss).
+            if not await self._migration_in_progress():
+                await store.enforce_retention()
         except Exception:
             try:
                 await store.close()
@@ -516,8 +549,14 @@ class RingBuffer:
 
         # Konsistent zum Startpfad: degenerierte Budgets (1/2 Byte) auf die
         # 3-Segment-Untergrenze anheben, statt einen Store mit budget<3*segment zu
-        # hinterlassen (#951, P2).
-        effective_max_file_size = _effective_store_max_file_size_bytes(self._max_file_size_bytes, self._segment_max_bytes)
+        # hinterlassen (#951, P2). Nur im auto-abgeleiteten Pfad – ein explizit zu grob
+        # gesetztes ``segment_max_bytes`` bleibt hart gedeckelt und läuft in die
+        # 3-Segment-Validierung (#951, F1).
+        effective_max_file_size = _effective_store_max_file_size_bytes(
+            self._max_file_size_bytes,
+            self._segment_max_bytes,
+            explicit_segment=self._segment_max_bytes_config is not None,
+        )
 
         self._store.apply_config(
             segments=SegmentConfig(

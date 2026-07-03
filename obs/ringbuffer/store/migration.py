@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sqlite3
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -408,11 +409,15 @@ class LegacyMigrator:
            (``_mark_source_migrated``) UND entfernt die Legacy-Manifest-Zeile. Der
            Marker-``touch`` ist der einzige fail-prone Schritt (evtl. read-only Legacy-
            Verzeichnis).
-        3. Schlägt Schritt 2 fehl (``OSError``), wird die Promotion aus Schritt 1
-           ZURÜCKGEROLLT: die gerade promoteten Segmente werden wieder ``migrating``
-           (versteckt) markiert und der Fehler RE-RAISED. Ergebnis: Chunks wieder
-           versteckt + Legacy noch attached → Single-Delivery, kein done-Mark, retry-sicher
-           (Finding 1).
+        3. Schlägt Schritt 2 fehl, wird die Promotion aus Schritt 1 ZURÜCKGEROLLT: die
+           gerade promoteten Segmente werden wieder ``migrating`` (versteckt) markiert und der
+           Fehler RE-RAISED. Ergebnis: Chunks wieder versteckt + Legacy noch attached →
+           Single-Delivery, kein done-Mark, retry-sicher (Finding 1). Gefangen werden ALLE
+           realistischen transienten Detach-Fehler: ``OSError`` (Marker-``touch`` scheitert im
+           read-only Legacy-Verzeichnis) UND ``sqlite3.Error`` (== ``aiosqlite.Error``, inkl.
+           ``OperationalError``/``DatabaseError``) aus dem finalen Manifest-Delete
+           (``delete_segment``) NACH erfolgreichem Marker (#951, P2, :653) – nicht das breite
+           ``Exception``.
 
         Warum Promote ZUERST (und nicht Marker zuerst): ``classify()`` unterdrückt ein
         Re-Attach allein anhand des Marker-Sidecars. Würde der Marker VOR der Promotion
@@ -436,11 +441,20 @@ class LegacyMigrator:
         to_migrated = await self._finalize_migrated_segments()
         try:
             await self._detach_migrated_legacy_segment()
-        except OSError:
-            # Marker/Detach fehlgeschlagen (z. B. read-only Legacy-Verzeichnis): die in
-            # Schritt 1 promoteten (``closed``) Segmente wieder verstecken, damit sie nicht
-            # ZUSAMMEN mit der noch attached Legacy-Quelle doppelt geliefert werden. Danach
-            # re-raise, der done-Mark unterbleibt und ein Retry setzt sauber fort.
+        except (OSError, sqlite3.Error):
+            # Detach fehlgeschlagen: die in Schritt 1 promoteten (``closed``) Segmente wieder
+            # verstecken, damit sie nicht ZUSAMMEN mit der noch attached Legacy-Quelle doppelt
+            # geliefert werden. Danach re-raise, der done-Mark unterbleibt und ein Retry setzt
+            # sauber fort. Abgedeckt werden ALLE realistischen transienten Detach-Fehler:
+            #   * ``OSError`` – ``_mark_source_migrated`` kann den ``.migrated``-Marker im
+            #     read-only Legacy-Verzeichnis nicht schreiben (touch).
+            #   * ``sqlite3.Error`` (== ``aiosqlite.Error``, inkl. ``OperationalError``/
+            #     ``DatabaseError``) – der finale Manifest-Delete (``delete_segment``) scheitert
+            #     NACH erfolgreichem Marker an einem transienten SQLite-I/O-/Locking-Fehler.
+            #     Ohne diesen Zweig blieben die Chunks sichtbar promotet, waehrend die Legacy
+            #     noch attached ist → dieselbe Historie doppelt bis zum naechsten Retry (#951,
+            #     P2, :653). Bewusst NICHT das breite ``Exception`` – nur die real auftretenden
+            #     Fehlerklassen des Detach-Schritts.
             for segment_id in migrating_before:
                 await self._store.manifest.mark_migrating(segment_id)
             raise
