@@ -18,36 +18,61 @@ INSTALL_DIR="/opt/obs"
 SERVICE="obs"
 
 CURRENT=$(cat "$INSTALL_DIR/version" 2>/dev/null || echo "unknown")
+
+SHOW_NIGHTLIES=false
+for arg in "$@"; do
+    case "$arg" in
+        --nightly|-n) SHOW_NIGHTLIES=true ;;
+    esac
+done
+
 echo "Fetching release information..."
 ALL_RELEASES=$(curl -sf "https://api.github.com/repos/${REPO}/releases")
 
-# Build ordered list via semantic version sort, stopping after 2 stables
-VERSION_LIST=$(echo "$ALL_RELEASES" | python3 -c "
-import sys, json, re
+# Build ordered list: versioned releases (up to 2 stables) plus nightlies if requested
+VERSION_LIST=$(echo "$ALL_RELEASES" | SHOW_NIGHTLIES="$SHOW_NIGHTLIES" python3 -c "
+import sys, json, re, os
 
+show_nightlies = os.environ.get('SHOW_NIGHTLIES') == 'true'
 releases = json.load(sys.stdin)
 
 def sort_key(tag):
     m = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-RC(\d+))?\$', tag, re.IGNORECASE)
-    if not m:
-        return (0, 0, 0, 0, 0)
-    y, mn, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
-    rc = int(m.group(4)) if m.group(4) else None
-    return (y, mn, p, 1 if rc is None else 0, rc or 0)
+    if m:
+        y, mn, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        rc = int(m.group(4)) if m.group(4) else None
+        return (y, mn, p, 1 if rc is None else 0, rc or 0)
+    m = re.match(r'^nightly-(\d{4})(\d{2})(\d{2})\$', tag)
+    if m:
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)), -1, 0)
+    return (0, 0, 0, 0, 0)
 
-candidates = sorted(
-    [r for r in releases if not r['draft']],
-    key=lambda r: sort_key(r['tag_name']), reverse=True
-)
+non_draft = [r for r in releases if not r['draft']]
 
+versioned = []
 stables_seen = 0
-for r in candidates:
-    kind = 'rc' if r['prerelease'] else 'stable'
-    print(kind + ' ' + r['tag_name'])
+for r in sorted(non_draft, key=lambda r: sort_key(r['tag_name']), reverse=True):
+    if re.match(r'^nightly-', r['tag_name']) or sort_key(r['tag_name']) == (0, 0, 0, 0, 0):
+        continue
+    versioned.append(r)
     if not r['prerelease']:
         stables_seen += 1
         if stables_seen >= 2:
             break
+
+result = list(versioned)
+if show_nightlies:
+    result.extend(r for r in non_draft if re.match(r'^nightly-\d{8}\$', r['tag_name']))
+result.sort(key=lambda r: sort_key(r['tag_name']), reverse=True)
+
+for r in result:
+    tag = r['tag_name']
+    if re.match(r'^nightly-', tag):
+        print('nightly ' + tag)
+    elif r['prerelease']:
+        print('rc ' + tag)
+    else:
+        print('stable ' + tag)
 ")
 
 echo "Current version: $CURRENT"
@@ -56,15 +81,11 @@ echo ""
 OPTIONS=()
 LABELS=()
 
-while IFS=' ' read -r TYPE TAG; do
+while IFS=' ' read -r _TYPE TAG; do
     OPTIONS+=("$TAG")
     MARKER=""
-    [[ "$TAG" == "$CURRENT" ]] && MARKER=", current"
-    if [[ "$TYPE" == "stable" ]]; then
-        LABELS+=("$TAG  (stable${MARKER})")
-    else
-        LABELS+=("$TAG  (release candidate${MARKER})")
-    fi
+    [[ "$TAG" == "$CURRENT" ]] && MARKER="  (current)"
+    LABELS+=("$TAG${MARKER}")
 done <<< "$VERSION_LIST"
 
 if [[ ${#OPTIONS[@]} -eq 0 ]]; then
@@ -112,16 +133,20 @@ if r:
         print(bundle['browser_download_url'])
     else:
         print('')
-    # Prefer SHA-256 embedded in release notes body (new format).
-    # Fall back to the legacy .sha512 release asset for releases
-    # published before this migration (enables rollback/downgrade).
+    # 1. SHA-256 embedded in release notes body (stable/RC releases).
+    # 2. .sha256 sidecar asset (nightly builds).
+    # 3. Legacy .sha512 sidecar asset (pre-migration stable/RC rollback targets).
     body = r.get('body') or ''
     m = re.search(r'app-bundle[^\n]*\n\x60\x60\x60\s*\n([0-9a-f]{64})', body)
     if m:
         print('sha256:' + m.group(1))
     else:
-        sha512 = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha512')), None)
-        print('sha512url:' + sha512['browser_download_url'] if sha512 else '')
+        sha256_asset = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha256')), None)
+        if sha256_asset:
+            print('sha256url:' + sha256_asset['browser_download_url'])
+        else:
+            sha512 = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha512')), None)
+            print('sha512url:' + sha512['browser_download_url'] if sha512 else '')
 ")
 
 BUNDLE_URL=$(echo "$ASSET_INFO" | sed -n '1p')
@@ -135,7 +160,7 @@ fi
 BUNDLE_FILENAME=$(basename "$BUNDLE_URL")
 
 TMP=$(mktemp -d)
-trap "rm -rf $TMP" EXIT
+trap 'rm -rf "$TMP"' EXIT
 
 echo "Downloading $BUNDLE_URL ..."
 curl -fL "$BUNDLE_URL" -o "$TMP/$BUNDLE_FILENAME"
@@ -144,6 +169,13 @@ if [[ "$CHECKSUM_LINE" == sha256:* ]]; then
     EXPECTED_SHA256="${CHECKSUM_LINE#sha256:}"
     echo "Verifying integrity (SHA-256) ..."
     echo "${EXPECTED_SHA256}  ${BUNDLE_FILENAME}" | (cd "$TMP" && sha256sum -c -)
+elif [[ "$CHECKSUM_LINE" == sha256url:* ]]; then
+    CHECKSUM_URL="${CHECKSUM_LINE#sha256url:}"
+    CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
+    echo "Downloading checksum (SHA-256) ..."
+    curl -fL "$CHECKSUM_URL" -o "$TMP/$CHECKSUM_FILENAME"
+    echo "Verifying integrity (SHA-256) ..."
+    (cd "$TMP" && sha256sum -c "$CHECKSUM_FILENAME")
 elif [[ "$CHECKSUM_LINE" == sha512url:* ]]; then
     CHECKSUM_URL="${CHECKSUM_LINE#sha512url:}"
     CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
@@ -174,13 +206,18 @@ systemctl stop "$SERVICE"
 tar -xzf "$TMP/$BUNDLE_FILENAME" -C "$INSTALL_DIR"
 "$INSTALL_DIR/venv/bin/pip" install --no-cache-dir -q -r "$INSTALL_DIR/requirements.txt"
 
-# Self-update: replace this script with the version from the bundle
-cp "$INSTALL_DIR/obs-update" /usr/local/bin/obs-update
-chmod +x /usr/local/bin/obs-update
+# Self-update: replace this script with the version from the bundle.
+# Write to a temp file in the same directory and rename atomically —
+# an `install`/`cp` in place would truncate the inode this script may
+# still be executing from, corrupting a concurrently running update.
+TMP_SELF=$(mktemp /usr/local/bin/obs-update.XXXXXX)
+install -m 755 "$INSTALL_DIR/obs-update" "$TMP_SELF"
+mv -f "$TMP_SELF" /usr/local/bin/obs-update
 rm -f "$INSTALL_DIR/obs-update"
 if [[ "$BUNDLE_HAS_OBS_ADMIN" == "true" ]]; then
-    cp "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin
-    chmod +x /usr/local/bin/obs-admin
+    TMP_ADMIN=$(mktemp /usr/local/bin/obs-admin.XXXXXX)
+    install -m 755 "$INSTALL_DIR/obs-admin" "$TMP_ADMIN"
+    mv -f "$TMP_ADMIN" /usr/local/bin/obs-admin
     rm -f "$INSTALL_DIR/obs-admin"
 else
     rm -f /usr/local/bin/obs-admin

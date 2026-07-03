@@ -479,6 +479,24 @@ class RingBuffer:
             wal_bytes = os.path.getsize(wal_path)
         return used_bytes + wal_bytes
 
+    def disk_file_sizes(self) -> dict[str, int]:
+        """Physical on-disk sizes of the ringbuffer DB and its ``-wal``/``-shm`` sidecars.
+
+        Reports each file separately (in contrast to ``_current_storage_bytes`` which
+        folds the logical used size and the WAL into a single number) so support
+        packages can spot a WAL file growing out of proportion to the DB. Returns zeros
+        for the in-memory backend. See issue #908.
+        """
+        sizes = {"db_bytes": 0, "wal_bytes": 0, "shm_bytes": 0, "total_bytes": 0}
+        if self._storage == "memory":
+            return sizes
+        for key, suffix in (("db_bytes", ""), ("wal_bytes", "-wal"), ("shm_bytes", "-shm")):
+            candidate = f"{self._disk_path}{suffix}"
+            if os.path.exists(candidate):
+                sizes[key] = os.path.getsize(candidate)
+        sizes["total_bytes"] = sizes["db_bytes"] + sizes["wal_bytes"] + sizes["shm_bytes"]
+        return sizes
+
     async def _log_trim_event(
         self,
         reason: str,

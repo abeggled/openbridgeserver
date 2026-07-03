@@ -13,7 +13,8 @@ WidgetRegistry.register({
   configComponent: Config,
   defaultConfig: {
     label: '',
-    steps: [
+    mode: 'sequence',
+    options: [
       { label: 'widgets.stufenschalter.defaultOffLabel', value: '0', icon: '', color: '#6b7280' },
       { label: 'widgets.stufenschalter.defaultStepLabel', value: '1', icon: '', color: '#3b82f6' },
       { label: 'widgets.stufenschalter.defaultStepLabel', value: '2', icon: '', color: '#10b981' },

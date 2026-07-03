@@ -560,6 +560,40 @@ def test_support_package_sanitizes_adapter_secret_fields(tmp_path: Path):
     assert "/" not in package["installation"]["database"]["path"]
 
 
+def test_support_package_reports_main_and_ringbuffer_file_sizes(tmp_path: Path):
+    db_path = tmp_path / "obs.db"
+    _make_db(db_path)
+    # Simulate a WAL sidecar next to the main DB and a file-backed ringbuffer.
+    (tmp_path / "obs.db-wal").write_bytes(b"w" * 4096)
+    (tmp_path / "obs_ringbuffer.db").write_bytes(b"r" * 8192)
+    (tmp_path / "obs_ringbuffer.db-wal").write_bytes(b"x" * 2048)
+
+    package = create_support_package(db_path)
+
+    main_files = package["installation"]["database"]["files"]
+    assert main_files["db_bytes"] == db_path.stat().st_size
+    assert main_files["wal_bytes"] == 4096
+    assert main_files["total_bytes"] == main_files["db_bytes"] + 4096 + main_files["shm_bytes"]
+
+    storage = package["storage"]
+    assert storage["main"]["wal_bytes"] == 4096
+    assert "/" not in storage["main"]["path"]
+    assert storage["ringbuffer"]["db_bytes"] == 8192
+    assert storage["ringbuffer"]["wal_bytes"] == 2048
+    assert storage["ringbuffer"]["total_bytes"] == 8192 + 2048
+    assert storage["ringbuffer"]["path"] == "obs_ringbuffer.db"
+
+
+def test_support_package_reports_zero_sizes_when_ringbuffer_absent(tmp_path: Path):
+    db_path = tmp_path / "obs.db"
+    _make_db(db_path)
+
+    package = create_support_package(db_path)
+
+    assert package["storage"]["ringbuffer"]["db_bytes"] == 0
+    assert package["storage"]["ringbuffer"]["total_bytes"] == 0
+
+
 def test_support_package_marks_invalid_adapter_json(tmp_path: Path):
     db_path = tmp_path / "obs.db"
     ids = _make_db(db_path)
