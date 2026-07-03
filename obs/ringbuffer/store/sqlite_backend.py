@@ -190,6 +190,19 @@ _LEGACY_DEFAULT_CANDIDATE_CAP = 10_000
 # v2-IDs); höhere rowid (neuer) ⇒ höhere (weniger negative) ID.
 _LEGACY_GID_OFFSET = 1 << 62
 
+# Per-Quelle-Stride, der die synthetischen Legacy-gids mehrerer read-only
+# attached Legacy-DBs DISJUNKT hält (#951, Codex :1123). Jede Legacy-Quelle
+# bekommt einen eigenen, ``segment_id``-skalierten Block von je ``STRIDE``
+# reservierten rowid-Werten. Ohne diesen Block kollidierten – bei bloßem
+# ``-(segment_id & 0xFFFF)`` – aufeinanderfolgende Quellen (rowid r der einen
+# und rowid r+1 der nächsten trafen dieselbe synthetische ID), sodass als
+# entry-IDs exponierte ``global_event_id``s doppelt vorkamen und Multi-
+# Filterset-Queries/Exports auf eindeutigen IDs brachen. ``1 << 40`` deckt jede
+# reale Legacy-rowid ab (weit über der Zeilenzahl einer 20–30 GB-Single-DB) und
+# lässt genügend segment_id-Raum unter ``_LEGACY_GID_OFFSET`` (~4 Mio Quellen),
+# ohne den strikt-negativen int64-Bereich zu verlassen.
+_LEGACY_GID_STRIDE = 1 << 40
+
 
 # Einfache Operatoren, die als typisiertes SQL-WHERE gepusht werden.
 _PUSHDOWN_OPERATORS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte", "between"})
@@ -1119,8 +1132,13 @@ class SqliteSegmentStore(RingBufferStore):
         # Synthetischer global_event_id aus der chronologischen Legacy-rowid
         # (``id``): fetch-richtungsunabhängig, streng negativ (unter allen v2-IDs)
         # und rowid-monoton — höhere rowid (neuer) ⇒ höhere (weniger negative) ID.
-        # ``segment_id`` bricht Gleichstände zwischen mehreren Legacy-Segmenten.
-        synthetic_gid = int(row["id"]) - _LEGACY_GID_OFFSET - (segment_id & 0xFFFF)
+        # Die volle ``segment_id`` skaliert einen disjunkten Per-Quelle-Block
+        # (#951, Codex :1123): jede attached Legacy-DB belegt einen eigenen
+        # ``_LEGACY_GID_STRIDE``-breiten rowid-Bereich, sodass zwei Legacy-Quellen
+        # NIE dieselbe synthetische ID erzeugen (rowid r der einen kollidierte
+        # sonst mit rowid r+1 der nächsten). Höhere ``segment_id`` ⇒ tieferer
+        # (älterer) Block ⇒ „ältere Legacy zuerst", Legacy insgesamt hinter v2.
+        synthetic_gid = int(row["id"]) - _LEGACY_GID_OFFSET - segment_id * _LEGACY_GID_STRIDE
         # pre-#388 Legacy-Schema (#951, Pkt 1): fehlt die metadata-Spalte, liefert
         # das SELECT NULL → Default ``metadata_version=1``/``metadata={}``.
         metadata_version = row["metadata_version"] if row["metadata_version"] is not None else 1
@@ -1823,18 +1841,40 @@ class SqliteSegmentStore(RingBufferStore):
         Ein korruptes Segment wird deshalb hier — konsistent mit dem Read-Pfad
         (``_quarantine_corrupt_read``) — quarantäniert statt propagiert. Das aktive
         Segment kann nie ``checkpoint_pending`` sein und wird daher nie hier berührt.
+
+        Fehlende Datei nicht neu erzeugen (#951, Codex :1830): ist die Datei eines
+        pending-Segments vor dem Retry verschwunden, legte ein schreibendes
+        ``connect`` an diesem Pfad still eine neue LEERE DB an. Der Checkpoint würde
+        dann für die alte Manifest-Zeile als ``done`` markiert und spätere Reads
+        träfen eine leere DB, statt das Segment als „missing" zu überspringen. Vor
+        dem Öffnen wird daher geprüft, ob die Datei existiert; fehlt sie, wird das
+        Segment übersprungen (kein Recreate) — konsistent zum Read-Pfad-Skip.
+
+        Transiente Fehler nicht quarantänieren (#951, Codex :1837): nur
+        KORRUPTIONS-indizierende ``aiosqlite``-Fehler (malformed/not a database/…)
+        führen zur Quarantäne. Ein GESUNDES pending-Segment, das einen TRANSIENTEN
+        Open/Checkpoint-Fehler trifft (locked/busy/I-O), bliebe sonst aus Queries
+        versteckt UND retention-fähig → gültige Historie könnte verworfen werden.
+        Transiente Fehler lassen das Segment daher ``checkpoint_pending`` für einen
+        späteren Retry, statt es zu isolieren.
         """
         recovered = 0
         for segment in await self.manifest.list_checkpoint_pending_segments():
+            segment_path = self._segments_dir / segment.filename
+            if not segment_path.exists():
+                # Datei vor dem Retry verschwunden → NICHT neu anlegen, überspringen.
+                continue
             try:
-                conn = await aiosqlite.connect(str(self._segments_dir / segment.filename))
+                conn = await aiosqlite.connect(str(segment_path))
                 try:
                     ok = await self._try_truncate_checkpoint(conn)
                 finally:
                     await conn.close()
             except aiosqlite.Error as exc:
-                # Unlesbares/korruptes pending-Segment isolieren statt Startup brechen.
-                await self.manifest.mark_quarantined(segment.segment_id, reason=str(exc))
+                # Nur echte Korruption isolieren; transiente Fehler (locked/busy/I-O)
+                # bleiben checkpoint_pending für einen späteren Retry.
+                if _is_sqlite_corruption(exc):
+                    await self.manifest.mark_quarantined(segment.segment_id, reason=str(exc))
                 continue
             if ok:
                 await self.manifest.mark_checkpoint_done(segment.segment_id)
@@ -2112,6 +2152,14 @@ class SqliteSegmentStore(RingBufferStore):
         tolerant. Nur das Ergebnis der BASIS-Datei entscheidet, ob der Aufrufer die
         Manifest-Zeile entfernen darf (#951, Pkt 6). Eine bereits fehlende Basisdatei
         gilt als erfolgreich gelöscht (Platz ist frei).
+
+        Sidecars nur bei Basis-Erfolg entfernen (#951, Codex :2126): scheitert das
+        Unlink der Basisdatei (Permission/Lock), bleibt das Segment über die
+        behaltene Manifest-Zeile registriert und wird beim nächsten Lauf erneut
+        versucht. Würden die ``-wal``/``-shm``-Sidecars trotzdem gelöscht, verlöre
+        ein behaltenes Segment (v. a. eine Legacy dirty-WAL-Quelle) seine noch nicht
+        gecheckpointeten Frames, während es weiter gelesen wird. Die Sidecars werden
+        deshalb nur angefasst, wenn die Basisdatei erfolgreich entfernt wurde.
         """
         base_removed = True
         try:
@@ -2121,6 +2169,10 @@ class SqliteSegmentStore(RingBufferStore):
             base_removed = True
         except OSError:
             base_removed = False
+        if not base_removed:
+            # Basis blieb liegen → Segment wird für den Retry behalten; Sidecars mit
+            # den ungecheckpointeten Frames dürfen NICHT verwaist gelöscht werden.
+            return False
         for sidecar in (Path(f"{base}-wal"), Path(f"{base}-shm")):
             try:
                 sidecar.unlink()

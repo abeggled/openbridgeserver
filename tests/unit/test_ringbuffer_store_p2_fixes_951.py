@@ -1019,3 +1019,244 @@ async def test_open_failure_closes_already_assigned_active_segment_conn(tmp_path
     monkeypatch.undo()
     await store.open()
     await store.close()
+
+
+# ===========================================================================
+# Codex-P2-Findings (Runde 2, #951)
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# (Codex :1123) Synthetische Legacy-IDs mehrerer Quellen disjunkt
+# ---------------------------------------------------------------------------
+
+
+def _build_legacy_simple(path: Path, rows: list[tuple[str, int]]) -> None:
+    """Legacy-Single-DB mit rowid = 1..n (Insert-Reihenfolge), ``(ts, value)``."""
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            """CREATE TABLE ringbuffer (
+                   id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                   ts             TEXT NOT NULL,
+                   datapoint_id   TEXT NOT NULL,
+                   topic          TEXT NOT NULL,
+                   old_value      TEXT,
+                   new_value      TEXT,
+                   source_adapter TEXT NOT NULL,
+                   quality        TEXT NOT NULL,
+                   metadata_version INTEGER NOT NULL DEFAULT 1,
+                   metadata       TEXT NOT NULL DEFAULT '{}'
+               )"""
+        )
+        for ts, value in rows:
+            conn.execute(
+                "INSERT INTO ringbuffer (ts, datapoint_id, topic, old_value, new_value, source_adapter, quality) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ts, "dp-legacy", "dp/dp-legacy/value", None, json.dumps(value), "legacy", "good"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_legacy_row_to_dict_disjoint_across_adjacent_segments():
+    # Zwei aufeinanderfolgende Legacy-segment_ids (s, s+1). Ohne Fix kollidierte
+    # (bloßes ``-(segment_id & 0xFFFF)``) rowid r der einen mit rowid r+1 der
+    # nächsten Quelle: gid(seg=s, rowid=2) == gid(seg=s+1, rowid=1). Mit dem
+    # Per-Quelle-Stride sind die synthetischen IDs beider Quellen disjunkt.
+    row1 = {
+        "id": 1,
+        "ts": "t",
+        "datapoint_id": "d",
+        "topic": "x",
+        "old_value": None,
+        "new_value": None,
+        "source_adapter": "a",
+        "quality": "good",
+        "metadata_version": 1,
+        "metadata": "{}",
+    }
+    row2 = dict(row1, id=2)
+
+    gid_a1 = SqliteSegmentStore._legacy_row_to_dict(row1, segment_id=5)["global_event_id"]
+    gid_a2 = SqliteSegmentStore._legacy_row_to_dict(row2, segment_id=5)["global_event_id"]
+    gid_b1 = SqliteSegmentStore._legacy_row_to_dict(row1, segment_id=6)["global_event_id"]
+    gid_b2 = SqliteSegmentStore._legacy_row_to_dict(row2, segment_id=6)["global_event_id"]
+
+    # Innerhalb einer Quelle rowid-monoton (höhere rowid ⇒ höhere/weniger negative ID).
+    assert gid_a2 > gid_a1
+    assert gid_b2 > gid_b1
+    # Kein Wert kommt doppelt vor – insbesondere NICHT gid_a2 == gid_b1 (der alte Bug).
+    assert len({gid_a1, gid_a2, gid_b1, gid_b2}) == 4
+    # Ordnung: höhere segment_id ⇒ ältere Quelle ⇒ tiefere (negativere) IDs.
+    assert max(gid_b1, gid_b2) < min(gid_a1, gid_a2)
+    # Alle strikt negativ (unter allen positiven v2-IDs).
+    assert gid_a1 < 0 and gid_b2 < 0
+
+
+async def test_two_legacy_sources_expose_unique_entry_ids(store: SqliteSegmentStore, tmp_path: Path):
+    # Zwei read-only attached Legacy-DBs. Ohne disjunkte IDs kollidierten
+    # aufeinanderfolgende synthetische ``global_event_id``s über die Quellgrenze –
+    # als entry-IDs exponiert brächen Multi-Filterset-Queries/Exports auf
+    # eindeutigen IDs. Mit dem Fix sind ALLE zurückgegebenen IDs eindeutig.
+    db_a = tmp_path / "legacy_a.db"
+    db_b = tmp_path / "legacy_b.db"
+    _build_legacy_simple(db_a, [("2025-01-01T00:00:00.000Z", 10), ("2025-01-01T00:00:01.000Z", 11)])
+    _build_legacy_simple(db_b, [("2025-02-01T00:00:00.000Z", 20), ("2025-02-01T00:00:01.000Z", 21)])
+    await store.manifest.register_legacy_segment(source_path=str(db_a), size_bytes=db_a.stat().st_size)
+    await store.manifest.register_legacy_segment(source_path=str(db_b), size_bytes=db_b.stat().st_size)
+
+    rows = await store.query(StoreQuery(limit=50))
+    ids = [r["global_event_id"] for r in rows]
+    assert len(ids) == 4
+    # Kern der Regression: keine doppelten synthetischen entry-IDs über Quellgrenzen.
+    assert len(set(ids)) == len(ids)
+
+
+# ---------------------------------------------------------------------------
+# (Codex :1830) Fehlendes Pending-Segment nicht neu erzeugen
+# ---------------------------------------------------------------------------
+
+
+async def test_run_pending_checkpoints_skips_missing_file_without_recreate(store: SqliteSegmentStore, monkeypatch):
+    # Ein checkpoint_pending-Segment, dessen Datei vor dem Retry verschwunden ist.
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    pending_id = (await store.manifest.get_active_segment()).segment_id
+
+    async def _busy(_conn):
+        return False
+
+    monkeypatch.setattr(store, "_try_truncate_checkpoint", _busy)
+    await store.rotate()
+    from obs.ringbuffer.store.manifest import SEGMENT_STATUS_CHECKPOINT_PENDING
+
+    seg = await store.manifest.get_segment(pending_id)
+    assert seg.status == SEGMENT_STATUS_CHECKPOINT_PENDING
+    seg_path = store._segments_dir / seg.filename
+    # Datei entfernen (Sidecars mit) – als wäre sie vor dem Retry verschwunden.
+    for p in (seg_path, Path(f"{seg_path}-wal"), Path(f"{seg_path}-shm")):
+        if p.exists():
+            p.unlink()
+
+    # run_pending_checkpoints darf die Datei NICHT neu (leer) anlegen und das
+    # Segment NICHT als checkpoint_done markieren.
+    async def _ok(_conn):
+        return True
+
+    monkeypatch.setattr(store, "_try_truncate_checkpoint", _ok)
+    recovered = await store.run_pending_checkpoints()
+
+    assert recovered == 0
+    assert not seg_path.exists()  # keine leere Ersatz-DB angelegt
+    seg_after = await store.manifest.get_segment(pending_id)
+    # Segment bleibt pending (nicht fälschlich als done markiert).
+    assert seg_after.status == SEGMENT_STATUS_CHECKPOINT_PENDING
+
+
+# ---------------------------------------------------------------------------
+# (Codex :1837) Transiente Checkpoint-Fehler NICHT quarantänieren
+# ---------------------------------------------------------------------------
+
+
+async def test_run_pending_checkpoints_keeps_pending_on_transient_error(store: SqliteSegmentStore, monkeypatch):
+    # Ein GESUNDES pending-Segment trifft einen TRANSIENTEN Fehler (locked/busy).
+    # Es darf NICHT quarantäniert werden (sonst aus Queries versteckt UND
+    # retention-eligible → Verlust gültiger Historie), sondern pending bleiben.
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    pending_id = (await store.manifest.get_active_segment()).segment_id
+
+    async def _busy(_conn):
+        return False
+
+    monkeypatch.setattr(store, "_try_truncate_checkpoint", _busy)
+    await store.rotate()
+    from obs.ringbuffer.store.manifest import SEGMENT_STATUS_CHECKPOINT_PENDING
+
+    assert (await store.manifest.get_segment(pending_id)).status == SEGMENT_STATUS_CHECKPOINT_PENDING
+
+    import obs.ringbuffer.store.sqlite_backend as backend
+
+    async def _transient(_conn):
+        raise backend.aiosqlite.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "_try_truncate_checkpoint", _transient)
+    recovered = await store.run_pending_checkpoints()
+
+    assert recovered == 0
+    seg = await store.manifest.get_segment(pending_id)
+    # Transienter Fehler ⇒ Segment bleibt checkpoint_pending (kein quarantined).
+    assert seg.status == SEGMENT_STATUS_CHECKPOINT_PENDING
+
+
+async def test_run_pending_checkpoints_quarantines_corrupt_segment(store: SqliteSegmentStore, monkeypatch):
+    # Kontrapunkt: echte Korruption wird weiterhin quarantäniert (Isolation bleibt).
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    pending_id = (await store.manifest.get_active_segment()).segment_id
+
+    async def _busy(_conn):
+        return False
+
+    monkeypatch.setattr(store, "_try_truncate_checkpoint", _busy)
+    await store.rotate()
+
+    import obs.ringbuffer.store.sqlite_backend as backend
+
+    async def _corrupt(_conn):
+        raise backend.aiosqlite.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(store, "_try_truncate_checkpoint", _corrupt)
+    await store.run_pending_checkpoints()
+
+    from obs.ringbuffer.store.manifest import SEGMENT_STATUS_QUARANTINED
+
+    assert (await store.manifest.get_segment(pending_id)).status == SEGMENT_STATUS_QUARANTINED
+
+
+# ---------------------------------------------------------------------------
+# (Codex :2126) Sidecars behalten, wenn Basis-Unlink scheitert
+# ---------------------------------------------------------------------------
+
+
+def test_unlink_with_sidecars_keeps_sidecars_when_base_fails(tmp_path: Path, monkeypatch):
+    # Basisdatei + beide Sidecars existieren; das Basis-Unlink scheitert
+    # (Permission/Lock). Ohne Fix würden -wal/-shm trotzdem entfernt → ein
+    # behaltenes Segment verlöre ungecheckpointete Frames. Mit Fix bleiben die
+    # Sidecars erhalten (Datenerhalt für den Retry).
+    base = tmp_path / "seg.db"
+    wal = tmp_path / "seg.db-wal"
+    shm = tmp_path / "seg.db-shm"
+    for p in (base, wal, shm):
+        p.write_bytes(b"data")
+
+    real_unlink = Path.unlink
+
+    def _failing_base_unlink(self: Path, *args, **kwargs):
+        if self == base:
+            raise OSError("device or resource busy")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", _failing_base_unlink)
+
+    removed = SqliteSegmentStore._unlink_with_sidecars(base)
+
+    assert removed is False
+    assert base.exists()
+    # Kern der Regression: die Sidecars bleiben, weil die Basis nicht gelöscht wurde.
+    assert wal.exists()
+    assert shm.exists()
+
+
+def test_unlink_with_sidecars_removes_sidecars_when_base_removed(tmp_path: Path):
+    # Positivfall: Basis geht weg → Sidecars werden ebenfalls entfernt.
+    base = tmp_path / "seg.db"
+    wal = tmp_path / "seg.db-wal"
+    shm = tmp_path / "seg.db-shm"
+    for p in (base, wal, shm):
+        p.write_bytes(b"data")
+
+    removed = SqliteSegmentStore._unlink_with_sidecars(base)
+
+    assert removed is True
+    assert not base.exists()
+    assert not wal.exists()
+    assert not shm.exists()
