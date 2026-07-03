@@ -24,7 +24,7 @@ import os
 import re
 import shutil
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -1425,12 +1425,18 @@ class RingBuffer:
                         metadata_binding_filters=metadata_binding_filters,
                         limit=_SEGMENTED_CANDIDATE_CAP,
                         offset=0,
-                        sort_field=sort_field,
-                        sort_order=sort_order,
+                        # Sortierung für die Enumeration bewusst auf ``id``/``desc``
+                        # fixieren (nicht die Query-Sortierung): so paginiert der
+                        # Discovery-Scan mit dem billigsten Segment-Frühabbruch, und
+                        # die Vollständigkeit (alle distinkten Datapoints) hängt nicht
+                        # von der aufrufenden Sortierung ab.
+                        sort_field="id",
+                        sort_order="desc",
                         value_filters=[],
                         candidate_cap=_SEGMENTED_CANDIDATE_CAP,
                         is_export=False,
-                    )
+                    ),
+                    max_distinct=len(datapoint_types) if datapoint_types else None,
                 )
                 # Leere Kandidatenmenge = keine Zeilen im Scope: der Legacy-Pfad
                 # liefert dann still leer OHNE 422 (kein row-lazy Typ-Check feuert).
@@ -1524,17 +1530,57 @@ class RingBuffer:
             async with self._lock:
                 return await self._store.query(store_query)
 
-    async def _scope_candidate_datapoint_ids(self, store_query: Any) -> set[str]:
+    async def _scope_candidate_datapoint_ids(self, store_query: Any, *, max_distinct: int | None = None) -> set[str]:
         """Distinkte Datapoint-IDs, die im gegebenen (value-filter-freien) Scope Zeilen haben.
 
         Dient der adapter-/source-/metadaten-scoped Value-Filter-Typvalidierung
         (#951, Codex :2095): der Kandidaten-Scan läuft mit demselben Scope wie die
         eigentliche Query, aber OHNE ``value_filters`` (die würden einen Typkonflikt
-        still wegfiltern statt sichtbar zu machen). Er ist über ``candidate_cap`` und
-        ``limit`` genauso gebunden wie der Read-Pfad – kein unbounded Full-Scan.
+        still wegfiltern statt sichtbar zu machen).
+
+        Enumeration ungecappt in ROWS, gebunden über DATAPOINTS (#951, Codex :1431):
+        Ein einzelner Row-gecappter Scan (neueste ``candidate_cap`` Zeilen) übersähe
+        einen ÄLTEREN in-scope STRING/BOOLEAN-Datapoint, der jenseits des Row-Caps
+        liegt – die Typprüfung liefe dann still an ihm vorbei und der SQL-Pushdown
+        filterte die inkompatiblen Zeilen als Teilergebnis weg (statt 422 wie Legacy).
+        Deshalb wird der Scope hier SEITENWEISE paginiert und die distinkten
+        Datapoint-IDs akkumuliert, bis eine der beiden Abbruchbedingungen greift:
+
+        * **Scope erschöpft** – eine Seite liefert weniger Zeilen als ihr ``limit``,
+          es folgen also keine weiteren scoped Zeilen mehr; ODER
+        * **alle möglichen Datapoints gesehen** – die Menge der distinkten IDs
+          erreicht ``max_distinct`` (die Anzahl bekannter Registry-Datapoints). Mehr
+          distinkte Datapoints kann der Scope nicht enthalten, also ist der Scan hier
+          vollständig.
+
+        Damit ist der Aufwand durch die Anzahl DISTINKTER Datapoints begrenzt (nicht
+        durch die – potenziell riesige – Zeilenzahl): jede Seite liest höchstens
+        ``candidate_cap`` Zeilen (bestehende Store-Bound), und sobald jede distinkte
+        ID einmal aufgetaucht ist, terminiert die Schleife. Ein zusätzlicher
+        Seiten-Backstop verhindert Endlosläufe, falls der Store wider Erwarten weder
+        ein kurzes Batch noch alle Datapoints liefert.
         """
-        rows = await self._store_query_serialized(store_query)
-        return {row["datapoint_id"] for row in rows}
+        page_size = max(store_query.limit, 1)
+        candidate_ids: set[str] = set()
+        offset = 0
+        # Backstop gegen pathologische Fälle: selbst ohne ``max_distinct`` bleibt die
+        # Enumeration hart gebunden (Seiten × ``candidate_cap`` Zeilen). Der Backstop
+        # ist bewusst großzügig – im Normalfall greift die Datapoint- oder die
+        # Scope-erschöpft-Bedingung deutlich früher.
+        max_pages = 1_000
+        for _ in range(max_pages):
+            page_query = replace(store_query, offset=offset)
+            rows = await self._store_query_serialized(page_query)
+            candidate_ids.update(row["datapoint_id"] for row in rows)
+            # Alle bekannten Registry-Datapoints gesehen → der Scope kann keine
+            # weiteren distinkten Datapoints beitragen.
+            if max_distinct is not None and len(candidate_ids) >= max_distinct:
+                break
+            # Kürzeres Batch als angefragt → Scope erschöpft, keine weiteren Zeilen.
+            if len(rows) < page_size:
+                break
+            offset += page_size
+        return candidate_ids
 
     async def stats(self) -> dict:
         def _effective_retention_seconds(oldest_ts: str | None) -> int | None:

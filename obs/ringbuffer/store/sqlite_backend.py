@@ -375,14 +375,21 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, default=json_default, sort_keys=True)
 
 
-def _obs_json_eq_impl(raw: Any, canonical_expected: str) -> int:
-    """SQLite-Callback: 1, wenn die gespeicherte JSON-Spalte kanonisch ``== expected`` ist.
+def _obs_json_eq_impl(raw: Any, expected_json: str) -> int:
+    """SQLite-Callback: 1, wenn die gespeicherte JSON-Spalte Python-``== expected`` ist.
 
     Spiegelt die Legacy-Referenz ``actual == expected`` für komplexe (list/dict)
-    Werte (#951, Codex :1281): die gespeicherte ``new_value``/``old_value``-JSON-Spalte
-    wird dekodiert und kanonisch (sortierte Keys) re-serialisiert, dann String-gleich
-    mit dem ebenfalls kanonisierten Filterwert verglichen. So matchen gleiche Objekte
-    unabhängig von der Key-Reihenfolge; malformed/non-JSON-Spalten matchen nie.
+    Werte (#951, Codex :1281 / Codex :393): die gespeicherte
+    ``new_value``/``old_value``-JSON-Spalte UND der Filterwert werden beide zu
+    Python-Objekten dekodiert und mit Python-``==`` verglichen – NICHT über ihre
+    JSON-Schreibweise. Das ist entscheidend für verschachtelte numerisch/bool
+    äquivalente Werte: Python wertet ``True == 1``, ``1 == 1.0`` (rekursiv in
+    Listen/Dicts) als gleich, während der kanonische JSON-STRING sie als
+    verschiedene Tokens rendert (``true`` vs ``1``, ``1`` vs ``1.0``) und so von der
+    Legacy-Referenz abwich (``eq`` verlor Zeilen, ``ne`` nahm sie fälschlich auf).
+    Python-``==`` ist zudem für Dicts von Natur aus key-order-unabhängig (wie die
+    frühere ``sort_keys``-Kanonisierung) und für Listen ordnungsempfindlich – exakt
+    die Referenz-Semantik. Malformed/non-JSON-Spalten matchen nie.
     """
     if not isinstance(raw, str):
         return 0
@@ -390,7 +397,8 @@ def _obs_json_eq_impl(raw: Any, canonical_expected: str) -> int:
         decoded = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
         return 0
-    return 1 if _canonical_json(decoded) == canonical_expected else 0
+    expected = json.loads(expected_json)
+    return 1 if decoded == expected else 0
 
 
 def _obs_regexp_impl(pattern: str, flags: int, value: Any) -> int:
@@ -2036,10 +2044,15 @@ class SqliteSegmentStore(RingBufferStore):
         # value_type == "json" (list/dict): kein 422 mehr (#951, Codex :1281). Der
         # Legacy-Referenzfilter verglich Python-Werte direkt (``actual == expected``);
         # ``eq`` auf dasselbe Objekt/Array matchte, ``ne`` lieferte das Inverse. Hier
-        # gegen die gespeicherte volle JSON-Spalte (``{field_name}``) vergleichen –
-        # kanonisch (sortierte Keys) über den ``obs_json_eq``-Callback, sodass gleiche
-        # Objekte unabhängig von der Key-Reihenfolge treffen. NULL-sicher via IFNULL,
-        # damit die ``ne``-Negation null-/andere-Typ-Zeilen einschließt.
+        # gegen die gespeicherte volle JSON-Spalte (``{field_name}``) über den
+        # ``obs_json_eq``-Callback vergleichen, der BEIDE Seiten zu Python-Objekten
+        # dekodiert und mit Python-``==`` vergleicht (#951, Codex :393). Dadurch treffen
+        # gleiche Dicts key-order-unabhängig UND verschachtelte numerisch/bool
+        # äquivalente Werte (``True == 1``, ``1 == 1.0``) matchen wie in der Referenz –
+        # ein reiner JSON-String-Vergleich täte das nicht. Der Filterwert wird als JSON
+        # übergeben (``_canonical_json`` liefert gültiges, zum Python-Wert
+        # rundreisefähiges JSON); der Callback dekodiert es zurück. NULL-sicher via
+        # IFNULL, damit die ``ne``-Negation null-/andere-Typ-Zeilen einschließt.
         return (f"IFNULL(obs_json_eq({field_name}, ?), 0)", [_canonical_json(value)])
 
     @staticmethod

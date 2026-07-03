@@ -128,7 +128,7 @@ async def test_recovery_rotation_serializes_under_shared_lock(store: SqliteSegme
     lock = asyncio.Lock()
     migrator = LegacyMigrator(store, db, write_lock=lock)
     assert await migrator._source_is_attached()
-    assert await migrator._active_segment_has_own_migrated_only_rows(*migrator._bucket_gid_bounds)
+    assert await migrator._active_segment_has_own_migrated_only_rows(*(await migrator._bucket_gid_bounds()))
 
     # Simulierter in-flight Live-Append hält den Lock.
     await lock.acquire()
@@ -137,14 +137,14 @@ async def test_recovery_rotation_serializes_under_shared_lock(store: SqliteSegme
         await asyncio.sleep(0.05)
         assert not task.done(), "Recovery-Rotation lief trotz gehaltenem Write-Lock durch"
         # Solange blockiert, wurde das aktive Segment NICHT rotiert (Zeilen noch dort).
-        assert await migrator._active_segment_has_own_migrated_only_rows(*migrator._bucket_gid_bounds)
+        assert await migrator._active_segment_has_own_migrated_only_rows(*(await migrator._bucket_gid_bounds()))
     finally:
         lock.release()
         await asyncio.wait_for(task, timeout=5)
 
     # Nach Freigabe rotiert die Recovery korrekt: aktives Segment ist nicht mehr rein-negativ
     # (leer/rotiert) und die migrierten Zeilen liegen in einem versteckten Segment.
-    assert not await migrator._active_segment_has_own_migrated_only_rows(*migrator._bucket_gid_bounds)
+    assert not await migrator._active_segment_has_own_migrated_only_rows(*(await migrator._bucket_gid_bounds()))
 
 
 async def test_recovery_rotation_noop_without_lock(store: SqliteSegmentStore, tmp_path: Path):
@@ -155,12 +155,12 @@ async def test_recovery_rotation_noop_without_lock(store: SqliteSegmentStore, tm
     await _arm_active_own_migrated_only(store, db)
 
     migrator = LegacyMigrator(store, db)  # kein write_lock
-    assert await migrator._active_segment_has_own_migrated_only_rows(*migrator._bucket_gid_bounds)
+    assert await migrator._active_segment_has_own_migrated_only_rows(*(await migrator._bucket_gid_bounds()))
 
     await migrator._recover_visible_migrated_while_attached()
 
     # No-Op-Lock: die Rotation läuft trotzdem und heilt den Zustand.
-    assert not await migrator._active_segment_has_own_migrated_only_rows(*migrator._bucket_gid_bounds)
+    assert not await migrator._active_segment_has_own_migrated_only_rows(*(await migrator._bucket_gid_bounds()))
 
 
 # ----------------------------------------------------------------------------

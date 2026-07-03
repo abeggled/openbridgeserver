@@ -46,6 +46,7 @@ from obs.ringbuffer.store.manifest import (
 from obs.ringbuffer.store.sqlite_backend import (
     _LEGACY_GID_OFFSET,
     _LEGACY_GID_STRIDE,
+    _LEGACY_SOURCE_BUCKETS,
     SqliteSegmentStore,
     _safe_getsize,
     _safe_json_decode,
@@ -63,44 +64,87 @@ LARGE_MIN_BYTES = 5 * 1024 * 1024 * 1024  # 5 GiB
 # Standard-Batchgröße für die chunked Migration (mittel).
 DEFAULT_CHUNK_ROWS = 5_000
 
-# Quell-Scoping der migrierten negativen global_event_ids (#951, Pkt 3).
+# Quell-Scoping der migrierten negativen global_event_ids (#951, Pkt 3; Runde 29, Finding 1).
 #
-# Der Resume-Floor muss PRO Quelldatei berechnet werden: werden zwei Legacy-DBs
-# in denselben Store migriert, dürfen sie sich beim idempotenten Nachziehen aus
-# der höchsten materialisierten Legacy-rowid nicht gegenseitig überspringen. Dazu
-# bekommt jede Quelldatei einen disjunkten gid-Bucket. Die migrierte gid ist:
+# Jede Quelldatei bekommt einen disjunkten gid-„Bucket" (den *source_factor*), der in
+# jede migrierte gid als Ordnungs-Komponente eingeht:
 #
-#     gid = -_LEGACY_GID_OFFSET + rowid - source_bucket * _MIGRATION_SOURCE_STRIDE
+#     gid = rowid - _LEGACY_GID_OFFSET - source_factor * _MIGRATION_SOURCE_STRIDE
 #
 # * Innerhalb einer Quelle bleibt die Ordnung rowid-monoton (höhere rowid ⇒ höhere,
 #   weniger negative gid) – identisch zum read-only-Legacy-Lesepfad.
 # * Verschiedene Quellen liegen in disjunkten Wertebereichen (Bucket-Trennung),
 #   sodass ``MAX(gid)`` je Bucket den Fortschritt genau EINER Quelle liefert.
 # * Alle gids bleiben strikt negativ (unter allen positiven v2-IDs), solange
-#   rowid < _MIGRATION_SOURCE_STRIDE und source_bucket < _MIGRATION_SOURCE_BUCKETS.
+#   rowid < _MIGRATION_SOURCE_STRIDE und source_factor < _MIGRATION_SOURCE_BUCKETS.
+#
+# CROSS-SOURCE-ORDNUNG (Runde 29, Finding 1): der ``source_factor`` wird – WENN die
+# Quelle als Legacy-Segment attached ist – aus dem Manifest-``segment_id`` der Quelle
+# abgeleitet und dabei GENAU SO an der Bucket-Schranke gespiegelt wie der attached-
+# read-Pfad in ``sqlite_backend._legacy_row_to_dict``:
+#
+#     source_factor = _MIGRATION_SOURCE_BUCKETS - 1 - (segment_id % _MIGRATION_SOURCE_BUCKETS)
+#
+# So bleibt die Cross-Source-``id desc``-Ordnung NACH dem Detach beider Quellen
+# konsistent mit dem attached-Zustand: eine NEUERE Quelle (höherer segment_id) trägt
+# den WENIGER negativen Block und sortiert vor der älteren – nicht mehr abhängig von
+# einem Dateinamen-Hash. Ist die Quelle (noch) NICHT attached (reiner Wartungs-
+# Migrationspfad ohne vorheriges ``attach_readonly``), gibt es kein attached-Ordnungs-
+# äquivalent, das gebrochen werden könnte; dann fällt der Faktor auf den stabilen
+# blake2b-Pfad-Hash (``_source_factor_from_path``) zurück – disjunkt und unverändert
+# zum bisherigen never-attached-Verhalten.
+#
+# TRENNUNG Ordnung vs. Resume-Keying (Runde 29, Finding 1, Punkt b): die
+# Resume-STATE-DATEI wird weiterhin über ``_source_state_token`` (blake2b des Pfads)
+# gekeyt – unabhängig vom Ordnungs-Faktor. Die Resume-KORREKTHEIT (idempotentes
+# Nachziehen aus ``MAX(gid)`` je Bucket in ``_max_migrated_rowid`` und die
+# Eigen-Segment-Erkennung) hängt allein an der DISJUNKTHEIT der Buckets, nicht an der
+# Herkunft des Faktors; sie bleibt damit intakt, egal ob der Faktor aus segment_id
+# oder Pfad-Hash stammt.
 #
 # JS-/JSON-Sicherheit (#951, Runde 23): der Stride läuft strukturell parallel zum
 # read-only-Legacy-Stride (``_LEGACY_GID_STRIDE`` in sqlite_backend.py) und teilt
 # denselben ``_LEGACY_GID_OFFSET``, damit beide Pfade ohne Divergieren im
 # JS-sicheren Band ``±(2**53-1)`` bleiben. ``1 << 32`` (~4,29e9 rowids/Quelle) deckt
 # jede reale Legacy-DB ab; zusammen mit ``OFFSET = 1<<52`` bleibt der Worst-Case-
-# Betrag bei bis zu ``_MIGRATION_SOURCE_BUCKETS`` (= ``1<<20``, ~1 Mio) Quellen unter
-# ``2**53``.
+# Betrag bei bis zu ``_MIGRATION_SOURCE_BUCKETS`` (= ``1<<20``, ~1 Mio) Quellen/segment_ids
+# unter ``2**53`` (Worst-Case: rowid 1, Faktor ``B-1`` ⇒ ``1 - (1<<52) - (2**20-1)*(1<<32)
+# == -9_007_194_959_773_695`` > ``-(2**53-1)``).
 _MIGRATION_SOURCE_STRIDE = _LEGACY_GID_STRIDE  # == 1 << 32; parallel zum read-only-Legacy-Stride
-_MIGRATION_SOURCE_BUCKETS = 1 << 20  # bis ~1e6 unterscheidbare Quelldateien
+# Identisch zu ``sqlite_backend._LEGACY_SOURCE_BUCKETS`` (dort importiert): dieselbe
+# Bucket-Schranke ``B``, an der beide Pfade den segment_id spiegeln – MÜSSEN gleich sein.
+_MIGRATION_SOURCE_BUCKETS = _LEGACY_SOURCE_BUCKETS  # bis ~1e6 unterscheidbare Quellen/segment_ids
 
 
-def _source_bucket_for(legacy_path: Path) -> int:
-    """Deterministischer gid-Bucket einer Quelldatei aus ihrem absoluten Pfad (#951, Pkt 3).
+def _mirror_segment_id(segment_id: int) -> int:
+    """Spiegelt einen Legacy-``segment_id`` an der Bucket-Schranke zum ``source_factor`` (Runde 29, Finding 1).
 
-    Stabil über Prozess-Neustarts (kein ``hash()``-Salt), damit ein Resume dieselbe
+    IDENTISCH zur read-Pfad-Formel (``sqlite_backend._legacy_row_to_dict``):
+    ``B - 1 - (segment_id % B)``. Höherer segment_id (neuere Quelle) ⇒ kleinerer Faktor
+    ⇒ weniger negative gid ⇒ ``id desc`` zuerst. So sind attached-read- und migrierte
+    Cross-Source-Ordnung deckungsgleich.
+    """
+    return _MIGRATION_SOURCE_BUCKETS - 1 - (int(segment_id) % _MIGRATION_SOURCE_BUCKETS)
+
+
+def _source_factor_from_path(legacy_path: Path) -> int:
+    """Deterministischer gid-Faktor einer Quelldatei aus ihrem absoluten Pfad (Fallback, #951, Pkt 3).
+
+    Nur für den never-attached-Wartungspfad (keine Manifest-``segment_id`` verfügbar):
+    stabil über Prozess-Neustarts (kein ``hash()``-Salt), damit ein Resume dieselbe
     Quelle demselben Bucket zuordnet. Kollisionen zweier verschiedener Quellpfade auf
-    denselben Bucket sind bei ~1e6 Buckets extrem unwahrscheinlich; sie degradieren
-    im schlimmsten Fall auf das alte globale Verhalten (kein Datenverlust, nur ein
+    denselben Bucket sind bei ~1e6 Buckets extrem unwahrscheinlich; sie degradieren im
+    schlimmsten Fall auf das alte globale Verhalten (kein Datenverlust, nur ein
     theoretisch möglicher Skip), sind aber praktisch ausgeschlossen.
     """
     digest = hashlib.blake2b(str(legacy_path.resolve()).encode("utf-8"), digest_size=8).digest()
     return int.from_bytes(digest, "big") % _MIGRATION_SOURCE_BUCKETS
+
+
+# Rückwärtskompatibler Alias (Runde 29, Finding 1): der Pfad-Hash-Faktor hieß früher
+# ``_source_bucket_for`` und war die einzige Bucket-Quelle. Bestehende Aufrufer/Tests,
+# die die never-attached-Zuordnung prüfen, greifen weiter darauf zu.
+_source_bucket_for = _source_factor_from_path
 
 
 def _source_state_token(legacy_path: Path) -> str:
@@ -224,10 +268,13 @@ class LegacyMigrator:
         # den ``record()`` nutzt, serialisiert die kritische Sektion mit Live-Appends.
         # ``None`` = No-Op (bestehende Tests/Startup-Pfad ohne Lock laufen unverändert).
         self._write_lock = write_lock
-        # Stabiler, deterministischer gid-Bucket dieser Quelldatei (#951, Pkt 3):
-        # aus dem absoluten Pfad abgeleitet, sodass verschiedene Quelldateien in
-        # disjunkte gid-Bereiche migrieren und ihr Resume-Floor pro Quelle scopt.
-        self._source_bucket = _source_bucket_for(self._legacy_path)
+        # gid-Ordnungs-Faktor dieser Quelldatei (Runde 29, Finding 1). LAZY aufgelöst:
+        # ist die Quelle als Legacy-Segment attached, wird der Faktor aus ihrem
+        # Manifest-``segment_id`` gespiegelt (deckungsgleich zum attached-read-Pfad,
+        # ``_source_factor``); sonst fällt er auf den blake2b-Pfad-Hash zurück. ``None``
+        # bis zur ersten Auflösung; danach stabil gecacht (die Quelle bleibt bis zum
+        # Detach attached, der segment_id ändert sich nicht).
+        self._source_factor: int | None = None
         # Resume-State liegt neben der Store-Root, nicht in der Legacy-Datei (die
         # bleibt read-only/unangetastet). Ein State pro ABSOLUTEM Quellpfad (#951,
         # Pkt 1, 3. Runde): zwei Legacy-DBs mit gleichem Basename (der Regelfall ist
@@ -244,17 +291,56 @@ class LegacyMigrator:
     # Quell-Scoping (#951, Pkt 3)
     # ------------------------------------------------------------------
 
+    async def _ensure_source_factor(self) -> int:
+        """Löst den gid-Ordnungs-Faktor dieser Quelle auf und cacht ihn (Runde 29, Finding 1).
+
+        Bevorzugt den aus dem Manifest-``segment_id`` gespiegelten Faktor (deckungsgleich
+        zum attached-read-Pfad), solange die Quelle als Legacy-Segment attached ist. Ist
+        sie NICHT (mehr) attached (reiner Wartungspfad ohne vorheriges ``attach_readonly``),
+        fällt der Faktor auf den stabilen blake2b-Pfad-Hash zurück. Einmal aufgelöst,
+        bleibt der Wert konstant (die Quelle bleibt bis zum Detach attached; ihr
+        segment_id ändert sich nicht) – so tragen ALLE Zeilen eines Migrationslaufs
+        denselben Bucket, auch der letzte (post-detach) Batch.
+        """
+        if self._source_factor is not None:
+            return self._source_factor
+        segment_id = await self._attached_legacy_segment_id()
+        if segment_id is not None:
+            self._source_factor = _mirror_segment_id(segment_id)
+        else:
+            self._source_factor = _source_factor_from_path(self._legacy_path)
+        return self._source_factor
+
+    async def _attached_legacy_segment_id(self) -> int | None:
+        """``segment_id`` des read-only attached Legacy-Segments DIESER Quelle (oder ``None``)."""
+        resolved = str(self._legacy_path.resolve())
+        for segment in await self._store.manifest.list_legacy_segments():
+            if segment.filename == resolved:
+                return segment.segment_id
+        return None
+
     def _gid_for_rowid(self, rowid: int) -> int:
-        """Negative, quell-gescopte gid einer Legacy-rowid (#951, Pkt 3)."""
-        return rowid - _LEGACY_GID_OFFSET - self._source_bucket * _MIGRATION_SOURCE_STRIDE
+        """Negative, quell-gescopte gid einer Legacy-rowid (#951, Pkt 3; Runde 29, Finding 1).
+
+        Erfordert einen bereits aufgelösten ``_source_factor`` (via
+        ``_ensure_source_factor``); alle Aufrufer lösen ihn vor der ersten gid-Rechnung auf.
+        """
+        assert self._source_factor is not None, "source_factor nicht aufgelöst (fehlt _ensure_source_factor)"
+        return rowid - _LEGACY_GID_OFFSET - self._source_factor * _MIGRATION_SOURCE_STRIDE
 
     def _rowid_for_gid(self, gid: int) -> int:
         """Rechnet eine quell-gescopte gid zurück in die Legacy-rowid."""
-        return gid + _LEGACY_GID_OFFSET + self._source_bucket * _MIGRATION_SOURCE_STRIDE
+        assert self._source_factor is not None, "source_factor nicht aufgelöst (fehlt _ensure_source_factor)"
+        return gid + _LEGACY_GID_OFFSET + self._source_factor * _MIGRATION_SOURCE_STRIDE
 
-    @property
-    def _bucket_gid_bounds(self) -> tuple[int, int]:
-        """Halb-offener gid-Bereich ``[low, high)`` dieser Quelle (rowid ≥ 1)."""
+    async def _bucket_gid_bounds(self) -> tuple[int, int]:
+        """Halb-offener gid-Bereich ``[low, high)`` dieser Quelle (rowid ≥ 1).
+
+        Löst den Ordnungs-Faktor bei Bedarf auf (``_ensure_source_factor``), damit die
+        Bereichsgrenzen mit den in ``_append_with_legacy_gids`` vergebenen gids
+        übereinstimmen.
+        """
+        await self._ensure_source_factor()
         low = self._gid_for_rowid(1)
         high = self._gid_for_rowid(_MIGRATION_SOURCE_STRIDE)
         return low, high
@@ -277,19 +363,40 @@ class LegacyMigrator:
         """
         return self._legacy_path.with_name(f"{self._legacy_path.name}.migrated")
 
+    @staticmethod
+    def _file_identity(path: Path) -> tuple[int, int]:
+        """``(mtime_ns, size)`` einer Datei; fehlt sie, ``(0, 0)`` (Runde 29, Finding 2)."""
+        try:
+            st = path.stat()
+        except OSError:
+            return (0, 0)
+        return (st.st_mtime_ns, st.st_size)
+
     def _legacy_identity(self) -> tuple[int, int] | None:
-        """Aktuelle Datei-Identität der Legacy-Quelle als ``(mtime_ns, size)`` (#951, Runde 27, Finding 3).
+        """Aktuelle Datei-Identität der Legacy-Quelle inkl. WAL/SHM-Sidecars (#951, Runde 27/29, Finding 3/2).
 
         Dient dem Marker-Invalidierungs-Check: ändert sich die Legacy-Datei nach dem
         Marker (neue Zeilen), weicht diese Identität vom im Marker gespeicherten Wert ab.
         Nur Dateisystem-Metadaten – die DB wird NICHT geöffnet (kein Startup-Scan). Fehlt
-        die Datei, ``None``.
+        die Hauptdatei, ``None``.
+
+        WAL/SHM-Erfassung (Runde 29, Finding 2): kehrt ein Operator temporär in den
+        legacy-file-backed Modus zurück, werden neue Legacy-Zeilen per SQLite-WAL
+        committet – die Haupt-``obs_ringbuffer.db`` (mtime/size) kann dabei IDENTISCH
+        bleiben, während sich nur ``obs_ringbuffer.db-wal`` (und ``-shm``) ändert. Deckte
+        die Marker-Identität nur die Hauptdatei ab, hielte der nächste Startup den Marker
+        für aktuell, skippte das Re-Attach und versteckte diese WAL-only-Zeilen still. Die
+        Sidecar-``(mtime_ns, size)`` fließen daher mit ein, sodass eine WAL-only-Änderung
+        den Marker als STALE erkennt → Re-Attach → neue Zeilen sichtbar.
         """
+        main = self._legacy_path
         try:
-            st = self._legacy_path.stat()
+            st = main.stat()
         except OSError:
             return None
-        return (st.st_mtime_ns, st.st_size)
+        wal_mtime, wal_size = self._file_identity(Path(f"{main}-wal"))
+        shm_mtime, shm_size = self._file_identity(Path(f"{main}-shm"))
+        return (st.st_mtime_ns, st.st_size, wal_mtime, wal_size, shm_mtime, shm_size)
 
     def _mark_source_migrated(self) -> None:
         """Vermerkt die Quelle persistent als vollständig migriert (#951, Pkt 2, Runde 27 Finding 3).
@@ -312,7 +419,19 @@ class LegacyMigrator:
         späterer Lauf kann es erneut versuchen.
         """
         identity = self._legacy_identity()
-        payload = {} if identity is None else {"mtime_ns": identity[0], "size": identity[1]}
+        if identity is None:
+            payload: dict[str, int] = {}
+        else:
+            # Runde 29, Finding 2: WAL/SHM-Sidecar-Identität mitschreiben, damit eine
+            # WAL-only-Änderung (Hauptdatei unverändert) den Marker als stale erkennt.
+            payload = {
+                "mtime_ns": identity[0],
+                "size": identity[1],
+                "wal_mtime_ns": identity[2],
+                "wal_size": identity[3],
+                "shm_mtime_ns": identity[4],
+                "shm_size": identity[5],
+            }
         try:
             self._migrated_marker_path.write_text(json.dumps(payload), encoding="utf-8")
         except OSError:
@@ -328,11 +447,19 @@ class LegacyMigrator:
         * **Leerer / Alt-Marker ohne Identität** (erzeugt vor Runde 27, z. B. ``touch``):
           weiterhin ``suppress`` – ein bestehendes Upgrade darf durch das neue Format
           nicht plötzlich re-attachen. So bleiben bestehende Tests/Installs unverändert.
-        * **Marker mit Identität** (``mtime_ns``+``size``): stimmt die aktuelle Datei-
-          Identität überein → ``suppress`` (Datei unverändert seit Migration). Weicht sie
-          ab (neue Zeilen / Rollback / ``segmented=false`` + Re-Insert) → Marker ist STALE,
-          NICHT mehr unterdrücken; die Datei wird wieder normal klassifiziert/attached, damit
-          die neuen Legacy-Zeilen NICHT still verloren gehen.
+        * **Marker mit Identität** (``mtime_ns``+``size`` [+ WAL/SHM ab Runde 29]): stimmt
+          die aktuelle Datei-Identität überein → ``suppress`` (Datei unverändert seit
+          Migration). Weicht sie ab (neue Zeilen / Rollback / ``segmented=false`` +
+          Re-Insert – auch WENN nur der ``-wal`` sich änderte) → Marker ist STALE, NICHT
+          mehr unterdrücken; die Datei wird wieder normal klassifiziert/attached, damit die
+          neuen Legacy-Zeilen NICHT still verloren gehen.
+
+        WAL/SHM-Vergleich (Runde 29, Finding 2): ein Marker im NEUEN Format trägt zusätzlich
+        die Sidecar-Identität. Vergleicht werden dann NUR die im Marker vorhandenen Felder
+        gegen ihr aktuelles Äquivalent – so bleibt ein Marker im ALTEN Format (nur
+        ``mtime_ns``+``size``, Runde 27) mit der bisherigen Haupt-nur-Semantik gültig
+        (Rückwärtskompat), während ein neuer Marker auch eine reine ``-wal``-Änderung als
+        stale erkennt.
 
         Tradeoff (bewusst, siehe ``classify``): das Re-Attach der geänderten Datei kann
         bereits migrierte (in v2 kopierte) Alt-Zeilen transient erneut sichtbar machen
@@ -349,10 +476,33 @@ class LegacyMigrator:
             return True  # Alt-Marker (leer, vor Runde 27) → konservativ weiterhin suppress
         try:
             data = json.loads(raw)
-            marker_identity = (int(data["mtime_ns"]), int(data["size"]))
+            # Pflicht-Kern (Runde 27): Haupt-mtime+size müssen vorhanden sein.
+            expected: dict[str, int] = {"mtime_ns": int(data["mtime_ns"]), "size": int(data["size"])}
+            # Optionaler WAL/SHM-Anteil (Runde 29): nur vergleichen, wenn im Marker vorhanden
+            # (ein Alt-Marker ohne diese Felder behält die Haupt-nur-Semantik).
+            for key in ("wal_mtime_ns", "wal_size", "shm_mtime_ns", "shm_size"):
+                if key in data:
+                    expected[key] = int(data[key])
         except (ValueError, TypeError, KeyError):
             return True  # unlesbarer/legacy Inhalt → konservativ suppress (Rückwärtskompat)
-        return self._legacy_identity() == marker_identity
+        current = self._current_identity_fields()
+        if current is None:
+            return False  # Hauptdatei fehlt → nicht unterdrücken
+        return all(current.get(key) == value for key, value in expected.items())
+
+    def _current_identity_fields(self) -> dict[str, int] | None:
+        """Aktuelle Identitätsfelder als benanntes dict (Runde 29, Finding 2) – ``None`` ohne Hauptdatei."""
+        identity = self._legacy_identity()
+        if identity is None:
+            return None
+        return {
+            "mtime_ns": identity[0],
+            "size": identity[1],
+            "wal_mtime_ns": identity[2],
+            "wal_size": identity[3],
+            "shm_mtime_ns": identity[4],
+            "shm_size": identity[5],
+        }
 
     def classify(self) -> LegacyClassification | None:
         """Klassifiziert die Quelle – ODER liefert ``None``, wenn bereits migriert (#951, Pkt 2, Runde 27 Finding 3).
@@ -596,7 +746,7 @@ class LegacyMigrator:
         store = self._store
         if not await self._source_is_attached():
             return
-        low, high = self._bucket_gid_bounds
+        low, high = await self._bucket_gid_bounds()
         # Aktives Segment prüfen/rotieren unter dem geteilten Write-Lock (#951, Runde 24):
         # der Check ``_active_segment_has_own_migrated_only_rows`` + ``store.rotate()`` läuft
         # sonst OHNE den Lock, den ``RingBuffer.record()`` hält. Ein Live-Append könnte
@@ -705,7 +855,7 @@ class LegacyMigrator:
         (``_bucket_gid_bounds`` via ``_segment_is_own_migrated_only``). Reihenfolge älteste
         zuerst (``list_migrating_segments`` ist ``segment_id ASC``).
         """
-        low, high = self._bucket_gid_bounds
+        low, high = await self._bucket_gid_bounds()
         own: list[int] = []
         for segment in await self._store.manifest.list_migrating_segments():
             if await self._segment_is_own_migrated_only(segment, low, high):
@@ -799,7 +949,26 @@ class LegacyMigrator:
         wenn der Store NOCH keine Positive hält (sonst hat ``_append_with_legacy_gids``
         via ``segregate`` bereits rotiert und markiert) und das aktive Segment auch
         wirklich rein-negativ und nicht leer ist (kein Rotieren leerer Segmente).
+
+        Serialisierung gegen Live-Appends (Runde 29, Finding 3): dieser finale Seal läuft
+        aus ``migrate_chunk`` NACH der Freigabe des Write-Locks in
+        ``_append_with_legacy_gids``. Ohne eigene Serialisierung könnte ein Live-``record()``
+        zwischen dem Rein-Negativ-Check (``_store_has_positive_rows`` / ``MIN(gid)``) und dem
+        ``store.rotate()`` eine POSITIVE Zeile ins aktive Segment schieben → gemischtes
+        NORMALES Segment, dessen negative Legacy-Zeilen im positiven Query-Präfix sitzen und
+        eine latest-page-``id desc``-Query VOR älteren positiven Segmenten erreichen. Der
+        gesamte Check+Rotate läuft daher unter demselben ``write_lock``, den ``record()``
+        hält. ``None`` = No-Op (bestehender Pfad ohne Lock). Keine Reentrancy: der Seal läuft
+        über ``migrate_chunk`` → ``_finalize_and_detach``, NICHT unter ``record()``.
         """
+        if self._write_lock is None:
+            await self._seal_pure_migrated_active_segment_inner()
+            return
+        async with self._write_lock:
+            await self._seal_pure_migrated_active_segment_inner()
+
+    async def _seal_pure_migrated_active_segment_inner(self) -> None:
+        """Check+Rotate des rein-negativen aktiven Segments (unter Lock, Runde 29, Finding 3)."""
         store = self._store
         if store._active_conn is None or store._active_segment is None:
             return
@@ -896,6 +1065,10 @@ class LegacyMigrator:
         store = self._store
         if store._active_conn is None or store._active_segment is None:
             return
+        # Ordnungs-Faktor auflösen, BEVOR die erste gid vergeben wird (Runde 29, Finding 1):
+        # solange die Quelle attached ist, bindet das den migrierten Bucket an den
+        # segment_id der Quelle – deckungsgleich zum attached-read-Pfad.
+        await self._ensure_source_factor()
         cfg = store._segment_config
         max_rows = cfg.segment_max_rows
         max_bytes = cfg.segment_max_bytes
@@ -1083,7 +1256,7 @@ class LegacyMigrator:
         segment_id-Ordnung von der gid-Ordnung entkoppelt und die migrierten Segmente
         müssen – wie im gemischten Fall – als ``migrated`` in den Trailing-Rang.
         """
-        low, high = self._bucket_gid_bounds
+        low, high = await self._bucket_gid_bounds()
         for segment in await self._iter_v2_segments():
             path, own_active = segment
             conn, close_after = await self._open_v2_segment_read(path, own_active)
@@ -1240,7 +1413,7 @@ class LegacyMigrator:
         Fortschritt der zuerst migrierten Datei und ließe die zweite Datei ihre
         ersten rowids still auslassen.
         """
-        low, high = self._bucket_gid_bounds
+        low, high = await self._bucket_gid_bounds()
         best = 0
         for segment in await self._store.manifest.list_segments():
             if segment.schema_version <= LEGACY_SCHEMA_VERSION:
