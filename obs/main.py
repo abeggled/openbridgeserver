@@ -173,7 +173,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_event_type) -> None:
     from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config
-    from obs.ringbuffer.ringbuffer import default_ringbuffer_disk_path, init_ringbuffer, reset_ringbuffer, set_ringbuffer_enabled
+    from obs.ringbuffer.ringbuffer import (
+        _is_sqlite_memory_path,
+        default_ringbuffer_disk_path,
+        init_ringbuffer,
+        reset_ringbuffer,
+        set_ringbuffer_enabled,
+    )
 
     rb_path = default_ringbuffer_disk_path(database_path)
     # storage_path an den Loader durchreichen (#951 [P3]): fehlt die Config-Zeile,
@@ -186,6 +192,13 @@ async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_eve
         return
     set_ringbuffer_enabled(True)
 
+    # Memory-DB-Pfade (``:memory:`` bzw. ``file:...mode=memory``) sind nicht
+    # segmentierbar (Codex #951): der segmentierte Startup leitet aus dem Disk-Pfad
+    # ein reales ``*_segments``-Verzeichnis ab und schriebe Manifest-/Segment-Dateien
+    # auf die Platte, während das Memory-Cleanup ein No-op ist. Konsistent zur
+    # API-seitigen Normalisierung (memory ⇒ nicht segmentiert) hier erzwingen.
+    segmented = rb_cfg.get("segmented", False) and not _is_sqlite_memory_path(rb_path)
+
     rb = await init_ringbuffer(
         storage="file",
         max_entries=rb_cfg["max_entries"],
@@ -193,7 +206,7 @@ async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_eve
         max_file_size_bytes=rb_cfg["max_file_size_bytes"],
         max_age=rb_cfg["max_age"],
         # Segmentierter Store (#919) — OPT-IN; Default AUS = unveränderter Legacy-Pfad.
-        segmented=rb_cfg.get("segmented", False),
+        segmented=segmented,
         segment_max_bytes=rb_cfg.get("segment_max_bytes"),
         segment_max_rows=rb_cfg.get("segment_max_rows"),
         segment_max_age=rb_cfg.get("segment_max_age"),
