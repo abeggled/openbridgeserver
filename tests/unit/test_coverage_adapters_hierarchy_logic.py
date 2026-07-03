@@ -573,6 +573,61 @@ class TestUpdateInstance:
         assert saved_config["providers"]["seven.io"]["targets"]["oncall"]["to"] == "+49123456789"
         assert saved_config["providers"]["seven.io"]["targets"]["oncall"]["channel"] == "voice"
 
+    @pytest.mark.asyncio
+    async def test_update_message_instance_preserves_multiple_renamed_redacted_targets(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceUpdate
+        from obs.api.v1.redaction import REDACTED
+
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": "pushover-token",
+                    "targets": {
+                        "ops": {"user_key": "ops-user"},
+                        "dev": {"user_key": "dev-user"},
+                    },
+                }
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": REDACTED,
+                    "targets": {
+                        "oncall": {"user_key": REDACTED},
+                        "developers": {"user_key": REDACTED},
+                        "new": {"user_key": "new-user"},
+                    },
+                }
+            }
+        }
+
+        row = _inst_row(adapter_type="MESSAGE", enabled=0, config=stored_config)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        async def _fake_stop(iid):
+            pass
+
+        monkeypatch.setattr(adp_api.adapter_registry, "stop_instance", _fake_stop)
+        db = _DbStub(one=row)
+
+        await adp_api.update_instance(
+            instance_id=uuid.UUID(row["id"]),
+            body=AdapterInstanceUpdate(config=incoming_config),
+            db=db,
+            _user="admin",
+        )
+
+        saved_config = json.loads(db.committed[0][1][1])
+        assert saved_config["providers"]["pushover"]["api_token"] == "pushover-token"
+        assert saved_config["providers"]["pushover"]["targets"]["oncall"]["user_key"] == "ops-user"
+        assert saved_config["providers"]["pushover"]["targets"]["developers"]["user_key"] == "dev-user"
+        assert saved_config["providers"]["pushover"]["targets"]["new"]["user_key"] == "new-user"
+
 
 class TestDeleteInstance:
     @pytest.mark.asyncio
@@ -822,6 +877,34 @@ class TestGetAdapterConfig:
         db = _DbStub(one=row)
         result = await adp_api.get_adapter_config(adapter_type="KNX", db=db, _user="admin")
         assert result.config == {"host": "10.0.0.1"}
+
+    @pytest.mark.asyncio
+    async def test_get_config_redacts_legacy_message_secrets(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.redaction import REDACTED
+
+        row = _row(
+            adapter_type="MESSAGE",
+            config=json.dumps(
+                {
+                    "providers": {
+                        "pushover": {
+                            "enabled": True,
+                            "api_token": "pushover-token",
+                            "targets": {"ops": {"user_key": "pushover-user"}},
+                        },
+                    }
+                }
+            ),
+            enabled=1,
+            updated_at="2024-01-01T00:00:00",
+        )
+        db = _DbStub(one=row)
+
+        result = await adp_api.get_adapter_config(adapter_type="MESSAGE", db=db, _user="admin")
+
+        assert result.config["providers"]["pushover"]["api_token"] == REDACTED
+        assert result.config["providers"]["pushover"]["targets"]["ops"]["user_key"] == REDACTED
 
 
 class TestMigrateInstanceBindings:

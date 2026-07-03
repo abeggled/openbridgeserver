@@ -220,6 +220,10 @@ def _redact_message_config(config: dict[str, Any]) -> dict[str, Any]:
     return redacted
 
 
+def _message_target_has_redacted_secret(provider_name: str, target_config: dict[str, Any]) -> bool:
+    return any(target_config.get(field) == REDACTED for field in _MESSAGE_PROVIDER_TARGET_SECRET_FIELDS[provider_name])
+
+
 def _preserve_redacted_message_config_secrets(stored_config: dict[str, Any], incoming_config: dict[str, Any]) -> dict[str, Any]:
     merged = dict(incoming_config)
     stored_providers = stored_config.get("providers")
@@ -249,20 +253,17 @@ def _preserve_redacted_message_config_secrets(stored_config: dict[str, Any], inc
 
         merged_targets = dict(incoming_targets)
         merged_provider["targets"] = merged_targets
-        removed_targets = [
+        removed_targets_queue = [
             target for target_name, target in stored_targets.items() if target_name not in incoming_targets and isinstance(target, dict)
         ]
-        added_target_names = [
-            target_name for target_name, target in incoming_targets.items() if target_name not in stored_targets and isinstance(target, dict)
-        ]
-        renamed_target = removed_targets[0] if len(removed_targets) == 1 and len(added_target_names) == 1 else None
-        renamed_target_name = added_target_names[0] if renamed_target is not None else None
         for target_name, incoming_target in incoming_targets.items():
             stored_target = stored_targets.get(target_name)
-            if not isinstance(stored_target, dict) and target_name == renamed_target_name:
-                stored_target = renamed_target
             if not isinstance(stored_target, dict) or not isinstance(incoming_target, dict):
-                continue
+                if not isinstance(incoming_target, dict) or not _message_target_has_redacted_secret(provider_name, incoming_target):
+                    continue
+                if not removed_targets_queue:
+                    continue
+                stored_target = removed_targets_queue.pop(0)
             merged_target = dict(incoming_target)
             merged_targets[target_name] = merged_target
             for field in _MESSAGE_PROVIDER_TARGET_SECRET_FIELDS[provider_name]:
@@ -1480,7 +1481,7 @@ async def get_adapter_config(
         return AdapterConfigOut(adapter_type=adapter_type, config={}, enabled=True, updated_at=None)
     return AdapterConfigOut(
         adapter_type=adapter_type,
-        config=json.loads(row["config"]),
+        config=_redact_instance_config(adapter_type, json.loads(row["config"])),
         enabled=bool(row["enabled"]),
         updated_at=row["updated_at"],
     )
