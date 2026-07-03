@@ -14,6 +14,7 @@ let messageArchivesApi
 
 beforeEach(() => {
   vi.resetModules()
+  window.history.pushState({}, '', '/')
   const storage = {
     getItem: vi.fn().mockImplementation(key => (key === 'access_token' ? 'token' : 'de')),
     setItem: vi.fn(),
@@ -179,13 +180,14 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.doUnmock('@/api/client')
+  window.history.pushState({}, '', '/')
 })
 
-async function mountSettingsView() {
+async function mountSettingsView({ authUser = { id: 'u1', username: 'admin', is_admin: true } } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const { useAuthStore } = await import('@/stores/auth')
-  useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+  useAuthStore().user = authUser
 
   const mod = await import('@/views/SettingsView.vue')
   const wrapper = mount(mod.default, {
@@ -262,6 +264,27 @@ function findReplaceExistingCheckbox(wrapper) {
 }
 
 describe('SettingsView KNX project import', () => {
+  it('opens the import/export tab from the query after admin auth becomes available', async () => {
+    window.history.pushState({}, '', '/settings?tab=importexport#knx-project-import')
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+    })
+
+    const wrapper = await mountSettingsView({ authUser: null })
+    expect(wrapper.find('input[accept=".knxproj"]').exists()).toBe(false)
+
+    const { useAuthStore } = await import('@/stores/auth')
+    useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+    await flushPromises()
+
+    expect(wrapper.find('input[accept=".knxproj"]').exists()).toBe(true)
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+
+    wrapper.unmount()
+  })
+
   it('sends hierarchy_replace_existing by default and shows replaced tree counts', async () => {
     const wrapper = await mountSettingsView()
     await openImportExportTab(wrapper)

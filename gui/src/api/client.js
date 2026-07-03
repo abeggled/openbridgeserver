@@ -145,6 +145,7 @@ export const knxprojApi = {
   listGA:  (params)   => api.get('/knxproj/group-addresses', { params }),
   listDevices: (params) => api.get('/knxproj/devices', { params }),
   getDevice: (pa)      => api.get(`/knxproj/devices/${encodeURIComponent(pa)}`),
+  setDeviceHierarchyLinks: (pa, data) => api.put(`/knxproj/devices/${encodeURIComponent(pa)}/hierarchy-links`, data),
   listGaDevices: (ga, params) => api.get(`/knxproj/group-addresses/${encodeURIComponent(ga)}/devices`, { params }),
   clearGA: ()         => api.delete('/knxproj/group-addresses'),
 }

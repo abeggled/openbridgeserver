@@ -6,6 +6,7 @@ const routes = [
   { path: '/datapoints',           name: 'DataPoints', component: () => import('@/views/DataPointsView.vue') },
   { path: '/datapoints/:id',       name: 'DataPointDetail', component: () => import('@/views/DataPointDetailView.vue'), props: true },
   { path: '/adapters',             name: 'Adapters',   component: () => import('@/views/AdaptersView.vue')   },
+  { path: '/knx-devices',          name: 'KnxDevices', component: () => import('@/views/KnxDevicesView.vue') },
   { path: '/history',              name: 'History',    component: () => import('@/views/HistoryView.vue')    },
   { path: '/ringbuffer',           name: 'RingBuffer', component: () => import('@/views/RingBufferView.vue') },
   { path: '/message-archives',     name: 'MessageArchives', component: () => import('@/views/MessageArchivesView.vue') },

@@ -156,6 +156,36 @@ def _sqlite_sidecar_path(db_path: Path, suffix: str) -> Path:
     return Path(f"{db_path}{suffix}")
 
 
+def _sqlite_file_sizes(db_path: Path) -> dict[str, int]:
+    """Physical on-disk sizes of a SQLite DB and its ``-wal``/``-shm`` sidecar files.
+
+    Reports each file separately so support packages can spot a WAL file growing out of
+    proportion to the DB (the failure mode behind issue #908). Missing files count as 0.
+    """
+    sizes = {"db_bytes": 0, "wal_bytes": 0, "shm_bytes": 0, "total_bytes": 0}
+    for key, suffix in (("db_bytes", ""), ("wal_bytes", "-wal"), ("shm_bytes", "-shm")):
+        candidate = db_path if suffix == "" else _sqlite_sidecar_path(db_path, suffix)
+        if candidate.exists():
+            sizes[key] = candidate.stat().st_size
+    sizes["total_bytes"] = sizes["db_bytes"] + sizes["wal_bytes"] + sizes["shm_bytes"]
+    return sizes
+
+
+def _storage_file_sizes(db_path: Path) -> dict[str, Any]:
+    """Per-file on-disk sizes (db/wal/shm) for the main and ringbuffer databases.
+
+    The offline package cannot query a running ringbuffer, so its disk path is derived
+    from the main DB path the same way the server does (see issue #908).
+    """
+    from obs.ringbuffer.ringbuffer import default_ringbuffer_disk_path
+
+    ringbuffer_path = Path(default_ringbuffer_disk_path(str(db_path)))
+    return {
+        "main": {"path": _basename(db_path), **_sqlite_file_sizes(db_path)},
+        "ringbuffer": {"path": _basename(ringbuffer_path), **_sqlite_file_sizes(ringbuffer_path)},
+    }
+
+
 def _default_backup_target(db_path: Path) -> Path:
     return db_path.with_name(f"{db_path.stem}-{_timestamp()}.sqlite")
 
@@ -574,8 +604,13 @@ def create_support_package(db_path: Path) -> dict[str, Any]:
                 },
                 "installation": {
                     "obs_version": __version__,
-                    "database": {"path": _basename(db_path), "size_bytes": db_path.stat().st_size if db_path.exists() else 0},
+                    "database": {
+                        "path": _basename(db_path),
+                        "size_bytes": db_path.stat().st_size if db_path.exists() else 0,
+                        "files": _sqlite_file_sizes(db_path),
+                    },
                 },
+                "storage": _storage_file_sizes(db_path),
                 "database": {
                     "schema_version": _row(conn, "SELECT MAX(version) AS version FROM schema_version")["version"]
                     if _table_exists(conn, "schema_version")

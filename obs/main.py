@@ -150,6 +150,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     autobackup_scheduler = init_autobackup_scheduler(db=db)
 
+    # 11. DB-Wartung — periodischer WAL-TRUNCATE-Checkpoint (siehe issue #908)
+    from obs.db.maintenance import init_db_maintenance_scheduler
+
+    db_maintenance_scheduler = init_db_maintenance_scheduler(db=db)
+
     logger.info(
         "open bridge server ready — %d datapoints, %d adapters registered",
         registry.count(),
@@ -173,6 +178,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     yield  # ← application running
 
     # Shutdown (reverse order)
+    await db_maintenance_scheduler.stop()
     await autobackup_scheduler.stop()
     await logic_mgr.stop()
     await adapter_registry.stop_all()

@@ -30,7 +30,7 @@
       <RouterLink
         v-for="item in navItems" :key="item.to"
         :to="item.to"
-        :title="collapsed ? (item.to === '/adapters' && adapterWarningCount ? $t('sidebar.adapterWarningsTitle', { label: item.label, count: adapterWarningCount }) : item.label) : ''"
+        :title="collapsed ? navTitle(item) : ''"
         :data-testid="'nav-' + (item.to === '/' ? 'home' : item.to.replace('/', ''))"
         :class="[
           'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
@@ -62,7 +62,7 @@
           href="/visu/"
           target="_blank"
           rel="noopener"
-          :title="collapsed ? $t('sidebar.visu') : ''"
+          :title="collapsed ? t('nav.visu') : ''"
           class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-800 dark:hover:text-slate-100"
         >
           <span class="shrink-0 text-lg w-5 text-center">&#9707;</span>
@@ -136,6 +136,7 @@ const { t }    = useI18n()
 const navItems = computed(() => [
   { to: '/',           label: t('nav.dashboard'),  icon: '&#9783;' },
   { to: '/datapoints', label: t('nav.datapoints'), icon: '&#9636;' },
+  { to: '/knx-devices', label: t('nav.knxDevices'), icon: '&#9783;' },
   { to: '/adapters',   label: t('nav.adapters'),   icon: '&#9741;' },
   { to: '/history',    label: t('nav.history'),    icon: '&#9685;' },
   { to: '/ringbuffer', label: t('nav.ringbuffer'), icon: '&#9706;' },
@@ -165,5 +166,12 @@ onBeforeUnmount(() => {
 function isActive(to) {
   if (to === '/') return route.path === '/'
   return route.path.startsWith(to)
+}
+
+function navTitle(item) {
+  if (item.to === '/adapters' && adapterWarningCount.value) {
+    return t('sidebar.adapterWarningsTitle', { label: item.label, count: adapterWarningCount.value })
+  }
+  return item.label
 }
 </script>
