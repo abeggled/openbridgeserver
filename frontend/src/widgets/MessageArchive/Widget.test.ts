@@ -258,4 +258,40 @@ describe('MessageArchive Widget.vue', () => {
     expect(articles[0].text()).not.toContain('widgets.messageArchive.unread')
     wrapper.unmount()
   })
+
+  it('refreshes live entries when the loaded archive can be retention-pruned', async () => {
+    const retainedEntry = { ...entry, id: 'entry-retained', title: 'Retained' }
+    const newEntry = {
+      ...entry,
+      id: 'entry-new',
+      title: 'New',
+      created_at: '2026-01-01T10:10:00+00:00',
+      updated_at: '2026-01-01T10:10:00+00:00',
+    }
+    vi.mocked(messageArchives.entries)
+      .mockResolvedValueOnce({ items: [retainedEntry, olderEntry], total: 2, limit: 25, offset: 0 })
+      .mockResolvedValueOnce({ items: [newEntry, retainedEntry], total: 2, limit: 25, offset: 0 })
+
+    const wrapper = mount(MessageArchiveWidget, {
+      props: {
+        config: {},
+        editorMode: false,
+        readonly: false,
+      },
+      global: {
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Older')
+    wsHandlers.current[0]({ action: 'message_archive_entry', entry: newEntry })
+    await flushPromises()
+
+    expect(messageArchives.entries).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('New')
+    expect(wrapper.text()).toContain('Retained')
+    expect(wrapper.text()).not.toContain('Older')
+    wrapper.unmount()
+  })
 })

@@ -609,8 +609,12 @@ async def test_message_archive_entries_allow_public_page_scoped_reads(client, au
 
         archive_list = await client.get("/api/v1/message-archives", headers={"X-Page-Id": page_id})
         assert archive_list.status_code == 200, archive_list.text
-        assert "db_path" not in archive_list.json()[0]
-        assert "db_status" not in archive_list.json()[0]
+        archive = archive_list.json()[0]
+        assert "db_path" not in archive
+        assert "db_status" not in archive
+        assert archive["entry_count"] == 1
+        assert archive["oldest_entry_at"] == warning_entry.json()["created_at"]
+        assert archive["newest_entry_at"] == warning_entry.json()["created_at"]
     finally:
         if page_id:
             await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)

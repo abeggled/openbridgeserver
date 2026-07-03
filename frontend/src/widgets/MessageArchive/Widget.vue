@@ -13,6 +13,7 @@ const props = defineProps<{
 const { t } = useI18n()
 const ws = useWebSocket()
 const entries = ref<MessageArchiveEntry[]>([])
+const total = ref(0)
 const loading = ref(false)
 const error = ref('')
 let unsubscribeWs: (() => void) | null = null
@@ -104,11 +105,12 @@ function matchesFilters(entry: MessageArchiveEntry): boolean {
   return true
 }
 
-function applyLiveEntry(entry: MessageArchiveEntry) {
+async function applyLiveEntry(entry: MessageArchiveEntry) {
   const existing = entries.value.find(item => item.id === entry.id)
   const merged = existing && existing.is_read && !entry.is_read
     ? { ...entry, is_read: true, read_at: existing.read_at }
     : entry
+  const loadedFullResult = total.value > 0 && entries.value.length >= total.value
   if (!matchesFilters(merged)) {
     entries.value = entries.value.filter(item => item.id !== merged.id)
     return
@@ -117,6 +119,7 @@ function applyLiveEntry(entry: MessageArchiveEntry) {
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     .slice(0, limit.value)
   error.value = ''
+  if (loadedFullResult) await load()
 }
 
 function isMessageArchiveEntry(value: unknown): value is MessageArchiveEntry {
@@ -141,6 +144,7 @@ async function load() {
   try {
     const result = await messageArchives.entries(params())
     entries.value = result.items
+    total.value = result.total
   } catch {
     error.value = t('widgets.messageArchive.loadError')
   } finally {
@@ -167,7 +171,7 @@ onMounted(() => {
   load()
   unsubscribeWs = ws.onMessage((data) => {
     if (props.editorMode || data.action !== 'message_archive_entry') return
-    if (isMessageArchiveEntry(data.entry)) applyLiveEntry(data.entry)
+    if (isMessageArchiveEntry(data.entry)) void applyLiveEntry(data.entry)
   })
 })
 onUnmounted(() => {

@@ -476,6 +476,37 @@ def _strip_archive_storage_fields(archive: dict[str, Any]) -> dict[str, Any]:
     return public_archive
 
 
+async def _with_scoped_archive_metadata(
+    store: MessageArchiveStore,
+    archive: dict[str, Any],
+    access: ArchiveReadAccess,
+    predicates: list[EntryPredicate],
+) -> dict[str, Any]:
+    scoped = dict(archive)
+    newest = await store.query_entries(
+        EntryQuery(
+            archive_ids=[archive["id"]],
+            limit=1,
+            sort="desc",
+            username=access.username,
+            predicates=predicates,
+        )
+    )
+    oldest = await store.query_entries(
+        EntryQuery(
+            archive_ids=[archive["id"]],
+            limit=1,
+            sort="asc",
+            username=access.username,
+            predicates=predicates,
+        )
+    )
+    scoped["entry_count"] = newest["total"]
+    scoped["newest_entry_at"] = newest["items"][0]["created_at"] if newest["items"] else None
+    scoped["oldest_entry_at"] = oldest["items"][0]["created_at"] if oldest["items"] else None
+    return scoped
+
+
 @router.get("", response_model=list[MessageArchiveOut], response_model_exclude_none=True)
 async def list_message_archives(
     request: Request,
@@ -486,6 +517,9 @@ async def list_message_archives(
     archives = await store.list_archives()
     if access.predicates is None:
         return archives if access.is_admin else [_strip_archive_storage_fields(archive) for archive in archives]
+    entry_predicates = _entry_predicates_for_page(access.predicates)
+    if not entry_predicates:
+        return []
     allowed_ids: set[str] | None = set()
     for predicate in access.predicates:
         if predicate.archive_ids is None:
@@ -493,7 +527,8 @@ async def list_message_archives(
             break
         allowed_ids.update(predicate.archive_ids)
     page_archives = archives if allowed_ids is None else [archive for archive in archives if archive["id"] in allowed_ids]
-    return [_strip_archive_storage_fields(archive) for archive in page_archives]
+    scoped_archives = [await _with_scoped_archive_metadata(store, archive, access, entry_predicates) for archive in page_archives]
+    return [_strip_archive_storage_fields(archive) for archive in scoped_archives]
 
 
 @router.post("", response_model=MessageArchiveOut, status_code=status.HTTP_201_CREATED)
@@ -670,11 +705,10 @@ async def get_message_archive(
     archive_id = _validate_archive_id(archive_id)
     access = await _archive_read_access(request, db)
     if access.predicates is not None:
-        if not _entry_predicates_for_page(access.predicates):
+        entry_predicates = _entry_predicates_for_page(access.predicates)
+        if not entry_predicates:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Message archive access denied")
-        probe = await store.query_entries(
-            EntryQuery(archive_ids=[archive_id], limit=1, username=access.username, predicates=_entry_predicates_for_page(access.predicates))
-        )
+        probe = await store.query_entries(EntryQuery(archive_ids=[archive_id], limit=1, username=access.username, predicates=entry_predicates))
         if probe["total"] == 0:
             allowed_ids = [predicate.archive_ids for predicate in access.predicates]
             if any(ids is None for ids in allowed_ids):
@@ -684,6 +718,8 @@ async def get_message_archive(
     archive = await store.get_archive(archive_id)
     if not archive:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive not found")
+    if access.predicates is not None:
+        archive = await _with_scoped_archive_metadata(store, archive, access, entry_predicates)
     return archive if access.is_admin else _strip_archive_storage_fields(archive)
 
 

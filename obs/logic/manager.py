@@ -1024,8 +1024,9 @@ class LogicManager:
         api_client_ids = {node.id for node in flow.nodes if node.type == "api_client"}
         host_check_ids = {node.id for node in flow.nodes if node.type == "host_check"}
         message_archive_ids = {node.id for node in flow.nodes if node.type == "message_archive"}
+        notify_ids = {node.id for node in flow.nodes if node.type in {"notify_pushover", "notify_sms"}}
         operating_hour_ids = {node.id for node in flow.nodes if node.type == "operating_hours"}
-        async_replay_source_ids = api_client_ids | host_check_ids | message_archive_ids
+        async_replay_source_ids = api_client_ids | host_check_ids | message_archive_ids | notify_ids
         needs_async_replay_snapshot = any(edge.source in async_replay_source_ids for edge in flow.edges)
 
         # ── Pre-compute operating_hours values to inject as overrides ─────
@@ -2494,9 +2495,179 @@ class LogicManager:
                 logger.warning("Graph %s: message archive write failed (node=%s): %s", graph_id[:8], node.id[:8], exc)
                 return False
 
+        triggered_notify_nodes: set[str] = set()
+
+        async def _run_notify_node(node: Any, target_set: set[str]) -> bool:
+            out = outputs.get(node.id, {})
+            if not GraphExecutor._to_bool(out.get("_trigger")):
+                return False
+
+            if node.type == "notify_pushover":
+                app_token = (node.data.get("app_token") or "").strip()
+                user_key = (node.data.get("user_key") or "").strip()
+                if not app_token or not user_key:
+                    logger.warning("Pushover: app_token or user_key missing on node %s", node.id[:8])
+                    return False
+                _raw_msg = out.get("_message")
+                msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
+                title = node.data.get("title", "open bridge server")
+                prio = int(node.data.get("priority", 0))
+                _out_url = out.get("_url")
+                _out_utit = out.get("_url_title")
+                _out_img = out.get("_image_url")
+                url = (_msg_to_str(_out_url) if _out_url is not None else (node.data.get("url") or "")).strip()
+                url_title = (_msg_to_str(_out_utit) if _out_utit is not None else (node.data.get("url_title") or "")).strip()
+                image_url = (_msg_to_str(_out_img) if _out_img is not None else (node.data.get("image_url") or "")).strip()
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        payload: dict[str, object] = {
+                            "token": app_token,
+                            "user": user_key,
+                            "title": str(title),
+                            "message": msg,
+                            "priority": prio,
+                        }
+                        if url:
+                            payload["url"] = url
+                        if url_title:
+                            payload["url_title"] = url_title
+
+                        if image_url:
+                            resolved = await _resolve_safe_image_url(image_url)
+                            if resolved is None:
+                                raise ValueError("Unsafe image_url: only validated HTTPS targets are allowed")
+                            pinned_url, host_header, pinned_ip = resolved
+                            async with client.stream(
+                                "GET",
+                                pinned_url,
+                                timeout=10.0,
+                                follow_redirects=False,
+                                headers={"Host": host_header},
+                                extensions={"sni_hostname": host_header.split(":", 1)[0]},
+                            ) as img_r:
+                                net_stream = img_r.extensions.get("network_stream")
+                                if net_stream is not None:
+                                    server_addr = net_stream.get_extra_info("server_addr")
+                                    if server_addr and server_addr[0] != pinned_ip:
+                                        raise ValueError("Pushover image_url resolved to an unexpected target IP")
+                                img_r.raise_for_status()
+                                content_type = img_r.headers.get("content-type", "").split(";")[0].strip().lower()
+                                if not content_type.startswith("image/"):
+                                    raise ValueError("Pushover image_url must return an image/* content type")
+
+                                content_len_raw = img_r.headers.get("content-length", "0") or "0"
+                                try:
+                                    content_len = int(content_len_raw)
+                                except ValueError:
+                                    content_len = 0
+                                if content_len > _PUSHOVER_ATTACHMENT_MAX_BYTES:
+                                    raise ValueError("Pushover attachment too large (max 5 MB)")
+
+                                img_content = bytearray()
+                                async for chunk in img_r.aiter_bytes():
+                                    img_content.extend(chunk)
+                                    if len(img_content) > _PUSHOVER_ATTACHMENT_MAX_BYTES:
+                                        raise ValueError("Pushover attachment too large (max 5 MB)")
+
+                            fname = image_url.split("?")[0].split("/")[-1] or "image.jpg"
+                            r = await client.post(
+                                "https://api.pushover.net/1/messages.json",
+                                data=payload,
+                                files={"attachment": (fname, bytes(img_content), content_type or "image/jpeg")},
+                            )
+                        else:
+                            r = await client.post(
+                                "https://api.pushover.net/1/messages.json",
+                                data=payload,
+                            )
+                        r.raise_for_status()
+                        outputs[node.id]["sent"] = True
+                        target_set.add(node.id)
+                        logger.info("Graph %s: Pushover sent (msg=%r)", graph_id[:8], msg[:40])
+                        return True
+                except Exception as exc:
+                    logger.warning(
+                        "Graph %s: Pushover failed (msg=%r): %s",
+                        graph_id[:8],
+                        msg[:40],
+                        exc,
+                    )
+                    return False
+
+            if node.type == "notify_sms":
+                api_key = (node.data.get("api_key") or "").strip()
+                to = (node.data.get("to") or "").strip()
+                if not api_key or not to:
+                    logger.warning("seven.io SMS: api_key or to missing on node %s", node.id[:8])
+                    return False
+                _raw_msg = out.get("_message")
+                msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
+                sender = node.data.get("sender", "obs")
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        r = await client.post(
+                            "https://gateway.seven.io/api/sms",
+                            headers={"X-Api-Key": api_key},
+                            data={"to": to, "from": str(sender), "text": msg},
+                        )
+                        r.raise_for_status()
+                        body = r.text.strip()
+                        logger.info(
+                            "Graph %s: seven.io response status=%d body=%r",
+                            graph_id[:8],
+                            r.status_code,
+                            body[:80],
+                        )
+                        _SEVEN_ERRORS = {
+                            100: "Unbekannter Fehler / Empfänger nicht angegeben",
+                            200: "Absender nicht angegeben",
+                            201: "Absender zu lang (max 11 Zeichen)",
+                            300: "Nachricht nicht angegeben",
+                            301: "Nachricht zu lang",
+                            401: "API-Key ungültig oder nicht autorisiert",
+                            402: "Nicht genug Guthaben",
+                            403: "Absender nicht erlaubt",
+                            500: "Server-Fehler bei seven.io",
+                        }
+                        try:
+                            body_int = int(body)
+                            if body_int in _SEVEN_ERRORS:
+                                raise ValueError(f"seven.io Fehlercode {body_int}: {_SEVEN_ERRORS[body_int]}")
+                            if body_int <= 0:
+                                raise ValueError(f"seven.io: 0 Nachrichten gesendet (body={body!r})")
+                        except ValueError:
+                            raise
+                        except TypeError:
+                            pass
+                        outputs[node.id]["sent"] = True
+                        target_set.add(node.id)
+                        logger.info(
+                            "Graph %s: seven.io SMS sent to %s (msg=%r)",
+                            graph_id[:8],
+                            to,
+                            msg[:40],
+                        )
+                        return True
+                except Exception as exc:
+                    logger.warning(
+                        "Graph %s: seven.io SMS failed (msg=%r): %s",
+                        graph_id[:8],
+                        msg[:40],
+                        exc,
+                    )
+                    return False
+
+            return False
+
         async def _run_replay_triggered_side_effects(candidate_ids: set[str]) -> None:
             def _triggered_side_effect_ids() -> set[str]:
-                return triggered_message_archive_nodes | triggered_api_clients | triggered_wol_nodes | triggered_host_check_nodes
+                return (
+                    triggered_message_archive_nodes
+                    | triggered_notify_nodes
+                    | triggered_api_clients
+                    | triggered_wol_nodes
+                    | triggered_host_check_nodes
+                )
 
             pending_candidates = set(candidate_ids)
             while pending_candidates:
@@ -2516,6 +2687,9 @@ class LogicManager:
                     elif node.type == "message_archive" and node.id not in triggered_message_archive_nodes:
                         if await _run_message_archive_node(node, newly_triggered):
                             triggered_message_archive_nodes.add(node.id)
+                    elif node.type in {"notify_pushover", "notify_sms"} and node.id not in triggered_notify_nodes:
+                        if await _run_notify_node(node, newly_triggered):
+                            triggered_notify_nodes.add(node.id)
                 if not newly_triggered:
                     break
                 _add_resolved_outputs(newly_triggered)
@@ -2532,11 +2706,13 @@ class LogicManager:
             _add_resolved_outputs(triggered_message_archive_nodes)
             message_archive_descendants = _replay_async_descendants(
                 triggered_message_archive_nodes,
-                skip_node_ids=triggered_message_archive_nodes | triggered_api_clients | triggered_wol_nodes | triggered_host_check_nodes,
+                skip_node_ids=triggered_message_archive_nodes
+                | triggered_notify_nodes
+                | triggered_api_clients
+                | triggered_wol_nodes
+                | triggered_host_check_nodes,
             )
             await _run_replay_triggered_side_effects(message_archive_descendants)
-
-        triggered_notify_nodes: set[str] = set()
 
         # ── Handle notify_pushover ────────────────────────────────────────
         # Runs AFTER api_client second-pass so that graphs with api_client →
@@ -2544,177 +2720,23 @@ class LogicManager:
         for node in flow.nodes:
             if node.type != "notify_pushover":
                 continue
-            out = outputs.get(node.id, {})
-            if not GraphExecutor._to_bool(out.get("_trigger")):
-                continue
-            app_token = (node.data.get("app_token") or "").strip()
-            user_key = (node.data.get("user_key") or "").strip()
-            if not app_token or not user_key:
-                logger.warning("Pushover: app_token or user_key missing on node %s", node.id[:8])
-                continue
-            _raw_msg = out.get("_message")
-            msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
-            title = node.data.get("title", "open bridge server")
-            prio = int(node.data.get("priority", 0))
-            # Input port value takes precedence over static config
-            _out_url = out.get("_url")
-            _out_utit = out.get("_url_title")
-            _out_img = out.get("_image_url")
-            url = (_msg_to_str(_out_url) if _out_url is not None else (node.data.get("url") or "")).strip()
-            url_title = (_msg_to_str(_out_utit) if _out_utit is not None else (node.data.get("url_title") or "")).strip()
-            image_url = (_msg_to_str(_out_img) if _out_img is not None else (node.data.get("image_url") or "")).strip()
-            try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    payload: dict[str, object] = {
-                        "token": app_token,
-                        "user": user_key,
-                        "title": str(title),
-                        "message": msg,
-                        "priority": prio,
-                    }
-                    if url:
-                        payload["url"] = url
-                    if url_title:
-                        payload["url_title"] = url_title
-
-                    if image_url:
-                        resolved = await _resolve_safe_image_url(image_url)
-                        if resolved is None:
-                            raise ValueError("Unsafe image_url: only validated HTTPS targets are allowed")
-                        pinned_url, host_header, pinned_ip = resolved
-                        # Stream attachment bytes and enforce max size while downloading.
-                        async with client.stream(
-                            "GET",
-                            pinned_url,
-                            timeout=10.0,
-                            follow_redirects=False,
-                            headers={"Host": host_header},
-                            extensions={"sni_hostname": host_header.split(":", 1)[0]},
-                        ) as img_r:
-                            net_stream = img_r.extensions.get("network_stream")
-                            if net_stream is not None:
-                                server_addr = net_stream.get_extra_info("server_addr")
-                                if server_addr and server_addr[0] != pinned_ip:
-                                    raise ValueError("Pushover image_url resolved to an unexpected target IP")
-                            img_r.raise_for_status()
-                            content_type = img_r.headers.get("content-type", "").split(";")[0].strip().lower()
-                            if not content_type.startswith("image/"):
-                                raise ValueError("Pushover image_url must return an image/* content type")
-
-                            content_len_raw = img_r.headers.get("content-length", "0") or "0"
-                            try:
-                                content_len = int(content_len_raw)
-                            except ValueError:
-                                content_len = 0
-                            if content_len > _PUSHOVER_ATTACHMENT_MAX_BYTES:
-                                raise ValueError("Pushover attachment too large (max 5 MB)")
-
-                            img_content = bytearray()
-                            async for chunk in img_r.aiter_bytes():
-                                img_content.extend(chunk)
-                                if len(img_content) > _PUSHOVER_ATTACHMENT_MAX_BYTES:
-                                    raise ValueError("Pushover attachment too large (max 5 MB)")
-
-                        fname = image_url.split("?")[0].split("/")[-1] or "image.jpg"
-                        r = await client.post(
-                            "https://api.pushover.net/1/messages.json",
-                            data=payload,
-                            files={"attachment": (fname, bytes(img_content), content_type or "image/jpeg")},
-                        )
-                    else:
-                        r = await client.post(
-                            "https://api.pushover.net/1/messages.json",
-                            data=payload,
-                        )
-                    r.raise_for_status()
-                    outputs[node.id]["sent"] = True
-                    triggered_notify_nodes.add(node.id)
-                    logger.info("Graph %s: Pushover sent (msg=%r)", graph_id[:8], msg[:40])
-            except Exception as exc:
-                logger.warning(
-                    "Graph %s: Pushover failed (msg=%r): %s",
-                    graph_id[:8],
-                    msg[:40],
-                    exc,
-                )
+            await _run_notify_node(node, triggered_notify_nodes)
 
         # ── Handle notify_sms ─────────────────────────────────────────────
         for node in flow.nodes:
             if node.type != "notify_sms":
                 continue
-            out = outputs.get(node.id, {})
-            if not GraphExecutor._to_bool(out.get("_trigger")):
-                continue
-            api_key = (node.data.get("api_key") or "").strip()
-            to = (node.data.get("to") or "").strip()
-            if not api_key or not to:
-                logger.warning("seven.io SMS: api_key or to missing on node %s", node.id[:8])
-                continue
-            _raw_msg = out.get("_message")
-            msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
-            sender = node.data.get("sender", "obs")
-            try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    r = await client.post(
-                        "https://gateway.seven.io/api/sms",
-                        headers={"X-Api-Key": api_key},
-                        data={"to": to, "from": str(sender), "text": msg},
-                    )
-                    r.raise_for_status()
-                    # seven.io returns the number of sent messages as body (e.g. "1").
-                    # A value of "0" means failure (no credits, invalid number, etc.)
-                    # even though the HTTP status is 200.
-                    body = r.text.strip()
-                    logger.info(
-                        "Graph %s: seven.io response status=%d body=%r",
-                        graph_id[:8],
-                        r.status_code,
-                        body[:80],
-                    )
-                    # seven.io returns the number of sent messages on success (e.g. "1"),
-                    # or a numeric error code on failure. Known error codes:
-                    _SEVEN_ERRORS = {
-                        100: "Unbekannter Fehler / Empfänger nicht angegeben",
-                        200: "Absender nicht angegeben",
-                        201: "Absender zu lang (max 11 Zeichen)",
-                        300: "Nachricht nicht angegeben",
-                        301: "Nachricht zu lang",
-                        401: "API-Key ungültig oder nicht autorisiert",
-                        402: "Nicht genug Guthaben",
-                        403: "Absender nicht erlaubt",
-                        500: "Server-Fehler bei seven.io",
-                    }
-                    try:
-                        body_int = int(body)
-                        if body_int in _SEVEN_ERRORS:
-                            raise ValueError(f"seven.io Fehlercode {body_int}: {_SEVEN_ERRORS[body_int]}")
-                        if body_int <= 0:
-                            raise ValueError(f"seven.io: 0 Nachrichten gesendet (body={body!r})")
-                    except ValueError:
-                        raise  # re-raise error code or zero-count errors
-                    except TypeError:
-                        pass  # non-numeric body → assume success (future API changes)
-                    outputs[node.id]["sent"] = True
-                    triggered_notify_nodes.add(node.id)
-                    logger.info(
-                        "Graph %s: seven.io SMS sent to %s (msg=%r)",
-                        graph_id[:8],
-                        to,
-                        msg[:40],
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Graph %s: seven.io SMS failed (msg=%r): %s",
-                    graph_id[:8],
-                    msg[:40],
-                    exc,
-                )
+            await _run_notify_node(node, triggered_notify_nodes)
 
         if triggered_notify_nodes:
             _add_resolved_outputs(triggered_notify_nodes)
             notify_descendants = _replay_async_descendants(
                 triggered_notify_nodes,
-                skip_node_ids=triggered_message_archive_nodes | triggered_api_clients | triggered_wol_nodes | triggered_host_check_nodes,
+                skip_node_ids=triggered_message_archive_nodes
+                | triggered_notify_nodes
+                | triggered_api_clients
+                | triggered_wol_nodes
+                | triggered_host_check_nodes,
             )
             await _run_replay_triggered_side_effects(notify_descendants)
 
