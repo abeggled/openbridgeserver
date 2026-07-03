@@ -611,6 +611,7 @@ async def import_message_archive_db(
 
     tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
     backup_path = f"{store.path}.pre-import.bak"
+    preserve_backup = False
     try:
         content = await file.read()
         tmp.write(content)
@@ -636,7 +637,20 @@ async def import_message_archive_db(
             except Exception:
                 pass
             if target_exists and os.path.exists(backup_path):
-                shutil.copy2(backup_path, target_path)
+                try:
+                    shutil.copy2(backup_path, target_path)
+                except Exception:
+                    preserve_backup = True
+                    logger.exception("Message archive database rollback failed; pre-import backup preserved at %s", backup_path)
+                    try:
+                        await store.connect()
+                        activate_message_archive_service(store)
+                    except Exception:
+                        logger.exception("Message archive database reconnect failed after rollback failure")
+                    raise HTTPException(
+                        status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        "Meldungsarchiv-Wiederherstellung fehlgeschlagen; die Sicherung der vorherigen Datenbank wurde erhalten.",
+                    ) from None
             _unlink_sqlite_sidecars(target_path)
             await store.connect()
             activate_message_archive_service(store)
@@ -649,7 +663,8 @@ async def import_message_archive_db(
             "size_bytes": os.path.getsize(target_path),
         }
     finally:
-        for path in (tmp.name, backup_path):
+        cleanup_paths = (tmp.name,) if preserve_backup else (tmp.name, backup_path)
+        for path in cleanup_paths:
             try:
                 os.unlink(path)
             except Exception:

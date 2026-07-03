@@ -237,6 +237,21 @@ async def test_delete_autobackup_success(client, auth_headers):
     assert backup_name not in names
 
 
+async def test_delete_autobackup_reports_unlink_failure(client, auth_headers, monkeypatch):
+    from obs.api.v1 import autobackup as autobackup_api
+
+    run_resp = await client.post("/api/v1/config/autobackup/run", headers=auth_headers)
+    backup_name = run_resp.json()["name"]
+    monkeypatch.setattr(autobackup_api, "_delete_backup_files", lambda _stem: 0)
+
+    del_resp = await client.delete(f"/api/v1/config/autobackup/{backup_name}", headers=auth_headers)
+
+    assert del_resp.status_code == 500
+    list_resp = await client.get("/api/v1/config/autobackup/list", headers=auth_headers)
+    names = [e["name"] for e in list_resp.json()]
+    assert backup_name in names
+
+
 # ---------------------------------------------------------------------------
 # POST /config/autobackup/restore/{name}
 # ---------------------------------------------------------------------------

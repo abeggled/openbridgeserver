@@ -257,6 +257,8 @@ async def delete_autobackup(
     if not backup_path.exists():
         raise HTTPException(status_code=404, detail=f"Sicherung '{safe_name}' nicht gefunden.")
     _delete_backup_files(matched.name)
+    if backup_path.exists():
+        raise HTTPException(status_code=500, detail=f"Sicherung '{safe_name}' konnte nicht gelöscht werden.")
     return {"ok": True, "name": safe_name}
 
 

@@ -2688,7 +2688,7 @@ class LogicManager:
                         if await _run_message_archive_node(node, newly_triggered):
                             triggered_message_archive_nodes.add(node.id)
                     elif node.type in {"notify_pushover", "notify_sms"} and node.id not in triggered_notify_nodes:
-                        if await _run_notify_node(node, newly_triggered):
+                        if await _run_notify_node(node, newly_triggered) or GraphExecutor._to_bool(outputs.get(node.id, {}).get("_trigger")):
                             triggered_notify_nodes.add(node.id)
                 if not newly_triggered:
                     break

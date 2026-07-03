@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from pathlib import Path
 
 import pytest
 from obs.api.auth import create_access_token
@@ -1745,6 +1746,48 @@ async def test_message_archive_database_import_rolls_back_when_imported_db_fails
 
         restored = await client.get(f"/api/v1/message-archives/{archive_id}", headers=auth_headers)
         assert restored.status_code == 200, restored.text
+    finally:
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
+async def test_message_archive_database_import_preserves_backup_when_rollback_copy_fails(client, auth_headers, monkeypatch):
+    from obs.api.v1 import message_archives as message_archives_api
+
+    archive_id = _archive_id("import-rollback-copy")
+    preserved_backups: list[str] = []
+    try:
+        create = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": "Rollback Copy"})
+        assert create.status_code == 201, create.text
+        exported = await client.get("/api/v1/message-archives/export/db", headers=auth_headers)
+        assert exported.status_code == 200, exported.text
+
+        async def failing_integrity_check(self):
+            return {"ok": False, "result": "not ok", "path": self.path, "status": "error"}
+
+        original_copy2 = message_archives_api.shutil.copy2
+
+        def fail_restore_copy(src, dst, *args, **kwargs):
+            if str(src).endswith(".pre-import.bak"):
+                preserved_backups.append(str(src))
+                raise OSError("restore failed")
+            return original_copy2(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(message_archives_api.MessageArchiveStore, "integrity_check", failing_integrity_check)
+        monkeypatch.setattr(message_archives_api.shutil, "copy2", fail_restore_copy)
+
+        imported = await client.post(
+            "/api/v1/message-archives/import/db",
+            headers=auth_headers,
+            files={"file": ("message-archives.sqlite", exported.content, "application/octet-stream")},
+        )
+
+        assert imported.status_code == 500
+        assert preserved_backups
+        assert all(Path(path).exists() for path in preserved_backups)
     finally:
         await client.delete(
             f"/api/v1/message-archives/{archive_id}",
