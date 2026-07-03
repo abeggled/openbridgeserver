@@ -557,10 +557,7 @@ async def get_widget_ref(
 
     pc = node.page_config or PageConfig()
     source_page_readonly = access == "readonly"
-    return [
-        WidgetRefInstance(**widget.model_dump(), source_page_readonly=source_page_readonly)
-        for widget in pc.widgets
-    ]
+    return [WidgetRefInstance(**widget.model_dump(), source_page_readonly=source_page_readonly) for widget in pc.widgets]
 
 
 @router.put("/pages/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
