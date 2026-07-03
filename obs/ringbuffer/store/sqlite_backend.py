@@ -572,6 +572,8 @@ class SqliteSegmentStore(RingBufferStore):
             active = await self.manifest.get_active_segment()
             if active is None:
                 active = await self._create_segment_locked()
+            else:
+                active = await self._recover_missing_active_segment(active)
             self._active_segment = active
             self._active_conn = await self._open_segment_conn(active.filename)
         except Exception:
@@ -604,6 +606,27 @@ class SqliteSegmentStore(RingBufferStore):
     async def _create_segment_locked(self) -> SegmentRecord:
         filename = f"rb_{_utc_now_compact()}.sqlite"
         return await self.manifest.create_segment(filename=filename, schema_version=SEGMENT_SCHEMA_VERSION)
+
+    async def _recover_missing_active_segment(self, active: SegmentRecord) -> SegmentRecord:
+        """Behandelt ein aktives Segment, dessen Datei beim (Wieder-)Öffnen fehlt (#951, Codex :576).
+
+        Wird ein bestehendes Manifest wieder geöffnet, nachdem die Datei des AKTIVEN
+        Segments entfernt wurde, würde der anschließende ``_open_segment_conn()`` mit
+        einem normalen SCHREIBBAREN Open still eine frische LEERE DB am alten Dateinamen
+        anlegen. Das Manifest beschriebe weiter die alten Zeilen (bis ein späterer
+        Stats-Refresh), Queries verlören die Daten still.
+
+        Fehlt die Datei, wird das alte (fehlende) aktive Segment daher als verloren
+        markiert (quarantäniert, konsistent zum Missing-File-Skip des Read-Pfads) und
+        ein FRISCHES aktives Segment mit neuer Manifest-Zeile eröffnet – so behauptet
+        das Manifest keine „lebenden" Zeilen mehr, die es nicht mehr gibt, und es
+        entsteht keine leere Ersatz-DB unter altem Namen. Ist die Datei vorhanden,
+        bleibt das aktive Segment unverändert.
+        """
+        if (self._segments_dir / active.filename).exists():
+            return active
+        await self.manifest.mark_quarantined(active.segment_id, reason="active segment file missing on open")
+        return await self._create_segment_locked()
 
     async def _open_segment_conn(self, filename: str) -> aiosqlite.Connection:
         conn = await aiosqlite.connect(str(self._segments_dir / filename))

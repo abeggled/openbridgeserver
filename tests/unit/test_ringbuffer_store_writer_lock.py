@@ -250,6 +250,51 @@ async def test_stale_takeover_two_concurrent_takers_only_one_owns(tmp_path: Path
             await le.release()
 
 
+async def test_release_does_not_unlink_lockfile(tmp_path: Path):
+    """#951 [P2]: Release entfernt die ``writer.lock``-Datei NICHT.
+
+    Der frühere Release-Pfad ``unlink()``te das Lockfile, WÄHREND der flock noch auf
+    dem alten Inode gehalten wurde. Startet in diesem Fenster eine andere OBS-Instanz,
+    kann sie ein NEUES ``writer.lock`` am selben Pfad anlegen und einen SEPARATEN flock
+    erwerben → die root-weite Single-Writer-Garantie wäre gebrochen. Der flock ist die
+    autoritative Sperre, nicht die Datei-Existenz; die (harmlose) Datei bleibt liegen
+    und wird beim nächsten Start per Takeover übernommen.
+    """
+    lock_path = tmp_path / "writer.lock"
+    lease = WriterLease(tmp_path)
+    await lease.acquire()
+    assert lock_path.exists()
+    await lease.release()
+    # Datei bleibt liegen; nur der gehaltene flock wurde freigegeben/geschlossen.
+    assert lock_path.exists()
+    assert not lease.owns_lock
+
+
+async def test_release_frees_flock_so_next_writer_can_reacquire(tmp_path: Path):
+    """#951 [P2]: Nach dem Release ist der flock frei – ein neuer Writer erwirbt ihn per Takeover.
+
+    Obwohl die verwaiste Lockfile-Datei liegen bleibt, darf ein folgender Writer die
+    Root erwerben (Takeover über den freigewordenen flock, nicht über Datei-Löschung).
+    """
+    lock_path = tmp_path / "writer.lock"
+    first = WriterLease(tmp_path)
+    await first.acquire()
+    await first.release()
+    assert lock_path.exists()  # Datei liegt weiter da
+
+    second = WriterLease(tmp_path)
+    await second.acquire()
+    try:
+        assert second.owns_lock
+        # Solange der zweite den flock hält, wird ein dritter fail-fast abgewiesen.
+        third = WriterLease(tmp_path)
+        with pytest.raises(WriterLockHeldError):
+            await third.acquire()
+        assert third.owns_lock is False
+    finally:
+        await second.release()
+
+
 async def test_live_holder_that_took_over_stale_lock_rejects_next_writer(tmp_path: Path):
     """Nach einer Übernahme hält der Gewinner das Lock live – ein Folgeschreiber wird abgewiesen."""
     lock_path = tmp_path / "writer.lock"

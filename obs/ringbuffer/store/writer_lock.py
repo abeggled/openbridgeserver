@@ -125,7 +125,14 @@ class WriterLease:
             return
         fd = self._fd
         try:
-            self._lock_path.unlink(missing_ok=True)
+            # Das Lockfile beim Release NICHT mehr unlinken (#951 [P2]): der gehaltene
+            # ``flock`` ist die autoritative Sperre, nicht die Datei-Existenz. Ein
+            # ``unlink()`` löschte die Datei, WÄHREND ein anderer Prozess sie zwischen
+            # unserem unlink und close bereits neu ``O_CREAT``-öffnen und einen SEPARATEN
+            # flock auf dem neuen Inode erwerben könnte → zwei Writer auf derselben Root.
+            # Wir geben nur den gehaltenen fd frei (``LOCK_UN``/``close``); die verwaiste,
+            # inhaltlich harmlose Datei bleibt liegen und wird beim nächsten Start per
+            # Takeover (flock-Erwerb) übernommen.
             if fd is not None:
                 try:
                     fcntl.flock(fd, fcntl.LOCK_UN)

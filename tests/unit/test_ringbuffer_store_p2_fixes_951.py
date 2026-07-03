@@ -1154,6 +1154,90 @@ async def test_run_pending_checkpoints_skips_missing_file_without_recreate(store
 
 
 # ---------------------------------------------------------------------------
+# (Codex :576) Fehlendes AKTIVES Segment beim (Wieder-)Öffnen nicht als leere DB neu anlegen
+# ---------------------------------------------------------------------------
+
+
+async def test_reopen_with_missing_active_segment_does_not_recreate_empty_db(tmp_path: Path):
+    # Ein Manifest mit einem AKTIVEN Segment wird wieder geöffnet, NACHDEM die Datei
+    # des aktiven Segments entfernt wurde. Der alte Pfad ging durch _open_segment_conn()
+    # mit einem normalen SCHREIBBAREN Open → es legte still eine frische LEERE DB am
+    # alten Dateinamen an, während das Manifest weiter die alten Zeilen behauptete
+    # (Datenverlust bei Queries). Der Fix erkennt die fehlende Datei beim Öffnen, markiert
+    # das alte aktive Segment als verloren (quarantäniert) und eröffnet ein FRISCHES
+    # aktives Segment mit neuer Manifest-Zeile.
+    from obs.ringbuffer.store.manifest import SEGMENT_STATUS_ACTIVE, SEGMENT_STATUS_QUARANTINED
+
+    root = tmp_path / "root"
+    store = SqliteSegmentStore(root)
+    await store.open()
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z"), _event(2, "2026-01-01T00:00:01.000Z")])
+    old_active = await store.manifest.get_active_segment()
+    old_id = old_active.segment_id
+    old_filename = old_active.filename
+    await store.close()
+
+    # Datei des aktiven Segments (inkl. Sidecars) entfernen, als wäre sie verschwunden.
+    seg_path = store._segments_dir / old_filename
+    for p in (seg_path, Path(f"{seg_path}-wal"), Path(f"{seg_path}-shm")):
+        if p.exists():
+            p.unlink()
+
+    # Wieder öffnen: darf KEINE leere Ersatz-DB unter dem alten Namen anlegen.
+    store2 = SqliteSegmentStore(root)
+    await store2.open()
+    try:
+        # (a) Keine leere Ersatz-DB unter dem alten aktiven Dateinamen.
+        assert not (store2._segments_dir / old_filename).exists()
+
+        # (b) Das alte (fehlende) aktive Segment ist nicht mehr aktiv, sondern als
+        #     verloren markiert (quarantäniert) – das Manifest behauptet keine lebenden
+        #     Zeilen mehr, die es nicht mehr gibt.
+        old_after = await store2.manifest.get_segment(old_id)
+        assert old_after is not None
+        assert old_after.status == SEGMENT_STATUS_QUARANTINED
+
+        # (c) Ein FRISCHES aktives Segment existiert, ist ein anderes und hat eine
+        #     eigene, real existierende Datei.
+        new_active = await store2.manifest.get_active_segment()
+        assert new_active is not None
+        assert new_active.status == SEGMENT_STATUS_ACTIVE
+        assert new_active.segment_id != old_id
+        assert new_active.filename != old_filename
+        assert (store2._segments_dir / new_active.filename).exists()
+
+        # (d) Der Store ist funktionsfähig: Append/Query gehen auf das frische Segment.
+        await store2.append([_event(3, "2026-01-02T00:00:00.000Z")])
+        rows = await store2.query(StoreQuery(limit=50))
+        assert 3 in {r["new_value"] for r in rows}
+    finally:
+        await store2.close()
+
+
+async def test_reopen_with_present_active_segment_is_unchanged(tmp_path: Path):
+    # Regression-Guard: Ist die Datei des aktiven Segments beim Wiederöffnen VORHANDEN,
+    # bleibt es unverändert das aktive Segment (kein neues Segment, keine Quarantäne)
+    # und die alten Zeilen sind weiter lesbar.
+    root = tmp_path / "root"
+    store = SqliteSegmentStore(root)
+    await store.open()
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    old_active = await store.manifest.get_active_segment()
+    await store.close()
+
+    store2 = SqliteSegmentStore(root)
+    await store2.open()
+    try:
+        active = await store2.manifest.get_active_segment()
+        assert active.segment_id == old_active.segment_id
+        assert active.filename == old_active.filename
+        rows = await store2.query(StoreQuery(limit=50))
+        assert 1 in {r["new_value"] for r in rows}
+    finally:
+        await store2.close()
+
+
+# ---------------------------------------------------------------------------
 # (Codex :1837) Transiente Checkpoint-Fehler NICHT quarantänieren
 # ---------------------------------------------------------------------------
 
