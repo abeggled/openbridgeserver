@@ -207,7 +207,13 @@ def _quote_api_client_url_value(value: str) -> str:
 
 
 def _replace_api_client_url_placeholders(value: str, resolver: Any) -> str:
+    value = value.lstrip()
     authority_bounds: tuple[int, int] | None = None
+    scheme_separator = value.find("://")
+    if scheme_separator != -1 and _API_CLIENT_VARIABLE_RE.search(value[:scheme_separator]):
+        raise _ApiClientVariableError(
+            "API client URL variables are not allowed in the scheme, host, userinfo, or port",
+        )
     scheme_match = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value)
     if scheme_match is not None:
         separator_scan_value = _API_CLIENT_VARIABLE_RE.sub(lambda match: "X" * (match.end() - match.start()), value)

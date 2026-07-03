@@ -1252,6 +1252,20 @@ class TestApiClientVariables:
         with pytest.raises(Exception, match="API client URL variables are not allowed"):
             _replace_api_client_url_placeholders("http://example.com:###OBS1###/status", resolver)
 
+    def test_url_variable_in_authority_with_leading_whitespace_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "attacker.example"
+
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders(" http://###OBS1###/status", resolver)
+
+    def test_url_variable_in_scheme_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "https"
+
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("###OBS1###://api.example/status", resolver)
+
     @patch("obs.logic.manager.httpx.AsyncClient")
     def test_missing_variable_configuration_sets_error_output(self, mock_client_cls):
         mock_client = AsyncMock()
