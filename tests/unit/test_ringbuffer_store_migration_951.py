@@ -1330,6 +1330,60 @@ async def test_in_progress_batch_does_not_double_deliver_copied_rows(tmp_path: P
         await store.close()
 
 
+async def test_in_progress_segregated_batch_hides_copied_rows(tmp_path: Path):
+    # Codex #951 :597: Laeuft die gechunkte Migration, waehrend die Legacy-Quelle
+    # noch attached ist UND der Store bereits ECHTE positive v2-Zeilen haelt
+    # (``segregate`` true), markierte ``_append_with_legacy_gids`` die frisch
+    # kopierten Negativ-Segmente VORZEITIG als ``migrated`` – noch BEVOR der
+    # In-Progress-Hiding-Block ``mark_migrating()`` aufruft. ``mark_migrating()``
+    # stuft aber nur ``closed``/``checkpoint_pending`` um, nicht ``migrated``: das
+    # bereits ``migrated``-markierte Segment blieb daher SICHTBAR und lieferte die
+    # kopierten Zeilen DOPPELT (einmal aus v2, einmal aus dem noch attached Legacy).
+    # Fix: solange die Quelle attached ist, bekommen in-progress kopierte Segmente
+    # den ``migrating``-Zustand (versteckt); die Promotion zu ``migrated`` passiert
+    # erst nach dem Detach (``_finalize_migrated_segments``).
+    store = SqliteSegmentStore(tmp_path / "root", segments=SegmentConfig(segment_max_rows=2))
+    await store.open()
+    try:
+        # ECHTE positive v2-Zeile ZUERST → has_positive true → segregate true.
+        await store.append([_event("v2-live", "2026-06-01T00:00:00.000Z")])
+
+        db = tmp_path / "obs_ringbuffer.db"
+        _build_legacy(db, [(f"2020-01-{i:02d}T00:00:00.000Z", f"L{i}") for i in range(1, 9)])
+        migrator = LegacyMigrator(store, db)
+        await migrator.attach_readonly(migrator.classify())
+
+        # Nicht-finaler Batch: L1..L4 nach v2 kopiert, Quelle bleibt attached (L1..L8).
+        assert await migrator.migrate_chunk(batch_rows=4) == 4
+        assert len(await store.manifest.list_legacy_segments()) == 1  # noch attached
+
+        # Waehrend die Quelle attached ist, muessen die kopierten Segmente versteckt
+        # (``migrating``) sein, KEINES vorzeitig ``migrated``.
+        migrating = await store.manifest.list_migrating_segments()
+        assert len(migrating) >= 1
+
+        # Query im Migrationsfenster: die attached Quelle liefert L1..L8 GENAU einmal,
+        # die live-Positive obendrauf. Ohne Fix erschienen L1..L4 doppelt.
+        rows = await store.query(StoreQuery(limit=100, sort_field="id", sort_order="desc"))
+        values = [r["new_value"] for r in rows]
+        assert values[0] == "v2-live"
+        assert sorted(values) == sorted(["v2-live", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8"])
+        assert len(values) == len(set(values)) == 9
+
+        # Migration abschliessen: nach Detach werden die zuvor versteckten Segmente zu
+        # ``migrated`` promotet und liefern jede Zeile weiterhin genau einmal.
+        assert await migrator.migrate_chunk(batch_rows=100) == 4
+        assert await store.manifest.list_legacy_segments() == []
+        assert await store.manifest.list_migrating_segments() == []
+        rows2 = await store.query(StoreQuery(limit=100, sort_field="id", sort_order="desc"))
+        values2 = [r["new_value"] for r in rows2]
+        assert values2[0] == "v2-live"
+        assert sorted(values2) == sorted(["v2-live", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8"])
+        assert len(values2) == len(set(values2)) == 9
+    finally:
+        await store.close()
+
+
 async def test_in_progress_migration_no_data_loss_on_ts_query(tmp_path: Path):
     # Auch eine ts-sortierte Query (die den id-desc-Frueh-Abbruch nicht nutzt) darf
     # im Migrationsfenster weder Zeilen doppeln noch verlieren: genau die 8 Quell-

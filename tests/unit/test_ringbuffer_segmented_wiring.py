@@ -382,6 +382,52 @@ async def test_segmented_rotation_after_segment_max_age(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_segmented_stale_segment_rotates_before_append(tmp_path: Path):
+    """#951 Pkt 1: ein bereits ueberaltertes aktives Segment rotiert VOR dem Append.
+
+    Idle-Phase: das aktive Segment liegt beim naechsten Event schon ueber
+    ``segment_max_age``. Bisher landete das Event NOCH im stale Segment und die
+    Rotation lief erst danach – dadurch wurde die ``to_ts`` des stale Segments auf
+    die neue Event-Zeit gezogen und das Segment spannte weit ueber die Age-Grenze
+    hinaus (kuenstlich „jung" gehalten). Korrekt: erst rotieren, dann das Event ins
+    frische Segment schreiben. Das stale Segment bleibt leer (0 rows) und das neue
+    Event liegt allein im frischen aktiven Segment.
+    """
+    rb = _rb(tmp_path, segmented=True, segment_max_age=3600)
+    await rb.start()
+    try:
+        # Ein erster Write, damit das (dann stale) Segment eine echte, alte to_ts hat.
+        await _record(rb, 1, "2020-01-01T00:00:00.000Z")
+        stale = await rb.store.manifest.get_active_segment()
+        assert stale is not None
+        stale_id = stale.segment_id
+        assert stale.row_count == 1
+
+        # Aktives Segment kuenstlich altern lassen (Idle-Phase).
+        rb._segment_created_at = "2000-01-01T00:00:00.000Z"
+
+        # Naechstes Event nach langer Idle-Phase.
+        await _record(rb, 2, "2026-06-01T00:00:00.000Z")
+
+        segments = {s.segment_id: s for s in await rb.store.manifest.list_segments()}
+        # Das stale Segment wurde VOR dem Append geschlossen und hat KEINE neue Zeile
+        # bekommen: es enthaelt weiterhin nur den alten Wert und seine to_ts bleibt alt.
+        assert segments[stale_id].row_count == 1
+        assert segments[stale_id].to_ts == "2020-01-01T00:00:00.000Z"
+
+        # Das neue Event liegt allein im frischen aktiven Segment.
+        active = await rb.store.manifest.get_active_segment()
+        assert active is not None
+        assert active.segment_id != stale_id
+        assert active.row_count == 1
+
+        # Read-back bleibt korrekt geordnet (newest-first).
+        assert [e.new_value for e in await rb.query_v2(limit=10)] == [2, 1]
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
 async def test_segmented_query_rejects_invalid_pagination_and_time(tmp_path: Path):
     rb = _rb(tmp_path, segmented=True)
     await rb.start()

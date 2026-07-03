@@ -585,22 +585,37 @@ class LegacyMigrator:
                 await store.rotate()
                 rows_in_active = 0
         await store._refresh_active_segment_stats()
+        # Ist die aktuell migrierte Quelle noch attached, DÜRFEN die in DIESEM Batch
+        # kopierten Segmente NICHT vorzeitig ``migrated`` werden (Codex #951 :597).
+        # ``migrated`` ist ein SICHTBARER (Trailing-)Rang; solange die Quelle attached
+        # ist und dieselben Alt-Zeilen zusätzlich read-only liefert, käme jede kopierte
+        # Zeile DOPPELT. Der In-Progress-Block unten versteckt die Segmente stattdessen
+        # als ``migrating``; ``mark_migrating`` stuft aber nur ``closed``/``checkpoint_
+        # pending`` um – ein vorher gesetztes ``migrated`` bliebe sichtbar. Daher hier
+        # bei noch attached Quelle KEIN ``mark_migrated`` auf die Batch-Segmente. Die
+        # Promotion zu ``migrated`` erfolgt erst nach dem Detach über
+        # ``_finalize_migrated_segments`` → ``promote_migrating_segments``.
+        source_attached = await self._source_is_attached()
         if segregate:
             # Das zuletzt befüllte (noch aktive) rein-negative Segment schließen, damit
-            # es als ``migrated`` markierbar wird und künftige POSITIVE Writes (bzw.
-            # eine weitere Quelle) ein frisches, separates aktives Segment (höhere
-            # segment_id) bekommen – so mischt nie wieder ein Segment positive und
-            # negative gids und nie zwei Quellen (#951, Pkt 2).
+            # es (nach Detach) als ``migrated`` markierbar wird und künftige POSITIVE
+            # Writes (bzw. eine weitere Quelle) ein frisches, separates aktives Segment
+            # (höhere segment_id) bekommen – so mischt nie wieder ein Segment positive
+            # und negative gids und nie zwei Quellen (#951, Pkt 2).
             if store._active_segment is not None and store._active_segment.segment_id in migrated_ids:
                 await store.rotate()
-            for segment_id in migrated_ids:
-                await store.manifest.mark_migrated(segment_id)
+            if not source_attached:
+                # Quelle bereits abgekoppelt (z. B. finaler Batch): direkt ``migrated``.
+                for segment_id in migrated_ids:
+                    await store.manifest.mark_migrated(segment_id)
             # Eine frühere Ein-Quell-Migration (ohne Positive/Fremdquelle) ließ ihr
             # Segment absichtlich unmarkiert als ``closed``/``active`` stehen. Kommt
             # jetzt eine zweite Quelle hinzu, muss dieses fremde rein-migrierte Segment
             # nachträglich als ``migrated`` markiert werden, damit ALLE migrierten
-            # Segmente gemeinsam im Trailing-Rang liegen (#951, Pkt 2, 3. Runde).
-            await self._mark_foreign_migrated_segments()
+            # Segmente gemeinsam im Trailing-Rang liegen (#951, Pkt 2, 3. Runde). Die im
+            # laufenden Batch kopierten Segmente sind dabei ausgenommen (bleiben
+            # ``migrating``, solange die Quelle attached ist).
+            await self._mark_foreign_migrated_segments(exclude_ids=migrated_ids if source_attached else None)
         # In-Progress-Schutz gegen Doppel-Delivery (#951, :375): solange die Quell-
         # Legacy-DB noch attached (voll abfragbar) ist, liefert sie ALLE Alt-Zeilen –
         # inklusive der in DIESEM/vorigen Batches bereits nach v2 kopierten. Deren v2-
@@ -610,7 +625,7 @@ class LegacyMigrator:
         # Segmente – nach Rotation des aktiven Segments, damit KEINE Negative im
         # (unausblendbaren) aktiven Segment verbleiben – als ``migrating`` markiert und
         # von ``list_segments_for_query`` ausgeblendet, bis die Quelle abgekoppelt ist.
-        if await self._source_is_attached():
+        if source_attached:
             # Aktives Segment mit Negativen schließen (rotate), damit ALLE kopierten
             # Zeilen in ausblendbaren (nicht-aktiven) Segmenten liegen. Das rotierte
             # Segment wird dann ebenfalls als ``migrating`` markiert.
@@ -630,7 +645,7 @@ class LegacyMigrator:
         # das global älteste Segment), nie die wachsenden v2-Segmente – Deferral
         # verliert also nichts. Retention läuft daher erst nach Abkopplung der Quelle
         # (Abschluss der Migration, siehe ``migrate_chunk`` → ``_run_retention_after_detach``).
-        if (max_rows is not None or max_bytes is not None) and not await self._source_is_attached():
+        if (max_rows is not None or max_bytes is not None) and not source_attached:
             await store.enforce_retention()
 
     async def _source_is_attached(self) -> bool:
@@ -700,7 +715,7 @@ class LegacyMigrator:
                     await conn.close()
         return False
 
-    async def _mark_foreign_migrated_segments(self) -> None:
+    async def _mark_foreign_migrated_segments(self, *, exclude_ids: set[int] | None = None) -> None:
         """Markiert bereits geschlossene, rein-migrierte Fremdquell-Segmente als ``migrated``.
 
         Eine frühere Ein-Quell-Migration ließ ihr Segment als ``closed``/``active``
@@ -709,8 +724,14 @@ class LegacyMigrator:
         migrierten Segmente gemeinsam hinter den echten v2-Segmenten iteriert werden.
         Nur geschlossene Segmente werden umgestuft (``mark_migrated``-Guard); ein
         aktives Segment bleibt unangetastet.
+
+        ``exclude_ids`` (#951 :597): die im LAUFENDEN Batch kopierten Segmente, solange
+        die Quelle noch attached ist. Sie sollen ``migrating`` (versteckt) bleiben und
+        NICHT vorzeitig in den sichtbaren ``migrated``-Rang gehoben werden – sonst käme
+        jede kopierte Zeile im Migrationsfenster doppelt (v2 + attached Legacy).
         """
         store = self._store
+        exclude = exclude_ids or set()
         active_id = store._active_segment.segment_id if store._active_segment else None
         for segment in await store.manifest.list_segments():
             if segment.schema_version <= LEGACY_SCHEMA_VERSION:
@@ -718,6 +739,8 @@ class LegacyMigrator:
             if segment.status == SEGMENT_STATUS_MIGRATED:
                 continue
             if segment.segment_id == active_id:
+                continue
+            if segment.segment_id in exclude:
                 continue
             path = store._segments_dir / segment.filename
             if not path.exists():

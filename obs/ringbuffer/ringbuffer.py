@@ -676,6 +676,17 @@ class RingBuffer:
         """
         from obs.ringbuffer.store.interface import StoreEvent
 
+        # Alters-Faelligkeit VOR dem Append pruefen (#951, Pkt 1): ist das aktive
+        # Segment nach einer Idle-Phase bereits ueber ``segment_max_age``, zuerst
+        # rotieren und DANN ins frische Segment schreiben. Andernfalls landete das
+        # naechste Event noch im stale Segment und zoege dessen ``to_ts`` auf die neue
+        # Event-Zeit – das Segment spannte weit ueber die konfigurierte Age-Grenze
+        # hinaus (kuenstlich „jung" gehalten). Groessen-/Row-Faelligkeit, die erst der
+        # Append reisst, bleibt korrekterweise NACH dem Append (siehe unten).
+        if await self._segment_age_rotation_due():
+            await self._store.rotate()
+            self._segment_created_at = _isoformat_utc(datetime.now(UTC))
+
         await self._store.append(
             [
                 StoreEvent(
@@ -722,11 +733,28 @@ class RingBuffer:
             return True
         if self._segment_max_bytes is not None and active.size_bytes >= self._segment_max_bytes:
             return True
-        if self._segment_max_age is not None and self._segment_created_at is not None:
-            age = (_parse_iso_ts(_isoformat_utc(datetime.now(UTC))) - _parse_iso_ts(self._segment_created_at)).total_seconds()
-            if age >= self._segment_max_age:
-                return True
-        return False
+        return self._segment_age_due()
+
+    async def _segment_age_rotation_due(self) -> bool:
+        """True, wenn das aktive Segment BEREITS über ``segment_max_age`` liegt (#951, Pkt 1).
+
+        Nur der Alters-Teil der Rotations-Fälligkeit und nur für ein nicht-leeres
+        aktives Segment: ein leeres Segment vor dem Append zu rotieren brächte lediglich
+        ein weiteres leeres Segment. Wird VOR dem Append geprüft, damit ein nach einer
+        Idle-Phase überaltertes Segment zuerst geschlossen wird und das Event ins frische
+        Segment geht (die ``to_ts`` des stale Segments bleibt so innerhalb der Age-Grenze).
+        """
+        if not self._segment_age_due():
+            return False
+        active = await self._store.manifest.get_active_segment()
+        return active is not None and active.row_count > 0
+
+    def _segment_age_due(self) -> bool:
+        """True, wenn seit ``_segment_created_at`` mindestens ``segment_max_age`` vergangen ist."""
+        if self._segment_max_age is None or self._segment_created_at is None:
+            return False
+        age = (_parse_iso_ts(_isoformat_utc(datetime.now(UTC))) - _parse_iso_ts(self._segment_created_at)).total_seconds()
+        return age >= self._segment_max_age
 
     async def _trim(self, reference_ts: str | None = None) -> None:
         """Apply retention rules and keep max_entries compatibility."""
