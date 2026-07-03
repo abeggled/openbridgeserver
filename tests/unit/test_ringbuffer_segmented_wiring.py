@@ -448,6 +448,30 @@ def test_derive_segment_max_bytes_satisfies_three_segment_rule(max_file_size_byt
     )
 
 
+@pytest.mark.parametrize("max_file_size_bytes", [1, 2])
+def test_derive_segment_max_bytes_sub_floor_budget_stays_rule_conform(max_file_size_bytes):
+    """Winzige Budgets < RETENTION_SEGMENT_RATIO Bytes (#951 P2).
+
+    ``max_file_size_bytes`` ist per API-Modell ``ge=1`` – Budgets von 1 oder 2
+    Byte sind also gültige (wenn auch degenerierte) Eingaben. Für sie ist die
+    3-Segment-Regel mit einem POSITIVEN Segment mathematisch unerfüllbar
+    (``3 * 1 = 3 > 2``). Die Auto-Ableitung muss trotzdem ein positives Segment
+    liefern, das ``validate_store_config`` NICHT scheitern lässt (kein Startup-
+    Crash): dazu wird das effektive Budget für die Regel auf die technische
+    Untergrenze ``RETENTION_SEGMENT_RATIO`` gehoben.
+    """
+    derived = derive_segment_max_bytes(max_file_size_bytes)
+    assert derived >= 1
+    # Regel gegen das auf die technische Untergrenze angehobene Budget: der
+    # abgeleitete Wert scheitert NIE an validate_store_config im Auto-Start.
+    effective_budget = max(max_file_size_bytes, RETENTION_SEGMENT_RATIO)
+    assert RETENTION_SEGMENT_RATIO * derived <= effective_budget
+    validate_store_config(
+        SegmentConfig(segment_max_bytes=derived),
+        StoreRetentionConfig(max_file_size_bytes=effective_budget),
+    )
+
+
 def test_derive_segment_max_bytes_ceiling_for_large_budget():
     # 4 GiB // 3 = ~1.33 GiB → auf 256 MiB gedeckelt, und 4 GiB >= 3*256 MiB.
     derived = derive_segment_max_bytes(4 * 1024 * 1024 * 1024)
@@ -459,6 +483,25 @@ def test_derive_segment_max_bytes_small_budget_has_no_floor():
     assert derive_segment_max_bytes(1024) == 341
     # Winzigstes gültiges Budget: 3 // 3 = 1.
     assert derive_segment_max_bytes(3) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_file_size_bytes", [1, 2])
+async def test_segmented_start_does_not_crash_for_sub_floor_budget(tmp_path: Path, max_file_size_bytes):
+    """Persistiertes Winzig-Budget (1/2 Byte) darf den Startup NICHT crashen (#951 P2).
+
+    Der API-Layer akzeptiert ``max_file_size_bytes >= 1`` bei Auto-Segment
+    (``segment_max_bytes=None``, ratio-Check übersprungen). Ein solcher Wert
+    landet persistiert und muss beim segmentierten Start über die Auto-Ableitung
+    OHNE ``validate_store_config``-Crash öffnen.
+    """
+    rb = _rb(tmp_path, segmented=True, max_file_size_bytes=max_file_size_bytes)
+    await rb.start()
+    try:
+        assert rb.store is not None
+        assert rb._segment_max_bytes >= 1
+    finally:
+        await rb.stop()
 
 
 @pytest.mark.asyncio

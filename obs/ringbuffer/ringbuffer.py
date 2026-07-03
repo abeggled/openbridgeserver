@@ -51,22 +51,49 @@ _SEGMENT_MAX_BYTES_DEFAULT = 256 * 1024 * 1024  # 256 MiB (fester Default, budge
 
 
 def derive_segment_max_bytes(max_file_size_bytes: int | None) -> int:
-    """Leitet ``segment_max_bytes`` aus ``max_file_size_bytes`` ab (#919).
+    """Leitet ``segment_max_bytes`` aus ``max_file_size_bytes`` ab (#919/#951).
 
     * Budget None (unbegrenztes Size-Budget) → **256 MiB** (fester Default, NICHT
       budgetabhängig).
     * Budget gesetzt → **min(256 MiB, max_file_size_bytes // 3)** (RETENTION_SEGMENT_RATIO).
       Das ``//3`` garantiert die 3-Segment-Regel
-      (``max_file_size_bytes >= 3 * segment_max_bytes``) für jedes positive Budget —
+      (``max_file_size_bytes >= 3 * segment_max_bytes``) für jedes Budget ab der
+      technischen Segment-Untergrenze von ``RETENTION_SEGMENT_RATIO`` (= 3) Byte –
       es gibt bewusst KEINE 4-MiB-Untergrenze im Auto-Pfad, damit auch winzige
-      Budgets im Auto-Start nie ein 422 auslösen. Die Config-Validierung kann im
-      Auto-Startpfad also NIE fehlschlagen.
+      Budgets im Auto-Start nie ein 422 auslösen.
+
+    Technische Untergrenze (#951, P2): ein positives Segment muss mindestens 1 Byte
+    groß sein, die 3-Segment-Regel verlangt also ``max_file_size_bytes >= 3``. Für
+    degenerierte Budgets von 1 oder 2 Byte (per API-Modell ``ge=1`` zwar gültig, aber
+    zu klein für ein einziges SQLite-Segment) ist die Regel mit einem positiven
+    Segment mathematisch unerfüllbar; die Ableitung liefert das kleinstmögliche
+    positive Segment (1 Byte). Damit die Auto-Ableitung in diesem Fall dennoch keinen
+    Startup-Crash über ``validate_store_config`` verursacht, hebt der Aufrufer das an
+    den Store weitergereichte Retention-Budget auf diese Untergrenze an
+    (siehe ``_effective_store_max_file_size_bytes``).
     """
     from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO
 
     if max_file_size_bytes is None:
         return _SEGMENT_MAX_BYTES_DEFAULT
     return max(1, min(_SEGMENT_MAX_BYTES_DEFAULT, max_file_size_bytes // RETENTION_SEGMENT_RATIO))
+
+
+def _effective_store_max_file_size_bytes(max_file_size_bytes: int | None, segment_max_bytes: int) -> int | None:
+    """Hebt das Retention-Budget auf die 3-Segment-Untergrenze an, wenn nötig (#951, P2).
+
+    Für degenerierte Budgets (1/2 Byte) ist die 3-Segment-Regel mit einem positiven
+    Segment unerfüllbar. Damit ``validate_store_config`` beim (Auto-)Store-Open nicht
+    crasht, wird das an den Store gereichte ``max_file_size_bytes`` in genau diesem
+    Fall auf ``RETENTION_SEGMENT_RATIO * segment_max_bytes`` angehoben – der kleinste
+    Wert, der die Regel erfüllt. Für alle regelkonformen Budgets (>= 3 Byte, der
+    Normalfall) bleibt der Wert unverändert.
+    """
+    from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO
+
+    if max_file_size_bytes is None:
+        return None
+    return max(max_file_size_bytes, RETENTION_SEGMENT_RATIO * segment_max_bytes)
 
 
 _SQLITE_CORRUPTION_MARKERS = (
@@ -260,6 +287,10 @@ class RingBuffer:
         if self._segment_max_bytes_config is None:
             self._segment_max_bytes = derive_segment_max_bytes(self._max_file_size_bytes)
 
+        # Degenerierte Budgets (1/2 Byte) auf die 3-Segment-Untergrenze anheben, damit
+        # die Auto-Ableitung nie über validate_store_config crasht (#951, P2).
+        effective_max_file_size = _effective_store_max_file_size_bytes(self._max_file_size_bytes, self._segment_max_bytes)
+
         root = self._segment_store_root()
         store = SqliteSegmentStore(
             root,
@@ -269,7 +300,7 @@ class RingBuffer:
                 segment_max_age=self._segment_max_age,
             ),
             retention=StoreRetentionConfig(
-                max_file_size_bytes=self._max_file_size_bytes,
+                max_file_size_bytes=effective_max_file_size,
                 max_entries=self._max_entries,
                 max_age=self._max_age,
             ),
@@ -483,6 +514,11 @@ class RingBuffer:
         self._segment_max_rows = segment_max_rows
         self._segment_max_age = segment_max_age
 
+        # Konsistent zum Startpfad: degenerierte Budgets (1/2 Byte) auf die
+        # 3-Segment-Untergrenze anheben, statt einen Store mit budget<3*segment zu
+        # hinterlassen (#951, P2).
+        effective_max_file_size = _effective_store_max_file_size_bytes(self._max_file_size_bytes, self._segment_max_bytes)
+
         self._store.apply_config(
             segments=SegmentConfig(
                 segment_max_bytes=self._segment_max_bytes,
@@ -490,7 +526,7 @@ class RingBuffer:
                 segment_max_age=self._segment_max_age,
             ),
             retention=StoreRetentionConfig(
-                max_file_size_bytes=self._max_file_size_bytes,
+                max_file_size_bytes=effective_max_file_size,
                 max_entries=self._max_entries,
                 max_age=self._max_age,
             ),
