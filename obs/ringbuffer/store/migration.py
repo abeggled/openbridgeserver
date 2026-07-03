@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -41,6 +42,8 @@ from obs.ringbuffer.store.sqlite_backend import (
     _safe_getsize,
     _safe_json_decode,
 )
+
+logger = logging.getLogger(__name__)
 
 # Schwellwerte (Bytes). Klein: klein genug für eine vollständige Einmal-Kopie.
 # Groß: ab hier NUR read-only einhängen, nie scannen — eine 20–30-GB-Datei darf
@@ -227,7 +230,44 @@ class LegacyMigrator:
     # Klassifikation
     # ------------------------------------------------------------------
 
+    @property
+    def _migrated_marker_path(self) -> Path:
+        """Persistenter „migriert"-Marker neben der Quelldatei (#951, Pkt 2).
+
+        Ein leeres Sidecar ``<quelle>.migrated`` direkt neben der Legacy-DB. Bewusst
+        neben der QUELLE (nicht in der Store-Root), damit der Marker die Quelle
+        begleitet und ausschließlich diese eine Datei als vollständig migriert
+        markiert – auch wenn mehrere Quellen mit gleichem Basename in denselben Store
+        migriert wurden.
+        """
+        return self._legacy_path.with_name(f"{self._legacy_path.name}.migrated")
+
+    def _mark_source_migrated(self) -> None:
+        """Vermerkt die Quelle persistent als vollständig migriert (#951, Pkt 2).
+
+        Idempotent: legt das leere Marker-Sidecar an (bzw. lässt es bestehen). Ein
+        I/O-Fehler wird geschluckt statt propagiert – der Marker ist eine
+        Best-Effort-Schutzschicht gegen Re-Attach; sein Fehlen darf die (bereits
+        erfolgreich abgeschlossene) Migration nicht scheitern lassen.
+        """
+        try:
+            self._migrated_marker_path.touch(exist_ok=True)
+        except OSError:
+            logger.warning("RingBuffer: konnte Migrations-Marker fuer %s nicht schreiben", self._legacy_path)
+
     def classify(self) -> LegacyClassification | None:
+        """Klassifiziert die Quelle – ODER liefert ``None``, wenn bereits migriert (#951, Pkt 2).
+
+        Der Startup-Attach-Pfad (``_open_segment_store_locked``) hängt eine physisch
+        vorhandene Legacy-Quelle nur ein, wenn ``classify()`` eine Klassifikation
+        liefert. Trägt die Quelle den persistenten „migriert"-Marker (aus
+        ``_detach_migrated_legacy_segment``), gilt sie als vollständig nach v2 kopiert
+        und darf NICHT erneut read-only eingehängt werden – sonst würde jedes bereits
+        migrierte Event doppelt geliefert. Die Original-Datei bleibt physisch erhalten
+        (Datenerhalt); nur das Wieder-Einhängen wird unterdrückt.
+        """
+        if self._migrated_marker_path.exists():
+            return None
         return classify_legacy_db(self._legacy_path)
 
     # ------------------------------------------------------------------
@@ -355,7 +395,18 @@ class LegacyMigrator:
         entfernt; die Original-Datei selbst bleibt unangetastet (nur read-only
         gelesen). Idempotent: ist kein passender Eintrag (mehr) vorhanden, passiert
         nichts.
+
+        **Re-Attach-Schutz (#951, Pkt 2):** VOR dem Entfernen der Manifest-Zeile wird
+        die Quelle persistent als migriert markiert (``_mark_source_migrated``). Sonst
+        sähe der schema-basierte Startup-Attach-Guard beim nächsten Restart nur noch
+        eine physisch vorhandene Legacy-Datei OHNE Legacy-Manifest-Zeile und hängte
+        genau dieselbe – bereits vollständig nach v2 migrierte – Quelle erneut
+        read-only ein → Doppel-Lieferung jedes migrierten Events. Der Marker sorgt
+        dafür, dass ``classify()`` die Quelle danach als ``None`` meldet und der
+        Attach-Pfad sie überspringt (konsistent zum Idempotenz-/Attach-Guard des
+        Startups), ohne die Original-Datei zu löschen.
         """
+        self._mark_source_migrated()
         resolved = str(self._legacy_path.resolve())
         for segment in await self._store.manifest.list_legacy_segments():
             if segment.filename == resolved:

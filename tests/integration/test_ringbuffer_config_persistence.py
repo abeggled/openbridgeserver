@@ -370,6 +370,63 @@ async def test_config_post_switch_rollback_preserves_existing_storage(client, au
     await _reset_to_defaults(client, auth_headers)
 
 
+async def test_config_post_unchanged_migrated_sub300_segment_age_roundtrips(client, auth_headers):
+    """Ein unveränderter migrierter Sub-300s-``segment_max_age`` muss durchgehen (Codex #951, Pkt 1).
+
+    Szenario: Ein migrierter Store leitete ein gültiges ``segment_max_age`` UNTER
+    dem 300-s-UI-Minimum ab (z. B. ``max_age=600`` → ``200``). Das Config-Modal
+    bewahrt diesen Wert und sendet ihn beim Speichern UNRELATED-Einstellungen
+    unverändert mit. Ein solcher unveränderter Round-trip darf NICHT mit 422
+    scheitern; nur eine AKTIVE Änderung auf einen Sub-300s-Wert wird abgelehnt.
+    """
+    # Persistierten Sub-300s-Wert direkt schreiben (simuliert eine migrierte Config).
+    # max_age=600 → Ratio-Boden 600 >= 3*200 gilt, kein Retention-Konflikt.
+    from obs.ringbuffer.persisted_config import persist_ringbuffer_config
+
+    await persist_ringbuffer_config(
+        get_db(),
+        enabled=True,
+        max_entries=1000,
+        max_file_size_bytes=None,
+        max_age=600,
+        segmented=True,
+        segment_max_bytes=None,
+        segment_max_rows=None,
+        segment_max_age=200,
+    )
+
+    # Unveränderter Round-trip des migrierten 200-s-Werts → muss durchgehen (kein 422).
+    resp = await client.post(
+        "/api/v1/ringbuffer/config",
+        json={
+            "storage": "file",
+            "max_entries": 2000,  # UNRELATED-Einstellung geändert
+            "max_file_size_bytes": None,
+            "max_age": 600,
+            "segment_max_age": 200,  # unverändert = persistierter migrierter Wert
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["segment_max_age"] == 200
+
+    # Eine AKTIVE Änderung auf einen ANDEREN Sub-300s-Wert bleibt 422.
+    resp = await client.post(
+        "/api/v1/ringbuffer/config",
+        json={
+            "storage": "file",
+            "max_entries": 2000,
+            "max_file_size_bytes": None,
+            "max_age": 600,
+            "segment_max_age": 150,  # geänderter Sub-300s-Wert → abgelehnt
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
+
+    await _reset_to_defaults(client, auth_headers)
+
+
 async def test_config_post_budget_change_rederives_auto_segment_max_bytes(client, auth_headers):
     """Ein reiner Budget-Wechsel muss die AUTO-Segmentgröße live neu ableiten (#919).
 

@@ -32,7 +32,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config, persist_ringbuffer_config
-from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig, validate_explicit_segment_bounds, validate_store_config
+from obs.ringbuffer.store.config import (
+    SEGMENT_MAX_AGE_MIN,
+    SegmentConfig,
+    StoreRetentionConfig,
+    validate_explicit_segment_bounds,
+    validate_store_config,
+)
 from obs.ringbuffer.ringbuffer import (
     RingBufferStorageDeleteIncompleteError,
     default_ringbuffer_disk_path,
@@ -1912,10 +1918,26 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     # Technische Grenzen NUR für EXPLIZIT gesetzte Segment-Werte durchsetzen (#919):
     # 4 MiB…1 GiB / 300 s…30 d / >= 1000. Nicht gesetzte Felder (Auto-Ableitung)
     # bleiben unangetastet → kein 422 im Auto-Startpfad.
+    #
+    # Migrierter Sub-300s-Round-trip (Codex #951, Pkt 1): Leitete der Loader für
+    # eine migrierte Config ein gültiges ``segment_max_age`` UNTER dem 300-s-Minimum
+    # ab (z. B. ``max_age=600`` → ``200``), bewahrt das Config-Modal (9855a69) diesen
+    # Wert und sendet ihn beim Speichern UNRELATED-Einstellungen unverändert mit. Ein
+    # solcher UNVERÄNDERTER Round-trip des bereits persistierten Werts wird NICHT als
+    # expliziter Nutzer-Input gegen das 300-s-Minimum geprüft (analog zur Modal-Logik,
+    # die das 300-s-Minimum nur bei aktiver Nutzeränderung erzwingt). Nur ein GEÄNDERTER
+    # Sub-300s-Wert läuft weiter in die 422-Ablehnung.
+    checked_segment_max_age = body.segment_max_age if "segment_max_age" in body.model_fields_set else None
+    if (
+        checked_segment_max_age is not None
+        and checked_segment_max_age < SEGMENT_MAX_AGE_MIN
+        and checked_segment_max_age == persisted.get("segment_max_age")
+    ):
+        checked_segment_max_age = None
     try:
         validate_explicit_segment_bounds(
             segment_max_bytes=body.segment_max_bytes if "segment_max_bytes" in body.model_fields_set else None,
-            segment_max_age=body.segment_max_age if "segment_max_age" in body.model_fields_set else None,
+            segment_max_age=checked_segment_max_age,
             segment_max_rows=body.segment_max_rows if "segment_max_rows" in body.model_fields_set else None,
         )
     except ValueError as exc:

@@ -405,6 +405,44 @@ async def test_migration_detaches_attached_legacy_entry_no_double_delivery(store
     assert values == ["one", "two"]
 
 
+async def test_migrated_source_not_reattached_after_detach(store: SqliteSegmentStore, tmp_path: Path):
+    # Codex #951, Pkt 2: Ist die migrierte Quelle die Default-``obs_ringbuffer.db``,
+    # die der Startup beim Upgrade attached, entfernt der Detach nur die Manifest-
+    # Zeile und lässt die Original-Datei liegen. Beim nächsten Restart sähe der
+    # schema-basierte Attach-Guard, dass die Datei existiert und KEINE Legacy-
+    # Manifest-Zeile mehr hat → er hängte dieselbe Legacy-DB erneut ein → jedes
+    # migrierte Event würde DOPPELT geliefert.
+    #
+    # Fix: die Migration vermerkt die Quelle PERSISTENT (Markerfile neben der
+    # Quelle), sodass ``classify()`` – den der Startup-Attach-Pfad konsultiert –
+    # danach ``None`` liefert und die bereits vollständig migrierte Quelle NICHT
+    # erneut einhängt. Die Original-Datei bleibt erhalten (Datenerhalt).
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy(db, [("2020-01-01T00:00:00.000Z", "one"), ("2020-01-02T00:00:00.000Z", "two")])
+
+    migrator = LegacyMigrator(store, db)
+    await migrator.attach_readonly(migrator.classify())
+    assert await migrator.migrate_small(batch_rows=100) == 2
+    assert await store.manifest.list_legacy_segments() == []
+
+    # Original-Datei ist unangetastet (nur read-only gelesen).
+    assert db.exists()
+
+    # Der Startup-Attach-Pfad konsultiert ``classify()``. Nach abgeschlossener
+    # Migration MUSS er ``None`` sehen (Marker vorhanden) → kein Re-Attach.
+    reattach_migrator = LegacyMigrator(store, db)
+    assert reattach_migrator.classify() is None
+
+    # Selbst wenn der Startup-Guard laufen würde: kein neues Legacy-Segment.
+    if reattach_migrator.classify() is not None:  # pragma: no cover - Guard
+        await reattach_migrator.attach_readonly(reattach_migrator.classify())
+    assert await store.manifest.list_legacy_segments() == []
+
+    # Jedes Event weiterhin genau EINMAL.
+    rows = await store.query(StoreQuery(limit=100))
+    assert sorted(r["new_value"] for r in rows) == ["one", "two"]
+
+
 async def test_migration_detach_is_idempotent_without_attached_entry(store: SqliteSegmentStore, tmp_path: Path):
     # Wird NICHT vorher eingehängt (kein Legacy-Segment), darf der Abschluss der
     # Migration nicht scheitern – Abkoppeln ist ein No-op.
