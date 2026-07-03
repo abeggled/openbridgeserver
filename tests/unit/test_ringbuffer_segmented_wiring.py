@@ -316,6 +316,29 @@ async def test_segmented_value_filter_type_conflict_raises(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_segmented_value_filter_type_conflict_for_name_resolved_dp_raises(tmp_path: Path):
+    """Namensaufgelöste Datenpunkte (``dp_ids_by_name``) müssen dieselbe Typkonflikt-422 liefern (#951, Pkt 2).
+
+    Zielt eine Freitextsuche über den Datapoint-NAMEN (→ ``dp_ids_by_name``) auf ein
+    BOOLEAN-Datapoint und sendet einen numerischen Operator, darf der segmentierte
+    Pfad NICHT still ``[]`` zurückgeben, sondern muss – wie bei id-aufgelösten
+    Datapoints – einen ``ValueError`` (422-tauglich) werfen.
+    """
+    rb = _rb(tmp_path, segmented=True)
+    await rb.start()
+    try:
+        await _record(rb, True, "2026-01-01T00:00:00.000Z", datapoint_id="dp-bool")
+        with pytest.raises(ValueError, match="not supported for data_type 'BOOLEAN'"):
+            await rb.query_v2(
+                dp_ids_by_name=["dp-bool"],
+                value_filters=[{"operator": "gt", "value": 0}],
+                datapoint_types={"dp-bool": "BOOLEAN"},
+            )
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
 async def test_segmented_query_rejects_invalid_sort(tmp_path: Path):
     rb = _rb(tmp_path, segmented=True)
     await rb.start()
@@ -561,6 +584,75 @@ async def test_segmented_start_auto_attaches_legacy_readonly(tmp_path: Path):
         # Legacy-Daten sind lesbar.
         entries = await rb.query_v2(limit=10)
         assert {e.new_value for e in entries} == {100, 101, 102}
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_segmented_post_upgrade_append_reclaims_over_budget_legacy_without_rotation(tmp_path: Path):
+    """#951 Pkt 1: über-budget-Legacy wird nach dem ERSTEN Post-Upgrade-Append zurückgewonnen – auch ohne fällige Rotation.
+
+    Beim Start greift der No-Zero-History-Guard (noch keine v2-Zeile) → der Startup-
+    Retention-Lauf kann die attached Legacy-DB nicht löschen. Erst NACH dem ersten
+    segmentierten Append ist der Guard erfüllt. Mit hohen Rotations-Schwellen ist
+    KEINE Rotation fällig; trotzdem muss die über-budget-Legacy zeitnah freigegeben
+    werden (sonst bliebe sie bis zur ersten Rotation liegen, #919-Kernszenario).
+    """
+    disk_path = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(disk_path)
+
+    # Hohe Rotations-Schwelle (kein Row-Budget): der erste Append löst keine Rotation aus.
+    rb = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True, segment_max_rows=1000, max_entries=None)
+    await rb.start()
+    try:
+        # Vorbedingung: Legacy attached, Guard greift (keine v2-Zeile) → noch nicht löschbar.
+        assert len(await rb.store.manifest.list_legacy_segments()) == 1
+
+        # Hartes Budget nachträglich auf 1 Byte: die attached Legacy-DB ist damit
+        # klar über Budget und – sobald der Guard erfüllt ist – reclaimbar.
+        rb.store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
+
+        # Erster Post-Upgrade-Append: Guard jetzt erfüllt, aber KEINE Rotation fällig.
+        await _record(rb, 200, "2026-06-01T00:00:00.000Z")
+
+        # Kein neues geschlossenes Segment durch Rotation …
+        assert (await rb.store.stats()).as_dict()["backend_extra"]["active_segment_id"] is not None
+        # … dennoch ist die über-budget-Legacy zurückgewonnen (Fix greift ohne Rotation).
+        assert await rb.store.manifest.list_legacy_segments() == []
+        # Der frische v2-Wert bleibt lesbar (No-Zero-History gewahrt).
+        assert [e.new_value for e in await rb.query_v2(limit=10)] == [200]
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_segmented_append_without_attached_legacy_skips_extra_enforce(tmp_path: Path, monkeypatch):
+    """#951 Pkt 1: im Normalbetrieb (kein attached Legacy) läuft KEIN zusätzliches enforce_retention pro Append.
+
+    Kostenbegrenzung: der Post-Upgrade-Zweig darf nur solange feuern, wie ein
+    attached Legacy-Segment existiert. Ohne Legacy und ohne fällige Rotation wird
+    ``enforce_retention`` je Append NICHT aufgerufen.
+    """
+    rb = _rb(tmp_path, segmented=True, segment_max_rows=1000, max_entries=None)
+    await rb.start()
+    try:
+        assert await rb.store.manifest.list_legacy_segments() == []
+
+        calls = 0
+        real_enforce = rb.store.enforce_retention
+
+        async def counting_enforce():
+            nonlocal calls
+            calls += 1
+            return await real_enforce()
+
+        monkeypatch.setattr(rb.store, "enforce_retention", counting_enforce)
+
+        for value in range(3):
+            await _record(rb, value, f"2026-06-01T00:00:0{value}.000Z")
+
+        # Kein attached Legacy + keine Rotation fällig → kein zusätzliches enforce.
+        assert calls == 0
     finally:
         await rb.stop()
 

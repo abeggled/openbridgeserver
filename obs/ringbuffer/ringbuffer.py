@@ -657,8 +657,22 @@ class RingBuffer:
 
         Der Event geht über die portable Store-Grenze (``append``). Danach wird
         auf Rotation (``segment_max_bytes``/``segment_max_rows``/``segment_max_age``)
-        geprüft und — falls rotiert wurde — ``enforce_retention`` auf die jetzt
+        geprüft und – falls rotiert wurde – ``enforce_retention`` auf die jetzt
         geschlossenen Segmente angewandt.
+
+        Post-Upgrade-Fenster (#951, Pkt 1): Ist beim Start eine über-budget
+        Legacy-Single-DB read-only attached, kann der Startup-Retention-Lauf sie
+        noch nicht löschen (No-Zero-History-Guard – es existiert noch keine
+        nicht-Legacy-Zeile). Erst NACH dem ersten segmentierten Append ist der
+        Guard erfüllt. Würde ``enforce_retention`` nur bei fälliger Rotation
+        laufen, bliebe die (u. U. 20–30 GB große) Legacy-Datei bei Default-
+        Schwellen (6 h / 256 MiB) bis zur ersten Rotation liegen, obwohl sie
+        längst reclaimbar wäre (#919-Kernszenario). Solange also noch ein
+        attached Legacy-Segment existiert, wird ``enforce_retention`` auch ohne
+        fällige Rotation ausgeführt, damit die über-budget-Legacy zeitnah
+        zurückgewonnen wird. Die Kosten sind an dieses transiente Upgrade-Fenster
+        gekoppelt: sobald kein attached Legacy mehr existiert (Normalbetrieb),
+        läuft KEIN zusätzliches ``enforce_retention`` pro Append.
         """
         from obs.ringbuffer.store.interface import StoreEvent
 
@@ -681,6 +695,23 @@ class RingBuffer:
             await self._store.rotate()
             self._segment_created_at = _isoformat_utc(datetime.now(UTC))
             await self._store.enforce_retention()
+        elif await self._has_attached_legacy_segment():
+            # Post-Upgrade-Fenster (#951, Pkt 1): über-budget-Legacy zeitnah
+            # zurückgewinnen, sobald der No-Zero-History-Guard nach diesem Append
+            # erfüllt ist – auch ohne fällige Rotation. Kostenbegrenzt: nur solange
+            # ein attached Legacy-Segment existiert; im Normalbetrieb (kein Legacy)
+            # läuft dieser Zweig nie.
+            await self._store.enforce_retention()
+
+    async def _has_attached_legacy_segment(self) -> bool:
+        """True, solange (mind.) ein read-only attached Legacy-Segment existiert.
+
+        Grenzt das zusätzliche Post-Upgrade-``enforce_retention`` auf das transiente
+        Upgrade-Fenster ein (#951, Pkt 1). Ein retention-bedingter Legacy-Delete
+        entfernt die ``status='legacy'``-Zeile; danach liefert dies ``False`` und der
+        Normalbetrieb zahlt keinen zusätzlichen enforce pro Append.
+        """
+        return bool(await self._store.manifest.list_legacy_segments())
 
     async def _segment_rotation_due(self) -> bool:
         """True, wenn das aktive Segment eine ``segment_max_*``-Schwelle reißt."""
@@ -1213,11 +1244,15 @@ class RingBuffer:
         # Typkonflikt-Validierung wie Legacy ``query_v2`` (z. B. numerischer
         # Operator auf BOOLEAN-Datenpunkt → 422). Ist ein datapoint_id-Filter
         # gesetzt, prüfen wir die Value-Filter gegen dessen data_type, bevor sie
-        # in den Store gepusht werden — sonst liefe ein Typkonflikt still leer.
+        # in den Store gepusht werden – sonst liefe ein Typkonflikt still leer.
+        # Namensaufgelöste Datapoints (``dp_ids_by_name``, z. B. UI-Freitextsuche
+        # auf den Datapoint-NAMEN) werden hier gleichberechtigt validiert (#951,
+        # Pkt 2): sonst übersprünge der segmentierte Pfad die Legacy-Typkonflikt-
+        # Prüfung und ein inkompatibler Filter liefe still leer statt 422.
         if value_filters:
             _validate_segmented_value_filter_types(
                 value_filters=value_filters,
-                datapoint_ids=normalized_dps,
+                datapoint_ids=normalized_dps + normalized_names,
                 datapoint_types=datapoint_types or {},
             )
 
