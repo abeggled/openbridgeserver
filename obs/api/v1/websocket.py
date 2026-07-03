@@ -525,6 +525,8 @@ async def _page_allowed_message_archive_predicates(
         for mini_widget in _mini_widgets_from_config(config):
             if not isinstance(mini_widget, dict):
                 continue
+            if mini_widget.get("visible") is not True:
+                continue
             mini_type = _non_empty_str(mini_widget.get("widgetType")) or _non_empty_str(mini_widget.get("type"))
             if not mini_type:
                 continue

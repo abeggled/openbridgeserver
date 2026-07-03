@@ -659,6 +659,7 @@ async def test_page_allowed_message_archive_predicates_include_grundriss_mini_wi
                         {
                             "id": "archive-mini",
                             "widgetType": "MessageArchive",
+                            "visible": True,
                             "config": {
                                 "archive_ids": ["System"],
                                 "severities": ["warning"],
@@ -683,6 +684,44 @@ async def test_page_allowed_message_archive_predicates_include_grundriss_mini_wi
     assert predicates[0].severities == {"warning"}
     assert predicates[0].statuses == {"new"}
     assert predicates[0].allow_read is False
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_message_archive_predicates_skip_hidden_mini_widgets():
+    page_config = {
+        "grid_cols": 12,
+        "grid_row_height": 80,
+        "background": None,
+        "widgets": [
+            {
+                "id": "floorplan",
+                "type": "Grundriss",
+                "name": "Floorplan",
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4,
+                "config": {
+                    "miniWidgets": [
+                        {
+                            "id": "hidden-archive-mini",
+                            "widgetType": "MessageArchive",
+                            "visible": False,
+                            "config": {"archive_ids": ["System"]},
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+
+    class _DbStub:
+        async def fetchone(self, _query, _params):
+            return {"page_config": json.dumps(page_config)}
+
+    predicates = await _page_allowed_message_archive_predicates(_DbStub(), "page-1")
+
+    assert predicates == []
 
 
 @pytest.mark.asyncio

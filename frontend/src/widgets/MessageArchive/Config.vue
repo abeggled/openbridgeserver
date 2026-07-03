@@ -36,7 +36,7 @@ function listFromModel(value: unknown): string[] {
 }
 
 const cfg = reactive<Cfg>({
-  archive_ids: Array.isArray(props.modelValue.archive_ids) ? props.modelValue.archive_ids as string[] : [],
+  archive_ids: [...new Set([...listFromModel(props.modelValue.archive_ids), ...listFromModel(props.modelValue.archive_id)])],
   limit: (props.modelValue.limit as number | undefined) ?? 25,
   severity: listFromModel(props.modelValue.severity),
   status: listFromModel(props.modelValue.status),

@@ -2536,6 +2536,8 @@ class LogicManager:
             )
             await _run_replay_triggered_side_effects(message_archive_descendants)
 
+        triggered_notify_nodes: set[str] = set()
+
         # ── Handle notify_pushover ────────────────────────────────────────
         # Runs AFTER api_client second-pass so that graphs with api_client →
         # json_extractor → notify see the real HTTP response, not placeholders.
@@ -2626,6 +2628,7 @@ class LogicManager:
                         )
                     r.raise_for_status()
                     outputs[node.id]["sent"] = True
+                    triggered_notify_nodes.add(node.id)
                     logger.info("Graph %s: Pushover sent (msg=%r)", graph_id[:8], msg[:40])
             except Exception as exc:
                 logger.warning(
@@ -2692,6 +2695,7 @@ class LogicManager:
                     except TypeError:
                         pass  # non-numeric body → assume success (future API changes)
                     outputs[node.id]["sent"] = True
+                    triggered_notify_nodes.add(node.id)
                     logger.info(
                         "Graph %s: seven.io SMS sent to %s (msg=%r)",
                         graph_id[:8],
@@ -2705,6 +2709,14 @@ class LogicManager:
                     msg[:40],
                     exc,
                 )
+
+        if triggered_notify_nodes:
+            _add_resolved_outputs(triggered_notify_nodes)
+            notify_descendants = _replay_async_descendants(
+                triggered_notify_nodes,
+                skip_node_ids=triggered_message_archive_nodes | triggered_api_clients | triggered_wol_nodes | triggered_host_check_nodes,
+            )
+            await _run_replay_triggered_side_effects(notify_descendants)
 
         # Deferred hc_prev_trigger=False: clear only for HC nodes that did NOT
         # fire in any async pass. Clearing inside _run_host_check_node was wrong
