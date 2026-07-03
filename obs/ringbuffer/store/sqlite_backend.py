@@ -262,7 +262,15 @@ _REGEX_MAX_PATTERN_LEN = 256
 # blockieren. Der Vergleich wird daher auf die ersten ``_REGEX_MAX_TARGET_LEN``
 # Zeichen begrenzt — gebounded statt blockierend.
 _REGEX_MAX_TARGET_LEN = 4096
-_RE_UNSAFE_NESTED_QUANTIFIERS = re.compile(r"\((?:[^()\\]|\\.)*[+*][^()]*\)[+*]")
+# Nested quantifiers wie ``(a+)+`` / ``(a?){30}`` / ``(a*){5,}`` (#951, Codex :265).
+# Innerer Quantifier deckt ``+``/``*`` UND ``?`` ab – auch optionale gruppierte
+# Wiederholungen (``(a?){30}``) backtracken gegen einen ``a``-Lauf katastrophal.
+# Aeusserer Quantifier deckt ``+``/``*`` UND alle counted quantifiers
+# (``{m}``/``{m,}``/``{m,n}``) ab – ein Muster wie ``(a+){30}`` umging die frühere,
+# nur auf ``[+*]`` begrenzte Variante sonst. Konsistent zur Alternations-Variante
+# unten (Codex :247). Benigne Muster ohne inneren Quantifier (``(abc)+``,
+# ``(abc){2,5}``) bleiben erlaubt.
+_RE_UNSAFE_NESTED_QUANTIFIERS = re.compile(r"\((?:[^()\\]|\\.)*[+*?][^()]*\)(?:[*+]|\{\d+(?:,\d*)?\})")
 # Quantifizierte Alternations-Gruppe wie ``(a|a)*`` / ``(a|ab)+`` / ``(a|b){0,5}`` /
 # ``(a|aa){30}`` (#951, Codex :307). Der nested-quantifier-Check oben verwirft solche
 # Muster NICHT (kein innerer ``+``/``*``), aber sie können exponentielles Backtracking
@@ -295,6 +303,25 @@ def _assert_safe_regex(pattern: str) -> None:
         raise ValueError("unsafe regex pattern: nested quantifiers are not allowed")
     if _RE_UNSAFE_QUANTIFIED_ALTERNATION.search(pattern):
         raise ValueError("unsafe regex pattern: quantified alternation is not allowed")
+
+
+def _sqlite_ro_uri(path: Path, *, params: str = "") -> str:
+    """Baut eine read-only ``file:``-URI mit korrekt encodiertem Pfad (#951, Codex :1142).
+
+    Enthaelt das Daten-/RingBuffer-Verzeichnis SQLite-URI-Metazeichen (``?``, ``#``,
+    ``%``, Leerzeichen), machte das rohe Interpolieren des Filesystem-Pfads in
+    ``file:...?mode=ro``, dass SQLite einen Teil des Pfads als URI-Query/Fragment
+    parst → falscher DB-Pfad → 500er oder fehlerhafte ``no such table``-Quarantaene.
+    ``Path.as_uri()`` prozent-encodiert den (absoluten) Pfad korrekt; die eigentlichen
+    Query-Parameter (``mode=ro`` etc.) werden ERST danach angehaengt, sodass sie echte
+    Query-Parameter bleiben und nicht Teil des encodierten Pfads werden. ``as_uri()``
+    verlangt einen absoluten Pfad, daher wird der (evtl. relative) Store-Pfad zuvor
+    aufgeloest – die geoeffnete Datei ist dieselbe wie beim frueheren rohen ``as_posix()``.
+    """
+    uri = path.resolve().as_uri()
+    if params:
+        uri = f"{uri}?{params}"
+    return uri
 
 
 # SQL-Vergleichsoperatoren je Pushdown-Operator (between separat behandelt).
@@ -1139,7 +1166,7 @@ class SqliteSegmentStore(RingBufferStore):
         # geschlossene Segmente bereits read-only geöffnet werden). Die Connection wird
         # vom Aufrufer (``_read_segment_rows``) nach dem Read geschlossen (``close_after``
         # greift, weil es nicht ``_active_conn`` ist) – kein Leak.
-        uri = f"file:{(self._segments_dir / segment.filename).as_posix()}?mode=ro"
+        uri = _sqlite_ro_uri(self._segments_dir / segment.filename, params="mode=ro")
         conn = await aiosqlite.connect(uri, uri=True)
         conn.row_factory = aiosqlite.Row
         return conn
@@ -1171,7 +1198,7 @@ class SqliteSegmentStore(RingBufferStore):
                     segment.segment_id,
                     size_bytes=self._segment_file_size(segment.filename),
                 )
-        uri = f"file:{legacy_path.as_posix()}?mode=ro&immutable=1"
+        uri = _sqlite_ro_uri(legacy_path, params="mode=ro&immutable=1")
         conn = await aiosqlite.connect(uri, uri=True)
         conn.row_factory = aiosqlite.Row
         return conn
@@ -2405,7 +2432,7 @@ class SqliteSegmentStore(RingBufferStore):
         # unten und das Segment wird als fehlend/nicht-ok quarantäniert (konsistent
         # zum bestehenden Missing-File-Handling im Read-Pfad).
         conn: aiosqlite.Connection | None = None
-        uri = f"file:{(self._segments_dir / segment.filename).as_posix()}?mode=ro"
+        uri = _sqlite_ro_uri(self._segments_dir / segment.filename, params="mode=ro")
         try:
             conn = await aiosqlite.connect(uri, uri=True)
             async with conn.execute("PRAGMA integrity_check") as cur:
