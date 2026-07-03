@@ -462,6 +462,13 @@ function buildPayload() {
     payload.max_age = retentionValue * RETENTION_UNIT_SECONDS[configForm.retentionUnit]
   }
 
+  // Segmentierung ist automatisch aktiv (#938): dieses Modal zeigt ausschliesslich
+  // Segment-Rotations-Controls und steuert damit den segmentierten Store. Beim
+  // Speichern immer segmented=true senden – sonst behielte das Backend einen aus
+  // dem Legacy-/API-Pfad persistierten segmented=false und die angezeigten
+  // Rotations-Controls blieben wirkungslos (Codex #951).
+  payload.segmented = true
+
   // Segment-Rotation (#938). Alter ist Pflicht (Primärtrigger); Bytes/Rows
   // optional (leer = automatisch vom Backend abgeleitet). Wert+Einheit → Sekunden;
   // das 300-s-Backend-Minimum respektieren und Sub-Stunden-Werte exakt treffen

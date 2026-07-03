@@ -280,6 +280,33 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
     expect(ageField.element.value).toBe('6')
   })
 
+  it('posts segmented=true even when persisted stats report segmented=false (Codex #951)', async () => {
+    // Legacy/API path may have persisted segmented=false. This modal only
+    // renders segment-rotation controls (segmentation is automatic), so saving
+    // any config must (re)activate the segmented store rather than silently
+    // leaving the persisted false in place.
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          segmented: false,
+          max_entries: null,
+          max_file_size_bytes: 500 * 1024 * 1024,
+          max_age: null,
+          file_size_bytes: 0,
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).toHaveBeenCalledTimes(1)
+    const payload = api.config.mock.calls[0][0]
+    expect('segmented' in payload).toBe(true)
+    expect(payload.segmented).toBe(true)
+  })
+
   it('posts segment_max_age (in seconds) on submit', async () => {
     const { wrapper, api } = await mountModal()
     await wrapper.find('[data-testid="rb-config-segment-max-age"]').setValue('8')
@@ -288,6 +315,9 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
     expect(api.config).toHaveBeenCalledTimes(1)
     const payload = api.config.mock.calls[0][0]
     expect(payload.segment_max_age).toBe(8 * 60 * 60)
+    // Segmentierung ist automatisch aktiv – der segmentierte Store muss beim
+    // Speichern (re)aktiviert werden (Codex #951).
+    expect(payload.segmented).toBe(true)
     // Optional advanced fields are sent as explicit null (= auto) when empty, so
     // the backend does not keep a previously persisted value (#938, Codex #951).
     expect('segment_max_bytes' in payload).toBe(true)

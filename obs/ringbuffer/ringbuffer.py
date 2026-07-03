@@ -364,7 +364,11 @@ class RingBuffer:
                 resolved_legacy = str(Path(legacy_fs_path).resolve())
                 existing = {seg.filename for seg in await store.manifest.list_segments() if seg.schema_version == LEGACY_SCHEMA_VERSION}
                 if resolved_legacy not in existing:
-                    migrator = LegacyMigrator(store, legacy_fs_path)
+                    # Write-Lock durchreichen (#951, Runde 23): der Startup-Pfad hier
+                    # migriert zwar nicht selbst, aber ein künftiger Wartungstreiber über
+                    # denselben Migrator serialisiert die Write-/Hide-Sequenz dann korrekt
+                    # gegen Live-``record()``-Appends (No-Op ohne Lock).
+                    migrator = LegacyMigrator(store, legacy_fs_path, write_lock=self._lock)
                     classification = migrator.classify()
                     if classification is not None:
                         await migrator.attach_readonly(classification)
@@ -578,7 +582,16 @@ class RingBuffer:
         if await self._segment_rotation_due():
             await self._store.rotate()
             self._segment_created_at = _isoformat_utc(datetime.now(UTC))
-        await self._store.enforce_retention()
+        # Dieselbe Migrations-Deferral wie im Append- (#951, F2) und Startup-Pfad
+        # (Runde 22): läuft gerade eine chunked Migration (versteckte ``migrating``-
+        # Segmente, noch attached Legacy-Quelle), umgeht dieser reconfigure-getriebene
+        # Pass sonst die Guards. Bei positiven v2-Zeilen + Size-/Row-/Age-Druck löschte
+        # die Retention die attached Legacy-Quelle, während restliche Chunks noch nicht
+        # kopiert sind → Verlust nicht kopierter Legacy-Zeilen. Solange
+        # ``_migration_in_progress()`` gilt, wird der Pass ausgesetzt; die Migration holt
+        # die Retention nach dem Detach nach.
+        if not await self._migration_in_progress():
+            await self._store.enforce_retention()
 
     # ------------------------------------------------------------------
     # Record

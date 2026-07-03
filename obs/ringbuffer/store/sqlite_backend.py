@@ -203,9 +203,19 @@ _LEGACY_DEFAULT_CANDIDATE_CAP = 10_000
 # Synthetische global_event_id für Legacy-Zeilen: aus der chronologischen
 # Legacy-rowid abgeleitet (NICHT aus der Fetch-Reihenfolge), damit die Ordnung
 # unabhängig von der Sort-Richtung des Kandidaten-Fetches stabil bleibt. Der
-# große Offset hält alle Legacy-IDs strikt negativ (unter allen positiven
-# v2-IDs); höhere rowid (neuer) ⇒ höhere (weniger negative) ID.
-_LEGACY_GID_OFFSET = 1 << 62
+# Offset hält alle Legacy-IDs strikt negativ (unter allen positiven v2-IDs);
+# höhere rowid (neuer) ⇒ höhere (weniger negative) ID.
+#
+# JS-/JSON-Sicherheit (#951, Runde 23): die synthetischen IDs werden über die
+# JSON-API als ``global_event_id`` exponiert. Browser parsen JSON-Zahlen als
+# IEEE-754-Doubles; jenseits von ``±(2**53-1)`` kollabieren benachbarte gids auf
+# denselben Double und ein JS-Consumer, der per ``id`` keyed/dedupliziert, bricht.
+# Das Schema ist daher so skaliert, dass der Worst-Case-Betrag
+# ``OFFSET + max_index*STRIDE`` unter ``2**53`` bleibt (statt der früheren
+# ``1<<62``/``1<<40``-Werte, die weit im unsicheren Bereich lagen). ``OFFSET =
+# 1<<52`` gibt einen negativen Floor weit unter jeder positiven v2-gid; da Legacy
+# strikt negativ und v2 strikt positiv ist, können sich beide Bänder nie treffen.
+_LEGACY_GID_OFFSET = 1 << 52
 
 # Per-Quelle-Stride, der die synthetischen Legacy-gids mehrerer read-only
 # attached Legacy-DBs DISJUNKT hält (#951, Codex :1123). Jede Legacy-Quelle
@@ -214,11 +224,15 @@ _LEGACY_GID_OFFSET = 1 << 62
 # ``-(segment_id & 0xFFFF)`` – aufeinanderfolgende Quellen (rowid r der einen
 # und rowid r+1 der nächsten trafen dieselbe synthetische ID), sodass als
 # entry-IDs exponierte ``global_event_id``s doppelt vorkamen und Multi-
-# Filterset-Queries/Exports auf eindeutigen IDs brachen. ``1 << 40`` deckt jede
-# reale Legacy-rowid ab (weit über der Zeilenzahl einer 20–30 GB-Single-DB) und
-# lässt genügend segment_id-Raum unter ``_LEGACY_GID_OFFSET`` (~4 Mio Quellen),
-# ohne den strikt-negativen int64-Bereich zu verlassen.
-_LEGACY_GID_STRIDE = 1 << 40
+# Filterset-Queries/Exports auf eindeutigen IDs brachen.
+#
+# Kapazitätsgrenze (JS-sicher, #951, Runde 23): ``1 << 32`` (~4,29e9 rowids je
+# Segment/Quelle) deckt eine 20–30 GB-Single-DB mit mehrfachem Headroom ab
+# (selbst bei ~30 Byte/Zeile ~1e9 Zeilen). Zusammen mit ``OFFSET = 1<<52`` bleibt
+# der Worst-Case-Betrag bis zu einem Segment-/Quell-Index von ``< 1<<20``
+# (~1 Mio) innerhalb ``±(2**53-1)`` – dokumentierte Obergrenze: ``segment_id`` bzw.
+# ``source_bucket`` müssen ``< _MIGRATION_SOURCE_BUCKETS`` (= ``1<<20``) bleiben.
+_LEGACY_GID_STRIDE = 1 << 32
 
 
 # Einfache Operatoren, die als typisiertes SQL-WHERE gepusht werden.

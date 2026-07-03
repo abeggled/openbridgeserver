@@ -25,6 +25,7 @@ bleibt unangetastet erhalten. Die Migration ist optional, lazy und resume-fähig
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -44,6 +45,7 @@ from obs.ringbuffer.store.manifest import (
 )
 from obs.ringbuffer.store.sqlite_backend import (
     _LEGACY_GID_OFFSET,
+    _LEGACY_GID_STRIDE,
     SqliteSegmentStore,
     _safe_getsize,
     _safe_json_decode,
@@ -75,7 +77,15 @@ DEFAULT_CHUNK_ROWS = 5_000
 #   sodass ``MAX(gid)`` je Bucket den Fortschritt genau EINER Quelle liefert.
 # * Alle gids bleiben strikt negativ (unter allen positiven v2-IDs), solange
 #   rowid < _MIGRATION_SOURCE_STRIDE und source_bucket < _MIGRATION_SOURCE_BUCKETS.
-_MIGRATION_SOURCE_STRIDE = 1 << 40  # bis ~1e12 rowids pro Quelldatei
+#
+# JS-/JSON-Sicherheit (#951, Runde 23): der Stride läuft strukturell parallel zum
+# read-only-Legacy-Stride (``_LEGACY_GID_STRIDE`` in sqlite_backend.py) und teilt
+# denselben ``_LEGACY_GID_OFFSET``, damit beide Pfade ohne Divergieren im
+# JS-sicheren Band ``±(2**53-1)`` bleiben. ``1 << 32`` (~4,29e9 rowids/Quelle) deckt
+# jede reale Legacy-DB ab; zusammen mit ``OFFSET = 1<<52`` bleibt der Worst-Case-
+# Betrag bei bis zu ``_MIGRATION_SOURCE_BUCKETS`` (= ``1<<20``, ~1 Mio) Quellen unter
+# ``2**53``.
+_MIGRATION_SOURCE_STRIDE = _LEGACY_GID_STRIDE  # == 1 << 32; parallel zum read-only-Legacy-Stride
 _MIGRATION_SOURCE_BUCKETS = 1 << 20  # bis ~1e6 unterscheidbare Quelldateien
 
 
@@ -194,9 +204,25 @@ class LegacyMigrator:
     additiv read-only als Legacy-Segment ein.
     """
 
-    def __init__(self, store: SqliteSegmentStore, legacy_path: str | Path) -> None:
+    def __init__(
+        self,
+        store: SqliteSegmentStore,
+        legacy_path: str | Path,
+        *,
+        write_lock: asyncio.Lock | None = None,
+    ) -> None:
         self._store = store
         self._legacy_path = Path(legacy_path)
+        # Serialisierung der Write-/Hide-Sequenz gegen Live-Appends (#951, Runde 23):
+        # ein Wartungs-``migrate_chunk`` schreibt direkt in ``store._active_conn`` –
+        # OHNE den Write-Lock, den ``RingBuffer.record()`` hält. Ein Live-Append kann
+        # sonst NACH dem Positive-Row-Check/Rotate, aber BEVOR die negativen Zeilen als
+        # ``migrating``/``migrated`` markiert sind, ins aktive Segment landen → das
+        # gemischte Segment wird versteckt/in den Legacy-Tail verschoben und frische
+        # Live-Events verschwinden oder sortieren als alt. Wird derselbe Lock übergeben,
+        # den ``record()`` nutzt, serialisiert die kritische Sektion mit Live-Appends.
+        # ``None`` = No-Op (bestehende Tests/Startup-Pfad ohne Lock laufen unverändert).
+        self._write_lock = write_lock
         # Stabiler, deterministischer gid-Bucket dieser Quelldatei (#951, Pkt 3):
         # aus dem absoluten Pfad abgeleitet, sodass verschiedene Quelldateien in
         # disjunkte gid-Bereiche migrieren und ihr Resume-Floor pro Quelle scopt.
@@ -667,6 +693,28 @@ class LegacyMigrator:
                 await self._store.manifest.delete_segment(segment.segment_id)
 
     async def _append_with_legacy_gids(self, rows: list[aiosqlite.Row]) -> None:
+        """Serialisiert die Write-/Hide-Sequenz gegen Live-Appends und delegiert (#951, Runde 23).
+
+        Die eigentliche Write-kritische Sektion (Positive-Check/Rotate →
+        ``_insert_event`` → ``mark_migrating``/``mark_migrated``) läuft unter dem
+        optionalen ``write_lock`` – demselben Lock, den ``RingBuffer.record()`` hält –,
+        damit ein Live-Append NICHT zwischen Positive-Check/Rotate und dem Verstecken der
+        negativen Zeilen ins aktive Segment einschlägt. Ohne Lock (``None``) ist der
+        ``async with`` ein No-Op; das ``rows`` sind bereits gelesen, die kritische
+        Sektion umfasst also ausschließlich die Write-/Hide-Sequenz, nicht den
+        Legacy-Read.
+
+        Reentrancy: ``record()`` hält ``self._lock`` bereits; die Migration läuft als
+        eigener Job NICHT unter ``record()`` – es gibt kein verschachteltes Acquire
+        desselben Locks im selben Task.
+        """
+        if self._write_lock is None:
+            await self._append_with_legacy_gids_locked(rows)
+            return
+        async with self._write_lock:
+            await self._append_with_legacy_gids_locked(rows)
+
+    async def _append_with_legacy_gids_locked(self, rows: list[aiosqlite.Row]) -> None:
         """Fügt Legacy-Zeilen mit negativen gids ein und hält dabei die Rotations-/Retention-Schwellen ein.
 
         Umgeht bewusst ``store.append()`` (das positive gids reserviert) und schreibt
