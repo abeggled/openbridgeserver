@@ -320,3 +320,149 @@ def test_unlink_with_sidecars_ignores_missing_and_unremovable(store: SqliteSegme
     only_main.write_bytes(b"\x00")
     store._unlink_with_sidecars(only_main)
     assert not only_main.exists()
+
+
+# ---------------------------------------------------------------------------
+# P2 (#951, :854): Legacy-WAL-Checkpoint muss die busy-Spalte der Ergebnis-Zeile
+# auswerten, bevor „recovered" markiert wird.
+# ---------------------------------------------------------------------------
+
+
+async def test_checkpoint_small_legacy_busy_row_is_not_success(store: SqliteSegmentStore, tmp_path: Path, monkeypatch):
+    # wal_checkpoint(TRUNCATE) wirft bei BUSY nicht, sondern meldet busy=1 in der
+    # Ergebnis-Zeile (busy, log, checkpointed). Der Helper darf das NICHT als Erfolg
+    # werten, sonst würde das Segment fälschlich „recovered" markiert und danach mit
+    # immutable=1 gelesen (nicht-gecheckpointete WAL-Frames unsichtbar).
+    legacy = tmp_path / "legacy.db"
+    legacy.write_bytes(b"\x00")
+
+    real_connect = aiosqlite.connect
+
+    class _BusyCursor:
+        async def fetchone(self):
+            return (1, 5, 0)  # busy=1 → Checkpoint NICHT vollständig
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+    class _BusyConn:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, *args, **kwargs):
+            if "wal_checkpoint" in sql:
+                return _BusyCursor()
+            return self._inner.execute(sql, *args, **kwargs)
+
+        async def commit(self):
+            await self._inner.commit()
+
+        async def close(self):
+            await self._inner.close()
+
+    async def _busy_connect(*args, **kwargs):
+        inner = await real_connect(*args, **kwargs)
+        return _BusyConn(inner)
+
+    monkeypatch.setattr(aiosqlite, "connect", _busy_connect)
+
+    ok = await store._checkpoint_small_legacy(legacy)
+    assert ok is False  # busy != 0 → kein Erfolg, kein „recovered"-Mark
+
+
+async def test_checkpoint_small_legacy_success_row_is_success(store: SqliteSegmentStore, tmp_path: Path, monkeypatch):
+    # Gegenprobe: busy=0 in der Ergebnis-Zeile → echter Erfolg → True.
+    legacy = tmp_path / "legacy_ok.db"
+    legacy.write_bytes(b"\x00")
+
+    real_connect = aiosqlite.connect
+
+    class _OkCursor:
+        async def fetchone(self):
+            return (0, 3, 3)  # busy=0 → vollständig gecheckpointet
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+    class _OkConn:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, *args, **kwargs):
+            if "wal_checkpoint" in sql:
+                return _OkCursor()
+            return self._inner.execute(sql, *args, **kwargs)
+
+        async def commit(self):
+            await self._inner.commit()
+
+        async def close(self):
+            await self._inner.close()
+
+    async def _ok_connect(*args, **kwargs):
+        inner = await real_connect(*args, **kwargs)
+        return _OkConn(inner)
+
+    monkeypatch.setattr(aiosqlite, "connect", _ok_connect)
+
+    ok = await store._checkpoint_small_legacy(legacy)
+    assert ok is True
+
+
+# ---------------------------------------------------------------------------
+# P2 (#951, :1737): unlesbare/korrupte checkpoint_pending-Segmente werden
+# quarantäniert statt den (segmentierten) Startup abzubrechen.
+# ---------------------------------------------------------------------------
+
+
+async def test_run_pending_checkpoints_quarantines_unreadable_segment(store: SqliteSegmentStore, tmp_path: Path):
+    # Ein checkpoint_pending-Segment, dessen Datei korrupt/unlesbar ist, darf beim
+    # Checkpoint-Retry nicht propagieren, sondern muss quarantäniert werden — analog
+    # zur Korruptions-Isolation im Read-Pfad.
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    await store.rotate()
+    closed = (await store.manifest.list_closed_segments())[0]
+    await store.manifest.mark_checkpoint_pending(closed.segment_id)
+
+    # Segment-Datei mit Garbage überschreiben → wal_checkpoint wirft „not a database".
+    seg_path = store._segments_dir / closed.filename
+    seg_path.write_bytes(b"this is not a sqlite database at all\x00\x01\x02")
+    Path(f"{seg_path}-wal").unlink(missing_ok=True)
+    Path(f"{seg_path}-shm").unlink(missing_ok=True)
+
+    recovered = await store.run_pending_checkpoints()
+    assert recovered == 0
+
+    seg = await store.manifest.get_segment(closed.segment_id)
+    assert seg is not None
+    assert seg.status == "quarantined"
+    # Nicht mehr als pending gelistet.
+    assert closed.segment_id not in {s.segment_id for s in await store.manifest.list_checkpoint_pending_segments()}
+
+
+async def test_run_pending_checkpoints_does_not_abort_startup_on_corrupt_segment(store: SqliteSegmentStore, tmp_path: Path):
+    # enforce_retention() ruft run_pending_checkpoints() als Vorlauf. Ein korruptes
+    # pending-Segment darf enforce_retention nicht mit einem aiosqlite-Fehler abbrechen.
+    from obs.ringbuffer.store.config import StoreRetentionConfig
+
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    await store.rotate()
+    closed = (await store.manifest.list_closed_segments())[0]
+    await store.manifest.mark_checkpoint_pending(closed.segment_id)
+    seg_path = store._segments_dir / closed.filename
+    seg_path.write_bytes(b"garbage-not-a-db\x00")
+    Path(f"{seg_path}-wal").unlink(missing_ok=True)
+    Path(f"{seg_path}-shm").unlink(missing_ok=True)
+
+    store._retention_config = StoreRetentionConfig(max_entries=1)
+    # Darf nicht werfen.
+    await store.enforce_retention()
+
+    seg = await store.manifest.get_segment(closed.segment_id)
+    assert seg is not None and seg.status == "quarantined"

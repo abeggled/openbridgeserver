@@ -845,19 +845,32 @@ class SqliteSegmentStore(RingBufferStore):
         Fehler (z. B. read-only-Filesystem) werden geschluckt — der Read degradiert
         dann auf den ``immutable=1``-Pfad statt zu brechen.
 
-        Liefert ``True`` bei erfolgreichem Checkpoint (der Aufrufer frischt dann
-        Manifest-Größe + Recovery-Status auf, #951 Codex :758), ``False`` bei Fehler.
+        WICHTIG (#951, Codex :854): ``wal_checkpoint(TRUNCATE)`` wirft bei einem
+        BUSY-Checkpoint NICHT, sondern meldet den Fall in der ERGEBNIS-ZEILE
+        ``(busy, log, checkpointed)`` mit ``busy=1``. Ohne Auswertung dieser Zeile
+        würde ``True`` zurückgegeben, obwohl die committeten WAL-Frames NICHT in die
+        Haupt-DB übernommen wurden. Der Aufrufer markierte dann ``recovered`` und läse
+        anschließend mit ``immutable=1`` — die nicht-gecheckpointeten Frames blieben
+        dauerhaft unsichtbar. Daher gilt nur ``busy == 0`` als Erfolg; bei ``busy != 0``
+        wird wie bei einem Checkpoint-Fehler degradiert (kein ``recovered``-Mark).
+
+        Liefert ``True`` NUR bei vollständigem Checkpoint (der Aufrufer frischt dann
+        Manifest-Größe + Recovery-Status auf, #951 Codex :758), ``False`` bei Fehler
+        oder BUSY.
         """
         try:
             conn = await aiosqlite.connect(str(legacy_path))
             try:
-                await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                async with conn.execute("PRAGMA wal_checkpoint(TRUNCATE)") as cur:
+                    row = await cur.fetchone()
                 await conn.commit()
             finally:
                 await conn.close()
         except aiosqlite.Error:
             return False
-        return True
+        # Ergebnis-Zeile (busy, log, checkpointed): busy != 0 → nicht vollständig
+        # (gleiche Auswertung wie in ``_try_truncate_checkpoint``).
+        return not (row is not None and row[0] != 0)
 
     async def _query_segment(self, conn: aiosqlite.Connection, query: StoreQuery) -> list[dict[str, Any]]:
         sql, params = self._build_segment_sql(query)
@@ -1729,14 +1742,27 @@ class SqliteSegmentStore(RingBufferStore):
         Erst nach erfolgreichem Truncate (DB/WAL/SHM konsistent) wird das Segment
         wieder als sauber ``closed`` markiert und damit retention-fähig. Liefert die
         Anzahl der jetzt konsistent geschlossenen Segmente.
+
+        Korruptions-Isolation (#951, Codex :1737): ist die Datei eines pending-Segments
+        beim Startup korrupt/unlesbar, würde der ``aiosqlite``-Fehler aus dem Open/
+        Checkpoint-Versuch sonst propagieren und den (segmentierten) Ringbuffer-Startup
+        abbrechen — obwohl ``enforce_retention()`` diesen Läufer als Vorlauf aufruft.
+        Ein korruptes Segment wird deshalb hier — konsistent mit dem Read-Pfad
+        (``_quarantine_corrupt_read``) — quarantäniert statt propagiert. Das aktive
+        Segment kann nie ``checkpoint_pending`` sein und wird daher nie hier berührt.
         """
         recovered = 0
         for segment in await self.manifest.list_checkpoint_pending_segments():
-            conn = await aiosqlite.connect(str(self._segments_dir / segment.filename))
             try:
-                ok = await self._try_truncate_checkpoint(conn)
-            finally:
-                await conn.close()
+                conn = await aiosqlite.connect(str(self._segments_dir / segment.filename))
+                try:
+                    ok = await self._try_truncate_checkpoint(conn)
+                finally:
+                    await conn.close()
+            except aiosqlite.Error as exc:
+                # Unlesbares/korruptes pending-Segment isolieren statt Startup brechen.
+                await self.manifest.mark_quarantined(segment.segment_id, reason=str(exc))
+                continue
             if ok:
                 await self.manifest.mark_checkpoint_done(segment.segment_id)
                 # Erfolgreicher TRUNCATE (#951, Codex :1696): ein großes ``-wal``/``-shm``
