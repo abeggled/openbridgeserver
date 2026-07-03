@@ -752,6 +752,7 @@ async def update_message_archive(
     )
     if not archive:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive not found")
+    await broadcast_message_archive_refresh(archive_id)
     return archive
 
 

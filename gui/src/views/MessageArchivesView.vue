@@ -106,7 +106,7 @@
                 <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">{{ selectedArchive.name }}</h3>
               </div>
               <p class="mt-1 text-sm text-slate-500">{{ selectedArchive.description || selectedArchive.id }}</p>
-              <p class="mt-2 text-xs text-slate-500">
+              <p v-if="auth.isAdmin && selectedArchive.db_path" class="mt-2 text-xs text-slate-500">
                 {{ $t('messageArchives.dbPath') }}: <span class="font-mono">{{ selectedArchive.db_path }}</span>
               </p>
             </div>
@@ -303,7 +303,8 @@ async function loadArchives() {
 }
 
 async function loadEntries() {
-  if (!currentArchiveId.value) {
+  const archiveId = currentArchiveId.value
+  if (!archiveId) {
     entries.value = []
     entriesTotal.value = 0
     return
@@ -311,7 +312,7 @@ async function loadEntries() {
   entriesLoading.value = true
   try {
     const params = {
-      archive_id: currentArchiveId.value,
+      archive_id: archiveId,
       limit: 200,
     }
     if (filters.q) params.q = filters.q
@@ -319,12 +320,14 @@ async function loadEntries() {
     if (filters.status) params.status = filters.status
     if (filters.type) params.type = filters.type
     const { data } = await messageArchivesApi.entries(params)
+    if (currentArchiveId.value !== archiveId) return
     entries.value = data.items
     entriesTotal.value = data.total
   } catch (err) {
+    if (currentArchiveId.value !== archiveId) return
     error.value = err?.response?.data?.detail || err.message || t('common.loadError')
   } finally {
-    entriesLoading.value = false
+    if (currentArchiveId.value === archiveId) entriesLoading.value = false
   }
 }
 
@@ -337,6 +340,9 @@ function selectArchive(archive) {
 function startCreate() {
   if (!auth.isAdmin) return
   selectedArchive.value = null
+  entries.value = []
+  entriesTotal.value = 0
+  entriesLoading.value = false
   resetForm()
   editing.value = true
 }
