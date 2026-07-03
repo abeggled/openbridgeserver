@@ -100,8 +100,7 @@ async def test_v39_repairs_existing_v38_without_device_hierarchy_links(tmp_path)
         # an. Diese synthetische V38-DB fuehrt nur V34 aus (kein Basis-Schema), daher
         # muss adapter_bindings bereitstehen, damit die Migrationskette bis V40 laeuft.
         await conn.execute(
-            "CREATE TABLE IF NOT EXISTS adapter_bindings "
-            "(id TEXT PRIMARY KEY, adapter_instance_id TEXT, enabled INTEGER NOT NULL DEFAULT 1)"
+            "CREATE TABLE IF NOT EXISTS adapter_bindings (id TEXT PRIMARY KEY, adapter_instance_id TEXT, enabled INTEGER NOT NULL DEFAULT 1)"
         )
         await conn.commit()
 
