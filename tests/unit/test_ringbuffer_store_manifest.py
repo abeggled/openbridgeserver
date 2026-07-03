@@ -190,6 +190,44 @@ async def test_list_retention_eligible_includes_closed_and_quarantined_fifo(mani
     assert c.segment_id not in {s.segment_id for s in eligible}
 
 
+async def test_list_retention_eligible_orders_migrated_before_closed(manifest: Manifest):
+    """Migrierte Segmente sind für Retention die ältesten – zuerst löschbar (#951, Pkt 1).
+
+    Materialisiert die Migration alte Legacy-Daten NACH den ersten v2-Writes, trägt
+    das migrierte Segment eine HÖHERE ``segment_id`` als ein bereits geschlossenes
+    v2-Segment, obwohl seine Events (negative Legacy-gids) ÄLTER sind. Rein nach
+    ``segment_id ASC`` löschte Size-/Row-Retention das jüngere v2-Segment VOR dem
+    älteren migrierten – falsche FIFO-Ordnung. Migrierte müssen daher trotz höherer
+    id ZUERST erscheinen, konsistent mit ihrer Query-Trailing-Position.
+    """
+    v2_closed = await manifest.create_segment(filename="v2.sqlite", schema_version=2)
+    await manifest.close_segment(v2_closed.segment_id)
+    migrated = await manifest.create_segment(filename="legacy.sqlite", schema_version=2)
+    await manifest.close_segment(migrated.segment_id)
+    await manifest.mark_migrated(migrated.segment_id)
+    # migrated hat die HÖHERE segment_id, hält aber die ÄLTESTEN (Legacy-)Daten.
+    assert migrated.segment_id > v2_closed.segment_id
+
+    eligible = await manifest.list_retention_eligible_segments()
+    # Migrated zuerst (ältestes Daten-Alter), dann das jüngere v2-closed.
+    assert [s.segment_id for s in eligible] == [migrated.segment_id, v2_closed.segment_id]
+
+
+async def test_list_retention_eligible_orders_multiple_migrated_oldest_id_first(manifest: Manifest):
+    """Innerhalb der migrated-Klasse bleibt segment_id ASC (älteres migriertes zuerst)."""
+    mig_a = await manifest.create_segment(filename="m_a.sqlite", schema_version=2)
+    mig_b = await manifest.create_segment(filename="m_b.sqlite", schema_version=2)
+    closed = await manifest.create_segment(filename="v2.sqlite", schema_version=2)
+    for seg in (mig_a, mig_b, closed):
+        await manifest.close_segment(seg.segment_id)
+    await manifest.mark_migrated(mig_a.segment_id)
+    await manifest.mark_migrated(mig_b.segment_id)
+
+    eligible = await manifest.list_retention_eligible_segments()
+    # Beide migrated vor closed; innerhalb migrated segment_id ASC.
+    assert [s.segment_id for s in eligible] == [mig_a.segment_id, mig_b.segment_id, closed.segment_id]
+
+
 async def test_delete_segment_removes_manifest_entry(manifest: Manifest):
     seg = await manifest.create_segment(filename="a.sqlite", schema_version=1)
     await manifest.close_segment(seg.segment_id)

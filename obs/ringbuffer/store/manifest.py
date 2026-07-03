@@ -365,10 +365,22 @@ class Manifest:
         wenn sie an der Reihe sind — ihre Manifest-Metadaten bleiben intakt,
         nur die Segment-Datei ist korrupt. ``active`` und ``checkpoint_pending``
         sind bewusst nicht enthalten und werden nie über diese Liste gelöscht.
+
+        Ordnung nach echtem DATEN-Alter, nicht rein nach ``segment_id`` (#951, Pkt 1):
+        migrierte Segmente (``migrated``) tragen synthetische, streng negative
+        Legacy-gids und sind per Definition ÄLTER als jedes echte v2-Segment. Da die
+        Migration alte Legacy-Daten NACH den ersten v2-Writes materialisieren kann,
+        bekommt ein migriertes Segment ggf. eine HÖHERE ``segment_id`` als ein bereits
+        geschlossenes v2-Segment. Rein nach ``segment_id ASC`` löschte die FIFO-
+        Retention dann das jüngere v2-Segment VOR dem älteren migrierten. Migrierte
+        werden daher als ÄLTESTE (zuerst löschbar) einsortiert, konsistent mit ihrer
+        Trailing-Position in ``list_segments_for_query``. Innerhalb jeder Klasse bleibt
+        ``segment_id ASC`` (ältestes zuerst).
         """
         placeholders = ", ".join("?" for _ in SEGMENT_STATUS_RETENTION_ELIGIBLE)
         async with self._db.execute(
-            f"SELECT * FROM segments WHERE status IN ({placeholders}) ORDER BY segment_id ASC",
+            f"SELECT * FROM segments WHERE status IN ({placeholders}) "
+            f"ORDER BY CASE WHEN status = '{SEGMENT_STATUS_MIGRATED}' THEN 0 ELSE 1 END, segment_id ASC",
             SEGMENT_STATUS_RETENTION_ELIGIBLE,
         ) as cur:
             rows = await cur.fetchall()

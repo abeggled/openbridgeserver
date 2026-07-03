@@ -659,6 +659,122 @@ async def test_migration_reads_committed_dirty_wal_frames(store: SqliteSegmentSt
     assert sorted(r["new_value"] for r in rows) == ["wal-0", "wal-1", "wal-2"]
 
 
+def _build_dirty_wal_legacy(tmp_path: Path, name: str = "obs_ringbuffer.db") -> Path:
+    """Kleine Legacy-DB mit committeten, noch ungecheckpointeten WAL-Frames.
+
+    Kopiert ``.db``+``-wal`` bei NOCH OFFENER Writer-Connection (kein Close-Checkpoint),
+    sodass am Zielpfad ein nicht-leeres ``-wal`` verbleibt (dirty).
+    """
+    src = tmp_path / "src.db"
+    conn = sqlite3.connect(str(src))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """CREATE TABLE ringbuffer (
+               id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
+               datapoint_id TEXT NOT NULL, topic TEXT NOT NULL, old_value TEXT,
+               new_value TEXT, source_adapter TEXT NOT NULL, quality TEXT NOT NULL,
+               metadata_version INTEGER NOT NULL DEFAULT 1, metadata TEXT NOT NULL DEFAULT '{}')"""
+    )
+    conn.commit()
+    # Schema in die Haupt-DB checkpointen, DANN autocheckpoint aus: nur die Zeilen
+    # landen anschließend im dirty -wal (die Tabelle ist im immutable-Snapshot sichtbar).
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.execute("PRAGMA wal_autocheckpoint=0")
+    for i in range(3):
+        conn.execute(
+            "INSERT INTO ringbuffer (ts, datapoint_id, topic, new_value, source_adapter, quality) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"2020-01-0{i + 1}T00:00:00.000Z", "dp-legacy", "t", json.dumps(f"wal-{i}"), "legacy", "good"),
+        )
+    conn.commit()  # committed, aber (autocheckpoint=0) noch im -wal
+    db = tmp_path / name
+    db.write_bytes(src.read_bytes())
+    Path(f"{db}-wal").write_bytes(Path(f"{src}-wal").read_bytes())
+    conn.close()
+    assert Path(f"{db}-wal").exists() and Path(f"{db}-wal").stat().st_size > 0
+    return db
+
+
+async def test_migration_busy_checkpoint_does_not_lose_committed_wal_frames(store: SqliteSegmentStore, tmp_path: Path, monkeypatch):
+    """#951, Pkt 2 (P1): busy WAL-Checkpoint im Migrationspfad verliert keine Frames.
+
+    ``wal_checkpoint(TRUNCATE)`` meldet ``busy`` NICHT als Exception, sondern in der
+    ERGEBNIS-ZEILE ``(busy, log, checkpointed)``. Ignoriert der Migrationspfad diese
+    Zeile, öffnet er anschließend mit ``immutable=1`` – die committeten WAL-Frames
+    bleiben ungelesen und ``migrate_chunk`` markiert den Resume-State fälschlich als
+    ``done`` (Datenverlust). Der Fix wertet die Zeile aus: bei ``busy`` wird NICHT als
+    gelesen behandelt, die Migration bricht (zum späteren Retry) ab statt Frames still
+    zu verlieren.
+    """
+    db = _build_dirty_wal_legacy(tmp_path)
+
+    import obs.ringbuffer.store.migration as migration_mod
+
+    real_connect = migration_mod.aiosqlite.connect
+
+    class _BusyCheckpointCursor:
+        """Cursor, der die busy-Ergebnis-Zeile liefert.
+
+        Unterstützt beide Aufrufformen: ``await conn.execute(...)`` (liefert diesen
+        Cursor) UND ``async with conn.execute(...) as cur`` (Kontextmanager).
+        """
+
+        def __await__(self):
+            async def _self():
+                return self
+
+            return _self().__await__()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def fetchone(self):
+            # Ergebnis-Zeile: busy=1 → Checkpoint unvollständig.
+            return (1, 0, 0)
+
+    class _BusyConnWrapper:
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, sql, *args, **kwargs):
+            if "wal_checkpoint" in str(sql).lower():
+                return _BusyCheckpointCursor()
+            return self._real.execute(sql, *args, **kwargs)
+
+        async def commit(self):
+            return await self._real.commit()
+
+        async def close(self):
+            return await self._real.close()
+
+    async def _fake_connect(*args, **kwargs):
+        conn = await real_connect(*args, **kwargs)
+        # Nur die schreibbare Checkpoint-Connection (ohne uri=True) verfälschen.
+        if not kwargs.get("uri"):
+            return _BusyConnWrapper(conn)
+        return conn
+
+    monkeypatch.setattr(migration_mod.aiosqlite, "connect", _fake_connect)
+
+    migrator = LegacyMigrator(store, db)
+    # Busy-Checkpoint darf die Frames NICHT still verlieren: entweder Abbruch (Exception)
+    # ODER kein done-Mark. In keinem Fall darf der Resume-State fälschlich done sein.
+    with pytest.raises(Exception):  # noqa: PT011 – busy soll hart abbrechen statt still done
+        await migrator.migrate_small(batch_rows=100)
+
+    # Resume-State darf NICHT done sein (sonst wären die WAL-Frames dauerhaft übersprungen).
+    assert migrator._load_state().done is False
+
+    # Ohne busy (Fake entfernt) migriert derselbe Migrator alle 3 Frames sauber.
+    monkeypatch.setattr(migration_mod.aiosqlite, "connect", real_connect)
+    total = await LegacyMigrator(store, db).migrate_small(batch_rows=100)
+    assert total == 3
+    rows = await store.query(StoreQuery(limit=100))
+    assert sorted(r["new_value"] for r in rows) == ["wal-0", "wal-1", "wal-2"]
+
+
 # ---------------------------------------------------------------------------
 # (Runde 2 / 5) pre-Metadata-Schema in der Chunk-Migration behandeln (:353)
 # ---------------------------------------------------------------------------

@@ -790,6 +790,19 @@ class LegacyMigrator:
         Migration sie sieht. Fehler (read-only-Filesystem o. Ä.) werden geschluckt –
         die Migration degradiert dann auf den ``immutable=1``-Pfad statt zu brechen.
         Große Dateien werden NICHT gecheckpointet (kein Startup-Scan auf 20–30 GB).
+
+        WICHTIG (#951, Codex :802, P1): ``wal_checkpoint(TRUNCATE)`` wirft bei einem
+        BUSY-Checkpoint NICHT, sondern meldet den Fall in der ERGEBNIS-ZEILE
+        ``(busy, log, checkpointed)`` mit ``busy=1``. Anders als der read-only-
+        Kompatibilitätspfad (``_checkpoint_small_legacy``) darf der MIGRATIONS-Pfad
+        einen busy Checkpoint NICHT stillschweigend als „gelesen" behandeln: die
+        committeten WAL-Frames stünden dann noch im ``-wal``, das folgende
+        ``immutable=1``-Open ignorierte sie und ``migrate_chunk`` markierte den
+        Resume-State fälschlich als ``done`` – Datenverlust bei der Migration. Daher
+        gilt nur ``busy == 0`` als Erfolg; bei ``busy != 0`` bricht die Migration mit
+        einem ``RuntimeError`` ab (kein done-Mark), ein späterer Lauf versucht es
+        erneut, sobald der Reader den WAL freigibt. Die Ergebnis-Zeile wird identisch
+        zu ``_checkpoint_small_legacy`` ausgewertet.
         """
         if not _wal_is_dirty(legacy_path):
             return
@@ -798,12 +811,21 @@ class LegacyMigrator:
         try:
             conn = await aiosqlite.connect(str(legacy_path))
             try:
-                await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                async with conn.execute("PRAGMA wal_checkpoint(TRUNCATE)") as cur:
+                    row = await cur.fetchone()
                 await conn.commit()
             finally:
                 await conn.close()
         except aiosqlite.Error:
             return
+        # Ergebnis-Zeile (busy, log, checkpointed): busy != 0 → committete WAL-Frames
+        # NICHT in die Haupt-DB übernommen. Nicht als gelesen behandeln – hart abbrechen,
+        # statt via immutable=1 committete Frames zu verlieren (#951, P1).
+        if row is not None and row[0] != 0:
+            raise RuntimeError(
+                f"WAL-Checkpoint der Legacy-DB {legacy_path} war busy – Migration abgebrochen, "
+                "um committete WAL-Frames nicht zu verlieren (späterer Retry)."
+            )
 
     # ------------------------------------------------------------------
     # Resume-State (JSON neben der Store-Root)
