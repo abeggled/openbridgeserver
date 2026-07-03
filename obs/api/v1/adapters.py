@@ -235,7 +235,10 @@ def _message_redacted_target_rename_candidates(
         for target_name, target in incoming_targets.items()
         if target_name not in stored_targets and isinstance(target, dict) and _message_target_has_redacted_secret(provider_name, target)
     ]
-    if len(removed_targets) != len(added_redacted_targets):
+    # Only handle single renames: FIFO matching for multiple renames would assign secrets in
+    # stored-dict order, but the GUI appends renamed keys at the end, so the incoming order
+    # reflects the user's edit sequence rather than the stored order — silently swapping secrets.
+    if len(removed_targets) != 1 or len(added_redacted_targets) != 1:
         return []
     return removed_targets
 

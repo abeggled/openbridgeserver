@@ -624,9 +624,67 @@ class TestUpdateInstance:
 
         saved_config = json.loads(db.committed[0][1][1])
         assert saved_config["providers"]["pushover"]["api_token"] == "pushover-token"
-        assert saved_config["providers"]["pushover"]["targets"]["oncall"]["user_key"] == "ops-user"
-        assert saved_config["providers"]["pushover"]["targets"]["developers"]["user_key"] == "dev-user"
+        # Multiple simultaneous renames: cannot safely determine mapping → require re-entry
+        assert saved_config["providers"]["pushover"]["targets"]["oncall"]["user_key"] == REDACTED
+        assert saved_config["providers"]["pushover"]["targets"]["developers"]["user_key"] == REDACTED
         assert saved_config["providers"]["pushover"]["targets"]["new"]["user_key"] == "new-user"
+
+    @pytest.mark.asyncio
+    async def test_multi_rename_does_not_swap_target_secrets(self, monkeypatch):
+        """FIFO matching swaps secrets when admin renames targets in a different order than stored."""
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceUpdate
+        from obs.api.v1.redaction import REDACTED
+
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": "pushover-token",
+                    "targets": {
+                        "ops": {"user_key": "ops-user"},
+                        "dev": {"user_key": "dev-user"},
+                    },
+                }
+            }
+        }
+        # GUI rename order: "dev" renamed to "developers" first, then "ops" to "oncall"
+        # → incoming dict order: {"developers": ..., "oncall": ...} (not stored order)
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": REDACTED,
+                    "targets": {
+                        "developers": {"user_key": REDACTED},
+                        "oncall": {"user_key": REDACTED},
+                    },
+                }
+            }
+        }
+
+        row = _inst_row(adapter_type="MESSAGE", enabled=0, config=stored_config)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        async def _fake_stop(iid):
+            pass
+
+        monkeypatch.setattr(adp_api.adapter_registry, "stop_instance", _fake_stop)
+        db = _DbStub(one=row)
+
+        await adp_api.update_instance(
+            instance_id=uuid.UUID(row["id"]),
+            body=AdapterInstanceUpdate(config=incoming_config),
+            db=db,
+            _user="admin",
+        )
+
+        saved_config = json.loads(db.committed[0][1][1])
+        assert saved_config["providers"]["pushover"]["api_token"] == "pushover-token"
+        # Multi-rename: cannot safely determine mapping → require re-entry (stay REDACTED)
+        assert saved_config["providers"]["pushover"]["targets"]["developers"]["user_key"] == REDACTED
+        assert saved_config["providers"]["pushover"]["targets"]["oncall"]["user_key"] == REDACTED
 
     @pytest.mark.asyncio
     async def test_update_message_instance_does_not_reassign_deleted_target_secret(self, monkeypatch):
