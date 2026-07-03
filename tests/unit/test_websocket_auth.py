@@ -349,6 +349,16 @@ async def test_ws_log_access_rejects_revoked_api_key(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ws_log_access_revalidates_resolved_api_key_owner(monkeypatch):
+    monkeypatch.setattr(auth_api, "hash_api_key", lambda key: f"hash:{key}")
+    db = _LogAccessDbStub(None)
+    monkeypatch.setattr(ws_api, "get_db", lambda: db)
+
+    assert await ws_api._ws_has_log_access("alice", "obs_revoked") is False  # noqa: SLF001
+    assert db.queries
+
+
+@pytest.mark.asyncio
 async def test_websocket_endpoint_accepts_public_visu_page_scope(monkeypatch):
     db = _DbStub(has_key=False, page_type="PAGE")
     monkeypatch.setattr(ws_api, "get_db", lambda: db)

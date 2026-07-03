@@ -118,6 +118,34 @@ describe('MessageArchive Widget.vue', () => {
     wrapper.unmount()
   })
 
+  it('hides read action after a page-scoped read is forbidden', async () => {
+    apiState.jwt = 'stale-jwt'
+    apiState.writeContext = { pageId: 'page-1' }
+    vi.mocked(messageArchives.entries).mockResolvedValue({ items: [entry], total: 1, limit: 25, offset: 0 })
+    vi.mocked(messageArchives.markRead).mockRejectedValueOnce({ response: { status: 403 } })
+
+    const wrapper = mount(MessageArchiveWidget, {
+      props: {
+        config: { allow_read: true },
+        editorMode: false,
+        readonly: false,
+      },
+      global: {
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await flushPromises()
+
+    const readButton = wrapper.findAll('button').find(button => button.text().includes('widgets.messageArchive.markRead'))
+    expect(readButton).toBeTruthy()
+    await readButton!.trigger('click')
+    await flushPromises()
+
+    expect(messageArchives.markRead).toHaveBeenCalledOnce()
+    expect(wrapper.text()).not.toContain('widgets.messageArchive.markRead')
+    wrapper.unmount()
+  })
+
   it('refreshes when cached live entries no longer match filters', async () => {
     vi.mocked(messageArchives.entries)
       .mockResolvedValueOnce({ items: [entry], total: 1, limit: 25, offset: 0 })

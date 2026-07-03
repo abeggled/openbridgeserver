@@ -570,6 +570,40 @@ async def test_message_archive_database_export_and_import(client, auth_headers):
     )
 
 
+async def test_message_archive_database_import_broadcasts_refresh(client, auth_headers, monkeypatch):
+    from obs.api.v1 import message_archives as message_archives_api
+
+    archive_id = _archive_id("db-import-refresh")
+    refreshed: list[str | None] = []
+
+    async def capture_refresh(target_archive_id=None):
+        refreshed.append(target_archive_id)
+
+    create = await client.post(
+        "/api/v1/message-archives",
+        headers=auth_headers,
+        json={"id": archive_id, "name": "DB Import Refresh"},
+    )
+    assert create.status_code == 201, create.text
+    exported = await client.get("/api/v1/message-archives/export/db", headers=auth_headers)
+    assert exported.status_code == 200, exported.text
+
+    monkeypatch.setattr(message_archives_api, "broadcast_message_archive_refresh", capture_refresh)
+    imported = await client.post(
+        "/api/v1/message-archives/import/db",
+        headers=auth_headers,
+        files={"file": ("message-archives.sqlite", exported.content, "application/octet-stream")},
+    )
+
+    assert imported.status_code == 200, imported.text
+    assert refreshed == [None]
+    await client.delete(
+        f"/api/v1/message-archives/{archive_id}",
+        headers=auth_headers,
+        params={"confirm": "true"},
+    )
+
+
 async def test_message_archive_database_import_rejects_malformed_schema(client, auth_headers, tmp_path):
     malformed = tmp_path / "malformed-message-archives.sqlite"
     conn = sqlite3.connect(malformed)

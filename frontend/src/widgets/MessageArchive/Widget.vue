@@ -16,6 +16,7 @@ const entries = ref<MessageArchiveEntry[]>([])
 const total = ref(0)
 const loading = ref(false)
 const error = ref('')
+const readForbidden = ref(false)
 let unsubscribeWs: (() => void) | null = null
 
 function configStringValues(...keys: string[]): string[] {
@@ -42,7 +43,7 @@ const showSource = computed(() => (props.config.show_source as boolean | undefin
 const allowRead = computed(() => (props.config.allow_read as boolean | undefined) ?? true)
 const allowAcknowledge = computed(() => (props.config.allow_acknowledge as boolean | undefined) ?? true)
 const anonymousPageScope = computed(() => !!getWriteContext().pageId && !getJwt())
-const canRead = computed(() => !props.readonly && allowRead.value && !anonymousPageScope.value)
+const canRead = computed(() => !props.readonly && allowRead.value && !anonymousPageScope.value && !readForbidden.value)
 const canAcknowledge = computed(() => !props.readonly && allowAcknowledge.value)
 
 function filterValues(key: 'severity' | 'status' | 'type' | 'source'): string[] {
@@ -160,9 +161,15 @@ async function load() {
 
 async function markRead(entry: MessageArchiveEntry) {
   if (props.editorMode || !canRead.value) return
-  const updated = await messageArchives.markRead(entry.archive_id, entry.id)
-  entries.value = entries.value.map(item => item.id === updated.id ? updated : item)
-  await load()
+  try {
+    const updated = await messageArchives.markRead(entry.archive_id, entry.id)
+    entries.value = entries.value.map(item => item.id === updated.id ? updated : item)
+    await load()
+  } catch (err) {
+    const status = (err as { response?: { status?: number }, status?: number }).response?.status
+      ?? (err as { status?: number }).status
+    if (status === 403 && getWriteContext().pageId) readForbidden.value = true
+  }
 }
 
 async function acknowledge(entry: MessageArchiveEntry) {

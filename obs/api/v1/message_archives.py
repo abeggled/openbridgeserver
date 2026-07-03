@@ -631,6 +631,7 @@ async def import_message_archive_db(
             if not integrity.get("ok"):
                 raise RuntimeError("imported database failed integrity check")
             activate_message_archive_service(store)
+            await broadcast_message_archive_refresh()
         except Exception:
             try:
                 await store.disconnect()

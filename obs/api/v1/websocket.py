@@ -760,8 +760,6 @@ async def _resolve_ws_api_key_subject(api_key: str) -> str | None:
 
 async def _ws_has_log_access(user: str | None, api_key: str | None) -> bool:
     """Return whether the authenticated websocket may receive log_entry pushes."""
-    if user and user != "__api_key__":
-        return True
     if api_key:
         try:
             db = get_db()
@@ -775,6 +773,8 @@ async def _ws_has_log_access(user: str | None, api_key: str | None) -> bool:
             (key_hash,),
         )
         return row is not None
+    if user and user != "__api_key__":
+        return True
     return False
 
 
