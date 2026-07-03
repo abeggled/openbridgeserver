@@ -21,7 +21,12 @@ from pydantic import BaseModel, field_serializer
 
 from obs.api.auth import Principal, get_admin_user, get_current_principal, optional_current_user
 from obs.api.authz import AuthzAction, AuthzTarget, authorize
-from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_datapoint_targets
+from obs.api.authz_service import (
+    _datapoint_read_grants,
+    filter_authorized_datapoints,
+    load_role_grants,
+    resolve_datapoint_targets,
+)
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config
 from obs.api.v1.sessions import validate_session
 from obs.core.event_bus import DataValueEvent, get_event_bus
@@ -238,11 +243,12 @@ async def _has_explicit_datapoint_read_deny(db: Database, principal: Principal, 
         targets = targets_by_dp.setdefault(direct_dp_id, [])
         if not any(target.node_type == "datapoint" and target.node_id == direct_dp_id for target in targets):
             targets.append(AuthzTarget(node_type="datapoint", node_id=direct_dp_id))
+    targets = targets_by_dp.get(dp_id_str, [])
     decision = authorize(
         principal=principal,
         action=AuthzAction.READ,
-        targets=targets_by_dp.get(dp_id_str, []),
-        grants=grants,
+        targets=targets,
+        grants=_datapoint_read_grants(grants, targets),
     )
     return decision.reason == "explicit_deny"
 
