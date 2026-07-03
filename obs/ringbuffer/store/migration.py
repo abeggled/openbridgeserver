@@ -265,25 +265,45 @@ class LegacyMigrator:
 
     @property
     def _migrated_marker_path(self) -> Path:
-        """Persistenter „migriert"-Marker neben der Quelldatei (#951, Pkt 2).
+        """Persistenter „migriert"-Marker neben der Quelldatei (#951, Pkt 2, Runde 27 Finding 3).
 
-        Ein leeres Sidecar ``<quelle>.migrated`` direkt neben der Legacy-DB. Bewusst
-        neben der QUELLE (nicht in der Store-Root), damit der Marker die Quelle
-        begleitet und ausschließlich diese eine Datei als vollständig migriert
-        markiert – auch wenn mehrere Quellen mit gleichem Basename in denselben Store
-        migriert wurden.
+        Ein Sidecar ``<quelle>.migrated`` direkt neben der Legacy-DB, das die Datei-
+        Identität ``(mtime_ns, size)`` der Quelle bei Migrations-Abschluss festhält (JSON;
+        ein leerer Alt-Marker gilt weiterhin als „migriert", siehe
+        ``_marker_suppresses_attach``). Bewusst neben der QUELLE (nicht in der Store-Root),
+        damit der Marker die Quelle begleitet und ausschließlich diese eine Datei als
+        vollständig migriert markiert – auch wenn mehrere Quellen mit gleichem Basename in
+        denselben Store migriert wurden.
         """
         return self._legacy_path.with_name(f"{self._legacy_path.name}.migrated")
 
-    def _mark_source_migrated(self) -> None:
-        """Vermerkt die Quelle persistent als vollständig migriert (#951, Pkt 2).
+    def _legacy_identity(self) -> tuple[int, int] | None:
+        """Aktuelle Datei-Identität der Legacy-Quelle als ``(mtime_ns, size)`` (#951, Runde 27, Finding 3).
 
-        Idempotent: legt das leere Marker-Sidecar an (bzw. lässt es bestehen).
+        Dient dem Marker-Invalidierungs-Check: ändert sich die Legacy-Datei nach dem
+        Marker (neue Zeilen), weicht diese Identität vom im Marker gespeicherten Wert ab.
+        Nur Dateisystem-Metadaten – die DB wird NICHT geöffnet (kein Startup-Scan). Fehlt
+        die Datei, ``None``.
+        """
+        try:
+            st = self._legacy_path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _mark_source_migrated(self) -> None:
+        """Vermerkt die Quelle persistent als vollständig migriert (#951, Pkt 2, Runde 27 Finding 3).
+
+        Idempotent: legt/aktualisiert das Marker-Sidecar neben der Quelldatei an. In den
+        Marker wird die Datei-Identität ``(mtime_ns, size)`` der Legacy-DL geschrieben
+        (JSON), damit ``classify()`` erkennt, ob die Datei NACH dem Marker verändert wurde
+        (Finding 3: Rollback/``segmented=false`` + neue Zeilen dürfen nicht still ignoriert
+        werden).
 
         Der Marker ist die Re-Attach-Schutzschicht (#951, P2): ``_detach_migrated_
         legacy_segment`` darf den Legacy-Manifest-Eintrag NUR entfernen, WENN dieser
         Marker erfolgreich geschrieben wurde. Ist das Legacy-Verzeichnis nicht
-        schreibbar (aber die Store-Root schon), scheitert ``touch()`` – ein
+        schreibbar (aber die Store-Root schon), scheitert der Write – ein
         geschluckter Fehler + trotzdem entfernte Manifest-Zeile führte beim nächsten
         Restart zum Re-Attach der bereits migrierten Quelle (``classify()`` sähe die
         Datei OHNE Marker) und damit zur DOPPELTEN Lieferung jedes migrierten Events.
@@ -291,24 +311,71 @@ class LegacyMigrator:
         detacht; die Legacy-Quelle bleibt registriert (kein Doppel-Delivery) und ein
         späterer Lauf kann es erneut versuchen.
         """
+        identity = self._legacy_identity()
+        payload = {} if identity is None else {"mtime_ns": identity[0], "size": identity[1]}
         try:
-            self._migrated_marker_path.touch(exist_ok=True)
+            self._migrated_marker_path.write_text(json.dumps(payload), encoding="utf-8")
         except OSError:
             logger.error("RingBuffer: konnte Migrations-Marker fuer %s nicht schreiben – Legacy bleibt eingehaengt", self._legacy_path)
             raise
 
+    def _marker_suppresses_attach(self) -> bool:
+        """True, wenn der Marker das Re-Attach unterdrückt – False, wenn er STALE ist (#951, Runde 27, Finding 3).
+
+        Marker-Semantik (Rückwärtskompat bewusst konservativ):
+
+        * **Kein Marker** → False (nicht unterdrückt; normal klassifizieren).
+        * **Leerer / Alt-Marker ohne Identität** (erzeugt vor Runde 27, z. B. ``touch``):
+          weiterhin ``suppress`` – ein bestehendes Upgrade darf durch das neue Format
+          nicht plötzlich re-attachen. So bleiben bestehende Tests/Installs unverändert.
+        * **Marker mit Identität** (``mtime_ns``+``size``): stimmt die aktuelle Datei-
+          Identität überein → ``suppress`` (Datei unverändert seit Migration). Weicht sie
+          ab (neue Zeilen / Rollback / ``segmented=false`` + Re-Insert) → Marker ist STALE,
+          NICHT mehr unterdrücken; die Datei wird wieder normal klassifiziert/attached, damit
+          die neuen Legacy-Zeilen NICHT still verloren gehen.
+
+        Tradeoff (bewusst, siehe ``classify``): das Re-Attach der geänderten Datei kann
+        bereits migrierte (in v2 kopierte) Alt-Zeilen transient erneut sichtbar machen
+        (Doppel-Delivery der Alt-Zeilen), was strikt besser ist als stiller Verlust der
+        NEUEN Zeilen. Die Migration ist rowid-idempotent und faltet die neuen Zeilen bei
+        einem späteren Lauf sauber ein.
+        """
+        try:
+            raw = self._migrated_marker_path.read_text(encoding="utf-8")
+        except OSError:
+            return False  # Marker nicht (mehr) lesbar → nicht unterdrücken
+        raw = raw.strip()
+        if not raw:
+            return True  # Alt-Marker (leer, vor Runde 27) → konservativ weiterhin suppress
+        try:
+            data = json.loads(raw)
+            marker_identity = (int(data["mtime_ns"]), int(data["size"]))
+        except (ValueError, TypeError, KeyError):
+            return True  # unlesbarer/legacy Inhalt → konservativ suppress (Rückwärtskompat)
+        return self._legacy_identity() == marker_identity
+
     def classify(self) -> LegacyClassification | None:
-        """Klassifiziert die Quelle – ODER liefert ``None``, wenn bereits migriert (#951, Pkt 2).
+        """Klassifiziert die Quelle – ODER liefert ``None``, wenn bereits migriert (#951, Pkt 2, Runde 27 Finding 3).
 
         Der Startup-Attach-Pfad (``_open_segment_store_locked``) hängt eine physisch
         vorhandene Legacy-Quelle nur ein, wenn ``classify()`` eine Klassifikation
         liefert. Trägt die Quelle den persistenten „migriert"-Marker (aus
-        ``_detach_migrated_legacy_segment``), gilt sie als vollständig nach v2 kopiert
-        und darf NICHT erneut read-only eingehängt werden – sonst würde jedes bereits
-        migrierte Event doppelt geliefert. Die Original-Datei bleibt physisch erhalten
-        (Datenerhalt); nur das Wieder-Einhängen wird unterdrückt.
+        ``_detach_migrated_legacy_segment``) UND ist die Datei seit dem Marker
+        unverändert (``_marker_suppresses_attach``), gilt sie als vollständig nach v2
+        kopiert und darf NICHT erneut read-only eingehängt werden – sonst würde jedes
+        bereits migrierte Event doppelt geliefert. Die Original-Datei bleibt physisch
+        erhalten (Datenerhalt); nur das Wieder-Einhängen wird unterdrückt.
+
+        Marker-Invalidierung (Finding 3): der path-only-Marker unterdrückte das Attachen
+        FÜR IMMER, obwohl ``_detach_migrated_legacy_segment`` die Originaldatei bewusst
+        liegen lässt. Rollt ein Operator zurück oder setzt ``segmented=false`` und dieselbe
+        ``obs_ringbuffer.db`` bekommt NACH dem Marker neue Zeilen, würden diese still
+        ignoriert (Datenverlust). Der Marker ist daher an die Datei-Identität
+        (mtime+size) gebunden: weicht sie ab, gilt der Marker als STALE und die Datei wird
+        wieder normal klassifiziert (siehe ``_marker_suppresses_attach`` für die Semantik
+        und den bewussten Doppel-Delivery-Tradeoff).
         """
-        if self._migrated_marker_path.exists():
+        if self._migrated_marker_path.exists() and self._marker_suppresses_attach():
             return None
         return classify_legacy_db(self._legacy_path)
 
@@ -654,7 +721,22 @@ class LegacyMigrator:
         damit ein konfiguriertes Byte-/Row-Budget über den nun rein-v2-Segmenten wieder
         eingehalten wird. ``enforce_retention`` ist selbst ge-guarded (No-op ohne
         konfigurierte Retention-Schwellen), daher unbedingter Aufruf.
+
+        **Multi-Source-Deferral (#951, Runde 27, Finding 1):** Sind Migrationen mehrerer
+        Legacy-Quellen verschränkt, ruft der Abschluss EINER Quelle diesen Pass auf, obwohl
+        eine ANDERE Quelle noch versteckte ``migrating``-Chunks UND ihr Original-Legacy-
+        Segment attached hat. Die frisch finalisierten (nun sichtbaren) rein-v2-Zeilen
+        DIESER Quelle erfüllen den No-Zero-History-Guard – unter Byte-/Row-/Age-Druck
+        könnte die Retention dann die noch attached Legacy-Datei der ANDEREN Quelle als
+        ältestes Segment wählen und löschen, BEVOR deren restliche Zeilen kopiert sind
+        (Datenverlust). Solange also global IRGENDEINE ``migrating``-Quelle in Arbeit ist
+        (``list_migrating_segments`` non-empty), wird der Pass übersprungen – konsistent zu
+        den ``_migration_in_progress()``-Guards im Append-/Startup-/reconfigure-Pfad, hier
+        aber im Migrations-eigenen post-detach-Pfad. Der letzte Quell-Abschluss (dann keine
+        ``migrating``-Segmente mehr) zieht die deferrte Retention nach.
         """
+        if await self._store.manifest.list_migrating_segments():
+            return
         await self._store.enforce_retention()
 
     async def _finalize_migrated_segments(self, own_migrating_ids: list[int] | None = None) -> bool:
@@ -1035,6 +1117,16 @@ class LegacyMigrator:
         die Quelle noch attached ist. Sie sollen ``migrating`` (versteckt) bleiben und
         NICHT vorzeitig in den sichtbaren ``migrated``-Rang gehoben werden – sonst käme
         jede kopierte Zeile im Migrationsfenster doppelt (v2 + attached Legacy).
+
+        Fremde ``migrating``-Chunks versteckt halten (#951, Runde 27, Finding 2): wird
+        eine zweite Legacy-Quelle migriert, während eine ANDERE Quelle noch
+        ``migrating``-Chunks (unterbrochene chunked Migration) mit weiterhin attached
+        Original-Legacy hält, passierte deren verstecktes rein-negatives Segment die
+        Positive-/Negative-Checks unten und würde ``migrated`` markiert → query-sichtbar,
+        WÄHREND deren Original-Legacy-Quelle noch attached ist → dieselben Legacy-Zeilen
+        DOPPELT. ``migrating``-Segmente werden daher – wie das aktive und das im aktuellen
+        Batch kopierte – NIE hier promotet; ihre eigene Quelle hebt sie erst nach ihrem
+        eigenen Detach (``_finalize_and_detach``) in den sichtbaren Rang.
         """
         store = self._store
         exclude = exclude_ids or set()
@@ -1044,6 +1136,8 @@ class LegacyMigrator:
                 continue
             if segment.status == SEGMENT_STATUS_MIGRATED:
                 continue
+            if segment.status == SEGMENT_STATUS_MIGRATING:
+                continue  # fremde (oder eigene) versteckte In-Progress-Chunks NIE promoten (#951, Runde 27, Finding 2)
             if segment.segment_id == active_id:
                 continue
             if segment.segment_id in exclude:

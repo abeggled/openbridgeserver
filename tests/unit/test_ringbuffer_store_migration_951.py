@@ -1195,11 +1195,12 @@ async def test_detach_skipped_when_marker_write_fails(store: SqliteSegmentStore,
     await migrator.attach_readonly(migrator.classify())
     assert len(await store.manifest.list_legacy_segments()) == 1
 
-    # Marker-Schreiben schlaegt hart fehl (z. B. read-only Legacy-Verzeichnis).
-    def _fail_touch(*_a, **_k):
+    # Marker-Schreiben schlaegt hart fehl (z. B. read-only Legacy-Verzeichnis). Der Marker
+    # wird seit #951 Runde 27 (Finding 3) mit Datei-Identitaet via ``write_text`` geschrieben.
+    def _fail_write_text(*_a, **_k):
         raise OSError("legacy directory is read-only")
 
-    monkeypatch.setattr(Path, "touch", _fail_touch)
+    monkeypatch.setattr(Path, "write_text", _fail_write_text)
 
     with pytest.raises(Exception):  # noqa: PT011 – Marker-Fehler soll klar gemeldet werden
         await migrator.migrate_small(batch_rows=100)
