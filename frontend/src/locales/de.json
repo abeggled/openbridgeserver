@@ -895,7 +895,12 @@
       "widget": "Widget (Name)",
       "selectWidget": "— Widget wählen —",
       "noNamedWidgets": "— keine benannten Widgets —",
-      "noNamedWidgetsHint": "⚠ Auf dieser Seite hat kein Widget einen Namen. Namen im Editor vergeben."
+      "noNamedWidgetsHint": "⚠ Auf dieser Seite hat kein Widget einen Namen. Namen im Editor vergeben.",
+      "reference": "Referenz",
+      "selectReference": "Referenz wählen …",
+      "noReference": "Keine Referenz",
+      "sourceUnavailable": "Quell-Seite nicht erreichbar",
+      "widgetNotFound": "Widget „{name}“ nicht gefunden"
     },
     "zeitschaltuhr": {
       "title": "Zeitschaltuhr",

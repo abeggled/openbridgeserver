@@ -21,6 +21,13 @@ vi.mock('@/stores/datapoints', () => ({
   }),
 }))
 
+vi.mock('vue-i18n', () => ({
+  useI18n: () => ({
+    t: (key: string, params?: Record<string, unknown>) =>
+      key === 'widgets.widgetref.widgetNotFound' ? `Widget ${params?.name} not found` : key,
+  }),
+}))
+
 const DummyWidget = defineComponent({
   props: {
     readonly: Boolean,
@@ -67,6 +74,11 @@ describe('WidgetRef Widget.vue', () => {
         statusValue: null,
         editorMode: false,
         readonly: true,
+      },
+      global: {
+        mocks: {
+          $t: (key: string) => key,
+        },
       },
     })
     await flushPromises()

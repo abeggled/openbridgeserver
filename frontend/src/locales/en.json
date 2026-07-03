@@ -895,7 +895,12 @@
       "widget": "Widget (name)",
       "selectWidget": "— Select widget —",
       "noNamedWidgets": "— no named widgets —",
-      "noNamedWidgetsHint": "⚠ No widget on this page has a name. Add names in the editor."
+      "noNamedWidgetsHint": "⚠ No widget on this page has a name. Add names in the editor.",
+      "reference": "Reference",
+      "selectReference": "Select reference …",
+      "noReference": "No reference",
+      "sourceUnavailable": "Source page unavailable",
+      "widgetNotFound": "Widget “{name}” not found"
     },
     "zeitschaltuhr": {
       "title": "Timer",
