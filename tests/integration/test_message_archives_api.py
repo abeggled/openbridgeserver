@@ -225,6 +225,58 @@ async def test_message_archive_mark_read_broadcasts_updated_entry(client, auth_h
         )
 
 
+async def test_message_archive_patch_broadcasts_updated_entry(client, auth_headers, monkeypatch):
+    from obs.api.v1 import message_archives as message_archives_api
+
+    archive_id = _archive_id("patch-broadcast")
+    broadcasted: list[dict] = []
+    previous_entries: list[dict | None] = []
+
+    async def capture_broadcast(entry, previous_entry=None):
+        broadcasted.append(entry)
+        previous_entries.append(previous_entry)
+
+    monkeypatch.setattr(message_archives_api, "broadcast_message_archive_entry", capture_broadcast)
+
+    try:
+        create = await client.post(
+            "/api/v1/message-archives",
+            headers=auth_headers,
+            json={"id": archive_id, "name": "Patch Broadcast"},
+        )
+        assert create.status_code == 201, create.text
+        entry_resp = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            json={"title": "Before", "status": "new", "severity": "info"},
+        )
+        assert entry_resp.status_code == 201, entry_resp.text
+        entry_id = entry_resp.json()["id"]
+        broadcasted.clear()
+        previous_entries.clear()
+
+        patch_resp = await client.patch(
+            f"/api/v1/message-archives/{archive_id}/entries/{entry_id}",
+            headers=auth_headers,
+            json={"title": "After", "status": "closed", "severity": "warning"},
+        )
+
+        assert patch_resp.status_code == 200, patch_resp.text
+        assert patch_resp.json()["title"] == "After"
+        assert [item["id"] for item in broadcasted] == [entry_id]
+        assert broadcasted[0]["title"] == "After"
+        assert broadcasted[0]["status"] == "closed"
+        assert previous_entries[0] is not None
+        assert previous_entries[0]["title"] == "Before"
+        assert previous_entries[0]["status"] == "new"
+    finally:
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
 async def test_message_archive_integrity_check_and_export(client, auth_headers):
     archive_id = _archive_id("export")
     try:

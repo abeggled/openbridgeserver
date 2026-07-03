@@ -2720,11 +2720,15 @@ class LogicManager:
         for node in flow.nodes:
             if node.type != "notify_pushover":
                 continue
+            if node.id in triggered_notify_nodes:
+                continue
             await _run_notify_node(node, triggered_notify_nodes)
 
         # ── Handle notify_sms ─────────────────────────────────────────────
         for node in flow.nodes:
             if node.type != "notify_sms":
+                continue
+            if node.id in triggered_notify_nodes:
                 continue
             await _run_notify_node(node, triggered_notify_nodes)
 

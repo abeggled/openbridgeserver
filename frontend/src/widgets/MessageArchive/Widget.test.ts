@@ -118,8 +118,10 @@ describe('MessageArchive Widget.vue', () => {
     wrapper.unmount()
   })
 
-  it('removes cached live entries that no longer match filters', async () => {
-    vi.mocked(messageArchives.entries).mockResolvedValue({ items: [entry], total: 1, limit: 25, offset: 0 })
+  it('refreshes when cached live entries no longer match filters', async () => {
+    vi.mocked(messageArchives.entries)
+      .mockResolvedValueOnce({ items: [entry], total: 1, limit: 25, offset: 0 })
+      .mockResolvedValueOnce({ items: [olderEntry], total: 1, limit: 25, offset: 0 })
 
     const wrapper = mount(MessageArchiveWidget, {
       props: {
@@ -140,7 +142,9 @@ describe('MessageArchive Widget.vue', () => {
     })
     await flushPromises()
 
+    expect(messageArchives.entries).toHaveBeenCalledTimes(2)
     expect(wrapper.text()).not.toContain('Startup')
+    expect(wrapper.text()).toContain('Older')
   })
 
   it('honors plural filter keys when loading and matching live entries', async () => {

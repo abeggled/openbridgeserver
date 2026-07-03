@@ -72,6 +72,23 @@ class _LogAccessDbStub:
         return self.row
 
 
+class _ApiKeyOwnerDbStub:
+    def __init__(self) -> None:
+        self.updated = False
+
+    async def fetchone(self, query: str, _params: tuple):
+        if "SELECT name FROM api_keys" in query:
+            return {"name": "automation-client"}
+        if "SELECT id, owner FROM api_keys" in query:
+            return {"id": "key-1", "owner": "alice"}
+        if "FROM visu_nodes" in query:
+            return {"type": "PAGE"}
+        return None
+
+    async def execute_and_commit(self, _query: str, _params: tuple) -> None:
+        self.updated = True
+
+
 @pytest.mark.asyncio
 async def test_authenticate_ws_rejects_missing_credentials():
     ws = _FakeWebSocket()
@@ -265,6 +282,41 @@ async def test_websocket_endpoint_rejects_authenticated_archive_scope_without_pa
 
     assert ws.accepted is False
     assert ws.close_calls == [(4001, "Zugriff verweigert")]
+
+
+@pytest.mark.asyncio
+async def test_websocket_endpoint_uses_api_key_owner_for_user_page_scope(monkeypatch):
+    class _ManagerStub:
+        async def connect(self, ws, **_kwargs):
+            await ws.accept()
+            return "conn-1"
+
+        async def disconnect(self, _conn_id: str) -> None:
+            return None
+
+    access_checks: list[tuple[str, str]] = []
+
+    async def _allow_owner_access(_db, node_id: str, username: str) -> bool:
+        access_checks.append((node_id, username))
+        return username == "alice"
+
+    async def _page_predicates(_db, _page_id: str, **_kwargs):
+        return [ws_api.MessageArchivePredicate(archive_ids={"system"})]
+
+    monkeypatch.setattr(auth_api, "hash_api_key", lambda key: f"hash:{key}")
+    db = _ApiKeyOwnerDbStub()
+    monkeypatch.setattr(ws_api, "get_db", lambda: db)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", _resolve_user_access)
+    monkeypatch.setattr("obs.api.v1.visu._check_user_access", _allow_owner_access)
+    monkeypatch.setattr(ws_api, "_page_allowed_message_archive_predicates", _page_predicates)
+    monkeypatch.setattr(ws_api, "get_ws_manager", lambda: _ManagerStub())
+
+    ws = _FakeWebSocket(headers={"x-api-key": "obs_valid"}, query_params={"page_id": "page-user"})
+    await ws_api.websocket_endpoint(ws)
+
+    assert ws.accepted is True
+    assert ws.close_calls == []
+    assert ("page-user", "alice") in access_checks
 
 
 @pytest.mark.asyncio

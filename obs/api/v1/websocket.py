@@ -663,7 +663,7 @@ async def _authorize_visu_page_scope(
     if access == "user":
         if username is None:
             return False, "Authentication required"
-        if username == "__api_key__":
+        if username == "__api_key__" or username.startswith("api_key:"):
             return False, "Authentication required"
         if await _check_user_access(db, page_id, username):
             return True, "OK"
@@ -720,6 +720,19 @@ async def _authenticate_ws_request(ws: WebSocket) -> tuple[bool, str]:
         return True, "OK"
 
     return await _authenticate_visu_page_scope(ws)
+
+
+async def _resolve_ws_api_key_subject(api_key: str) -> str | None:
+    """Return the REST-equivalent subject for an already authenticated API key."""
+    from obs.api.auth import hash_api_key
+
+    db = get_db()
+    key_hash = hash_api_key(api_key)
+    row = await db.fetchone("SELECT id, owner FROM api_keys WHERE key_hash=?", (key_hash,))
+    if not row:
+        return None
+    owner = row["owner"] if row["owner"] else None
+    return owner or f"api_key:{row['id']}"
 
 
 async def _ws_has_log_access(user: str | None, api_key: str | None) -> bool:
@@ -821,6 +834,8 @@ async def websocket_endpoint(
     allowed_message_archive_access: MessageArchiveAccess = None
     db = get_db() if page_id else None
     session_token = subprotocol_session or ws.query_params.get("session_token")
+    if db is not None and api_key and user == "__api_key__":
+        user = await _resolve_ws_api_key_subject(api_key) or user
 
     async def _can_access_widget_ref_page(source_page_id: str) -> bool:
         if db is None:
@@ -832,7 +847,7 @@ async def websocket_endpoint(
             source_validate_id = source_defining_node_id or source_page_id
             return bool(session_token and sessions_api.validate_session(session_token, source_validate_id))
         if source_access == "user":
-            if user is None or user == "__api_key__":
+            if user is None or user == "__api_key__" or user.startswith("api_key:"):
                 return False
             return await _check_user_access(db, source_page_id, user)
         return False
@@ -878,7 +893,7 @@ async def websocket_endpoint(
             db=db,
             page_id=page_id,
             session_token=session_token,
-            username=None if user == "__api_key__" else user,
+            username=user,
         )
         if not ok:
             await ws.close(code=4001, reason=reason)

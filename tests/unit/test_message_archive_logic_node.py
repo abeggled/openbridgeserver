@@ -272,6 +272,38 @@ def test_notify_sent_output_replays_downstream_notify() -> None:
     assert outputs["notify2"]["sent"] is True
 
 
+def test_message_archive_replayed_notify_is_not_sent_again_in_main_pass() -> None:
+    manager = _make_manager()
+    flow = _flow(
+        [
+            node("ma", "message_archive", {"archive_id": "Alerts", "message": "Stored"}),
+            node("notify", "notify_pushover", {"app_token": "app-token", "user_key": "user-key", "message": "notify"}),
+        ],
+        [edge("ma", "notify", "stored", "trigger")],
+    )
+    service = MagicMock()
+    service.record = AsyncMock(return_value={"id": "entry-1"})
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    patcher = patch("obs.logic.manager.httpx.AsyncClient")
+    mock_client_cls = patcher.start()
+    mock_client = AsyncMock()
+    mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=response)
+
+    try:
+        with patch("obs.message_archive.get_message_archive_service", return_value=service):
+            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+                outputs = _run(manager, flow, {"ma": {"trigger": True}})
+    finally:
+        patcher.stop()
+
+    assert mock_client.post.await_count == 1
+    assert outputs["ma"]["stored"] is True
+    assert outputs["notify"]["sent"] is True
+
+
 def test_notify_replay_snapshots_stateful_descendants_before_placeholder_pass() -> None:
     manager = _make_manager()
     flow = _flow(

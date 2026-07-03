@@ -661,6 +661,24 @@ async def test_archive_only_binding_does_not_mark_failed_archive_write_as_sent(b
 
 
 @pytest.mark.asyncio
+async def test_none_archive_strategy_consumes_successful_event(bus, dummy_provider, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    adapter = MessageAdapter(event_bus=bus, config={"providers": {}})
+    binding = _message_binding(dp_id, providers=[], archive_strategy="none")
+    await adapter.reload_bindings([binding])
+
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=31, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
+
+    state = adapter._states[binding.id]
+    assert state.last_sent_monotonic is not None
+    assert state.last_condition is True
+    assert state.last_value == 31
+    dummy_provider.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_send_and_archive_binding_preserves_throttle_when_archive_write_fails(bus, dummy_provider, monkeypatch):
     dp_id = uuid.uuid4()
     monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))

@@ -910,6 +910,7 @@ async def update_message_archive_entry(
     store: MessageArchiveStore = Depends(_store),
 ) -> dict[str, Any]:
     archive_id = _validate_archive_id(archive_id)
+    previous_entry = await store.get_entry(archive_id, entry_id)
     entry = await store.update_entry(
         archive_id,
         entry_id,
@@ -925,6 +926,8 @@ async def update_message_archive_entry(
     )
     if not entry:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message archive entry not found")
+    broadcast_entry = await store.get_entry(archive_id, entry_id) or entry
+    await broadcast_message_archive_entry(broadcast_entry, previous_entry=previous_entry)
     return await store.get_entry(archive_id, entry_id, username=_admin) or entry
 
 
