@@ -231,6 +231,20 @@ class WebSocketManager:
         for conn_id in dead:
             await self.disconnect(conn_id)
 
+    async def broadcast_message_archive_refresh(self, archive_id: str | None = None) -> None:
+        """Ask clients with access to an archive to refresh their message archive view."""
+        dead: list[str] = []
+        normalized_archive_id = str(archive_id or "").lower() or None
+        msg = {"action": "message_archive_refresh", "archive_id": normalized_archive_id}
+        for conn_id in list(self._connections):
+            access = self._message_archive_access.get(conn_id)
+            if access is not None and not _message_archive_archive_matches_access(normalized_archive_id, access):
+                continue
+            if not await self._send(conn_id, msg):
+                dead.append(conn_id)
+        for conn_id in dead:
+            await self.disconnect(conn_id)
+
     async def handle_value_event(self, event: Any) -> None:
         """Called by EventBus when a DataValueEvent arrives."""
         if not self._connections:
@@ -594,6 +608,15 @@ def _message_archive_entry_matches_access(entry: dict[str, Any], access: list[Me
         if predicate.sources and str(entry.get("source") or "") not in predicate.sources:
             continue
         return True
+    return False
+
+
+def _message_archive_archive_matches_access(archive_id: str | None, access: list[MessageArchivePredicate]) -> bool:
+    if archive_id is None:
+        return True
+    for predicate in access:
+        if predicate.archive_ids is None or archive_id in predicate.archive_ids:
+            return True
     return False
 
 

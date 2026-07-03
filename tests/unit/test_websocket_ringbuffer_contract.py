@@ -310,6 +310,33 @@ async def test_message_archive_push_uses_previous_entry_for_filter_transitions()
 
 
 @pytest.mark.asyncio
+async def test_message_archive_refresh_is_filtered_by_archive_access():
+    manager = WebSocketManager()
+    scoped_ws = _FakeWebSocket()
+    unrestricted_ws = _FakeWebSocket()
+    all_archives_ws = _FakeWebSocket()
+
+    await manager.connect(
+        scoped_ws,
+        allowed_dp_ids=set(),
+        allowed_message_archive_access=[MessageArchivePredicate(archive_ids={"system"}, statuses={"new"})],
+    )
+    await manager.connect(unrestricted_ws)
+    await manager.connect(
+        all_archives_ws,
+        allowed_dp_ids=set(),
+        allowed_message_archive_access=[MessageArchivePredicate(archive_ids=None, statuses={"new"})],
+    )
+
+    await manager.broadcast_message_archive_refresh("system")
+    await manager.broadcast_message_archive_refresh("security")
+
+    assert [msg["archive_id"] for msg in scoped_ws.messages] == ["system"]
+    assert [msg["archive_id"] for msg in unrestricted_ws.messages] == ["system", "security"]
+    assert [msg["archive_id"] for msg in all_archives_ws.messages] == ["system", "security"]
+
+
+@pytest.mark.asyncio
 async def test_subscribe_filters_datapoints_for_page_scoped_connection():
     ws = _FakeWebSocket()
     manager = WebSocketManager()

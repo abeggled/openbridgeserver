@@ -105,6 +105,11 @@ function matchesFilters(entry: MessageArchiveEntry): boolean {
   return true
 }
 
+function matchesRefreshArchive(archiveId: unknown): boolean {
+  if (typeof archiveId !== 'string' || !archiveId.trim()) return true
+  return !archiveIds.value.length || archiveIds.value.includes(archiveId.trim().toLowerCase())
+}
+
 async function applyLiveEntry(entry: MessageArchiveEntry) {
   const existing = entries.value.find(item => item.id === entry.id)
   const merged = existing && existing.is_read && !entry.is_read
@@ -171,8 +176,12 @@ watch(() => props.config, load, { deep: true })
 onMounted(() => {
   load()
   unsubscribeWs = ws.onMessage((data) => {
-    if (props.editorMode || data.action !== 'message_archive_entry') return
-    if (isMessageArchiveEntry(data.entry)) void applyLiveEntry(data.entry)
+    if (props.editorMode) return
+    if (data.action === 'message_archive_refresh') {
+      if (matchesRefreshArchive(data.archive_id)) void load()
+      return
+    }
+    if (data.action === 'message_archive_entry' && isMessageArchiveEntry(data.entry)) void applyLiveEntry(data.entry)
   })
 })
 onUnmounted(() => {

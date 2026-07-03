@@ -147,6 +147,54 @@ describe('MessageArchive Widget.vue', () => {
     expect(wrapper.text()).toContain('Older')
   })
 
+  it('refreshes when the current archive is invalidated', async () => {
+    vi.mocked(messageArchives.entries)
+      .mockResolvedValueOnce({ items: [entry], total: 1, limit: 25, offset: 0 })
+      .mockResolvedValueOnce({ items: [], total: 0, limit: 25, offset: 0 })
+
+    const wrapper = mount(MessageArchiveWidget, {
+      props: {
+        config: { archive_ids: ['system'] },
+        editorMode: false,
+        readonly: false,
+      },
+      global: {
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Startup')
+    wsHandlers.current[0]({ action: 'message_archive_refresh', archive_id: 'system' })
+    await flushPromises()
+
+    expect(messageArchives.entries).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).not.toContain('Startup')
+    wrapper.unmount()
+  })
+
+  it('ignores refresh events for other archive filters', async () => {
+    vi.mocked(messageArchives.entries).mockResolvedValue({ items: [entry], total: 1, limit: 25, offset: 0 })
+
+    const wrapper = mount(MessageArchiveWidget, {
+      props: {
+        config: { archive_ids: ['system'] },
+        editorMode: false,
+        readonly: false,
+      },
+      global: {
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await flushPromises()
+
+    wsHandlers.current[0]({ action: 'message_archive_refresh', archive_id: 'security' })
+    await flushPromises()
+
+    expect(messageArchives.entries).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
   it('honors plural filter keys when loading and matching live entries', async () => {
     vi.mocked(messageArchives.entries).mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0 })
 

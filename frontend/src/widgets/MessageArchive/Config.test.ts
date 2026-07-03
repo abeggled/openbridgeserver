@@ -61,4 +61,40 @@ describe('MessageArchive Config.vue', () => {
       limit: 50,
     })
   })
+
+  it('preserves plural filter keys when emitting updates', async () => {
+    const wrapper = mount(MessageArchiveConfig, {
+      props: {
+        modelValue: {
+          severities: ['warning'],
+          statuses: ['new'],
+          types: ['system'],
+          sources: ['core'],
+          limit: 25,
+        },
+      },
+      global: {
+        mocks: {
+          $t: (key: string) => key,
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('input[type="number"]').setValue('30')
+
+    const updates = wrapper.emitted('update:modelValue') ?? []
+    const latest = updates[updates.length - 1][0] as Record<string, unknown>
+    expect(latest).toMatchObject({
+      severities: ['warning'],
+      statuses: ['new'],
+      types: ['system'],
+      sources: ['core'],
+      limit: 30,
+    })
+    expect(latest).not.toHaveProperty('severity')
+    expect(latest).not.toHaveProperty('status')
+    expect(latest).not.toHaveProperty('type')
+    expect(latest).not.toHaveProperty('source')
+  })
 })

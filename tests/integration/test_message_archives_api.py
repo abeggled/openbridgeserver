@@ -277,6 +277,48 @@ async def test_message_archive_patch_broadcasts_updated_entry(client, auth_heade
         )
 
 
+async def test_message_archive_clear_broadcasts_archive_refresh(client, auth_headers, monkeypatch):
+    from obs.api.v1 import message_archives as message_archives_api
+
+    archive_id = _archive_id("clear-refresh")
+    refreshed: list[str | None] = []
+
+    async def capture_refresh(target_archive_id=None):
+        refreshed.append(target_archive_id)
+
+    monkeypatch.setattr(message_archives_api, "broadcast_message_archive_refresh", capture_refresh)
+
+    try:
+        create = await client.post(
+            "/api/v1/message-archives",
+            headers=auth_headers,
+            json={"id": archive_id, "name": "Clear Refresh"},
+        )
+        assert create.status_code == 201, create.text
+        entry_resp = await client.post(
+            f"/api/v1/message-archives/{archive_id}/entries",
+            headers=auth_headers,
+            json={"title": "Before clear"},
+        )
+        assert entry_resp.status_code == 201, entry_resp.text
+
+        clear_resp = await client.post(
+            f"/api/v1/message-archives/{archive_id}/clear",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+        assert clear_resp.status_code == 200, clear_resp.text
+        assert clear_resp.json() == {"ok": True, "affected_entries": 1}
+        assert refreshed == [archive_id]
+    finally:
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
 async def test_message_archive_integrity_check_and_export(client, auth_headers):
     archive_id = _archive_id("export")
     try:

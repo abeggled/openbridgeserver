@@ -16,6 +16,13 @@ interface Cfg {
   allow_acknowledge: boolean
 }
 
+const pluralFilterKeys = {
+  severity: 'severities',
+  status: 'statuses',
+  type: 'types',
+  source: 'sources',
+} as const
+
 const props = defineProps<{ modelValue: Record<string, unknown> }>()
 const emit = defineEmits<{ (e: 'update:modelValue', value: Record<string, unknown>): void }>()
 
@@ -35,32 +42,41 @@ function listFromModel(value: unknown): string[] {
   return []
 }
 
+function combinedListFromModel(...values: unknown[]): string[] {
+  return [...new Set(values.flatMap(listFromModel))]
+}
+
 const cfg = reactive<Cfg>({
-  archive_ids: [...new Set([...listFromModel(props.modelValue.archive_ids), ...listFromModel(props.modelValue.archive_id)])],
+  archive_ids: combinedListFromModel(props.modelValue.archive_ids, props.modelValue.archive_id),
   limit: (props.modelValue.limit as number | undefined) ?? 25,
-  severity: listFromModel(props.modelValue.severity),
-  status: listFromModel(props.modelValue.status),
-  type: listFromModel(props.modelValue.type),
-  source: listFromModel(props.modelValue.source),
+  severity: combinedListFromModel(props.modelValue.severity, props.modelValue.severities),
+  status: combinedListFromModel(props.modelValue.status, props.modelValue.statuses),
+  type: combinedListFromModel(props.modelValue.type, props.modelValue.types),
+  source: combinedListFromModel(props.modelValue.source, props.modelValue.sources),
   show_archive: (props.modelValue.show_archive as boolean | undefined) ?? true,
   show_source: (props.modelValue.show_source as boolean | undefined) ?? true,
   allow_read: (props.modelValue.allow_read as boolean | undefined) ?? true,
   allow_acknowledge: (props.modelValue.allow_acknowledge as boolean | undefined) ?? true,
 })
 
+const usePluralFilterKey = Object.fromEntries(
+  Object.entries(pluralFilterKeys).map(([key, pluralKey]) => [key, Object.prototype.hasOwnProperty.call(props.modelValue, pluralKey)]),
+) as Record<keyof typeof pluralFilterKeys, boolean>
+
 watch(cfg, () => {
-  emit('update:modelValue', {
+  const value: Record<string, unknown> = {
     archive_ids: cfg.archive_ids,
     limit: cfg.limit,
-    severity: cfg.severity.length ? cfg.severity : undefined,
-    status: cfg.status.length ? cfg.status : undefined,
-    type: cfg.type.length ? cfg.type : undefined,
-    source: cfg.source.length ? cfg.source : undefined,
     show_archive: cfg.show_archive,
     show_source: cfg.show_source,
     allow_read: cfg.allow_read,
     allow_acknowledge: cfg.allow_acknowledge,
-  })
+  }
+  for (const key of Object.keys(pluralFilterKeys) as Array<keyof typeof pluralFilterKeys>) {
+    const targetKey = usePluralFilterKey[key] ? pluralFilterKeys[key] : key
+    value[targetKey] = cfg[key].length ? cfg[key] : undefined
+  }
+  emit('update:modelValue', value)
 }, { deep: true })
 
 const allSourceOptions = computed(() => {

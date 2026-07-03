@@ -30,6 +30,7 @@ from obs.message_archive import (
     MessageArchiveStore,
     activate_message_archive_service,
     broadcast_message_archive_entry,
+    broadcast_message_archive_refresh,
     get_message_archive_store,
     init_message_archive_store,
 )
@@ -798,6 +799,7 @@ async def clear_message_archive(
         resource_id=archive_id,
         details={"affected_entries": affected},
     )
+    await broadcast_message_archive_refresh(archive_id)
     return {"ok": True, "affected_entries": affected}
 
 

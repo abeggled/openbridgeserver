@@ -859,6 +859,23 @@ async def broadcast_message_archive_entry(entry: dict[str, Any], previous_entry:
         logger.exception("Message archive WebSocket broadcast failed")
 
 
+async def broadcast_message_archive_refresh(archive_id: str | None = None) -> None:
+    try:
+        from obs.api.v1.websocket import get_ws_manager
+
+        manager = get_ws_manager()
+    except RuntimeError:
+        return
+    except Exception:
+        logger.exception("Message archive WebSocket manager unavailable")
+        return
+
+    try:
+        await manager.broadcast_message_archive_refresh(archive_id)
+    except Exception:
+        logger.exception("Message archive WebSocket refresh broadcast failed")
+
+
 _store: MessageArchiveStore | None = None
 _service: MessageArchiveService | None = None
 
