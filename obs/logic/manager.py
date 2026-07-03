@@ -65,6 +65,8 @@ _SECRET_FILE_MAX_BYTES = 8192
 _SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
 _API_CLIENT_RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _API_CLIENT_VARIABLE_RE = re.compile(r"###OBS([1-9][0-9]*)###")
+_API_CLIENT_URL_LEADING_STRIP_CHARS = "".join(chr(value) for value in range(0x21))
+_API_CLIENT_URL_REMOVE_CHARS = str.maketrans("", "", "\r\n\t")
 _HOST_CHECK_MIN_TIMEOUT_S = 1.0
 _HOST_CHECK_MAX_TIMEOUT_S = 30.0
 _HOST_CHECK_MIN_COUNT = 1
@@ -206,8 +208,12 @@ def _quote_api_client_url_value(value: str) -> str:
     return quote(value, safe="-._~")
 
 
+def _normalise_api_client_url_for_parse(value: str) -> str:
+    return value.lstrip(_API_CLIENT_URL_LEADING_STRIP_CHARS).translate(_API_CLIENT_URL_REMOVE_CHARS)
+
+
 def _replace_api_client_url_placeholders(value: str, resolver: Any) -> str:
-    value = value.lstrip()
+    value = _normalise_api_client_url_for_parse(value)
     authority_bounds: tuple[int, int] | None = None
     scheme_separator = value.find("://")
     if scheme_separator != -1 and _API_CLIENT_VARIABLE_RE.search(value[:scheme_separator]):

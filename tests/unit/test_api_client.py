@@ -1259,6 +1259,20 @@ class TestApiClientVariables:
         with pytest.raises(Exception, match="API client URL variables are not allowed"):
             _replace_api_client_url_placeholders(" http://###OBS1###/status", resolver)
 
+    def test_url_variable_in_authority_with_leading_control_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "attacker.example"
+
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("\x00http://###OBS1###/status", resolver)
+
+    def test_url_variable_in_authority_after_control_removal_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "attacker.example"
+
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("http:\n//###OBS1###/status", resolver)
+
     def test_url_variable_in_scheme_is_rejected(self):
         def resolver(index: int) -> str:
             return "https"
