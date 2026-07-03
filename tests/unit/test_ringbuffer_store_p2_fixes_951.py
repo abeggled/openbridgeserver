@@ -1344,3 +1344,110 @@ def test_unlink_with_sidecars_removes_sidecars_when_base_removed(tmp_path: Path)
     assert not base.exists()
     assert not wal.exists()
     assert not shm.exists()
+
+
+# ---------------------------------------------------------------------------
+# (Codex #951, Pkt 1) Gefilterter Legacy-Export nicht per Roh-Kandidatenzahl kappen
+# ---------------------------------------------------------------------------
+
+
+def _build_legacy_sparse_matches(path: Path, *, total: int, match_rowids: set[int]) -> None:
+    """Legacy-Single-DB: nur ``match_rowids`` tragen ``new_value='MATCH'``.
+
+    rowid = 1..total in Insert-/ts-Reihenfolge (aufsteigend). Bei ``sort desc``
+    (neueste zuerst) liegen niedrige rowids (alte Zeilen) hinten – ein Roh-Cap auf
+    die neuesten k Zeilen schnitte alte Treffer ab.
+    """
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            """CREATE TABLE ringbuffer (
+                   id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                   ts             TEXT NOT NULL,
+                   datapoint_id   TEXT NOT NULL,
+                   topic          TEXT NOT NULL,
+                   old_value      TEXT,
+                   new_value      TEXT,
+                   source_adapter TEXT NOT NULL,
+                   quality        TEXT NOT NULL,
+                   metadata_version INTEGER NOT NULL DEFAULT 1,
+                   metadata       TEXT NOT NULL DEFAULT '{}'
+               )"""
+        )
+        for rowid in range(1, total + 1):
+            value = "MATCH" if rowid in match_rowids else f"other-{rowid}"
+            conn.execute(
+                "INSERT INTO ringbuffer (ts, datapoint_id, topic, old_value, new_value, source_adapter, quality) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"2025-01-01T00:{rowid // 60:02d}:{rowid % 60:02d}.000Z",
+                    "dp-legacy",
+                    "dp/dp-legacy/value",
+                    None,
+                    json.dumps(value),
+                    "legacy",
+                    "good",
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def test_legacy_export_returns_all_matches_beyond_raw_cap(store: SqliteSegmentStore, tmp_path: Path):
+    # Nur die 5 ÄLTESTEN Zeilen (rowid 1..5) matchen; 45 neuere Zeilen matchen nicht.
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy_sparse_matches(db, total=50, match_rowids={1, 2, 3, 4, 5})
+    await LegacyMigrator(store, db).attach_readonly(LegacyMigrator(store, db).classify())
+
+    value_filters = [{"operator": "contains", "field": "new_value", "value": "MATCH"}]
+    # Export-Semantik: candidate_cap == offset + limit (die vom CSV-Export gesetzte,
+    # mit dem Fenster wachsende Deckelung). Ohne Fix fetchte der Legacy-Reader nur die
+    # neuesten 5 ROH-Zeilen (rowid 50..46, allesamt Nicht-Treffer) → 0 Matches → der
+    # Export-Loop stoppte, obwohl 5 ältere Zeilen matchen.
+    query = StoreQuery(limit=5, offset=0, candidate_cap=5, sort_field="id", sort_order="desc", value_filters=value_filters)
+    rows = await store.query(query)
+    assert {r["new_value"] for r in rows} == {"MATCH"}
+    assert len(rows) == 5
+
+
+async def test_legacy_export_paginates_full_matched_window(store: SqliteSegmentStore, tmp_path: Path):
+    # 12 Treffer, verstreut; der Export paginiert in 5er-Chunks über die gefilterte Menge.
+    db = tmp_path / "obs_ringbuffer.db"
+    match_rowids = {1, 2, 3, 20, 21, 22, 40, 41, 42, 60, 61, 62}
+    _build_legacy_sparse_matches(db, total=80, match_rowids=match_rowids)
+    await LegacyMigrator(store, db).attach_readonly(LegacyMigrator(store, db).classify())
+
+    value_filters = [{"operator": "contains", "field": "new_value", "value": "MATCH"}]
+    collected: list[Any] = []
+    offset = 0
+    chunk = 5
+    while True:
+        query = StoreQuery(limit=chunk, offset=offset, candidate_cap=offset + chunk, sort_field="id", sort_order="desc", value_filters=value_filters)
+        page = await store.query(query)
+        if not page:
+            break
+        collected.extend(page)
+        offset += len(page)
+        if len(page) < chunk:
+            break
+
+    # Alle 12 Treffer wurden über die Paginierung eingesammelt, keiner ging verloren.
+    assert len(collected) == 12
+    assert all(r["new_value"] == "MATCH" for r in collected)
+
+
+async def test_legacy_monitor_cap_stays_bounded_below_offset_plus_limit(store: SqliteSegmentStore, tmp_path: Path):
+    # Monitor-Live-View: candidate_cap ist der (große) Roh-Scan-Budget-Cap und ÜBERSTEIGT
+    # offset+limit. Er behält sein deckelndes Verhalten – ein Treffer JENSEITS der neuesten
+    # cap-Roh-Zeilen wird bewusst NICHT gefunden (bounded Scan, kein Full-Scan über Legacy).
+    db = tmp_path / "obs_ringbuffer.db"
+    # Ein Treffer nur ganz am Anfang (rowid 1 = ältester), sonst nichts.
+    _build_legacy_sparse_matches(db, total=50, match_rowids={1})
+    await LegacyMigrator(store, db).attach_readonly(LegacyMigrator(store, db).classify())
+
+    value_filters = [{"operator": "contains", "field": "new_value", "value": "MATCH"}]
+    # cap=10 (Scan-Budget) > offset+limit (0+5) → Monitor-Modus: nur die neuesten 10 Roh-
+    # Zeilen werden betrachtet, der älteste Treffer (rowid 1) liegt außerhalb und fehlt.
+    query = StoreQuery(limit=5, offset=0, candidate_cap=10, sort_field="id", sort_order="desc", value_filters=value_filters)
+    rows = await store.query(query)
+    assert rows == []

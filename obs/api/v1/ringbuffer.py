@@ -1187,12 +1187,15 @@ async def export_ringbuffer_csv(
                         body,
                         limit_override=chunk_size,
                         offset_override=offset,
-                        # Legacy-Segment-Cap mit dem wachsenden Export-Offset skalieren
-                        # (Codex #951, Pkt 2): der Monitor-Live-Cap würde ein Legacy-
-                        # Segment mit Value-/Metadaten-Post-Filter roh deckeln und ab
-                        # ``offset > cap`` Zeilen abschneiden. Mit ``offset+limit`` als Cap
-                        # deckt das Legacy-Fetch-Limit das gesamte paginierte Fenster ab,
-                        # sodass der Export die vollständige gefilterte Menge liefert.
+                        # Export-Cap == Fenster (Codex #951, Pkt 1): ``offset+chunk_size``
+                        # (= ``offset+limit``). Ein gefilterter Legacy-Read wendet Value-/
+                        # Metadaten-Filter ERST NACH dem Fetch der gedeckelten Roh-Kandidaten
+                        # an. Setzt der Export den Cap GLEICH dem angefragten Fenster, erkennt
+                        # der Legacy-Reader den Export-Modus (``candidate_cap <= offset+limit``)
+                        # und liefert die VOLLSTÄNDIGE gematchte Menge (batch-scannt bis genug
+                        # Treffer oder Segment erschöpft), statt bei spärlichen Treffern auf
+                        # einem kurzen/leeren Chunk zu stoppen. Der Monitor-Live-View (großes
+                        # ``candidate_cap`` > Fenster) behält sein hartes Roh-Cap-Verhalten.
                         candidate_cap_override=offset + chunk_size,
                     ),
                     timeout=_CSV_EXPORT_QUERY_TIMEOUT_SECONDS,
@@ -1223,8 +1226,9 @@ async def export_ringbuffer_csv(
                     limit_override=1,
                     offset_override=offset,
                     # Probe muss dieselbe volle Legacy-Kandidatenmenge sehen wie die
-                    # Export-Schleife (Codex #951, Pkt 2), sonst meldete sie am hohen
-                    # Offset fälschlich „keine weiteren Zeilen".
+                    # Export-Schleife (Codex #951, Pkt 1): ``candidate_cap == offset+1``
+                    # (= Fenster) hält den Legacy-Reader im Export-Modus, sonst meldete
+                    # die Probe am hohen Offset fälschlich „keine weiteren Zeilen".
                     candidate_cap_override=offset + 1,
                 ),
                 timeout=_CSV_EXPORT_QUERY_TIMEOUT_SECONDS,

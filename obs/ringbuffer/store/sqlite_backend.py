@@ -1050,10 +1050,6 @@ class SqliteSegmentStore(RingBufferStore):
         # in Python auf den dekodierten metadata-JSON ausgewertet — wie die
         # Value-Filter. Beides zusammen erzwingt den Kandidaten-Cap.
         has_python_post_filter = bool(query.value_filters) or self._has_metadata_filter(query)
-        if has_python_post_filter:
-            fetch_limit = self._legacy_candidate_cap(query)
-        else:
-            fetch_limit = max(query.offset, 0) + max(query.limit, 0)
         # Fetch-Richtung an die gewünschte Sortierung koppeln, damit die gebundene
         # Kandidatenmenge die RICHTIGEN Extremwerte enthält: bei ``asc`` die
         # ältesten, sonst die neuesten. Sonst liefert eine große Legacy-DB (mehr
@@ -1077,24 +1073,85 @@ class SqliteSegmentStore(RingBufferStore):
         # Defaults (``metadata_version=1``, ``metadata={}``).
         has_metadata_cols = await self._legacy_has_metadata_columns(conn)
         metadata_select = "metadata_version, metadata" if has_metadata_cols else "NULL AS metadata_version, NULL AS metadata"
-        sql = (
+        base_sql = (
             "SELECT id, ts, datapoint_id, topic, old_value, new_value, "
             f"source_adapter, quality, {metadata_select} "
-            f"FROM ringbuffer{where} ORDER BY {candidate_order} {direction}, id {direction} LIMIT ?"
+            f"FROM ringbuffer{where} ORDER BY {candidate_order} {direction}, id {direction} LIMIT ? OFFSET ?"
         )
-        params.append(fetch_limit)
-        async with conn.execute(sql, params) as cur:
-            raw_rows = await cur.fetchall()
 
+        needed = max(query.offset, 0) + max(query.limit, 0)
+        if not has_python_post_filter:
+            # Kein Post-Filter → jede Roh-Zeile ist ein Treffer; ``offset+limit`` roh
+            # holen reicht (der Aufrufer sortiert+slict final über alle Segmente).
+            batch, _fetched = await self._fetch_legacy_batch(conn, base_sql, params, segment, query, needed, 0)
+            return batch
+
+        # Post-Filter aktiv. Zwei Modi, unterschieden am ``candidate_cap`` relativ zum
+        # angefragten Fenster:
+        #
+        # * **Monitor-Live-View** (kleines ``limit``, ``candidate_cap`` als GROSSES
+        #   Roh-Scan-Budget, also ``candidate_cap > offset+limit``): der Cap deckelt
+        #   die betrachteten Roh-Kandidaten hart. Treffer jenseits der neuesten
+        #   ``candidate_cap`` Zeilen werden bewusst NICHT gefunden — das hält den Scan
+        #   auf einer 20–30 GB Legacy-DB gebunden statt in einen Full-Scan zu kippen.
+        # * **Gefilterter Export** (CSV-Export, ``candidate_cap == offset+limit`` = die
+        #   mit dem Export-Fenster mitwachsende Deckelung, also ``candidate_cap <=
+        #   offset+limit``): der Export MUSS die vollständige gematchte Menge liefern.
+        #   Der Roh-Cap darf die gematchte Ausgabe nicht abschneiden — sonst stoppte
+        #   die Export-Schleife bei spärlichen Treffern auf einem leeren/kurzen Chunk,
+        #   obwohl spätere Legacy-Zeilen matchen (unvollständiger Export).
+        #
+        # Speicher-/Vollständigkeits-Abwägung (Export): im Export-Modus wird ``ringbuffer``
+        # in ``candidate_cap``-großen Batches gescannt, bis genug GEMATCHTE Zeilen für
+        # ``offset+limit`` zusammen sind ODER das Segment erschöpft ist. Für sehr spärliche
+        # Treffer kann das den gesamten Legacy-Bestand durchlaufen — bewusst zugunsten der
+        # Vollständigkeit; der bounded Monitor-Pfad bleibt davon unberührt. Es liegen dabei
+        # nie mehr als ``offset+limit`` gematchte Records gleichzeitig im Speicher (die
+        # nicht-matchenden Roh-Zeilen jedes Batches werden sofort verworfen).
+        raw_cap = self._legacy_candidate_cap(query)
+        is_export = query.candidate_cap is not None and query.candidate_cap <= needed
         results: list[dict[str, Any]] = []
+        raw_offset = 0
+        while True:
+            rows, fetched = await self._fetch_legacy_batch(conn, base_sql, params, segment, query, raw_cap, raw_offset)
+            results.extend(rows)
+            raw_offset += fetched
+            if not is_export:
+                # Monitor: genau EIN gedeckelter Batch, harte Grenze.
+                break
+            if len(results) >= needed or fetched < raw_cap:
+                # Export: genug Treffer für das Fenster ODER Segment erschöpft.
+                break
+        return results
+
+    async def _fetch_legacy_batch(
+        self,
+        conn: aiosqlite.Connection,
+        base_sql: str,
+        base_params: list[Any],
+        segment: SegmentRecord,
+        query: StoreQuery,
+        limit: int,
+        raw_offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Ein Roh-Batch der Legacy-DB fetchen + Post-Filter in Python anwenden.
+
+        Liefert ``(gematchte_records, roh_zeilen_im_batch)``. ``roh_zeilen_im_batch``
+        (vor Filter) treibt Batch-Fortschritt und Erschöpfungs-Erkennung; die
+        gematchten Records sind das gefilterte Ergebnis dieses Batches.
+        """
+        params = [*base_params, limit, raw_offset]
+        async with conn.execute(base_sql, params) as cur:
+            raw_rows = await cur.fetchall()
+        matched: list[dict[str, Any]] = []
         for row in raw_rows:
             record = self._legacy_row_to_dict(row, segment.segment_id)
             if query.value_filters and not _legacy_row_matches_filters(record, query.value_filters):
                 continue
             if not self._legacy_metadata_matches(record, query):
                 continue
-            results.append(record)
-        return results
+            matched.append(record)
+        return matched, len(raw_rows)
 
     @staticmethod
     def _has_metadata_filter(query: StoreQuery) -> bool:
@@ -1935,9 +1992,19 @@ class SqliteSegmentStore(RingBufferStore):
             return True
         # Read-only öffnen; jede Exception (Öffnen/Lesen/Korruption) wird als
         # korrupt behandelt und quarantäniert, nie propagiert (#919).
+        #
+        # Missing-File-Recreate (#951, Pkt 2): ein schreibendes ``connect`` legte
+        # an einem zwischenzeitlich gelöschten/verschobenen Segmentpfad still eine
+        # leere Ersatz-DB an – ``PRAGMA integrity_check`` meldete dann ``ok``, das
+        # Manifest bewarb weiter die alten Zeilen, aber spätere Queries sahen die
+        # neue DB ohne ``ringbuffer``-Tabelle und scheiterten. ``mode=ro`` legt eine
+        # fehlende Datei NICHT an, sondern wirft – der Fehler landet im ``except``
+        # unten und das Segment wird als fehlend/nicht-ok quarantäniert (konsistent
+        # zum bestehenden Missing-File-Handling im Read-Pfad).
         conn: aiosqlite.Connection | None = None
+        uri = f"file:{(self._segments_dir / segment.filename).as_posix()}?mode=ro"
         try:
-            conn = await aiosqlite.connect(str(self._segments_dir / segment.filename))
+            conn = await aiosqlite.connect(uri, uri=True)
             async with conn.execute("PRAGMA integrity_check") as cur:
                 row = await cur.fetchone()
             ok = row is not None and row[0] == "ok"

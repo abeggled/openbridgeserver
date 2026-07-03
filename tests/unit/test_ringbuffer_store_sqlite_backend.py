@@ -383,6 +383,38 @@ async def test_check_segment_integrity_healthy_segment_stays_ok(tmp_path: Path):
         await store.close()
 
 
+async def test_check_segment_integrity_missing_file_not_recreated(tmp_path: Path):
+    """On-demand-Integritaetscheck auf ein geloeschtes Segment (#951, Pkt 2).
+
+    Ein schreibendes ``aiosqlite.connect`` legte am Segmentpfad still eine leere
+    DB an; ``PRAGMA integrity_check`` meldete dann ``ok``, das Manifest bewarb
+    weiter die alten Zeilen, aber spaetere Queries sahen die neue DB ohne
+    ``ringbuffer``-Tabelle und scheiterten. Read-only-Open (``mode=ro``) darf die
+    Datei NICHT neu anlegen und muss das fehlende Segment als nicht-ok /
+    quarantaeniert behandeln.
+    """
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+        closed = await store.manifest.get_active_segment()
+        await store.rotate()
+        await store.append([_event(2, "2026-01-01T00:00:01.000Z")])
+        # Datei des geschlossenen Segments loeschen (Retention/Move-Race).
+        seg_path = store._segments_dir / closed.filename
+        seg_path.unlink()
+
+        ok = await store.check_segment_integrity(closed.segment_id)
+        assert ok is False
+        # Keine leere Ersatz-DB wurde am Segmentpfad angelegt.
+        assert not seg_path.exists()
+        # Segment als fehlend/nicht-ok quarantaeniert, statt faelschlich ``ok``.
+        seg = await store.manifest.get_segment(closed.segment_id)
+        assert seg.status == SEGMENT_STATUS_QUARANTINED
+    finally:
+        await store.close()
+
+
 async def test_safe_getsize_returns_zero_for_missing_file(store: SqliteSegmentStore):
     # _sidecar_size/_segment_file_size dürfen bei fehlender Datei nie werfen.
     assert store._sidecar_size("does-not-exist.sqlite", "-wal") == 0
