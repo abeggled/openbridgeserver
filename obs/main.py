@@ -170,7 +170,10 @@ async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_eve
     from obs.ringbuffer.ringbuffer import default_ringbuffer_disk_path, init_ringbuffer, reset_ringbuffer, set_ringbuffer_enabled
 
     rb_path = default_ringbuffer_disk_path(database_path)
-    rb_cfg = await load_persisted_ringbuffer_config(db)
+    # storage_path an den Loader durchreichen (#951 [P3]): fehlt die Config-Zeile,
+    # unterscheidet er anhand vorhandenen Ringbuffer-Storages Upgrade (10 MiB) von
+    # Fresh-Install (100 MiB).
+    rb_cfg = await load_persisted_ringbuffer_config(db, storage_path=rb_path)
     if not rb_cfg["enabled"]:
         reset_ringbuffer()
         set_ringbuffer_enabled(False)

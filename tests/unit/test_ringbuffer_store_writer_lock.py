@@ -79,14 +79,25 @@ async def test_corrupt_lockfile_is_treated_as_stale(tmp_path: Path):
         await lease.release()
 
 
-async def test_pid_of_current_process_is_alive(tmp_path: Path):
+async def test_stale_lockfile_with_own_live_pid_is_taken_over_after_flock(tmp_path: Path):
+    """#951 [P1]: Ein verwaistes Lockfile, dessen PID zufaellig unserer eigenen (lebenden)
+
+    PID entspricht, darf den Erwerb NICHT verhindern, sobald der exklusive ``flock``
+    gewonnen ist. In Containern bekommt der neu gestartete Dienst nach einem
+    unsauberen Shutdown oft dieselbe PID (haeufig PID 1); die ``writer.lock``-Datei
+    bleibt liegen, waehrend der Kernel-``flock`` weg ist. Der gewonnene ``flock`` ist
+    autoritativ – die informative Datei-PID darf nicht zur Ablehnung fuehren, sonst
+    startet der segmentierte Store nach jedem Absturz nicht mehr.
+    """
     import os
 
-    # Lockfile mit der eigenen (lebenden) PID → zweiter Writer wird abgewiesen.
     (tmp_path / "writer.lock").write_text(f'{{"pid": {os.getpid()}}}', encoding="utf-8")
     lease = WriterLease(tmp_path)
-    with pytest.raises(WriterLockHeldError):
-        await lease.acquire()
+    await lease.acquire()
+    try:
+        assert lease.owns_lock
+    finally:
+        await lease.release()
 
 
 async def test_lockfile_with_zero_pid_is_treated_as_stale(tmp_path: Path):
@@ -181,7 +192,16 @@ async def test_stale_takeover_blocked_by_live_flock_holder_is_fail_fast(tmp_path
         await winner.release()
 
 
-async def test_permission_error_on_kill_treats_holder_as_alive(tmp_path: Path, monkeypatch):
+async def test_stale_file_pid_liveness_is_irrelevant_after_flock(tmp_path: Path, monkeypatch):
+    """#951 [P1]: Nach gewonnenem ``flock`` wird die Datei-PID nicht mehr auf Leben geprueft.
+
+    Frueher raiste der Erwerb, wenn die (best-effort) Datei-PID als lebendig galt –
+    selbst wenn ``os.kill(pid, 0)`` nur an fehlenden Rechten scheiterte. Der gewonnene
+    ``flock`` ist jedoch autoritativ (nur ein Prozess kann ihn halten), also darf die
+    Datei-PID den Erwerb nicht mehr blockieren. ``os.kill`` wird hier bewusst so
+    verbogen, dass es die alte „lebendig"-Heuristik ausgeloest haette; der Erwerb muss
+    trotzdem gelingen.
+    """
     import obs.ringbuffer.store.writer_lock as wl
 
     def _raise_permission(_pid, _sig):
@@ -190,8 +210,11 @@ async def test_permission_error_on_kill_treats_holder_as_alive(tmp_path: Path, m
     monkeypatch.setattr(wl.os, "kill", _raise_permission)
     (tmp_path / "writer.lock").write_text('{"pid": 424242}', encoding="utf-8")
     lease = WriterLease(tmp_path)
-    with pytest.raises(WriterLockHeldError):
-        await lease.acquire()
+    await lease.acquire()
+    try:
+        assert lease.owns_lock
+    finally:
+        await lease.release()
 
 
 async def test_stale_takeover_two_concurrent_takers_only_one_owns(tmp_path: Path):

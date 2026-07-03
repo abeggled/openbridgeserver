@@ -18,6 +18,14 @@ alte File blind zu ``unlink()``en (was das frisch erzeugte Lock eines anderen
 Übernehmers löschen könnte), gewinnt genau der Prozess, der den flock exklusiv
 erhält, überschreibt die Payload **in place** (ohne unlink) und hält den fd.
 Jeder weitere Übernehmer scheitert am ``LOCK_NB`` → fail-fast.
+
+Autoritativer flock (#951): Sobald der exklusive ``flock`` gewonnen ist, ist er
+AUTORITATIV. Die im Lockfile hinterlegte PID ist rein informativ und wird NICHT
+mehr gegen Lebendigkeit geprüft. Nach einem unsauberen Shutdown kann das File auf
+der Platte liegen bleiben, während der Kernel-``flock`` weg ist; in Containern
+bekommt der Dienst dann oft dieselbe PID wieder (häufig PID 1). Eine PID-basierte
+Ablehnung würde den Store nach jedem Absturz blockieren – der gewonnene ``flock``
+allein garantiert bereits, dass genau ein Halter existiert.
 """
 
 from __future__ import annotations
@@ -33,19 +41,6 @@ LOCK_FILENAME = "writer.lock"
 
 class WriterLockHeldError(RuntimeError):
     """Raised when another live writer already owns the storage root."""
-
-
-def _pid_is_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Prozess existiert, gehört aber einem anderen User → als lebendig werten.
-        return True
-    return True
 
 
 class WriterLease:
@@ -69,11 +64,12 @@ class WriterLease:
 
         1. Lockfile ``O_CREAT``-öffnen (legt es an, falls es fehlt; teilt es sonst).
         2. ``flock(LOCK_EX | LOCK_NB)`` – kernel-serialisiert. Wer ihn erhält, ist
-           der einzige Kandidat; wer ihn nicht bekommt, muss entscheiden, ob der
-           aktuelle Halter lebt (fail-fast) oder das Lock verwaist ist.
-        3. Unter gehaltenem flock die (evtl. verwaiste) Payload verifizieren und
-           **in place** mit der eigenen Identität überschreiben. Kein unlink →
-           kein Fenster, in dem ein zweiter Übernehmer das frische Lock löscht.
+           der einzige Kandidat und Halter; wer ihn nicht bekommt, wird fail-fast
+           abgewiesen (ein lebender Halter hält den fd offen).
+        3. Unter gehaltenem flock ist der Besitz AUTORITATIV (#951): die (evtl.
+           verwaiste) Payload wird ohne PID-Liveness-Prüfung **in place** mit der
+           eigenen Identität überschrieben. Kein unlink → kein Fenster, in dem ein
+           zweiter Übernehmer das frische Lock löscht.
         """
         self._root.mkdir(parents=True, exist_ok=True)
         fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o644)
@@ -85,14 +81,15 @@ class WriterLease:
                 # ist definitionsgemäß am Leben (er hält den fd offen).
                 holder_pid = self._read_holder_pid(fd)
                 raise WriterLockHeldError(f"storage root {self._root} is locked by live writer pid={holder_pid}") from exc
-            # flock erhalten. Prüfen, ob eine *lebende* PID in der Payload steht –
-            # das kann nur passieren, wenn ein Vorbesitzer die Datei ohne flock
-            # (Altbestand) hinterlassen hat; ein lebender flock-Halter hätte uns
-            # oben blockiert. Ein toter/unbekannter PID gilt als verwaist.
-            holder_pid = self._read_holder_pid(fd)
-            if holder_pid is not None and _pid_is_alive(holder_pid):
-                fcntl.flock(fd, fcntl.LOCK_UN)
-                raise WriterLockHeldError(f"storage root {self._root} is locked by live writer pid={holder_pid}")
+            # flock erhalten – ab hier AUTORITATIV (#951 [P1]): der kernel-serialisierte
+            # flock stellt sicher, dass nur DIESER Prozess die Root hält; ein zweiter
+            # lebender Halter wäre oben am ``LOCK_NB`` gescheitert. Die im Lockfile
+            # stehende PID ist rein informativ und kann nach einem unsauberen Shutdown
+            # verwaist auf der Platte liegen bleiben (in Containern bekommt der Dienst
+            # oft dieselbe PID wieder, häufig PID 1). Sie darf daher NICHT mehr zur
+            # Ablehnung führen – sonst startet der Store nach jedem Absturz nicht mehr.
+            # Wir übernehmen die (evtl. verwaiste) Payload und überschreiben sie in place
+            # mit unserer eigenen Identität.
             self._write_payload(fd)
         except BaseException:
             os.close(fd)

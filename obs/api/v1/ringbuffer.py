@@ -108,7 +108,7 @@ def _unsubscribe_ringbuffer(rb: Any) -> None:
 
 
 async def _disabled_stats(db: Database) -> RingBufferStats:
-    cfg = await load_persisted_ringbuffer_config(db)
+    cfg = await load_persisted_ringbuffer_config(db, storage_path=_ringbuffer_disk_path())
     return RingBufferStats(
         enabled=False,
         total=0,
@@ -1871,7 +1871,7 @@ async def ringbuffer_stats(
     stats = await rb.stats()
     # Persistierte Segment-Config mitgeben, damit der Config-Dialog die
     # gespeicherten Werte anzeigt (``rb.stats()`` liefert nur den Store-Snapshot).
-    persisted = await load_persisted_ringbuffer_config(db)
+    persisted = await load_persisted_ringbuffer_config(db, storage_path=_ringbuffer_disk_path())
     return RingBufferStats(
         enabled=True,
         segment_max_bytes=persisted.get("segment_max_bytes"),
@@ -1898,7 +1898,7 @@ async def configure_ringbuffer(
 
 
 async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> RingBufferStats:
-    persisted = await load_persisted_ringbuffer_config(db)
+    persisted = await load_persisted_ringbuffer_config(db, storage_path=_ringbuffer_disk_path())
     requested_enabled = body.enabled if "enabled" in body.model_fields_set else is_ringbuffer_enabled()
     rb = get_optional_ringbuffer()
     current_config = await rb.stats() if rb is not None else persisted
@@ -1906,6 +1906,14 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     resolved_max_entries = body.max_entries if "max_entries" in body.model_fields_set else current_config["max_entries"]
     resolved_max_file_size = body.max_file_size_bytes if "max_file_size_bytes" in body.model_fields_set else current_config["max_file_size_bytes"]
     resolved_max_age = body.max_age if "max_age" in body.model_fields_set else current_config["max_age"]
+    # Null-Retention normalisieren (#951 [P2]): ``RingBufferConfig`` erlaubt ``max_age: 0``
+    # (fuer persistierte Legacy-Configs bereits zu ``None`` normalisiert, siehe
+    # persisted_config.py:110 / 9278f0d8). ``StoreRetentionConfig`` lehnt die rohe 0 aber
+    # ab (verlangt ``>= 1`` oder ``null``) → 422 im segmentierten Pfad. Die 0 hier vor der
+    # ``StoreRetentionConfig``/``validate_store_config`` zu ``None`` (unbegrenzt) klemmen,
+    # damit der Round-trip konsistent zum Persisted-Load-Pfad gelingt.
+    if resolved_max_age == 0:
+        resolved_max_age = None
 
     # Segment-Parameter (#930) leben nur in der persistierten Config, nicht im
     # laufenden RingBuffer. Bei Teil-Updates die nicht gesetzten Felder aus der
@@ -2077,7 +2085,10 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
         if "max_file_size_bytes" in body.model_fields_set:
             reconfigure_kwargs["max_file_size_bytes"] = body.max_file_size_bytes
         if "max_age" in body.model_fields_set:
-            reconfigure_kwargs["max_age"] = body.max_age
+            # Null-Retention (#951 [P2]): die normalisierte ``resolved_max_age`` (0 → None)
+            # verwenden, damit auch der Live-Reconfigure-Pfad kein rohes 0 an
+            # ``StoreRetentionConfig`` durchreicht.
+            reconfigure_kwargs["max_age"] = resolved_max_age
         # Segment-Config live an den laufenden Store propagieren (#919/#938):
         # gesetzte segment_max_* werden übernommen, im segmentierten Modus wirken
         # sie sofort (Rotation/Retention/Prognose) ohne Neustart.

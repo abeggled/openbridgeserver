@@ -56,6 +56,34 @@ async def test_config_rejects_too_coarse_segmentation_with_422(db, field, segmen
 
 
 @pytest.mark.asyncio
+async def test_config_normalizes_zero_max_age_to_none_in_segmented_path(db, monkeypatch, tmp_path):
+    """#951 [P2]: ``max_age: 0`` (erlaubt vom API-Modell) darf im segmentierten Pfad kein 422 sein.
+
+    ``RingBufferConfig`` erlaubt ``max_age: 0`` (fuer persistierte Legacy-Configs bereits
+    zu ``None`` normalisiert). Wurde die rohe 0 an ``StoreRetentionConfig`` durchgereicht,
+    lehnte dessen post-init sie ab → 422, obwohl es ein gueltiger „unbegrenzt/keine
+    Age-Retention"-Round-trip ist. Der Config-API-Pfad muss ``max_age == 0`` vor der
+    segmentierten Validierung zu ``None`` normalisieren – konsistent zum Persisted-Load-Pfad.
+    """
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    try:
+        stats = await rb_api.configure_ringbuffer(
+            _cfg(segmented=True, max_age=0),
+            _user="admin",
+            db=db,
+        )
+        assert stats.enabled is True
+        cfg = await rb_api.load_persisted_ringbuffer_config(db)
+        assert cfg["max_age"] is None
+    finally:
+        active_rb = rb_api.get_optional_ringbuffer()
+        if active_rb is not None:
+            await active_rb.stop()
+        reset_ringbuffer()
+
+
+@pytest.mark.asyncio
 async def test_config_segmented_opt_in_persists_and_exposes_store_stats(db, monkeypatch, tmp_path):
     """POST /config mit ``segmented=True`` persistiert das Flag und macht die
     Store-Stats (``store``) additiv in der Stats-API sichtbar (#919)."""

@@ -24,6 +24,7 @@ from obs.db.database import Database
 from obs.ringbuffer.persisted_config import (
     DEFAULT_MAX_FILE_SIZE_BYTES,
     DEFAULT_SEGMENT_MAX_AGE_SECONDS,
+    DEFAULT_UPGRADE_MAX_FILE_SIZE_BYTES,
     PERSISTED_CONFIG_KEY,
     load_persisted_ringbuffer_config,
     persist_ringbuffer_config,
@@ -323,6 +324,91 @@ async def test_persisted_positive_max_age_is_preserved():
         await db.commit()
         cfg = await load_persisted_ringbuffer_config(db)
         assert cfg["max_age"] == 7200
+    finally:
+        await db.disconnect()
+
+
+def test_default_upgrade_max_file_size_is_ten_mebibytes():
+    assert DEFAULT_UPGRADE_MAX_FILE_SIZE_BYTES == 10 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_no_config_row_but_existing_storage_keeps_legacy_10mib_budget(tmp_path):
+    """#951 [P3]: Upgrade ohne Config-Zeile bewahrt das vorherige 10-MiB-Budget.
+
+    Eine upgegradete Installation, die nie Monitor-Settings gespeichert hat, hat KEINE
+    ``ringbuffer.runtime_config``-Zeile, aber bereits Ringbuffer-Storage auf der Platte
+    (Legacy-DB oder Segment-Root). Ohne Sonderbehandlung springt das Budget still von
+    vormals 10 MiB auf den neuen 100-MiB-Fresh-Install-Default. Existiert eine
+    Storage-Spur, muss der Legacy-10-MiB-Default bewahrt werden.
+    """
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        storage_path = tmp_path / "obs_ringbuffer.db"
+        storage_path.write_bytes(b"")  # Legacy-DB-Datei existiert → Upgrade-Indikator.
+        cfg = await load_persisted_ringbuffer_config(db, storage_path=str(storage_path))
+        assert cfg["max_file_size_bytes"] == DEFAULT_UPGRADE_MAX_FILE_SIZE_BYTES
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_no_config_row_but_existing_segment_root_keeps_legacy_10mib_budget(tmp_path):
+    """#951 [P3]: Auch ein vorhandener Segment-Root (v2-Store) zaehlt als Upgrade-Spur."""
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        storage_path = tmp_path / "obs_ringbuffer.db"
+        (tmp_path / "obs_ringbuffer_segments").mkdir()  # Segment-Root existiert.
+        cfg = await load_persisted_ringbuffer_config(db, storage_path=str(storage_path))
+        assert cfg["max_file_size_bytes"] == DEFAULT_UPGRADE_MAX_FILE_SIZE_BYTES
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_no_config_row_and_no_storage_trace_is_fresh_install_100mib(tmp_path):
+    """#951 [P3]: Wirklich frische Installation (keine Storage-Spur) bekommt den 100-MiB-Default."""
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        storage_path = tmp_path / "obs_ringbuffer.db"  # existiert NICHT.
+        cfg = await load_persisted_ringbuffer_config(db, storage_path=str(storage_path))
+        assert cfg["max_file_size_bytes"] == DEFAULT_MAX_FILE_SIZE_BYTES
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_no_storage_path_defaults_to_fresh_install_budget():
+    """Ohne ``storage_path`` (z. B. In-Memory-DB) bleibt der 100-MiB-Fresh-Install-Default."""
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        cfg = await load_persisted_ringbuffer_config(db)
+        assert cfg["max_file_size_bytes"] == DEFAULT_MAX_FILE_SIZE_BYTES
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_existing_config_row_ignores_storage_trace(tmp_path):
+    """Existiert eine Config-Zeile, ist die Upgrade-Heuristik irrelevant – der persistierte Wert gilt."""
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        storage_path = tmp_path / "obs_ringbuffer.db"
+        storage_path.write_bytes(b"")
+        await persist_ringbuffer_config(
+            db,
+            enabled=True,
+            max_entries=None,
+            max_file_size_bytes=42 * 1024 * 1024,
+            max_age=None,
+        )
+        cfg = await load_persisted_ringbuffer_config(db, storage_path=str(storage_path))
+        assert cfg["max_file_size_bytes"] == 42 * 1024 * 1024
     finally:
         await db.disconnect()
 

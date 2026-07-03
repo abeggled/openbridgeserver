@@ -51,7 +51,7 @@ async def test_init_persisted_ringbuffer_subscribes_when_enabled(monkeypatch):
 
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
-        lambda _db: _async_value(
+        lambda _db, **_kwargs: _async_value(
             {
                 "enabled": True,
                 "max_entries": 42,
@@ -84,7 +84,7 @@ async def test_init_persisted_ringbuffer_disables_without_initializing(monkeypat
 
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
-        lambda _db: _async_value(
+        lambda _db, **_kwargs: _async_value(
             {
                 "enabled": False,
                 "max_entries": 42,
