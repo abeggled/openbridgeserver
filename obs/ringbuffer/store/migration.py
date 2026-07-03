@@ -245,15 +245,24 @@ class LegacyMigrator:
     def _mark_source_migrated(self) -> None:
         """Vermerkt die Quelle persistent als vollständig migriert (#951, Pkt 2).
 
-        Idempotent: legt das leere Marker-Sidecar an (bzw. lässt es bestehen). Ein
-        I/O-Fehler wird geschluckt statt propagiert – der Marker ist eine
-        Best-Effort-Schutzschicht gegen Re-Attach; sein Fehlen darf die (bereits
-        erfolgreich abgeschlossene) Migration nicht scheitern lassen.
+        Idempotent: legt das leere Marker-Sidecar an (bzw. lässt es bestehen).
+
+        Der Marker ist die Re-Attach-Schutzschicht (#951, P2): ``_detach_migrated_
+        legacy_segment`` darf den Legacy-Manifest-Eintrag NUR entfernen, WENN dieser
+        Marker erfolgreich geschrieben wurde. Ist das Legacy-Verzeichnis nicht
+        schreibbar (aber die Store-Root schon), scheitert ``touch()`` – ein
+        geschluckter Fehler + trotzdem entfernte Manifest-Zeile führte beim nächsten
+        Restart zum Re-Attach der bereits migrierten Quelle (``classify()`` sähe die
+        Datei OHNE Marker) und damit zur DOPPELTEN Lieferung jedes migrierten Events.
+        Der Fehler wird daher als ``OSError`` PROPAGIERT, damit der Aufrufer NICHT
+        detacht; die Legacy-Quelle bleibt registriert (kein Doppel-Delivery) und ein
+        späterer Lauf kann es erneut versuchen.
         """
         try:
             self._migrated_marker_path.touch(exist_ok=True)
         except OSError:
-            logger.warning("RingBuffer: konnte Migrations-Marker fuer %s nicht schreiben", self._legacy_path)
+            logger.error("RingBuffer: konnte Migrations-Marker fuer %s nicht schreiben – Legacy bleibt eingehaengt", self._legacy_path)
+            raise
 
     def classify(self) -> LegacyClassification | None:
         """Klassifiziert die Quelle – ODER liefert ``None``, wenn bereits migriert (#951, Pkt 2).
@@ -355,18 +364,29 @@ class LegacyMigrator:
         after_rowid = max(state.last_rowid, materialized)
         rows = await self._read_batch(after_rowid=after_rowid, limit=batch_rows)
         if not rows:
-            self._save_state(_ResumeState(last_rowid=after_rowid, done=True))
+            # Detach (inkl. Marker-Schreiben) VOR dem done-Mark (#951, P2): scheitert
+            # das Marker-Schreiben, propagiert ``_detach_migrated_legacy_segment`` einen
+            # Fehler, BEVOR der Resume-State als ``done`` persistiert wird – sonst
+            # übersprungen ein späterer Lauf die Quelle trotz noch eingehängtem Legacy.
             await self._detach_migrated_legacy_segment()
+            self._save_state(_ResumeState(last_rowid=after_rowid, done=True))
             await self._run_retention_after_detach()
             return 0
         await self._append_with_legacy_gids(rows)
         last_rowid = rows[-1]["id"]
         # done erst markieren, wenn der Batch kleiner als angefordert war (= letzte Seite).
         done = len(rows) < batch_rows
-        self._save_state(_ResumeState(last_rowid=last_rowid, done=done))
         if done:
+            # Wie oben: Marker + Detach vor dem done-Mark, damit ein Marker-Fehler den
+            # done-Mark verhindert (kein stiller Skip beim Retry, #951 P2). Der
+            # Zwischen-Cursor (last_rowid) wurde durch den Append bereits idempotent
+            # materialisiert; ein Abbruch hier lässt den nächsten Lauf ab last_rowid
+            # fortsetzen und erneut detachen.
             await self._detach_migrated_legacy_segment()
+            self._save_state(_ResumeState(last_rowid=last_rowid, done=True))
             await self._run_retention_after_detach()
+        else:
+            self._save_state(_ResumeState(last_rowid=last_rowid, done=False))
         return len(rows)
 
     async def _run_retention_after_detach(self) -> None:
@@ -405,6 +425,12 @@ class LegacyMigrator:
         dafür, dass ``classify()`` die Quelle danach als ``None`` meldet und der
         Attach-Pfad sie überspringt (konsistent zum Idempotenz-/Attach-Guard des
         Startups), ohne die Original-Datei zu löschen.
+
+        Detach NUR bei Marker-Erfolg (#951, P2): ``_mark_source_migrated`` PROPAGIERT
+        einen Schreibfehler (z. B. read-only Legacy-Verzeichnis). Die Manifest-Zeile
+        wird daher erst NACH erfolgreichem Marker-Schreiben entfernt – schlägt es fehl,
+        bleibt die Legacy-Quelle registriert (kein Doppel-Delivery), der Fehler wird
+        gemeldet und ``migrate_chunk`` bricht ab (kein done-Mark; späterer Retry).
         """
         self._mark_source_migrated()
         resolved = str(self._legacy_path.resolve())
@@ -752,8 +778,12 @@ class LegacyMigrator:
         ``_checkpoint_small_legacy``) wird eine dirty-WAL-Legacy-DB **unter dem
         Small-Schwellwert** daher EINMAL sauber gecheckpointet, bevor read-only
         gelesen wird; committete Frames wandern so in die Haupt-DB und werden
-        mitmigriert. Große Dateien bleiben beim ``immutable=1``-Pfad (kein Scan/
-        Checkpoint auf 20–30 GB).
+        mitmigriert. Ist der dirty WAL dagegen **zu gross zum Checkpointen** (DB+WAL
+        >= ``SMALL_MAX_BYTES``), BRICHT die Migration ab (kein Scan/Checkpoint auf
+        20–30 GB, aber auch kein stiller ``immutable=1``-Datenverlust) – siehe
+        ``_checkpoint_dirty_wal_if_small`` (#951, P1). Nur ein SAUBERER WAL (kein
+        dirty ``-wal``) grosser Dateien darf regulär über ``immutable=1`` gelesen
+        werden, da dann keine committeten Frames ausserhalb der Haupt-DB liegen.
 
         **pre-Metadata-Schema (#951, Pkt 5):** Sehr alte Single-DBs (vor #388) haben
         noch keine ``metadata_version``/``metadata``-Spalten. Ein bedingungsloses
@@ -807,7 +837,20 @@ class LegacyMigrator:
         if not _wal_is_dirty(legacy_path):
             return
         if _legacy_disk_size(legacy_path) >= SMALL_MAX_BYTES:
-            return
+            # Dirty WAL, aber DB+WAL >= SMALL_MAX_BYTES → zu gross zum Checkpointen
+            # (kein Scan/Checkpoint auf 20–30 GB). Anders als der read-only-
+            # Kompatibilitätspfad (der auf ``immutable=1`` degradieren DARF, weil er nur
+            # liest) würde der MIGRATIONS-Pfad hier via ``immutable=1`` die committeten
+            # WAL-Frames ignorieren und – erreicht der Batch das Ende der Haupt-DB –
+            # ``migrate_chunk`` fälschlich als ``done`` markieren: die jüngsten
+            # committeten Frames gingen still verloren (#951, P1). Daher hart abbrechen
+            # (kein done-Mark), konsistent zum busy-Abbruch weiter unten; ein späterer
+            # Lauf kann es erneut versuchen, sobald der WAL gecheckpointet/kleiner ist.
+            raise RuntimeError(
+                f"Dirty WAL der Legacy-DB {legacy_path} ist zu gross zum Checkpointen "
+                f"(DB+WAL >= {SMALL_MAX_BYTES} Bytes) – Migration abgebrochen, um committete "
+                "WAL-Frames nicht via immutable=1 zu verlieren (spaeterer Retry)."
+            )
         try:
             conn = await aiosqlite.connect(str(legacy_path))
             try:

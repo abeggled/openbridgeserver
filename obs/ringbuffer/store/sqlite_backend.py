@@ -69,6 +69,7 @@ from obs.ringbuffer.store.manifest import (
     SEGMENT_STATUS_ACTIVE,
     SEGMENT_STATUS_CHECKPOINT_PENDING,
     SEGMENT_STATUS_CLOSED,
+    SEGMENT_STATUS_LEGACY,
     SEGMENT_STATUS_QUARANTINED,
     Manifest,
     SegmentRecord,
@@ -714,7 +715,25 @@ class SqliteSegmentStore(RingBufferStore):
         # älteres Segment noch in das Ausgabefenster fallen; dann werden ALLE
         # passenden Segmente je ``offset+limit``-bounded gelesen (kein Voll-Scan)
         # und der finale Sort in ``query()` begrenzt die Ausgabe.
-        allow_early_termination = query.sort_field == "id" and query.sort_order == "desc"
+        #
+        # In-Progress-Migration (#951, Pkt 1): läuft die gechunkte Legacy-Migration,
+        # ist die Original-Legacy-DB NOCH read-only als ``legacy``-Segment eingehängt,
+        # WÄHREND das Manifest bereits frisch geschriebene v2-Segmente mit den zuerst
+        # kopierten (ÄLTESTEN) Legacy-Zeilen enthält. Diese migrierten Segmente tragen
+        # quell-gescopte NEGATIVE gids und liegen – im reinen Legacy-Fall ohne positive
+        # Zeilen – als ``closed``/``active`` im positiven Query-Rang; sie werden wegen
+        # ihrer höheren ``segment_id`` ZUERST besucht, halten aber die ältesten Zeilen,
+        # während das noch attached Legacy-Segment die NEUESTEN Zeilen hält. Der
+        # ``id desc``-Frühabbruch (Annahme: neuere Segmente ⇒ höhere gids) sammelte dann
+        # die ältesten migrierten Zeilen und terminierte, bevor das Legacy-Segment
+        # gelesen wurde → unvollständige/falsch geordnete Ergebnisse. Solange ein
+        # attached ``legacy``-Segment im Abfrage-Set liegt, wird der Frühabbruch daher
+        # deaktiviert und ALLE relevanten Segmente vollständig eingelesen; der finale
+        # Sort nach ``global_event_id`` in ``query()`` ordnet korrekt und begrenzt auf
+        # ``offset+limit``. Im Normalbetrieb (kein attached Legacy) bleibt der
+        # Frühabbruch erhalten (Performance).
+        migration_in_progress = any(s.status == SEGMENT_STATUS_LEGACY for s in segments)
+        allow_early_termination = query.sort_field == "id" and query.sort_order == "desc" and not migration_in_progress
         for segment in segments:
             if allow_early_termination and needed and len(collected) >= needed:
                 break  # bounded: ältere Segmente können das Fenster nicht mehr treffen.

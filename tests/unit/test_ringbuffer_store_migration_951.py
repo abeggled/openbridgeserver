@@ -32,7 +32,7 @@ import pytest
 
 from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
 from obs.ringbuffer.store.interface import StoreEvent, StoreQuery
-from obs.ringbuffer.store.migration import LegacyMigrator, _ResumeState
+from obs.ringbuffer.store.migration import SMALL_MAX_BYTES, LegacyMigrator, _ResumeState
 from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
 
 
@@ -1047,3 +1047,155 @@ async def test_migration_retention_reclaims_after_completion(tmp_path: Path):
         assert "L5" in {r["new_value"] for r in rows}
     finally:
         await store.close()
+
+
+# ---------------------------------------------------------------------------
+# (P2, Pkt 1) Early-Termination waehrend laufender Migration abschalten (:720)
+# ---------------------------------------------------------------------------
+
+
+async def test_in_progress_migration_disables_early_termination(tmp_path: Path):
+    # Waehrend die gechunkte Legacy-Migration laeuft, ist die Original-Legacy-DB
+    # NOCH read-only attached (status='legacy') UND es existieren bereits v2-Segmente
+    # mit den zuerst kopierten (AELTESTEN) Legacy-Zeilen. Die migrierten Segmente
+    # tragen quell-gescopte NEGATIVE gids ausserhalb des Legacy-gid-Bereichs und
+    # liegen – im reinen Legacy-Fall ohne positive Zeilen – als ``closed``/``active``
+    # im positiven Query-Rang. Ein ``id desc``-Query mit kleinem Limit besuchte sie
+    # daher ZUERST (hoehere segment_id), sammelte die aeltesten kopierten Zeilen und
+    # terminierte frueh – das noch attached Legacy-Segment mit den NEUESTEN Zeilen
+    # wurde nie gelesen. Fix: bei attached Legacy + migrierten v2-Segmenten (In-
+    # Progress-Signal) kein Frueh-Abbruch; alle Segmente werden gelesen und korrekt
+    # nach global_event_id geordnet.
+    store = SqliteSegmentStore(tmp_path / "root", segments=SegmentConfig(segment_max_rows=2))
+    await store.open()
+    try:
+        db = tmp_path / "obs_ringbuffer.db"
+        _build_legacy(db, [(f"2020-01-{i:02d}T00:00:00.000Z", f"L{i}") for i in range(1, 9)])
+        migrator = LegacyMigrator(store, db)
+        await migrator.attach_readonly(migrator.classify())
+
+        # Nur einen Teil migrieren: kopiert die 4 aeltesten Zeilen (rowid 1..4) in
+        # rotierende v2-Segmente, die Legacy-DB bleibt attached und haelt L1..L8.
+        assert await migrator.migrate_chunk(batch_rows=4) == 4
+        assert len(await store.manifest.list_legacy_segments()) == 1  # noch attached
+        # v2-Segmente mit migrierten (aeltesten) Zeilen existieren bereits.
+        assert any(s.schema_version > 1 for s in await store.manifest.list_segments())
+
+        # Die 3 NEUESTEN nach id sind L8, L7, L6 (aus dem noch attached Legacy-Segment).
+        # Ohne Fix liefert der Frueh-Abbruch faelschlich die migrierten L4, L3, L2.
+        rows = await store.query(StoreQuery(limit=3, sort_field="id", sort_order="desc"))
+        assert [r["new_value"] for r in rows] == ["L8", "L7", "L6"]
+    finally:
+        await store.close()
+
+
+async def test_early_termination_still_active_without_attached_legacy(tmp_path: Path):
+    # Regression-Guard: ohne attached Legacy-Segment bleibt der Frueh-Abbruch aktiv
+    # (Performance). Ein rein-v2-Store mit mehreren Segmenten darf bei kleinem Limit
+    # NICHT alle Segmente oeffnen.
+    store = SqliteSegmentStore(tmp_path / "root", segments=SegmentConfig(segment_max_rows=1))
+    await store.open()
+    try:
+        for i in range(4):
+            await store.append([_event(f"v2-{i}", f"2026-01-0{i + 1}T00:00:00.000Z")])
+        assert not await store.manifest.list_legacy_segments()
+
+        opened: list[int] = []
+        original = store._read_segment_rows
+
+        async def _tracking_read(segment, query):
+            opened.append(segment.segment_id)
+            return await original(segment, query)
+
+        store._read_segment_rows = _tracking_read
+        rows = await store.query(StoreQuery(limit=1, sort_field="id", sort_order="desc"))
+        assert [r["new_value"] for r in rows] == ["v2-3"]
+        # Frueh-Abbruch: nicht alle 4 Segmente wurden geoeffnet.
+        assert len(opened) < 4
+    finally:
+        await store.close()
+
+
+# ---------------------------------------------------------------------------
+# (P2, Pkt 2) Detach nur bei erfolgreichem Marker-Schreiben (:256)
+# ---------------------------------------------------------------------------
+
+
+async def test_detach_skipped_when_marker_write_fails(store: SqliteSegmentStore, tmp_path: Path, monkeypatch):
+    # Ist das Legacy-Verzeichnis nicht schreibbar (aber die Store-Root schon), kann
+    # der ``.migrated``-Marker nicht geschrieben werden. Wuerde die Migration den
+    # Legacy-Manifest-Eintrag TROTZDEM abkoppeln, sähe ``classify()`` beim naechsten
+    # Restart nur die vorhandene Legacy-DB OHNE Marker → Re-Attach → jedes bereits
+    # migrierte Event DOPPELT. Fix: schlaegt das Marker-Schreiben fehl, wird NICHT
+    # detacht (Legacy bleibt registriert; kein Doppel-Delivery), der Fehler wird
+    # gemeldet.
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy(db, [("2020-01-01T00:00:00.000Z", "one"), ("2020-01-02T00:00:00.000Z", "two")])
+
+    migrator = LegacyMigrator(store, db)
+    await migrator.attach_readonly(migrator.classify())
+    assert len(await store.manifest.list_legacy_segments()) == 1
+
+    # Marker-Schreiben schlaegt hart fehl (z. B. read-only Legacy-Verzeichnis).
+    def _fail_touch(*_a, **_k):
+        raise OSError("legacy directory is read-only")
+
+    monkeypatch.setattr(Path, "touch", _fail_touch)
+
+    with pytest.raises(Exception):  # noqa: PT011 – Marker-Fehler soll klar gemeldet werden
+        await migrator.migrate_small(batch_rows=100)
+
+    # Der Legacy-Eintrag bleibt registriert (NICHT abgekoppelt), solange der Marker
+    # fehlt – sonst wuerde ein Restart die Quelle erneut einhaengen (Doppel-Delivery).
+    assert len(await store.manifest.list_legacy_segments()) == 1
+    # Kein Marker geschrieben.
+    assert not db.with_name(f"{db.name}.migrated").exists()
+
+
+async def test_detach_succeeds_when_marker_write_succeeds(store: SqliteSegmentStore, tmp_path: Path):
+    # Positiv-Gegenprobe: schreibt der Marker erfolgreich, wird wie bisher abgekoppelt.
+    db = tmp_path / "obs_ringbuffer.db"
+    _build_legacy(db, [("2020-01-01T00:00:00.000Z", "one"), ("2020-01-02T00:00:00.000Z", "two")])
+    migrator = LegacyMigrator(store, db)
+    await migrator.attach_readonly(migrator.classify())
+    assert await migrator.migrate_small(batch_rows=100) == 2
+    # Marker geschrieben und Legacy-Eintrag abgekoppelt.
+    assert db.with_name(f"{db.name}.migrated").exists()
+    assert await store.manifest.list_legacy_segments() == []
+
+
+# ---------------------------------------------------------------------------
+# (P2, Pkt 3) Migration abbrechen, wenn dirty WAL zu gross zum Checkpointen (:810)
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_aborts_when_dirty_wal_too_large_to_checkpoint(store: SqliteSegmentStore, tmp_path: Path, monkeypatch):
+    # Eine Legacy-DB mit nicht-leerem, committetem WAL, deren kombinierte DB+WAL-Groesse
+    # >= SMALL_MAX_BYTES ist: ``_checkpoint_dirty_wal_if_small`` kehrte OHNE Checkpoint
+    # zurueck, aber ``_read_batch`` oeffnet mit ``immutable=1`` (ignoriert committete
+    # WAL-Frames). Erreicht der Batch das Ende der Haupt-DB, markierte ``migrate_chunk``
+    # ``done`` – die juengsten committeten Frames wurden NIE gelesen (stiller
+    # Datenverlust). Fix: ist der dirty WAL zu gross zum Checkpointen, bricht die
+    # Migration mit klarer Exception ab (kein done-Mark) – konsistent zum busy-Abbruch.
+    db = _build_dirty_wal_legacy(tmp_path)
+
+    import obs.ringbuffer.store.migration as migration_mod
+
+    # Datei physisch klein lassen, aber die gemeldete Disk-Groesse ueber den
+    # Small-Schwellwert heben → der Checkpoint-Pfad darf NICHT greifen.
+    monkeypatch.setattr(migration_mod, "_legacy_disk_size", lambda _p: SMALL_MAX_BYTES + 1)
+
+    migrator = LegacyMigrator(store, db)
+    with pytest.raises(Exception):  # noqa: PT011 – zu grosser dirty WAL soll hart abbrechen
+        await migrator.migrate_small(batch_rows=100)
+
+    # Resume-State darf NICHT done sein (sonst waeren die WAL-Frames dauerhaft uebersprungen).
+    assert migrator._load_state().done is False
+
+    # Ohne die kuenstliche Groessen-Inflation checkpointet derselbe Migrator sauber
+    # und migriert alle committeten Frames.
+    monkeypatch.undo()
+    total = await LegacyMigrator(store, db).migrate_small(batch_rows=100)
+    assert total == 3
+    rows = await store.query(StoreQuery(limit=100))
+    assert sorted(r["new_value"] for r in rows) == ["wal-0", "wal-1", "wal-2"]
