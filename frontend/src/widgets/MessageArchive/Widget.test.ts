@@ -8,7 +8,14 @@ const wsHandlers = vi.hoisted(() => ({
   current: [] as Array<(data: Record<string, unknown>) => void>,
 }))
 
+const apiState = vi.hoisted(() => ({
+  jwt: 'jwt-1' as string | null,
+  writeContext: {} as { pageId?: string; sessionToken?: string; definingId?: string },
+}))
+
 vi.mock('@/api/client', () => ({
+  getJwt: vi.fn(() => apiState.jwt),
+  getWriteContext: vi.fn(() => apiState.writeContext),
   messageArchives: {
     entries: vi.fn(),
     markRead: vi.fn(),
@@ -64,6 +71,8 @@ const olderEntry: MessageArchiveEntry = {
 
 afterEach(() => {
   wsHandlers.current = []
+  apiState.jwt = 'jwt-1'
+  apiState.writeContext = {}
   vi.clearAllMocks()
 })
 
@@ -85,6 +94,28 @@ describe('MessageArchive Widget.vue', () => {
 
     expect(wrapper.text()).not.toContain('widgets.messageArchive.markRead')
     expect(wrapper.text()).not.toContain('widgets.messageArchive.acknowledge')
+  })
+
+  it('hides read action for anonymous page viewers', async () => {
+    apiState.jwt = null
+    apiState.writeContext = { pageId: 'page-1' }
+    vi.mocked(messageArchives.entries).mockResolvedValue({ items: [entry], total: 1, limit: 25, offset: 0 })
+
+    const wrapper = mount(MessageArchiveWidget, {
+      props: {
+        config: { allow_read: true, allow_acknowledge: true },
+        editorMode: false,
+        readonly: false,
+      },
+      global: {
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('widgets.messageArchive.markRead')
+    expect(wrapper.text()).toContain('widgets.messageArchive.acknowledge')
+    wrapper.unmount()
   })
 
   it('removes cached live entries that no longer match filters', async () => {

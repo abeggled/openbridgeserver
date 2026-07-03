@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { messageArchives, type MessageArchiveEntry } from '@/api/client'
+import { getJwt, getWriteContext, messageArchives, type MessageArchiveEntry } from '@/api/client'
 import { useWebSocket } from '@/composables/useWebSocket'
 
 const props = defineProps<{
@@ -40,7 +40,8 @@ const showArchive = computed(() => (props.config.show_archive as boolean | undef
 const showSource = computed(() => (props.config.show_source as boolean | undefined) ?? true)
 const allowRead = computed(() => (props.config.allow_read as boolean | undefined) ?? true)
 const allowAcknowledge = computed(() => (props.config.allow_acknowledge as boolean | undefined) ?? true)
-const canRead = computed(() => !props.readonly && allowRead.value)
+const anonymousPageScope = computed(() => !!getWriteContext().pageId && !getJwt())
+const canRead = computed(() => !props.readonly && allowRead.value && !anonymousPageScope.value)
 const canAcknowledge = computed(() => !props.readonly && allowAcknowledge.value)
 
 function filterValues(key: 'severity' | 'status' | 'type' | 'source'): string[] {
