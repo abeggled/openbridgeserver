@@ -166,6 +166,8 @@ def test_checksum_injection_is_idempotent(tmp_path):
 
     first_run = run_script(f"# Release\n\n{marker}\n")
     assert first_run.count("### Checksums") == 1
+    assert first_run.count("**App Bundle**") == 1
+    assert re.search(r"App Bundle.*?```\s*" + fake_hash, first_run, re.DOTALL)
     assert first_run.count(fake_hash) == 1
 
     second_run = run_script(first_run)

@@ -486,6 +486,8 @@ jobs:
 
           section = "### Checksums (SHA-256)\n\n"
           for name, cs in entries:
+              if 'app-bundle' in name:
+                  section += "**App Bundle**\n\n"
               section += f"*{name}*:\n```\n{cs}\n```\n\n"
           section += marker
 
