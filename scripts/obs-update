@@ -145,7 +145,8 @@ if r:
         if sha256_asset:
             print('sha256url:' + sha256_asset['browser_download_url'])
         else:
-            sha512 = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha512')), None)
+            expected_sha512_name = bundle['name'] + '.sha512'
+            sha512 = next((a for a in r['assets'] if a['name'] == expected_sha512_name), None)
             print('sha512url:' + sha512['browser_download_url'] if sha512 else '')
 ")
 
@@ -181,8 +182,13 @@ elif [[ "$CHECKSUM_LINE" == sha512url:* ]]; then
     CHECKSUM_FILENAME=$(basename "$CHECKSUM_URL")
     echo "Downloading checksum (legacy SHA-512) ..."
     curl -fL "$CHECKSUM_URL" -o "$TMP/$CHECKSUM_FILENAME"
+    EXPECTED_SHA512=$(awk 'NR == 1 { print $1 }' "$TMP/$CHECKSUM_FILENAME")
+    if ! [[ "$EXPECTED_SHA512" =~ ^[0-9a-fA-F]{128}$ ]]; then
+        echo "Error: invalid legacy SHA-512 checksum format for $TARGET." >&2
+        exit 1
+    fi
     echo "Verifying integrity (SHA-512) ..."
-    (cd "$TMP" && sha512sum -c "$CHECKSUM_FILENAME")
+    echo "${EXPECTED_SHA512}  ${BUNDLE_FILENAME}" | (cd "$TMP" && sha512sum -c -)
 else
     echo "Error: no integrity checksum available for $TARGET." >&2
     echo "Integrity check is required; aborting." >&2

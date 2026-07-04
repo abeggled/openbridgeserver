@@ -34,6 +34,7 @@
 * Visu: Link widget: the navigation arrow (→) can now be hidden independently of the icon via the "show_arrow" option (default: shown).
 
 ### Fixes 🐞
+* Security (Upstream PR #956): bind legacy SHA-512 fallback verification to the app bundle filename.
 * Security (Upstream PR #955): keep updater checksum notes compatible with legacy app-bundle verification.
 * Security (Upstream PR #954): prevent API-client URL variables from changing request authority.
 * Security (Upstream PR #952): prevent MQTT writes from mutating bindingless internal datapoints.
