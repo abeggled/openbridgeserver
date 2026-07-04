@@ -292,7 +292,7 @@ class RingBuffer:
         einer ggf. sehr großen Datei). Neue Writes gehen sofort in v2-Segmente.
         """
         from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
-        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_QUARANTINED
         from obs.ringbuffer.store.migration import LegacyMigrator
         from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
 
@@ -362,16 +362,53 @@ class RingBuffer:
             if not _is_sqlite_memory_path(self._disk_path) and Path(_sqlite_filesystem_path(self._disk_path)).exists():
                 legacy_fs_path = _sqlite_filesystem_path(self._disk_path)
                 resolved_legacy = str(Path(legacy_fs_path).resolve())
+                migrator = LegacyMigrator(store, legacy_fs_path, write_lock=self._lock)
+
+                # Stale quarantined Legacy-Zeile revalidieren (#951, Codex Runde 36, F2 :366).
+                # Ein corrupt/missing-table-Read kann die attached Legacy-Datei
+                # ``quarantined`` markieren (``mark_quarantined`` behält Dateiname +
+                # schema_version). Diese Zeile bleibt aber im schema-basierten ``existing``-
+                # Guard und wird von ``list_segments_for_query`` gleichzeitig ausgeschlossen –
+                # repariert/ersetzt der Operator dieselbe ``obs_ringbuffer.db``, übersprang der
+                # Startup bisher ``classify()``/``attach_readonly()`` und die reparierte
+                # Historie blieb dauerhaft versteckt.
+                #
+                # Datei-Identität: dieselbe Definition wie Marker/Resume (Runde 27/29/30) –
+                # ``(mtime_ns, size)`` für Haupt-DB UND ``-wal``/``-shm``, via
+                # ``migrator._current_identity_fields()``. Bewusst NICHT die Manifest-
+                # ``size_bytes``: SQLite prä-allokiert Pages, sodass eine Reparatur die reine
+                # Byte-Größe unverändert lassen kann; die mtime dagegen ändert sich bei jedem
+                # Write. Die Identität wird beim erfolgreichen Attach in ein Sidecar neben der
+                # Quelle geschrieben; ist die Zeile beim Startup ``quarantined`` UND weicht die
+                # aktuelle Identität vom Attach-Sidecar ab, gilt die Quelle als repariert/
+                # ersetzt → stale Zeile entfernen, damit sie unten neu klassifiziert/attached
+                # wird. Unveränderte Datei (oder fehlender/übereinstimmender Sidecar) → Zeile
+                # bleibt quarantined (kein Flapping).
+                legacy_rows = [seg for seg in await store.manifest.list_segments() if seg.schema_version == LEGACY_SCHEMA_VERSION]
+                current_identity = migrator._current_identity_fields()
+                for seg in legacy_rows:
+                    if (
+                        seg.filename == resolved_legacy
+                        and seg.status == SEGMENT_STATUS_QUARANTINED
+                        and self._quarantined_legacy_file_changed(legacy_fs_path, current_identity)
+                    ):
+                        logger.info(
+                            "RingBuffer: quarantinierte Legacy-Quelle %s hat sich seit dem Attach geändert – re-attach der reparierten Historie",
+                            resolved_legacy,
+                        )
+                        await store.manifest.delete_segment(seg.segment_id)
+
                 existing = {seg.filename for seg in await store.manifest.list_segments() if seg.schema_version == LEGACY_SCHEMA_VERSION}
                 if resolved_legacy not in existing:
                     # Write-Lock durchreichen (#951, Runde 23): der Startup-Pfad hier
                     # migriert zwar nicht selbst, aber ein künftiger Wartungstreiber über
                     # denselben Migrator serialisiert die Write-/Hide-Sequenz dann korrekt
                     # gegen Live-``record()``-Appends (No-Op ohne Lock).
-                    migrator = LegacyMigrator(store, legacy_fs_path, write_lock=self._lock)
                     classification = migrator.classify()
                     if classification is not None:
                         await migrator.attach_readonly(classification)
+                        # Attach-Identität für die spätere F2-Revalidierung festhalten.
+                        self._write_legacy_attach_identity(legacy_fs_path, migrator._current_identity_fields())
 
             # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
             # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
@@ -401,6 +438,59 @@ class RingBuffer:
         """Storage-Root des Segment-Stores neben der Legacy-DB (``<stem>_segments``)."""
         path = Path(_sqlite_filesystem_path(self._disk_path))
         return str(path.with_name(f"{path.stem}_segments"))
+
+    @staticmethod
+    def _legacy_attach_identity_path(legacy_fs_path: str) -> Path:
+        """Sidecar-Pfad für die Attach-Identität einer Legacy-Quelle (#951, Runde 36, F2).
+
+        Neben der Quelle, damit der Marker die Datei begleitet – analog zum
+        ``.migrated``-Marker aus ``LegacyMigrator``.
+        """
+        p = Path(legacy_fs_path)
+        return p.with_name(f"{p.name}.attach_identity")
+
+    def _write_legacy_attach_identity(self, legacy_fs_path: str, identity: dict[str, int] | None) -> None:
+        """Persistiert die Datei-Identität der Legacy-Quelle beim Attach (#951, Runde 36, F2).
+
+        Best-effort: schlägt der Sidecar-Write fehl (z. B. read-only Verzeichnis), bleibt
+        das Attach gültig; die F2-Revalidierung fällt dann mangels Sidecar auf „nicht
+        geändert" zurück (konservativ, kein Flapping). Ein fehlender Sidecar ist damit
+        kein Fehler.
+        """
+        if identity is None:
+            return
+        try:
+            self._legacy_attach_identity_path(legacy_fs_path).write_text(json.dumps(identity), encoding="utf-8")
+        except OSError:
+            logger.warning(
+                "RingBuffer: Attach-Identitaets-Sidecar fuer %s nicht schreibbar – F2-Revalidierung faellt konservativ aus", legacy_fs_path
+            )
+
+    def _quarantined_legacy_file_changed(self, legacy_fs_path: str, current_identity: dict[str, int] | None) -> bool:
+        """True, wenn die quarantined Legacy-Datei sich seit dem Attach geändert hat (#951, Runde 36, F2).
+
+        Vergleicht die aktuelle Datei-Identität (``mtime_ns``+``size`` für Haupt-DB +
+        ``-wal``/``-shm``) gegen den beim Attach geschriebenen Sidecar. Fehlt der Sidecar
+        (Alt-Attach vor diesem Feature) oder ist er unlesbar/kaputt, wird KONSERVATIV
+        ``False`` geliefert (die Quarantäne bleibt bestehen – kein Flapping). Nur wenn der
+        Sidecar existiert UND von der aktuellen Identität abweicht, gilt die Quelle als
+        repariert/ersetzt.
+        """
+        if current_identity is None:
+            return False
+        try:
+            raw = self._legacy_attach_identity_path(legacy_fs_path).read_text(encoding="utf-8").strip()
+        except OSError:
+            return False
+        if not raw:
+            return False
+        try:
+            attached = json.loads(raw)
+        except ValueError:
+            return False
+        if not isinstance(attached, dict):
+            return False
+        return {str(k): int(v) for k, v in attached.items()} != {str(k): int(v) for k, v in current_identity.items()}
 
     async def stop(self) -> None:
         if self._store is not None:
@@ -1430,12 +1520,19 @@ class RingBuffer:
                     value_filters=[],
                 )
             )
-            # Explizite Namens-Treffer und angefragte ``datapoint_ids`` mit dem
-            # Discovery-Ergebnis VEREINIGEN: der Store matcht ``q``/``dp_ids_by_name``
-            # OR-verknüpft, und ein angefragter Datapoint bleibt Kandidat, auch wenn er
-            # (noch) keine Zeilen hat – die Discovery liefert nur Datapoints MIT Zeilen.
+            # Nur Name-Treffer validieren, die im effektiven Scope TATSÄCHLICH Zeilen
+            # haben (#951, Codex Runde 36, F1 :1438 – Verfeinerung der Runde-32-Union).
+            # Die Discovery (``distinct_datapoint_ids``) bekommt ``dp_ids_by_name`` bereits
+            # in ihrer ``StoreQuery`` und berücksichtigt den VOLLEN Scope (adapter/time/
+            # metadata): sie liefert damit exakt die namensaufgelösten Datapoints, die
+            # unter dem Scope Zeilen haben. Die frühere blinde ``.update(normalized_names)``
+            # addierte dagegen AUCH Namens-Treffer OHNE in-scope-Zeilen zur Typprüfmenge –
+            # ein STRING-Name ohne Zeilen im angefragten Adapter/Fenster erzwang so ein
+            # 422, obwohl der row-lazy Legacy-Pfad (der zuerst den vollen SQL-Scope
+            # anwendet und nur die zurückgegebenen Zeilen typ-checkt) leer OHNE 422
+            # liefert. Daher NICHT mehr blind unionen; die Discovery-Menge IST bereits
+            # der Schnitt der Name-Treffer mit dem effektiven Scope.
             effective_candidate_ids = set(candidate_ids)
-            effective_candidate_ids.update(normalized_names)
             # Leere Kandidatenmenge = keine Zeilen im Scope/Fenster: der Legacy-Pfad
             # liefert dann still leer OHNE 422 (kein row-lazy Typ-Check feuert). Nur
             # bei mindestens einem Kandidaten typ-prüfen; sonst fiele die

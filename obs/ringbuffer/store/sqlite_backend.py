@@ -202,17 +202,6 @@ def _is_missing_ringbuffer_table(exc: Exception) -> bool:
 # Value-Filter-Degradation liest höchstens so viele Kandidatenzeilen.
 _LEGACY_DEFAULT_CANDIDATE_CAP = 10_000
 
-# Erschöpfender Discovery-``limit`` für den row-level Legacy-Discovery-Zweig (``q``/
-# Metadaten), #951 Runde 35: Der Legacy-Reader stoppt seine Export-Batch-Schleife,
-# sobald ``offset+limit`` GEMATCHTE Zeilen zusammen sind ODER das Segment erschöpft
-# ist. Ein sehr hoher ``limit`` erzwingt hier die Segment-Erschöpfung (statt nach den
-# neuesten 100 zu stoppen), sodass auch ältere/gelöschte in-scope Datapoints erfasst
-# werden. Der Roh-Kandidaten-Cap je Batch (``_legacy_candidate_cap``) bindet den
-# Speicher unabhängig davon. Der Wert bleibt endlich (kein „unlimited"), damit ein
-# pathologisch großer, ausschließlich in Python gefilterter Legacy-Bestand nicht in
-# einen faktisch unbegrenzten Discovery-Scan kippt.
-_LEGACY_DISCOVERY_EXHAUSTIVE_LIMIT = 1 << 30
-
 # Synthetische global_event_id für Legacy-Zeilen: aus der chronologischen
 # Legacy-rowid abgeleitet (NICHT aus der Fetch-Reihenfolge), damit die Ordnung
 # unabhängig von der Sort-Richtung des Kandidaten-Fetches stabil bleibt. Der
@@ -1607,11 +1596,14 @@ class SqliteSegmentStore(RingBufferStore):
         * **Ohne ``q``/Metadaten** (rein sargable Scope): ein direktes
           ``SELECT DISTINCT datapoint_id`` über die Legacy-DB – erschöpfend über die
           ganze Historie, durch die distinct-Anzahl gebunden (kein 100er-Fenster).
-        * **Mit ``q``/Metadaten** (row-level, nur in Python auswertbar): der bestehende
-          Legacy-Reader wird EXHAUSTIV gefahren (``is_export=True`` + erschöpfender
-          ``limit``), sodass die Batch-Schleife bis zur Segment-Erschöpfung läuft statt
-          nach dem ersten 100er-Batch zu stoppen. Der Roh-Kandidaten-Cap je Batch
-          bindet den Speicher (wie beim gefilterten Legacy-Export).
+        * **Mit ``q``/Metadaten** (row-level, nur in Python auswertbar): die Roh-Zeilen
+          werden STREAMEND in ``candidate_cap``-großen Batches konsumiert (Codex :1623);
+          je Batch werden nur die distinkten ``datapoint_id`` der gematchten Records ins
+          Set gehoben, die vollen Row-Dicts sofort verworfen. Kein voll-materialisiertes
+          Result-Set (kein riesiges Limit, keine Millionen Row-Dicts im Speicher) – der
+          Speicher ist durch die distinct-Anzahl bzw. einen Batch gebunden. Exhaustiv
+          über die ganze Legacy-Historie (bis zur Segment-Erschöpfung), sodass ältere/
+          gelöschte in-scope Datapoints erfasst bleiben (→ 422-Parität).
         """
         if not ((query.q or "").strip() or self._has_metadata_filter(query)):
             clauses, params = self._legacy_sargable_where(query)
@@ -1619,9 +1611,34 @@ class SqliteSegmentStore(RingBufferStore):
             async with conn.execute(f"SELECT DISTINCT datapoint_id FROM ringbuffer{where}", params) as cur:
                 rows = await cur.fetchall()
             return {row["datapoint_id"] for row in rows}
-        scope_query = replace(query, value_filters=[], is_export=True, limit=_LEGACY_DISCOVERY_EXHAUSTIVE_LIMIT, offset=0)
-        rows = await self._query_legacy_segment(conn, segment, scope_query)
-        return {row["datapoint_id"] for row in rows}
+        # Value-Filter aus der Discovery entfernen (dürfen keinen Typkonflikt
+        # wegfiltern); der q-/Metadaten-Scope bleibt row-level in Python.
+        scope_query = replace(query, value_filters=[])
+        return await self._stream_legacy_scoped_ids(conn, segment, scope_query)
+
+    async def _stream_legacy_scoped_ids(self, conn: aiosqlite.Connection, segment: SegmentRecord, query: StoreQuery) -> set[str]:
+        """Streamt die Legacy-Roh-Zeilen batchweise und sammelt NUR distinkte ``datapoint_id`` (#951, Codex :1623).
+
+        Statt das exhaustive Result-Set zu materialisieren (``_query_legacy_segment``
+        mit riesigem Limit akkumuliert ALLE gematchten Row-Dicts, bevor die IDs
+        reduziert werden – OOM-Risiko auf einer Multi-GB-Legacy) wird hier bis zur
+        Segment-Erschöpfung gescannt und je ``candidate_cap``-Batch nur das ID-Set
+        gepflegt; die vollen Row-Dicts jedes Batches werden sofort verworfen. Speicher
+        ist durch die distinct-Anzahl (Set) bzw. einen Cap-Batch gebunden.
+        """
+        base_sql, params, _has_post_filter = await self._legacy_scan_plan(conn, query)
+        raw_cap = self._legacy_candidate_cap(query)
+        ids: set[str] = set()
+        raw_offset = 0
+        while True:
+            rows, fetched = await self._fetch_legacy_batch(conn, base_sql, params, segment, query, raw_cap, raw_offset)
+            for record in rows:
+                ids.add(record["datapoint_id"])
+            raw_offset += fetched
+            if fetched < raw_cap:
+                # Segment erschöpft.
+                break
+        return ids
 
     def _legacy_sargable_where(self, query: StoreQuery) -> tuple[list[str], list[Any]]:
         """Sargable Legacy-WHERE (Zeitfenster + datapoint_ids/adapter/quality), ohne ``q``/Metadaten.
@@ -1891,27 +1908,14 @@ class SqliteSegmentStore(RingBufferStore):
             raise ValueError("unsafe regex pattern: target value too long")
         return [self._row_to_dict(row) for row in rows]
 
-    async def _query_legacy_segment(
-        self,
-        conn: aiosqlite.Connection,
-        segment: SegmentRecord,
-        query: StoreQuery,
-    ) -> list[dict[str, Any]]:
-        """Degradierender Read-Zweig für eine v1/Legacy-Single-DB (#934).
+    async def _legacy_scan_plan(self, conn: aiosqlite.Connection, query: StoreQuery) -> tuple[str, list[Any], bool]:
+        """Baut das batch-gescopte Legacy-Roh-SELECT (WHERE + ORDER BY + LIMIT/OFFSET).
 
-        Legacy-Segmente haben weder ``global_event_id`` noch typisierte Wertspalten:
-
-        * **Ordering** wird aus ``ts`` + segment-lokaler rowid ``id`` abgeleitet
-          (neueste zuerst) und in einen synthetischen, streng **negativen**
-          ``global_event_id`` übersetzt. Damit sortieren alle Legacy-Zeilen unter
-          jeder v2-Zeile (positive IDs) — Legacy-Daten sind per Definition älter als
-          jedes nach Aktivierung geschriebene v2-Segment — und behalten intern ihre
-          ts/rowid-Ordnung.
-        * **Value-Filter** werden NICHT typisiert in SQL gepusht (die Spalten fehlen),
-          sondern kontrolliert **bounded** in Python auf den dekodierten JSON-Werten
-          ausgewertet. Der Kandidatensatz ist auf ``candidate_cap`` bzw. einen Default-
-          Cap begrenzt, damit ein Value-Filter über Legacy nicht in einen unbounded
-          Full-Scan über 20–30 GB kippt.
+        Liefert ``(base_sql, params, has_python_post_filter)``. ``base_sql`` erwartet
+        zwei Platzhalter am Ende (``LIMIT ? OFFSET ?``), die der Batch-Fetch bindet.
+        Gemeinsam genutzt vom Legacy-Read (``_query_legacy_segment``) und der
+        streamenden Discovery (``_stream_legacy_scoped_ids``), damit beide dieselbe
+        gescopte, gecappte Roh-Zeilen-Sicht teilen.
         """
         clauses, params = self._time_where(query)
         if query.datapoint_id is not None:
@@ -1986,6 +1990,31 @@ class SqliteSegmentStore(RingBufferStore):
             f"source_adapter, quality, {metadata_select} "
             f"FROM ringbuffer{where} ORDER BY {candidate_order} {direction}, id {direction} LIMIT ? OFFSET ?"
         )
+        return base_sql, params, has_python_post_filter
+
+    async def _query_legacy_segment(
+        self,
+        conn: aiosqlite.Connection,
+        segment: SegmentRecord,
+        query: StoreQuery,
+    ) -> list[dict[str, Any]]:
+        """Degradierender Read-Zweig für eine v1/Legacy-Single-DB (#934).
+
+        Legacy-Segmente haben weder ``global_event_id`` noch typisierte Wertspalten:
+
+        * **Ordering** wird aus ``ts`` + segment-lokaler rowid ``id`` abgeleitet
+          (neueste zuerst) und in einen synthetischen, streng **negativen**
+          ``global_event_id`` übersetzt. Damit sortieren alle Legacy-Zeilen unter
+          jeder v2-Zeile (positive IDs) – Legacy-Daten sind per Definition älter als
+          jedes nach Aktivierung geschriebene v2-Segment – und behalten intern ihre
+          ts/rowid-Ordnung.
+        * **Value-Filter** werden NICHT typisiert in SQL gepusht (die Spalten fehlen),
+          sondern kontrolliert **bounded** in Python auf den dekodierten JSON-Werten
+          ausgewertet. Der Kandidatensatz ist auf ``candidate_cap`` bzw. einen Default-
+          Cap begrenzt, damit ein Value-Filter über Legacy nicht in einen unbounded
+          Full-Scan über 20–30 GB kippt.
+        """
+        base_sql, params, has_python_post_filter = await self._legacy_scan_plan(conn, query)
 
         needed = max(query.offset, 0) + max(query.limit, 0)
         if not has_python_post_filter:
@@ -2251,16 +2280,24 @@ class SqliteSegmentStore(RingBufferStore):
 
         # Freitext-``q``-OR-Block (#951, Codex :1603): der leading-wildcard-LIKE auf
         # datapoint_id/source_adapter ist index-untauglich. Trägt der Query einen
-        # nicht-leeren ``q``, wird der Block wie ein Guarded-Filter behandelt und (im
-        # unwindowed, nicht-Export-Fall) auf die gedeckelte Kandidatenmenge gelegt,
+        # nicht-leeren ``q``, wird der LIKE-Teil wie ein Guarded-Filter behandelt und
+        # (im unwindowed, nicht-Export-Fall) auf die gedeckelte Kandidatenmenge gelegt,
         # statt jedes Segment voll zu scannen. Ohne ``q`` (nur ``dp_ids_by_name``-IN,
-        # index-tauglich) bzw. mit Zeitfenster/Export bleibt er inline.
+        # index-tauglich) bzw. mit Zeitfenster/Export bleibt der ganze OR-Block inline.
+        #
+        # Name-Treffer aus dem Cap herauslösen (#951, Codex :2262): ist ``q`` gesetzt,
+        # darf der index-taugliche ``dp_ids_by_name``-``IN``-Arm NICHT durch den
+        # gedeckelten leading-wildcard-Scan laufen – sonst würde eine nur per NAME
+        # gematchte Zeile jenseits der neuesten ``candidate_cap`` Roh-Zeilen verpasst,
+        # obwohl der IN-Arm indizierbar ist (Parität zur un-capped Legacy-OR-Query).
+        # Der IN-Arm wird deshalb im gedeckelten Pfad separat als un-capped Kandidaten-
+        # Widening (UNION) und als eigener OR-Zweig geführt (siehe capped-Block unten).
         free_text_clause, free_text_params = self._free_text_clause(query)
         q_is_scan = bool((query.q or "").strip())
-        if free_text_clause and q_is_scan:
-            guarded_clauses.append(free_text_clause)
-            guarded_params.extend(free_text_params)
-        elif free_text_clause:
+        like_parts, like_params = self._free_text_like_arm(query)
+        in_clause, in_params = self._free_text_in_arm(query)
+        if free_text_clause and not q_is_scan:
+            # Kein ``q``-LIKE (nur der index-taugliche IN-Arm) → voll inline.
             clauses.append(free_text_clause)
             params.extend(free_text_params)
 
@@ -2276,6 +2313,7 @@ class SqliteSegmentStore(RingBufferStore):
         has_metadata = self._has_metadata_filter(query)
         use_capped = not self._query_is_windowed(query) and not query.is_export
         route_metadata_capped = has_metadata and use_capped
+        route_free_text_capped = q_is_scan and use_capped
 
         # Der teure Match wird nur dann auf eine gedeckelte Kandidaten-Subquery
         # gelegt, wenn der Query ausschließlich per candidate_cap (ohne Zeitfenster)
@@ -2287,7 +2325,7 @@ class SqliteSegmentStore(RingBufferStore):
         # finale ``LIMIT`` = ``offset+limit`` GEMATCHTE Zeilen begrenzt) – analog zum
         # bereits gefixten Legacy-Export-Batch-Scan. Kostenbegrenzt: SQLite terminiert
         # den Scan, sobald ``offset+limit`` Treffer gefunden sind.
-        if (guarded_clauses or route_metadata_capped) and use_capped:
+        if (guarded_clauses or route_metadata_capped or route_free_text_capped) and use_capped:
             cap = self._effective_candidate_cap(query)
             inner_where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
             # Die innere Subquery muss die typisierten Text-Spalten (für die
@@ -2295,9 +2333,37 @@ class SqliteSegmentStore(RingBufferStore):
             # ``EXISTS``-Korrelation gegen ``capped.id``) durchreichen – sonst kennt
             # die äußere Query ``*_value_text``/``id`` nicht.
             inner_cols = f"{select_cols}, old_value_text, new_value_text, id"
-            inner_sql = f"SELECT {inner_cols} FROM ringbuffer{inner_where} ORDER BY {order_by} LIMIT ?"
+            capped_arm = f"SELECT {inner_cols} FROM ringbuffer{inner_where} ORDER BY {order_by} LIMIT ?"
+            inner_sql = capped_arm
+            inner_params: list[Any] = [*params, cap]
+            # Name-Treffer-Widening (#951, Codex :2262): der index-taugliche
+            # ``dp_ids_by_name``-``IN``-Arm darf NICHT durch den Cap fallen. Er wird
+            # per ``UNION`` un-capped in die Kandidatenmenge gehoben (indiziert über
+            # ``datapoint_id``), sodass eine per NAME gematchte Zeile jenseits der
+            # neuesten ``cap`` Roh-Zeilen trotzdem Kandidat ist. Die äußere
+            # Freitext-Bedingung führt den IN-Arm zusätzlich als OR-Zweig (unten),
+            # damit diese Zeilen die Freitext-Prüfung passieren (Parität Legacy-OR).
+            # Der gedeckelte Arm wird gekapselt (``ORDER BY``/``LIMIT`` sind in einem
+            # SQLite-Compound nur in einer Sub-SELECT erlaubt, nicht vor ``UNION``).
+            if route_free_text_capped and in_clause:
+                name_where_parts = [*clauses, in_clause]
+                name_where = f" WHERE {' AND '.join(name_where_parts)}"
+                name_sql = f"SELECT {inner_cols} FROM ringbuffer{name_where}"
+                inner_sql = f"SELECT {inner_cols} FROM ({capped_arm}) UNION {name_sql}"
+                inner_params = [*params, cap, *params, *in_params]
             outer_clauses = list(guarded_clauses)
             outer_params = list(guarded_params)
+            if route_free_text_capped:
+                # LIKE-Arme (gedeckelt) ODER IN-Arm (un-capped via UNION oben):
+                # zusammen der Freitext-OR-Block auf der Kandidatenmenge.
+                free_parts = list(like_parts)
+                free_params = list(like_params)
+                if in_clause:
+                    free_parts.append(in_clause)
+                    free_params.extend(in_params)
+                if free_parts:
+                    outer_clauses.append(f"({' OR '.join(free_parts)})")
+                    outer_params.extend(free_params)
             if route_metadata_capped:
                 meta_clause, meta_params = self._metadata_clause(query, entry_ref="capped.id")
                 if meta_clause:
@@ -2305,11 +2371,16 @@ class SqliteSegmentStore(RingBufferStore):
                     outer_params.extend(meta_params)
             outer_where = " AND ".join(outer_clauses)
             sql = f"SELECT {select_cols} FROM ({inner_sql}) AS capped WHERE {outer_where} ORDER BY {order_by} LIMIT ?"
-            return sql, [*params, cap, *outer_params, final_limit]
+            return sql, [*inner_params, *outer_params, final_limit]
 
         # Mit Zeitfenster (oder ohne cap-fähigen Scan-Filter): alle Klauseln inline.
         clauses.extend(guarded_clauses)
         params.extend(guarded_params)
+        if q_is_scan and free_text_clause:
+            # Windowed/Export: der volle OR-Block (LIKE + IN) läuft inline (ts-gebunden
+            # bzw. durch das finale LIMIT begrenzt) – wie der Legacy-OR-Referenzpfad.
+            clauses.append(free_text_clause)
+            params.extend(free_text_params)
         if has_metadata:
             meta_clause, meta_params = self._metadata_clause(query)
             if meta_clause:
@@ -2371,8 +2442,8 @@ class SqliteSegmentStore(RingBufferStore):
         return clauses, params
 
     @staticmethod
-    def _free_text_clause(query: StoreQuery) -> tuple[str | None, list[Any]]:
-        """OR-Block für Freitext-``q`` (LIKE) + ``dp_ids_by_name`` (IN) — Legacy-Semantik."""
+    def _free_text_like_arm(query: StoreQuery) -> tuple[list[str], list[Any]]:
+        """Nur die leading-wildcard-``LIKE``-Arme des Freitext-``q`` (index-untauglich)."""
         parts: list[str] = []
         params: list[Any] = []
         q = (query.q or "").strip()
@@ -2381,10 +2452,24 @@ class SqliteSegmentStore(RingBufferStore):
             params.append(f"%{q}%")
             parts.append("source_adapter LIKE ?")
             params.append(f"%{q}%")
-        if query.dp_ids_by_name:
-            placeholders = ",".join("?" * len(query.dp_ids_by_name))
-            parts.append(f"datapoint_id IN ({placeholders})")
-            params.extend(query.dp_ids_by_name)
+        return parts, params
+
+    @staticmethod
+    def _free_text_in_arm(query: StoreQuery) -> tuple[str | None, list[Any]]:
+        """Nur der index-taugliche ``dp_ids_by_name``-``IN``-Arm des Freitext-``q`` (#951, Codex :2262)."""
+        if not query.dp_ids_by_name:
+            return None, []
+        placeholders = ",".join("?" * len(query.dp_ids_by_name))
+        return f"datapoint_id IN ({placeholders})", list(query.dp_ids_by_name)
+
+    @staticmethod
+    def _free_text_clause(query: StoreQuery) -> tuple[str | None, list[Any]]:
+        """OR-Block für Freitext-``q`` (LIKE) + ``dp_ids_by_name`` (IN) – Legacy-Semantik."""
+        parts, params = SqliteSegmentStore._free_text_like_arm(query)
+        in_clause, in_params = SqliteSegmentStore._free_text_in_arm(query)
+        if in_clause:
+            parts.append(in_clause)
+            params.extend(in_params)
         if not parts:
             return None, []
         return f"({' OR '.join(parts)})", params
@@ -2437,8 +2522,18 @@ class SqliteSegmentStore(RingBufferStore):
 
     @staticmethod
     def _query_is_windowed(query: StoreQuery) -> bool:
-        """True, wenn ein beidseitiges Zeitfenster den Scan bereits bindet."""
-        return query.from_ts is not None and query.to_ts is not None
+        """True, wenn MINDESTENS eine Zeitgrenze den Scan bereits bindet (#951, Codex :2441).
+
+        Auch eine EINSEITIGE Grenze (nur ``from_ts`` ODER nur ``to_ts`` – z. B. der
+        last-24h-Filter der UI mit unterer, aber ohne obere Grenze) bindet den Scan:
+        das ts-Prädikat läuft indiziert, SQLite liest nur den ts-Bereich. Solche
+        Prädikate dürfen daher inline (ts-gebunden) laufen statt durch den
+        ``candidate_cap`` – sonst würden Zeilen VERPASST, die im angefragten
+        Zeitbereich liegen, aber älter als die neuesten ``candidate_cap`` Roh-Zeilen
+        sind (der Legacy-Pfad wendet das Zeit-Prädikat an und sucht weiter). Nur ein
+        reiner unbounded Scope (GAR KEINE ts-Grenze) bleibt gedeckelt.
+        """
+        return query.from_ts is not None or query.to_ts is not None
 
     @staticmethod
     def _query_is_bounded(query: StoreQuery) -> bool:
