@@ -2270,10 +2270,8 @@ async def init_ringbuffer(
 _NUMERIC_TYPES = {"FLOAT", "INTEGER"}
 _BOOLEAN_TYPES = {"BOOLEAN"}
 _STRING_TYPES = {"STRING"}
-_REGEX_MAX_PATTERN_LEN = 256
 _REGEX_MAX_TARGET_LEN = 4096
 _REGEX_TIMEOUT_SECONDS = 0.5
-_RE_UNSAFE_NESTED_QUANTIFIERS = re.compile(r"\((?:[^()\\]|\\.)*[+*][^()]*\)[+*]")
 
 
 def _value_filters_pushable(
@@ -2438,13 +2436,21 @@ async def _match_string_operator(value: Any, vf: dict[str, Any]) -> bool:
 
 
 async def _match_regex(value: str, vf: dict[str, Any]) -> bool:
+    # Eine Quelle der Wahrheit für das Safe-Regex-Gate (#951, Codex :1678): der row-lazy
+    # Pfad nutzt dasselbe gehärtete, nesting-aware ``_assert_safe_regex`` wie Store- und
+    # Legacy-Fallback. Die frühere schwache Vorprüfung (``_RE_UNSAFE_NESTED_QUANTIFIERS``)
+    # ließ katastrophale Wrapper-Muster wie ``((a+))+b`` und quantifizierte Alternationen
+    # wie ``(a|aa){30}b`` durch; die liefen dann gegen jeden Kandidatenstring und
+    # verbrannten bei einem langen Non-Match den Worker/GIL, statt ein 422-taugliches
+    # ``ValueError`` zu liefern. Ein laufender ``re.search`` ist in CPython (GIL) nicht per
+    # Timeout abbrechbar, daher ist die Muster-Ablehnung VOR der Ausführung der einzige
+    # wirksame Schutz. Die Ziel-Längen-Ablehnung (``_REGEX_MAX_TARGET_LEN``) bleibt erhalten.
+    from obs.ringbuffer.store.sqlite_backend import _assert_safe_regex
+
     pattern = vf["pattern"]
     if not isinstance(pattern, str) or not pattern:
         raise ValueError("filters.values[].pattern must be a non-empty string")
-    if len(pattern) > _REGEX_MAX_PATTERN_LEN:
-        raise ValueError("unsafe regex pattern: pattern too long")
-    if _RE_UNSAFE_NESTED_QUANTIFIERS.search(pattern):
-        raise ValueError("unsafe regex pattern: nested quantifiers are not allowed")
+    _assert_safe_regex(pattern)
     if len(value) > _REGEX_MAX_TARGET_LEN:
         raise ValueError("unsafe regex pattern: target value too long")
 

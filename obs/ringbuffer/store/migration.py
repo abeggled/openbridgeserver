@@ -39,6 +39,7 @@ import aiosqlite
 from obs.ringbuffer.store.interface import StoreEvent
 from obs.ringbuffer.store.manifest import (
     LEGACY_SCHEMA_VERSION,
+    SEGMENT_STATUS_CLOSED,
     SEGMENT_STATUS_MIGRATED,
     SEGMENT_STATUS_MIGRATING,
     SegmentRecord,
@@ -688,6 +689,10 @@ class LegacyMigrator:
         # Crash zurückgebliebenen inkonsistenten Zustand heilen – sichtbare, rein aus
         # DIESER noch attached Quelle stammende (rein-negative) Segmente re-hidden.
         await self._recover_visible_migrated_while_attached()
+        # Trailing-Rang-Recovery (#951, P2, :795): ist die Quelle bereits detached (Marker
+        # publiziert), aber ein Crash brach die ``mark_migrated``-Schleife ab, sitzen eigene
+        # rein-negative ``closed``-Chunks noch im positiven Prefix – jetzt nachziehen.
+        await self._recover_detached_migrated_closed_segments()
         rows = await self._read_batch(after_rowid=after_rowid, limit=batch_rows)
         if not rows:
             await self._finalize_and_detach()
@@ -791,8 +796,55 @@ class LegacyMigrator:
         # migrierten Segmente DIESER Quelle ggf. in den Trailing-Rang (``migrated``) heben – erst
         # jetzt gefahrlos, weil die Legacy-Quelle nicht mehr dieselben Zeilen liefert.
         if to_migrated:
-            for segment_id in own_migrating_before:
-                await self._store.manifest.mark_migrated(segment_id)
+            await self._promote_own_closed_migrated_to_trailing()
+
+    async def _promote_own_closed_migrated_to_trailing(self) -> None:
+        """Hebt eigene rein-negative ``closed``-Chunks in den Trailing-Rang (``migrated``) – idempotent (#951, P2, :795).
+
+        Wird nach erfolgreichem Detach aufgerufen UND als Recovery am Anfang jedes
+        ``migrate_chunk`` (siehe ``_recover_detached_migrated_closed_segments``). Bewusst
+        source-gescopt: promotet AUSSCHLIESSLICH ``closed``-Segmente, die ausschließlich
+        rein-negative Zeilen im gid-Bucket DIESER Quelle halten (``_segment_is_own_migrated_
+        only``). Der ``mark_migrated``-Guard stuft nur ``closed``/``checkpoint_pending`` um.
+
+        Crash-Lücke (Codex :795): Stirbt der Prozess NACH erfolgreichem Detach (Marker
+        geschrieben, Legacy-Zeile weg), aber BEVOR diese Promotion fertig ist, blieben die
+        kopierten Chunks schlicht ``closed`` statt ``migrated``. ``list_segments_for_query``
+        verschiebt nur ``legacy``/``migrated`` in den Trailing-Rang – die ``closed`` negativen
+        Chunks säßen mit ihrer (höheren) segment_id im POSITIVEN Prefix und eine ``id desc``-
+        latest-page-Query träfe sie ZUERST → migrierte Legacy-Zeilen als „latest", echte
+        Live-Zeilen versteckt. Idempotentes Nachziehen aus dem Segment-Zustand (nicht aus
+        einer vorab erfassten ID-Liste) heilt diese Lücke resume-fähig beim nächsten Lauf.
+        """
+        low, high = await self._bucket_gid_bounds()
+        for segment in await self._store.manifest.list_segments():
+            if segment.schema_version <= LEGACY_SCHEMA_VERSION:
+                continue
+            if segment.status != SEGMENT_STATUS_CLOSED:
+                continue
+            if await self._segment_is_own_migrated_only(segment, low, high):
+                await self._store.manifest.mark_migrated(segment.segment_id)
+
+    async def _recover_detached_migrated_closed_segments(self) -> None:
+        """Heilt einen nach Crash zurückgebliebenen ``mark_migrated``-Abbruch (#951, P2, :795).
+
+        Läuft am Anfang jedes ``migrate_chunk`` (symmetrisch zu
+        ``_recover_visible_migrated_while_attached``, aber für den DETACHTEN Zustand). Ist die
+        Quelle NICHT (mehr) attached (Detach war erfolgreich, Marker publiziert) und braucht
+        der Store den Trailing-Rang (echte Positive oder Fremdquelle), werden verbliebene
+        eigene rein-negative ``closed``-Chunks nachgezogen auf ``migrated``. So kann kein
+        Zustand „Legacy detached + Marker gesetzt, aber eigene Chunks noch ``closed`` im
+        positiven Prefix" persistieren.
+
+        Idempotent: ist die Quelle noch attached ODER braucht der Store keinen Trailing-Rang
+        (rein legacy-migrierter Ein-Quell-Store, segment_id-Ordnung == gid-Ordnung) ODER liegt
+        kein eigener ``closed``-Chunk mehr vor, ist es ein No-op.
+        """
+        if await self._source_is_attached():
+            return
+        if not (await self._store_has_positive_rows() or await self._store_has_foreign_migrated_rows()):
+            return
+        await self._promote_own_closed_migrated_to_trailing()
 
     async def _recover_visible_migrated_while_attached(self) -> None:
         """Stellt die Sichtbarkeits-Invariante nach einem Crash während der Migration her (#951, P2, :596).
