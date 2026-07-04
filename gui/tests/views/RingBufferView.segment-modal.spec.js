@@ -1,5 +1,5 @@
 /**
- * RingBufferView — segment stats moved into a modal + toolbar button badge (#938).
+ * RingBufferView – segment stats moved into a modal + toolbar button badge (#938).
  *
  * After user feedback the SegmentStatsPanel is no longer rendered inline. A
  * toolbar button ("Segmente") opens a modal that hosts the panel, and the
@@ -53,6 +53,21 @@ const problemSegments = [
   { segment_id: 3, status: 'quarantined', row_count: 0, size_bytes: 0, from_ts: null, to_ts: null, integrity_status: 'corrupt', recovery_status: 'quarantined', quarantine_reason: 'checksum mismatch' },
 ]
 
+// #951: Segment nach busy WAL-Checkpoint auf status='checkpoint_pending', aber
+// integrity/recovery gesund. Der Toolbar-Badge muss das (wie Dialog/Dashboard
+// via useSegmentProblems) als Problem erkennen.
+const checkpointPendingSegments = [
+  { segment_id: 5, status: 'active', row_count: 500, size_bytes: 1024 * 1024, from_ts: '2026-06-02T00:00:00.000Z', to_ts: null, integrity_status: 'ok', recovery_status: 'none', quarantine_reason: null },
+  { segment_id: 4, status: 'checkpoint_pending', row_count: 300, size_bytes: 2 * 1024 * 1024, from_ts: '2026-06-01T00:00:00.000Z', to_ts: '2026-06-02T00:00:00.000Z', integrity_status: 'ok', recovery_status: 'none', quarantine_reason: null },
+]
+
+// #951: Segment status='quarantined' bei gesundem recovery_status='none' –
+// das eigene recovery-only-Prädikat des Badges hätte das früher verpasst.
+const statusQuarantinedSegments = [
+  { segment_id: 5, status: 'active', row_count: 500, size_bytes: 1024 * 1024, from_ts: '2026-06-02T00:00:00.000Z', to_ts: null, integrity_status: 'ok', recovery_status: 'none', quarantine_reason: null },
+  { segment_id: 4, status: 'quarantined', row_count: 300, size_bytes: 2 * 1024 * 1024, from_ts: '2026-06-01T00:00:00.000Z', to_ts: '2026-06-02T00:00:00.000Z', integrity_status: 'ok', recovery_status: 'none', quarantine_reason: null },
+]
+
 describe('RingBufferView segment modal + button badge (#938)', () => {
   beforeEach(() => {
     vi.resetModules()
@@ -90,6 +105,24 @@ describe('RingBufferView segment modal + button badge (#938)', () => {
     const { mountRingBufferView, makeRingbufferApiMock } = await import('../helpers/mountRingBufferView.js')
     const ringbufferApi = makeRingbufferApiMock({
       stats: vi.fn().mockResolvedValue({ data: segmentedStatsPayload(problemSegments) }),
+    })
+    const { wrapper } = await mountRingBufferView({ ringbufferApi })
+    expect(wrapper.find('[data-testid="btn-segments-badge"]').exists()).toBe(true)
+  })
+
+  it('shows a warn badge when a segment is status=checkpoint_pending (recovery healthy, #951)', async () => {
+    const { mountRingBufferView, makeRingbufferApiMock } = await import('../helpers/mountRingBufferView.js')
+    const ringbufferApi = makeRingbufferApiMock({
+      stats: vi.fn().mockResolvedValue({ data: segmentedStatsPayload(checkpointPendingSegments) }),
+    })
+    const { wrapper } = await mountRingBufferView({ ringbufferApi })
+    expect(wrapper.find('[data-testid="btn-segments-badge"]').exists()).toBe(true)
+  })
+
+  it('shows a warn badge when a segment is status=quarantined with recovery_status=none (#951)', async () => {
+    const { mountRingBufferView, makeRingbufferApiMock } = await import('../helpers/mountRingBufferView.js')
+    const ringbufferApi = makeRingbufferApiMock({
+      stats: vi.fn().mockResolvedValue({ data: segmentedStatsPayload(statusQuarantinedSegments) }),
     })
     const { wrapper } = await mountRingBufferView({ ringbufferApi })
     expect(wrapper.find('[data-testid="btn-segments-badge"]').exists()).toBe(true)

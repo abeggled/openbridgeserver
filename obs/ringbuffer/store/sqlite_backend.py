@@ -1556,14 +1556,46 @@ class SqliteSegmentStore(RingBufferStore):
         ``datapoint_id`` zurückgegeben. Bounded über den Cap; der „ambiguous unbounded
         scope"-Kompromiss (ältere Metadaten-Treffer jenseits des Caps) ist im Docstring
         von ``_distinct_ids_v2_segment`` dokumentiert.
+
+        Name-Treffer-Widening (#951, Codex Runde 37, :1566): der echte Read-Pfad
+        (``_build_segment_sql``, Runde 36 :2262) hebt den index-tauglichen
+        ``dp_ids_by_name``-``IN``-Arm per ``UNION`` UN-CAPPED aus der Cap-Subquery
+        heraus. Diese Discovery-Quelle muss dasselbe tun – sonst fehlt ein älterer, per
+        NAME erreichbarer metadaten-matchender STRING/BOOLEAN/gelöschter Datapoint,
+        dessen Zeilen jenseits des Caps liegen, in der Discovery: der numerische
+        Pushdown würde dann erlaubt und die inkompatiblen Zeilen still gedroppt statt
+        das Legacy-422 zu werfen. Der IN-Arm wird deshalb un-capped in die Kandidaten-
+        menge gehoben und zusätzlich als eigener OR-Zweig des Freitext-Blocks geführt;
+        das Metadaten-``EXISTS`` (gegen ``capped.id``) validiert ihn weiter im Metadaten-
+        Scope, sodass ein out-of-scope Name-Treffer NICHT miterfasst wird. Bounded-ness
+        bleibt: der IN-Arm ist über ``datapoint_id`` indiziert, nur die leading-wildcard-
+        ``LIKE``-Arme bleiben gedeckelt.
         """
         cap = self._effective_candidate_cap(query)
-        inner_clauses, inner_params = self._common_where(query)
-        inner_where = f" WHERE {' AND '.join(inner_clauses)}" if inner_clauses else ""
+        base_clauses, base_params = self._common_where(query)
+        inner_where = f" WHERE {' AND '.join(base_clauses)}" if base_clauses else ""
         order_by = self._segment_order_by(query)
         # Die Subquery reicht ``id`` durch, damit das Metadaten-``EXISTS`` gegen
         # ``capped.id`` korrelieren kann.
-        inner_sql = f"SELECT datapoint_id, source_adapter, id FROM ringbuffer{inner_where} ORDER BY {order_by} LIMIT ?"
+        inner_cols = "datapoint_id, source_adapter, id"
+        capped_arm = f"SELECT {inner_cols} FROM ringbuffer{inner_where} ORDER BY {order_by} LIMIT ?"
+        inner_sql = capped_arm
+        inner_params: list[Any] = [*base_params, cap]
+        q_is_scan = bool((query.q or "").strip())
+        _in_clause, in_params = self._free_text_in_arm(query)
+        # Name-Treffer-Widening (#951, Codex :2262/:1566): der index-taugliche IN-Arm
+        # darf NICHT durch den Cap fallen – nur bei aktivem ``q``-Scan (dann ist der
+        # LIKE-Arm gedeckelt und der Legacy-OR-Referenzpfad würde den Namen dennoch
+        # un-capped/indiziert liefern). Ohne ``q`` läuft der IN-Arm ohnehin sargable
+        # inline über ``_free_text_clause`` und braucht kein Widening. Der gedeckelte
+        # Arm wird gekapselt (``ORDER BY``/``LIMIT`` sind in einem SQLite-Compound nur
+        # in einer Sub-SELECT erlaubt, nicht vor ``UNION``).
+        if q_is_scan and _in_clause:
+            name_where_parts = [*base_clauses, _in_clause]
+            name_where = f" WHERE {' AND '.join(name_where_parts)}"
+            name_sql = f"SELECT {inner_cols} FROM ringbuffer{name_where}"
+            inner_sql = f"SELECT {inner_cols} FROM ({capped_arm}) UNION {name_sql}"
+            inner_params = [*base_params, cap, *base_params, *in_params]
         outer_clauses: list[str] = []
         outer_params: list[Any] = []
         free_text_clause, free_text_params = self._free_text_clause(query)
@@ -1576,7 +1608,7 @@ class SqliteSegmentStore(RingBufferStore):
             outer_params.extend(meta_params)
         outer_where = f" WHERE {' AND '.join(outer_clauses)}" if outer_clauses else ""
         sql = f"SELECT DISTINCT datapoint_id FROM ({inner_sql}) AS capped{outer_where}"
-        async with conn.execute(sql, [*inner_params, cap, *outer_params]) as cur:
+        async with conn.execute(sql, [*inner_params, *outer_params]) as cur:
             rows = await cur.fetchall()
         return {row["datapoint_id"] for row in rows}
 

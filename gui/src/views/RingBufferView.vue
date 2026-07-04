@@ -180,6 +180,7 @@ import { useSetColors } from '@/composables/useSetColors'
 import { useLiveQueue } from '@/composables/useLiveQueue'
 import { timeFilterToPayload, entryInTimeWindow } from '@/composables/useTimeFilterPayload'
 import { matchedSetIds } from '@/composables/useClientSideMatch'
+import { isSegmentProblem } from '@/composables/useSegmentProblems'
 import { useAuthStore } from '@/stores/auth'
 import { useWebSocketStore } from '@/stores/websocket'
 import Badge from '@/components/ui/Badge.vue'
@@ -234,14 +235,15 @@ const storeStats = ref(null)
 let recoveryNoticeRefreshPromise = null
 let lastRecoveryNoticeRefreshAt = 0
 
-// Warn-Badge am Segmente-Button (#938): true, sobald irgendein Segment
-// integrity_status='corrupt' oder recovery_status ∈ {quarantined, pending,
-// dirty_wal} meldet. Im Normalfall (alle gesund) false → kein Badge.
-const PROBLEM_RECOVERY = new Set(['quarantined', 'pending', 'dirty_wal'])
+// Warn-Badge am Segmente-Button (#938/#951): true, sobald irgendein Segment
+// problematisch ist. Nutzt den GETEILTEN Helper aus useSegmentProblems (eine
+// Quelle der Wahrheit), damit der Badge dieselben Zustände wie Dialog/Dashboard
+// erkennt – inkl. status='checkpoint_pending'/'quarantined' via status. Im
+// Normalfall (alle gesund) false → kein Badge.
 const segmentProblems = computed(() => {
   const segs = storeStats.value?.backend_extra?.segments
   if (!Array.isArray(segs)) return false
-  return segs.some((s) => s?.integrity_status === 'corrupt' || PROBLEM_RECOVERY.has(s?.recovery_status))
+  return segs.some((s) => isSegmentProblem(s))
 })
 
 function onEditSet(id) {

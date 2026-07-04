@@ -883,13 +883,73 @@ class RingBuffer:
     async def _migration_in_progress(self) -> bool:
         """True, solange eine chunked Legacy-Migration läuft (#951).
 
-        Signalisiert über mind. ein ``migrating``-Segment, dass gerade Zeilen aus einer
-        noch attached Legacy-Quelle kopiert werden. Solange das der Fall ist, dürfen die
-        append-getriebenen ``enforce_retention``-Aufrufe die Legacy-Quelle NICHT löschen
-        (No-Op), sonst gingen noch nicht kopierte Zeilen verloren. Nach
-        ``promote_migrating_segments`` liefert dies wieder ``False``.
+        Signalisiert, dass gerade Zeilen aus einer noch attached Legacy-Quelle kopiert
+        werden. Solange das der Fall ist, dürfen die append-/startup-getriebenen
+        ``enforce_retention``-Aufrufe die Legacy-Quelle NICHT löschen (No-Op), sonst gingen
+        noch nicht kopierte Zeilen verloren.
+
+        Zwei Zustände zählen als „in progress":
+
+        1. Mind. ein ``migrating``-Segment existiert (Normalfall der laufenden Migration;
+           nach ``promote_migrating_segments`` wieder leer).
+        2. Crash-Fenster (#951, Codex Runde 37, F2 :892): ``_append_with_legacy_gids`` hat
+           kopierte Legacy-Zeilen bereits committet/rotiert, der Prozess starb aber BEVOR
+           diese Segmente ``migrating`` markiert wurden. Dann existiert KEIN
+           ``migrating``-Segment, obwohl die Legacy-Quelle noch attached ist UND sichtbare
+           (nicht-``migrating``) v2-Segmente negative gids dieser Quelle tragen. Ohne diese
+           Erkennung sähen die Retention-Gates die sichtbaren negativen v2-Chunks als
+           non-legacy-Daten und löschten die attached Legacy-DB, BEVOR die restlichen Zeilen
+           kopiert sind → Datenverlust. Die eigentliche Re-Hide-Recovery läuft danach beim
+           nächsten ``migrate_chunk`` über die bestehende Runde-27-Logik.
+
+        Der Normalfall (attached read-only Legacy OHNE negative v2-Chunks = nie migriert)
+        wird NICHT über-deferred: es wird nur bei tatsächlich vorhandenen negativen v2-
+        Chunks deferred.
         """
-        return bool(await self._store.manifest.list_migrating_segments())
+        if await self._store.manifest.list_migrating_segments():
+            return True
+        if await self._has_attached_legacy_segment() and await self._has_visible_negative_v2_chunk():
+            return True
+        return False
+
+    async def _has_visible_negative_v2_chunk(self) -> bool:
+        """True, wenn ein sichtbares (nicht-``migrating``) v2-Segment negative gids trägt (#951, F2).
+
+        Nur READ-ONLY: iteriert das Manifest und liest je Kandidatensegment ``MIN(global_event_id)``
+        über eine read-only Segment-Connection. Legacy-Segmente (``schema_version <= LEGACY``)
+        werden übersprungen – ihre synthetischen negativen gids entstehen erst beim Read und
+        sind kein Migrations-Fortschritt. ``migrating``/``quarantined`` Segmente sind bereits
+        durch Punkt 1 bzw. den unsichtbaren Zustand abgedeckt und zählen hier nicht als
+        „sichtbar". Ein zwischenzeitlich weggeräumtes Segment (Race) wird still übersprungen.
+        """
+        from obs.ringbuffer.store.manifest import (
+            LEGACY_SCHEMA_VERSION,
+            SEGMENT_STATUS_MIGRATING,
+            SEGMENT_STATUS_QUARANTINED,
+        )
+
+        hidden = {SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED}
+        for segment in await self._store.manifest.list_segments():
+            if segment.schema_version <= LEGACY_SCHEMA_VERSION or segment.status in hidden:
+                continue
+            try:
+                conn = await self._store._connection_for_read(segment)
+            except Exception:
+                # Datei zwischenzeitlich weggeräumt (Retention-Delete-Race) o. Ä.
+                continue
+            if conn is None:
+                continue
+            try:
+                async with conn.execute("SELECT MIN(global_event_id) FROM ringbuffer") as cur:
+                    row = await cur.fetchone()
+            except Exception:
+                continue
+            finally:
+                await conn.close()
+            min_gid = row[0] if row is not None else None
+            if min_gid is not None and min_gid < 0:
+                return True
+        return False
 
     async def _has_attached_legacy_segment(self) -> bool:
         """True, solange (mind.) ein read-only attached Legacy-Segment existiert.
@@ -2270,11 +2330,24 @@ def _validate_segmented_value_filter_types(
                 # Unbekannter/leerer Kandidatentyp (z. B. ein GELÖSCHTER, nicht mehr
                 # in der Registry vorhandener Datapoint, der aber noch Zeilen im
                 # Buffer hat). Der Legacy-Pfad leitet den Typ row-lazy aus dem
-                # Zeilenwert ab und wirft für eine STRING-/BOOLEAN-Zeile unter einem
-                # non-``eq``/``ne``-Operator einen ``ValueError`` (→ 422). Der
-                # segmentierte Pushdown kennt den Row-Wert nicht und würde sonst
-                # still ein numerisches Prädikat pushen und string/bool-Zeilen droppen.
-                # Konservativ ablehnen ist die parität-wahrende Wahl (#951, Codex :2227).
+                # Zeilenwert ab. Hier muss nach Operatorklasse differenziert werden
+                # (#951, Codex Runde 37, F1 :2269):
+                #
+                # * STRING-Operatoren (``contains``/``regex``): der Legacy-Pfad wendet
+                #   diese auf BELIEBIGE gespeicherte Strings an (``_is_string_type``
+                #   greift row-lazy für jeden ``str``-Wert) und liefert matchende
+                #   Zeilen OHNE 422. Ein gelöschter TEXT-Datapoint, per ``contains``/
+                #   ``regex`` über adapter/q/metadata-Scope abgefragt, muss daher auch
+                #   segmentiert Zeilen liefern – NICHT ablehnen.
+                # * Numerische Operatoren (``gt``/``gte``/``lt``/``lte``/``between``):
+                #   ohne bekannten Typ nicht sicher als typisiertes Prädikat pushbar;
+                #   der segmentierte Pushdown würde still ein numerisches Prädikat
+                #   pushen und string/bool-Zeilen droppen. Konservativ ablehnen wie
+                #   Runde 31 (Parität zur row-lazy Legacy-``ValueError``-Ablehnung).
+                #
+                # ``eq``/``ne`` (typunabhängig) sind oben bereits übersprungen.
+                if operator in {"contains", "regex"}:
+                    continue
                 raise ValueError(f"operator '{operator}' is not supported for data_type 'UNKNOWN'")
             if data_type in _BOOLEAN_TYPES:
                 raise ValueError(f"operator '{operator}' is not supported for data_type 'BOOLEAN'")
