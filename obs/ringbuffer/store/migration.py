@@ -657,26 +657,32 @@ class LegacyMigrator:
         # Legacy-rowid). Deckt einen veralteten/verlorenen State nach Crash ab.
         materialized = await self._max_migrated_rowid()
         after_rowid = max(state.last_rowid, materialized)
-        # Stale-Cursor-Reset bei ersetzter/getruncateter Quelle (#951, P2, Codex :658):
+        # Stale-Cursor-Reset bei ersetzter/getruncateter Quelle (#951, P2, Codex :658/:680):
         # ``done_is_stale`` erlaubt zwar das Weiterlaufen, aber der oben gefaltete Cursor
         # (JSON-``last_rowid`` UND die materialisierte ``_max_migrated_rowid``-Grenze) gehört
-        # noch zur ALTEN Datei-Generation. Ersetzt/truncatet ein Operator die Legacy-DB nach
-        # dem ``done``, sodass die NEUEN Zeilen wieder UNTERHALB dieses alten Cursors beginnen
-        # (truncate: rowids < altem Cursor; replace: andere Daten, ggf. weniger Zeilen), läge
-        # der effektive Cursor bei/über der aktuellen ``MAX(id)`` der Quelle → ``_read_batch``
-        # liefert leer, ``_finalize_and_detach`` schriebe einen frischen Marker und entfernte
-        # die attached Quelle: die neuen Legacy-Zeilen wären PERMANENT versteckt.
-        # Gegenmaßnahme: Ist die Identität stale UND deckt der alte Cursor die aktuelle
-        # ``MAX(id)`` bereits ab (Cursor >= Legacy-MAX), ist er stale-vergiftet und wird
-        # generations-frisch auf 0 zurückgesetzt, sodass ``_read_batch`` die neuen Zeilen ab
-        # Beginn liest. Der bloße ``append``/Grow-Fall (neue rowids OBERHALB des Cursors, Runde
-        # 30) bleibt unberührt: dort liegt die Legacy-``MAX(id)`` ÜBER dem Cursor, der Cursor
-        # überspringt die bereits kopierten Zeilen idempotent (kein Re-Scan/Duplikat). Der
-        # akzeptierte Tradeoff bei einer ersetzten Quelle mit kollidierenden rowids ist – wie
-        # bei der Marker-Staleness (siehe ``_marker_suppresses_attach``) – ein transientes
-        # Doppel-Delivery bereits migrierter Alt-Zeilen, strikt besser als stiller Verlust der
-        # NEUEN Zeilen.
-        if stale and after_rowid >= await self._legacy_max_rowid():
+        # noch zur ALTEN Datei-Generation. Ersetzt/truncatet/restauriert ein Operator die
+        # Legacy-DB nach dem ``done`` durch eine ANDERE Datei, gehört ihr rowid-Raum zu einer
+        # NEUEN Generation, in der die Zeilen ``1..alter Cursor`` andere Daten tragen –
+        # überspränge ``_read_batch(after_rowid=alter Cursor)`` sie, schriebe
+        # ``_finalize_and_detach`` einen frischen Marker und entfernte die attached Quelle: die
+        # neuen Legacy-Zeilen wären PERMANENT versteckt. Das passiert unabhängig davon, ob die
+        # neue Quelle WENIGER (Cursor >= neuer MAX → ``_read_batch`` leer) ODER MEHR Zeilen als
+        # der alte Cursor hat (neuer MAX > Cursor → ``_read_batch`` liest nur ``Cursor+1..MAX``
+        # und lässt ``1..Cursor`` der neuen Generation aus). Die frühere Bedingung
+        # ``after_rowid >= _legacy_max_rowid()`` deckte nur den Weniger-/Gleich-Fall ab und ließ
+        # den Mehr-Fall durchrutschen.
+        # Gegenmaßnahme: Ist die Identität stale, wird der Cursor generations-frisch auf 0
+        # zurückgesetzt (Cursor UND materialisierter Floor ignoriert), sodass ``_read_batch``
+        # die neue Generation ab Beginn liest – ES SEI DENN, die Änderung ist BEWEISBAR
+        # append-only (``_cursor_is_append_only``: die bereits migrierte Boundary-Zeile bei
+        # ``after_rowid`` liegt in der aktuellen Quelle unverändert vor). Nur dann bleiben die
+        # bereits kopierten Zeilen ``1..after_rowid`` derselben Generation und der Cursor bleibt
+        # gültig (reiner ``append``/Grow-Fall, Runde 30: neue rowids OBERHALB des Cursors, kein
+        # Re-Scan/Duplikat). Der akzeptierte Tradeoff bei einer ersetzten Quelle mit
+        # kollidierenden rowids ist – wie bei der Marker-Staleness (siehe
+        # ``_marker_suppresses_attach``) – ein transientes Doppel-Delivery bereits migrierter
+        # Alt-Zeilen, strikt besser als stiller Verlust der NEUEN Zeilen.
+        if stale and not await self._cursor_is_append_only(after_rowid):
             after_rowid = 0
         # Invarianten-Recovery (#951, P2, :596): bevor ein neuer Batch läuft, einen nach
         # Crash zurückgebliebenen inkonsistenten Zustand heilen – sichtbare, rein aus
@@ -1528,6 +1534,109 @@ class LegacyMigrator:
         if row is None or row[0] is None:
             return 0
         return int(row[0])
+
+    async def _cursor_is_append_only(self, after_rowid: int) -> bool:
+        """True, wenn der Cursor ``after_rowid`` beweisbar zur AKTUELLEN Datei-Generation gehört.
+
+        Genutzt vom Stale-Cursor-Reset (#951, P2, Codex :680): Ist die Datei-Identität stale,
+        muss der Cursor generations-frisch auf 0 zurückgesetzt werden, ES SEI DENN, die
+        Änderung ist ein reiner ``append``/Grow (neue rowids OBERHALB des Cursors, die bereits
+        migrierten Zeilen ``1..after_rowid`` unverändert). Nur ``_legacy_max_rowid() > cursor``
+        zu prüfen genügt NICHT: eine GRÖSSERE Ersatzdatei erfüllt das ebenfalls, obwohl ihre
+        Zeilen ``1..cursor`` andere Daten tragen.
+
+        Beweis für append-only – bewusst gid-derivations-UNABHÄNGIG (der ``_source_factor`` wird
+        pro Attach neu aus der ``segment_id`` gespiegelt und ist über Re-Attaches hinweg NICHT
+        stabil, deshalb wird NICHT über eine berechnete gid gesucht):
+
+        * Es wurden genau ``after_rowid`` Zeilen dieser Quelle migriert (Anzahl der negativen,
+          quell-migrierten v2-Events == Cursor). Eine kleinere/getruncatete Ersatzquelle bricht
+          das (Cursor > migrierte Menge der aktuellen Generation ist hier nicht messbar, aber
+          die Boundary-Zeile fehlt, s. u.).
+        * Die zuletzt migrierte Zeile (höchste = jüngste negative gid) trägt IDENTISCHES
+          ``ts``/``new_value`` wie die aktuelle Quell-Zeile bei rowid ``after_rowid``. Trifft das
+          zu, ist ``1..after_rowid`` nachweislich der unveränderte Kopf der aktuellen Datei und
+          die neue Generation beginnt OBERHALB des Cursors → Cursor gültig. Weicht die
+          Boundary-Zeile ab oder fehlt sie (replace/truncate), ist die Quelle ersetzt → Reset.
+
+        Ein ``after_rowid`` von 0 (nichts migriert) ist trivial nicht append-only-schützbar; der
+        Reset-Effekt (ab 0 lesen) ist dort ohnehin ein No-op. Rein read-only, ohne die Quelle zu
+        verändern.
+        """
+        if after_rowid <= 0:
+            return False
+        source_row = await self._read_row_at(after_rowid)
+        if source_row is None:
+            return False
+        count, last_migrated = await self._migrated_count_and_last()
+        if count != after_rowid or last_migrated is None:
+            return False
+        return source_row == last_migrated
+
+    async def _read_row_at(self, rowid: int) -> tuple[object, object] | None:
+        """Liest ``(ts, new_value)`` der Legacy-Zeile bei ``rowid`` read-only (``None``, wenn fehlend)."""
+        legacy_path = self._legacy_path.resolve()
+        if not legacy_path.exists():
+            return None
+        await self._checkpoint_dirty_wal_if_small(legacy_path)
+        uri = _sqlite_ro_uri(legacy_path, params="mode=ro&immutable=1")
+        conn = await aiosqlite.connect(uri, uri=True)
+        try:
+            async with conn.execute("SELECT ts, new_value FROM ringbuffer WHERE id = ?", (rowid,)) as cur:
+                row = await cur.fetchone()
+        except aiosqlite.Error:
+            return None
+        finally:
+            await conn.close()
+        if row is None:
+            return None
+        return (row[0], row[1])
+
+    async def _migrated_count_and_last(self) -> tuple[int, tuple[object, object] | None]:
+        """Anzahl migrierter (negativer) v2-Events + ``(ts, new_value)`` des jüngsten.
+
+        „Jüngste" = höchste (am wenigsten negative) negative gid, entspricht der zuletzt
+        migrierten Legacy-rowid. Bewusst über den REINEN Vorzeichen-Filter ``global_event_id < 0``
+        statt über einen quell-gescopten Bereich: der ``_source_factor`` wird pro Attach neu aus
+        der ``segment_id`` gespiegelt und ist über Re-Attaches NICHT stabil, ein berechneter
+        Bereich verfehlte die tatsächlich geschriebenen gids. Der Vorzeichen-Filter deckt den
+        Ein-Quell-Fall (Regelfall der Migration) exakt ab. Sind mehrere Quellen in denselben
+        Store migriert, überzählt er FREMDE migrierte Zeilen → ``count`` weicht ab → die Prüfung
+        liefert konservativ ``False`` (Reset statt Cursor-Erhalt); der akzeptierte Tradeoff ist
+        dort ein transientes Doppel-Delivery, nie stiller Verlust. Read-only über alle v2-Segmente.
+        """
+        count = 0
+        best_gid: int | None = None
+        best_fields: tuple[object, object] | None = None
+        for segment in await self._store.manifest.list_segments():
+            if segment.schema_version <= LEGACY_SCHEMA_VERSION:
+                continue  # read-only eingehängte Legacy-Segmente haben keine v2-Tabelle
+            path = self._store._segments_dir / segment.filename
+            if not path.exists():
+                continue
+            uri = _sqlite_ro_uri(path, params="mode=ro")
+            conn = await aiosqlite.connect(uri, uri=True)
+            try:
+                async with conn.execute("SELECT COUNT(*), MAX(global_event_id) FROM ringbuffer WHERE global_event_id < 0") as cur:
+                    agg = await cur.fetchone()
+                if agg is None or agg[0] == 0:
+                    continue
+                count += int(agg[0])
+                seg_max = int(agg[1])
+                if best_gid is None or seg_max > best_gid:
+                    async with conn.execute(
+                        "SELECT ts, new_value FROM ringbuffer WHERE global_event_id = ?",
+                        (seg_max,),
+                    ) as cur:
+                        row = await cur.fetchone()
+                    if row is not None:
+                        best_gid = seg_max
+                        best_fields = (row[0], row[1])
+            except aiosqlite.Error:
+                continue
+            finally:
+                await conn.close()
+        return count, best_fields
 
     async def _read_batch(self, *, after_rowid: int, limit: int) -> list[aiosqlite.Row]:
         """Liest den nächsten aufsteigenden rowid-Batch read-only aus der Legacy-DB.

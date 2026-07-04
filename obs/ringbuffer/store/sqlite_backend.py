@@ -2459,6 +2459,32 @@ class SqliteSegmentStore(RingBufferStore):
         old_conn = self._active_conn
         if old_segment is not None and old_conn is not None:
             await self._refresh_active_segment_stats()
+
+        # Ersatz-Segment ZUERST durabel machen (#951, Codex :2463): schlägt das Anlegen
+        # oder Öffnen des neuen Segments fehl (Manifest-DB/Disk voll), bleibt die alte
+        # aktive Connection ungeschlossen und ``_active_conn``/``_active_segment`` zeigen
+        # weiter auf einen brauchbaren Writer. Würde die alte Connection – wie zuvor –
+        # vor diesem Punkt geschlossen, liefe der Store nach einem Rotation-Fehler mit
+        # einem geschlossenen aktiven Writer weiter und JEDER Folge-``append`` scheiterte
+        # dauerhaft mit closed-connection-Fehlern bis zum Neustart. Der aktive Zustand
+        # wird deshalb erst getauscht, wenn der neue Writer offen ist; erst danach wird
+        # das alte Segment geschlossen und im Manifest nachgezogen.
+        new_segment = await self._create_segment_locked()
+        try:
+            new_conn = await self._open_segment_conn(new_segment.filename)
+        except BaseException:
+            # Die Manifest-Zeile ist schon angelegt, aber die Connection scheiterte:
+            # ohne Rollback bliebe eine zweite „active"-Zeile ohne Writer zurück und
+            # das Manifest hätte zwei aktive Segmente. Die verwaiste Zeile daher
+            # best-effort wieder entfernen, bevor der Fehler propagiert – das alte
+            # aktive Segment bleibt der einzige aktive Writer.
+            with contextlib.suppress(Exception):
+                await self.manifest.delete_segment(new_segment.segment_id)
+            raise
+        self._active_segment = new_segment
+        self._active_conn = new_conn
+
+        if old_segment is not None and old_conn is not None:
             checkpoint_ok = await self._try_truncate_checkpoint(old_conn)
             await old_conn.close()
             await self.manifest.close_segment(old_segment.segment_id)
@@ -2478,9 +2504,6 @@ class SqliteSegmentStore(RingBufferStore):
                 await self.manifest.mark_checkpoint_pending(old_segment.segment_id)
                 # TODO(#936): Hintergrund-Checkpoint-Läufer räumt pending später ab.
 
-        new_segment = await self._create_segment_locked()
-        self._active_segment = new_segment
-        self._active_conn = await self._open_segment_conn(new_segment.filename)
         return new_segment
 
     async def _try_truncate_checkpoint(self, conn: aiosqlite.Connection) -> bool:

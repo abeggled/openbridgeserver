@@ -896,15 +896,18 @@ class RingBuffer:
            kopierte Legacy-Zeilen bereits committet/rotiert, der Prozess starb aber BEVOR
            diese Segmente ``migrating`` markiert wurden. Dann existiert KEIN
            ``migrating``-Segment, obwohl die Legacy-Quelle noch attached ist UND sichtbare
-           (nicht-``migrating``) v2-Segmente negative gids dieser Quelle tragen. Ohne diese
-           Erkennung sähen die Retention-Gates die sichtbaren negativen v2-Chunks als
+           (nicht-``migrating``, nicht-``migrated``) v2-Segmente negative gids tragen. Ohne
+           diese Erkennung sähen die Retention-Gates die sichtbaren negativen v2-Chunks als
            non-legacy-Daten und löschten die attached Legacy-DB, BEVOR die restlichen Zeilen
            kopiert sind → Datenverlust. Die eigentliche Re-Hide-Recovery läuft danach beim
            nächsten ``migrate_chunk`` über die bestehende Runde-27-Logik.
 
         Der Normalfall (attached read-only Legacy OHNE negative v2-Chunks = nie migriert)
         wird NICHT über-deferred: es wird nur bei tatsächlich vorhandenen negativen v2-
-        Chunks deferred.
+        Chunks deferred. Ebenso wenig deferren ABGESCHLOSSENE ``migrated``-Chunks einer
+        bereits fertig migrierten Quelle (#951, Codex :911) – diese werden in
+        ``_has_visible_negative_v2_chunk`` ausgeschlossen, sonst blockierte eine fertige
+        Fremd-Quelle die Retention der noch attached Quelle.
         """
         if await self._store.manifest.list_migrating_segments():
             return True
@@ -913,7 +916,7 @@ class RingBuffer:
         return False
 
     async def _has_visible_negative_v2_chunk(self) -> bool:
-        """True, wenn ein sichtbares (nicht-``migrating``) v2-Segment negative gids trägt (#951, F2).
+        """True, wenn ein sichtbares, NICHT-``migrated`` v2-Segment negative gids trägt (#951, F2).
 
         Nur READ-ONLY: iteriert das Manifest und liest je Kandidatensegment ``MIN(global_event_id)``
         über eine read-only Segment-Connection. Legacy-Segmente (``schema_version <= LEGACY``)
@@ -921,14 +924,24 @@ class RingBuffer:
         sind kein Migrations-Fortschritt. ``migrating``/``quarantined`` Segmente sind bereits
         durch Punkt 1 bzw. den unsichtbaren Zustand abgedeckt und zählen hier nicht als
         „sichtbar". Ein zwischenzeitlich weggeräumtes Segment (Race) wird still übersprungen.
+
+        Ausschluss ``migrated`` (#951, Codex :911): ein ABGESCHLOSSENES ``migrated``-Segment
+        trägt zwar sichtbare negative gids, gehört aber zu einer bereits FERTIG migrierten
+        Quelle. Ist eine ANDERE Legacy-Quelle noch attached, würde ein source-agnostischer
+        Zähler diese fertigen Chunks fälschlich als „migration in progress" werten und die
+        Retention der attached Quelle deferren, obwohl für sie gerade keine Zeilen kopiert
+        werden → über-budget-Legacy bliebe unreklamiert. Nur nicht-``migrated`` negative
+        Chunks (das Crash-Fenster: ``closed``/``active`` mit negativer gid, noch nicht
+        ``migrating`` markiert) zählen daher als in-progress-Signal.
         """
         from obs.ringbuffer.store.manifest import (
             LEGACY_SCHEMA_VERSION,
+            SEGMENT_STATUS_MIGRATED,
             SEGMENT_STATUS_MIGRATING,
             SEGMENT_STATUS_QUARANTINED,
         )
 
-        hidden = {SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED}
+        hidden = {SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED, SEGMENT_STATUS_MIGRATED}
         for segment in await self._store.manifest.list_segments():
             if segment.schema_version <= LEGACY_SCHEMA_VERSION or segment.status in hidden:
                 continue
