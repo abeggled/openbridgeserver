@@ -2230,6 +2230,16 @@ def _validate_segmented_value_filter_types(
         if operator in {"eq", "ne"}:
             continue
         for data_type in data_types:
+            if not data_type:
+                # Unbekannter/leerer Kandidatentyp (z. B. ein GELÖSCHTER, nicht mehr
+                # in der Registry vorhandener Datapoint, der aber noch Zeilen im
+                # Buffer hat). Der Legacy-Pfad leitet den Typ row-lazy aus dem
+                # Zeilenwert ab und wirft für eine STRING-/BOOLEAN-Zeile unter einem
+                # non-``eq``/``ne``-Operator einen ``ValueError`` (→ 422). Der
+                # segmentierte Pushdown kennt den Row-Wert nicht und würde sonst
+                # still ein numerisches Prädikat pushen und string/bool-Zeilen droppen.
+                # Konservativ ablehnen ist die parität-wahrende Wahl (#951, Codex :2227).
+                raise ValueError(f"operator '{operator}' is not supported for data_type 'UNKNOWN'")
             if data_type in _BOOLEAN_TYPES:
                 raise ValueError(f"operator '{operator}' is not supported for data_type 'BOOLEAN'")
             if data_type in _NUMERIC_TYPES and operator not in {"gt", "gte", "lt", "lte", "between"}:

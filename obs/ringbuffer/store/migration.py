@@ -644,7 +644,8 @@ class LegacyMigrator:
         von ``enforce_retention()`` – Details siehe ``_append_with_legacy_gids``.
         """
         state = self._load_state()
-        if state.done and not state.done_is_stale(self._current_identity_fields()):
+        stale = state.done and state.done_is_stale(self._current_identity_fields())
+        if state.done and not stale:
             # Fertig UND Quelldatei seit dem ``done`` unverändert → kein Re-Scan.
             return 0
         # Ist der ``done``-State STALE (Quelldatei nach dem ``done`` verändert, #951, P2,
@@ -656,6 +657,27 @@ class LegacyMigrator:
         # Legacy-rowid). Deckt einen veralteten/verlorenen State nach Crash ab.
         materialized = await self._max_migrated_rowid()
         after_rowid = max(state.last_rowid, materialized)
+        # Stale-Cursor-Reset bei ersetzter/getruncateter Quelle (#951, P2, Codex :658):
+        # ``done_is_stale`` erlaubt zwar das Weiterlaufen, aber der oben gefaltete Cursor
+        # (JSON-``last_rowid`` UND die materialisierte ``_max_migrated_rowid``-Grenze) gehört
+        # noch zur ALTEN Datei-Generation. Ersetzt/truncatet ein Operator die Legacy-DB nach
+        # dem ``done``, sodass die NEUEN Zeilen wieder UNTERHALB dieses alten Cursors beginnen
+        # (truncate: rowids < altem Cursor; replace: andere Daten, ggf. weniger Zeilen), läge
+        # der effektive Cursor bei/über der aktuellen ``MAX(id)`` der Quelle → ``_read_batch``
+        # liefert leer, ``_finalize_and_detach`` schriebe einen frischen Marker und entfernte
+        # die attached Quelle: die neuen Legacy-Zeilen wären PERMANENT versteckt.
+        # Gegenmaßnahme: Ist die Identität stale UND deckt der alte Cursor die aktuelle
+        # ``MAX(id)`` bereits ab (Cursor >= Legacy-MAX), ist er stale-vergiftet und wird
+        # generations-frisch auf 0 zurückgesetzt, sodass ``_read_batch`` die neuen Zeilen ab
+        # Beginn liest. Der bloße ``append``/Grow-Fall (neue rowids OBERHALB des Cursors, Runde
+        # 30) bleibt unberührt: dort liegt die Legacy-``MAX(id)`` ÜBER dem Cursor, der Cursor
+        # überspringt die bereits kopierten Zeilen idempotent (kein Re-Scan/Duplikat). Der
+        # akzeptierte Tradeoff bei einer ersetzten Quelle mit kollidierenden rowids ist – wie
+        # bei der Marker-Staleness (siehe ``_marker_suppresses_attach``) – ein transientes
+        # Doppel-Delivery bereits migrierter Alt-Zeilen, strikt besser als stiller Verlust der
+        # NEUEN Zeilen.
+        if stale and after_rowid >= await self._legacy_max_rowid():
+            after_rowid = 0
         # Invarianten-Recovery (#951, P2, :596): bevor ein neuer Batch läuft, einen nach
         # Crash zurückgebliebenen inkonsistenten Zustand heilen – sichtbare, rein aus
         # DIESER noch attached Quelle stammende (rein-negative) Segmente re-hidden.
@@ -1480,6 +1502,32 @@ class LegacyMigrator:
             if row is not None and row[0] is not None:
                 best = max(best, self._rowid_for_gid(int(row[0])))
         return best
+
+    async def _legacy_max_rowid(self) -> int:
+        """Höchste ``id`` (rowid) der aktuellen Legacy-Quelle read-only (0, wenn leer/fehlend).
+
+        Dient dem Stale-Cursor-Reset (#951, P2, Codex :658): nur wenn der aus der ALTEN
+        Generation gefaltete Cursor diese aktuelle ``MAX(id)`` bereits abdeckt (Cursor >=
+        MAX), würde ``_read_batch`` leer liefern und die neuen Zeilen permanent verstecken;
+        dann wird generations-frisch ab 0 gelesen. Rein read-only wie ``_read_batch``
+        (``immutable=1`` nach etwaigem Small-WAL-Checkpoint), ohne die Datei zu verändern.
+        """
+        legacy_path = self._legacy_path.resolve()
+        if not legacy_path.exists():
+            return 0
+        await self._checkpoint_dirty_wal_if_small(legacy_path)
+        uri = _sqlite_ro_uri(legacy_path, params="mode=ro&immutable=1")
+        conn = await aiosqlite.connect(uri, uri=True)
+        try:
+            async with conn.execute("SELECT MAX(id) FROM ringbuffer") as cur:
+                row = await cur.fetchone()
+        except aiosqlite.Error:
+            return 0
+        finally:
+            await conn.close()
+        if row is None or row[0] is None:
+            return 0
+        return int(row[0])
 
     async def _read_batch(self, *, after_rowid: int, limit: int) -> list[aiosqlite.Row]:
         """Liest den nächsten aufsteigenden rowid-Batch read-only aus der Legacy-DB.

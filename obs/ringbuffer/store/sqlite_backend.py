@@ -1778,6 +1778,17 @@ class SqliteSegmentStore(RingBufferStore):
 
         select_cols = "global_event_id, ts, datapoint_id, topic, old_value, new_value, source_adapter, quality, metadata_version, metadata"
 
+        # Metadaten-Tag/Binding-``EXISTS`` (#951, Codex :1861): wie der Freitext-``q``
+        # und die guarded value-Filter ein potenziell teurer Scan-Filter. Bei
+        # seltenem/fehlendem Tag würde ein inline-``EXISTS`` SQLite die ganze
+        # ``ringbuffer``-Ordnung des Segments walken lassen, bevor ``LIMIT`` erfüllt
+        # ist. Im unwindowed, nicht-Export-Fall wird er daher auf dieselbe gedeckelte
+        # Kandidatenmenge gelegt wie die anderen guarded Prädikate. Die Korrelation
+        # muss dann gegen ``capped.id`` (Kapsel-Alias) statt ``ringbuffer.id`` laufen.
+        has_metadata = self._has_metadata_filter(query)
+        use_capped = not self._query_is_windowed(query) and not query.is_export
+        route_metadata_capped = has_metadata and use_capped
+
         # Der teure Match wird nur dann auf eine gedeckelte Kandidaten-Subquery
         # gelegt, wenn der Query ausschließlich per candidate_cap (ohne Zeitfenster)
         # gebunden ist UND es KEIN Export ist. Mit Zeitfenster bindet bereits das
@@ -1788,21 +1799,34 @@ class SqliteSegmentStore(RingBufferStore):
         # finale ``LIMIT`` = ``offset+limit`` GEMATCHTE Zeilen begrenzt) – analog zum
         # bereits gefixten Legacy-Export-Batch-Scan. Kostenbegrenzt: SQLite terminiert
         # den Scan, sobald ``offset+limit`` Treffer gefunden sind.
-        if guarded_clauses and not self._query_is_windowed(query) and not query.is_export:
+        if (guarded_clauses or route_metadata_capped) and use_capped:
             cap = self._effective_candidate_cap(query)
             inner_where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-            # Die innere Subquery muss auch die typisierten Text-Spalten
-            # durchreichen, auf denen die Guarded-Prädikate (instr/obs_regexp)
-            # arbeiten – sonst kennt die äußere Query ``*_value_text`` nicht.
-            inner_cols = f"{select_cols}, old_value_text, new_value_text"
+            # Die innere Subquery muss die typisierten Text-Spalten (für die
+            # instr/obs_regexp-Guarded-Prädikate) UND ``id`` (für die Metadaten-
+            # ``EXISTS``-Korrelation gegen ``capped.id``) durchreichen – sonst kennt
+            # die äußere Query ``*_value_text``/``id`` nicht.
+            inner_cols = f"{select_cols}, old_value_text, new_value_text, id"
             inner_sql = f"SELECT {inner_cols} FROM ringbuffer{inner_where} ORDER BY {order_by} LIMIT ?"
-            outer_where = " AND ".join(guarded_clauses)
+            outer_clauses = list(guarded_clauses)
+            outer_params = list(guarded_params)
+            if route_metadata_capped:
+                meta_clause, meta_params = self._metadata_clause(query, entry_ref="capped.id")
+                if meta_clause:
+                    outer_clauses.append(meta_clause)
+                    outer_params.extend(meta_params)
+            outer_where = " AND ".join(outer_clauses)
             sql = f"SELECT {select_cols} FROM ({inner_sql}) AS capped WHERE {outer_where} ORDER BY {order_by} LIMIT ?"
-            return sql, [*params, cap, *guarded_params, final_limit]
+            return sql, [*params, cap, *outer_params, final_limit]
 
-        # Mit Zeitfenster (oder ohne Guarded-Filter): alle Klauseln inline.
+        # Mit Zeitfenster (oder ohne cap-fähigen Scan-Filter): alle Klauseln inline.
         clauses.extend(guarded_clauses)
         params.extend(guarded_params)
+        if has_metadata:
+            meta_clause, meta_params = self._metadata_clause(query)
+            if meta_clause:
+                clauses.append(meta_clause)
+                params.extend(meta_params)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"SELECT {select_cols} FROM ringbuffer{where} ORDER BY {order_by} LIMIT ?"
         params.append(final_limit)
@@ -1829,10 +1853,14 @@ class SqliteSegmentStore(RingBufferStore):
     def _common_where(self, query: StoreQuery) -> tuple[list[str], list[Any]]:
         """Baut die von v2- und (soweit anwendbar) Legacy-Segment geteilten WHERE-Prädikate.
 
-        Deckt Zeitfenster, Ein-Wert-Kern (datapoint_id/source_adapter/quality),
-        additive ``IN (...)``-Listen (mehrere datapoint_ids/adapter), den
-        Freitext-``q``/``dp_ids_by_name``-OR-Block sowie Metadaten-Tag/Binding-
-        Filter als ``EXISTS``-Subquery ab (Semantik wie Legacy ``query_v2``).
+        Deckt Zeitfenster, Ein-Wert-Kern (datapoint_id/source_adapter/quality)
+        sowie additive ``IN (...)``-Listen (mehrere datapoint_ids/adapter) ab.
+
+        Der Freitext-``q``/``dp_ids_by_name``-OR-Block UND die Metadaten-Tag/
+        Binding-``EXISTS``-Subquery werden NICHT hier gehängt: beide sind
+        index-untauglich bzw. teuer und müssen – wie ein Guarded-Filter – auf eine
+        gedeckelte Kandidatenmenge gelegt werden (#951, Codex :1603/:1861). Das
+        Routing (inner-capped vs. inline) übernimmt ``_build_segment_sql``.
         """
         clauses, params = self._time_where(query)
         if query.datapoint_id is not None:
@@ -1852,14 +1880,6 @@ class SqliteSegmentStore(RingBufferStore):
         if query.quality is not None:
             clauses.append("quality = ?")
             params.append(query.quality)
-        # Der Freitext-``q``-OR-Block wird NICHT hier inline gehängt: sein leading-
-        # wildcard-LIKE ist index-untauglich und muss – wie ein Guarded-Filter – auf
-        # eine gedeckelte Kandidatenmenge gelegt werden (#951, Codex :1603). Das
-        # Routing (inner-capped vs. inline) übernimmt ``_build_segment_sql``.
-        meta_clause, meta_params = self._metadata_clause(query)
-        if meta_clause:
-            clauses.append(meta_clause)
-            params.extend(meta_params)
         return clauses, params
 
     @staticmethod
@@ -1882,14 +1902,21 @@ class SqliteSegmentStore(RingBufferStore):
         return f"({' OR '.join(parts)})", params
 
     @staticmethod
-    def _metadata_clause(query: StoreQuery) -> tuple[str | None, list[Any]]:
-        """EXISTS-Subqueries für Metadaten-Tags/Bindings (Semantik wie Legacy)."""
+    def _metadata_clause(query: StoreQuery, entry_ref: str = "ringbuffer.id") -> tuple[str | None, list[Any]]:
+        """EXISTS-Subqueries für Metadaten-Tags/Bindings (Semantik wie Legacy).
+
+        ``entry_ref`` benennt die Spalte, mit der das ``EXISTS`` korreliert.
+        Inline (Base-WHERE über ``ringbuffer``) ist das ``ringbuffer.id``; im
+        gedeckelten guarded Pfad umschließt eine Subquery-Kapsel (``... AS
+        capped``) die Kandidatenmenge, dann muss das ``EXISTS`` gegen ``capped.id``
+        korrelieren – die innere Subquery reicht ``id`` dafür durch.
+        """
         clauses: list[str] = []
         params: list[Any] = []
         tags = query.metadata_tags_any_of
         if tags:
             placeholders = ",".join("?" * len(tags))
-            clauses.append(f"EXISTS (SELECT 1 FROM ringbuffer_metadata_tags rmt WHERE rmt.entry_id = ringbuffer.id AND rmt.tag IN ({placeholders}))")
+            clauses.append(f"EXISTS (SELECT 1 FROM ringbuffer_metadata_tags rmt WHERE rmt.entry_id = {entry_ref} AND rmt.tag IN ({placeholders}))")
             params.extend(tags)
         binding_clauses: list[str] = []
         binding_params: list[Any] = []
@@ -1901,7 +1928,7 @@ class SqliteSegmentStore(RingBufferStore):
             binding_params.extend(values)
         if binding_clauses:
             clauses.append(
-                f"EXISTS (SELECT 1 FROM ringbuffer_metadata_bindings rmb WHERE rmb.entry_id = ringbuffer.id AND {' AND '.join(binding_clauses)})"
+                f"EXISTS (SELECT 1 FROM ringbuffer_metadata_bindings rmb WHERE rmb.entry_id = {entry_ref} AND {' AND '.join(binding_clauses)})"
             )
             params.extend(binding_params)
         if not clauses:

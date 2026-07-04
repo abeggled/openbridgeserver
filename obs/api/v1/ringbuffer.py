@@ -211,11 +211,18 @@ class RingBufferConfig(BaseModel):
     max_entries: int | None = Field(default=None, ge=1)
     max_file_size_bytes: int | None = Field(default=None, ge=1)
     max_age: int | None = Field(default=None, ge=0)
-    # Segmentierter Store (#919) — OPT-IN, Default AUS. Bei ``False`` bleibt der
-    # Legacy-Single-File-Pfad unverändert; eine Umschaltung greift beim nächsten
-    # RingBuffer-(Neu-)Start.
-    segmented: bool = False
-    # Segment-Parameter (#930) — Rotation, getrennt von den Retention-Feldern
+    # Segmentierter Store (#919) – PARTIAL-UPDATE-Feld (Codex #951 [P2]).
+    # Der deployte Default ist segmentiert; das GUI zeigt keinen Legacy-Toggle
+    # mehr. Das Schema darf daher KEINEN ``false``-Default bewerben – sonst
+    # serialisieren generierte Clients / Admin-Skripte beim Aendern UNRELATED
+    # Config ein ``segmented:false`` mit und bauen den laufenden Monitor in den
+    # Legacy-Single-File-Pfad zurueck (v2-Segment-Historie nicht mehr lesbar).
+    # ``None`` (= nicht gesetzt) bedeutet "unveraendert lassen": der Resolver
+    # behaelt den persistierten/deployten Wert. Nur ein EXPLIZITES ``true``/``false``
+    # schaltet um (bewusster Opt-in/Opt-out). Eine Umschaltung greift beim
+    # naechsten RingBuffer-(Neu-)Start bzw. sofort via Modus-Switch-Rebuild.
+    segmented: bool | None = None
+    # Segment-Parameter (#930) – Rotation, getrennt von den Retention-Feldern
     # oben.
     segment_max_bytes: int | None = Field(default=None, ge=1)
     segment_max_rows: int | None = Field(default=None, ge=1)
@@ -1945,7 +1952,24 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     # Segment-Parameter (#930) leben nur in der persistierten Config, nicht im
     # laufenden RingBuffer. Bei Teil-Updates die nicht gesetzten Felder aus der
     # persistierten Config übernehmen.
-    resolved_segmented = body.segmented if "segmented" in body.model_fields_set else bool(persisted.get("segmented", False))
+    # ``segmented`` ist ein Partial-Update-Feld (Codex #951 [P2]): ``None`` (fehlend
+    # ODER explizit ``null``) bedeutet "unveraendert lassen" und behaelt den
+    # persistierten/deployten Wert. Nur ein EXPLIZITES ``true``/``false`` schaltet um.
+    # Deshalb auf ``is not None`` pruefen statt auf ``model_fields_set`` – ein explizit
+    # gesendetes ``null`` darf NICHT als ``false`` interpretiert werden und den Store
+    # in den Legacy-Pfad zurueckbauen.
+    # Fallback fuer ein ausgelassenes Feld ist der LAUFENDE Wert (``rb.segmented``),
+    # nicht ``persisted.get(..., False)``: ein neuer Install laeuft segmentiert per
+    # Default, ohne dass ``segmented`` zwingend explizit in der persistierten Config
+    # steht. Ohne den Live-Fallback kippte ein Omit-Update einen solchen laufenden
+    # segmentierten Store faelschlich in den Legacy-Pfad (genau der Codex-Befund).
+    # Nur wenn gar kein RingBuffer laeuft, greift die persistierte Config.
+    if body.segmented is not None:
+        resolved_segmented = body.segmented
+    elif rb is not None:
+        resolved_segmented = rb.segmented
+    else:
+        resolved_segmented = bool(persisted.get("segmented", False))
     # Segmentierung an das aufgelöste ``storage`` koppeln (Codex #951, Pkt 1):
     # Postet ein Client eine partielle Config wie ``{"storage": "memory"}`` ohne
     # ``segmented``, bliebe sonst das persistierte/Default-``segmented=true`` erhalten.
