@@ -44,6 +44,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -269,15 +270,97 @@ _BINDING_INDEX_COLUMNS = (
 )
 # Regex-Härtung (Referenz: Legacy _match_regex in ringbuffer.py).
 _REGEX_MAX_PATTERN_LEN = 256
-# Ziel-String-Längenbegrenzung wie Legacy ``_match_regex`` (#951, Pkt 6): der
-# SQLite-Callback läuft synchron je Kandidatenzeile; ohne diese Grenze könnte ein
+# Ziel-String-Längenbegrenzung wie Legacy ``_match_regex`` (#951, Pkt 6 / Codex :499):
+# der Regex-Callback läuft synchron je Kandidatenzeile; ohne diese Grenze könnte ein
 # sehr langer Wert (kombiniert mit einem Muster) die Query/den Event-Loop lange
-# blockieren. Der Vergleich wird daher auf die ersten ``_REGEX_MAX_TARGET_LEN``
-# Zeichen begrenzt — gebounded statt blockierend.
+# blockieren. Übersteigt ein GESPEICHERTER Wert diese Grenze, wird der Filter – exakt
+# wie im Legacy-Pfad – als 422-tauglicher Validierungsfehler ABGELEHNT (nicht auf den
+# Prefix truncatet); sonst hinge das Ergebnis von der Truncation-Grenze ab.
 _REGEX_MAX_TARGET_LEN = 4096
 # Ein Quantifier direkt nach einer schließenden Gruppe: ``*``/``+``/``?`` oder ein
 # counted quantifier (``{m}``/``{m,}``/``{m,n}``). Für den Look-ahead im Scanner unten.
 _RE_TRAILING_QUANTIFIER = re.compile(r"[*+?]|\{\d+(?:,\d*)?\}")
+
+
+# Inline-Flag-Buchstaben eines ``(?flags)``/``(?flags:...)``-Präfixes (Python ``re``).
+_REGEX_INLINE_FLAG_CHARS = set("aiLmsux")
+
+
+def _skip_group_prefix(pattern: str, open_idx: int) -> int | None:
+    """Überspringt ein Regex-Extension-Präfix nach ``(`` (#951, Codex :338).
+
+    ``open_idx`` zeigt auf das ``(``. Rückgabe: der Index, ab dem der eigentliche
+    Gruppen-**Körper** beginnt (nach dem Präfix). Für einen ``(?#...)``-Kommentar –
+    der keinen scannbaren Körper hat – wird ``None`` zurückgegeben, damit der Aufrufer
+    die ganze Kommentargruppe verwirft.
+
+    Erkannte Präfixe (die Präfix-Zeichen sind KEIN Quantifier/Körper-Inhalt):
+
+    * ``(?:``                     – non-capturing
+    * ``(?P<name>`` / ``(?'name'``– named group
+    * ``(?P=name)``              – named backreference (kein Körper)
+    * ``(?i)`` / ``(?i:`` / ``(?i-s:`` … – inline flags (global oder scoped)
+    * ``(?=`` ``(?!`` ``(?<=`` ``(?<!`` – look-around
+    * ``(?>``                     – atomic group
+    * ``(?#...)``                – Kommentar (→ ``None``)
+
+    Eine gewöhnliche Gruppe (``(`` NICHT gefolgt von ``?``) hat kein Präfix; der
+    Körper beginnt direkt nach ``(`` (Rückgabe ``open_idx + 1``).
+    """
+    n = len(pattern)
+    i = open_idx + 1
+    if i >= n or pattern[i] != "?":
+        # Gewöhnliche (capturing) Gruppe – kein Präfix.
+        return i
+    i += 1  # ``?`` verbraucht
+    if i >= n:
+        return i
+    ch = pattern[i]
+    if ch == "#":
+        # Kommentar – kein scannbarer Körper.
+        return None
+    if ch == ":" or ch == ">":
+        # non-capturing / atomic – Körper folgt direkt.
+        return i + 1
+    if ch == "=" or ch == "!":
+        # look-ahead – Körper folgt direkt.
+        return i + 1
+    if ch == "P":
+        i += 1
+        if i < n and pattern[i] == "=":
+            # ``(?P=name)`` – Backreference, kein quantifizierbarer Körper. Bis ``)``.
+            while i < n and pattern[i] != ")":
+                i += 1
+            return i  # Körper ist leer; ``)`` schließt gleich
+        # ``(?P<name>`` – Namen bis ``>`` überspringen.
+        while i < n and pattern[i] != ">":
+            i += 1
+        return i + 1 if i < n else i
+    if ch == "'":
+        # ``(?'name'`` – Namen bis schließendes ``'`` überspringen.
+        i += 1
+        while i < n and pattern[i] != "'":
+            i += 1
+        return i + 1 if i < n else i
+    if ch == "<":
+        i += 1
+        if i < n and pattern[i] in "=!":
+            # look-behind ``(?<=`` / ``(?<!`` – Körper folgt.
+            return i + 1
+        # ``(?<name>`` – named group (alternative Schreibweise).
+        while i < n and pattern[i] != ">":
+            i += 1
+        return i + 1 if i < n else i
+    if ch in _REGEX_INLINE_FLAG_CHARS or ch == "-":
+        # Inline-Flags: ``(?i)`` (global) oder ``(?i:`` / ``(?i-s:`` (scoped).
+        while i < n and (pattern[i] in _REGEX_INLINE_FLAG_CHARS or pattern[i] == "-"):
+            i += 1
+        if i < n and pattern[i] == ":":
+            return i + 1  # scoped: Körper folgt nach ``:``
+        # global ``(?flags)`` – kein Körper, direkt ``)`` erwartet.
+        return i
+    # Unbekanntes Präfix – konservativ hinter dem ``?`` weiterscannen.
+    return i
 
 
 def _scan_unsafe_group_repetition(pattern: str) -> str | None:
@@ -334,8 +417,24 @@ def _scan_unsafe_group_repetition(pattern: str) -> str | None:
             i += 1  # schließende ``]``
             continue
         if ch == "(":
+            # Python-Regex-Extension-Präfixe (``(?:``, ``(?P<name>``, ``(?i:``,
+            # ``(?=``, ``(?!`` …) VOR dem Gruppen-Körper überspringen (#951, Codex :338).
+            # Sonst läse der Scanner das ``?`` (und ``<``/``=``/``!``/Flags) des Präfixes
+            # als INNEREN Quantifier/Inhalt und wiese einen sicheren Filter wie
+            # ``(?:abc)+`` fälschlich als „nested quantifiers" ab (Über-Rejection).
+            prefix_end = _skip_group_prefix(pattern, i)
+            if prefix_end is None:
+                # ``(?#...)``-Kommentar: die gesamte Gruppe ist inhaltslos und wird
+                # weder als Gruppe gestackt noch gescannt – bis zum ``)`` überspringen.
+                j = i + 1
+                while j < n and pattern[j] != ")":
+                    if pattern[j] == "\\":
+                        j += 1
+                    j += 1
+                i = j + 1  # schließende ``)`` mitüberspringen
+                continue
             stack.append([False, False])
-            i += 1
+            i = prefix_end  # nur der Körper NACH dem Präfix wird gescannt
             continue
         if ch == ")":
             frame = stack.pop() if stack else [False, False]
@@ -482,8 +581,18 @@ def _obs_json_eq_impl(raw: Any, expected_json: str) -> int:
     return 1 if decoded == expected else 0
 
 
-def _obs_regexp_impl(pattern: str, flags: int, value: Any) -> int:
-    """SQLite-Callback für gepushtes ``regex``. 1 bei Treffer, sonst 0.
+def _make_obs_regexp_impl(too_long_flag: list[bool]) -> Callable[[str, int, Any], int]:
+    """Baut den ``obs_regexp``-Callback mit einem query-gescopten Too-Long-Marker (#951, Codex :499).
+
+    ``too_long_flag`` ist eine geteilte mutable Ein-Element-Liste: trifft der Callback
+    einen Zielwert länger als ``_REGEX_MAX_TARGET_LEN``, setzt er ``too_long_flag[0]``
+    und liefert 0 (kein Treffer), damit die Query sauber durchläuft. Nach ``execute``
+    prüft ``_query_segment`` das Flag und wirft einen 422-tauglichen ``ValueError`` –
+    Parität zum Legacy-Pfad (``_match_regex`` in ringbuffer.py wirft „target value too
+    long"). Der Marker ist nötig, weil eine im SQLite-Callback GEWORFENE Exception in
+    CPython nur als generischer ``OperationalError`` („user-defined function raised
+    exception") ohne ``__cause__`` ankommt und vom Korruptions-/Quarantäne-Pfad als
+    SQL-Fehler maskiert würde, statt als Validierungsfehler zu propagieren.
 
     Das Muster ist beim Clause-Bau bereits gehärtet (Länge, nested quantifiers,
     ambiguous alternation, Kompilierbarkeit); der Query-Kontext ist gebunden
@@ -491,16 +600,22 @@ def _obs_regexp_impl(pattern: str, flags: int, value: Any) -> int:
     Worker-Thread — die Muster-Härtung VOR der Query ist daher der eigentliche
     DoS-Schutz (siehe ``_assert_safe_regex``).
     """
-    if not isinstance(value, str):  # pragma: no cover - SQL filtert bereits text_col IS NOT NULL
-        return 0
-    # Ziel-Länge begrenzen (Legacy-Parität, #951 Pkt 6): ein pathologisch langer
-    # Wert darf den synchronen Callback nicht unnötig lange scannen. ``^``-Anker
-    # bleiben korrekt, da vom Anfang gesucht wird.
-    target = value if len(value) <= _REGEX_MAX_TARGET_LEN else value[:_REGEX_MAX_TARGET_LEN]
-    try:
-        return 1 if re.compile(pattern, flags).search(target) else 0
-    except re.error:  # pragma: no cover - bereits beim Clause-Bau geprüft
-        return 0
+
+    def _impl(pattern: str, flags: int, value: Any) -> int:
+        if not isinstance(value, str):  # pragma: no cover - SQL filtert bereits text_col IS NOT NULL
+            return 0
+        # Zu langen Zielwert ABLEHNEN statt truncaten (#951, Codex :499): Legacy-Parität
+        # (siehe ``_make_obs_regexp_impl``-Docstring). Flag setzen, 0 liefern; der
+        # ValueError wird nach der Query aus dem Flag geworfen.
+        if len(value) > _REGEX_MAX_TARGET_LEN:
+            too_long_flag[0] = True
+            return 0
+        try:
+            return 1 if re.compile(pattern, flags).search(value) else 0
+        except re.error:  # pragma: no cover - bereits beim Clause-Bau geprüft
+            return 0
+
+    return _impl
 
 
 def _obs_icontains_impl(needle_lower: str, value: Any) -> int:
@@ -654,14 +769,16 @@ def _legacy_filter_matches(record: dict[str, Any], spec: dict[str, Any]) -> bool
     if not isinstance(actual, str):
         return False
     flags = re.IGNORECASE if ignore_case else 0
-    # Ziel-Länge kappen wie der v2-``_obs_regexp_impl`` (#951, Codex :376): ein
-    # pathologisch langer gespeicherter Wert darf den synchronen ``re.search`` nicht
-    # den Event-Loop blockieren lassen. Vergleich auf die ersten
-    # ``_REGEX_MAX_TARGET_LEN`` Zeichen — gebounded statt blockierend, ``^``-Anker
-    # bleiben korrekt (vom Anfang gesucht).
-    target = actual if len(actual) <= _REGEX_MAX_TARGET_LEN else actual[:_REGEX_MAX_TARGET_LEN]
+    # Zu langen Zielwert ABLEHNEN statt truncaten (#951, Codex :499): der Legacy-Pfad
+    # (``_match_regex`` in ringbuffer.py) wirft für ``len(value) > _REGEX_MAX_TARGET_LEN``
+    # einen 422-tauglichen ValueError. Würde hier stattdessen auf den Prefix gekappt und
+    # nur dieser durchsucht, hinge das Ergebnis von der Truncation-Grenze ab (ein Match
+    # nach Byte 4096 fiele still weg; ``$``-Anker matchte die künstliche Grenze) → keine
+    # Parität. Daher identisch zum Legacy ablehnen.
+    if len(actual) > _REGEX_MAX_TARGET_LEN:
+        raise ValueError("unsafe regex pattern: target value too long")
     try:
-        return re.compile(pattern, flags).search(target) is not None
+        return re.compile(pattern, flags).search(actual) is not None
     except re.error as exc:  # pragma: no cover - Muster wurde oben bereits kompiliert
         raise ValueError(f"invalid regex pattern: {exc}") from exc
 
@@ -769,6 +886,13 @@ class SqliteSegmentStore(RingBufferStore):
         self._last_checkpoint_mode: str | None = None
         self._last_checkpoint_result: str | None = None
         self._wal_checkpoint_busy_count = 0
+        # Segment-IDs, deren Basisdatei ``_delete_segment`` NICHT unlinken konnte
+        # (Permission/Lock/EBUSY), #951 [P2] :2575. Solche Bytes bleiben auf der
+        # Platte belegt, obwohl das Segment retention-eligible ist; sie dürfen im
+        # ``retention_over_budget``-Pressure-Test NICHT als freigebbar abgezogen
+        # werden (sonst meldete ``/stats`` fälschlich unter-Budget). Ein späterer
+        # erfolgreicher Delete räumt die ID wieder aus.
+        self._unlink_blocked_segment_ids: set[int] = set()
 
     def apply_config(
         self,
@@ -1001,16 +1125,22 @@ class SqliteSegmentStore(RingBufferStore):
         try:
             for offset, event in enumerate(events):
                 await self._insert_event(self._active_conn, start_id + offset, event)
+            # commit() MIT im rollback-geschützten Block (#951, Codex :1013): meldet
+            # SQLite einen Fehler WÄHREND des commit selbst (volle Disk / I/O-Fehler
+            # nach eingereihten Inserts), bliebe die Transaktion sonst offen und ihre
+            # Zeilen würden vom nächsten erfolgreichen append() auf derselben Connection
+            # MIT-committet, obwohl der Aufrufer einen Fehler sah. Insert(s) UND commit
+            # daher gemeinsam absichern.
+            await self._active_conn.commit()
         except BaseException:
             # Scheitert ein Insert mitten im Batch (z.B. nicht serialisierbare Metadaten
-            # oder ein fehlgeschlagener Metadaten-Index-Insert), bleiben die früheren
-            # Inserts sonst in der offenen Transaktion und würden vom nächsten
-            # erfolgreichen append() auf derselben Connection MIT-committet, obwohl der
-            # Aufrufer einen Fehler sah (#951, Codex :584). Aktive Transaktion daher
-            # zurückrollen – kein partieller Batch committet später.
+            # oder ein fehlgeschlagener Metadaten-Index-Insert) ODER das commit selbst,
+            # bleiben die früheren Inserts sonst in der offenen Transaktion und würden vom
+            # nächsten erfolgreichen append() auf derselben Connection MIT-committet,
+            # obwohl der Aufrufer einen Fehler sah (#951, Codex :584/:1013). Aktive
+            # Transaktion daher zurückrollen – kein partieller Batch committet später.
             await self._active_conn.rollback()
             raise
-        await self._active_conn.commit()
         await self._refresh_active_segment_stats()
         # TODO(#932/#936): hier greift später Rotation nach segment_max_* und
         # anschließend enforce_retention() auf geschlossene Segmente.
@@ -1497,11 +1627,15 @@ class SqliteSegmentStore(RingBufferStore):
 
     async def _query_segment(self, conn: aiosqlite.Connection, query: StoreQuery) -> list[dict[str, Any]]:
         sql, params = self._build_segment_sql(query)
+        # Query-gescopter Too-Long-Marker für den Regex-Callback (#951, Codex :499).
+        regex_target_too_long: list[bool] = [False]
         if any(str(f.get("operator", "")).strip().lower() == "regex" for f in query.value_filters):
             # REGEXP-Callback nur registrieren, wenn ein Regex-Filter vorliegt.
             # Registrierung erfolgt lokal auf der übergebenen Read-Connection. Das Muster
-            # wurde beim Clause-Bau bereits als safe gehärtet (#951, Codex :307).
-            await conn.create_function("obs_regexp", 3, _obs_regexp_impl, deterministic=True)
+            # wurde beim Clause-Bau bereits als safe gehärtet (#951, Codex :307). Der
+            # Callback ist NICHT mehr deterministisch registriert, weil er über den
+            # geteilten Marker einen Nebeneffekt (Too-Long-Erkennung) trägt.
+            await conn.create_function("obs_regexp", 3, _make_obs_regexp_impl(regex_target_too_long))
         if self._has_json_eq_filter(query.value_filters):
             # JSON-eq/ne-Callback nur registrieren, wenn ein komplexer (list/dict)
             # eq/ne-Filterwert vorliegt (#951, Codex :1281).
@@ -1516,6 +1650,12 @@ class SqliteSegmentStore(RingBufferStore):
             await conn.create_function("obs_num_cmp", 3, _obs_num_cmp_impl, deterministic=True)
         async with conn.execute(sql, params) as cur:
             rows = await cur.fetchall()
+        if regex_target_too_long[0]:
+            # Ein Kandidat trug einen Zielwert über ``_REGEX_MAX_TARGET_LEN`` (#951,
+            # Codex :499). Wie der Legacy-Pfad als Validierungsfehler ablehnen, statt
+            # still auf den Prefix zu truncaten – die 422-Meldung propagiert aus diesem
+            # ValueError sauber bis zur API.
+            raise ValueError("unsafe regex pattern: target value too long")
         return [self._row_to_dict(row) for row in rows]
 
     async def _query_legacy_segment(
@@ -2517,6 +2657,10 @@ class SqliteSegmentStore(RingBufferStore):
             "checkpoint_pending": sum(1 for s in segments if s.status == "checkpoint_pending"),
             "retention_over_budget": over_budget,
             "retention_pressure_reason": pressure_reason,
+            # Persistenter Delete-Fehler (#951 [P2] :2575): Segmente, deren Basisdatei
+            # nicht unlinkbar war, bleiben hier sichtbar, damit Dashboard/Admin den
+            # blockierten Retention-Zustand erkennt (nicht nur das aggregierte Flag).
+            "unlink_blocked_segment_ids": sorted(sid for sid in self._unlink_blocked_segment_ids if any(s.segment_id == sid for s in segments)),
             "storage_on_network_drive": self._storage_on_network_drive(),
             "segments": [self._segment_stat(s) for s in segments],
         }
@@ -2572,12 +2716,31 @@ class SqliteSegmentStore(RingBufferStore):
         budget = self._retention_config.max_file_size_bytes
         if budget is None:
             return False, None
-        undeletable = sum(s.size_bytes for s in segments if s.status in (SEGMENT_STATUS_ACTIVE, SEGMENT_STATUS_CHECKPOINT_PENDING))
+        undeletable_ids: set[int] = set()
+        undeletable = 0
+        for s in segments:
+            if s.status in (SEGMENT_STATUS_ACTIVE, SEGMENT_STATUS_CHECKPOINT_PENDING):
+                undeletable += s.size_bytes
+                undeletable_ids.add(s.segment_id)
         # Legacy zählt nur solange als undeletable, wie es NICHT freigebbar ist
         # (Guard greift). Sobald ein nicht-Legacy-Segment Zeilen hält, ist Legacy
         # per Size-Retention löschbar und darf das Budget nicht künstlich sprengen.
         if not await self._has_nonlegacy_data_segment():
-            undeletable += sum(s.size_bytes for s in segments if _is_legacy_segment(s))
+            for s in segments:
+                if _is_legacy_segment(s) and s.segment_id not in undeletable_ids:
+                    undeletable += s.size_bytes
+                    undeletable_ids.add(s.segment_id)
+        # Unlink-blocked Segmente (#951 [P2] :2575): ein retention-eligibles Segment,
+        # dessen Basisdatei ``_delete_segment`` NICHT unlinken konnte (Permission/Lock/
+        # EBUSY), belegt seine Bytes weiter auf der Platte und blockiert jeden Pass an
+        # derselben Datei. Seine Bytes werden daher NICHT als freigebbar abgezogen,
+        # sonst meldete ``retention_over_budget=false`` trotz real über-Budget-Store
+        # (konsistent zum Signalmodell Fall B: nicht löschbare non-legacy Segmente über
+        # Budget = rot).
+        for s in segments:
+            if s.segment_id in self._unlink_blocked_segment_ids and s.segment_id not in undeletable_ids:
+                undeletable += s.size_bytes
+                undeletable_ids.add(s.segment_id)
         if undeletable > budget:
             return True, "max_file_size_bytes exceeded by non-deletable segments"
         return False, None
@@ -3015,11 +3178,18 @@ class SqliteSegmentStore(RingBufferStore):
             base_removed = self._unlink_with_sidecars(self._segments_dir / segment.filename)
         if not base_removed:
             # Basisdatei blieb liegen → Zeile behalten, Retention versucht es erneut.
+            # Segment als unlink-blocked markieren (#951 [P2] :2575), damit seine Bytes
+            # im ``retention_over_budget``-Pressure-Test als NICHT-freigebbar zählen –
+            # sonst meldete ``/stats`` unter-Budget, obwohl der Store über
+            # ``max_file_size_bytes`` bleibt und jeder Pass an derselben Datei blockiert.
+            self._unlink_blocked_segment_ids.add(segment.segment_id)
             _LOGGER.warning(
                 "retention: base segment file for segment_id=%s could not be removed; keeping manifest entry for retry",
                 segment.segment_id,
             )
             return False
+        # Erfolgreich gelöscht → evtl. früherer unlink-blocked-Zustand ist aufgehoben.
+        self._unlink_blocked_segment_ids.discard(segment.segment_id)
         await self.manifest.delete_segment(segment.segment_id)
         return True
 

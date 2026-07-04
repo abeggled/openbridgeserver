@@ -252,13 +252,18 @@ async def test_unwindowed_regex_callback_is_bounded(store: SqliteSegmentStore, m
     import obs.ringbuffer.store.sqlite_backend as backend
 
     calls = {"n": 0}
-    orig = backend._obs_regexp_impl
+    orig_factory = backend._make_obs_regexp_impl
 
-    def _counting(pattern, flags, value):
-        calls["n"] += 1
-        return orig(pattern, flags, value)
+    def _counting_factory(too_long_flag):
+        inner = orig_factory(too_long_flag)
 
-    monkeypatch.setattr(backend, "_obs_regexp_impl", _counting)
+        def _counting(pattern, flags, value):
+            calls["n"] += 1
+            return inner(pattern, flags, value)
+
+        return _counting
+
+    monkeypatch.setattr(backend, "_make_obs_regexp_impl", _counting_factory)
 
     cap = 50
     query = StoreQuery(limit=10, candidate_cap=cap, value_filters=[{"operator": "regex", "field": "new_value", "pattern": "NO_MATCH_[0-9]{9}"}])
@@ -694,15 +699,15 @@ async def _attach_legacy_db(store: SqliteSegmentStore, db: Path) -> None:
     await migrator.attach_readonly(migrator.classify())
 
 
-def test_legacy_regex_caps_target_length_before_search(monkeypatch):
-    # Parität zum v2-``_obs_regexp_impl``: der Legacy-Python-Regex-Pfad
-    # (_legacy_filter_matches) darf ``re.search`` NICHT über einen beliebig langen
-    # gespeicherten Wert laufen lassen, sonst blockiert der synchrone Vergleich den
-    # Event-Loop. Das Ziel wird auf die ersten ``_REGEX_MAX_TARGET_LEN`` Zeichen
-    # gekappt – wie der v2-Callback.
+def test_legacy_regex_rejects_long_target_before_search(monkeypatch):
+    # Parität zum Legacy-``_match_regex`` (#951, Codex :499): ein gespeicherter Wert
+    # über ``_REGEX_MAX_TARGET_LEN`` wird als 422-tauglicher ValueError ABGELEHNT –
+    # NICHT auf den Prefix truncatet-und-durchsucht. Sonst hinge das Ergebnis von der
+    # Truncation-Grenze ab (Treffer hinter Byte 4096 fiele still weg). ``re.search``
+    # darf für einen zu langen Wert gar nicht erst laufen.
     import obs.ringbuffer.store.sqlite_backend as backend
 
-    seen = {"len": None}
+    searched = {"n": 0}
     real_compile = backend.re.compile
 
     class _Spy:
@@ -710,7 +715,7 @@ def test_legacy_regex_caps_target_length_before_search(monkeypatch):
             self._inner = inner
 
         def search(self, target):
-            seen["len"] = len(target)
+            searched["n"] += 1
             return self._inner.search(target)
 
     def _spy_compile(pattern, flags=0):
@@ -718,22 +723,25 @@ def test_legacy_regex_caps_target_length_before_search(monkeypatch):
 
     monkeypatch.setattr(backend.re, "compile", _spy_compile)
 
-    # Ein Muster, das erst weit hinter dem Cap treffen würde, plus ein sehr langer Wert.
     huge = "a" * (backend._REGEX_MAX_TARGET_LEN + 5000) + "NEEDLE"
     record = {"new_value": huge}
     spec = {"operator": "regex", "field": "new_value", "pattern": "NEEDLE"}
-    result = backend._legacy_filter_matches(record, spec)
+    # Kein ``match=``-Argument: pytest.raises würde dessen Regex mit dem gepatchten
+    # ``re.compile``-Spy kompilieren. Die Meldung wird separat geprüft.
+    with pytest.raises(ValueError) as excinfo:
+        backend._legacy_filter_matches(record, spec)
+    assert "target value too long" in str(excinfo.value)
 
-    # Ohne Cap sähe re.search den vollen Wert (len == len(huge)) und würde den Treffer
-    # jenseits des Caps finden. Mit Cap ist das Ziel gebounded und der Treffer hinter
-    # dem Cap wird – wie beim v2-Callback – bewusst NICHT gefunden.
-    assert seen["len"] == backend._REGEX_MAX_TARGET_LEN
-    assert result is False
+    # Der zu lange Wert wird VOR dem Scan abgelehnt – kein re.search-Aufruf.
+    assert searched["n"] == 0
 
 
-async def test_legacy_regex_cap_matches_v2_semantics(store: SqliteSegmentStore, tmp_path: Path):
-    # End-to-end über eine eingehängte Legacy-DB: ein Treffer INNERHALB des Caps wird
-    # gefunden, ein Treffer erst JENSEITS des Caps nicht (gebundener Ziel-Scan).
+async def test_legacy_regex_long_target_rejected_matches_v2_semantics(store: SqliteSegmentStore, tmp_path: Path):
+    # End-to-end über eine eingehängte Legacy-DB (#951, Codex :499): liegt im Scope ein
+    # gespeicherter Wert über ``_REGEX_MAX_TARGET_LEN``, wird der Regex-Filter als
+    # Validierungsfehler abgelehnt – exakt wie der Legacy-``_match_regex`` und der
+    # v2-Pushdown. Ein truncated-Prefix-Scan (Ergebnis von der Grenze abhängig) wäre
+    # keine Parität.
     from obs.ringbuffer.store.sqlite_backend import _REGEX_MAX_TARGET_LEN
 
     within = "MATCH" + "x" * 10
@@ -748,10 +756,8 @@ async def test_legacy_regex_cap_matches_v2_semantics(store: SqliteSegmentStore, 
     )
     await _attach_legacy_db(store, db)
 
-    rows = await store.query(StoreQuery(limit=10, candidate_cap=100, value_filters=[{"operator": "regex", "field": "new_value", "pattern": "MATCH"}]))
-    values = {r["new_value"] for r in rows}
-    assert within in values
-    assert beyond not in values
+    with pytest.raises(ValueError, match="target value too long"):
+        await store.query(StoreQuery(limit=10, candidate_cap=100, value_filters=[{"operator": "regex", "field": "new_value", "pattern": "MATCH"}]))
 
 
 # ---------------------------------------------------------------------------

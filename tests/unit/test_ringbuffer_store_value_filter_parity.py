@@ -466,16 +466,17 @@ def test_legacy_metadata_matches_unknown_binding_column_never_matches():
 # ---------------------------------------------------------------------------
 
 
-async def test_regex_long_target_stays_bounded(store: SqliteSegmentStore):
-    # Sehr langer Zielstring: der Callback darf ihn nicht ungebremst gegen ein
-    # backtracking-lastiges Muster laufen lassen. Ergebnis muss trotzdem korrekt
-    # (kein Treffer eines am Ende stehenden Tokens jenseits der Ziel-Länge) und
-    # schnell sein.
-    long_no_match = "a" * 100_000
-    await store.append([_event(long_no_match, "2026-01-01T00:00:00.000Z")])
+async def test_regex_long_target_rejected(store: SqliteSegmentStore):
+    # Sehr langer Zielstring (#951, Codex :499): der Callback darf ihn nicht ungebremst
+    # gegen ein Muster laufen lassen. Wie der Legacy-Pfad wird ein Wert über
+    # ``_REGEX_MAX_TARGET_LEN`` als 422-tauglicher Validierungsfehler ABGELEHNT (statt
+    # truncatet-und-durchsucht), sodass das Ergebnis nicht von der Truncation-Grenze
+    # abhängt.
+    long_value = "a" * 100_000
+    await store.append([_event(long_value, "2026-01-01T00:00:00.000Z")])
     window = {"from_ts": "2026-01-01T00:00:00.000Z", "to_ts": "2026-01-01T01:00:00.000Z"}
-    rows = await store.query(StoreQuery(limit=10, value_filters=[{"operator": "regex", "pattern": r"b+c"}], **window))
-    assert rows == []
+    with pytest.raises(ValueError, match="target value too long"):
+        await store.query(StoreQuery(limit=10, value_filters=[{"operator": "regex", "pattern": r"b+c"}], **window))
 
 
 async def test_regex_nested_quantifier_pattern_rejected(store: SqliteSegmentStore):
@@ -487,19 +488,22 @@ async def test_regex_nested_quantifier_pattern_rejected(store: SqliteSegmentStor
         await store.query(StoreQuery(limit=10, value_filters=[{"operator": "regex", "pattern": r"(a+)+$"}], **window))
 
 
-async def test_regex_match_within_target_len_boundary(store: SqliteSegmentStore):
-    # Ein Treffer innerhalb der ersten _REGEX_MAX_TARGET_LEN Zeichen wird gefunden;
-    # ein Token JENSEITS der Grenze wird (gebounded) NICHT gematcht.
+async def test_regex_target_len_boundary(store: SqliteSegmentStore):
+    # #951, Codex :499: ein Wert innerhalb ``_REGEX_MAX_TARGET_LEN`` wird regulär
+    # gematcht; liegt im Scope ein Wert JENSEITS der Grenze, wird der Regex-Filter als
+    # Validierungsfehler abgelehnt (Legacy-Parität), statt truncatet-und-durchsucht.
     from obs.ringbuffer.store.sqlite_backend import _REGEX_MAX_TARGET_LEN
 
     within = "x" * 10 + "TOKEN" + "y" * 10
-    beyond = "z" * (_REGEX_MAX_TARGET_LEN + 50) + "TOKEN"
-    await store.append(
-        [
-            _event(within, "2026-01-01T00:00:00.000Z"),
-            _event(beyond, "2026-01-01T00:00:01.000Z"),
-        ]
-    )
     window = {"from_ts": "2026-01-01T00:00:00.000Z", "to_ts": "2026-01-01T01:00:00.000Z"}
+
+    # Nur der kurze Wert im Scope → regulärer Treffer.
+    await store.append([_event(within, "2026-01-01T00:00:00.000Z")])
     rows = await store.query(StoreQuery(limit=10, value_filters=[{"operator": "regex", "pattern": "TOKEN"}], **window))
     assert {r["new_value"] for r in rows} == {within}
+
+    # Ein zu langer Wert im Scope → Ablehnung (kein Prefix-Scan).
+    beyond = "z" * (_REGEX_MAX_TARGET_LEN + 50) + "TOKEN"
+    await store.append([_event(beyond, "2026-01-01T00:00:01.000Z")])
+    with pytest.raises(ValueError, match="target value too long"):
+        await store.query(StoreQuery(limit=10, value_filters=[{"operator": "regex", "pattern": "TOKEN"}], **window))
