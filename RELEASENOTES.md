@@ -34,6 +34,7 @@
 * Visu: Link widget: the navigation arrow (→) can now be hidden independently of the icon via the "show_arrow" option (default: shown).
 
 ### Fixes 🐞
+* Security (Upstream PR #955): keep updater checksum notes compatible with legacy app-bundle verification.
 * Security (Upstream PR #954): prevent API-client URL variables from changing request authority.
 * Security (Upstream PR #952): prevent MQTT writes from mutating bindingless internal datapoints.
 * QA/CI: The i18n hard gate now runs reliably with macOS Bash 3.2 when no explicit diff range is provided, avoiding local pre-push failures caused by empty Bash arrays. https://github.com/abeggled/openbridgeserver/pull/898
