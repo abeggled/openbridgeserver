@@ -892,6 +892,15 @@ class SqliteSegmentStore(RingBufferStore):
         # werden (sonst meldete ``/stats`` fälschlich unter-Budget). Ein späterer
         # erfolgreicher Delete räumt die ID wieder aus.
         self._unlink_blocked_segment_ids: set[int] = set()
+        # #951 [P2] Runde 42: Cache je immutable ``closed``-Segment, ob seine Zeilen
+        # NEGATIVE ``global_event_id``s tragen (verwaister, vor ``mark_migrated``
+        # gecrashter Migrations-Chunk). Solche Segmente stehen mangels ``legacy``/
+        # ``migrated``-Status im positiven Query-Prefix und dürfen die
+        # ``id desc``-Early-Termination NICHT früh abbrechen. Ein ``closed``-Segment
+        # ist immutable (Rotate schreibt nie mehr hinein), daher ist das MIN(gid)-
+        # Ergebnis stabil cachebar – ein bounded Read je solchem Segment und danach
+        # kostenlos. Der Cache wird beim erfolgreichen Delete (Retention) mitgeräumt.
+        self._segment_negative_gid_cache: dict[int, bool] = {}
 
     def apply_config(
         self,
@@ -1331,6 +1340,28 @@ class SqliteSegmentStore(RingBufferStore):
         # ``offset+limit``-bounded gelesen und der finale Sort nach ``global_event_id`` in
         # ``query()`` ordnet korrekt (positive vor negative gid). Bei abweichender
         # Sortierung (``ts``/``asc``) greift der Frühabbruch gar nicht.
+        #
+        # Verwaiste negative-gid-``closed``-Chunks (#951 [P2] Runde 42, Codex :1886):
+        # crasht eine Migration NACH dem Detach der Quelle, aber VOR ``mark_migrated``,
+        # bleiben rein-negative-gid-``closed``-Segmente im Manifest. ``list_segments_for_query``
+        # schiebt nur ``legacy``/``migrated`` in den Trailing-Rang, sodass so ein Chunk mit
+        # seiner hohen ``segment_id`` im POSITIVEN Prefix ZUERST gelesen wird. Eine
+        # ``id desc``-latest-page könnte damit die ältesten migrierten (negativen) Zeilen
+        # sammeln und früh terminieren, BEVOR echte positive v2-Segmente/der Legacy-Tail
+        # gelesen werden → migrierte Historie erschiene als „latest".
+        #
+        # Source-UNABHÄNGIGER, LAZY Fix (bounded): nicht vorab alle Prefix-Segmente öffnen
+        # (das bräche die #932-Garantie „nicht alle Segmente öffnen"), sondern die bereits
+        # GELESENEN Zeilen eines Segments auf negative gids prüfen – das kostet KEINEN
+        # zusätzlichen Open. Trägt ein gerade gelesenes Segment negative gids, wird
+        # ``entered_legacy_tail`` gesetzt: der Frühabbruch ist danach gesperrt, sodass die
+        # noch folgenden ECHTEN positiven v2-Segmente ebenfalls gelesen werden. Der finale
+        # ``global_event_id``-Sort in ``query()`` ordnet dann positiv vor negativ und die
+        # latest-page liefert die echten positiven Zeilen. Da der negative Chunk mit hoher
+        # ``segment_id`` ZUERST iteriert wird, greift die Sperre rechtzeitig (vor dem ersten
+        # ``break``). Das je immutable ``closed``-Segment gecachte Ergebnis
+        # (``_segment_negative_gid_cache``) spart die Re-Inspektion bei Folge-Queries, ohne je
+        # ein Segment zusätzlich zu öffnen.
         allow_early_termination = query.sort_field == "id" and query.sort_order == "desc"
         entered_legacy_tail = False
         for segment in segments:
@@ -1344,7 +1375,32 @@ class SqliteSegmentStore(RingBufferStore):
             rows = await self._read_segment_rows(segment, query)
             if rows is not None:
                 collected.extend(rows)
+                # Verwaisten negativen Chunk am gerade gelesenen Ergebnis erkennen (kein
+                # zusätzlicher Open) und den Frühabbruch für den Rest sperren (#951 R42).
+                if not entered_legacy_tail and self._rows_carry_negative_gid(segment, rows):
+                    entered_legacy_tail = True
         return collected
+
+    def _rows_carry_negative_gid(self, segment: SegmentRecord, rows: list[dict[str, Any]]) -> bool:
+        """True, wenn die gerade gelesenen Zeilen negative ``global_event_id``s tragen (#951 [P2] R42).
+
+        Erkennt verwaiste Migrations-Chunks (Crash nach Detach, vor ``mark_migrated``) am
+        bereits gefetchten Ergebnis – ohne das Segment erneut zu öffnen. Legacy/migrated
+        werden hier nie geprüft (sie sind schon im Trailing-Rang).
+
+        Cache-Vorsicht: ``rows`` ist eine gefilterte/gebundene Teilmenge (Value-Filter,
+        LIMIT). Ein NEGATIV-Treffer ist definitiv und wird je immutable ``closed``-Segment
+        gecacht (Rotate schreibt nie mehr hinein). Ein leeres/rein-positives Filter-Ergebnis
+        beweist dagegen NICHT, dass das Segment keine negativen gids hält – ``False`` wird
+        deshalb NIE gecacht, sonst würde eine spätere ungefilterte Query fälschlich als
+        positiv behandelt.
+        """
+        if segment.status == SEGMENT_STATUS_CLOSED and self._segment_negative_gid_cache.get(segment.segment_id):
+            return True
+        result = any(r.get("global_event_id", 0) < 0 for r in rows)
+        if result and segment.status == SEGMENT_STATUS_CLOSED:
+            self._segment_negative_gid_cache[segment.segment_id] = True
+        return result
 
     async def _read_segment_rows(self, segment: SegmentRecord, query: StoreQuery) -> list[dict[str, Any]] | None:
         """Liest ein einzelnes Segment; quarantäniert es on-the-fly bei Korruption (#919).
@@ -2848,7 +2904,22 @@ class SqliteSegmentStore(RingBufferStore):
         for segment in await self.manifest.list_checkpoint_pending_segments():
             segment_path = self._segments_dir / segment.filename
             if not segment_path.exists():
-                # Datei vor dem Retry verschwunden → NICHT neu anlegen, überspringen.
+                # Datei vor dem Retry verschwunden (#951 [P2] Runde 42, sqlite_backend :2852):
+                # ein reines ``continue`` ließe die Manifest-Zeile für immer
+                # ``checkpoint_pending`` – retention-UNfähig – und ``_retention_pressure``
+                # zählte ihre stale ``size_bytes`` dauerhaft als non-deletable, sodass der
+                # Store permanent über Budget bliebe, ohne dass ``enforce_retention()``
+                # Fortschritt machen kann. Ein pending-Segment, dessen Datei fehlt UND das
+                # Zeilen erwartet, wird daher als verloren quarantäniert (konsistent zur
+                # missing-/leeren-Datei-Behandlung Codex :1830/:2220). Danach zählen seine
+                # Bytes nicht mehr als non-deletable und die FIFO-Retention räumt die Zeile.
+                # NICHT neu anlegen; ein leeres (row_count<=0) pending-Segment ohne Datei
+                # wird nur übersprungen (keine Historie verloren).
+                if segment.row_count > 0:
+                    await self.manifest.mark_quarantined(
+                        segment.segment_id,
+                        reason="checkpoint_pending base file missing but manifest expects rows",
+                    )
                 continue
             try:
                 conn = await aiosqlite.connect(str(segment_path))
@@ -3229,6 +3300,8 @@ class SqliteSegmentStore(RingBufferStore):
             return False
         # Erfolgreich gelöscht → evtl. früherer unlink-blocked-Zustand ist aufgehoben.
         self._unlink_blocked_segment_ids.discard(segment.segment_id)
+        # Negative-gid-Cache (#951 [P2] R42) für die entfernte segment_id miträumen.
+        self._segment_negative_gid_cache.pop(segment.segment_id, None)
         await self.manifest.delete_segment(segment.segment_id)
         return True
 

@@ -1157,8 +1157,13 @@ async def test_run_pending_checkpoints_skips_missing_file_without_recreate(store
     assert recovered == 0
     assert not seg_path.exists()  # keine leere Ersatz-DB angelegt
     seg_after = await store.manifest.get_segment(pending_id)
-    # Segment bleibt pending (nicht fälschlich als done markiert).
-    assert seg_after.status == SEGMENT_STATUS_CHECKPOINT_PENDING
+    # Runde 42 [P2] (sqlite_backend :2852): ein pending-Segment mit fehlender Datei UND
+    # erwarteten Zeilen wird als verloren quarantänisiert – NICHT ewig übersprungen und
+    # NICHT fälschlich als checkpoint_done markiert. So zählen seine Bytes nicht mehr als
+    # non-deletable und die FIFO-Retention kann die verwaiste Zeile räumen.
+    from obs.ringbuffer.store.manifest import SEGMENT_STATUS_QUARANTINED
+
+    assert seg_after.status == SEGMENT_STATUS_QUARANTINED
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ import asyncio
 from contextlib import suppress
 import csv
 import json
+import logging
 import re
 import tempfile
 import time
@@ -50,6 +51,8 @@ from obs.ringbuffer.ringbuffer import (
     reset_ringbuffer,
     set_ringbuffer_enabled,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ringbuffer"])
 
@@ -2173,7 +2176,7 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             segment_max_rows=resolved_segment_max_rows,
             segment_max_age=resolved_segment_max_age,
         )
-    except Exception:
+    except Exception as exc:
         if created_rb and rb is not None:
             if subscribed_new:
                 _unsubscribe_ringbuffer(rb)
@@ -2194,10 +2197,8 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
         # Modus-Switch-Rebuild gescheitert (#951, Pkt 2): der alte Buffer wurde
         # bereits abgebaut. Damit immer ein funktionierender Buffer läuft, den
         # vorherigen Zustand im ALTEN Modus re-initialisieren und neu subscriben.
-        # Best-effort: schlägt auch das fehl, bleibt der ursprüngliche Fehler
-        # maßgeblich (kein neuer Zustand wird vorgetäuscht).
         if switch_prev_config is not None:
-            with suppress(Exception):
+            try:
                 restored = await init_ringbuffer(
                     storage=switch_prev_config["storage"],
                     max_entries=switch_prev_config["max_entries"],
@@ -2211,6 +2212,31 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 )
                 _subscribe_ringbuffer(restored)
                 set_ringbuffer_enabled(True)
+            except Exception as restore_exc:
+                # Auch das Restore des alten Buffers ist gescheitert (#951 [P2]:
+                # "Report failed mode-switch rollbacks"). Der alte Buffer ist bereits
+                # gestoppt+ge-``reset``, ein neuer konnte nicht aufgebaut werden → der
+                # Store läuft jetzt DEGRADIERT (kein Buffer, deaktiviert): Recording
+                # steht, Query-Endpunkte liefern disabled/500, bis ein Neustart oder ein
+                # weiterer Config-Call kommt. Diesen Zustand NICHT verschlucken, sondern
+                # deterministisch setzen und dem Aufrufer SICHTBAR melden – sonst sähe der
+                # Betreiber nur den ursprünglichen Config-Fehler und wüsste nicht, dass der
+                # Store degradiert ist.
+                reset_ringbuffer()
+                set_ringbuffer_enabled(False)
+                logger.error(
+                    "RingBuffer mode-switch rollback failed: neither the reconfigured buffer "
+                    "nor the previous buffer could be restored; store is now disabled with no "
+                    "active buffer (original error: %r)",
+                    exc,
+                    exc_info=restore_exc,
+                )
+                raise HTTPException(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    "ringbuffer mode-switch failed and rollback to the previous buffer also "
+                    f"failed: the store is now disabled with no active buffer. "
+                    f"config error: {exc!s}; rollback error: {restore_exc!s}",
+                ) from restore_exc
         raise
     # Persistierte Segment-Config in die Response spiegeln (wie GET /stats),
     # damit das Config-Modal nach dem Speichern die GESPEICHERTEN Werte
