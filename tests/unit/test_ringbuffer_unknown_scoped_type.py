@@ -1,18 +1,14 @@
 """Scoped Value-Filter über GELÖSCHTE Datapoints: unbekannter Typ → 422 (#919, Review #951).
 
-Codex-Finding (``ringbuffer.py`` :2227, Follow-up auf Runde 28/29/30): Liefert die
-scoped Discovery einen historischen Datapoint, der NICHT (mehr) in der Registry
-(``datapoint_types``) ist, wird ``datapoint_types.get(dp_id)`` zu einem LEEREN Typ.
-Der Validator ``_validate_segmented_value_filter_types`` lehnte bisher für non-``eq``/
-``ne``-Filter nur BEKANNTE STRING/BOOLEAN-Typen ab. Ein leerer/unbekannter Kandidaten-
-Typ rutschte durch → der segmentierte Pfad pushte trotzdem ein numerisches SQL-Prädikat
-und droppte string/bool-Zeilen des gelöschten Datapoints STILL.
+Ein historischer Datapoint, der NICHT (mehr) in der Registry (``datapoint_types``) ist,
+hat einen LEEREN Typ. Der Legacy-Pfad ist row-lazy: bei leerem ``data_type`` leitet er
+den Typ aus dem Zeilenwert ab (``_is_string_type``/``_is_boolean_type``) und wirft für
+eine STRING-/BOOLEAN-Zeile unter ``gt``/``between`` einen ``ValueError`` (→ 422).
 
-Der Legacy-Pfad ist dagegen row-lazy: bei leerem ``data_type`` leitet er den Typ aus
-dem Zeilenwert ab (``_is_string_type``/``_is_boolean_type``) und wirft für eine
-STRING-/BOOLEAN-Zeile unter ``gt``/``between`` einen ``ValueError`` (→ 422). Da der
-segmentierte Pfad den Row-Wert beim Pushdown nicht kennt, ist die konservative
-Ablehnung (422) die parität-wahrende Wahl statt still numerisch zu pushen.
+Nach dem Wurzel-Refactor wertet der segmentierte Pfad Value-Filter row-lazy über die
+gebundene Kandidatenmenge aus (``_apply_value_filters`` / ``_matches_value_filter``) –
+also mit derselben row-lazy Typableitung wie Legacy. Eine STRING-/BOOLEAN-Zeile eines
+gelöschten Datapoints INNERHALB der Kandidatenmenge erzwingt damit 422 wie Legacy.
 
 Diese Suite fixiert:
 

@@ -1,32 +1,17 @@
-"""q-scoped EXPORT: Typ-Discovery erschöpfend (is_export durchgereicht) (#919, Review #951).
+"""q-scoped Value-Filter: row-lazy Typprüfung über die gebundene Kandidatenmenge (#919, Review #951).
 
-Codex-Finding (``ringbuffer.py`` :1437, Follow-up auf Runde 29): Die scoped Typ-
-Discovery (``_scope_candidate_datapoint_ids``) baute ihre ``StoreQuery`` IMMER mit
-``is_export=False`` – auch wenn der Aufrufer einen CSV-Export (``is_export=True``)
-fährt. Für einen ``q``-scoped Export mit Value-Filter legt der Store den Freitext-
-``q``-OR-Block als Guarded-Filter auf die gedeckelte Kandidatenmenge (neueste
-``_SEGMENTED_CANDIDATE_CAP`` Zeilen je Segment). Sind diese neuesten Kandidaten
-numerisch, existiert aber – jenseits des Caps – ein ÄLTERER ``q``-matchender STRING/
-BOOLEAN-Datapoint, so entging dieser der Discovery: der eigentliche Export inlinet
-``q`` (erschöpfend), pusht das numerische Prädikat und dropt die inkompatiblen Zeilen
-STILL, statt das Legacy-422 zu werfen.
-
-Fix: Der Aufrufer-Export-Modus (``is_export``) wird in die Discovery-``StoreQuery``
-durchgereicht. Beim Export läuft die Discovery damit erschöpfend (kein Freitext-
-``q``-Cap) und erkennt den älteren inkompatiblen Datapoint → korrektes 422 (Parität
-zum Legacy). Für den Nicht-Export-Monitorpfad bleibt die bisherige (gedeckelte)
-Discovery – KEIN neuer unbounded Scan.
+Nach dem Wurzel-Refactor läuft die Value-Filter-Typprüfung für einen ``q``-Scope
+row-lazy über die gebundene Kandidatenmenge, exakt wie ``segmented=False``. Eine
+inkompatible ``q``-matchende Zeile INNERHALB dieser Menge (Cap/Zeitfenster) erzwingt
+422 – identisch zum Legacy-Pfad. Eine inkompatible Zeile JENSEITS des Caps in einer
+riesigen Historie wird bewusst NICHT gescannt (bounded Store); das ist die
+dokumentierte, gewollte Divergenz des Refactors und gilt für Monitor UND Export.
 
 Diese Suite fixiert:
 
-* ``q``-scoped EXPORT ``gt``/``between``; viele neue numerische ``q``-Treffer UND
-  (jenseits des Row-Caps) ein älterer ``q``-matchender STRING-Datapoint → 422.
-* Gegentest: derselbe ``q``-scoped Filter als NICHT-Export-Monitor → bisheriges
-  gedeckeltes Verhalten (kein 422, weil der alte Datapoint jenseits des Caps liegt).
+* ``q``-scoped ``gt``/``between`` (Monitor und Export); die ältere ``q``-matchende
+  STRING-Zeile liegt INNERHALB des Caps → 422, identisch zu ``segmented=False``.
 * Regression: rein-numerischer ``q``-Export → kein 422, korrektes Ergebnis.
-
-Der Row-Cap wird auf einen kleinen Wert gemonkeypatcht, um „jenseits des Caps" ohne
-10k reale Zeilen zu simulieren.
 """
 
 from __future__ import annotations
@@ -35,7 +20,6 @@ from pathlib import Path
 
 import pytest
 
-import obs.ringbuffer.ringbuffer as ringbuffer_module
 from obs.ringbuffer.ringbuffer import RingBuffer
 
 
@@ -69,26 +53,18 @@ _TYPES = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _tiny_candidate_cap(monkeypatch):
-    """Row-Cap klein setzen, um „jenseits des Caps" ohne 10k reale Zeilen zu simulieren."""
-    monkeypatch.setattr(ringbuffer_module, "_SEGMENTED_CANDIDATE_CAP", 3, raising=True)
-
-
 async def _make_rb_old_string_new_numeric(tmp_path: Path, *, segmented: bool) -> RingBuffer:
-    """Älterer ``q``-matchender STRING-Datapoint + viele neuere numerische ``q``-Treffer.
+    """Älterer ``q``-matchender STRING-Datapoint + weitere numerische ``q``-Treffer.
 
-    Die STRING-Zeile (``sensor-str``) ist die ÄLTESTE; danach folgen mehr numerische
-    Zeilen (``sensor-num``) als der (klein gemonkeypatchte) Row-Cap. Ein row-gecappter
-    Discovery-Scan (neueste zuerst) sieht damit nur die numerischen Zeilen und übersieht
-    die alte STRING-Zeile.
+    Die STRING-Zeile (``sensor-str``) ist die ÄLTESTE; danach folgen weitere numerische
+    Zeilen (``sensor-num``). Alle Zeilen liegen INNERHALB des (default) Row-Caps, also in
+    der gebundenen Kandidatenmenge – die row-lazy Typprüfung sieht damit auch die alte
+    STRING-Zeile, exakt wie ``segmented=False``.
     """
     rb = _rb(tmp_path, segmented=segmented)
     await rb.start()
     # Älteste Zeile: STRING-Datapoint, matcht ``q="sensor"``.
     await _record(rb, "hello", "2026-01-01T00:00:00.000Z", datapoint_id="sensor-str", adapter="mixed-adapter")
-    # Danach mehr numerische Zeilen als der Row-Cap (=3): jenseits des Caps liegt die
-    # STRING-Zeile.
     for i in range(1, 8):
         await _record(rb, i, f"2026-01-01T00:00:{i:02d}.000Z", datapoint_id="sensor-num", adapter="mixed-adapter")
     return rb
@@ -104,18 +80,16 @@ async def _make_rb_numeric_only(tmp_path: Path, *, segmented: bool) -> RingBuffe
 
 
 # ---------------------------------------------------------------------------
-# Case A: q-scoped EXPORT erkennt den alten STRING-Datapoint jenseits des Caps → 422
+# Case A: q-scoped erkennt den STRING-Datapoint INNERHALB des Caps → 422 (In-Cap-Parität)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_q_scoped_export_gt_detects_old_string_beyond_cap(tmp_path: Path):
-    """``q``-scoped EXPORT ``gt``; alte STRING-Zeile jenseits des Row-Caps → 422.
+async def test_q_scoped_export_gt_detects_string_in_cap(tmp_path: Path):
+    """``q``-scoped EXPORT ``gt``; STRING-Zeile INNERHALB des Caps → 422.
 
-    Legacy ist row-lazy und typ-checkt auch die alte STRING-Zeile → ValueError. Der
-    segmentierte Export-Pfad muss identisch 422 liefern: mit durchgereichtem
-    ``is_export=True`` diskovert die Discovery den ``q``-Scope erschöpfend und sieht
-    den älteren inkompatiblen Datapoint.
+    Legacy ist row-lazy und typ-checkt die STRING-Zeile → ValueError. Der segmentierte
+    Export-Pfad wertet dieselbe gebundene Kandidatenmenge row-lazy aus → identisch 422.
     """
     legacy = await _make_rb_old_string_new_numeric(tmp_path / "legacy", segmented=False)
     seg = await _make_rb_old_string_new_numeric(tmp_path / "seg", segmented=True)
@@ -131,33 +105,24 @@ async def test_q_scoped_export_gt_detects_old_string_beyond_cap(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_q_scoped_export_between_detects_old_string_beyond_cap_with_offset(tmp_path: Path):
-    """``q``-scoped EXPORT ``between`` mit Offset: der alte STRING-Datapoint erzwingt 422."""
+async def test_q_scoped_export_between_detects_string_in_cap_with_offset(tmp_path: Path):
+    """``q``-scoped EXPORT ``between`` mit Offset: die STRING-Zeile in der Kandidatenmenge erzwingt 422."""
+    legacy = await _make_rb_old_string_new_numeric(tmp_path / "legacy", segmented=False)
     seg = await _make_rb_old_string_new_numeric(tmp_path / "seg", segmented=True)
     try:
         vf = [{"operator": "between", "lower": 0, "upper": 100}]
         with pytest.raises(ValueError):
+            await legacy.query_v2(q="sensor", value_filters=vf, datapoint_types=_TYPES, limit=10, offset=2, is_export=True)
+        with pytest.raises(ValueError):
             await seg.query_v2(q="sensor", value_filters=vf, datapoint_types=_TYPES, limit=10, offset=2, is_export=True)
     finally:
+        await legacy.stop()
         await seg.stop()
 
 
-# ---------------------------------------------------------------------------
-# Gegentest: NICHT-Export-Monitor bleibt gedeckelt (kein 422, kein unbounded-Scan)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_q_scoped_monitor_detects_old_string_like_legacy(tmp_path: Path):
-    """Derselbe ``q``-scoped Filter als NICHT-Export-Monitor: 422 wie Legacy (Runde 33).
-
-    Runde 33 (Codex Perf/:2260): Die Discovery läuft jetzt über eine STORE-Level
-    ``SELECT DISTINCT datapoint_id``-Query statt Row-Pagination. Sie ist durch die
-    ANZAHL DISTINKTER Datapoints begrenzt, NICHT durch einen Row-Cap – der frühere
-    „jenseits des Row-Caps unsichtbar"-Blindfleck existiert nicht mehr. Der ältere
-    ``q``-matchende STRING-Datapoint wird auch im NICHT-Export-Monitor diskovert →
-    422, exakt wie der row-lazy Legacy-Pfad (kein stiller numerischer Drop mehr).
-    """
+async def test_q_scoped_monitor_detects_string_in_cap_like_legacy(tmp_path: Path):
+    """Derselbe ``q``-scoped Filter als NICHT-Export-Monitor: STRING in-cap → 422 wie Legacy."""
     legacy = await _make_rb_old_string_new_numeric(tmp_path / "legacy", segmented=False)
     seg = await _make_rb_old_string_new_numeric(tmp_path / "seg", segmented=True)
     try:

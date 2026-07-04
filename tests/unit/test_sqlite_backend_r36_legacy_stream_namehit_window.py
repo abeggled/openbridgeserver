@@ -1,12 +1,8 @@
 """Codex-Runde-36 [P2]-Findings am ``sqlite_backend.py`` (#951).
 
-Drei unabhängige Findings, jeweils gegen den Legacy-``query_v2``-OR-Referenzpfad
-(un-capped, indiziert) geprüft:
+Zwei Findings am realen Read-Pfad (``store.query`` / ``_build_segment_sql``), jeweils
+gegen den Legacy-``query_v2``-OR-Referenzpfad (un-capped, indiziert) geprüft:
 
-* **F1 (:1623)** – q-/metadaten-scoped Legacy-Discovery darf das exhaustive
-  Result-Set NICHT voll materialisieren (OOM auf Multi-GB-Legacy). Sie sammelt
-  distinkte ``datapoint_id`` inkrementell (streamend), bleibt aber exhaustiv
-  (ältere/gelöschte in-scope Datapoints erfasst → 422-tauglich).
 * **F2 (:2262)** – ist ``q`` gesetzt, darf der index-taugliche
   ``dp_ids_by_name``-``IN``-Arm NICHT durch den gedeckelten leading-wildcard-Scan
   laufen: eine per Namen gematchte Zeile jenseits des Caps muss geliefert werden
@@ -23,9 +19,7 @@ from typing import Any
 
 import pytest
 
-from obs.ringbuffer.ringbuffer import RingBuffer
 from obs.ringbuffer.store.interface import StoreEvent, StoreQuery
-from obs.ringbuffer.store.migration import LegacyMigrator
 from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
 
 
@@ -45,26 +39,6 @@ def _event(value: Any, ts: str, *, dp: str = "dp-1", src: str = "api") -> StoreE
     )
 
 
-async def _build_legacy_db(path: Path, rows: list[dict]) -> None:
-    """Befüllt eine echte Legacy-``ringbuffer.db`` im ALTEN Format über RingBuffer."""
-    rb = RingBuffer(storage="disk", disk_path=str(path), max_entries=None)
-    await rb.start()
-    try:
-        for r in rows:
-            await rb.record(
-                ts=r["ts"],
-                datapoint_id=r["dp"],
-                topic=f"dp/{r['dp']}/value",
-                old_value=None,
-                new_value=r["value"],
-                source_adapter=r.get("adapter", "legacy"),
-                quality="good",
-                metadata={"datapoint": {"tags": r.get("tags", [])}},
-            )
-    finally:
-        await rb.stop()
-
-
 @pytest.fixture
 async def store(tmp_path: Path) -> SqliteSegmentStore:
     s = SqliteSegmentStore(tmp_path / "root")
@@ -73,72 +47,6 @@ async def store(tmp_path: Path) -> SqliteSegmentStore:
         yield s
     finally:
         await s.close()
-
-
-async def _attach_legacy(store: SqliteSegmentStore, db: Path):
-    migrator = LegacyMigrator(store, db)
-    return await migrator.attach_readonly(migrator.classify())
-
-
-# ---------------------------------------------------------------------------
-# F1 – Streaming-Discovery statt Voll-Materialisierung (Legacy)
-# ---------------------------------------------------------------------------
-
-
-async def test_f1_qscoped_discovery_is_streaming_and_exhaustive(store: SqliteSegmentStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """q-scoped Legacy-Discovery: exhaustiv, aber ohne Voll-Materialisierung.
-
-    50 Zeilen über 5 distinkte Datapoints, alle mit ``adapter='knx'`` (matcht
-    ``q='knx'``). Mit ``candidate_cap=10`` muss die Discovery mehrere Batches
-    streamen und trotzdem ALLE 5 distinkten IDs finden (auch die ältesten,
-    jenseits des ersten Caps). Nachweis „kein Voll-Set materialisiert": die
-    Discovery nutzt NICHT den full-akkumulierenden ``_query_legacy_segment`` und
-    hält je Batch nie mehr als ``candidate_cap`` Row-Dicts.
-    """
-    db = tmp_path / "obs_ringbuffer.db"
-    rows = [{"dp": f"dp-{i % 5}", "value": i, "ts": f"2025-01-01T00:00:{i:02d}.000Z", "adapter": "knx"} for i in range(50)]
-    await _build_legacy_db(db, rows)
-    await _attach_legacy(store, db)
-
-    seen_limits: list[int] = []
-    peak_batch_len: list[int] = []
-    real_batch = SqliteSegmentStore._fetch_legacy_batch
-
-    async def spy_batch(self, conn, base_sql, base_params, segment, query, limit, raw_offset):
-        seen_limits.append(limit)
-        rows_out, fetched = await real_batch(self, conn, base_sql, base_params, segment, query, limit, raw_offset)
-        peak_batch_len.append(len(rows_out))
-        return rows_out, fetched
-
-    query_legacy_calls: list[int] = []
-    real_query_legacy = SqliteSegmentStore._query_legacy_segment
-
-    async def spy_query_legacy(self, conn, segment, query):
-        query_legacy_calls.append(1)
-        return await real_query_legacy(self, conn, segment, query)
-
-    monkeypatch.setattr(SqliteSegmentStore, "_fetch_legacy_batch", spy_batch)
-    monkeypatch.setattr(SqliteSegmentStore, "_query_legacy_segment", spy_query_legacy)
-
-    ids = await store.distinct_datapoint_ids(StoreQuery(q="knx", candidate_cap=10, limit=100))
-
-    assert ids == {f"dp-{i}" for i in range(5)}, "Discovery muss alle distinkten in-scope Datapoints exhaustiv erfassen"
-    assert seen_limits, "Discovery muss über den streamenden Legacy-Batch-Pfad laufen"
-    assert not query_legacy_calls, "Discovery darf nicht den voll-materialisierenden _query_legacy_segment nutzen"
-    assert all(lim <= 10 for lim in seen_limits), "kein riesiges Limit → Batches durch candidate_cap gebunden"
-    assert len(seen_limits) >= 5, "mehrere Batches → die Discovery streamt bis zur Segment-Erschöpfung"
-    assert peak_batch_len and max(peak_batch_len) <= 10, "kein Batch hält mehr als candidate_cap Row-Dicts"
-
-
-async def test_f1_small_legacy_db_still_correct(store: SqliteSegmentStore, tmp_path: Path):
-    """Gegentest: kleine q-scoped Legacy-DB bleibt korrekt (keine Regression)."""
-    db = tmp_path / "obs_ringbuffer.db"
-    rows = [{"dp": f"dp-{i}", "value": i, "ts": f"2025-01-01T00:00:0{i}.000Z", "adapter": "knx"} for i in range(3)]
-    await _build_legacy_db(db, rows)
-    await _attach_legacy(store, db)
-
-    ids = await store.distinct_datapoint_ids(StoreQuery(q="knx", limit=100))
-    assert ids == {"dp-0", "dp-1", "dp-2"}
 
 
 # ---------------------------------------------------------------------------

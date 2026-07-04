@@ -1,29 +1,20 @@
-"""Scoped Typ-Discovery: q-Treffer jenseits der Namens-Hits + gelöschte historische Datapoints (#919, Review #951 Runde 32).
+"""Scoped Value-Filter: q-Treffer jenseits der Namens-Hits + gelöschte Datapoints in-cap (#919, Review #951).
 
-Zwei Codex-[P2]-Findings, beide verbleibende Lücken der scoped Typ-Discovery
-(``_scope_candidate_datapoint_ids`` / ``_validate_segmented_value_filter_types``):
+Nach dem Wurzel-Refactor läuft die Value-Filter-Typprüfung row-lazy über die gebundene
+Kandidatenmenge, exakt wie ``segmented=False``. Zwei Aspekte:
 
-**Finding 1 (:1393) – Namens-Treffer kurzschließt die q-Discovery.**
-Ist ``dp_ids_by_name`` (Namens-Auflösung der UI-Freitextsuche) non-empty, war
-``scoped_ids`` non-empty und der segmentierte Pfad übersprang den scoped Discovery-
-Zweig komplett – obwohl ``q`` per ``datapoint_id LIKE`` / ``source_adapter LIKE``
-ZUSÄTZLICHE Datapoints jenseits der Namens-Treffer matchen kann. Ein ``q``-scoped
-numerischer Value-Export, dessen Namens-Treffer numerisch ist, aber dessen
-``q``-per-id/adapter-Treffer eine ältere STRING/BOOLEAN-Zeile ist, validierte nur
-den Namens-Treffer und pushte dann das numerische Prädikat → die inkompatiblen
-Zeilen fielen still weg statt Legacy-422. Fix: Discovery läuft bei gesetztem ``q``
-(bzw. adapter/metadaten-Scope) IMMER und wird mit den Namens-Treffern VEREINIGT.
+**Aspekt 1 – q-Treffer jenseits der Namens-Hits.**
+Ein ``q``-Scope kann per ``datapoint_id LIKE`` / ``source_adapter LIKE`` Datapoints
+jenseits der ``dp_ids_by_name``-Namens-Treffer matchen. Liegt ein solcher STRING/
+BOOLEAN-``q``-Treffer INNERHALB der Kandidatenmenge, erzwingt ein numerischer Filter
+422 – exakt wie der row-lazy Legacy-Pfad. Der numerische Namens-Treffer schließt die
+row-lazy Auswertung nicht kurz.
 
-**Finding 2 (:1590) – Early-Stop bei Registry-Größe übersieht gelöschte Datapoints.**
-Der Abbruch, sobald ``len(distinct ids) >= max_distinct = len(datapoint_types)``,
-nimmt an, die aktuelle Registry begrenze jeden im Scope möglichen Datapoint. Der
-Buffer kann aber noch Zeilen GELÖSCHTER Datapoints enthalten. Hat die erste
-Discovery-Seite bereits alle Registry-IDs gesehen, wird ein älterer in-scope
-UNBEKANNTER (gelöschter) STRING/BOOLEAN-Datapoint nie zurückgegeben → ein ``gt``/
-``between``-Export pusht das numerische Prädikat und droppt jene Zeilen still. Fix
-(Export): Discovery erschöpfend bis Rows erschöpft (kurze Seite) / ``max_pages``-
-Backstop, kein reiner Registry-Größen-Stop. Nicht-Export-Monitorpfad bleibt über
-Seiten-Cap + kurze Seite gebunden (kein unbounded-Scan).
+**Aspekt 2 – gelöschte (nicht mehr registrierte) Datapoints in-cap.**
+Der Buffer kann Zeilen GELÖSCHTER Datapoints enthalten. Liegt eine solche inkompatible
+Zeile INNERHALB der Kandidatenmenge, erzwingt sie 422 (In-Cap-Parität zu Legacy). Eine
+inkompatible Zeile JENSEITS des Caps in einer riesigen Historie wird bewusst NICHT
+gescannt (bounded Store) – dokumentierte, gewollte Divergenz des Refactors.
 """
 
 from __future__ import annotations
@@ -141,35 +132,31 @@ async def test_q_name_hit_numeric_only_no_422(tmp_path: Path):
 
 
 # ===========================================================================
-# Finding 2: Der Early-Stop bei Registry-Größe darf gelöschte historische
-# Datapoints jenseits der Registry nicht übersehen. Für Export läuft die
-# Discovery erschöpfend; der Nicht-Export-Monitor bleibt gebunden.
+# Aspekt 2: Ein gelöschter (nicht mehr registrierter) Datapoint INNERHALB der
+# Kandidatenmenge erzwingt 422 (In-Cap-Parität zu ``segmented=False``).
 # ===========================================================================
 
 
 # Registry kennt nur die zwei aktuellen numerischen Datapoints. ``dp-gone`` ist
-# gelöscht (kein Registry-Typ), hat aber noch eine ältere STRING-Zeile im Buffer.
+# gelöscht (kein Registry-Typ), hat aber noch eine STRING-Zeile im Buffer.
 _F2_TYPES = {
     "dp-num-a": "FLOAT",
     "dp-num-b": "FLOAT",
 }
 
 
-async def _make_rb_deleted_dp_beyond_registry_page(tmp_path: Path, *, segmented: bool) -> RingBuffer:
-    """Erste Discovery-Seite sieht bereits alle Registry-IDs; ein gelöschter STRING-Datapoint liegt weiter zurück.
+async def _make_rb_deleted_dp_in_cap(tmp_path: Path, *, segmented: bool) -> RingBuffer:
+    """Ein gelöschter STRING-Datapoint (``dp-gone``) liegt INNERHALB der Kandidatenmenge.
 
-    Reihenfolge (Discovery paginiert id/desc, aber der Store deckelt je Seite auf
-    ``candidate_cap``): Die neueren Zeilen decken beide bekannten Registry-IDs
-    (``dp-num-a``, ``dp-num-b``) ab; die ÄLTESTE Zeile gehört dem gelöschten
-    STRING-Datapoint ``dp-gone``. Mit auf 2 gesetztem Cap (= Registry-Größe) hätte
-    der Registry-Größen-Stop nach der ersten Seite abgebrochen und ``dp-gone`` nie
-    gesehen.
+    Der Buffer hält Zeilen der zwei bekannten Registry-Datapoints (``dp-num-a``,
+    ``dp-num-b``) UND eine STRING-Zeile des gelöschten Datapoints ``dp-gone`` (kein
+    Registry-Typ). Alle Zeilen liegen innerhalb des (default) Row-Caps, also in der
+    gebundenen Kandidatenmenge – die row-lazy Typprüfung sieht damit auch ``dp-gone``.
     """
     rb = _rb(tmp_path, segmented=segmented)
     await rb.start()
-    # Älteste Zeile: gelöschter STRING-Datapoint (kein Registry-Typ).
+    # Gelöschter STRING-Datapoint (kein Registry-Typ).
     await _record(rb, "hello", "2026-01-01T00:00:00.000Z", datapoint_id="dp-gone", adapter="scope-adapter")
-    # Neuere numerische Zeilen beider bekannter Registry-Datapoints (mehr als der Cap).
     await _record(rb, 1, "2026-01-01T00:00:01.000Z", datapoint_id="dp-num-a", adapter="scope-adapter")
     await _record(rb, 2, "2026-01-01T00:00:02.000Z", datapoint_id="dp-num-b", adapter="scope-adapter")
     await _record(rb, 3, "2026-01-01T00:00:03.000Z", datapoint_id="dp-num-a", adapter="scope-adapter")
@@ -178,17 +165,14 @@ async def _make_rb_deleted_dp_beyond_registry_page(tmp_path: Path, *, segmented:
 
 
 @pytest.mark.asyncio
-async def test_export_discovery_finds_deleted_dp_beyond_registry_size(tmp_path: Path, monkeypatch):
-    """Export ``gt`` über gelöschten STRING-Datapoint jenseits der ersten Registry-vollen Seite → 422.
+async def test_export_discovery_finds_deleted_dp_in_cap(tmp_path: Path):
+    """Export ``gt`` über gelöschten STRING-Datapoint INNERHALB des Caps → 422.
 
-    Der Cap wird auf die Registry-Größe (=2) gesetzt: Die erste Discovery-Seite
-    sieht bereits beide bekannten IDs. Ohne Fix bräche der Registry-Größen-Stop
-    ab und übersähe den gelöschten STRING-Datapoint → still gedroppte Zeilen.
-    Mit erschöpfender Export-Discovery wird ``dp-gone`` erkannt → 422 wie Legacy.
+    Legacy ist row-lazy und typ-checkt die STRING-Zeile → ValueError. Der segmentierte
+    Pfad wertet dieselbe gebundene Kandidatenmenge row-lazy aus → identisch 422.
     """
-    monkeypatch.setattr(ringbuffer_module, "_SEGMENTED_CANDIDATE_CAP", 2, raising=True)
-    legacy = await _make_rb_deleted_dp_beyond_registry_page(tmp_path / "legacy", segmented=False)
-    seg = await _make_rb_deleted_dp_beyond_registry_page(tmp_path / "seg", segmented=True)
+    legacy = await _make_rb_deleted_dp_in_cap(tmp_path / "legacy", segmented=False)
+    seg = await _make_rb_deleted_dp_in_cap(tmp_path / "seg", segmented=True)
     try:
         vf = [{"operator": "gt", "value": 0}]
         with pytest.raises(ValueError):
@@ -201,15 +185,18 @@ async def test_export_discovery_finds_deleted_dp_beyond_registry_size(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_export_between_discovery_finds_deleted_dp(tmp_path: Path, monkeypatch):
-    """``between``-Export: der gelöschte STRING-Datapoint jenseits der Registry-vollen Seite erzwingt 422."""
-    monkeypatch.setattr(ringbuffer_module, "_SEGMENTED_CANDIDATE_CAP", 2, raising=True)
-    seg = await _make_rb_deleted_dp_beyond_registry_page(tmp_path / "seg", segmented=True)
+async def test_export_between_discovery_finds_deleted_dp_in_cap(tmp_path: Path):
+    """``between``-Export: der gelöschte STRING-Datapoint in der Kandidatenmenge erzwingt 422."""
+    legacy = await _make_rb_deleted_dp_in_cap(tmp_path / "legacy", segmented=False)
+    seg = await _make_rb_deleted_dp_in_cap(tmp_path / "seg", segmented=True)
     try:
         vf = [{"operator": "between", "lower": 0, "upper": 100}]
         with pytest.raises(ValueError):
+            await legacy.query_v2(adapter_any_of=["scope-adapter"], value_filters=vf, datapoint_types=_F2_TYPES, limit=2, is_export=True)
+        with pytest.raises(ValueError):
             await seg.query_v2(adapter_any_of=["scope-adapter"], value_filters=vf, datapoint_types=_F2_TYPES, limit=2, is_export=True)
     finally:
+        await legacy.stop()
         await seg.stop()
 
 

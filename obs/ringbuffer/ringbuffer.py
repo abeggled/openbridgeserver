@@ -1532,89 +1532,43 @@ class RingBuffer:
 
         from obs.ringbuffer.store.interface import StoreQuery
 
-        # Kandidaten-Datapoints des Scopes über eine STORE-Level DISTINCT-Query
-        # bestimmen (#951, Codex :2260/:1396/Perf, Runde 33). Der Legacy-Pfad ist
-        # row-lazy: er wendet ZUERST alle Scope-Prädikate INKL. Zeitfenster an und
-        # typ-checkt nur die zurückgegebenen Zeilen. Die Kandidatenmenge ist damit
-        # exakt „welche distinkten Datapoints haben unter Scope+Zeitfenster Zeilen".
+        # Value-Filter-Auswertung (#951, Wurzel-Fix): Der segmentierte v2-Pushdown
+        # filtert typ-inkompatible Zeilen ueber die typisierten Spalten
+        # (``*_value_num``/``*_value_text``) STILL weg, waehrend die kanonische
+        # Legacy-Referenz ``_matches_value_filter`` (Memory-Pfad ``query_v2``) den Typ
+        # row-lazy aus dem tatsaechlichen Zeilenwert ableitet und bei Inkompatibilitaet
+        # 422 wirft. Diese Semantik-Divergenz war die Wurzel der wiederkehrenden
+        # Value-Filter-Findings.
         #
-        # Frühere Row-Pagination-Discovery (Runde 29-32) ersetzt: sie paginierte
-        # ROW-weise über den Scope und stoppte (nicht-Export) erst, wenn so viele
-        # distinkte Datapoints gesehen waren wie die GESAMTE Registry hat. Ein Scope
-        # mit einem Millionen-Zeilen-Datapoint bei vielen unrelated Registry-
-        # Datapoints erreichte diesen Stop NIE → Pagination über den ganzen Scope
-        # (Perf-Befund). ``distinct_datapoint_ids`` führt stattdessen je relevantem
-        # Segment ein einzelnes ``SELECT DISTINCT datapoint_id ... WHERE <scope>`` aus:
-        # durch die ANZAHL DISTINKTER Datapoints begrenzt (index-nutzbar), NICHT durch
-        # die Zeilenzahl.
-        #
-        # Deckt alle drei Findings ab:
-        # * :2260 (unscoped): die DISTINCT-Query scannt echte Buffer-Zeilen, also auch
-        #   die GELÖSCHTER (nicht mehr in der Registry vorhandener) Datapoints – ein
-        #   non-``eq``/``ne``-Filter über eine alte STRING/BOOLEAN-Zeile wird wie Legacy
-        #   mit 422 abgelehnt (unbekannter Kandidatentyp → UNKNOWN im Validator).
-        # * :1396 (nur Zeitfenster): ``from_ts``/``to_ts`` gehen als WHERE in die
-        #   Discovery ein – ein unrelated STRING/BOOLEAN-Datapoint OHNE Zeilen im
-        #   Fenster ist kein Kandidat und erzwingt kein 422 (Legacy-Parität); hat er
-        #   Zeilen IM Fenster, wird er Kandidat → 422.
-        # * scoped (adapter/source/q/metadata/datapoint_ids): unverändert nur die im
-        #   Scope tatsächlich vorhandenen Datapoints, VEREINIGT mit den expliziten
-        #   Namens-Treffern (``dp_ids_by_name``) und angefragten ``datapoint_ids``, weil
-        #   der Store diese OR-verknüpft matcht.
-        #
-        # Value-Filter werden bei der Discovery bewusst NICHT angewandt (sie würden
-        # einen Typkonflikt still wegfiltern statt ihn sichtbar zu machen).
-        if value_filters:
-            candidate_ids = await self._store.distinct_datapoint_ids(
-                StoreQuery(
-                    from_ts=effective_from,
-                    to_ts=effective_to,
-                    from_exclusive=True,
-                    to_exclusive=True,
-                    datapoint_ids=normalized_dps,
-                    source_adapters=normalized_adapters,
-                    q=q or None,
-                    dp_ids_by_name=normalized_names,
-                    metadata_tags_any_of=_normalize_string_filters(metadata_tags_any_of),
-                    metadata_binding_filters=metadata_binding_filters,
-                    value_filters=[],
-                )
-            )
-            # Nur Name-Treffer validieren, die im effektiven Scope TATSÄCHLICH Zeilen
-            # haben (#951, Codex Runde 36, F1 :1438 – Verfeinerung der Runde-32-Union).
-            # Die Discovery (``distinct_datapoint_ids``) bekommt ``dp_ids_by_name`` bereits
-            # in ihrer ``StoreQuery`` und berücksichtigt den VOLLEN Scope (adapter/time/
-            # metadata): sie liefert damit exakt die namensaufgelösten Datapoints, die
-            # unter dem Scope Zeilen haben. Die frühere blinde ``.update(normalized_names)``
-            # addierte dagegen AUCH Namens-Treffer OHNE in-scope-Zeilen zur Typprüfmenge –
-            # ein STRING-Name ohne Zeilen im angefragten Adapter/Fenster erzwang so ein
-            # 422, obwohl der row-lazy Legacy-Pfad (der zuerst den vollen SQL-Scope
-            # anwendet und nur die zurückgegebenen Zeilen typ-checkt) leer OHNE 422
-            # liefert. Daher NICHT mehr blind unionen; die Discovery-Menge IST bereits
-            # der Schnitt der Name-Treffer mit dem effektiven Scope.
-            effective_candidate_ids = set(candidate_ids)
-            # Leere Kandidatenmenge = keine Zeilen im Scope/Fenster: der Legacy-Pfad
-            # liefert dann still leer OHNE 422 (kein row-lazy Typ-Check feuert). Nur
-            # bei mindestens einem Kandidaten typ-prüfen; sonst fiele die
-            # ``if datapoint_ids:``-Verzweigung des Validators auf das volle Registry-
-            # Universum zurück und würfe fälschlich 422.
-            #
-            # Ohne Registry-Typkontext KEINE Typprüfung (Legacy-Parität): fehlt
-            # ``datapoint_types`` ganz, liefert der API-Layer keinen Typkontext (der
-            # reale Aufrufer füllt es stets aus der Registry). Der Legacy-Pfad leitet
-            # dann den Typ row-lazy aus dem tatsächlichen Zeilenwert ab und wirft NUR
-            # bei einer real inkompatiblen Zeile. Der segmentierte Pfad kennt den Row-
-            # Wert beim Pushdown nicht; alle Kandidaten pauschal als UNKNOWN → 422 zu
-            # werten wäre eine Über-Rejection. Ohne jeden Typkontext wird die Vorab-
-            # Prüfung daher übersprungen (der Pushdown liefert dann numerisch korrekt;
-            # der 422-Deckungsfall greift, sobald der API-Layer die Registry-Typen
-            # mitgibt – der Normalpfad).
-            if effective_candidate_ids and datapoint_types:
-                _validate_segmented_value_filter_types(
-                    value_filters=value_filters,
-                    datapoint_ids=list(effective_candidate_ids),
-                    datapoint_types={dp_id: (datapoint_types.get(dp_id, "") if datapoint_types else "") for dp_id in effective_candidate_ids},
-                )
+        # Aufloesung: Value-Filter laufen NUR dann als typisierter SQL-Pushdown, wenn der
+        # Scope EXPLIZIT und AUSSCHLIESSLICH auf bekannte, typkompatible ``datapoint_ids``
+        # zeigt (schnell, vollstaendig, bei sauberen Daten nachweislich divergenzfrei).
+        # Jeder andere Fall (unbekannter/inkompatibler Typ, Scope-Verbreiterung ueber
+        # q/adapter/name-hit/metadata) wird row-lazy ueber die gebundene Kandidatenmenge
+        # mit ``_apply_value_filters`` ausgewertet - also EXAKT der Memory-Referenz.
+        # Divergenz zu ``segmented=False`` ist damit per Konstruktion ausgeschlossen; die
+        # fruehere Discovery-/Vorab-422-Maschinerie entfaellt.
+        normalized_metadata_tags = _normalize_string_filters(metadata_tags_any_of)
+        pushdown_value_filters = _value_filters_pushable(
+            list(value_filters or []),
+            datapoint_ids=normalized_dps,
+            adapters=normalized_adapters,
+            names=normalized_names,
+            q=q or "",
+            has_metadata=bool(normalized_metadata_tags) or bool(metadata_binding_filters),
+            datapoint_types=datapoint_types,
+        )
+        row_lazy_value_filters = bool(value_filters) and not pushdown_value_filters
+
+        # Bounded-Garantie: ohne engen Zeitrahmen liest der Store hoechstens diese
+        # Kandidatenzahl je Segment. Der CSV-Export paginiert mit wachsendem ``offset``
+        # und uebergibt daher einen mit ``offset+limit`` mitwachsenden Cap
+        # (``candidate_cap_override``); der Monitor-Live-View behaelt den festen Cap.
+        effective_cap = candidate_cap_override if candidate_cap_override is not None else _SEGMENTED_CANDIDATE_CAP
+        # Im row-lazy Fall den Value-Filter NICHT pushen, sondern die gebundene
+        # Kandidatenmenge roh holen und in Python filtern+paginieren (wie der Memory-Pfad).
+        fetch_limit = effective_cap if row_lazy_value_filters else limit
+        fetch_offset = 0 if row_lazy_value_filters else offset
 
         store_query = StoreQuery(
             from_ts=effective_from,
@@ -1626,33 +1580,18 @@ class RingBuffer:
             source_adapters=normalized_adapters,
             q=q or None,
             dp_ids_by_name=normalized_names,
-            metadata_tags_any_of=_normalize_string_filters(metadata_tags_any_of),
+            metadata_tags_any_of=normalized_metadata_tags,
             metadata_binding_filters=metadata_binding_filters,
-            limit=limit,
-            offset=offset,
+            limit=fetch_limit,
+            offset=fetch_offset,
             sort_field=sort_field,
             sort_order=sort_order,
-            value_filters=list(value_filters or []),
-            # Bounded-Garantie für guarded contains/regex ohne Zeitfenster und für
-            # den Legacy-Python-Fallback: ohne engen Zeitrahmen wird höchstens diese
-            # Kandidatenzahl je Segment gelesen, statt unbounded zu scannen.
-            #
-            # Export-Pfad (Codex #951, Pkt 2): der CSV-Export paginiert mit WACHSENDEM
-            # ``offset`` und muss die vollständige gefilterte Menge liefern. Der Monitor-
-            # Live-View-Cap (fester ``_SEGMENTED_CANDIDATE_CAP``) würde ein Legacy-Segment
-            # mit Value-/Metadaten-Post-Filter roh auf diese Zeilenzahl deckeln – sobald
-            # ``offset`` den Cap übersteigt, gingen Zeilen VERLOREN. Der Export übergibt
-            # daher einen mit ``offset+limit`` mitwachsenden Cap (``candidate_cap_override``),
-            # sodass das Legacy-Fetch-Limit die gesamte paginierte Menge abdeckt. Der
-            # Monitor-Live-View (kleines Limit, kein Override) behält seinen festen Cap.
-            candidate_cap=candidate_cap_override if candidate_cap_override is not None else _SEGMENTED_CANDIDATE_CAP,
-            # Export- vs. Live-Query explizit (#951, Pkt 4): nur der Export scannt die
-            # gefilterte Legacy-/v2-Menge batchweise vollständig; die Live-Query bleibt
-            # hart auf den Cap gedeckelt – auch bei großem limit/Offset.
+            value_filters=list(value_filters or []) if pushdown_value_filters else [],
+            candidate_cap=effective_cap,
             is_export=is_export,
         )
         rows = await self._store_query_serialized(store_query)
-        return [
+        entries = [
             RingBufferEntry(
                 id=row["global_event_id"],
                 ts=row["ts"],
@@ -1667,6 +1606,16 @@ class RingBuffer:
             )
             for row in rows
         ]
+        if not row_lazy_value_filters:
+            return entries
+        # Row-lazy = exakte Memory-/Legacy-Semantik (inkl. 422 bei inkompatiblem Typ),
+        # gebunden durch die Kandidatenmenge.
+        filtered = await _apply_value_filters(
+            entries=entries,
+            value_filters=list(value_filters or []),
+            datapoint_types=datapoint_types or {},
+        )
+        return filtered[offset : offset + limit]
 
     async def _store_query_serialized(self, store_query: Any) -> list[dict[str, Any]]:
         """Führt den segmentierten Store-Read rotationssicher aus (#951, Pkt 1).
@@ -2262,6 +2211,51 @@ _REGEX_TIMEOUT_SECONDS = 0.5
 _RE_UNSAFE_NESTED_QUANTIFIERS = re.compile(r"\((?:[^()\\]|\\.)*[+*][^()]*\)[+*]")
 
 
+def _value_filters_pushable(
+    value_filters: list[dict[str, Any]],
+    *,
+    datapoint_ids: list[str],
+    adapters: list[str],
+    names: list[str],
+    q: str,
+    has_metadata: bool,
+    datapoint_types: dict[str, str] | None,
+) -> bool:
+    """True, wenn die Value-Filter sicher als typisierter SQL-Pushdown laufen duerfen (#951).
+
+    Nur wenn der Scope EXPLIZIT und AUSSCHLIESSLICH auf bekannte, typkompatible
+    ``datapoint_ids`` zeigt, ist der v2-Pushdown nachweislich divergenzfrei zur
+    row-lazy Legacy-Referenz ``_matches_value_filter``. Jede Scope-Verbreiterung
+    (``q``/adapter/name-hit/metadata) koennte Datapoints einbeziehen, deren Typ hier
+    nicht bekannt ist; ein unbekannter oder zum Operator inkompatibler Typ wuerde vom
+    Pushdown still weggefiltert statt - wie der Memory-Pfad - row-lazy ausgewertet und
+    ggf. mit 422 abgelehnt. Alle solchen Faelle laufen daher row-lazy.
+    """
+    if not value_filters:
+        return True
+    if not datapoint_ids or adapters or names or q.strip() or has_metadata:
+        return False
+    if not datapoint_types:
+        return False
+    for dp in datapoint_ids:
+        data_type = (datapoint_types.get(dp) or "").strip().upper()
+        if not data_type:
+            return False
+        for spec in value_filters:
+            operator = str(spec.get("operator", "")).strip().lower()
+            if operator in {"eq", "ne"}:
+                continue
+            if operator in {"gt", "gte", "lt", "lte", "between"}:
+                if data_type not in _NUMERIC_TYPES:
+                    return False
+            elif operator in {"contains", "regex"}:
+                if data_type not in _STRING_TYPES:
+                    return False
+            else:
+                return False
+    return True
+
+
 async def _apply_value_filters(
     *,
     entries: list[RingBufferEntry],
@@ -2280,81 +2274,6 @@ async def _apply_value_filters(
         if match:
             result.append(entry)
     return result
-
-
-def _validate_segmented_value_filter_types(
-    *,
-    value_filters: list[dict[str, Any]],
-    datapoint_ids: list[str],
-    datapoint_types: dict[str, str],
-) -> None:
-    """Prüft Value-Filter-Operatoren gegen die data_types der gefilterten Datenpunkte.
-
-    Spiegelt die Legacy-``query_v2``-Semantik: ein numerischer Operator auf einem
-    BOOLEAN-Datenpunkt (oder ein sonst inkompatibler Operator/Typ) ergibt einen
-    ``ValueError`` (422-tauglich), statt im segmentierten SQL-Pushdown still leer
-    zu laufen.
-
-    Die zu prüfende Datapoint-Menge (``datapoint_ids``) wird vom Aufrufer als
-    KANDIDATENMENGE übergeben und spiegelt die row-lazy Legacy-Semantik:
-
-    * datapoint_id-scoped: genau die adressierten Datapoints.
-    * adapter-/source-/metadaten-scoped (ohne datapoint_id): nur die Datapoints,
-      die im Scope tatsächlich Zeilen haben (bounded Kandidaten-Scan im Aufrufer,
-      #951 Codex :2095) – NICHT das volle Registry-Universum. So erzwingt ein
-      unrelated STRING/BOOLEAN-Datapoint eines ANDEREN Adapters kein 422, während
-      ein inkompatibler Datapoint IM Scope wie Legacy 422 wirft.
-    * vollständig unscoped (kein datapoint_id, kein adapter/source/metadata): der
-      Aufrufer übergibt eine leere ``datapoint_ids``-Liste, sodass gegen das VOLLE
-      ``datapoint_types``-Universum geprüft wird (Runde-26-Verhalten).
-
-    Hintergrund: der Legacy-Pfad prüft row-lazy – sobald eine Zeile eines STRING-/
-    BOOLEAN-Datapoints in einen non-``eq``/``ne``-Operator läuft, wirft
-    ``_matches_value_filter`` einen ``ValueError`` (→ 422). Der segmentierte Pushdown
-    kann das nicht bounded nachziehen (er ließe inkompatible Zeilen still fallen →
-    Teilergebnisse), daher die Vorab-Typprüfung gegen die Kandidatenmenge.
-    ``eq``/``ne`` (typunabhängig) bleiben unangetastet (#951, Codex :2081/:2095).
-    """
-    if datapoint_ids:
-        scoped_ids: set[str] = set(datapoint_ids)
-    else:
-        # Unscoped: gegen alle bekannten Registry-Typen prüfen (Legacy-Parität).
-        scoped_ids = set(datapoint_types)
-    data_types = {(datapoint_types.get(dp_id) or "").strip().upper() for dp_id in scoped_ids}
-    for spec in value_filters:
-        operator = str(spec.get("operator", "")).strip().lower()
-        if operator in {"eq", "ne"}:
-            continue
-        for data_type in data_types:
-            if not data_type:
-                # Unbekannter/leerer Kandidatentyp (z. B. ein GELÖSCHTER, nicht mehr
-                # in der Registry vorhandener Datapoint, der aber noch Zeilen im
-                # Buffer hat). Der Legacy-Pfad leitet den Typ row-lazy aus dem
-                # Zeilenwert ab. Hier muss nach Operatorklasse differenziert werden
-                # (#951, Codex Runde 37, F1 :2269):
-                #
-                # * STRING-Operatoren (``contains``/``regex``): der Legacy-Pfad wendet
-                #   diese auf BELIEBIGE gespeicherte Strings an (``_is_string_type``
-                #   greift row-lazy für jeden ``str``-Wert) und liefert matchende
-                #   Zeilen OHNE 422. Ein gelöschter TEXT-Datapoint, per ``contains``/
-                #   ``regex`` über adapter/q/metadata-Scope abgefragt, muss daher auch
-                #   segmentiert Zeilen liefern – NICHT ablehnen.
-                # * Numerische Operatoren (``gt``/``gte``/``lt``/``lte``/``between``):
-                #   ohne bekannten Typ nicht sicher als typisiertes Prädikat pushbar;
-                #   der segmentierte Pushdown würde still ein numerisches Prädikat
-                #   pushen und string/bool-Zeilen droppen. Konservativ ablehnen wie
-                #   Runde 31 (Parität zur row-lazy Legacy-``ValueError``-Ablehnung).
-                #
-                # ``eq``/``ne`` (typunabhängig) sind oben bereits übersprungen.
-                if operator in {"contains", "regex"}:
-                    continue
-                raise ValueError(f"operator '{operator}' is not supported for data_type 'UNKNOWN'")
-            if data_type in _BOOLEAN_TYPES:
-                raise ValueError(f"operator '{operator}' is not supported for data_type 'BOOLEAN'")
-            if data_type in _NUMERIC_TYPES and operator not in {"gt", "gte", "lt", "lte", "between"}:
-                raise ValueError(f"operator '{operator}' is not supported for data_type '{data_type}'")
-            if data_type in _STRING_TYPES and operator not in {"contains", "regex"}:
-                raise ValueError(f"operator '{operator}' is not supported for data_type 'STRING'")
 
 
 def _normalize_value_filter(spec: dict[str, Any]) -> dict[str, Any]:

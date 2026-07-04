@@ -1,28 +1,21 @@
-"""Scoped Value-Filter-Typvalidierung: Discovery unabhängig vom Row-/Kandidaten-Cap (#919, Review #951).
+"""Scoped Value-Filter-Typvalidierung: row-lazy über die gebundene Kandidatenmenge (#919, Review #951).
 
-Codex-Finding (``ringbuffer.py`` :1431, Follow-up auf Runde 28): Für adapter-/
-source-/metadaten-scoped Value-Filter OHNE explizite ``datapoint_ids`` bestimmt der
-segmentierte Pfad die Kandidaten-Datapoints aus einem Row-gecappten Discovery-Scan
-(die neuesten ``_SEGMENTED_CANDIDATE_CAP`` scoped Zeilen). Sind diese neuesten Zeilen
-alle numerisch, existiert aber – WEITER ZURÜCK, jenseits des Row-Caps – ein älterer
-in-scope STRING/BOOLEAN-Datapoint, so entging dieser der Typprüfung: eine ``gt``/
-``between``-Query lieferte still Teilergebnisse statt des Legacy-422.
+Nach dem Wurzel-Refactor läuft die Value-Filter-Typprüfung row-lazy über die
+gebundene Kandidatenmenge (die neuesten ``_SEGMENTED_CANDIDATE_CAP`` scoped Zeilen),
+exakt wie ``segmented=False``. Eine inkompatible Zeile INNERHALB dieser Menge (Cap/
+Zeitfenster) erzwingt 422 – identisch zum Legacy-Pfad. Eine inkompatible Zeile
+JENSEITS des Caps in einer riesigen Historie wird bewusst NICHT gescannt (der bounded
+Store scannt nicht die ganze Historie, nur um eine alte inkompatible Zeile zu finden);
+das ist die dokumentierte, gewollte Divergenz des Refactors.
 
-Diese Suite fixiert, dass die Discovery die scoped Datapoint-IDs UNABHÄNGIG vom
-Row-Cap enumeriert (gebunden durch die Anzahl distinkter Datapoints, nicht durch
-Rows):
+Diese Suite fixiert die In-Cap-Parität:
 
-* Adapter-scoped ``gt`` – Scope enthält viele NEUE numerische Rows UND (jenseits des
-  Row-Caps) mind. eine ältere STRING-Zeile → 422 (der ältere inkompatible Datapoint
-  wird erkannt), unabhängig von Offset/Export.
+* Adapter-scoped ``gt``/``between`` – die ältere STRING-Zeile liegt INNERHALB des Caps
+  → 422 (der inkompatible Datapoint wird erkannt), identisch zu ``segmented=False``.
 * Gegentest: Scope rein numerisch, auch mit mehr Zeilen als der Cap → kein 422,
   korrektes Ergebnis.
 * Regression: adapter-scoped rein-numerisch (Runde 28) und vollständig unscoped
   (Runde 26) unverändert.
-
-Der Row-Cap wird in den Tests auf einen kleinen Wert gesetzt (Monkeypatch von
-``_SEGMENTED_CANDIDATE_CAP``), um „jenseits des Caps" ohne 10k reale Zeilen zu
-simulieren.
 """
 
 from __future__ import annotations
@@ -31,7 +24,6 @@ from pathlib import Path
 
 import pytest
 
-import obs.ringbuffer.ringbuffer as ringbuffer_module
 from obs.ringbuffer.ringbuffer import RingBuffer
 
 
@@ -64,26 +56,18 @@ _TYPES = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _tiny_candidate_cap(monkeypatch):
-    """Row-Cap klein setzen, um „jenseits des Caps" ohne 10k reale Zeilen zu simulieren."""
-    monkeypatch.setattr(ringbuffer_module, "_SEGMENTED_CANDIDATE_CAP", 3, raising=True)
-
-
 async def _make_rb_old_string_new_numeric(tmp_path: Path, *, segmented: bool) -> RingBuffer:
-    """Ein Adapter mit ÄLTERER STRING-Zeile und vielen NEUEREN numerischen Zeilen.
+    """Ein Adapter mit ÄLTERER STRING-Zeile und mehreren NEUEREN numerischen Zeilen.
 
-    Die STRING-Zeile (``dp-str``) ist die ÄLTESTE des Adapters; danach folgen mehr
-    numerische Zeilen (``dp-num``) als der (klein gemonkeypatchte) Row-Cap. Ein
-    row-gecappter Discovery-Scan (neueste zuerst) sieht damit nur die numerischen
-    Zeilen und übersieht die alte STRING-Zeile.
+    Die STRING-Zeile (``dp-str``) ist die ÄLTESTE des Adapters; danach folgen weitere
+    numerische Zeilen (``dp-num``). Alle Zeilen liegen INNERHALB des (default) Row-Caps,
+    d. h. in der gebundenen Kandidatenmenge – die row-lazy Typprüfung sieht damit auch
+    die alte STRING-Zeile, exakt wie ``segmented=False``.
     """
     rb = _rb(tmp_path, segmented=segmented)
     await rb.start()
     # Älteste Zeile: STRING-Datapoint desselben Adapters.
     await _record(rb, "hello", "2026-01-01T00:00:00.000Z", datapoint_id="dp-str", adapter="mixed-adapter")
-    # Danach mehr numerische Zeilen als der Row-Cap (=3): jenseits des Caps liegt
-    # die STRING-Zeile.
     for i in range(1, 8):
         await _record(rb, i, f"2026-01-01T00:00:{i:02d}.000Z", datapoint_id="dp-num", adapter="mixed-adapter")
     return rb
@@ -100,17 +84,17 @@ async def _make_rb_numeric_only(tmp_path: Path, *, segmented: bool) -> RingBuffe
 
 
 # ---------------------------------------------------------------------------
-# Case A: älterer in-scope STRING-Datapoint jenseits des Caps → 422 (Parität)
+# Case A: in-scope STRING-Datapoint INNERHALB des Caps → 422 (In-Cap-Parität)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_scoped_gt_detects_old_string_datapoint_beyond_cap(tmp_path: Path):
-    """Adapter-scoped ``gt``; alte STRING-Zeile liegt jenseits des Row-Caps → 422.
+async def test_scoped_gt_detects_old_string_datapoint_in_cap(tmp_path: Path):
+    """Adapter-scoped ``gt``; die STRING-Zeile liegt INNERHALB des Caps → 422.
 
-    Legacy ist row-lazy und typ-checkt auch die alte STRING-Zeile → ValueError.
-    Der segmentierte Pfad muss identisch 422 liefern, obwohl der Row-gecappte
-    Discovery-Scan die STRING-Zeile nicht sieht.
+    Legacy ist row-lazy und typ-checkt die STRING-Zeile → ValueError. Der
+    segmentierte Pfad wertet dieselbe gebundene Kandidatenmenge row-lazy aus und
+    liefert identisch 422 (In-Cap-Parität zu ``segmented=False``).
     """
     legacy = await _make_rb_old_string_new_numeric(tmp_path / "legacy", segmented=False)
     seg = await _make_rb_old_string_new_numeric(tmp_path / "seg", segmented=True)
@@ -126,14 +110,18 @@ async def test_scoped_gt_detects_old_string_datapoint_beyond_cap(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_scoped_between_detects_old_string_beyond_cap_with_offset(tmp_path: Path):
-    """``between`` mit größerem Offset: der alte STRING-Datapoint erzwingt weiterhin 422."""
+async def test_scoped_between_detects_string_in_cap_with_offset(tmp_path: Path):
+    """``between`` mit Offset: die STRING-Zeile in der Kandidatenmenge erzwingt weiterhin 422."""
+    legacy = await _make_rb_old_string_new_numeric(tmp_path / "legacy", segmented=False)
     seg = await _make_rb_old_string_new_numeric(tmp_path / "seg", segmented=True)
     try:
         vf = [{"operator": "between", "lower": 0, "upper": 100}]
         with pytest.raises(ValueError):
+            await legacy.query_v2(adapter_any_of=["mixed-adapter"], value_filters=vf, datapoint_types=_TYPES, limit=10, offset=2)
+        with pytest.raises(ValueError):
             await seg.query_v2(adapter_any_of=["mixed-adapter"], value_filters=vf, datapoint_types=_TYPES, limit=10, offset=2)
     finally:
+        await legacy.stop()
         await seg.stop()
 
 

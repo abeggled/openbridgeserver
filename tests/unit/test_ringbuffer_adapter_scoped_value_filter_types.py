@@ -1,15 +1,10 @@
 """Adapter-/source-scoped Value-Filter-Typparität: segmentiert == Legacy (#919, Review #951).
 
-Codex-Finding (``ringbuffer.py`` :2095, Follow-up auf Runde 26): Die unscoped-
-Typvalidierung ``_validate_segmented_value_filter_types`` prüfte einen non-``eq``/``ne``-
-Value-Filter gegen das VOLLE ``datapoint_types``-Universum (alle Registry-Datapoints).
-Für eine ADAPTER-scopte Query (z. B. ``adapter_any_of=['numeric-adapter']`` + ``gt``)
-ohne explizite ``datapoint_ids`` fiel damit bereits ein 422, sobald IRGENDEIN
-unrelated STRING-/BOOLEAN-Datapoint eines ANDEREN Adapters existierte – obwohl der
-Adapter-Filter diese Datapoints nie zurückgeben kann.
-
-Der Legacy-Pfad ist dagegen row-lazy: er wendet erst den ``source_adapter``-SQL-Filter
-an und typ-checkt nur die ZURÜCKGEGEBENEN Zeilen. Diese Suite fixiert die Parität:
+Der Legacy-Pfad ist row-lazy: er wendet erst den ``source_adapter``-SQL-Filter an und
+typ-checkt nur die ZURÜCKGEGEBENEN Zeilen. Nach dem Wurzel-Refactor wertet auch der
+segmentierte Pfad Value-Filter row-lazy über die gebundene Kandidatenmenge aus – ein
+unrelated STRING-/BOOLEAN-Datapoint eines ANDEREN Adapters ist damit kein Kandidat und
+erzwingt kein 422. Diese Suite fixiert die Parität:
 
 * Adapter-scoped ``gt`` gegen einen NUMERISCHEN Adapter, bei gemischter Installation
   mit unrelated STRING/BOOLEAN-Datapoints ANDERER Adapter → KEIN 422 (die unrelated
