@@ -1843,6 +1843,121 @@ class LegacyMigrator:
         self._state_path.write_text(json.dumps(state.as_dict()), encoding="utf-8")
 
 
+async def recover_detached_migrated_chunks(store: SqliteSegmentStore) -> None:
+    """Store-weite Startup-Recovery verwaister ``closed``-Migrations-Chunks DETACHTER Quellen (#951, P2, Runde 41, F1/F2).
+
+    Schließt die zwei Lücken des Runde-40-Fixes:
+
+    **F1 (kein garantierter Aufruf):** ``LegacyMigrator._recover_detached_migrated_closed_
+    segments`` läuft NUR am Anfang von ``migrate_chunk`` – einem Wartungsjob ohne
+    Produktions-Treiber. Crasht der Prozess NACH ``_detach_migrated_legacy_segment``
+    (``.migrated``-Marker gesetzt, Legacy-Manifest-Zeile entfernt), aber BEVOR
+    ``_promote_own_closed_migrated_to_trailing`` fertig ist, bleiben die eigenen
+    rein-negativen ``closed``-Chunks im POSITIVEN Prefix, bis ein Operator die Migration
+    erneut anstößt. Eine ``id desc``-latest-page lieferte bis dahin migrierte Legacy-Zeilen
+    VOR echten Live-Zeilen. Diese Recovery läuft daher store-weit auf dem GARANTIERTEN
+    Startup-Pfad (``RingBuffer._open_segment_store_locked``), nach Attach/classify.
+
+    **F2 (source_factor post-Detach nicht mehr auflösbar):** Nach dem Detach liefert
+    ``_attached_legacy_segment_id()`` ``None``, ``_ensure_source_factor`` fiele auf den
+    Pfad-Hash zurück – die vor dem Detach mit dem ATTACHED-``segment_id``-Bucket geschriebenen
+    gids lägen dann außerhalb von ``[low, high)`` und würden nie promotet. Diese Recovery
+    arbeitet daher source-factor-UNABHÄNGIG (Weg a): sie identifiziert verwaiste Chunks
+    allein über „``closed``/sichtbar, ausschließlich negative gids, KEINE attached Legacy-
+    Quelle mehr" und promotet sie ohne ``[low, high)``-Bucket-Bounds.
+
+    Guards (alle No-op-sicher, idempotent):
+
+    * Ist NOCH eine Legacy-Quelle attached (``list_legacy_segments`` non-empty), bleibt die
+      Recovery ein No-op: der attached-in-progress-Fall gehört dem round-37-/``migrate_chunk``-
+      Pfad (``_recover_visible_migrated_while_attached``), der die Chunks bewusst VERSTECKT
+      hält (``migrating``), solange dieselben Zeilen zusätzlich read-only geliefert werden.
+    * Braucht der Store keinen Trailing-Rang – d. h. es existiert keine echte positive v2-Zeile
+      (rein legacy-migrierter Ein-Quell-Store, segment_id-Ordnung == gid-Ordnung) – bleibt es
+      ebenfalls ein No-op: ``closed`` genügt, die Ordnung ist bereits korrekt.
+
+    Ein-vs-Mehr-Quell (bewusst konservativ, Weg a): der Regelfall ist EINE migrierte Quelle.
+    „Keine Legacy mehr attached" heißt dann: ALLE sichtbaren rein-negativen ``closed``-Chunks
+    stammen aus der bereits detachten Quelle und sind verwaist. Sind mehrere Quellen im Spiel
+    und eine davon ist NOCH attached, greift der erste Guard und die Recovery bleibt inaktiv,
+    bis auch die letzte Quelle detached ist – dann sind wieder alle sichtbaren rein-negativen
+    ``closed``-Chunks verwaist. So kann kein noch-attached-Fall vorzeitig promotet werden.
+    """
+    if await store.manifest.list_legacy_segments():
+        return  # eine Quelle noch attached → round-37/migrate_chunk zuständig, nicht hier
+    if not await _store_has_positive_migrated_recovery_rows(store):
+        return  # kein Trailing-Rang nötig (rein legacy-migrierter Ein-Quell-Store)
+    active_id = store._active_segment.segment_id if store._active_segment else None
+    for segment in await store.manifest.list_segments():
+        if segment.schema_version <= LEGACY_SCHEMA_VERSION:
+            continue  # read-only eingehängte Legacy-Segmente haben keine v2-Tabelle
+        if segment.status != SEGMENT_STATUS_CLOSED:
+            continue
+        if segment.segment_id == active_id:
+            continue  # aktives Segment bleibt appendfähig, wird nie umgestuft
+        if await _segment_is_pure_negative(store, segment):
+            await store.manifest.mark_migrated(segment.segment_id)
+
+
+async def _store_has_positive_migrated_recovery_rows(store: SqliteSegmentStore) -> bool:
+    """True, wenn irgendein v2-Segment echte positive gids hält (source-factor-unabhängig, #951, Runde 41).
+
+    Analog zu ``LegacyMigrator._store_has_positive_rows``, aber OHNE einen ``LegacyMigrator``
+    (post-Detach existiert keine an eine Quelle gebundene Instanz mehr). Nur die Existenz
+    positiver gids entscheidet, ob der Trailing-Rang gebraucht wird.
+    """
+    active_id = store._active_segment.segment_id if store._active_segment else None
+    for segment in await store.manifest.list_segments():
+        if segment.schema_version <= LEGACY_SCHEMA_VERSION or segment.status == SEGMENT_STATUS_MIGRATED:
+            continue
+        if segment.segment_id == active_id:
+            if store._active_conn is not None:
+                async with store._active_conn.execute("SELECT 1 FROM ringbuffer WHERE global_event_id >= 0 LIMIT 1") as cur:
+                    if await cur.fetchone() is not None:
+                        return True
+            continue
+        path = store._segments_dir / segment.filename
+        if not path.exists():
+            continue
+        uri = _sqlite_ro_uri(path, params="mode=ro")
+        conn = await aiosqlite.connect(uri, uri=True)
+        try:
+            async with conn.execute("SELECT 1 FROM ringbuffer WHERE global_event_id >= 0 LIMIT 1") as cur:
+                if await cur.fetchone() is not None:
+                    return True
+        except aiosqlite.Error:
+            continue
+        finally:
+            await conn.close()
+    return False
+
+
+async def _segment_is_pure_negative(store: SqliteSegmentStore, segment: SegmentRecord) -> bool:
+    """True, wenn ein v2-Segment ausschließlich negative gids hält (source-factor-unabhängig, #951, Runde 41).
+
+    Weg a (F2): bewusst OHNE ``[low, high)``-Bucket-Bounds – nach dem Detach ist der
+    ursprüngliche ``source_factor`` nicht mehr rekonstruierbar. Ein Segment mit ausschließlich
+    negativen und mindestens einer negativen gid ist ein migriertes Alt-Segment; da keine
+    Legacy-Quelle mehr attached ist (Aufrufer-Guard), ist es verwaist und gehört in den
+    Trailing-Rang.
+    """
+    path = store._segments_dir / segment.filename
+    if not path.exists():
+        return False
+    uri = _sqlite_ro_uri(path, params="mode=ro")
+    conn = await aiosqlite.connect(uri, uri=True)
+    try:
+        async with conn.execute("SELECT 1 FROM ringbuffer WHERE global_event_id >= 0 LIMIT 1") as cur:
+            if await cur.fetchone() is not None:
+                return False  # enthält positive gids → kein reines Migrations-Segment
+        async with conn.execute("SELECT 1 FROM ringbuffer WHERE global_event_id < 0 LIMIT 1") as cur:
+            return await cur.fetchone() is not None
+    except aiosqlite.Error:
+        return False
+    finally:
+        await conn.close()
+
+
 async def _legacy_has_metadata_columns(conn: aiosqlite.Connection) -> bool:
     """True, wenn die Legacy-``ringbuffer``-Tabelle die ``metadata``-Spalten trägt (#951, Pkt 5).
 

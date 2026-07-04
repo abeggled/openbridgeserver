@@ -293,7 +293,7 @@ class RingBuffer:
         """
         from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
         from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_QUARANTINED
-        from obs.ringbuffer.store.migration import LegacyMigrator
+        from obs.ringbuffer.store.migration import LegacyMigrator, recover_detached_migrated_chunks
         from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
 
         # ``segment_max_bytes`` automatisch aus ``max_file_size_bytes`` ableiten,
@@ -409,6 +409,16 @@ class RingBuffer:
                         await migrator.attach_readonly(classification)
                         # Attach-Identität für die spätere F2-Revalidierung festhalten.
                         self._write_legacy_attach_identity(legacy_fs_path, migrator._current_identity_fields())
+
+            # Detach-Recovery auf dem GARANTIERTEN Startup-Pfad (#951, P2, Runde 41, F1/F2):
+            # crasht der Prozess NACH dem Detach einer migrierten Quelle (Marker gesetzt,
+            # Legacy-Zeile weg), aber BEVOR ihre eigenen rein-negativen ``closed``-Chunks in
+            # den Trailing-Rang (``migrated``) gehoben sind, säßen sie im positiven Prefix und
+            # eine ``id desc``-latest-page träfe migrierte Legacy-Zeilen VOR echten Live-Zeilen.
+            # ``migrate_chunk`` ist ein Wartungsjob ohne Produktions-Treiber, daher hier
+            # store-weit (nach Attach/classify) und source-factor-unabhängig heilen. Idempotent/
+            # No-op, solange eine Quelle noch attached ist oder kein Trailing-Rang nötig ist.
+            await recover_detached_migrated_chunks(store)
 
             # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
             # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
