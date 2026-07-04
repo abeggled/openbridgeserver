@@ -184,13 +184,40 @@ async def test_regression_round28_unrelated_string_bool_no_422(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_regression_round26_fully_unscoped_still_rejects(tmp_path: Path):
-    """Vollständig unscoped + ``gt`` gegen gemischte Registry-Typen → weiterhin 422."""
-    rb = _rb(tmp_path / "seg", segmented=True)
+async def test_fully_unscoped_rejects_only_with_incompatible_rows_like_legacy(tmp_path: Path):
+    """Vollständig unscoped + ``gt``: 422 nur, wenn ein STRING/BOOLEAN-Datapoint auch ZEILEN hat (Runde 33).
+
+    Korrigiert das frühere „Runde 26"-Verhalten (gegen das VOLLE Registry-Universum
+    validieren): Der Legacy-Pfad ist row-lazy und typ-checkt NUR Zeilen, die real
+    existieren. Ein STRING/BOOLEAN-Datapoint, der zwar in der Registry steht, aber
+    KEINE Zeilen im Buffer hat, lässt Legacy NICHT scheitern (Codex :2260/:1396). Die
+    STORE-Level DISTINCT-Discovery erfasst genau die Datapoints MIT Zeilen, also gilt
+    die Parität in beide Richtungen.
+    """
+    # Fall A: nur eine numerische Zeile → kein STRING/BOOLEAN im Buffer → kein 422.
+    rb = _rb(tmp_path / "numeric_only", segmented=True)
     await rb.start()
     try:
         await _record(rb, 5, "2026-01-01T00:00:00.000Z", datapoint_id="dp-num", adapter="numeric-adapter")
-        with pytest.raises(ValueError):
-            await rb.query_v2(value_filters=[{"operator": "gt", "value": 1}], datapoint_types=_TYPES, limit=10)
+        rows = await rb.query_v2(value_filters=[{"operator": "gt", "value": 1}], datapoint_types=_TYPES, limit=10)
+        assert [e.new_value for e in rows] == [5]
     finally:
         await rb.stop()
+
+    # Fall B: ein STRING-Datapoint HAT eine Zeile → 422 (row-lazy Parität), wie Legacy.
+    legacy = _rb(tmp_path / "legacy", segmented=False)
+    seg = _rb(tmp_path / "seg", segmented=True)
+    await legacy.start()
+    await seg.start()
+    try:
+        for inst in (legacy, seg):
+            await _record(inst, 5, "2026-01-01T00:00:00.000Z", datapoint_id="dp-num", adapter="numeric-adapter")
+            await _record(inst, "x", "2026-01-01T00:00:01.000Z", datapoint_id="dp-str", adapter="string-adapter")
+        vf = [{"operator": "gt", "value": 1}]
+        with pytest.raises(ValueError):
+            await legacy.query_v2(value_filters=vf, datapoint_types=_TYPES, limit=10)
+        with pytest.raises(ValueError):
+            await seg.query_v2(value_filters=vf, datapoint_types=_TYPES, limit=10)
+    finally:
+        await legacy.stop()
+        await seg.stop()

@@ -7,13 +7,13 @@
  * canonical problem summary, and the per-segment tooltip.
  *
  * `useSegmentProblems()` calls `useI18n()`, so it must run inside a Vue setup
- * context — we mount a throwaway component and expose the returned API.
+ * context – we mount a throwaway component and expose the returned API.
  */
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
 import { createTestI18n } from '../helpers/createTestI18n'
-import { useSegmentProblems, isSegmentProblem, PROBLEM_RECOVERY } from '@/composables/useSegmentProblems'
+import { useSegmentProblems, isSegmentProblem, PROBLEM_RECOVERY, PROBLEM_STATUS } from '@/composables/useSegmentProblems'
 
 function useApi() {
   let api
@@ -27,11 +27,15 @@ function useApi() {
   return api
 }
 
-const seg = (over = {}) => ({ integrity_status: 'ok', recovery_status: 'none', ...over })
+const seg = (over = {}) => ({ status: 'closed', integrity_status: 'ok', recovery_status: 'none', ...over })
 
-describe('isSegmentProblem / PROBLEM_RECOVERY', () => {
+describe('isSegmentProblem / PROBLEM_RECOVERY / PROBLEM_STATUS', () => {
   it('exposes the recovery states that count as a problem', () => {
     expect([...PROBLEM_RECOVERY].sort()).toEqual(['dirty_wal', 'pending', 'quarantined'])
+  })
+
+  it('exposes the segment states that count as a problem', () => {
+    expect([...PROBLEM_STATUS].sort()).toEqual(['checkpoint_pending', 'quarantined'])
   })
 
   it('flags corrupt integrity or a problematic recovery state', () => {
@@ -43,18 +47,26 @@ describe('isSegmentProblem / PROBLEM_RECOVERY', () => {
     expect(isSegmentProblem(seg({ recovery_status: 'recovered' }))).toBe(false)
     expect(isSegmentProblem(undefined)).toBe(false)
   })
+
+  it('flags a problematic segment status even when recovery/integrity look healthy (#951)', () => {
+    // A busy WAL checkpoint leaves the segment on status=checkpoint_pending
+    // while recovery_status stays "none" – retention is blocked, so it is a problem.
+    expect(isSegmentProblem(seg({ status: 'checkpoint_pending' }))).toBe(true)
+    expect(isSegmentProblem(seg({ status: 'quarantined' }))).toBe(true)
+    expect(isSegmentProblem(seg({ status: 'active' }))).toBe(false)
+  })
 })
 
 describe('problemCounts', () => {
   it('returns all-zero counts for healthy segments', () => {
     const { problemCounts } = useApi()
-    expect(problemCounts([seg(), seg()])).toEqual({ corrupt: 0, quarantined: 0, pending: 0, dirtyWal: 0, total: 0 })
+    expect(problemCounts([seg(), seg()])).toEqual({ corrupt: 0, quarantined: 0, pending: 0, dirtyWal: 0, checkpointPending: 0, total: 0 })
   })
 
   it('counts corrupt integrity independently of recovery', () => {
     const { problemCounts } = useApi()
     expect(problemCounts([seg({ integrity_status: 'corrupt' })])).toEqual({
-      corrupt: 1, quarantined: 0, pending: 0, dirtyWal: 0, total: 1,
+      corrupt: 1, quarantined: 0, pending: 0, dirtyWal: 0, checkpointPending: 0, total: 1,
     })
   })
 
@@ -65,6 +77,27 @@ describe('problemCounts', () => {
     expect(problemCounts([seg({ recovery_status: 'dirty_wal' })]).dirtyWal).toBe(1)
   })
 
+  it('counts a checkpoint_pending status as a problem (#951)', () => {
+    const { problemCounts } = useApi()
+    expect(problemCounts([seg({ status: 'checkpoint_pending' })])).toEqual({
+      corrupt: 0, quarantined: 0, pending: 0, dirtyWal: 0, checkpointPending: 1, total: 1,
+    })
+  })
+
+  it('counts a quarantined status via the same quarantined bucket (#951)', () => {
+    const { problemCounts } = useApi()
+    expect(problemCounts([seg({ status: 'quarantined' })])).toEqual({
+      corrupt: 0, quarantined: 1, pending: 0, dirtyWal: 0, checkpointPending: 0, total: 1,
+    })
+  })
+
+  it('does not double-count a segment quarantined by both status and recovery_status (#951)', () => {
+    const { problemCounts } = useApi()
+    const counts = problemCounts([seg({ status: 'quarantined', recovery_status: 'quarantined' })])
+    expect(counts.quarantined).toBe(1)
+    expect(counts.total).toBe(1)
+  })
+
   it('mixes corrupt + recovery and counts distinct problem segments once in total', () => {
     const { problemCounts } = useApi()
     const counts = problemCounts([
@@ -72,7 +105,7 @@ describe('problemCounts', () => {
       seg({ integrity_status: 'corrupt', recovery_status: 'quarantined' }),
       seg({ recovery_status: 'pending' }),
     ])
-    expect(counts).toEqual({ corrupt: 1, quarantined: 1, pending: 1, dirtyWal: 0, total: 2 })
+    expect(counts).toEqual({ corrupt: 1, quarantined: 1, pending: 1, dirtyWal: 0, checkpointPending: 0, total: 2 })
   })
 
   it('tolerates non-array input', () => {
@@ -105,6 +138,12 @@ describe('problemSummary', () => {
     expect(summary).toContain('Wiederherstellung ausstehend')
     expect(summary).toContain('unsauberes WAL')
   })
+
+  it('includes checkpoint-pending wording (#951)', () => {
+    const { problemSummary } = useApi()
+    const summary = problemSummary([seg({ status: 'checkpoint_pending' })])
+    expect(summary).toContain('Checkpoint ausstehend')
+  })
 })
 
 describe('segmentProblemTitle', () => {
@@ -123,6 +162,13 @@ describe('segmentProblemTitle', () => {
     expect(title).toContain('checksum mismatch')
     expect(title).toContain(' · ')
   })
+
+  it('reports a checkpoint_pending status even when recovery/integrity are healthy (#951)', () => {
+    const { segmentProblemTitle } = useApi()
+    const title = segmentProblemTitle(seg({ status: 'checkpoint_pending' }))
+    expect(title).toContain('Status')
+    expect(title).toContain('Checkpoint ausstehend')
+  })
 })
 
 describe('retentionSignal (#919/#938)', () => {
@@ -133,7 +179,7 @@ describe('retentionSignal (#919/#938)', () => {
     ...over,
   })
 
-  it('is silent in normal operation — a full budget is not an alarm', () => {
+  it('is silent in normal operation – a full budget is not an alarm', () => {
     const { retentionSignal } = useApi()
     expect(retentionSignal(stats()).level).toBe('none')
   })

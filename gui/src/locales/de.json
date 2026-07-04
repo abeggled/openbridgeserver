@@ -1329,6 +1329,7 @@
     "segmentProblemQuarantined": "{n} isoliert",
     "segmentProblemPending": "{n} Wiederherstellung ausstehend",
     "segmentProblemDirtyWal": "{n} unsauberes WAL",
+    "segmentProblemCheckpointPending": "{n} Checkpoint ausstehend",
     "retentionSignal": {
       "budgetFloor": "Budget zu klein: aktive/isolierte Segmente überschreiten das Budget dauerhaft. Budget erhöhen oder Segmentgröße verringern.",
       "belowTarget": "Retention unter Ziel: Budget reicht nur für ~{current}, konfiguriert sind ~{target}. Für das Ziel Budget ≥ {budget}.",

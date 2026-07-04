@@ -24,7 +24,7 @@ import os
 import re
 import shutil
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -1382,108 +1382,81 @@ class RingBuffer:
 
         from obs.ringbuffer.store.interface import StoreQuery
 
-        # Kandidaten-Datapoints des Scopes bestimmen (#951, Codex :2095). Der
-        # Legacy-Pfad ist row-lazy: er filtert erst nach Adapter/Source/Metadaten
-        # und typ-checkt nur die ZURÜCKGEGEBENEN Zeilen. Ist die Query adapter-/
-        # source-/metadaten-scoped (aber ohne expliziten datapoint_id), sind die
-        # Kandidaten nur die Datapoints, die unter diesem Scope tatsächlich Zeilen
-        # haben – NICHT das ganze Registry-Universum. Der bounded Kandidaten-Scan
-        # (ohne value_filters, damit Typkonflikte nicht still weggefiltert werden)
-        # liefert genau diese erreichbare Datapoint-Menge.
-        scoped_ids = normalized_dps + normalized_names
-        is_scope_filtered = bool(
-            normalized_adapters or (q or "").strip() or metadata_binding_filters or _normalize_string_filters(metadata_tags_any_of)
-        )
-
-        # Typkonflikt-Validierung wie Legacy ``query_v2`` (z. B. numerischer
-        # Operator auf BOOLEAN-Datenpunkt → 422). Ist ein datapoint_id-Filter
-        # gesetzt, prüfen wir die Value-Filter gegen dessen data_type, bevor sie
-        # in den Store gepusht werden – sonst liefe ein Typkonflikt still leer.
-        # Namensaufgelöste Datapoints (``dp_ids_by_name``, z. B. UI-Freitextsuche
-        # auf den Datapoint-NAMEN) werden hier gleichberechtigt validiert (#951,
-        # Pkt 2): sonst übersprünge der segmentierte Pfad die Legacy-Typkonflikt-
-        # Prüfung und ein inkompatibler Filter liefe still leer statt 422.
+        # Kandidaten-Datapoints des Scopes über eine STORE-Level DISTINCT-Query
+        # bestimmen (#951, Codex :2260/:1396/Perf, Runde 33). Der Legacy-Pfad ist
+        # row-lazy: er wendet ZUERST alle Scope-Prädikate INKL. Zeitfenster an und
+        # typ-checkt nur die zurückgegebenen Zeilen. Die Kandidatenmenge ist damit
+        # exakt „welche distinkten Datapoints haben unter Scope+Zeitfenster Zeilen".
+        #
+        # Frühere Row-Pagination-Discovery (Runde 29-32) ersetzt: sie paginierte
+        # ROW-weise über den Scope und stoppte (nicht-Export) erst, wenn so viele
+        # distinkte Datapoints gesehen waren wie die GESAMTE Registry hat. Ein Scope
+        # mit einem Millionen-Zeilen-Datapoint bei vielen unrelated Registry-
+        # Datapoints erreichte diesen Stop NIE → Pagination über den ganzen Scope
+        # (Perf-Befund). ``distinct_datapoint_ids`` führt stattdessen je relevantem
+        # Segment ein einzelnes ``SELECT DISTINCT datapoint_id ... WHERE <scope>`` aus:
+        # durch die ANZAHL DISTINKTER Datapoints begrenzt (index-nutzbar), NICHT durch
+        # die Zeilenzahl.
+        #
+        # Deckt alle drei Findings ab:
+        # * :2260 (unscoped): die DISTINCT-Query scannt echte Buffer-Zeilen, also auch
+        #   die GELÖSCHTER (nicht mehr in der Registry vorhandener) Datapoints – ein
+        #   non-``eq``/``ne``-Filter über eine alte STRING/BOOLEAN-Zeile wird wie Legacy
+        #   mit 422 abgelehnt (unbekannter Kandidatentyp → UNKNOWN im Validator).
+        # * :1396 (nur Zeitfenster): ``from_ts``/``to_ts`` gehen als WHERE in die
+        #   Discovery ein – ein unrelated STRING/BOOLEAN-Datapoint OHNE Zeilen im
+        #   Fenster ist kein Kandidat und erzwingt kein 422 (Legacy-Parität); hat er
+        #   Zeilen IM Fenster, wird er Kandidat → 422.
+        # * scoped (adapter/source/q/metadata/datapoint_ids): unverändert nur die im
+        #   Scope tatsächlich vorhandenen Datapoints, VEREINIGT mit den expliziten
+        #   Namens-Treffern (``dp_ids_by_name``) und angefragten ``datapoint_ids``, weil
+        #   der Store diese OR-verknüpft matcht.
+        #
+        # Value-Filter werden bei der Discovery bewusst NICHT angewandt (sie würden
+        # einen Typkonflikt still wegfiltern statt ihn sichtbar zu machen).
         if value_filters:
-            if is_scope_filtered:
-                # Adapter-/source-/metadaten-/``q``-scoped: gegen die im Scope
-                # tatsächlich vorhandenen Datapoints prüfen. Ein unrelated STRING/
-                # BOOLEAN-Datapoint eines ANDEREN Adapters ist kein Kandidat und darf
-                # kein 422 erzwingen (Legacy-Parität). Hätte der Scope selbst einen
-                # inkompatiblen Datapoint, wirft die Prüfung wie Legacy 422.
-                #
-                # WICHTIG (#951, Codex :1393, Runde 32): Namens-Treffer
-                # (``normalized_names`` aus ``dp_ids_by_name``) dürfen die Discovery
-                # NICHT kurzschließen. Bei gesetztem ``q`` matcht der Store per Name
-                # ODER ``datapoint_id LIKE`` ODER ``source_adapter LIKE`` – der
-                # ``q``-Arm kann also Datapoints JENSEITS der Namens-Treffer erfassen
-                # (per id/source_adapter). Liefe die Validierung nur über die Namens-
-                # Treffer, entginge ein älterer ``q``-per-id-matchender STRING/BOOLEAN-
-                # Datapoint der Typprüfung und der numerische Pushdown droppte seine
-                # Zeilen still statt 422. Die Discovery erfasst daher den vollen
-                # ``q``/Adapter/Metadaten-Scope; das Ergebnis wird mit den expliziten
-                # Namens-Treffern VEREINIGT (nicht ersetzt), damit auch ein Namens-
-                # Treffer ohne (mehr) Zeilen im Zeitfenster typgeprüft bleibt.
-                candidate_ids = await self._scope_candidate_datapoint_ids(
-                    StoreQuery(
-                        from_ts=effective_from,
-                        to_ts=effective_to,
-                        from_exclusive=True,
-                        to_exclusive=True,
-                        datapoint_ids=normalized_dps,
-                        source_adapters=normalized_adapters,
-                        q=q or None,
-                        dp_ids_by_name=normalized_names,
-                        metadata_tags_any_of=_normalize_string_filters(metadata_tags_any_of),
-                        metadata_binding_filters=metadata_binding_filters,
-                        limit=_SEGMENTED_CANDIDATE_CAP,
-                        offset=0,
-                        # Sortierung für die Enumeration bewusst auf ``id``/``desc``
-                        # fixieren (nicht die Query-Sortierung): so paginiert der
-                        # Discovery-Scan mit dem billigsten Segment-Frühabbruch, und
-                        # die Vollständigkeit (alle distinkten Datapoints) hängt nicht
-                        # von der aufrufenden Sortierung ab.
-                        sort_field="id",
-                        sort_order="desc",
-                        value_filters=[],
-                        candidate_cap=_SEGMENTED_CANDIDATE_CAP,
-                        # Export-Modus des Aufrufers durchreichen (#951, Codex :1437,
-                        # Follow-up Runde 29): der Freitext-``q``-OR-Block ist ein
-                        # Guarded-Filter, den der Store nur im NICHT-Export-Fall auf die
-                        # gedeckelte Kandidatenmenge legt. Hart ``is_export=False`` würde
-                        # die ``q``-scoped Discovery AUCH beim CSV-Export deckeln und einen
-                        # älteren ``q``-matchenden STRING/BOOLEAN-Datapoint jenseits des
-                        # Caps übersehen → der Export inlinet ``q`` erschöpfend, pusht das
-                        # numerische Prädikat und dropt die inkompatiblen Zeilen still statt
-                        # das Legacy-422 zu werfen. Mit dem Aufrufer-Flag läuft die Discovery
-                        # beim Export erschöpfend (analog Runde-20-``is_export``-Verhalten für
-                        # ``q``) und erkennt den inkompatiblen Datapoint. Der NICHT-Export-
-                        # Monitorpfad bleibt gedeckelt (kein neuer unbounded-Scan).
-                        is_export=is_export,
-                    ),
-                    max_distinct=len(datapoint_types) if datapoint_types else None,
+            candidate_ids = await self._store.distinct_datapoint_ids(
+                StoreQuery(
+                    from_ts=effective_from,
+                    to_ts=effective_to,
+                    from_exclusive=True,
+                    to_exclusive=True,
+                    datapoint_ids=normalized_dps,
+                    source_adapters=normalized_adapters,
+                    q=q or None,
+                    dp_ids_by_name=normalized_names,
+                    metadata_tags_any_of=_normalize_string_filters(metadata_tags_any_of),
+                    metadata_binding_filters=metadata_binding_filters,
+                    value_filters=[],
                 )
-                # Namens-Treffer mit dem Discovery-Ergebnis VEREINIGEN (#951, Codex
-                # :1393): der ``q``/Adapter/Metadaten-Scope und die expliziten
-                # Namens-Treffer sind im Store OR-verknüpft, also gilt beides zusammen
-                # als Kandidatenmenge.
-                effective_candidate_ids = set(candidate_ids)
-                effective_candidate_ids.update(normalized_names)
-                # Leere Kandidatenmenge = keine Zeilen im Scope: der Legacy-Pfad
-                # liefert dann still leer OHNE 422 (kein row-lazy Typ-Check feuert).
-                # Nur bei mindestens einem Kandidaten typ-prüfen; sonst würde die
-                # ``if datapoint_ids:``-Verzweigung des Validators auf das volle
-                # Registry-Universum zurückfallen und fälschlich 422 werfen.
-                if effective_candidate_ids:
-                    _validate_segmented_value_filter_types(
-                        value_filters=value_filters,
-                        datapoint_ids=list(effective_candidate_ids),
-                        datapoint_types={dp_id: (datapoint_types.get(dp_id, "") if datapoint_types else "") for dp_id in effective_candidate_ids},
-                    )
-            else:
+            )
+            # Explizite Namens-Treffer und angefragte ``datapoint_ids`` mit dem
+            # Discovery-Ergebnis VEREINIGEN: der Store matcht ``q``/``dp_ids_by_name``
+            # OR-verknüpft, und ein angefragter Datapoint bleibt Kandidat, auch wenn er
+            # (noch) keine Zeilen hat – die Discovery liefert nur Datapoints MIT Zeilen.
+            effective_candidate_ids = set(candidate_ids)
+            effective_candidate_ids.update(normalized_names)
+            # Leere Kandidatenmenge = keine Zeilen im Scope/Fenster: der Legacy-Pfad
+            # liefert dann still leer OHNE 422 (kein row-lazy Typ-Check feuert). Nur
+            # bei mindestens einem Kandidaten typ-prüfen; sonst fiele die
+            # ``if datapoint_ids:``-Verzweigung des Validators auf das volle Registry-
+            # Universum zurück und würfe fälschlich 422.
+            #
+            # Ohne Registry-Typkontext KEINE Typprüfung (Legacy-Parität): fehlt
+            # ``datapoint_types`` ganz, liefert der API-Layer keinen Typkontext (der
+            # reale Aufrufer füllt es stets aus der Registry). Der Legacy-Pfad leitet
+            # dann den Typ row-lazy aus dem tatsächlichen Zeilenwert ab und wirft NUR
+            # bei einer real inkompatiblen Zeile. Der segmentierte Pfad kennt den Row-
+            # Wert beim Pushdown nicht; alle Kandidaten pauschal als UNKNOWN → 422 zu
+            # werten wäre eine Über-Rejection. Ohne jeden Typkontext wird die Vorab-
+            # Prüfung daher übersprungen (der Pushdown liefert dann numerisch korrekt;
+            # der 422-Deckungsfall greift, sobald der API-Layer die Registry-Typen
+            # mitgibt – der Normalpfad).
+            if effective_candidate_ids and datapoint_types:
                 _validate_segmented_value_filter_types(
                     value_filters=value_filters,
-                    datapoint_ids=scoped_ids,
-                    datapoint_types=datapoint_types or {},
+                    datapoint_ids=list(effective_candidate_ids),
+                    datapoint_types={dp_id: (datapoint_types.get(dp_id, "") if datapoint_types else "") for dp_id in effective_candidate_ids},
                 )
 
         store_query = StoreQuery(
@@ -1559,73 +1532,6 @@ class RingBuffer:
                 raise
             async with self._lock:
                 return await self._store.query(store_query)
-
-    async def _scope_candidate_datapoint_ids(self, store_query: Any, *, max_distinct: int | None = None) -> set[str]:
-        """Distinkte Datapoint-IDs, die im gegebenen (value-filter-freien) Scope Zeilen haben.
-
-        Dient der adapter-/source-/metadaten-scoped Value-Filter-Typvalidierung
-        (#951, Codex :2095): der Kandidaten-Scan läuft mit demselben Scope wie die
-        eigentliche Query, aber OHNE ``value_filters`` (die würden einen Typkonflikt
-        still wegfiltern statt sichtbar zu machen).
-
-        Enumeration ungecappt in ROWS, gebunden über DATAPOINTS (#951, Codex :1431):
-        Ein einzelner Row-gecappter Scan (neueste ``candidate_cap`` Zeilen) übersähe
-        einen ÄLTEREN in-scope STRING/BOOLEAN-Datapoint, der jenseits des Row-Caps
-        liegt – die Typprüfung liefe dann still an ihm vorbei und der SQL-Pushdown
-        filterte die inkompatiblen Zeilen als Teilergebnis weg (statt 422 wie Legacy).
-        Deshalb wird der Scope hier SEITENWEISE paginiert und die distinkten
-        Datapoint-IDs akkumuliert, bis eine der Abbruchbedingungen greift:
-
-        * **Scope erschöpft** – eine Seite liefert weniger Zeilen als ihr ``limit``,
-          es folgen also keine weiteren scoped Zeilen mehr; ODER
-        * **alle möglichen Datapoints gesehen** – die Menge der distinkten IDs
-          erreicht ``max_distinct`` (die Anzahl bekannter Registry-Datapoints). Dieser
-          Early-Stop gilt aber NUR für den NICHT-Export-Monitorpfad (s. u.); ODER
-        * **Seiten-Backstop** – ``max_pages`` als harte Obergrenze.
-
-        Registry-Größen-Stop nur für den Nicht-Export-Pfad (#951, Codex :1590, Runde
-        32): Der Abbruch bei ``len(distinct ids) >= max_distinct`` nimmt an, die
-        aktuelle Registry begrenze jeden im Scope möglichen Datapoint. Der Buffer kann
-        aber noch Zeilen GELÖSCHTER (nicht mehr in der Registry vorhandener) Datapoints
-        enthalten. Hat die erste Seite bereits alle Registry-IDs gesehen, würde ein
-        älterer in-scope UNBEKANNTER STRING/BOOLEAN-Datapoint nie erkannt → ein
-        ``gt``/``between``-Export pushte das numerische Prädikat und dropte jene Zeilen
-        still statt Legacy-422. Für **Export**-Queries (``is_export``) läuft die
-        Discovery daher ERSCHÖPFEND – bis der Scope erschöpft ist (kurze Seite) bzw.
-        der ``max_pages``-Backstop greift – und ignoriert den Registry-Größen-Stop.
-
-        Damit ist der Aufwand im Nicht-Export-Fall durch die Anzahl DISTINKTER
-        Datapoints begrenzt (jede Seite liest höchstens ``candidate_cap`` Zeilen,
-        bestehende Store-Bound); im Export-Fall ist er durch die scoped Zeilenzahl
-        gebunden (Seiten × ``candidate_cap``, kein unbounded Single-Scan). Der
-        Seiten-Backstop verhindert Endlosläufe, falls der Store wider Erwarten weder
-        ein kurzes Batch noch alle Datapoints liefert.
-        """
-        page_size = max(store_query.limit, 1)
-        candidate_ids: set[str] = set()
-        offset = 0
-        # Export-Queries dürfen den Registry-Größen-Stop NICHT nutzen: sie müssen
-        # gelöschte historische Datapoints jenseits der aktuellen Registry erkennen.
-        allow_registry_size_stop = not bool(getattr(store_query, "is_export", False))
-        # Backstop gegen pathologische Fälle: selbst ohne ``max_distinct`` bleibt die
-        # Enumeration hart gebunden (Seiten × ``candidate_cap`` Zeilen). Der Backstop
-        # ist bewusst großzügig – im Normalfall greift die Datapoint- oder die
-        # Scope-erschöpft-Bedingung deutlich früher.
-        max_pages = 1_000
-        for _ in range(max_pages):
-            page_query = replace(store_query, offset=offset)
-            rows = await self._store_query_serialized(page_query)
-            candidate_ids.update(row["datapoint_id"] for row in rows)
-            # Alle bekannten Registry-Datapoints gesehen → der Scope kann keine
-            # weiteren BEKANNTEN Datapoints beitragen. Nur Nicht-Export: der Export
-            # scannt weiter, um gelöschte historische Datapoints zu erfassen.
-            if allow_registry_size_stop and max_distinct is not None and len(candidate_ids) >= max_distinct:
-                break
-            # Kürzeres Batch als angefragt → Scope erschöpft, keine weiteren Zeilen.
-            if len(rows) < page_size:
-                break
-            offset += page_size
-        return candidate_ids
 
     async def stats(self) -> dict:
         def _effective_retention_seconds(oldest_ts: str | None) -> int | None:

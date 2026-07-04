@@ -148,19 +148,26 @@ async def test_q_scoped_export_between_detects_old_string_beyond_cap_with_offset
 
 
 @pytest.mark.asyncio
-async def test_q_scoped_monitor_stays_bounded_no_422(tmp_path: Path):
-    """Derselbe ``q``-scoped Filter als NICHT-Export-Monitor: gedeckelt → kein 422.
+async def test_q_scoped_monitor_detects_old_string_like_legacy(tmp_path: Path):
+    """Derselbe ``q``-scoped Filter als NICHT-Export-Monitor: 422 wie Legacy (Runde 33).
 
-    Der Monitor-Live-View bleibt hart auf den Row-Cap gedeckelt: die alte STRING-Zeile
-    liegt jenseits des Caps und wird bewusst nicht diskovert. Es darf kein 422 und kein
-    unbounded-Scan entstehen; der Filter läuft gegen die numerischen Treffer.
+    Runde 33 (Codex Perf/:2260): Die Discovery läuft jetzt über eine STORE-Level
+    ``SELECT DISTINCT datapoint_id``-Query statt Row-Pagination. Sie ist durch die
+    ANZAHL DISTINKTER Datapoints begrenzt, NICHT durch einen Row-Cap – der frühere
+    „jenseits des Row-Caps unsichtbar"-Blindfleck existiert nicht mehr. Der ältere
+    ``q``-matchende STRING-Datapoint wird auch im NICHT-Export-Monitor diskovert →
+    422, exakt wie der row-lazy Legacy-Pfad (kein stiller numerischer Drop mehr).
     """
+    legacy = await _make_rb_old_string_new_numeric(tmp_path / "legacy", segmented=False)
     seg = await _make_rb_old_string_new_numeric(tmp_path / "seg", segmented=True)
     try:
         vf = [{"operator": "gt", "value": 6}]
-        rows = await seg.query_v2(q="sensor", value_filters=vf, datapoint_types=_TYPES, limit=10)
-        assert sorted(e.new_value for e in rows) == [7]
+        with pytest.raises(ValueError):
+            await legacy.query_v2(q="sensor", value_filters=vf, datapoint_types=_TYPES, limit=10)
+        with pytest.raises(ValueError):
+            await seg.query_v2(q="sensor", value_filters=vf, datapoint_types=_TYPES, limit=10)
     finally:
+        await legacy.stop()
         await seg.stop()
 
 

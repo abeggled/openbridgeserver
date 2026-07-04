@@ -44,6 +44,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -827,6 +828,21 @@ class SqliteSegmentStore(RingBufferStore):
             active = await self._recover_corrupt_active_segment(active)
             self._active_segment = active
             self._active_conn = await self._open_segment_conn(active.filename)
+            # Aktive-Segment-Stats aus dem tatsächlichen Inhalt reparieren (#951,
+            # Codex :998, Runde 33). Crasht der Prozess / läuft die Disk voll /
+            # scheitert das Manifest-Update NACH einem Segment-Commit, aber BEVOR
+            # ``_refresh_active_segment_stats()`` in die separate Manifest-DB committet,
+            # trägt das aktive Segment über den Restart STALE ``from_ts``/``to_ts``/
+            # ``row_count``. Zeitfenster-Queries wählen Segmente anhand dieser Manifest-
+            # Grenzen (``list_segments_for_query``) → ein Fenster könnte das aktive
+            # Segment ausschließen, obwohl es committete Zeilen im Fenster hält, bis ein
+            # weiterer Append die Stats auffrischt. Analog zu den Corrupt-/Empty-Segment-
+            # Checks (Runde 19/24) wird die Reparatur daher konsistent in den ``open()``-
+            # Pfad gezogen: der Refresh berechnet MIN(ts)/MAX(ts)/row_count/size aus dem
+            # committeten Inhalt neu und schreibt sie ins Manifest, bevor das Segment
+            # abfragbar wird. Für ein frisch angelegtes (leeres) aktives Segment ist der
+            # Refresh idempotent (row_count=0, Grenzen NULL) und schadet nicht.
+            await self._refresh_active_segment_stats()
         except Exception:
             # Scheitert ein Schritt NACH erfolgreichem manifest.open() (z.B. ein korruptes/
             # nicht schreibbares aktives Segment in _create_segment_locked/_open_segment_conn),
@@ -1170,6 +1186,105 @@ class SqliteSegmentStore(RingBufferStore):
             if rows is not None:
                 collected.extend(rows)
         return collected
+
+    async def distinct_datapoint_ids(self, query: StoreQuery) -> set[str]:
+        """Distinkte ``datapoint_id`` im Scope der Query – bounded über distinct-count (#951, Codex :2260/:1396, Runde 33).
+
+        Ersetzt die frühere Row-Pagination-Discovery in ``RingBuffer`` durch eine
+        STORE-Level ``SELECT DISTINCT datapoint_id``-Query je relevantem Segment. Die
+        Kosten sind durch die ANZAHL DISTINKTER Datapoints begrenzt (index-nutzbar
+        über ``ts``/``datapoint_id``/``source_adapter``), NICHT durch die Zeilenzahl –
+        ein Scope mit Millionen Zeilen, aber wenigen distinkten Datapoints wird so
+        gebunden diskovert (der frühere Registry-Größen-Stop paginierte sonst über den
+        ganzen Scope).
+
+        Semantik/Parität:
+
+        * **Scope-Prädikate** (Zeitfenster, datapoint_ids/source_adapters/quality,
+          Freitext-``q``/``dp_ids_by_name``, Metadaten-Tags/Bindings) fließen ins
+          WHERE ein – so respektiert die Discovery das Zeitfenster (nur Datapoints,
+          die IM Fenster auftauchen, :1396) und erfasst echte in-buffer-Zeilen inkl.
+          GELÖSCHTER (nicht mehr registrierter) Datapoints (:2260).
+        * **Value-Filter werden NICHT angewandt** – sie würden einen Typkonflikt still
+          wegfiltern, statt ihn der Typprüfung sichtbar zu machen.
+        * Über alle relevanten Segmente vereinigt (``list_segments_for_query`` wählt mit
+          Zeitfenster nur überlappende Segmente).
+
+        Legacy-Segmente (v1-Single-DB) haben keine Metadaten-Index-Tabellen; ihr
+        Freitext-``q`` und die Metadaten-Filter laufen – wie im regulären Legacy-Read –
+        bounded in Python. Sie werden über den degradierenden Read-Zweig diskovert.
+        """
+        candidate_ids: set[str] = set()
+        segments = await self.manifest.list_segments_for_query(query.from_ts, query.to_ts)
+        for segment in segments:
+            ids = await self._distinct_ids_for_segment(segment, query)
+            if ids is not None:
+                candidate_ids.update(ids)
+        return candidate_ids
+
+    async def _distinct_ids_for_segment(self, segment: SegmentRecord, query: StoreQuery) -> set[str] | None:
+        """Distinkte ``datapoint_id`` eines Segments im Scope; überspringt fehlende/korrupte Segmente.
+
+        Nutzt denselben Skip-/Quarantäne-Pfad wie ``_read_segment_rows`` (#951, Pkt 2):
+        ein zwischenzeitlich gelöschtes/korruptes Segment darf die Discovery nicht
+        brechen.
+        """
+        if self._segment_read_file_missing(segment):
+            return None
+        try:
+            conn = await self._connection_for_read(segment)
+        except aiosqlite.Error as exc:
+            await self._skip_or_quarantine_read(segment, exc)
+            return None
+        close_after = conn is not self._active_conn
+        try:
+            if _is_legacy_segment(segment):
+                return await self._distinct_ids_legacy_segment(conn, segment, query)
+            return await self._distinct_ids_v2_segment(conn, query)
+        except aiosqlite.Error as exc:
+            await self._skip_or_quarantine_read(segment, exc)
+            return None
+        finally:
+            if close_after:
+                await conn.close()
+
+    async def _distinct_ids_v2_segment(self, conn: aiosqlite.Connection, query: StoreQuery) -> set[str]:
+        """``SELECT DISTINCT datapoint_id`` über ein v2-Segment mit den Scope-Prädikaten.
+
+        Baut das WHERE aus ``_common_where`` (Zeitfenster + datapoint_ids/adapter/
+        quality) plus Freitext-``q``/``dp_ids_by_name`` (OR-Block) und den Metadaten-
+        ``EXISTS``-Subqueries – ohne Value-Filter, ohne ``LIMIT`` (durch distinct-count
+        gebunden). Der Freitext-Leading-Wildcard-``LIKE`` ist index-untauglich, aber die
+        DISTINCT-Query terminiert nach dem distinct-Scan (kein per-Zeile-``LIMIT``, das
+        SQLite zum Full-Scan zwänge).
+        """
+        clauses, params = self._common_where(query)
+        free_text_clause, free_text_params = self._free_text_clause(query)
+        if free_text_clause:
+            clauses.append(free_text_clause)
+            params.extend(free_text_params)
+        if self._has_metadata_filter(query):
+            meta_clause, meta_params = self._metadata_clause(query)
+            if meta_clause:
+                clauses.append(meta_clause)
+                params.extend(meta_params)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"SELECT DISTINCT datapoint_id FROM ringbuffer{where}"
+        async with conn.execute(sql, params) as cur:
+            rows = await cur.fetchall()
+        return {row["datapoint_id"] for row in rows}
+
+    async def _distinct_ids_legacy_segment(self, conn: aiosqlite.Connection, segment: SegmentRecord, query: StoreQuery) -> set[str]:
+        """Distinkte ``datapoint_id`` eines Legacy-Segments im Scope (degradierend, #934).
+
+        Die value-filter-freie Query wird über den bestehenden Legacy-Read-Zweig
+        (mit ``is_export`` für erschöpfende Discovery) gelesen und auf die distinkten
+        ``datapoint_id`` reduziert. Value-Filter werden bewusst entfernt (die Discovery
+        darf keinen Typkonflikt wegfiltern); ``q``/Metadaten bleiben (bounded in Python).
+        """
+        scope_query = replace(query, value_filters=[], is_export=True)
+        rows = await self._query_legacy_segment(conn, segment, scope_query)
+        return {row["datapoint_id"] for row in rows}
 
     async def _read_segment_rows(self, segment: SegmentRecord, query: StoreQuery) -> list[dict[str, Any]] | None:
         """Liest ein einzelnes Segment; quarantäniert es on-the-fly bei Korruption (#919).

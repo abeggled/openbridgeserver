@@ -1,5 +1,5 @@
 /**
- * useSegmentProblems (#919/#938) — EINE Quelle der Wahrheit für die
+ * useSegmentProblems (#919/#938) – EINE Quelle der Wahrheit für die
  * Segment-Problem-Sicht des RingBuffers.
  *
  * Sowohl der Segment-Dialog (``SegmentStatsPanel``) als auch die
@@ -15,14 +15,30 @@ import { formatBytesBinary } from '@/utils/formatBytesBinary'
 /** Recovery-Zustände, die ein Segment als problematisch markieren (#938). */
 export const PROBLEM_RECOVERY = new Set(['quarantined', 'pending', 'dirty_wal'])
 
+/**
+ * Segment-``status``-Werte, die ein Segment als problematisch markieren (#951).
+ *
+ * Das Backend meldet busy-Checkpoint- und Quarantäne-Zustände über
+ * ``segment.status`` (``SEGMENT_STATUS_CHECKPOINT_PENDING`` /
+ * ``SEGMENT_STATUS_QUARANTINED``), NICHT über ``recovery_status``. Ein Segment,
+ * das nach einem belegten WAL-Checkpoint auf ``checkpoint_pending`` steht,
+ * blockiert die Retention und muss daher als Problem erkannt werden – auch wenn
+ * Integrität und Recovery gesund aussehen.
+ */
+export const PROBLEM_STATUS = new Set(['checkpoint_pending', 'quarantined'])
+
 function posNumber(value) {
   const n = Number(value)
   return Number.isFinite(n) && n > 0 ? n : null
 }
 
-/** True, wenn das Segment nicht als gesund (integrity=ok, recovery=none) gilt. */
+/** True, wenn das Segment nicht als gesund (status/integrity/recovery unauffällig) gilt. */
 export function isSegmentProblem(seg) {
-  return seg?.integrity_status === 'corrupt' || PROBLEM_RECOVERY.has(seg?.recovery_status)
+  return (
+    seg?.integrity_status === 'corrupt' ||
+    PROBLEM_RECOVERY.has(seg?.recovery_status) ||
+    PROBLEM_STATUS.has(seg?.status)
+  )
 }
 
 export function useSegmentProblems() {
@@ -33,6 +49,17 @@ export function useSegmentProblems() {
       ok: t('ringbuffer.integrityStatus.ok'),
       corrupt: t('ringbuffer.integrityStatus.corrupt'),
       unknown: t('ringbuffer.integrityStatus.unknown'),
+    }
+    return map[value] ?? value
+  }
+
+  function statusLabel(value) {
+    const map = {
+      active: t('ringbuffer.segmentStatus.active'),
+      closed: t('ringbuffer.segmentStatus.closed'),
+      legacy: t('ringbuffer.segmentStatus.legacy'),
+      checkpoint_pending: t('ringbuffer.segmentStatus.checkpoint_pending'),
+      quarantined: t('ringbuffer.segmentStatus.quarantined'),
     }
     return map[value] ?? value
   }
@@ -49,8 +76,10 @@ export function useSegmentProblems() {
   }
 
   /**
-   * Zählt korrupte Segmente und die einzelnen Recovery-Anomalien.
-   * Liefert ``{ corrupt, quarantined, pending, dirtyWal, total }``.
+   * Zählt korrupte Segmente sowie die einzelnen Recovery- und Status-Anomalien.
+   * ``quarantined`` bündelt beide Quellen (``recovery_status`` und ``status``),
+   * zählt ein Segment aber nur einmal. Liefert
+   * ``{ corrupt, quarantined, pending, dirtyWal, checkpointPending, total }``.
    */
   function problemCounts(segments) {
     const list = Array.isArray(segments) ? segments : []
@@ -58,15 +87,17 @@ export function useSegmentProblems() {
     let quarantined = 0
     let pending = 0
     let dirtyWal = 0
+    let checkpointPending = 0
     let total = 0
     for (const seg of list) {
       if (seg?.integrity_status === 'corrupt') corrupt += 1
-      if (seg?.recovery_status === 'quarantined') quarantined += 1
+      if (seg?.recovery_status === 'quarantined' || seg?.status === 'quarantined') quarantined += 1
       else if (seg?.recovery_status === 'pending') pending += 1
       else if (seg?.recovery_status === 'dirty_wal') dirtyWal += 1
+      if (seg?.status === 'checkpoint_pending') checkpointPending += 1
       if (isSegmentProblem(seg)) total += 1
     }
-    return { corrupt, quarantined, pending, dirtyWal, total }
+    return { corrupt, quarantined, pending, dirtyWal, checkpointPending, total }
   }
 
   /**
@@ -75,12 +106,13 @@ export function useSegmentProblems() {
    * Leer, wenn alles gesund ist.
    */
   function problemSummary(segments) {
-    const { corrupt, quarantined, pending, dirtyWal } = problemCounts(segments)
+    const { corrupt, quarantined, pending, dirtyWal, checkpointPending } = problemCounts(segments)
     const parts = []
     if (corrupt > 0) parts.push(t('ringbuffer.segmentProblemCorrupt', { n: corrupt }))
     if (quarantined > 0) parts.push(t('ringbuffer.segmentProblemQuarantined', { n: quarantined }))
     if (pending > 0) parts.push(t('ringbuffer.segmentProblemPending', { n: pending }))
     if (dirtyWal > 0) parts.push(t('ringbuffer.segmentProblemDirtyWal', { n: dirtyWal }))
+    if (checkpointPending > 0) parts.push(t('ringbuffer.segmentProblemCheckpointPending', { n: checkpointPending }))
     if (!parts.length) return ''
     return `${t('ringbuffer.segmentProblemPrefix')} ${parts.join(', ')}`
   }
@@ -89,6 +121,9 @@ export function useSegmentProblems() {
   function segmentProblemTitle(seg) {
     if (!isSegmentProblem(seg)) return null
     const parts = []
+    if (PROBLEM_STATUS.has(seg.status)) {
+      parts.push(`${t('ringbuffer.segmentColStatus')}: ${statusLabel(seg.status)}`)
+    }
     if (seg.integrity_status && seg.integrity_status !== 'ok') {
       parts.push(`${t('ringbuffer.segmentColIntegrity')}: ${integrityLabel(seg.integrity_status)}`)
     }
@@ -99,7 +134,7 @@ export function useSegmentProblems() {
     return parts.join(' · ')
   }
 
-  /** Menschliche Dauer „~X h" (h<48) bzw. „~X Tage" — deckungsgleich mit PrognosisBlock. */
+  /** Menschliche Dauer „~X h" (h<48) bzw. „~X Tage" – deckungsgleich mit PrognosisBlock. */
   function humanDuration(seconds) {
     const s = posNumber(seconds)
     if (s === null) return null
@@ -111,12 +146,12 @@ export function useSegmentProblems() {
   }
 
   /**
-   * Retention-Signal (#919/#938) — trennt Normalbetrieb von echter Fehlanpassung.
+   * Retention-Signal (#919/#938) – trennt Normalbetrieb von echter Fehlanpassung.
    *
    * Ein voller Budget-Füllstand ist NORMAL (FIFO füllt das Budget immer) und
    * erzeugt KEIN Signal. Rot/Warn ist reserviert für „Durchsatz ist der Config
    * entwachsen":
-   *   - Fall B (error): ``retention_over_budget`` — nicht löschbare Segmente
+   *   - Fall B (error): ``retention_over_budget`` – nicht löschbare Segmente
    *     (aktiv/pending/isoliert) sprengen das harte Byte-Budget dauerhaft.
    *   - Fall A (warn): ein Age-Ziel (``max_age``) ist gesetzt UND die datengetrieben
    *     geschätzte Retention liegt darunter → Budget zu klein für Durchsatz+Ziel.
