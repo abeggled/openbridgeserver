@@ -23,6 +23,7 @@ class _FakeXKNXProj:
                     "description": "Aktuator EG",
                     "manufacturer_name": "Acme KNX",
                     "individual_address": "1.1.10",
+                    "space_id": "P-0001-0_R-1",
                     "application": "App-1",
                     "project_uid": 17,
                     "communication_object_ids": ["co-1", "co-2"],
@@ -92,6 +93,7 @@ def test_parse_knxproj_devices_extracts_devices_comm_objects_and_ga_links(fake_x
     assert len(devices) == 1
     assert devices[0].identifier == "dev-1"
     assert devices[0].individual_address == "1.1.10"
+    assert devices[0].space_id == "P-0001-0_R-1"
     assert devices[0].communication_object_ids == ["co-1", "co-2"]
 
     assert len(comm_objects) == 2
@@ -109,6 +111,110 @@ def test_parse_knxproj_devices_extracts_devices_comm_objects_and_ga_links(fake_x
         ("co-1", "1/0/2"),
         ("co-2", "1/0/3"),
     ]
+
+
+def test_extract_device_space_id_supports_xknxproject_shapes():
+    assert parser._extract_device_space_id({"location_id": " room-1 "}) == "room-1"
+    assert parser._extract_device_space_id({"room": {"id": "room-2"}}) == "room-2"
+    assert parser._extract_device_space_id({"space": SimpleNamespace(identifier="room-3")}) == "room-3"
+    assert parser._extract_device_space_id(SimpleNamespace(room_id="room-4")) == "room-4"
+    assert parser._extract_device_space_id(SimpleNamespace(location=SimpleNamespace(id="room-5"))) == "room-5"
+    assert parser._extract_device_space_id({"space": {}}) is None
+    assert parser._extract_device_space_id(SimpleNamespace(space=SimpleNamespace())) is None
+
+
+def test_collect_space_device_map_supports_nested_location_memberships():
+    spaces = {
+        "building": {
+            "identifier": "building",
+            "devices": [{"identifier": "dev-building"}],
+            "spaces": {
+                "room": {
+                    "identifier": "room-1",
+                    "devices": ["dev-a", {"device_id": "dev-b"}, SimpleNamespace(id="dev-c")],
+                }
+            },
+        }
+    }
+
+    assert parser._collect_space_device_map(spaces) == {
+        "dev-building": "building",
+        "dev-a": "room-1",
+        "dev-b": "room-1",
+        "dev-c": "room-1",
+    }
+
+
+def test_collect_space_device_map_uses_dict_keys_when_device_ref_has_no_identifier():
+    spaces = {
+        "room": {
+            "identifier": "room-1",
+            "devices": {"dev-a": {}, "dev-b": {"identifier": "dev-b-ref"}},
+        }
+    }
+
+    assert parser._collect_space_device_map(spaces) == {
+        "dev-a": "room-1",
+        "dev-b-ref": "room-1",
+    }
+
+
+def test_parse_knxproj_devices_uses_location_device_membership(monkeypatch: pytest.MonkeyPatch):
+    class _WithLocationDeviceMembership(_FakeXKNXProj):
+        def parse(self):
+            return {
+                "devices": {
+                    "dev-a": {
+                        "individual_address": "1.1.20",
+                        "name": "Room actuator",
+                    }
+                },
+                "communication_objects": {},
+                "locations": {
+                    "building": {
+                        "identifier": "building",
+                        "spaces": {
+                            "room": {
+                                "identifier": "room-1",
+                                "devices": ["dev-a"],
+                            }
+                        },
+                    }
+                },
+            }
+
+    monkeypatch.setitem(sys.modules, "xknxproject", SimpleNamespace(XKNXProj=_WithLocationDeviceMembership))
+
+    devices, _, _ = parser.parse_knxproj_devices(b"dummy")
+
+    assert devices[0].space_id == "room-1"
+
+
+def test_parse_knxproj_devices_prefers_direct_device_space(monkeypatch: pytest.MonkeyPatch):
+    class _WithConflictingLocationDeviceMembership(_FakeXKNXProj):
+        def parse(self):
+            return {
+                "devices": {
+                    "dev-a": {
+                        "individual_address": "1.1.20",
+                        "name": "Room actuator",
+                        "space_id": "direct-room",
+                    }
+                },
+                "communication_objects": {},
+                "locations": {
+                    "room": {
+                        "identifier": "fallback-room",
+                        "devices": ["dev-a"],
+                    }
+                },
+            }
+
+    monkeypatch.setitem(sys.modules, "xknxproject", SimpleNamespace(XKNXProj=_WithConflictingLocationDeviceMembership))
+
+    devices, _, _ = parser.parse_knxproj_devices(b"dummy")
+
+    assert devices[0].space_id == "direct-room"
 
 
 def test_parse_knxproj_devices_tolerates_missing_optional_fields(fake_xknxproject, monkeypatch: pytest.MonkeyPatch):

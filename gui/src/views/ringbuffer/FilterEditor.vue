@@ -93,6 +93,42 @@
       </section>
 
       <section class="flex flex-col gap-1">
+        <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.devicesLabel') }}</label>
+        <KnxDeviceCombobox
+          :model-value="form.devices"
+          data-testid="filter-editor-devices"
+          @update:model-value="onDevicesChange"
+        >
+          <template #chip="{ item, index }">
+            <span class="truncate" :title="deviceChipTitle(item)">{{ deviceChipLabel(item) }}</span>
+            <button
+              type="button"
+              :data-testid="`device-expand-${index}`"
+              class="ml-1 inline-flex items-center gap-1 text-blue-700/80 hover:text-emerald-600 disabled:cursor-wait disabled:opacity-70 dark:text-blue-300/80 dark:hover:text-emerald-300"
+              :title="$t('ringbuffer.filterEditor.expandDeviceTitle')"
+              :disabled="expandingDevice"
+              @click.stop="expandDeviceChip(item, index)"
+            >
+              <svg
+                v-if="isDeviceChipExpanding(index)"
+                class="h-3 w-3 animate-spin"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <circle class="opacity-25" cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+              <span>{{ isDeviceChipExpanding(index) ? $t('ringbuffer.filterEditor.expandingDeviceShort') : '⊞' }}</span>
+            </button>
+          </template>
+        </KnxDeviceCombobox>
+        <p class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.devicesHint') }}</p>
+        <p v-if="expandingDevice" class="text-xs text-amber-600 dark:text-amber-400" data-testid="filter-editor-device-expanding">
+          {{ $t('ringbuffer.filterEditor.expandingDevice', { device: expandingDevicePa }) }}
+        </p>
+      </section>
+
+      <section class="flex flex-col gap-1">
         <label class="text-xs text-slate-500">{{ $t('ringbuffer.filterEditor.datapointsLabel') }}</label>
         <DpCombobox
           :multi="true"
@@ -129,17 +165,6 @@
           class="input"
           data-testid="filter-editor-q"
           :placeholder="$t('ringbuffer.filterEditor.fulltextPlaceholder')"
-          @input="markDirty"
-        />
-      </section>
-
-      <section class="flex flex-col gap-1">
-        <label class="text-xs text-slate-500">KNX Devices (PA)</label>
-        <input
-          v-model="form.devicesInput"
-          class="input"
-          data-testid="filter-editor-devices"
-          placeholder="1.1.10, 1.1.11"
           @input="markDirty"
         />
       </section>
@@ -317,11 +342,12 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ringbufferApi, searchApi, hierarchyApi } from '@/api/client'
+import { ringbufferApi, searchApi, hierarchyApi, knxprojApi, dpApi } from '@/api/client'
 import Modal from '@/components/ui/Modal.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import HierarchyCombobox from '@/components/ui/HierarchyCombobox.vue'
 import DpCombobox from '@/components/ui/DpCombobox.vue'
+import KnxDeviceCombobox from '@/components/ui/KnxDeviceCombobox.vue'
 import TagCombobox from '@/components/ui/TagCombobox.vue'
 import AdapterCombobox from '@/components/ui/AdapterCombobox.vue'
 import { isEmptyFilter } from '@/composables/useClientSideMatch'
@@ -372,7 +398,7 @@ function makeEmptyForm() {
     color: DEFAULT_COLOR,
     hierarchy_nodes: [], // {tree_id, node_id, include_descendants}
     datapoints: [],
-    devicesInput: '',
+    devices: [],
     tags: [],
     adapters: [],
     q: '',
@@ -430,7 +456,7 @@ const filterIsEmpty = computed(() =>
   isEmptyFilter({
     hierarchy_nodes: form.hierarchy_nodes,
     datapoints: form.datapoints,
-    devices: parseDeviceAddresses(form.devicesInput),
+    devices: form.devices,
     tags: form.tags,
     adapters: form.adapters,
     q: form.q,
@@ -445,6 +471,8 @@ const dirty = ref(false)
 const confirmOpen = ref(false)
 const confirmDeleteOpen = ref(false)
 const expanding = ref(false)
+const expandingDevice = ref(false)
+const expandingDevicePa = ref('')
 const loadedSet = ref(null)
 
 // Fine-grained ownership (#478): admin can edit every set; non-admin users
@@ -506,6 +534,28 @@ function chipFullLabelAttrs(item) {
   return { title: chipFullLabel(item) }
 }
 
+function deviceChipLabel(item) {
+  if (!item) return ''
+  const pa = item.id ?? item.pa
+  const label = item.label ?? item.name
+  return label && label !== pa ? `${pa} ${label}` : String(pa ?? '')
+}
+
+function deviceChipTitle(item) {
+  if (!item) return ''
+  return [item.id ?? item.pa, item.label ?? item.name, item.manufacturer, item.order_number]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+function deviceChipPa(index) {
+  return String(form.devices[index] ?? '').trim()
+}
+
+function isDeviceChipExpanding(index) {
+  return expandingDevicePa.value === deviceChipPa(index)
+}
+
 function parseCompositeId(compositeId) {
   const idx = String(compositeId).indexOf(':')
   if (idx <= 0) return null
@@ -534,6 +584,11 @@ function onHierarchyChange(ids) {
 
 function onDpsChange(ids) {
   form.datapoints = Array.isArray(ids) ? [...ids] : []
+  markDirty()
+}
+
+function onDevicesChange(ids) {
+  form.devices = Array.isArray(ids) ? [...ids] : []
   markDirty()
 }
 
@@ -622,24 +677,13 @@ function buildPayload() {
         include_descendants: n.include_descendants !== false,
       })),
       datapoints: [...form.datapoints],
-      devices: parseDeviceAddresses(form.devicesInput),
+      devices: [...form.devices],
       tags: [...form.tags],
       adapters: [...form.adapters],
       q: form.q ? form.q.trim() : null,
       value_filter: buildValueFilter(),
     },
   }
-}
-
-function parseDeviceAddresses(raw) {
-  return Array.from(
-    new Set(
-      String(raw ?? '')
-        .split(/[,\s]+/g)
-        .map((part) => part.trim())
-        .filter(Boolean),
-    ),
-  )
 }
 
 function hydrateForm(payload) {
@@ -662,7 +706,7 @@ function hydrateForm(payload) {
       }))
     : []
   form.datapoints = Array.isArray(flt.datapoints) ? [...flt.datapoints] : []
-  form.devicesInput = Array.isArray(flt.devices) ? flt.devices.map((v) => String(v).trim()).filter(Boolean).join(', ') : ''
+  form.devices = Array.isArray(flt.devices) ? flt.devices.map((v) => String(v).trim()).filter(Boolean) : []
   form.tags = Array.isArray(flt.tags) ? [...flt.tags] : []
   form.adapters = Array.isArray(flt.adapters) ? [...flt.adapters] : []
   form.q = flt.q || ''
@@ -766,6 +810,96 @@ async function expandHierarchyChip(item, index) {
   }
   // suppress unused-arg warning while still documenting the slot contract
   void item
+}
+
+function collectDeviceGroupAddresses(device) {
+  const out = []
+  const seen = new Set()
+  for (const co of device?.comm_objects || []) {
+    for (const ga of co?.ga_addresses || []) {
+      const address = String(ga ?? '').trim()
+      if (!address || seen.has(address)) continue
+      seen.add(address)
+      out.push(address)
+    }
+  }
+  return out
+}
+
+function bindingMatchesGroupAddress(binding, ga) {
+  if (String(binding?.adapter_type ?? '').toUpperCase() !== 'KNX') return false
+  const config = binding?.config || {}
+  return [config.group_address, config.state_group_address]
+    .map((value) => String(value ?? '').trim())
+    .includes(ga)
+}
+
+async function datapointHasKnxGroupAddress(dpId, ga, bindingCache) {
+  if (!bindingCache.has(dpId)) {
+    const { data } = await dpApi.listBindings(dpId)
+    bindingCache.set(dpId, Array.isArray(data) ? data : [])
+  }
+  return bindingCache.get(dpId).some((binding) => bindingMatchesGroupAddress(binding, ga))
+}
+
+async function searchKnxDatapointsByGroupAddress(ga) {
+  const items = []
+  const size = 500
+  let page = 0
+  let pages = 1
+  do {
+    const { data: result } = await searchApi.search({
+      q: ga,
+      adapter: 'KNX',
+      page,
+      size,
+    })
+    items.push(...(Array.isArray(result?.items) ? result.items : []))
+    const total = Number(result?.total)
+    const reportedPages = Number(result?.pages)
+    if (Number.isFinite(reportedPages) && reportedPages > 0) {
+      pages = reportedPages
+    } else if (Number.isFinite(total) && total > 0) {
+      pages = Math.ceil(total / size)
+    } else {
+      pages = 1
+    }
+    page += 1
+  } while (page < pages)
+  return items
+}
+
+async function expandDeviceChip(item, index) {
+  void item
+  if (expandingDevice.value) return
+  const pa = deviceChipPa(index)
+  if (!pa) return
+  expandingDevice.value = true
+  expandingDevicePa.value = pa
+  errorMsg.value = ''
+  try {
+    const { data } = await knxprojApi.getDevice(pa)
+    const groupAddresses = collectDeviceGroupAddresses(data)
+    const foundDpIds = []
+    const bindingCache = new Map()
+    for (const ga of groupAddresses) {
+      for (const dp of await searchKnxDatapointsByGroupAddress(ga)) {
+        const dpId = dp?.id ? String(dp.id) : ''
+        if (dpId && await datapointHasKnxGroupAddress(dpId, ga, bindingCache)) {
+          foundDpIds.push(dpId)
+        }
+      }
+    }
+    if (!form.devices.some((devicePa) => String(devicePa ?? '').trim() === pa)) return
+    form.datapoints = Array.from(new Set([...form.datapoints, ...foundDpIds]))
+    form.devices = form.devices.filter((devicePa) => String(devicePa ?? '').trim() !== pa)
+    markDirty()
+  } catch (err) {
+    errorMsg.value = err?.response?.data?.detail || err?.message || t('ringbuffer.filterEditor.expandDeviceError')
+  } finally {
+    expandingDevice.value = false
+    expandingDevicePa.value = ''
+  }
 }
 
 async function onSave(addToTopbar) {
