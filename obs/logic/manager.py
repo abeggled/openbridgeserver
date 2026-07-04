@@ -65,6 +65,8 @@ _SECRET_FILE_MAX_BYTES = 8192
 _SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
 _API_CLIENT_RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _API_CLIENT_VARIABLE_RE = re.compile(r"###OBS([1-9][0-9]*)###")
+_API_CLIENT_URL_LEADING_STRIP_CHARS = "".join(chr(value) for value in range(0x21))
+_API_CLIENT_URL_REMOVE_CHARS = str.maketrans("", "", "\r\n\t")
 _HOST_CHECK_MIN_TIMEOUT_S = 1.0
 _HOST_CHECK_MAX_TIMEOUT_S = 30.0
 _HOST_CHECK_MIN_COUNT = 1
@@ -206,8 +208,35 @@ def _quote_api_client_url_value(value: str) -> str:
     return quote(value, safe="-._~")
 
 
+def _normalise_api_client_url_for_parse(value: str) -> str:
+    # The API-client call sites apply Python ``str.strip()`` to the resolved URL,
+    # which removes Unicode whitespace (e.g. U+00A0) on top of the C0 controls and
+    # ASCII space that ``urlparse`` itself trims. Mirror both here so the authority
+    # bounds are computed against the same leading run that is silently removed
+    # later; otherwise a leading Unicode-whitespace (or interleaved control /
+    # whitespace) prefix would hide the scheme and let a variable choose the host.
+    previous = None
+    while value != previous:
+        previous = value
+        value = value.lstrip(_API_CLIENT_URL_LEADING_STRIP_CHARS).lstrip()
+    return value.translate(_API_CLIENT_URL_REMOVE_CHARS)
+
+
 def _replace_api_client_url_placeholders(value: str, resolver: Any) -> str:
+    value = _normalise_api_client_url_for_parse(value)
     authority_bounds: tuple[int, int] | None = None
+    scheme_separator = value.find("://")
+    if scheme_separator != -1 and _API_CLIENT_VARIABLE_RE.search(value[:scheme_separator]):
+        raise _ApiClientVariableError(
+            "API client URL variables are not allowed in the scheme, host, userinfo, or port",
+        )
+    # Reject templates where removing placeholders would expose a :// that is hidden in the
+    # raw template (e.g. "http:###OBS1###//attacker.com" collapses to "http://attacker.com"
+    # when the variable resolves to an empty string).
+    if scheme_separator == -1 and _API_CLIENT_VARIABLE_RE.sub("", value).find("://") != -1:
+        raise _ApiClientVariableError(
+            "API client URL variables are not allowed in the scheme, host, userinfo, or port",
+        )
     scheme_match = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value)
     if scheme_match is not None:
         separator_scan_value = _API_CLIENT_VARIABLE_RE.sub(lambda match: "X" * (match.end() - match.start()), value)
@@ -220,9 +249,11 @@ def _replace_api_client_url_placeholders(value: str, resolver: Any) -> str:
         authority_bounds = (authority_start, authority_end)
 
     def _replace(match: re.Match[str]) -> str:
-        replacement = resolver(int(match.group(1)))
         if authority_bounds is not None and authority_bounds[0] <= match.start() < authority_bounds[1]:
-            return quote(replacement, safe="-._~:[]")
+            raise _ApiClientVariableError(
+                "API client URL variables are not allowed in the scheme, host, userinfo, or port",
+            )
+        replacement = resolver(int(match.group(1)))
         return _quote_api_client_url_value(replacement)
 
     return _API_CLIENT_VARIABLE_RE.sub(_replace, value)
