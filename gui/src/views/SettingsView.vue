@@ -627,7 +627,7 @@
       </div>
 
       <!-- KNX Projekt Import -->
-      <div class="card p-5 flex flex-col gap-3">
+      <div id="knx-project-import" class="card p-5 flex flex-col gap-3">
         <div class="flex items-center gap-2">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.knxTitle') }}</h3>
           <span class="text-xs text-slate-500 bg-slate-700/50 px-2 py-0.5 rounded">.knxproj</span>
@@ -1427,6 +1427,7 @@ function onOutsideClick(e) {
 }
 
 onMounted(async () => {
+  activateTabFromRoute()
   if (!settings.loaded) await settings.load()
   tzSelected.value = settings.timezone
   document.addEventListener('mousedown', onOutsideClick)
@@ -1435,6 +1436,22 @@ onMounted(async () => {
     loadHistoryFilterDps()
   }
 })
+
+function activateTabFromRoute() {
+  const tab = new URLSearchParams(window.location.search).get('tab') || ''
+  if (tab && tabs.value.some((item) => item.id === tab)) {
+    activeTab.value = tab
+    scrollToRouteHash()
+  }
+}
+
+async function scrollToRouteHash() {
+  const hash = window.location.hash || ''
+  if (!hash) return
+  await nextTick()
+  const target = document.getElementById(decodeURIComponent(hash.slice(1)))
+  target?.scrollIntoView({ block: 'start' })
+}
 
 watch(activeTab, (tab) => {
   if (tab === 'history') {
@@ -1478,6 +1495,11 @@ const tabs = computed(() => [
   { id: 'history',      label: t('settings.tabs.history') },
   { id: 'dangerzone',   label: t('settings.tabs.dangerzone') },
 ])
+
+watch(
+  () => tabs.value.map((tab) => tab.id).join('|'),
+  () => activateTabFromRoute(),
+)
 
 // ── URL Target Allowlist ──────────────────────────────────────────────────
 const urlTargetsLoading = ref(false)
