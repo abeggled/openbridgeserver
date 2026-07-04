@@ -1578,47 +1578,99 @@ class RingBuffer:
         # und uebergibt daher einen mit ``offset+limit`` mitwachsenden Cap
         # (``candidate_cap_override``); der Monitor-Live-View behaelt den festen Cap.
         effective_cap = candidate_cap_override if candidate_cap_override is not None else _SEGMENTED_CANDIDATE_CAP
-        # Im row-lazy Fall den Value-Filter NICHT pushen, sondern die gebundene
+
+        def _build_store_query(*, fetch_limit: int, fetch_offset: int, fetch_value_filters: list[dict[str, Any]]) -> StoreQuery:
+            return StoreQuery(
+                from_ts=effective_from,
+                to_ts=effective_to,
+                # Legacy-``query_v2`` behandelt beide Zeitgrenzen exklusiv.
+                from_exclusive=True,
+                to_exclusive=True,
+                datapoint_ids=normalized_dps,
+                source_adapters=normalized_adapters,
+                q=q or None,
+                dp_ids_by_name=normalized_names,
+                metadata_tags_any_of=normalized_metadata_tags,
+                metadata_binding_filters=metadata_binding_filters,
+                limit=fetch_limit,
+                offset=fetch_offset,
+                sort_field=sort_field,
+                sort_order=sort_order,
+                value_filters=fetch_value_filters,
+                candidate_cap=effective_cap,
+                is_export=is_export,
+            )
+
+        def _entries_from_rows(rows: list[dict[str, Any]]) -> list[RingBufferEntry]:
+            return [
+                RingBufferEntry(
+                    id=row["global_event_id"],
+                    ts=row["ts"],
+                    datapoint_id=row["datapoint_id"],
+                    topic=row["topic"],
+                    old_value=row["old_value"],
+                    new_value=row["new_value"],
+                    source_adapter=row["source_adapter"],
+                    quality=row["quality"],
+                    metadata_version=row["metadata_version"],
+                    metadata=row["metadata"] if isinstance(row["metadata"], dict) else {},
+                )
+                for row in rows
+            ]
+
+        # Row-lazy EXPORT (#951, Codex :1583): kann der Value-Filter nicht gepusht
+        # werden, darf der Export NICHT bei ``offset+limit`` roh cappen. Sonst liefert
+        # ein Chunk, dessen NEUESTE Roh-Kandidaten den Filter nicht matchen, eine leere
+        # Seite und die Export-Schleife stoppt, obwohl aeltere matchende Zeilen jenseits
+        # des Fensters nie gelesen wurden. Wie der Legacy-Export batch-scannen wir den
+        # Scope (feste Batch-Groesse, wachsender Store-``offset``, Value-Filter row-lazy
+        # via ``_apply_value_filters``) und akkumulieren GEMATCHTE Zeilen, bis genug fuer
+        # ``offset+limit`` vorliegen ODER der Scope erschoepft ist (ein Batch liefert
+        # weniger Rohzeilen als angefordert). Ein ``max_batches``-Backstop deckelt
+        # pathologische Faelle. Der 422-Fall (inkompatibler Typ) propagiert unveraendert
+        # aus ``_apply_value_filters``, der Export bricht ab wie Legacy.
+        if row_lazy_value_filters and is_export:
+            batch_size = max(1, _SEGMENTED_CANDIDATE_CAP)
+            needed = offset + limit
+            # Backstop: genug Batches, um ``needed`` Treffer selbst bei sehr duenner
+            # Trefferquote zu erreichen, ohne unbegrenzt zu scannen.
+            max_batches = max(1, (needed // batch_size) + 1) * 1000
+            matched: list[RingBufferEntry] = []
+            store_offset = 0
+            for _ in range(max_batches):
+                rows = await self._store_query_serialized(
+                    _build_store_query(fetch_limit=batch_size, fetch_offset=store_offset, fetch_value_filters=[])
+                )
+                batch_entries = _entries_from_rows(rows)
+                matched.extend(
+                    await _apply_value_filters(
+                        entries=batch_entries,
+                        value_filters=list(value_filters or []),
+                        datapoint_types=datapoint_types or {},
+                    )
+                )
+                # Scope erschoepft: der Store lieferte weniger Rohzeilen als angefordert.
+                if len(rows) < batch_size:
+                    break
+                # Genug GEMATCHTE Zeilen fuer die angeforderte Export-Seite.
+                if len(matched) >= needed:
+                    break
+                store_offset += batch_size
+            return matched[offset : offset + limit]
+
+        # Nicht-Export (Monitor-Live-View) bzw. reiner Pushdown: EINMALIGER gebundener
+        # Fetch. Im row-lazy Monitor-Fall den Value-Filter nicht pushen, die gebundene
         # Kandidatenmenge roh holen und in Python filtern+paginieren (wie der Memory-Pfad).
         fetch_limit = effective_cap if row_lazy_value_filters else limit
         fetch_offset = 0 if row_lazy_value_filters else offset
-
-        store_query = StoreQuery(
-            from_ts=effective_from,
-            to_ts=effective_to,
-            # Legacy-``query_v2`` behandelt beide Zeitgrenzen exklusiv.
-            from_exclusive=True,
-            to_exclusive=True,
-            datapoint_ids=normalized_dps,
-            source_adapters=normalized_adapters,
-            q=q or None,
-            dp_ids_by_name=normalized_names,
-            metadata_tags_any_of=normalized_metadata_tags,
-            metadata_binding_filters=metadata_binding_filters,
-            limit=fetch_limit,
-            offset=fetch_offset,
-            sort_field=sort_field,
-            sort_order=sort_order,
-            value_filters=list(value_filters or []) if pushdown_value_filters else [],
-            candidate_cap=effective_cap,
-            is_export=is_export,
-        )
-        rows = await self._store_query_serialized(store_query)
-        entries = [
-            RingBufferEntry(
-                id=row["global_event_id"],
-                ts=row["ts"],
-                datapoint_id=row["datapoint_id"],
-                topic=row["topic"],
-                old_value=row["old_value"],
-                new_value=row["new_value"],
-                source_adapter=row["source_adapter"],
-                quality=row["quality"],
-                metadata_version=row["metadata_version"],
-                metadata=row["metadata"] if isinstance(row["metadata"], dict) else {},
+        rows = await self._store_query_serialized(
+            _build_store_query(
+                fetch_limit=fetch_limit,
+                fetch_offset=fetch_offset,
+                fetch_value_filters=list(value_filters or []) if pushdown_value_filters else [],
             )
-            for row in rows
-        ]
+        )
+        entries = _entries_from_rows(rows)
         if not row_lazy_value_filters:
             return entries
         # Row-lazy = exakte Memory-/Legacy-Semantik (inkl. 422 bei inkompatiblem Typ),

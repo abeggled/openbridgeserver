@@ -943,6 +943,7 @@ class SqliteSegmentStore(RingBufferStore):
         try:
             self._segments_dir.mkdir(parents=True, exist_ok=True)
             await self.manifest.open()
+            await self._reconcile_multiple_active_segments()
             active = await self.manifest.get_active_segment()
             if active is None:
                 active = await self._create_segment_locked()
@@ -996,6 +997,35 @@ class SqliteSegmentStore(RingBufferStore):
     async def _create_segment_locked(self) -> SegmentRecord:
         filename = f"rb_{_utc_now_compact()}.sqlite"
         return await self.manifest.create_segment(filename=filename, schema_version=SEGMENT_SCHEMA_VERSION)
+
+    async def _reconcile_multiple_active_segments(self) -> None:
+        """Löst einen Zwei-``active``-Zustand beim Öffnen robust auf (#951, Codex :2485).
+
+        ``rotate()`` macht das Ersatz-Segment ZUERST durabel/aktiv und schließt erst
+        DANACH das alte Segment (Runde-38-Fix :2463: bei einem Fehler bleibt der alte
+        Writer schreibbar). Beendet sich der Prozess WÄHREND der Rotation NACH der
+        Aktivierung des neuen Segments, aber BEVOR das alte unten als
+        ``closed``/``checkpoint_pending`` markiert ist, bleiben ZWEI ``active``-Zeilen
+        im Manifest zurück. Beim Restart wählt ``get_active_segment()`` das neuere
+        (höchste ``segment_id``) zum Schreiben; das ältere ``active``-Segment wird nie
+        mehr beschrieben, ist aber auch NIE retention-eligible (``active`` ist von der
+        Retention ausgenommen) → seine Alt-Daten bleiben permanent unlöschbar und der
+        Store bleibt über Budget.
+
+        Analog zum Corrupt-/Missing-Active-Recovery (Runde 19) wird der Zustand daher
+        beim Öffnen aufgelöst: Gibt es mehr als ein ``active``-Segment, bleibt das
+        neueste (höchste ``segment_id``, exakt das von ``get_active_segment()``
+        gewählte) aktiv; alle älteren werden auf ``closed`` demotet und damit
+        retention-eligible. So ist WEDER der Runde-38-Fehlerfall (Writer bleibt
+        schreibbar) NOCH dieser harte Crash-Fall (zwei active, alt stuck) problematisch.
+        """
+        active_segments = [s for s in await self.manifest.list_segments() if s.status == SEGMENT_STATUS_ACTIVE]
+        if len(active_segments) <= 1:
+            return
+        # list_segments() liefert aufsteigend nach segment_id → das letzte ist das
+        # neueste (bleibt aktiv), alle davor werden geschlossen.
+        for stale in active_segments[:-1]:
+            await self.manifest.close_segment(stale.segment_id)
 
     async def _recover_missing_active_segment(self, active: SegmentRecord) -> SegmentRecord:
         """Behandelt ein aktives Segment, dessen Datei beim (Wieder-)Öffnen fehlt (#951, Codex :576).
@@ -3060,12 +3090,22 @@ class SqliteSegmentStore(RingBufferStore):
         ``_next_size_retention_victim()`` könnte die attached Legacy-QUELLE löschen,
         BEVOR die Migration detached/finalisiert ist → unkopierte Zeilen verloren,
         kopierte (im migrating-Chunk) versteckt.
+
+        Fehlende v2-Datei NICHT als lesbare Historie werten (#951, Codex :3068):
+        ist die Datei eines nicht-Legacy-Segments außerhalb des Retention-Pfads
+        verschwunden (manuelles Aufräumen, Race), überspringt der Read-Pfad sie
+        (``_segment_read_file_missing``) – ihr Manifest-``row_count`` beschreibt dann
+        keine tatsächlich lesbaren Zeilen mehr. Zählte der Guard sie hier trotzdem,
+        hübe er unter Size-Druck ab und die attached LESBARE Legacy-DB könnte als
+        Opfer gelöscht werden, obwohl keine lesbare nicht-Legacy-Historie existiert
+        → letzte lesbare Kopie der Historie verloren. Die Existenzprüfung ist konsistent
+        zum missing-file-Skip des Read-Pfads (``_segment_read_file_missing``).
         """
         hidden_statuses = {SEGMENT_STATUS_QUARANTINED, SEGMENT_STATUS_MIGRATING}
         for segment in await self.manifest.list_segments():
             if _is_legacy_segment(segment) or segment.status in hidden_statuses:
                 continue
-            if segment.row_count > 0:
+            if segment.row_count > 0 and not self._segment_read_file_missing(segment):
                 return True
         return False
 
