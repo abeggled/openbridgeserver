@@ -1404,13 +1404,25 @@ class RingBuffer:
         # Pkt 2): sonst übersprünge der segmentierte Pfad die Legacy-Typkonflikt-
         # Prüfung und ein inkompatibler Filter liefe still leer statt 422.
         if value_filters:
-            if not scoped_ids and is_scope_filtered:
-                # Adapter-/source-/metadaten-scoped ohne expliziten datapoint_id:
-                # nur gegen die im Scope tatsächlich vorhandenen Datapoints prüfen.
-                # Ein unrelated STRING/BOOLEAN-Datapoint eines ANDEREN Adapters ist
-                # kein Kandidat und darf kein 422 erzwingen (Legacy-Parität). Hätte
-                # der Scope selbst einen inkompatiblen Datapoint, wirft die Prüfung
-                # wie Legacy 422 (statt still leer zu laufen).
+            if is_scope_filtered:
+                # Adapter-/source-/metadaten-/``q``-scoped: gegen die im Scope
+                # tatsächlich vorhandenen Datapoints prüfen. Ein unrelated STRING/
+                # BOOLEAN-Datapoint eines ANDEREN Adapters ist kein Kandidat und darf
+                # kein 422 erzwingen (Legacy-Parität). Hätte der Scope selbst einen
+                # inkompatiblen Datapoint, wirft die Prüfung wie Legacy 422.
+                #
+                # WICHTIG (#951, Codex :1393, Runde 32): Namens-Treffer
+                # (``normalized_names`` aus ``dp_ids_by_name``) dürfen die Discovery
+                # NICHT kurzschließen. Bei gesetztem ``q`` matcht der Store per Name
+                # ODER ``datapoint_id LIKE`` ODER ``source_adapter LIKE`` – der
+                # ``q``-Arm kann also Datapoints JENSEITS der Namens-Treffer erfassen
+                # (per id/source_adapter). Liefe die Validierung nur über die Namens-
+                # Treffer, entginge ein älterer ``q``-per-id-matchender STRING/BOOLEAN-
+                # Datapoint der Typprüfung und der numerische Pushdown droppte seine
+                # Zeilen still statt 422. Die Discovery erfasst daher den vollen
+                # ``q``/Adapter/Metadaten-Scope; das Ergebnis wird mit den expliziten
+                # Namens-Treffern VEREINIGT (nicht ersetzt), damit auch ein Namens-
+                # Treffer ohne (mehr) Zeilen im Zeitfenster typgeprüft bleibt.
                 candidate_ids = await self._scope_candidate_datapoint_ids(
                     StoreQuery(
                         from_ts=effective_from,
@@ -1450,16 +1462,22 @@ class RingBuffer:
                     ),
                     max_distinct=len(datapoint_types) if datapoint_types else None,
                 )
+                # Namens-Treffer mit dem Discovery-Ergebnis VEREINIGEN (#951, Codex
+                # :1393): der ``q``/Adapter/Metadaten-Scope und die expliziten
+                # Namens-Treffer sind im Store OR-verknüpft, also gilt beides zusammen
+                # als Kandidatenmenge.
+                effective_candidate_ids = set(candidate_ids)
+                effective_candidate_ids.update(normalized_names)
                 # Leere Kandidatenmenge = keine Zeilen im Scope: der Legacy-Pfad
                 # liefert dann still leer OHNE 422 (kein row-lazy Typ-Check feuert).
                 # Nur bei mindestens einem Kandidaten typ-prüfen; sonst würde die
                 # ``if datapoint_ids:``-Verzweigung des Validators auf das volle
                 # Registry-Universum zurückfallen und fälschlich 422 werfen.
-                if candidate_ids:
+                if effective_candidate_ids:
                     _validate_segmented_value_filter_types(
                         value_filters=value_filters,
-                        datapoint_ids=list(candidate_ids),
-                        datapoint_types={dp_id: (datapoint_types.get(dp_id, "") if datapoint_types else "") for dp_id in candidate_ids},
+                        datapoint_ids=list(effective_candidate_ids),
+                        datapoint_types={dp_id: (datapoint_types.get(dp_id, "") if datapoint_types else "") for dp_id in effective_candidate_ids},
                     )
             else:
                 _validate_segmented_value_filter_types(
@@ -1556,25 +1574,39 @@ class RingBuffer:
         liegt – die Typprüfung liefe dann still an ihm vorbei und der SQL-Pushdown
         filterte die inkompatiblen Zeilen als Teilergebnis weg (statt 422 wie Legacy).
         Deshalb wird der Scope hier SEITENWEISE paginiert und die distinkten
-        Datapoint-IDs akkumuliert, bis eine der beiden Abbruchbedingungen greift:
+        Datapoint-IDs akkumuliert, bis eine der Abbruchbedingungen greift:
 
         * **Scope erschöpft** – eine Seite liefert weniger Zeilen als ihr ``limit``,
           es folgen also keine weiteren scoped Zeilen mehr; ODER
         * **alle möglichen Datapoints gesehen** – die Menge der distinkten IDs
-          erreicht ``max_distinct`` (die Anzahl bekannter Registry-Datapoints). Mehr
-          distinkte Datapoints kann der Scope nicht enthalten, also ist der Scan hier
-          vollständig.
+          erreicht ``max_distinct`` (die Anzahl bekannter Registry-Datapoints). Dieser
+          Early-Stop gilt aber NUR für den NICHT-Export-Monitorpfad (s. u.); ODER
+        * **Seiten-Backstop** – ``max_pages`` als harte Obergrenze.
 
-        Damit ist der Aufwand durch die Anzahl DISTINKTER Datapoints begrenzt (nicht
-        durch die – potenziell riesige – Zeilenzahl): jede Seite liest höchstens
-        ``candidate_cap`` Zeilen (bestehende Store-Bound), und sobald jede distinkte
-        ID einmal aufgetaucht ist, terminiert die Schleife. Ein zusätzlicher
+        Registry-Größen-Stop nur für den Nicht-Export-Pfad (#951, Codex :1590, Runde
+        32): Der Abbruch bei ``len(distinct ids) >= max_distinct`` nimmt an, die
+        aktuelle Registry begrenze jeden im Scope möglichen Datapoint. Der Buffer kann
+        aber noch Zeilen GELÖSCHTER (nicht mehr in der Registry vorhandener) Datapoints
+        enthalten. Hat die erste Seite bereits alle Registry-IDs gesehen, würde ein
+        älterer in-scope UNBEKANNTER STRING/BOOLEAN-Datapoint nie erkannt → ein
+        ``gt``/``between``-Export pushte das numerische Prädikat und dropte jene Zeilen
+        still statt Legacy-422. Für **Export**-Queries (``is_export``) läuft die
+        Discovery daher ERSCHÖPFEND – bis der Scope erschöpft ist (kurze Seite) bzw.
+        der ``max_pages``-Backstop greift – und ignoriert den Registry-Größen-Stop.
+
+        Damit ist der Aufwand im Nicht-Export-Fall durch die Anzahl DISTINKTER
+        Datapoints begrenzt (jede Seite liest höchstens ``candidate_cap`` Zeilen,
+        bestehende Store-Bound); im Export-Fall ist er durch die scoped Zeilenzahl
+        gebunden (Seiten × ``candidate_cap``, kein unbounded Single-Scan). Der
         Seiten-Backstop verhindert Endlosläufe, falls der Store wider Erwarten weder
         ein kurzes Batch noch alle Datapoints liefert.
         """
         page_size = max(store_query.limit, 1)
         candidate_ids: set[str] = set()
         offset = 0
+        # Export-Queries dürfen den Registry-Größen-Stop NICHT nutzen: sie müssen
+        # gelöschte historische Datapoints jenseits der aktuellen Registry erkennen.
+        allow_registry_size_stop = not bool(getattr(store_query, "is_export", False))
         # Backstop gegen pathologische Fälle: selbst ohne ``max_distinct`` bleibt die
         # Enumeration hart gebunden (Seiten × ``candidate_cap`` Zeilen). Der Backstop
         # ist bewusst großzügig – im Normalfall greift die Datapoint- oder die
@@ -1585,8 +1617,9 @@ class RingBuffer:
             rows = await self._store_query_serialized(page_query)
             candidate_ids.update(row["datapoint_id"] for row in rows)
             # Alle bekannten Registry-Datapoints gesehen → der Scope kann keine
-            # weiteren distinkten Datapoints beitragen.
-            if max_distinct is not None and len(candidate_ids) >= max_distinct:
+            # weiteren BEKANNTEN Datapoints beitragen. Nur Nicht-Export: der Export
+            # scannt weiter, um gelöschte historische Datapoints zu erfassen.
+            if allow_registry_size_stop and max_distinct is not None and len(candidate_ids) >= max_distinct:
                 break
             # Kürzeres Batch als angefragt → Scope erschöpft, keine weiteren Zeilen.
             if len(rows) < page_size:
