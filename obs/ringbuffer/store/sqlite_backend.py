@@ -202,6 +202,17 @@ def _is_missing_ringbuffer_table(exc: Exception) -> bool:
 # Value-Filter-Degradation liest höchstens so viele Kandidatenzeilen.
 _LEGACY_DEFAULT_CANDIDATE_CAP = 10_000
 
+# Erschöpfender Discovery-``limit`` für den row-level Legacy-Discovery-Zweig (``q``/
+# Metadaten), #951 Runde 35: Der Legacy-Reader stoppt seine Export-Batch-Schleife,
+# sobald ``offset+limit`` GEMATCHTE Zeilen zusammen sind ODER das Segment erschöpft
+# ist. Ein sehr hoher ``limit`` erzwingt hier die Segment-Erschöpfung (statt nach den
+# neuesten 100 zu stoppen), sodass auch ältere/gelöschte in-scope Datapoints erfasst
+# werden. Der Roh-Kandidaten-Cap je Batch (``_legacy_candidate_cap``) bindet den
+# Speicher unabhängig davon. Der Wert bleibt endlich (kein „unlimited"), damit ein
+# pathologisch großer, ausschließlich in Python gefilterter Legacy-Bestand nicht in
+# einen faktisch unbegrenzten Discovery-Scan kippt.
+_LEGACY_DISCOVERY_EXHAUSTIVE_LIMIT = 1 << 30
+
 # Synthetische global_event_id für Legacy-Zeilen: aus der chronologischen
 # Legacy-rowid abgeleitet (NICHT aus der Fetch-Reihenfolge), damit die Ordnung
 # unabhängig von der Sort-Richtung des Kandidaten-Fetches stabil bleibt. Der
@@ -893,6 +904,15 @@ class SqliteSegmentStore(RingBufferStore):
         # werden (sonst meldete ``/stats`` fälschlich unter-Budget). Ein späterer
         # erfolgreicher Delete räumt die ID wieder aus.
         self._unlink_blocked_segment_ids: set[int] = set()
+        # Per-Segment-Discovery-Summary (#951, Codex Runde 35): distinkte
+        # ``(datapoint_id, source_adapter)``-Paare je v2-Segment, lazy berechnet und
+        # NUR für GESCHLOSSENE (immutable) Segmente gecacht. Bounded über die
+        # DISTINCT-Anzahl (Covering-Index ``idx_rb_dp_ts_id``), nicht die Zeilenzahl.
+        # Speist die Freitext-``q``-Discovery in Python, statt einen unbounded leading-
+        # wildcard-``LIKE`` über die ganze Segment-Historie zu scannen. Das aktive
+        # Segment wird NIE gecacht (es wächst) – dort läuft die DISTINCT-Query frisch;
+        # sie ist als jüngstes/kleinstes Segment ebenfalls durch distinct-count gebunden.
+        self._segment_dp_adapter_summary: dict[int, frozenset[tuple[str, str]]] = {}
 
     def apply_config(
         self,
@@ -1370,7 +1390,7 @@ class SqliteSegmentStore(RingBufferStore):
         try:
             if _is_legacy_segment(segment):
                 return await self._distinct_ids_legacy_segment(conn, segment, query)
-            return await self._distinct_ids_v2_segment(conn, query)
+            return await self._distinct_ids_v2_segment(conn, segment, query)
         except aiosqlite.Error as exc:
             await self._skip_or_quarantine_read(segment, exc)
             return None
@@ -1378,43 +1398,256 @@ class SqliteSegmentStore(RingBufferStore):
             if close_after:
                 await conn.close()
 
-    async def _distinct_ids_v2_segment(self, conn: aiosqlite.Connection, query: StoreQuery) -> set[str]:
-        """``SELECT DISTINCT datapoint_id`` über ein v2-Segment mit den Scope-Prädikaten.
+    async def _distinct_ids_v2_segment(self, conn: aiosqlite.Connection, segment: SegmentRecord, query: StoreQuery) -> set[str]:
+        """Distinkte ``datapoint_id`` eines v2-Segments im Scope – bounded UND exhaustiv (#951, Runde 35).
 
-        Baut das WHERE aus ``_common_where`` (Zeitfenster + datapoint_ids/adapter/
-        quality) plus Freitext-``q``/``dp_ids_by_name`` (OR-Block) und den Metadaten-
-        ``EXISTS``-Subqueries – ohne Value-Filter, ohne ``LIMIT`` (durch distinct-count
-        gebunden). Der Freitext-Leading-Wildcard-``LIKE`` ist index-untauglich, aber die
-        DISTINCT-Query terminiert nach dem distinct-Scan (kein per-Zeile-``LIMIT``, das
-        SQLite zum Full-Scan zwänge).
+        Die frühere Fassung hängte den Freitext-``q``-``LIKE`` und die Metadaten-
+        ``EXISTS`` direkt ans DISTINCT-WHERE und verzichtete auf jeden Cap. Für einen
+        UNWINDOWED Scope (``q``/Metadaten ohne Zeitfenster) zwingt ein leading-wildcard-
+        ``LIKE``/``EXISTS`` SQLite, jede historische Segment-Zeile zu walken, nur um
+        Typen zu validieren (Codex :1402) – auf einem 20–30 GB-Store blockiert das eine
+        latest-page-Query auf einem Full-History-Scan. Die Prädikate werden daher nach
+        Scan-Kosten getrennt:
+
+        * **Sargable Scope** (Zeitfenster, datapoint_ids/adapter/quality) → direktes
+          ``SELECT DISTINCT datapoint_id`` (Covering-Index ``idx_rb_dp_ts_id``/
+          ``idx_rb_adp_ts_id``, durch distinct-count gebunden). Deckt den unscoped/
+          scoped/zeitfenster-Fall ab.
+        * **Freitext-``q``** (leading-wildcard ``LIKE`` auf id ODER adapter):
+          - OHNE Zeitgrenze → NICHT als ``LIKE``-Scan gepusht, sondern über die per-
+            Segment ``(datapoint_id, source_adapter)``-Summary (für geschlossene
+            Segmente gecacht) in Python gefiltert. Bounded über die distinct-Paar-
+            Anzahl, exhaustiv über die ganze Segment-Historie (auch ältere/gelöschte
+            Datapoints).
+          - MIT Zeitgrenze (ein- oder beidseitig) → die Zeitgrenze bindet den Scan
+            bereits (SQLite liest nur den ts-Bereich); der ``LIKE`` läuft inline im
+            WHERE (keine Full-History) und behält die ts-Restriktion (Parität :1396).
+        * **Metadaten-Filter** (row-level Tagging – eine reine id/adapter-Summary genügt
+          NICHT, ein Datapoint kann teils getaggte, teils untagged Zeilen haben):
+          - MIT Zeitgrenze → inline-``EXISTS`` (durch die Zeitgrenze gebunden).
+          - OHNE Zeitgrenze → über die gedeckelte Kandidaten-Subquery (Runde-31-Cap) als
+            Discovery-Quelle, dann deren distinct ``datapoint_id``. Das ist bewusst nur
+            durch den ``candidate_cap`` gebunden (nicht voll exhaustiv über die
+            Historie): eine korrekte, voll erschöpfende UND bounded Discovery für einen
+            metadaten-only-Value-Filter ist auf dem bestehenden Schema (kein
+            row→datapoint-Metadaten-Index) nicht darstellbar → dokumentierter
+            „ambiguous unbounded scope"-Kompromiss (Codex-Wahl 2). Der Legacy-Pfad ist
+            hier ebenfalls cap-gebunden, sodass die Parität gewahrt bleibt.
+
+        Ohne ``q`` und ohne Metadaten reduziert sich alles auf den ersten (direkten)
+        Zweig – identisch zum bounded Verhalten für unscoped/scoped/zeitfenster-Queries.
         """
-        clauses, params = self._common_where(query)
-        free_text_clause, free_text_params = self._free_text_clause(query)
-        if free_text_clause:
-            clauses.append(free_text_clause)
-            params.extend(free_text_params)
-        if self._has_metadata_filter(query):
+        sargable_clauses, sargable_params = self._common_where(query)
+        has_q = bool((query.q or "").strip()) or bool(query.dp_ids_by_name)
+        has_metadata = self._has_metadata_filter(query)
+        # Ein Zeit-Prädikat (ein- ODER beidseitig) bindet den ``LIKE``/``EXISTS``-Scan
+        # bereits (SQLite liest nur den ts-Bereich). Der teure Summary-/Cap-Pfad ist
+        # nur nötig, wenn GAR KEINE Zeitgrenze den Scan bindet. Nur bei fehlender
+        # Zeitgrenze verliert die Summary keine ts-Restriktion (es gibt keine).
+        time_bounded = query.from_ts is not None or query.to_ts is not None
+
+        # Metadaten OHNE Zeitgrenze → gedeckelte Kandidaten-Subquery als Discovery-Quelle.
+        if has_metadata and not time_bounded:
+            return await self._distinct_ids_capped_candidates(conn, query)
+
+        # Freitext-``q`` OHNE Zeitgrenze → summary-basiert (bounded über distinct-Paare,
+        # exhaustiv). Die Summary honoriert den sargable id/adapter-Scope selbst; ein
+        # separates ``SELECT DISTINCT`` mit leerem WHERE würde hier ALLE Datapoints
+        # liefern und das ``(q OR name)``-Prädikat aushebeln – daher NICHT unionen,
+        # sondern ausschließlich die summary-gefilterte Menge zurückgeben.
+        if has_q and not time_bounded:
+            summary = await self._segment_dp_adapter_pairs(conn, segment)
+            return self._q_filter_summary(summary, query)
+
+        clauses = list(sargable_clauses)
+        params = list(sargable_params)
+        if has_q and time_bounded:
+            # Zeitgrenze bindet den Scan – ``LIKE``-OR-Block inline zulässig.
+            free_text_clause, free_text_params = self._free_text_clause(query)
+            if free_text_clause:
+                clauses.append(free_text_clause)
+                params.extend(free_text_params)
+        if has_metadata and time_bounded:
             meta_clause, meta_params = self._metadata_clause(query)
             if meta_clause:
                 clauses.append(meta_clause)
                 params.extend(meta_params)
+
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"SELECT DISTINCT datapoint_id FROM ringbuffer{where}"
         async with conn.execute(sql, params) as cur:
             rows = await cur.fetchall()
         return {row["datapoint_id"] for row in rows}
 
-    async def _distinct_ids_legacy_segment(self, conn: aiosqlite.Connection, segment: SegmentRecord, query: StoreQuery) -> set[str]:
-        """Distinkte ``datapoint_id`` eines Legacy-Segments im Scope (degradierend, #934).
+    def _q_filter_summary(self, summary: frozenset[tuple[str, str]], query: StoreQuery) -> set[str]:
+        """Wendet den Freitext-``q``/``dp_ids_by_name``-OR-Block auf die Segment-Summary an.
 
-        Die value-filter-freie Query wird über den bestehenden Legacy-Read-Zweig
-        (mit ``is_export`` für erschöpfende Discovery) gelesen und auf die distinkten
-        ``datapoint_id`` reduziert. Value-Filter werden bewusst entfernt (die Discovery
-        darf keinen Typkonflikt wegfiltern); ``q``/Metadaten bleiben (bounded in Python).
+        Semantik identisch zum SQL-OR-Block (``_free_text_clause``): eine Zeile matcht,
+        wenn ``datapoint_id`` ODER ``source_adapter`` den ``q``-Teilstring enthält ODER
+        ``datapoint_id`` in ``dp_ids_by_name`` liegt. Auf die Summary übertragen: ein
+        Datapoint ist Kandidat, wenn EIN ``(datapoint_id, source_adapter)``-Paar den
+        OR-Block erfüllt. Case-insensitiv wie SQLite-``LIKE`` für ASCII.
+
+        Der sargable Scope (Zeit/quality) ist hier NICHT einschränkbar (die Summary
+        trägt keine Zeit/Quality); dieser Pfad läuft daher nur OHNE Zeitgrenze (jede
+        Zeitgrenze routet inline) und ohne quality-Prädikat (der Aufrufer setzt für die
+        Discovery keine quality).
         """
-        scope_query = replace(query, value_filters=[], is_export=True)
+        q = (query.q or "").strip().lower()
+        names = set(query.dp_ids_by_name or [])
+        # Sargable id/adapter-Scope, den die Summary noch honorieren kann (die
+        # Zeit-/quality-Prädikate greifen im UNWINDOWED-``q``-Pfad nicht).
+        scoped_dps = self._scoped_datapoint_ids(query)
+        scoped_adapters = self._scoped_source_adapters(query)
+        candidates: set[str] = set()
+        for dp_id, adapter in summary:
+            if scoped_dps is not None and dp_id not in scoped_dps:
+                continue
+            if scoped_adapters is not None and adapter not in scoped_adapters:
+                continue
+            if dp_id in names:
+                candidates.add(dp_id)
+                continue
+            if q and (q in dp_id.lower() or q in adapter.lower()):
+                candidates.add(dp_id)
+        return candidates
+
+    @staticmethod
+    def _scoped_datapoint_ids(query: StoreQuery) -> set[str] | None:
+        """Angefragte ``datapoint_id``-Menge (Einzel + Liste) oder ``None``, wenn unbeschränkt."""
+        ids: set[str] = set()
+        if query.datapoint_id is not None:
+            ids.add(query.datapoint_id)
+        if query.datapoint_ids:
+            ids.update(query.datapoint_ids)
+        return ids or None
+
+    @staticmethod
+    def _scoped_source_adapters(query: StoreQuery) -> set[str] | None:
+        """Angefragte ``source_adapter``-Menge (Einzel + Liste) oder ``None``, wenn unbeschränkt."""
+        adapters: set[str] = set()
+        if query.source_adapter is not None:
+            adapters.add(query.source_adapter)
+        if query.source_adapters:
+            adapters.update(query.source_adapters)
+        return adapters or None
+
+    async def _segment_dp_adapter_pairs(self, conn: aiosqlite.Connection, segment: SegmentRecord) -> frozenset[tuple[str, str]]:
+        """Distinkte ``(datapoint_id, source_adapter)``-Paare eines v2-Segments (Summary).
+
+        Lazy berechnet; für GESCHLOSSENE (immutable) Segmente in-memory gecacht –
+        geschlossene Segmente ändern sich nie mehr, das Ergebnis ist stabil. Das AKTIVE
+        Segment wächst, wird daher NIE gecacht (jeder Aufruf berechnet frisch; als
+        jüngstes/kleinstes Segment ist der Scan durch die Rotationsgrenze gebunden).
+
+        Die Summary ist über die distinct-Paar-Anzahl gebunden (typischerweise
+        Datapoints × je 1 Adapter). Sie erfasst die GANZE Segment-Historie (auch
+        ältere/gelöschte Datapoints) → exhaustiv. Kein Schema-Eingriff (kein Migrations-
+        Risiko): die bestehende ``ringbuffer``-Tabelle wird nur gelesen.
+        """
+        is_active = self._active_segment is not None and segment.segment_id == self._active_segment.segment_id
+        if not is_active:
+            cached = self._segment_dp_adapter_summary.get(segment.segment_id)
+            if cached is not None:
+                return cached
+        async with conn.execute("SELECT DISTINCT datapoint_id, source_adapter FROM ringbuffer") as cur:
+            rows = await cur.fetchall()
+        pairs = frozenset((row["datapoint_id"], row["source_adapter"]) for row in rows)
+        if not is_active:
+            self._segment_dp_adapter_summary[segment.segment_id] = pairs
+        return pairs
+
+    async def _distinct_ids_capped_candidates(self, conn: aiosqlite.Connection, query: StoreQuery) -> set[str]:
+        """Distinkte ``datapoint_id`` aus der gedeckelten Kandidaten-Subquery (Runde-31-Cap).
+
+        Für einen UNWINDOWED Metadaten-Scope: statt eines unbounded inline-``EXISTS``
+        über die ganze Segment-Historie wird die Kandidatenmenge auf die neuesten
+        ``candidate_cap`` sargable-gescopten Zeilen begrenzt, DANN der Metadaten-Filter
+        (und ein etwaiger Freitext-``q``) darauf ausgewertet und deren distinkte
+        ``datapoint_id`` zurückgegeben. Bounded über den Cap; der „ambiguous unbounded
+        scope"-Kompromiss (ältere Metadaten-Treffer jenseits des Caps) ist im Docstring
+        von ``_distinct_ids_v2_segment`` dokumentiert.
+        """
+        cap = self._effective_candidate_cap(query)
+        inner_clauses, inner_params = self._common_where(query)
+        inner_where = f" WHERE {' AND '.join(inner_clauses)}" if inner_clauses else ""
+        order_by = self._segment_order_by(query)
+        # Die Subquery reicht ``id`` durch, damit das Metadaten-``EXISTS`` gegen
+        # ``capped.id`` korrelieren kann.
+        inner_sql = f"SELECT datapoint_id, source_adapter, id FROM ringbuffer{inner_where} ORDER BY {order_by} LIMIT ?"
+        outer_clauses: list[str] = []
+        outer_params: list[Any] = []
+        free_text_clause, free_text_params = self._free_text_clause(query)
+        if free_text_clause:
+            outer_clauses.append(free_text_clause)
+            outer_params.extend(free_text_params)
+        meta_clause, meta_params = self._metadata_clause(query, entry_ref="capped.id")
+        if meta_clause:
+            outer_clauses.append(meta_clause)
+            outer_params.extend(meta_params)
+        outer_where = f" WHERE {' AND '.join(outer_clauses)}" if outer_clauses else ""
+        sql = f"SELECT DISTINCT datapoint_id FROM ({inner_sql}) AS capped{outer_where}"
+        async with conn.execute(sql, [*inner_params, cap, *outer_params]) as cur:
+            rows = await cur.fetchall()
+        return {row["datapoint_id"] for row in rows}
+
+    async def _distinct_ids_legacy_segment(self, conn: aiosqlite.Connection, segment: SegmentRecord, query: StoreQuery) -> set[str]:
+        """Distinkte ``datapoint_id`` eines Legacy-Segments im Scope – EXHAUSTIV (#951, Runde 35).
+
+        Finding 2 (Codex :1415): die frühere Fassung erbte ``StoreQuery``s Default
+        ``limit=100`` und delegierte an ``_query_legacy_segment``. Ist der Scope
+        value-filter-frei (kein Python-Post-Filter), holte der Legacy-Reader nur die
+        NEUESTEN ``offset+limit`` = 100 Zeilen – ein älterer in-scope STRING/BOOLEAN/
+        gelöschter Datapoint jenseits dieser 100 fiel aus der Discovery, der Value-
+        Filter-Pushdown droppte seine Zeilen dann still statt das Legacy-422 zu wahren.
+
+        Die Discovery muss ALLE in-scope Datapoints erfassen. Value-Filter werden
+        entfernt (die Discovery darf keinen Typkonflikt wegfiltern):
+
+        * **Ohne ``q``/Metadaten** (rein sargable Scope): ein direktes
+          ``SELECT DISTINCT datapoint_id`` über die Legacy-DB – erschöpfend über die
+          ganze Historie, durch die distinct-Anzahl gebunden (kein 100er-Fenster).
+        * **Mit ``q``/Metadaten** (row-level, nur in Python auswertbar): der bestehende
+          Legacy-Reader wird EXHAUSTIV gefahren (``is_export=True`` + erschöpfender
+          ``limit``), sodass die Batch-Schleife bis zur Segment-Erschöpfung läuft statt
+          nach dem ersten 100er-Batch zu stoppen. Der Roh-Kandidaten-Cap je Batch
+          bindet den Speicher (wie beim gefilterten Legacy-Export).
+        """
+        if not ((query.q or "").strip() or self._has_metadata_filter(query)):
+            clauses, params = self._legacy_sargable_where(query)
+            where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+            async with conn.execute(f"SELECT DISTINCT datapoint_id FROM ringbuffer{where}", params) as cur:
+                rows = await cur.fetchall()
+            return {row["datapoint_id"] for row in rows}
+        scope_query = replace(query, value_filters=[], is_export=True, limit=_LEGACY_DISCOVERY_EXHAUSTIVE_LIMIT, offset=0)
         rows = await self._query_legacy_segment(conn, segment, scope_query)
         return {row["datapoint_id"] for row in rows}
+
+    def _legacy_sargable_where(self, query: StoreQuery) -> tuple[list[str], list[Any]]:
+        """Sargable Legacy-WHERE (Zeitfenster + datapoint_ids/adapter/quality), ohne ``q``/Metadaten.
+
+        Legacy-Spalte für den Quell-Adapter heißt ``source_adapter`` (identisch zu v2);
+        Freitext-``q`` und Metadaten sind hier NICHT enthalten (row-level, separat).
+        """
+        clauses, params = self._time_where(query)
+        if query.datapoint_id is not None:
+            clauses.append("datapoint_id = ?")
+            params.append(query.datapoint_id)
+        if query.datapoint_ids:
+            placeholders = ",".join("?" * len(query.datapoint_ids))
+            clauses.append(f"datapoint_id IN ({placeholders})")
+            params.extend(query.datapoint_ids)
+        if query.source_adapter is not None:
+            clauses.append("source_adapter = ?")
+            params.append(query.source_adapter)
+        if query.source_adapters:
+            placeholders = ",".join("?" * len(query.source_adapters))
+            clauses.append(f"source_adapter IN ({placeholders})")
+            params.extend(query.source_adapters)
+        if query.quality is not None:
+            clauses.append("quality = ?")
+            params.append(query.quality)
+        return clauses, params
 
     async def _read_segment_rows(self, segment: SegmentRecord, query: StoreQuery) -> list[dict[str, Any]] | None:
         """Liest ein einzelnes Segment; quarantäniert es on-the-fly bei Korruption (#919).
