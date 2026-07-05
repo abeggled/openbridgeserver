@@ -2522,12 +2522,16 @@ class SqliteSegmentStore(RingBufferStore):
             "ts": row["ts"],
             "datapoint_id": row["datapoint_id"],
             "topic": row["topic"],
-            "old_value": json.loads(row["old_value"]) if row["old_value"] is not None else None,
-            "new_value": json.loads(row["new_value"]) if row["new_value"] is not None else None,
+            # Safe decode (#951, Codex P2 :2526): analog zum Legacy-Reader. Bleibt ein
+            # v2-Segment lesbar, aber der JSON-Wert EINER Zeile ist malformed (partielle
+            # Datei-Korruption oder fremder/fehlerhafter Write), degradiert der Wert auf
+            # den Rohwert statt mit JSONDecodeError die ganze Query zu brechen (→ 500).
+            "old_value": _safe_json_decode(row["old_value"]),
+            "new_value": _safe_json_decode(row["new_value"]),
             "source_adapter": row["source_adapter"],
             "quality": row["quality"],
             "metadata_version": row["metadata_version"],
-            "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+            "metadata": _legacy_metadata_decode(row["metadata"]),
         }
 
     # ------------------------------------------------------------------
