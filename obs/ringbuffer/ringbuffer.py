@@ -495,7 +495,12 @@ class RingBuffer:
             return False
         if not isinstance(attached, dict):
             return False
-        return {str(k): int(v) for k, v in attached.items()} != {str(k): int(v) for k, v in current_identity.items()}
+        # Nicht-Integer-Werte (Truncation, manueller Edit) zählen als korrupter
+        # Sidecar → konservativ False, statt den Startup mit ValueError abzubrechen.
+        try:
+            return {str(k): int(v) for k, v in attached.items()} != {str(k): int(v) for k, v in current_identity.items()}
+        except (TypeError, ValueError):
+            return False
 
     async def stop(self) -> None:
         if self._store is not None:
@@ -1562,10 +1567,15 @@ class RingBuffer:
                             datapoint_types=datapoint_types or {},
                         )
                     )
+                    # Offset IMMER um die konsumierten Rohzeilen vorruecken – auch beim
+                    # kurzen Abschluss-Batch (#951, Runde 47, P1): bliebe er dort stehen,
+                    # startete der naechste Export-Chunk am selben Offset, re-laese den
+                    # kurzen Batch und lieferte dessen Treffer doppelt (Export loopt,
+                    # statt zu enden).
+                    store_offset += len(rows)
                     if len(rows) < batch_size:
                         exhausted = True
                         break
-                    store_offset += batch_size
                     if len(scanned) >= min_matches:
                         break
                 return scanned, store_offset, exhausted

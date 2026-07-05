@@ -141,6 +141,56 @@ async def test_rowlazy_export_cursor_reads_each_row_once(tmp_path: Path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_rowlazy_export_short_final_batch_advances_cursor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Kurzer Abschluss-Batch rueckt den Cursor vor – keine Duplikate, kein Loop (#951, Runde 47, P1).
+
+    Der letzte Roh-Batch ist typischerweise KUERZER als der Candidate-Cap. Markierte
+    ``_scan_matches`` nur das Scope-Ende, ohne ``store_offset`` um die gerade
+    konsumierten Zeilen vorzuruecken, startete der naechste Chunk am selben Offset,
+    re-las dieselben Zeilen und lieferte ihre Treffer DOPPELT – der Export loopte,
+    bis der Max-Row-/Timeout-Pfad griff, statt zu enden.
+
+    Aufbau: 8 Rohzeilen, Batch 5. Der Scan laeuft ``id desc`` (neueste zuerst), der
+    kurze Abschluss-Batch (3 Zeilen) haelt also die AELTESTEN Zeilen – dort liegen
+    alle 3 Treffer. Chunk-Limit 2 zwingt den Export, NACH dem kurzen Batch weitere
+    Chunks zu holen (ein Treffer liegt im Carry) – genau das Fenster, in dem der
+    alte Code ab dem alten Offset re-scannte und Duplikate lieferte.
+    """
+    monkeypatch.setattr(rbmod, "_SEGMENTED_CANDIDATE_CAP", 5)
+
+    rb = _rb(tmp_path, segmented=True)
+    await rb.start()
+    try:
+        # Aelteste Positionen 0-2: Match (100), neuere Positionen 3-7: kein Match (0).
+        for i in range(8):
+            await _record(rb, 100 if i < 3 else 0, f"2026-01-01T00:00:{i:02d}.000Z")
+
+        cursor = RowLazyExportCursor()
+        collected: list = []
+        offset = 0
+        chunk_limit = 2
+        for _ in range(50):  # harte Obergrenze gegen einen Test-Endlosloop
+            chunk = await rb.query_v2(
+                value_filters=[{"operator": "gte", "value": 50}],
+                limit=chunk_limit,
+                offset=offset,
+                candidate_cap_override=offset + chunk_limit,
+                is_export=True,
+                export_store_cursor=cursor,
+            )
+            if not chunk:
+                break
+            collected.extend(chunk)
+            offset += len(chunk)
+
+        # Vollstaendig UND duplikatfrei: exakt die 3 Treffer, jede ts genau einmal.
+        assert [e.new_value for e in collected] == [100, 100, 100]
+        assert len({e.ts for e in collected}) == 3, f"Duplikate im Export: {[e.ts for e in collected]}"
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
 async def test_rowlazy_export_cursor_no_quadratic_growth_with_chunks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Die Store-Reads wachsen NICHT quadratisch mit der Chunk-Zahl.
 

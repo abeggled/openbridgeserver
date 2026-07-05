@@ -151,6 +151,40 @@ async def test_close_marks_segment_checkpoint_pending_when_busy(store: SqliteSeg
     assert seg.status == SEGMENT_STATUS_CHECKPOINT_PENDING
 
 
+async def test_busy_checkpoint_never_persists_transient_closed(store: SqliteSegmentStore, monkeypatch):
+    """Busy-Checkpoint-Rotation schreibt NIE ein transientes ``closed`` (#951, Runde 47).
+
+    Der alte Ablauf persistierte erst ``closed`` (retention-eligible) und stufte
+    dann auf ``checkpoint_pending`` um. Ein Crash zwischen beiden Writes ließe ein
+    Segment mit nicht-getruncatetem WAL als sauber geschlossen zurück – die
+    Retention dürfte es löschen und der Read-Pfad hielte es für konsistent. Der
+    Statuswechsel muss daher in EINEM durablen Write erfolgen; ``closed_at`` wird
+    dabei trotzdem gesetzt (das Segment ist für Writes geschlossen).
+    """
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    seg_id = (await store.manifest.get_active_segment()).segment_id
+
+    async def _busy_checkpoint(_conn):
+        return False
+
+    monkeypatch.setattr(store, "_try_truncate_checkpoint", _busy_checkpoint)
+
+    close_calls: list[int] = []
+    original_close = store.manifest.close_segment
+
+    async def _spy_close(segment_id):
+        close_calls.append(segment_id)
+        await original_close(segment_id)
+
+    monkeypatch.setattr(store.manifest, "close_segment", _spy_close)
+    await store.rotate()
+
+    seg = await store.manifest.get_segment(seg_id)
+    assert seg.status == SEGMENT_STATUS_CHECKPOINT_PENDING
+    assert seg.closed_at is not None, "auch pending Segmente sind fuer Writes geschlossen"
+    assert seg_id not in close_calls, "kein transienter closed-Write im Busy-Pfad"
+
+
 async def test_stats_split_common_and_backend_extra(store: SqliteSegmentStore):
     await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
     stats = await store.stats()

@@ -48,7 +48,7 @@ import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import aiosqlite
 
@@ -79,6 +79,24 @@ from obs.ringbuffer.store.manifest import (
 from obs.ringbuffer.store.writer_lock import WriterLease
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class LegacyScanPlan(NamedTuple):
+    """Plan des Legacy-Roh-Scans (siehe ``_legacy_scan_plan``).
+
+    ``base_sql``/``params`` sind das gedeckelte, per Batch (``LIMIT ? OFFSET ?``)
+    gefetchte Kandidaten-SELECT. ``name_hit_sql``/``name_hit_params`` sind der
+    separat gedeckelte ``dp_ids_by_name``-``IN``-Arm (nur gesetzt, wenn Freitext-``q``
+    UND ``dp_ids_by_name`` vorliegen); er wird einmalig gefetcht und dedupliziert in
+    die Kandidatenmenge gemerged (#951, Runde 46, :1686).
+    """
+
+    base_sql: str
+    params: list[Any]
+    has_python_post_filter: bool
+    name_hit_sql: str | None
+    name_hit_params: list[Any]
+
 
 SEGMENT_SCHEMA_VERSION = 2
 
@@ -1554,12 +1572,12 @@ class SqliteSegmentStore(RingBufferStore):
             raise ValueError("unsafe regex pattern: target value too long")
         return [self._row_to_dict(row) for row in rows]
 
-    async def _legacy_scan_plan(self, conn: aiosqlite.Connection, query: StoreQuery) -> tuple[str, list[Any], bool]:
+    async def _legacy_scan_plan(self, conn: aiosqlite.Connection, query: StoreQuery) -> LegacyScanPlan:
         """Baut das batch-gescopte Legacy-Roh-SELECT (WHERE + ORDER BY + LIMIT/OFFSET).
 
-        Liefert ``(base_sql, params, has_python_post_filter)``. ``base_sql`` erwartet
-        zwei Platzhalter am Ende (``LIMIT ? OFFSET ?``), die der Batch-Fetch bindet.
-        Vom Legacy-Read (``_query_legacy_segment``) genutzt.
+        Liefert einen ``LegacyScanPlan``. ``base_sql`` und ``name_hit_sql`` erwarten
+        jeweils zwei Platzhalter am Ende (``LIMIT ? OFFSET ?``), die der Batch-Fetch
+        bindet. Vom Legacy-Read (``_query_legacy_segment``) genutzt.
         """
         clauses, params = self._time_where(query)
         if query.datapoint_id is not None:
@@ -1593,11 +1611,13 @@ class SqliteSegmentStore(RingBufferStore):
         # würde die OR- in eine AND-Semantik verwandeln (eine nur über ``q`` matchende
         # Zeile fiele durch das SQL-``IN`` heraus). Nur wenn ``q`` FEHLT (kein Scan-
         # Risiko), bleibt das reine ``dp_ids_by_name``-``IN`` index-tauglich im SQL.
-        if not (query.q or "").strip():
-            name_clause, name_params = self._legacy_dp_ids_by_name_clause(query)
-            if name_clause:
-                clauses.append(name_clause)
-                params.extend(name_params)
+        q_is_scan = bool((query.q or "").strip())
+        name_clause, name_params = self._legacy_dp_ids_by_name_clause(query)
+        base_clauses = list(clauses)
+        base_params = list(params)
+        if not q_is_scan and name_clause:
+            clauses.append(name_clause)
+            params.extend(name_params)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
 
         # Metadaten-Tag/Binding-Filter kann eine v1/Legacy-DB nicht per Index-
@@ -1629,12 +1649,32 @@ class SqliteSegmentStore(RingBufferStore):
         # Defaults (``metadata_version=1``, ``metadata={}``).
         has_metadata_cols = await self._legacy_has_metadata_columns(conn)
         metadata_select = "metadata_version, metadata" if has_metadata_cols else "NULL AS metadata_version, NULL AS metadata"
-        base_sql = (
-            "SELECT id, ts, datapoint_id, topic, old_value, new_value, "
-            f"source_adapter, quality, {metadata_select} "
-            f"FROM ringbuffer{where} ORDER BY {candidate_order} {direction}, id {direction} LIMIT ? OFFSET ?"
-        )
-        return base_sql, params, has_python_post_filter
+        select_cols = f"SELECT id, ts, datapoint_id, topic, old_value, new_value, source_adapter, quality, {metadata_select} FROM ringbuffer"
+        order_suffix = f"ORDER BY {candidate_order} {direction}, id {direction} LIMIT ? OFFSET ?"
+        base_sql = f"{select_cols}{where} {order_suffix}"
+
+        # Name-Treffer-Widening für den LEGACY-Read (#951, Runde 46, :1686 – analog
+        # zum v2-Fix Runde 36, :2262): ist ``q`` gesetzt, läuft der gesamte ``q``/
+        # ``dp_ids_by_name``-OR-Block bounded in Python auf der gedeckelten
+        # Kandidatenmenge – der index-taugliche ``dp_ids_by_name``-``IN``-Arm würde
+        # damit fälschlich MIT gedeckelt. Eine per NAME gematchte Legacy-Zeile, deren
+        # rowids ÄLTER als die neuesten ``candidate_cap`` Roh-Zeilen sind und deren
+        # id/source ``q`` nicht enthält, fiele so aus dem Ergebnis, obwohl der
+        # ``IN``-Arm über ``datapoint_id`` indizierbar ist. Der IN-Arm wird deshalb
+        # als EIGENES, separat gedeckeltes SELECT geführt (eigener Cap NUR über die
+        # Namens-Treffer statt Konkurrenz um die globalen Cap-Slots);
+        # ``_query_legacy_segment`` fetcht ihn einmalig und merged ihn dedupliziert
+        # in die Kandidatenmenge. So bleibt Parität zur un-capped Legacy-OR-Query
+        # (``segmented=False``), während die index-untauglichen ``LIKE``-Arme
+        # (id/source) weiter im gedeckelten Kandidaten-Pfad bounded ausgewertet werden.
+        name_hit_sql: str | None = None
+        name_hit_params: list[Any] = []
+        if q_is_scan and name_clause:
+            name_where_parts = [*base_clauses, name_clause]
+            name_where = f" WHERE {' AND '.join(name_where_parts)}"
+            name_hit_sql = f"{select_cols}{name_where} {order_suffix}"
+            name_hit_params = [*base_params, *name_params]
+        return LegacyScanPlan(base_sql, params, has_python_post_filter, name_hit_sql, name_hit_params)
 
     async def _query_legacy_segment(
         self,
@@ -1658,13 +1698,13 @@ class SqliteSegmentStore(RingBufferStore):
           Cap begrenzt, damit ein Value-Filter über Legacy nicht in einen unbounded
           Full-Scan über 20–30 GB kippt.
         """
-        base_sql, params, has_python_post_filter = await self._legacy_scan_plan(conn, query)
+        plan = await self._legacy_scan_plan(conn, query)
 
         needed = max(query.offset, 0) + max(query.limit, 0)
-        if not has_python_post_filter:
+        if not plan.has_python_post_filter:
             # Kein Post-Filter → jede Roh-Zeile ist ein Treffer; ``offset+limit`` roh
             # holen reicht (der Aufrufer sortiert+slict final über alle Segmente).
-            batch, _fetched = await self._fetch_legacy_batch(conn, base_sql, params, segment, query, needed, 0)
+            batch, _fetched = await self._fetch_legacy_batch(conn, plan.base_sql, plan.params, segment, query, needed, 0)
             return batch
 
         # Post-Filter aktiv. Zwei Modi, unterschieden am EXPLIZITEN ``is_export``-Flag
@@ -1695,7 +1735,7 @@ class SqliteSegmentStore(RingBufferStore):
         results: list[dict[str, Any]] = []
         raw_offset = 0
         while True:
-            rows, fetched = await self._fetch_legacy_batch(conn, base_sql, params, segment, query, raw_cap, raw_offset)
+            rows, fetched = await self._fetch_legacy_batch(conn, plan.base_sql, plan.params, segment, query, raw_cap, raw_offset)
             results.extend(rows)
             raw_offset += fetched
             if not is_export:
@@ -1704,6 +1744,16 @@ class SqliteSegmentStore(RingBufferStore):
             if len(results) >= needed or fetched < raw_cap:
                 # Export: genug Treffer für das Fenster ODER Segment erschöpft.
                 break
+        # Name-Treffer-Widening (#951, Runde 46, :1686): der ``dp_ids_by_name``-``IN``-
+        # Arm läuft im Monitor-Pfad als EIGENER, separat gedeckelter Fetch – Namens-
+        # Treffer konkurrieren nicht mit den unrelated neuesten Zeilen um die
+        # Cap-Slots. Dedupe über den synthetischen ``global_event_id`` (bijektiv zur
+        # rowid). Im Export-Pfad überflüssig: der erschöpfende Batch-Scan oben prüft
+        # ohnehin JEDE Zeile über den Python-OR-Block.
+        if plan.name_hit_sql is not None and not is_export:
+            name_rows, _fetched = await self._fetch_legacy_batch(conn, plan.name_hit_sql, plan.name_hit_params, segment, query, raw_cap, 0)
+            seen = {row["global_event_id"] for row in results}
+            results.extend(row for row in name_rows if row["global_event_id"] not in seen)
         return results
 
     async def _fetch_legacy_batch(
@@ -2528,8 +2578,8 @@ class SqliteSegmentStore(RingBufferStore):
             try:
                 checkpoint_ok = await self._try_truncate_checkpoint(old_conn)
                 await old_conn.close()
-                await self.manifest.close_segment(old_segment.segment_id)
                 if checkpoint_ok:
+                    await self.manifest.close_segment(old_segment.segment_id)
                     # Erfolgreicher TRUNCATE (#951, Codex :1346): die WAL/SHM-Bytes sind
                     # gerade in die Haupt-DB verschoben/getruncatet worden. Die von
                     # _refresh_active_segment_stats gesetzte pre-checkpoint-Größe (inkl.
@@ -2542,8 +2592,11 @@ class SqliteSegmentStore(RingBufferStore):
                         size_bytes=self._segment_file_size(old_segment.filename),
                     )
                 else:
-                    await self.manifest.mark_checkpoint_pending(old_segment.segment_id)
-                    # TODO(#936): Hintergrund-Checkpoint-Läufer räumt pending später ab.
+                    # Busy-Checkpoint: Status + closed_at in EINEM durablen Write
+                    # (#951, Runde 47) – nie transient ``closed`` (retention-eligible)
+                    # persistieren, solange der WAL nicht getruncatet ist.
+                    await self.manifest.close_segment_checkpoint_pending(old_segment.segment_id)
+                    # Der ``checkpoint_pending``-Läufer räumt das Segment später ab (#936).
             except BaseException:
                 # Best-effort-Demote: das alte Segment darf nicht ``active`` bleiben.
                 # ``close_segment`` selbst kann bereits gelaufen sein (dann idempotent);

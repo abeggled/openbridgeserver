@@ -288,6 +288,20 @@ class Manifest:
         )
         await self._db.commit()
 
+    async def close_segment_checkpoint_pending(self, segment_id: int) -> None:
+        """Schließt ein Segment mit busy WAL-Checkpoint direkt als ``checkpoint_pending``.
+
+        EIN durabler Write für Status + ``closed_at`` (#951, Runde 47): würde die
+        Rotation erst ``closed`` persistieren und dann auf ``checkpoint_pending``
+        umstufen, ließe ein Crash zwischen beiden Writes ein Segment mit
+        nicht-getruncatetem WAL als retention-eligible ``closed`` zurück.
+        """
+        await self._db.execute(
+            "UPDATE segments SET status = ?, closed_at = ? WHERE segment_id = ?",
+            (SEGMENT_STATUS_CHECKPOINT_PENDING, _utc_now_iso(), segment_id),
+        )
+        await self._db.commit()
+
     async def mark_checkpoint_done(self, segment_id: int) -> None:
         """Räumt ein ``checkpoint_pending``-Segment nach erfolgreichem Truncate ab.
 

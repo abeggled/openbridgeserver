@@ -253,6 +253,38 @@ async def test_f2_unchanged_quarantined_legacy_stays_hidden(tmp_path: Path):
         await rb2.stop()
 
 
+@pytest.mark.asyncio
+async def test_f2_malformed_attach_identity_sidecar_is_conservative(tmp_path: Path):
+    """Sidecar mit Nicht-Integer-Werten (Truncation/manueller Edit) → konservativ quarantined.
+
+    Runde 47 (Codex): ein JSON-Objekt-Sidecar mit z. B. String-Wert ließ ``int(v)``
+    mit ``ValueError`` durchschlagen und brach den gesamten Segment-Store-Startup ab,
+    obwohl die Funktion korrupte Sidecars als konservatives ``False`` dokumentiert.
+    Erwartung: Startup läuft durch, die unveränderte Datei bleibt quarantined.
+    """
+    disk_path = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(disk_path, [100, 101])
+
+    rb = _rb(disk_path, segmented=True)
+    await rb.start()
+    try:
+        await _quarantine_legacy_segment(rb)
+    finally:
+        await rb.stop()
+
+    # Sidecar beschädigen: gültiges JSON-Objekt, aber Nicht-Integer-Wert.
+    sidecar = disk_path.with_name(f"{disk_path.name}.attach_identity")
+    sidecar.write_text('{"mtime_ns": "kaputt", "size": null}', encoding="utf-8")
+
+    rb2 = _rb(disk_path, segmented=True)
+    await rb2.start()  # darf NICHT mit ValueError/TypeError abbrechen
+    try:
+        entries = await rb2.query_v2(limit=10)
+        assert {e.new_value for e in entries} == set(), "korrupter Sidecar darf kein Re-Attach ausloesen"
+    finally:
+        await rb2.stop()
+
+
 # ===========================================================================
 # F3: gespeicherte Row-Typen vor SQL-Pushdown – dokumentierter Kompromiss
 # ===========================================================================
