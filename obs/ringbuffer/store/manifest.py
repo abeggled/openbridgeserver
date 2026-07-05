@@ -35,6 +35,17 @@ SEGMENT_STATUS_CHECKPOINT_PENDING = "checkpoint_pending"
 # global ältestes Segment zurückgewinnt (No-Zero-History-Guard beachtet).
 SEGMENT_STATUS_LEGACY = "legacy"
 
+# Offline-Migrations-Segment (#965): hält bereits kopierte Legacy-Zeilen mit
+# synthetischen NEGATIVEN global_event_ids, SOLANGE die Original-Legacy-Quelle
+# noch attached (autoritativ) ist. Einzige Semantik: UNSICHTBAR bis zum atomaren
+# Commit – ``list_segments_for_query`` blendet den Status aus, retention-eligible
+# ist er nicht (nicht in ``SEGMENT_STATUS_RETENTION_ELIGIBLE``). Beim Commit
+# werden alle ``migrating``-Segmente in EINER Transaktion auf ``closed`` promotet
+# und die Legacy-Zeile entfernt. KEINE weiteren Query-/Ordnungs-Sonderpfade:
+# die negativen gids sortieren nach dem Commit über den normalen
+# ``global_event_id``-Sort unter alle v2-Zeilen.
+SEGMENT_STATUS_MIGRATING = "migrating"
+
 # Schema-Version einer Legacy-Single-DB: kein ``global_event_id``, keine
 # typisierten Wertspalten, segment-lokale rowid. Der Read-Pfad degradiert für
 # diese Version kontrolliert (Ordering aus ts+rowid, kein typed pushdown).
@@ -281,6 +292,50 @@ class Manifest:
         )
         await self._db.commit()
 
+    async def create_migrating_segment(self, *, filename: str, schema_version: int) -> SegmentRecord:
+        """Legt ein Offline-Migrations-Segment DIREKT als ``migrating`` an (#965).
+
+        Bewusst ohne transitorisches ``active``: der Startup-Reconciler
+        (``_reconcile_multiple_active_segments``) darf ein halb kopiertes
+        Migrations-Segment nach einem Crash nie als zweites aktives Segment
+        deuten und in den sichtbaren ``closed``-Rang demoten.
+        """
+        created_at = _utc_now_iso()
+        cursor = await self._db.execute(
+            """INSERT INTO segments (filename, status, created_at, schema_version)
+               VALUES (?, ?, ?, ?)""",
+            (filename, SEGMENT_STATUS_MIGRATING, created_at, schema_version),
+        )
+        await self._db.commit()
+        return await self.get_segment(cursor.lastrowid)
+
+    async def list_migrating_segments(self) -> list[SegmentRecord]:
+        """Alle (unsichtbaren) Offline-Migrations-Segmente, älteste zuerst (#965)."""
+        async with self._db.execute(
+            "SELECT * FROM segments WHERE status = ? ORDER BY segment_id ASC",
+            (SEGMENT_STATUS_MIGRATING,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_segment(row) for row in rows]
+
+    async def commit_offline_migration(self, legacy_segment_ids: list[int]) -> None:
+        """Atomarer Migrations-Commit (#965): promote + detach in EINER Transaktion.
+
+        Alle ``migrating``-Segmente werden ``closed`` (und damit sichtbar +
+        retention-fähig), die Legacy-Manifest-Zeile(n) werden entfernt – beides
+        in einer SQLite-Transaktion. Ein Crash lässt entweder den kompletten
+        Vorzustand (Legacy autoritativ, Kopien unsichtbar) oder den kompletten
+        Endzustand zurück; einen Mischzustand gibt es nicht.
+        """
+        closed_at = _utc_now_iso()
+        await self._db.execute(
+            "UPDATE segments SET status = ?, closed_at = ? WHERE status = ?",
+            (SEGMENT_STATUS_CLOSED, closed_at, SEGMENT_STATUS_MIGRATING),
+        )
+        for segment_id in legacy_segment_ids:
+            await self._db.execute("DELETE FROM segments WHERE segment_id = ?", (segment_id,))
+        await self._db.commit()
+
     async def mark_checkpoint_pending(self, segment_id: int) -> None:
         await self._db.execute(
             "UPDATE segments SET status = ? WHERE segment_id = ?",
@@ -401,8 +456,12 @@ class Manifest:
         #932.
         """
         # Quarantänierte (korrupte, isolierte) Segmente sind für Reads tabu (#919).
+        # ``migrating``-Segmente (#965) sind bis zum atomaren Migrations-Commit
+        # unsichtbar: ihre Zeilen existieren parallel noch in der attachten
+        # Legacy-Quelle (autoritativ) – Einblenden ergäbe Doppel-Delivery.
         clauses: list[str] = [
             f"status != '{SEGMENT_STATUS_QUARANTINED}'",
+            f"status != '{SEGMENT_STATUS_MIGRATING}'",
         ]
         params: list[str] = []
         if to_ts is not None:

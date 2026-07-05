@@ -50,6 +50,10 @@ async def test_init_persisted_ringbuffer_subscribes_when_enabled(monkeypatch):
     ringbuffer = RingBufferStub()
 
     monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
+        lambda _db, **_kwargs: _async_value(None),
+    )
+    monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
         lambda _db, **_kwargs: _async_value(
             {
@@ -82,6 +86,10 @@ async def test_init_persisted_ringbuffer_subscribes_when_enabled(monkeypatch):
 async def test_init_persisted_ringbuffer_disables_without_initializing(monkeypatch):
     events: list[tuple[str, object]] = []
 
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
+        lambda _db, **_kwargs: _async_value(None),
+    )
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
         lambda _db, **_kwargs: _async_value(
@@ -116,6 +124,10 @@ async def test_init_persisted_ringbuffer_memory_path_forces_unsegmented(monkeypa
     class RingBufferStub:
         handle_value_event = object()
 
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
+        lambda _db, **_kwargs: _async_value(None),
+    )
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
         lambda _db, **_kwargs: _async_value(
@@ -158,6 +170,10 @@ async def test_init_persisted_ringbuffer_file_path_stays_segmented(monkeypatch):
     class RingBufferStub:
         handle_value_event = object()
 
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
+        lambda _db, **_kwargs: _async_value(None),
+    )
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
         lambda _db, **_kwargs: _async_value(

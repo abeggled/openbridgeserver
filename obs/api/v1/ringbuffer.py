@@ -20,10 +20,12 @@ import csv
 import json
 import logging
 import re
+import shutil
 import tempfile
 import time
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
@@ -32,7 +34,17 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
-from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config, persist_ringbuffer_config
+from obs.ringbuffer.persisted_config import (
+    LEGACY_DECISION_DISCARDED,
+    LEGACY_DECISION_KEEP,
+    LEGACY_DECISION_SKIPPED,
+    LEGACY_DECISIONS_PROTECTED,
+    LEGACY_DECISIONS_TERMINAL,
+    load_legacy_migration_decision,
+    load_persisted_ringbuffer_config,
+    persist_legacy_migration_decision,
+    persist_ringbuffer_config,
+)
 from obs.ringbuffer.store.config import (
     SEGMENT_MAX_AGE_MIN,
     SegmentConfig,
@@ -1938,6 +1950,145 @@ async def put_ringbuffer_export_settings(
 # ---------------------------------------------------------------------------
 # Stats / config
 # ---------------------------------------------------------------------------
+
+
+class LegacyMigrationDecisionIn(BaseModel):
+    """Entscheidung des Migrations-Assistenten (#964). ``migrate`` startet den Job (#965)."""
+
+    decision: Literal["keep", "discard", "skip"]
+
+
+class LegacyMigrationStatus(BaseModel):
+    """Zustand + Ist-Analyse für den Migrations-Assistenten (#964)."""
+
+    decision: str | None
+    retention_protected: bool
+    legacy: dict[str, Any] | None
+    disk_free_bytes: int | None
+    budget_bytes: int | None
+    over_budget: bool
+    estimated_seconds_until_budget: float | None
+    job: dict[str, Any] | None
+
+
+async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
+    """Baut den Assistenten-Status aus Decision-State, Legacy-Overview und Prognose (#964).
+
+    Eskalations-Signal: ``estimated_seconds_until_budget`` prognostiziert aus der
+    Wachstumsrate (``prognosis.bytes_per_hour``), wann das Size-Budget erschöpft ist
+    und die FIFO-Retention das Legacy-Segment zurückgewinnen MÜSSTE (0 = bereits
+    über Budget). ``None``, wenn keine Rate/kein Budget vorliegt.
+    """
+    decision = await load_legacy_migration_decision(db)
+    rb = get_optional_ringbuffer()
+    legacy: dict[str, Any] | None = None
+    over_budget = False
+    budget: int | None = None
+    eta: float | None = None
+    protected = decision in LEGACY_DECISIONS_PROTECTED
+    job: dict[str, Any] | None = None
+    if rb is not None and is_ringbuffer_enabled():
+        job = rb.legacy_migration_progress()
+        legacy = await rb.legacy_migration_overview()
+        stats = await rb.stats()
+        budget = stats.get("max_file_size_bytes")
+        over_budget = bool(stats.get("retention_over_budget"))
+        if legacy is not None and not over_budget and budget:
+            rate = (stats.get("prognosis") or {}).get("bytes_per_hour")
+            size = stats.get("size_bytes")
+            if rate and size is not None and rate > 0:
+                eta = max(0.0, (budget - size) / rate * 3600.0)
+        elif legacy is not None and over_budget:
+            eta = 0.0
+    disk_free: int | None = None
+    try:
+        disk_free = shutil.disk_usage(str(Path(_ringbuffer_disk_path()).parent)).free
+    except OSError:
+        disk_free = None
+    return LegacyMigrationStatus(
+        decision=decision,
+        retention_protected=protected,
+        legacy=legacy,
+        disk_free_bytes=disk_free,
+        budget_bytes=budget,
+        over_budget=over_budget,
+        estimated_seconds_until_budget=eta,
+        job=job,
+    )
+
+
+@router.get("/migration", response_model=LegacyMigrationStatus)
+async def legacy_migration_status(
+    _user: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
+) -> LegacyMigrationStatus:
+    """Zustand des Legacy-Migrations-Assistenten inkl. Ist-Analyse (#964)."""
+    return await _legacy_migration_status(db)
+
+
+@router.post("/migration/decision", response_model=LegacyMigrationStatus)
+async def legacy_migration_decision(
+    body: LegacyMigrationDecisionIn,
+    _user: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
+) -> LegacyMigrationStatus:
+    """Setzt die Assistenten-Entscheidung (#964).
+
+    * ``skip``: später entscheiden – Legacy bleibt retention-geschützt (revidierbar).
+    * ``keep``: bewusst read-only behalten – der Schutz fällt, die FIFO-Retention
+      darf die Legacy-Quelle als global ältestes Segment zurückgewinnen (revidierbar,
+      solange die Quelle existiert).
+    * ``discard``: Alt-Historie sofort und endgültig verwerfen (terminal).
+    """
+    current = await load_legacy_migration_decision(db)
+    if current in LEGACY_DECISIONS_TERMINAL:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"legacy migration already finalized ({current})")
+    rb = get_optional_ringbuffer()
+    if body.decision == "skip":
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+        if rb is not None:
+            await rb.set_legacy_retention_protected(True)
+    elif body.decision == "keep":
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+        if rb is not None:
+            await rb.set_legacy_retention_protected(False)
+    else:  # discard
+        if rb is not None:
+            await rb.set_legacy_retention_protected(False)
+            await rb.discard_legacy()
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_DISCARDED)
+    return await _legacy_migration_status(db)
+
+
+@router.post("/migration/start", response_model=LegacyMigrationStatus)
+async def legacy_migration_start(
+    _user: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
+) -> LegacyMigrationStatus:
+    """Startet den budget-gebundenen Offline-Migrationsjob (#965).
+
+    Läuft als Hintergrund-Task; Fortschritt über ``GET /migration`` (``job``-Feld).
+    Nach erfolgreichem Commit wird die Entscheidung ``migrated`` (terminal)
+    persistiert und der Retention-Schutz aufgehoben.
+    """
+    from obs.ringbuffer.persisted_config import LEGACY_DECISION_MIGRATED
+    from obs.ringbuffer.store.offline_migration import OfflineMigrationError
+
+    current = await load_legacy_migration_decision(db)
+    if current in LEGACY_DECISIONS_TERMINAL:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"legacy migration already finalized ({current})")
+    rb = get_optional_ringbuffer()
+    if rb is None or not is_ringbuffer_enabled():
+        raise HTTPException(status.HTTP_409_CONFLICT, "ringbuffer is not running")
+
+    async def _persist_migrated() -> None:
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
+
+    try:
+        await rb.start_legacy_migration(on_success=_persist_migrated)
+    except OfflineMigrationError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return await _legacy_migration_status(db)
 
 
 @router.get("/stats", response_model=RingBufferStats)

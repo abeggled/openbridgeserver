@@ -23,6 +23,35 @@ from obs.db.database import Database
 
 PERSISTED_CONFIG_KEY = "ringbuffer.runtime_config"
 
+# Entscheidungszustand des Legacy-Migrations-Assistenten (#964). Eigener
+# app_settings-Key (reiner String), damit der Zustand unabhängig von der
+# Runtime-Config gelesen/geschrieben werden kann.
+LEGACY_MIGRATION_DECISION_KEY = "ringbuffer.legacy_migration_decision"
+
+# Zustände: ``pending`` (Upgrade erkannt, keine Entscheidung), ``skipped``
+# (Wizard dismisst – revidierbar), ``keep`` (bewusst read-only behalten bis die
+# FIFO-Retention greift – revidierbar), ``migrated``/``discarded`` (terminal).
+LEGACY_DECISION_PENDING = "pending"
+LEGACY_DECISION_KEEP = "keep"
+LEGACY_DECISION_SKIPPED = "skipped"
+LEGACY_DECISION_MIGRATED = "migrated"
+LEGACY_DECISION_DISCARDED = "discarded"
+LEGACY_DECISIONS = (
+    LEGACY_DECISION_PENDING,
+    LEGACY_DECISION_KEEP,
+    LEGACY_DECISION_SKIPPED,
+    LEGACY_DECISION_MIGRATED,
+    LEGACY_DECISION_DISCARDED,
+)
+# Terminale Zustände: die Legacy-Quelle existiert danach nicht mehr (migriert
+# bzw. verworfen) – keine weitere Entscheidung möglich.
+LEGACY_DECISIONS_TERMINAL = (LEGACY_DECISION_MIGRATED, LEGACY_DECISION_DISCARDED)
+# Zustände OHNE informierte Entscheidung: das Legacy-Segment bleibt vor der
+# FIFO-Retention geschützt (``StoreRetentionConfig.protect_legacy``). ``keep``
+# ist bewusst NICHT enthalten – der Admin hat die Alles-oder-nichts-Rückgewinnung
+# dann explizit akzeptiert.
+LEGACY_DECISIONS_PROTECTED = (LEGACY_DECISION_PENDING, LEGACY_DECISION_SKIPPED)
+
 # Sentinel: unterscheidet "``segment_max_age`` fehlt in der persistierten Config"
 # (Alt-Config vor der Segmentierung) von einem explizit persistierten ``None``.
 _UNSET = object()
@@ -179,6 +208,50 @@ async def load_persisted_ringbuffer_config(db: Database, *, storage_path: str | 
         "segment_max_rows": data.get("segment_max_rows", defaults["segment_max_rows"]),
         "segment_max_age": segment_max_age,
     }
+
+
+async def load_legacy_migration_decision(db: Database) -> str | None:
+    """Liest den Entscheidungszustand des Migrations-Assistenten (#964).
+
+    ``None`` = kein Zustand vorhanden (Fresh Install ohne Legacy-DB, oder der
+    Startup lief noch nie mit vorhandener Legacy-Quelle). Unbekannte Werte
+    (manueller Edit) werden konservativ als ``None`` behandelt.
+    """
+    row = await db.fetchone("SELECT value FROM app_settings WHERE key=?", (LEGACY_MIGRATION_DECISION_KEY,))
+    value = row["value"] if row else None
+    return value if value in LEGACY_DECISIONS else None
+
+
+async def persist_legacy_migration_decision(db: Database, decision: str) -> None:
+    """Persistiert den Entscheidungszustand des Migrations-Assistenten (#964)."""
+    if decision not in LEGACY_DECISIONS:
+        raise ValueError(f"unknown legacy migration decision: {decision!r}")
+    await db.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (LEGACY_MIGRATION_DECISION_KEY, decision),
+    )
+    await db.commit()
+
+
+async def ensure_legacy_migration_decision(db: Database, *, legacy_db_path: str | None) -> str | None:
+    """Stellt beim Startup den Entscheidungszustand sicher (#964).
+
+    * Existiert bereits ein Zustand → unverändert zurückgeben.
+    * Sonst: liegt eine Legacy-Single-DB auf der Platte (Upgrade-Fall), wird
+      ``pending`` persistiert und zurückgegeben – der Wizard erscheint, das
+      Legacy-Segment bleibt bis zur Entscheidung retention-geschützt.
+    * Ohne Legacy-Datei (Fresh Install, Memory-Pfad) bleibt der Zustand leer.
+    """
+    existing = await load_legacy_migration_decision(db)
+    if existing is not None:
+        return existing
+    if not legacy_db_path:
+        return None
+    db_path = Path(legacy_db_path)
+    if db_path.suffix == "" or not db_path.exists():
+        return None
+    await persist_legacy_migration_decision(db, LEGACY_DECISION_PENDING)
+    return LEGACY_DECISION_PENDING
 
 
 async def persist_ringbuffer_config(

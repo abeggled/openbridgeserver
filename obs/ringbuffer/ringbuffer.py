@@ -243,6 +243,7 @@ class RingBuffer:
         segment_max_bytes: int | None = None,
         segment_max_rows: int | None = None,
         segment_max_age: int | None = None,
+        legacy_retention_protected: bool = False,
     ) -> None:
         if storage not in _ALLOWED_STORAGE_MODELS:
             raise ValueError("storage must be one of: file, disk, memory")
@@ -254,6 +255,14 @@ class RingBuffer:
         self._max_file_size_bytes = max_file_size_bytes
         self._max_age = max_age
         self._conn: aiosqlite.Connection | None = None
+        # Entscheidungs-Guard des Migrations-Assistenten (#964): solange keine
+        # informierte Entscheidung vorliegt (pending/skipped), nimmt die Store-
+        # Retention das attachte Legacy-Segment nicht als FIFO-Opfer.
+        self._legacy_retention_protected = bool(legacy_retention_protected)
+        # Offline-Migrationsjob (#965): genau EIN Lauf gleichzeitig; der Fortschritt
+        # wird live in dieses dict geschrieben (API-Progress-Endpoint).
+        self._legacy_migration_task: asyncio.Task | None = None
+        self._legacy_migration_progress: dict[str, Any] = {"phase": "idle"}
         self._last_values: dict[str, Any] = {}  # dp_id → last recorded value
         self._last_recovery_at: str | None = None
         self._last_recovery_files: list[str] = []
@@ -347,6 +356,7 @@ class RingBuffer:
                 max_file_size_bytes=effective_max_file_size,
                 max_entries=self._max_entries,
                 max_age=self._max_age,
+                protect_legacy=self._legacy_retention_protected,
             ),
         )
         await store.open()
@@ -427,6 +437,13 @@ class RingBuffer:
                         # Attach-Identität für die spätere F2-Revalidierung festhalten.
                         self._write_legacy_attach_identity(legacy_fs_path, migrator._current_identity_fields())
 
+            # Offline-Migrations-Reconciler (#965): vollendet einen im Commit-Fenster
+            # unterbrochenen Migrations-Commit bzw. verwirft verwaiste unsichtbare
+            # Kopien – deterministisch, bevor die Startup-Retention läuft.
+            from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
+
+            await reconcile_offline_migration(store)
+
             # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
             # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
             # zügig getrimmt (No-Zero-History-Guard beachtet, siehe Store).
@@ -503,6 +520,11 @@ class RingBuffer:
             return False
 
     async def stop(self) -> None:
+        if self._legacy_migration_task is not None and not self._legacy_migration_task.done():
+            self._legacy_migration_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await self._legacy_migration_task
+        self._legacy_migration_task = None
         if self._store is not None:
             await self._store.close()
             self._store = None
@@ -725,6 +747,7 @@ class RingBuffer:
                 max_file_size_bytes=effective_max_file_size,
                 max_entries=self._max_entries,
                 max_age=self._max_age,
+                protect_legacy=self._legacy_retention_protected,
             ),
         )
 
@@ -936,6 +959,149 @@ class RingBuffer:
         from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
 
         return any(s.schema_version <= LEGACY_SCHEMA_VERSION for s in await self._store.manifest.list_segments())
+
+    # ------------------------------------------------------------------
+    # Legacy-Migrations-Assistent (#964)
+    # ------------------------------------------------------------------
+
+    async def set_legacy_retention_protected(self, protected: bool) -> None:
+        """Schaltet den Entscheidungs-Guard live um (#964).
+
+        Wird von ``POST /ringbuffer/migration/decision`` aufgerufen: ``keep``/
+        ``discard`` heben den Schutz auf, ein Zurück auf ``skipped`` setzt ihn
+        wieder. Wirkt ab dem nächsten Retention-Pass (``apply_config`` liest die
+        Retention-Config live).
+        """
+        self._legacy_retention_protected = bool(protected)
+        if self._store is None:
+            return
+        from obs.ringbuffer.store.config import StoreRetentionConfig
+
+        current = self._store._retention_config
+        self._store.apply_config(
+            retention=StoreRetentionConfig(
+                max_file_size_bytes=current.max_file_size_bytes,
+                max_entries=current.max_entries,
+                max_age=current.max_age,
+                protect_legacy=self._legacy_retention_protected,
+            )
+        )
+
+    async def legacy_migration_overview(self) -> dict[str, Any] | None:
+        """Billige Ist-Analyse der attachten Legacy-Quelle für den Wizard (#964).
+
+        ``None``, wenn kein Legacy-Segment (mehr) attached ist. Bewusst KEIN
+        Vollscan: Größe kommt aus dem Manifest (inkl. WAL/SHM, siehe
+        ``attach_readonly``), die Zeilenzahl wird über ``MAX(rowid)`` geschätzt
+        (rowids sind in der append-only Legacy-DB monoton) und die Zeitspanne über
+        die ts der ersten/letzten rowid – drei Punkt-Lookups statt COUNT/Scan über
+        eine potenziell 20–30 GB große Datei.
+        """
+        if not self._segmented or self._store is None:
+            return None
+        legacy_segments = await self._store.manifest.list_legacy_segments()
+        if not legacy_segments:
+            return None
+        segment = legacy_segments[0]
+        row_estimate: int | None = None
+        from_ts: str | None = None
+        to_ts: str | None = None
+        try:
+            conn = await self._store._connection_for_read(segment)
+        except Exception:
+            conn = None
+        if conn is not None:
+            try:
+                async with conn.execute("SELECT MAX(id) FROM ringbuffer") as cur:
+                    row = await cur.fetchone()
+                row_estimate = int(row[0]) if row and row[0] is not None else 0
+                async with conn.execute("SELECT ts FROM ringbuffer ORDER BY id ASC LIMIT 1") as cur:
+                    row = await cur.fetchone()
+                from_ts = row[0] if row else None
+                async with conn.execute("SELECT ts FROM ringbuffer ORDER BY id DESC LIMIT 1") as cur:
+                    row = await cur.fetchone()
+                to_ts = row[0] if row else None
+            except Exception:
+                logger.warning("RingBuffer: Legacy-Analyse unlesbar (%s) – Overview liefert nur Manifest-Daten", segment.filename)
+            finally:
+                await conn.close()
+        return {
+            "path": segment.filename,
+            "status": segment.status,
+            "size_bytes": segment.size_bytes,
+            "row_estimate": row_estimate,
+            "from_ts": from_ts,
+            "to_ts": to_ts,
+            "retention_protected": self._legacy_retention_protected,
+        }
+
+    async def discard_legacy(self) -> dict[str, Any]:
+        """Verwirft die attachte Legacy-Quelle sofort und endgültig (#964, ``discard``).
+
+        Entfernt die Legacy-Manifest-Zeile(n) und löscht die Original-Dateien
+        (Haupt-DB, ``-wal``/``-shm``, Attach-Identity-Sidecar). Läuft unter dem
+        Write-Lock, damit kein Append/Rotate parallel den Manifest-Zustand
+        verändert; laufende read-only Queries auf der alten Datei lesen per
+        POSIX-Unlink-Semantik ihren Snapshot zu Ende.
+        """
+        if not self._segmented or self._store is None:
+            return {"removed_segments": 0, "freed_bytes": 0}
+        async with self._lock:
+            legacy_segments = await self._store.manifest.list_legacy_segments()
+            freed = 0
+            for segment in legacy_segments:
+                await self._store.manifest.delete_segment(segment.segment_id)
+                base = Path(segment.filename)
+                for candidate in (base, Path(f"{base}-wal"), Path(f"{base}-shm"), self._legacy_attach_identity_path(str(base))):
+                    try:
+                        freed += candidate.stat().st_size
+                        candidate.unlink()
+                    except OSError:
+                        continue
+            return {"removed_segments": len(legacy_segments), "freed_bytes": freed}
+
+    def legacy_migration_progress(self) -> dict[str, Any]:
+        """Aktueller Fortschritt des Offline-Migrationsjobs (#965) – Kopie, nie live-Referenz."""
+        return dict(self._legacy_migration_progress)
+
+    async def start_legacy_migration(self, *, on_success=None) -> dict[str, Any]:
+        """Startet den budget-gebundenen Offline-Migrationsjob (#965) als Hintergrund-Task.
+
+        Genau EIN Lauf gleichzeitig. Der Job setzt das Legacy-Segment für seine
+        Laufzeit unter Retention-Schutz (die Quelle muss bis zum Commit autoritativ
+        bleiben). ``on_success`` (optional, async) läuft nach erfolgreichem Commit –
+        die API persistiert darüber die Entscheidung ``migrated``.
+        """
+        from obs.ringbuffer.store.offline_migration import OfflineLegacyMigrator, OfflineMigrationError
+
+        if not self._segmented or self._store is None:
+            raise OfflineMigrationError("segmented store is not running")
+        if self._legacy_migration_task is not None and not self._legacy_migration_task.done():
+            raise OfflineMigrationError("legacy migration already running")
+        if not await self._has_attached_legacy_segment():
+            raise OfflineMigrationError("no attached legacy source to migrate")
+
+        # Während der Kopie MUSS die Quelle erhalten bleiben – unabhängig vom
+        # Entscheidungszustand den Retention-Schutz aktivieren.
+        await self.set_legacy_retention_protected(True)
+        migrator = OfflineLegacyMigrator(self._store, write_lock=self._lock)
+        progress = self._legacy_migration_progress = {"phase": "starting", "error": None}
+
+        async def _run() -> None:
+            try:
+                await migrator.run(progress)
+                await self.set_legacy_retention_protected(False)
+                if on_success is not None:
+                    await on_success()
+            except asyncio.CancelledError:
+                progress.update(phase="failed", error="cancelled")
+                raise
+            except Exception as exc:
+                logger.exception("RingBuffer: Offline-Migration fehlgeschlagen")
+                progress.update(phase="failed", error=str(exc))
+
+        self._legacy_migration_task = asyncio.create_task(_run())
+        return dict(progress)
 
     async def _segment_rotation_due(self) -> bool:
         """True, wenn das aktive Segment eine ``segment_max_*``-Schwelle reißt."""
@@ -2260,6 +2426,7 @@ async def init_ringbuffer(
     segment_max_bytes: int | None = None,
     segment_max_rows: int | None = None,
     segment_max_age: int | None = None,
+    legacy_retention_protected: bool = False,
 ) -> RingBuffer:
     global _rb, _enabled
     rb = RingBuffer(
@@ -2272,6 +2439,7 @@ async def init_ringbuffer(
         segment_max_bytes=segment_max_bytes,
         segment_max_rows=segment_max_rows,
         segment_max_age=segment_max_age,
+        legacy_retention_protected=legacy_retention_protected,
     )
     await rb.start()
     _rb = rb

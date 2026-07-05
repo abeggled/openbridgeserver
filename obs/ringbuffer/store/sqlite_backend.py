@@ -3154,9 +3154,14 @@ class SqliteSegmentStore(RingBufferStore):
         max_age/max_entries NIE zurückgewonnen, WÄHREND ein quarantäniertes Legacy
         fälschlich – am Guard vorbei – gelöscht werden könnte.
         """
+        # Entscheidungs-Guard (#964): solange der Migrations-Assistent keine
+        # informierte Entscheidung hat (``protect_legacy``), ist das Legacy-Segment
+        # KEIN Löschkandidat – unabhängig vom No-Zero-History-Guard. Der Store darf
+        # dann über Budget bleiben; ``/stats`` weist das aus und die GUI eskaliert.
+        protect_legacy = self._retention_config.protect_legacy
         has_nonlegacy_data = await self._has_nonlegacy_data_segment()
         victims: list[SegmentRecord] = []
-        legacy_segments = [s for s in await self.manifest.list_segments() if _is_legacy_segment(s)]
+        legacy_segments = [] if protect_legacy else [s for s in await self.manifest.list_segments() if _is_legacy_segment(s)]
         if legacy_segments and has_nonlegacy_data:
             # ältestes Legacy zuerst (#951, Codex :2267): segment_id steigt mit der
             # Registrierung, list_legacy_segments dokumentiert ascending = ältestes
