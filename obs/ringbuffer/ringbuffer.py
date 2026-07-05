@@ -1636,18 +1636,23 @@ class RingBuffer:
         # Scope (feste Batch-Groesse, wachsender Store-``offset``, Value-Filter row-lazy
         # via ``_apply_value_filters``) und akkumulieren GEMATCHTE Zeilen, bis genug fuer
         # ``offset+limit`` vorliegen ODER der Scope erschoepft ist (ein Batch liefert
-        # weniger Rohzeilen als angefordert). Ein ``max_batches``-Backstop deckelt
-        # pathologische Faelle. Der 422-Fall (inkompatibler Typ) propagiert unveraendert
-        # aus ``_apply_value_filters``, der Export bricht ab wie Legacy.
+        # weniger Rohzeilen als angefordert). Ein EXPORT muss VOLLSTAENDIG sein
+        # (#951, Codex :1647): ein zeilen-/batch-basierter Deckel darf NICHT abbrechen,
+        # solange die Batches noch VOLL sind (Store liefert weiter ``batch_size`` →
+        # NICHT erschoepft). Sonst trunkiert ein sparse-match-Export mit sehr spaeten
+        # Treffern still. Terminierung deshalb NUR bei (a) Scope erschoepft (kurzer
+        # Batch) oder (b) genug gematchte Zeilen; ein wachsender Store-``offset`` laesst
+        # die Schleife bei endlichem Store ohnehin natuerlich ueber (a) enden. Als echte
+        # Infinite-Loop-Absicherung dient allein ein Batch OHNE Rohzeilen (0) – ein
+        # Store, der ohne ``offset``-Fortschritt weiter volle Batches liefert, ist
+        # pathologisch, greift aber NIE bei realen (endlichen) Exporten. Der 422-Fall
+        # (inkompatibler Typ) propagiert unveraendert aus ``_apply_value_filters``.
         if row_lazy_value_filters and is_export:
             batch_size = max(1, _SEGMENTED_CANDIDATE_CAP)
             needed = offset + limit
-            # Backstop: genug Batches, um ``needed`` Treffer selbst bei sehr duenner
-            # Trefferquote zu erreichen, ohne unbegrenzt zu scannen.
-            max_batches = max(1, (needed // batch_size) + 1) * 1000
             matched: list[RingBufferEntry] = []
             store_offset = 0
-            for _ in range(max_batches):
+            while True:
                 rows = await self._store_query_serialized(
                     _build_store_query(fetch_limit=batch_size, fetch_offset=store_offset, fetch_value_filters=[])
                 )
@@ -1660,6 +1665,8 @@ class RingBuffer:
                     )
                 )
                 # Scope erschoepft: der Store lieferte weniger Rohzeilen als angefordert.
+                # Deckt auch den leeren Batch (0 Zeilen) als echtes Ende ab und schuetzt
+                # damit zugleich vor einem Endlosloop bei nicht fortschreitendem Store.
                 if len(rows) < batch_size:
                     break
                 # Genug GEMATCHTE Zeilen fuer die angeforderte Export-Seite.

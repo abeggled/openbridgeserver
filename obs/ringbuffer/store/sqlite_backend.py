@@ -2571,24 +2571,43 @@ class SqliteSegmentStore(RingBufferStore):
         self._active_conn = new_conn
 
         if old_segment is not None and old_conn is not None:
-            checkpoint_ok = await self._try_truncate_checkpoint(old_conn)
-            await old_conn.close()
-            await self.manifest.close_segment(old_segment.segment_id)
-            if checkpoint_ok:
-                # Erfolgreicher TRUNCATE (#951, Codex :1346): die WAL/SHM-Bytes sind
-                # gerade in die Haupt-DB verschoben/getruncatet worden. Die von
-                # _refresh_active_segment_stats gesetzte pre-checkpoint-Größe (inkl.
-                # voller WAL) überschätzt jetzt die reale Disk-Nutzung. Größe daher
-                # mit der REALEN post-checkpoint-Größe neu schreiben, BEVOR die direkt
-                # folgende Retention greift – sonst löschte _enforce_size_budget()
-                # WAL-schwere Segmente unnötig zusätzliche geschlossene/Legacy-Segmente.
-                await self.manifest.update_segment_size(
-                    old_segment.segment_id,
-                    size_bytes=self._segment_file_size(old_segment.filename),
-                )
-            else:
-                await self.manifest.mark_checkpoint_pending(old_segment.segment_id)
-                # TODO(#936): Hintergrund-Checkpoint-Läufer räumt pending später ab.
+            # Post-switch-Schritte (#951, Codex :2574): der Writer zeigt hier bereits auf
+            # ``new_segment``. Wirft ein Schritt (``_try_truncate_checkpoint`` oder ein
+            # Manifest-Update) NACHDEM umgeschaltet wurde, aber BEVOR die alte Zeile
+            # ``closed`` ist, bliebe das alte Segment dauerhaft ``active`` – nie
+            # retention-eligible, Store ggf. über Budget. Der Startup-Reconciler
+            # ``_reconcile_multiple_active_segments()`` läuft nur aus ``open()``, würde
+            # den Live-Fehler also erst nach einem Neustart reparieren. Deshalb wird die
+            # alte Zeile im Fehlerpfad best-effort sofort auf ``closed`` demotet (self-
+            # healing), BEVOR der Fehler propagiert; der neue Writer bleibt der einzige
+            # aktive und ein Folge-``append`` funktioniert weiter.
+            try:
+                checkpoint_ok = await self._try_truncate_checkpoint(old_conn)
+                await old_conn.close()
+                await self.manifest.close_segment(old_segment.segment_id)
+                if checkpoint_ok:
+                    # Erfolgreicher TRUNCATE (#951, Codex :1346): die WAL/SHM-Bytes sind
+                    # gerade in die Haupt-DB verschoben/getruncatet worden. Die von
+                    # _refresh_active_segment_stats gesetzte pre-checkpoint-Größe (inkl.
+                    # voller WAL) überschätzt jetzt die reale Disk-Nutzung. Größe daher
+                    # mit der REALEN post-checkpoint-Größe neu schreiben, BEVOR die direkt
+                    # folgende Retention greift – sonst löschte _enforce_size_budget()
+                    # WAL-schwere Segmente unnötig zusätzliche geschlossene/Legacy-Segmente.
+                    await self.manifest.update_segment_size(
+                        old_segment.segment_id,
+                        size_bytes=self._segment_file_size(old_segment.filename),
+                    )
+                else:
+                    await self.manifest.mark_checkpoint_pending(old_segment.segment_id)
+                    # TODO(#936): Hintergrund-Checkpoint-Läufer räumt pending später ab.
+            except BaseException:
+                # Best-effort-Demote: das alte Segment darf nicht ``active`` bleiben.
+                # ``close_segment`` selbst kann bereits gelaufen sein (dann idempotent);
+                # ein erneuter Fehler beim Demote wird unterdrückt, damit der originale
+                # Rotation-Fehler unmaskiert propagiert.
+                with contextlib.suppress(Exception):
+                    await self.manifest.close_segment(old_segment.segment_id)
+                raise
 
         return new_segment
 
