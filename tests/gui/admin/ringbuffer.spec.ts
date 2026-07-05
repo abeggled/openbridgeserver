@@ -248,6 +248,7 @@ test('RingBuffer Monitor-Modal hält Speicher-/Retention-State und sendet Limits
   expect(postedBody).toEqual({
     enabled: true,
     storage: 'file',
+    segmented: true,
     max_entries: 50000,
     max_file_size_bytes: 2147483648,
     max_age: 63072000,
@@ -390,6 +391,7 @@ test('RingBuffer Monitor-Modal unterstützt Max.-Einträge ohne Limit und schlie
   expect(postedBody).toEqual({
     enabled: true,
     storage: 'file',
+    segmented: true,
     max_entries: null,
     max_file_size_bytes: 10485760,
     max_age: 86400,
