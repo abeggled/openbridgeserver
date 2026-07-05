@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pytest
 
-import aiosqlite
 
 from obs.ringbuffer.ringbuffer import RingBuffer
 from obs.ringbuffer.store.interface import StoreEvent, StoreQuery
@@ -150,15 +149,6 @@ def test_wal_dirty_check_swallows_oserror(tmp_path: Path, monkeypatch: pytest.Mo
     assert mig._wal_is_dirty(tmp_path / "obs_ringbuffer.db") is False
 
 
-async def test_migrate_chunk_on_empty_legacy_db_is_immediately_done(store: SqliteSegmentStore, tmp_path: Path):
-    db = tmp_path / "obs_ringbuffer.db"
-    await _build_legacy_db(db, [])  # leere Legacy-DB (Schema, keine Zeilen)
-    migrator = LegacyMigrator(store, db)
-    assert await migrator.migrate_chunk() == 0
-    # Zweiter Aufruf bleibt 0 (done persistiert), keine Fehler.
-    assert await migrator.migrate_chunk() == 0
-
-
 # ---------------------------------------------------------------------------
 # (a) + (c) read-only Einhängen ohne Scan
 # ---------------------------------------------------------------------------
@@ -193,41 +183,6 @@ async def test_legacy_single_db_stays_readable_after_attach(store: SqliteSegment
 # ---------------------------------------------------------------------------
 # (b) kleine Migration kopiert in v2-Segmente
 # ---------------------------------------------------------------------------
-
-
-async def test_migrate_small_copies_into_v2_segments(store: SqliteSegmentStore, tmp_path: Path):
-    db = tmp_path / "obs_ringbuffer.db"
-    await _build_legacy_db(db, [1, 2, 3, 4, 5])
-    migrator = LegacyMigrator(store, db)
-    copied = await migrator.migrate_small(batch_rows=2)
-    assert copied == 5
-
-    rows = await store.query(StoreQuery(limit=50))
-    assert {r["new_value"] for r in rows} == {1, 2, 3, 4, 5}
-    # In v2 kopiert, aber mit synthetischen NEGATIVEN gids (Legacy-Ordnung bewahrt,
-    # #951 Pkt 2): migrierte Historie sortiert hinter echten neueren v2-Events. Die
-    # typisierten Wertspalten werden trotzdem befüllt → Value-Pushdown greift weiter.
-    assert all(r["global_event_id"] < 0 for r in rows)
-    filtered = await store.query(StoreQuery(limit=50, value_filters=[{"operator": "gte", "value": 3}]))
-    assert {r["new_value"] for r in filtered} == {3, 4, 5}
-
-
-async def test_migrate_chunk_is_resumable(store: SqliteSegmentStore, tmp_path: Path):
-    db = tmp_path / "obs_ringbuffer.db"
-    await _build_legacy_db(db, [1, 2, 3, 4, 5])
-    migrator = LegacyMigrator(store, db)
-    first = await migrator.migrate_chunk(batch_rows=2)
-    assert first == 2
-    second = await migrator.migrate_chunk(batch_rows=2)
-    assert second == 2
-    third = await migrator.migrate_chunk(batch_rows=2)
-    assert third == 1
-    fourth = await migrator.migrate_chunk(batch_rows=2)
-    assert fourth == 0  # fertig, keine Duplikate
-
-    rows = await store.query(StoreQuery(limit=50))
-    values = sorted(r["new_value"] for r in rows)
-    assert values == [1, 2, 3, 4, 5]  # jede Zeile genau einmal
 
 
 # ---------------------------------------------------------------------------
@@ -418,18 +373,3 @@ def test_legacy_filter_contains_and_regex():
         _legacy_filter_matches(_rec("x"), {"operator": "regex", "pattern": "a" * 300})
     with pytest.raises(ValueError, match="nested quantifiers"):
         _legacy_filter_matches(_rec("x"), {"operator": "regex", "pattern": "(a+)+"})
-
-
-async def test_error_never_deletes_legacy_db(store: SqliteSegmentStore, tmp_path: Path):
-    db = tmp_path / "obs_ringbuffer.db"
-    await _build_legacy_db(db, [1, 2, 3])
-    migrator = LegacyMigrator(store, db)
-    # Kaputter Batch-Reader → Migration schlägt fehl, Legacy bleibt erhalten.
-
-    async def boom(**_kwargs):
-        raise aiosqlite.DatabaseError("simulated read failure")
-
-    migrator._read_batch = boom  # type: ignore[method-assign]
-    with pytest.raises(aiosqlite.DatabaseError):
-        await migrator.migrate_chunk()
-    assert db.exists()

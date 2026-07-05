@@ -315,7 +315,7 @@ class RingBuffer:
         """
         from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
         from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_QUARANTINED
-        from obs.ringbuffer.store.migration import LegacyMigrator, recover_detached_migrated_chunks
+        from obs.ringbuffer.store.migration import LegacyMigrator
         from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
 
         # ``segment_max_bytes`` automatisch aus ``max_file_size_bytes`` ableiten,
@@ -380,11 +380,11 @@ class RingBuffer:
             # (``status='legacy'``) sähe diese Zeile nicht → erneuter Insert desselben
             # Dateinamens → Manifest-``UNIQUE``-Constraint bricht den Startup ab (#951,
             # Pkt 1). ``LEGACY_SCHEMA_VERSION`` erfasst alle Legacy-Zeilen unabhängig
-            # vom Status; v2-Segmente (auch ``migrated``) tragen schema_version 2.
+            # vom Status; v2-Segmente tragen schema_version 2.
             if not _is_sqlite_memory_path(self._disk_path) and Path(_sqlite_filesystem_path(self._disk_path)).exists():
                 legacy_fs_path = _sqlite_filesystem_path(self._disk_path)
                 resolved_legacy = str(Path(legacy_fs_path).resolve())
-                migrator = LegacyMigrator(store, legacy_fs_path, write_lock=self._lock)
+                migrator = LegacyMigrator(store, legacy_fs_path)
 
                 # Stale quarantined Legacy-Zeile revalidieren (#951, Codex Runde 36, F2 :366).
                 # Ein corrupt/missing-table-Read kann die attached Legacy-Datei
@@ -395,8 +395,7 @@ class RingBuffer:
                 # Startup bisher ``classify()``/``attach_readonly()`` und die reparierte
                 # Historie blieb dauerhaft versteckt.
                 #
-                # Datei-Identität: dieselbe Definition wie Marker/Resume (Runde 27/29/30) –
-                # ``(mtime_ns, size)`` für Haupt-DB UND ``-wal``/``-shm``, via
+                # Datei-Identität: ``(mtime_ns, size)`` für Haupt-DB UND ``-wal``/``-shm``, via
                 # ``migrator._current_identity_fields()``. Bewusst NICHT die Manifest-
                 # ``size_bytes``: SQLite prä-allokiert Pages, sodass eine Reparatur die reine
                 # Byte-Größe unverändert lassen kann; die mtime dagegen ändert sich bei jedem
@@ -422,41 +421,16 @@ class RingBuffer:
 
                 existing = {seg.filename for seg in await store.manifest.list_segments() if seg.schema_version == LEGACY_SCHEMA_VERSION}
                 if resolved_legacy not in existing:
-                    # Write-Lock durchreichen (#951, Runde 23): der Startup-Pfad hier
-                    # migriert zwar nicht selbst, aber ein künftiger Wartungstreiber über
-                    # denselben Migrator serialisiert die Write-/Hide-Sequenz dann korrekt
-                    # gegen Live-``record()``-Appends (No-Op ohne Lock).
                     classification = migrator.classify()
                     if classification is not None:
                         await migrator.attach_readonly(classification)
                         # Attach-Identität für die spätere F2-Revalidierung festhalten.
                         self._write_legacy_attach_identity(legacy_fs_path, migrator._current_identity_fields())
 
-            # Detach-Recovery auf dem GARANTIERTEN Startup-Pfad (#951, P2, Runde 41, F1/F2):
-            # crasht der Prozess NACH dem Detach einer migrierten Quelle (Marker gesetzt,
-            # Legacy-Zeile weg), aber BEVOR ihre eigenen rein-negativen ``closed``-Chunks in
-            # den Trailing-Rang (``migrated``) gehoben sind, säßen sie im positiven Prefix und
-            # eine ``id desc``-latest-page träfe migrierte Legacy-Zeilen VOR echten Live-Zeilen.
-            # ``migrate_chunk`` ist ein Wartungsjob ohne Produktions-Treiber, daher hier
-            # store-weit (nach Attach/classify) und source-factor-unabhängig heilen. Idempotent/
-            # No-op, solange eine Quelle noch attached ist oder kein Trailing-Rang nötig ist.
-            await recover_detached_migrated_chunks(store)
-
             # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
             # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
             # zügig getrimmt (No-Zero-History-Guard beachtet, siehe Store).
-            #
-            # ABER: dieselbe Migrations-Deferral wie im Append-Pfad (#951, F2). Startet
-            # der Server WÄHREND einer chunked Legacy-Migration neu, kann das Manifest
-            # versteckte ``migrating``-v2-Chunks enthalten, während die Original-Legacy-DB
-            # noch als einzige vollständige Quelle attached ist. Hätte ein Live-v2-Segment
-            # bereits Zeilen (No-Zero-History-Guard erfüllt) und läge die Legacy-Datei über
-            # dem Byte-Budget, löschte dieser Startup-Pass die attached Legacy-Quelle, BEVOR
-            # die restlichen Legacy-Zeilen kopiert sind → Datenverlust. Solange also
-            # ``list_migrating_segments()`` non-empty ist, wird der Startup-Retention-Pass
-            # ausgesetzt; die Migration holt die Retention später nach (nach Detach/Abschluss).
-            if not await self._migration_in_progress():
-                await store.enforce_retention()
+            await store.enforce_retention()
         except Exception:
             try:
                 await store.close()
@@ -475,8 +449,7 @@ class RingBuffer:
     def _legacy_attach_identity_path(legacy_fs_path: str) -> Path:
         """Sidecar-Pfad für die Attach-Identität einer Legacy-Quelle (#951, Runde 36, F2).
 
-        Neben der Quelle, damit der Marker die Datei begleitet – analog zum
-        ``.migrated``-Marker aus ``LegacyMigrator``.
+        Neben der Quelle, damit der Marker die Datei begleitet.
         """
         p = Path(legacy_fs_path)
         return p.with_name(f"{p.name}.attach_identity")
@@ -704,16 +677,7 @@ class RingBuffer:
         if await self._segment_rotation_due():
             await self._store.rotate()
             self._segment_created_at = _isoformat_utc(datetime.now(UTC))
-        # Dieselbe Migrations-Deferral wie im Append- (#951, F2) und Startup-Pfad
-        # (Runde 22): läuft gerade eine chunked Migration (versteckte ``migrating``-
-        # Segmente, noch attached Legacy-Quelle), umgeht dieser reconfigure-getriebene
-        # Pass sonst die Guards. Bei positiven v2-Zeilen + Size-/Row-/Age-Druck löschte
-        # die Retention die attached Legacy-Quelle, während restliche Chunks noch nicht
-        # kopiert sind → Verlust nicht kopierter Legacy-Zeilen. Solange
-        # ``_migration_in_progress()`` gilt, wird der Pass ausgesetzt; die Migration holt
-        # die Retention nach dem Detach nach.
-        if not await self._migration_in_progress():
-            await self._store.enforce_retention()
+        await self._store.enforce_retention()
 
     # ------------------------------------------------------------------
     # Record
@@ -850,20 +814,6 @@ class RingBuffer:
         """
         from obs.ringbuffer.store.interface import StoreEvent
 
-        # Append-getriebene Retention während laufender Live-Migration aussetzen
-        # (#951, Pkt „Defer legacy retention during live migration"): eine chunked
-        # Legacy-Migration legt versteckte ``migrating``-Segmente an
-        # (``mark_migrating``) und promotet sie erst nach Abkopplung der Quelle
-        # (``promote_migrating_segments``). Ein normaler Live-Append erzeugt jedoch
-        # bereits eine positive aktive Zeile und erfüllt damit den No-Zero-History-
-        # Guard – WÄHREND die Legacy-Quelle noch attached ist. Liefe der append-
-        # getriebene ``enforce_retention`` dann unter Size-/Row-Druck durch, löschte
-        # er die attached Legacy-Quelle, BEVOR alle Zeilen migriert sind → Datenverlust.
-        # Solange also mind. ein ``migrating``-Segment existiert, werden ALLE append-
-        # getriebenen enforce-Aufrufe zu No-Ops. Der reguläre (nicht append-getriebene)
-        # enforce-Pfad über die API/den Job bleibt ungegated.
-        migration_in_progress = await self._migration_in_progress()
-
         # Alters-Faelligkeit VOR dem Append pruefen (#951, Pkt 1): ist das aktive
         # Segment nach einer Idle-Phase bereits ueber ``segment_max_age``, zuerst
         # rotieren und DANN ins frische Segment schreiben. Andernfalls landete das
@@ -881,8 +831,7 @@ class RingBuffer:
             # ``max_file_size_bytes``/``max_age``/``max_entries`` würden verletzt,
             # weil der Post-Append-Rotationszweig (unten) bei diesem Traffic-Profil
             # nie fällig wird. Analog zum Post-Append-Zweig.
-            if not migration_in_progress:
-                await self._store.enforce_retention()
+            await self._store.enforce_retention()
 
         await self._store.append(
             [
@@ -902,99 +851,14 @@ class RingBuffer:
         if await self._segment_rotation_due():
             await self._store.rotate()
             self._segment_created_at = _isoformat_utc(datetime.now(UTC))
-            if not migration_in_progress:
-                await self._store.enforce_retention()
-        elif not migration_in_progress and await self._has_attached_legacy_segment():
+            await self._store.enforce_retention()
+        elif await self._has_attached_legacy_segment():
             # Post-Upgrade-Fenster (#951, Pkt 1): über-budget-Legacy zeitnah
             # zurückgewinnen, sobald der No-Zero-History-Guard nach diesem Append
             # erfüllt ist – auch ohne fällige Rotation. Kostenbegrenzt: nur solange
             # ein attached Legacy-Segment existiert; im Normalbetrieb (kein Legacy)
             # läuft dieser Zweig nie.
             await self._store.enforce_retention()
-
-    async def _migration_in_progress(self) -> bool:
-        """True, solange eine chunked Legacy-Migration läuft (#951).
-
-        Signalisiert, dass gerade Zeilen aus einer noch attached Legacy-Quelle kopiert
-        werden. Solange das der Fall ist, dürfen die append-/startup-getriebenen
-        ``enforce_retention``-Aufrufe die Legacy-Quelle NICHT löschen (No-Op), sonst gingen
-        noch nicht kopierte Zeilen verloren.
-
-        Zwei Zustände zählen als „in progress":
-
-        1. Mind. ein ``migrating``-Segment existiert (Normalfall der laufenden Migration;
-           nach ``promote_migrating_segments`` wieder leer).
-        2. Crash-Fenster (#951, Codex Runde 37, F2 :892): ``_append_with_legacy_gids`` hat
-           kopierte Legacy-Zeilen bereits committet/rotiert, der Prozess starb aber BEVOR
-           diese Segmente ``migrating`` markiert wurden. Dann existiert KEIN
-           ``migrating``-Segment, obwohl die Legacy-Quelle noch attached ist UND sichtbare
-           (nicht-``migrating``, nicht-``migrated``) v2-Segmente negative gids tragen. Ohne
-           diese Erkennung sähen die Retention-Gates die sichtbaren negativen v2-Chunks als
-           non-legacy-Daten und löschten die attached Legacy-DB, BEVOR die restlichen Zeilen
-           kopiert sind → Datenverlust. Die eigentliche Re-Hide-Recovery läuft danach beim
-           nächsten ``migrate_chunk`` über die bestehende Runde-27-Logik.
-
-        Der Normalfall (attached read-only Legacy OHNE negative v2-Chunks = nie migriert)
-        wird NICHT über-deferred: es wird nur bei tatsächlich vorhandenen negativen v2-
-        Chunks deferred. Ebenso wenig deferren ABGESCHLOSSENE ``migrated``-Chunks einer
-        bereits fertig migrierten Quelle (#951, Codex :911) – diese werden in
-        ``_has_visible_negative_v2_chunk`` ausgeschlossen, sonst blockierte eine fertige
-        Fremd-Quelle die Retention der noch attached Quelle.
-        """
-        if await self._store.manifest.list_migrating_segments():
-            return True
-        if await self._has_attached_legacy_segment() and await self._has_visible_negative_v2_chunk():
-            return True
-        return False
-
-    async def _has_visible_negative_v2_chunk(self) -> bool:
-        """True, wenn ein sichtbares, NICHT-``migrated`` v2-Segment negative gids trägt (#951, F2).
-
-        Nur READ-ONLY: iteriert das Manifest und liest je Kandidatensegment ``MIN(global_event_id)``
-        über eine read-only Segment-Connection. Legacy-Segmente (``schema_version <= LEGACY``)
-        werden übersprungen – ihre synthetischen negativen gids entstehen erst beim Read und
-        sind kein Migrations-Fortschritt. ``migrating``/``quarantined`` Segmente sind bereits
-        durch Punkt 1 bzw. den unsichtbaren Zustand abgedeckt und zählen hier nicht als
-        „sichtbar". Ein zwischenzeitlich weggeräumtes Segment (Race) wird still übersprungen.
-
-        Ausschluss ``migrated`` (#951, Codex :911): ein ABGESCHLOSSENES ``migrated``-Segment
-        trägt zwar sichtbare negative gids, gehört aber zu einer bereits FERTIG migrierten
-        Quelle. Ist eine ANDERE Legacy-Quelle noch attached, würde ein source-agnostischer
-        Zähler diese fertigen Chunks fälschlich als „migration in progress" werten und die
-        Retention der attached Quelle deferren, obwohl für sie gerade keine Zeilen kopiert
-        werden → über-budget-Legacy bliebe unreklamiert. Nur nicht-``migrated`` negative
-        Chunks (das Crash-Fenster: ``closed``/``active`` mit negativer gid, noch nicht
-        ``migrating`` markiert) zählen daher als in-progress-Signal.
-        """
-        from obs.ringbuffer.store.manifest import (
-            LEGACY_SCHEMA_VERSION,
-            SEGMENT_STATUS_MIGRATED,
-            SEGMENT_STATUS_MIGRATING,
-            SEGMENT_STATUS_QUARANTINED,
-        )
-
-        hidden = {SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED, SEGMENT_STATUS_MIGRATED}
-        for segment in await self._store.manifest.list_segments():
-            if segment.schema_version <= LEGACY_SCHEMA_VERSION or segment.status in hidden:
-                continue
-            try:
-                conn = await self._store._connection_for_read(segment)
-            except Exception:
-                # Datei zwischenzeitlich weggeräumt (Retention-Delete-Race) o. Ä.
-                continue
-            if conn is None:
-                continue
-            try:
-                async with conn.execute("SELECT MIN(global_event_id) FROM ringbuffer") as cur:
-                    row = await cur.fetchone()
-            except Exception:
-                continue
-            finally:
-                await conn.close()
-            min_gid = row[0] if row is not None else None
-            if min_gid is not None and min_gid < 0:
-                return True
-        return False
 
     async def _has_attached_legacy_segment(self) -> bool:
         """True, solange (mind.) ein read-only attached Legacy-Segment existiert.

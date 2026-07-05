@@ -522,38 +522,6 @@ async def _attach_legacy_blob(store: SqliteSegmentStore, size_bytes: int) -> tup
     return rec.segment_id, legacy_file
 
 
-async def test_migrating_chunk_not_counted_as_nonlegacy_history(store: SqliteSegmentStore):
-    # Während einer unterbrochenen gechunkten Migration ist ein kopierter Chunk als
-    # ``migrating`` markiert (read-ausgeschlossen). Er darf den No-Zero-History-Guard
-    # NICHT erfüllen – sonst würde die attached Legacy-Quelle unter Size-Druck gelöscht,
-    # bevor die Migration finalisiert ist (unkopierte Zeilen verloren).
-    from obs.ringbuffer.store.manifest import SEGMENT_STATUS_MIGRATING
-
-    # Attached Legacy-Quelle (die einzige lesbare Datenquelle).
-    legacy_id, legacy_file = await _attach_legacy_blob(store, 8 * 1024 * 1024)
-
-    # Ein migrierender Chunk mit Zeilen (kopierte, aber noch versteckte Daten).
-    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
-    chunk = await store.manifest.get_active_segment()
-    await store.rotate()  # schließen, damit es migrating werden kann
-    await store.manifest.mark_migrating(chunk.segment_id)
-    assert (await store.manifest.get_segment(chunk.segment_id)).status == SEGMENT_STATUS_MIGRATING
-
-    # Der migrierende Chunk darf NICHT als non-legacy-Historie zählen.
-    assert await store._has_nonlegacy_data_segment() is False
-
-    # Folge: die Legacy-Quelle ist unter Size-Druck geschützt (kein Opfer).
-    store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
-    await store.enforce_retention()
-    assert await store.manifest.get_segment(legacy_id) is not None
-    assert legacy_file.exists()
-
-
-# ===========================================================================
-# (7) [P2] Age-/Row-Retention durch den No-Zero-History-Guard routen
-# ===========================================================================
-
-
 async def test_age_retention_reclaims_healthy_legacy_under_guard(store: SqliteSegmentStore, tmp_path: Path):
     # Upgrade mit NUR max_age: die attached gesunde Legacy-DB (status='legacy') fehlt
     # in list_retention_eligible_segments() und wurde daher vom Age-Pfad NIE

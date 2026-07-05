@@ -1,7 +1,7 @@
 """Synthetische Legacy-global_event_ids JSON-/JS-sicher halten (#951, Runde 23).
 
 Codex-Finding „Keep legacy entry IDs JSON-safe": die synthetischen Legacy-IDs lagen um
-``-(1<<62)`` (Read-Pfad ``_legacy_row_to_dict`` und Migrations-Pfad ``_gid_for_rowid``).
+``-(1<<62)`` (Read-Pfad ``_legacy_row_to_dict``).
 Über die JSON-API exponiert überschreiten sie den JS-sicheren Integer-Bereich
 (``±(2**53-1)``); Browser parsen JSON-Zahlen als IEEE-754-Doubles, sodass benachbarte
 Legacy-rowids auf denselben Double kollabieren und jeder JS-Consumer, der per ``id``
@@ -19,10 +19,6 @@ zwei benachbarte rowids kollabieren als float auf denselben Wert).
 
 from __future__ import annotations
 
-import pytest
-
-from obs.ringbuffer.store import migration as migration_mod
-from obs.ringbuffer.store import sqlite_backend as backend_mod
 from obs.ringbuffer.store.sqlite_backend import (
     _LEGACY_GID_OFFSET,
     _LEGACY_GID_STRIDE,
@@ -43,18 +39,11 @@ def _read_path_gid(rowid: int, segment_id: int) -> int:
     return rowid - _LEGACY_GID_OFFSET - source_factor * _LEGACY_GID_STRIDE
 
 
-def test_constants_shared_between_read_and_migration_paths():
-    """migration.py importiert dieselbe OFFSET-Konstante (kein Divergieren)."""
-    assert migration_mod._LEGACY_GID_OFFSET == _LEGACY_GID_OFFSET
-    # Read- und Migrations-Stride laufen strukturell parallel (identische Skalierung).
-    assert migration_mod._MIGRATION_SOURCE_STRIDE == _LEGACY_GID_STRIDE
-
-
 def test_worst_case_read_path_gid_is_js_safe():
     """Auch der Worst-Case-Read-Pfad-gid bleibt in ``[-(2**53-1), 0)``.
 
     Worst Case = kleinste rowid (1) im höchsten dokumentierten Segment-/Bucket-Index.
-    Die dokumentierte Kapazitätsgrenze ist ``segment_id < _MIGRATION_SOURCE_BUCKETS``
+    Die dokumentierte Kapazitätsgrenze ist ``segment_id < _LEGACY_SOURCE_BUCKETS``
     (= ``1<<20``); an dieser Grenze muss der Betrag noch ``<= JS_MAX`` sein.
     """
     # Cross-Source-Spiegelung (#951, Codex :1558): der Betrag ist maximal beim NIEDRIGSTEN
@@ -63,18 +52,8 @@ def test_worst_case_read_path_gid_is_js_safe():
     assert -JS_MAX <= worst < 0
     assert abs(worst) <= JS_MAX
     # Auch der höchste dokumentierte Index (strikt < cap) bleibt sicher (weniger negativ).
-    cap = migration_mod._MIGRATION_SOURCE_BUCKETS  # 1<<20
-    top = _read_path_gid(rowid=1, segment_id=cap - 1)
+    top = _read_path_gid(rowid=1, segment_id=_LEGACY_SOURCE_BUCKETS - 1)
     assert -JS_MAX <= top < 0
-
-
-def test_worst_case_migration_gid_is_js_safe():
-    """Der Worst-Case-Migrations-gid (höchster source_bucket, rowid 1) bleibt JS-sicher."""
-    buckets = migration_mod._MIGRATION_SOURCE_BUCKETS
-    stride = migration_mod._MIGRATION_SOURCE_STRIDE
-    offset = migration_mod._LEGACY_GID_OFFSET
-    worst = 1 - offset - (buckets - 1) * stride
-    assert -JS_MAX <= worst < 0
 
 
 def test_read_path_gids_strictly_negative_and_below_positive():
@@ -129,20 +108,15 @@ def test_adjacent_rowids_distinct_as_float64():
     denselben Double, sodass ein JS-Consumer sie nicht mehr unterscheiden kann. Im
     JS-sicheren Band bleibt ``float(gid_a) != float(gid_b)``.
     """
-    for segment_id in (0, 7, migration_mod._MIGRATION_SOURCE_BUCKETS - 1):
+    for segment_id in (0, 7, _LEGACY_SOURCE_BUCKETS - 1):
         a = _read_path_gid(rowid=1, segment_id=segment_id)
         b = _read_path_gid(rowid=2, segment_id=segment_id)
         assert a != b
         assert float(a) != float(b), f"float-Kollision bei seg={segment_id}"
 
 
-@pytest.mark.parametrize("mod", [backend_mod, migration_mod])
-def test_offset_and_stride_documented_capacity(mod):
+def test_offset_and_stride_documented_capacity():
     """Die gewählten Konstanten halten die dokumentierte Kapazitätsgrenze unter 2**53."""
-    offset = mod._LEGACY_GID_OFFSET
-    # Migrations-Modul trägt zusätzlich BUCKETS; Backend-Modul nur OFFSET/STRIDE.
-    stride = getattr(mod, "_LEGACY_GID_STRIDE", None) or getattr(mod, "_MIGRATION_SOURCE_STRIDE")
-    buckets = getattr(mod, "_MIGRATION_SOURCE_BUCKETS", 1 << 20)
-    assert offset + (buckets - 1) * stride < 2**53
-    assert offset == 1 << 52
-    assert stride == 1 << 32
+    assert _LEGACY_GID_OFFSET + (_LEGACY_SOURCE_BUCKETS - 1) * _LEGACY_GID_STRIDE < 2**53
+    assert _LEGACY_GID_OFFSET == 1 << 52
+    assert _LEGACY_GID_STRIDE == 1 << 32

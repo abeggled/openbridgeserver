@@ -32,9 +32,10 @@ globaler Startup-Scan über 20–30 GB.
 Die segmentbewusste, bounded Query (#932) wählt Segmente zuerst über das
 Manifest (Zeitfenster-Overlap bzw. neueste zuerst), mergt sie nach
 ``global_event_id`` DESC und terminiert früh, sobald ``offset+limit`` Zeilen
-sicher zusammengeführt sind (kein Voll-Merge über alle Segmente). Legacy-
-Migration inkl. Dirty-WAL-Handling großer Single-DBs (#934) bleibt außerhalb
-dieses Kernels; die Nahtstelle ist mit ``# TODO(#…)`` markiert.
+sicher zusammengeführt sind (kein Voll-Merge über alle Segmente). Das
+Klassifizieren/Attachen einer Legacy-Single-DB (#934) bleibt außerhalb dieses
+Kernels (``store/migration.py``); der Legacy-Lesepfad hier degradiert
+kontrolliert auf das v1-Schema.
 """
 
 from __future__ import annotations
@@ -71,8 +72,6 @@ from obs.ringbuffer.store.manifest import (
     SEGMENT_STATUS_ACTIVE,
     SEGMENT_STATUS_CHECKPOINT_PENDING,
     SEGMENT_STATUS_CLOSED,
-    SEGMENT_STATUS_MIGRATED,
-    SEGMENT_STATUS_MIGRATING,
     SEGMENT_STATUS_QUARANTINED,
     Manifest,
     SegmentRecord,
@@ -242,9 +241,6 @@ _LEGACY_GID_STRIDE = 1 << 32
 # im Default-``id desc`` VOR der älteren Quelle sortiert – konsistent zum FIFO-/
 # Retention-Vertrag (``_retention_victim_order``: ältestes Legacy = niedrigste
 # segment_id zuerst) und zur finalen ``global_event_id``-Ordnung in ``query()``.
-# Wert und Bedeutung sind identisch zu ``migration.py``'s ``_MIGRATION_SOURCE_BUCKETS``;
-# hier lokal definiert, weil ``migration.py`` aus ``sqlite_backend`` importiert (kein
-# Rück-Import ohne Zyklus). Beide MÜSSEN denselben Wert tragen (Kapazitätsgrenze).
 _LEGACY_SOURCE_BUCKETS = 1 << 20
 
 
@@ -892,15 +888,6 @@ class SqliteSegmentStore(RingBufferStore):
         # werden (sonst meldete ``/stats`` fälschlich unter-Budget). Ein späterer
         # erfolgreicher Delete räumt die ID wieder aus.
         self._unlink_blocked_segment_ids: set[int] = set()
-        # #951 [P2] Runde 42: Cache je immutable ``closed``-Segment, ob seine Zeilen
-        # NEGATIVE ``global_event_id``s tragen (verwaister, vor ``mark_migrated``
-        # gecrashter Migrations-Chunk). Solche Segmente stehen mangels ``legacy``/
-        # ``migrated``-Status im positiven Query-Prefix und dürfen die
-        # ``id desc``-Early-Termination NICHT früh abbrechen. Ein ``closed``-Segment
-        # ist immutable (Rotate schreibt nie mehr hinein), daher ist das MIN(gid)-
-        # Ergebnis stabil cachebar – ein bounded Read je solchem Segment und danach
-        # kostenlos. Der Cache wird beim erfolgreichen Delete (Retention) mitgeräumt.
-        self._segment_negative_gid_cache: dict[int, bool] = {}
 
     def apply_config(
         self,
@@ -1290,78 +1277,26 @@ class SqliteSegmentStore(RingBufferStore):
         # passenden Segmente je ``offset+limit``-bounded gelesen (kein Voll-Scan)
         # und der finale Sort in ``query()` begrenzt die Ausgabe.
         #
-        # In-Progress-Migration (#951, Pkt 1): läuft die gechunkte Legacy-Migration,
-        # ist die Original-Legacy-DB NOCH read-only als ``legacy``-Segment eingehängt,
-        # WÄHREND das Manifest bereits frisch geschriebene v2-Segmente mit den zuerst
-        # kopierten (ÄLTESTEN) Legacy-Zeilen enthält. Diese migrierten Segmente tragen
-        # quell-gescopte NEGATIVE gids und liegen – im reinen Legacy-Fall ohne positive
-        # Zeilen – als ``closed``/``active`` im positiven Query-Rang; sie werden wegen
-        # ihrer höheren ``segment_id`` ZUERST besucht, halten aber die ältesten Zeilen,
-        # während das noch attached Legacy-Segment die NEUESTEN Zeilen hält. Der
-        # ``id desc``-Frühabbruch (Annahme: neuere Segmente ⇒ höhere gids) sammelte dann
-        # die ältesten migrierten Zeilen und terminierte, bevor das Legacy-Segment
-        # gelesen wurde → unvollständige/falsch geordnete Ergebnisse. Solange ein
-        # attached ``legacy``-Segment im Abfrage-Set liegt, wird der Frühabbruch daher
-        # deaktiviert und ALLE relevanten Segmente vollständig eingelesen; der finale
-        # Sort nach ``global_event_id`` in ``query()`` ordnet korrekt und begrenzt auf
-        # ``offset+limit``. Im Normalbetrieb (kein attached Legacy) bleibt der
-        # Frühabbruch erhalten (Performance).
-        #
-        # Migrierte Segmente (#951, Pkt 1, Erweiterung): auch NACH Abschluss der
-        # Migration (Quelle bereits detached, kein ``legacy``-Segment mehr) bleiben die
-        # aus mehreren Legacy-Quellen migrierten ``migrated``-Segmente im Abfrage-Set.
-        # Ihre quell-gescopten NEGATIVEN gid-Buckets sind von der ``segment_id``-
-        # Reihenfolge ENTKOPPELT: eine Quelle mit kleinerem Bucket trägt höhere (weniger
-        # negative) gids, kann aber je nach Migrationsreihenfolge niedrigere segment_ids
-        # halten. ``list_segments_for_query`` iteriert migrierte Segmente nach
-        # ``segment_id DESC`` – das korreliert dann NICHT mehr mit der gid-Ordnung. Ein
-        # ``id desc``-Query mit kleinem limit/offset könnte im migrierten Bereich Zeilen
-        # überspringen oder falsch ordnen.
-        #
         # Zustandsabhängiger Frühabbruch (#951, Codex :980): den Frühabbruch NICHT global
-        # abschalten, sobald irgendein legacy/migrated-Segment im Set liegt, sondern nur
+        # abschalten, sobald ein attached ``legacy``-Segment im Set liegt, sondern nur
         # den POSITIVEN v2-Prefix früh terminieren lassen. ``list_segments_for_query``
         # liefert die positiven v2-Segmente (segment_id DESC = global_event_id DESC)
-        # ZUERST und alle legacy/migrated-Segmente (negative synthetische gids, per
-        # Definition älter) ZULETZT.
+        # ZUERST und alle Legacy-Segmente (negative synthetische gids, per Definition
+        # älter) ZULETZT.
         #
         # KORREKTHEIT: Solange NUR positive v2-Prefix-Zeilen gesammelt wurden, sind alle
-        # noch NICHT gelesenen Segmente (älterer positiver v2 ODER legacy/migrated)
-        # garantiert kleiner-gid – ein Frühabbruch bei ``offset+limit`` gefüllten Zeilen
-        # ist dann korrekt. Eine latest-N-``id desc``-Query, die bereits aus positiven
-        # v2-Zeilen voll wird, bricht daher früh ab und fasst den Legacy-Tail NICHT an
-        # (bounded latest-page).
+        # noch NICHT gelesenen Segmente (älterer positiver v2 ODER legacy) garantiert
+        # kleiner-gid – ein Frühabbruch bei ``offset+limit`` gefüllten Zeilen ist dann
+        # korrekt. Eine latest-N-``id desc``-Query, die bereits aus positiven v2-Zeilen
+        # voll wird, bricht daher früh ab und fasst den Legacy-Tail NICHT an (bounded
+        # latest-page).
         #
-        # Sobald der positive Prefix NICHT reicht und wir das ERSTE legacy/migrated-Segment
-        # lesen, ist der Frühabbruch NICHT mehr zulässig: die synthetischen negativen
-        # gid-Buckets migrierter Segmente sind von der ``segment_id DESC``-Iteration
-        # ENTKOPPELT (ein zuerst besuchtes migrated-Segment ist nicht zwingend das
-        # höchstwertige). Ab dem Tail werden daher ALLE verbliebenen relevanten Segmente
-        # ``offset+limit``-bounded gelesen und der finale Sort nach ``global_event_id`` in
-        # ``query()`` ordnet korrekt (positive vor negative gid). Bei abweichender
-        # Sortierung (``ts``/``asc``) greift der Frühabbruch gar nicht.
-        #
-        # Verwaiste negative-gid-``closed``-Chunks (#951 [P2] Runde 42, Codex :1886):
-        # crasht eine Migration NACH dem Detach der Quelle, aber VOR ``mark_migrated``,
-        # bleiben rein-negative-gid-``closed``-Segmente im Manifest. ``list_segments_for_query``
-        # schiebt nur ``legacy``/``migrated`` in den Trailing-Rang, sodass so ein Chunk mit
-        # seiner hohen ``segment_id`` im POSITIVEN Prefix ZUERST gelesen wird. Eine
-        # ``id desc``-latest-page könnte damit die ältesten migrierten (negativen) Zeilen
-        # sammeln und früh terminieren, BEVOR echte positive v2-Segmente/der Legacy-Tail
-        # gelesen werden → migrierte Historie erschiene als „latest".
-        #
-        # Source-UNABHÄNGIGER, LAZY Fix (bounded): nicht vorab alle Prefix-Segmente öffnen
-        # (das bräche die #932-Garantie „nicht alle Segmente öffnen"), sondern die bereits
-        # GELESENEN Zeilen eines Segments auf negative gids prüfen – das kostet KEINEN
-        # zusätzlichen Open. Trägt ein gerade gelesenes Segment negative gids, wird
-        # ``entered_legacy_tail`` gesetzt: der Frühabbruch ist danach gesperrt, sodass die
-        # noch folgenden ECHTEN positiven v2-Segmente ebenfalls gelesen werden. Der finale
-        # ``global_event_id``-Sort in ``query()`` ordnet dann positiv vor negativ und die
-        # latest-page liefert die echten positiven Zeilen. Da der negative Chunk mit hoher
-        # ``segment_id`` ZUERST iteriert wird, greift die Sperre rechtzeitig (vor dem ersten
-        # ``break``). Das je immutable ``closed``-Segment gecachte Ergebnis
-        # (``_segment_negative_gid_cache``) spart die Re-Inspektion bei Folge-Queries, ohne je
-        # ein Segment zusätzlich zu öffnen.
+        # Sobald der positive Prefix NICHT reicht und wir das ERSTE Legacy-Segment
+        # lesen, wird der Frühabbruch konservativ gesperrt: ab dem Tail werden ALLE
+        # verbliebenen relevanten Segmente ``offset+limit``-bounded gelesen und der
+        # finale Sort nach ``global_event_id`` in ``query()`` ordnet korrekt (positive
+        # vor negative gid). Bei abweichender Sortierung (``ts``/``asc``) greift der
+        # Frühabbruch gar nicht.
         allow_early_termination = query.sort_field == "id" and query.sort_order == "desc"
         entered_legacy_tail = False
         for segment in segments:
@@ -1370,37 +1305,12 @@ class SqliteSegmentStore(RingBufferStore):
             # nicht mehr an die Iterationsreihenfolge gebunden – nicht früh abbrechen.
             if allow_early_termination and not entered_legacy_tail and needed and len(collected) >= needed:
                 break
-            if _is_legacy_segment(segment) or segment.status == SEGMENT_STATUS_MIGRATED:
+            if _is_legacy_segment(segment):
                 entered_legacy_tail = True
             rows = await self._read_segment_rows(segment, query)
             if rows is not None:
                 collected.extend(rows)
-                # Verwaisten negativen Chunk am gerade gelesenen Ergebnis erkennen (kein
-                # zusätzlicher Open) und den Frühabbruch für den Rest sperren (#951 R42).
-                if not entered_legacy_tail and self._rows_carry_negative_gid(segment, rows):
-                    entered_legacy_tail = True
         return collected
-
-    def _rows_carry_negative_gid(self, segment: SegmentRecord, rows: list[dict[str, Any]]) -> bool:
-        """True, wenn die gerade gelesenen Zeilen negative ``global_event_id``s tragen (#951 [P2] R42).
-
-        Erkennt verwaiste Migrations-Chunks (Crash nach Detach, vor ``mark_migrated``) am
-        bereits gefetchten Ergebnis – ohne das Segment erneut zu öffnen. Legacy/migrated
-        werden hier nie geprüft (sie sind schon im Trailing-Rang).
-
-        Cache-Vorsicht: ``rows`` ist eine gefilterte/gebundene Teilmenge (Value-Filter,
-        LIMIT). Ein NEGATIV-Treffer ist definitiv und wird je immutable ``closed``-Segment
-        gecacht (Rotate schreibt nie mehr hinein). Ein leeres/rein-positives Filter-Ergebnis
-        beweist dagegen NICHT, dass das Segment keine negativen gids hält – ``False`` wird
-        deshalb NIE gecacht, sonst würde eine spätere ungefilterte Query fälschlich als
-        positiv behandelt.
-        """
-        if segment.status == SEGMENT_STATUS_CLOSED and self._segment_negative_gid_cache.get(segment.segment_id):
-            return True
-        result = any(r.get("global_event_id", 0) < 0 for r in rows)
-        if result and segment.status == SEGMENT_STATUS_CLOSED:
-            self._segment_negative_gid_cache[segment.segment_id] = True
-        return result
 
     async def _read_segment_rows(self, segment: SegmentRecord, query: StoreQuery) -> list[dict[str, Any]] | None:
         """Liest ein einzelnes Segment; quarantäniert es on-the-fly bei Korruption (#919).
@@ -3206,15 +3116,6 @@ class SqliteSegmentStore(RingBufferStore):
         Historie existiert (Datenverlust). Nur aktive/geschlossene/pending – also
         NICHT quarantänierte – nicht-Legacy-Segmente mit Zeilen werten.
 
-        ``migrating``-Segmente ebenfalls NICHT werten (#951, Pkt 6): während einer
-        unterbrochenen gechunkten Legacy-Migration sind kopierte Chunks als
-        ``migrating`` markiert und aus Reads ausgeschlossen (``list_segments_for_query``
-        filtert sie). Ihre Zeilen sind daher – wie quarantänierte – KEINE lesbare
-        nicht-Legacy-Historie. Zählten sie hier mit, hübe der Guard ab und
-        ``_next_size_retention_victim()`` könnte die attached Legacy-QUELLE löschen,
-        BEVOR die Migration detached/finalisiert ist → unkopierte Zeilen verloren,
-        kopierte (im migrating-Chunk) versteckt.
-
         Fehlende v2-Datei NICHT als lesbare Historie werten (#951, Codex :3068):
         ist die Datei eines nicht-Legacy-Segments außerhalb des Retention-Pfads
         verschwunden (manuelles Aufräumen, Race), überspringt der Read-Pfad sie
@@ -3225,7 +3126,7 @@ class SqliteSegmentStore(RingBufferStore):
         → letzte lesbare Kopie der Historie verloren. Die Existenzprüfung ist konsistent
         zum missing-file-Skip des Read-Pfads (``_segment_read_file_missing``).
         """
-        hidden_statuses = {SEGMENT_STATUS_QUARANTINED, SEGMENT_STATUS_MIGRATING}
+        hidden_statuses = {SEGMENT_STATUS_QUARANTINED}
         for segment in await self.manifest.list_segments():
             if _is_legacy_segment(segment) or segment.status in hidden_statuses:
                 continue
@@ -3353,8 +3254,6 @@ class SqliteSegmentStore(RingBufferStore):
             return False
         # Erfolgreich gelöscht → evtl. früherer unlink-blocked-Zustand ist aufgehoben.
         self._unlink_blocked_segment_ids.discard(segment.segment_id)
-        # Negative-gid-Cache (#951 [P2] R42) für die entfernte segment_id miträumen.
-        self._segment_negative_gid_cache.pop(segment.segment_id, None)
         await self.manifest.delete_segment(segment.segment_id)
         return True
 

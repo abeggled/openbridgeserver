@@ -25,7 +25,6 @@ import aiosqlite
 import pytest
 
 from obs.ringbuffer.ringbuffer import RingBuffer
-from obs.ringbuffer.store.config import StoreRetentionConfig
 
 
 # ===========================================================================
@@ -190,94 +189,3 @@ async def _force_active_row_negative_gid(rb: RingBuffer) -> None:
     async with aiosqlite.connect(str(seg_path)) as conn:
         await conn.execute("UPDATE ringbuffer SET global_event_id = -42 WHERE global_event_id >= 0")
         await conn.commit()
-
-
-@pytest.mark.asyncio
-async def test_visible_negative_v2_chunk_counts_as_in_progress(tmp_path: Path):
-    """Attached Legacy + sichtbarer negativer v2-Chunk (nicht ``migrating``) → in progress True.
-
-    Reproduziert das Crash-Fenster: die kopierten negativen Zeilen liegen sichtbar in einem
-    ``active``/``closed`` v2-Segment, die Legacy-Quelle ist noch attached, aber es gibt KEIN
-    ``migrating``-Segment. Der Helper muss ``True`` melden und die append-getriebene Retention
-    darf die attached Legacy NICHT löschen.
-    """
-    disk_path = tmp_path / "obs_ringbuffer.db"
-    await _seed_legacy(disk_path)
-
-    rb = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True, segment_max_rows=1000, max_entries=None)
-    await rb.start()
-    try:
-        assert len(await rb.store.manifest.list_legacy_segments()) == 1
-
-        # Eine kopierte Legacy-Zeile (negative gid) sichtbar im aktiven v2-Segment ablegen.
-        await _record_seg(rb, 900, "2026-05-01T00:00:00.000Z")
-        await _force_active_row_negative_gid(rb)
-
-        # KEIN migrating-Segment – dennoch muss der Helper den Crash-Zustand erkennen.
-        assert await rb.store.manifest.list_migrating_segments() == []
-        assert await rb._migration_in_progress() is True
-
-        # Hartes Size-Budget: die attached Legacy wäre ohne Gating reclaimbar.
-        rb.store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
-
-        # Live-Append läuft über die append-getriebene Retention. Gating greift → Legacy bleibt.
-        await _record_seg(rb, 200, "2026-06-01T00:00:00.000Z")
-        assert len(await rb.store.manifest.list_legacy_segments()) == 1
-    finally:
-        await rb.stop()
-
-
-@pytest.mark.asyncio
-async def test_attached_legacy_without_negative_v2_not_over_deferred(tmp_path: Path):
-    """Gegentest: attached read-only Legacy OHNE negative v2-Chunks → in progress False.
-
-    Der Normalfall (attached Legacy, nur positive v2-Zeilen, nie migriert) darf NICHT
-    über-deferred werden – die Retention muss weiterhin greifen können.
-    """
-    disk_path = tmp_path / "obs_ringbuffer.db"
-    await _seed_legacy(disk_path)
-
-    rb = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True, segment_max_rows=1000, max_entries=None)
-    await rb.start()
-    try:
-        assert len(await rb.store.manifest.list_legacy_segments()) == 1
-        # Nur positive v2-Zeilen, kein migrating-Segment.
-        await _record_seg(rb, 900, "2026-05-01T00:00:00.000Z")
-        assert await rb.store.manifest.list_migrating_segments() == []
-        assert await rb._migration_in_progress() is False
-    finally:
-        await rb.stop()
-
-
-@pytest.mark.asyncio
-async def test_no_migrating_no_legacy_is_false(tmp_path: Path):
-    """Gegentest: keine migrating-Segmente UND keine attached Legacy → False."""
-    rb = RingBuffer(storage="file", disk_path=str(tmp_path / "obs_ringbuffer.db"), segmented=True, max_entries=None)
-    await rb.start()
-    try:
-        await _record_seg(rb, 1, "2026-05-01T00:00:00.000Z")
-        assert await rb.store.manifest.list_legacy_segments() == []
-        assert await rb.store.manifest.list_migrating_segments() == []
-        assert await rb._migration_in_progress() is False
-    finally:
-        await rb.stop()
-
-
-@pytest.mark.asyncio
-async def test_migrating_segment_still_true(tmp_path: Path):
-    """Regression: ein ``migrating``-Segment allein ergibt weiterhin True (Grundfall)."""
-    disk_path = tmp_path / "obs_ringbuffer.db"
-    await _seed_legacy(disk_path)
-
-    rb = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True, segment_max_rows=1, max_entries=None)
-    await rb.start()
-    try:
-        await _record_seg(rb, 900, "2026-05-01T00:00:00.000Z")
-        await _record_seg(rb, 901, "2026-05-01T00:00:01.000Z")
-        closed = [s for s in await rb.store.manifest.list_segments() if s.status == "closed"]
-        assert closed
-        await rb.store.manifest.mark_migrating(closed[0].segment_id)
-        assert len(await rb.store.manifest.list_migrating_segments()) == 1
-        assert await rb._migration_in_progress() is True
-    finally:
-        await rb.stop()

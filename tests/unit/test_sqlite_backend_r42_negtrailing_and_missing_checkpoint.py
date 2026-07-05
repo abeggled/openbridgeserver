@@ -74,88 +74,6 @@ async def _set_negative_gid(rb: RingBuffer, filename: str, gid: int = -42) -> No
 
 
 @pytest.mark.asyncio
-async def test_orphan_negative_closed_chunk_not_returned_as_latest_page(tmp_path: Path):
-    """Verwaister negativer ``closed``-Chunk (hohe segment_id) darf latest-page NICHT früh füllen.
-
-    Ohne Fix: ``list_segments_for_query`` liefert den negativen ``closed``-Chunk (höchste
-    segment_id) ZUERST; die ``id desc``-latest-page sammelt seine negativen Zeilen, erreicht
-    ``limit`` und terminiert früh → das echte positive v2-Segment wird nie gelesen und die
-    migrierte Historie erscheint als „latest".
-    Mit Fix: der negative Chunk wird in den Trailing-Rang umsortiert → die latest-page liefert
-    die echten positiven v2-Zeilen.
-    """
-    disk_path = tmp_path / "obs_ringbuffer.db"
-
-    # segment_max_rows=1 → jeder Record rotiert und erzeugt ein neues ``closed`` v2-Segment.
-    rb = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True, segment_max_rows=1, max_entries=None)
-    await rb.start()
-    try:
-        # 1) Echtes positives v2-Segment (ältere segment_id, positive gids) → wird nach Rotate ``closed``.
-        await _record_seg(rb, "real-positive", "2026-05-01T00:00:00.000Z")
-        # 2) Zweiter Record rotiert Segment 1 nach ``closed`` und öffnet ein neues aktives Segment.
-        await _record_seg(rb, "real-positive-2", "2026-05-01T00:00:01.000Z")
-
-        closed = sorted(
-            (s for s in await rb.store.manifest.list_segments() if s.status == "closed"),
-            key=lambda s: s.segment_id,
-        )
-        assert closed, "es muss mindestens ein closed v2-Segment geben"
-
-        # 3) Der JÜNGSTE closed-Chunk (höchste segment_id) wird zum verwaisten Migrations-Chunk:
-        #    negative gids setzen, aber NICHT mark_migrated (Crash nach Detach, vor mark_migrated).
-        orphan = closed[-1]
-        await _set_negative_gid(rb, orphan.filename)
-
-        # Der Chunk bleibt Status ``closed`` und trägt jetzt negative gids.
-        assert orphan.status == "closed"
-
-        # latest-page: limit=1, id desc → darf NICHT die negative migrierte Zeile liefern.
-        rows = await rb.store.query(StoreQuery(limit=1, offset=0, sort_field="id", sort_order="desc"))
-        assert rows, "latest-page darf nicht leer sein"
-        assert all(r["global_event_id"] >= 0 for r in rows), (
-            f"latest-page lieferte migrierte negative gids als 'latest': {[r['global_event_id'] for r in rows]}"
-        )
-    finally:
-        await rb.stop()
-
-
-@pytest.mark.asyncio
-async def test_orphan_negative_closed_chunk_with_other_source_attached(tmp_path: Path):
-    """Mehr-Quell-Fall: eine Quelle detached+gecrasht (negativer closed-Chunk), andere attached.
-
-    Deckt den von der Runde-41-Startup-Recovery bewusst NICHT abgedeckten Mehr-Quell-Fall ab.
-    Auch mit noch attached Legacy-Quelle darf eine ``id desc``-latest-page keine migrierten
-    negativen Zeilen als „latest" liefern.
-    """
-    disk_path = tmp_path / "obs_ringbuffer.db"
-    await _seed_legacy(disk_path)
-
-    rb = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True, segment_max_rows=1, max_entries=None)
-    await rb.start()
-    try:
-        # Quelle B: das beim Upgrade eingehängte Legacy-Segment bleibt attached.
-        assert len(await rb.store.manifest.list_legacy_segments()) == 1
-
-        await _record_seg(rb, "real-positive", "2026-05-01T00:00:00.000Z")
-        await _record_seg(rb, "real-positive-2", "2026-05-01T00:00:01.000Z")
-        closed = sorted(
-            (s for s in await rb.store.manifest.list_segments() if s.status == "closed"),
-            key=lambda s: s.segment_id,
-        )
-        assert closed
-        orphan = closed[-1]
-        await _set_negative_gid(rb, orphan.filename)
-
-        rows = await rb.store.query(StoreQuery(limit=1, offset=0, sort_field="id", sort_order="desc"))
-        assert rows
-        assert all(r["global_event_id"] >= 0 for r in rows), (
-            f"latest-page lieferte migrierte negative gids trotz attached Legacy: {[r['global_event_id'] for r in rows]}"
-        )
-    finally:
-        await rb.stop()
-
-
-@pytest.mark.asyncio
 async def test_pure_positive_v2_prefix_still_early_terminates(tmp_path: Path):
     """Gegentest: reine positive v2-Segmente bleiben früh-abbrechbar und korrekt geordnet.
 
@@ -178,44 +96,6 @@ async def test_pure_positive_v2_prefix_still_early_terminates(tmp_path: Path):
         assert gids == sorted(gids, reverse=True)
         # Neueste Zeile zuerst.
         assert rows[0]["new_value"] == "v2"
-    finally:
-        await rb.stop()
-
-
-@pytest.mark.asyncio
-async def test_negative_gid_flag_cached_for_closed_segment(tmp_path: Path):
-    """Bounded-heit: ein negativer ``closed``-Chunk wird nach dem ersten Read je segment_id gecacht.
-
-    Der Cache wird als Nebenprodukt des normalen Reads (kein zusätzlicher Open) gefüllt;
-    nur ein definitiver Negativ-Treffer wird memoisiert, ein rein-positives Segment cacht NIE.
-    """
-    disk_path = tmp_path / "obs_ringbuffer.db"
-
-    rb = RingBuffer(storage="file", disk_path=str(disk_path), segmented=True, segment_max_rows=1, max_entries=None)
-    await rb.start()
-    try:
-        await _record_seg(rb, "a", "2026-05-01T00:00:00.000Z")
-        await _record_seg(rb, "b", "2026-05-01T00:00:01.000Z")
-        closed = sorted(
-            (s for s in await rb.store.manifest.list_segments() if s.status == "closed"),
-            key=lambda s: s.segment_id,
-        )
-        assert closed
-        orphan = closed[-1]
-        await _set_negative_gid(rb, orphan.filename)
-
-        # Ein voller Read (limit hoch) besucht alle Segmente und cacht den Negativ-Chunk.
-        await rb.store.query(StoreQuery(limit=100, offset=0, sort_field="id", sort_order="desc"))
-        assert rb.store._segment_negative_gid_cache.get(orphan.segment_id) is True
-        # Ein rein-positives closed-Segment wird NIE als negativ gecacht (kein False-Eintrag).
-        positive = closed[0]
-        assert positive.segment_id not in rb.store._segment_negative_gid_cache
-
-        # Direkte Erkennung am gefetchten Ergebnis: negative Zeile → True.
-        neg_rows = [{"global_event_id": -42}]
-        assert rb.store._rows_carry_negative_gid(orphan, neg_rows) is True
-        pos_rows = [{"global_event_id": 5}]
-        assert rb.store._rows_carry_negative_gid(positive, pos_rows) is False
     finally:
         await rb.stop()
 

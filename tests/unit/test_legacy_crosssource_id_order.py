@@ -30,10 +30,7 @@ import pytest
 
 from obs.ringbuffer.ringbuffer import RingBuffer
 from obs.ringbuffer.store.interface import StoreQuery
-from obs.ringbuffer.store.migration import (
-    _MIGRATION_SOURCE_BUCKETS,
-    LegacyMigrator,
-)
+from obs.ringbuffer.store.migration import LegacyMigrator
 from obs.ringbuffer.store.sqlite_backend import (
     SqliteSegmentStore,
     _LEGACY_GID_OFFSET,
@@ -158,11 +155,6 @@ async def test_single_source_id_desc_order_unchanged(store: SqliteSegmentStore, 
 # ---------------------------------------------------------------------------
 # Formel-Invarianten: Ordnung, Negativität, JS-Safety, Disjunktheit, Worst-Case
 # ---------------------------------------------------------------------------
-
-
-def test_alias_bucket_bound_matches_migration():
-    """``_LEGACY_SOURCE_BUCKETS`` == ``migration._MIGRATION_SOURCE_BUCKETS`` (Kapazitätsparität)."""
-    assert _LEGACY_SOURCE_BUCKETS == _MIGRATION_SOURCE_BUCKETS
 
 
 def test_higher_segment_id_is_less_negative():
