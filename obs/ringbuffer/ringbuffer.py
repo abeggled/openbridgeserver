@@ -24,7 +24,7 @@ import os
 import re
 import shutil
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -133,6 +133,28 @@ _DELETE_OLDEST_BATCH_SIZE = 500
 # entsperrt guarded contains/regex ohne Zeitfenster — ohne unbounded Full-Scan.
 _SEGMENTED_CANDIDATE_CAP = 10_000
 _enabled = True
+
+
+@dataclass
+class RowLazyExportCursor:
+    """Threaded Raw-Cursor für den row-lazy CSV-Export (#951, Codex :1654).
+
+    Ohne diesen Cursor startete JEDER Export-Chunk seinen row-lazy Batch-Scan
+    wieder bei Store-``offset`` 0 und verwarf ``matched[:offset]``: spätere Chunks
+    re-lasen und re-filterten ALLE vorherigen Rohzeilen (O(n²), reißt bei großen
+    Segment-Stores die 3s-/20s-Export-Timeouts). Der Export-Endpunkt hält EINEN
+    Cursor über alle Chunks; der segmentierte Reader nimmt den Scan bei
+    ``store_offset`` wieder auf und filtert jede Rohzeile GENAU EINMAL über den
+    gesamten Export → lineare Gesamtarbeit.
+
+    ``carry`` puffert bereits GEMATCHTE, aber im vorherigen Chunk nicht mehr
+    ausgegebene Zeilen (ein Batch kann mehr Treffer liefern als ein Chunk-``limit``
+    aufnimmt). Damit bleibt die Ausgabe zeilen-genau ``limit``-gedeckelt, während
+    der Roh-Scan batch-granular fortschreitet.
+    """
+
+    store_offset: int = 0
+    carry: list[RingBufferEntry] = field(default_factory=list)
 
 
 class RingBufferStorageDeleteIncompleteError(OSError):
@@ -1308,6 +1330,7 @@ class RingBuffer:
         dp_ids_by_name: list[str] | None = None,
         candidate_cap_override: int | None = None,
         is_export: bool = False,
+        export_store_cursor: RowLazyExportCursor | None = None,
     ) -> list[RingBufferEntry]:
         if self._segmented:
             return await self._query_v2_segmented(
@@ -1335,6 +1358,7 @@ class RingBuffer:
                 dp_ids_by_name=dp_ids_by_name,
                 candidate_cap_override=candidate_cap_override,
                 is_export=is_export,
+                export_store_cursor=export_store_cursor,
             )
 
         if not self._conn:
@@ -1501,6 +1525,7 @@ class RingBuffer:
         dp_ids_by_name: list[str] | None,
         candidate_cap_override: int | None = None,
         is_export: bool = False,
+        export_store_cursor: RowLazyExportCursor | None = None,
     ) -> list[RingBufferEntry]:
         """Read-Pfad im segmentierten Modus (#919).
 
@@ -1649,30 +1674,64 @@ class RingBuffer:
         # (inkompatibler Typ) propagiert unveraendert aus ``_apply_value_filters``.
         if row_lazy_value_filters and is_export:
             batch_size = max(1, _SEGMENTED_CANDIDATE_CAP)
-            needed = offset + limit
-            matched: list[RingBufferEntry] = []
-            store_offset = 0
-            while True:
-                rows = await self._store_query_serialized(
-                    _build_store_query(fetch_limit=batch_size, fetch_offset=store_offset, fetch_value_filters=[])
-                )
-                batch_entries = _entries_from_rows(rows)
-                matched.extend(
-                    await _apply_value_filters(
-                        entries=batch_entries,
-                        value_filters=list(value_filters or []),
-                        datapoint_types=datapoint_types or {},
+
+            async def _scan_matches(*, start_offset: int, min_matches: int) -> tuple[list[RingBufferEntry], int, bool]:
+                """Batch-scannt ab ``start_offset``, bis ``min_matches`` Treffer beisammen sind.
+
+                Liefert (Treffer, neuer Store-``offset``, Scope-erschoepft). Jede Rohzeile
+                wird dabei genau EINMAL ueber ``_apply_value_filters`` gefiltert. Ein Batch,
+                der weniger Rohzeilen liefert als angefordert, markiert das Scope-Ende (deckt
+                den leeren Batch mit ab und schuetzt vor einem nicht fortschreitenden Store).
+                Der 422-Fall (inkompatibler Typ) propagiert unveraendert.
+                """
+                scanned: list[RingBufferEntry] = []
+                store_offset = start_offset
+                exhausted = False
+                while True:
+                    rows = await self._store_query_serialized(
+                        _build_store_query(fetch_limit=batch_size, fetch_offset=store_offset, fetch_value_filters=[])
                     )
-                )
-                # Scope erschoepft: der Store lieferte weniger Rohzeilen als angefordert.
-                # Deckt auch den leeren Batch (0 Zeilen) als echtes Ende ab und schuetzt
-                # damit zugleich vor einem Endlosloop bei nicht fortschreitendem Store.
-                if len(rows) < batch_size:
-                    break
-                # Genug GEMATCHTE Zeilen fuer die angeforderte Export-Seite.
-                if len(matched) >= needed:
-                    break
-                store_offset += batch_size
+                    scanned.extend(
+                        await _apply_value_filters(
+                            entries=_entries_from_rows(rows),
+                            value_filters=list(value_filters or []),
+                            datapoint_types=datapoint_types or {},
+                        )
+                    )
+                    if len(rows) < batch_size:
+                        exhausted = True
+                        break
+                    store_offset += batch_size
+                    if len(scanned) >= min_matches:
+                        break
+                return scanned, store_offset, exhausted
+
+            # Threaded-Cursor-Pfad (#951, Codex :1654): der Export-Endpunkt haelt EINEN
+            # Cursor ueber alle Chunks. Statt pro Chunk ab Store-``offset`` 0 neu zu
+            # scannen und ``matched[:offset]`` zu verwerfen (O(n²)), nimmt der Reader den
+            # Scan bei ``cursor.store_offset`` wieder auf und filtert jede Rohzeile GENAU
+            # EINMAL ueber den gesamten Export → lineare Gesamtarbeit. Die Ausgabe bleibt
+            # zeilen-genau ``limit``-gedeckelt: ein Batch kann mehr Treffer liefern als ein
+            # Chunk aufnimmt; der Ueberhang wird in ``cursor.carry`` fuer den naechsten
+            # Chunk gepuffert.
+            if export_store_cursor is not None:
+                out = export_store_cursor.carry[:limit]
+                remaining_carry = export_store_cursor.carry[limit:]
+                if len(out) < limit:
+                    scanned, new_offset, _exhausted = await _scan_matches(
+                        start_offset=export_store_cursor.store_offset,
+                        min_matches=limit - len(out),
+                    )
+                    export_store_cursor.store_offset = new_offset
+                    take = limit - len(out)
+                    out = out + scanned[:take]
+                    remaining_carry = remaining_carry + scanned[take:]
+                export_store_cursor.carry = remaining_carry
+                return out
+
+            # Ohne Cursor (direkte ``query_v2``-Aufrufer): einmaliger Batch-Scan ab 0, bis
+            # genug Treffer fuer ``offset+limit`` vorliegen ODER der Scope erschoepft ist.
+            matched, _new_offset, _exhausted = await _scan_matches(start_offset=0, min_matches=offset + limit)
             return matched[offset : offset + limit]
 
         # Nicht-Export (Monitor-Live-View) bzw. reiner Pushdown: EINMALIGER gebundener

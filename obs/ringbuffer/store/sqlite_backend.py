@@ -2045,7 +2045,11 @@ class SqliteSegmentStore(RingBufferStore):
         # Kandidatenmenge gelegt wie die anderen guarded Prädikate. Die Korrelation
         # muss dann gegen ``capped.id`` (Kapsel-Alias) statt ``ringbuffer.id`` laufen.
         has_metadata = self._has_metadata_filter(query)
-        use_capped = not self._query_is_windowed(query) and not query.is_export
+        # Cap-Routing der scan-heavy Prädikate: nur eine Zeitgrenze, die den Scan in
+        # SORTIER-Richtung STOPPT, umgeht den Cap (#951, Codex-Follow-up :2270). Eine
+        # rein nicht-stoppende Grenze (z. B. desc + nur ``to_ts=now``) deckt die ganze
+        # History ab und bindet den Scan NICHT → Cap beibehalten.
+        use_capped = not self._window_binds_scan_direction(query) and not query.is_export
         route_metadata_capped = has_metadata and use_capped
         route_free_text_capped = q_is_scan and use_capped
 
@@ -2268,6 +2272,32 @@ class SqliteSegmentStore(RingBufferStore):
         reiner unbounded Scope (GAR KEINE ts-Grenze) bleibt gedeckelt.
         """
         return query.from_ts is not None or query.to_ts is not None
+
+    @staticmethod
+    def _window_binds_scan_direction(query: StoreQuery) -> bool:
+        """True, wenn das Zeitfenster den scan-heavy Scan in SORTIER-Richtung STOPPT (#951, Codex-Follow-up :2270).
+
+        Verfeinert ``_query_is_windowed`` FÜR DIE CAP-ROUTING-ENTSCHEIDUNG der
+        scan-heavy Prädikate (``q``/Metadaten/``contains``/``regex``): eine
+        EINSEITIGE Grenze bindet den Scan nur, wenn sie ihn in der iterierten
+        Richtung STOPPT. Bei ``sort_order='desc'`` (neueste→älteste, Default)
+        stoppt die UNTERE Grenze (``from_ts``); eine reine OBERE Grenze
+        (``to_ts=now``) deckt die ganze retained History ab und begrenzt den
+        desc-Scan NICHT. Bei ``sort_order='asc'`` (älteste→neueste) stoppt die
+        OBERE Grenze (``to_ts``); eine reine ``from_ts`` begrenzt den asc-Scan
+        nicht. Beide Grenzen → immer gebunden. So bleibt eine seltene/fehlende
+        Text-/Metadaten-Suche mit nur nicht-stoppender Grenze weiter gedeckelt,
+        statt jede Zeile großer Segmente zu scannen.
+        """
+        has_from = query.from_ts is not None
+        has_to = query.to_ts is not None
+        if has_from and has_to:
+            return True
+        if query.sort_order == "asc":
+            # älteste→neueste: die OBERE Grenze stoppt den Scan.
+            return has_to
+        # desc (Default): neueste→älteste, die UNTERE Grenze stoppt den Scan.
+        return has_from
 
     @staticmethod
     def _query_is_bounded(query: StoreQuery) -> bool:

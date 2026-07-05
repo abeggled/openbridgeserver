@@ -42,6 +42,7 @@ from obs.ringbuffer.store.config import (
 )
 from obs.ringbuffer.ringbuffer import (
     RingBufferStorageDeleteIncompleteError,
+    RowLazyExportCursor,
     default_ringbuffer_disk_path,
     delete_ringbuffer_storage_files,
     get_optional_ringbuffer,
@@ -834,6 +835,7 @@ async def _query_v2_entries(
     offset_override: int | None = None,
     candidate_cap_override: int | None = None,
     is_export: bool = False,
+    export_store_cursor: RowLazyExportCursor | None = None,
 ) -> list[RingBufferEntryOut]:
     if not is_ringbuffer_enabled():
         return []
@@ -927,6 +929,7 @@ async def _query_v2_entries(
             dp_ids_by_name=dp_ids_by_name or None,
             candidate_cap_override=candidate_cap_override,
             is_export=is_export,
+            export_store_cursor=export_store_cursor,
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
@@ -1170,6 +1173,11 @@ async def export_ringbuffer_csv(
     started = time.monotonic()
     offset = 0
     exported_rows = 0
+    # Row-lazy Export-Cursor (#951, Codex :1654): EIN Cursor ueber alle Chunks, damit der
+    # segmentierte row-lazy Zweig den Roh-Scan chunk-uebergreifend fortsetzt statt pro Chunk
+    # ab Store-``offset`` 0 neu zu scannen (sonst O(n²) Full-Rescans). Fuer Pushdown-/Legacy-
+    # /Nicht-row-lazy-Pfade bleibt der Cursor ungenutzt und aendert nichts.
+    export_store_cursor = RowLazyExportCursor()
 
     spool = tempfile.SpooledTemporaryFile(
         mode="w+",
@@ -1209,6 +1217,7 @@ async def export_ringbuffer_csv(
                         # Monitor-Live-View (``is_export=False``) behält sein hartes Roh-Cap.
                         candidate_cap_override=offset + chunk_size,
                         is_export=True,
+                        export_store_cursor=export_store_cursor,
                     ),
                     timeout=_CSV_EXPORT_QUERY_TIMEOUT_SECONDS,
                 )
@@ -1243,6 +1252,7 @@ async def export_ringbuffer_csv(
                     # Offset fälschlich „keine weiteren Zeilen".
                     candidate_cap_override=offset + 1,
                     is_export=True,
+                    export_store_cursor=export_store_cursor,
                 ),
                 timeout=_CSV_EXPORT_QUERY_TIMEOUT_SECONDS,
             )
@@ -2124,6 +2134,15 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
         await rb.stop()
         reset_ringbuffer()
         rb = None
+        # Rebuild-Fenster deterministisch DISABLED halten (#951 [P2] "Keep ringbuffer
+        # disabled during mode rebuild"): der Singleton ist ab hier ``None``, bis das
+        # awaited ``init_ringbuffer()`` unten den Ersatz aufbaut. Ohne diese Zeile bliebe
+        # ``_enabled`` true (``reset_ringbuffer`` setzt es sogar wieder auf true), sodass
+        # nebenlaeufige query/export-Requests ``is_ringbuffer_enabled()`` → true sehen und
+        # ``get_ringbuffer()`` dann mangels Buffer wirft → transiente 500s waehrend des
+        # Speicherns der Config. Disabled liefern die Read-Pfade stattdessen deterministisch
+        # eine leere Seite. Nach erfolgreichem Neuaufbau wird unten wieder enabled.
+        set_ringbuffer_enabled(False)
 
     created_rb = False
     subscribed_new = False
@@ -2143,6 +2162,11 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             _subscribe_ringbuffer(rb)
             subscribed_new = True
             created_rb = True
+            # Ersatz-Buffer steht: Rebuild-Fenster schliessen, wieder enabled (#951 [P2]).
+            # Nur im Switch-Pfad noetig (nur dort wurde oben disabled); der regulaere
+            # Enable-aus-deaktiviert-Pfad setzt seinen Enable-State an anderer Stelle.
+            if switch_prev_config is not None:
+                set_ringbuffer_enabled(True)
 
         reconfigure_kwargs: dict[str, Any] = {}
         if "max_entries" in body.model_fields_set:
