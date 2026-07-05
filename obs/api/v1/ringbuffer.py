@@ -1694,6 +1694,26 @@ async def query_ringbuffer_filterset(
 _EXPORT_SETTINGS_KEY = "ringbuffer.export_settings"
 
 
+async def _guarded_export_query(query, *, candidate_cap_override: int) -> list[RingBufferEntryOut]:
+    """Fuehrt einen Filterset-Export-Scan mit dem Per-Query-Timeout des CSV-Exports aus (#951 [P2]).
+
+    Ohne Guard koennte ein pathologischer q-/metadata-/contains-/regex-/value-Filter ueber eine
+    grosse Legacy-Datei oder viele v2-Segmente bis zur Erschoepfung scannen und den API-Worker
+    blockieren, BEVOR eine Response gesendet wird. Bei Timeout dasselbe 504 wie
+    ``/ringbuffer/export/csv``.
+    """
+    try:
+        return await asyncio.wait_for(
+            _query_v2_entries(query, candidate_cap_override=candidate_cap_override, is_export=True),
+            timeout=_CSV_EXPORT_QUERY_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(
+            status.HTTP_504_GATEWAY_TIMEOUT,
+            "ringbuffer CSV export timed out",
+        ) from exc
+
+
 async def _collect_multi_entries(
     body: RingBufferMultiExportRequest,
     db: Database,
@@ -1727,9 +1747,13 @@ async def _collect_multi_entries(
         # volle Export-Limit heben, sonst deckelte ein Legacy-Segment mit Value-/
         # Metadaten-Post-Filter die Kandidaten roh auf den Monitor-Cap und der Export
         # verlöre alle Zeilen jenseits davon.
-        entries = await _query_v2_entries(query, candidate_cap_override=_CSV_EXPORT_MAX_ROWS, is_export=True)
+        entries = await _guarded_export_query(query, candidate_cap_override=_CSV_EXPORT_MAX_ROWS)
         return entries, {e.id: [] for e in entries}
 
+    # Gesamt-Budget ueber alle Sets (Codex #951 [P2]): wie ``/ringbuffer/export/csv`` einen
+    # 504 werfen, wenn die Summe der Set-Scans das Total-Timeout sprengt, damit ein
+    # pathologischer Filter den Worker nicht bis zur Erschoepfung blockiert.
+    started = time.monotonic()
     resolved: list[RingBufferFiltersetOut] = []
     for set_id in body.set_ids:
         current = await _fetch_filterset(db, set_id, username=username)
@@ -1745,6 +1769,11 @@ async def _collect_multi_entries(
     matched: dict[int, list[str]] = {}
     entries_by_id: dict[int, RingBufferEntryOut] = {}
     for fs in resolved:
+        if time.monotonic() - started > _CSV_EXPORT_TOTAL_TIMEOUT_SECONDS:
+            raise HTTPException(
+                status.HTTP_504_GATEWAY_TIMEOUT,
+                "ringbuffer CSV export timed out",
+            )
         query = await _build_query_from_filter_criteria(
             fs.filter,
             time_filter=body.time,
@@ -1758,8 +1787,12 @@ async def _collect_multi_entries(
             # Export-Kandidaten-Cap auf das volle Export-Limit heben (Codex #951, Pkt 2),
             # damit ein Legacy-Segment mit Value-/Metadaten-Post-Filter nicht auf den
             # Monitor-Cap gedeckelt wird und Zeilen jenseits davon verschluckt.
-            rows = await _query_v2_entries(query, candidate_cap_override=_CSV_EXPORT_MAX_ROWS, is_export=True)
-        except HTTPException:
+            rows = await _guarded_export_query(query, candidate_cap_override=_CSV_EXPORT_MAX_ROWS)
+        except HTTPException as exc:
+            # Ein Per-Query-Timeout (504) muss propagieren; andere HTTPExceptions
+            # (z.B. 422 eines fehlerhaften Set-Filters) ueberspringen das Set wie bisher.
+            if exc.status_code == status.HTTP_504_GATEWAY_TIMEOUT:
+                raise
             continue
         for entry in rows:
             matched.setdefault(entry.id, []).append(fs.id)
