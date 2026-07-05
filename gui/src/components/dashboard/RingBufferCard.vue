@@ -20,6 +20,10 @@
     </div>
 
     <div class="card-body flex flex-col gap-4">
+      <!-- Migrations-Assistent (#966): kompakter Hinweis, solange die
+           Entscheidung zum Legacy-Altbestand aussteht (admin-only, self-gated). -->
+      <LegacyMigrationBanner compact @open="showMigrationWizard = true" />
+
       <!-- Ladezustand -->
       <div v-if="loading" class="flex justify-center py-6" data-testid="rb-card-loading"><Spinner /></div>
 
@@ -137,11 +141,14 @@
 
     <!-- Segment-Details: dasselbe Panel wie im Monitor, hier in einem Modal. -->
     <Modal v-model="showSegments" :title="$t('dashboard.ringbuffer.segmentDetails')" max-width="2xl">
-      <SegmentStatsPanel v-if="store" :store="store" />
+      <SegmentStatsPanel v-if="store" :store="store" @open-migration="onOpenMigrationFromSegments" />
     </Modal>
 
     <!-- Konfiguration: wiederverwendetes MonitorConfigModal. -->
     <MonitorConfigModal v-model="showConfig" @saved="onConfigSaved" />
+
+    <!-- Migrations-Assistent (#966); „Budget prüfen" öffnet das Konfig-Modal. -->
+    <LegacyMigrationWizard v-model="showMigrationWizard" @open-config="showConfig = true" />
   </div>
 </template>
 
@@ -154,8 +161,10 @@ import { formatBytesBinary } from '@/utils/formatBytesBinary'
 import Spinner from '@/components/ui/Spinner.vue'
 import Modal from '@/components/ui/Modal.vue'
 import PrognosisBlock from '@/components/ringbuffer/PrognosisBlock.vue'
+import LegacyMigrationBanner from '@/components/ringbuffer/LegacyMigrationBanner.vue'
 import MonitorConfigModal from '@/views/ringbuffer/MonitorConfigModal.vue'
 import SegmentStatsPanel from '@/views/ringbuffer/SegmentStatsPanel.vue'
+import LegacyMigrationWizard from '@/views/ringbuffer/LegacyMigrationWizard.vue'
 
 const REFRESH_INTERVAL_MS = 30_000
 
@@ -170,7 +179,14 @@ const loading = ref(true)
 const loadError = ref(false)
 const showConfig = ref(false)
 const showSegments = ref(false)
+const showMigrationWizard = ref(false)
 let refreshTimer = null
+
+// Einstieg aus dem Segment-Details-Modal (#966): Modal schließen, Assistent öffnen.
+function onOpenMigrationFromSegments() {
+  showSegments.value = false
+  showMigrationWizard.value = true
+}
 
 async function load() {
   try {

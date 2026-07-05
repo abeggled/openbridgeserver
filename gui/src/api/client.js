@@ -251,6 +251,10 @@ export const ringbufferApi = {
   countExportRows: (body)           => api.post('/ringbuffer/filtersets/export/count', body),
   getExportSettings: ()             => api.get('/ringbuffer/export/settings'),
   putExportSettings: (body)         => api.put('/ringbuffer/export/settings', body),
+  // #966 — Migrations-Assistent für den Legacy-Altbestand (admin-only)
+  migrationStatus:   ()             => api.get('/ringbuffer/migration'),
+  migrationDecision: (decision)     => api.post('/ringbuffer/migration/decision', { decision }),
+  migrationStart:    ()             => api.post('/ringbuffer/migration/start'),
 }
 
 // ── Config Import/Export ──────────────────────────────────────────────────
