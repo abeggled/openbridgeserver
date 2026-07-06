@@ -22,15 +22,14 @@ Historie blieb dauerhaft versteckt. Fix: ändert sich die physische Datei-Identi
 persistierten ``size_bytes``, wird die stale quarantined-Zeile entfernt und die Datei
 neu klassifiziert/attached. Unveränderte Datei → bleibt quarantined (kein Flapping).
 
-**F3 (:2186) – „Check stored value types before SQL pushdown".**
-Prinzipielle Spannung: perfekte Parität bräuchte Row-Scanning der GESPEICHERTEN
-Wert-Typen – genau das, was der bounded Pushdown vermeidet. Gewählter Weg:
-dokumentierter bounded-best-effort-Kompromiss (analog Runde-35-Metadaten-Kompromiss).
-Der segmentierte Pfad prüft die Registry-Typen der Kandidaten, NICHT die historischen
-Row-Typen; hat ein aktuell numerischer Datapoint eine historische STRING-Zeile, liefert
-segmentiert Teilergebnisse (SQL-Prädikat filtert die STRING-Zeile via ``new_value_num``
-weg), während Legacy die Zeile row-lazy typ-checkt und 422 wirft. Dieser Test schreibt
-den DOKUMENTIERTEN Unterschied fest, statt still zu divergieren.
+**F3 (:2186 → Codex :2263) – „Konsistentes Skippen nicht-numerischer Historie".**
+Ursprünglich als dokumentierte Divergenz festgeschrieben (segmentiert lieferte
+Teilergebnisse, Legacy warf 422). In Runde 48 (#951, Codex :2263) aufgelöst: BEIDE
+Pfade überspringen jetzt eine nicht-numerische HISTORIE-Zeile bei einem numerischen
+Range-Filter (kein Match), konsistent zum SQL-Pushdown und zur v1-Referenz
+``test_legacy_range_filter_excludes_cross_type_rows``; nur ein ungültiger FILTER-Wert
+bleibt ein 422 in beiden Modi. ``test_f3_mixed_type_history_consistent_skip`` pinnt
+die Konsistenz (Legacy == segmentiert == ``[9]`` für ``gt 6``).
 """
 
 from __future__ import annotations
