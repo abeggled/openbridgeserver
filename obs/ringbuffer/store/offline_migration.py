@@ -202,11 +202,22 @@ class OfflineLegacyMigrator:
                 await conn.close()
             await source.close()
         sample_size = self._store._segment_file_size(sample_filename)
-        # Wegwerf-Sample entfernen (Datei + Manifest-Zeile).
+        # Wegwerf-Sample entfernen. Die Manifest-Zeile NUR löschen, wenn die Hauptdatei
+        # wirklich weg ist (#968, Codex :210): scheiterte der Unlink (Permission/EBUSY)
+        # und die Zeile würde trotzdem entfernt, bliebe eine untracked
+        # ``rb_migrated_sample_*.sqlite`` auf der Platte – weder in ``/stats`` noch in
+        # Retention/Retry-Cleanup sichtbar – und leakte dauerhaft Platz. Der Fehler wird
+        # deshalb surfaced (Migration bricht sauber ab); das Sample bleibt als
+        # ``migrating``-Segment registriert und der nächste Job-Start
+        # (``_discard_migrating_segments``) bzw. der Startup-Reconciler räumt es auf.
         base = self._store._segments_dir / sample_filename
-        for candidate in (base, Path(f"{base}-wal"), Path(f"{base}-shm")):
+        for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm")):
             with contextlib.suppress(OSError):
                 candidate.unlink()
+        try:
+            base.unlink(missing_ok=True)
+        except OSError as exc:
+            raise OfflineMigrationError(f"could not remove calibration sample {sample_filename}: {exc}") from exc
         await self._store.manifest.delete_segment(sample_segment.segment_id)
         if copied == 0 or sample_size <= 0:
             return plan
@@ -323,6 +334,8 @@ class OfflineLegacyMigrator:
             has_metadata_cols = await self._legacy_has_metadata_columns(source)
             metadata_select = "metadata_version, metadata" if has_metadata_cols else "NULL AS metadata_version, NULL AS metadata"
             cursor_rowid = plan.cutoff_rowid
+            # Kalibrierte reale v2-Zeilengröße für die Byte-Cap-Begrenzung des Batches.
+            est_row_bytes = (plan.copy_bytes_estimate / plan.rows_to_copy) if plan.rows_to_copy > 0 else 0.0
             while True:
                 # Batch am Row-Cap deckeln, damit ein legacy-DB mit vielen kleinen
                 # Zeilen kein Segment weit ueber ``segment_max_rows`` fuellt (#968,
@@ -331,7 +344,16 @@ class OfflineLegacyMigrator:
                 batch_limit = COPY_BATCH_ROWS
                 if segment_max_rows is not None:
                     capacity = segment_max_rows if target_conn is None else segment_max_rows - seg_rows
-                    batch_limit = max(1, min(COPY_BATCH_ROWS, capacity))
+                    batch_limit = min(batch_limit, max(1, capacity))
+                if segment_max_bytes is not None and est_row_bytes > 0:
+                    # Batch auch am Byte-Cap deckeln (#968, Codex :334): sonst schriebe ein
+                    # voller Batch ein Segment mit großen JSON/Metadaten-Werten weit über
+                    # den (evtl. kleinen) ``segment_max_bytes``, bevor der Rollover-Check
+                    # nach dem Batch greift. Der size-Check unten bleibt als exakte Sicherung.
+                    used_bytes = seg_rows * est_row_bytes if target_conn is not None else 0
+                    byte_capacity_rows = max(1, int((segment_max_bytes - used_bytes) / est_row_bytes))
+                    batch_limit = min(batch_limit, byte_capacity_rows)
+                batch_limit = max(1, batch_limit)
                 async with source.execute(
                     f"SELECT id, ts, datapoint_id, topic, old_value, new_value, source_adapter, quality, {metadata_select} "
                     "FROM ringbuffer WHERE id > ? ORDER BY id ASC LIMIT ?",

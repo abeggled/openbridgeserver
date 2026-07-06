@@ -531,3 +531,112 @@ async def test_reconcile_completes_commit_for_single_missing_legacy_of_many(tmp_
         assert promoted is not None and promoted.status != "migrating"
     finally:
         await store.close()
+
+
+# ---------- Runde 6, Codex :1153: Post-Commit-Bookkeeping-Fehler bleibt terminal ----------
+
+
+async def test_post_commit_bookkeeping_failure_keeps_migration_done(tmp_path: Path):
+    """Schlägt das Post-Commit-Bookkeeping (``on_success``) fehl, NACHDEM der destruktive
+    Commit durch ist (Legacy weg), darf die Migration nicht als ``failed`` gemeldet und
+    der Schutz nicht zurückgerollt werden (#968, Codex :1153) – es gibt keine Quelle mehr
+    zum Retry. ``phase`` bleibt ``done``."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(50)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=False)
+    await rb.start()
+    try:
+
+        async def _boom_success():
+            raise RuntimeError("app db locked")
+
+        await rb.start_legacy_migration(on_success=_boom_success)
+        await rb._legacy_migration_task
+        # Commit ist durch (Legacy weg), trotz bookkeeping-Fehler terminal.
+        assert rb.legacy_migration_progress()["phase"] == "done", "committed migration bleibt terminal, nicht failed"
+        assert not legacy.exists()
+        assert await rb._store.manifest.list_legacy_segments() == []
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 6, Codex :210: Sample-Unlink-Fehler leakt nicht ----------
+
+
+async def test_calibration_sample_unlink_failure_surfaces_and_keeps_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Kann die Kalibrierungs-Sample-Datei nicht entfernt werden, muss der Fehler
+    surfacen UND die Manifest-Zeile erhalten bleiben (#968, Codex :210) – sonst leakte
+    eine untracked ``rb_migrated_sample_*.sqlite`` dauerhaft Platz."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(300)))
+    # Unbegrenztes Budget -> alle Zeilen werden kopiert und die Kalibrierung samplet
+    # (bei zu kleinem Budget bliebe rows_to_copy 0 und das Sample würde nie geschrieben).
+    rb = _seg_rb(tmp_path, max_file_size_bytes=None, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        plan = await mig.plan()
+        legacy_seg = await mig._attached_legacy()
+
+        orig_unlink = Path.unlink
+
+        def _boom(self, *a, **k):
+            if self.name.startswith("rb_migrated_sample_") and self.name.endswith(".sqlite"):
+                raise PermissionError("locked")
+            return orig_unlink(self, *a, **k)
+
+        monkeypatch.setattr(Path, "unlink", _boom)
+        with pytest.raises(OfflineMigrationError, match="calibration sample"):
+            await mig._calibrate_cutoff(plan, legacy_seg)
+        # Manifest-Zeile bleibt (als migrating registriert) für späteren Cleanup.
+        assert await rb._store.manifest.list_migrating_segments(), "Sample-Zeile darf nicht verwaist geloescht werden"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 6, Codex :334: Byte-Cap-Batch-Split ohne Row-Cap ----------
+
+
+async def test_migration_splits_at_byte_cap_without_row_cap(tmp_path: Path):
+    """Ist nur ``segment_max_bytes`` (kein ``segment_max_rows``) gesetzt, darf ein Batch
+    kein Segment weit über den Byte-Cap füllen (#968, Codex :334). Große Zeilenwerte +
+    kleiner Byte-Cap müssen die Migration in mehrere Segmente splitten."""
+    import dataclasses
+
+    from obs.ringbuffer.ringbuffer import RingBuffer as _RB
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    # Legacy mit großen new_value-Werten (~1 KiB je Zeile).
+    big = "x" * 1024
+    src = _RB(storage="disk", disk_path=str(legacy), max_entries=None)
+    await src.start()
+    try:
+        for i in range(300):
+            await src.record(
+                ts=_iso(i % 60),
+                datapoint_id="dp-leg",
+                topic="dp/dp-leg/value",
+                old_value=None,
+                new_value=f"{big}-{i}",
+                source_adapter="api",
+                quality="good",
+            )
+    finally:
+        await src.stop()
+
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        # Kleinen Byte-Cap OHNE Row-Cap erzwingen (unter dem 4-MiB-Min der Config, nur für den Test).
+        cap = 64 * 1024
+        rb._store._segment_config = dataclasses.replace(rb._store._segment_config, segment_max_bytes=cap, segment_max_rows=None)
+
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        await mig.run({})
+
+        v2 = [s for s in await rb._store.manifest.list_segments() if s.filename.startswith("rb_migrated_") and s.row_count > 0]
+        assert len(v2) >= 2, "Byte-Cap muss die Migration in mehrere Segmente splitten"
+        # Kein Segment liegt VIELFACH über dem Cap (ein voller 5000-Batch waere ~300 KiB = ~5x cap).
+        assert max(s.size_bytes for s in v2) < cap * 3, "kein Segment darf den Byte-Cap massiv ueberschiessen"
+    finally:
+        await rb.stop()

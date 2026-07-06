@@ -1148,9 +1148,6 @@ class RingBuffer:
         async def _run() -> None:
             try:
                 await migrator.run(progress)
-                await self.set_legacy_retention_protected(False)
-                if on_success is not None:
-                    await on_success()
             except asyncio.CancelledError:
                 await self.set_legacy_retention_protected(prev_protected)
                 progress.update(phase="failed", error="cancelled")
@@ -1159,6 +1156,19 @@ class RingBuffer:
                 logger.exception("RingBuffer: Offline-Migration fehlgeschlagen")
                 await self.set_legacy_retention_protected(prev_protected)
                 progress.update(phase="failed", error=str(exc))
+                return
+            # Ab hier ist der DESTRUKTIVE Commit durch (Legacy-Quelle entfernt, Segmente
+            # promotet) – die Migration ist terminal. Ein Fehler im Post-Commit-Bookkeeping
+            # (Schutz-Update / ``on_success``-Persistenz, z. B. app-DB locked/voll) darf
+            # NICHT den Schutz zurückrollen oder ``failed`` melden (#968, Codex :1153):
+            # es gibt keine Legacy-Quelle mehr zum Retry, und ``migrator.run`` hat bereits
+            # ``phase='done'`` gesetzt. Best-effort, Fehler nur protokollieren.
+            try:
+                await self.set_legacy_retention_protected(False)
+                if on_success is not None:
+                    await on_success()
+            except Exception:
+                logger.exception("RingBuffer: Post-Commit-Bookkeeping der Migration fehlgeschlagen (Migration ist dennoch committed)")
 
         self._legacy_migration_task = asyncio.create_task(_run())
         return dict(progress)
