@@ -2078,9 +2078,16 @@ async def legacy_migration_decision(
         if rb is not None:
             await rb.set_legacy_retention_protected(False)
     else:  # discard
-        if rb is not None:
-            await rb.set_legacy_retention_protected(False)
-            await rb.discard_legacy()
+        # ``discard`` ist terminal UND destruktiv (entfernt die Legacy-Dateien). Läuft
+        # der Monitor nicht (Singleton None/deaktiviert), würde ``discard_legacy()``
+        # übersprungen, aber ``discarded`` dennoch persistiert (#968, Codex :2084): die
+        # Legacy-DB bliebe auf der Platte, würde beim nächsten Start wieder attached –
+        # während der Assistent wegen der terminalen Entscheidung versteckt ist. Deshalb
+        # 409, bis der Monitor läuft und die Quelle wirklich gelöscht werden kann.
+        if rb is None or not is_ringbuffer_enabled():
+            raise HTTPException(status.HTTP_409_CONFLICT, "ringbuffer is not running; cannot discard legacy data")
+        await rb.set_legacy_retention_protected(False)
+        await rb.discard_legacy()
         await persist_legacy_migration_decision(db, LEGACY_DECISION_DISCARDED)
     return await _legacy_migration_status(db)
 
@@ -2338,6 +2345,9 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             "segment_max_bytes": rb._segment_max_bytes_config,
             "segment_max_rows": rb._segment_max_rows,
             "segment_max_age": rb._segment_max_age,
+            # Retention-Schutz des Legacy-Segments mitsichern (#968, Codex :2443),
+            # damit ein Rollback nach fehlgeschlagenem Rebuild den Schutz nicht verliert.
+            "legacy_retention_protected": rb._legacy_retention_protected,
         }
         _unsubscribe_ringbuffer(rb)
         await rb.stop()
@@ -2450,6 +2460,11 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                     segment_max_bytes=switch_prev_config["segment_max_bytes"],
                     segment_max_rows=switch_prev_config["segment_max_rows"],
                     segment_max_age=switch_prev_config["segment_max_age"],
+                    # Legacy-Schutz aus dem vorherigen Zustand wiederherstellen (#968,
+                    # Codex :2443): sonst defaultet ``protect_legacy`` auf false und die
+                    # FIFO-Retention könnte die über-budget Legacy-Quelle löschen, bevor
+                    # der Admin eine informierte Entscheidung getroffen hat.
+                    legacy_retention_protected=switch_prev_config["legacy_retention_protected"],
                 )
                 _subscribe_ringbuffer(restored)
                 set_ringbuffer_enabled(True)

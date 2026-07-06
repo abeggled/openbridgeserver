@@ -707,3 +707,100 @@ async def test_runtime_enable_with_legacy_sets_pending_protection(tmp_path, monk
             await rb.stop()
         reset_ringbuffer()
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_discard_rejected_when_ringbuffer_not_running():
+    """``discard`` bei nicht laufendem Monitor (Singleton None/deaktiviert) → 409 statt
+    terminaler ``discarded``-Persistenz ohne Löschung (#968, Codex :2084). Sonst bliebe
+    die Legacy-DB auf der Platte und würde beim nächsten Start wieder attached, während
+    der Assistent wegen der terminalen Entscheidung versteckt ist."""
+    from obs.ringbuffer.persisted_config import load_legacy_migration_decision
+
+    db = Database(":memory:")
+    await db.connect()
+    reset_ringbuffer()
+    rb_api.set_ringbuffer_enabled(False)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            await rb_api.legacy_migration_decision(rb_api.LegacyMigrationDecisionIn(decision="discard"), _user="admin", db=db)
+        assert exc.value.status_code == 409
+        # Keine terminale Entscheidung persistiert – der Assistent bleibt bedienbar.
+        assert await load_legacy_migration_decision(db) != "discarded"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_modeswitch_rollback_preserves_legacy_protection(tmp_path, monkeypatch):
+    """Scheitert ein Mode-Switch-Rebuild, während die Legacy-Entscheidung pending/skipped
+    ist, muss der Rollback den vorherigen Retention-Schutz bewahren (#968, Codex :2443).
+    Sonst defaultet ``protect_legacy`` auf false und die FIFO-Retention könnte die
+    über-budget Legacy-Quelle vor einer informierten Entscheidung löschen."""
+    from obs.ringbuffer.ringbuffer import RingBuffer as _RB
+
+    db = Database(":memory:")
+    await db.connect()
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    # Legacy-Single-DB, damit der segmentierte Buffer sie geschützt attacht.
+    leg = _RB(storage="disk", disk_path=str(rb_path), max_entries=None)
+    await leg.start()
+    await leg.record(
+        ts="2026-01-01T00:00:00.000Z",
+        datapoint_id="dp-leg",
+        topic="dp/dp-leg/value",
+        old_value=None,
+        new_value=1,
+        source_adapter="api",
+        quality="good",
+    )
+    await leg.stop()
+
+    reset_ringbuffer()
+    rb_api.set_ringbuffer_enabled(False)
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    monkeypatch.setattr(rb_api, "_subscribe_ringbuffer", lambda _rb: None)
+    monkeypatch.setattr(rb_api, "_unsubscribe_ringbuffer", lambda _rb: None)
+
+    # Ausgangszustand: segmentierter Buffer mit geschütztem Legacy als Singleton.
+    from obs.ringbuffer.ringbuffer import init_ringbuffer as _real_init
+
+    await _real_init(
+        storage="file",
+        max_entries=100,
+        disk_path=str(rb_path),
+        max_file_size_bytes=1024 * 1024,
+        max_age=3600,
+        segmented=True,
+        segment_max_age=1200,
+        legacy_retention_protected=True,
+    )
+    rb_api.set_ringbuffer_enabled(True)
+
+    # Beim Switch soll der Neuaufbau (non-segmented) fehlschlagen, das Restore aber gelingen.
+    state = {"n": 0}
+
+    async def _init_fail_first(*args, **kwargs):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise RuntimeError("rebuild boom")
+        return await _real_init(*args, **kwargs)
+
+    monkeypatch.setattr(rb_api, "init_ringbuffer", _init_fail_first)
+    try:
+        with pytest.raises(RuntimeError, match="rebuild boom"):
+            await rb_api.configure_ringbuffer(
+                rb_api.RingBufferConfig(enabled=True, segmented=False, max_entries=100, max_file_size_bytes=1024 * 1024, max_age=3600),
+                _user="admin",
+                db=db,
+            )
+        restored = rb_api.get_optional_ringbuffer()
+        assert restored is not None, "Rollback muss den alten Buffer wiederherstellen"
+        assert restored.segmented is True, "auf den alten (segmentierten) Modus zurueckgerollt"
+        assert restored._legacy_retention_protected is True, "Rollback muss den Legacy-Schutz bewahren"
+    finally:
+        active = rb_api.get_optional_ringbuffer()
+        if active is not None:
+            await active.stop()
+        reset_ringbuffer()
+        await db.disconnect()

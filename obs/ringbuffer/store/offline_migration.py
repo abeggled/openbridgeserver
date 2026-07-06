@@ -52,6 +52,7 @@ from obs.ringbuffer.store.sqlite_backend import (
     _LEGACY_GID_OFFSET,
     _LEGACY_GID_STRIDE,
     _LEGACY_SOURCE_BUCKETS,
+    MIGRATED_FILENAME_PREFIX,
     SEGMENT_SCHEMA_VERSION,
     SqliteSegmentStore,
     _safe_json_decode,
@@ -177,7 +178,7 @@ class OfflineLegacyMigrator:
         source = await self._store._connection_for_read(legacy)
         if source is None:
             raise OfflineMigrationError("legacy source became unreadable during calibration")
-        sample_filename = f"rb_migrated_sample_{_utc_now_compact()}.sqlite"
+        sample_filename = f"{MIGRATED_FILENAME_PREFIX}sample_{_utc_now_compact()}.sqlite"
         sample_segment = await self._store.manifest.create_migrating_segment(filename=sample_filename, schema_version=SEGMENT_SCHEMA_VERSION)
         conn = await self._store._open_segment_conn(sample_filename)
         copied = 0
@@ -248,10 +249,18 @@ class OfflineLegacyMigrator:
     async def run(self, progress: dict[str, Any]) -> dict[str, Any]:
         """Precheck → Copy-Phase → atomarer Commit. Mutiert ``progress`` live."""
         progress.update(phase="precheck", error=None)
-        # Stale ``migrating``-Reste einer frueher abgebrochenen Migration ZUERST
-        # verwerfen (#968, Codex :233), BEVOR ``plan()`` den freien Platz prueft –
-        # sonst zaehlte der Precheck genau die Dateien mit, die dieser Lauf ohnehin
-        # loescht, und ein Retry scheiterte grundlos an "not enough free disk space".
+        # Einen IN-PROCESS unterbrochenen Commit ZUERST reconcilen (#968, Codex :255):
+        # schlug ``commit_offline_migration`` NACH ``_unlink_legacy_files`` fehl (Legacy-
+        # Datei weg, Manifest-Zeile noch da), sind die ``migrating``-Segmente die EINZIGE
+        # verbliebene Kopie. Ohne diesen Aufruf löschte das folgende
+        # ``_discard_migrating_segments`` sie und machte aus einem recoverbaren Commit
+        # permanenten Verlust der Alt-Historie. Der Reconciler promotet genau diesen Fall
+        # (Legacy-Zeile mit fehlender Datei) und lässt nur echte Copy-Phase-Reste stehen.
+        await reconcile_offline_migration(self._store)
+        # Stale ``migrating``-Reste einer frueher abgebrochenen Copy-Phase verwerfen
+        # (#968, Codex :233), BEVOR ``plan()`` den freien Platz prueft – sonst zaehlte der
+        # Precheck genau die Dateien mit, die dieser Lauf ohnehin loescht, und ein Retry
+        # scheiterte grundlos an "not enough free disk space".
         await self._discard_migrating_segments()
 
         plan = await self.plan()
@@ -333,7 +342,7 @@ class OfflineLegacyMigrator:
                     break
                 if target_conn is None:
                     seg_index += 1
-                    target_filename = f"rb_migrated_{_utc_now_compact()}_{seg_index:03d}.sqlite"
+                    target_filename = f"{MIGRATED_FILENAME_PREFIX}{_utc_now_compact()}_{seg_index:03d}.sqlite"
                     target_segment = await self._store.manifest.create_migrating_segment(
                         filename=target_filename, schema_version=SEGMENT_SCHEMA_VERSION
                     )

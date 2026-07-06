@@ -337,3 +337,112 @@ async def test_calibration_updates_estimate_without_budget(tmp_path: Path):
         assert calibrated.copy_bytes_estimate > v1_estimate, "v2-Schätzung muss über der v1-Erstschätzung liegen"
     finally:
         await rb.stop()
+
+
+# ---------- Runde 4, Codex :2819: migrating aus sichtbaren Zeilen-/Zeit-Stats ----------
+
+
+async def test_migrating_excluded_from_visible_stats(tmp_path: Path):
+    """``migrating``-Segmente sind vor Queries versteckt und dürfen die sichtbaren
+    Zeilen-/Zeit-Aggregate (``total``/``oldest_ts``/``newest_ts``) nicht double-counten
+    (#968, Codex :2819). ``size_bytes`` bleibt physisch (reale Plattennutzung)."""
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        await store.append([_event(1, _iso(1))])
+        base = await store.stats()
+        base_total = base.as_dict()["common"]["total"]
+
+        seg = await store.manifest.create_migrating_segment(filename="rb_migrated_x.sqlite", schema_version=2)
+        await store.manifest.update_segment_stats(
+            seg.segment_id, row_count=500, size_bytes=4096, from_ts="2020-01-01T00:00:00.000Z", to_ts="2020-06-01T00:00:00.000Z"
+        )
+
+        after = (await store.stats()).as_dict()["common"]
+        assert after["total"] == base_total, "migrating-Zeilen zaehlen nicht in die sichtbaren Stats"
+        # Die uralte migrating-Zeitspanne verschiebt oldest/newest NICHT.
+        assert after["oldest_ts"] != "2020-01-01T00:00:00.000Z"
+        assert after["newest_ts"] != "2020-06-01T00:00:00.000Z"
+        # size_bytes zaehlt die Kopie dennoch (physische Plattennutzung).
+        assert after["size_bytes"] >= 4096
+    finally:
+        await store.close()
+
+
+# ---------- Runde 4, Codex :2733: migrierte Chunks aus der Wachstumsprognose ----------
+
+
+async def test_migrated_segments_excluded_from_prognosis(tmp_path: Path):
+    """Offline migrierte ``rb_migrated_*``-Chunks (historische Zeitspannen) dürfen die
+    Wachstumsprognose nicht verfälschen (#968, Codex :2733) – sonst schätzte die Rate
+    aus jahre-alter Alt-Historie statt der aktuellen Schreibrate."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(400)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        await mig.run({})
+        segs = await rb._store.manifest.list_segments()
+        migrated = [s for s in segs if s.filename.startswith("rb_migrated_")]
+        assert migrated, "Migration muss rb_migrated_-Segmente erzeugt haben"
+        prog = rb._store._compute_prognosis(segs)
+        # Kein migriertes Segment darf als Prognose-Sample zaehlen (alle sind entweder
+        # aktiv/legacy oder migriert – keine echten Live-Rotationen).
+        assert prog["sample_segment_count"] == 0, "migrierte Chunks duerfen die Rate nicht speisen"
+        assert prog["bytes_per_hour"] is None
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 4, Codex :255: interrupted commit nicht als Retry verwerfen ----------
+
+
+async def test_run_reconciles_interrupted_commit_instead_of_discarding(tmp_path: Path):
+    """Schlägt der Manifest-Commit NACH dem Legacy-Unlink fehl (Legacy-Datei weg, Zeile
+    noch da), sind die ``migrating``-Segmente die einzige Kopie. Ein erneuter Lauf muss
+    sie reconcilen (promoten), NICHT verwerfen (#968, Codex :255) – sonst permanenter
+    Verlust der Alt-Historie."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(50)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+
+        # Commit-Abbruch NACH dem Unlink simulieren: commit_offline_migration wirft einmal.
+        orig_commit = rb._store.manifest.commit_offline_migration
+        calls = {"n": 0}
+
+        async def _boom_once(ids):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("manifest commit failed after unlink")
+            return await orig_commit(ids)
+
+        rb._store.manifest.commit_offline_migration = _boom_once
+        with pytest.raises(OSError):
+            await mig.run({})
+        rb._store.manifest.commit_offline_migration = orig_commit
+
+        # Zustand: Legacy-Datei weg, Legacy-Zeile + migrating-Segmente noch da.
+        assert not legacy.exists()
+        assert await rb._store.manifest.list_migrating_segments(), "migrating-Kopie muss noch existieren"
+
+        # Erneuter Lauf: darf die Kopie NICHT verwerfen, sondern den Commit vollenden.
+        migrated_before = {s.filename for s in await rb._store.manifest.list_migrating_segments()}
+        with pytest.raises(OfflineMigrationError):
+            # Nach dem Reconcile-Promote gibt es kein Legacy mehr -> plan/run bricht sauber ab.
+            await mig.run({})
+        # Die zuvor migrating-Segmente sind jetzt promoted (closed v2), nicht gelöscht.
+        all_segs = await rb._store.manifest.list_segments()
+        promoted = {s.filename for s in all_segs if s.status == "closed" and s.filename.startswith("rb_migrated_")}
+        assert migrated_before <= promoted, "interrupted commit muss promotet, nicht verworfen werden"
+        assert await rb._store.manifest.list_migrating_segments() == []
+        # Die Alt-Historie ist sichtbar (negative gids), nichts verloren.
+        from obs.ringbuffer.store.interface import StoreQuery
+
+        rows = await rb._store.query(StoreQuery(limit=100))
+        assert len([r for r in rows if r["global_event_id"] < 0]) > 0
+    finally:
+        await rb.stop()

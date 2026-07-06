@@ -198,6 +198,22 @@ def _is_legacy_segment(segment: SegmentRecord) -> bool:
     return segment.schema_version <= LEGACY_SCHEMA_VERSION
 
 
+# Dateinamen-Präfix der offline migrierten v2-Segmente (``OfflineLegacyMigrator``).
+# Zentral hier, damit Detektor und Erzeuger denselben Marker nutzen.
+MIGRATED_FILENAME_PREFIX = "rb_migrated_"
+
+
+def _is_migrated_segment(segment: SegmentRecord) -> bool:
+    """True für v2-Segmente, die aus der Offline-Legacy-Migration stammen (#968).
+
+    Diese Chunks sind sauber geschlossene v2-Segmente, tragen aber historische
+    ``from_ts``/``to_ts`` (Alt-Historie) und synthetische negative gids. Für die
+    Wachstumsprognose dürfen sie NICHT wie normale Live-Rotationen zählen, sonst
+    schätzte die Rate aus jahre-alter importierter Historie statt der Schreibrate.
+    """
+    return segment.filename.startswith(MIGRATED_FILENAME_PREFIX)
+
+
 def _is_missing_ringbuffer_table(exc: Exception) -> bool:
     """True, wenn ein Read an einer fehlenden ``ringbuffer``-Tabelle scheitert (#951, Codex :1057).
 
@@ -2730,7 +2746,11 @@ class SqliteSegmentStore(RingBufferStore):
             "estimated_retention_seconds": None,
             "effective_segment_max_bytes": self._segment_config.segment_max_bytes,
         }
-        closed_v2 = [s for s in segments if s.status == SEGMENT_STATUS_CLOSED and not _is_legacy_segment(s)]
+        # Offline migrierte Chunks (#968, Codex :2733) ausschließen: sie sind zwar
+        # geschlossene v2-Segmente, tragen aber die historischen Zeitspannen der
+        # Alt-Historie. In die Rate gerechnet, sagte das Dashboard die Retention aus
+        # jahre-alter importierter Historie statt der aktuellen Schreibrate voraus.
+        closed_v2 = [s for s in segments if s.status == SEGMENT_STATUS_CLOSED and not _is_legacy_segment(s) and not _is_migrated_segment(s)]
         if not closed_v2:
             return empty
 
@@ -2813,10 +2833,17 @@ class SqliteSegmentStore(RingBufferStore):
         # ts der ersten/letzten rowid) auf der read-only Connection - kein Scan.
         # Bewusst NUR Anzeige-Anreicherung: die Manifest-Zeile bleibt unveraendert,
         # damit die row-Budget-Retention ihr Verhalten nicht aendert.
-        legacy_estimates = {s.segment_id: await self._legacy_stats_estimate(s) for s in segments if _is_legacy_segment(s) and s.row_count == 0}
-        total = sum(legacy_estimates.get(s.segment_id, (s.row_count, None, None))[0] or s.row_count for s in segments)
-        ts_lows = [s.from_ts for s in segments if s.from_ts] + [est[1] for est in legacy_estimates.values() if est[1]]
-        ts_highs = [s.to_ts for s in segments if s.to_ts] + [est[2] for est in legacy_estimates.values() if est[2]]
+        # ``migrating``-Segmente sind vor Queries versteckt (list_segments_for_query
+        # schließt sie aus). Die sichtbaren Zeilen-/Zeit-Aggregate (#968, Codex :2819)
+        # müssen sie deshalb ebenfalls auslassen, sonst double-count't ``/stats`` die
+        # kopierten Legacy-Zeilen (Quelle noch attached) bzw. meldet nach einem
+        # gescheiterten Copy row/oldest/newest, die niemand abfragen kann. ``size_bytes``
+        # bleibt bewusst die physische Gesamtnutzung (die Kopien belegen real Platte).
+        visible = [s for s in segments if s.status != SEGMENT_STATUS_MIGRATING]
+        legacy_estimates = {s.segment_id: await self._legacy_stats_estimate(s) for s in visible if _is_legacy_segment(s) and s.row_count == 0}
+        total = sum(legacy_estimates.get(s.segment_id, (s.row_count, None, None))[0] or s.row_count for s in visible)
+        ts_lows = [s.from_ts for s in visible if s.from_ts] + [est[1] for est in legacy_estimates.values() if est[1]]
+        ts_highs = [s.to_ts for s in visible if s.to_ts] + [est[2] for est in legacy_estimates.values() if est[2]]
         oldest = min(ts_lows, default=None)
         newest = max(ts_highs, default=None)
         size_bytes = sum(s.size_bytes for s in segments)
