@@ -999,7 +999,17 @@ class RingBuffer:
         """
         if not self._segmented or self._store is None:
             return None
-        legacy_segments = await self._store.manifest.list_legacy_segments()
+        # Schema-basiert (#968, Codex :1003, analog R49-C): ein nach einem Read-Fehler
+        # quarantaeniertes Legacy behaelt sein Legacy-Schema, faellt aber aus
+        # ``list_legacy_segments()`` (nur ``status='legacy'``). Der Assistent muss es
+        # weiterhin sehen, damit ein Admin die nun unlesbare, Platz belegende Quelle
+        # verwerfen kann. Aeltestes zuerst.
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+
+        legacy_segments = sorted(
+            (s for s in await self._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION),
+            key=lambda s: s.segment_id,
+        )
         if not legacy_segments:
             return None
         segment = legacy_segments[0]
@@ -1046,13 +1056,31 @@ class RingBuffer:
         """
         if not self._segmented or self._store is None:
             return {"removed_segments": 0, "freed_bytes": 0}
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+
         async with self._lock:
-            legacy_segments = await self._store.manifest.list_legacy_segments()
+            # Schema-basiert erfassen (#968): auch ein quarantaeniertes Legacy soll
+            # verworfen werden koennen.
+            legacy_segments = sorted(
+                (s for s in await self._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION),
+                key=lambda s: s.segment_id,
+            )
             freed = 0
             for segment in legacy_segments:
-                await self._store.manifest.delete_segment(segment.segment_id)
                 base = Path(segment.filename)
-                for candidate in (base, Path(f"{base}-wal"), Path(f"{base}-shm"), self._legacy_attach_identity_path(str(base))):
+                # Haupt-DB ZUERST loeschen und Fehler PROPAGIEREN (#968, Codex :1060):
+                # bleibt sie liegen (Permission/Lock), attached der naechste Start sie
+                # wieder als Legacy, obwohl dem Admin ``discarded`` (endgueltig) gemeldet
+                # wuerde. Erst nach erfolgreichem Unlink die Manifest-Zeile entfernen –
+                # scheitert das Unlink, bleibt die Zeile registriert und der Aufrufer
+                # persistiert kein ``discarded``.
+                try:
+                    freed += base.stat().st_size
+                except OSError:
+                    pass
+                base.unlink(missing_ok=True)
+                await self._store.manifest.delete_segment(segment.segment_id)
+                for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm"), self._legacy_attach_identity_path(str(base))):
                     try:
                         freed += candidate.stat().st_size
                         candidate.unlink()
@@ -1082,7 +1110,12 @@ class RingBuffer:
             raise OfflineMigrationError("no attached legacy source to migrate")
 
         # Während der Kopie MUSS die Quelle erhalten bleiben – unabhängig vom
-        # Entscheidungszustand den Retention-Schutz aktivieren.
+        # Entscheidungszustand den Retention-Schutz aktivieren. Den VORHERIGEN Zustand
+        # merken (#968, Codex :1101): bei einem Fehlschlag muss er wiederhergestellt
+        # werden, sonst bleibt eine ``keep``-Installation (die Budget-Rueckgewinnung
+        # akzeptiert hat) nach einem gescheiterten Migrationsversuch dauerhaft
+        # geschuetzt und ueber Budget, bis zum Neustart.
+        prev_protected = self._legacy_retention_protected
         await self.set_legacy_retention_protected(True)
         migrator = OfflineLegacyMigrator(self._store, write_lock=self._lock)
         progress = self._legacy_migration_progress = {"phase": "starting", "error": None}
@@ -1094,10 +1127,12 @@ class RingBuffer:
                 if on_success is not None:
                     await on_success()
             except asyncio.CancelledError:
+                await self.set_legacy_retention_protected(prev_protected)
                 progress.update(phase="failed", error="cancelled")
                 raise
             except Exception as exc:
                 logger.exception("RingBuffer: Offline-Migration fehlgeschlagen")
+                await self.set_legacy_retention_protected(prev_protected)
                 progress.update(phase="failed", error=str(exc))
 
         self._legacy_migration_task = asyncio.create_task(_run())

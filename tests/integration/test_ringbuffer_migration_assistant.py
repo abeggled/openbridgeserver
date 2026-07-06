@@ -104,3 +104,27 @@ async def test_discard_is_terminal(client, auth_headers):
 async def test_decision_rejects_unknown_value(client, auth_headers):
     resp = await client.post("/api/v1/ringbuffer/migration/decision", json={"decision": "explode"}, headers=auth_headers)
     assert resp.status_code == 422
+
+
+async def test_decision_rejected_while_migration_job_running(client, auth_headers, monkeypatch):
+    """Läuft ein Migrationsjob (``copying``), wird jede Entscheidung mit 409 abgelehnt (#968, Codex :2047).
+
+    Ohne den Guard könnte ein ``discard`` die Legacy-Quelle entfernen, während die
+    Copy-Task noch läuft und danach ``migrated`` persistiert – die Admin-Entscheidung
+    raced mit dem Job.
+    """
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer
+
+    rb = get_optional_ringbuffer()
+    if rb is None:
+        pytest.skip("kein RingBuffer in dieser Session")
+    await _reset_decision()
+    try:
+        monkeypatch.setattr(rb, "legacy_migration_progress", lambda: {"phase": "copying"})
+        for decision in ("keep", "skip", "discard"):
+            resp = await client.post("/api/v1/ringbuffer/migration/decision", json={"decision": decision}, headers=auth_headers)
+            assert resp.status_code == 409, f"{decision}: {resp.text}"
+            assert "running" in resp.json()["detail"]
+    finally:
+        monkeypatch.undo()
+        await _reset_decision()

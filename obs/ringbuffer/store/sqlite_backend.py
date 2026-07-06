@@ -72,6 +72,7 @@ from obs.ringbuffer.store.manifest import (
     SEGMENT_STATUS_ACTIVE,
     SEGMENT_STATUS_CHECKPOINT_PENDING,
     SEGMENT_STATUS_CLOSED,
+    SEGMENT_STATUS_MIGRATING,
     SEGMENT_STATUS_QUARANTINED,
     Manifest,
     SegmentRecord,
@@ -3154,10 +3155,17 @@ class SqliteSegmentStore(RingBufferStore):
         return removed
 
     async def _total_size_bytes(self) -> int:
-        return sum(s.size_bytes for s in await self.manifest.list_segments())
+        # ``migrating``-Segmente (#965) sind unsichtbare, noch nicht committete
+        # Migrations-Kopien und NICHT retention-eligible. Ihre Bytes duerfen nicht
+        # ins Retention-Budget zaehlen (#968, Codex :3160), sonst loeschte die
+        # Live-Retention geschlossene Live-Segmente, um die in-progress-Kopie zu
+        # kompensieren – vermeidbarer Verlust frischer Historie vor dem Commit.
+        return sum(s.size_bytes for s in await self.manifest.list_segments() if s.status != SEGMENT_STATUS_MIGRATING)
 
     async def _total_row_count(self) -> int:
-        return sum(s.row_count for s in await self.manifest.list_segments())
+        # Analog ``_total_size_bytes`` (#968): unsichtbare ``migrating``-Kopien zaehlen
+        # nicht ins Row-Budget.
+        return sum(s.row_count for s in await self.manifest.list_segments() if s.status != SEGMENT_STATUS_MIGRATING)
 
     async def _enforce_size_budget(self, budget: int | None) -> int:
         if budget is None:
@@ -3279,7 +3287,13 @@ class SqliteSegmentStore(RingBufferStore):
         → letzte lesbare Kopie der Historie verloren. Die Existenzprüfung ist konsistent
         zum missing-file-Skip des Read-Pfads (``_segment_read_file_missing``).
         """
-        hidden_statuses = {SEGMENT_STATUS_QUARANTINED}
+        # ``migrating`` (#965) ebenfalls ausblenden (#968, Codex :3286): eine
+        # unsichtbare, noch nicht committete Migrations-Kopie ist KEINE lesbare
+        # nicht-Legacy-Historie. Zaehlte sie hier, hoebe der No-Zero-History-Guard ab
+        # und die attachte LESBARE Legacy-Quelle koennte unter Druck geloescht werden,
+        # bevor die Migration committet – nach einem Crash verwirft der Reconciler die
+        # partielle Kopie und die Legacy-Historie waere verloren.
+        hidden_statuses = {SEGMENT_STATUS_QUARANTINED, SEGMENT_STATUS_MIGRATING}
         for segment in await self.manifest.list_segments():
             if _is_legacy_segment(segment) or segment.status in hidden_statuses:
                 continue

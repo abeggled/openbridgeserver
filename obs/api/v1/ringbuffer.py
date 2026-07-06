@@ -1992,10 +1992,15 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
         legacy = await rb.legacy_migration_overview()
         stats = await rb.stats()
         budget = stats.get("max_file_size_bytes")
-        over_budget = bool(stats.get("retention_over_budget"))
+        # ``retention_over_budget`` liegt unter ``store.backend_extra`` und die Gesamt-
+        # Nutzung als Top-Level ``file_size_bytes`` (#968, Codex :1999) – nicht als
+        # Top-Level ``retention_over_budget``/``size_bytes``. Ohne die korrekten Pfade
+        # war ``over_budget`` immer False und ``size`` None, sodass genau der attachte-
+        # Legacy-Upgrade-Fall (fuer den die Eskalation gebaut wurde) nie eskalierte.
+        over_budget = bool(((stats.get("store") or {}).get("backend_extra") or {}).get("retention_over_budget"))
         if legacy is not None and not over_budget and budget:
             rate = (stats.get("prognosis") or {}).get("bytes_per_hour")
-            size = stats.get("size_bytes")
+            size = stats.get("file_size_bytes")
             if rate and size is not None and rate > 0:
                 eta = max(0.0, (budget - size) / rate * 3600.0)
         elif legacy is not None and over_budget:
@@ -2044,6 +2049,12 @@ async def legacy_migration_decision(
     if current in LEGACY_DECISIONS_TERMINAL:
         raise HTTPException(status.HTTP_409_CONFLICT, f"legacy migration already finalized ({current})")
     rb = get_optional_ringbuffer()
+    # Keine Entscheidung, solange ein Migrationsjob laeuft (#968, Codex :2047): ein
+    # ``discard`` waehrend ``starting``/``copying``/``committing`` koennte die Legacy-
+    # Quelle entfernen, waehrend die Copy-Task noch laeuft und danach ``migrated``
+    # persistiert – die Admin-Entscheidung raced mit dem Job und wird ggf. ueberschrieben.
+    if rb is not None and (rb.legacy_migration_progress() or {}).get("phase") in ("starting", "precheck", "copying", "committing"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "a legacy migration job is currently running")
     if body.decision == "skip":
         await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
         if rb is not None:

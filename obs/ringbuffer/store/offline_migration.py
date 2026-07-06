@@ -111,6 +111,22 @@ class OfflineLegacyMigrator:
     # Precheck / Plan
     # ------------------------------------------------------------------
 
+    def _check_disk_free(self, copy_bytes_estimate: int) -> int:
+        """Prueft freien Platz gegen das (mit Sicherheitsfaktor skalierte) Kopiervolumen.
+
+        Gemeinsam genutzt vom Precheck in ``plan()`` UND vom Recheck NACH der
+        Sample-Kalibrierung (#968, Codex :257): die reale v2-Zeilengroesse kann
+        ``copy_bytes_estimate`` deutlich ueber die v1-Erstschaetzung heben, sonst
+        passierte ein knapper Datentraeger den Precheck und scheiterte erst beim
+        Kopieren mit ENOSPC statt mit einem sauberen Precheck-Fehler.
+        """
+        disk_free = shutil.disk_usage(str(self._store._segments_dir)).free
+        if disk_free < copy_bytes_estimate * DISK_SAFETY_FACTOR:
+            raise OfflineMigrationError(
+                f"not enough free disk space for migration copy: need ~{int(copy_bytes_estimate * DISK_SAFETY_FACTOR)} bytes, free {disk_free}"
+            )
+        return disk_free
+
     async def plan(self) -> MigrationPlan:
         legacy = await self._attached_legacy()
         if legacy is None:
@@ -139,11 +155,7 @@ class OfflineLegacyMigrator:
         cutoff_rowid = max_rowid if rows_to_copy == 0 else max(0, max_rowid - rows_to_copy)
         copy_bytes_estimate = int(rows_to_copy * avg_row_bytes)
 
-        disk_free = shutil.disk_usage(str(self._store._segments_dir)).free
-        if disk_free < copy_bytes_estimate * DISK_SAFETY_FACTOR:
-            raise OfflineMigrationError(
-                f"not enough free disk space for migration copy: need ~{int(copy_bytes_estimate * DISK_SAFETY_FACTOR)} bytes, free {disk_free}"
-            )
+        disk_free = self._check_disk_free(copy_bytes_estimate)
         return MigrationPlan(
             legacy_segment_id=legacy.segment_id,
             legacy_path=legacy.filename,
@@ -230,6 +242,12 @@ class OfflineLegacyMigrator:
     async def run(self, progress: dict[str, Any]) -> dict[str, Any]:
         """Precheck → Copy-Phase → atomarer Commit. Mutiert ``progress`` live."""
         progress.update(phase="precheck", error=None)
+        # Stale ``migrating``-Reste einer frueher abgebrochenen Migration ZUERST
+        # verwerfen (#968, Codex :233), BEVOR ``plan()`` den freien Platz prueft –
+        # sonst zaehlte der Precheck genau die Dateien mit, die dieser Lauf ohnehin
+        # loescht, und ein Retry scheiterte grundlos an "not enough free disk space".
+        await self._discard_migrating_segments()
+
         plan = await self.plan()
         progress.update(
             phase="copying",
@@ -238,10 +256,6 @@ class OfflineLegacyMigrator:
             copied_bytes=0,
             dropped_rows=plan.total_rows - plan.rows_to_copy,
         )
-
-        # Reste einer früher abgebrochenen Migration verwerfen (Crash-Modell:
-        # Neustart der Kopie; Legacy war und bleibt bis zum Commit autoritativ).
-        await self._discard_migrating_segments()
 
         legacy = await self._attached_legacy()
         if legacy is None or legacy.segment_id != plan.legacy_segment_id:
@@ -254,6 +268,9 @@ class OfflineLegacyMigrator:
         # Post-Commit-Retention sofort wieder löscht (verschwendete Arbeit,
         # unnötiger Platz-Peak).
         plan = await self._calibrate_cutoff(plan, legacy)
+        # Disk-Recheck NACH der Kalibrierung (#968, Codex :257): die reale v2-Groesse
+        # kann das Kopiervolumen deutlich erhoeht haben.
+        self._check_disk_free(plan.copy_bytes_estimate)
         progress.update(total_rows=plan.rows_to_copy, dropped_rows=plan.total_rows - plan.rows_to_copy)
 
         if plan.rows_to_copy > 0:
@@ -399,9 +416,18 @@ def _legacy_row_to_event(row: Any) -> StoreEvent:
 
 
 def _unlink_legacy_files(legacy_path: Path) -> None:
-    """Entfernt Legacy-Haupt-DB, WAL/SHM-Sidecars und den Attach-Identity-Sidecar."""
+    """Entfernt Legacy-Haupt-DB (Fehler PROPAGIERT), WAL/SHM + Attach-Sidecar (best-effort).
+
+    Die Haupt-DB MUSS weg sein, BEVOR der aufrufende Commit die Legacy-Manifest-Zeile
+    entfernt (#968, Codex :410): bleibt sie liegen (Permission/Lock), attached der
+    naechste Startup sie als NEUES Legacy-Segment neben den promoteten migrierten
+    Segmenten – migrierte Zeilen erschienen doppelt und die budget-bedingt gedroppten
+    Alt-Zeilen kaemen zurueck. Ein Unlink-Fehler der Haupt-DB propagiert daher, sodass
+    der Commit (``commit_offline_migration``) NICHT laeuft und die Legacy autoritativ
+    bleibt. Die Sidecars sind unkritisch und bleiben best-effort.
+    """
+    legacy_path.unlink(missing_ok=True)
     for candidate in (
-        legacy_path,
         Path(f"{legacy_path}-wal"),
         Path(f"{legacy_path}-shm"),
         legacy_path.with_name(f"{legacy_path.name}.attach_identity"),
