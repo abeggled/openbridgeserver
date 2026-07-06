@@ -1404,7 +1404,7 @@
         "done": "Finished",
         "failed": "Failed"
       },
-      "budgetLossHint": "Budget too small for a lossless takeover: the migration will drop the oldest events. To keep the full history, raise the budget to at least {recommended} first (rule of thumb: 2 × the old database; after migrating, reduce via an age limit rather than the budget if needed). Until you decide, the old history stays protected – live recording, however, is still bound by this budget."
+      "budgetLossHint": "Budget too small for a lossless takeover: the migration will drop the oldest events. To keep the full history, raise the budget to at least {recommended} first (rule of thumb: 2 × the old database; after migrating, reduce via an age limit rather than the budget if needed). Until you decide, the old history stays protected – live recording, however, is still bound by this budget. After raising the budget, migrate promptly – otherwise live recording grows into the new budget and displaces that many old events from the copy."
     }
   },
   "logs": {

@@ -1404,7 +1404,7 @@
         "done": "Abgeschlossen",
         "failed": "Fehlgeschlagen"
       },
-      "budgetLossHint": "Budget zu klein für eine verlustfreie Übernahme: Bei der Migration werden die ältesten Alt-Events verworfen. Für die vollständige Historie das Budget vorher auf mindestens {recommended} erhöhen (Faustformel: 2 × Alt-Datenbank; nach der Migration bei Bedarf über ein Alterslimit statt über das Budget reduzieren). Bis zur Entscheidung bleibt die Alt-Historie geschützt – die Live-Aufzeichnung unterliegt aber weiterhin diesem Budget."
+      "budgetLossHint": "Budget zu klein für eine verlustfreie Übernahme: Bei der Migration werden die ältesten Alt-Events verworfen. Für die vollständige Historie das Budget vorher auf mindestens {recommended} erhöhen (Faustformel: 2 × Alt-Datenbank; nach der Migration bei Bedarf über ein Alterslimit statt über das Budget reduzieren). Bis zur Entscheidung bleibt die Alt-Historie geschützt – die Live-Aufzeichnung unterliegt aber weiterhin diesem Budget. Nach dem Erhöhen des Budgets zeitnah migrieren – die Live-Aufzeichnung wächst sonst in das neue Budget hinein und verdrängt beim Kopieren entsprechend viele Alt-Events."
     }
   },
   "logs": {

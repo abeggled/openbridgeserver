@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from obs.ringbuffer.store.interface import StoreEvent
-from obs.ringbuffer.store.manifest import SEGMENT_STATUS_LEGACY, SegmentRecord
+from obs.ringbuffer.store.manifest import SEGMENT_STATUS_LEGACY, SEGMENT_STATUS_MIGRATING, SegmentRecord
 from obs.ringbuffer.store.sqlite_backend import (
     _LEGACY_GID_OFFSET,
     _LEGACY_GID_STRIDE,
@@ -130,11 +130,10 @@ class OfflineLegacyMigrator:
         # reale v2-Zeilengröße vor dem eigentlichen Lauf über ein Sample nach.
         avg_row_bytes = (legacy.size_bytes / total_rows) if total_rows else 0.0
         budget = self._store._retention_config.max_file_size_bytes
-        headroom = self._store._segment_config.segment_max_bytes or 0
         if budget is None or avg_row_bytes <= 0:
             rows_to_copy = total_rows
         else:
-            target_volume = max(0, budget - headroom)
+            target_volume = await self._target_copy_volume(budget)
             rows_to_copy = min(total_rows, int(target_volume / avg_row_bytes))
         # Cutoff über die rowid-Ordnung: die NEUESTEN ``rows_to_copy`` Zeilen bleiben.
         cutoff_rowid = max_rowid if rows_to_copy == 0 else max(0, max_rowid - rows_to_copy)
@@ -199,8 +198,7 @@ class OfflineLegacyMigrator:
         if copied == 0 or sample_size <= 0:
             return plan
         v2_row_bytes = sample_size / copied
-        headroom = self._store._segment_config.segment_max_bytes or 0
-        target_volume = max(0, budget - headroom)
+        target_volume = await self._target_copy_volume(budget)
         rows_to_copy = min(plan.total_rows, int(target_volume / v2_row_bytes))
         cutoff_rowid = plan.max_rowid if rows_to_copy == 0 else max(0, plan.max_rowid - rows_to_copy)
         return replace(
@@ -209,6 +207,21 @@ class OfflineLegacyMigrator:
             cutoff_rowid=cutoff_rowid,
             copy_bytes_estimate=int(rows_to_copy * v2_row_bytes),
         )
+
+    async def _target_copy_volume(self, budget: int) -> int:
+        """Ziel-Kopiervolumen: Budget minus Headroom minus LIVE-Bestand (#965).
+
+        Der bereits vorhandene Live-Bestand (nicht-Legacy-, nicht-``migrating``-
+        Segmente) belegt seinen Budget-Anteil nach dem Commit weiter – Zeilen
+        darüber hinaus zu kopieren wäre verschwendete Arbeit, die die
+        Post-Commit-Retention sofort wieder trimmt. Konsequenz für Admins
+        (dokumentiert in Wizard + RELEASENOTES): nach einer Budget-Erhöhung
+        zeitnah migrieren – wachsender Live-Bestand verdrängt 1:1 Alt-Events.
+        """
+        headroom = self._store._segment_config.segment_max_bytes or 0
+        segments = await self._store.manifest.list_segments()
+        live_bytes = sum(s.size_bytes for s in segments if s.status not in (SEGMENT_STATUS_LEGACY, SEGMENT_STATUS_MIGRATING))
+        return max(0, budget - headroom - live_bytes)
 
     # ------------------------------------------------------------------
     # Job
