@@ -124,7 +124,7 @@
 
     <!-- Migrations-Assistent-Modal (#966); „Budget prüfen" öffnet das
          bestehende MonitorConfigModal. -->
-    <LegacyMigrationWizard v-model="showMigrationWizard" @open-config="showConfig = true" />
+    <LegacyMigrationWizard v-model="showMigrationWizard" @open-config="openConfigFromWizard" />
 
     <!-- Soft-modal CSV/TSV export dialog (#427) -->
     <ExportDialog
@@ -180,7 +180,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
 import { useTz } from '@/composables/useTz'
@@ -233,6 +233,21 @@ const entries = ref([])
 const loading = ref(false)
 const listError = ref('')
 const showConfig = ref(false)
+// Konfigurator aus dem Migrations-Assistenten heraus: der Wizard schließt sich,
+// damit das Konfig-Modal nicht hinter ihm liegt, und öffnet sich nach dem
+// Schließen der Konfig wieder (lädt den Status dann frisch, inkl. neuem Budget).
+const configOpenedFromWizard = ref(false)
+function openConfigFromWizard() {
+  configOpenedFromWizard.value = true
+  showMigrationWizard.value = false
+  showConfig.value = true
+}
+watch(showConfig, (open) => {
+  if (!open && configOpenedFromWizard.value) {
+    configOpenedFromWizard.value = false
+    showMigrationWizard.value = true
+  }
+})
 const showSegments = ref(false)
 const showMigrationWizard = ref(false)
 const showFilterEditor = ref(false)

@@ -148,12 +148,12 @@
     <MonitorConfigModal v-model="showConfig" @saved="onConfigSaved" />
 
     <!-- Migrations-Assistent (#966); „Budget prüfen" öffnet das Konfig-Modal. -->
-    <LegacyMigrationWizard v-model="showMigrationWizard" @open-config="showConfig = true" />
+    <LegacyMigrationWizard v-model="showMigrationWizard" @open-config="openConfigFromWizard" />
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ringbufferApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSegmentProblems } from '@/composables/useSegmentProblems'
@@ -180,6 +180,20 @@ const loadError = ref(false)
 const showConfig = ref(false)
 const showSegments = ref(false)
 const showMigrationWizard = ref(false)
+// Wie in RingBufferView: Wizard beim Öffnen des Konfigurators schließen und
+// nach dem Schließen der Konfig wieder öffnen (Status wird frisch geladen).
+const configOpenedFromWizard = ref(false)
+function openConfigFromWizard() {
+  configOpenedFromWizard.value = true
+  showMigrationWizard.value = false
+  showConfig.value = true
+}
+watch(showConfig, (open) => {
+  if (!open && configOpenedFromWizard.value) {
+    configOpenedFromWizard.value = false
+    showMigrationWizard.value = true
+  }
+})
 let refreshTimer = null
 
 // Einstieg aus dem Segment-Details-Modal (#966): Modal schließen, Assistent öffnen.
