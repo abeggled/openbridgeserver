@@ -89,6 +89,30 @@ async def test_v34_is_idempotent_and_preserves_existing_knx_tables():
 
 
 @pytest.mark.asyncio
+async def test_v39_repairs_existing_v38_without_device_hierarchy_links(tmp_path):
+    db_path = tmp_path / "v38-collision.db"
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT '')")
+        await conn.executemany("INSERT INTO schema_version (version) VALUES (?)", [(version,) for version in range(1, 30)])
+        await conn.executemany("INSERT INTO schema_version (version) VALUES (?)", [(32,), (33,), (34,), (35,), (36,), (37,), (38,)])
+        await conn.executescript(_MIGRATION_V34)
+        await conn.commit()
+
+    db = Database(str(db_path))
+    await db.connect()
+    try:
+        tables = await _table_names(db)
+        assert "hierarchy_device_links" in tables
+        assert {"id", "node_id", "device_id", "created_at"} <= await _column_names(db, "hierarchy_device_links")
+        assert "idx_hierarchy_device_links_node" in await _index_names(db, "hierarchy_device_links")
+        assert "idx_hierarchy_device_links_device" in await _index_names(db, "hierarchy_device_links")
+        version = await db.fetchone("SELECT MAX(version) AS version FROM schema_version")
+        assert version["version"] == 39
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_v36_hierarchy_source_migration_is_idempotent():
     db = Database(":memory:")
     await db.connect()

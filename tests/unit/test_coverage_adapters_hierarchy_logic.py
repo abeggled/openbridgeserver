@@ -261,6 +261,35 @@ class TestCreateInstance:
         assert exc_info.value.status_code == 422
 
     @pytest.mark.asyncio
+    async def test_create_message_instance_rejects_redacted_secrets(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceCreate
+        from obs.api.v1.redaction import REDACTED
+
+        mock_cls = MagicMock()
+        mock_cls.config_schema.return_value = MagicMock()
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: mock_cls)
+        body = AdapterInstanceCreate(
+            adapter_type="MESSAGE",
+            name="copy",
+            config={
+                "providers": {
+                    "pushover": {
+                        "enabled": True,
+                        "api_token": REDACTED,
+                        "targets": {"ops": {"user_key": REDACTED}},
+                    },
+                }
+            },
+        )
+        db = _DbStub()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await adp_api.create_instance(body=body, db=db, _user="admin")
+        assert exc_info.value.status_code == 422
+        assert db.committed == []
+
+    @pytest.mark.asyncio
     async def test_create_instance_success_disabled(self, monkeypatch):
         from obs.api.v1 import adapters as adp_api
         from obs.api.v1.adapters import AdapterInstanceCreate
@@ -1092,6 +1121,36 @@ class TestUpdateAdapterConfig:
         with pytest.raises(HTTPException) as exc_info:
             await adp_api.update_adapter_config(adapter_type="MESSAGE", body=ConfigPatch(config=incoming_config), db=db, _user="admin")
         assert exc_info.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_update_config_legacy_message_rejects_redacted_secrets_without_stored_config(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import ConfigPatch
+        from obs.api.v1.redaction import REDACTED
+
+        from pydantic import BaseModel
+
+        class Cfg(BaseModel):
+            providers: dict
+
+        mock_cls = MagicMock()
+        mock_cls.config_schema = Cfg
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: mock_cls)
+        incoming_config = {
+            "providers": {
+                "telegram": {
+                    "enabled": True,
+                    "bot_token": REDACTED,
+                    "targets": {"ops": {"chat_id": REDACTED}},
+                }
+            }
+        }
+        db = _DbStub(one=None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await adp_api.update_adapter_config(adapter_type="MESSAGE", body=ConfigPatch(config=incoming_config), db=db, _user="admin")
+        assert exc_info.value.status_code == 422
+        assert db.committed == []
 
 
 class TestGetAdapterConfig:
@@ -2491,6 +2550,7 @@ class TestEtsImport:
             def __init__(self):
                 self.node_rows = []
                 self.link_rows = []
+                self.device_link_rows = []
 
             async def fetchall(self, query, params=()):
                 if "FROM knx_locations" in query:
@@ -2500,6 +2560,8 @@ class TestEtsImport:
                     ]
                 if "FROM knx_functions f" in query:
                     return [_row(space_id="room", ga_address="1/2/3")]
+                if "FROM knx_space_device_links" in query:
+                    return [_row(space_id="room", device_id="dev-1")]
                 if "FROM datapoints dp" in query:
                     return [_row(id="dp-1")]
                 return []
@@ -2512,6 +2574,8 @@ class TestEtsImport:
                     self.node_rows.extend(rows)
                 if "hierarchy_datapoint_links" in query:
                     self.link_rows.extend(rows)
+                if "hierarchy_device_links" in query:
+                    self.device_link_rows.extend(rows)
 
             async def commit(self):
                 pass
@@ -2526,6 +2590,114 @@ class TestEtsImport:
         assert result.links_created == 1
         assert len(db.node_rows) == 2
         assert len(db.link_rows) == 1
+        assert len(db.device_link_rows) == 1
+        assert db.device_link_rows[0][1] == db.node_rows[1][0]
+        assert db.device_link_rows[0][2] == "dev-1"
+
+    @pytest.mark.asyncio
+    async def test_create_ets_hierarchy_buildings_links_devices_without_datapoint_auto_link(self):
+        from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
+
+        class _Db:
+            def __init__(self):
+                self.node_rows = []
+                self.link_rows = []
+                self.device_link_rows = []
+                self.datapoint_queries = 0
+
+            async def fetchall(self, query, params=()):
+                if "FROM knx_locations" in query:
+                    return [
+                        _row(id="building", parent_id=None, name="Building", space_type="Building", sort_order=1),
+                        _row(id="room", parent_id="building", name="Room", space_type="Room", sort_order=2),
+                    ]
+                if "FROM datapoints dp" in query:
+                    self.datapoint_queries += 1
+                    return [_row(id="dp-1")]
+                if "FROM knx_space_device_links" in query:
+                    return [_row(space_id="room", device_id="dev-1")]
+                if "FROM knx_comm_objects co" in query:
+                    return [_row(space_id="room", device_id="dev-2")]
+                return []
+
+            async def execute_and_commit(self, query, params=()):
+                pass
+
+            async def executemany(self, query, rows):
+                if "hierarchy_nodes" in query:
+                    self.node_rows.extend(rows)
+                if "hierarchy_datapoint_links" in query:
+                    self.link_rows.extend(rows)
+                if "hierarchy_device_links" in query:
+                    self.device_link_rows.extend(rows)
+
+            async def commit(self):
+                pass
+
+        db = _Db()
+        result = await create_ets_hierarchy(
+            db,
+            EtsImportRequest(tree_name="Buildings", mode="buildings", auto_link=False),
+        )
+
+        room_node_id = db.node_rows[1][0]
+        assert result.links_created == 0
+        assert db.datapoint_queries == 0
+        assert db.link_rows == []
+        assert sorted((row[1], row[2]) for row in db.device_link_rows) == [
+            (room_node_id, "dev-1"),
+            (room_node_id, "dev-2"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_create_ets_hierarchy_buildings_auto_links_unique_device_space_from_group_addresses(self):
+        from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
+
+        class _Db:
+            def __init__(self):
+                self.node_rows = []
+                self.device_link_rows = []
+
+            async def fetchall(self, query, params=()):
+                if "FROM knx_locations" in query:
+                    return [
+                        _row(id="building", parent_id=None, name="Building", space_type="Building", sort_order=1),
+                        _row(id="room", parent_id="building", name="Room", space_type="Room", sort_order=2),
+                    ]
+                if "FROM knx_functions f" in query:
+                    return []
+                if "FROM knx_space_device_links" in query:
+                    return [_row(space_id="room", device_id="direct-device")]
+                if "FROM knx_comm_objects co" in query:
+                    return [
+                        _row(space_id="room", device_id="inferred-device"),
+                        _row(space_id="missing-room", device_id="missing-room-device"),
+                    ]
+                return []
+
+            async def execute_and_commit(self, query, params=()):
+                pass
+
+            async def executemany(self, query, rows):
+                if "hierarchy_nodes" in query:
+                    self.node_rows.extend(rows)
+                if "hierarchy_device_links" in query:
+                    self.device_link_rows.extend(rows)
+
+            async def commit(self):
+                pass
+
+        db = _Db()
+        await create_ets_hierarchy(
+            db,
+            EtsImportRequest(tree_name="Buildings", mode="buildings", auto_link=True),
+        )
+
+        room_node_id = db.node_rows[1][0]
+        assert sorted((row[1], row[2]) for row in db.device_link_rows) == [
+            (room_node_id, "direct-device"),
+            (room_node_id, "inferred-device"),
+        ]
 
     @pytest.mark.asyncio
     async def test_create_ets_hierarchy_trades_auto_links_function_datapoints(self):

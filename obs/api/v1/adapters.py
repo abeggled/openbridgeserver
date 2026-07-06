@@ -224,6 +224,38 @@ def _message_target_has_redacted_secret(provider_name: str, target_config: dict[
     return any(target_config.get(field) == REDACTED for field in _MESSAGE_PROVIDER_TARGET_SECRET_FIELDS[provider_name])
 
 
+def _message_redacted_secret_paths(config: dict[str, Any]) -> list[str]:
+    providers = config.get("providers")
+    if not isinstance(providers, dict):
+        return []
+
+    paths: list[str] = []
+    for provider_name, provider_fields in _MESSAGE_PROVIDER_SECRET_FIELDS.items():
+        provider_config = providers.get(provider_name)
+        if not isinstance(provider_config, dict):
+            continue
+        for field in provider_fields:
+            if provider_config.get(field) == REDACTED:
+                paths.append(f"providers.{provider_name}.{field}")
+
+        targets = provider_config.get("targets")
+        if not isinstance(targets, dict):
+            continue
+        for target_name, target_config in targets.items():
+            if not isinstance(target_config, dict):
+                continue
+            for field in _MESSAGE_PROVIDER_TARGET_SECRET_FIELDS[provider_name]:
+                if target_config.get(field) == REDACTED:
+                    paths.append(f"providers.{provider_name}.targets.{target_name}.{field}")
+    return paths
+
+
+def _reject_unresolved_redacted_message_config(config: dict[str, Any]) -> None:
+    paths = _message_redacted_secret_paths(config)
+    if paths:
+        raise ValueError("Unresolved redacted MESSAGE secrets: " + ", ".join(paths) + "; please re-enter credentials")
+
+
 def _message_redacted_target_rename_candidates(
     provider_name: str,
     stored_targets: dict[str, Any],
@@ -374,6 +406,11 @@ async def create_instance(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"Adapter-Typ '{body.adapter_type}' nicht registriert",
         )
+    if body.adapter_type == "MESSAGE":
+        try:
+            _reject_unresolved_redacted_message_config(body.config)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     # Config validieren
     try:
         cls.config_schema(**body.config)
@@ -449,6 +486,7 @@ async def update_instance(
             stored_config = json.loads(config_raw) if config_raw else {}
             try:
                 config_new = _preserve_redacted_message_config_secrets(stored_config, body.config)
+                _reject_unresolved_redacted_message_config(config_new)
             except ValueError as exc:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
         cls = adapter_registry.get_class(row["adapter_type"])
@@ -1475,6 +1513,7 @@ async def update_adapter_config(
         stored_config = json.loads(row["config"]) if row is not None and row["config"] else {}
         try:
             config_new = _preserve_redacted_message_config_secrets(stored_config, body.config)
+            _reject_unresolved_redacted_message_config(config_new)
         except ValueError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     try:
