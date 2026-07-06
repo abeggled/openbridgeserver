@@ -204,3 +204,28 @@ describe('LegacyMigrationWizard — Verwerfen', () => {
     expect(wrapper.find('[data-testid="wizard-discard-freed"]').text()).toContain('512')
   })
 })
+
+describe('LegacyMigrationWizard — nullish Backend-Werte (#968)', () => {
+  it('treats unknown disk space as unknown, not 0 B, and does not block the start', async () => {
+    // disk_free_bytes: null → freier Platz unbekannt. Number(null) wäre 0 und würde
+    // fälschlich „0 B", ein rotes Verdict und einen gesperrten Start erzeugen.
+    const wrapper = await mountWizard(statusPayload({ disk_free_bytes: null }))
+    expect(wrapper.find('[data-testid="wizard-disk-free"]').text()).toContain('–')
+    // Kein Disk-Verdict (unbekannt → Backend-Precheck entscheidet).
+    expect(wrapper.find('[data-testid="wizard-disk-verdict"]').exists()).toBe(false)
+    // Start NICHT gesperrt.
+    expect(wrapper.find('[data-testid="wizard-migrate-start"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('does not read a missing reclaim ETA as immediate pressure', async () => {
+    // estimated_seconds_until_budget: null + over_budget: false → keine ETA, kein
+    // „Budget bereits überschritten". Number(null)=0 hätte fälschlich keepEtaNow gezeigt.
+    const wrapper = await mountWizard(statusPayload({ estimated_seconds_until_budget: null, over_budget: false }))
+    expect(wrapper.find('[data-testid="wizard-keep-eta"]').exists()).toBe(false)
+  })
+
+  it('still shows immediate pressure when over_budget is explicitly true', async () => {
+    const wrapper = await mountWizard(statusPayload({ estimated_seconds_until_budget: null, over_budget: true }))
+    expect(wrapper.find('[data-testid="wizard-keep-eta"]').exists()).toBe(true)
+  })
+})

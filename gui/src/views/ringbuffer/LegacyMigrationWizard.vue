@@ -248,7 +248,13 @@ const budgetBytes = computed(() => {
 })
 const budgetText = computed(() => (budgetBytes.value !== null ? formatBytesBinary(budgetBytes.value) : t('ringbuffer.migration.noBudget')))
 const diskFreeBytes = computed(() => {
-  const n = Number(status.value?.disk_free_bytes)
+  // Nullish VOR der Number-Coercion behandeln (#968, Codex :252): der Backend liefert
+  // ``null``, wenn der freie Platz unbekannt ist. ``Number(null)`` wäre 0 und würde
+  // fälschlich „0 B frei" anzeigen, den Disk-Check rot färben und den Start sperren –
+  // gewollt ist stattdessen: unbekannt → der Backend-Precheck entscheidet.
+  const raw = status.value?.disk_free_bytes
+  if (raw === null || raw === undefined) return null
+  const n = Number(raw)
   return Number.isFinite(n) && n >= 0 ? n : null
 })
 const diskFreeText = computed(() => (diskFreeBytes.value !== null ? formatBytesBinary(diskFreeBytes.value) : '–'))
@@ -335,9 +341,14 @@ async function onStartMigration() {
 const keepEtaText = computed(() => {
   const s = status.value
   if (!s) return null
-  const eta = Number(s.estimated_seconds_until_budget)
+  // Fehlende ETA (kein Budget / zu wenig Prognosedaten → Backend liefert ``null``)
+  // NICHT als sofortigen Druck lesen (#968, Codex :339): ``Number(null)`` wäre 0 und
+  // meldete fälschlich „Budget bereits überschritten". ``over_budget`` ist das
+  // autoritative Sofort-Signal; eine echte ETA von 0 zählt ebenfalls.
+  const raw = s.estimated_seconds_until_budget
+  const eta = raw === null || raw === undefined ? null : Number(raw)
   if (s.over_budget || eta === 0) return t('ringbuffer.migration.keepEtaNow')
-  if (Number.isFinite(eta) && eta > 0) {
+  if (eta !== null && Number.isFinite(eta) && eta > 0) {
     return t('ringbuffer.migration.keepEta', { days: fmtInt(Math.max(1, Math.round(eta / SECONDS_PER_DAY))) })
   }
   return null

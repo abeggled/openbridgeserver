@@ -446,3 +446,88 @@ async def test_run_reconciles_interrupted_commit_instead_of_discarding(tmp_path:
         assert len([r for r in rows if r["global_event_id"] < 0]) > 0
     finally:
         await rb.stop()
+
+
+# ---------- Runde 5, Codex :1066: discard räumt verwaiste migrating-Segmente ----------
+
+
+async def test_discard_legacy_also_removes_orphaned_migrating_segments(tmp_path: Path):
+    """``discard`` nach einer gescheiterten Migration muss auch die verwaisten
+    ``migrating``-Kopien entfernen (#968, Codex :1066), nicht nur die Legacy-Zeilen –
+    sonst belegen sie unsichtbar Platz bis zum nächsten Reconcile-Neustart."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, [1, 2, 3])
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        # Verwaiste migrating-Kopie einer gescheiterten Migration simulieren.
+        seg = await rb._store.manifest.create_migrating_segment(filename="rb_migrated_orphan.sqlite", schema_version=2)
+        (rb._store._segments_dir / "rb_migrated_orphan.sqlite").write_bytes(b"x" * 512)
+        assert await rb._store.manifest.list_migrating_segments()
+
+        await rb.discard_legacy()
+
+        assert await rb._store.manifest.list_migrating_segments() == [], "migrating-Reste muessen mit verworfen werden"
+        assert await rb._store.manifest.get_segment(seg.segment_id) is None
+        assert not (rb._store._segments_dir / "rb_migrated_orphan.sqlite").exists()
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 5, Codex :1110: quarantäniertes Legacy synchron ablehnen ----------
+
+
+async def test_start_migration_rejects_quarantined_legacy_synchronously(tmp_path: Path):
+    """Ist die einzige Legacy-Quelle quarantäniert (nach Read-Fehler), muss
+    ``start_legacy_migration`` synchron abbrechen (#968, Codex :1110) statt einen Job
+    zu melden, der im Hintergrund sofort scheitert."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, [1, 2, 3])
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        for seg in [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION]:
+            await rb._store.manifest.mark_quarantined(seg.segment_id, "corrupt (Test)")
+        assert await rb._store.manifest.list_legacy_segments() == []
+        with pytest.raises(OfflineMigrationError, match="quarantined|unreadable"):
+            await rb.start_legacy_migration()
+        # Kein Hintergrund-Task angelegt (synchroner Abbruch).
+        assert rb._legacy_migration_task is None
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 5, Codex :496: Reconcile pro fehlender Legacy-Quelle ----------
+
+
+async def test_reconcile_completes_commit_for_single_missing_legacy_of_many(tmp_path: Path):
+    """Bei mehreren registrierten Legacy-Quellen fehlt nach einem Crash nur die gerade
+    migrierte Datei. Der Reconciler muss den Commit für DIESE Quelle vollenden (#968,
+    Codex :496), statt zu verlangen, dass ALLE Legacy-Dateien fehlen."""
+    from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
+
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        # Zwei Legacy-Quellen: eine mit vorhandener Datei, eine (migrierte) ohne Datei.
+        present = tmp_path / "legacy_present.db"
+        present.write_bytes(b"x" * 256)
+        missing = tmp_path / "legacy_gone.db"  # existiert bewusst NICHT (unlinkt)
+        present_row = await store.manifest.register_legacy_segment(source_path=str(present), size_bytes=256)
+        missing_row = await store.manifest.register_legacy_segment(source_path=str(missing), size_bytes=256)
+
+        # Kopie der migrierten (fehlenden) Quelle als migrating-Segment.
+        mig = await store.manifest.create_migrating_segment(filename="rb_migrated_x.sqlite", schema_version=2)
+        (store._segments_dir / "rb_migrated_x.sqlite").write_bytes(b"y" * 256)
+
+        await reconcile_offline_migration(store)
+
+        # Die fehlende Quelle ist detached, ihre Kopie promotet; die vorhandene bleibt.
+        legacy_now = {s.segment_id for s in await store.manifest.list_legacy_segments()}
+        assert missing_row.segment_id not in legacy_now, "fehlende Quelle muss detached werden"
+        assert present_row.segment_id in legacy_now, "vorhandene Quelle bleibt unangetastet"
+        assert await store.manifest.list_migrating_segments() == [], "Kopie muss promotet sein"
+        promoted = await store.manifest.get_segment(mig.segment_id)
+        assert promoted is not None and promoted.status != "migrating"
+    finally:
+        await store.close()

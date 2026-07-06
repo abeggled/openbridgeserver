@@ -1086,6 +1086,23 @@ class RingBuffer:
                         candidate.unlink()
                     except OSError:
                         continue
+            # Auch verwaiste ``migrating``-Kopien einer zuvor gescheiterten Migration hier
+            # verwerfen (#968, Codex :1066): ein ``discard`` ist erlaubt, sobald kein Job
+            # mehr läuft. Blieben die migrating-Segmente liegen, hielten sie – unsichtbar
+            # für Queries und aus der Retention ausgeschlossen – Platz belegt, bis ein
+            # Neustart sie reconcilet, obwohl die Entscheidung bereits terminal ist.
+            for segment in await self._store.manifest.list_migrating_segments():
+                base = self._store._segments_dir / segment.filename
+                for candidate in (base, Path(f"{base}-wal"), Path(f"{base}-shm")):
+                    try:
+                        freed += candidate.stat().st_size
+                    except OSError:
+                        pass
+                    try:
+                        candidate.unlink()
+                    except OSError:
+                        pass
+                await self._store.manifest.delete_segment(segment.segment_id)
             return {"removed_segments": len(legacy_segments), "freed_bytes": freed}
 
     def legacy_migration_progress(self) -> dict[str, Any]:
@@ -1108,6 +1125,14 @@ class RingBuffer:
             raise OfflineMigrationError("legacy migration already running")
         if not await self._has_attached_legacy_segment():
             raise OfflineMigrationError("no attached legacy source to migrate")
+        # Quarantäniertes Legacy synchron ablehnen (#968, Codex :1110):
+        # ``_has_attached_legacy_segment`` prüft nur die Schema-Version und meldet auch
+        # ein nach einem Read-Fehler quarantäniertes Segment als vorhanden. Der Migrator
+        # liest die Quelle aber über ``list_legacy_segments()`` (status ``legacy`` only),
+        # fände nichts und scheiterte erst asynchron. Hier hart abbrechen, statt einen
+        # scheinbar gestarteten Job zu melden, der im Hintergrund sofort fehlschlägt.
+        if not await self._store.manifest.list_legacy_segments():
+            raise OfflineMigrationError("legacy source is quarantined or unreadable; cannot migrate")
 
         # Während der Kopie MUSS die Quelle erhalten bleiben – unabhängig vom
         # Entscheidungszustand den Retention-Schutz aktivieren. Den VORHERIGEN Zustand

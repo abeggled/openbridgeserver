@@ -493,9 +493,20 @@ async def reconcile_offline_migration(store: SqliteSegmentStore) -> None:
             await store.manifest.delete_segment(segment.segment_id)
         return
     missing_file_rows = [s for s in legacy_rows if not Path(s.filename).exists()]
-    if missing_file_rows and len(missing_file_rows) == len(legacy_rows):
-        logger.info("RingBuffer: unterbrochenen Offline-Migrations-Commit vollenden (%d Segmente)", len(migrating))
-        await store.manifest.commit_offline_migration([s.segment_id for s in legacy_rows])
+    if missing_file_rows:
+        # Commit pro FEHLENDER Legacy-Quelle vollenden (#968, Codex :496): bei mehreren
+        # registrierten Legacy-Quellen fehlt nach einem Crash nur die gerade migrierte
+        # Datei, während die anderen Zeilen noch existieren. Früher verlangte der Check,
+        # dass ALLE Legacy-Dateien fehlen – sonst fiel der Startup zum Copy-Phase-Fall
+        # durch, ließ die kopierten ``migrating``-Segmente unsichtbar liegen und die
+        # unlinkte Quelle war weder abfragbar noch retrybar. Nur die fehlenden Zeilen
+        # detachen; ihre Kopien sind die einzigen ``migrating``-Segmente (ein Lauf gleichzeitig).
+        logger.info(
+            "RingBuffer: unterbrochenen Offline-Migrations-Commit vollenden (%d Segmente, %d fehlende Quelle(n))",
+            len(migrating),
+            len(missing_file_rows),
+        )
+        await store.manifest.commit_offline_migration([s.segment_id for s in missing_file_rows])
         return
     # Copy-Phase-Crash: Legacy-Datei existiert noch → Reste bleiben unsichtbar
     # liegen; der nächste Job-Start räumt sie weg.
