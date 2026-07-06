@@ -2071,11 +2071,12 @@ async def legacy_migration_decision(
     if current in LEGACY_DECISIONS_TERMINAL:
         raise HTTPException(status.HTTP_409_CONFLICT, f"legacy migration already finalized ({current})")
     rb = get_optional_ringbuffer()
-    # Keine Entscheidung, solange ein Migrationsjob laeuft (#968, Codex :2047): ein
+    # Keine Entscheidung, solange ein Migrationsjob laeuft (#968, Codex :2047/:2078): ein
     # ``discard`` waehrend ``starting``/``copying``/``committing`` koennte die Legacy-
     # Quelle entfernen, waehrend die Copy-Task noch laeuft und danach ``migrated``
-    # persistiert – die Admin-Entscheidung raced mit dem Job und wird ggf. ueberschrieben.
-    if rb is not None and (rb.legacy_migration_progress() or {}).get("phase") in ("starting", "precheck", "copying", "committing"):
+    # persistiert. ``legacy_migration_in_progress`` deckt auch das START-FENSTER ab
+    # (synchrone Reservierung vor den awaited Prechecks, Phase noch nicht ``starting``).
+    if rb is not None and rb.legacy_migration_in_progress():
         raise HTTPException(status.HTTP_409_CONFLICT, "a legacy migration job is currently running")
     if body.decision == "skip":
         await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)

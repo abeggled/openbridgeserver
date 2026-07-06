@@ -69,6 +69,7 @@ from obs.ringbuffer.store.interface import (
 )
 from obs.ringbuffer.store.manifest import (
     LEGACY_SCHEMA_VERSION,
+    MIGRATED_FILENAME_PREFIX,
     SEGMENT_STATUS_ACTIVE,
     SEGMENT_STATUS_CHECKPOINT_PENDING,
     SEGMENT_STATUS_CLOSED,
@@ -196,11 +197,6 @@ def _is_legacy_segment(segment: SegmentRecord) -> bool:
     Read-Pfad unabhängig von der Manifest-Statusmaschine korrekt degradiert.
     """
     return segment.schema_version <= LEGACY_SCHEMA_VERSION
-
-
-# Dateinamen-Präfix der offline migrierten v2-Segmente (``OfflineLegacyMigrator``).
-# Zentral hier, damit Detektor und Erzeuger denselben Marker nutzen.
-MIGRATED_FILENAME_PREFIX = "rb_migrated_"
 
 
 def _is_migrated_segment(segment: SegmentRecord) -> bool:

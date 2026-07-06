@@ -695,3 +695,57 @@ async def test_concurrent_migration_starts_are_serialized(tmp_path: Path):
             await rb._legacy_migration_task
     finally:
         await rb.stop()
+
+
+# ---------- Runde 8, Codex :495: migrierte Chunks hinter Live-Segmente sortieren ----------
+
+
+async def test_migrated_chunks_ordered_after_live_segments(tmp_path: Path):
+    """Promotete ``rb_migrated_*``-Chunks tragen negative gids (Alt-Historie) und müssen
+    in der Read-Ordnung ZULETZT kommen – wie der Legacy-Tail (#968, Codex :495), sonst
+    scannt eine Latest-Page-Query nach großer Migration alle migrierten Chunks."""
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        # Live-Segmente (positive gids).
+        await store.append([_event(1, _iso(0))])
+        await store.rotate()
+        await store.append([_event(2, _iso(1))])
+        # Ein migrierter Chunk mit HOHER segment_id (nach den Live-Segmenten promotet).
+        mig = await store.manifest.create_migrating_segment(filename="rb_migrated_x_001.sqlite", schema_version=2)
+        await store.manifest.update_segment_stats(mig.segment_id, row_count=1, size_bytes=100, from_ts=_iso(0), to_ts=_iso(0))
+        await store.manifest.commit_offline_migration([])  # migrating -> closed
+
+        segs = await store.manifest.list_segments_for_query()
+        names = [s.filename for s in segs]
+        migrated_pos = [i for i, f in enumerate(names) if f.startswith("rb_migrated_")]
+        live_pos = [i for i, f in enumerate(names) if not f.startswith("rb_migrated_")]
+        assert migrated_pos and live_pos
+        assert max(live_pos) < min(migrated_pos), "Live-Segmente müssen VOR den migrierten Chunks iteriert werden"
+    finally:
+        await store.close()
+
+
+# ---------- Runde 8, Codex :2078: Entscheidung im Migrations-Startfenster blockieren ----------
+
+
+async def test_migration_in_progress_covers_startup_reservation(tmp_path: Path):
+    """``legacy_migration_in_progress`` deckt das Startfenster ab (#968, Codex :2078):
+    zwischen der synchronen Reservierung und ``phase='starting'`` ist die Progress-Phase
+    noch idle – eine parallele keep/discard-Entscheidung dürfte hier nicht durchgehen."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, [1, 2, 3])
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        assert rb.legacy_migration_in_progress() is False
+        # Startfenster: Flag reserviert, Phase noch idle/failed.
+        rb._legacy_migration_starting = True
+        assert rb.legacy_migration_in_progress() is True, "Reservierungs-Flag muss als in-progress gelten"
+        rb._legacy_migration_starting = False
+        assert rb.legacy_migration_in_progress() is False
+        # Auch eine aktive Phase zählt.
+        rb._legacy_migration_progress = {"phase": "copying"}
+        assert rb.legacy_migration_in_progress() is True
+    finally:
+        await rb.stop()

@@ -41,10 +41,20 @@ SEGMENT_STATUS_LEGACY = "legacy"
 # Commit – ``list_segments_for_query`` blendet den Status aus, retention-eligible
 # ist er nicht (nicht in ``SEGMENT_STATUS_RETENTION_ELIGIBLE``). Beim Commit
 # werden alle ``migrating``-Segmente in EINER Transaktion auf ``closed`` promotet
-# und die Legacy-Zeile entfernt. KEINE weiteren Query-/Ordnungs-Sonderpfade:
-# die negativen gids sortieren nach dem Commit über den normalen
-# ``global_event_id``-Sort unter alle v2-Zeilen.
+# und die Legacy-Zeile entfernt.
 SEGMENT_STATUS_MIGRATING = "migrating"
+
+# Dateinamen-Präfix der offline migrierten v2-Segmente (``OfflineLegacyMigrator``).
+# Zentral hier, damit Detektor (``sqlite_backend._is_migrated_segment``), Erzeuger
+# und die Read-Ordnung denselben Marker nutzen. WICHTIG (#968, Codex :495): die
+# promoteten ``rb_migrated_*``-Chunks tragen zwar hohe ``segment_id``s, aber
+# streng NEGATIVE global_event_ids (Alt-Historie). In der neueste-zuerst-Ordnung
+# müssen sie deshalb – genau wie der Legacy-Tail – ZULETZT iteriert werden, sonst
+# lesen Latest-Page-Queries sie vor den Live-v2-Segmenten, das Early-Termination
+# (#932) greift nicht und ein normaler Monitor-Load wird O(migrierte Chunks).
+MIGRATED_FILENAME_PREFIX = "rb_migrated_"
+# SQL-LIKE-Muster mit escapten '_' (in LIKE sonst ein Wildcard) für die Ordnung.
+_MIGRATED_LIKE = MIGRATED_FILENAME_PREFIX.replace("_", "\\_") + "%"
 
 # Schema-Version einer Legacy-Single-DB: kein ``global_event_id``, keine
 # typisierten Wertspalten, segment-lokale rowid. Der Read-Pfad degradiert für
@@ -484,15 +494,18 @@ class Manifest:
             clauses.append("(to_ts IS NULL OR to_ts >= ?)")
             params.append(from_ts)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        # Legacy-Segmente (#934) tragen synthetische, streng negative
-        # global_event_ids und sind per Definition älter als jedes echte
-        # v2-Segment – unabhängig von ihrer segment_id (sie werden ggf. NACH dem
-        # aktiven v2-Segment eingehängt). Sie müssen daher immer ZULETZT iteriert
-        # werden, sonst bricht die neueste-zuerst-Ordnung und das bounded
-        # Early-Termination in #932. Primär also nach Legacy-Zugehörigkeit, dann
-        # segment_id DESC.
+        # Legacy-Segmente (#934) UND offline migrierte ``rb_migrated_*``-Chunks (#965)
+        # tragen synthetische, streng negative global_event_ids und sind per Definition
+        # älter als jedes echte v2-Segment – unabhängig von ihrer segment_id (Legacy wird
+        # ggf. NACH dem aktiven v2-Segment eingehängt; migrierte Chunks bekommen beim
+        # Promote hohe segment_ids). Beide müssen daher immer ZULETZT iteriert werden,
+        # sonst bricht die neueste-zuerst-Ordnung und das bounded Early-Termination (#932):
+        # eine Latest-Page-Query läse die migrierten Chunks vor den Live-Segmenten und
+        # müsste jedes verbleibende Segment besuchen (#968, Codex :495). Primär also nach
+        # Alt-Historie-Zugehörigkeit (Legacy ODER migriert), dann segment_id DESC.
         async with self._db.execute(
-            f"SELECT * FROM segments{where} ORDER BY CASE WHEN status = '{SEGMENT_STATUS_LEGACY}' THEN 1 ELSE 0 END, segment_id DESC",
+            f"SELECT * FROM segments{where} "
+            f"ORDER BY CASE WHEN status = '{SEGMENT_STATUS_LEGACY}' OR filename LIKE '{_MIGRATED_LIKE}' ESCAPE '\\' THEN 1 ELSE 0 END, segment_id DESC",
             params,
         ) as cur:
             rows = await cur.fetchall()

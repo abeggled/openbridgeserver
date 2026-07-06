@@ -1113,6 +1113,20 @@ class RingBuffer:
         """Aktueller Fortschritt des Offline-Migrationsjobs (#965) – Kopie, nie live-Referenz."""
         return dict(self._legacy_migration_progress)
 
+    def legacy_migration_in_progress(self) -> bool:
+        """True, solange ein Migrationsjob reserviert ist ODER in einer aktiven Phase läuft.
+
+        Deckt auch das START-FENSTER ab (#968, Codex :2078): zwischen der synchronen
+        Reservierung (``_legacy_migration_starting``, gesetzt VOR den awaited Prechecks)
+        und dem Setzen von ``phase='starting'`` ist die Progress-Phase noch der vorherige
+        idle/failed-Wert. Eine parallele ``keep``/``discard``-Entscheidung dürfte in
+        genau diesem Fenster NICHT durchgehen – ``keep`` könnte den Schutz vor dem
+        Copy-Start aufheben, ``discard`` die Quelle nach akzeptiertem Start entfernen.
+        """
+        if self._legacy_migration_starting:
+            return True
+        return (self._legacy_migration_progress or {}).get("phase") in ("starting", "precheck", "copying", "committing")
+
     async def start_legacy_migration(self, *, on_success=None) -> dict[str, Any]:
         """Startet den budget-gebundenen Offline-Migrationsjob (#965) als Hintergrund-Task.
 
