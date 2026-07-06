@@ -1966,6 +1966,7 @@ class LegacyMigrationStatus(BaseModel):
     legacy: dict[str, Any] | None
     disk_free_bytes: int | None
     budget_bytes: int | None
+    estimated_copy_bytes: int | None
     over_budget: bool
     estimated_seconds_until_budget: float | None
     job: dict[str, Any] | None
@@ -1985,6 +1986,7 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
     over_budget = False
     budget: int | None = None
     eta: float | None = None
+    estimated_copy: int | None = None
     protected = decision in LEGACY_DECISIONS_PROTECTED
     job: dict[str, Any] | None = None
     if rb is not None and is_ringbuffer_enabled():
@@ -2005,6 +2007,16 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
                 eta = max(0.0, (budget - size) / rate * 3600.0)
         elif legacy is not None and over_budget:
             eta = 0.0
+        # Copy-Obergrenze fuer den Disk-Precheck (#968, Codex :278): der Job kopiert
+        # nur das budget-gekappte v2-Aequivalent der Legacy-Daten, nicht das ganze
+        # Budget. Ein grosses Retention-Budget bei kleiner Legacy-DB darf die
+        # Migration in der UI nicht blockieren. Konservative Obergrenze:
+        # ``min(2x Legacy-Groesse, Budget)`` (v2 ~2x groesser; der Job kappt
+        # budget-genau, kopiert also nie mehr als das Budget).
+        legacy_size = (legacy or {}).get("size_bytes")
+        if isinstance(legacy_size, int) and legacy_size > 0:
+            v2_estimate = 2 * legacy_size
+            estimated_copy = min(v2_estimate, budget) if budget else v2_estimate
     disk_free: int | None = None
     try:
         disk_free = shutil.disk_usage(str(Path(_ringbuffer_disk_path()).parent)).free
@@ -2016,6 +2028,7 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
         legacy=legacy,
         disk_free_bytes=disk_free,
         budget_bytes=budget,
+        estimated_copy_bytes=estimated_copy,
         over_budget=over_budget,
         estimated_seconds_until_budget=eta,
         job=job,

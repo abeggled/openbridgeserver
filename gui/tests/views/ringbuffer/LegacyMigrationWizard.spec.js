@@ -106,6 +106,23 @@ describe('LegacyMigrationWizard — Ist-Analyse + Optionen', () => {
     // Roter Disk-Check blockiert den Start.
     expect(wrapper.find('[data-testid="wizard-migrate-start"]').attributes('disabled')).toBeDefined()
   })
+
+  it('checks free space against the estimated copy size, not the whole budget (#968)', async () => {
+    // Großes Retention-Budget (5 GiB), aber der Job kopiert nur ~200 MiB. Freier
+    // Platz (1 GiB) liegt UNTER dem Budget, aber deutlich ÜBER dem Copy-Bedarf –
+    // die Migration darf NICHT blockiert werden.
+    const wrapper = await mountWizard(
+      statusPayload({
+        budget_bytes: 5 * 1024 * 1024 * 1024,
+        estimated_copy_bytes: 200 * 1024 * 1024,
+        disk_free_bytes: 1024 * 1024 * 1024,
+      })
+    )
+    const verdict = wrapper.find('[data-testid="wizard-disk-verdict"]')
+    expect(verdict.exists()).toBe(true)
+    expect(verdict.classes().join(' ')).toContain('text-green-600')
+    expect(wrapper.find('[data-testid="wizard-migrate-start"]').attributes('disabled')).toBeUndefined()
+  })
 })
 
 describe('LegacyMigrationWizard — Migrieren', () => {

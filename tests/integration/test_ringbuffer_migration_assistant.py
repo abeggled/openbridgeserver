@@ -56,6 +56,7 @@ async def test_migration_status_shape(client, auth_headers):
             "legacy",
             "disk_free_bytes",
             "budget_bytes",
+            "estimated_copy_bytes",
             "over_budget",
             "estimated_seconds_until_budget",
             "job",

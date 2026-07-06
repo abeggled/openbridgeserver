@@ -11,11 +11,13 @@ from pathlib import Path
 
 import pytest
 
+import dataclasses
+
 from obs.ringbuffer.ringbuffer import RingBuffer
 from obs.ringbuffer.store.interface import StoreEvent
 from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
 from obs.ringbuffer.store.offline_migration import OfflineLegacyMigrator, OfflineMigrationError
-from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
+from obs.ringbuffer.store.sqlite_backend import SEGMENT_SCHEMA_VERSION, SqliteSegmentStore
 
 
 def _iso(i: int) -> str:
@@ -240,5 +242,70 @@ async def test_stats_exposes_over_budget_under_store_backend_extra(tmp_path: Pat
         # Die ALTEN (falschen) Top-Level-Pfade sind leer -> beweist den Bug:
         assert stats.get("retention_over_budget") is None
         assert stats.get("size_bytes") is None
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 2, Om-l6: geschütztes Legacy zählt als Budget-Druck ----------
+
+
+async def test_protected_legacy_counts_as_budget_pressure_with_live_data(tmp_path: Path):
+    """Upgrade-Fall: großes geschütztes Legacy + kleines Live-Segment über Budget.
+
+    Der No-Zero-History-Guard greift NICHT (Live-Segment hält Zeilen), aber
+    ``protect_legacy=True`` macht das Legacy trotzdem unlöschbar. Ohne den Fix
+    meldete ``/stats`` ``retention_over_budget=false`` und Dashboard/Config
+    eskalierten nie (#968, Codex :2919). Das Budget wird realistisch gewählt
+    (Live-Segment passt allein, Legacy sprengt) – NICHT 1 Byte, sonst maskiert
+    schon das aktive Segment den Fehler."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(200)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        await rb.record(ts=_iso(50), datapoint_id="dp-1", topic="dp/dp-1/value", old_value=None, new_value=1, source_adapter="api", quality="good")
+        assert await rb._store._has_nonlegacy_data_segment() is True, "Live-Segment ist non-legacy Historie"
+
+        segs = await rb._store.manifest.list_segments()
+        active = next(s for s in segs if s.status == "active")
+        legacy_seg = next(s for s in segs if s.schema_version <= LEGACY_SCHEMA_VERSION)
+        # Budget so, dass das Live-Segment allein passt, Legacy zusaetzlich sprengt.
+        budget = active.size_bytes + legacy_seg.size_bytes // 2
+        rb._store._retention_config = dataclasses.replace(rb._store._retention_config, max_file_size_bytes=budget)
+
+        stats = await rb.stats()
+        assert stats["store"]["backend_extra"]["retention_over_budget"] is True, "geschuetztes Legacy muss als Budget-Druck zaehlen"
+
+        # Gegenprobe: ohne Schutz (keep) UND mit non-legacy data ist Legacy loeschbar -> kein Druck.
+        rb._store._retention_config = dataclasses.replace(rb._store._retention_config, protect_legacy=False)
+        stats2 = await rb.stats()
+        assert stats2["store"]["backend_extra"]["retention_over_budget"] is False, "ungeschuetztes Legacy ist per FIFO reclaimbar"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 2, Om-lx: Row-Cap-Rotation während der Migration ----------
+
+
+async def test_migration_honors_segment_max_rows(tmp_path: Path):
+    """Ein Legacy-DB mit vielen kleinen Zeilen darf kein Segment weit über
+    ``segment_max_rows`` erzeugen (#968, Codex :341). Byte-Cap greift bei großem
+    Budget nicht – nur der Row-Cap teilt auf."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(2500)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, segment_max_rows=1000, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        progress: dict = {}
+        await mig.run(progress)
+        assert progress["phase"] == "done"
+        assert progress["copied_rows"] == 2500, "grosses Budget -> kein Cutoff"
+
+        v2_with_rows = [s for s in await rb._store.manifest.list_segments() if s.schema_version == SEGMENT_SCHEMA_VERSION and s.row_count > 0]
+        assert max(s.row_count for s in v2_with_rows) <= 1000, "kein migriertes Segment ueber dem Row-Cap"
+        # Die 2500 migrierten Zeilen wurden auf >=3 Segmente aufgeteilt (statt 1x2500).
+        migrated = [s for s in v2_with_rows if s.row_count >= 1]
+        assert len(migrated) >= 3, "Row-Cap muss die Migration in mehrere Segmente aufteilen"
     finally:
         await rb.stop()

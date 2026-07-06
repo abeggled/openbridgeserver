@@ -296,6 +296,7 @@ class OfflineLegacyMigrator:
         if source is None:
             raise OfflineMigrationError("legacy source became unreadable during migration")
         segment_max_bytes = self._store._segment_config.segment_max_bytes
+        segment_max_rows = self._store._segment_config.segment_max_rows
         target_conn = None
         target_filename: str | None = None
         target_segment: SegmentRecord | None = None
@@ -308,10 +309,18 @@ class OfflineLegacyMigrator:
             metadata_select = "metadata_version, metadata" if has_metadata_cols else "NULL AS metadata_version, NULL AS metadata"
             cursor_rowid = plan.cutoff_rowid
             while True:
+                # Batch am Row-Cap deckeln, damit ein legacy-DB mit vielen kleinen
+                # Zeilen kein Segment weit ueber ``segment_max_rows`` fuellt (#968,
+                # Codex :341). Bei offenem Segment nur die Restkapazitaet, sonst ein
+                # volles Batch (das naechste Segment startet leer).
+                batch_limit = COPY_BATCH_ROWS
+                if segment_max_rows is not None:
+                    capacity = segment_max_rows if target_conn is None else segment_max_rows - seg_rows
+                    batch_limit = max(1, min(COPY_BATCH_ROWS, capacity))
                 async with source.execute(
                     f"SELECT id, ts, datapoint_id, topic, old_value, new_value, source_adapter, quality, {metadata_select} "
                     "FROM ringbuffer WHERE id > ? ORDER BY id ASC LIMIT ?",
-                    (cursor_rowid, COPY_BATCH_ROWS),
+                    (cursor_rowid, batch_limit),
                 ) as cur:
                     rows = await cur.fetchall()
                 if not rows:
@@ -337,8 +346,11 @@ class OfflineLegacyMigrator:
                 progress["copied_rows"] = progress.get("copied_rows", 0) + len(rows)
                 size_now = self._store._segment_file_size(target_filename)
                 progress["copied_bytes"] = size_now if seg_index == 1 else progress.get("copied_bytes", 0)
-                # Segment-Rollover am Größen-Cap: Stats finalisieren, Datei schließen.
-                if segment_max_bytes is not None and size_now >= segment_max_bytes:
+                # Segment-Rollover am Größen- ODER Zeilen-Cap (Parität zum Live-Store
+                # ``_segment_rotation_due``): Stats finalisieren, Datei schließen.
+                bytes_full = segment_max_bytes is not None and size_now >= segment_max_bytes
+                rows_full = segment_max_rows is not None and seg_rows >= segment_max_rows
+                if bytes_full or rows_full:
                     await self._finalize_target(target_conn, target_segment, target_filename, seg_rows, seg_from_ts, seg_to_ts)
                     target_conn = None
             if target_conn is not None:

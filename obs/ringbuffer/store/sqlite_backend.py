@@ -2896,8 +2896,17 @@ class SqliteSegmentStore(RingBufferStore):
         zählt ebenfalls als undeletable. Sonst meldete ``/stats``
         ``retention_over_budget=false``, obwohl eine übergroße read-only Legacy-DB
         das Byte-Budget real überschreitet und ``enforce_retention()`` sie wegen
-        des Guards nicht freigeben kann. Der Guard-Check ist derselbe wie in
-        ``_next_size_retention_victim`` (``_has_nonlegacy_data_segment()``), damit
+        des Guards nicht freigeben kann.
+
+        #968 [P2]: Genauso zählt Legacy als undeletable, solange der Migrations-
+        Assistent es per ``protect_legacy`` schützt (Entscheidung pending/skipped).
+        In dem häufigen Upgrade-Fall (große geschützte Legacy-DB plus kleines
+        Live-Segment über Budget) greift der No-Zero-History-Guard nicht mehr –
+        ohne diese Bedingung meldete ``/stats`` fälschlich
+        ``retention_over_budget=false`` und Dashboard/Config eskalierten nie,
+        obwohl die Retention die geschützte Legacy-Datei bewusst nicht freigibt.
+        Beide Checks (``protect_legacy`` + ``_has_nonlegacy_data_segment()``)
+        spiegeln exakt die Ausschlussbedingungen in ``_retention_victims``, damit
         Meldung und Löschentscheidung konsistent bleiben.
         """
         budget = self._retention_config.max_file_size_bytes
@@ -2909,10 +2918,11 @@ class SqliteSegmentStore(RingBufferStore):
             if s.status in (SEGMENT_STATUS_ACTIVE, SEGMENT_STATUS_CHECKPOINT_PENDING):
                 undeletable += s.size_bytes
                 undeletable_ids.add(s.segment_id)
-        # Legacy zählt nur solange als undeletable, wie es NICHT freigebbar ist
-        # (Guard greift). Sobald ein nicht-Legacy-Segment Zeilen hält, ist Legacy
-        # per Size-Retention löschbar und darf das Budget nicht künstlich sprengen.
-        if not await self._has_nonlegacy_data_segment():
+        # Legacy zählt als undeletable, solange es NICHT freigebbar ist: entweder weil
+        # der Assistent es per ``protect_legacy`` schützt, oder weil der No-Zero-History-
+        # Guard greift (kein nicht-Legacy-Segment hält Zeilen). Nur wenn beides falsch ist,
+        # ist Legacy per Size-Retention löschbar und darf das Budget nicht künstlich sprengen.
+        if self._retention_config.protect_legacy or not await self._has_nonlegacy_data_segment():
             for s in segments:
                 if _is_legacy_segment(s) and s.segment_id not in undeletable_ids:
                     undeletable += s.size_bytes

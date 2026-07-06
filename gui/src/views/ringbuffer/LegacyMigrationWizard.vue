@@ -252,6 +252,14 @@ const diskFreeBytes = computed(() => {
   return Number.isFinite(n) && n >= 0 ? n : null
 })
 const diskFreeText = computed(() => (diskFreeBytes.value !== null ? formatBytesBinary(diskFreeBytes.value) : '–'))
+// Tatsächlicher Copy-Bedarf des Jobs (budget-gekapptes v2-Äquivalent der Legacy-
+// Daten), nicht das volle Budget – Fallback Budget, wenn das Backend keine
+// Schätzung liefert (#968).
+const requiredBytes = computed(() => {
+  const n = Number(status.value?.estimated_copy_bytes)
+  if (Number.isFinite(n) && n > 0) return n
+  return budgetBytes.value
+})
 const isLegacyDefaultBudget = computed(() => budgetBytes.value === LEGACY_DEFAULT_BUDGET_BYTES)
 // Faustformel verlustfreie Übernahme (#965): v2-Segmente speichern dieselben
 // Events größer als die v1-Quelle (typisierte Spalten, Metadaten-Indexe;
@@ -270,11 +278,13 @@ const showBudgetHint = computed(() => {
 })
 
 // ── Migrieren ──────────────────────────────────────────────────────────────
-// Disk-Check-Verdict: die Kopie braucht höchstens Budget-Bytes zusätzlich.
+// Disk-Check-Verdict: die Kopie braucht höchstens den geschätzten Copy-Bedarf
+// (budget-gekapptes v2-Äquivalent der Legacy-Daten), NICHT das volle Budget –
+// sonst blockiert ein großes Retention-Budget die Migration grundlos (#968).
 const diskVerdict = computed(() => {
-  if (diskFreeBytes.value === null || budgetBytes.value === null) return null
-  const ok = diskFreeBytes.value > budgetBytes.value
-  const params = { free: formatBytesBinary(diskFreeBytes.value), budget: formatBytesBinary(budgetBytes.value) }
+  if (diskFreeBytes.value === null || requiredBytes.value === null) return null
+  const ok = diskFreeBytes.value > requiredBytes.value
+  const params = { free: formatBytesBinary(diskFreeBytes.value), budget: formatBytesBinary(requiredBytes.value) }
   return { ok, text: ok ? t('ringbuffer.migration.diskOk', params) : t('ringbuffer.migration.diskLow', params) }
 })
 
