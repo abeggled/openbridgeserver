@@ -259,12 +259,16 @@ const diskFreeBytes = computed(() => {
 })
 const diskFreeText = computed(() => (diskFreeBytes.value !== null ? formatBytesBinary(diskFreeBytes.value) : '–'))
 // Tatsächlicher Copy-Bedarf des Jobs (budget-gekapptes v2-Äquivalent der Legacy-
-// Daten), nicht das volle Budget – Fallback Budget, wenn das Backend keine
-// Schätzung liefert (#968).
+// Daten), nicht das volle Budget – Fallback Budget nur, wenn das Backend KEINE
+// Schätzung liefert (#968). Ein finiter Wert von 0 (Codex :266) ist legitim –
+// Live-Bestand + Headroom lassen keine budgetierten Alt-Zeilen übrig, die Migration
+// kopiert dann 0 Bytes (drop-only) und braucht keinen Platz. Nicht auf das volle
+// Budget zurückfallen und den Start grundlos sperren.
 const requiredBytes = computed(() => {
-  const n = Number(status.value?.estimated_copy_bytes)
-  if (Number.isFinite(n) && n > 0) return n
-  return budgetBytes.value
+  const raw = status.value?.estimated_copy_bytes
+  if (raw === null || raw === undefined) return budgetBytes.value
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 0 ? n : budgetBytes.value
 })
 const isLegacyDefaultBudget = computed(() => budgetBytes.value === LEGACY_DEFAULT_BUDGET_BYTES)
 // Faustformel verlustfreie Übernahme (#965): v2-Segmente speichern dieselben

@@ -217,6 +217,19 @@ describe('LegacyMigrationWizard — nullish Backend-Werte (#968)', () => {
     expect(wrapper.find('[data-testid="wizard-migrate-start"]').attributes('disabled')).toBeUndefined()
   })
 
+  it('accepts a zero-byte copy estimate (drop-only migration) and does not block the start (#968)', async () => {
+    // estimated_copy_bytes: 0 ist legitim (Live + Headroom lassen keine budgetierten
+    // Alt-Zeilen) – der Job kopiert 0 Bytes und braucht keinen Platz. Nicht auf das
+    // volle Budget zurueckfallen und den Start sperren.
+    const wrapper = await mountWizard(
+      statusPayload({ estimated_copy_bytes: 0, budget_bytes: 5 * 1024 * 1024 * 1024, disk_free_bytes: 100 * 1024 * 1024 })
+    )
+    const verdict = wrapper.find('[data-testid="wizard-disk-verdict"]')
+    expect(verdict.exists()).toBe(true)
+    expect(verdict.classes().join(' ')).toContain('text-green-600')
+    expect(wrapper.find('[data-testid="wizard-migrate-start"]').attributes('disabled')).toBeUndefined()
+  })
+
   it('does not read a missing reclaim ETA as immediate pressure', async () => {
     // estimated_seconds_until_budget: null + over_budget: false → keine ETA, kein
     // „Budget bereits überschritten". Number(null)=0 hätte fälschlich keepEtaNow gezeigt.

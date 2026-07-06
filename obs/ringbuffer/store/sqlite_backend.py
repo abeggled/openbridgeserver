@@ -1571,6 +1571,15 @@ class SqliteSegmentStore(RingBufferStore):
         Manifest-Größe + Recovery-Status auf, #951 Codex :758), ``False`` bei Fehler
         oder BUSY.
         """
+        # Fehlt die Legacy-Hauptdatei, NICHT neu anlegen (#968, Codex :1575):
+        # ``aiosqlite.connect`` öffnet read/write und erzeugte sonst still eine leere
+        # SQLite-Datei. Genau das kann nach einem Offline-Migrations-Unlink (Datei weg,
+        # Manifest-Commit noch nicht vollendet) passieren, wenn die UI ``/migration``/
+        # ``/stats`` pollt und den Legacy-Checkpoint-Pfad triggert – der Startup-Reconciler
+        # sähe die fehlende Quelle dann nicht mehr, auf die er zum Promoten der fertigen
+        # ``migrating``-Kopien baut. Kein Checkpoint möglich → wie ein Fehler degradieren.
+        if not legacy_path.exists():
+            return False
         try:
             conn = await aiosqlite.connect(str(legacy_path))
             try:

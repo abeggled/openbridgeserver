@@ -267,7 +267,14 @@ class OfflineLegacyMigrator:
         # ``_discard_migrating_segments`` sie und machte aus einem recoverbaren Commit
         # permanenten Verlust der Alt-Historie. Der Reconciler promotet genau diesen Fall
         # (Legacy-Zeile mit fehlender Datei) und lässt nur echte Copy-Phase-Reste stehen.
-        await reconcile_offline_migration(self._store)
+        if await reconcile_offline_migration(self._store):
+            # Der Reconciler hat einen unterbrochenen Commit VOLLENDET (Kopien promotet,
+            # Legacy detached) – die Migration ist fertig (#968, Codex :277). NICHT
+            # weiterplanen (es gibt keine Quelle mehr; ``plan()`` meldete sonst ``failed``
+            # und der Aufrufer persistierte nie ``migrated``). Als ``done`` melden, damit
+            # das Post-Commit-Bookkeeping (``on_success``) im Aufrufer läuft.
+            progress.update(phase="done", copied_rows=progress.get("copied_rows", 0), dropped_rows=0, error=None)
+            return progress
         # Stale ``migrating``-Reste einer frueher abgebrochenen Copy-Phase verwerfen
         # (#968, Codex :233), BEVOR ``plan()`` den freien Platz prueft – sonst zaehlte der
         # Precheck genau die Dateien mit, die dieser Lauf ohnehin loescht, und ein Retry
@@ -497,7 +504,7 @@ def _unlink_legacy_files(legacy_path: Path) -> None:
             candidate.unlink()
 
 
-async def reconcile_offline_migration(store: SqliteSegmentStore) -> None:
+async def reconcile_offline_migration(store: SqliteSegmentStore) -> bool:
     """Startup-Reconciler (#965): vollendet oder neutralisiert eine unterbrochene Migration.
 
     Deterministische Regeln beim Öffnen des Stores:
@@ -512,10 +519,14 @@ async def reconcile_offline_migration(store: SqliteSegmentStore) -> None:
     * ``migrating``-Segmente + Legacy-Zeile mit vorhandener Datei → Crash während
       der Copy-Phase: nichts tun (unsichtbar, Legacy autoritativ); der nächste
       Job-Start verwirft die Reste und kopiert neu.
+
+    Rückgabe: ``True`` NUR, wenn ein unterbrochener Commit vollendet wurde
+    (Fall 1). Der Job-Pfad (#968, Codex :277) meldet dann ``done`` statt weiter zu
+    planen – die Migration ist fertig, es gibt keine Quelle mehr.
     """
     migrating = await store.manifest.list_migrating_segments()
     if not migrating:
-        return
+        return False
     legacy_rows = [s for s in await store.manifest.list_segments() if s.status == SEGMENT_STATUS_LEGACY]
     if not legacy_rows:
         logger.warning("RingBuffer: %d verwaiste Offline-Migrations-Segmente ohne Legacy-Quelle – werden verworfen", len(migrating))
@@ -525,7 +536,7 @@ async def reconcile_offline_migration(store: SqliteSegmentStore) -> None:
                 with contextlib.suppress(OSError):
                     candidate.unlink()
             await store.manifest.delete_segment(segment.segment_id)
-        return
+        return False
     missing_file_rows = [s for s in legacy_rows if not Path(s.filename).exists()]
     if missing_file_rows:
         # Commit pro FEHLENDER Legacy-Quelle vollenden (#968, Codex :496): bei mehreren
@@ -541,7 +552,8 @@ async def reconcile_offline_migration(store: SqliteSegmentStore) -> None:
             len(missing_file_rows),
         )
         await store.manifest.commit_offline_migration([s.segment_id for s in missing_file_rows])
-        return
+        return True
     # Copy-Phase-Crash: Legacy-Datei existiert noch → Reste bleiben unsichtbar
     # liegen; der nächste Job-Start räumt sie weg.
     logger.info("RingBuffer: %d unsichtbare Offline-Migrations-Segmente einer unterbrochenen Kopie gefunden", len(migrating))
+    return False

@@ -430,11 +430,12 @@ async def test_run_reconciles_interrupted_commit_instead_of_discarding(tmp_path:
         assert not legacy.exists()
         assert await rb._store.manifest.list_migrating_segments(), "migrating-Kopie muss noch existieren"
 
-        # Erneuter Lauf: darf die Kopie NICHT verwerfen, sondern den Commit vollenden.
+        # Erneuter Lauf: reconcilet den unterbrochenen Commit (promote) und meldet ``done``
+        # statt zu verwerfen oder als ``failed`` abzubrechen (#968, Codex :277).
         migrated_before = {s.filename for s in await rb._store.manifest.list_migrating_segments()}
-        with pytest.raises(OfflineMigrationError):
-            # Nach dem Reconcile-Promote gibt es kein Legacy mehr -> plan/run bricht sauber ab.
-            await mig.run({})
+        progress2: dict = {}
+        result = await mig.run(progress2)
+        assert result["phase"] == "done", "vollendeter Reconcile muss als done gemeldet werden, nicht failed"
         # Die zuvor migrating-Segmente sind jetzt promoted (closed v2), nicht gelöscht.
         all_segs = await rb._store.manifest.list_segments()
         promoted = {s.filename for s in all_segs if s.status == "closed" and s.filename.startswith("rb_migrated_")}
@@ -749,3 +750,17 @@ async def test_migration_in_progress_covers_startup_reservation(tmp_path: Path):
         assert rb.legacy_migration_in_progress() is True
     finally:
         await rb.stop()
+
+
+# ---------- Runde 9, Codex :1575: fehlende Legacy-DB im Checkpoint nicht neu anlegen ----------
+
+
+async def test_checkpoint_missing_legacy_does_not_recreate_file(tmp_path: Path):
+    """``_checkpoint_small_legacy`` darf eine fehlende Legacy-Hauptdatei NICHT neu anlegen
+    (#968, Codex :1575): sonst erzeugte ein UI-Poll auf /stats zwischen Offline-Unlink und
+    Manifest-Commit eine leere DB und der Reconciler sähe die fehlende Quelle nicht mehr."""
+    missing = tmp_path / "gone_legacy.db"
+    assert not missing.exists()
+    result = await SqliteSegmentStore._checkpoint_small_legacy(missing)
+    assert result is False, "kein Checkpoint moeglich ohne Quelldatei"
+    assert not missing.exists(), "fehlende Legacy-DB darf nicht neu angelegt werden"
