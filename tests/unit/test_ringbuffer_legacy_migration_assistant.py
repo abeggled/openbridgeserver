@@ -185,6 +185,36 @@ async def test_protect_legacy_blocks_fifo_reclaim_until_lifted(tmp_path: Path):
         await store.close()
 
 
+@pytest.mark.asyncio
+async def test_stats_estimate_attached_legacy_rows_and_span(tmp_path: Path):
+    """/stats zaehlt attachte Legacy-Events per Punkt-Lookup-Schaetzung mit (#964-Follow-up).
+
+    Das Manifest traegt fuer attachte Legacy-Segmente bewusst row_count 0 (kein
+    Attach-Scan). Ohne Anreicherung meldete das Dashboard "0 Eintraege", obwohl
+    zigtausend Alt-Events abfragbar sind. Die Stats schaetzen jetzt lazy+gecacht
+    ueber MAX(rowid) und liefern auch die ts-Spanne der Alt-Historie.
+    """
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        legacy = tmp_path / "obs_ringbuffer.db"
+        await _seed_legacy_db(legacy, [10, 11, 12, 13])
+        migrator = LegacyMigrator(store, legacy)
+        await migrator.attach_readonly(migrator.classify())
+        await store.append([_event(1, _iso(50))])
+
+        stats = await store.stats()
+        assert stats.common["total"] == 5, "4 Legacy-Events (geschaetzt) + 1 Live-Event"
+        assert stats.common["oldest_ts"] == _iso(0), "aelteste ts kommt aus der Legacy-Historie"
+        assert stats.common["newest_ts"] == _iso(50)
+
+        # Cache greift: zweiter Aufruf identisch (und guenstig).
+        stats2 = await store.stats()
+        assert stats2.common["total"] == 5
+    finally:
+        await store.close()
+
+
 # ---------------------------------------------------------------------------
 # RingBuffer-Helfer: Overview, Discard, Live-Umschaltung
 # ---------------------------------------------------------------------------

@@ -906,6 +906,10 @@ class SqliteSegmentStore(RingBufferStore):
         # werden (sonst meldete ``/stats`` fälschlich unter-Budget). Ein späterer
         # erfolgreicher Delete räumt die ID wieder aus.
         self._unlink_blocked_segment_ids: set[int] = set()
+        # Lazy-Schaetzung attachter Legacy-Segmente fuer /stats (#964-Follow-up):
+        # (row_estimate, from_ts, to_ts) je segment_id. Die Quelle ist read-only,
+        # der Wert damit stabil; beim Delete wird der Eintrag mitgeraeumt.
+        self._legacy_stats_cache: dict[int, tuple[int, str | None, str | None]] = {}
 
     def apply_config(
         self,
@@ -2738,11 +2742,53 @@ class SqliteSegmentStore(RingBufferStore):
             "effective_segment_max_bytes": self._segment_config.segment_max_bytes,
         }
 
+    async def _legacy_stats_estimate(self, segment: SegmentRecord) -> tuple[int, str | None, str | None]:
+        """Billige (row_estimate, from_ts, to_ts)-Schaetzung eines attachten Legacy-Segments.
+
+        MAX(rowid) plus ts der ersten/letzten rowid - drei Punkt-Lookups statt
+        COUNT/Scan (rowids einer append-only Legacy-DB sind monoton). Gecacht je
+        segment_id (die Quelle ist read-only). Unlesbare Quelle -> (0, None, None),
+        ebenfalls gecacht, damit ein kaputtes File nicht jeden /stats-Poll kostet.
+        """
+        cached = self._legacy_stats_cache.get(segment.segment_id)
+        if cached is not None:
+            return cached
+        estimate: tuple[int, str | None, str | None] = (0, None, None)
+        try:
+            conn = await self._connection_for_read(segment)
+        except Exception:
+            conn = None
+        if conn is not None:
+            try:
+                async with conn.execute("SELECT MAX(id) FROM ringbuffer") as cur:
+                    row = await cur.fetchone()
+                rows = int(row[0]) if row and row[0] is not None else 0
+                async with conn.execute("SELECT ts FROM ringbuffer ORDER BY id ASC LIMIT 1") as cur:
+                    first = await cur.fetchone()
+                async with conn.execute("SELECT ts FROM ringbuffer ORDER BY id DESC LIMIT 1") as cur:
+                    last = await cur.fetchone()
+                estimate = (rows, first[0] if first else None, last[0] if last else None)
+            except Exception:
+                estimate = (0, None, None)
+            finally:
+                await conn.close()
+        self._legacy_stats_cache[segment.segment_id] = estimate
+        return estimate
+
     async def stats(self) -> StoreStats:
         segments = await self.manifest.list_segments()
-        total = sum(s.row_count for s in segments)
-        oldest = min((s.from_ts for s in segments if s.from_ts), default=None)
-        newest = max((s.to_ts for s in segments if s.to_ts), default=None)
+        # Attached Legacy-Segmente tragen im Manifest row_count 0 / keine ts-Grenzen
+        # (Attach scannt bewusst nicht, #934). Fuer die STATS werden sie lazy und
+        # gecacht geschaetzt (#964-Follow-up): drei Punkt-Lookups (MAX(rowid),
+        # ts der ersten/letzten rowid) auf der read-only Connection - kein Scan.
+        # Bewusst NUR Anzeige-Anreicherung: die Manifest-Zeile bleibt unveraendert,
+        # damit die row-Budget-Retention ihr Verhalten nicht aendert.
+        legacy_estimates = {s.segment_id: await self._legacy_stats_estimate(s) for s in segments if _is_legacy_segment(s) and s.row_count == 0}
+        total = sum(legacy_estimates.get(s.segment_id, (s.row_count, None, None))[0] or s.row_count for s in segments)
+        ts_lows = [s.from_ts for s in segments if s.from_ts] + [est[1] for est in legacy_estimates.values() if est[1]]
+        ts_highs = [s.to_ts for s in segments if s.to_ts] + [est[2] for est in legacy_estimates.values() if est[2]]
+        oldest = min(ts_lows, default=None)
+        newest = max(ts_highs, default=None)
         size_bytes = sum(s.size_bytes for s in segments)
         common = {
             "total": total,
@@ -3321,6 +3367,7 @@ class SqliteSegmentStore(RingBufferStore):
             return False
         # Erfolgreich gelöscht → evtl. früherer unlink-blocked-Zustand ist aufgehoben.
         self._unlink_blocked_segment_ids.discard(segment.segment_id)
+        self._legacy_stats_cache.pop(segment.segment_id, None)
         await self.manifest.delete_segment(segment.segment_id)
         return True
 
