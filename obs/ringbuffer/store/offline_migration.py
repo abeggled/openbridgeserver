@@ -436,9 +436,21 @@ class OfflineLegacyMigrator:
     async def _discard_migrating_segments(self) -> None:
         for segment in await self._store.manifest.list_migrating_segments():
             base = self._store._segments_dir / segment.filename
-            for candidate in (base, Path(f"{base}-wal"), Path(f"{base}-shm")):
+            for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm")):
                 with contextlib.suppress(OSError):
                     candidate.unlink()
+            # Die Manifest-Zeile NUR entfernen, wenn die Hauptdatei wirklich weg ist
+            # (#968, Codex :442, analog zum Kalibrierungs-Sample :210): bleibt sie liegen
+            # (Permission/IO) und die Zeile würde trotzdem gelöscht, wäre es eine untracked
+            # ``rb_migrated_*.sqlite`` – aus /stats, Retention und Retry-Cleanup verschwunden,
+            # dauerhaft Platz belegend und künftige Prechecks scheiternd. Fehler surfacen
+            # (Migration bricht sauber ab); die Zeile bleibt für den nächsten Cleanup.
+            try:
+                base.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise OfflineMigrationError(f"could not remove stale migrating segment {segment.filename}: {exc}") from exc
             await self._store.manifest.delete_segment(segment.segment_id)
 
     @staticmethod

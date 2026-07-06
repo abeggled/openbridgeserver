@@ -804,3 +804,74 @@ async def test_modeswitch_rollback_preserves_legacy_protection(tmp_path, monkeyp
             await active.stop()
         reset_ringbuffer()
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_estimated_copy_bytes_accounts_for_live_bytes(tmp_path, monkeypatch):
+    """``estimated_copy_bytes`` spiegelt das Ziel-Volumen des Migrators
+    (``budget − headroom − live_bytes``), nicht das volle Budget (#968, Codex :2020).
+    Verbrauchen Live-Segmente bereits Budget, muss die Schätzung sinken – sonst
+    blockierte die UI eine valide Migration."""
+    from obs.ringbuffer.ringbuffer import RingBuffer as _RB
+
+    db = Database(":memory:")
+    await db.connect()
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    # Legacy-Quelle, deren v2-Äquivalent (2×) das Budget übersteigt → ohne Live-Abzug
+    # wäre estimated == budget; mit Abzug muss es kleiner sein.
+    leg = _RB(storage="disk", disk_path=str(rb_path), max_entries=None)
+    await leg.start()
+    for i in range(300):
+        await leg.record(
+            ts=f"2026-01-01T00:00:{i % 60:02d}.000Z",
+            datapoint_id="dp-leg",
+            topic="t",
+            old_value=None,
+            new_value=i,
+            source_adapter="api",
+            quality="good",
+        )
+    await leg.stop()
+    legacy_size = rb_path.stat().st_size
+
+    reset_ringbuffer()
+    rb_api.set_ringbuffer_enabled(False)
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    monkeypatch.setattr(rb_api, "_subscribe_ringbuffer", lambda _rb: None)
+    # Budget kleiner als 2× Legacy, damit die Kappung am Ziel-Volumen (nicht an 2×Legacy) greift.
+    budget = int(legacy_size * 1.5)
+    rb = await init_ringbuffer(
+        storage="file",
+        max_entries=None,
+        disk_path=str(rb_path),
+        max_file_size_bytes=budget,
+        max_age=None,
+        segmented=True,
+        legacy_retention_protected=True,
+    )
+    rb_api.set_ringbuffer_enabled(True)
+    try:
+        # Live-Bestand aufbauen, der einen Teil des Budgets belegt.
+        for i in range(400):
+            await rb.record(
+                ts=f"2026-02-01T00:00:{i % 60:02d}.000Z",
+                datapoint_id="dp-live",
+                topic="t",
+                old_value=None,
+                new_value=i,
+                source_adapter="api",
+                quality="good",
+            )
+
+        status = await rb_api._legacy_migration_status(db)
+        assert status.estimated_copy_bytes is not None
+        assert status.budget_bytes == budget
+        # Der Live-Bestand ist abgezogen → Schätzung strikt unter dem Budget.
+        assert status.estimated_copy_bytes < status.budget_bytes, "Live-Bestand muss den Copy-Bedarf senken"
+        assert status.estimated_copy_bytes >= 0
+    finally:
+        active = rb_api.get_optional_ringbuffer()
+        if active is not None:
+            await active.stop()
+        reset_ringbuffer()
+        await db.disconnect()

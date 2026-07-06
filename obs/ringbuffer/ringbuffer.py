@@ -262,6 +262,10 @@ class RingBuffer:
         # Offline-Migrationsjob (#965): genau EIN Lauf gleichzeitig; der Fortschritt
         # wird live in dieses dict geschrieben (API-Progress-Endpoint).
         self._legacy_migration_task: asyncio.Task | None = None
+        # Synchrones Reservierungs-Flag (#968, Codex :1126): der Task wird erst nach
+        # mehreren awaited Prechecks gesetzt; das Flag schließt das Race-Fenster
+        # zwischen zwei fast-gleichzeitigen ``start_legacy_migration``-Aufrufen.
+        self._legacy_migration_starting = False
         self._legacy_migration_progress: dict[str, Any] = {"phase": "idle"}
         self._last_values: dict[str, Any] = {}  # dp_id → last recorded value
         self._last_recovery_at: str | None = None
@@ -1121,27 +1125,39 @@ class RingBuffer:
 
         if not self._segmented or self._store is None:
             raise OfflineMigrationError("segmented store is not running")
-        if self._legacy_migration_task is not None and not self._legacy_migration_task.done():
+        # Doppelstart-Guard (#968, Codex :1126): NEBEN dem Task auch das synchrone
+        # ``_legacy_migration_starting``-Flag prüfen. Der Task wird erst nach mehreren
+        # awaited Prechecks gesetzt; ohne das Flag sähen zwei fast-gleichzeitige Aufrufe
+        # beide ``_legacy_migration_task is None`` und starteten zwei Migrator-Tasks gegen
+        # dieselbe Quelle (racende Copy-Phasen; der Commit promotet alle migrating-Segmente).
+        if self._legacy_migration_starting or (self._legacy_migration_task is not None and not self._legacy_migration_task.done()):
             raise OfflineMigrationError("legacy migration already running")
-        if not await self._has_attached_legacy_segment():
-            raise OfflineMigrationError("no attached legacy source to migrate")
-        # Quarantäniertes Legacy synchron ablehnen (#968, Codex :1110):
-        # ``_has_attached_legacy_segment`` prüft nur die Schema-Version und meldet auch
-        # ein nach einem Read-Fehler quarantäniertes Segment als vorhanden. Der Migrator
-        # liest die Quelle aber über ``list_legacy_segments()`` (status ``legacy`` only),
-        # fände nichts und scheiterte erst asynchron. Hier hart abbrechen, statt einen
-        # scheinbar gestarteten Job zu melden, der im Hintergrund sofort fehlschlägt.
-        if not await self._store.manifest.list_legacy_segments():
-            raise OfflineMigrationError("legacy source is quarantined or unreadable; cannot migrate")
+        # Sofort reservieren – synchron, VOR dem ersten await (kein Context-Switch dazwischen).
+        self._legacy_migration_starting = True
+        try:
+            if not await self._has_attached_legacy_segment():
+                raise OfflineMigrationError("no attached legacy source to migrate")
+            # Quarantäniertes Legacy synchron ablehnen (#968, Codex :1110):
+            # ``_has_attached_legacy_segment`` prüft nur die Schema-Version und meldet auch
+            # ein nach einem Read-Fehler quarantäniertes Segment als vorhanden. Der Migrator
+            # liest die Quelle aber über ``list_legacy_segments()`` (status ``legacy`` only),
+            # fände nichts und scheiterte erst asynchron. Hier hart abbrechen, statt einen
+            # scheinbar gestarteten Job zu melden, der im Hintergrund sofort fehlschlägt.
+            if not await self._store.manifest.list_legacy_segments():
+                raise OfflineMigrationError("legacy source is quarantined or unreadable; cannot migrate")
 
-        # Während der Kopie MUSS die Quelle erhalten bleiben – unabhängig vom
-        # Entscheidungszustand den Retention-Schutz aktivieren. Den VORHERIGEN Zustand
-        # merken (#968, Codex :1101): bei einem Fehlschlag muss er wiederhergestellt
-        # werden, sonst bleibt eine ``keep``-Installation (die Budget-Rueckgewinnung
-        # akzeptiert hat) nach einem gescheiterten Migrationsversuch dauerhaft
-        # geschuetzt und ueber Budget, bis zum Neustart.
-        prev_protected = self._legacy_retention_protected
-        await self.set_legacy_retention_protected(True)
+            # Während der Kopie MUSS die Quelle erhalten bleiben – unabhängig vom
+            # Entscheidungszustand den Retention-Schutz aktivieren. Den VORHERIGEN Zustand
+            # merken (#968, Codex :1101): bei einem Fehlschlag muss er wiederhergestellt
+            # werden, sonst bleibt eine ``keep``-Installation (die Budget-Rueckgewinnung
+            # akzeptiert hat) nach einem gescheiterten Migrationsversuch dauerhaft
+            # geschuetzt und ueber Budget, bis zum Neustart.
+            prev_protected = self._legacy_retention_protected
+            await self.set_legacy_retention_protected(True)
+        finally:
+            # Reservierung freigeben: ab jetzt schützt entweder der laufende Task
+            # (Erfolgsfall) oder – bei einem Precheck-Fehler – ist kein Job aktiv.
+            self._legacy_migration_starting = False
         migrator = OfflineLegacyMigrator(self._store, write_lock=self._lock)
         progress = self._legacy_migration_progress = {"phase": "starting", "error": None}
 

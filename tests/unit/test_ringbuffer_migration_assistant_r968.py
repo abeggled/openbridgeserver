@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import asyncio
 import dataclasses
 
 from obs.ringbuffer.ringbuffer import RingBuffer
@@ -638,5 +639,59 @@ async def test_migration_splits_at_byte_cap_without_row_cap(tmp_path: Path):
         assert len(v2) >= 2, "Byte-Cap muss die Migration in mehrere Segmente splitten"
         # Kein Segment liegt VIELFACH über dem Cap (ein voller 5000-Batch waere ~300 KiB = ~5x cap).
         assert max(s.size_bytes for s in v2) < cap * 3, "kein Segment darf den Byte-Cap massiv ueberschiessen"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 7, Codex :442: stale migrating-Unlink-Fehler leakt nicht ----------
+
+
+async def test_discard_migrating_unlink_failure_surfaces_and_keeps_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Kann eine stale ``migrating``-Datei nicht entfernt werden, muss der Fehler surfacen
+    UND die Manifest-Zeile erhalten bleiben (#968, Codex :442, analog zum Sample :210) –
+    sonst würde sie zur untracked ``rb_migrated_*.sqlite`` und leakte Platz."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, [1, 2, 3])
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        seg = await rb._store.manifest.create_migrating_segment(filename="rb_migrated_stale.sqlite", schema_version=2)
+        (rb._store._segments_dir / "rb_migrated_stale.sqlite").write_bytes(b"x" * 256)
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+
+        orig_unlink = Path.unlink
+
+        def _boom(self, *a, **k):
+            if self.name == "rb_migrated_stale.sqlite":
+                raise PermissionError("locked")
+            return orig_unlink(self, *a, **k)
+
+        monkeypatch.setattr(Path, "unlink", _boom)
+        with pytest.raises(OfflineMigrationError, match="stale migrating"):
+            await mig._discard_migrating_segments()
+        assert await rb._store.manifest.get_segment(seg.segment_id) is not None, "Manifest-Zeile muss fuer spaeteren Cleanup bleiben"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 7, Codex :1126: gleichzeitige Migration-Starts serialisiert ----------
+
+
+async def test_concurrent_migration_starts_are_serialized(tmp_path: Path):
+    """Zwei fast-gleichzeitige ``start_legacy_migration`` dürfen nur EINEN Job starten
+    (#968, Codex :1126); der zweite scheitert deterministisch, sonst racen zwei Migrator-
+    Tasks gegen dieselbe Quelle."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(50)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        results = await asyncio.gather(rb.start_legacy_migration(), rb.start_legacy_migration(), return_exceptions=True)
+        errors = [r for r in results if isinstance(r, OfflineMigrationError)]
+        oks = [r for r in results if not isinstance(r, Exception)]
+        assert len(errors) == 1, "genau ein Doppelstart muss abgelehnt werden"
+        assert len(oks) == 1
+        if rb._legacy_migration_task is not None:
+            await rb._legacy_migration_task
     finally:
         await rb.stop()

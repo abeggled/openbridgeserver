@@ -2008,16 +2008,24 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
                 eta = max(0.0, (budget - size) / rate * 3600.0)
         elif legacy is not None and over_budget:
             eta = 0.0
-        # Copy-Obergrenze fuer den Disk-Precheck (#968, Codex :278): der Job kopiert
-        # nur das budget-gekappte v2-Aequivalent der Legacy-Daten, nicht das ganze
-        # Budget. Ein grosses Retention-Budget bei kleiner Legacy-DB darf die
-        # Migration in der UI nicht blockieren. Konservative Obergrenze:
-        # ``min(2x Legacy-Groesse, Budget)`` (v2 ~2x groesser; der Job kappt
-        # budget-genau, kopiert also nie mehr als das Budget).
+        # Copy-Obergrenze fuer den Disk-Precheck (#968, Codex :278/:2020): der Job kopiert
+        # nur das v2-Aequivalent der Legacy-Daten, gekappt auf das TATSAECHLICHE
+        # Ziel-Volumen des Migrators – ``budget - headroom - live_bytes`` – NICHT auf das
+        # ganze Budget. Verbrauchen vorhandene Live-Segmente bereits den Grossteil des
+        # Budgets, kopiert der Job entsprechend weniger; ein UI-Block anhand des vollen
+        # Budgets wuerde eine valide Migration grundlos verhindern. Konservativ mit
+        # ``2x Legacy-Groesse`` gedeckelt (v2-Zeilen sind groesser als ihre v1-Quelle).
         legacy_size = (legacy or {}).get("size_bytes")
         if isinstance(legacy_size, int) and legacy_size > 0:
             v2_estimate = 2 * legacy_size
-            estimated_copy = min(v2_estimate, budget) if budget else v2_estimate
+            if budget:
+                headroom = ((stats.get("prognosis") or {}).get("effective_segment_max_bytes")) or 0
+                total_size = stats.get("file_size_bytes") or 0
+                live_bytes = max(0, total_size - legacy_size)
+                target_volume = max(0, budget - headroom - live_bytes)
+                estimated_copy = min(v2_estimate, target_volume)
+            else:
+                estimated_copy = v2_estimate
     disk_free: int | None = None
     try:
         disk_free = shutil.disk_usage(str(Path(_ringbuffer_disk_path()).parent)).free
