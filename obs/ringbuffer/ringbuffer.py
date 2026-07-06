@@ -566,21 +566,33 @@ class RingBuffer:
 
             # Same model: apply config in-place and trim.
             if storage == self._storage:
+                # Rollback-Snapshot (#951, Codex :573): der in-place-Pfad mutiert die
+                # Live-Retention-/Segment-Felder (und die Store-Config), BEVOR die
+                # Store-Umstellung (Sofort-Rotation + Retention) bzw. ``_trim`` laufen.
+                # Schlägt einer dieser Schritte nicht-recoverbar fehl, liefert die API
+                # einen Fehler und persistiert die alte Config – der laufende Buffer
+                # dürfte dann NICHT mit den abgelehnten Limits weiterlaufen. Daher den
+                # Vorzustand festhalten und bei jedem Fehler vollständig wiederherstellen.
+                _rollback = self._inplace_config_snapshot()
                 self._max_entries = resolved_max_entries
                 self._max_file_size_bytes = int(resolved_max_file_size) if resolved_max_file_size is not None else None
                 self._max_age = int(resolved_max_age) if resolved_max_age is not None else None
-                if self._segmented and self._store is not None:
-                    await self._apply_segment_config_locked(
-                        resolved_segment_max_bytes,
-                        resolved_segment_max_rows,
-                        resolved_segment_max_age,
-                    )
                 try:
-                    await self._trim()
-                except Exception as exc:
-                    if not self._can_recover_from(exc):
-                        raise
-                    await self._recover_corrupt_storage_locked(exc)
+                    if self._segmented and self._store is not None:
+                        await self._apply_segment_config_locked(
+                            resolved_segment_max_bytes,
+                            resolved_segment_max_rows,
+                            resolved_segment_max_age,
+                        )
+                    try:
+                        await self._trim()
+                    except Exception as exc:
+                        if not self._can_recover_from(exc):
+                            raise
+                        await self._recover_corrupt_storage_locked(exc)
+                except Exception:
+                    self._restore_inplace_config(_rollback)
+                    raise
                 logger.info(
                     "RingBuffer reconfigured in-place → %s, max_entries=%s, max_file_size_bytes=%s, max_age=%s, "
                     "segment_max_bytes=%s, segment_max_rows=%s, segment_max_age=%s",
@@ -621,6 +633,47 @@ class RingBuffer:
                 self._max_file_size_bytes,
                 self._max_age,
             )
+
+    def _inplace_config_snapshot(self) -> dict[str, Any]:
+        """Snapshot der in-place mutierten Config-Felder + Store-Config (#951, Codex :573).
+
+        Erfasst alles, was ein in-place-``reconfigure`` verändert: die Retention-
+        Felder, die Segment-Rotations-Felder und – falls ein Store läuft – dessen
+        ``SegmentConfig``/``StoreRetentionConfig`` (frozen dataclasses, als Referenz
+        sicher haltbar). Dient dem Rollback bei fehlgeschlagener Store-Umstellung.
+        """
+        snap: dict[str, Any] = {
+            "max_entries": self._max_entries,
+            "max_file_size_bytes": self._max_file_size_bytes,
+            "max_age": self._max_age,
+            "segment_max_bytes_config": self._segment_max_bytes_config,
+            "segment_max_bytes": self._segment_max_bytes,
+            "segment_max_rows": self._segment_max_rows,
+            "segment_max_age": self._segment_max_age,
+        }
+        if self._store is not None:
+            snap["store_segments"] = self._store._segment_config
+            snap["store_retention"] = self._store._retention_config
+        return snap
+
+    def _restore_inplace_config(self, snap: dict[str, Any]) -> None:
+        """Stellt einen ``_inplace_config_snapshot`` vollständig wieder her (#951, Codex :573).
+
+        Rollt In-Memory-Felder UND die Store-Config auf den Vorzustand zurück. Eine
+        bereits erfolgte Sofort-Rotation wird bewusst NICHT rückgängig gemacht
+        (Rotation löscht keine Daten; sie hinterlässt nur eine zusätzliche
+        Segmentgrenze) – entscheidend ist, dass Config-Felder und Store-Config wieder
+        zur (nicht persistierten) alten DB-Config passen.
+        """
+        self._max_entries = snap["max_entries"]
+        self._max_file_size_bytes = snap["max_file_size_bytes"]
+        self._max_age = snap["max_age"]
+        self._segment_max_bytes_config = snap["segment_max_bytes_config"]
+        self._segment_max_bytes = snap["segment_max_bytes"]
+        self._segment_max_rows = snap["segment_max_rows"]
+        self._segment_max_age = snap["segment_max_age"]
+        if self._store is not None and "store_segments" in snap:
+            self._store.apply_config(segments=snap["store_segments"], retention=snap["store_retention"])
 
     async def _apply_segment_config_locked(
         self,
@@ -2349,20 +2402,36 @@ def _match_numeric_operator(value: Any, vf: dict[str, Any]) -> bool:
     if operator not in {"gt", "gte", "lt", "lte", "between"}:
         raise ValueError(f"operator '{operator}' is not supported for data_type 'FLOAT'")
 
-    actual = _to_number(value, field="row value")
-    if operator == "gt":
-        return actual > _to_number(vf["value"], field="filters.values[].value")
-    if operator == "gte":
-        return actual >= _to_number(vf["value"], field="filters.values[].value")
-    if operator == "lt":
-        return actual < _to_number(vf["value"], field="filters.values[].value")
-    if operator == "lte":
-        return actual <= _to_number(vf["value"], field="filters.values[].value")
+    # Die FILTER-Grenzen ZUERST validieren: ein ungültiger Filter-Wert (``gt:null``,
+    # ``between`` mit String-Grenze) ist ein 422-tauglicher Fehler, unabhängig vom
+    # Historie-Wert – daher vor dem Cross-Typ-Skip.
+    if operator == "between":
+        lower = _to_number(vf["lower"], field="filters.values[].lower")
+        upper = _to_number(vf["upper"], field="filters.values[].upper")
+        if lower > upper:
+            raise ValueError("filters.values[].lower must be <= filters.values[].upper")
+        threshold: float | None = None
+    else:
+        threshold = _to_number(vf["value"], field="filters.values[].value")
 
-    lower = _to_number(vf["lower"], field="filters.values[].lower")
-    upper = _to_number(vf["upper"], field="filters.values[].upper")
-    if lower > upper:
-        raise ValueError("filters.values[].lower must be <= filters.values[].upper")
+    # Nicht-numerischer HISTORIE-Wert (null/String/bool) → kein Match (skip), NICHT
+    # 422 (#951, Codex :2263). Der SQL-Pushdown (``new_value_num IS NULL``) und der
+    # v1-Legacy-Pfad (``_legacy_compare`` / ``test_legacy_range_filter_excludes_cross_type_rows``)
+    # überspringen solche Zeilen bereits; ein 422 nur im v2-row-lazy-Pfad hätte einen
+    # datapoint-gescopten Range-Filter je nach Storage-Modus mal partielle Ergebnisse
+    # (segmentiert), mal 422 (row-lazy) liefern lassen. Der Filter-Wert selbst ist oben
+    # bereits als gültig-numerisch verifiziert.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    actual = float(value)
+    if operator == "gt":
+        return actual > threshold
+    if operator == "gte":
+        return actual >= threshold
+    if operator == "lt":
+        return actual < threshold
+    if operator == "lte":
+        return actual <= threshold
     return lower <= actual <= upper
 
 

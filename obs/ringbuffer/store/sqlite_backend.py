@@ -2043,12 +2043,23 @@ class SqliteSegmentStore(RingBufferStore):
             # damit diese Zeilen die Freitext-Prüfung passieren (Parität Legacy-OR).
             # Der gedeckelte Arm wird gekapselt (``ORDER BY``/``LIMIT`` sind in einem
             # SQLite-Compound nur in einer Sub-SELECT erlaubt, nicht vor ``UNION``).
+            #
+            # Auch der Name-Arm bekommt einen EIGENEN ``ORDER BY … LIMIT`` (#951, Codex
+            # :2049): un-capped würde ein populärer ``dp_ids_by_name``-Datapoint mit sehr
+            # vielen retained Zeilen sie ALLE materialisieren, bevor das äußere
+            # ``LIMIT`` greift – die candidate-cap-Garantie fiele, eine Dashboard-Suche
+            # scannte ein großes Segment. Der Arm ist über ``datapoint_id`` indiziert
+            # (``idx_rb_dp_ts_id``), sodass ``ORDER BY … LIMIT cap`` die neuesten ``cap``
+            # Namens-Treffer index-effizient liefert (kein Full-Scan). Der Cap ist derselbe
+            # wie beim LIKE-Arm; ein Namens-Treffer jenseits der neuesten ``cap`` Roh-Zeilen
+            # bleibt Kandidat, solange er in den neuesten ``cap`` SEINER Datapoint-Gruppe
+            # liegt (Parität zum bounded Legacy-Name-Arm, Runde 46).
             if route_free_text_capped and in_clause:
                 name_where_parts = [*clauses, in_clause]
                 name_where = f" WHERE {' AND '.join(name_where_parts)}"
-                name_sql = f"SELECT {inner_cols} FROM ringbuffer{name_where}"
-                inner_sql = f"SELECT {inner_cols} FROM ({capped_arm}) UNION {name_sql}"
-                inner_params = [*params, cap, *params, *in_params]
+                name_arm = f"SELECT {inner_cols} FROM ringbuffer{name_where} ORDER BY {order_by} LIMIT ?"
+                inner_sql = f"SELECT {inner_cols} FROM ({capped_arm}) UNION SELECT {inner_cols} FROM ({name_arm})"
+                inner_params = [*params, cap, *params, *in_params, cap]
             outer_clauses = list(guarded_clauses)
             outer_params = list(guarded_params)
             if route_free_text_capped:

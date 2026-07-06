@@ -1227,3 +1227,42 @@ async def test_segmented_query_candidate_cap_override_scales_with_offset(tmp_pat
         assert seen[0] > _SEGMENTED_CANDIDATE_CAP
     finally:
         await rb.stop()
+
+
+async def test_inplace_config_update_rolls_back_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Fehlgeschlagenes in-place-Update lässt KEINE abgelehnten Limits zurück (#951, Codex :573).
+
+    Der in-place-``reconfigure``-Pfad mutiert die Live-Retention-/Segment-Felder,
+    BEVOR die Store-Umstellung (Sofort-Rotation + Retention) läuft. Schlägt die
+    nicht-recoverbar fehl, gab die API bisher einen Fehler zurück und persistierte
+    die alte Config, während der laufende Buffer die abgelehnten Limits bis zum
+    Neustart behielt. Nach dem Fix werden die Werte bei Fehler auf den Vorzustand
+    zurückgerollt – In-Memory-Config und (nicht persistierte) DB bleiben konsistent.
+    """
+    rb = _rb(tmp_path, segmented=True, max_file_size_bytes=100 * 1024 * 1024)
+    await rb.start()
+    try:
+        await _record(rb, 1, "2026-01-01T00:00:00.000Z")
+        before = {
+            "max_file_size_bytes": rb._max_file_size_bytes,
+            "max_age": rb._max_age,
+            "segment_max_bytes": rb._store._segment_config.segment_max_bytes,
+            "retention_budget": rb._store._retention_config.max_file_size_bytes,
+        }
+
+        # Die Store-Umstellung (Retention nach Sofort-Rotation) hart fehlschlagen lassen.
+        async def _boom() -> int:
+            raise RuntimeError("simulated manifest/disk error during retention")
+
+        monkeypatch.setattr(rb._store, "enforce_retention", _boom)
+
+        with pytest.raises(RuntimeError):
+            await rb.reconfigure("file", max_file_size_bytes=12 * 1024 * 1024, max_age=3600)
+
+        # Alle Live-Felder + Store-Config stehen wieder auf dem Vorzustand.
+        assert rb._max_file_size_bytes == before["max_file_size_bytes"], "max_file_size_bytes nicht zurückgerollt"
+        assert rb._max_age == before["max_age"], "max_age nicht zurückgerollt"
+        assert rb._store._segment_config.segment_max_bytes == before["segment_max_bytes"], "Store-Segment-Config nicht zurückgerollt"
+        assert rb._store._retention_config.max_file_size_bytes == before["retention_budget"], "Store-Retention nicht zurückgerollt"
+    finally:
+        await rb.stop()

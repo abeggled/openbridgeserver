@@ -302,28 +302,32 @@ async def _make_num_dp_with_string_history(disk_path: Path, *, segmented: bool) 
 
 
 @pytest.mark.asyncio
-async def test_f3_mixed_type_history_documented_divergence(tmp_path: Path):
-    """Numerischer Datapoint mit historischer STRING-Zeile: Legacy 422, segmentiert Teilergebnis.
+async def test_f3_mixed_type_history_consistent_skip(tmp_path: Path):
+    """Numerischer Datapoint mit historischer STRING-Zeile: Legacy UND segmentiert skippen.
 
-    Dokumentierter bounded-best-effort-Kompromiss (F3, Codex-Wahl 2, analog Runde-35):
-    Der segmentierte Pfad prüft die REGISTRY-Typen der Kandidaten (FLOAT), nicht die
-    gespeicherten Row-Typen; das SQL-Prädikat ``new_value_num`` filtert die STRING-Zeile
-    still weg. Der Legacy-Pfad evaluiert die zurückgegebene STRING-Zeile row-lazy und
-    wirft 422. Dieser Test SCHREIBT den Unterschied fest (statt still zu divergieren):
-
-    * Legacy (``segmented=False``): 422 auf der Mixed-Type-Historie.
-    * Segmentiert: kein 422, liefert die numerischen Treffer (``[9]`` für ``gt 6``).
+    Auflösung der früher dokumentierten Divergenz (#951, Codex :2263): Bis Runde 36
+    warf der Legacy/row-lazy-Pfad 422 auf der Mixed-Type-Historie, während der
+    segmentierte SQL-Pushdown die STRING-Zeile still übersprang – derselbe
+    datapoint-gescopte ``gt``-Filter lieferte je nach Storage-Modus mal 422, mal ein
+    Teilergebnis. Jetzt behandeln BEIDE Pfade eine nicht-numerische HISTORIE-Zeile als
+    kein-Match (skip); ein ungültiger FILTER-Wert bleibt in beiden ein 422. Damit
+    liefern Legacy und segmentiert identisch die numerischen Treffer (``[9]`` für
+    ``gt 6``). Konsistent zur v1-Referenz ``test_legacy_range_filter_excludes_cross_type_rows``.
     """
     legacy = await _make_num_dp_with_string_history(tmp_path / "legacy", segmented=False)
     seg = await _make_num_dp_with_string_history(tmp_path / "seg", segmented=True)
     try:
         vf = [{"operator": "gt", "value": 6}]
-        # Legacy wirft 422, sobald die STRING-Zeile in den numerischen Operator läuft.
-        with pytest.raises(ValueError):
-            await legacy.query_v2(datapoint_ids=["dp-num"], value_filters=vf, datapoint_types=_TYPES, limit=10)
-        # Segmentiert: dokumentierter Kompromiss – Teilergebnis statt 422.
+        legacy_rows = await legacy.query_v2(datapoint_ids=["dp-num"], value_filters=vf, datapoint_types=_TYPES, limit=10)
         seg_rows = await seg.query_v2(datapoint_ids=["dp-num"], value_filters=vf, datapoint_types=_TYPES, limit=10)
+        # Beide überspringen die STRING-Zeile und liefern denselben numerischen Treffer.
+        assert [e.new_value for e in legacy_rows] == [9]
         assert [e.new_value for e in seg_rows] == [9]
+        # Ein ungültiger FILTER-Wert wirft weiter – in beiden Modi konsistent.
+        bad = [{"operator": "gt", "value": None}]
+        for rb in (legacy, seg):
+            with pytest.raises(ValueError):
+                await rb.query_v2(datapoint_ids=["dp-num"], value_filters=bad, datapoint_types=_TYPES, limit=10)
     finally:
         await legacy.stop()
         await seg.stop()

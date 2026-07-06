@@ -83,6 +83,25 @@ async def test_f2_name_hit_in_arm_stays_out_of_capped_subquery(store: SqliteSegm
     assert "datapoint_id IN (" in head, "der index-taugliche IN-Arm muss un-capped im Basis-WHERE stehen"
 
 
+async def test_f2_name_hit_arm_is_bounded(store: SqliteSegmentStore):
+    """Der ``dp_ids_by_name``-UNION-Arm ist auf den Candidate-Cap gedeckelt (#951, Codex :2049).
+
+    Ohne eigenen ``ORDER BY … LIMIT`` würde ein populärer Datapoint mit vielen
+    retained Zeilen sie ALLE materialisieren, bevor das äußere Paging-``LIMIT``
+    greift – die candidate-cap-Garantie fiele. Der SQL-Struktur-Check pinnt, dass
+    beide UNION-Arme gekapselte Sub-SELECTs mit ``LIMIT`` sind.
+    """
+    q = StoreQuery(q="zzz", dp_ids_by_name=["dp-a"], candidate_cap=5, limit=10)
+    sql, params = store._build_segment_sql(q)
+    union = sql[sql.index("UNION") :]
+    assert "UNION SELECT" in sql, "der Name-Arm ist ein eigenes gekapseltes SELECT"
+    # Beide Arme (vor und nach UNION) tragen ein ``LIMIT ?`` – keiner ist un-capped.
+    assert sql[: sql.index("UNION")].count("LIMIT ?") >= 1, "der LIKE-Arm bleibt gedeckelt"
+    assert union.count("LIMIT ?") >= 1, "der Name-Arm muss ein eigenes LIMIT tragen"
+    # Der Cap-Wert taucht für BEIDE Arme in den Params auf.
+    assert params.count(5) >= 2, "beide Arme binden den Candidate-Cap"
+
+
 async def test_f2_leading_wildcard_like_stays_capped(store: SqliteSegmentStore):
     """Gegentest: der reine leading-wildcard-``LIKE``-Arm bleibt gedeckelt.
 
