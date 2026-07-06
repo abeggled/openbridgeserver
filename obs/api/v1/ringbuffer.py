@@ -40,6 +40,7 @@ from obs.ringbuffer.persisted_config import (
     LEGACY_DECISION_SKIPPED,
     LEGACY_DECISIONS_PROTECTED,
     LEGACY_DECISIONS_TERMINAL,
+    ensure_legacy_migration_decision,
     load_legacy_migration_decision,
     load_persisted_ringbuffer_config,
     persist_legacy_migration_decision,
@@ -2356,6 +2357,13 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     subscribed_new = False
     try:
         if rb is None:
+            # Migrations-Assistent (#968, Codex :2369): der Runtime-Init (Monitor-Enable
+            # oder Mode-Rebuild via POST /config) muss das Decision/Protection-Setup des
+            # Startups spiegeln. Sonst bliebe bei einem Upgrade, bei dem der Monitor erst
+            # zur Laufzeit aktiviert wird, die Entscheidung ``None`` (Banner versteckt) und
+            # die ersten non-legacy-Daten könnten die FIFO-Retention das Legacy-Segment
+            # zurückgewinnen lassen, bevor der Assistent den pending/skipped-Schutz greift.
+            decision = await ensure_legacy_migration_decision(db, legacy_db_path=_ringbuffer_disk_path() if resolved_segmented else None)
             rb = await init_ringbuffer(
                 storage="file",
                 max_entries=resolved_max_entries,
@@ -2366,6 +2374,7 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 segment_max_bytes=resolved_segment_max_bytes,
                 segment_max_rows=resolved_segment_max_rows,
                 segment_max_age=resolved_segment_max_age,
+                legacy_retention_protected=decision in LEGACY_DECISIONS_PROTECTED,
             )
             _subscribe_ringbuffer(rb)
             subscribed_new = True

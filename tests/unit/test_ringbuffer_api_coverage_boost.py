@@ -652,3 +652,58 @@ async def test_multi_query_empty_set_ids_invokes_underlying_query(monkeypatch):
     assert captured, "underlying query must be invoked even for empty set_ids"
     assert captured[0].pagination.limit == 25
     assert captured[0].pagination.offset == 3
+
+
+@pytest.mark.asyncio
+async def test_runtime_enable_with_legacy_sets_pending_protection(tmp_path, monkeypatch):
+    """Runtime-Enable des segmentierten Monitors bei vorhandener Legacy-DB spiegelt
+    das Startup-Setup: Entscheidung ``pending`` wird persistiert und der Ersatz-Buffer
+    startet retention-geschützt (#968, Codex :2369). Ohne den Fix bliebe die Entscheidung
+    ``None`` und die FIFO-Retention könnte die Legacy-Quelle vorzeitig zurückgewinnen."""
+    from obs.ringbuffer.persisted_config import LEGACY_DECISION_PENDING, load_legacy_migration_decision
+    from obs.ringbuffer.ringbuffer import RingBuffer as _RB
+
+    db = Database(":memory:")
+    await db.connect()
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    # Legacy-Single-DB (v1) anlegen, die der segmentierte Init als Legacy attacht.
+    leg = _RB(storage="disk", disk_path=str(rb_path), max_entries=None)
+    await leg.start()
+    await leg.record(
+        ts="2026-01-01T00:00:00.000Z",
+        datapoint_id="dp-leg",
+        topic="dp/dp-leg/value",
+        old_value=None,
+        new_value=1,
+        source_adapter="api",
+        quality="good",
+    )
+    await leg.stop()
+
+    reset_ringbuffer()
+    rb_api.set_ringbuffer_enabled(False)
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    monkeypatch.setattr(rb_api, "_subscribe_ringbuffer", lambda _rb: None)
+    try:
+        await rb_api.configure_ringbuffer(
+            rb_api.RingBufferConfig(
+                enabled=True,
+                segmented=True,
+                max_entries=100,
+                max_file_size_bytes=1024 * 1024,
+                max_age=3600,
+                segment_max_age=1200,
+            ),
+            _user="admin",
+            db=db,
+        )
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_PENDING
+        rb = rb_api.get_optional_ringbuffer()
+        assert rb is not None
+        assert rb._legacy_retention_protected is True, "Legacy muss beim Runtime-Enable retention-geschützt starten"
+    finally:
+        rb = rb_api.get_optional_ringbuffer()
+        if rb is not None:
+            await rb.stop()
+        reset_ringbuffer()
+        await db.disconnect()

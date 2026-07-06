@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { reactive } from 'vue'
 
 const migrationStatus = vi.fn()
 const migrationDecision = vi.fn()
@@ -111,6 +112,33 @@ describe('LegacyMigrationBanner — Eskalation', () => {
   it('escalates when the prognosis falls below seven days', async () => {
     const wrapper = await mountBanner(statusPayload({ estimated_seconds_until_budget: 2 * 24 * 3600 }))
     expect(wrapper.find('[data-testid="legacy-migration-banner"]').attributes('data-escalated')).toBe('true')
+  })
+})
+
+describe('LegacyMigrationBanner — Admin-State-Race (#968)', () => {
+  it('refreshes when isAdmin becomes true after mount (async loadMe)', async () => {
+    // App.vue lädt auth.loadMe() async NACH dem Mount der Kind-Komponenten – isAdmin
+    // ist beim Mount noch false. Ein reines onMounted-if-isAdmin würde den Refresh
+    // verpassen; der Watcher muss ihn nachholen, sobald isAdmin true wird.
+    const authState = reactive({ isAdmin: false })
+    migrationStatus.mockResolvedValue({ data: statusPayload() })
+    vi.doMock('@/api/client', () => ({
+      ringbufferApi: { migrationStatus, migrationDecision, migrationStart },
+    }))
+    vi.doMock('@/stores/auth', () => ({ useAuthStore: () => authState }))
+    const { default: LegacyMigrationBanner } = await import('@/components/ringbuffer/LegacyMigrationBanner.vue')
+    const wrapper = mount(LegacyMigrationBanner)
+    await flushPromises()
+
+    // Beim Mount noch kein Admin → kein Fetch, kein Banner.
+    expect(migrationStatus).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="legacy-migration-banner"]').exists()).toBe(false)
+
+    // loadMe() ist durch: isAdmin wird true → Watcher holt den Refresh nach.
+    authState.isAdmin = true
+    await flushPromises()
+    expect(migrationStatus).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="legacy-migration-banner"]').exists()).toBe(true)
   })
 })
 

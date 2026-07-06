@@ -171,7 +171,7 @@ class OfflineLegacyMigrator:
     async def _calibrate_cutoff(self, plan: MigrationPlan, legacy: SegmentRecord) -> MigrationPlan:
         """Misst die reale v2-Zeilengröße über ein Wegwerf-Sample und passt den Cutoff an."""
         budget = self._store._retention_config.max_file_size_bytes
-        if budget is None or plan.rows_to_copy <= 0 or plan.total_rows == 0:
+        if plan.rows_to_copy <= 0 or plan.total_rows == 0:
             return plan
         sample_rows = min(COPY_BATCH_ROWS, plan.total_rows)
         source = await self._store._connection_for_read(legacy)
@@ -210,6 +210,12 @@ class OfflineLegacyMigrator:
         if copied == 0 or sample_size <= 0:
             return plan
         v2_row_bytes = sample_size / copied
+        if budget is None:
+            # Unbegrenztes Budget (#968, Codex :175): kein Cutoff – alle Zeilen bleiben –,
+            # aber ``copy_bytes_estimate`` auf die reale v2-Größe heben. Sonst nutzten
+            # beide Disk-Checks die zu kleine v1-Schätzung aus ``plan()`` und der Job
+            # könnte mid-copy die Platte füllen, statt sauber "not enough space" zu melden.
+            return replace(plan, copy_bytes_estimate=int(plan.rows_to_copy * v2_row_bytes))
         target_volume = await self._target_copy_volume(budget)
         rows_to_copy = min(plan.total_rows, int(target_volume / v2_row_bytes))
         cutoff_rowid = plan.max_rowid if rows_to_copy == 0 else max(0, plan.max_rowid - rows_to_copy)

@@ -309,3 +309,31 @@ async def test_migration_honors_segment_max_rows(tmp_path: Path):
         assert len(migrated) >= 3, "Row-Cap muss die Migration in mehrere Segmente aufteilen"
     finally:
         await rb.stop()
+
+
+# ---------- Runde 3, Codex :175: Kalibrierung auch ohne Budget ----------
+
+
+async def test_calibration_updates_estimate_without_budget(tmp_path: Path):
+    """Bei unbegrenztem Budget (``max_file_size_bytes=None``) muss die Kalibrierung
+    trotzdem laufen und ``copy_bytes_estimate`` auf die reale v2-Größe heben (#968,
+    Codex :175). Ohne den Fix nutzte der Disk-Precheck die zu kleine v1-Schätzung
+    aus ``plan()`` und der Job könnte mid-copy die Platte füllen. Der Cutoff bleibt
+    aus – alle Zeilen werden kopiert."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(300)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=None, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        plan = await mig.plan()
+        legacy_seg = await mig._attached_legacy()
+        v1_estimate = plan.copy_bytes_estimate
+        calibrated = await mig._calibrate_cutoff(plan, legacy_seg)
+        # Kein Cutoff bei unbegrenztem Budget: alle Zeilen bleiben.
+        assert calibrated.rows_to_copy == plan.rows_to_copy
+        assert calibrated.cutoff_rowid == plan.cutoff_rowid
+        # Aber die Schätzung ist auf die reale (größere) v2-Zeilengröße angehoben.
+        assert calibrated.copy_bytes_estimate > v1_estimate, "v2-Schätzung muss über der v1-Erstschätzung liegen"
+    finally:
+        await rb.stop()

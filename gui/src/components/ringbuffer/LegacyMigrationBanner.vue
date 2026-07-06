@@ -38,7 +38,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useLegacyMigration } from '@/composables/useLegacyMigration'
 
@@ -56,13 +56,23 @@ const { showBanner, escalated, refresh, decide } = useLegacyMigration()
 const skipping = ref(false)
 const visible = computed(() => auth.isAdmin && showBanner.value)
 
-onMounted(() => {
-  if (auth.isAdmin) {
-    refresh().catch(() => {
-      // Kein Status ladbar → kein Banner; Fehlerdetails zeigt der Wizard.
-    })
-  }
-})
+// Auf den Admin-State reagieren, nicht nur beim Mount prüfen (#968, Codex :60):
+// App.vue lädt ``auth.loadMe()`` asynchron in seinem eigenen onMounted, oft NACHDEM
+// die Kind-Komponenten bereits gemountet sind. Ein reines onMounted-if-isAdmin würde
+// den Refresh dann verpassen (isAdmin noch false) und der Banner bliebe versteckt, bis
+// zufällig etwas anderes den Status lädt. ``immediate: true`` deckt den bereits-Admin-Fall
+// ab, der Watcher den Fall, dass isAdmin erst später true wird.
+watch(
+  () => auth.isAdmin,
+  (isAdmin) => {
+    if (isAdmin) {
+      refresh().catch(() => {
+        // Kein Status ladbar → kein Banner; Fehlerdetails zeigt der Wizard.
+      })
+    }
+  },
+  { immediate: true },
+)
 
 // „Später" = Entscheidung ``skip``: Alt-Historie bleibt retention-geschützt,
 // der Banner verschwindet über den geteilten Status (revidierbar).
