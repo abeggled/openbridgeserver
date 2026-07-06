@@ -40,8 +40,11 @@ def _cfg(**kwargs):
         ("max_age", {"segment_max_age": 300}, {"max_age": 899}),
     ],
 )
-async def test_config_rejects_too_coarse_segmentation_with_422(db, field, segment_kwargs, retention_kwargs, monkeypatch):
-    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: ":memory:")
+async def test_config_rejects_too_coarse_segmentation_with_422(db, field, segment_kwargs, retention_kwargs, monkeypatch, tmp_path):
+    # File-Pfad (nicht ``:memory:``): die 3-Segment-Regel gilt nur für den segmentierten
+    # Pfad, und eine in-memory-DB wird ohne explizites ``segmented`` bewusst nicht
+    # segmentiert (#968, Codex :2221) – die Validierung liefe dort sonst gar nicht.
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(tmp_path / "obs_ringbuffer.db"))
     try:
         with pytest.raises(HTTPException) as exc:
             await rb_api.configure_ringbuffer(

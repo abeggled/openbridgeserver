@@ -875,3 +875,32 @@ async def test_estimated_copy_bytes_accounts_for_live_bytes(tmp_path, monkeypatc
             await active.stop()
         reset_ringbuffer()
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_enable_normalizes_segmented_off_for_memory_db(tmp_path, monkeypatch):
+    """Aktiviert ein Admin den Monitor bei einer in-memory-DB (``:memory:``) ohne
+    explizites ``segmented``, darf der persistierte Default ``segmented=true`` nicht
+    überleben (#968, Codex :2221) – sonst schriebe ``init_ringbuffer`` ein reales
+    ``:memory:_segments``-Verzeichnis. Gleiche Normalisierung wie der Startup."""
+    db = Database(":memory:")
+    await db.connect()
+    subscribed = {"called": False}
+
+    reset_ringbuffer()
+    rb_api.set_ringbuffer_enabled(False)
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: ":memory:")
+    monkeypatch.setattr(rb_api, "_subscribe_ringbuffer", lambda _rb: subscribed.__setitem__("called", True))
+    # Persistierten segmented=true-Default hinterlegen, den die Normalisierung kippen muss.
+    await rb_api.persist_ringbuffer_config(db, enabled=False, max_entries=50, max_file_size_bytes=None, max_age=None, segmented=True)
+    try:
+        await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, max_entries=50), _user="admin", db=db)
+        rb = rb_api.get_optional_ringbuffer()
+        assert rb is not None
+        assert rb.segmented is False, "in-memory-DB darf nicht segmentiert werden"
+    finally:
+        active = rb_api.get_optional_ringbuffer()
+        if active is not None:
+            await active.stop()
+        reset_ringbuffer()
+        await db.disconnect()

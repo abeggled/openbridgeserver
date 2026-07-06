@@ -56,6 +56,7 @@ from obs.ringbuffer.store.config import (
 from obs.ringbuffer.ringbuffer import (
     RingBufferStorageDeleteIncompleteError,
     RowLazyExportCursor,
+    _is_sqlite_memory_path,
     default_ringbuffer_disk_path,
     delete_ringbuffer_storage_files,
     get_optional_ringbuffer,
@@ -2217,7 +2218,16 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     # ``storage`` zu ``memory`` auf, wird die Segmentierung daher normalisiert
     # abgeschaltet; der ``file``-Pfad bleibt unverändert (segmentiert per Default).
     resolved_storage = body.storage if "storage" in body.model_fields_set else current_config.get("storage", "file")
-    if resolved_storage == "memory":
+    # Auch eine in-memory-DB (``storage='file'`` mit ``disk_path`` wie ``:memory:``) darf
+    # NICHT implizit segmentiert werden (#968, Codex :2221): ist der Monitor deaktiviert
+    # (``rb is None``) und ein Admin aktiviert ihn OHNE explizites ``segmented``, überlebte
+    # sonst der persistierte Default ``segmented=true`` und ``init_ringbuffer()`` leitete
+    # ein reales ``:memory:_segments``-Verzeichnis auf die Platte ab. Gleiche Normalisierung
+    # wie der Startup-Pfad (``main.py``: ``not _is_sqlite_memory_path(rb_path)``). Nur für
+    # den IMPLIZITEN Fall (``body.segmented is None``) – ein explizit gepostetes
+    # ``segmented`` durchläuft weiterhin die reguläre Segment-Parameter-Validierung.
+    memory_db = body.segmented is None and _is_sqlite_memory_path(_ringbuffer_disk_path())
+    if resolved_storage == "memory" or memory_db:
         resolved_segmented = False
     resolved_segment_max_bytes = body.segment_max_bytes if "segment_max_bytes" in body.model_fields_set else persisted.get("segment_max_bytes")
     resolved_segment_max_rows = body.segment_max_rows if "segment_max_rows" in body.model_fields_set else persisted.get("segment_max_rows")
