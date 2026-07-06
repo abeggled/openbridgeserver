@@ -1367,7 +1367,6 @@
       "budget": "Speicher-Budget",
       "diskFree": "Freier Speicherplatz",
       "noBudget": "Unbegrenzt",
-      "budgetDefaultHint": "Budget prüfen – 10 MiB ist der Alt-Default; Neuinstallationen nutzen 100 MiB.",
       "openConfig": "Konfiguration öffnen",
       "migrateTitle": "Migrieren",
       "migrateBody": "Kopiert die neuesten Alt-Daten bis zum Budget in Segmente; ältere Daten darüber hinaus werden verworfen. Danach ist die Migration abgeschlossen (endgültig).",
@@ -1404,7 +1403,8 @@
         "committing": "Übernehme …",
         "done": "Abgeschlossen",
         "failed": "Fehlgeschlagen"
-      }
+      },
+      "budgetLossHint": "Budget zu klein für eine verlustfreie Übernahme: Bei der Migration werden die ältesten Alt-Events verworfen. Für die vollständige Historie das Budget vorher auf mindestens {recommended} erhöhen (Faustformel: 2 × Alt-Datenbank; nach der Migration bei Bedarf über ein Alterslimit statt über das Budget reduzieren). Bis zur Entscheidung bleibt die Alt-Historie geschützt – die Live-Aufzeichnung unterliegt aber weiterhin diesem Budget."
     }
   },
   "logs": {

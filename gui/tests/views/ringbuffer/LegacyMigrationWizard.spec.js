@@ -82,6 +82,12 @@ describe('LegacyMigrationWizard — Ist-Analyse + Optionen', () => {
     expect(wrapper.find('[data-testid="wizard-option-keep"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="wizard-option-discard"]').exists()).toBe(true)
     // 100-MiB-Budget → kein Alt-Default-Hinweis.
+    // 512-MiB-Legacy bei 100-MiB-Budget: verlustfreie Uebernahme unmoeglich -> Hinweis.
+    expect(wrapper.find('[data-testid="wizard-budget-hint"]').exists()).toBe(true)
+  })
+
+  it('hides the budget hint when the budget covers a lossless takeover (>= 2x legacy)', async () => {
+    const wrapper = await mountWizard(statusPayload({ budget_bytes: 2 * 512 * 1024 * 1024 }))
     expect(wrapper.find('[data-testid="wizard-budget-hint"]').exists()).toBe(false)
   })
 

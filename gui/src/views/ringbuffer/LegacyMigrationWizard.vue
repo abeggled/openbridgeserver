@@ -34,13 +34,15 @@
             <span>{{ $t('ringbuffer.migration.diskFree') }}</span>
             <span class="font-medium tabular-nums text-slate-700 dark:text-slate-200" data-testid="wizard-disk-free">{{ diskFreeText }}</span>
           </div>
-          <!-- Alt-Default-Budget (10 MiB): Hinweis + Absprung ins Konfig-Modal. -->
+          <!-- Budget zu klein für verlustfreie Übernahme (deckt auch den
+               10-MiB-Alt-Default ab): Faustformel 2 × Alt-DB, Absprung ins
+               Konfig-Modal. Erst Budget anpassen, dann in Ruhe entscheiden. -->
           <div
-            v-if="isLegacyDefaultBudget"
+            v-if="showBudgetHint"
             class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"
             data-testid="wizard-budget-hint"
           >
-            <span>{{ $t('ringbuffer.migration.budgetDefaultHint') }}</span>
+            <span>{{ $t('ringbuffer.migration.budgetLossHint', { recommended: recommendedBudgetText }) }}</span>
             <button
               type="button"
               class="self-start font-medium underline underline-offset-2 sm:self-center"
@@ -251,6 +253,21 @@ const diskFreeBytes = computed(() => {
 })
 const diskFreeText = computed(() => (diskFreeBytes.value !== null ? formatBytesBinary(diskFreeBytes.value) : '–'))
 const isLegacyDefaultBudget = computed(() => budgetBytes.value === LEGACY_DEFAULT_BUDGET_BYTES)
+// Faustformel verlustfreie Übernahme (#965): v2-Segmente speichern dieselben
+// Events größer als die v1-Quelle (typisierte Spalten, Metadaten-Indexe;
+// gemessen ~1,4× bei metadatenreichen bis ~4× bei sehr kleinen Events).
+// Empfehlung: Budget ≥ 2 × Alt-Datenbank. Der Job kalibriert den realen Faktor
+// vor der Kopie über ein Sample und kappt notfalls budget-genau.
+const recommendedBudgetBytes = computed(() => {
+  const size = Number(legacy.value?.size_bytes)
+  return Number.isFinite(size) && size > 0 ? 2 * size : null
+})
+const recommendedBudgetText = computed(() => (recommendedBudgetBytes.value !== null ? formatBytesBinary(recommendedBudgetBytes.value) : '–'))
+const showBudgetHint = computed(() => {
+  if (isLegacyDefaultBudget.value) return true
+  if (budgetBytes.value === null || recommendedBudgetBytes.value === null) return false
+  return budgetBytes.value < recommendedBudgetBytes.value
+})
 
 // ── Migrieren ──────────────────────────────────────────────────────────────
 // Disk-Check-Verdict: die Kopie braucht höchstens Budget-Bytes zusätzlich.

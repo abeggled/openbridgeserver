@@ -1367,7 +1367,6 @@
       "budget": "Storage budget",
       "diskFree": "Free disk space",
       "noBudget": "Unlimited",
-      "budgetDefaultHint": "Check the budget – 10 MiB is the legacy default; fresh installations use 100 MiB.",
       "openConfig": "Open configuration",
       "migrateTitle": "Migrate",
       "migrateBody": "Copies the newest legacy data into segments up to the budget; older data beyond that is dropped. Afterwards the migration is complete (final).",
@@ -1404,7 +1403,8 @@
         "committing": "Committing …",
         "done": "Finished",
         "failed": "Failed"
-      }
+      },
+      "budgetLossHint": "Budget too small for a lossless takeover: the migration will drop the oldest events. To keep the full history, raise the budget to at least {recommended} first (rule of thumb: 2 × the old database; after migrating, reduce via an age limit rather than the budget if needed). Until you decide, the old history stays protected – live recording, however, is still bound by this budget."
     }
   },
   "logs": {
