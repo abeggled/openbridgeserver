@@ -906,6 +906,13 @@ class SqliteSegmentStore(RingBufferStore):
         # werden (sonst meldete ``/stats`` fälschlich unter-Budget). Ein späterer
         # erfolgreicher Delete räumt die ID wieder aus.
         self._unlink_blocked_segment_ids: set[int] = set()
+        # Cache je immutable ``closed``-Segment, ob seine Zeilen NEGATIVE
+        # ``global_event_id``s tragen (#965): offline-MIGRIERTE Segmente haben
+        # HÖHERE segment_ids als ältere Live-Segmente, aber negative gids – die
+        # segment_id-DESC-Annahme des ``id desc``-Frühabbruchs gilt für sie
+        # nicht. Ein Negativ-Treffer ist je ``closed``-Segment stabil cachebar
+        # (Rotate schreibt nie mehr hinein); Delete räumt den Eintrag mit.
+        self._segment_negative_gid_cache: dict[int, bool] = {}
         # Lazy-Schaetzung attachter Legacy-Segmente fuer /stats (#964-Follow-up):
         # (row_estimate, from_ts, to_ts) je segment_id. Die Quelle ist read-only,
         # der Wert damit stabil; beim Delete wird der Eintrag mitgeraeumt.
@@ -1332,7 +1339,29 @@ class SqliteSegmentStore(RingBufferStore):
             rows = await self._read_segment_rows(segment, query)
             if rows is not None:
                 collected.extend(rows)
+                # Offline-migrierte Segmente (#965) am gelesenen Ergebnis erkennen
+                # (kein zusätzlicher Open): tragen die Zeilen negative gids, ist der
+                # Frühabbruch für den Rest gesperrt – ältere Live-Segmente mit
+                # positiven gids müssen noch gelesen werden; der finale
+                # ``global_event_id``-Sort in ``query()`` ordnet positiv vor negativ.
+                if not entered_legacy_tail and self._rows_carry_negative_gid(segment, rows):
+                    entered_legacy_tail = True
         return collected
+
+    def _rows_carry_negative_gid(self, segment: SegmentRecord, rows: list[dict[str, Any]]) -> bool:
+        """True, wenn die gerade gelesenen Zeilen negative ``global_event_id``s tragen (#965).
+
+        Cache-Vorsicht: ``rows`` ist eine gefilterte/gebundene Teilmenge. Ein
+        NEGATIV-Treffer ist definitiv und wird je immutable ``closed``-Segment
+        gecacht. Ein leeres/rein-positives Filter-Ergebnis beweist NICHT, dass das
+        Segment keine negativen gids hält – ``False`` wird deshalb nie gecacht.
+        """
+        if segment.status == SEGMENT_STATUS_CLOSED and self._segment_negative_gid_cache.get(segment.segment_id):
+            return True
+        result = any(r.get("global_event_id", 0) < 0 for r in rows)
+        if result and segment.status == SEGMENT_STATUS_CLOSED:
+            self._segment_negative_gid_cache[segment.segment_id] = True
+        return result
 
     async def _read_segment_rows(self, segment: SegmentRecord, query: StoreQuery) -> list[dict[str, Any]] | None:
         """Liest ein einzelnes Segment; quarantäniert es on-the-fly bei Korruption (#919).
@@ -3133,8 +3162,19 @@ class SqliteSegmentStore(RingBufferStore):
     async def _enforce_size_budget(self, budget: int | None) -> int:
         if budget is None:
             return 0
+        # Entscheidungs-Guard (#964): eine GESCHÜTZTE Legacy-Quelle ist als
+        # Über-Budget-Zustand toleriert. Ihr Size-Anteil darf den Druck nicht auf
+        # die einzig ungeschützten Opfer umleiten – sonst frisst jeder Pass die
+        # JÜNGSTEN geschlossenen Live-Segmente, obwohl der Überschuss allein aus
+        # der Legacy stammt. Solange der Schutz aktiv ist, wird ihr Anteil dem
+        # Budget zugeschlagen; nach der Entscheidung (keep/discard/migrate) gilt
+        # wieder das harte Budget.
+        effective_budget = budget
+        if self._retention_config.protect_legacy:
+            segments = await self.manifest.list_segments()
+            effective_budget += sum(s.size_bytes for s in segments if _is_legacy_segment(s))
         removed = 0
-        while await self._total_size_bytes() > budget:
+        while await self._total_size_bytes() > effective_budget:
             victim = await self._next_size_retention_victim()
             if victim is None:
                 break  # kein löschbares Segment mehr → over_budget in stats sichtbar.
@@ -3368,6 +3408,7 @@ class SqliteSegmentStore(RingBufferStore):
         # Erfolgreich gelöscht → evtl. früherer unlink-blocked-Zustand ist aufgehoben.
         self._unlink_blocked_segment_ids.discard(segment.segment_id)
         self._legacy_stats_cache.pop(segment.segment_id, None)
+        self._segment_negative_gid_cache.pop(segment.segment_id, None)
         await self.manifest.delete_segment(segment.segment_id)
         return True
 

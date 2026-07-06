@@ -36,7 +36,7 @@ from obs.ringbuffer.ringbuffer import RingBuffer
 from obs.ringbuffer.store.config import StoreRetentionConfig
 from obs.ringbuffer.store.migration import LegacyMigrator
 from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
-from obs.ringbuffer.store.interface import StoreEvent
+from obs.ringbuffer.store.interface import StoreEvent, StoreQuery
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +211,48 @@ async def test_stats_estimate_attached_legacy_rows_and_span(tmp_path: Path):
         # Cache greift: zweiter Aufruf identisch (und guenstig).
         stats2 = await store.stats()
         assert stats2.common["total"] == 5
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_protected_legacy_does_not_sacrifice_live_segments(tmp_path: Path):
+    """Budget-Druck durch GESCHÜTZTE Legacy darf keine Live-Segmente opfern (#964-Fix).
+
+    Konstellation aus dem Demo-Betrieb: 10-MiB-Alt-Budget, 76-MB-Legacy attached
+    und geschützt (pending). Der Store ist damit dauerhaft über Budget – aber der
+    Überschuss STAMMT aus der tolerierten Legacy. Ohne Korrektur fraß jeder
+    Retention-Pass das einzige ungeschützte Opfer: das jüngste geschlossene
+    Live-Segment (im Feldversuch: 712 frische Events weg). Solange der Schutz
+    aktiv ist, muss der Legacy-Anteil aus dem Size-Druck herausgerechnet werden.
+    """
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        legacy = tmp_path / "obs_ringbuffer.db"
+        # Groß genug, dass die Legacy den SQLite-Fixkosten-Overhead der
+        # Live-Segmente klar dominiert (Feld-Konstellation: 76 MB vs. 10 MiB).
+        await _seed_legacy_db(legacy, list(range(3000)))
+        migrator = LegacyMigrator(store, legacy)
+        await migrator.attach_readonly(migrator.classify())
+        legacy_size = (await store.manifest.list_legacy_segments())[0].size_bytes
+
+        # Ein geschlossenes + ein aktives Live-Segment mit frischen Daten.
+        await store.append([_event(1, _iso(50))])
+        await store.rotate()
+        await store.append([_event(2, _iso(51))])
+
+        # Budget: größer als der Live-Anteil, aber klein gegen die Legacy –
+        # über Budget also NUR wegen der (geschützten) Legacy.
+        budget = max(legacy_size // 3, 256 * 1024)
+        assert budget < legacy_size
+        store._retention_config = StoreRetentionConfig(max_file_size_bytes=budget, protect_legacy=True)
+        removed = await store.enforce_retention()
+
+        assert removed == 0, "geschuetzte Ueber-Budget-Lage darf keine Live-Segmente kosten"
+        rows = await store.query(StoreQuery(limit=10))
+        assert {r["new_value"] for r in rows} >= {1, 2}, "frische Live-Events muessen ueberleben"
+        assert len(await store.manifest.list_legacy_segments()) == 1
     finally:
         await store.close()
 

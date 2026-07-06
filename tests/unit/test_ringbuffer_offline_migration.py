@@ -299,6 +299,48 @@ async def test_parallel_append_during_copy_stays_consistent(tmp_path: Path, monk
         await rb.stop()
 
 
+async def test_latest_page_after_migration_shows_live_rows_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Kleine latest-Page NACH Migration + weiteren Appends zeigt Live-Zeilen zuerst (#965-Fix).
+
+    Migrierte Segmente tragen HÖHERE segment_ids als ältere Live-Segmente, aber
+    NEGATIVE gids – die segment_id-DESC-Iterationsannahme des ``id desc``-
+    Frühabbruchs gilt für sie nicht. Ohne Gegenmaßnahme füllte eine kleine
+    latest-Page ihre Zeilen aus den migrierten Alt-Daten und terminierte, bevor
+    ältere Live-Segmente gelesen wurden → frische Events unsichtbar (Feldbefund
+    aus dem Demo-Betrieb). Der Reader muss den Frühabbruch sperren, sobald ein
+    gelesenes Segment negative gids liefert (R42-Mechanismus).
+    """
+    import obs.ringbuffer.store.offline_migration as mig_mod
+
+    monkeypatch.setattr(mig_mod, "COPY_BATCH_ROWS", 3)
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy_db(legacy, 8)
+
+    rb = _segmented_rb(tmp_path)
+    await rb.start()
+    try:
+        # Live-Zeile VOR der Migration + Rotation → liegt in einem Segment mit
+        # NIEDRIGERER segment_id als die späteren migrierten Segmente.
+        await _record_live(rb, 1, 7200)
+        await rb._store.rotate()
+
+        migrator = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        progress: dict = {}
+        await migrator.run(progress)
+        assert progress["phase"] == "done"
+
+        # Weitere Live-Zeile nach der Migration (aktives Segment).
+        await _record_live(rb, 2, 7300)
+
+        # Kleine latest-Page: MUSS die beiden Live-Zeilen zuerst liefern.
+        rows = await rb._store.query(StoreQuery(limit=2, sort_field="id", sort_order="desc"))
+        assert [r["new_value"] for r in rows] == [2, 1], f"Live-Zeilen verdeckt: {[r['new_value'] for r in rows]}"
+        assert all(r["global_event_id"] > 0 for r in rows)
+    finally:
+        await rb.stop()
+
+
 async def test_run_requires_attached_legacy(tmp_path: Path):
     rb = _segmented_rb(tmp_path)
     await rb.start()
