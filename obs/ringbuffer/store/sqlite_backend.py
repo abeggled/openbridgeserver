@@ -2590,15 +2590,14 @@ class SqliteSegmentStore(RingBufferStore):
                 checkpoint_ok = await self._try_truncate_checkpoint(old_conn)
                 await old_conn.close()
                 if checkpoint_ok:
-                    await self.manifest.close_segment(old_segment.segment_id)
-                    # Erfolgreicher TRUNCATE (#951, Codex :1346): die WAL/SHM-Bytes sind
-                    # gerade in die Haupt-DB verschoben/getruncatet worden. Die von
-                    # _refresh_active_segment_stats gesetzte pre-checkpoint-Größe (inkl.
-                    # voller WAL) überschätzt jetzt die reale Disk-Nutzung. Größe daher
-                    # mit der REALEN post-checkpoint-Größe neu schreiben, BEVOR die direkt
-                    # folgende Retention greift – sonst löschte _enforce_size_budget()
-                    # WAL-schwere Segmente unnötig zusätzliche geschlossene/Legacy-Segmente.
-                    await self.manifest.update_segment_size(
+                    # Erfolgreicher TRUNCATE (#951, Codex :1346 / R49): Status ``closed``
+                    # UND die reale post-checkpoint-Größe in EINEM durablen Write. Ein
+                    # separates ``close_segment`` (retention-eligible) gefolgt von einem
+                    # zweiten ``update_segment_size`` liesse bei einem Crash dazwischen ein
+                    # ``closed`` Segment mit der pre-checkpoint WAL-schweren ``size_bytes``
+                    # zurück – die nächste Size-Retention löschte dann auf Basis bereits
+                    # freigegebener Bytes unnötig zusätzliche ältere Segmente.
+                    await self.manifest.close_segment_with_size(
                         old_segment.segment_id,
                         size_bytes=self._segment_file_size(old_segment.filename),
                     )
@@ -3059,17 +3058,16 @@ class SqliteSegmentStore(RingBufferStore):
         Liefert die Anzahl freigegebener Segmente.
         """
         cfg = self._retention_config
+        # Pending Checkpoints IMMER zuerst nachziehen (#951, Pkt 5 / Codex R49): ein
+        # busy gebliebenes ``checkpoint_pending``-Segment ist retention-UNfähig. Würde
+        # der Truncate nie erneut versucht, bliebe es das dauerhaft und hielte seine
+        # WAL/SHM-Sidecars. ``run_pending_checkpoints`` ist der EINZIGE Retry-Pfad
+        # (der RingBuffer ruft ihn nur über ``enforce_retention``). Er muss deshalb VOR
+        # dem Unlimited-Early-Return laufen – sonst blieben checkpoint_pending-Segmente
+        # auf Installationen OHNE Retention-Limits (alle Limits ``None``) für immer hängen.
+        await self.run_pending_checkpoints()
         if cfg.max_file_size_bytes is None and cfg.max_age is None and cfg.max_entries is None:
             return 0
-
-        # Pending Checkpoints zuerst nachziehen (#951, Pkt 5): ein busy gebliebenes
-        # ``checkpoint_pending``-Segment ist retention-UNfähig. Würde der Truncate
-        # nie erneut versucht, bliebe es das dauerhaft und könnte ein hartes
-        # Byte-Budget dauerhaft überschritten halten. ``run_pending_checkpoints`` lief
-        # bisher nur aus Tests; hier im Retention-Pfad wird er bei jeder Erzwingung
-        # wiederholt versucht, sodass ein inzwischen freier WAL das Segment wieder
-        # ``closed`` (und damit retention-fähig) macht.
-        await self.run_pending_checkpoints()
 
         removed = 0
         # Retention-fähige Segmente sind löschbar; älteste zuerst. Das aktive und

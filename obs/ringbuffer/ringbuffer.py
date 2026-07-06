@@ -922,11 +922,20 @@ class RingBuffer:
         """True, solange (mind.) ein read-only attached Legacy-Segment existiert.
 
         Grenzt das zusätzliche Post-Upgrade-``enforce_retention`` auf das transiente
-        Upgrade-Fenster ein (#951, Pkt 1). Ein retention-bedingter Legacy-Delete
-        entfernt die ``status='legacy'``-Zeile; danach liefert dies ``False`` und der
-        Normalbetrieb zahlt keinen zusätzlichen enforce pro Append.
+        Upgrade-Fenster ein (#951, Pkt 1).
+
+        Erkennung per SCHEMA (``schema_version <= LEGACY``), NICHT per ``status='legacy'``
+        (#951, Codex R49): quarantiniert ein Read die attached Legacy-DB VOR dem ersten
+        Post-Upgrade-Event, wechselt ihr Status auf ``quarantined`` und
+        ``list_legacy_segments()`` (nur ``status='legacy'``) sähe sie nicht mehr – der
+        First-Append-Retention-Pass liefe dann nicht und der über-budget Legacy-Blob
+        bliebe bis zur nächsten normalen Rotation liegen, obwohl frische Daten den
+        No-Zero-History-Guard bereits erfüllen. Ein retention-bedingter Delete entfernt
+        die Zeile ganz; danach ``False`` (Normalbetrieb ohne Extra-Enforce).
         """
-        return bool(await self._store.manifest.list_legacy_segments())
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+
+        return any(s.schema_version <= LEGACY_SCHEMA_VERSION for s in await self._store.manifest.list_segments())
 
     async def _segment_rotation_due(self) -> bool:
         """True, wenn das aktive Segment eine ``segment_max_*``-Schwelle reißt."""

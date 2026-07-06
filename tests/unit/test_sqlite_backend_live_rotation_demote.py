@@ -94,23 +94,24 @@ async def test_live_rotation_error_after_switch_demotes_old_segment(store: Sqlit
 async def test_live_rotation_error_in_manifest_update_demotes_old_segment(store: SqliteSegmentStore, monkeypatch):
     """Fehler in einem post-switch-Manifest-Update → altes Segment dennoch demotet.
 
-    Zweiter post-switch-Pfad: nach erfolgreichem Truncate wirft ``update_segment_size``.
-    Auch hier darf die alte Zeile nicht ``active`` bleiben.
+    Zweiter post-switch-Pfad: nach erfolgreichem Truncate wirft der atomare
+    ``close_segment_with_size`` (#951, R49). Auch hier darf die alte Zeile nicht
+    ``active`` bleiben.
     """
     await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
     old_active = await store.manifest.get_active_segment()
 
-    original_update = store.manifest.update_segment_size
+    original_close = store.manifest.close_segment_with_size
 
-    async def _boom_update(segment_id, *, size_bytes):
-        raise OSError("manifest update_segment_size failed after writer switch")
+    async def _boom_close(segment_id, *, size_bytes):
+        raise OSError("manifest close_segment_with_size failed after writer switch")
 
-    monkeypatch.setattr(store.manifest, "update_segment_size", _boom_update)
+    monkeypatch.setattr(store.manifest, "close_segment_with_size", _boom_close)
 
     with pytest.raises(OSError):
         await store.rotate()
 
-    monkeypatch.setattr(store.manifest, "update_segment_size", original_update)
+    monkeypatch.setattr(store.manifest, "close_segment_with_size", original_close)
 
     segments = await store.manifest.list_segments()
     old_row = next(s for s in segments if s.segment_id == old_active.segment_id)

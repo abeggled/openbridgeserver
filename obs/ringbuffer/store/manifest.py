@@ -288,6 +288,23 @@ class Manifest:
         )
         await self._db.commit()
 
+    async def close_segment_with_size(self, segment_id: int, *, size_bytes: int) -> None:
+        """Schließt ein Segment und schreibt die post-checkpoint ``size_bytes`` atomar (#951, R49).
+
+        Nach erfolgreichem ``wal_checkpoint(TRUNCATE)`` beim Rotieren: Status
+        ``closed`` + ``closed_at`` + reale post-checkpoint-Größe in EINEM durablen
+        Write. Ein separates ``close_segment`` gefolgt von ``update_segment_size``
+        liesse bei einem Crash dazwischen ein retention-eligible ``closed`` Segment
+        mit der alten WAL-schweren Größe zurück (die Size-Retention löschte dann zu
+        viele ältere Segmente). Analog zu ``close_segment_checkpoint_pending`` für den
+        Busy-Pfad.
+        """
+        await self._db.execute(
+            "UPDATE segments SET status = ?, closed_at = ?, size_bytes = ? WHERE segment_id = ?",
+            (SEGMENT_STATUS_CLOSED, _utc_now_iso(), size_bytes, segment_id),
+        )
+        await self._db.commit()
+
     async def close_segment_checkpoint_pending(self, segment_id: int) -> None:
         """Schließt ein Segment mit busy WAL-Checkpoint direkt als ``checkpoint_pending``.
 
