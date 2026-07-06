@@ -417,10 +417,21 @@ class Manifest:
         wenn sie an der Reihe sind — ihre Manifest-Metadaten bleiben intakt,
         nur die Segment-Datei ist korrupt. ``active`` und ``checkpoint_pending``
         sind bewusst nicht enthalten und werden nie über diese Liste gelöscht.
+
+        Ordnung nach echtem DATEN-Alter, nicht nach Datei-ID (#965): offline-
+        migrierte Segmente werden NACH den ersten Live-Segmenten erzeugt (höhere
+        ``segment_id``), halten aber ÄLTERE Daten. Rein nach ``segment_id ASC``
+        löschte die FIFO-Retention unter Budget-Druck die jüngsten Live-Daten vor
+        der migrierten Alt-Historie. Primärschlüssel der Opferwahl ist daher
+        ``from_ts`` (ISO-8601, lexikografisch = chronologisch); Segmente ohne
+        ``from_ts`` (leer bzw. unbekanntes Alter) konservativ ZULETZT – der
+        Age-Pass behandelt unbekanntes Alter als „nicht löschbar" und bricht
+        dort ab. Tie-Break ``segment_id ASC``.
         """
         placeholders = ", ".join("?" for _ in SEGMENT_STATUS_RETENTION_ELIGIBLE)
         async with self._db.execute(
-            f"SELECT * FROM segments WHERE status IN ({placeholders}) ORDER BY segment_id ASC",
+            f"SELECT * FROM segments WHERE status IN ({placeholders}) "
+            "ORDER BY CASE WHEN from_ts IS NULL THEN 1 ELSE 0 END, from_ts ASC, segment_id ASC",
             SEGMENT_STATUS_RETENTION_ELIGIBLE,
         ) as cur:
             rows = await cur.fetchall()

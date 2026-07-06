@@ -114,7 +114,12 @@ async def test_full_migration_preserves_ids_and_history(tmp_path: Path):
         await rb.stop()
 
 
-async def test_budget_bounded_cutoff_drops_oldest(tmp_path: Path):
+async def test_budget_bounded_cutoff_drops_oldest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import obs.ringbuffer.store.offline_migration as mig_mod
+
+    # Kleine Copy-Batches erzwingen Segment-Rollover: mehrere migrierte Segmente,
+    # sodass die Post-Commit-Retention nur das AELTESTE trimmt statt alles.
+    monkeypatch.setattr(mig_mod, "COPY_BATCH_ROWS", 50)
     legacy = tmp_path / "obs_ringbuffer.db"
     # Groß genug, dass die Nutzdaten den SQLite-Datei-Overhead pro Segment klar
     # dominieren – sonst frisst der Fixkosten-Anteil das kleine Test-Budget auf.
@@ -142,6 +147,8 @@ async def test_budget_bounded_cutoff_drops_oldest(tmp_path: Path):
         # (der Cutoff schätzt über die mittlere Zeilengröße) – nie am neuen.
         assert 0 < len(migrated_values) <= progress["copied_rows"]
         assert migrated_values == list(range(100 + total - len(migrated_values), 100 + total))
+        # Und die JUENGSTE Zeile (Live-Event, positive gid) ueberlebt jede Trimmung.
+        assert 1 in {r["new_value"] for r in rows}
     finally:
         await rb.stop()
 
@@ -337,6 +344,57 @@ async def test_latest_page_after_migration_shows_live_rows_first(tmp_path: Path,
         rows = await rb._store.query(StoreQuery(limit=2, sort_field="id", sort_order="desc"))
         assert [r["new_value"] for r in rows] == [2, 1], f"Live-Zeilen verdeckt: {[r['new_value'] for r in rows]}"
         assert all(r["global_event_id"] > 0 for r in rows)
+    finally:
+        await rb.stop()
+
+
+async def test_retention_fifo_orders_migrated_segments_by_data_age(tmp_path: Path):
+    """FIFO-Opferwahl nach DATEN-Alter, nicht Datei-ID (#965-Fix, Feldbefund).
+
+    Migrierte Segmente haben HÖHERE segment_ids als ein früher rotiertes
+    Live-Segment, halten aber ÄLTERE Daten. Eine Opferwahl nach ``segment_id
+    ASC`` löschte unter Budget-Druck die HEUTIGEN Live-Daten vor der
+    migrierten Alt-Historie – FIFO-Vertragsbruch. Die Opferwahl muss dem
+    ``from_ts``-Datenalter folgen: migrierte Alt-Segmente sterben zuerst.
+    """
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy_db(legacy, 6)
+
+    rb = _segmented_rb(tmp_path)
+    await rb.start()
+    try:
+        # Live-Segment MIT niedrigerer segment_id als die späteren migrierten:
+        # Zeile schreiben und rotieren (ts = HEUTE, klar neuer als die Legacy).
+        await _record_live(rb, 1, 7200)
+        await rb._store.rotate()
+        await _record_live(rb, 2, 7300)
+
+        migrator = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        progress: dict = {}
+        await migrator.run(progress)
+        assert progress["phase"] == "done"
+
+        victims = await rb._store._retention_victims_in_order()
+        victim_spans = [(v.segment_id, v.from_ts) for v in victims]
+        # Alle migrierten (Alt-Daten) MÜSSEN vor dem geschlossenen Live-Segment stehen.
+        live_positions = [i for i, v in enumerate(victims) if v.from_ts and v.from_ts.startswith(_iso(7200)[:10]) and v.from_ts >= _iso(7200)]
+        migrated_positions = [i for i, v in enumerate(victims) if v.from_ts and v.from_ts < _iso(7200)]
+        assert migrated_positions and live_positions, f"unerwartete Opferliste: {victim_spans}"
+        assert max(migrated_positions) < min(live_positions), f"Live-Daten vor Alt-Daten in der FIFO: {victim_spans}"
+
+        # Und unter hartem Size-Druck stirbt zuerst ein migriertes Segment.
+        from obs.ringbuffer.store.config import StoreRetentionConfig
+
+        rb._store._retention_config = StoreRetentionConfig(max_file_size_bytes=1)
+        before = {s.segment_id for s in await rb._store.manifest.list_segments()}
+        await rb._store._enforce_size_budget(rb._store._retention_config.max_file_size_bytes)
+        after = {s.segment_id for s in await rb._store.manifest.list_segments()}
+        deleted = before - after
+        assert deleted, "Budget-Druck muss Opfer finden"
+        live_closed = [v.segment_id for i, v in enumerate(victims) if i in live_positions]
+        # Das Live-Segment darf erst fallen, wenn ALLE migrierten weg sind.
+        if any(sid in deleted for sid in live_closed):
+            assert all(v.segment_id in deleted for i, v in enumerate(victims) if i in migrated_positions)
     finally:
         await rb.stop()
 
