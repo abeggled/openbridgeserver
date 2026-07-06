@@ -904,3 +904,78 @@ async def test_enable_normalizes_segmented_off_for_memory_db(tmp_path, monkeypat
             await active.stop()
         reset_ringbuffer()
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_enable_explicit_segmented_normalized_off_for_memory_db(tmp_path, monkeypatch):
+    """Auch ein EXPLIZIT gepostetes ``segmented=true`` wird bei einer in-memory-DB auf
+    False normalisiert (#968, Codex :2470): Clients wie das Config-Modal senden das Feld
+    stets, ein reiner Implizit-Guard würde umgangen und schriebe ``:memory:_segments``."""
+    db = Database(":memory:")
+    await db.connect()
+    reset_ringbuffer()
+    rb_api.set_ringbuffer_enabled(False)
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: ":memory:")
+    monkeypatch.setattr(rb_api, "_subscribe_ringbuffer", lambda _rb: None)
+    try:
+        await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, segmented=True, max_entries=50), _user="admin", db=db)
+        rb = rb_api.get_optional_ringbuffer()
+        assert rb is not None
+        assert rb.segmented is False, "explizit segmented=true muss bei :memory: normalisiert werden"
+    finally:
+        active = rb_api.get_optional_ringbuffer()
+        if active is not None:
+            await active.stop()
+        reset_ringbuffer()
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_discard_failure_preserves_protection(tmp_path, monkeypatch):
+    """Schlägt ``discard_legacy()`` fehl, muss der Retention-Schutz erhalten bleiben und die
+    Entscheidung nicht-terminal (#968, Codex :2099) – sonst könnte die Retention die
+    ungeschützte Legacy-Quelle zurückgewinnen, obwohl nie ``discarded`` erreicht wurde."""
+    from obs.ringbuffer.persisted_config import load_legacy_migration_decision
+    from obs.ringbuffer.ringbuffer import RingBuffer as _RB
+
+    db = Database(":memory:")
+    await db.connect()
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    leg = _RB(storage="disk", disk_path=str(rb_path), max_entries=None)
+    await leg.start()
+    await leg.record(
+        ts="2026-01-01T00:00:00.000Z", datapoint_id="dp-leg", topic="t", old_value=None, new_value=1, source_adapter="api", quality="good"
+    )
+    await leg.stop()
+
+    reset_ringbuffer()
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    monkeypatch.setattr(rb_api, "_subscribe_ringbuffer", lambda _rb: None)
+    rb = await init_ringbuffer(
+        storage="file",
+        max_entries=100,
+        disk_path=str(rb_path),
+        max_file_size_bytes=1024 * 1024,
+        max_age=3600,
+        segmented=True,
+        segment_max_age=1200,
+        legacy_retention_protected=True,
+    )
+    rb_api.set_ringbuffer_enabled(True)
+    try:
+
+        async def _boom():
+            raise PermissionError("legacy DB locked")
+
+        monkeypatch.setattr(rb, "discard_legacy", _boom)
+        with pytest.raises(PermissionError):
+            await rb_api.legacy_migration_decision(rb_api.LegacyMigrationDecisionIn(decision="discard"), _user="admin", db=db)
+        # Schutz erhalten (discard lief unter Schutz und schlug fehl), Entscheidung nicht terminal.
+        assert rb._legacy_retention_protected is True, "Schutz muss nach fehlgeschlagenem discard erhalten bleiben"
+        assert await load_legacy_migration_decision(db) != "discarded"
+    finally:
+        active = rb_api.get_optional_ringbuffer()
+        if active is not None:
+            await active.stop()
+        reset_ringbuffer()
+        await db.disconnect()

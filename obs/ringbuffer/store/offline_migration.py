@@ -532,9 +532,24 @@ async def reconcile_offline_migration(store: SqliteSegmentStore) -> bool:
         logger.warning("RingBuffer: %d verwaiste Offline-Migrations-Segmente ohne Legacy-Quelle – werden verworfen", len(migrating))
         for segment in migrating:
             base = store._segments_dir / segment.filename
-            for candidate in (base, Path(f"{base}-wal"), Path(f"{base}-shm")):
+            for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm")):
                 with contextlib.suppress(OSError):
                     candidate.unlink()
+            # Manifest-Zeile NUR entfernen, wenn die Hauptdatei wirklich weg ist (#968,
+            # Codex :538, analog :442/:210): bleibt sie liegen (Permission/Lock) und die
+            # Zeile würde trotzdem gelöscht, wäre es eine untracked ``rb_migrated_*.sqlite``
+            # (aus /stats/Retention/Cleanup verschwunden, dauerhafter Leak). Im Startup-
+            # Reconciler NICHT raisen (der Store muss öffnen), sondern die Zeile behalten –
+            # der nächste Start versucht den Cleanup erneut.
+            try:
+                base.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                logger.warning(
+                    "RingBuffer: verwaistes migrating-Segment %s nicht entfernbar – Manifest-Zeile bleibt für spaeteren Cleanup", segment.filename
+                )
+                continue
             await store.manifest.delete_segment(segment.segment_id)
         return False
     missing_file_rows = [s for s in legacy_rows if not Path(s.filename).exists()]

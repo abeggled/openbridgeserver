@@ -121,7 +121,9 @@ async def test_decision_rejected_while_migration_job_running(client, auth_header
         pytest.skip("kein RingBuffer in dieser Session")
     await _reset_decision()
     try:
-        monkeypatch.setattr(rb, "legacy_migration_progress", lambda: {"phase": "copying"})
+        # Der decision-Guard nutzt seit #968 (Codex :2078) ``legacy_migration_in_progress()``
+        # (deckt auch das synchrone Startfenster ab) statt der reinen Progress-Phase.
+        monkeypatch.setattr(rb, "legacy_migration_in_progress", lambda: True)
         for decision in ("keep", "skip", "discard"):
             resp = await client.post("/api/v1/ringbuffer/migration/decision", json={"decision": decision}, headers=auth_headers)
             assert resp.status_code == 409, f"{decision}: {resp.text}"

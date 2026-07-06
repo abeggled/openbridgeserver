@@ -764,3 +764,59 @@ async def test_checkpoint_missing_legacy_does_not_recreate_file(tmp_path: Path):
     result = await SqliteSegmentStore._checkpoint_small_legacy(missing)
     assert result is False, "kein Checkpoint moeglich ohne Quelldatei"
     assert not missing.exists(), "fehlende Legacy-DB darf nicht neu angelegt werden"
+
+
+# ---------- Runde 11, Codex :2847: quarantänierte Segmente aus sichtbaren Stats ----------
+
+
+async def test_quarantined_excluded_from_visible_stats(tmp_path: Path):
+    """Quarantänierte Segmente sind aus Reads ausgeschlossen und dürfen die sichtbaren
+    Zeilen-/Zeit-Aggregate nicht mitzählen (#968, Codex :2847) – sonst meldete /stats
+    Zeilen/Zeitspannen, die kein Query liefern kann."""
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        await store.append([_event(1, _iso(1))])
+        await store.rotate()
+        await store.append([_event(2, _iso(2))])
+        base_total = (await store.stats()).as_dict()["common"]["total"]
+        # Ein geschlossenes Segment quarantänieren.
+        closed = [s for s in await store.manifest.list_segments() if s.status == "closed"]
+        assert closed
+        await store.manifest.mark_quarantined(closed[0].segment_id, "corrupt (Test)")
+
+        after = (await store.stats()).as_dict()["common"]
+        assert after["total"] == base_total - closed[0].row_count, "quarantänierte Zeilen zaehlen nicht in die sichtbaren Stats"
+    finally:
+        await store.close()
+
+
+# ---------- Runde 11, Codex :538: verwaistes migrating bei Unlink-Fehler behalten ----------
+
+
+async def test_reconcile_orphan_keeps_row_when_unlink_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Verwaiste ``migrating``-Segmente (ohne Legacy-Quelle), deren Datei nicht entfernbar
+    ist, dürfen ihre Manifest-Zeile im Reconciler NICHT verlieren (#968, Codex :538) –
+    sonst untracked Leak. Der Startup-Reconciler bricht dabei NICHT ab."""
+    from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
+
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        seg = await store.manifest.create_migrating_segment(filename="rb_migrated_orphan.sqlite", schema_version=2)
+        (store._segments_dir / "rb_migrated_orphan.sqlite").write_bytes(b"x" * 128)
+
+        orig_unlink = Path.unlink
+
+        def _boom(self, *a, **k):
+            if self.name == "rb_migrated_orphan.sqlite":
+                raise PermissionError("locked")
+            return orig_unlink(self, *a, **k)
+
+        monkeypatch.setattr(Path, "unlink", _boom)
+        # Darf NICHT raisen (Startup muss öffnen) und die Zeile behalten.
+        result = await reconcile_offline_migration(store)
+        assert result is False
+        assert await store.manifest.get_segment(seg.segment_id) is not None, "Manifest-Zeile muss fuer spaeteren Cleanup bleiben"
+    finally:
+        await store.close()

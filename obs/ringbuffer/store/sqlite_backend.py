@@ -2844,7 +2844,11 @@ class SqliteSegmentStore(RingBufferStore):
         # kopierten Legacy-Zeilen (Quelle noch attached) bzw. meldet nach einem
         # gescheiterten Copy row/oldest/newest, die niemand abfragen kann. ``size_bytes``
         # bleibt bewusst die physische Gesamtnutzung (die Kopien belegen real Platte).
-        visible = [s for s in segments if s.status != SEGMENT_STATUS_MIGRATING]
+        # Auch quarantänierte Segmente (#968, Codex :2847) aus den sichtbaren Zeilen-/
+        # Zeit-Aggregaten auslassen: ``list_segments_for_query`` schließt sie aus Reads
+        # aus, also meldete ``/stats`` sonst Zeilen/Zeitspannen, die kein Query/Export
+        # liefern kann (irreführend für Dashboard und Retention/Prognose).
+        visible = [s for s in segments if s.status not in (SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED)]
         legacy_estimates = {s.segment_id: await self._legacy_stats_estimate(s) for s in visible if _is_legacy_segment(s) and s.row_count == 0}
         total = sum(legacy_estimates.get(s.segment_id, (s.row_count, None, None))[0] or s.row_count for s in visible)
         ts_lows = [s.from_ts for s in visible if s.from_ts] + [est[1] for est in legacy_estimates.values() if est[1]]
