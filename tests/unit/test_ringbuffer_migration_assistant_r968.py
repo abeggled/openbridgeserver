@@ -2257,3 +2257,77 @@ async def test_no_calibration_sample_when_target_volume_zero(tmp_path: Path):
         assert [s for s in await rb._store.manifest.list_migrating_segments()] == [], "kein Kalibrierungs-Sample geschrieben"
     finally:
         await rb.stop()
+
+
+# ---------- Runde 26, Codex :621: Reconciler behält discarding-Zeile bei Unlink-Fehler ----------
+
+
+async def test_reconciler_keeps_discarding_row_when_unlink_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Kann der Startup-Reconciler die Legacy-Datei einer ``discarding``-Zeile NICHT löschen
+    (Permission/Lock), darf er die Manifest-Zeile NICHT entfernen (#968, Codex :621) – sonst
+    bliebe die Datei untracked und würde beim nächsten Start wieder attached."""
+    from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
+    from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
+
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    orig_unlink = Path.unlink
+    try:
+        stuck = tmp_path / "stuck.db"
+        stuck.write_bytes(b"x" * 32)
+        row = await store.manifest.register_legacy_segment(source_path=str(stuck), size_bytes=32)
+        await store.manifest.mark_discarding(row.segment_id)
+
+        def _boom(self, *a, **k):
+            if self.name == "stuck.db":
+                raise PermissionError("locked")
+            return orig_unlink(self, *a, **k)
+
+        monkeypatch.setattr(Path, "unlink", _boom)
+        await reconcile_offline_migration(store)
+
+        assert await store.manifest.list_discarding_segments(), "discarding-Zeile bleibt bei Unlink-Fehler"
+        assert stuck.exists(), "Datei bleibt"
+    finally:
+        monkeypatch.setattr(Path, "unlink", orig_unlink)
+        await store.close()
+
+
+# ---------- Runde 26, Codex :2184: partial keep-Migration persistiert Schutz ----------
+
+
+async def test_partial_keep_migration_persists_protected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Migriert ein Lauf aus einem ``keep``-Zustand nur EINE von mehreren Quellen, muss die
+    verbleibende Quelle persistent geschützt werden (#968, Codex :2184): ``keep`` → ``skipped``
+    (protected), sonst wäre sie nach einem Restart ungeschützt."""
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_KEEP,
+        LEGACY_DECISION_SKIPPED,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(15)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=False)  # keep: Schutz aus
+    await rb.start()
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        second = tmp_path / "legacy2.db"
+        second.write_bytes(b"z" * 128)
+        await rb._store.manifest.register_legacy_segment(source_path=str(second), size_bytes=128)
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+
+        monkeypatch.setattr(rb_api, "get_optional_ringbuffer", lambda: rb)
+        monkeypatch.setattr(rb_api, "is_ringbuffer_enabled", lambda: True)
+        await rb_api.legacy_migration_start(_user="admin", db=db)
+        await rb._legacy_migration_task
+
+        assert await rb.has_attached_legacy() is True, "zweite Quelle bleibt attached"
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_SKIPPED, "keep -> skipped (protected)"
+    finally:
+        await rb.stop()
+        await db.disconnect()

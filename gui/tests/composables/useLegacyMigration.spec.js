@@ -205,3 +205,16 @@ describe('useLegacyMigration — pendingFinalization (#968 Codex :72)', () => {
     expect(api.pendingFinalization.value).toBe(false)
   })
 })
+
+describe('useLegacyMigration — keep does not trigger endless polling (#968 Codex :48)', () => {
+  it('is not pendingFinalization for a kept source removed by retention', async () => {
+    const api = await loadComposable()
+    // Frühere Migration ließ job=done; Admin wählte keep; Retention entfernte die Quelle später.
+    migrationStatus.mockResolvedValue({
+      data: statusPayload({ decision: 'keep', legacy: null, job: { phase: 'done', error: null } }),
+    })
+    await api.refresh()
+    expect(api.pendingFinalization.value).toBe(false)
+    expect(api.jobRunning.value).toBe(false)
+  })
+})

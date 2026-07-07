@@ -2181,6 +2181,14 @@ async def legacy_migration_start(
         # (nicht migrierbares, nur verwerfbares) Legacy den Abschluss verhindert – der Admin
         # muss es über den weiterhin sichtbaren Assistenten discarden können.
         if await rb.has_attached_legacy():
+            # Verbleibende Quelle(n) nach einem Multi-Quellen-Lauf: eine PROTECTED non-terminale
+            # Entscheidung persistieren (#968, Codex :2184), analog zum partial-discard-Pfad. War die
+            # Start-Entscheidung ``keep`` (Schutz aus der Persistenz), bliebe die verbleibende Quelle
+            # nach einem Restart/Status-Reload ungeschützt (``legacy_retention_protected = decision in
+            # LEGACY_DECISIONS_PROTECTED``) und die FIFO-Retention könnte sie zurückgewinnen, bevor
+            # der Admin über sie entscheidet. ``skipped`` ist protected + non-terminal.
+            if await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP:
+                await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
             return
         await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
 

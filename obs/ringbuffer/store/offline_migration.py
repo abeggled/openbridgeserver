@@ -614,11 +614,18 @@ async def reconcile_offline_migration(store: SqliteSegmentStore) -> bool:
     # Filter unten sie nicht als unterbrochenen Commit fehldeutet.
     for row in await store.manifest.list_discarding_segments():
         rbase = Path(row.filename)
-        for candidate in (rbase, Path(f"{rbase}-wal"), Path(f"{rbase}-shm"), rbase.with_name(f"{rbase.name}.attach_identity")):
+        for candidate in (Path(f"{rbase}-wal"), Path(f"{rbase}-shm"), rbase.with_name(f"{rbase.name}.attach_identity")):
             with contextlib.suppress(OSError):
                 candidate.unlink()
-        with contextlib.suppress(Exception):
-            await store.manifest.delete_segment(row.segment_id)
+        with contextlib.suppress(OSError):
+            rbase.unlink()
+        # Manifest-Zeile NUR entfernen, wenn die Haupt-DB wirklich weg ist (#968, Codex :621): bleibt
+        # sie liegen (Permission/Lock) und die Zeile würde trotzdem gelöscht, attached der nächste
+        # Start die vermeintlich verworfene Legacy-DB wieder – und die discard-Retry-Garantie wäre
+        # umgangen. Andernfalls die ``discarding``-Zeile für einen weiteren Retry behalten.
+        if not rbase.exists():
+            with contextlib.suppress(Exception):
+                await store.manifest.delete_segment(row.segment_id)
     # Schema-basiert (#968, Codex :583), ``discarding``-Reste ausgeschlossen (#968, Codex :1148):
     # wird eine Legacy-Quelle vor dem Commit-Crash quarantäniert (status != 'legacy', aber schema-
     # legacy), verpasste der reine status-Filter die fehlende Quelle und verwürfe die Kopien.

@@ -43,9 +43,15 @@ const jobRunning = computed(() => RUNNING_JOB_PHASES.has(job.value?.phase))
 // Entscheidung terminal ist. Sonst bliebe die bereits committete Migration als pending/skipped
 // hängen (Banner + Segment-Eintrag verschwinden bei ``legacy === null``, ein Reload/Neustart wäre
 // nötig).
-const TERMINAL_DECISIONS = new Set(['migrated', 'discarded'])
+// Nur die RETRY-fähigen non-terminalen Entscheidungen zählen als „Finalisierung ausstehend"
+// (#968, Codex :48): pending/skipped (bzw. keine Entscheidung) warten nach einem Commit auf das
+// Nachziehen von ``migrated``. ``keep`` ist dagegen eine BEWUSSTE non-terminale Entscheidung – der
+// Backend-Finalizer wandelt sie absichtlich NICHT in ``migrated`` um. Würde ``keep`` hier als
+// pending gewertet, liefe der 1-s-Poller nach einem retention-bedingten Entfernen der ge-keepten
+// Quelle (``legacy === null``) endlos weiter.
+const RETRYABLE_PENDING_DECISIONS = new Set(['pending', 'skipped', null])
 const pendingFinalization = computed(
-  () => job.value?.phase === 'done' && legacy.value === null && !TERMINAL_DECISIONS.has(decision.value),
+  () => job.value?.phase === 'done' && legacy.value === null && RETRYABLE_PENDING_DECISIONS.has(decision.value),
 )
 
 // Banner nur solange KEINE informierte Entscheidung vorliegt und die
