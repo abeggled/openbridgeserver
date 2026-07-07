@@ -197,15 +197,20 @@ class OfflineLegacyMigrator:
     async def _calibrate_cutoff(self, plan: MigrationPlan, legacy: SegmentRecord) -> MigrationPlan:
         """Misst die reale v2-Zeilengröße über ein Wegwerf-Sample und passt den Cutoff an."""
         budget = self._store._retention_config.max_file_size_bytes
-        if plan.rows_to_copy <= 0 or plan.total_rows == 0:
+        # Auch einen drop-only-Plan (rows_to_copy == 0) noch kalibrieren, WENN ein Budget gesetzt ist
+        # (#968, Codex :201): die v1-Erstschätzung (avg über ``legacy.size_bytes`` inkl. WAL/Sidecars)
+        # überschätzt die Zeilengröße und kann ``rows_to_copy`` fälschlich auf 0 drücken. Die reale,
+        # kleinere v2-Zeilengröße erlaubt bei positivem Ziel-Volumen evtl. doch das Behalten der
+        # neuesten Zeilen. Ohne Budget ist ``rows_to_copy == total_rows``; ``== 0`` bedeutet dann
+        # ``total_rows == 0`` (nichts zu messen).
+        if plan.total_rows == 0 or (plan.rows_to_copy <= 0 and budget is None):
             return plan
-        # Sample auf die tatsächlich geplante Kopiermenge deckeln (#968, Codex :177):
-        # bei budget-gebundenen Migrationen kann ``plan.rows_to_copy`` weit unter
-        # ``COPY_BATCH_ROWS`` liegen (nach dem Cutoff evtl. nur eine Handvoll Zeilen). Ein
-        # 5.000-Zeilen-Sample verbrauchte dann deutlich mehr Platz/Zeit als die eigentliche
-        # Kopie und könnte die Migration schon in der Kalibrierung (vor dem Disk-Recheck)
-        # scheitern lassen. ``rows_to_copy <= total_rows`` ist oben garantiert.
-        sample_rows = min(COPY_BATCH_ROWS, plan.rows_to_copy)
+        # Sample auf die tatsächlich geplante Kopiermenge deckeln (#968, Codex :177): bei budget-
+        # gebundenen Migrationen kann ``plan.rows_to_copy`` weit unter ``COPY_BATCH_ROWS`` liegen
+        # (nach dem Cutoff evtl. nur eine Handvoll Zeilen). Ein 5.000-Zeilen-Sample verbrauchte dann
+        # deutlich mehr Platz/Zeit als die eigentliche Kopie. Bei einem drop-only-Plan (== 0) auf die
+        # Gesamtmenge basieren, damit überhaupt gemessen wird (#968, Codex :201).
+        sample_rows = min(COPY_BATCH_ROWS, plan.rows_to_copy if plan.rows_to_copy > 0 else plan.total_rows)
         source = await self._store._connection_for_read(legacy)
         if source is None:
             raise OfflineMigrationError("legacy source became unreadable during calibration")

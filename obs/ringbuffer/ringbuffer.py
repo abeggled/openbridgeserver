@@ -1131,17 +1131,21 @@ class RingBuffer:
                     pass
                 base.unlink(missing_ok=True)
                 await self._store.manifest.delete_segment(segment.segment_id)
-            # Dann die Zielquelle: Haupt-DB ZUERST löschen und Fehler PROPAGIEREN (#968, Codex
-            # :1060) – bleibt sie liegen (Permission/Lock), attached der nächste Start sie wieder
-            # als Legacy, obwohl dem Admin ``discarded`` gemeldet würde. Erst nach erfolgreichem
-            # Unlink die Manifest-Zeile entfernen.
+            # Dann die Zielquelle: Manifest-Zeile ZUERST entfernen, DANN die Dateien (#968, Codex
+            # :1144). Umgekehrt (Datei zuerst) hinterließe ein fehlgeschlagener Manifest-Delete eine
+            # Legacy-Zeile MIT fehlender Datei – ununterscheidbar von einem unterbrochenen
+            # Migrations-Commit, den der Reconciler später fälschlich als ``migrated`` finalisierte
+            # (obwohl die Historie absichtlich verworfen wurde). Zeile-zuerst führt bei einem
+            # Datei-Unlink-Fehler dagegen nur dazu, dass der nächste Start die Datei erneut als
+            # Legacy attached (Assistent zeigt sie wieder ``pending``) – harmlos und retry-bar. Der
+            # Fehler propagiert in beiden Fällen, sodass der Aufrufer kein ``discarded`` persistiert.
             base = Path(target.filename)
             try:
                 freed += base.stat().st_size
             except OSError:
                 pass
-            base.unlink(missing_ok=True)
             await self._store.manifest.delete_segment(target.segment_id)
+            base.unlink(missing_ok=True)
             for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm"), self._legacy_attach_identity_path(str(base))):
                 try:
                     freed += candidate.stat().st_size

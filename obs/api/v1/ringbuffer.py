@@ -2133,12 +2133,16 @@ async def legacy_migration_decision(
         await rb.discard_legacy()
         # ``discarded`` nur terminal setzen + Schutz aufheben, wenn KEINE Legacy-Quelle mehr bleibt
         # (#968, Codex :1095): ``discard_legacy`` verwirft nur die angezeigte (älteste) Quelle;
-        # bleiben weitere, muss der Assistent für sie sichtbar/entscheidbar bleiben und die
-        # verbleibende Quelle geschützt (analog zum migrated-Finalizer, der bei attachter Quelle
-        # non-terminal bleibt).
+        # bleiben weitere, muss der Assistent für sie sichtbar/entscheidbar bleiben.
         if not await rb.has_attached_legacy():
             await rb.set_legacy_retention_protected(False)
             await persist_legacy_migration_decision(db, LEGACY_DECISION_DISCARDED)
+        else:
+            # Verbleibende Quelle(n) AKTIV schützen (#968, Codex :2141): war die vorherige
+            # Entscheidung ``keep`` (Schutz bereits aus), bliebe die nächste Quelle sonst
+            # ungeschützt und könnte von der nächsten Retention zurückgewonnen werden, bevor der
+            # Admin über sie migrieren/keep/discard entscheidet.
+            await rb.set_legacy_retention_protected(True)
     return await _legacy_migration_status(db)
 
 

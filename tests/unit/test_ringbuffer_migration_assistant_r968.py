@@ -124,9 +124,13 @@ async def test_discard_legacy_propagates_when_main_db_cannot_be_removed(tmp_path
         monkeypatch.setattr(Path, "unlink", _boom)
         with pytest.raises(PermissionError):
             await rb.discard_legacy()
-        # Manifest-Zeile bleibt (kein 'verschwundenes' Legacy), Datei existiert noch.
-        assert [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION]
-        assert legacy.exists()
+        # "Zeile zuerst" (#968, Codex :1144): die Manifest-Zeile ist bereits entfernt, der
+        # anschließende Datei-Unlink schlug fehl – die Datei bleibt und wird beim nächsten Start
+        # erneut als Legacy attached (``pending``). Bewusst NICHT als missing-file-Zeile hinterlassen,
+        # die der Reconciler fälschlich als ``migrated`` finalisieren würde. Der Aufrufer persistiert
+        # kein ``discarded`` (Fehler propagiert), also keine discarded-Inkonsistenz.
+        assert not [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION], "Manifest-Zeile entfernt"
+        assert legacy.exists(), "Datei bleibt (Unlink schlug fehl) → Re-Attach beim nächsten Start"
     finally:
         await rb.stop()
 
@@ -2096,5 +2100,67 @@ async def test_discard_migrating_unlink_failure_keeps_legacy(tmp_path: Path, mon
 
         assert legacy.exists(), "Legacy bleibt, wenn der migrating-Cleanup fehlschlägt"
         assert [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION], "Legacy-Row bleibt"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 24, Codex :2141: partial discard schützt verbleibende Quelle ----------
+
+
+async def test_partial_discard_reprotects_remaining_legacy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Verwirft der Admin aus einem ``keep``-Zustand (Schutz aus) die angezeigte älteste Quelle,
+    während eine weitere bleibt, muss die verbleibende Quelle AKTIV geschützt werden (#968, Codex
+    :2141) – sonst könnte die nächste Retention sie zurückgewinnen."""
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import LEGACY_DECISION_KEEP, persist_legacy_migration_decision
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(10)))
+    rb = _seg_rb(tmp_path, legacy_retention_protected=False)  # keep: Schutz aus
+    await rb.start()
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        second = tmp_path / "legacy2.db"
+        second.write_bytes(b"z" * 128)
+        await rb._store.manifest.register_legacy_segment(source_path=str(second), size_bytes=128)
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+        assert rb._legacy_retention_protected is False
+
+        monkeypatch.setattr(rb_api, "get_optional_ringbuffer", lambda: rb)
+        monkeypatch.setattr(rb_api, "is_ringbuffer_enabled", lambda: True)
+        await rb_api.legacy_migration_decision(rb_api.LegacyMigrationDecisionIn(decision="discard"), _user="admin", db=db)
+
+        assert not legacy.exists(), "älteste Quelle verworfen"
+        assert second.exists(), "verbleibende Quelle bleibt"
+        assert rb._legacy_retention_protected is True, "verbleibende Quelle wird aktiv geschützt"
+    finally:
+        await rb.stop()
+        await db.disconnect()
+
+
+# ---------- Runde 24, Codex :201: drop-only-Plan wird vor Akzeptanz kalibriert ----------
+
+
+async def test_calibration_runs_for_zero_row_plan_with_budget(tmp_path: Path):
+    """Auch ein drop-only-Plan (``rows_to_copy == 0`` aus der v1-Überschätzung) wird bei gesetztem
+    Budget kalibriert (#968, Codex :201): die reale, kleinere v2-Zeilengröße rettet evtl. doch die
+    neuesten Zeilen, statt sie in einem Zero-Copy-Commit zu verwerfen."""
+    import dataclasses
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(30)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        base_plan = await mig.plan()
+        # Plan künstlich auf drop-only setzen, als hätte die v1-Schätzung die Zeilengröße überschätzt.
+        zero_plan = dataclasses.replace(base_plan, rows_to_copy=0, cutoff_rowid=base_plan.max_rowid)
+        legacy_seg = await mig._attached_legacy()
+
+        calibrated = await mig._calibrate_cutoff(zero_plan, legacy_seg)
+        assert calibrated.rows_to_copy > 0, "Kalibrierung läuft trotz rows_to_copy=0 und rettet Zeilen"
     finally:
         await rb.stop()
