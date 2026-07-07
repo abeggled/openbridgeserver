@@ -1231,10 +1231,33 @@ class RingBuffer:
         migrator = OfflineLegacyMigrator(self._store, write_lock=self._lock)
         progress = self._legacy_migration_progress = {"phase": "starting", "error": None}
 
+        async def _post_commit_bookkeeping() -> None:
+            # Der DESTRUKTIVE Commit ist durch (Legacy-Quelle entfernt, Segmente promotet).
+            # Schutz nur aufheben, wenn KEINE Legacy-Quelle mehr attached ist (#968, Codex
+            # :1240): migriert ein Lauf bei mehreren Quellen nur die erste, bleibt die
+            # Entscheidung non-terminal (``on_success`` persistiert kein ``migrated``) – die
+            # verbleibende Quelle MUSS geschützt bleiben, sonst gewänne die nächste
+            # FIFO-Retention sie zurück, bevor der Admin sie migrieren/keep/discard kann.
+            if not await self.has_attached_legacy():
+                await self.set_legacy_retention_protected(False)
+            if on_success is not None:
+                await on_success()
+
         async def _run() -> None:
             try:
                 await migrator.run(progress)
             except asyncio.CancelledError:
+                if progress.get("committed"):
+                    # Der Cancel kam NACH dem Commit (Shutdown während der Post-Commit-
+                    # Retention, #968, Codex :1239): die Migration ist terminal. NICHT den
+                    # Schutz zurückrollen oder ``failed`` melden, sondern dem Post-Commit-
+                    # Bookkeeping folgen (best-effort), dann für sauberes Shutdown re-raisen.
+                    progress.update(phase="done", error=None)
+                    try:
+                        await _post_commit_bookkeeping()
+                    except Exception:
+                        logger.exception("RingBuffer: Post-Commit-Bookkeeping nach Cancellation fehlgeschlagen (Migration ist dennoch committed)")
+                    raise
                 await self.set_legacy_retention_protected(prev_protected)
                 progress.update(phase="failed", error="cancelled")
                 raise
@@ -1243,22 +1266,11 @@ class RingBuffer:
                 await self.set_legacy_retention_protected(prev_protected)
                 progress.update(phase="failed", error=str(exc))
                 return
-            # Ab hier ist der DESTRUKTIVE Commit durch (Legacy-Quelle entfernt, Segmente
-            # promotet) – die Migration ist terminal. Ein Fehler im Post-Commit-Bookkeeping
-            # (Schutz-Update / ``on_success``-Persistenz, z. B. app-DB locked/voll) darf
-            # NICHT den Schutz zurückrollen oder ``failed`` melden (#968, Codex :1153):
-            # es gibt keine Legacy-Quelle mehr zum Retry, und ``migrator.run`` hat bereits
-            # ``phase='done'`` gesetzt. Best-effort, Fehler nur protokollieren.
+            # Ein Fehler im Post-Commit-Bookkeeping (Schutz-Update / ``on_success``-Persistenz,
+            # z. B. app-DB locked/voll) darf die committete Migration NICHT ``failed`` melden
+            # (#968, Codex :1153): ``migrator.run`` hat bereits ``phase='done'`` gesetzt.
             try:
-                # Schutz nur aufheben, wenn KEINE Legacy-Quelle mehr attached ist (#968,
-                # Codex :1240): migriert ein Lauf bei mehreren Quellen nur die erste, bleibt
-                # die Entscheidung non-terminal (``on_success`` persistiert kein ``migrated``)
-                # – die verbleibende Quelle MUSS geschützt bleiben, sonst gewänne die nächste
-                # FIFO-Retention sie zurück, bevor der Admin sie migrieren/keep/discard kann.
-                if not await self.has_attached_legacy():
-                    await self.set_legacy_retention_protected(False)
-                if on_success is not None:
-                    await on_success()
+                await _post_commit_bookkeeping()
             except Exception:
                 logger.exception("RingBuffer: Post-Commit-Bookkeeping der Migration fehlgeschlagen (Migration ist dennoch committed)")
 

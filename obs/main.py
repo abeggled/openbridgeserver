@@ -225,11 +225,13 @@ async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_eve
         legacy_retention_protected=decision in LEGACY_DECISIONS_PROTECTED,
     )
     # Hat der Startup-Reconciler einen im Commit-Fenster unterbrochenen Offline-
-    # Migrations-Commit vollendet (#968, Codex :449), ist die Migration terminal – die
+    # Migrations-Commit vollendet (#968, Codex :449), ist DIESE Quelle terminal – die
     # Entscheidung nachziehen, sonst bliebe sie ``pending``/``skipped``, obwohl der Store
-    # promotet ist und keine Legacy-Quelle mehr existiert (spätere ``/migration/start``
-    # scheiterten dann grundlos).
-    if rb.startup_reconciled_commit and decision not in LEGACY_DECISIONS_TERMINAL:
+    # promotet ist. Aber NUR, wenn keine weitere Legacy-Quelle mehr attached ist (#968,
+    # Codex :233, wie der API-Success-Pfad): der Reconciler detacht bei mehreren Quellen
+    # nur die fehlende – eine terminale Entscheidung versteckte sonst den Assistenten für
+    # die verbleibende Quelle und nähme ihr beim nächsten Start den Retention-Schutz.
+    if rb.startup_reconciled_commit and decision not in LEGACY_DECISIONS_TERMINAL and not await rb.has_attached_legacy():
         await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
     bus.subscribe(data_value_event_type, rb.handle_value_event)
 

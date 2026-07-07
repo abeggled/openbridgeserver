@@ -987,3 +987,69 @@ async def test_startup_reconcile_sets_migrated_flag(tmp_path: Path):
         assert await rb2._store.manifest.list_legacy_segments() == []
     finally:
         await rb2.stop()
+
+
+# ---------- Runde 14, Codex :1239: Cancel NACH dem Commit bleibt done ----------
+
+
+async def test_cancel_after_commit_keeps_migration_done(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Wird der Job NACH dem destruktiven Commit gecancelt (Shutdown während der Post-
+    Commit-Retention), darf er nicht als ``failed`` gemeldet werden (#968, Codex :1239):
+    die Migration ist committed, das Post-Commit-Bookkeeping (on_success) läuft."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(40)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+
+        async def _cancel():
+            raise asyncio.CancelledError()
+
+        # enforce_retention läuft NACH dem Commit (committed-Marker gesetzt) und cancelt.
+        monkeypatch.setattr(rb._store, "enforce_retention", _cancel)
+        on_success_called = {"v": False}
+
+        async def _on_success():
+            on_success_called["v"] = True
+
+        await rb.start_legacy_migration(on_success=_on_success)
+        with pytest.raises(asyncio.CancelledError):
+            await rb._legacy_migration_task
+
+        assert rb.legacy_migration_progress()["phase"] == "done", "Cancel nach Commit bleibt done, nicht failed"
+        assert not legacy.exists(), "Commit ist durch"
+        assert on_success_called["v"] is True, "Post-Commit-Bookkeeping (on_success) muss laufen"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 14, Codex :177: Kalibrierungs-Sample auf rows_to_copy deckeln ----------
+
+
+async def test_calibration_sample_capped_to_rows_to_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Das Kalibrierungs-Sample darf höchstens ``plan.rows_to_copy`` Zeilen schreiben
+    (#968, Codex :177) – nicht das volle ``COPY_BATCH_ROWS``, wenn der Budget-Cutoff nur
+    wenige Zeilen zulässt."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(300)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        # Plan mit einer kleinen geplanten Kopiermenge (Budget-Cutoff): das Sample muss sich
+        # daran orientieren, nicht am vollen COPY_BATCH_ROWS.
+        plan = dataclasses.replace(await mig.plan(), rows_to_copy=5, cutoff_rowid=295)
+        legacy_seg = await mig._attached_legacy()
+
+        inserts = {"n": 0}
+        orig_insert = rb._store._insert_event
+
+        async def _spy(conn, gid, event):
+            inserts["n"] += 1
+            return await orig_insert(conn, gid, event)
+
+        monkeypatch.setattr(rb._store, "_insert_event", _spy)
+        await mig._calibrate_cutoff(plan, legacy_seg)
+        assert inserts["n"] <= plan.rows_to_copy, "Sample darf nicht mehr als die geplante Kopiermenge schreiben"
+    finally:
+        await rb.stop()

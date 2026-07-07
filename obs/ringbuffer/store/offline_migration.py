@@ -174,7 +174,13 @@ class OfflineLegacyMigrator:
         budget = self._store._retention_config.max_file_size_bytes
         if plan.rows_to_copy <= 0 or plan.total_rows == 0:
             return plan
-        sample_rows = min(COPY_BATCH_ROWS, plan.total_rows)
+        # Sample auf die tatsächlich geplante Kopiermenge deckeln (#968, Codex :177):
+        # bei budget-gebundenen Migrationen kann ``plan.rows_to_copy`` weit unter
+        # ``COPY_BATCH_ROWS`` liegen (nach dem Cutoff evtl. nur eine Handvoll Zeilen). Ein
+        # 5.000-Zeilen-Sample verbrauchte dann deutlich mehr Platz/Zeit als die eigentliche
+        # Kopie und könnte die Migration schon in der Kalibrierung (vor dem Disk-Recheck)
+        # scheitern lassen. ``rows_to_copy <= total_rows`` ist oben garantiert.
+        sample_rows = min(COPY_BATCH_ROWS, plan.rows_to_copy)
         source = await self._store._connection_for_read(legacy)
         if source is None:
             raise OfflineMigrationError("legacy source became unreadable during calibration")
@@ -318,6 +324,12 @@ class OfflineLegacyMigrator:
         async with self._write_lock:
             _unlink_legacy_files(Path(plan.legacy_path))
             await self._store.manifest.commit_offline_migration([plan.legacy_segment_id])
+        # Marker DIREKT nach dem Commit (#968, Codex :1239): ab hier ist die Migration
+        # terminal. Wird der Job danach gecancelt (Shutdown während der Post-Commit-
+        # Retention), muss der ``_run``-Wrapper das am Marker erkennen und dem
+        # Post-Commit-Bookkeeping-Pfad folgen statt ``failed`` zu melden – ein CancelledError
+        # (BaseException) wird von den ``except Exception``-Pfaden nicht gefangen.
+        progress["committed"] = True
         # AB HIER ist der destruktive Commit durch (Legacy weg, Kopien promotet) – die
         # Migration ist terminal. Das Retention-Nachziehen (Ränder trimmen, Cutoff ist eine
         # Schätzung) ist reine Aufräumarbeit; ein Fehler darf die committete Migration NICHT
