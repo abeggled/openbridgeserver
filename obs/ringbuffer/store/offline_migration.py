@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from obs.ringbuffer.store.interface import StoreEvent
-from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_LEGACY, SEGMENT_STATUS_MIGRATING, SegmentRecord
+from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_MIGRATING, SegmentRecord
 from obs.ringbuffer.store.sqlite_backend import (
     _LEGACY_GID_OFFSET,
     _LEGACY_GID_STRIDE,
@@ -579,7 +579,12 @@ async def reconcile_offline_migration(store: SqliteSegmentStore) -> bool:
     planen – die Migration ist fertig, es gibt keine Quelle mehr.
     """
     migrating = await store.manifest.list_migrating_segments()
-    legacy_rows = [s for s in await store.manifest.list_segments() if s.status == SEGMENT_STATUS_LEGACY]
+    # Schema-basiert (#968, Codex :583), nicht status-basiert: wird eine Legacy-Quelle vor dem
+    # Commit-Crash durch einen Read-Fehler quarantäniert (status != 'legacy', aber schema-legacy),
+    # verpasste der status-Filter die fehlende Quelle, fiele zum Orphan-Copy-Pfad und verwürfe die
+    # migrating-Segmente – obwohl die Originaldatei schon unlinkt ist (Verlust der kopierten
+    # Historie). Schema-basierte Erkennung promotet auch solche unterbrochenen Commits korrekt.
+    legacy_rows = [s for s in await store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION]
     missing_file_rows = [s for s in legacy_rows if not Path(s.filename).exists()]
     # Fall 1 – unterbrochener Commit (Legacy-Datei unlinkt, Manifest-Delete fehlte noch).
     # ZUERST prüfen, damit auch drop-only/ZERO-COPY-Migrationen erkannt werden (#968,

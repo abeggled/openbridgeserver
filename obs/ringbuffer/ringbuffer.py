@@ -1265,6 +1265,7 @@ class RingBuffer:
             raise OfflineMigrationError("legacy migration already running")
         # Sofort reservieren – synchron, VOR dem ersten await (kein Context-Switch dazwischen).
         self._legacy_migration_starting = True
+        protected_activated = False
         try:
             if not await self._has_attached_legacy_segment():
                 raise OfflineMigrationError("no attached legacy source to migrate")
@@ -1285,6 +1286,7 @@ class RingBuffer:
             # geschuetzt und ueber Budget, bis zum Neustart.
             prev_protected = self._legacy_retention_protected
             await self.set_legacy_retention_protected(True)
+            protected_activated = True
             # Durablen Commit-Zähler VOR dem Lauf merken (#968, Codex :1263): steigt er während
             # des Jobs, hat DIESER Lauf committed – ein job-lokaler Beleg, der auch dann trägt,
             # wenn eine weitere Legacy-Quelle attached bleibt (Multi-Quellen). Dieser await MUSS
@@ -1292,6 +1294,16 @@ class RingBuffer:
             # sähe ein zweiter fast-gleichzeitiger Start ``_legacy_migration_starting == False`` UND
             # noch keinen Task und startete einen zweiten Migrator gegen dieselbe Quelle.
             commit_count_before = await self.committed_migration_count()
+        except BaseException:
+            # Fehler NACH dem Schutz-Aktivieren, aber VOR der Task-Erstellung (#968, Codex :1294):
+            # z. B. ``committed_migration_count`` wirft (transienter Manifest-/SQLite-Lesefehler).
+            # Der ``_run``-Handler, der ``prev_protected`` zurückrollt, läuft dann nie – den Schutz
+            # hier wiederherstellen, sonst bliebe eine ``keep``-Quelle dauerhaft geschützt und der
+            # Store über Budget bis zum Neustart.
+            if protected_activated:
+                with suppress(Exception):
+                    await self.set_legacy_retention_protected(prev_protected)
+            raise
         finally:
             # Reservierung freigeben: ab jetzt schützt entweder der laufende Task
             # (Erfolgsfall) oder – bei einem Precheck-Fehler – ist kein Job aktiv.
@@ -2351,7 +2363,7 @@ def default_ringbuffer_disk_path(database_path: str) -> str:
     return str(path.with_name(f"{path.stem}_ringbuffer.db"))
 
 
-def delete_ringbuffer_storage_files(disk_path: str) -> None:
+def delete_ringbuffer_storage_files(disk_path: str, *, keep_legacy_db: bool = False) -> None:
     """Remove the file-backed ringbuffer database and SQLite sidecar files.
 
     Im segmentierten Store (#919) liegen Manifest und Segment-DBs NICHT in der
@@ -2361,11 +2373,17 @@ def delete_ringbuffer_storage_files(disk_path: str) -> None:
     wieder statt frei zu starten. Daher zusätzlich das Segment-Store-Root
     rekursiv entfernen (best effort — schlägt es fehl, blockiert das nicht die
     Legacy-Löschung).
+
+    ``keep_legacy_db`` (#968, Codex :2518): beim Rollback eines Enable-aus-deaktiviert
+    auf einem Upgrade-Install ist ``disk_path`` die BEREITS vorhandene Legacy-Quelle, die
+    ``init_ringbuffer`` nur attached (nicht erstellt) hat. Ein transienter Save-Fehler darf
+    diese Historie NICHT löschen – dann nur den (von diesem Request erzeugten) Segment-Root
+    entfernen, die Legacy-DB + Sidecars unangetastet lassen.
     """
     if _is_sqlite_memory_path(disk_path):
         return
     disk_path = _sqlite_filesystem_path(disk_path)
-    storage_paths = (f"{disk_path}-wal", f"{disk_path}-shm", disk_path)
+    storage_paths = () if keep_legacy_db else (f"{disk_path}-wal", f"{disk_path}-shm", disk_path)
     existing_paths = [Path(path) for path in storage_paths if Path(path).exists()]
     renamed_paths: list[tuple[Path, Path]] = []
     delete_suffix = f".deleting-{os.getpid()}-{uuid4().hex}"

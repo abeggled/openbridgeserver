@@ -1624,3 +1624,96 @@ async def test_target_copy_volume_excludes_quarantined_legacy(tmp_path: Path):
         assert after == before, "quarantäniertes Legacy zählt nicht als Live-Bestand"
     finally:
         await rb.stop()
+
+
+# ---------- Runde 20, Codex :1294: pre-task-Fehler stellt den Schutz wieder her ----------
+
+
+async def test_start_precheck_failure_restores_protection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Wirft ein await NACH ``set_legacy_retention_protected(True)`` und VOR der Task-Erstellung
+    (z. B. ``committed_migration_count``), muss ``start_legacy_migration`` den Schutz auf den
+    Vorzustand zurückrollen (#968, Codex :1294) – sonst bliebe eine keep-Quelle dauerhaft
+    geschützt und über Budget."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(10)))
+    rb = _seg_rb(tmp_path, legacy_retention_protected=False)  # keep: Schutz initial AUS
+    await rb.start()
+    try:
+        assert rb._legacy_retention_protected is False
+
+        async def _boom():
+            raise RuntimeError("manifest read error")
+
+        monkeypatch.setattr(rb, "committed_migration_count", _boom)
+        with pytest.raises(RuntimeError, match="manifest read error"):
+            await rb.start_legacy_migration()
+        assert rb._legacy_retention_protected is False, "Schutz nach pre-task-Fehler zurückgerollt"
+        assert rb._legacy_migration_starting is False, "Reservierung freigegeben"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 20, Codex :2518 (P1): Enable-Rollback löscht pre-existing Legacy NICHT ----------
+
+
+async def test_enable_rollback_keeps_preexisting_legacy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Schlägt beim Monitor-Enable-aus-deaktiviert auf einem Upgrade-Install ein späterer Schritt
+    fehl (``persist_ringbuffer_config``), darf der Rollback die BEREITS vorhandene Legacy-DB NICHT
+    löschen (#968, Codex :2518, P1) – sonst wird ein transienter Save-Fehler zu irreversiblem
+    Verlust der Alt-Historie."""
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer, reset_ringbuffer
+
+    db = Database(":memory:")
+    await db.connect()
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(rb_path, list(range(20)))  # pre-existing Legacy-DB (Upgrade-Install)
+    assert rb_path.exists()
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    reset_ringbuffer()
+
+    async def _boom(*a, **k):
+        raise RuntimeError("app-db save failed")
+
+    monkeypatch.setattr(rb_api, "persist_ringbuffer_config", _boom)
+    try:
+        try:
+            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), _user="admin", db=db)
+        except Exception:
+            pass  # der Save-Fehler propagiert erwartungsgemäß
+        assert rb_path.exists(), "pre-existing Legacy-DB darf beim Rollback NICHT gelöscht werden"
+    finally:
+        rb = get_optional_ringbuffer()
+        if rb is not None:
+            await rb.stop()
+        reset_ringbuffer()
+        await db.disconnect()
+
+
+# ---------- Runde 20, Codex :583: reconcile erkennt quarantänierte Legacy schema-basiert ----------
+
+
+async def test_reconcile_promotes_quarantined_missing_legacy(tmp_path: Path):
+    """Wird eine Legacy-Quelle vor dem Commit-Crash quarantäniert (status != 'legacy', aber
+    schema-legacy) und ihre Datei ist bereits unlinkt, muss der Reconciler sie schema-basiert
+    erkennen und den unterbrochenen Commit vollenden – NICHT die migrating-Kopie verwerfen
+    (#968, Codex :583)."""
+    from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
+    from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
+
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        await store.manifest.create_migrating_segment(filename="rb_migrated_x.sqlite", schema_version=2)
+        missing = tmp_path / "gone_legacy.db"
+        leg = await store.manifest.register_legacy_segment(source_path=str(missing), size_bytes=999)
+        await store.manifest.mark_quarantined(leg.segment_id, "read error")
+        assert not missing.exists()
+
+        result = await reconcile_offline_migration(store)
+        assert result is True, "unterbrochener Commit einer quarantänierten Legacy wird vollendet"
+        promoted = [s for s in await store.manifest.list_segments() if s.filename == "rb_migrated_x.sqlite" and s.status == "closed"]
+        assert promoted, "kopierte History wird promotet statt verworfen"
+    finally:
+        await store.close()

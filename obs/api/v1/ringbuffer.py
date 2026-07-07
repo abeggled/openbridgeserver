@@ -2421,6 +2421,12 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
 
     created_rb = False
     subscribed_new = False
+    # Vor dem Attach merken, ob die Legacy-DB bereits existierte (#968, Codex :2518): ist sie
+    # pre-existing (Upgrade-Install, Monitor-Enable-aus-deaktiviert), hat ``init_ringbuffer`` sie
+    # nur als autoritative Legacy-Quelle attached – NICHT erstellt. Ein Rollback nach einem
+    # transienten Save-Fehler darf sie dann nicht löschen (sonst irreversibler Verlust der
+    # Alt-Historie); nur der von diesem Request erzeugte Segment-Root wird entfernt.
+    legacy_preexisting = bool(resolved_segmented) and Path(_ringbuffer_disk_path()).exists()
     try:
         if rb is None:
             # Migrations-Assistent (#968, Codex :2369): der Runtime-Init (Monitor-Enable
@@ -2515,7 +2521,9 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             # deaktivierten Zustand) und wird sauber wieder abgebaut.
             if switch_prev_config is None:
                 with suppress(Exception):
-                    delete_ringbuffer_storage_files(_ringbuffer_disk_path())
+                    # Pre-existing Legacy-DB NICHT löschen (#968, Codex :2518): nur den frisch
+                    # erzeugten Segment-Root entfernen, die attachte Alt-Historie bewahren.
+                    delete_ringbuffer_storage_files(_ringbuffer_disk_path(), keep_legacy_db=legacy_preexisting)
         # Modus-Switch-Rebuild gescheitert (#951, Pkt 2): der alte Buffer wurde
         # bereits abgebaut. Damit immer ein funktionierender Buffer läuft, den
         # vorherigen Zustand im ALTEN Modus re-initialisieren und neu subscriben.
