@@ -173,12 +173,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_event_type) -> None:
     from obs.ringbuffer.persisted_config import (
-        LEGACY_DECISION_MIGRATED,
         LEGACY_DECISIONS_PROTECTED,
-        LEGACY_DECISIONS_TERMINAL,
         ensure_legacy_migration_decision,
+        finalize_committed_migration_decision,
         load_persisted_ringbuffer_config,
-        persist_legacy_migration_decision,
     )
     from obs.ringbuffer.ringbuffer import (
         _is_sqlite_memory_path,
@@ -224,15 +222,13 @@ async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_eve
         segment_max_age=rb_cfg.get("segment_max_age"),
         legacy_retention_protected=decision in LEGACY_DECISIONS_PROTECTED,
     )
-    # Hat der Startup-Reconciler einen im Commit-Fenster unterbrochenen Offline-
-    # Migrations-Commit vollendet (#968, Codex :449), ist DIESE Quelle terminal – die
-    # Entscheidung nachziehen, sonst bliebe sie ``pending``/``skipped``, obwohl der Store
-    # promotet ist. Aber NUR, wenn keine weitere Legacy-Quelle mehr attached ist (#968,
-    # Codex :233, wie der API-Success-Pfad): der Reconciler detacht bei mehreren Quellen
-    # nur die fehlende – eine terminale Entscheidung versteckte sonst den Assistenten für
-    # die verbleibende Quelle und nähme ihr beim nächsten Start den Retention-Schutz.
-    if rb.startup_reconciled_commit and decision not in LEGACY_DECISIONS_TERMINAL and not await rb.has_attached_legacy():
-        await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
+    # Ist ein Offline-Migrations-Commit durch (Kopien promotet, Legacy detached), aber die
+    # ``migrated``-Entscheidung wurde nie terminal persistiert (im Commit-Fenster unterbrochen
+    # und vom Startup-Reconciler vollendet, oder eine frühere ``on_success``-Persistenz schlug
+    # fehl), state-basiert nachziehen (#968, Codex :449/:326). No-op, wenn bereits terminal oder
+    # noch eine Legacy-Quelle attached ist – dann bleibt der Assistent für die verbleibende
+    # Quelle sichtbar und retention-geschützt.
+    await finalize_committed_migration_decision(db, rb)
     bus.subscribe(data_value_event_type, rb.handle_value_event)
 
 

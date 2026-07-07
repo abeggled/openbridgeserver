@@ -950,13 +950,13 @@ async def test_has_attached_legacy_counts_quarantined(tmp_path: Path):
         await rb.stop()
 
 
-# ---------- Runde 12, Codex :449: Startup-Reconcile setzt das migrated-Flag ----------
+# ---------- Runde 12/15, Codex :449/:326: Startup-Reconcile vollendet den Commit ----------
 
 
-async def test_startup_reconcile_sets_migrated_flag(tmp_path: Path):
-    """Vollendet der Startup-Reconciler einen unterbrochenen Commit, muss der RingBuffer
-    das über ``startup_reconciled_commit`` melden (#968, Codex :449) – der Aufrufer
-    (main.py) persistiert daraufhin die terminale ``migrated``-Entscheidung."""
+async def test_startup_reconcile_completes_interrupted_commit(tmp_path: Path):
+    """Vollendet der Startup-Reconciler einen unterbrochenen Commit, ist der Store promotet und
+    der durable ``has_committed_migration``-Marker True (#968, Codex :449/:326) – der Aufrufer
+    (main.py) zieht daraufhin state-basiert die terminale ``migrated``-Entscheidung nach."""
     legacy = tmp_path / "obs_ringbuffer.db"
     await _seed_legacy(legacy, list(range(30)))
 
@@ -982,7 +982,7 @@ async def test_startup_reconcile_sets_migrated_flag(tmp_path: Path):
     rb2 = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
     await rb2.start()
     try:
-        assert rb2.startup_reconciled_commit is True, "vollendeter Startup-Reconcile muss gemeldet werden"
+        assert await rb2.has_committed_migration() is True, "vollendeter Startup-Reconcile belegt den Commit durabel"
         # Der Store ist promotet: Alt-Historie sichtbar (negative gids), keine Legacy-Zeile mehr.
         assert await rb2._store.manifest.list_legacy_segments() == []
     finally:
@@ -1051,5 +1051,203 @@ async def test_calibration_sample_capped_to_rows_to_copy(tmp_path: Path, monkeyp
         monkeypatch.setattr(rb._store, "_insert_event", _spy)
         await mig._calibrate_cutoff(plan, legacy_seg)
         assert inserts["n"] <= plan.rows_to_copy, "Sample darf nicht mehr als die geplante Kopiermenge schreiben"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 15, Codex :156: Cutoff aus geordneten Zeilen (Lücken-robust) ----------
+
+
+async def test_migration_cutoff_survives_id_gaps(tmp_path: Path):
+    """Bei nicht-kontinuierlichen ids (z. B. nach Age-Retention) darf der Cutoff keine
+    existierende Alt-Zeile ausschließen (#968, Codex :156). ``max_rowid - rows_to_copy`` wäre
+    hier die id einer bereits gelöschten Zeile und der Copy-Filter ``id > cutoff`` verlöre echte
+    Daten, bevor der Commit die Legacy-DB unlinkt."""
+    import aiosqlite
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, [10, 20, 30, 40])  # ids 1..4
+    # Lücken erzeugen: ids 1 und 3 löschen -> es bleiben id=2 (Wert 20) und id=4 (Wert 40).
+    async with aiosqlite.connect(legacy) as conn:
+        await conn.execute("DELETE FROM ringbuffer WHERE id IN (1, 3)")
+        await conn.commit()
+
+    rb = _seg_rb(tmp_path, max_file_size_bytes=None, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        plan = await mig.plan()
+        assert plan.total_rows == 2
+        assert plan.rows_to_copy == 2, "unlimitiertes Budget kopiert alle existierenden Zeilen"
+        # Der Bug: max_rowid(4) - rows_to_copy(2) = 2 -> `id > 2` migrierte nur id 4.
+        # Korrekt: cutoff 0 (nur 2 Zeilen existieren, keine wird ausgeschlossen).
+        assert plan.cutoff_rowid == 0, "cutoff darf keine existierende Zeile ausschließen"
+
+        # End-to-End: die Migration behält BEIDE Zeilen.
+        await rb.start_legacy_migration()
+        await rb._legacy_migration_task
+        assert rb.legacy_migration_progress()["phase"] == "done"
+        assert await rb._store._total_row_count() == 2, "keine Zeile durch Lücken-Cutoff verloren"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 15, Codex :326: Cancel IM Commit-Fenster über State erkennen ----------
+
+
+async def test_cancel_in_commit_window_detected_by_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Trifft der Shutdown-Cancel das schmale Fenster IM Commit-``await`` – der SQLite-Commit ist
+    schon durch (Legacy detached, Kopien promotet), aber ``progress['committed']`` noch nicht
+    gesetzt –, muss der Handler den Commit am durablen State erkennen und NICHT auf ``failed``
+    zurückrollen (#968, Codex :326)."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(20)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        orig_commit = rb._store.manifest.commit_offline_migration
+
+        async def _commit_then_cancel(ids):
+            await orig_commit(ids)  # echter Commit: Legacy detached, Segmente promotet
+            raise asyncio.CancelledError()  # Cancel VOR progress["committed"]=True
+
+        monkeypatch.setattr(rb._store.manifest, "commit_offline_migration", _commit_then_cancel)
+        on_success = {"v": False}
+
+        async def _os():
+            on_success["v"] = True
+
+        await rb.start_legacy_migration(on_success=_os)
+        with pytest.raises(asyncio.CancelledError):
+            await rb._legacy_migration_task
+
+        assert rb.legacy_migration_progress()["phase"] == "done", "State-Check erkennt den Commit trotz fehlendem Marker"
+        assert not legacy.exists(), "Commit ist durch"
+        assert await rb.has_committed_migration() is True
+        assert on_success["v"] is True, "Post-Commit-Bookkeeping muss laufen"
+    finally:
+        await rb.stop()
+
+
+async def test_has_committed_migration_reflects_promoted_segments(tmp_path: Path):
+    """``has_committed_migration`` ist der durable Beleg des Commits: False solange nur Legacy
+    (bzw. migrating) existiert, True sobald ``rb_migrated_*`` promotet sind (#968, Codex :326)."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(12)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        assert await rb.has_committed_migration() is False, "vor der Migration kein Commit-Beleg"
+        await rb.start_legacy_migration()
+        await rb._legacy_migration_task
+        assert rb.legacy_migration_progress()["phase"] == "done"
+        assert await rb.has_committed_migration() is True, "promotete rb_migrated_*-Segmente belegen den Commit"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 15, Codex :1273/:2423: Post-Commit-Decision state-basiert finalisieren ----------
+
+
+async def test_finalize_after_persist_failure_retries(tmp_path: Path):
+    """Scheiterte die ``on_success``-Persistenz der ``migrated``-Entscheidung nach einem Commit,
+    zieht ``finalize_committed_migration_decision`` sie state-basiert nach (#968, Codex :1273)."""
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_MIGRATED,
+        LEGACY_DECISION_SKIPPED,
+        finalize_committed_migration_decision,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    db = Database(":memory:")
+    await db.connect()
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(15)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        # Zustand nach einer 'skip'-Entscheidung, deren Migrations-Persistenz später ausblieb.
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+        # Migration ohne on_success: der Commit läuft, die Entscheidung wird NICHT persistiert.
+        await rb.start_legacy_migration()
+        await rb._legacy_migration_task
+        assert rb.legacy_migration_progress()["phase"] == "done"
+        assert not legacy.exists()
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_SKIPPED
+
+        assert await finalize_committed_migration_decision(db, rb) is True
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_MIGRATED
+        # Idempotent: ein zweiter Aufruf zieht nichts mehr nach.
+        assert await finalize_committed_migration_decision(db, rb) is False
+    finally:
+        await rb.stop()
+        await db.disconnect()
+
+
+async def test_finalize_committed_migration_decision_branches(tmp_path: Path):
+    """No-op-Zweige der Finalisierung: rb None, bereits terminal, noch Legacy attached, kein
+    Commit-Beleg – nur committed + keine Legacy + non-terminal zieht ``migrated`` nach."""
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_MIGRATED,
+        LEGACY_DECISION_PENDING,
+        finalize_committed_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    class _Rb:
+        def __init__(self, attached: bool, committed: bool):
+            self._attached, self._committed = attached, committed
+
+        async def has_attached_legacy(self):
+            return self._attached
+
+        async def has_committed_migration(self):
+            return self._committed
+
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        assert await finalize_committed_migration_decision(db, None) is False
+        # Bereits terminal -> no-op, auch wenn committed.
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
+        assert await finalize_committed_migration_decision(db, _Rb(False, True)) is False
+        # Noch Legacy attached -> no-op (Assistent bleibt sichtbar).
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_PENDING)
+        assert await finalize_committed_migration_decision(db, _Rb(True, True)) is False
+        # Kein Commit-Beleg -> no-op.
+        assert await finalize_committed_migration_decision(db, _Rb(False, False)) is False
+        # committed + keine Legacy + non-terminal -> migrated.
+        assert await finalize_committed_migration_decision(db, _Rb(False, True)) is True
+    finally:
+        await db.disconnect()
+
+
+async def test_resolve_cutoff_rowid_edge_cases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Rand-Fälle der id-geordneten Cutoff-Ableitung (#968, Codex :156): nichts kopieren,
+    mehr als vorhanden kopieren, N-te-neueste id, und unlesbare Quelle."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(5)))  # ids 1..5
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        seg = await mig._attached_legacy()
+        # rows_to_copy <= 0 -> nichts kopieren -> cutoff = max_rowid (WHERE id > max_rowid = leer).
+        assert await mig._resolve_cutoff_rowid(seg, 0, 5) == 5
+        # rows_to_copy >= vorhandene Zeilen -> cutoff 0 (alle kopieren).
+        assert await mig._resolve_cutoff_rowid(seg, 10, 5) == 0
+        # 2 von 5 -> Cutoff ist die id der 3.-neuesten Zeile (3); `id > 3` migriert 4 und 5.
+        assert await mig._resolve_cutoff_rowid(seg, 2, 5) == 3
+
+        # Unlesbare Quelle -> sauberer Migrationsfehler.
+        async def _none(_seg):
+            return None
+
+        monkeypatch.setattr(rb._store, "_connection_for_read", _none)
+        with pytest.raises(OfflineMigrationError):
+            await mig._resolve_cutoff_rowid(seg, 2, 5)
     finally:
         await rb.stop()

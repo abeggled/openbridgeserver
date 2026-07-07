@@ -45,7 +45,6 @@ async def test_init_persisted_ringbuffer_subscribes_when_enabled(monkeypatch):
 
     class RingBufferStub:
         handle_value_event = object()
-        startup_reconciled_commit = False  # #968: main.py fragt das nach init_ringbuffer ab
 
     db = object()
     ringbuffer = RingBufferStub()
@@ -53,6 +52,12 @@ async def test_init_persisted_ringbuffer_subscribes_when_enabled(monkeypatch):
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
         lambda _db, **_kwargs: _async_value(None),
+    )
+    # #968: main.py finalisiert nach init_ringbuffer state-basiert die Migrations-Entscheidung.
+    # Diese Tests prüfen subscribe/segmented, nicht die Decision – Finalisierung neutralisieren.
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.finalize_committed_migration_decision",
+        lambda _db, _rb: _async_value(False),
     )
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
@@ -91,6 +96,12 @@ async def test_init_persisted_ringbuffer_disables_without_initializing(monkeypat
         "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
         lambda _db, **_kwargs: _async_value(None),
     )
+    # #968: main.py finalisiert nach init_ringbuffer state-basiert die Migrations-Entscheidung.
+    # Diese Tests prüfen subscribe/segmented, nicht die Decision – Finalisierung neutralisieren.
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.finalize_committed_migration_decision",
+        lambda _db, _rb: _async_value(False),
+    )
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
         lambda _db, **_kwargs: _async_value(
@@ -124,11 +135,16 @@ async def test_init_persisted_ringbuffer_memory_path_forces_unsegmented(monkeypa
 
     class RingBufferStub:
         handle_value_event = object()
-        startup_reconciled_commit = False  # #968: main.py fragt das nach init_ringbuffer ab
 
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
         lambda _db, **_kwargs: _async_value(None),
+    )
+    # #968: main.py finalisiert nach init_ringbuffer state-basiert die Migrations-Entscheidung.
+    # Diese Tests prüfen subscribe/segmented, nicht die Decision – Finalisierung neutralisieren.
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.finalize_committed_migration_decision",
+        lambda _db, _rb: _async_value(False),
     )
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
@@ -171,11 +187,16 @@ async def test_init_persisted_ringbuffer_file_path_stays_segmented(monkeypatch):
 
     class RingBufferStub:
         handle_value_event = object()
-        startup_reconciled_commit = False  # #968: main.py fragt das nach init_ringbuffer ab
 
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
         lambda _db, **_kwargs: _async_value(None),
+    )
+    # #968: main.py finalisiert nach init_ringbuffer state-basiert die Migrations-Entscheidung.
+    # Diese Tests prüfen subscribe/segmented, nicht die Decision – Finalisierung neutralisieren.
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.finalize_committed_migration_decision",
+        lambda _db, _rb: _async_value(False),
     )
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",

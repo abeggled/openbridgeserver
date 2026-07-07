@@ -41,6 +41,7 @@ from obs.ringbuffer.persisted_config import (
     LEGACY_DECISIONS_PROTECTED,
     LEGACY_DECISIONS_TERMINAL,
     ensure_legacy_migration_decision,
+    finalize_committed_migration_decision,
     load_legacy_migration_decision,
     load_persisted_ringbuffer_config,
     persist_legacy_migration_decision,
@@ -1982,8 +1983,14 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
     und die FIFO-Retention das Legacy-Segment zurückgewinnen MÜSSTE (0 = bereits
     über Budget). ``None``, wenn keine Rate/kein Budget vorliegt.
     """
-    decision = await load_legacy_migration_decision(db)
     rb = get_optional_ringbuffer()
+    # Post-Commit-Finalisierung als Retry-Pfad (#968, Codex :1273): schlug die ``on_success``-
+    # Persistenz der ``migrated``-Entscheidung nach einem erfolgreichen Commit fehl (app-DB
+    # locked/voll), zieht der nächste Status-Poll des Assistenten sie state-basiert nach –
+    # bevor ``decision`` gelesen wird, damit der zurückgegebene Status schon terminal ist.
+    if rb is not None and is_ringbuffer_enabled():
+        await finalize_committed_migration_decision(db, rb)
+    decision = await load_legacy_migration_decision(db)
     legacy: dict[str, Any] | None = None
     over_budget = False
     budget: int | None = None
@@ -2421,6 +2428,12 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 segment_max_age=resolved_segment_max_age,
                 legacy_retention_protected=decision in LEGACY_DECISIONS_PROTECTED,
             )
+            # Der Runtime-Init kann den Offline-Migrations-Reconciler laufen (Crash im
+            # Commit-Fenster, Monitor erst zur Laufzeit aktiviert): dann ist der Store promotet
+            # und die Legacy-Datei weg, während die Entscheidung ``pending``/``skipped`` bliebe
+            # und ``/migration/start`` mangels Quelle scheiterte. Wie der Startup-Finalizer
+            # state-basiert nachziehen (#968, Codex :2423).
+            await finalize_committed_migration_decision(db, rb)
             _subscribe_ringbuffer(rb)
             subscribed_new = True
             created_rb = True

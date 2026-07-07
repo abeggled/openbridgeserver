@@ -152,8 +152,12 @@ class OfflineLegacyMigrator:
         else:
             target_volume = await self._target_copy_volume(budget)
             rows_to_copy = min(total_rows, int(target_volume / avg_row_bytes))
-        # Cutoff über die rowid-Ordnung: die NEUESTEN ``rows_to_copy`` Zeilen bleiben.
-        cutoff_rowid = max_rowid if rows_to_copy == 0 else max(0, max_rowid - rows_to_copy)
+        # Cutoff über die ORDNUNG der existierenden Zeilen (#968, Codex :156): bei Lücken in
+        # den ids (Age-Retention löscht nach ts, nicht nach id; jede frühere Lücke) ist
+        # ``max_rowid - rows_to_copy`` NICHT die id der N-ten-neuesten existierenden Zeile.
+        # Der Copy-Filter ``id > cutoff`` verlöre sonst noch existierende Alt-Zeilen, bevor der
+        # Commit die Legacy-DB unlinkt. Die tatsächliche Cutoff-id kommt aus ``ORDER BY id DESC``.
+        cutoff_rowid = await self._resolve_cutoff_rowid(legacy, rows_to_copy, max_rowid)
         copy_bytes_estimate = int(rows_to_copy * avg_row_bytes)
 
         disk_free = self._check_disk_free(copy_bytes_estimate)
@@ -168,6 +172,27 @@ class OfflineLegacyMigrator:
             copy_bytes_estimate=copy_bytes_estimate,
             disk_free_bytes=disk_free,
         )
+
+    async def _resolve_cutoff_rowid(self, legacy: SegmentRecord, rows_to_copy: int, max_rowid: int) -> int:
+        """Cutoff-id über die ORDNUNG der existierenden Zeilen statt ``MAX(id) - count`` (#968, Codex :156).
+
+        Liefert die id der ERSTEN nicht mehr zu kopierenden Zeile, sodass der Copy-Filter
+        ``WHERE id > cutoff`` genau die neuesten ``rows_to_copy`` EXISTIERENDEN Zeilen migriert –
+        korrekt auch bei nicht-kontinuierlichen ids (z. B. nach Age-Retention, die nach ts löscht).
+        ``0`` (alle kopieren), wenn weniger als ``rows_to_copy + 1`` Zeilen existieren; ``max_rowid``
+        (nichts kopieren) bei ``rows_to_copy <= 0``.
+        """
+        if rows_to_copy <= 0:
+            return max_rowid
+        conn = await self._store._connection_for_read(legacy)
+        if conn is None:
+            raise OfflineMigrationError("legacy source is not readable")
+        try:
+            async with conn.execute("SELECT id FROM ringbuffer ORDER BY id DESC LIMIT 1 OFFSET ?", (rows_to_copy,)) as cur:
+                row = await cur.fetchone()
+        finally:
+            await conn.close()
+        return int(row[0]) if row and row[0] is not None else 0
 
     async def _calibrate_cutoff(self, plan: MigrationPlan, legacy: SegmentRecord) -> MigrationPlan:
         """Misst die reale v2-Zeilengröße über ein Wegwerf-Sample und passt den Cutoff an."""
@@ -191,10 +216,14 @@ class OfflineLegacyMigrator:
         try:
             has_metadata_cols = await self._legacy_has_metadata_columns(source)
             metadata_select = "metadata_version, metadata" if has_metadata_cols else "NULL AS metadata_version, NULL AS metadata"
+            # Die neuesten ``sample_rows`` Zeilen über die id-Ordnung greifen (#968, Codex :156):
+            # ``id > max_rowid - sample_rows`` läse bei Lücken in den ids evtl. weniger Zeilen und
+            # verzerrte die v2-Zeilengrößen-Schätzung. ``ORDER BY id DESC LIMIT`` ist lückenrobust;
+            # die Reihenfolge ist für das Wegwerf-Sample irrelevant.
             async with source.execute(
                 f"SELECT id, ts, datapoint_id, topic, old_value, new_value, source_adapter, quality, {metadata_select} "
-                "FROM ringbuffer WHERE id > ? ORDER BY id ASC LIMIT ?",
-                (max(0, plan.max_rowid - sample_rows), sample_rows),
+                "FROM ringbuffer ORDER BY id DESC LIMIT ?",
+                (sample_rows,),
             ) as cur:
                 rows = await cur.fetchall()
             for row in rows:
@@ -236,7 +265,8 @@ class OfflineLegacyMigrator:
             return replace(plan, copy_bytes_estimate=int(plan.rows_to_copy * v2_row_bytes))
         target_volume = await self._target_copy_volume(budget)
         rows_to_copy = min(plan.total_rows, int(target_volume / v2_row_bytes))
-        cutoff_rowid = plan.max_rowid if rows_to_copy == 0 else max(0, plan.max_rowid - rows_to_copy)
+        # Cutoff wie in ``plan()`` über die id-Ordnung ableiten (#968, Codex :156).
+        cutoff_rowid = await self._resolve_cutoff_rowid(legacy, rows_to_copy, plan.max_rowid)
         return replace(
             plan,
             rows_to_copy=rows_to_copy,

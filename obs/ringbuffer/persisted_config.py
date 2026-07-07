@@ -254,6 +254,38 @@ async def ensure_legacy_migration_decision(db: Database, *, legacy_db_path: str 
     return LEGACY_DECISION_PENDING
 
 
+async def finalize_committed_migration_decision(db: Database, rb) -> bool:
+    """Zieht die terminale ``migrated``-Entscheidung state-basiert nach (#968, Codex :326/:2423/:1273).
+
+    Deckt drei Post-Commit-Lücken ab, in denen ein Offline-Commit bereits durchlief (Legacy
+    detached, Kopien promotet), die Entscheidung aber NICHT terminal persistiert wurde und der
+    Startup-Reconciler sie nicht mehr repariert (keine fehlende Legacy-Manifest-Zeile mehr):
+
+    * Cancel im Commit-``await`` (Shutdown), bevor ``on_success`` lief,
+    * ``on_success``-Persistenz scheiterte (app-DB locked/voll),
+    * Runtime-Init (Monitor-Enable via ``POST /config``) reconciled nach einem Crash im
+      Commit-Fenster, spiegelt aber den Startup-Finalizer nicht.
+
+    Durable & idempotent: Grundlage ist der promotete ``rb_migrated_*``-Segment-State
+    (``has_committed_migration``), nicht ein transientes Flag – über Prozess-Neustarts
+    reparierbar. No-op, wenn bereits terminal, noch eine Legacy-Quelle attached ist oder kein
+    Migrations-Commit belegt ist. Gibt ``True`` zurück, wenn ``migrated`` nachgezogen wurde.
+    """
+    if rb is None:
+        return False
+    decision = await load_legacy_migration_decision(db)
+    if decision in LEGACY_DECISIONS_TERMINAL:
+        return False
+    # Solange noch eine (evtl. quarantänierte) Legacy-Quelle existiert, bleibt der Assistent
+    # nicht-terminal – sonst versteckte eine terminale Entscheidung den verbleibenden Cleanup.
+    if await rb.has_attached_legacy():
+        return False
+    if not await rb.has_committed_migration():
+        return False
+    await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
+    return True
+
+
 async def persist_ringbuffer_config(
     db: Database,
     *,

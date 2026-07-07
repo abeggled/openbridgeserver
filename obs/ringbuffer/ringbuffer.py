@@ -266,11 +266,6 @@ class RingBuffer:
         # mehreren awaited Prechecks gesetzt; das Flag schließt das Race-Fenster
         # zwischen zwei fast-gleichzeitigen ``start_legacy_migration``-Aufrufen.
         self._legacy_migration_starting = False
-        # True, wenn der Startup-Reconciler einen im Commit-Fenster unterbrochenen
-        # Offline-Migrations-Commit VOLLENDET hat (#968, Codex :449). Der Aufrufer
-        # (``main.py``, der die DB hält) persistiert daraufhin die terminale
-        # ``migrated``-Entscheidung – der RingBuffer selbst kennt die app_settings-DB nicht.
-        self._startup_reconciled_commit = False
         self._legacy_migration_progress: dict[str, Any] = {"phase": "idle"}
         self._last_values: dict[str, Any] = {}  # dp_id → last recorded value
         self._last_recovery_at: str | None = None
@@ -451,12 +446,12 @@ class RingBuffer:
             # Kopien – deterministisch, bevor die Startup-Retention läuft.
             from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
 
-            # Rückgabewert auswerten (#968, Codex :449): hat der Reconciler einen
-            # unterbrochenen Commit vollendet, muss der Aufrufer die ``migrated``-
-            # Entscheidung persistieren – sonst bliebe sie ``pending``/``skipped``,
-            # obwohl der Store korrekt promotet ist und keine Legacy-Quelle mehr existiert.
-            if await reconcile_offline_migration(store):
-                self._startup_reconciled_commit = True
+            # Einen im Commit-Fenster unterbrochenen Offline-Migrations-Commit vollenden
+            # (#968, Codex :449): der Reconciler promotet die Kopien und detacht die Legacy-
+            # Zeile. Das terminale Persistieren der ``migrated``-Entscheidung übernimmt danach
+            # der state-basierte Finalizer im Aufrufer (``finalize_committed_migration_decision``
+            # über den durablen ``has_committed_migration``-State), nicht ein transientes Flag.
+            await reconcile_offline_migration(store)
 
             # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
             # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
@@ -1143,15 +1138,6 @@ class RingBuffer:
         """Aktueller Fortschritt des Offline-Migrationsjobs (#965) – Kopie, nie live-Referenz."""
         return dict(self._legacy_migration_progress)
 
-    @property
-    def startup_reconciled_commit(self) -> bool:
-        """True, wenn der Startup-Reconciler einen unterbrochenen Migrations-Commit vollendet hat.
-
-        Der Aufrufer (``main.py``) persistiert daraufhin die terminale ``migrated``-
-        Entscheidung (#968, Codex :449) – der RingBuffer kennt die app_settings-DB nicht.
-        """
-        return self._startup_reconciled_commit
-
     async def has_attached_legacy(self) -> bool:
         """True, wenn (noch) IRGENDEINE Legacy-Quelle attached ist – schema-basiert.
 
@@ -1168,6 +1154,26 @@ class RingBuffer:
         from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
 
         return any(s.schema_version <= LEGACY_SCHEMA_VERSION for s in await self._store.manifest.list_segments())
+
+    async def has_committed_migration(self) -> bool:
+        """True, wenn promotete (nicht mehr ``migrating``) ``rb_migrated_*``-Segmente existieren.
+
+        Der DURABLE Beleg, dass ein Offline-Migrations-Commit die Kopien sichtbar gemacht hat:
+        anders als ein transientes Prozess-Flag überlebt dieser Manifest-State Neustarts.
+        Grundlage der Post-Commit-Finalisierung (#968, Codex :326/:2423/:1273):
+        ist der Commit durch (Legacy detached, Kopien promotet), aber die ``migrated``-Entscheidung
+        wurde nie persistiert (Cancel im Commit-await, gescheiterte ``on_success``-Persistenz oder
+        Runtime-Init nach Crash), muss die Entscheidung state-basiert nachgezogen werden.
+        ``migrating`` (laufende Copy/Sample) und ``quarantined`` zählen NICHT.
+        """
+        if not self._segmented or self._store is None:
+            return False
+        from obs.ringbuffer.store.manifest import MIGRATED_FILENAME_PREFIX, SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED
+
+        return any(
+            s.filename.startswith(MIGRATED_FILENAME_PREFIX) and s.status not in (SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED)
+            for s in await self._store.manifest.list_segments()
+        )
 
     def legacy_migration_in_progress(self) -> bool:
         """True, solange ein Migrationsjob reserviert ist ODER in einer aktiven Phase läuft.
@@ -1247,12 +1253,20 @@ class RingBuffer:
             try:
                 await migrator.run(progress)
             except asyncio.CancelledError:
-                if progress.get("committed"):
+                # Marker ODER tatsächlicher State (#968, Codex :326): der Cancel kann das schmale
+                # Fenster IM Commit-await getroffen haben – der SQLite-Commit war bereits durch
+                # (Legacy detached, Kopien promotet), aber ``progress['committed']`` wurde noch
+                # nicht gesetzt. Den State deshalb zusätzlich am durablen Manifest prüfen, sonst
+                # nähme der Handler fälschlich den pre-commit-Failure-Pfad, rollte den Schutz
+                # zurück und ließe die Entscheidung non-terminal, ohne dass der Startup-Reconciler
+                # (keine fehlende Legacy-Zeile mehr) sie je reparierte.
+                committed = bool(progress.get("committed")) or (not await self.has_attached_legacy() and await self.has_committed_migration())
+                if committed:
                     # Der Cancel kam NACH dem Commit (Shutdown während der Post-Commit-
-                    # Retention, #968, Codex :1239): die Migration ist terminal. NICHT den
+                    # Retention, #968, Codex :1239/:326): die Migration ist terminal. NICHT den
                     # Schutz zurückrollen oder ``failed`` melden, sondern dem Post-Commit-
                     # Bookkeeping folgen (best-effort), dann für sauberes Shutdown re-raisen.
-                    progress.update(phase="done", error=None)
+                    progress.update(phase="done", error=None, committed=True)
                     try:
                         await _post_commit_bookkeeping()
                     except Exception:
