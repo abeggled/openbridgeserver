@@ -2428,12 +2428,6 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 segment_max_age=resolved_segment_max_age,
                 legacy_retention_protected=decision in LEGACY_DECISIONS_PROTECTED,
             )
-            # Der Runtime-Init kann den Offline-Migrations-Reconciler laufen (Crash im
-            # Commit-Fenster, Monitor erst zur Laufzeit aktiviert): dann ist der Store promotet
-            # und die Legacy-Datei weg, während die Entscheidung ``pending``/``skipped`` bliebe
-            # und ``/migration/start`` mangels Quelle scheiterte. Wie der Startup-Finalizer
-            # state-basiert nachziehen (#968, Codex :2423).
-            await finalize_committed_migration_decision(db, rb)
             _subscribe_ringbuffer(rb)
             subscribed_new = True
             created_rb = True
@@ -2442,6 +2436,21 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             # Enable-aus-deaktiviert-Pfad setzt seinen Enable-State an anderer Stelle.
             if switch_prev_config is not None:
                 set_ringbuffer_enabled(True)
+            # Der Runtime-Init kann den Offline-Migrations-Reconciler laufen (Crash im
+            # Commit-Fenster, Monitor erst zur Laufzeit aktiviert): dann ist der Store promotet
+            # und die Legacy-Datei weg, während die Entscheidung ``pending``/``skipped`` bliebe.
+            # Wie der Startup-Finalizer state-basiert nachziehen (#968, Codex :2423) – aber NACH
+            # dem vollständigen Buffer-Setup (subscribed + enabled) und best-effort (#968, Codex
+            # :2436): schlägt die Decision-Persistenz transient fehl (app-DB locked/voll – genau
+            # der Fall, den dieser Retry-Pfad behandelt), darf das den bereits laufenden Buffer
+            # NICHT abbauen (created_rb/subscribed_new sind gesetzt, der except-Cleanup risse ihn
+            # sonst nieder). Der nächste Status-Poll zieht die Entscheidung nach. Nur loggen.
+            try:
+                await finalize_committed_migration_decision(db, rb)
+            except Exception:
+                logger.exception(
+                    "RingBuffer: Post-Init-Finalisierung der Migrations-Entscheidung fehlgeschlagen (Buffer läuft, Retry beim nächsten Status-Poll)"
+                )
 
         reconfigure_kwargs: dict[str, Any] = {}
         if "max_entries" in body.model_fields_set:

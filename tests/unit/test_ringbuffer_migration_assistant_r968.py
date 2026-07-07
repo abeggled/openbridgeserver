@@ -1251,3 +1251,156 @@ async def test_resolve_cutoff_rowid_edge_cases(tmp_path: Path, monkeypatch: pyte
             await mig._resolve_cutoff_rowid(seg, 2, 5)
     finally:
         await rb.stop()
+
+
+# ---------- Runde 16, Codex :1175: drop-only-Commit gilt als migriert ----------
+
+
+async def test_drop_only_commit_counts_as_migrated(tmp_path: Path):
+    """Ein Commit ohne Kopie (``rows_to_copy == 0``, Budget lässt nichts zu) erzeugt KEIN
+    ``rb_migrated_*``-Segment, detacht aber die Legacy-Quelle. Der durable Commit-Zähler belegt
+    ihn trotzdem, sodass die Entscheidung terminal wird (#968, Codex :1175)."""
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_MIGRATED,
+        LEGACY_DECISION_SKIPPED,
+        finalize_committed_migration_decision,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(30)))
+    legacy_size = legacy.stat().st_size
+    db = Database(":memory:")
+    await db.connect()
+    # Sehr kleines Budget -> der Cutoff lässt 0 Zeilen zu (drop-only).
+    rb = _seg_rb(tmp_path, max_file_size_bytes=legacy_size // 3, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        assert (await mig.plan()).rows_to_copy == 0, "Test-Voraussetzung: drop-only"
+
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+        await rb.start_legacy_migration()
+        await rb._legacy_migration_task
+        assert rb.legacy_migration_progress()["phase"] == "done"
+        assert not legacy.exists()
+
+        promoted = [s for s in await rb._store.manifest.list_segments() if s.filename.startswith("rb_migrated_")]
+        assert promoted == [], "drop-only erzeugt keine migrierten Segmente"
+        assert await rb.committed_migration_count() == 1
+        assert await rb.has_committed_migration() is True, "durabler Zähler belegt den Commit auch ohne Segment"
+
+        assert await finalize_committed_migration_decision(db, rb) is True
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_MIGRATED
+    finally:
+        await rb.stop()
+        await db.disconnect()
+
+
+# ---------- Runde 16, Codex :1263: Multi-Quellen-Commit beim Cancel erkennen ----------
+
+
+async def test_cancel_after_commit_multisource_keeps_protection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Landet ein Cancel nach dem Commit EINER Quelle, während eine weitere Legacy-Quelle
+    attached bleibt (``has_attached_legacy`` weiter True), belegt das Zähler-Delta den Commit –
+    der Handler folgt dem Post-Commit-Pfad und behält den Schutz der verbleibenden Quelle, statt
+    ihn auf den keep-Vorzustand (ungeschützt) zurückzurollen (#968, Codex :1263)."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(20)))
+    # keep-Installation: Schutz initial AUS.
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=False)
+    await rb.start()
+    try:
+        orig_commit = rb._store.manifest.commit_offline_migration
+
+        async def _commit_then_cancel(ids):
+            await orig_commit(ids)
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(rb._store.manifest, "commit_offline_migration", _commit_then_cancel)
+
+        # Verbleibende zweite Legacy-Quelle simulieren: has_attached_legacy bleibt True.
+        async def _still_attached():
+            return True
+
+        monkeypatch.setattr(rb, "has_attached_legacy", _still_attached)
+
+        await rb.start_legacy_migration()
+        with pytest.raises(asyncio.CancelledError):
+            await rb._legacy_migration_task
+
+        assert rb.legacy_migration_progress()["phase"] == "done", "Zähler-Delta erkennt den Commit trotz verbleibender Quelle"
+        assert rb._legacy_retention_protected is True, "Schutz der verbleibenden Quelle bleibt (kein Rollback auf keep-Vorzustand)"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 16, Codex :547: stop() lässt den Buffer nach close()-Fehler sauber ----------
+
+
+async def test_stop_swallows_store_close_error(tmp_path: Path):
+    """Wirft ``_store.close()`` beim Stop, darf ``stop()`` NICHT propagieren (sonst blieben die
+    Aufrufer mit einem enabled Buffer + ``_store is None`` zurück) – der Store wird dennoch
+    gelöst (#968, Codex :547)."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, [1, 2, 3])
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    orig_close = rb._store.close
+
+    async def _boom():
+        await orig_close()
+        raise OSError("close failed")
+
+    rb._store.close = _boom
+    # Darf nicht werfen:
+    await rb.stop()
+    assert rb._store is None, "Store wird trotz close()-Fehler gelöst"
+
+
+async def test_committed_migration_count_zero_without_segmented_store():
+    """``committed_migration_count``/``has_committed_migration`` liefern 0/False ohne
+    segmentierten Store (#968, Codex :1175)."""
+    rb = RingBuffer(storage="memory", max_entries=10)
+    assert await rb.committed_migration_count() == 0
+    assert await rb.has_committed_migration() is False
+
+
+# ---------- Runde 16, Codex :2436: finalize-Fehler baut den Runtime-Buffer nicht ab ----------
+
+
+async def test_config_finalize_failure_keeps_buffer_running(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Wirft die Post-Init-Finalisierung im Config-Endpoint (transienter app-DB-Fehler – genau
+    der Fall, den der Retry-Pfad behandelt), darf der frisch gebaute Buffer NICHT abgebaut werden:
+    er bleibt subscribed + enabled, der Request scheitert nicht (#968, Codex :2436)."""
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer, is_ringbuffer_enabled, reset_ringbuffer
+
+    db = Database(":memory:")
+    await db.connect()
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    reset_ringbuffer()
+
+    async def _boom(_db, _rb):
+        raise RuntimeError("app-db locked")
+
+    monkeypatch.setattr(rb_api, "finalize_committed_migration_decision", _boom)
+
+    try:
+        await rb_api.configure_ringbuffer(
+            rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True),
+            _user="admin",
+            db=db,
+        )
+        assert is_ringbuffer_enabled() is True, "Buffer bleibt trotz finalize-Fehler enabled"
+        assert get_optional_ringbuffer() is not None, "Buffer wurde nicht abgebaut"
+    finally:
+        rb = get_optional_ringbuffer()
+        if rb is not None:
+            await rb.stop()
+        reset_ringbuffer()
+        await db.disconnect()

@@ -98,6 +98,17 @@ CREATE TABLE IF NOT EXISTS event_id_counter (
     last_value INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO event_id_counter (id, last_value) VALUES (1, 0);
+
+-- Durabler Zähler abgeschlossener Offline-Migrations-Commits (#968, Codex :1175). Eine
+-- Zeile (id=1); ``commit_offline_migration`` erhöht ihn ATOMAR mit dem Detach der Legacy-
+-- Quelle. Überlebt drop-only-Commits (keine ``rb_migrated_*``-Segmente), Retention-Trim des
+-- einzigen migrierten Segments und Prozess-Neustarts – die verlässliche Grundlage der
+-- Post-Commit-Decision-Finalisierung (``CREATE IF NOT EXISTS`` zieht Alt-Manifests nach).
+CREATE TABLE IF NOT EXISTS migration_state (
+    id                   INTEGER PRIMARY KEY CHECK (id = 1),
+    committed_migrations INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO migration_state (id, committed_migrations) VALUES (1, 0);
 """
 
 
@@ -344,7 +355,17 @@ class Manifest:
         )
         for segment_id in legacy_segment_ids:
             await self._db.execute("DELETE FROM segments WHERE segment_id = ?", (segment_id,))
+        # Durablen Commit-Zähler ATOMAR mit dem Detach erhöhen (#968, Codex :1175): der
+        # verlässliche Beleg, dass DIESER Commit durch ist – auch ohne ``rb_migrated_*``-
+        # Segment (drop-only) und nachdem Retention das einzige migrierte Segment trimmt.
+        await self._db.execute("UPDATE migration_state SET committed_migrations = committed_migrations + 1 WHERE id = 1")
         await self._db.commit()
+
+    async def committed_migration_count(self) -> int:
+        """Anzahl durabel abgeschlossener Offline-Migrations-Commits (#968, Codex :1175)."""
+        async with self._db.execute("SELECT committed_migrations FROM migration_state WHERE id = 1") as cur:
+            row = await cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
 
     async def mark_checkpoint_pending(self, segment_id: int) -> None:
         await self._db.execute(

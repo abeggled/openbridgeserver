@@ -537,13 +537,17 @@ class RingBuffer:
         if self._store is not None:
             try:
                 await self._store.close()
+            except Exception:
+                # ``close()`` gibt alle Ressourcen best-effort frei und die Writer-Lease (#968,
+                # Codex :1033); den Fehler NUR loggen, NICHT propagieren (#968, Codex :547): ein
+                # propagierter close()-Fehler brach die Aufrufer (config-disable/mode-switch) ab,
+                # BEVOR sie den Singleton zurücksetzten oder neu aufbauten – zurück blieb ein
+                # enabled RingBuffer mit ``_store is None``, der neue Records still verwarf. Ein
+                # sauber gestoppter Buffer (Store gelöst) erlaubt den Aufrufern reset/rebuild.
+                logger.exception("RingBuffer: Store-Close beim Stop fehlgeschlagen (Ressourcen best-effort freigegeben)")
             finally:
-                # ``_store`` IMMER lösen, auch wenn ``close()`` einen (best-effort schon
-                # abgearbeiteten) Fehler propagiert (#968, Codex :543): sonst könnte der
-                # Rollback-Pfad (config-disable) den alten Singleton mit einem bereits
-                # geschlossenen Manifest/Connection re-subscriben – Appends/Queries
-                # scheiterten dann bis zum Neustart. ``close()`` hat die Ressourcen best-
-                # effort geschlossen und die Writer-Lease freigegeben (#968, Codex :1033).
+                # ``_store`` IMMER lösen (#968, Codex :543): der Buffer ist gestoppt; ein
+                # Re-Subscribe/Reuse des alten Singleton mit geschlossenem Store scheiterte sonst.
                 self._store = None
         await self._close_connection()
 
@@ -1155,19 +1159,32 @@ class RingBuffer:
 
         return any(s.schema_version <= LEGACY_SCHEMA_VERSION for s in await self._store.manifest.list_segments())
 
-    async def has_committed_migration(self) -> bool:
-        """True, wenn promotete (nicht mehr ``migrating``) ``rb_migrated_*``-Segmente existieren.
+    async def committed_migration_count(self) -> int:
+        """Durabler Zähler abgeschlossener Offline-Migrations-Commits (#968, Codex :1175/:1263).
 
-        Der DURABLE Beleg, dass ein Offline-Migrations-Commit die Kopien sichtbar gemacht hat:
-        anders als ein transientes Prozess-Flag überlebt dieser Manifest-State Neustarts.
-        Grundlage der Post-Commit-Finalisierung (#968, Codex :326/:2423/:1273):
-        ist der Commit durch (Legacy detached, Kopien promotet), aber die ``migrated``-Entscheidung
-        wurde nie persistiert (Cancel im Commit-await, gescheiterte ``on_success``-Persistenz oder
-        Runtime-Init nach Crash), muss die Entscheidung state-basiert nachgezogen werden.
-        ``migrating`` (laufende Copy/Sample) und ``quarantined`` zählen NICHT.
+        ``0`` ohne segmentierten Store. Ein Anstieg über einen Migrationslauf belegt job-lokal,
+        dass genau DIESER Lauf committed hat – Grundlage des Cancel-Handlers (robust auch bei
+        mehreren attachten Legacy-Quellen, wo ein globaler Beleg einen früheren Commit sähe).
+        """
+        if not self._segmented or self._store is None:
+            return 0
+        return await self._store.manifest.committed_migration_count()
+
+    async def has_committed_migration(self) -> bool:
+        """True, wenn durabel ein Offline-Migrations-Commit belegt ist.
+
+        Primär über den durablen Manifest-Zähler (#968, Codex :1175): erfasst auch drop-only-
+        Commits (``rows_to_copy == 0``, keine ``rb_migrated_*``-Segmente) und Commits, deren
+        einziges migriertes Segment die Retention NACH dem Commit getrimmt hat – beides ließ der
+        rein segment-basierte Check fälschlich als „nicht committed" erscheinen und die
+        Entscheidung non-terminal. Grundlage der Post-Commit-Finalisierung (#968, Codex
+        :326/:2423/:1273/:1175). Promotete ``rb_migrated_*``-Segmente als Fallback für Commits
+        von vor der Einführung des Zählers.
         """
         if not self._segmented or self._store is None:
             return False
+        if await self._store.manifest.committed_migration_count() > 0:
+            return True
         from obs.ringbuffer.store.manifest import MIGRATED_FILENAME_PREFIX, SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED
 
         return any(
@@ -1236,6 +1253,11 @@ class RingBuffer:
             self._legacy_migration_starting = False
         migrator = OfflineLegacyMigrator(self._store, write_lock=self._lock)
         progress = self._legacy_migration_progress = {"phase": "starting", "error": None}
+        # Durablen Commit-Zähler VOR dem Lauf merken (#968, Codex :1263): steigt er während des
+        # Jobs, hat DIESER Lauf committed – ein job-lokaler Beleg, der auch dann trägt, wenn eine
+        # weitere Legacy-Quelle attached bleibt (Multi-Quellen) und ``has_attached_legacy`` weiter
+        # True meldet.
+        commit_count_before = await self.committed_migration_count()
 
         async def _post_commit_bookkeeping() -> None:
             # Der DESTRUKTIVE Commit ist durch (Legacy-Quelle entfernt, Segmente promotet).
@@ -1253,14 +1275,14 @@ class RingBuffer:
             try:
                 await migrator.run(progress)
             except asyncio.CancelledError:
-                # Marker ODER tatsächlicher State (#968, Codex :326): der Cancel kann das schmale
-                # Fenster IM Commit-await getroffen haben – der SQLite-Commit war bereits durch
-                # (Legacy detached, Kopien promotet), aber ``progress['committed']`` wurde noch
-                # nicht gesetzt. Den State deshalb zusätzlich am durablen Manifest prüfen, sonst
-                # nähme der Handler fälschlich den pre-commit-Failure-Pfad, rollte den Schutz
-                # zurück und ließe die Entscheidung non-terminal, ohne dass der Startup-Reconciler
-                # (keine fehlende Legacy-Zeile mehr) sie je reparierte.
-                committed = bool(progress.get("committed")) or (not await self.has_attached_legacy() and await self.has_committed_migration())
+                # Marker ODER durabler Zähler-Anstieg (#968, Codex :326/:1263): der Cancel kann das
+                # schmale Fenster IM Commit-await getroffen haben – der SQLite-Commit war bereits
+                # durch, aber ``progress['committed']`` noch nicht gesetzt. Das DELTA des durablen
+                # Commit-Zählers belegt job-lokal, dass DIESER Lauf committed hat – auch bei
+                # mehreren Legacy-Quellen (wo ``has_attached_legacy`` weiter True meldet). Sonst
+                # nähme der Handler fälschlich den pre-commit-Failure-Pfad, rollte den Schutz der
+                # verbleibenden Quelle zurück und ließe die Entscheidung non-terminal.
+                committed = bool(progress.get("committed")) or (await self.committed_migration_count() > commit_count_before)
                 if committed:
                     # Der Cancel kam NACH dem Commit (Shutdown während der Post-Commit-
                     # Retention, #968, Codex :1239/:326): die Migration ist terminal. NICHT den
