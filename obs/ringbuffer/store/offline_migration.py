@@ -358,6 +358,13 @@ class OfflineLegacyMigrator:
         progress.update(phase="committing")
         async with self._write_lock:
             _unlink_legacy_files(Path(plan.legacy_path))
+            # Marker DIREKT nach dem Unlink (#968, Codex :1356): ab hier ist die Legacy-Quelle weg
+            # und die (noch unsichtbaren) migrating-Segmente sind die EINZIGE verbliebene Kopie.
+            # Scheitert ``commit_offline_migration`` jetzt, darf der Failure-Handler den Retention-
+            # Schutz NICHT auf den keep-Vorzustand zurückrollen – sonst löschte die nächste
+            # Retention die missing-legacy-Row als ungeschütztes Opfer und der Reconciler verwürfe
+            # die Kopien als orphan. Der Zustand ist recoverbar (Reconciler promotet ihn).
+            progress["legacy_unlinked"] = True
             await self._store.manifest.commit_offline_migration([plan.legacy_segment_id])
         # Marker DIREKT nach dem Commit (#968, Codex :1239): ab hier ist die Migration
         # terminal. Wird der Job danach gecancelt (Shutdown während der Post-Commit-

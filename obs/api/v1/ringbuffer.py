@@ -2421,12 +2421,13 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
 
     created_rb = False
     subscribed_new = False
-    # Vor dem Attach merken, ob die Legacy-DB bereits existierte (#968, Codex :2518): ist sie
-    # pre-existing (Upgrade-Install, Monitor-Enable-aus-deaktiviert), hat ``init_ringbuffer`` sie
-    # nur als autoritative Legacy-Quelle attached – NICHT erstellt. Ein Rollback nach einem
-    # transienten Save-Fehler darf sie dann nicht löschen (sonst irreversibler Verlust der
-    # Alt-Historie); nur der von diesem Request erzeugte Segment-Root wird entfernt.
-    legacy_preexisting = bool(resolved_segmented) and Path(_ringbuffer_disk_path()).exists()
+    # Vor dem Attach merken, ob die Ringbuffer-DB bereits existierte (#968, Codex :2518/:2429):
+    # ist sie pre-existing (Upgrade-Install, Monitor-Enable-aus-deaktiviert), hat ``init_ringbuffer``
+    # nur eine vorhandene DB geöffnet – NICHT erstellt. Ein Rollback nach einem transienten Save-
+    # Fehler darf sie dann nicht löschen (sonst irreversibler Verlust der Alt-Historie). UNABHÄNGIG
+    # vom Modus (#968, Codex :2429): auch der explizite Legacy-Pfad (``segmented=false``) nutzt die
+    # ``obs_ringbuffer.db`` direkt als Storage und ist gleichermaßen schützenswert.
+    legacy_preexisting = Path(_ringbuffer_disk_path()).exists()
     try:
         if rb is None:
             # Migrations-Assistent (#968, Codex :2369): der Runtime-Init (Monitor-Enable

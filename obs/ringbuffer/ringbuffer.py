@@ -1266,17 +1266,26 @@ class RingBuffer:
         # Sofort reservieren – synchron, VOR dem ersten await (kein Context-Switch dazwischen).
         self._legacy_migration_starting = True
         protected_activated = False
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_LEGACY
+
         try:
-            if not await self._has_attached_legacy_segment():
+            # Der Wizard/Overview zeigt die ÄLTESTE schema-legacy Quelle (inkl. quarantänierte).
+            # Der Migrator MUSS genau diese Quelle betreffen (#968, Codex :1279/:1110): der frühere
+            # Guard ließ Migrate durch, sobald IRGENDEINE spätere status='legacy' Row existierte –
+            # war die angezeigte älteste Quelle quarantäniert, migrierte der Job dann eine ANDERE,
+            # versteckte Quelle (``_attached_legacy`` = erste status='legacy'). Deshalb hier die
+            # schema-geordnete älteste Row prüfen: fehlt sie ganz → nichts zu migrieren; ist sie
+            # quarantäniert (status != 'legacy') → ablehnen, der Admin verwirft sie zuerst. Ist sie
+            # migrierbar, ist sie garantiert auch die erste status='legacy' Row (kein kleineres
+            # segment_id davor), sodass Start und Migrator dieselbe Quelle betreffen.
+            legacy_segments = sorted(
+                (s for s in await self._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION),
+                key=lambda s: s.segment_id,
+            )
+            if not legacy_segments:
                 raise OfflineMigrationError("no attached legacy source to migrate")
-            # Quarantäniertes Legacy synchron ablehnen (#968, Codex :1110):
-            # ``_has_attached_legacy_segment`` prüft nur die Schema-Version und meldet auch
-            # ein nach einem Read-Fehler quarantäniertes Segment als vorhanden. Der Migrator
-            # liest die Quelle aber über ``list_legacy_segments()`` (status ``legacy`` only),
-            # fände nichts und scheiterte erst asynchron. Hier hart abbrechen, statt einen
-            # scheinbar gestarteten Job zu melden, der im Hintergrund sofort fehlschlägt.
-            if not await self._store.manifest.list_legacy_segments():
-                raise OfflineMigrationError("legacy source is quarantined or unreadable; cannot migrate")
+            if legacy_segments[0].status != SEGMENT_STATUS_LEGACY:
+                raise OfflineMigrationError("the oldest legacy source is quarantined or unreadable; discard it before migrating")
 
             # Während der Kopie MUSS die Quelle erhalten bleiben – unabhängig vom
             # Entscheidungszustand den Retention-Schutz aktivieren. Den VORHERIGEN Zustand
@@ -1348,12 +1357,22 @@ class RingBuffer:
                     except Exception:
                         logger.exception("RingBuffer: Post-Commit-Bookkeeping nach Cancellation fehlgeschlagen (Migration ist dennoch committed)")
                     raise
-                await self.set_legacy_retention_protected(prev_protected)
+                # Schutz nur zurückrollen, solange die Legacy NOCH autoritativ ist (#968, Codex
+                # :1356): nach dem Unlink (Commit-Crash zwischen Unlink und Manifest-Transaktion)
+                # sind die unsichtbaren migrating-Segmente die einzige Kopie – der Schutz MUSS
+                # bleiben, sonst löscht die nächste Retention die missing-legacy-Row als
+                # ungeschütztes Opfer und der Reconciler verwürfe die recoverbaren Kopien als orphan.
+                if not progress.get("legacy_unlinked"):
+                    await self.set_legacy_retention_protected(prev_protected)
                 progress.update(phase="failed", error="cancelled")
                 raise
             except Exception as exc:
                 logger.exception("RingBuffer: Offline-Migration fehlgeschlagen")
-                await self.set_legacy_retention_protected(prev_protected)
+                # Wie im Cancel-Pfad (#968, Codex :1356): nach dem Legacy-Unlink den Schutz halten,
+                # damit die recoverbare missing-legacy-Row + migrating-Kopien bis zum Reconciler
+                # überleben und nicht von der Retention gelöscht werden.
+                if not progress.get("legacy_unlinked"):
+                    await self.set_legacy_retention_protected(prev_protected)
                 progress.update(phase="failed", error=str(exc))
                 return
             # Ein Fehler im Post-Commit-Bookkeeping (Schutz-Update / ``on_success``-Persistenz,

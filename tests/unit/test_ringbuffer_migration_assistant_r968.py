@@ -1717,3 +1717,94 @@ async def test_reconcile_promotes_quarantined_missing_legacy(tmp_path: Path):
         assert promoted, "kopierte History wird promotet statt verworfen"
     finally:
         await store.close()
+
+
+# ---------- Runde 21, Codex :1279: Start zielt auf die angezeigte (älteste) Quelle ----------
+
+
+async def test_start_rejects_when_oldest_legacy_quarantined(tmp_path: Path):
+    """Ist die ÄLTESTE (vom Wizard angezeigte) schema-legacy Quelle quarantäniert, muss der Start
+    ablehnen – nicht eine spätere, versteckte Quelle migrieren (#968, Codex :1279)."""
+    from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+    from obs.ringbuffer.store.offline_migration import OfflineMigrationError
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(10)))
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        legs = [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION]
+        oldest = min(legs, key=lambda s: s.segment_id)
+        await rb._store.manifest.mark_quarantined(oldest.segment_id, "read error")
+        # Eine jüngere, gesunde Legacy-Quelle (status='legacy') hinzufügen.
+        await rb._store.manifest.register_legacy_segment(source_path=str(tmp_path / "leg2.db"), size_bytes=1000)
+
+        with pytest.raises(OfflineMigrationError, match="oldest legacy source is quarantined"):
+            await rb.start_legacy_migration()
+        assert rb._legacy_migration_task is None, "kein Job gegen die versteckte Quelle gestartet"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 21, Codex :1356 (P1): post-unlink-Commit-Crash behält Schutz ----------
+
+
+async def test_post_unlink_commit_failure_keeps_protection(tmp_path: Path):
+    """Wirft ``commit_offline_migration`` NACH ``_unlink_legacy_files`` (Legacy weg, migrating-
+    Segmente = einzige Kopie), darf der Failure-Handler den Retention-Schutz NICHT auf den keep-
+    Vorzustand zurückrollen (#968, Codex :1356) – sonst löschte die Retention die recoverbare
+    missing-legacy-Row und der Reconciler verwürfe die Kopien als orphan."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(20)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=False)  # keep: Schutz AUS
+    await rb.start()
+    try:
+
+        async def _boom(ids):
+            raise OSError("commit crash after unlink")
+
+        rb._store.manifest.commit_offline_migration = _boom
+        await rb.start_legacy_migration()
+        await rb._legacy_migration_task
+
+        assert rb.legacy_migration_progress()["phase"] == "failed"
+        assert not legacy.exists(), "Unlink war durch (post-unlink-Crash)"
+        assert rb._legacy_retention_protected is True, "Schutz nach post-unlink-Crash behalten (recoverbar)"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 21, Codex :2429 (P1): Legacy-Mode-Enable-Rollback bewahrt DB ----------
+
+
+async def test_enable_rollback_keeps_preexisting_legacy_mode_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Auch beim expliziten Legacy-Pfad (``segmented=false``) darf ein Enable-Rollback die pre-
+    existing ``obs_ringbuffer.db`` NICHT löschen (#968, Codex :2429, P1)."""
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer, reset_ringbuffer
+
+    db = Database(":memory:")
+    await db.connect()
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(rb_path, list(range(20)))
+    assert rb_path.exists()
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    reset_ringbuffer()
+
+    async def _boom(*a, **k):
+        raise RuntimeError("app-db save failed")
+
+    monkeypatch.setattr(rb_api, "persist_ringbuffer_config", _boom)
+    try:
+        try:
+            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=False), _user="admin", db=db)
+        except Exception:
+            pass
+        assert rb_path.exists(), "pre-existing Legacy-Mode-DB darf beim Rollback NICHT gelöscht werden"
+    finally:
+        rb = get_optional_ringbuffer()
+        if rb is not None:
+            await rb.stop()
+        reset_ringbuffer()
+        await db.disconnect()
