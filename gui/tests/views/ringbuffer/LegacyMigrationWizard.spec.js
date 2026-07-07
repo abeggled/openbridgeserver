@@ -123,6 +123,23 @@ describe('LegacyMigrationWizard — Ist-Analyse + Optionen', () => {
     expect(verdict.classes().join(' ')).toContain('text-green-600')
     expect(wrapper.find('[data-testid="wizard-migrate-start"]').attributes('disabled')).toBeUndefined()
   })
+
+  it('applies the backend 1.2x disk safety factor (#968)', async () => {
+    // Freier Platz (220 MiB) liegt ÜBER dem Copy-Bedarf (200 MiB), aber UNTER dem vom Backend
+    // geforderten 1.2x-Puffer (240 MiB). Der Wizard muss den Disk-Check ROT zeigen und den
+    // Start blockieren, sonst startete der Nutzer einen Lauf, den die API sofort ablehnt.
+    const wrapper = await mountWizard(
+      statusPayload({
+        budget_bytes: 5 * 1024 * 1024 * 1024,
+        estimated_copy_bytes: 200 * 1024 * 1024,
+        disk_free_bytes: 220 * 1024 * 1024,
+      })
+    )
+    const verdict = wrapper.find('[data-testid="wizard-disk-verdict"]')
+    expect(verdict.exists()).toBe(true)
+    expect(verdict.classes().join(' ')).toContain('text-red-600')
+    expect(wrapper.find('[data-testid="wizard-migrate-start"]').attributes('disabled')).toBeDefined()
+  })
 })
 
 describe('LegacyMigrationWizard — Migrieren', () => {

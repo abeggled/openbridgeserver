@@ -226,9 +226,16 @@ async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_eve
     # ``migrated``-Entscheidung wurde nie terminal persistiert (im Commit-Fenster unterbrochen
     # und vom Startup-Reconciler vollendet, oder eine frühere ``on_success``-Persistenz schlug
     # fehl), state-basiert nachziehen (#968, Codex :449/:326). No-op, wenn bereits terminal oder
-    # noch eine Legacy-Quelle attached ist – dann bleibt der Assistent für die verbleibende
-    # Quelle sichtbar und retention-geschützt.
-    await finalize_committed_migration_decision(db, rb)
+    # noch eine Legacy-Quelle attached ist. Best-effort wie der Runtime-Config-Pfad (#968, Codex
+    # :231): ein transienter app-DB-Schreibfehler (locked/voll) darf den Boot NICHT blockieren –
+    # der Datenpfad ist bereits committed, der nächste ``/migration``-Poll zieht die Entscheidung
+    # nach.
+    try:
+        await finalize_committed_migration_decision(db, rb)
+    except Exception:
+        logger.exception(
+            "RingBuffer: Startup-Finalisierung der Migrations-Entscheidung fehlgeschlagen (Server startet, Retry beim nächsten Status-Poll)"
+        )
     bus.subscribe(data_value_event_type, rb.handle_value_event)
 
 

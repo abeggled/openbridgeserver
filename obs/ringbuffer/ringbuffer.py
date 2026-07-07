@@ -453,6 +453,14 @@ class RingBuffer:
             # über den durablen ``has_committed_migration``-State), nicht ein transientes Flag.
             await reconcile_offline_migration(store)
 
+            # Alt-Manifeste (vor dem ``migration_state``-Zähler) belegen einen Commit nur über das
+            # promotete ``rb_migrated_*``-Segment (#968, Codex :459). Die Start-Retention unten
+            # könnte genau dieses – über Budget/Alter liegende – Segment trimmen, BEVOR der
+            # Finalizer im Aufrufer läuft; danach sähe er Zähler 0 UND kein Fallback-Segment und
+            # ließe die Entscheidung non-terminal, obwohl die Legacy-Quelle detached ist. Den
+            # Zähler deshalb VOR der Retention aus dem Segment-Beleg backfillen.
+            await self._backfill_committed_migration_counter(store)
+
             # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
             # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
             # zügig getrimmt (No-Zero-History-Guard beachtet, siehe Store).
@@ -1169,6 +1177,22 @@ class RingBuffer:
         if not self._segmented or self._store is None:
             return 0
         return await self._store.manifest.committed_migration_count()
+
+    @staticmethod
+    async def _backfill_committed_migration_counter(store) -> None:
+        """Alt-Manifest-Migration: den durablen Commit-Zähler aus dem promoteten Segment-Beleg
+        nachziehen, bevor die Start-Retention ihn löschen kann (#968, Codex :459). Idempotent –
+        no-op, sobald der Zähler bereits > 0 ist (regulärer Fall nach einem neuen Commit)."""
+        if await store.manifest.committed_migration_count() > 0:
+            return
+        from obs.ringbuffer.store.manifest import MIGRATED_FILENAME_PREFIX, SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED
+
+        has_promoted = any(
+            s.filename.startswith(MIGRATED_FILENAME_PREFIX) and s.status not in (SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED)
+            for s in await store.manifest.list_segments()
+        )
+        if has_promoted:
+            await store.manifest.record_committed_migration()
 
     async def has_committed_migration(self) -> bool:
         """True, wenn durabel ein Offline-Migrations-Commit belegt ist.

@@ -298,13 +298,19 @@ const showBudgetHint = computed(() => {
 })
 
 // ── Migrieren ──────────────────────────────────────────────────────────────
+// Muss zum Backend-Precheck ``OfflineLegacyMigrator._check_disk_free`` passen (#968): der
+// lehnt einen Lauf ab, sobald ``disk_free < copy_bytes_estimate * 1.2`` – denselben
+// Sicherheitsfaktor hier anwenden, sonst zeigte der Wizard einen grünen Disk-Befund (Start-
+// Button aktiv), während die API den Lauf sofort mit „not enough free disk space" ablehnt.
+const DISK_SAFETY_FACTOR = 1.2
 // Disk-Check-Verdict: die Kopie braucht höchstens den geschätzten Copy-Bedarf
 // (budget-gekapptes v2-Äquivalent der Legacy-Daten), NICHT das volle Budget –
 // sonst blockiert ein großes Retention-Budget die Migration grundlos (#968).
 const diskVerdict = computed(() => {
   if (diskFreeBytes.value === null || requiredBytes.value === null) return null
-  const ok = diskFreeBytes.value > requiredBytes.value
-  const params = { free: formatBytesBinary(diskFreeBytes.value), budget: formatBytesBinary(requiredBytes.value) }
+  const required = Math.ceil(requiredBytes.value * DISK_SAFETY_FACTOR)
+  const ok = diskFreeBytes.value > required
+  const params = { free: formatBytesBinary(diskFreeBytes.value), budget: formatBytesBinary(required) }
   return { ok, text: ok ? t('ringbuffer.migration.diskOk', params) : t('ringbuffer.migration.diskLow', params) }
 })
 

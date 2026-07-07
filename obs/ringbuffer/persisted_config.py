@@ -274,7 +274,14 @@ async def finalize_committed_migration_decision(db: Database, rb) -> bool:
     if rb is None:
         return False
     decision = await load_legacy_migration_decision(db)
-    if decision in LEGACY_DECISIONS_TERMINAL:
+    # Terminal (migrated/discarded) NICHT anfassen – und die bewusste ``keep``-Entscheidung
+    # ebenso wenig überschreiben (#968, Codex :285): der GLOBALE Commit-Zähler belegt bei
+    # mehreren Quellen nur, dass IRGENDEINE frühere Quelle migriert wurde. Wird die zuletzt
+    # ge-keepte Quelle danach von der FIFO-Retention zurückgewonnen (``has_attached_legacy``
+    # fällt auf False), dürfte der Assistent NICHT auf ``migrated`` springen – ``keep`` heißt
+    # „behalten, Budget-Rückgewinnung akzeptiert", nicht „migriert". Nur pending/skipped werden
+    # nachgezogen.
+    if decision in LEGACY_DECISIONS_TERMINAL or decision == LEGACY_DECISION_KEEP:
         return False
     # Solange noch eine (evtl. quarantänierte) Legacy-Quelle existiert, bleibt der Assistent
     # nicht-terminal – sonst versteckte eine terminale Entscheidung den verbleibenden Cleanup.

@@ -367,6 +367,16 @@ class Manifest:
             row = await cur.fetchone()
         return int(row[0]) if row and row[0] is not None else 0
 
+    async def record_committed_migration(self) -> None:
+        """Erhöht den durablen Commit-Zähler in eigener Transaktion (Backfill, #968, Codex :459).
+
+        Getrennt von ``commit_offline_migration`` (das den Zähler ATOMAR mit dem Detach erhöht),
+        damit Alt-Manifeste den Beleg aus einem promoteten ``rb_migrated_*``-Segment nachziehen
+        können, bevor die Start-Retention es trimmt.
+        """
+        await self._db.execute("UPDATE migration_state SET committed_migrations = committed_migrations + 1 WHERE id = 1")
+        await self._db.commit()
+
     async def mark_checkpoint_pending(self, segment_id: int) -> None:
         await self._db.execute(
             "UPDATE segments SET status = ? WHERE segment_id = ?",

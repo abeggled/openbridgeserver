@@ -2679,6 +2679,14 @@ class SqliteSegmentStore(RingBufferStore):
                     await self.manifest.close_segment_checkpoint_pending(old_segment.segment_id)
                     # Der ``checkpoint_pending``-Läufer räumt das Segment später ab (#936).
             except BaseException:
+                # Alte Connection best-effort schließen (#968, Codex :2685): erreichte der Fehler
+                # den Handler NACH dem Zuweisen von ``new_conn`` an ``_active_conn`` – aus
+                # ``_try_truncate_checkpoint`` oder einem partiellen ``old_conn.close()`` –, ist
+                # der retirierte Writer aus dem Store nicht mehr erreichbar. Ohne Close leakt die
+                # SQLite-Connection und hält WAL/Datei des geschlossenen Segments für spätere
+                # Retention gesperrt. Ein bereits erfolgtes ``close()`` ist idempotent (suppress).
+                with contextlib.suppress(Exception):
+                    await old_conn.close()
                 # Best-effort-Demote: das alte Segment darf nicht ``active`` bleiben.
                 # ``close_segment`` selbst kann bereits gelaufen sein (dann idempotent);
                 # ein erneuter Fehler beim Demote wird unterdrückt, damit der originale

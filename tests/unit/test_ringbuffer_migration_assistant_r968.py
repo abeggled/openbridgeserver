@@ -1404,3 +1404,67 @@ async def test_config_finalize_failure_keeps_buffer_running(tmp_path: Path, monk
             await rb.stop()
         reset_ringbuffer()
         await db.disconnect()
+
+
+# ---------- Runde 17, Codex :285: keep wird nicht auto-finalisiert ----------
+
+
+async def test_finalize_does_not_override_keep(tmp_path: Path):
+    """Eine bewusste ``keep``-Entscheidung darf der globale Commit-Zähler NICHT auf ``migrated``
+    kippen (#968, Codex :285): bei mehreren Quellen belegt er nur, dass IRGENDEINE frühere Quelle
+    migriert wurde – die zuletzt ge-keepte Quelle wurde behalten/gedroppt, nicht migriert."""
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_KEEP,
+        finalize_committed_migration_decision,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    class _Rb:
+        async def has_attached_legacy(self):
+            return False  # keep-Quelle wurde von der Retention zurückgewonnen
+
+        async def has_committed_migration(self):
+            return True  # frühere Quelle hatte committed
+
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+        assert await finalize_committed_migration_decision(db, _Rb()) is False
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP, "keep bleibt keep"
+    finally:
+        await db.disconnect()
+
+
+# ---------- Runde 17, Codex :459: Zähler-Backfill überlebt die Start-Retention ----------
+
+
+async def test_commit_counter_backfilled_before_startup_retention(tmp_path: Path):
+    """Alt-Manifest ohne Zähler, dessen einziges migriertes Segment beim Start von der Retention
+    getrimmt wird: der Backfill zieht den durablen Zähler VOR der Retention aus dem Segment-Beleg,
+    sodass ``has_committed_migration`` den Neustart überlebt (#968, Codex :459)."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(20)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        await rb.start_legacy_migration()
+        await rb._legacy_migration_task
+        assert rb.legacy_migration_progress()["phase"] == "done"
+        # Zähler auf 0 zurücksetzen -> Alt-Manifest-Zustand simulieren (nur Segment-Beleg da).
+        await rb._store.manifest._db.execute("UPDATE migration_state SET committed_migrations = 0 WHERE id = 1")
+        await rb._store.manifest._db.commit()
+        assert await rb.committed_migration_count() == 0
+    finally:
+        await rb.stop()
+
+    # Neustart auf demselben Pfad: der Backfill (vor enforce_retention) zieht den Zähler nach.
+    rb2 = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb2.start()
+    try:
+        assert await rb2.committed_migration_count() == 1, "Backfill aus dem Segment-Beleg"
+        assert await rb2.has_committed_migration() is True
+    finally:
+        await rb2.stop()
