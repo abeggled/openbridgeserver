@@ -1285,17 +1285,21 @@ class RingBuffer:
             # geschuetzt und ueber Budget, bis zum Neustart.
             prev_protected = self._legacy_retention_protected
             await self.set_legacy_retention_protected(True)
+            # Durablen Commit-Zähler VOR dem Lauf merken (#968, Codex :1263): steigt er während
+            # des Jobs, hat DIESER Lauf committed – ein job-lokaler Beleg, der auch dann trägt,
+            # wenn eine weitere Legacy-Quelle attached bleibt (Multi-Quellen). Dieser await MUSS
+            # NOCH im reservierten Fenster liegen (#968, Codex :1291): läge er nach dem ``finally``,
+            # sähe ein zweiter fast-gleichzeitiger Start ``_legacy_migration_starting == False`` UND
+            # noch keinen Task und startete einen zweiten Migrator gegen dieselbe Quelle.
+            commit_count_before = await self.committed_migration_count()
         finally:
             # Reservierung freigeben: ab jetzt schützt entweder der laufende Task
             # (Erfolgsfall) oder – bei einem Precheck-Fehler – ist kein Job aktiv.
             self._legacy_migration_starting = False
+        # Ab hier KEIN await mehr bis ``create_task`` (#968, Codex :1291): der Doppelstart-Guard
+        # ist lückenlos – die Reservierung deckt bis hierher, danach der gesetzte Task.
         migrator = OfflineLegacyMigrator(self._store, write_lock=self._lock)
         progress = self._legacy_migration_progress = {"phase": "starting", "error": None}
-        # Durablen Commit-Zähler VOR dem Lauf merken (#968, Codex :1263): steigt er während des
-        # Jobs, hat DIESER Lauf committed – ein job-lokaler Beleg, der auch dann trägt, wenn eine
-        # weitere Legacy-Quelle attached bleibt (Multi-Quellen) und ``has_attached_legacy`` weiter
-        # True meldet.
-        commit_count_before = await self.committed_migration_count()
 
         async def _post_commit_bookkeeping() -> None:
             # Der DESTRUKTIVE Commit ist durch (Legacy-Quelle entfernt, Segmente promotet).

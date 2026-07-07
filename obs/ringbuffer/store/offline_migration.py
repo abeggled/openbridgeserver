@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from obs.ringbuffer.store.interface import StoreEvent
-from obs.ringbuffer.store.manifest import SEGMENT_STATUS_LEGACY, SEGMENT_STATUS_MIGRATING, SegmentRecord
+from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_LEGACY, SEGMENT_STATUS_MIGRATING, SegmentRecord
 from obs.ringbuffer.store.sqlite_backend import (
     _LEGACY_GID_OFFSET,
     _LEGACY_GID_STRIDE,
@@ -286,7 +286,12 @@ class OfflineLegacyMigrator:
         """
         headroom = self._store._segment_config.segment_max_bytes or 0
         segments = await self._store.manifest.list_segments()
-        live_bytes = sum(s.size_bytes for s in segments if s.status not in (SEGMENT_STATUS_LEGACY, SEGMENT_STATUS_MIGRATING))
+        # Schema-basiert (#968, Codex :289): ein quarantäniertes Legacy hat status != 'legacy'
+        # (z. B. 'quarantined'), aber schema_version <= LEGACY_SCHEMA_VERSION. Der reine status-
+        # Filter zählte es fälschlich als Live-Bestand, sodass ``target_volume`` zu klein wurde und
+        # mehr migrierbare Alt-Zeilen droppte als das Budget verlangt. Retention-Guard und Status-
+        # Endpoint schließen ALLE schema-legacy Quellen aus – hier ebenso.
+        live_bytes = sum(s.size_bytes for s in segments if s.schema_version > LEGACY_SCHEMA_VERSION and s.status != SEGMENT_STATUS_MIGRATING)
         return max(0, budget - headroom - live_bytes)
 
     # ------------------------------------------------------------------
@@ -591,6 +596,13 @@ async def reconcile_offline_migration(store: SqliteSegmentStore) -> bool:
             len(migrating),
             len(missing_file_rows),
         )
+        # Sidecars (-wal/-shm/attach_identity) jeder fehlenden Quelle mit-aufräumen (#968, Codex
+        # :594): starb der Prozess NACH dem Unlink der Haupt-DB, aber VOR den Sidecars, blieben
+        # potenziell sehr große dirty-WAL-Dateien liegen – nach dem Detach nicht mehr in
+        # stats/Retention sichtbar (untracked Leak). Die Haupt-DB fehlt bereits (``missing_ok``),
+        # der Unlink propagiert hier also nicht.
+        for row in missing_file_rows:
+            _unlink_legacy_files(Path(row.filename))
         await store.manifest.commit_offline_migration([s.segment_id for s in missing_file_rows])
         return True
     if not migrating:

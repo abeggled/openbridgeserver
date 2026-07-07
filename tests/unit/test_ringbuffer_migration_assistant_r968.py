@@ -1528,3 +1528,99 @@ async def test_attached_legacy_total_bytes_sums_all_sources(tmp_path: Path):
         assert second is not None
     finally:
         await rb.stop()
+
+
+# ---------- Runde 19, Codex :1291: Reservierung deckt das commit_count-await ----------
+
+
+async def test_second_start_rejected_during_commit_count_await(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Ein zweiter ``start_legacy_migration`` MUSS abgelehnt werden, während der erste noch im
+    ``committed_migration_count``-await hängt (#968, Codex :1291): läge dieser await außerhalb des
+    ``_legacy_migration_starting``-Fensters, startete der zweite einen Migrator gegen dieselbe
+    Quelle (racende Copy-Phasen, der Commit promotet alle migrating-Segmente)."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(10)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        gate = asyncio.Event()
+        orig = rb.committed_migration_count
+
+        async def _slow():
+            await gate.wait()
+            return await orig()
+
+        monkeypatch.setattr(rb, "committed_migration_count", _slow)
+
+        first = asyncio.create_task(rb.start_legacy_migration())
+        await asyncio.sleep(0.05)  # ersten Start bis in den committed_migration_count-await bringen
+        assert rb._legacy_migration_starting is True, "Reservierung deckt das await-Fenster"
+
+        from obs.ringbuffer.store.offline_migration import OfflineMigrationError
+
+        with pytest.raises(OfflineMigrationError, match="already running"):
+            await rb.start_legacy_migration()
+
+        gate.set()
+        await first
+        if rb._legacy_migration_task is not None:
+            await rb._legacy_migration_task
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 19, Codex :594: reconcile räumt verwaiste Legacy-Sidecars ----------
+
+
+async def test_reconcile_cleans_legacy_sidecars(tmp_path: Path):
+    """Stirbt der Prozess NACH dem Unlink der Legacy-Haupt-DB, aber VOR den Sidecars, muss der
+    Startup-Reconciler die verwaisten ``-wal``/``-shm`` beim Vollenden des Commits aufräumen –
+    sonst leaken potenziell große dirty-WAL-Dateien untracked (#968, Codex :594)."""
+    from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
+    from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
+
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        # Exakter interrupted-Commit-Zustand: Legacy-Manifest-Zeile mit FEHLENDER Hauptdatei,
+        # aber verbliebenen Sidecars (Crash zwischen main-unlink und sidecar-unlink).
+        missing_main = tmp_path / "gone_legacy.db"
+        wal = Path(f"{missing_main}-wal")
+        shm = Path(f"{missing_main}-shm")
+        wal.write_bytes(b"x" * 4096)
+        shm.write_bytes(b"y" * 256)
+        await store.manifest.register_legacy_segment(source_path=str(missing_main), size_bytes=999_999)
+        assert not missing_main.exists()
+        assert wal.exists()
+
+        result = await reconcile_offline_migration(store)
+        assert result is True, "unterbrochener Commit wird vollendet"
+        assert not wal.exists(), "verwaistes -wal muss der Reconciler aufräumen"
+        assert not shm.exists(), "verwaistes -shm muss der Reconciler aufräumen"
+    finally:
+        await store.close()
+
+
+# ---------- Runde 19, Codex :289: quarantäniertes Legacy zählt nicht als Live-Budget ----------
+
+
+async def test_target_copy_volume_excludes_quarantined_legacy(tmp_path: Path):
+    """``_target_copy_volume`` darf ein quarantäniertes Legacy (schema-legacy, status !=
+    'legacy') NICHT als Live-Bestand zählen (#968, Codex :289) – sonst würde das Ziel-Volumen
+    zu klein und der Job droppte mehr migrierbare Zeilen als das Budget verlangt."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(20)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        budget = 10**9
+        before = await mig._target_copy_volume(budget)
+
+        seg = await rb._store.manifest.register_legacy_segment(source_path=str(tmp_path / "leg2.db"), size_bytes=500_000_000)
+        await rb._store.manifest.mark_quarantined(seg.segment_id, "corrupt (Test)")
+        after = await mig._target_copy_volume(budget)
+
+        assert after == before, "quarantäniertes Legacy zählt nicht als Live-Bestand"
+    finally:
+        await rb.stop()

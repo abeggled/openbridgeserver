@@ -309,7 +309,10 @@ const DISK_SAFETY_FACTOR = 1.2
 const diskVerdict = computed(() => {
   if (diskFreeBytes.value === null || requiredBytes.value === null) return null
   const required = Math.ceil(requiredBytes.value * DISK_SAFETY_FACTOR)
-  const ok = diskFreeBytes.value > required
+  // ``>=`` spiegelt die Backend-Semantik (#968): ``_check_disk_free`` lehnt nur
+  // ``disk_free < estimate * 1.2`` ab, erlaubt also GENAU den Schwellwert. Ein strikteres
+  // ``>`` blockierte den Start am exakten Grenzwert, den die API akzeptiert.
+  const ok = diskFreeBytes.value >= required
   const params = { free: formatBytesBinary(diskFreeBytes.value), budget: formatBytesBinary(required) }
   return { ok, text: ok ? t('ringbuffer.migration.diskOk', params) : t('ringbuffer.migration.diskLow', params) }
 })

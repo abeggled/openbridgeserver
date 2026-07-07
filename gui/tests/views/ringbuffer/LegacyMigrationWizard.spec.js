@@ -140,6 +140,23 @@ describe('LegacyMigrationWizard — Ist-Analyse + Optionen', () => {
     expect(verdict.classes().join(' ')).toContain('text-red-600')
     expect(wrapper.find('[data-testid="wizard-migrate-start"]').attributes('disabled')).toBeDefined()
   })
+
+  it('allows a start at exactly the required disk threshold (#968)', async () => {
+    // Freier Platz == geforderter 1.2x-Puffer (240 MiB). Das Backend akzeptiert genau den
+    // Schwellwert (`_check_disk_free` lehnt nur `< estimate * 1.2` ab), also muss der Wizard
+    // hier GRÜN zeigen und den Start erlauben – `>=`, nicht `>`.
+    const wrapper = await mountWizard(
+      statusPayload({
+        budget_bytes: 5 * 1024 * 1024 * 1024,
+        estimated_copy_bytes: 200 * 1024 * 1024,
+        disk_free_bytes: Math.ceil(200 * 1024 * 1024 * 1.2),
+      })
+    )
+    const verdict = wrapper.find('[data-testid="wizard-disk-verdict"]')
+    expect(verdict.exists()).toBe(true)
+    expect(verdict.classes().join(' ')).toContain('text-green-600')
+    expect(wrapper.find('[data-testid="wizard-migrate-start"]').attributes('disabled')).toBeUndefined()
+  })
 })
 
 describe('LegacyMigrationWizard — Migrieren', () => {
