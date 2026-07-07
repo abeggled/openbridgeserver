@@ -1181,6 +1181,21 @@ class RingBuffer:
 
         return sum(s.size_bytes for s in await self._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION)
 
+    async def has_missing_file_legacy(self) -> bool:
+        """True, wenn eine schema-legacy Manifest-Row eine FEHLENDE Datei hat (#968, Codex :2110).
+
+        Der Marker eines im Commit-Fenster unterbrochenen Offline-Commits, den der Reconciler beim
+        nächsten Start/Startup vollendet. Bis dahin sind etwaige migrating-Kopien die einzige
+        Quelle – eine ``keep``/``discard``-Entscheidung würde ihren Retention-Schutz aufheben und
+        die Kopien der nächsten Retention/dem Orphan-Cleanup ausliefern. Der Assistent muss solche
+        Entscheidungen deshalb bis zur Reconciler-Vollendung ablehnen.
+        """
+        if not self._segmented or self._store is None:
+            return False
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+
+        return any(s.schema_version <= LEGACY_SCHEMA_VERSION and not Path(s.filename).exists() for s in await self._store.manifest.list_segments())
+
     async def committed_migration_count(self) -> int:
         """Durabler Zähler abgeschlossener Offline-Migrations-Commits (#968, Codex :1175/:1263).
 
@@ -1284,7 +1299,12 @@ class RingBuffer:
             )
             if not legacy_segments:
                 raise OfflineMigrationError("no attached legacy source to migrate")
-            if legacy_segments[0].status != SEGMENT_STATUS_LEGACY:
+            oldest = legacy_segments[0]
+            # Eine quarantänierte älteste Quelle mit VORHANDENER Datei ablehnen. Fehlt ihre Datei
+            # dagegen, ist es ein im Commit-Fenster unterbrochener Commit (#968, Codex :1288):
+            # durchlassen, damit ``run()`` → ``reconcile_offline_migration`` die migrating-Kopien
+            # promotet, statt den Operator zu einem Neustart/destruktiven discard zu zwingen.
+            if oldest.status != SEGMENT_STATUS_LEGACY and Path(oldest.filename).exists():
                 raise OfflineMigrationError("the oldest legacy source is quarantined or unreadable; discard it before migrating")
 
             # Während der Kopie MUSS die Quelle erhalten bleiben – unabhängig vom
@@ -2382,7 +2402,7 @@ def default_ringbuffer_disk_path(database_path: str) -> str:
     return str(path.with_name(f"{path.stem}_ringbuffer.db"))
 
 
-def delete_ringbuffer_storage_files(disk_path: str, *, keep_legacy_db: bool = False) -> None:
+def delete_ringbuffer_storage_files(disk_path: str, *, keep_legacy_db: bool = False, keep_segment_root: bool = False) -> None:
     """Remove the file-backed ringbuffer database and SQLite sidecar files.
 
     Im segmentierten Store (#919) liegen Manifest und Segment-DBs NICHT in der
@@ -2398,6 +2418,11 @@ def delete_ringbuffer_storage_files(disk_path: str, *, keep_legacy_db: bool = Fa
     ``init_ringbuffer`` nur attached (nicht erstellt) hat. Ein transienter Save-Fehler darf
     diese Historie NICHT löschen – dann nur den (von diesem Request erzeugten) Segment-Root
     entfernen, die Legacy-DB + Sidecars unangetastet lassen.
+
+    ``keep_segment_root`` (#968, Codex :2527): analog für einen bereits vorhandenen
+    ``<stem>_segments``-Root. Öffnet ``init_ringbuffer`` beim Enable-aus-deaktiviert einen
+    PRE-EXISTING Segment-Store, darf ein Rollback dessen bereits retenierte v2-Historie nicht
+    entfernen – dann bleibt auch der Segment-Root unangetastet.
     """
     if _is_sqlite_memory_path(disk_path):
         return
@@ -2448,7 +2473,7 @@ def delete_ringbuffer_storage_files(disk_path: str, *, keep_legacy_db: bool = Fa
     # ``RingBufferStorageDeleteIncompleteError`` gemeldet, sodass der Aufrufer den
     # unvollständigen Zustand erkennt. Bei Erfolg bleibt das saubere Abräumen unverändert.
     segments_root = Path(disk_path).with_name(f"{Path(disk_path).stem}_segments")
-    if segments_root.exists():
+    if not keep_segment_root and segments_root.exists():
         rmtree_errors: list[BaseException] = []
         shutil.rmtree(segments_root, onexc=lambda _func, _path, exc: rmtree_errors.append(exc))
         if segments_root.exists():

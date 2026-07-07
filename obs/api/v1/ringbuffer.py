@@ -2100,6 +2100,13 @@ async def legacy_migration_decision(
     # (synchrone Reservierung vor den awaited Prechecks, Phase noch nicht ``starting``).
     if rb is not None and rb.legacy_migration_in_progress():
         raise HTTPException(status.HTTP_409_CONFLICT, "a legacy migration job is currently running")
+    # Auch einen im Commit-Fenster unterbrochenen Commit abwarten (#968, Codex :2110): eine
+    # schema-legacy Row mit fehlender Datei bedeutet, dass die (noch unsichtbaren) migrating-
+    # Kopien die einzige Quelle sind. Ein ``keep``/``discard`` würde ihren Retention-Schutz jetzt
+    # aufheben, sodass die nächste Retention die Row löscht und der Reconciler die Kopien als
+    # orphan verwirft. Erst der nächste ``/migration/start`` oder Startup vollendet den Commit.
+    if rb is not None and await rb.has_missing_file_legacy():
+        raise HTTPException(status.HTTP_409_CONFLICT, "an interrupted legacy migration commit awaits recovery; retry after it is reconciled")
     if body.decision == "skip":
         await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
         if rb is not None:
@@ -2426,8 +2433,12 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     # nur eine vorhandene DB geöffnet – NICHT erstellt. Ein Rollback nach einem transienten Save-
     # Fehler darf sie dann nicht löschen (sonst irreversibler Verlust der Alt-Historie). UNABHÄNGIG
     # vom Modus (#968, Codex :2429): auch der explizite Legacy-Pfad (``segmented=false``) nutzt die
-    # ``obs_ringbuffer.db`` direkt als Storage und ist gleichermaßen schützenswert.
-    legacy_preexisting = Path(_ringbuffer_disk_path()).exists()
+    # ``obs_ringbuffer.db`` direkt als Storage und ist gleichermaßen schützenswert. Gleiches gilt für
+    # einen bereits vorhandenen Segment-Root (#968, Codex :2527): dessen retenierte v2-Historie darf
+    # ein Rollback ebenso wenig entfernen.
+    _rb_disk_path = _ringbuffer_disk_path()
+    legacy_preexisting = Path(_rb_disk_path).exists()
+    segment_root_preexisting = Path(_rb_disk_path).with_name(f"{Path(_rb_disk_path).stem}_segments").exists()
     try:
         if rb is None:
             # Migrations-Assistent (#968, Codex :2369): der Runtime-Init (Monitor-Enable
@@ -2522,9 +2533,15 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             # deaktivierten Zustand) und wird sauber wieder abgebaut.
             if switch_prev_config is None:
                 with suppress(Exception):
-                    # Pre-existing Legacy-DB NICHT löschen (#968, Codex :2518): nur den frisch
-                    # erzeugten Segment-Root entfernen, die attachte Alt-Historie bewahren.
-                    delete_ringbuffer_storage_files(_ringbuffer_disk_path(), keep_legacy_db=legacy_preexisting)
+                    # Pre-existing Storage NICHT löschen (#968, Codex :2518/:2527): weder die
+                    # attachte Legacy-DB noch einen bereits vorhandenen Segment-Root – nur was
+                    # dieser Request neu erzeugt hat. Ein transienter Save-Fehler darf keine
+                    # bestehende v1-/v2-Historie irreversibel entfernen.
+                    delete_ringbuffer_storage_files(
+                        _ringbuffer_disk_path(),
+                        keep_legacy_db=legacy_preexisting,
+                        keep_segment_root=segment_root_preexisting,
+                    )
         # Modus-Switch-Rebuild gescheitert (#951, Pkt 2): der alte Buffer wurde
         # bereits abgebaut. Damit immer ein funktionierender Buffer läuft, den
         # vorherigen Zustand im ALTEN Modus re-initialisieren und neu subscriben.

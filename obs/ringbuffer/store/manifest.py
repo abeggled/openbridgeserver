@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS segments (
     schema_version   INTEGER NOT NULL DEFAULT 1,
     integrity_status TEXT    NOT NULL DEFAULT 'ok',
     recovery_status  TEXT    NOT NULL DEFAULT 'none',
-    quarantine_reason TEXT
+    quarantine_reason TEXT,
+    legacy_source_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_manifest_status ON segments(status);
 CREATE INDEX IF NOT EXISTS idx_manifest_from_ts ON segments(from_ts);
@@ -166,17 +167,22 @@ class Manifest:
         conn.row_factory = aiosqlite.Row
         await conn.execute("PRAGMA journal_mode=WAL")
         await conn.executescript(_MANIFEST_SCHEMA)
-        await self._migrate_add_quarantine_reason(conn)
+        await self._migrate_add_segment_columns(conn)
         await conn.commit()
         self._conn = conn
 
     @staticmethod
-    async def _migrate_add_quarantine_reason(conn: aiosqlite.Connection) -> None:
-        """Idempotente Migration: ``quarantine_reason`` in Alt-Manifests nachziehen."""
+    async def _migrate_add_segment_columns(conn: aiosqlite.Connection) -> None:
+        """Idempotente Spalten-Migrationen für Alt-Manifests (``ALTER TABLE ADD COLUMN``)."""
         async with conn.execute("PRAGMA table_info(segments)") as cur:
             columns = {row["name"] for row in await cur.fetchall()}
         if "quarantine_reason" not in columns:
             await conn.execute("ALTER TABLE segments ADD COLUMN quarantine_reason TEXT")
+        # #968, Codex :354: Zuordnung eines migrating-Segments zu seiner Legacy-Quelle, damit
+        # ``commit_offline_migration`` bei mehreren Quellen nur die Kopien der gerade
+        # committeten/reconcileten Quelle promotet (nicht stale Reste einer anderen Quelle).
+        if "legacy_source_id" not in columns:
+            await conn.execute("ALTER TABLE segments ADD COLUMN legacy_source_id INTEGER")
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -313,19 +319,23 @@ class Manifest:
         )
         await self._db.commit()
 
-    async def create_migrating_segment(self, *, filename: str, schema_version: int) -> SegmentRecord:
+    async def create_migrating_segment(self, *, filename: str, schema_version: int, legacy_source_id: int | None = None) -> SegmentRecord:
         """Legt ein Offline-Migrations-Segment DIREKT als ``migrating`` an (#965).
 
         Bewusst ohne transitorisches ``active``: der Startup-Reconciler
         (``_reconcile_multiple_active_segments``) darf ein halb kopiertes
         Migrations-Segment nach einem Crash nie als zweites aktives Segment
         deuten und in den sichtbaren ``closed``-Rang demoten.
+
+        ``legacy_source_id`` (#968, Codex :354) ordnet das Segment der kopierten Legacy-Quelle
+        zu, damit ``commit_offline_migration`` bei mehreren Quellen nur die Kopien der gerade
+        committeten Quelle promotet. ``None`` für Wegwerf-Segmente (Kalibrierungs-Sample).
         """
         created_at = _utc_now_iso()
         cursor = await self._db.execute(
-            """INSERT INTO segments (filename, status, created_at, schema_version)
-               VALUES (?, ?, ?, ?)""",
-            (filename, SEGMENT_STATUS_MIGRATING, created_at, schema_version),
+            """INSERT INTO segments (filename, status, created_at, schema_version, legacy_source_id)
+               VALUES (?, ?, ?, ?, ?)""",
+            (filename, SEGMENT_STATUS_MIGRATING, created_at, schema_version, legacy_source_id),
         )
         await self._db.commit()
         return await self.get_segment(cursor.lastrowid)
@@ -349,9 +359,15 @@ class Manifest:
         Endzustand zurück; einen Mischzustand gibt es nicht.
         """
         closed_at = _utc_now_iso()
+        # Nur die migrating-Segmente der committeten Quelle(n) promoten (#968, Codex :354): bei
+        # mehreren Legacy-Quellen darf ein Commit/Reconcile von Quelle B nicht die stale migrating-
+        # Kopien einer noch attachten Quelle A sichtbar machen (duplicate/incomplete rows).
+        # ``legacy_source_id IS NULL`` deckt (a) Alt-Manifests vor der Spalte und (b) den Single-
+        # Source-Fall ab; ``_discard_migrating_segments`` verwirft NULL-Reste ohnehin vor jedem Lauf.
+        placeholders = ", ".join("?" for _ in legacy_segment_ids)
         await self._db.execute(
-            "UPDATE segments SET status = ?, closed_at = ? WHERE status = ?",
-            (SEGMENT_STATUS_CLOSED, closed_at, SEGMENT_STATUS_MIGRATING),
+            f"UPDATE segments SET status = ?, closed_at = ? WHERE status = ? AND (legacy_source_id IN ({placeholders}) OR legacy_source_id IS NULL)",
+            (SEGMENT_STATUS_CLOSED, closed_at, SEGMENT_STATUS_MIGRATING, *legacy_segment_ids),
         )
         for segment_id in legacy_segment_ids:
             await self._db.execute("DELETE FROM segments WHERE segment_id = ?", (segment_id,))

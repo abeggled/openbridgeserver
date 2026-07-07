@@ -1808,3 +1808,169 @@ async def test_enable_rollback_keeps_preexisting_legacy_mode_db(tmp_path: Path, 
             await rb.stop()
         reset_ringbuffer()
         await db.disconnect()
+
+
+# ---------- Runde 22, Codex :354: Commit promotet nur die Quelle des Commits ----------
+
+
+async def test_commit_promotes_only_committed_source_migrating(tmp_path: Path):
+    """``commit_offline_migration`` darf bei mehreren Legacy-Quellen nur die migrating-Kopien der
+    committeten Quelle promoten – stale Kopien einer anderen, noch attachten Quelle bleiben
+    unsichtbar (#968, Codex :354)."""
+    from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
+
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        a = await store.manifest.register_legacy_segment(source_path=str(tmp_path / "a.db"), size_bytes=100)
+        b = await store.manifest.register_legacy_segment(source_path=str(tmp_path / "b.db"), size_bytes=100)
+        await store.manifest.create_migrating_segment(filename="rb_migrated_a.sqlite", schema_version=2, legacy_source_id=a.segment_id)
+        await store.manifest.create_migrating_segment(filename="rb_migrated_b.sqlite", schema_version=2, legacy_source_id=b.segment_id)
+
+        await store.manifest.commit_offline_migration([b.segment_id])
+        by_name = {s.filename: s for s in await store.manifest.list_segments()}
+        assert by_name["rb_migrated_b.sqlite"].status == "closed", "B's Kopie promotet"
+        assert by_name["rb_migrated_a.sqlite"].status == "migrating", "A's stale Kopie bleibt unsichtbar"
+        ids = [s.segment_id for s in await store.manifest.list_segments()]
+        assert b.segment_id not in ids, "B detached"
+        assert a.segment_id in ids, "A bleibt attached"
+    finally:
+        await store.close()
+
+
+async def test_commit_null_source_backcompat_promoted(tmp_path: Path):
+    """Migrating-Segmente ohne ``legacy_source_id`` (Alt-Manifest / Single-Source) werden weiterhin
+    promotet (#968, Codex :354, Abwärtskompatibilität)."""
+    from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
+
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        leg = await store.manifest.register_legacy_segment(source_path=str(tmp_path / "leg.db"), size_bytes=100)
+        await store.manifest.create_migrating_segment(filename="rb_migrated_null.sqlite", schema_version=2)  # source_id=None
+        await store.manifest.commit_offline_migration([leg.segment_id])
+        by_name = {s.filename: s for s in await store.manifest.list_segments()}
+        assert by_name["rb_migrated_null.sqlite"].status == "closed", "NULL-source Kopie wird promotet"
+    finally:
+        await store.close()
+
+
+# ---------- Runde 22, Codex :2110: keep während unterbrochenem Commit ablehnen ----------
+
+
+async def test_has_missing_file_legacy_detects_interrupted_commit(tmp_path: Path):
+    """``has_missing_file_legacy`` erkennt eine schema-legacy Row mit fehlender Datei – den Marker
+    eines im Commit-Fenster unterbrochenen Commits (#968, Codex :2110)."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(10)))
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        assert await rb.has_missing_file_legacy() is False
+        # Eine Legacy-Row mit fehlender Datei registrieren (interrupted-commit-Zustand).
+        await rb._store.manifest.register_legacy_segment(source_path=str(tmp_path / "gone.db"), size_bytes=100)
+        assert await rb.has_missing_file_legacy() is True
+    finally:
+        await rb.stop()
+
+
+async def test_keep_rejected_during_interrupted_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """``keep`` (und ``discard``) müssen 409 liefern, solange ein unterbrochener Commit auf den
+    Reconciler wartet (#968, Codex :2110) – sonst hebt keep den Schutz der einzigen Kopie auf."""
+    import obs.api.v1.ringbuffer as rb_api
+    from fastapi import HTTPException
+
+    from obs.db.database import Database
+
+    class _Rb:
+        def legacy_migration_in_progress(self):
+            return False
+
+        async def has_missing_file_legacy(self):
+            return True
+
+    monkeypatch.setattr(rb_api, "get_optional_ringbuffer", lambda: _Rb())
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        with pytest.raises(HTTPException) as exc:
+            await rb_api.legacy_migration_decision(rb_api.LegacyMigrationDecisionIn(decision="keep"), _user="admin", db=db)
+        assert exc.value.status_code == 409
+    finally:
+        await db.disconnect()
+
+
+# ---------- Runde 22, Codex :2527 (P1): pre-existing Segment-Root beim Rollback bewahren ----------
+
+
+async def test_enable_rollback_keeps_preexisting_segment_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Öffnet ein Enable-aus-deaktiviert einen bereits vorhandenen Segment-Store, darf ein
+    Rollback dessen v2-Historie NICHT löschen (#968, Codex :2527, P1)."""
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer, reset_ringbuffer
+
+    db = Database(":memory:")
+    await db.connect()
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(rb_path, list(range(10)))
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    reset_ringbuffer()
+
+    # Ersten Enable (segmented) durchführen, um einen echten Segment-Root anzulegen.
+    await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), _user="admin", db=db)
+    seg_root = rb_path.with_name(f"{rb_path.stem}_segments")
+    assert seg_root.exists(), "Segment-Root wurde angelegt"
+    rb0 = get_optional_ringbuffer()
+    if rb0 is not None:
+        await rb0.stop()
+    reset_ringbuffer()
+
+    # Zweiter Enable schlägt beim persist fehl -> Rollback darf den pre-existing Segment-Root behalten.
+    async def _boom(*a, **k):
+        raise RuntimeError("app-db save failed")
+
+    monkeypatch.setattr(rb_api, "persist_ringbuffer_config", _boom)
+    try:
+        try:
+            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), _user="admin", db=db)
+        except Exception:
+            pass
+        assert seg_root.exists(), "pre-existing Segment-Root darf beim Rollback NICHT gelöscht werden"
+        assert rb_path.exists(), "pre-existing Legacy-DB bleibt ebenfalls"
+    finally:
+        rb = get_optional_ringbuffer()
+        if rb is not None:
+            await rb.stop()
+        reset_ringbuffer()
+        await db.disconnect()
+
+
+# ---------- Runde 22, Codex :1288: Start lässt unterbrochenen Commit zum Reconciler durch ----------
+
+
+async def test_start_allows_reconcile_of_unlinked_quarantined_source(tmp_path: Path):
+    """Ist die älteste Legacy-Quelle quarantäniert UND ihre Datei bereits unlinkt (unterbrochener
+    Commit), darf der Start NICHT wie eine gewöhnliche quarantänierte Quelle ablehnen, sondern muss
+    ``run()`` → ``reconcile_offline_migration`` die migrating-Kopie promoten lassen (#968, Codex
+    :1288)."""
+    from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(15)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        legs = [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION]
+        oldest = min(legs, key=lambda s: s.segment_id)
+        await rb._store.manifest.create_migrating_segment(filename="rb_migrated_x.sqlite", schema_version=2, legacy_source_id=oldest.segment_id)
+        await rb._store.manifest.mark_quarantined(oldest.segment_id, "read error")
+        Path(oldest.filename).unlink()  # Datei weg = unterbrochener Commit nach Unlink
+
+        await rb.start_legacy_migration()
+        await rb._legacy_migration_task
+        assert rb.legacy_migration_progress()["phase"] == "done", "Reconciler vollendet den unterbrochenen Commit"
+        promoted = [s for s in await rb._store.manifest.list_segments() if s.filename == "rb_migrated_x.sqlite" and s.status == "closed"]
+        assert promoted, "migrating-Kopie promotet statt Start abgelehnt"
+    finally:
+        await rb.stop()

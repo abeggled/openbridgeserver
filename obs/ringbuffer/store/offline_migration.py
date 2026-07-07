@@ -433,8 +433,10 @@ class OfflineLegacyMigrator:
                 if target_conn is None:
                     seg_index += 1
                     target_filename = f"{MIGRATED_FILENAME_PREFIX}{_utc_now_compact()}_{seg_index:03d}.sqlite"
+                    # Segment der kopierten Quelle zuordnen (#968, Codex :354), damit der Commit
+                    # bei mehreren Quellen nur diese Kopien promotet.
                     target_segment = await self._store.manifest.create_migrating_segment(
-                        filename=target_filename, schema_version=SEGMENT_SCHEMA_VERSION
+                        filename=target_filename, schema_version=SEGMENT_SCHEMA_VERSION, legacy_source_id=legacy.segment_id
                     )
                     target_conn = await self._store._open_segment_conn(target_filename)
                     seg_rows = 0
