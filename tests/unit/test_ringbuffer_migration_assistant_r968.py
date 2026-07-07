@@ -820,3 +820,164 @@ async def test_reconcile_orphan_keeps_row_when_unlink_fails(tmp_path: Path, monk
         assert await store.manifest.get_segment(seg.segment_id) is not None, "Manifest-Zeile muss fuer spaeteren Cleanup bleiben"
     finally:
         await store.close()
+
+
+# ---------- Runde 12, Codex :1109: discard-migrating-Unlink-Fehler propagiert ----------
+
+
+async def test_discard_migrating_unlink_failure_propagates_and_keeps_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Kann eine ``migrating``-Kopie beim ``discard`` nicht unlinkt werden, propagiert der
+    Fehler und die Manifest-Zeile bleibt (#968, Codex :1109) – kein untracked Leak, kein
+    fälschlich terminales ``discarded``."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, [1, 2, 3])
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        seg = await rb._store.manifest.create_migrating_segment(filename="rb_migrated_x.sqlite", schema_version=2)
+        (rb._store._segments_dir / "rb_migrated_x.sqlite").write_bytes(b"x" * 128)
+
+        orig_unlink = Path.unlink
+
+        def _boom(self, *a, **k):
+            if self.name == "rb_migrated_x.sqlite":
+                raise PermissionError("locked")
+            return orig_unlink(self, *a, **k)
+
+        monkeypatch.setattr(Path, "unlink", _boom)
+        with pytest.raises(PermissionError):
+            await rb.discard_legacy()
+        assert await rb._store.manifest.get_segment(seg.segment_id) is not None, "migrating-Zeile muss bleiben"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 12, Codex :323: Post-Commit-Retention-Fehler bleibt done ----------
+
+
+async def test_post_commit_retention_failure_keeps_migration_done(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Ein Fehler im Post-Commit-``enforce_retention`` darf die committete Migration nicht
+    als ``failed`` melden (#968, Codex :323) – der Commit ist durch, es gibt keine Quelle
+    mehr zum Retry."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(50)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+
+        async def _boom():
+            raise OSError("retention manifest IO")
+
+        monkeypatch.setattr(rb._store, "enforce_retention", _boom)
+        result = await mig.run({})
+        assert result["phase"] == "done", "committete Migration bleibt done trotz Retention-Fehler"
+        assert not legacy.exists()
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 12, Codex :528: zero-copy Commit ohne migrating-Segmente reconcilen ----------
+
+
+async def test_reconcile_zero_copy_missing_legacy_without_migrating(tmp_path: Path):
+    """Eine drop-only Migration (``rows_to_copy == 0``) unlinkt die Legacy-DB, ohne
+    migrating-Segmente anzulegen. Stirbt der Prozess vor dem Manifest-Delete, muss der
+    Reconciler die Legacy-Zeile mit fehlender Datei AUCH ohne migrating-Segmente detachen
+    (#968, Codex :528)."""
+    from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
+
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        missing = tmp_path / "gone_legacy.db"  # existiert bewusst NICHT (unlinkt)
+        row = await store.manifest.register_legacy_segment(source_path=str(missing), size_bytes=100)
+        assert await store.manifest.list_migrating_segments() == []
+
+        result = await reconcile_offline_migration(store)
+        assert result is True, "zero-copy Commit muss vollendet gemeldet werden"
+        assert row.segment_id not in {s.segment_id for s in await store.manifest.list_legacy_segments()}, "fehlende Legacy-Zeile muss detached sein"
+    finally:
+        await store.close()
+
+
+# ---------- Runde 12, Codex :1033: Writer-Lease auch bei close-Fehler freigeben ----------
+
+
+async def test_close_releases_lease_on_manifest_close_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Wirft ``manifest.close()`` beim Store-Close, muss die Writer-Lease dennoch fallen
+    (#968, Codex :1033) – sonst bliebe die ``writer.lock``-flock gehalten und ein zweiter
+    Store auf demselben Root scheiterte mit ``WriterLockHeldError``."""
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+
+    async def _boom():
+        raise OSError("manifest close failed")
+
+    monkeypatch.setattr(store.manifest, "close", _boom)
+    with pytest.raises(OSError):
+        await store.close()
+
+    # Beweis: die Lease ist frei – ein zweiter Store öffnet ohne WriterLockHeldError.
+    store2 = SqliteSegmentStore(tmp_path / "root")
+    await store2.open()
+    await store2.close()
+
+
+# ---------- Runde 12, Codex :441: migrated nur ohne weitere migrierbare Quelle ----------
+
+
+async def test_has_migratable_legacy_reflects_readable_sources(tmp_path: Path):
+    """``has_migratable_legacy`` steuert den Multi-Quellen-Abschluss (#968, Codex :441):
+    True solange eine LESBARE Legacy-Quelle attached ist, False sobald keine mehr
+    (quarantänierte zählen nicht – nicht migrierbar)."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, [1, 2, 3])
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        assert await rb.has_migratable_legacy() is True
+        for seg in [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION]:
+            await rb._store.manifest.mark_quarantined(seg.segment_id, "corrupt (Test)")
+        assert await rb.has_migratable_legacy() is False, "quarantänierte Quelle ist nicht migrierbar"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 12, Codex :449: Startup-Reconcile setzt das migrated-Flag ----------
+
+
+async def test_startup_reconcile_sets_migrated_flag(tmp_path: Path):
+    """Vollendet der Startup-Reconciler einen unterbrochenen Commit, muss der RingBuffer
+    das über ``startup_reconciled_commit`` melden (#968, Codex :449) – der Aufrufer
+    (main.py) persistiert daraufhin die terminale ``migrated``-Entscheidung."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(30)))
+
+    # Ersten Buffer starten, einen interrupted commit erzeugen (Commit wirft nach Unlink).
+    rb1 = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb1.start()
+    try:
+        mig = OfflineLegacyMigrator(rb1._store, write_lock=rb1._lock)
+        orig_commit = rb1._store.manifest.commit_offline_migration
+
+        async def _boom(ids):
+            raise OSError("commit failed after unlink")
+
+        rb1._store.manifest.commit_offline_migration = _boom
+        with pytest.raises(OSError):
+            await mig.run({})
+        rb1._store.manifest.commit_offline_migration = orig_commit
+        assert not legacy.exists()  # Legacy-Datei unlinkt, Commit aber nicht vollendet
+    finally:
+        await rb1.stop()
+
+    # Neustart auf demselben Pfad: der Startup-Reconciler vollendet den Commit.
+    rb2 = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb2.start()
+    try:
+        assert rb2.startup_reconciled_commit is True, "vollendeter Startup-Reconcile muss gemeldet werden"
+        # Der Store ist promotet: Alt-Historie sichtbar (negative gids), keine Legacy-Zeile mehr.
+        assert await rb2._store.manifest.list_legacy_segments() == []
+    finally:
+        await rb2.stop()

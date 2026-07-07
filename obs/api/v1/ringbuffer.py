@@ -2130,6 +2130,15 @@ async def legacy_migration_start(
         raise HTTPException(status.HTTP_409_CONFLICT, "ringbuffer is not running")
 
     async def _persist_migrated() -> None:
+        # Nur terminal ``migrated``, wenn KEINE lesbare Legacy-Quelle mehr attached ist
+        # (#968, Codex :441): bei mehreren attachten Legacy-DBs migriert EIN Lauf nur die
+        # erste Quelle. Würde die Entscheidung sofort terminal, versteckte sie den Assistenten
+        # und weitere ``/migration/start`` würden als finalisiert abgelehnt – die restliche
+        # Alt-Historie könnte dann nur noch von der Retention verworfen, nie migriert werden.
+        # Solange weitere Quellen offen sind, bleibt die Entscheidung nicht-terminal; der
+        # Admin startet den nächsten Lauf.
+        if await rb.has_migratable_legacy():
+            return
         await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
 
     try:

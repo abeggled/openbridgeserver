@@ -1026,11 +1026,27 @@ class SqliteSegmentStore(RingBufferStore):
             raise
 
     async def close(self) -> None:
+        # Die Writer-Lease MUSS auch dann fallen, wenn conn-/manifest-close wirft (#968,
+        # Codex :1033): sonst bliebe die ``writer.lock``-flock während shutdown/disable/
+        # mode-rebuild gehalten und ein späteres Re-Enable/Retry IM SELBEN PROZESS scheiterte
+        # mit ``WriterLockHeldError`` bis zum Neustart. Alle Ressourcen best-effort schließen,
+        # Lease immer freigeben, den ERSTEN Fehler dennoch propagieren (analog open-error-Pfad).
+        first_err: Exception | None = None
         if self._active_conn is not None:
-            await self._active_conn.close()
+            try:
+                await self._active_conn.close()
+            except Exception as exc:  # noqa: BLE001 - erster Fehler wird propagiert
+                first_err = first_err or exc
             self._active_conn = None
-        await self.manifest.close()
-        await self._lease.release()
+        self._active_segment = None
+        try:
+            await self.manifest.close()
+        except Exception as exc:  # noqa: BLE001
+            first_err = first_err or exc
+        with contextlib.suppress(Exception):
+            await self._lease.release()
+        if first_err is not None:
+            raise first_err
 
     async def _create_segment_locked(self) -> SegmentRecord:
         filename = f"rb_{_utc_now_compact()}.sqlite"

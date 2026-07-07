@@ -173,9 +173,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_event_type) -> None:
     from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_MIGRATED,
         LEGACY_DECISIONS_PROTECTED,
+        LEGACY_DECISIONS_TERMINAL,
         ensure_legacy_migration_decision,
         load_persisted_ringbuffer_config,
+        persist_legacy_migration_decision,
     )
     from obs.ringbuffer.ringbuffer import (
         _is_sqlite_memory_path,
@@ -221,6 +224,13 @@ async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_eve
         segment_max_age=rb_cfg.get("segment_max_age"),
         legacy_retention_protected=decision in LEGACY_DECISIONS_PROTECTED,
     )
+    # Hat der Startup-Reconciler einen im Commit-Fenster unterbrochenen Offline-
+    # Migrations-Commit vollendet (#968, Codex :449), ist die Migration terminal – die
+    # Entscheidung nachziehen, sonst bliebe sie ``pending``/``skipped``, obwohl der Store
+    # promotet ist und keine Legacy-Quelle mehr existiert (spätere ``/migration/start``
+    # scheiterten dann grundlos).
+    if rb.startup_reconciled_commit and decision not in LEGACY_DECISIONS_TERMINAL:
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
     bus.subscribe(data_value_event_type, rb.handle_value_event)
 
 

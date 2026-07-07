@@ -318,9 +318,16 @@ class OfflineLegacyMigrator:
         async with self._write_lock:
             _unlink_legacy_files(Path(plan.legacy_path))
             await self._store.manifest.commit_offline_migration([plan.legacy_segment_id])
-        # Retention einmal nachziehen: der Store ist jetzt budget-konform bzw.
-        # trimmt Ränder (Cutoff ist eine Schätzung über die mittlere Zeilengröße).
-        await self._store.enforce_retention()
+        # AB HIER ist der destruktive Commit durch (Legacy weg, Kopien promotet) – die
+        # Migration ist terminal. Das Retention-Nachziehen (Ränder trimmen, Cutoff ist eine
+        # Schätzung) ist reine Aufräumarbeit; ein Fehler darf die committete Migration NICHT
+        # als ``failed`` melden (#968, Codex :323): ``_run()`` finge ihn sonst, rollte den
+        # Schutz zurück und überspränge ``on_success`` – die Entscheidung bliebe nicht-
+        # terminal, obwohl keine Quelle mehr zum Retry existiert. Best-effort, nur loggen.
+        try:
+            await self._store.enforce_retention()
+        except Exception:
+            logger.exception("RingBuffer: Post-Commit-Retention der Migration fehlgeschlagen (Migration ist dennoch committed)")
         progress.update(phase="done")
         return progress
 
@@ -525,9 +532,27 @@ async def reconcile_offline_migration(store: SqliteSegmentStore) -> bool:
     planen – die Migration ist fertig, es gibt keine Quelle mehr.
     """
     migrating = await store.manifest.list_migrating_segments()
+    legacy_rows = [s for s in await store.manifest.list_segments() if s.status == SEGMENT_STATUS_LEGACY]
+    missing_file_rows = [s for s in legacy_rows if not Path(s.filename).exists()]
+    # Fall 1 – unterbrochener Commit (Legacy-Datei unlinkt, Manifest-Delete fehlte noch).
+    # ZUERST prüfen, damit auch drop-only/ZERO-COPY-Migrationen erkannt werden (#968,
+    # Codex :528): ``rows_to_copy == 0`` legt gar keine ``migrating``-Segmente an, unlinkt
+    # aber die Legacy-DB. Stirbt der Prozess vor dem Manifest-Delete, gibt es eine
+    # Legacy-Zeile mit fehlender Datei UND keine migrating-Segmente – der frühere
+    # ``if not migrating: return`` überspränge das für immer (Zeile auf fehlende Datei,
+    # Retries unlesbar, ``migrated`` nie persistiert). Nur die fehlenden Zeilen detachen;
+    # etwaige migrating-Kopien werden mit-promotet (bei mehreren Quellen fehlt nur die
+    # gerade migrierte Datei – #968, Codex :496 – die anderen bleiben unangetastet).
+    if missing_file_rows:
+        logger.info(
+            "RingBuffer: unterbrochenen Offline-Migrations-Commit vollenden (%d migrating-Segmente, %d fehlende Quelle(n))",
+            len(migrating),
+            len(missing_file_rows),
+        )
+        await store.manifest.commit_offline_migration([s.segment_id for s in missing_file_rows])
+        return True
     if not migrating:
         return False
-    legacy_rows = [s for s in await store.manifest.list_segments() if s.status == SEGMENT_STATUS_LEGACY]
     if not legacy_rows:
         logger.warning("RingBuffer: %d verwaiste Offline-Migrations-Segmente ohne Legacy-Quelle – werden verworfen", len(migrating))
         for segment in migrating:
@@ -552,22 +577,6 @@ async def reconcile_offline_migration(store: SqliteSegmentStore) -> bool:
                 continue
             await store.manifest.delete_segment(segment.segment_id)
         return False
-    missing_file_rows = [s for s in legacy_rows if not Path(s.filename).exists()]
-    if missing_file_rows:
-        # Commit pro FEHLENDER Legacy-Quelle vollenden (#968, Codex :496): bei mehreren
-        # registrierten Legacy-Quellen fehlt nach einem Crash nur die gerade migrierte
-        # Datei, während die anderen Zeilen noch existieren. Früher verlangte der Check,
-        # dass ALLE Legacy-Dateien fehlen – sonst fiel der Startup zum Copy-Phase-Fall
-        # durch, ließ die kopierten ``migrating``-Segmente unsichtbar liegen und die
-        # unlinkte Quelle war weder abfragbar noch retrybar. Nur die fehlenden Zeilen
-        # detachen; ihre Kopien sind die einzigen ``migrating``-Segmente (ein Lauf gleichzeitig).
-        logger.info(
-            "RingBuffer: unterbrochenen Offline-Migrations-Commit vollenden (%d Segmente, %d fehlende Quelle(n))",
-            len(migrating),
-            len(missing_file_rows),
-        )
-        await store.manifest.commit_offline_migration([s.segment_id for s in missing_file_rows])
-        return True
     # Copy-Phase-Crash: Legacy-Datei existiert noch → Reste bleiben unsichtbar
     # liegen; der nächste Job-Start räumt sie weg.
     logger.info("RingBuffer: %d unsichtbare Offline-Migrations-Segmente einer unterbrochenen Kopie gefunden", len(migrating))

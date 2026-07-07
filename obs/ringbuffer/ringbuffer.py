@@ -266,6 +266,11 @@ class RingBuffer:
         # mehreren awaited Prechecks gesetzt; das Flag schließt das Race-Fenster
         # zwischen zwei fast-gleichzeitigen ``start_legacy_migration``-Aufrufen.
         self._legacy_migration_starting = False
+        # True, wenn der Startup-Reconciler einen im Commit-Fenster unterbrochenen
+        # Offline-Migrations-Commit VOLLENDET hat (#968, Codex :449). Der Aufrufer
+        # (``main.py``, der die DB hält) persistiert daraufhin die terminale
+        # ``migrated``-Entscheidung – der RingBuffer selbst kennt die app_settings-DB nicht.
+        self._startup_reconciled_commit = False
         self._legacy_migration_progress: dict[str, Any] = {"phase": "idle"}
         self._last_values: dict[str, Any] = {}  # dp_id → last recorded value
         self._last_recovery_at: str | None = None
@@ -446,7 +451,12 @@ class RingBuffer:
             # Kopien – deterministisch, bevor die Startup-Retention läuft.
             from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
 
-            await reconcile_offline_migration(store)
+            # Rückgabewert auswerten (#968, Codex :449): hat der Reconciler einen
+            # unterbrochenen Commit vollendet, muss der Aufrufer die ``migrated``-
+            # Entscheidung persistieren – sonst bliebe sie ``pending``/``skipped``,
+            # obwohl der Store korrekt promotet ist und keine Legacy-Quelle mehr existiert.
+            if await reconcile_offline_migration(store):
+                self._startup_reconciled_commit = True
 
             # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
             # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
@@ -1097,7 +1107,7 @@ class RingBuffer:
             # Neustart sie reconcilet, obwohl die Entscheidung bereits terminal ist.
             for segment in await self._store.manifest.list_migrating_segments():
                 base = self._store._segments_dir / segment.filename
-                for candidate in (base, Path(f"{base}-wal"), Path(f"{base}-shm")):
+                for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm")):
                     try:
                         freed += candidate.stat().st_size
                     except OSError:
@@ -1106,12 +1116,45 @@ class RingBuffer:
                         candidate.unlink()
                     except OSError:
                         pass
+                # Manifest-Zeile NUR entfernen, wenn die Hauptdatei wirklich weg ist (#968,
+                # Codex :1109, analog :442/:538/:210): bleibt sie liegen (Permission/EBUSY)
+                # und die Zeile würde trotzdem gelöscht, wäre es eine untracked
+                # ``rb_migrated_*.sqlite`` – aus /stats/Retention/Cleanup verschwunden.
+                # Der Unlink-Fehler propagiert (wie bei der Legacy-Hauptdatei oben), sodass
+                # der Aufrufer kein ``discarded`` persistiert und der Rest beim nächsten
+                # Versuch aufgeräumt wird.
+                try:
+                    freed += base.stat().st_size
+                except OSError:
+                    pass
+                base.unlink(missing_ok=True)
                 await self._store.manifest.delete_segment(segment.segment_id)
             return {"removed_segments": len(legacy_segments), "freed_bytes": freed}
 
     def legacy_migration_progress(self) -> dict[str, Any]:
         """Aktueller Fortschritt des Offline-Migrationsjobs (#965) – Kopie, nie live-Referenz."""
         return dict(self._legacy_migration_progress)
+
+    @property
+    def startup_reconciled_commit(self) -> bool:
+        """True, wenn der Startup-Reconciler einen unterbrochenen Migrations-Commit vollendet hat.
+
+        Der Aufrufer (``main.py``) persistiert daraufhin die terminale ``migrated``-
+        Entscheidung (#968, Codex :449) – der RingBuffer kennt die app_settings-DB nicht.
+        """
+        return self._startup_reconciled_commit
+
+    async def has_migratable_legacy(self) -> bool:
+        """True, wenn (noch) eine LESBARE Legacy-Quelle (``status='legacy'``) attached ist.
+
+        Grundlage für den Multi-Quellen-Abschluss (#968, Codex :441): ein Migrationslauf
+        migriert nur die erste Quelle; die ``migrated``-Entscheidung darf erst terminal
+        werden, wenn keine lesbare Legacy-Quelle mehr übrig ist. Quarantänierte (unlesbare)
+        Segmente zählen bewusst NICHT – sie sind nicht migrierbar (nur verwerfbar).
+        """
+        if not self._segmented or self._store is None:
+            return False
+        return bool(await self._store.manifest.list_legacy_segments())
 
     def legacy_migration_in_progress(self) -> bool:
         """True, solange ein Migrationsjob reserviert ist ODER in einer aktiven Phase läuft.

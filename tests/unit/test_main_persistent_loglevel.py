@@ -45,6 +45,7 @@ async def test_init_persisted_ringbuffer_subscribes_when_enabled(monkeypatch):
 
     class RingBufferStub:
         handle_value_event = object()
+        startup_reconciled_commit = False  # #968: main.py fragt das nach init_ringbuffer ab
 
     db = object()
     ringbuffer = RingBufferStub()
@@ -123,6 +124,7 @@ async def test_init_persisted_ringbuffer_memory_path_forces_unsegmented(monkeypa
 
     class RingBufferStub:
         handle_value_event = object()
+        startup_reconciled_commit = False  # #968: main.py fragt das nach init_ringbuffer ab
 
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
@@ -169,6 +171,7 @@ async def test_init_persisted_ringbuffer_file_path_stays_segmented(monkeypatch):
 
     class RingBufferStub:
         handle_value_event = object()
+        startup_reconciled_commit = False  # #968: main.py fragt das nach init_ringbuffer ab
 
     monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
