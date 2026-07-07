@@ -540,8 +540,16 @@ class RingBuffer:
                 await self._legacy_migration_task
         self._legacy_migration_task = None
         if self._store is not None:
-            await self._store.close()
-            self._store = None
+            try:
+                await self._store.close()
+            finally:
+                # ``_store`` IMMER lösen, auch wenn ``close()`` einen (best-effort schon
+                # abgearbeiteten) Fehler propagiert (#968, Codex :543): sonst könnte der
+                # Rollback-Pfad (config-disable) den alten Singleton mit einem bereits
+                # geschlossenen Manifest/Connection re-subscriben – Appends/Queries
+                # scheiterten dann bis zum Neustart. ``close()`` hat die Ressourcen best-
+                # effort geschlossen und die Writer-Lease freigegeben (#968, Codex :1033).
+                self._store = None
         await self._close_connection()
 
     # ------------------------------------------------------------------
@@ -1144,17 +1152,22 @@ class RingBuffer:
         """
         return self._startup_reconciled_commit
 
-    async def has_migratable_legacy(self) -> bool:
-        """True, wenn (noch) eine LESBARE Legacy-Quelle (``status='legacy'``) attached ist.
+    async def has_attached_legacy(self) -> bool:
+        """True, wenn (noch) IRGENDEINE Legacy-Quelle attached ist – schema-basiert.
 
-        Grundlage für den Multi-Quellen-Abschluss (#968, Codex :441): ein Migrationslauf
-        migriert nur die erste Quelle; die ``migrated``-Entscheidung darf erst terminal
-        werden, wenn keine lesbare Legacy-Quelle mehr übrig ist. Quarantänierte (unlesbare)
-        Segmente zählen bewusst NICHT – sie sind nicht migrierbar (nur verwerfbar).
+        Grundlage für den Multi-Quellen-Abschluss (#968, Codex :441/:2142): ein
+        Migrationslauf behandelt nur die erste Quelle; die ``migrated``-Entscheidung darf
+        erst terminal werden und der Retention-Schutz erst fallen, wenn KEINE Legacy-Quelle
+        mehr existiert. Schema-basiert (``schema_version <= LEGACY_SCHEMA_VERSION``), damit
+        auch ein quarantäniertes (unlesbares) Legacy zählt: es ist nicht migrierbar, aber
+        der Assistent muss sichtbar bleiben, damit der Admin es verwerfen kann – eine
+        terminale Entscheidung würde diesen Cleanup-Pfad verstecken.
         """
         if not self._segmented or self._store is None:
             return False
-        return bool(await self._store.manifest.list_legacy_segments())
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+
+        return any(s.schema_version <= LEGACY_SCHEMA_VERSION for s in await self._store.manifest.list_segments())
 
     def legacy_migration_in_progress(self) -> bool:
         """True, solange ein Migrationsjob reserviert ist ODER in einer aktiven Phase läuft.
@@ -1237,7 +1250,13 @@ class RingBuffer:
             # es gibt keine Legacy-Quelle mehr zum Retry, und ``migrator.run`` hat bereits
             # ``phase='done'`` gesetzt. Best-effort, Fehler nur protokollieren.
             try:
-                await self.set_legacy_retention_protected(False)
+                # Schutz nur aufheben, wenn KEINE Legacy-Quelle mehr attached ist (#968,
+                # Codex :1240): migriert ein Lauf bei mehreren Quellen nur die erste, bleibt
+                # die Entscheidung non-terminal (``on_success`` persistiert kein ``migrated``)
+                # – die verbleibende Quelle MUSS geschützt bleiben, sonst gewänne die nächste
+                # FIFO-Retention sie zurück, bevor der Admin sie migrieren/keep/discard kann.
+                if not await self.has_attached_legacy():
+                    await self.set_legacy_retention_protected(False)
                 if on_success is not None:
                     await on_success()
             except Exception:

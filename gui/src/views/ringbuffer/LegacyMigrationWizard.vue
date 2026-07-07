@@ -211,8 +211,18 @@ watch(open, (val) => {
 })
 
 // ── Abschluss ──────────────────────────────────────────────────────────────
+// ``phase === 'done'`` zählt nur als Abschluss, wenn KEINE Legacy-Quelle mehr übrig ist
+// (#968, Codex :216): migriert ein Lauf bei mehreren attachten Legacy-DBs nur die erste,
+// bleibt die Entscheidung non-terminal und ``legacy`` non-null – der Admin muss den
+// nächsten Lauf (bzw. discard einer quarantänierten Quelle) aus dem Assistenten starten
+// können, statt in den Abschluss-Screen gedrängt zu werden. Terminale Entscheidungen
+// (migrated/discarded) und der frisch gewählte keep-Pfad schließen weiterhin sofort ab.
 const finished = computed(
-  () => decision.value === 'migrated' || decision.value === 'discarded' || job.value?.phase === 'done' || keepJustChosen.value
+  () =>
+    decision.value === 'migrated' ||
+    decision.value === 'discarded' ||
+    (job.value?.phase === 'done' && !legacy.value) ||
+    keepJustChosen.value
 )
 const finishedText = computed(() => {
   if (decision.value === 'discarded') return t('ringbuffer.migration.discardDone')

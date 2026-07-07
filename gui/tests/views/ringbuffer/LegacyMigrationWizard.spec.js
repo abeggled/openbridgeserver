@@ -163,6 +163,15 @@ describe('LegacyMigrationWizard — Migrieren', () => {
     expect(wrapper.find('[data-testid="wizard-migrate-start"]').attributes('disabled')).toBeUndefined()
   })
 
+  it('stays on the options screen when a run finished but legacy remains (#968)', async () => {
+    // Multi-Quellen: ein Lauf ist done (phase=done), aber die Entscheidung bleibt
+    // non-terminal und eine weitere Legacy-Quelle ist noch attached (legacy != null).
+    // Der Admin muss den nächsten Lauf/discard aus dem Assistenten starten können.
+    const wrapper = await mountWizard(statusPayload({ decision: 'pending', job: job({ phase: 'done' }) }))
+    expect(wrapper.find('[data-testid="wizard-finished"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="wizard-option-migrate"]').exists()).toBe(true)
+  })
+
   it('shows the finished view when the decision is terminal (migrated)', async () => {
     const wrapper = await mountWizard(statusPayload({ decision: 'migrated', legacy: null, job: job({ phase: 'done' }) }))
     expect(wrapper.find('[data-testid="wizard-finished"]').exists()).toBe(true)

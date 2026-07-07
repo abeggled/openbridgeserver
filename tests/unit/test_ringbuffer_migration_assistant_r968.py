@@ -924,22 +924,28 @@ async def test_close_releases_lease_on_manifest_close_error(tmp_path: Path, monk
     await store2.close()
 
 
-# ---------- Runde 12, Codex :441: migrated nur ohne weitere migrierbare Quelle ----------
+# ---------- Runde 12/13, Codex :441/:2142: migrated nur ohne JEDE verbliebene Quelle ----------
 
 
-async def test_has_migratable_legacy_reflects_readable_sources(tmp_path: Path):
-    """``has_migratable_legacy`` steuert den Multi-Quellen-Abschluss (#968, Codex :441):
-    True solange eine LESBARE Legacy-Quelle attached ist, False sobald keine mehr
-    (quarantänierte zählen nicht – nicht migrierbar)."""
+async def test_has_attached_legacy_counts_quarantined(tmp_path: Path):
+    """``has_attached_legacy`` steuert den Multi-Quellen-Abschluss (#968, Codex :441/:2142):
+    schema-basiert True, solange IRGENDEINE Legacy-Quelle attached ist – auch eine
+    quarantänierte. Sie ist zwar nicht migrierbar, aber der Assistent muss sichtbar bleiben,
+    damit der Admin sie verwerfen kann; eine terminale ``migrated``-Entscheidung würde das
+    verstecken. Erst nach discard (Legacy-Zeile weg) wird der Check False."""
     legacy = tmp_path / "obs_ringbuffer.db"
     await _seed_legacy(legacy, [1, 2, 3])
     rb = _seg_rb(tmp_path, legacy_retention_protected=True)
     await rb.start()
     try:
-        assert await rb.has_migratable_legacy() is True
+        assert await rb.has_attached_legacy() is True
+        # Quarantänieren: nicht migrierbar, aber weiterhin attached → Check bleibt True.
         for seg in [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION]:
             await rb._store.manifest.mark_quarantined(seg.segment_id, "corrupt (Test)")
-        assert await rb.has_migratable_legacy() is False, "quarantänierte Quelle ist nicht migrierbar"
+        assert await rb.has_attached_legacy() is True, "quarantäniertes Legacy zählt noch (discard-Pfad offen)"
+        # Erst nach dem Verwerfen ist keine Quelle mehr da.
+        await rb.discard_legacy()
+        assert await rb.has_attached_legacy() is False
     finally:
         await rb.stop()
 
