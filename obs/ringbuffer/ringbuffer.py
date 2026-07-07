@@ -1167,6 +1167,20 @@ class RingBuffer:
 
         return any(s.schema_version <= LEGACY_SCHEMA_VERSION for s in await self._store.manifest.list_segments())
 
+    async def attached_legacy_total_bytes(self) -> int:
+        """Summe der Größen ALLER attachten Legacy-Quellen (#968, Codex :2032).
+
+        Schema-basiert (zählt auch quarantänierte Legacy), damit die Copy-Estimate im Status-
+        Endpoint – wie ``_target_copy_volume`` – jede Legacy-Quelle aus dem Live-Bestand
+        ausschließt: bei mehreren attachten Quellen zählten die übrigen sonst als Live-Daten und
+        senkten das geschätzte Ziel-Volumen unter den Backend-Precheck.
+        """
+        if not self._segmented or self._store is None:
+            return 0
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+
+        return sum(s.size_bytes for s in await self._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION)
+
     async def committed_migration_count(self) -> int:
         """Durabler Zähler abgeschlossener Offline-Migrations-Commits (#968, Codex :1175/:1263).
 

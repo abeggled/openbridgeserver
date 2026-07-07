@@ -1989,7 +1989,15 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
     # locked/voll), zieht der nächste Status-Poll des Assistenten sie state-basiert nach –
     # bevor ``decision`` gelesen wird, damit der zurückgegebene Status schon terminal ist.
     if rb is not None and is_ringbuffer_enabled():
-        await finalize_committed_migration_decision(db, rb)
+        # Best-effort wie die Startup-/Runtime-Init-Finalizer (#968, Codex :1992): schlägt die
+        # Persistenz der terminalen Entscheidung noch fehl (app-DB weiter locked/voll), darf der
+        # Status-Endpoint NICHT mit 500 antworten – der Frontend-Poller stoppt sonst bei Refresh-
+        # Fehlern und der Assistent bliebe nach einem erfolgreichen destruktiven Commit stale.
+        # Der nächste Poll versucht es erneut.
+        try:
+            await finalize_committed_migration_decision(db, rb)
+        except Exception:
+            logger.exception("RingBuffer: Status-Poll-Finalisierung der Migrations-Entscheidung fehlgeschlagen (Retry beim nächsten Poll)")
     decision = await load_legacy_migration_decision(db)
     legacy: dict[str, Any] | None = None
     over_budget = False
@@ -2029,7 +2037,13 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
             if budget:
                 headroom = ((stats.get("prognosis") or {}).get("effective_segment_max_bytes")) or 0
                 total_size = stats.get("file_size_bytes") or 0
-                live_bytes = max(0, total_size - legacy_size)
+                # ALLE Legacy-Quellen aus den Live-Bytes herausrechnen (#968, Codex :2032), nicht
+                # nur die angezeigte: der Migrator schließt in ``_target_copy_volume`` jedes
+                # Legacy-Segment aus. Bei mehreren attachten Quellen zählten die übrigen sonst als
+                # Live-Bestand, senkten ``target_volume``/``estimated_copy`` und ließen eine
+                # Migration zu, die der Backend-Precheck dann ablehnt.
+                total_legacy_bytes = await rb.attached_legacy_total_bytes()
+                live_bytes = max(0, total_size - total_legacy_bytes)
                 target_volume = max(0, budget - headroom - live_bytes)
                 estimated_copy = min(v2_estimate, target_volume)
             else:

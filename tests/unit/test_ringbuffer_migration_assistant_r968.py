@@ -1468,3 +1468,63 @@ async def test_commit_counter_backfilled_before_startup_retention(tmp_path: Path
         assert await rb2.has_committed_migration() is True
     finally:
         await rb2.stop()
+
+
+# ---------- Runde 18, Codex :1992: Status-Poll-Finalisierung best-effort ----------
+
+
+async def test_status_finalize_error_does_not_500(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Wirft die Finalisierung im ``GET /migration``-Status (app-DB weiter locked/voll), darf der
+    Endpoint NICHT mit 500 antworten – der Frontend-Poller würde sonst stoppen und der Assistent
+    bliebe stale (#968, Codex :1992)."""
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer, reset_ringbuffer
+
+    db = Database(":memory:")
+    await db.connect()
+    rb_path = tmp_path / "obs_ringbuffer.db"
+    monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
+    reset_ringbuffer()
+
+    async def _boom(_db, _rb):
+        raise RuntimeError("app-db locked")
+
+    monkeypatch.setattr(rb_api, "finalize_committed_migration_decision", _boom)
+    try:
+        await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), _user="admin", db=db)
+        # Darf NICHT werfen – der Status kommt trotz Finalisierungsfehler zurück.
+        status = await rb_api._legacy_migration_status(db)
+        assert status is not None
+    finally:
+        rb = get_optional_ringbuffer()
+        if rb is not None:
+            await rb.stop()
+        reset_ringbuffer()
+        await db.disconnect()
+
+
+# ---------- Runde 18, Codex :2032: Estimate schließt ALLE Legacy-Quellen aus ----------
+
+
+async def test_attached_legacy_total_bytes_sums_all_sources(tmp_path: Path):
+    """``attached_legacy_total_bytes`` summiert ALLE attachten Legacy-Segmente (#968, Codex :2032),
+    Grundlage der Multi-Quellen-korrekten Copy-Estimate."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(10)))
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+
+        legacy_segs = [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION]
+        assert legacy_segs, "eine Legacy-Quelle ist attached"
+        expected = sum(s.size_bytes for s in legacy_segs)
+        assert await rb.attached_legacy_total_bytes() == expected
+
+        # Zweite Legacy-Quelle simulieren: die Summe wächst um deren Größe.
+        second = await rb._store.manifest.register_legacy_segment(source_path=str(tmp_path / "obs_ringbuffer_2.db"), size_bytes=4242)
+        assert await rb.attached_legacy_total_bytes() == expected + 4242, "beide Quellen zählen"
+        assert second is not None
+    finally:
+        await rb.stop()
