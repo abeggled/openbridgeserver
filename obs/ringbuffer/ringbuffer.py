@@ -1088,39 +1088,28 @@ class RingBuffer:
         from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
 
         async with self._lock:
-            # Schema-basiert erfassen (#968): auch ein quarantaeniertes Legacy soll
-            # verworfen werden koennen.
+            # Schema-basiert erfassen (#968): auch ein quarantaeniertes Legacy soll verworfen
+            # werden koennen. NUR die ÄLTESTE (vom Overview angezeigte) Quelle verwerfen (#968,
+            # Codex :1095): Assistent und Start-Guard verweisen stets auf die älteste schema-legacy
+            # Quelle. Spätere, nie previewte gesunde Quellen mitzulöschen wäre unerwarteter
+            # Datenverlust – sie bleiben für eine separate Entscheidung erhalten.
             legacy_segments = sorted(
                 (s for s in await self._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION),
                 key=lambda s: s.segment_id,
             )
+            if not legacy_segments:
+                return {"removed_segments": 0, "freed_bytes": 0}
+            target = legacy_segments[0]
+            multi_source = len(legacy_segments) > 1
             freed = 0
-            for segment in legacy_segments:
-                base = Path(segment.filename)
-                # Haupt-DB ZUERST loeschen und Fehler PROPAGIEREN (#968, Codex :1060):
-                # bleibt sie liegen (Permission/Lock), attached der naechste Start sie
-                # wieder als Legacy, obwohl dem Admin ``discarded`` (endgueltig) gemeldet
-                # wuerde. Erst nach erfolgreichem Unlink die Manifest-Zeile entfernen –
-                # scheitert das Unlink, bleibt die Zeile registriert und der Aufrufer
-                # persistiert kein ``discarded``.
-                try:
-                    freed += base.stat().st_size
-                except OSError:
-                    pass
-                base.unlink(missing_ok=True)
-                await self._store.manifest.delete_segment(segment.segment_id)
-                for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm"), self._legacy_attach_identity_path(str(base))):
-                    try:
-                        freed += candidate.stat().st_size
-                        candidate.unlink()
-                    except OSError:
-                        continue
-            # Auch verwaiste ``migrating``-Kopien einer zuvor gescheiterten Migration hier
-            # verwerfen (#968, Codex :1066): ein ``discard`` ist erlaubt, sobald kein Job
-            # mehr läuft. Blieben die migrating-Segmente liegen, hielten sie – unsichtbar
-            # für Queries und aus der Retention ausgeschlossen – Platz belegt, bis ein
-            # Neustart sie reconcilet, obwohl die Entscheidung bereits terminal ist.
+            # Verwaiste ``migrating``-Kopien der Zielquelle ZUERST räumen (#968, Codex :1110), VOR
+            # der destruktiven Legacy-Löschung: scheitert ein migrating-Unlink (Permission/EBUSY)
+            # NACH dem Legacy-Löschen, bliebe ein partial discard (Legacy weg, migrating-Row
+            # registriert, keine Quelle zum Anzeigen/Retry). Source-scoped: nur die der Zielquelle;
+            # unscoped NULL-Reste (Alt-Manifest) nur, wenn keine andere Quelle attached bleibt.
             for segment in await self._store.manifest.list_migrating_segments():
+                if segment.legacy_source_id != target.segment_id and not (segment.legacy_source_id is None and not multi_source):
+                    continue
                 base = self._store._segments_dir / segment.filename
                 for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm")):
                     try:
@@ -1132,19 +1121,34 @@ class RingBuffer:
                     except OSError:
                         pass
                 # Manifest-Zeile NUR entfernen, wenn die Hauptdatei wirklich weg ist (#968,
-                # Codex :1109, analog :442/:538/:210): bleibt sie liegen (Permission/EBUSY)
-                # und die Zeile würde trotzdem gelöscht, wäre es eine untracked
-                # ``rb_migrated_*.sqlite`` – aus /stats/Retention/Cleanup verschwunden.
-                # Der Unlink-Fehler propagiert (wie bei der Legacy-Hauptdatei oben), sodass
-                # der Aufrufer kein ``discarded`` persistiert und der Rest beim nächsten
-                # Versuch aufgeräumt wird.
+                # Codex :1109, analog :442/:538/:210): sonst eine untracked ``rb_migrated_*.sqlite``
+                # (aus /stats/Retention/Cleanup verschwunden). Der Unlink-Fehler propagiert, sodass
+                # der Aufrufer kein ``discarded`` persistiert und der Rest beim nächsten Versuch
+                # aufgeräumt wird.
                 try:
                     freed += base.stat().st_size
                 except OSError:
                     pass
                 base.unlink(missing_ok=True)
                 await self._store.manifest.delete_segment(segment.segment_id)
-            return {"removed_segments": len(legacy_segments), "freed_bytes": freed}
+            # Dann die Zielquelle: Haupt-DB ZUERST löschen und Fehler PROPAGIEREN (#968, Codex
+            # :1060) – bleibt sie liegen (Permission/Lock), attached der nächste Start sie wieder
+            # als Legacy, obwohl dem Admin ``discarded`` gemeldet würde. Erst nach erfolgreichem
+            # Unlink die Manifest-Zeile entfernen.
+            base = Path(target.filename)
+            try:
+                freed += base.stat().st_size
+            except OSError:
+                pass
+            base.unlink(missing_ok=True)
+            await self._store.manifest.delete_segment(target.segment_id)
+            for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm"), self._legacy_attach_identity_path(str(base))):
+                try:
+                    freed += candidate.stat().st_size
+                    candidate.unlink()
+                except OSError:
+                    continue
+            return {"removed_segments": 1, "freed_bytes": freed}
 
     def legacy_migration_progress(self) -> dict[str, Any]:
         """Aktueller Fortschritt des Offline-Migrationsjobs (#965) – Kopie, nie live-Referenz."""
@@ -1256,6 +1260,14 @@ class RingBuffer:
         Copy-Start aufheben, ``discard`` die Quelle nach akzeptiertem Start entfernen.
         """
         if self._legacy_migration_starting:
+            return True
+        # Auch das POST-COMMIT-Fenster abdecken (#968, Codex :385): ``migrator.run`` setzt
+        # ``phase='done'``, aber der ``_run``-Wrapper führt danach noch ``_post_commit_bookkeeping``
+        # aus (Schutz aufheben + ``migrated`` persistieren). Solange der Task nicht abgeschlossen
+        # ist, läuft dieser Abschluss noch – eine parallele ``keep``/``discard``-Entscheidung dürfte
+        # in diesem Fenster NICHT durchgehen, sonst bliebe der Assistenten-Zustand inkonsistent mit
+        # den bereits migrierten Daten (der Finalizer überschreibt keep/terminal bewusst nicht).
+        if self._legacy_migration_task is not None and not self._legacy_migration_task.done():
             return True
         return (self._legacy_migration_progress or {}).get("phase") in ("starting", "precheck", "copying", "committing")
 

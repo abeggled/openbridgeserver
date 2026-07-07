@@ -128,6 +128,7 @@ class SegmentRecord:
     integrity_status: str
     recovery_status: str
     quarantine_reason: str | None = None
+    legacy_source_id: int | None = None
 
 
 def _utc_now_iso() -> str:
@@ -149,6 +150,7 @@ def _row_to_segment(row: aiosqlite.Row) -> SegmentRecord:
         integrity_status=row["integrity_status"],
         recovery_status=row["recovery_status"],
         quarantine_reason=row["quarantine_reason"] if "quarantine_reason" in row.keys() else None,
+        legacy_source_id=row["legacy_source_id"] if "legacy_source_id" in row.keys() else None,
     )
 
 
@@ -362,11 +364,20 @@ class Manifest:
         # Nur die migrating-Segmente der committeten Quelle(n) promoten (#968, Codex :354): bei
         # mehreren Legacy-Quellen darf ein Commit/Reconcile von Quelle B nicht die stale migrating-
         # Kopien einer noch attachten Quelle A sichtbar machen (duplicate/incomplete rows).
-        # ``legacy_source_id IS NULL`` deckt (a) Alt-Manifests vor der Spalte und (b) den Single-
-        # Source-Fall ab; ``_discard_migrating_segments`` verwirft NULL-Reste ohnehin vor jedem Lauf.
         placeholders = ", ".join("?" for _ in legacy_segment_ids)
+        # Unscoped NULL-source Chunks (Alt-Manifest vor der ``legacy_source_id``-Spalte) nur dann
+        # mit-promoten, wenn KEINE weitere schema-legacy Quelle attached bleibt (#968, Codex :369):
+        # sonst könnten sie zu einer verbleibenden Quelle gehören und würden die Kreuzkontamination
+        # für genau den Abwärtskompatibilitäts-Pfad wieder öffnen. Bleibt keine andere Quelle, sind
+        # NULL-Chunks eindeutig diesem Single-Source-Commit zuzuordnen.
+        async with self._db.execute(
+            f"SELECT COUNT(*) FROM segments WHERE schema_version <= {LEGACY_SCHEMA_VERSION} AND segment_id NOT IN ({placeholders})",
+            tuple(legacy_segment_ids),
+        ) as cur:
+            other_legacy_attached = bool((await cur.fetchone())[0])
+        null_clause = "" if other_legacy_attached else " OR legacy_source_id IS NULL"
         await self._db.execute(
-            f"UPDATE segments SET status = ?, closed_at = ? WHERE status = ? AND (legacy_source_id IN ({placeholders}) OR legacy_source_id IS NULL)",
+            f"UPDATE segments SET status = ?, closed_at = ? WHERE status = ? AND (legacy_source_id IN ({placeholders}){null_clause})",
             (SEGMENT_STATUS_CLOSED, closed_at, SEGMENT_STATUS_MIGRATING, *legacy_segment_ids),
         )
         for segment_id in legacy_segment_ids:

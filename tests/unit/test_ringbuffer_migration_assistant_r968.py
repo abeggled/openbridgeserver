@@ -518,8 +518,12 @@ async def test_reconcile_completes_commit_for_single_missing_legacy_of_many(tmp_
         present_row = await store.manifest.register_legacy_segment(source_path=str(present), size_bytes=256)
         missing_row = await store.manifest.register_legacy_segment(source_path=str(missing), size_bytes=256)
 
-        # Kopie der migrierten (fehlenden) Quelle als migrating-Segment.
-        mig = await store.manifest.create_migrating_segment(filename="rb_migrated_x.sqlite", schema_version=2)
+        # Kopie der migrierten (fehlenden) Quelle als migrating-Segment – der fehlenden Quelle
+        # zugeordnet (#968, Codex :354/:369), damit der Commit bei mehreren Quellen genau diese
+        # Kopie promotet und die andere, noch attachte Quelle nicht kreuzkontaminiert.
+        mig = await store.manifest.create_migrating_segment(
+            filename="rb_migrated_x.sqlite", schema_version=2, legacy_source_id=missing_row.segment_id
+        )
         (store._segments_dir / "rb_migrated_x.sqlite").write_bytes(b"y" * 256)
 
         await reconcile_offline_migration(store)
@@ -1972,5 +1976,125 @@ async def test_start_allows_reconcile_of_unlinked_quarantined_source(tmp_path: P
         assert rb.legacy_migration_progress()["phase"] == "done", "Reconciler vollendet den unterbrochenen Commit"
         promoted = [s for s in await rb._store.manifest.list_segments() if s.filename == "rb_migrated_x.sqlite" and s.status == "closed"]
         assert promoted, "migrating-Kopie promotet statt Start abgelehnt"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 23, Codex :385: Job bleibt aktiv bis migrated persistiert ----------
+
+
+async def test_migration_in_progress_during_post_commit_bookkeeping(tmp_path: Path):
+    """``legacy_migration_in_progress`` muss True bleiben, solange nach ``phase='done'`` noch das
+    Post-Commit-Bookkeeping (``on_success`` → ``migrated`` persistieren) läuft (#968, Codex :385) –
+    sonst könnte eine parallele keep/discard-Entscheidung durchschlüpfen."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(15)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        gate = asyncio.Event()
+
+        async def _slow_on_success():
+            await gate.wait()
+
+        await rb.start_legacy_migration(on_success=_slow_on_success)
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if rb.legacy_migration_progress().get("phase") == "done":
+                break
+        assert rb.legacy_migration_progress()["phase"] == "done", "Commit durch, Bookkeeping hängt"
+        assert rb.legacy_migration_in_progress() is True, "Job aktiv bis Bookkeeping fertig"
+
+        gate.set()
+        await rb._legacy_migration_task
+        assert rb.legacy_migration_in_progress() is False, "nach Bookkeeping nicht mehr aktiv"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 23, Codex :369: NULL-Chunk bei weiterer Quelle NICHT promoten ----------
+
+
+async def test_commit_keeps_null_chunk_when_other_source_attached(tmp_path: Path):
+    """Ein unscoped NULL-source migrating-Chunk darf NICHT promotet werden, solange eine weitere
+    Legacy-Quelle attached ist (#968, Codex :369) – sonst Multi-Source-Kreuzkontamination über den
+    Abwärtskompatibilitäts-Pfad."""
+    from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
+
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        a = await store.manifest.register_legacy_segment(source_path=str(tmp_path / "a.db"), size_bytes=100)
+        b = await store.manifest.register_legacy_segment(source_path=str(tmp_path / "b.db"), size_bytes=100)
+        await store.manifest.create_migrating_segment(filename="rb_migrated_null.sqlite", schema_version=2)  # source_id=None
+
+        await store.manifest.commit_offline_migration([b.segment_id])
+        by_name = {s.filename: s for s in await store.manifest.list_segments()}
+        assert by_name["rb_migrated_null.sqlite"].status == "migrating", "NULL-Chunk bleibt unsichtbar (A noch attached)"
+        assert a.segment_id in [s.segment_id for s in await store.manifest.list_segments()]
+    finally:
+        await store.close()
+
+
+# ---------- Runde 23, Codex :1095: discard verwirft nur die angezeigte Quelle ----------
+
+
+async def test_discard_removes_only_oldest_legacy(tmp_path: Path):
+    """``discard_legacy`` darf nur die ÄLTESTE (angezeigte) Quelle löschen – spätere gesunde,
+    nie previewte Quellen bleiben erhalten (#968, Codex :1095)."""
+    from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(10)))
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        second = tmp_path / "legacy2.db"
+        second.write_bytes(b"z" * 128)
+        await rb._store.manifest.register_legacy_segment(source_path=str(second), size_bytes=128)
+
+        await rb.discard_legacy()
+        remaining = [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION]
+        assert len(remaining) == 1, "nur die älteste Quelle verworfen"
+        assert remaining[0].filename == str(second), "die spätere Quelle bleibt erhalten"
+        assert second.exists(), "spätere Legacy-Datei nicht gelöscht"
+        assert not legacy.exists(), "älteste Legacy-Datei verworfen"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 23, Codex :1110: migrating-Cleanup vor der Legacy-Löschung ----------
+
+
+async def test_discard_migrating_unlink_failure_keeps_legacy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Scheitert der Unlink eines migrating-Leftovers, muss die Legacy-Quelle NOCH da sein (#968,
+    Codex :1110): der migrating-Cleanup läuft VOR der destruktiven Legacy-Löschung, sodass kein
+    partial discard entsteht (Legacy weg, migrating-Row registriert)."""
+    from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(10)))
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        legs = [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION]
+        oldest = min(legs, key=lambda s: s.segment_id)
+        await rb._store.manifest.create_migrating_segment(filename="rb_migrated_stale.sqlite", schema_version=2, legacy_source_id=oldest.segment_id)
+        (rb._store._segments_dir / "rb_migrated_stale.sqlite").write_bytes(b"x" * 64)
+
+        orig_unlink = Path.unlink
+
+        def _boom(self, *a, **k):
+            if "rb_migrated_stale" in self.name:
+                raise PermissionError("locked")
+            return orig_unlink(self, *a, **k)
+
+        monkeypatch.setattr(Path, "unlink", _boom)
+        with pytest.raises(PermissionError):
+            await rb.discard_legacy()
+        monkeypatch.setattr(Path, "unlink", orig_unlink)
+
+        assert legacy.exists(), "Legacy bleibt, wenn der migrating-Cleanup fehlschlägt"
+        assert [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION], "Legacy-Row bleibt"
     finally:
         await rb.stop()
