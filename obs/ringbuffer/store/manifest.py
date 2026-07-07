@@ -44,6 +44,16 @@ SEGMENT_STATUS_LEGACY = "legacy"
 # und die Legacy-Zeile entfernt.
 SEGMENT_STATUS_MIGRATING = "migrating"
 
+# Intent-Marker für einen laufenden ``discard`` einer Legacy-Quelle (#968, Codex :1144/:1148).
+# ``discard_legacy`` setzt ihn ATOMAR VOR dem Löschen der Legacy-Datei. Er unterscheidet einen
+# (evtl. fehlgeschlagenen) discard eindeutig von einem im Commit-Fenster unterbrochenen Migrations-
+# Commit: eine ``discarding``-Zeile mit fehlender Datei ist KEIN recoverbarer Commit (der Reconciler
+# darf sie nicht als ``migrated`` promoten) und blockiert auch keine Assistenten-Entscheidung – sie
+# wird von ``discard_legacy`` bzw. dem Startup-Reconciler einfach zu Ende verworfen. Egal welcher
+# Schritt (Datei-Unlink oder Manifest-Delete) fehlschlägt, ein Retry findet die Marker-Zeile und
+# vollendet den discard, ohne einen der beiden inkonsistenten Zwischenzustände zu hinterlassen.
+SEGMENT_STATUS_DISCARDING = "discarding"
+
 # Dateinamen-Präfix der offline migrierten v2-Segmente (``OfflineLegacyMigrator``).
 # Zentral hier, damit Detektor (``sqlite_backend._is_migrated_segment``), Erzeuger
 # und die Read-Ordnung denselben Marker nutzen. WICHTIG (#968, Codex :495): die
@@ -351,31 +361,53 @@ class Manifest:
             rows = await cur.fetchall()
         return [_row_to_segment(row) for row in rows]
 
-    async def commit_offline_migration(self, legacy_segment_ids: list[int]) -> None:
+    async def list_schema_legacy_segments(self, *, include_discarding: bool = False) -> list[SegmentRecord]:
+        """Alle schema-legacy Segmente (auch quarantänierte), älteste zuerst (#968, Codex :1148).
+
+        ``discarding``-Zeilen (Intent-Marker eines laufenden/fehlgeschlagenen discard) sind
+        standardmäßig AUSGESCHLOSSEN: sie sind im Verwerfen und keine aktive Legacy-Quelle mehr.
+        Nur der Reconciler/discard-Cleanup betrachtet sie explizit (``include_discarding=True``).
+        """
+        rows = [s for s in await self.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION]
+        if not include_discarding:
+            rows = [s for s in rows if s.status != SEGMENT_STATUS_DISCARDING]
+        return sorted(rows, key=lambda s: s.segment_id)
+
+    async def mark_discarding(self, segment_id: int) -> None:
+        """Setzt den ``discarding``-Intent-Marker auf eine Legacy-Zeile (#968, Codex :1148)."""
+        await self._db.execute("UPDATE segments SET status = ? WHERE segment_id = ?", (SEGMENT_STATUS_DISCARDING, segment_id))
+        await self._db.commit()
+
+    async def list_discarding_segments(self) -> list[SegmentRecord]:
+        """Legacy-Zeilen im ``discarding``-Zwischenzustand (unterbrochener discard), älteste zuerst."""
+        async with self._db.execute(
+            "SELECT * FROM segments WHERE status = ? ORDER BY segment_id ASC",
+            (SEGMENT_STATUS_DISCARDING,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_segment(row) for row in rows]
+
+    async def commit_offline_migration(self, legacy_segment_ids: list[int], *, promote_unscoped: bool = False) -> None:
         """Atomarer Migrations-Commit (#965): promote + detach in EINER Transaktion.
 
-        Alle ``migrating``-Segmente werden ``closed`` (und damit sichtbar +
-        retention-fähig), die Legacy-Manifest-Zeile(n) werden entfernt – beides
-        in einer SQLite-Transaktion. Ein Crash lässt entweder den kompletten
-        Vorzustand (Legacy autoritativ, Kopien unsichtbar) oder den kompletten
-        Endzustand zurück; einen Mischzustand gibt es nicht.
+        Alle zugeordneten ``migrating``-Segmente werden ``closed`` (und damit sichtbar +
+        retention-fähig), die Legacy-Manifest-Zeile(n) werden entfernt – beides in einer SQLite-
+        Transaktion. Ein Crash lässt entweder den kompletten Vorzustand (Legacy autoritativ, Kopien
+        unsichtbar) oder den kompletten Endzustand zurück; einen Mischzustand gibt es nicht.
+
+        ``promote_unscoped`` (#968, Codex :369/:378): steuert die Behandlung von migrating-Chunks
+        OHNE ``legacy_source_id`` (Alt-Manifest vor der Spalte). Der normale Migrator-Commit (False)
+        promotet NUR source-scoped, um bei mehreren Quellen keine stale Kopie einer anderen Quelle
+        sichtbar zu machen. Der Startup-Reconciler eines unterbrochenen Commits (True) MUSS die
+        NULL-Chunks der fehlenden Quelle promoten, sonst löscht das folgende Detach die einzige
+        Quelle, die den Commit identifizierte, und die bereits unlinkte Historie ginge verloren.
         """
         closed_at = _utc_now_iso()
         # Nur die migrating-Segmente der committeten Quelle(n) promoten (#968, Codex :354): bei
-        # mehreren Legacy-Quellen darf ein Commit/Reconcile von Quelle B nicht die stale migrating-
+        # mehreren Legacy-Quellen darf ein normaler Commit von Quelle B nicht die stale migrating-
         # Kopien einer noch attachten Quelle A sichtbar machen (duplicate/incomplete rows).
         placeholders = ", ".join("?" for _ in legacy_segment_ids)
-        # Unscoped NULL-source Chunks (Alt-Manifest vor der ``legacy_source_id``-Spalte) nur dann
-        # mit-promoten, wenn KEINE weitere schema-legacy Quelle attached bleibt (#968, Codex :369):
-        # sonst könnten sie zu einer verbleibenden Quelle gehören und würden die Kreuzkontamination
-        # für genau den Abwärtskompatibilitäts-Pfad wieder öffnen. Bleibt keine andere Quelle, sind
-        # NULL-Chunks eindeutig diesem Single-Source-Commit zuzuordnen.
-        async with self._db.execute(
-            f"SELECT COUNT(*) FROM segments WHERE schema_version <= {LEGACY_SCHEMA_VERSION} AND segment_id NOT IN ({placeholders})",
-            tuple(legacy_segment_ids),
-        ) as cur:
-            other_legacy_attached = bool((await cur.fetchone())[0])
-        null_clause = "" if other_legacy_attached else " OR legacy_source_id IS NULL"
+        null_clause = " OR legacy_source_id IS NULL" if promote_unscoped else ""
         await self._db.execute(
             f"UPDATE segments SET status = ?, closed_at = ? WHERE status = ? AND (legacy_source_id IN ({placeholders}){null_clause})",
             (SEGMENT_STATUS_CLOSED, closed_at, SEGMENT_STATUS_MIGRATING, *legacy_segment_ids),

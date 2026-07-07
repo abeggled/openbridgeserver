@@ -985,9 +985,7 @@ class RingBuffer:
         No-Zero-History-Guard bereits erfüllen. Ein retention-bedingter Delete entfernt
         die Zeile ganz; danach ``False`` (Normalbetrieb ohne Extra-Enforce).
         """
-        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
-
-        return any(s.schema_version <= LEGACY_SCHEMA_VERSION for s in await self._store.manifest.list_segments())
+        return bool(await self._store.manifest.list_schema_legacy_segments())
 
     # ------------------------------------------------------------------
     # Legacy-Migrations-Assistent (#964)
@@ -1033,12 +1031,7 @@ class RingBuffer:
         # ``list_legacy_segments()`` (nur ``status='legacy'``). Der Assistent muss es
         # weiterhin sehen, damit ein Admin die nun unlesbare, Platz belegende Quelle
         # verwerfen kann. Aeltestes zuerst.
-        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
-
-        legacy_segments = sorted(
-            (s for s in await self._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION),
-            key=lambda s: s.segment_id,
-        )
+        legacy_segments = await self._store.manifest.list_schema_legacy_segments()
         if not legacy_segments:
             return None
         segment = legacy_segments[0]
@@ -1085,28 +1078,34 @@ class RingBuffer:
         """
         if not self._segmented or self._store is None:
             return {"removed_segments": 0, "freed_bytes": 0}
-        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_DISCARDING
 
         async with self._lock:
-            # Schema-basiert erfassen (#968): auch ein quarantaeniertes Legacy soll verworfen
-            # werden koennen. NUR die ÄLTESTE (vom Overview angezeigte) Quelle verwerfen (#968,
-            # Codex :1095): Assistent und Start-Guard verweisen stets auf die älteste schema-legacy
-            # Quelle. Spätere, nie previewte gesunde Quellen mitzulöschen wäre unerwarteter
-            # Datenverlust – sie bleiben für eine separate Entscheidung erhalten.
+            freed = 0
+            removed = 0
+            # 1. Etwaige ``discarding``-Leftovers eines FRÜHER fehlgeschlagenen discard zu Ende
+            #    verwerfen (#968, Codex :1148): egal ob damals der Datei-Unlink oder der Manifest-
+            #    Delete scheiterte, die Marker-Zeile erlaubt hier den sauberen Abschluss.
+            for segment in await self._store.manifest.list_discarding_segments():
+                freed += await self._finish_discard_row(Path(segment.filename), segment.segment_id)
+                removed += 1
+            # 2. Älteste AKTIVE schema-legacy Quelle als Ziel (``discarding``-Reste ausgeschlossen).
+            #    NUR die älteste (vom Overview angezeigte) verwerfen (#968, Codex :1095): spätere,
+            #    nie previewte gesunde Quellen bleiben für eine separate Entscheidung erhalten.
             legacy_segments = sorted(
-                (s for s in await self._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION),
+                (
+                    s
+                    for s in await self._store.manifest.list_segments()
+                    if s.schema_version <= LEGACY_SCHEMA_VERSION and s.status != SEGMENT_STATUS_DISCARDING
+                ),
                 key=lambda s: s.segment_id,
             )
             if not legacy_segments:
-                return {"removed_segments": 0, "freed_bytes": 0}
+                return {"removed_segments": removed, "freed_bytes": freed}
             target = legacy_segments[0]
             multi_source = len(legacy_segments) > 1
-            freed = 0
-            # Verwaiste ``migrating``-Kopien der Zielquelle ZUERST räumen (#968, Codex :1110), VOR
-            # der destruktiven Legacy-Löschung: scheitert ein migrating-Unlink (Permission/EBUSY)
-            # NACH dem Legacy-Löschen, bliebe ein partial discard (Legacy weg, migrating-Row
-            # registriert, keine Quelle zum Anzeigen/Retry). Source-scoped: nur die der Zielquelle;
-            # unscoped NULL-Reste (Alt-Manifest) nur, wenn keine andere Quelle attached bleibt.
+            # Verwaiste ``migrating``-Kopien der Zielquelle ZUERST räumen (#968, Codex :1110).
+            # Source-scoped: nur die der Zielquelle; unscoped NULL-Reste nur bei Single-Source.
             for segment in await self._store.manifest.list_migrating_segments():
                 if segment.legacy_source_id != target.segment_id and not (segment.legacy_source_id is None and not multi_source):
                     continue
@@ -1120,39 +1119,42 @@ class RingBuffer:
                         candidate.unlink()
                     except OSError:
                         pass
-                # Manifest-Zeile NUR entfernen, wenn die Hauptdatei wirklich weg ist (#968,
-                # Codex :1109, analog :442/:538/:210): sonst eine untracked ``rb_migrated_*.sqlite``
-                # (aus /stats/Retention/Cleanup verschwunden). Der Unlink-Fehler propagiert, sodass
-                # der Aufrufer kein ``discarded`` persistiert und der Rest beim nächsten Versuch
-                # aufgeräumt wird.
                 try:
                     freed += base.stat().st_size
                 except OSError:
                     pass
                 base.unlink(missing_ok=True)
                 await self._store.manifest.delete_segment(segment.segment_id)
-            # Dann die Zielquelle: Manifest-Zeile ZUERST entfernen, DANN die Dateien (#968, Codex
-            # :1144). Umgekehrt (Datei zuerst) hinterließe ein fehlgeschlagener Manifest-Delete eine
-            # Legacy-Zeile MIT fehlender Datei – ununterscheidbar von einem unterbrochenen
-            # Migrations-Commit, den der Reconciler später fälschlich als ``migrated`` finalisierte
-            # (obwohl die Historie absichtlich verworfen wurde). Zeile-zuerst führt bei einem
-            # Datei-Unlink-Fehler dagegen nur dazu, dass der nächste Start die Datei erneut als
-            # Legacy attached (Assistent zeigt sie wieder ``pending``) – harmlos und retry-bar. Der
-            # Fehler propagiert in beiden Fällen, sodass der Aufrufer kein ``discarded`` persistiert.
-            base = Path(target.filename)
+            # 3. Intent-Marker setzen, DANN Datei, DANN Manifest-Zeile (#968, Codex :1144/:1148):
+            #    egal welcher Schritt fehlschlägt, die ``discarding``-Zeile hinterlässt weder einen
+            #    missing-file-Legacy-Zustand (den der Reconciler fälschlich als ``migrated``
+            #    finalisierte) noch einen row-weg-datei-da-Zustand (den ein Retry fälschlich als
+            #    ``discarded`` bei tatsächlich verbliebener Datei quittierte). Schritt 1 eines
+            #    Retrys (oder der Startup-Reconciler) vollendet den discard sauber.
+            await self._store.manifest.mark_discarding(target.segment_id)
+            freed += await self._finish_discard_row(Path(target.filename), target.segment_id)
+            removed += 1
+            return {"removed_segments": removed, "freed_bytes": freed}
+
+    async def _finish_discard_row(self, base: Path, segment_id: int) -> int:
+        """Vollendet den discard einer (``discarding``/Legacy-)Zeile: Datei + Sidecars, dann
+        Manifest-Zeile (#968, Codex :1148). Der Haupt-Datei-Unlink propagiert bei Permission/Lock –
+        die (weiterhin ``discarding``) Zeile bleibt dann für einen Retry erhalten. Gelingt der
+        Unlink, wird die Manifest-Zeile entfernt. Gibt die freigegebenen Bytes zurück."""
+        freed = 0
+        try:
+            freed += base.stat().st_size
+        except OSError:
+            pass
+        base.unlink(missing_ok=True)
+        for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm"), self._legacy_attach_identity_path(str(base))):
             try:
-                freed += base.stat().st_size
+                freed += candidate.stat().st_size
+                candidate.unlink()
             except OSError:
-                pass
-            await self._store.manifest.delete_segment(target.segment_id)
-            base.unlink(missing_ok=True)
-            for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm"), self._legacy_attach_identity_path(str(base))):
-                try:
-                    freed += candidate.stat().st_size
-                    candidate.unlink()
-                except OSError:
-                    continue
-            return {"removed_segments": 1, "freed_bytes": freed}
+                continue
+        await self._store.manifest.delete_segment(segment_id)
+        return freed
 
     def legacy_migration_progress(self) -> dict[str, Any]:
         """Aktueller Fortschritt des Offline-Migrationsjobs (#965) – Kopie, nie live-Referenz."""
@@ -1171,9 +1173,7 @@ class RingBuffer:
         """
         if not self._segmented or self._store is None:
             return False
-        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
-
-        return any(s.schema_version <= LEGACY_SCHEMA_VERSION for s in await self._store.manifest.list_segments())
+        return bool(await self._store.manifest.list_schema_legacy_segments())
 
     async def attached_legacy_total_bytes(self) -> int:
         """Summe der Größen ALLER attachten Legacy-Quellen (#968, Codex :2032).
@@ -1185,9 +1185,7 @@ class RingBuffer:
         """
         if not self._segmented or self._store is None:
             return 0
-        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
-
-        return sum(s.size_bytes for s in await self._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION)
+        return sum(s.size_bytes for s in await self._store.manifest.list_schema_legacy_segments())
 
     async def has_missing_file_legacy(self) -> bool:
         """True, wenn eine schema-legacy Manifest-Row eine FEHLENDE Datei hat (#968, Codex :2110).
@@ -1200,9 +1198,9 @@ class RingBuffer:
         """
         if not self._segmented or self._store is None:
             return False
-        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
-
-        return any(s.schema_version <= LEGACY_SCHEMA_VERSION and not Path(s.filename).exists() for s in await self._store.manifest.list_segments())
+        # ``discarding``-Zeilen ausgeschlossen (#968, Codex :1148): eine fehlende Datei dort ist ein
+        # laufender/fehlgeschlagener discard, KEIN unterbrochener Migrations-Commit.
+        return any(not Path(s.filename).exists() for s in await self._store.manifest.list_schema_legacy_segments())
 
     async def committed_migration_count(self) -> int:
         """Durabler Zähler abgeschlossener Offline-Migrations-Commits (#968, Codex :1175/:1263).
@@ -1297,7 +1295,7 @@ class RingBuffer:
         # Sofort reservieren – synchron, VOR dem ersten await (kein Context-Switch dazwischen).
         self._legacy_migration_starting = True
         protected_activated = False
-        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_LEGACY
+        from obs.ringbuffer.store.manifest import SEGMENT_STATUS_LEGACY
 
         try:
             # Der Wizard/Overview zeigt die ÄLTESTE schema-legacy Quelle (inkl. quarantänierte).
@@ -1309,10 +1307,7 @@ class RingBuffer:
             # quarantäniert (status != 'legacy') → ablehnen, der Admin verwirft sie zuerst. Ist sie
             # migrierbar, ist sie garantiert auch die erste status='legacy' Row (kein kleineres
             # segment_id davor), sodass Start und Migrator dieselbe Quelle betreffen.
-            legacy_segments = sorted(
-                (s for s in await self._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION),
-                key=lambda s: s.segment_id,
-            )
+            legacy_segments = await self._store.manifest.list_schema_legacy_segments()
             if not legacy_segments:
                 raise OfflineMigrationError("no attached legacy source to migrate")
             oldest = legacy_segments[0]

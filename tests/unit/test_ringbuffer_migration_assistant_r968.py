@@ -124,13 +124,14 @@ async def test_discard_legacy_propagates_when_main_db_cannot_be_removed(tmp_path
         monkeypatch.setattr(Path, "unlink", _boom)
         with pytest.raises(PermissionError):
             await rb.discard_legacy()
-        # "Zeile zuerst" (#968, Codex :1144): die Manifest-Zeile ist bereits entfernt, der
-        # anschließende Datei-Unlink schlug fehl – die Datei bleibt und wird beim nächsten Start
-        # erneut als Legacy attached (``pending``). Bewusst NICHT als missing-file-Zeile hinterlassen,
-        # die der Reconciler fälschlich als ``migrated`` finalisieren würde. Der Aufrufer persistiert
-        # kein ``discarded`` (Fehler propagiert), also keine discarded-Inkonsistenz.
-        assert not [s for s in await rb._store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION], "Manifest-Zeile entfernt"
-        assert legacy.exists(), "Datei bleibt (Unlink schlug fehl) → Re-Attach beim nächsten Start"
+        # Intent-Marker (#968, Codex :1148): schlägt der Datei-Unlink fehl, bleibt die Zeile als
+        # ``discarding`` erhalten – NICHT als aktive Legacy sichtbar (kein Re-Attach/Anzeige), aber
+        # auch NICHT als missing-file-Zeile, die der Reconciler fälschlich als ``migrated``
+        # finalisierte. Ein Retry (bzw. der Startup-Reconciler) vollendet den discard sauber.
+        assert await rb._store.manifest.list_schema_legacy_segments() == [], "keine AKTIVE Legacy-Quelle mehr sichtbar"
+        assert await rb._store.manifest.list_discarding_segments(), "Zeile bleibt als discarding-Marker (retry-bar)"
+        assert legacy.exists(), "Datei bleibt (Unlink schlug fehl)"
+        assert await rb.has_missing_file_legacy() is False, "discarding gilt NICHT als unterbrochener Commit"
     finally:
         await rb.stop()
 
@@ -723,7 +724,7 @@ async def test_migrated_chunks_ordered_after_live_segments(tmp_path: Path):
         # Ein migrierter Chunk mit HOHER segment_id (nach den Live-Segmenten promotet).
         mig = await store.manifest.create_migrating_segment(filename="rb_migrated_x_001.sqlite", schema_version=2)
         await store.manifest.update_segment_stats(mig.segment_id, row_count=1, size_bytes=100, from_ts=_iso(0), to_ts=_iso(0))
-        await store.manifest.commit_offline_migration([])  # migrating -> closed
+        await store.manifest.commit_offline_migration([], promote_unscoped=True)  # migrating (NULL-source) -> closed
 
         segs = await store.manifest.list_segments_for_query()
         names = [s.filename for s in segs]
@@ -1847,8 +1848,9 @@ async def test_commit_promotes_only_committed_source_migrating(tmp_path: Path):
 
 
 async def test_commit_null_source_backcompat_promoted(tmp_path: Path):
-    """Migrating-Segmente ohne ``legacy_source_id`` (Alt-Manifest / Single-Source) werden weiterhin
-    promotet (#968, Codex :354, Abwärtskompatibilität)."""
+    """Migrating-Segmente ohne ``legacy_source_id`` (Alt-Manifest) werden vom Reconciler-Commit
+    (``promote_unscoped=True``) promotet (#968, Codex :354/:369/:378, Abwärtskompatibilität) – der
+    normale, source-scoped Migrator-Commit (default) lässt sie dagegen unsichtbar."""
     from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
 
     store = SqliteSegmentStore(tmp_path / "root")
@@ -1856,9 +1858,16 @@ async def test_commit_null_source_backcompat_promoted(tmp_path: Path):
     try:
         leg = await store.manifest.register_legacy_segment(source_path=str(tmp_path / "leg.db"), size_bytes=100)
         await store.manifest.create_migrating_segment(filename="rb_migrated_null.sqlite", schema_version=2)  # source_id=None
+        # Default (source-scoped): NULL-Chunk NICHT promotet.
         await store.manifest.commit_offline_migration([leg.segment_id])
         by_name = {s.filename: s for s in await store.manifest.list_segments()}
-        assert by_name["rb_migrated_null.sqlite"].status == "closed", "NULL-source Kopie wird promotet"
+        assert by_name["rb_migrated_null.sqlite"].status == "migrating", "default lässt NULL-Chunk unsichtbar"
+
+        # Reconciler-Semantik: NULL-Chunk der recovered Quelle wird promotet.
+        leg2 = await store.manifest.register_legacy_segment(source_path=str(tmp_path / "leg2.db"), size_bytes=100)
+        await store.manifest.commit_offline_migration([leg2.segment_id], promote_unscoped=True)
+        by_name = {s.filename: s for s in await store.manifest.list_segments()}
+        assert by_name["rb_migrated_null.sqlite"].status == "closed", "Reconciler promotet NULL-Chunk"
     finally:
         await store.close()
 
@@ -2162,5 +2171,89 @@ async def test_calibration_runs_for_zero_row_plan_with_budget(tmp_path: Path):
 
         calibrated = await mig._calibrate_cutoff(zero_plan, legacy_seg)
         assert calibrated.rows_to_copy > 0, "Kalibrierung läuft trotz rows_to_copy=0 und rettet Zeilen"
+    finally:
+        await rb.stop()
+
+
+# ---------- Runde 25, Codex :1148: discard-Retry vollendet über den Intent-Marker ----------
+
+
+async def test_discard_retry_completes_after_unlink_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Schlägt der Datei-Unlink beim discard fehl, bleibt die Zeile als ``discarding``; ein Retry
+    (ohne den Fehler) findet den Marker und vollendet den discard sauber (#968, Codex :1148)."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, [1, 2, 3])
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        orig_unlink = Path.unlink
+        fail = {"on": True}
+
+        def _boom(self, *a, **k):
+            if fail["on"] and self.name == "obs_ringbuffer.db":
+                raise PermissionError("locked")
+            return orig_unlink(self, *a, **k)
+
+        monkeypatch.setattr(Path, "unlink", _boom)
+        with pytest.raises(PermissionError):
+            await rb.discard_legacy()
+        assert await rb._store.manifest.list_discarding_segments(), "discarding-Marker gesetzt"
+        assert legacy.exists()
+
+        fail["on"] = False
+        await rb.discard_legacy()  # Retry
+        assert not legacy.exists(), "Retry löscht die Legacy-Datei"
+        assert await rb._store.manifest.list_discarding_segments() == [], "discarding-Marker aufgelöst"
+        assert await rb._store.manifest.list_schema_legacy_segments(include_discarding=True) == [], "keine Zeile mehr"
+    finally:
+        await rb.stop()
+
+
+async def test_reconciler_finishes_interrupted_discard(tmp_path: Path):
+    """Der Startup-Reconciler vollendet einen im discard unterbrochenen Zustand (``discarding``-
+    Zeile) statt ihn als Migrations-Commit fehlzudeuten (#968, Codex :1148)."""
+    from obs.ringbuffer.store.manifest import SEGMENT_STATUS_DISCARDING
+    from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
+    from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
+
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        gone = tmp_path / "gone.db"  # Datei existiert nicht (Unlink war durch, Delete crashte)
+        row = await store.manifest.register_legacy_segment(source_path=str(gone), size_bytes=100)
+        await store.manifest.mark_discarding(row.segment_id)
+        assert (await store.manifest.list_discarding_segments())[0].status == SEGMENT_STATUS_DISCARDING
+
+        result = await reconcile_offline_migration(store)
+        assert result is False, "ein discard ist KEIN unterbrochener Commit (kein migrated)"
+        assert await store.manifest.list_discarding_segments() == [], "discarding-Zeile aufgeräumt"
+    finally:
+        await store.close()
+
+
+# ---------- Runde 25, Codex :206: keine Kalibrierung bei Ziel-Volumen 0 ----------
+
+
+async def test_no_calibration_sample_when_target_volume_zero(tmp_path: Path):
+    """Ein echter drop-only-Plan (Ziel-Volumen 0) schreibt KEIN Kalibrierungs-Sample (#968, Codex
+    :206) – es könnte auf voller Platte scheitern und keine v2-Größe machte rows_to_copy positiv."""
+    import dataclasses
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(30)))
+    legacy_size = legacy.stat().st_size
+    rb = _seg_rb(tmp_path, max_file_size_bytes=legacy_size // 3, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        mig = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        plan = await mig.plan()
+        assert plan.rows_to_copy == 0, "Test-Voraussetzung: drop-only"
+        assert await mig._target_copy_volume(legacy_size // 3) <= 0, "Ziel-Volumen 0"
+        legacy_seg = await mig._attached_legacy()
+
+        calibrated = await mig._calibrate_cutoff(dataclasses.replace(plan, rows_to_copy=0), legacy_seg)
+        assert calibrated.rows_to_copy == 0, "bleibt drop-only, keine gerettete Zeile"
+        # Kein migrating-Sample-Segment zurückgelassen.
+        assert [s for s in await rb._store.manifest.list_migrating_segments()] == [], "kein Kalibrierungs-Sample geschrieben"
     finally:
         await rb.stop()

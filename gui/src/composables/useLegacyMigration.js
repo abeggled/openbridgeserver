@@ -37,6 +37,17 @@ const legacy = computed(() => status.value?.legacy ?? null)
 const job = computed(() => status.value?.job ?? null)
 const jobRunning = computed(() => RUNNING_JOB_PHASES.has(job.value?.phase))
 
+// Post-Commit-Retry-Fenster (#968, Codex :72): der Commit ist durch (Job ``done``, keine Legacy
+// mehr), aber die terminale Entscheidung wurde noch nicht persistiert (transienter app-DB-Fehler).
+// Der Status-Endpoint zieht sie beim nächsten Poll nach – deshalb muss weitergepollt werden, bis die
+// Entscheidung terminal ist. Sonst bliebe die bereits committete Migration als pending/skipped
+// hängen (Banner + Segment-Eintrag verschwinden bei ``legacy === null``, ein Reload/Neustart wäre
+// nötig).
+const TERMINAL_DECISIONS = new Set(['migrated', 'discarded'])
+const pendingFinalization = computed(
+  () => job.value?.phase === 'done' && legacy.value === null && !TERMINAL_DECISIONS.has(decision.value),
+)
+
 // Banner nur solange KEINE informierte Entscheidung vorliegt und die
 // Legacy-Quelle noch existiert (#966).
 const showBanner = computed(() => decision.value === 'pending' && legacy.value != null)
@@ -60,7 +71,7 @@ function stopPolling() {
 
 /** Startet/stoppt das 1-s-Polling abhängig von der aktuellen Job-Phase. */
 function syncPolling() {
-  if (jobRunning.value) {
+  if (jobRunning.value || pendingFinalization.value) {
     if (pollTimer == null) {
       pollTimer = setInterval(() => {
         // refresh() wirft weiter (für Aufrufer mit eigener Fehlerbehandlung);
@@ -121,6 +132,7 @@ export function useLegacyMigration() {
     legacy,
     job,
     jobRunning,
+    pendingFinalization,
     showBanner,
     escalated,
     refresh,

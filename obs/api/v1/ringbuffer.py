@@ -2138,11 +2138,15 @@ async def legacy_migration_decision(
             await rb.set_legacy_retention_protected(False)
             await persist_legacy_migration_decision(db, LEGACY_DECISION_DISCARDED)
         else:
-            # Verbleibende Quelle(n) AKTIV schützen (#968, Codex :2141): war die vorherige
-            # Entscheidung ``keep`` (Schutz bereits aus), bliebe die nächste Quelle sonst
-            # ungeschützt und könnte von der nächsten Retention zurückgewonnen werden, bevor der
-            # Admin über sie migrieren/keep/discard entscheidet.
+            # Verbleibende Quelle(n) AKTIV schützen UND eine PROTECTED non-terminale Entscheidung
+            # persistieren (#968, Codex :2141/:2145): nur das in-memory-Flag zu setzen genügt nicht –
+            # der Status-Endpoint und der nächste Startup lesen die Persistenz
+            # (``legacy_retention_protected = decision in LEGACY_DECISIONS_PROTECTED``); eine
+            # ``keep``-Entscheidung ließe die verbleibende Quelle dann ungeschützt. ``skipped`` ist
+            # protected + non-terminal, sodass der Assistent für die verbleibende Quelle sichtbar und
+            # geschützt bleibt.
             await rb.set_legacy_retention_protected(True)
+            await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
     return await _legacy_migration_status(db)
 
 

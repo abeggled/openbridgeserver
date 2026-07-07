@@ -175,3 +175,33 @@ describe('useLegacyMigration — polling', () => {
     expect(migrationStatus).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('useLegacyMigration — pendingFinalization (#968 Codex :72)', () => {
+  it('is true for a committed-but-non-terminal state and keeps polling', async () => {
+    vi.useFakeTimers()
+    const api = await loadComposable()
+    // Commit durch (job done), keine Legacy mehr, Entscheidung noch non-terminal (Retry nötig).
+    migrationStatus.mockResolvedValue({
+      data: statusPayload({ decision: 'skipped', legacy: null, job: { phase: 'done', error: null } }),
+    })
+    await api.refresh()
+    expect(api.pendingFinalization.value).toBe(true)
+    expect(api.jobRunning.value).toBe(false)
+
+    // Der Poller läuft weiter und ruft den Status erneut ab, bis die Entscheidung terminal wird.
+    migrationStatus.mockResolvedValue({
+      data: statusPayload({ decision: 'migrated', legacy: null, job: { phase: 'done', error: null } }),
+    })
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(api.pendingFinalization.value).toBe(false)
+  })
+
+  it('is false once the decision is terminal', async () => {
+    const api = await loadComposable()
+    migrationStatus.mockResolvedValue({
+      data: statusPayload({ decision: 'migrated', legacy: null, job: { phase: 'done', error: null } }),
+    })
+    await api.refresh()
+    expect(api.pendingFinalization.value).toBe(false)
+  })
+})

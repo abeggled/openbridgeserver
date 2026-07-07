@@ -205,6 +205,13 @@ class OfflineLegacyMigrator:
         # ``total_rows == 0`` (nichts zu messen).
         if plan.total_rows == 0 or (plan.rows_to_copy <= 0 and budget is None):
             return plan
+        # Einen drop-only-Plan (rows_to_copy == 0) nur kalibrieren, wenn das Ziel-Volumen ÜBERHAUPT
+        # Platz für Zeilen lässt (#968, Codex :206): ist ``budget - headroom - live_bytes`` bereits 0,
+        # kann keine gemessene v2-Größe rows_to_copy positiv machen – die Kalibrierung schriebe nur
+        # ein unnötiges Sample (das auf voller Platte scheitern könnte), statt die Legacy einfach zu
+        # unlinken.
+        if plan.rows_to_copy <= 0 and budget is not None and await self._target_copy_volume(budget) <= 0:
+            return plan
         # Sample auf die tatsächlich geplante Kopiermenge deckeln (#968, Codex :177): bei budget-
         # gebundenen Migrationen kann ``plan.rows_to_copy`` weit unter ``COPY_BATCH_ROWS`` liegen
         # (nach dem Cutoff evtl. nur eine Handvoll Zeilen). Ein 5.000-Zeilen-Sample verbrauchte dann
@@ -257,6 +264,14 @@ class OfflineLegacyMigrator:
         try:
             base.unlink(missing_ok=True)
         except OSError as exc:
+            # Die gemessene Sample-Größe ins Manifest schreiben, BEVOR der Cleanup-Fehler propagiert
+            # und die Zeile für den Retry behalten wird (#968, Codex :260): sonst meldete /stats das
+            # behaltene ``migrating``-Segment mit 0 Bytes, während die Datei weiter Platz belegt – die
+            # beabsichtigte Sichtbarkeit der Retry-Zeile ginge verloren.
+            with contextlib.suppress(Exception):
+                await self._store.manifest.update_segment_stats(
+                    sample_segment.segment_id, row_count=copied, size_bytes=sample_size, from_ts=None, to_ts=None
+                )
             raise OfflineMigrationError(f"could not remove calibration sample {sample_filename}: {exc}") from exc
         await self._store.manifest.delete_segment(sample_segment.segment_id)
         if copied == 0 or sample_size <= 0:
@@ -593,12 +608,21 @@ async def reconcile_offline_migration(store: SqliteSegmentStore) -> bool:
     planen – die Migration ist fertig, es gibt keine Quelle mehr.
     """
     migrating = await store.manifest.list_migrating_segments()
-    # Schema-basiert (#968, Codex :583), nicht status-basiert: wird eine Legacy-Quelle vor dem
-    # Commit-Crash durch einen Read-Fehler quarantäniert (status != 'legacy', aber schema-legacy),
-    # verpasste der status-Filter die fehlende Quelle, fiele zum Orphan-Copy-Pfad und verwürfe die
-    # migrating-Segmente – obwohl die Originaldatei schon unlinkt ist (Verlust der kopierten
-    # Historie). Schema-basierte Erkennung promotet auch solche unterbrochenen Commits korrekt.
-    legacy_rows = [s for s in await store.manifest.list_segments() if s.schema_version <= LEGACY_SCHEMA_VERSION]
+    # Fehlgeschlagene ``discard``-Reste zu Ende verwerfen (#968, Codex :1148): eine ``discarding``-
+    # Zeile ist ein im discard unterbrochener Zustand, KEIN Migrations-Commit – Datei (falls noch da)
+    # + Sidecars + Manifest-Zeile entfernen, damit sie nicht dauerhaft bleibt und der schema-legacy-
+    # Filter unten sie nicht als unterbrochenen Commit fehldeutet.
+    for row in await store.manifest.list_discarding_segments():
+        rbase = Path(row.filename)
+        for candidate in (rbase, Path(f"{rbase}-wal"), Path(f"{rbase}-shm"), rbase.with_name(f"{rbase.name}.attach_identity")):
+            with contextlib.suppress(OSError):
+                candidate.unlink()
+        with contextlib.suppress(Exception):
+            await store.manifest.delete_segment(row.segment_id)
+    # Schema-basiert (#968, Codex :583), ``discarding``-Reste ausgeschlossen (#968, Codex :1148):
+    # wird eine Legacy-Quelle vor dem Commit-Crash quarantäniert (status != 'legacy', aber schema-
+    # legacy), verpasste der reine status-Filter die fehlende Quelle und verwürfe die Kopien.
+    legacy_rows = await store.manifest.list_schema_legacy_segments()
     missing_file_rows = [s for s in legacy_rows if not Path(s.filename).exists()]
     # Fall 1 – unterbrochener Commit (Legacy-Datei unlinkt, Manifest-Delete fehlte noch).
     # ZUERST prüfen, damit auch drop-only/ZERO-COPY-Migrationen erkannt werden (#968,
@@ -622,7 +646,11 @@ async def reconcile_offline_migration(store: SqliteSegmentStore) -> bool:
         # der Unlink propagiert hier also nicht.
         for row in missing_file_rows:
             _unlink_legacy_files(Path(row.filename))
-        await store.manifest.commit_offline_migration([s.segment_id for s in missing_file_rows])
+        # ``promote_unscoped=True`` (#968, Codex :369/:378): ein Alt-Manifest-Commit hinterließ
+        # migrating-Kopien OHNE ``legacy_source_id``. Werden sie hier nicht mit-promotet, löscht das
+        # folgende Detach die einzige Quelle, die den unterbrochenen Commit identifizierte, und die
+        # bereits unlinkte Historie ginge verloren.
+        await store.manifest.commit_offline_migration([s.segment_id for s in missing_file_rows], promote_unscoped=True)
         return True
     if not migrating:
         return False
