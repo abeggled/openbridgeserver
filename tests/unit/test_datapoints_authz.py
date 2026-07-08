@@ -575,7 +575,7 @@ async def test_get_value_authenticated_protected_source_page_remains_compatible_
 
 
 @pytest.mark.asyncio
-async def test_get_value_assigned_user_visu_page_requires_read_grant(monkeypatch, db: Database):
+async def test_get_value_assigned_user_visu_page_requires_datapoint_read_grant(monkeypatch, db: Database):
     datapoint = _dp("00000000-0000-0000-0000-000000000051", "User page value")
     await _insert_datapoint(db, datapoint)
     await db.execute_and_commit(

@@ -9,6 +9,9 @@ cd "$REPO_ROOT"
 BASE_REF="${I18N_DIFF_BASE:-}"
 HEAD_REF="${I18N_DIFF_HEAD:-}"
 
+# Two diff-scoped gates run back-to-back; both must pass:
+#   - check_i18n_guard.py:    frontend (gui/src, frontend/src) hardcoded strings + locale parity
+#   - check_adapter_i18n.py:  backend adapter status/test strings must use locale codes (issue #779)
 status=0
 # Branch explicitly instead of expanding an empty array: macOS Bash 3.2 treats
 # "${array[@]}" as unbound under set -u when the array has no elements.

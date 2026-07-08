@@ -415,7 +415,7 @@ async def test_query_history_page_fallback_honors_explicit_deny(monkeypatch, db:
 
 
 @pytest.mark.asyncio
-async def test_query_history_assigned_user_page_requires_read_grant(monkeypatch, db: Database):
+async def test_query_history_assigned_user_page_requires_datapoint_read_grant(monkeypatch, db: Database):
     dp_id = uuid.uuid4()
     await _seed_datapoint_scope(db, dp_id)
     await _insert_user_visu_page(db, "page-user-history", "alice", dp_id)

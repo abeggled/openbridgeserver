@@ -194,8 +194,8 @@ async def test_user_visu_allows_assigned_non_admin_user(client, auth_headers):
         )
         assert set_users.status_code == 204, set_users.text
 
-        await _save_page_with_single_dp_widget(client, auth_headers, page_id, dp_id)
         await _grant_datapoint_read(username, dp_id)
+        await _save_page_with_single_dp_widget(client, auth_headers, page_id, dp_id)
         await _write_value(client, auth_headers, dp_id, 23.0)
 
         page_resp = await client.get(

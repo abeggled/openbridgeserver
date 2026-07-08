@@ -263,7 +263,7 @@ async def _page_context_allows_datapoint_read(
     if not page_id or not await _page_has_datapoint(db, page_id, dp_id):
         return False
 
-    from obs.api.v1.visu import _resolve_access_with_node
+    from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
 
     access, defining_node_id = await _resolve_access_with_node(db, page_id)
     if access in ("public", "readonly"):
@@ -274,6 +274,8 @@ async def _page_context_allows_datapoint_read(
         session_token = request.headers.get("X-Session-Token")
         validate_id = defining_node_id or page_id
         return bool(session_token and validate_session(session_token, validate_id))
+    if access == "user" and principal is not None and principal.type == "user":
+        return await _check_user_access(db, page_id, principal.subject) and await _can_read_datapoint(db, principal, dp_id)
     return False
 
 
