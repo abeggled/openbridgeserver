@@ -11,9 +11,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-from obs.api.auth import optional_current_user
+from obs.api.auth import Principal, get_current_principal
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import filter_authorized_datapoints
+from obs.api.v1.datapoints import _page_context_allows_datapoint_read
 from obs.api.v1.sessions import validate_session
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
@@ -23,6 +27,8 @@ router = APIRouter(tags=["history"])
 DEFAULT_HISTORY_WINDOW_HOURS = 24 * 7
 MIN_HISTORY_WINDOW_HOURS = 1
 MAX_HISTORY_WINDOW_HOURS = 24 * 365
+_history_bearer = HTTPBearer(auto_error=False)
+_history_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +96,19 @@ async def _get_default_history_window_hours(db: Database) -> int:
     return max(MIN_HISTORY_WINDOW_HOURS, min(hours, MAX_HISTORY_WINDOW_HOURS))
 
 
+async def _optional_history_principal(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_history_bearer),
+    api_key: str | None = Depends(_history_api_key_header),
+    db: Database = Depends(get_db),
+) -> Principal | None:
+    if credentials is None and api_key is None:
+        return None
+    try:
+        return await get_current_principal(credentials=credentials, api_key=api_key, db=db)
+    except HTTPException:
+        return None
+
+
 async def _resolve_page_access(db: Database, node_id: str) -> str:
     """Traversiert die parent_id-Kette und gibt das effektive Access-Level zurück."""
     current_id: str | None = node_id
@@ -130,6 +149,27 @@ async def _check_history_access(
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
 
+async def _check_datapoint_read_access(
+    db: Database,
+    principal: Principal | None,
+    dp_id: uuid.UUID,
+    request: Request,
+) -> None:
+    if principal is None:
+        if not await _page_context_allows_datapoint_read(db, request, dp_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+        return
+
+    allowed = await filter_authorized_datapoints(
+        db,
+        principal,
+        [str(dp_id)],
+        action=AuthzAction.READ,
+    )
+    if str(dp_id) not in allowed and not await _page_context_allows_datapoint_read(db, request, dp_id, principal):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -142,12 +182,13 @@ async def query_history(
     to_ts: str | None = Query(None, alias="to"),
     limit: int = Query(10000, ge=1, le=100000),
     request: Request = None,
-    user: str | None = Depends(optional_current_user),
+    principal: Principal | None = Depends(_optional_history_principal),
     db: Database = Depends(get_db),
 ) -> list[HistoryPoint]:
-    await _check_history_access(request, user, db)
+    await _check_history_access(request, principal.subject if principal else None, db)
     if get_registry().get(dp_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+    await _check_datapoint_read_access(db, principal, dp_id, request)
 
     now = datetime.now(UTC)
     window_hours = await _get_default_history_window_hours(db)
@@ -167,12 +208,13 @@ async def aggregate_history(
     from_ts: str | None = Query(None, alias="from"),
     to_ts: str | None = Query(None, alias="to"),
     request: Request = None,
-    user: str | None = Depends(optional_current_user),
+    principal: Principal | None = Depends(_optional_history_principal),
     db: Database = Depends(get_db),
 ) -> list[AggregatedPoint]:
-    await _check_history_access(request, user, db)
+    await _check_history_access(request, principal.subject if principal else None, db)
     if get_registry().get(dp_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+    await _check_datapoint_read_access(db, principal, dp_id, request)
     if fn not in ("avg", "min", "max", "last"):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
