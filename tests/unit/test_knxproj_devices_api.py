@@ -760,3 +760,29 @@ async def test_non_admin_scope_ignores_disabled_knx_bindings_and_instances():
         assert result.total == 0
     finally:
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_set_knx_device_hierarchy_links_preserves_admin_for_non_default_admin():
+    """Admin with a username other than 'admin' must get the device back, not a 404.
+
+    In production, get_admin_user returns the username string. For usernames other
+    than 'admin', the old _principal_from_dependency reconstructed is_admin=False,
+    causing the non-admin scope check to deny the response fetch.
+    """
+    db = await _prepare_db()
+    try:
+        _, _, living_node_id = await _insert_hierarchy(db)
+
+        # Simulate the production path: get_admin_user returns username as a plain str.
+        result = await knxproj_api.set_knx_device_hierarchy_links(
+            pa="1.1.1",
+            body=knxproj_api.KnxDeviceHierarchyLinksIn(node_ids=[living_node_id]),
+            _user="superadmin",  # non-"admin" string, as returned by get_admin_user
+            db=db,
+        )
+
+        assert result.pa == "1.1.1"
+        assert [link.node_id for link in result.hierarchy_links] == [living_node_id]
+    finally:
+        await db.disconnect()

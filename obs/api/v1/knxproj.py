@@ -1281,7 +1281,10 @@ async def set_knx_device_hierarchy_links(
             [(str(uuid_mod.uuid4()), node_id, device_row["id"], now) for node_id in node_ids],
         )
     await db.commit()
-    return await get_knx_device(pa=pa, _user=_user, db=db)
+    # get_admin_user already verified admin status; reconstruct as admin Principal so
+    # get_knx_device skips the non-admin GA-scope filter regardless of the username.
+    admin_principal = Principal(subject=_user, type="user", is_admin=True) if isinstance(_user, str) else _user
+    return await get_knx_device(pa=pa, _user=admin_principal, db=db)
 
 
 @router.get("/group-addresses/{ga:path}/devices", response_model=KnxDevicePage)
