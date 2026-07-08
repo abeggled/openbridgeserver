@@ -120,8 +120,8 @@
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
                 <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ b.adapter_type }}</span>
-                <Badge :variant="b.direction === 'SOURCE' ? 'info' : b.direction === 'DEST' ? 'warning' : 'success'" size="xs">
-                  {{ b.direction === 'SOURCE' ? $t('datapoints.detail.bindingRead') : b.direction === 'DEST' ? $t('datapoints.detail.bindingWrite') : $t('datapoints.detail.bindingReadWrite') }}
+                <Badge :variant="bindingBadgeVariant(b)" size="xs">
+                  {{ bindingDirectionLabel(b) }}
                 </Badge>
                 <Badge v-if="!b.enabled" variant="danger" size="xs">{{ $t('datapoints.detail.bindingDisabled') }}</Badge>
               </div>
@@ -234,8 +234,9 @@ const displayVal = computed(() => {
   return dp.value?.unit ? `${v} ${dp.value.unit}` : String(v)
 })
 const activeBindings = computed(() => bindings.value.filter(b => b.enabled))
+const activeWritableBindings = computed(() => activeBindings.value.filter(b => b.adapter_type !== 'MESSAGE'))
 const canWriteValue = computed(() =>
-  bindingsLoaded.value && (activeBindings.value.length === 0 || activeBindings.value.some(b => ['DEST', 'BOTH'].includes(b.direction)))
+  bindingsLoaded.value && (activeWritableBindings.value.length === 0 || activeWritableBindings.value.some(b => ['DEST', 'BOTH'].includes(b.direction)))
 )
 watch(currentRawValue, (value) => {
   if (!writeBusy.value && value !== undefined && value !== null) writeDraft.value = String(value)
@@ -253,6 +254,17 @@ onMounted(async () => {
   await Promise.all([loadBindings(), loadLogicUsages()])
 })
 onUnmounted(() => unsubWs?.())
+
+function bindingBadgeVariant(binding) {
+  if (binding.adapter_type === 'MESSAGE') return 'info'
+  return binding.direction === 'SOURCE' ? 'info' : binding.direction === 'DEST' ? 'warning' : 'success'
+}
+
+function bindingDirectionLabel(binding) {
+  if (binding.direction === 'SOURCE') return t('datapoints.detail.bindingRead')
+  if (binding.direction === 'DEST') return t('datapoints.detail.bindingWrite')
+  return t('datapoints.detail.bindingReadWrite')
+}
 
 async function loadBindings() {
   bindingsLoading.value = true

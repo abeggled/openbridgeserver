@@ -173,6 +173,18 @@ describe('GenericNode — summary', () => {
     await flushPromises()
     expect(mapping.find('.gn-summary').text()).toContain('4 Regeln')
   })
+
+  it('shows host for host_check', async () => {
+    const w = await mountGN('host_check', { host: '192.168.1.1' })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toContain('192.168.1.1')
+  })
+
+  it('shows — for host_check with no host configured', async () => {
+    const w = await mountGN('host_check', {})
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('—')
+  })
 })
 
 describe('GenericNode — debug band', () => {

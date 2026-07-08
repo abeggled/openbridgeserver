@@ -1055,6 +1055,51 @@
       </div>
     </template>
 
+    <!-- ── host_check: host + timeout + count ─────────────────────────── -->
+    <template v-else-if="isHostCheckNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.host_check.host') }}</label>
+          <input
+            v-model="localData.host"
+            type="text"
+            class="input text-sm font-mono"
+            :placeholder="$t('logic.nodeConfig.host_check.hostPlaceholder')"
+            @change="emitUpdate"
+            data-testid="hc-host"
+          />
+        </div>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.host_check.timeout_s') }}</label>
+          <input
+            v-model.number="localData.timeout_s"
+            type="number"
+            min="1"
+            max="30"
+            class="input text-sm"
+            @change="emitUpdate"
+            data-testid="hc-timeout"
+          />
+        </div>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.host_check.count') }}</label>
+          <input
+            v-model.number="localData.count"
+            type="number"
+            min="1"
+            max="10"
+            class="input text-sm"
+            @change="emitUpdate"
+            data-testid="hc-count"
+          />
+        </div>
+      </div>
+    </template>
+
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -1299,6 +1344,7 @@ const isStringConcatNode = computed(() => props.node?.type === 'string_concat')
 const isICalNode          = computed(() => props.node?.type === 'ical')
 const apiVariables = computed(() => Array.isArray(localData.value.variables) ? localData.value.variables : [])
 const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
+const isHostCheckNode     = computed(() => props.node?.type === 'host_check')
 const isDecisionNode      = computed(() => props.node?.type === 'decision')
 const isValueMappingNode  = computed(() => props.node?.type === 'value_mapping')
 

@@ -84,6 +84,7 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
 
     # Batch all inserts; commit once at the end for performance.
     inserts: list[tuple] = []
+    device_link_sentinels: set[tuple[str, str]] = set()
 
     def _q_insert(nid: str, parent_id: str | None, name: str, desc: str, order: int) -> None:
         inserts.append((nid, tree_id, parent_id, name, desc, order, None, now, now))
@@ -220,6 +221,29 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
                     links_created += 1
                     inserts.append(("__link__", node_id, dp["id"]))
 
+        device_rows = await db.fetchall("SELECT space_id, device_id FROM knx_space_device_links")
+        for row in device_rows:
+            node_id = loc_to_node.get(row["space_id"])
+            if not node_id:
+                continue
+            device_link_sentinels.add((node_id, row["device_id"]))
+
+        inferred_device_rows = await db.fetchall(
+            """SELECT co.device_id, MIN(f.space_id) AS space_id
+               FROM knx_comm_objects co
+               JOIN knx_co_ga_links cgl ON cgl.comm_object_id = co.id
+               JOIN knx_function_ga_links fgl ON fgl.ga_address = cgl.ga_address
+               JOIN knx_functions f ON f.id = fgl.function_id
+               WHERE f.space_id IS NOT NULL AND f.space_id != ''
+               GROUP BY co.device_id
+               HAVING COUNT(DISTINCT f.space_id) = 1"""
+        )
+        for row in inferred_device_rows:
+            node_id = loc_to_node.get(row["space_id"])
+            if not node_id:
+                continue
+            device_link_sentinels.add((node_id, row["device_id"]))
+
     else:  # "trades"
         trade_rows = await db.fetchall("SELECT id, name, parent_id, sort_order FROM knx_trades ORDER BY sort_order")
         if not trade_rows:
@@ -303,6 +327,12 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
         await db.executemany(
             "INSERT OR IGNORE INTO hierarchy_datapoint_links (id, node_id, datapoint_id, created_at) VALUES (?,?,?,?)",
             link_rows,
+        )
+
+    if device_link_sentinels:
+        await db.executemany(
+            "INSERT OR IGNORE INTO hierarchy_device_links (id, node_id, device_id, created_at) VALUES (?,?,?,?)",
+            [(_new_id(), node_id, device_id, now) for node_id, device_id in device_link_sentinels],
         )
 
     await db.commit()

@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from obs.api.auth import get_admin_user
+from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
@@ -81,6 +82,85 @@ class ExportedAdapterConfig(BaseModel):
     adapter_type: str
     config: dict
     enabled: bool
+
+
+def _message_binding_row(
+    *,
+    binding_id: str,
+    direction: str,
+    config: dict,
+    enabled: bool,
+    instance_id: str | None,
+) -> dict:
+    return {
+        "id": binding_id,
+        "direction": direction,
+        "config": config,
+        "enabled": enabled,
+        "adapter_instance_id": instance_id,
+    }
+
+
+async def _validate_import_message_instance_configs(
+    instances: list[ExportedAdapterInstance],
+    bindings: list[ExportedBinding],
+    db: Database,
+) -> dict[str, str]:
+    message_instances = {instance.id: instance for instance in instances if instance.adapter_type == "MESSAGE"}
+    if not message_instances:
+        return {}
+
+    message_import_bindings = [binding for binding in bindings if binding.adapter_type == "MESSAGE"]
+    existing_import_bindings: dict[str, dict] = {}
+    for binding in message_import_bindings:
+        row = await db.fetchone(
+            "SELECT id, adapter_instance_id, adapter_type FROM adapter_bindings WHERE id=?",
+            (binding.id,),
+        )
+        if row is not None and row["adapter_type"] == "MESSAGE":
+            existing_import_bindings[binding.id] = row
+
+    invalid: dict[str, str] = {}
+    for instance_id, instance in message_instances.items():
+        rows = await db.fetchall(
+            """SELECT id, adapter_instance_id, direction, config, enabled
+               FROM adapter_bindings
+               WHERE adapter_instance_id=? AND adapter_type='MESSAGE'""",
+            (instance_id,),
+        )
+        proposed = {
+            row["id"]: _message_binding_row(
+                binding_id=row["id"],
+                direction=row["direction"],
+                config=_json_config(row["config"]),
+                enabled=bool(row["enabled"]),
+                instance_id=row["adapter_instance_id"],
+            )
+            for row in rows
+        }
+        for binding in message_import_bindings:
+            existing = existing_import_bindings.get(binding.id)
+            effective_instance_id = existing["adapter_instance_id"] if existing is not None else binding.adapter_instance_id
+            if effective_instance_id == instance_id:
+                proposed[binding.id] = _message_binding_row(
+                    binding_id=binding.id,
+                    direction=binding.direction,
+                    config=binding.config,
+                    enabled=binding.enabled,
+                    instance_id=effective_instance_id,
+                )
+        try:
+            for binding in proposed.values():
+                _validate_adapter_binding(
+                    "MESSAGE",
+                    binding["direction"],
+                    binding["config"],
+                    enabled=binding["enabled"],
+                    instance_config=instance.config,
+                )
+        except Exception as exc:
+            invalid[instance_id] = str(exc)
+    return invalid
 
 
 class ExportedLogicGraph(BaseModel):
@@ -603,8 +683,12 @@ async def import_config(
                 ),
             )
 
+    invalid_message_instances = await _validate_import_message_instance_configs(instances_to_upsert, body.bindings, db)
+
     for ai in instances_to_upsert:
         try:
+            if ai.id in invalid_message_instances:
+                raise ValueError(invalid_message_instances[ai.id])
             await db.execute_and_commit(
                 """INSERT INTO adapter_instances
                    (id, adapter_type, name, config, enabled, created_at, updated_at)
@@ -630,13 +714,33 @@ async def import_config(
     for b_data in body.bindings:
         try:
             b_id = b_data.id
+            existing_binding = await db.fetchone(
+                "SELECT id, adapter_type, adapter_instance_id FROM adapter_bindings WHERE id=?",
+                (b_id,),
+            )
+            effective_adapter_type = existing_binding["adapter_type"] if existing_binding is not None else b_data.adapter_type
+            effective_instance_id = existing_binding["adapter_instance_id"] if existing_binding is not None else b_data.adapter_instance_id
             formula = (b_data.value_formula or "").strip() or None
             if formula:
                 err = validate_formula(formula)
                 if err:
                     raise ValueError(f"Ungültige Formel: {err}")
-            row = await db.fetchone("SELECT id FROM adapter_bindings WHERE id=?", (b_id,))
-            if row:
+            instance_config = None
+            if effective_adapter_type == "MESSAGE" and effective_instance_id:
+                if effective_instance_id in invalid_message_instances:
+                    raise ValueError(invalid_message_instances[effective_instance_id])
+                instance_row = await db.fetchone("SELECT config FROM adapter_instances WHERE id=?", (effective_instance_id,))
+                if instance_row is None:
+                    raise ValueError(f"MESSAGE adapter instance not found: {effective_instance_id}")
+                instance_config = _json_config(instance_row["config"])
+            _validate_adapter_binding(
+                effective_adapter_type,
+                b_data.direction,
+                b_data.config,
+                enabled=b_data.enabled,
+                instance_config=instance_config,
+            )
+            if existing_binding:
                 await db.execute_and_commit(
                     """UPDATE adapter_bindings
                        SET direction=?, config=?, enabled=?,

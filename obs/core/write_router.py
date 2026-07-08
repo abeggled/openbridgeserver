@@ -144,10 +144,9 @@ class WriteRouter:
     async def handle(self, dp_id: uuid.UUID, raw_payload: str) -> None:
         """Deserialize an inbound MQTT set payload.
 
-        Bound datapoints keep the adapter write semantics: only DEST/BOTH
-        bindings receive commands, and registry state changes only when an
-        adapter later publishes a value event. Bindingless datapoints are OBS
-        internal objects, so their validated set payload becomes the value event.
+        External MQTT commands may only target explicit writable adapter
+        bindings. Bindingless datapoints are OBS-internal state and must not be
+        converted into trusted DataValueEvent updates from this path.
         """
         from obs.models.types import DataTypeRegistry
 
@@ -158,14 +157,15 @@ class WriteRouter:
             return
 
         rows = await self._db.fetchall(
-            """SELECT direction, enabled FROM adapter_bindings
+            """SELECT direction, enabled, adapter_type FROM adapter_bindings
                WHERE datapoint_id=?""",
             (str(dp_id),),
         )
-        has_bindings = bool(rows)
         active_rows = [row for row in rows if _row_is_enabled(row)]
-        has_writable_bindings = any(_row_value(row, "direction") in {"DEST", "BOTH"} for row in active_rows)
-        if has_bindings and not has_writable_bindings:
+        write_semantic_rows = [row for row in active_rows if _row_value(row, "adapter_type") != "MESSAGE"]
+        has_write_semantic_bindings = bool(write_semantic_rows)
+        has_writable_bindings = any(_row_value(row, "direction") in {"DEST", "BOTH"} for row in write_semantic_rows)
+        if has_write_semantic_bindings and not has_writable_bindings:
             logger.warning("Write request for non-writable DataPoint %s — ignored", dp_id)
             return
 
@@ -190,17 +190,7 @@ class WriteRouter:
             await self._write_to_dest_bindings(dp_id, value, skip_binding_id=None)
             return
 
-        from obs.core.event_bus import DataValueEvent, get_event_bus
-
-        bus = getattr(self, "_bus", None) or get_event_bus()
-        await bus.publish(
-            DataValueEvent(
-                datapoint_id=dp_id,
-                value=value,
-                quality="good",
-                source_adapter="mqtt_set",
-            )
-        )
+        logger.warning("Write request for bindingless internal DataPoint %s — ignored", dp_id)
 
     # ------------------------------------------------------------------
     # Path 2 — internal DataValueEvent propagation
@@ -267,7 +257,7 @@ class WriteRouter:
 
         rows = await self._db.fetchall(
             """SELECT * FROM adapter_bindings
-               WHERE datapoint_id=? AND direction IN ('DEST','BOTH') AND enabled=1""",
+               WHERE datapoint_id=? AND direction IN ('DEST','BOTH') AND enabled=1 AND adapter_type <> 'MESSAGE'""",
             (str(dp_id),),
         )
         if not rows:
@@ -288,6 +278,9 @@ class WriteRouter:
                 continue
             if skip_binding_id and binding.id == skip_binding_id:
                 logger.debug("WriteRouter: skipping originating binding %s", binding.id)
+                continue
+            if binding.adapter_type == "MESSAGE":
+                logger.debug("WriteRouter: skipping MESSAGE observer binding %s", binding.id)
                 continue
 
             # Phase 5: Lookup per Instance-ID (bevorzugt), Fallback auf Typ

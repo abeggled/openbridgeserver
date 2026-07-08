@@ -59,6 +59,7 @@ async def test_config_post_persists_full_payload_to_app_settings(client, auth_he
 
     persisted = await _read_persisted_row()
     assert persisted == {
+        "enabled": True,
         "max_entries": 42_000,
         "max_file_size_bytes": 5 * 1024 * 1024,
         "max_age": 7200,
@@ -82,6 +83,7 @@ async def test_config_post_persists_null_max_entries(client, auth_headers):
 
     persisted = await _read_persisted_row()
     assert persisted == {
+        "enabled": True,
         "max_entries": None,
         "max_file_size_bytes": 3 * 1024 * 1024,
         "max_age": None,
@@ -106,6 +108,7 @@ async def test_load_persisted_ringbuffer_config_after_post_matches_payload(clien
 
     cfg = await load_persisted_ringbuffer_config(get_db())
     assert cfg == {
+        "enabled": True,
         "max_entries": 25_000,
         "max_file_size_bytes": 8 * 1024 * 1024,
         "max_age": 3600,

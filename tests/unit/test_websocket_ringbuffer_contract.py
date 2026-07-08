@@ -127,6 +127,35 @@ async def test_ringbuffer_entry_payload_contains_documented_fields(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ringbuffer_entry_payload_is_skipped_when_monitor_disabled(monkeypatch):
+    ws = _FakeWebSocket()
+    manager = WebSocketManager()
+    await manager.connect(ws)
+
+    class _RegistryStub:
+        def get(self, _dp_id):
+            return SimpleNamespace(name="Disabled DP", unit="W")
+
+        def get_value(self, _dp_id):
+            return SimpleNamespace(old_value=12.5)
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+    monkeypatch.setattr("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", lambda: False)
+
+    await manager.handle_value_event(
+        DataValueEvent(
+            datapoint_id=uuid4(),
+            value=42.0,
+            quality="good",
+            source_adapter="api",
+            ts=datetime(2026, 5, 6, 19, 44, 49, 123000, tzinfo=UTC),
+        )
+    )
+
+    assert ws.messages == []
+
+
+@pytest.mark.asyncio
 async def test_send_drops_non_serializable_message_without_disconnect():
     ws = _SerializationFailWebSocket()
     manager = WebSocketManager()

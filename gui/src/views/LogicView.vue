@@ -238,7 +238,7 @@ const nodeTypeComponents = {
   // String
   string_concat: _generic,
   // Notification
-  notify_pushover: _generic, notify_sms: _generic, wake_on_lan: _generic,
+  notify_pushover: _generic, notify_sms: _generic, wake_on_lan: _generic, host_check: _generic,
   // Integration
   api_client: _generic, json_extractor: _generic, xml_extractor: _generic, substring_extractor: _generic,
   ical: _generic,

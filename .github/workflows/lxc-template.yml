@@ -246,7 +246,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
 
           apt-get update
-          apt-get install -y python3 python3-pip python3-venv gcc libffi-dev libssl-dev mosquitto mosquitto-clients
+          apt-get install -y python3 python3-pip python3-venv gcc libffi-dev libssl-dev iputils-ping mosquitto mosquitto-clients
 
           # Isolated venv — mirrors the --prefix=/install pattern from the Dockerfile
           python3 -m venv /opt/obs/venv
@@ -486,6 +486,8 @@ jobs:
 
           section = "### Checksums (SHA-256)\n\n"
           for name, cs in entries:
+              if 'app-bundle' in name:
+                  section += "**App Bundle**\n\n"
               section += f"*{name}*:\n```\n{cs}\n```\n\n"
           section += marker
 

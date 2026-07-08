@@ -29,6 +29,7 @@ from obs.logic.manager import (
     _normalise_api_client_variables,
     _read_secret_file,
     _replace_api_client_placeholders,
+    _replace_api_client_url_placeholders,
 )
 from obs.logic.models import FlowData
 from obs.security.url_targets import add_allowed_url_target, evaluate_url_target
@@ -1203,26 +1204,15 @@ class TestApiClientVariables:
         assert captured["url"] == "http://93.184.216.34/api/fresh"
 
     @patch("obs.logic.manager.httpx.AsyncClient")
-    @patch(
-        "obs.security.url_targets.socket.getaddrinfo",
-        return_value=[(None, None, None, None, ("93.184.216.34", 8443))],
-    )
-    def test_url_variable_preserves_authority_host_port(self, _mock_resolve, mock_client_cls):
-        captured: dict = {}
+    def test_url_variable_in_authority_is_rejected(self, mock_client_cls):
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        async def _capture(method, url, **kwargs):
-            captured["url"] = url
-            captured["headers"] = kwargs.get("headers")
-            return _mock_response(200, {"ok": True})
-
-        mock_client.request = _capture
+        mock_client.request = AsyncMock()
 
         dp_id = uuid.uuid4()
         manager = _make_manager()
-        manager._registry.get_value.return_value = self._state("example.com:8443")
+        manager._registry.get_value.return_value = self._state("attacker.example")
         data = {
             "url": "http://###OBS1###/status",
             "method": "GET",
@@ -1236,9 +1226,89 @@ class TestApiClientVariables:
         with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
             outputs = asyncio.run(manager._execute_graph(graph_id, "t", flow, {"ac": {"trigger": True}}))
 
-        assert outputs["ac"]["success"] is True
-        assert captured["url"] == "http://93.184.216.34:8443/status"
-        assert captured["headers"]["Host"] == "example.com:8443"
+        mock_client.request.assert_not_called()
+        assert outputs["ac"]["success"] is False
+        assert outputs["ac"]["status"] is None
+        assert outputs["ac"]["response"] == "API client URL variables are not allowed in the scheme, host, userinfo, or port"
+
+    def test_url_variable_in_path_and_query_is_percent_encoded(self):
+        def resolver(index: int) -> str:
+            return {1: "device/7", 2: "42&admin=true"}[index]
+
+        assert (
+            _replace_api_client_url_placeholders(
+                "http://example.com/api/###OBS1###?value=###OBS2###",
+                resolver,
+            )
+            == "http://example.com/api/device%2F7?value=42%26admin%3Dtrue"
+        )
+
+    def test_url_variable_in_userinfo_and_port_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "secret"
+
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("http://user:###OBS1###@example.com/status", resolver)
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("http://example.com:###OBS1###/status", resolver)
+
+    def test_url_variable_in_authority_with_leading_whitespace_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "attacker.example"
+
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders(" http://###OBS1###/status", resolver)
+
+    def test_url_variable_in_authority_with_leading_control_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "attacker.example"
+
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("\x00http://###OBS1###/status", resolver)
+
+    def test_url_variable_in_authority_after_control_removal_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "attacker.example"
+
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("http:\n//###OBS1###/status", resolver)
+
+    def test_url_variable_in_authority_with_leading_unicode_whitespace_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "attacker.example"
+
+        # U+00A0 (non-breaking space) is removed by the call sites' str.strip()
+        # but not by urlparse; the authority guard must reject it too.
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("\u00a0http://###OBS1###/status", resolver)
+
+    def test_url_variable_in_authority_with_interleaved_control_and_whitespace_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "attacker.example"
+
+        # Interleaved C0 control + Unicode whitespace must be fully stripped so
+        # the scheme is not hidden from the authority-bounds check.
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("\x00\u00a0\x01http://###OBS1###/status", resolver)
+
+    def test_url_variable_in_scheme_is_rejected(self):
+        def resolver(index: int) -> str:
+            return "https"
+
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("###OBS1###://api.example/status", resolver)
+
+    def test_url_variable_between_scheme_colon_and_authority_slashes_is_rejected(self):
+        # A placeholder between the scheme's colon and the // authority marker
+        # collapses to a valid scheme://authority URL when the variable is empty.
+        # The guard must reject such templates at analysis time, before resolution.
+        def resolver(index: int) -> str:
+            return ""
+
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("http:###OBS1###//attacker.example/path", resolver)
+        with pytest.raises(Exception, match="API client URL variables are not allowed"):
+            _replace_api_client_url_placeholders("https:###OBS1###//attacker.example/path", resolver)
 
     @patch("obs.logic.manager.httpx.AsyncClient")
     def test_missing_variable_configuration_sets_error_output(self, mock_client_cls):

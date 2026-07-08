@@ -131,6 +131,7 @@ const NODE_DEFS = computed(() => ({
   notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:'URL'},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
   notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',     label:t('logic.ports.sent')}]        },
   wake_on_lan:        { label: 'Wake on LAN',    color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                              outputs: [{id:'sent',     label:t('logic.ports.sent')}]        },
+  host_check:         { label: t('logic.nodeTypes.host_check'), color: '#0369a1', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                              outputs: [{id:'reachable',label:t('logic.portLabels.reachable')},{id:'latency_ms',label:t('logic.portLabels.latencyMs')}] },
   // Math — avg_multi (dynamic inputs, fixed outputs)
   avg_multi: { label: 'Mittelwert', color: '#7c3aed',
     inputs: [{id:'in_1',label:t('logic.ports.in_n',{n:1})},{id:'in_2',label:t('logic.ports.in_n',{n:2})}],
@@ -286,6 +287,7 @@ const summary = computed(() => {
   if (props.type === 'notify_pushover')     return d.title || 'open bridge server'
   if (props.type === 'notify_sms')          return d.to || '—'
   if (props.type === 'wake_on_lan')         return d.mac_address || '—'
+  if (props.type === 'host_check')          return d.host || '—'
   if (props.type === 'avg_multi') {
     const count = Math.max(2, Math.min(20, Number(d.input_count) || 2))
     return t('logic.summary.inputs', { n: count })

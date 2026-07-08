@@ -1,0 +1,1 @@
+"""MESSAGE notification adapter package."""
