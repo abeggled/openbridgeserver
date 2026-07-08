@@ -152,6 +152,7 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("POST", "/api/v1/auth/refresh"): "config_mutation",
     ("POST", "/api/v1/auth/users"): "config_mutation",
     ("POST", "/api/v1/auth/users/{username}/mqtt-password"): "config_mutation",
+    ("POST", "/api/v1/authz/preview"): "read_live",
     ("POST", "/api/v1/config/autobackup/restore/{name}"): "config_mutation",
     ("POST", "/api/v1/config/autobackup/run"): "config_mutation",
     ("POST", "/api/v1/config/import"): "config_mutation",
