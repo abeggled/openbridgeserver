@@ -550,6 +550,8 @@ async def _ws_authenticated_page_scope(
 ) -> set[str] | None:
     from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
 
+    user_source_page_ids: set[str] = set()
+
     async def _can_access_page(candidate_page_id: str) -> bool:
         access, defining_node_id = await _resolve_access_with_node(db, candidate_page_id)
         if access in ("public", "readonly"):
@@ -560,7 +562,10 @@ async def _ws_authenticated_page_scope(
             validate_id = defining_node_id or candidate_page_id
             return bool(session_token and sessions_api.validate_session(session_token, validate_id))
         if access == "user" and principal.type == "user":
-            return await _check_user_access(db, candidate_page_id, principal.subject)
+            ok = await _check_user_access(db, candidate_page_id, principal.subject)
+            if ok and candidate_page_id != page_id:
+                user_source_page_ids.add(candidate_page_id)
+            return ok
         return False
 
     if not await _can_access_page(page_id):
@@ -572,6 +577,17 @@ async def _ws_authenticated_page_scope(
     if access == "user":
         allowed_ids = set(await filter_authorized_datapoints(db, principal, page_scope_ids, action=AuthzAction.READ))
         return page_scope_ids & allowed_ids
+    # Datapoints contributed by user-access widget_ref source pages must also respect READ grants.
+    if user_source_page_ids:
+        user_sourced: set[str] = set()
+        for src_page_id in user_source_page_ids:
+            src_ids = await _page_allowed_datapoints(db, src_page_id)
+            if src_ids:
+                user_sourced.update(src_ids)
+        user_sourced &= page_scope_ids
+        if user_sourced:
+            read_allowed = set(await filter_authorized_datapoints(db, principal, user_sourced, action=AuthzAction.READ))
+            page_scope_ids = (page_scope_ids - user_sourced) | read_allowed
     return page_scope_ids
 
 
