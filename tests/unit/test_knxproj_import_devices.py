@@ -22,11 +22,12 @@ def _ga(address: str, name: str = "GA") -> SimpleNamespace:
     )
 
 
-def _device(identifier: str, pa: str, name: str) -> SimpleNamespace:
+def _device(identifier: str, pa: str, name: str, space_id: str | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         identifier=identifier,
         individual_address=pa,
         name=name,
+        space_id=space_id,
         description="",
         manufacturer_name="Acme",
         order_number="ORD-1",
@@ -129,6 +130,48 @@ async def test_import_knxproj_persists_devices_comm_objects_and_links(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_import_knxproj_persists_device_space_links(monkeypatch: pytest.MonkeyPatch):
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            """INSERT INTO knx_locations (id, parent_id, name, space_type, sort_order, imported_at)
+               VALUES ('space-1', NULL, 'Kitchen', 'Room', 1, '2026-06-09T10:00:00+00:00')"""
+        )
+        await db.commit()
+
+        monkeypatch.setattr(
+            knxproj_api,
+            "parse_knxproj_devices",
+            lambda *_args, **_kwargs: (
+                [
+                    _device("dev-1", "1.1.10", "Kitchen Actuator", space_id="space-1"),
+                    _device("dev-2", "1.1.11", "Unknown Room Actuator", space_id="missing-space"),
+                    _device("dev-without-pa", "", "Unassigned Device", space_id="space-1"),
+                ],
+                [],
+                [],
+            ),
+        )
+
+        imported_devices, imported_comm_objects = await knxproj_api._import_knx_devices_and_comm_objects(
+            file_bytes=b"dummy",
+            password=None,
+            db=db,
+            now="2026-06-09T10:00:00+00:00",
+        )
+
+        assert imported_devices == 3
+        assert imported_comm_objects == 0
+        rows = await db.fetchall("SELECT space_id, device_id FROM knx_space_device_links ORDER BY device_id")
+        assert [(row["space_id"], row["device_id"]) for row in rows] == [("space-1", "dev-1")]
+        skipped = await db.fetchone("SELECT id FROM knx_devices WHERE id='dev-without-pa'")
+        assert skipped is None
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_import_knxproj_replaces_device_snapshot_on_reimport(monkeypatch: pytest.MonkeyPatch):
     db = Database(":memory:")
     await db.connect()
@@ -163,6 +206,52 @@ async def test_import_knxproj_replaces_device_snapshot_on_reimport(monkeypatch: 
         assert count_row["n"] == 1
         only_co = await db.fetchone("SELECT id FROM knx_comm_objects")
         assert only_co["id"] == "co-b"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_device_reimport_preserves_manual_hierarchy_links(monkeypatch: pytest.MonkeyPatch):
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        monkeypatch.setattr(knxproj_api, "parse_knxproj", lambda *_args, **_kwargs: [_ga("1/2/3")])
+        monkeypatch.setattr(knxproj_api, "parse_knxproj_locations", lambda *_args, **_kwargs: ([], []))
+        monkeypatch.setattr(knxproj_api, "parse_knxproj_trades", lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(
+            knxproj_api,
+            "parse_knxproj_devices",
+            lambda *_args, **_kwargs: (
+                [_device("dev-1", "1.1.10", "Kitchen Actuator")],
+                [],
+                [],
+            ),
+        )
+
+        file = UploadFile(filename="project.knxproj", file=BytesIO(b"dummy"))
+        await knxproj_api.import_knxproj_file(file=file, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
+
+        await db.execute(
+            """INSERT INTO hierarchy_trees (id, name, description, source, created_at, updated_at)
+               VALUES ('tree-1', 'Gebäude', '', '', '2026-06-09T10:00:00+00:00', '2026-06-09T10:00:00+00:00')"""
+        )
+        await db.execute(
+            """INSERT INTO hierarchy_nodes
+               (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+               VALUES ('node-1', 'tree-1', NULL, 'Küche', '', 0, NULL, '2026-06-09T10:00:00+00:00', '2026-06-09T10:00:00+00:00')"""
+        )
+        await db.execute(
+            """INSERT INTO hierarchy_device_links (id, node_id, device_id, created_at)
+               VALUES ('hdl-1', 'node-1', 'dev-1', '2026-06-09T10:00:00+00:00')"""
+        )
+        await db.commit()
+
+        file2 = UploadFile(filename="project.knxproj", file=BytesIO(b"dummy-v2"))
+        await knxproj_api.import_knxproj_file(file=file2, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
+
+        row = await db.fetchone("SELECT node_id, device_id FROM hierarchy_device_links")
+        assert row is not None
+        assert (row["node_id"], row["device_id"]) == ("node-1", "dev-1")
     finally:
         await db.disconnect()
 
