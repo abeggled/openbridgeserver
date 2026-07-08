@@ -1235,6 +1235,37 @@ Connects to an **external** MQTT broker (separate from the internal Mosquitto).
 
 ---
 
+### MESSAGE adapter
+
+Sends notifications when a linked data point changes and the binding condition is fulfilled. The binding uses the read direction (`SOURCE`) because the adapter observes value changes and turns them into messages.
+
+**Supported providers:**
+
+| Provider | Instance fields | Target fields |
+|---|---|---|
+| `pushover` | `api_token` | `user_key` |
+| `telegram` | `bot_token` | `chat_id` |
+| `seven.io` | `api_key`, optional `sender` | `to`, `channel` (`sms`/`voice`) |
+
+**Binding configuration:**
+
+| Field | Description |
+|---|---|
+| `operator` | Condition: `any`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `contains`, `contains not`, `starts with`, `ends with` |
+| `compare_value` | Comparison value; not required for `any` |
+| `message` | Message template with placeholders |
+| `title` | Optional message title |
+| `providers` | List of provider and target name to send to |
+| `send_on_change` | Sends only when entering the fulfilled state; for `any`, only when the value changes |
+| `cooldown_seconds` | Minimum delay between two sent messages |
+| `enabled` | Enables/disables the binding |
+
+Message placeholders: `###DP###` = value, `###DPU###` = unit, `###DPN###` = data point name, `###DPI###` = data point ID, `###TS###` = timestamp.
+
+> **Note:** Signal is not offered by the MESSAGE adapter for now because it would require operating a separate Signal gateway service.
+
+---
+
 ### Home Assistant adapter
 
 Connects **open bridge server** bidirectionally to a Home Assistant instance. Receives state changes in real time via WebSocket (`state_changed` events) and writes values via the HA REST API (service calls).

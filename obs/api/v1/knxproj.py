@@ -27,7 +27,7 @@ from fastapi import (
 )
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction
@@ -103,6 +103,15 @@ class KnxCommObjectOut(BaseModel):
     ga_addresses: list[str]
 
 
+class KnxHierarchyLinkOut(BaseModel):
+    tree_id: str
+    tree_name: str
+    node_id: str
+    node_name: str
+    node_path: list[str] = Field(default_factory=list)
+    display_depth: int = 0
+
+
 class KnxDeviceOut(BaseModel):
     pa: str
     name: str
@@ -110,10 +119,15 @@ class KnxDeviceOut(BaseModel):
     order_number: str
     app_ref: str
     imported_at: str
+    hierarchy_links: list[KnxHierarchyLinkOut] = Field(default_factory=list)
 
 
 class KnxDeviceDetailOut(KnxDeviceOut):
     comm_objects: list[KnxCommObjectOut]
+
+
+class KnxDeviceHierarchyLinksIn(BaseModel):
+    node_ids: list[str] = Field(default_factory=list)
 
 
 class KnxDevicePage(BaseModel):
@@ -361,7 +375,7 @@ async def _authorized_knx_group_addresses(
         """SELECT ab.datapoint_id, ab.config
            FROM adapter_bindings ab
            LEFT JOIN adapter_instances ai ON ai.id = ab.adapter_instance_id
-           WHERE ab.adapter_type = 'KNX'
+           WHERE UPPER(ab.adapter_type) = 'KNX'
              AND ab.enabled = 1
              AND (ab.adapter_instance_id IS NULL OR ai.enabled = 1)""",
     )
@@ -406,6 +420,83 @@ async def _authorized_knx_device_scope(
     return allowed_device_ids, allowed_ga_addresses
 
 
+def _parse_hierarchy_node_filter(value: str) -> list[str]:
+    if not isinstance(value, str):
+        return []
+    if not value:
+        return []
+    node_ids: list[str] = []
+    seen: set[str] = set()
+    for raw in value.split(","):
+        node_id = raw.strip()
+        if not node_id or node_id in seen:
+            continue
+        seen.add(node_id)
+        node_ids.append(node_id)
+    return node_ids
+
+
+async def _load_device_hierarchy_links(db: Database, device_ids: list[str]) -> dict[str, list[KnxHierarchyLinkOut]]:
+    if not device_ids:
+        return {}
+    placeholders = ",".join("?" * len(device_ids))
+    rows = await db.fetchall(
+        f"""SELECT
+               hdl.device_id,
+               hn.id AS node_id,
+               hn.name AS node_name,
+               ht.id AS tree_id,
+               ht.name AS tree_name,
+               ht.display_depth
+           FROM hierarchy_device_links hdl
+           JOIN hierarchy_nodes hn ON hn.id = hdl.node_id
+           JOIN hierarchy_trees ht ON ht.id = hn.tree_id
+           WHERE hdl.device_id IN ({placeholders})
+           ORDER BY ht.name, hn.name""",
+        device_ids,
+    )
+    node_ids = list(dict.fromkeys(row["node_id"] for row in rows))
+    node_paths: dict[str, list[str]] = {}
+    if node_ids:
+        path_placeholders = ",".join("?" * len(node_ids))
+        path_rows = await db.fetchall(
+            f"""WITH RECURSIVE anc(leaf_id, cur_id, cur_name, cur_parent, depth) AS (
+                   SELECT id, id, name, parent_id, 0 FROM hierarchy_nodes WHERE id IN ({path_placeholders})
+                   UNION ALL
+                   SELECT a.leaf_id, hn2.id, hn2.name, hn2.parent_id, a.depth + 1
+                   FROM anc a JOIN hierarchy_nodes hn2 ON hn2.id = a.cur_parent
+                   WHERE a.cur_parent IS NOT NULL
+               )
+               SELECT leaf_id, cur_name
+               FROM anc
+               WHERE depth > 0
+               ORDER BY leaf_id, depth DESC""",
+            node_ids,
+        )
+        for row in path_rows:
+            node_paths.setdefault(row["leaf_id"], []).append(row["cur_name"])
+
+    out: dict[str, list[KnxHierarchyLinkOut]] = {device_id: [] for device_id in device_ids}
+    for row in rows:
+        out.setdefault(row["device_id"], []).append(
+            KnxHierarchyLinkOut(
+                tree_id=row["tree_id"],
+                tree_name=row["tree_name"],
+                node_id=row["node_id"],
+                node_name=row["node_name"],
+                node_path=node_paths.get(row["node_id"], []),
+                display_depth=row["display_depth"] if row["display_depth"] is not None else 0,
+            )
+        )
+    return out
+
+
+def _with_hierarchy_links(device: KnxDeviceOut, links: list[KnxHierarchyLinkOut] | None) -> KnxDeviceOut:
+    payload = device.model_dump()
+    payload["hierarchy_links"] = links or []
+    return KnxDeviceOut(**payload)
+
+
 async def _import_knx_devices_and_comm_objects(
     *,
     file_bytes: bytes,
@@ -428,6 +519,7 @@ async def _import_knx_devices_and_comm_objects(
 
     await db.execute("SAVEPOINT knx_device_snapshot")
     try:
+        existing_hierarchy_links = await db.fetchall("SELECT node_id, device_id FROM hierarchy_device_links")
         # Keep the latest project snapshot deterministic: tables mirror the current
         # imported .knxproj payload.
         await db.execute("DELETE FROM knx_co_ga_links")
@@ -455,6 +547,34 @@ async def _import_knx_devices_and_comm_objects(
                     if d.identifier and d.individual_address
                 ],
             )
+
+            imported_device_ids = {d.identifier for d in devices if d.identifier and d.individual_address}
+            preserved_hierarchy_links = [
+                (str(uuid_mod.uuid4()), row["node_id"], row["device_id"], now)
+                for row in existing_hierarchy_links
+                if row["device_id"] in imported_device_ids
+            ]
+            if preserved_hierarchy_links:
+                await db.executemany(
+                    "INSERT OR IGNORE INTO hierarchy_device_links (id, node_id, device_id, created_at) VALUES (?, ?, ?, ?)",
+                    preserved_hierarchy_links,
+                )
+
+            device_space_links = [(d.space_id, d.identifier) for d in devices if d.space_id and d.identifier and d.identifier in imported_device_ids]
+            if device_space_links:
+                space_ids = list(dict.fromkeys(space_id for space_id, _ in device_space_links if space_id))
+                placeholders = ",".join("?" * len(space_ids))
+                existing_space_rows = await db.fetchall(
+                    f"SELECT id FROM knx_locations WHERE id IN ({placeholders})",
+                    space_ids,
+                )
+                existing_space_ids = {row["id"] for row in existing_space_rows}
+                space_link_rows = [(space_id, device_id) for space_id, device_id in device_space_links if space_id in existing_space_ids]
+                if space_link_rows:
+                    await db.executemany(
+                        "INSERT OR IGNORE INTO knx_space_device_links (space_id, device_id) VALUES (?, ?)",
+                        space_link_rows,
+                    )
 
         device_id_by_pa = {d.individual_address: d.identifier for d in devices if d.individual_address and d.identifier}
         imported_comm_ids: set[str] = set()
@@ -959,6 +1079,7 @@ async def list_knx_devices(
     q: str = Query("", description="Suche in PA, Name, Hersteller, Bestellnummer und App-Ref"),
     manufacturer: str = Query("", description="Hersteller (Teilstring, case-insensitive)"),
     order_number: str = Query("", description="Bestellnummer (Teilstring, case-insensitive)"),
+    hierarchy_node_id: str = Query("", description="Kommagetrennte Hierarchie-Knoten-IDs zur Gerätefilterung"),
     room: str = Query("", description="Optionaler Raumfilter (noch ohne Wirkung)"),
     trade: str = Query("", description="Optionaler Gewerkefilter (noch ohne Wirkung)"),
     page: int = Query(0, ge=0),
@@ -1002,6 +1123,27 @@ async def list_knx_devices(
         where.append("lower(product_refid) LIKE ?")
         params.append(f"%{order_number.lower()}%")
 
+    hierarchy_node_ids = _parse_hierarchy_node_filter(hierarchy_node_id)
+    if hierarchy_node_ids:
+        placeholders = ",".join("?" * len(hierarchy_node_ids))
+        where.append(
+            f"""id IN (
+                WITH RECURSIVE selected_hierarchy_nodes(id) AS (
+                    SELECT id
+                    FROM hierarchy_nodes
+                    WHERE id IN ({placeholders})
+                    UNION ALL
+                    SELECT child.id
+                    FROM hierarchy_nodes child
+                    JOIN selected_hierarchy_nodes selected ON child.parent_id = selected.id
+                )
+                SELECT hdl.device_id
+                FROM hierarchy_device_links hdl
+                JOIN selected_hierarchy_nodes selected ON selected.id = hdl.node_id
+            )"""
+        )
+        params.extend(hierarchy_node_ids)
+
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     count_row = await db.fetchone(
         f"SELECT COUNT(*) AS n FROM knx_devices {where_sql}",
@@ -1011,6 +1153,7 @@ async def list_knx_devices(
 
     rows = await db.fetchall(
         f"""SELECT
+                id,
                 individual_address AS pa,
                 name,
                 product_name AS manufacturer,
@@ -1024,8 +1167,10 @@ async def list_knx_devices(
         tuple([*params, size, page * size]),
     )
     pages = max(1, (total + size - 1) // size)
+    device_ids = [row["id"] for row in rows]
+    links_by_device_id = await _load_device_hierarchy_links(db, device_ids)
     return KnxDevicePage(
-        items=[_device_out_from_row(row) for row in rows],
+        items=[_with_hierarchy_links(_device_out_from_row(row), links_by_device_id.get(row["id"])) for row in rows],
         total=total,
         page=page,
         size=size,
@@ -1098,10 +1243,45 @@ async def get_knx_device(
             by_id[co_id].ga_addresses.append(ga)
 
     device = _device_out_from_row(device_row)
+    links_by_device_id = await _load_device_hierarchy_links(db, [device_row["id"]])
     return KnxDeviceDetailOut(
-        **device.model_dump(),
+        **_with_hierarchy_links(device, links_by_device_id.get(device_row["id"])).model_dump(),
         comm_objects=list(by_id.values()),
     )
+
+
+@router.put("/devices/{pa}/hierarchy-links", response_model=KnxDeviceDetailOut)
+async def set_knx_device_hierarchy_links(
+    pa: str,
+    body: KnxDeviceHierarchyLinksIn,
+    _user: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
+) -> KnxDeviceDetailOut:
+    if not await _knx_device_schema_ready(db):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"KNX Gerät {pa} nicht gefunden")
+
+    device_row = await db.fetchone("SELECT id FROM knx_devices WHERE individual_address = ?", (pa,))
+    if not device_row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"KNX Gerät {pa} nicht gefunden")
+
+    node_ids = list(dict.fromkeys(str(node_id).strip() for node_id in body.node_ids if str(node_id).strip()))
+    if node_ids:
+        placeholders = ",".join("?" * len(node_ids))
+        rows = await db.fetchall(f"SELECT id FROM hierarchy_nodes WHERE id IN ({placeholders})", node_ids)
+        existing_node_ids = {row["id"] for row in rows}
+        missing = [node_id for node_id in node_ids if node_id not in existing_node_ids]
+        if missing:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Hierarchie-Knoten nicht gefunden: {', '.join(missing)}")
+
+    now = datetime.now(UTC).isoformat()
+    await db.execute("DELETE FROM hierarchy_device_links WHERE device_id = ?", (device_row["id"],))
+    if node_ids:
+        await db.executemany(
+            "INSERT INTO hierarchy_device_links (id, node_id, device_id, created_at) VALUES (?, ?, ?, ?)",
+            [(str(uuid_mod.uuid4()), node_id, device_row["id"], now) for node_id in node_ids],
+        )
+    await db.commit()
+    return await get_knx_device(pa=pa, _user=_user, db=db)
 
 
 @router.get("/group-addresses/{ga:path}/devices", response_model=KnxDevicePage)

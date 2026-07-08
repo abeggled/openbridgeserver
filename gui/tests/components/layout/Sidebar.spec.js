@@ -86,6 +86,11 @@ describe('Sidebar — nav links', () => {
     expect(wrapper.find('[data-testid="nav-adapters"]').exists()).toBe(true)
   })
 
+  it('renders the KNX devices nav link', async () => {
+    const { wrapper } = await mountSidebar()
+    expect(wrapper.find('[data-testid="nav-knx-devices"]').exists()).toBe(true)
+  })
+
   it('active route "/" is highlighted on home link', async () => {
     const { wrapper } = await mountSidebar({ routePath: '/' })
     const homeLink = wrapper.find('[data-testid="nav-home"]')
@@ -101,6 +106,11 @@ describe('Sidebar — nav links', () => {
   it('nav link /datapoints is highlighted when route starts with /datapoints', async () => {
     const { wrapper } = await mountSidebar({ routePath: '/datapoints' })
     expect(wrapper.find('[data-testid="nav-datapoints"]').classes().join(' ')).toContain('bg-blue-600/20')
+  })
+
+  it('nav link /knx-devices is highlighted on the KNX devices page', async () => {
+    const { wrapper } = await mountSidebar({ routePath: '/knx-devices' })
+    expect(wrapper.find('[data-testid="nav-knx-devices"]').classes().join(' ')).toContain('bg-blue-600/20')
   })
 
   it('home link is NOT highlighted when route is /datapoints (exact match only)', async () => {
@@ -189,6 +199,17 @@ describe('Sidebar — adapter warning badge', () => {
     })
     const badge = wrapper.find('[data-testid="nav-adapter-warning-count"]')
     expect(badge.classes().join(' ')).toContain('bg-amber-500/20')
+  })
+
+  it('uses translated collapsed adapter titles with warning counts', async () => {
+    const { wrapper } = await mountSidebar({
+      collapsed: true,
+      adapterInstances: [{ severity: 'warning' }, { severity: 'error' }],
+    })
+
+    expect(wrapper.find('[data-testid="nav-adapters"]').attributes('title')).toContain('Adapter')
+    expect(wrapper.find('[data-testid="nav-adapters"]').attributes('title')).toContain('2')
+    expect(wrapper.find('[data-testid="nav-knx-devices"]').attributes('title')).toBe('KNX-Geräte')
   })
 })
 

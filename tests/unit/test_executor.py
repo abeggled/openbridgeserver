@@ -554,6 +554,37 @@ class TestDecisionNode:
         assert out["match"] is False
 
 
+class TestHostCheckNode:
+    def test_placeholder_outputs_when_not_triggered(self):
+        out = run_single("host_check", {"host": "192.168.1.1"}, inputs={"trigger": False})
+        assert out["reachable"] is False
+        assert out["latency_ms"] is None
+
+    def test_placeholder_outputs_when_triggered(self):
+        # Executor itself always returns the placeholder; the manager performs the actual ping
+        out = run_single("host_check", {"host": "192.168.1.1"}, inputs={"trigger": True})
+        assert out["reachable"] is False
+        assert out["latency_ms"] is None
+
+    def test_trigger_is_forwarded(self):
+        out = run_single("host_check", {"host": "192.168.1.1"}, inputs={"trigger": True})
+        assert out["_trigger"] is True
+
+    def test_trigger_false_not_forwarded(self):
+        out = run_single("host_check", {"host": "192.168.1.1"}, inputs={"trigger": False})
+        assert out["_trigger"] is False
+
+    def test_missing_trigger_input_defaults_to_false(self):
+        out = run_single("host_check", {"host": "192.168.1.1"})
+        assert out["_trigger"] is False
+
+    def test_all_three_output_keys_present(self):
+        out = run_single("host_check", {"host": "192.168.1.1"})
+        assert "_trigger" in out
+        assert "reachable" in out
+        assert "latency_ms" in out
+
+
 class TestValueMappingNode:
     def test_first_matching_rule_wins(self):
         out = run_single(

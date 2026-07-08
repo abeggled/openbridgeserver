@@ -57,6 +57,10 @@ LABEL org.opencontainers.image.title="open bridge server" \
       org.opencontainers.image.description="Open-Source Multiprotocol Server for Building Automation" \
       org.opencontainers.image.licenses="MIT"
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
+
 # Python packages from builder
 COPY --from=py-builder /install /usr/local
 

@@ -43,6 +43,13 @@ Alle wesentlichen Änderungen an open bridge server werden hier festgehalten.
 **Einstellungen — KNX-Projektdatei**
 - Der Bereich „KNX Projekt importieren" wurde vom Tab „Sicherung" in den Tab **Allgemein** verschoben
 
+**KNX — Geräteverwaltung (#911)**
+- Neue Admin-Seite **KNX-Geräte** für importierte Geräte aus KNX-Projektdateien, erreichbar über die Seitenleiste direkt unter „Objekte"
+- Die Geräteansicht zeigt Gerätedetails, verknüpfte Gruppenadressen und Hierarchie-Zuordnungen; Filter berücksichtigen auch untergeordnete Hierarchie-Knoten
+- Der KNX-Projektimport übernimmt Geräte-Zuordnungen aus ETS-Orten und verknüpft importierte Geräte mit der Gebäudehierarchie
+- Im Monitor/RingBuffer kann jetzt nach KNX-Geräten gesucht und gefiltert werden; das Aufklappen eines Geräts löst dessen Gruppenadressen in konkrete Datenpunkt-Bindings auf
+- Die Geräteansicht enthält einen direkten Einstieg zum KNX-Projektimport in den Einstellungen
+
 **7 neue Blocktypen im Logik-Editor**
 
 | Block | Kategorie | Beschreibung |

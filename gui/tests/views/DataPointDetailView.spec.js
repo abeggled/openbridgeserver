@@ -90,6 +90,18 @@ describe('DataPointDetailView', () => {
     expect(wrapper.findAll('button').some(button => button.text() === 'Schreiben')).toBe(false)
   })
 
+  it('allows writing when only MESSAGE bindings are attached', async () => {
+    apiMocks.dpApi.listBindings.mockResolvedValue({
+      data: [{ id: 'binding-message', enabled: true, direction: 'DEST', adapter_type: 'MESSAGE', config: {} }],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('Kein schreibbares Binding vorhanden.')
+    expect(wrapper.find('input[type="text"]').exists()).toBe(true)
+  })
+
   it('does not expose the write form while bindings are still loading', async () => {
     let resolveBindings
     apiMocks.dpApi.listBindings.mockReturnValue(new Promise(resolve => { resolveBindings = resolve }))

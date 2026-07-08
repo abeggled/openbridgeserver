@@ -535,7 +535,7 @@ async def test_import_config_updates_existing_binding(monkeypatch):
 
     bind_id = str(uuid.uuid4())
     # fetchone returns existing row
-    db = _DbStub(fetchone_result=_row({"id": bind_id}))
+    db = _DbStub(fetchone_result=_row({"id": bind_id, "adapter_type": "mqtt", "adapter_instance_id": None}))
 
     body = _make_config_export(
         bindings=[

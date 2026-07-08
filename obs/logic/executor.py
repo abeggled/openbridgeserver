@@ -693,6 +693,14 @@ class GraphExecutor:
                     "sent": False,
                 }
 
+            case "host_check":
+                # Async — fully handled by LogicManager after executor run
+                return {
+                    "_trigger": self._to_bool(inputs.get("trigger")),
+                    "reachable": False,
+                    "latency_ms": None,
+                }
+
             case "api_client":
                 # Async — fully handled by LogicManager after executor run
                 return {

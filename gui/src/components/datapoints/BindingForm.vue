@@ -31,7 +31,7 @@
             </optgroup>
           </select>
         </div>
-        <div v-if="selectedAdapterType !== 'ANWESENHEITSSIMULATION'" class="form-group">
+        <div v-if="selectedAdapterType !== 'ANWESENHEITSSIMULATION' && selectedAdapterType !== 'MESSAGE'" class="form-group">
           <label class="label">{{ $t('adapters.bindingForm.directionLabel') }}</label>
           <select
             v-model="form.direction"
@@ -160,6 +160,13 @@
           :snmp-walk-error="snmpWalkError"
           :snmp-walk-has-more="snmpWalkHasMore"
           @snmp-walk="snmpWalk"
+        />
+
+      <!-- MESSAGE -->
+      <BindingFormMessage
+        v-if="selectedAdapterType === 'MESSAGE'"
+          :cfg="cfg"
+          :selected-instance="selectedInstance"
         />
 
       <div v-if="!selectedAdapterType && !props.initial" class="p-3 bg-slate-100/80 dark:bg-slate-800/40 rounded-lg text-sm text-slate-500 text-center">
@@ -306,6 +313,7 @@ import BindingFormIoBroker from '@/components/datapoints/binding-form/BindingFor
 import BindingFormTimer from '@/components/datapoints/binding-form/BindingFormTimer.vue'
 import BindingFormPresenceSimulation from '@/components/datapoints/binding-form/BindingFormPresenceSimulation.vue'
 import BindingFormSnmp from '@/components/datapoints/binding-form/BindingFormSnmp.vue'
+import BindingFormMessage from '@/components/datapoints/binding-form/BindingFormMessage.vue'
 
 const props = defineProps({
   dpId:           { type: String,  required: true },
@@ -379,6 +387,15 @@ const cfg = reactive({
   data_type: 'auto',
   timeout: 5.0,
   retries: 1,
+  // MESSAGE
+  operator: '==',
+  compare_value: '',
+  message: '###DPN###: ###DP### ###DPU###',
+  title: '',
+  providers: [],
+  priority: null,
+  cooldown_seconds: 0,
+  send_on_change: true,
   // ZEITSCHALTUHR
   timer_type: 'daily', meta_type: 'none',
   weekdays: [0,1,2,3,4,5,6], months: [], day_of_month: 0,
@@ -506,10 +523,11 @@ const currentInstanceName = computed(() => {
 })
 
 const selectedInstanceId = computed(() => props.initial?.adapter_instance_id || form.adapter_instance_id)
+const selectedInstance = computed(() => allInstances.value.find(i => String(i.id) === String(selectedInstanceId.value)) ?? null)
 
 const visibleTabs = computed(() => {
   const tabs = [{ id: 'conn', label: t('logic.nodeConfig.tabs.connection'), badge: false }]
-  if (selectedAdapterType.value && selectedAdapterType.value !== 'ZEITSCHALTUHR' && selectedAdapterType.value !== 'ANWESENHEITSSIMULATION') {
+  if (selectedAdapterType.value && !['ZEITSCHALTUHR', 'ANWESENHEITSSIMULATION', 'MESSAGE'].includes(selectedAdapterType.value)) {
     if (selectedAdapterType.value === 'IOBROKER' && !showAdvancedTabs.value) return tabs
     const hasFormula = !!form.value_formula?.trim() || !!form.value_map_preset
     tabs.push({ id: 'transform', label: t('logic.nodeConfig.tabs.transform'), badge: hasFormula })
@@ -634,6 +652,15 @@ watch(() => props.initial, val => {
   if (cfg.data_type == null) cfg.data_type = 'auto'
   if (cfg.timeout  == null) cfg.timeout  = 5.0
   if (cfg.retries  == null) cfg.retries  = 1
+  // MESSAGE defaults when loading
+  if (cfg.operator == null) cfg.operator = '=='
+  if (cfg.compare_value == null) cfg.compare_value = ''
+  if (cfg.message == null) cfg.message = '###DPN###: ###DP### ###DPU###'
+  if (cfg.title == null) cfg.title = ''
+  if (cfg.providers == null) cfg.providers = []
+  if (cfg.priority === undefined) cfg.priority = null
+  if (cfg.cooldown_seconds == null) cfg.cooldown_seconds = 0
+  if (cfg.send_on_change == null) cfg.send_on_change = true
   {
     const ANW_PRESETS = ['1', '7', '14']
     if (cfg.offset_override != null) {
@@ -843,14 +870,20 @@ watch(() => cfg.source_data_type, sdt => {
   if (sdt === 'json' || sdt === 'xml') loadMqttSample()
 })
 
-// Force direction to SOURCE when ZEITSCHALTUHR is selected
+// Force direction to SOURCE for adapters that observe values instead of writing.
 watch(selectedAdapterType, type => {
-  if (type === 'ZEITSCHALTUHR') form.direction = 'SOURCE'
+  if (type === 'ZEITSCHALTUHR' || type === 'MESSAGE') form.direction = 'SOURCE'
   if (type === 'IOBROKER') {
     activeTab.value = 'conn'
     showAdvancedTabs.value = false
   }
   if (type === 'SNMP' && !cfg.poll_interval) cfg.poll_interval = 30.0
+})
+
+watch(selectedInstanceId, (newId, oldId) => {
+  if (oldId && newId !== oldId && selectedAdapterType.value === 'MESSAGE') {
+    cfg.providers = []
+  }
 })
 
 // Zeitschaltuhr helpers
@@ -1198,6 +1231,19 @@ function buildConfig() {
     if (cfg.retries !== undefined && cfg.retries !== 1) c.retries = cfg.retries
     return c
   }
+  if (type === 'MESSAGE') {
+    const c = {
+      operator: cfg.operator || '==',
+      compare_value: cfg.compare_value,
+      message: cfg.message || '###DPN###: ###DP### ###DPU###',
+      providers: [...(cfg.providers ?? [])],
+      send_on_change: cfg.send_on_change ?? true,
+      cooldown_seconds: cfg.cooldown_seconds ?? 0,
+    }
+    if (cfg.title?.trim()) c.title = cfg.title.trim()
+    if (cfg.priority != null) c.priority = cfg.priority
+    return c
+  }
   return {}
 }
 
@@ -1206,7 +1252,7 @@ async function submit() {
   saving.value = true
   try {
     const config     = buildConfig()
-    const effectiveDirection = selectedAdapterType.value === 'ANWESENHEITSSIMULATION' ? 'SOURCE' : form.direction
+    const effectiveDirection = ['ANWESENHEITSSIMULATION', 'MESSAGE'].includes(selectedAdapterType.value) ? 'SOURCE' : form.direction
     const throttleMs = form.throttle_value > 0
       ? Math.round(form.throttle_value * THROTTLE_FACTORS[form.throttle_unit]) : null
     let resolvedValueMap = null

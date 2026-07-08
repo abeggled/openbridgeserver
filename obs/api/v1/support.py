@@ -61,8 +61,11 @@ _SENSITIVE_KEY_PARTS = (
 _SENSITIVE_KEYS = {
     "backbone_key",
     "community",
+    "chat_id",
     "knxkeys_file_path",
+    "to",
     "priv_key",
+    "user_key",
 }
 _PASSTHROUGH_KEYS = {
     "auth_protocol",
@@ -227,7 +230,7 @@ async def create_support_package(
         runtime=_build_runtime_info(now),
         adapters=await _build_adapter_info(db),
         history=await _build_history_info(db),
-        monitor=await _build_monitor_info(),
+        monitor=await _build_monitor_info(db),
         health=_build_health_info(now),
         warning_history=warning_history,
         error_history=error_history,
@@ -344,6 +347,30 @@ def _support_categories() -> list[SupportCategoryOut]:
     ]
 
 
+def _sqlite_file_sizes(path: str | None) -> dict[str, int]:
+    """Physical on-disk sizes of a SQLite DB and its ``-wal``/``-shm`` sidecar files.
+
+    Reports each file separately so support packages can spot a WAL file growing out of
+    proportion to the DB (the failure mode behind issue #908). Returns zeros for
+    in-memory databases or when a file is absent/unreadable.
+    """
+    from obs.ringbuffer.ringbuffer import _is_sqlite_memory_path, _sqlite_filesystem_path
+
+    sizes = {"db_bytes": 0, "wal_bytes": 0, "shm_bytes": 0, "total_bytes": 0}
+    if not path or _is_sqlite_memory_path(path):
+        return sizes
+    # Normalize SQLite file URIs (e.g. file:/data/obs.db?mode=rwc) to a filesystem path
+    # so the -wal/-shm sidecars are stat'd correctly rather than as literal URI strings.
+    fs_path = _sqlite_filesystem_path(path)
+    for key, suffix in (("db_bytes", ""), ("wal_bytes", "-wal"), ("shm_bytes", "-shm")):
+        try:
+            sizes[key] = os.path.getsize(f"{fs_path}{suffix}")
+        except OSError:
+            sizes[key] = 0
+    sizes["total_bytes"] = sizes["db_bytes"] + sizes["wal_bytes"] + sizes["shm_bytes"]
+    return sizes
+
+
 def _build_installation_info() -> dict[str, Any]:
     settings = get_settings()
     return sanitize_support_data(
@@ -351,7 +378,11 @@ def _build_installation_info() -> dict[str, Any]:
             "installation_type": _detect_installation_type(),
             "obs_version": __version__,
             "config_source": _basename_only(os.environ.get("OBS_CONFIG") or "config.yaml"),
-            "database": {"path": _basename_only(settings.database.path), "history_plugin": settings.database.history_plugin},
+            "database": {
+                "path": _basename_only(settings.database.path),
+                "history_plugin": settings.database.history_plugin,
+                "files": _sqlite_file_sizes(settings.database.path),
+            },
         },
     )
 
@@ -466,13 +497,36 @@ async def _build_history_info(db: Database) -> dict[str, Any]:
     )
 
 
-async def _build_monitor_info() -> dict[str, Any]:
+async def _build_monitor_info(db: Database) -> dict[str, Any]:
     try:
-        from obs.ringbuffer.ringbuffer import get_ringbuffer
+        from obs.api.v1.ringbuffer import _disabled_stats
+        from obs.ringbuffer.ringbuffer import get_optional_ringbuffer, is_ringbuffer_enabled
 
-        ringbuffer = get_ringbuffer()
+        ringbuffer = get_optional_ringbuffer()
+        if not is_ringbuffer_enabled() or ringbuffer is None:
+            stats = await _disabled_stats(db)
+            if ringbuffer is not None:
+                disk_files = ringbuffer.disk_file_sizes()
+            else:
+                # No live instance: stat the default ringbuffer path derived from the DB
+                # path so a leftover obs_ringbuffer.db/-wal still consuming disk while the
+                # monitor is disabled is surfaced rather than reported as zero (#908).
+                from obs.ringbuffer.ringbuffer import default_ringbuffer_disk_path
+
+                disk_files = _sqlite_file_sizes(default_ringbuffer_disk_path(get_settings().database.path))
+            return sanitize_support_data(
+                {
+                    "available": True,
+                    "stats": stats.model_dump(),
+                    "storage_files": disk_files,
+                    "recent_sample_size": 0,
+                    "recent_source_adapter_counts": {},
+                    "recent_quality_counts": {},
+                }
+            )
         stats = await ringbuffer.stats()
         recent_entries = await ringbuffer.query(limit=200)
+        storage_files = ringbuffer.disk_file_sizes()
     except Exception as exc:
         return {"available": False, "reason": _support_unavailable_reason(exc)}
 
@@ -486,6 +540,7 @@ async def _build_monitor_info() -> dict[str, Any]:
         {
             "available": True,
             "stats": stats,
+            "storage_files": storage_files,
             "recent_sample_size": len(recent_entries),
             "recent_source_adapter_counts": source_counts,
             "recent_quality_counts": quality_counts,

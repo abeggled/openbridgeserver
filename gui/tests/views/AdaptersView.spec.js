@@ -135,6 +135,30 @@ describe('AdaptersView — initial render', () => {
     expect(select.html()).toContain('KNX')
     expect(select.html()).toContain('MQTT')
   })
+
+  it('renders the MESSAGE config form for new MESSAGE instances', async () => {
+    const { wrapper } = await mountAdapters({ types: ['MESSAGE'] })
+    await wrapper.find('[data-testid="btn-new-instance"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="select-adapter-type"]').setValue('MESSAGE')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Pushover')
+    expect(wrapper.text()).toContain('Telegram')
+    expect(wrapper.text()).toContain('seven.io')
+  })
+
+  it('renders the MESSAGE config form when editing MESSAGE instances', async () => {
+    const { wrapper } = await mountAdapters({
+      instances: [makeInstance({ id: 42, adapter_type: 'MESSAGE', name: 'Notifications', config: { providers: {} } })],
+    })
+    await wrapper.find('[data-testid="btn-expand-42"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Pushover')
+    expect(wrapper.text()).toContain('Telegram')
+    expect(wrapper.text()).toContain('seven.io')
+  })
 })
 
 // ─── Demo mode ───────────────────────────────────────────────────────────────
@@ -397,6 +421,14 @@ describe('AdaptersView — test connection', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Timeout')
+  })
+
+  it('does not show the generic test button for MESSAGE instances', async () => {
+    const { wrapper } = await mountAdapters({ instances: [makeInstance({ adapter_type: 'MESSAGE', name: 'Nachrichten' })] })
+    await wrapper.find('[data-testid="btn-expand-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('button').some(b => b.text() === 'Verbindung testen')).toBe(false)
   })
 })
 
