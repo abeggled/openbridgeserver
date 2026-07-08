@@ -465,6 +465,12 @@ async def test_support_package_contains_history_and_monitor_sections(client, aut
     assert body["monitor"]["available"] is True
     assert "stats" in body["monitor"]
     assert "recent_source_adapter_counts" in body["monitor"]
+    # DB/WAL sizes for the main and ringbuffer DBs must be part of the package (issue #908).
+    main_files = body["installation"]["database"]["files"]
+    assert set(main_files) == {"db_bytes", "wal_bytes", "shm_bytes", "total_bytes"}
+    assert main_files["db_bytes"] > 0
+    monitor_files = body["monitor"]["storage_files"]
+    assert set(monitor_files) == {"db_bytes", "wal_bytes", "shm_bytes", "total_bytes"}
 
 
 async def test_support_package_tolerates_history_stats_failure(client, auth_headers):
