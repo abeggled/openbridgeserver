@@ -5,6 +5,7 @@ import pytest
 from obs.api.auth import Principal
 from obs.api.authz import AuthzAction, GrantEffect, Role
 from obs.api.authz_service import (
+    filter_authorized_hierarchy_nodes,
     filter_authorized_datapoints,
     load_role_grants,
     resolve_datapoint_targets,
@@ -190,6 +191,91 @@ async def test_filter_authorized_datapoints_honors_direct_grants_on_linked_datap
 
 
 @pytest.mark.asyncio
+async def test_filter_authorized_datapoints_does_not_use_child_grants_for_ancestor_links(db: Database):
+    await _insert_tree(db)
+    await _insert_node(db, "building")
+    await _insert_node(db, "floor", parent_id="building")
+    await _insert_node(db, "room", parent_id="floor")
+    await _insert_datapoint(db, "dp-1")
+    await _link_datapoint(db, "dp-1", "floor", "link-floor")
+    await _insert_grant(db, node_id="room", role="guest", effect="allow")
+
+    child_allowed = await filter_authorized_datapoints(
+        db,
+        Principal(subject="alice", type="user", is_admin=False),
+        ["dp-1"],
+        action=AuthzAction.READ,
+    )
+
+    await _insert_grant(db, node_id="building", role="guest", effect="allow")
+    ancestor_allowed = await filter_authorized_datapoints(
+        db,
+        Principal(subject="alice", type="user", is_admin=False),
+        ["dp-1"],
+        action=AuthzAction.READ,
+    )
+
+    assert child_allowed == []
+    assert ancestor_allowed == ["dp-1"]
+
+
+@pytest.mark.asyncio
+async def test_filter_authorized_datapoints_honors_direct_write_grants_on_linked_datapoints(db: Database):
+    await _insert_tree(db)
+    await _insert_node(db, "room")
+    await _insert_datapoint(db, "dp-1")
+    await _link_datapoint(db, "dp-1", "room", "link")
+    await _insert_grant(db, node_type="datapoint", node_id="dp-1", role="resident", effect="allow")
+
+    allowed = await filter_authorized_datapoints(
+        db,
+        Principal(subject="alice", type="user", is_admin=False),
+        ["dp-1"],
+        action=AuthzAction.WRITE,
+    )
+
+    assert allowed == ["dp-1"]
+
+
+@pytest.mark.asyncio
+async def test_filter_authorized_datapoints_keeps_explicit_deny_over_direct_write_grant(db: Database):
+    await _insert_tree(db)
+    await _insert_node(db, "room")
+    await _insert_datapoint(db, "dp-1")
+    await _link_datapoint(db, "dp-1", "room", "link")
+    await _insert_grant(db, node_id="room", role="resident", effect="deny")
+    await _insert_grant(db, node_type="datapoint", node_id="dp-1", role="resident", effect="allow")
+
+    allowed = await filter_authorized_datapoints(
+        db,
+        Principal(subject="alice", type="user", is_admin=False),
+        ["dp-1"],
+        action=AuthzAction.WRITE,
+    )
+
+    assert allowed == []
+
+
+@pytest.mark.asyncio
+async def test_filter_authorized_datapoints_keeps_direct_deny_over_hierarchy_write_grant(db: Database):
+    await _insert_tree(db)
+    await _insert_node(db, "room")
+    await _insert_datapoint(db, "dp-1")
+    await _link_datapoint(db, "dp-1", "room", "link")
+    await _insert_grant(db, node_id="room", role="resident", effect="allow")
+    await _insert_grant(db, node_type="datapoint", node_id="dp-1", role="resident", effect="deny")
+
+    allowed = await filter_authorized_datapoints(
+        db,
+        Principal(subject="alice", type="user", is_admin=False),
+        ["dp-1"],
+        action=AuthzAction.WRITE,
+    )
+
+    assert allowed == []
+
+
+@pytest.mark.asyncio
 async def test_resolve_datapoint_targets_ignores_other_principals_direct_grants(db: Database):
     await _insert_tree(db)
     await _insert_node(db, "room")
@@ -296,3 +382,21 @@ async def test_unlinked_datapoints_keep_admin_bridge_but_deny_ungranted_non_admi
 
     assert admin_allowed == ["dp-unlinked"]
     assert user_allowed == []
+
+
+@pytest.mark.asyncio
+async def test_filter_authorized_hierarchy_nodes_applies_read_inheritance(db: Database):
+    await _insert_tree(db)
+    await _insert_node(db, "building")
+    await _insert_node(db, "floor", parent_id="building")
+    await _insert_node(db, "room", parent_id="floor")
+    await _insert_node(db, "secret")
+    await _insert_grant(db, node_id="room", role="guest", effect="allow")
+
+    allowed = await filter_authorized_hierarchy_nodes(
+        db,
+        Principal(subject="alice", type="user", is_admin=False),
+        ["building", "floor", "room", "secret"],
+    )
+
+    assert allowed == ["building", "floor", "room"]

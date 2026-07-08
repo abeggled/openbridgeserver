@@ -162,6 +162,15 @@ async def resolve_datapoint_targets(db: Database, dp_ids: Iterable[str]) -> dict
     return targets_by_dp
 
 
+def _datapoint_read_grants(grants: Sequence[RoleGrant], targets: Sequence[AuthzTarget]) -> list[RoleGrant]:
+    """Restrict datapoint READ hierarchy grants to linked nodes and ancestors."""
+    result: list[RoleGrant] = []
+    for grant in grants:
+        if any(grant.node_type == target.node_type and grant.node_id in target.path for target in targets):
+            result.append(grant)
+    return result
+
+
 async def filter_authorized_datapoints(
     db: Database,
     principal: Principal,
@@ -175,22 +184,71 @@ async def filter_authorized_datapoints(
     if not ordered_ids:
         return []
 
+    action_value = AuthzAction(action)
     resolved_grants = list(grants) if grants is not None else await load_role_grants(db, principal)
     targets_by_dp = await resolve_datapoint_targets(db, ordered_ids)
     direct_grant_ids = {grant.node_id for grant in resolved_grants if grant.node_type == "datapoint" and grant.node_id in ordered_ids}
-    for dp_id in direct_grant_ids:
+    for dp_id in direct_grant_ids if action_value == AuthzAction.READ else ():
         targets = targets_by_dp.setdefault(dp_id, [])
         if not any(target.node_type == "datapoint" and target.node_id == dp_id for target in targets):
             targets.append(AuthzTarget(node_type="datapoint", node_id=dp_id))
 
     allowed: list[str] = []
     for dp_id in ordered_ids:
+        targets = targets_by_dp.get(dp_id, [])
+        decision_grants = _datapoint_read_grants(resolved_grants, targets) if action_value == AuthzAction.READ else resolved_grants
+        decision = authorize(
+            principal=principal,
+            action=action_value,
+            targets=targets,
+            grants=decision_grants,
+        )
+        if action_value != AuthzAction.READ and dp_id in direct_grant_ids:
+            direct_decision = authorize(
+                principal=principal,
+                action=action_value,
+                targets=[AuthzTarget(node_type="datapoint", node_id=dp_id)],
+                grants=resolved_grants,
+            )
+            if decision.reason == "explicit_deny" or direct_decision.reason == "explicit_deny":
+                continue
+            if decision.allowed or direct_decision.allowed:
+                allowed.append(dp_id)
+            continue
+        if decision.allowed:
+            allowed.append(dp_id)
+            continue
+    return allowed
+
+
+async def filter_authorized_hierarchy_nodes(
+    db: Database,
+    principal: Principal,
+    node_ids: Iterable[str],
+    *,
+    action: AuthzAction | str = AuthzAction.READ,
+    grants: Sequence[RoleGrant] | None = None,
+) -> list[str]:
+    """Return hierarchy node IDs from *node_ids* authorized for *principal*."""
+    ordered_ids = _unique(node_ids)
+    if not ordered_ids:
+        return []
+    if principal.type == "user" and principal.is_admin:
+        return ordered_ids
+
+    resolved_grants = list(grants) if grants is not None else await load_role_grants(db, principal, node_type="hierarchy")
+    targets_by_node = {target.node_id: target for target in await resolve_hierarchy_targets(db, ordered_ids)}
+    allowed: list[str] = []
+    for node_id in ordered_ids:
+        target = targets_by_node.get(node_id)
+        if target is None:
+            continue
         decision = authorize(
             principal=principal,
             action=action,
-            targets=targets_by_dp.get(dp_id, []),
+            targets=[target],
             grants=resolved_grants,
         )
         if decision.allowed:
-            allowed.append(dp_id)
+            allowed.append(node_id)
     return allowed

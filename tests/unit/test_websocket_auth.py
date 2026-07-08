@@ -339,7 +339,7 @@ async def test_websocket_endpoint_api_key_page_scope_honors_explicit_deny(monkey
 
 
 @pytest.mark.asyncio
-async def test_websocket_endpoint_preserves_api_key_log_access_with_datapoint_scope(monkeypatch):
+async def test_websocket_endpoint_disables_api_key_log_access_with_datapoint_scope(monkeypatch):
     monkeypatch.setattr(auth_api, "hash_api_key", lambda key: f"hash:{key}")
     monkeypatch.setattr(ws_api, "get_db", lambda: _ApiKeyScopeDbStub())
 
@@ -364,7 +364,7 @@ async def test_websocket_endpoint_preserves_api_key_log_access_with_datapoint_sc
         ws_api.reset_ws_manager()
 
     assert captured["allowed_dp_ids"] == {"allowed-dp"}
-    assert captured["log_access"] is True
+    assert captured["log_access"] is False
 
 
 @pytest.mark.asyncio

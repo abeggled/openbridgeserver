@@ -77,9 +77,17 @@ def _page_config_contains_camera_url(page_config: Any, url: str, username: str =
     expected_username = username.strip()
     expected_password = password
 
+    def _normalize_auth_type(raw: Any) -> str:
+        value = "".join(ch for ch in str(raw or "none").lower() if ch.isalnum())
+        if value == "basic" or value.startswith("basicauth"):
+            return "basic"
+        if value == "apikey" or value.startswith("apikey"):
+            return "apikey"
+        return "none"
+
     def _camera_target(config: dict[str, Any]) -> str:
         target = str(config.get("url", "")).strip()
-        if str(config.get("authType", "")) == "apikey":
+        if _normalize_auth_type(config.get("authType")) == "apikey":
             api_key_param = str(config.get("apiKeyParam", "")).strip()
             api_key_value = str(config.get("apiKeyValue", "")).strip()
             if api_key_param and api_key_value:
@@ -88,7 +96,7 @@ def _page_config_contains_camera_url(page_config: Any, url: str, username: str =
         return target
 
     def _camera_credentials_match(config: dict[str, Any]) -> bool:
-        auth_type = str(config.get("authType", "none"))
+        auth_type = _normalize_auth_type(config.get("authType"))
         if auth_type == "basic":
             return str(config.get("username", "")).strip() == expected_username and str(config.get("password", "")) == expected_password
         return not expected_username and not expected_password

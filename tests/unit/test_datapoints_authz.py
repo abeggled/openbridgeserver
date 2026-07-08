@@ -75,14 +75,14 @@ async def _insert_tree(db: Database) -> None:
     )
 
 
-async def _insert_node(db: Database, node_id: str) -> None:
+async def _insert_node(db: Database, node_id: str, *, parent_id: str | None = None) -> None:
     await db.execute_and_commit(
         """
         INSERT INTO hierarchy_nodes
             (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
-        VALUES (?, 'tree', NULL, ?, '', 0, NULL, ?, ?)
+        VALUES (?, 'tree', ?, ?, '', 0, NULL, ?, ?)
         """,
-        (node_id, node_id, NOW, NOW),
+        (node_id, parent_id, node_id, NOW, NOW),
     )
 
 
@@ -401,6 +401,65 @@ async def test_get_value_authenticated_page_fallback_honors_explicit_deny(monkey
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_value_page_fallback_ignores_descendant_deny_for_ancestor_datapoint(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000046", "Ancestor page value")
+    await _insert_tree(db)
+    await _insert_node(db, "floor")
+    await _insert_node(db, "room", parent_id="floor")
+    await _insert_datapoint(db, datapoint)
+    await _link_datapoint(db, datapoint.id, "floor")
+    await _insert_grant(db, "room", effect="deny")
+    page_config = f"""
+    {{
+      "grid_cols": 12,
+      "grid_row_height": 80,
+      "grid_cell_width": 120,
+      "background": null,
+      "widgets": [
+        {{
+          "id": "widget-1",
+          "name": "Widget",
+          "type": "value",
+          "datapoint_id": "{datapoint.id}",
+          "status_datapoint_id": null,
+          "x": 0,
+          "y": 0,
+          "w": 2,
+          "h": 1,
+          "config": {{}}
+        }}
+      ]
+    }}
+    """
+    await db.execute_and_commit(
+        """
+        INSERT INTO visu_nodes
+            (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
+        VALUES ('page-public-child-deny', NULL, 'Page', 'PAGE', 0, NULL, 'public', NULL, ?, ?, ?)
+        """,
+        (page_config, NOW, NOW),
+    )
+    registry = _RegistryStub([datapoint])
+    state = ValueState()
+    state.update(22.0, "good")
+    registry._values[datapoint.id] = state
+    monkeypatch.setattr(dp_api, "get_registry", lambda: registry)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", AsyncMock(return_value=("public", None)))
+
+    request = MagicMock()
+    request.headers.get = lambda key, default=None: {"X-Page-Id": "page-public-child-deny"}.get(key, default)
+    result = await dp_api.get_value(
+        dp_id=datapoint.id,
+        request=request,
+        user=Principal(subject="alice", type="user", is_admin=False),
+        db=db,
+    )
+
+    assert result.value == 22.0
+    assert result.quality == "good"
 
 
 @pytest.mark.asyncio
