@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
     protocols?: string | string[]
     readyState: number
     sent: string[]
-    onclose?: (event: { code: number }) => void
+    onclose?: ((event: { code: number }) => void) | null
   }>,
 }))
 
@@ -26,7 +26,7 @@ class MockWebSocket {
   readyState = MockWebSocket.CONNECTING
   sent: string[] = []
   onopen?: () => void
-  onclose?: (event: { code: number }) => void
+  onclose?: ((event: { code: number }) => void) | null
   onerror?: () => void
   onmessage?: (event: { data: string }) => void
 
@@ -101,6 +101,7 @@ describe('createWebSocketClient', () => {
     client.connect({ pageId: 'viewer-page', sessionToken: 'session-1' })
 
     expect(initialSocket.readyState).toBe(3)
+    expect(initialSocket.onclose).toBeNull()
     expect(mocks.sockets).toHaveLength(2)
     expect(mocks.sockets[1].url).toContain('/api/v1/ws?page_id=viewer-page&session_token=session-1')
     expect(mocks.sockets[1].protocols).toEqual(['obs.jwt.jwt-token'])
@@ -111,9 +112,11 @@ describe('createWebSocketClient', () => {
 
     const client = createWebSocketClient()
     client.connect()
+    const initialSocket = mocks.sockets[0]
     client.disconnect()
     vi.advanceTimersByTime(2_000)
 
+    expect(initialSocket.onclose).toBeNull()
     expect(mocks.sockets).toHaveLength(1)
   })
 })

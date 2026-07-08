@@ -368,6 +368,79 @@ async def test_websocket_endpoint_disables_api_key_log_access_with_datapoint_sco
 
 
 @pytest.mark.asyncio
+async def test_websocket_endpoint_prefers_decoded_jwt_when_api_key_header_is_also_present(monkeypatch):
+    def _decode_token(token: str, expected_type: str = "access") -> str:
+        if token == "valid.jwt.token" and expected_type == "access":
+            return "alice"
+        raise HTTPException(401, "invalid")
+
+    async def _filter_authorized_datapoints(_db, principal, ids, *, action):
+        assert principal.type == "user"
+        assert principal.subject == "alice"
+        return ["allowed-dp"]
+
+    async def _unexpected_api_key_principal(*args, **kwargs):
+        raise AssertionError("valid JWT should take precedence over API key scope")
+
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+    monkeypatch.setattr(ws_api, "get_db", lambda: _JwtScopeDbStub(is_admin=False))
+    monkeypatch.setattr(ws_api, "filter_authorized_datapoints", _filter_authorized_datapoints)
+    monkeypatch.setattr(ws_api, "get_current_principal", _unexpected_api_key_principal)
+
+    ws = _FakeWebSocket(
+        headers={"authorization": "Bearer valid.jwt.token", "x-api-key": "obs_stale"},
+        received=[{"action": "subscribe", "ids": ["allowed-dp", "blocked-dp"]}],
+    )
+    ws_api.init_ws_manager()
+    try:
+        await ws_api.websocket_endpoint(ws)
+    finally:
+        ws_api.reset_ws_manager()
+
+    assert ws.accepted is True
+    assert ws.sent == [{"action": "subscribed", "ids": ["allowed-dp"]}]
+
+
+@pytest.mark.asyncio
+async def test_websocket_endpoint_filters_user_page_scope_by_datapoint_read_policy(monkeypatch):
+    def _decode_token(token: str, expected_type: str = "access") -> str:
+        if token == "valid.jwt.token" and expected_type == "access":
+            return "alice"
+        raise HTTPException(401, "invalid")
+
+    async def _filter_authorized_datapoints(_db, _principal, ids, *, action):
+        return ["allowed-dp"] if "allowed-dp" in ids else []
+
+    async def _resolve_user_access(_db, _node_id: str) -> tuple[str, str | None]:
+        return "user", "page-user"
+
+    async def _check_user_access(_db, _node_id: str, username: str) -> bool:
+        return username == "alice"
+
+    page_allowed = AsyncMock(return_value={"allowed-dp", "blocked-dp"})
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+    monkeypatch.setattr(ws_api, "get_db", lambda: _JwtScopeDbStub(is_admin=False))
+    monkeypatch.setattr(ws_api, "filter_authorized_datapoints", _filter_authorized_datapoints)
+    monkeypatch.setattr(ws_api, "_page_allowed_datapoints", page_allowed)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", _resolve_user_access)
+    monkeypatch.setattr("obs.api.v1.visu._check_user_access", _check_user_access)
+
+    ws = _FakeWebSocket(
+        headers={"authorization": "Bearer valid.jwt.token"},
+        query_params={"page_id": "page-user"},
+        received=[{"action": "subscribe", "ids": ["allowed-dp", "blocked-dp"]}],
+    )
+    ws_api.init_ws_manager()
+    try:
+        await ws_api.websocket_endpoint(ws)
+    finally:
+        ws_api.reset_ws_manager()
+
+    assert ws.accepted is True
+    assert ws.sent == [{"action": "subscribed", "ids": ["allowed-dp"]}]
+
+
+@pytest.mark.asyncio
 async def test_websocket_endpoint_subscribe_sends_initial_registry_value(monkeypatch):
     dp_id = uuid4()
     monkeypatch.setattr(auth_api, "hash_api_key", lambda key: f"hash:{key}")

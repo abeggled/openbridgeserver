@@ -105,6 +105,7 @@ async def _insert_scoped_datapoint(
     state_ga: str | None = None,
     binding_enabled: bool = True,
     adapter_instance_id: str = "knx-main",
+    adapter_type: str = "KNX",
 ) -> None:
     now = datetime.now(UTC).isoformat()
     config = {"group_address": ga}
@@ -129,9 +130,9 @@ async def _insert_scoped_datapoint(
         """
         INSERT INTO adapter_bindings
             (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled, created_at, updated_at)
-        VALUES (?, ?, 'KNX', ?, 'SOURCE', ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, 'SOURCE', ?, ?, ?, ?)
         """,
-        (f"binding-{dp_id}", dp_id, adapter_instance_id, json.dumps(config), int(binding_enabled), now, now),
+        (f"binding-{dp_id}", dp_id, adapter_type, adapter_instance_id, json.dumps(config), int(binding_enabled), now, now),
     )
 
 
@@ -716,6 +717,35 @@ async def test_non_admin_scope_includes_state_group_address():
         )
 
         assert [item.pa for item in result.items] == ["1.1.1"]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_scope_matches_legacy_lowercase_knx_bindings():
+    db = await _prepare_db()
+    try:
+        await _insert_authz_tree(db)
+        await _insert_knx_instance(db)
+        await _insert_scoped_datapoint(
+            db,
+            dp_id="00000000-0000-0000-0000-000000000202",
+            name="Allowed legacy binding",
+            node_id="allowed-room",
+            ga="1/2/3",
+            adapter_type="knx",
+        )
+        await _grant_room(db)
+
+        result = await knxproj_api.list_knx_devices_for_group_address(
+            ga="1/2/3",
+            page=0,
+            size=50,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+        assert [item.pa for item in result.items] == ["1.1.1", "1.1.2"]
     finally:
         await db.disconnect()
 
