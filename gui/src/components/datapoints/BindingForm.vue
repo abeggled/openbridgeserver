@@ -400,7 +400,7 @@ const cfg = reactive({
   timer_type: 'daily', meta_type: 'none',
   weekdays: [0,1,2,3,4,5,6], months: [], day_of_month: 0,
   time_ref: 'absolute', hour: 0, minute: 0, offset_minutes: 0,
-  solar_altitude_deg: 0.0, sun_direction: 'rising',
+  solar_altitude_deg: 0.0, solar_azimuth_deg: 180.0, sun_direction: 'rising',
   every_hour: false, every_minute: false,
   holiday_mode: 'ignore', vacation_mode: 'ignore',
   selected_holidays: [],
@@ -629,6 +629,7 @@ watch(() => props.initial, val => {
   if (cfg.minute        == null) cfg.minute        = 0
   if (cfg.offset_minutes == null) cfg.offset_minutes = 0
   if (cfg.solar_altitude_deg == null) cfg.solar_altitude_deg = 0.0
+  if (cfg.solar_azimuth_deg == null) cfg.solar_azimuth_deg = 180.0
   if (cfg.sun_direction == null) cfg.sun_direction = 'rising'
   if (cfg.every_hour    == null) cfg.every_hour    = false
   if (cfg.every_minute  == null) cfg.every_minute  = false
@@ -1200,6 +1201,10 @@ function buildConfig() {
       if (cfg.time_ref === 'solar_altitude') {
         c.solar_altitude_deg = cfg.solar_altitude_deg ?? 0.0
         c.sun_direction      = cfg.sun_direction || 'rising'
+      }
+      if (cfg.time_ref === 'solar_azimuth') {
+        c.solar_azimuth_deg = cfg.solar_azimuth_deg ?? 180.0
+        c.sun_direction     = cfg.sun_direction || 'rising'
       }
       if (cfg.date_window_enabled) {
         c.date_window_enabled = true
