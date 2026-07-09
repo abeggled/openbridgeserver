@@ -586,6 +586,15 @@ async def _ws_authenticated_page_scope(
                 user_sourced.update(src_ids)
         user_sourced &= page_scope_ids
         if user_sourced:
+            # Datapoints directly on this page (not only via widget_ref) must not be subject
+            # to the widget_ref READ grant filter, even if they happen to appear in a
+            # user-access source page as well.
+            async def _deny_widget_refs(_: str) -> bool:
+                return False
+
+            direct_ids = await _page_allowed_datapoints(db, page_id, widget_ref_access_check=_deny_widget_refs) or set()
+            user_sourced -= direct_ids
+        if user_sourced:
             read_allowed = set(await filter_authorized_datapoints(db, principal, user_sourced, action=AuthzAction.READ))
             page_scope_ids = (page_scope_ids - user_sourced) | read_allowed
     return page_scope_ids
