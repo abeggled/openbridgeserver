@@ -483,7 +483,7 @@ class TestListGraphs:
         from obs.api.v1.logic import list_graphs
 
         db = _DbStub(rows=[])
-        result = await list_graphs(_user="user", db=db)
+        result = await list_graphs(_user="admin", db=db)
         assert result == []
 
     @pytest.mark.asyncio
@@ -492,7 +492,7 @@ class TestListGraphs:
 
         rows = [_make_graph_row(name="G1"), _make_graph_row(name="G2")]
         db = _DbStub(rows=rows)
-        result = await list_graphs(_user="user", db=db)
+        result = await list_graphs(_user="admin", db=db)
         assert len(result) == 2
 
 
@@ -503,7 +503,7 @@ class TestGetGraph:
 
         row = _make_graph_row(name="My Graph")
         db = _DbStub(one=row)
-        result = await get_graph(graph_id=row["id"], _user="user", db=db)
+        result = await get_graph(graph_id=row["id"], _user="admin", db=db)
         assert result.name == "My Graph"
 
     @pytest.mark.asyncio
@@ -783,7 +783,7 @@ class TestRunGraph:
         row = _make_graph_row(enabled=0)
         db = _DbStub(one=row)
         with pytest.raises(HTTPException) as exc_info:
-            await run_graph(graph_id=row["id"], _user="user", db=db)
+            await run_graph(graph_id=row["id"], _user="admin", db=db)
         assert exc_info.value.status_code == 422
 
     @pytest.mark.asyncio
@@ -796,7 +796,7 @@ class TestRunGraph:
         mock_manager.execute_graph = AsyncMock(return_value={"output": 1})
 
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
-            result = await run_graph(graph_id=row["id"], _user="user", db=db)
+            result = await run_graph(graph_id=row["id"], _user="admin", db=db)
 
         assert result["status"] == "ok"
         assert result["outputs"] == {"output": 1}
@@ -814,7 +814,7 @@ class TestRunGraph:
 
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
             with pytest.raises(HTTPException) as exc_info:
-                await run_graph(graph_id=row["id"], _user="user", db=db)
+                await run_graph(graph_id=row["id"], _user="admin", db=db)
         assert exc_info.value.status_code == 500
 
 
@@ -880,7 +880,7 @@ class TestExportGraph:
 
         row = _make_graph_row(name="My Graph")
         db = _DbStub(one=row)
-        response = await export_graph(graph_id=row["id"], _user="user", db=db)
+        response = await export_graph(graph_id=row["id"], _user="admin", db=db)
         content = json.loads(response.body)
         assert content["obs_export"] == "logic_graph"
         assert content["name"] == "My Graph"
@@ -893,7 +893,7 @@ class TestGetDatapointLogicUsages:
         from obs.api.v1.logic import get_datapoint_logic_usages
 
         db = _DbStub(rows=[])
-        result = await get_datapoint_logic_usages(dp_id="dp-123", _user="user", db=db)
+        result = await get_datapoint_logic_usages(dp_id="dp-123", _user="admin", db=db)
         assert result == []
 
     @pytest.mark.asyncio
@@ -907,7 +907,7 @@ class TestGetDatapointLogicUsages:
         flow = FlowData(nodes=[node])
         row = _make_graph_row(name="G", flow_data=flow.model_dump_json())
         db = _DbStub(rows=[row])
-        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=db)
+        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="admin", db=db)
         assert len(result) == 1
         assert result[0].direction == "SOURCE"
 
@@ -922,7 +922,7 @@ class TestGetDatapointLogicUsages:
         flow = FlowData(nodes=[node])
         row = _make_graph_row(name="G", flow_data=flow.model_dump_json())
         db = _DbStub(rows=[row])
-        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=db)
+        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="admin", db=db)
         assert len(result) == 1
         assert result[0].direction == "DEST"
 
@@ -937,7 +937,7 @@ class TestGetDatapointLogicUsages:
         flow = FlowData(nodes=[node])
         row = _make_graph_row(name="G", flow_data=flow.model_dump_json())
         db = _DbStub(rows=[row])
-        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=db)
+        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="admin", db=db)
         assert result == []
 
 

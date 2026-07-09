@@ -24,6 +24,9 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from obs.api.auth import Principal, get_current_principal
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import filter_authorized_datapoints
 from obs.api.v1 import sessions as sessions_api
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config, is_uuid_str
 from obs.core.json import jsonable
@@ -46,14 +49,18 @@ class WebSocketManager:
     """Tracks all connected WebSocket clients and their DataPoint subscriptions."""
 
     def __init__(self) -> None:
-        # conn_id → (websocket, subscribed_dp_ids, send_lock, allowed_dp_ids, log_access, log_access_check)
+        # conn_id → (websocket, subscribed_dp_ids, send_lock, allowed_dp_ids,
+        #            log_access, log_access_check, ringbuffer_metadata)
         # allowed_dp_ids: None = unrestricted (authenticated user),
         # otherwise page-scoped allowlist for anonymous viewer sessions.
         # log_access: authenticated non-page connections receive log_entry pushes.
         # log_access_check: revalidates API-key existence before every log_entry push.
         # send_lock serialises concurrent sends on the same WebSocket;
         # concurrent asyncio.gather calls in EventBus would otherwise race.
-        self._connections: dict[str, tuple[WebSocket, set[str], asyncio.Lock, set[str] | None, bool, LogAccessCheck | None]] = {}
+        self._connections: dict[
+            str,
+            tuple[WebSocket, set[str], asyncio.Lock, set[str] | None, bool, LogAccessCheck | None, bool],
+        ] = {}
 
     async def connect(
         self,
@@ -61,6 +68,7 @@ class WebSocketManager:
         allowed_dp_ids: set[str] | None = None,
         log_access: bool = False,
         log_access_check: LogAccessCheck | None = None,
+        ringbuffer_metadata: bool = False,
         subprotocol: str | None = None,
     ) -> str:
         if subprotocol is None:
@@ -72,7 +80,7 @@ class WebSocketManager:
                 # Test doubles may not support the subprotocol kwarg.
                 await ws.accept()
         conn_id = str(uuid.uuid4())
-        self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access, log_access_check)
+        self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access, log_access_check, ringbuffer_metadata)
         logger.debug("WS client connected: %s  (total: %d)", conn_id[:8], len(self._connections))
         return conn_id
 
@@ -171,18 +179,44 @@ class WebSocketManager:
                 # Actual transport error — signal caller to close the connection.
                 return False
 
+    @staticmethod
+    def _message_datapoint_id(msg: dict) -> str | None:
+        """Return the datapoint ID referenced by a server-push message, if any."""
+        dp_id = msg.get("datapoint_id")
+        if isinstance(dp_id, str) and dp_id:
+            return dp_id
+
+        entry = msg.get("entry")
+        if isinstance(entry, dict):
+            entry_dp_id = entry.get("datapoint_id")
+            if isinstance(entry_dp_id, str) and entry_dp_id:
+                return entry_dp_id
+
+        # Legacy value pushes use an action-less payload with top-level "id".
+        if "action" not in msg:
+            legacy_id = msg.get("id")
+            if isinstance(legacy_id, str) and legacy_id:
+                return legacy_id
+
+        return None
+
     async def broadcast(self, msg: dict) -> None:
-        """Send a message to ALL connected clients (no subscription filter)."""
+        """Send a message to connected clients, applying per-message DP scope."""
         dead: list[str] = []
         log_only = msg.get("action") == "log_entry"
+        scoped_dp_id = self._message_datapoint_id(msg)
         for conn_id, entry in list(self._connections.items()):
-            _, _subs, _lock, _allowed_ids, log_access, log_access_check = entry
+            _, _subs, _lock, allowed_ids, log_access, log_access_check, _ringbuffer_metadata = entry
             if log_only:
                 if not log_access:
                     continue
                 if log_access_check is not None and not await log_access_check():
                     self._set_log_access(conn_id, False)
                     continue
+            if allowed_ids is not None and scoped_dp_id is None:
+                continue
+            if scoped_dp_id is not None and allowed_ids is not None and scoped_dp_id not in allowed_ids:
+                continue
             if not await self._send(conn_id, msg):
                 dead.append(conn_id)
         for conn_id in dead:
@@ -241,7 +275,7 @@ class WebSocketManager:
             "unit": dp.unit if dp else None,
         }
         metadata: dict[str, Any] | None = None
-        if any(entry[3] is None for entry in self._connections.values()):
+        if any(entry[6] for entry in self._connections.values()):
             from obs.ringbuffer.ringbuffer import build_ringbuffer_metadata_snapshot
 
             metadata = await build_ringbuffer_metadata_snapshot(
@@ -255,7 +289,7 @@ class WebSocketManager:
             if allowed_ids is not None and dp_id_str not in allowed_ids:
                 continue
             rb_entry = base_rb_entry
-            if allowed_ids is None and metadata is not None:
+            if entry[6] and metadata is not None:
                 rb_entry = {
                     **base_rb_entry,
                     "metadata_version": 1,
@@ -275,8 +309,8 @@ class WebSocketManager:
         entry = self._connections.get(conn_id)
         if entry is None:
             return
-        ws, subs, lock, allowed_dp_ids, _old_log_access, log_access_check = entry
-        self._connections[conn_id] = (ws, subs, lock, allowed_dp_ids, log_access, log_access_check)
+        ws, subs, lock, allowed_dp_ids, _old_log_access, log_access_check, ringbuffer_metadata = entry
+        self._connections[conn_id] = (ws, subs, lock, allowed_dp_ids, log_access, log_access_check, ringbuffer_metadata)
 
 
 async def _page_allowed_datapoints(
@@ -488,6 +522,110 @@ async def _ws_has_log_access(user: str | None, api_key: str | None) -> bool:
     return False
 
 
+async def _jwt_principal(db: Database, username: str) -> Principal:
+    row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (username,))
+    return Principal(subject=username, type="user", is_admin=bool(row and row["is_admin"]))
+
+
+async def _ws_authorized_datapoint_scope(db: Database, principal: Principal) -> set[str] | None:
+    if principal.type == "user" and principal.is_admin:
+        return None
+
+    rows = await db.fetchall("SELECT id FROM datapoints ORDER BY id")
+    all_ids = [row["id"] for row in rows]
+    allowed = await filter_authorized_datapoints(
+        db,
+        principal,
+        all_ids,
+        action=AuthzAction.READ,
+    )
+    return set(allowed)
+
+
+async def _ws_authenticated_page_scope(
+    db: Database,
+    page_id: str,
+    principal: Principal,
+    session_token: str | None,
+) -> set[str] | None:
+    from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
+
+    user_source_page_ids: set[str] = set()
+
+    async def _can_access_page(candidate_page_id: str) -> bool:
+        access, defining_node_id = await _resolve_access_with_node(db, candidate_page_id)
+        if access in ("public", "readonly"):
+            return True
+        if access == "protected":
+            if principal.type == "user":
+                return True
+            validate_id = defining_node_id or candidate_page_id
+            return bool(session_token and sessions_api.validate_session(session_token, validate_id))
+        if access == "user" and principal.type == "user":
+            ok = await _check_user_access(db, candidate_page_id, principal.subject)
+            if ok and candidate_page_id != page_id:
+                user_source_page_ids.add(candidate_page_id)
+            return ok
+        return False
+
+    if not await _can_access_page(page_id):
+        return None
+    page_scope_ids = await _page_allowed_datapoints(db, page_id, widget_ref_access_check=_can_access_page)
+    if page_scope_ids is None:
+        return None
+    access, _ = await _resolve_access_with_node(db, page_id)
+    if access == "user":
+        allowed_ids = set(await filter_authorized_datapoints(db, principal, page_scope_ids, action=AuthzAction.READ))
+        return page_scope_ids & allowed_ids
+    # Datapoints contributed by user-access widget_ref source pages must also respect READ grants.
+    if user_source_page_ids:
+        user_sourced: set[str] = set()
+        for src_page_id in user_source_page_ids:
+            src_ids = await _page_allowed_datapoints(db, src_page_id)
+            if src_ids:
+                user_sourced.update(src_ids)
+        user_sourced &= page_scope_ids
+        if user_sourced:
+            # Datapoints directly on this page (not only via widget_ref) must not be subject
+            # to the widget_ref READ grant filter, even if they happen to appear in a
+            # user-access source page as well.
+            async def _deny_widget_refs(_: str) -> bool:
+                return False
+
+            direct_ids = await _page_allowed_datapoints(db, page_id, widget_ref_access_check=_deny_widget_refs) or set()
+            user_sourced -= direct_ids
+        if user_sourced:
+            read_allowed = set(await filter_authorized_datapoints(db, principal, user_sourced, action=AuthzAction.READ))
+            page_scope_ids = (page_scope_ids - user_sourced) | read_allowed
+    return page_scope_ids
+
+
+async def _merge_authenticated_page_scope(
+    db: Database,
+    allowed_dp_ids: set[str],
+    page_id: str,
+    principal: Principal,
+    session_token: str | None,
+) -> None:
+    page_scope_ids = await _ws_authenticated_page_scope(db, page_id, principal, session_token)
+    if page_scope_ids is None:
+        return
+
+    from obs.api.v1.datapoints import _has_explicit_datapoint_read_deny
+
+    explicitly_denied: set[str] = set()
+    for dp_id in page_scope_ids:
+        try:
+            dp_uuid = uuid.UUID(dp_id)
+        except (TypeError, ValueError):
+            continue
+        if await _has_explicit_datapoint_read_deny(db, principal, dp_uuid):
+            explicitly_denied.add(dp_id)
+
+    allowed_dp_ids.difference_update(explicitly_denied)
+    allowed_dp_ids.update(page_scope_ids - explicitly_denied)
+
+
 # ---------------------------------------------------------------------------
 # Singleton
 # ---------------------------------------------------------------------------
@@ -564,6 +702,21 @@ async def websocket_endpoint(
         return
 
     allowed_dp_ids: set[str] | None = None
+    db: Database | None = None
+    if api_key and user == "__api_key__":
+        db = get_db()
+        principal = await get_current_principal(credentials=None, api_key=api_key, db=db)
+        allowed_dp_ids = await _ws_authorized_datapoint_scope(db, principal)
+        if page_id and allowed_dp_ids is not None:
+            await _merge_authenticated_page_scope(db, allowed_dp_ids, page_id, principal, subprotocol_session or ws.query_params.get("session_token"))
+    elif user is not None:
+        db = get_db()
+        principal = await _jwt_principal(db, user)
+        allowed_dp_ids = await _ws_authorized_datapoint_scope(db, principal)
+        if page_id and allowed_dp_ids is not None:
+            await _merge_authenticated_page_scope(db, allowed_dp_ids, page_id, principal, subprotocol_session or ws.query_params.get("session_token"))
+
+    authenticated_user = user is not None
     if user is None:
         if not page_id:
             await ws.close(code=4001, reason="Authentication required")
@@ -603,14 +756,16 @@ async def websocket_endpoint(
             # page config cannot be parsed (e.g. lightweight test doubles).
             allowed_dp_ids = set()
 
-    log_access = await _ws_has_log_access(user, api_key) if allowed_dp_ids is None else False
+    effective_api_key = api_key if user == "__api_key__" else None
+    log_access = await _ws_has_log_access(user, effective_api_key) if allowed_dp_ids is None else False
 
     manager = get_ws_manager()
     conn_id = await manager.connect(
         ws,
         allowed_dp_ids=allowed_dp_ids,
         log_access=log_access,
-        log_access_check=(lambda: _ws_has_log_access(user, api_key)) if log_access else None,
+        log_access_check=(lambda: _ws_has_log_access(user, effective_api_key)) if log_access else None,
+        ringbuffer_metadata=authenticated_user,
         subprotocol=selected_subprotocol,
     )
 
