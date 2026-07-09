@@ -1131,6 +1131,11 @@ async def list_knx_devices(
 
     hierarchy_node_ids = _parse_hierarchy_node_filter(hierarchy_node_id)
     if hierarchy_node_ids:
+        if not _is_admin_principal(principal):
+            hierarchy_node_ids = await filter_authorized_hierarchy_nodes(db, principal, hierarchy_node_ids, action=AuthzAction.READ)
+        if not hierarchy_node_ids:
+            return KnxDevicePage(items=[], total=0, page=page, size=size, pages=1)
+    if hierarchy_node_ids:
         placeholders = ",".join("?" * len(hierarchy_node_ids))
         where.append(
             f"""id IN (

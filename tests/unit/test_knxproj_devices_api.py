@@ -856,3 +856,55 @@ async def test_admin_get_knx_device_sees_all_hierarchy_links():
         assert sorted(link.node_id for link in result.hierarchy_links) == ["allowed-room", "blocked-room"]
     finally:
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_hierarchy_filter_blocks_unauthorized_node_probe():
+    """Non-admin mit unauthorized hierarchy_node_id darf keine Geräte erhalten.
+
+    Würde dev-1 zurückgegeben, obwohl blocked-room unsichtbar ist, könnte der
+    Nutzer durch den Filterwert die Knoten-Gerät-Verknüpfung enumieren.
+    """
+    db = await _prepare_scoped_devices_db()
+    try:
+        await _link_device_to_nodes(db, device_id="dev-1", node_ids=["blocked-room"])
+
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="",
+            hierarchy_node_id="blocked-room",
+            page=0,
+            size=50,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+        assert result.items == []
+        assert result.total == 0
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_hierarchy_filter_allows_authorized_node():
+    """Non-admin mit authorisierter hierarchy_node_id sieht die verlinkten Geräte."""
+    db = await _prepare_scoped_devices_db()
+    try:
+        await _link_device_to_nodes(db, device_id="dev-1", node_ids=["allowed-room"])
+
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="",
+            hierarchy_node_id="allowed-room",
+            page=0,
+            size=50,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+        assert result.total == 1
+        assert result.items[0].pa == "1.1.1"
+    finally:
+        await db.disconnect()
