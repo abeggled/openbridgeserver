@@ -7,7 +7,7 @@ are all pure / near-pure methods that can be tested without asyncio.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -399,6 +399,12 @@ class TestGetSolarAzimuthTime:
         result = adapter._calculate_target_time(cfg, date(2026, 7, 9))
         assert result is not None
         assert result.hour >= 11
+
+    def test_unexpected_error_is_caught_and_returns_none(self):
+        adapter = self._munich_adapter()
+        with patch("astral.sun.sun", side_effect=RuntimeError("boom")):
+            result = adapter._get_solar_azimuth_time(180.0, SunDirection.SETTING, date(2026, 7, 9))
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
