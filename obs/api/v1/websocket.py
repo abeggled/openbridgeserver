@@ -572,7 +572,27 @@ async def _ws_authenticated_page_scope(
     if access == "user":
         allowed_ids = set(await filter_authorized_datapoints(db, principal, page_scope_ids, action=AuthzAction.READ))
         return page_scope_ids & allowed_ids
-    return page_scope_ids
+
+    # For non-user top-level pages, datapoints that are reachable *only* via a user-page
+    # widget_ref still require READ grants — mirroring the HTTP widget-ref endpoint which
+    # calls _check_page_datapoint_policy when the referenced page has access == "user".
+    async def _can_access_non_user_page(candidate_page_id: str) -> bool:
+        src_access, src_defining = await _resolve_access_with_node(db, candidate_page_id)
+        if src_access in ("public", "readonly"):
+            return True
+        if src_access == "protected":
+            if principal.type == "user":
+                return True
+            validate_id = src_defining or candidate_page_id
+            return bool(session_token and sessions_api.validate_session(session_token, validate_id))
+        return False
+
+    non_user_scope = await _page_allowed_datapoints(db, page_id, widget_ref_access_check=_can_access_non_user_page) or set()
+    user_ref_ids = page_scope_ids - non_user_scope
+    if not user_ref_ids:
+        return page_scope_ids
+    filtered = set(await filter_authorized_datapoints(db, principal, user_ref_ids, action=AuthzAction.READ))
+    return non_user_scope | filtered
 
 
 async def _merge_authenticated_page_scope(
