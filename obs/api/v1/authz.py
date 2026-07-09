@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from obs.api.auth import Principal, get_admin_user
 from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, GrantEffect, Role, RoleGrant, authorize
-from obs.api.authz_service import load_role_grants, resolve_datapoint_targets, resolve_hierarchy_targets
+from obs.api.authz_service import _datapoint_read_grants, load_role_grants, resolve_datapoint_targets, resolve_hierarchy_targets
 from obs.db.database import Database, get_db
 from obs.models.authz import (
     AuthzPreviewGrant,
@@ -137,7 +137,10 @@ def _decision_for_target(
     if target.node_type == "datapoint" and action == AuthzAction.READ and direct_grants:
         return authorize(principal=principal, action=action, targets=[*resolved_targets, *direct_targets], grants=grants)
 
-    decision = authorize(principal=principal, action=action, targets=resolved_targets, grants=grants)
+    # Mirror the runtime _datapoint_read_grants filter: descendant hierarchy grants must not
+    # imply READ on a datapoint linked to an ancestor node.
+    decision_grants = _datapoint_read_grants(grants, resolved_targets) if (action == AuthzAction.READ and target.node_type == "datapoint") else grants
+    decision = authorize(principal=principal, action=action, targets=resolved_targets, grants=decision_grants)
     if target.node_type != "datapoint" or not direct_grants or action == AuthzAction.READ:
         return decision
 

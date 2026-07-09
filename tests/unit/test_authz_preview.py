@@ -211,3 +211,37 @@ async def test_preview_honors_direct_datapoint_draft_grant_for_linked_datapoint(
     assert result.effective_role == "resident"
     assert result.resolved_targets[0].node_type == "hierarchy"
     assert result.matching_grants[0].node_type == "datapoint"
+
+
+@pytest.mark.asyncio
+async def test_preview_datapoint_read_rejects_descendant_hierarchy_grant(db: Database):
+    """Grant on a descendant hierarchy node must not imply READ on a datapoint linked to an ancestor.
+
+    The runtime (_datapoint_read_grants) strips descendant hierarchy grants before calling
+    authorize so that only the linked node and its ancestors count.  The preview must mirror
+    this filtering, otherwise a grant on 'room' (child of 'floor') would falsely show
+    'allowed' for a datapoint linked to 'floor' while the actual API would deny it.
+    """
+    dp_id = str(uuid.uuid4())
+    await _insert_user(db)
+    await _insert_tree(db)
+    await _insert_node(db, "building")
+    await _insert_node(db, "floor", parent_id="building")
+    await _insert_node(db, "room", parent_id="floor")
+    await _insert_datapoint(db, dp_id)
+    await _link_datapoint(db, dp_id, "floor")
+    await _insert_persisted_grant(db, node_id="room", role="guest", effect="allow")
+
+    response = await authz_api.preview_permissions(
+        _request(
+            actions=["read"],
+            targets=[AuthzPreviewTarget(node_type="datapoint", node_id=dp_id)],
+            grants=[],
+        ),
+        db=db,
+        _admin="admin",
+    )
+
+    result = response.results[0]
+    assert result.allowed is False
+    assert result.reason == "missing_allow"
