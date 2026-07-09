@@ -77,8 +77,20 @@ describe('createWebSocketClient', () => {
     client.connect({ pageId: 'viewer-page', sessionToken: 'session-1' })
 
     expect(mocks.sockets).toHaveLength(1)
-    expect(mocks.sockets[0].url).toContain('/api/v1/ws?page_id=viewer-page&session_token=session-1')
+    expect(mocks.sockets[0].url).toContain('page_id=viewer-page')
+    expect(mocks.sockets[0].url).not.toContain('session_token')
     expect(mocks.sockets[0].protocols).toEqual(['obs.jwt.jwt-token'])
+  })
+
+  it('does not send session_token in URL when JWT auth is used', () => {
+    mocks.getJwt.mockReturnValue('jwt-token')
+
+    const client = createWebSocketClient()
+    client.connect({ pageId: 'page-x', sessionToken: 'pin-secret' })
+
+    expect(mocks.sockets[0].protocols).toEqual(['obs.jwt.jwt-token'])
+    expect(mocks.sockets[0].url).not.toContain('session_token')
+    expect(mocks.sockets[0].url).not.toContain('pin-secret')
   })
 
   it('keeps JWT transport as the default authenticated path', () => {
@@ -102,7 +114,8 @@ describe('createWebSocketClient', () => {
 
     expect(initialSocket.readyState).toBe(3)
     expect(mocks.sockets).toHaveLength(2)
-    expect(mocks.sockets[1].url).toContain('/api/v1/ws?page_id=viewer-page&session_token=session-1')
+    expect(mocks.sockets[1].url).toContain('page_id=viewer-page')
+    expect(mocks.sockets[1].url).not.toContain('session_token')
     expect(mocks.sockets[1].protocols).toEqual(['obs.jwt.jwt-token'])
   })
 
