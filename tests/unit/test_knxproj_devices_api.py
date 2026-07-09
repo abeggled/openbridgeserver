@@ -786,3 +786,73 @@ async def test_set_knx_device_hierarchy_links_preserves_admin_for_non_default_ad
         assert [link.node_id for link in result.hierarchy_links] == [living_node_id]
     finally:
         await db.disconnect()
+
+
+async def _link_device_to_nodes(db: Database, *, device_id: str, node_ids: list[str]) -> None:
+    now = datetime.now(UTC).isoformat()
+    await db.executemany(
+        """INSERT INTO hierarchy_device_links (id, node_id, device_id, created_at)
+           VALUES (?, ?, ?, ?)""",
+        [(f"hdl-{device_id}-{node_id}", node_id, device_id, now) for node_id in node_ids],
+    )
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_get_knx_device_hides_out_of_scope_hierarchy_links():
+    db = await _prepare_scoped_devices_db()
+    try:
+        # dev-1 is readable for alice via GA 1/2/3, but is linked to both the granted
+        # allowed-room node and the ungranted blocked-room node.
+        await _link_device_to_nodes(db, device_id="dev-1", node_ids=["allowed-room", "blocked-room"])
+
+        result = await knxproj_api.get_knx_device(
+            pa="1.1.1",
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+        assert result.pa == "1.1.1"
+        assert [link.node_id for link in result.hierarchy_links] == ["allowed-room"]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_list_knx_devices_hides_out_of_scope_hierarchy_links():
+    db = await _prepare_scoped_devices_db()
+    try:
+        await _link_device_to_nodes(db, device_id="dev-1", node_ids=["allowed-room", "blocked-room"])
+
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="",
+            hierarchy_node_id="",
+            page=0,
+            size=50,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+        dev1 = next(item for item in result.items if item.pa == "1.1.1")
+        assert [link.node_id for link in dev1.hierarchy_links] == ["allowed-room"]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_admin_get_knx_device_sees_all_hierarchy_links():
+    db = await _prepare_scoped_devices_db()
+    try:
+        await _link_device_to_nodes(db, device_id="dev-1", node_ids=["allowed-room", "blocked-room"])
+
+        result = await knxproj_api.get_knx_device(
+            pa="1.1.1",
+            _user="admin",
+            db=db,
+        )
+
+        assert sorted(link.node_id for link in result.hierarchy_links) == ["allowed-room", "blocked-room"]
+    finally:
+        await db.disconnect()

@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction
-from obs.api.authz_service import filter_authorized_datapoints
+from obs.api.authz_service import filter_authorized_datapoints, filter_authorized_hierarchy_nodes
 from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
 from obs.db.database import Database, get_db
 from obs.knxproj.csv_parser import parse_ga_csv
@@ -436,7 +436,9 @@ def _parse_hierarchy_node_filter(value: str) -> list[str]:
     return node_ids
 
 
-async def _load_device_hierarchy_links(db: Database, device_ids: list[str]) -> dict[str, list[KnxHierarchyLinkOut]]:
+async def _load_device_hierarchy_links(
+    db: Database, device_ids: list[str], principal: Principal | None = None
+) -> dict[str, list[KnxHierarchyLinkOut]]:
     if not device_ids:
         return {}
     placeholders = ",".join("?" * len(device_ids))
@@ -455,6 +457,10 @@ async def _load_device_hierarchy_links(db: Database, device_ids: list[str]) -> d
            ORDER BY ht.name, hn.name""",
         device_ids,
     )
+    if principal is not None and not _is_admin_principal(principal):
+        link_node_ids = list(dict.fromkeys(row["node_id"] for row in rows))
+        allowed_node_ids = set(await filter_authorized_hierarchy_nodes(db, principal, link_node_ids, action=AuthzAction.READ))
+        rows = [row for row in rows if row["node_id"] in allowed_node_ids]
     node_ids = list(dict.fromkeys(row["node_id"] for row in rows))
     node_paths: dict[str, list[str]] = {}
     if node_ids:
@@ -1168,7 +1174,7 @@ async def list_knx_devices(
     )
     pages = max(1, (total + size - 1) // size)
     device_ids = [row["id"] for row in rows]
-    links_by_device_id = await _load_device_hierarchy_links(db, device_ids)
+    links_by_device_id = await _load_device_hierarchy_links(db, device_ids, principal)
     return KnxDevicePage(
         items=[_with_hierarchy_links(_device_out_from_row(row), links_by_device_id.get(row["id"])) for row in rows],
         total=total,
@@ -1243,7 +1249,7 @@ async def get_knx_device(
             by_id[co_id].ga_addresses.append(ga)
 
     device = _device_out_from_row(device_row)
-    links_by_device_id = await _load_device_hierarchy_links(db, [device_row["id"]])
+    links_by_device_id = await _load_device_hierarchy_links(db, [device_row["id"]], principal)
     return KnxDeviceDetailOut(
         **_with_hierarchy_links(device, links_by_device_id.get(device_row["id"])).model_dump(),
         comm_objects=list(by_id.values()),
