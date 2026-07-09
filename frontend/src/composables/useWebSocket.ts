@@ -14,6 +14,7 @@ type MessageHandler = (data: Record<string, unknown>) => void
 type ConnectContext = {
   pageId?: string
   sessionToken?: string
+  preferPageScope?: boolean
 }
 
 const WS_URL = () => {
@@ -21,92 +22,103 @@ const WS_URL = () => {
   return `${proto}://${location.host}/api/v1/ws`
 }
 
-// ── Singleton-State ───────────────────────────────────────────────────────────
-
-let socket: WebSocket | null = null
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let reconnectDelay = 1000
 const MAX_DELAY = 30_000
 
-const connected = ref(false)
-const handlers = new Set<MessageHandler>()
-let connectContext: ConnectContext = {}
+export function createWebSocketClient() {
+  let socket: WebSocket | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectDelay = 1000
+  let shouldReconnect = false
+  const connected = ref(false)
+  const handlers = new Set<MessageHandler>()
+  let connectContext: ConnectContext = {}
+  const subscribedIds = new Set<string>()
 
-// Puffert alle aktuell abonnierten IDs → wird beim (Re-)Connect gesendet
-const subscribedIds = new Set<string>()
-
-// ── Interne Funktionen ────────────────────────────────────────────────────────
-
-function send(data: unknown) {
-  if (socket?.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(data))
-  }
-}
-
-function connect(nextContext: ConnectContext = {}) {
-  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-    return
+  function send(data: unknown) {
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(data))
+    }
   }
 
-  connectContext = nextContext
-  const jwt = getJwt()
-  let url = WS_URL()
-  if (jwt) {
-    socket = new WebSocket(url, [`obs.jwt.${jwt}`])
-  } else {
-    if (!connectContext.pageId) return
-    const params = new URLSearchParams({ page_id: connectContext.pageId })
-    if (connectContext.sessionToken) params.set('session_token', connectContext.sessionToken)
-    url = `${url}?${params.toString()}`
-    socket = new WebSocket(url)
+  function dispatch(data: Record<string, unknown>) {
+    for (const handler of handlers) handler(data)
   }
 
-  socket.onopen = () => {
-    connected.value = true
-    reconnectDelay = 1000
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer)
+  function sameConnectContext(a: ConnectContext, b: ConnectContext) {
+    return a.pageId === b.pageId && a.sessionToken === b.sessionToken && a.preferPageScope === b.preferPageScope
+  }
+
+  function connect(nextContext: ConnectContext = {}) {
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+      if (sameConnectContext(connectContext, nextContext)) return
+      socket.onclose = null
+      socket.onerror = null
+      socket.onmessage = null
+      socket.close()
+      socket = null
+      connected.value = false
+    }
+
+    connectContext = nextContext
+    shouldReconnect = true
+    const jwt = getJwt()
+    let url = WS_URL()
+    if (jwt && !connectContext.preferPageScope) {
+      if (connectContext.pageId) {
+        url = `${url}?${new URLSearchParams({ page_id: connectContext.pageId }).toString()}`
+      }
+      socket = new WebSocket(url, [`obs.jwt.${jwt}`])
+    } else {
+      if (!connectContext.pageId) return
+      const params = new URLSearchParams({ page_id: connectContext.pageId })
+      if (connectContext.sessionToken) params.set('session_token', connectContext.sessionToken)
+      url = `${url}?${params.toString()}`
+      socket = new WebSocket(url)
+    }
+
+    socket.onopen = () => {
+      connected.value = true
+      reconnectDelay = 1000
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
+      if (subscribedIds.size > 0) {
+        send({ action: 'subscribe', ids: Array.from(subscribedIds) })
+      }
+    }
+
+    socket.onclose = (event) => {
+      connected.value = false
+      socket = null
+      if (!shouldReconnect) return
+      if (event.code === 4001) return
+      scheduleReconnect()
+    }
+
+    socket.onerror = () => {
+      socket?.close()
+    }
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as Record<string, unknown>
+        dispatch(data)
+      } catch {
+        // ungültige Nachricht ignorieren
+      }
+    }
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) return
+    reconnectTimer = setTimeout(() => {
       reconnectTimer = null
-    }
-    // Gepufferte Subscriptions nach (Re-)Connect sofort senden
-    if (subscribedIds.size > 0) {
-      send({ action: 'subscribe', ids: Array.from(subscribedIds) })
-    }
+      reconnectDelay = Math.min(reconnectDelay * 2, MAX_DELAY)
+      connect(connectContext)
+    }, reconnectDelay)
   }
 
-  socket.onclose = (event) => {
-    connected.value = false
-    socket = null
-    if (event.code === 4001) return
-    scheduleReconnect()
-  }
-
-  socket.onerror = () => {
-    socket?.close()
-  }
-
-  socket.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data) as Record<string, unknown>
-      for (const handler of handlers) handler(data)
-    } catch {
-      // ungültige Nachricht ignorieren
-    }
-  }
-}
-
-function scheduleReconnect() {
-  if (reconnectTimer) return
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null
-    reconnectDelay = Math.min(reconnectDelay * 2, MAX_DELAY)
-    connect(connectContext)
-  }, reconnectDelay)
-}
-
-// ── Composable ────────────────────────────────────────────────────────────────
-
-export function useWebSocket() {
   return {
     connected: readonly(connected),
 
@@ -115,6 +127,7 @@ export function useWebSocket() {
 
     /** Verbindung trennen und Reconnect verhindern */
     disconnect() {
+      shouldReconnect = false
       subscribedIds.clear()
       connectContext = {}
       if (reconnectTimer) {
@@ -144,5 +157,15 @@ export function useWebSocket() {
       handlers.add(handler)
       return () => handlers.delete(handler)
     },
+
+    dispatch,
   }
+}
+
+const defaultClient = createWebSocketClient()
+
+// ── Composable ────────────────────────────────────────────────────────────────
+
+export function useWebSocket() {
+  return defaultClient
 }
