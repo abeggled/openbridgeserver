@@ -1,10 +1,10 @@
-"""Pydantic schemas for AuthZ owner UI previews."""
+"""Pydantic schemas for AuthZ owner administration."""
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ActionName = Literal["read", "write", "generate", "activate"]
 EffectName = Literal["allow", "deny"]
@@ -65,3 +65,35 @@ class AuthzPreviewResult(BaseModel):
 class AuthzPreviewResponse(BaseModel):
     principal: AuthzPreviewPrincipal
     results: list[AuthzPreviewResult]
+
+
+class AuthzPrincipalGrant(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_type: NodeTypeName
+    node_id: str
+    role: RoleName
+    effect: EffectName = "allow"
+
+
+class AuthzPrincipalGrantsReplace(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    grants: list[AuthzPrincipalGrant]
+
+    @model_validator(mode="after")
+    def reject_duplicate_targets(self) -> Self:
+        targets = [(grant.node_type, grant.node_id) for grant in self.grants]
+        if len(targets) != len(set(targets)):
+            raise ValueError("Duplicate grants for the same node_type and node_id are not allowed")
+        return self
+
+
+class AuthzPrincipalReference(BaseModel):
+    principal_type: PrincipalTypeName
+    principal_id: str
+
+
+class AuthzPrincipalGrantsResponse(BaseModel):
+    principal: AuthzPrincipalReference
+    grants: list[AuthzPrincipalGrant]

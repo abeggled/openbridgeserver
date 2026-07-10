@@ -1,0 +1,635 @@
+"""Tests for principal grant persistence administration (#983)."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import uuid
+
+import pytest
+from fastapi import FastAPI, HTTPException, status
+from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
+from starlette.requests import Request
+
+from obs.api.auth import get_admin_user
+from obs.api.v1 import authz as authz_api
+from obs.db.database import Database, get_db
+from obs.models.authz import AuthzPrincipalGrant, AuthzPrincipalGrantsReplace
+
+NOW = "2026-07-10T00:00:00+00:00"
+
+
+@pytest.fixture
+async def db() -> Database:
+    database = Database(":memory:")
+    await database.connect()
+    try:
+        yield database
+    finally:
+        await database.disconnect()
+
+
+def _request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "PUT",
+            "path": "/api/v1/authz/principals/user/alice/grants",
+            "query_string": b"",
+            "headers": [(b"x-request-id", b"grant-test"), (b"user-agent", b"pytest")],
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+
+
+async def _insert_user(db: Database, username: str = "alice") -> None:
+    await db.execute_and_commit(
+        "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (?, ?, 'hash', 0, ?)",
+        (str(uuid.uuid4()), username, NOW),
+    )
+
+
+async def _insert_api_key(db: Database, key_id: str) -> None:
+    await db.execute_and_commit(
+        "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?, 'key', ?, 'alice', ?)",
+        (key_id, f"hash-{key_id}", NOW),
+    )
+
+
+async def _insert_tree(db: Database) -> None:
+    await db.execute_and_commit(
+        "INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at) VALUES ('tree', 'tree', '', ?, ?)",
+        (NOW, NOW),
+    )
+
+
+async def _insert_node(db: Database, node_id: str) -> None:
+    await db.execute_and_commit(
+        """
+        INSERT INTO hierarchy_nodes
+            (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+        VALUES (?, 'tree', NULL, ?, '', 0, NULL, ?, ?)
+        """,
+        (node_id, node_id, NOW, NOW),
+    )
+
+
+async def _insert_datapoint(db: Database, datapoint_id: str) -> None:
+    await db.execute_and_commit(
+        """
+        INSERT INTO datapoints
+            (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, record_history, created_at, updated_at)
+        VALUES (?, ?, 'FLOAT', NULL, '[]', ?, NULL, 1, 1, ?, ?)
+        """,
+        (datapoint_id, datapoint_id, f"obs/test/{datapoint_id}", NOW, NOW),
+    )
+
+
+async def _insert_grant(
+    db: Database,
+    *,
+    principal_type: str = "user",
+    principal_id: str = "alice",
+    node_type: str = "hierarchy",
+    node_id: str,
+    role: str = "guest",
+    effect: str = "allow",
+) -> None:
+    await db.execute_and_commit(
+        """
+        INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (principal_type, principal_id, node_type, node_id, role, effect),
+    )
+
+
+def _replace(grants: list[AuthzPrincipalGrant]) -> AuthzPrincipalGrantsReplace:
+    return AuthzPrincipalGrantsReplace(grants=grants)
+
+
+@pytest.mark.asyncio
+async def test_replace_user_grants_roundtrips_full_set_and_audits_only_counts(db: Database) -> None:
+    await _insert_user(db)
+    await _insert_tree(db)
+    for node_id in ("added", "changed", "removed", "same"):
+        await _insert_node(db, node_id)
+    await _insert_grant(db, node_id="changed", role="guest")
+    await _insert_grant(db, node_id="removed", role="resident")
+    await _insert_grant(db, node_id="same", role="operator", effect="deny")
+
+    response = await authz_api.replace_principal_grants(
+        principal_type="user",
+        principal_id="alice",
+        body=_replace(
+            [
+                AuthzPrincipalGrant(node_type="hierarchy", node_id="same", role="operator", effect="deny"),
+                AuthzPrincipalGrant(node_type="hierarchy", node_id="added", role="owner"),
+                AuthzPrincipalGrant(node_type="hierarchy", node_id="changed", role="resident"),
+            ]
+        ),
+        request=_request(),
+        db=db,
+        _admin="admin",
+    )
+
+    assert response.model_dump() == {
+        "principal": {"principal_type": "user", "principal_id": "alice"},
+        "grants": [
+            {"node_type": "hierarchy", "node_id": "added", "role": "owner", "effect": "allow"},
+            {"node_type": "hierarchy", "node_id": "changed", "role": "resident", "effect": "allow"},
+            {"node_type": "hierarchy", "node_id": "same", "role": "operator", "effect": "deny"},
+        ],
+    }
+    loaded = await authz_api.get_principal_grants("user", "alice", db=db, _admin="admin")
+    assert loaded == response
+
+    audit = await db.fetchone("SELECT * FROM audit_log_entries WHERE action='authz.grants.replace'")
+    assert audit is not None
+    assert audit["actor"] == "admin"
+    assert audit["resource_type"] == "authz_principal"
+    assert audit["resource_id"] == "user:alice"
+    assert audit["request_id"] == "grant-test"
+    details = json.loads(audit["details_json"])
+    assert details == {
+        "added_count": 1,
+        "after_count": 3,
+        "before_count": 3,
+        "removed_count": 1,
+        "unchanged_count": 1,
+        "updated_count": 1,
+    }
+    assert all(isinstance(value, int) for value in details.values())
+
+
+@pytest.mark.asyncio
+async def test_replace_with_empty_list_removes_every_grant_atomically(db: Database) -> None:
+    await _insert_user(db)
+    await _insert_tree(db)
+    await _insert_node(db, "room")
+    await _insert_grant(db, node_id="room")
+
+    response = await authz_api.replace_principal_grants(
+        "user",
+        "alice",
+        _replace([]),
+        _request(),
+        db=db,
+        _admin="admin",
+    )
+
+    assert response.grants == []
+    assert await db.fetchone("SELECT 1 FROM authz_node_roles WHERE principal_id='alice'") is None
+
+
+@pytest.mark.asyncio
+async def test_api_key_id_is_canonicalized_to_raw_lowercase_uuid_in_response_and_db(db: Database) -> None:
+    key_id = str(uuid.uuid4())
+    datapoint_id = str(uuid.uuid4())
+    await _insert_api_key(db, key_id)
+    await _insert_datapoint(db, datapoint_id)
+
+    response = await authz_api.replace_principal_grants(
+        "api_key",
+        f"api_key:{key_id.upper()}",
+        _replace([AuthzPrincipalGrant(node_type="datapoint", node_id=datapoint_id, role="resident")]),
+        _request(),
+        db=db,
+        _admin="admin",
+    )
+
+    assert response.principal.principal_id == key_id
+    row = await db.fetchone("SELECT principal_id FROM authz_node_roles")
+    assert row is not None
+    assert row["principal_id"] == key_id
+    loaded = await authz_api.get_principal_grants("api_key", f"api_key:{key_id}", db=db, _admin="admin")
+    assert loaded == response
+
+
+@pytest.mark.asyncio
+async def test_api_key_get_then_put_preserves_grants_and_removes_legacy_prefixed_alias(db: Database) -> None:
+    key_id = str(uuid.uuid4())
+    first_datapoint_id = str(uuid.uuid4())
+    second_datapoint_id = str(uuid.uuid4())
+    await _insert_api_key(db, key_id)
+    await _insert_datapoint(db, first_datapoint_id)
+    await _insert_datapoint(db, second_datapoint_id)
+    await _insert_grant(
+        db,
+        principal_type="api_key",
+        principal_id=key_id,
+        node_type="datapoint",
+        node_id=first_datapoint_id,
+        role="guest",
+    )
+    await _insert_grant(
+        db,
+        principal_type="api_key",
+        principal_id=f"api_key:{key_id}",
+        node_type="datapoint",
+        node_id=second_datapoint_id,
+        role="resident",
+        effect="deny",
+    )
+
+    loaded = await authz_api.get_principal_grants("api_key", key_id, db=db, _admin="admin")
+    replaced = await authz_api.replace_principal_grants(
+        "api_key",
+        f"api_key:{key_id}",
+        _replace(loaded.grants),
+        _request(),
+        db=db,
+        _admin="admin",
+    )
+
+    assert replaced == loaded
+    rows = await db.fetchall("SELECT principal_id, node_id FROM authz_node_roles ORDER BY node_id")
+    assert {row["node_id"] for row in rows} == {first_datapoint_id, second_datapoint_id}
+    assert {row["principal_id"] for row in rows} == {key_id}
+
+
+@pytest.mark.asyncio
+async def test_api_key_get_rejects_conflicting_raw_and_prefixed_aliases(db: Database) -> None:
+    key_id = str(uuid.uuid4())
+    datapoint_id = str(uuid.uuid4())
+    await _insert_api_key(db, key_id)
+    await _insert_datapoint(db, datapoint_id)
+    await _insert_grant(db, principal_type="api_key", principal_id=key_id, node_type="datapoint", node_id=datapoint_id, role="guest")
+    await _insert_grant(
+        db,
+        principal_type="api_key",
+        principal_id=f"api_key:{key_id}",
+        node_type="datapoint",
+        node_id=datapoint_id,
+        role="owner",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await authz_api.get_principal_grants("api_key", key_id, db=db, _admin="admin")
+
+    assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+    replaced = await authz_api.replace_principal_grants(
+        "api_key",
+        key_id,
+        _replace([AuthzPrincipalGrant(node_type="datapoint", node_id=datapoint_id, role="resident")]),
+        _request(),
+        db=db,
+        _admin="admin",
+    )
+    assert replaced.grants[0].role == "resident"
+    rows = await db.fetchall("SELECT principal_id, role FROM authz_node_roles")
+    assert [(row["principal_id"], row["role"]) for row in rows] == [(key_id, "resident")]
+
+
+@pytest.mark.asyncio
+async def test_missing_principals_and_invalid_api_key_id_are_rejected(db: Database) -> None:
+    with pytest.raises(HTTPException) as missing_user:
+        await authz_api.get_principal_grants("user", "missing", db=db, _admin="admin")
+    assert missing_user.value.status_code == status.HTTP_404_NOT_FOUND
+
+    key_id = str(uuid.uuid4())
+    with pytest.raises(HTTPException) as missing_key:
+        await authz_api.get_principal_grants("api_key", key_id, db=db, _admin="admin")
+    assert missing_key.value.status_code == status.HTTP_404_NOT_FOUND
+
+    with pytest.raises(HTTPException) as invalid_key:
+        await authz_api.get_principal_grants("api_key", "api_key:not-a-uuid", db=db, _admin="admin")
+    assert invalid_key.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("node_type", ["hierarchy", "datapoint"])
+async def test_unknown_grant_target_is_rejected_without_changing_existing_set(db: Database, node_type: str) -> None:
+    await _insert_user(db)
+    await _insert_tree(db)
+    await _insert_node(db, "existing")
+    await _insert_grant(db, node_id="existing")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await authz_api.replace_principal_grants(
+            "user",
+            "alice",
+            _replace([AuthzPrincipalGrant(node_type=node_type, node_id="missing", role="owner")]),
+            _request(),
+            db=db,
+            _admin="admin",
+        )
+
+    assert exc_info.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    row = await db.fetchone("SELECT node_id FROM authz_node_roles WHERE principal_id='alice'")
+    assert row is not None
+    assert row["node_id"] == "existing"
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+
+
+@pytest.mark.asyncio
+async def test_get_exposes_orphan_grant_but_put_rejects_it_without_data_loss(db: Database) -> None:
+    await _insert_user(db)
+    await _insert_grant(db, node_id="deleted-node")
+
+    loaded = await authz_api.get_principal_grants("user", "alice", db=db, _admin="admin")
+    assert [grant.node_id for grant in loaded.grants] == ["deleted-node"]
+
+    with pytest.raises(HTTPException) as exc_info:
+        await authz_api.replace_principal_grants(
+            "user",
+            "alice",
+            _replace(loaded.grants),
+            _request(),
+            db=db,
+            _admin="admin",
+        )
+
+    assert exc_info.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert await db.fetchone("SELECT 1 FROM authz_node_roles WHERE node_id='deleted-node'") is not None
+
+
+def test_replace_model_rejects_duplicate_node_type_and_node_id() -> None:
+    grant = {"node_type": "hierarchy", "node_id": "room", "role": "guest"}
+    with pytest.raises(ValidationError, match="Duplicate grants"):
+        AuthzPrincipalGrantsReplace(grants=[grant, {**grant, "role": "owner"}])
+
+
+@pytest.mark.asyncio
+async def test_audit_failure_rolls_back_delete_and_insert(monkeypatch: pytest.MonkeyPatch, db: Database) -> None:
+    await _insert_user(db)
+    await _insert_tree(db)
+    await _insert_node(db, "before")
+    await _insert_node(db, "after")
+    await _insert_grant(db, node_id="before")
+
+    original_execute = db.execute
+
+    async def fail_audit_insert(sql: str, params=()):
+        if "INSERT INTO audit_log_entries" in sql:
+            raise RuntimeError("audit unavailable")
+        return await original_execute(sql, params)
+
+    monkeypatch.setattr(db, "execute", fail_audit_insert)
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await authz_api.replace_principal_grants(
+            "user",
+            "alice",
+            _replace([AuthzPrincipalGrant(node_type="hierarchy", node_id="after", role="owner")]),
+            _request(),
+            db=db,
+            _admin="admin",
+        )
+
+    rows = await db.fetchall("SELECT node_id FROM authz_node_roles WHERE principal_id='alice'")
+    assert [row["node_id"] for row in rows] == ["before"]
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+
+
+@pytest.mark.asyncio
+async def test_commit_failure_after_audit_insert_rolls_back_both(monkeypatch: pytest.MonkeyPatch, db: Database) -> None:
+    await _insert_user(db)
+    await _insert_tree(db)
+    await _insert_node(db, "before")
+    await _insert_node(db, "after")
+    await _insert_grant(db, node_id="before")
+
+    async def fail_commit() -> None:
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(db.conn, "commit", fail_commit)
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await authz_api.replace_principal_grants(
+            "user",
+            "alice",
+            _replace([AuthzPrincipalGrant(node_type="hierarchy", node_id="after", role="owner")]),
+            _request(),
+            db=db,
+            _admin="admin",
+        )
+
+    rows = await db.fetchall("SELECT node_id FROM authz_node_roles WHERE principal_id='alice'")
+    assert [row["node_id"] for row in rows] == ["before"]
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+
+
+@pytest.mark.asyncio
+async def test_insert_failure_rolls_back_delete(monkeypatch: pytest.MonkeyPatch, db: Database) -> None:
+    await _insert_user(db)
+    await _insert_tree(db)
+    await _insert_node(db, "before")
+    await _insert_node(db, "after")
+    await _insert_grant(db, node_id="before")
+
+    async def fail_insert(*_args, **_kwargs):
+        raise RuntimeError("insert failed")
+
+    monkeypatch.setattr(db, "executemany", fail_insert)
+    with pytest.raises(RuntimeError, match="insert failed"):
+        await authz_api.replace_principal_grants(
+            "user",
+            "alice",
+            _replace([AuthzPrincipalGrant(node_type="hierarchy", node_id="after", role="owner")]),
+            _request(),
+            db=db,
+            _admin="admin",
+        )
+
+    rows = await db.fetchall("SELECT node_id FROM authz_node_roles WHERE principal_id='alice'")
+    assert [row["node_id"] for row in rows] == ["before"]
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+
+
+@pytest.mark.asyncio
+async def test_cancellation_between_delete_and_insert_rolls_back(monkeypatch: pytest.MonkeyPatch, db: Database) -> None:
+    await _insert_user(db)
+    await _insert_tree(db)
+    await _insert_node(db, "before")
+    await _insert_node(db, "after")
+    await _insert_grant(db, node_id="before")
+    insert_started = asyncio.Event()
+    wait_forever = asyncio.Event()
+
+    async def pause_insert(*_args, **_kwargs):
+        insert_started.set()
+        await wait_forever.wait()
+
+    monkeypatch.setattr(db, "executemany", pause_insert)
+    replace_task = asyncio.create_task(
+        authz_api.replace_principal_grants(
+            "user",
+            "alice",
+            _replace([AuthzPrincipalGrant(node_type="hierarchy", node_id="after", role="owner")]),
+            _request(),
+            db=db,
+            _admin="admin",
+        )
+    )
+    await insert_started.wait()
+    replace_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await replace_task
+
+    rows = await db.fetchall("SELECT node_id FROM authz_node_roles WHERE principal_id='alice'")
+    assert [row["node_id"] for row in rows] == ["before"]
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+
+
+@pytest.mark.asyncio
+async def test_normal_commit_cannot_interleave_with_replace_transaction(monkeypatch: pytest.MonkeyPatch, db: Database) -> None:
+    await _insert_user(db)
+    await _insert_tree(db)
+    await _insert_node(db, "before")
+    await _insert_node(db, "after")
+    await _insert_grant(db, node_id="before")
+    audit_started = asyncio.Event()
+    release_audit = asyncio.Event()
+
+    async def pause_then_fail_audit(*_args, **_kwargs) -> int:
+        audit_started.set()
+        await release_audit.wait()
+        raise RuntimeError("audit failed")
+
+    monkeypatch.setattr(authz_api.AuditLogWriter, "write", pause_then_fail_audit)
+    replace_task = asyncio.create_task(
+        authz_api.replace_principal_grants(
+            "user",
+            "alice",
+            _replace([AuthzPrincipalGrant(node_type="hierarchy", node_id="after", role="owner")]),
+            _request(),
+            db=db,
+            _admin="admin",
+        )
+    )
+    await audit_started.wait()
+    concurrent_commit = asyncio.create_task(db.execute_and_commit("INSERT INTO app_settings (key, value) VALUES ('race', 'safe')"))
+    await asyncio.sleep(0)
+    assert not concurrent_commit.done()
+
+    release_audit.set()
+    with pytest.raises(RuntimeError, match="audit failed"):
+        await replace_task
+    await concurrent_commit
+
+    rows = await db.fetchall("SELECT node_id FROM authz_node_roles WHERE principal_id='alice'")
+    assert [row["node_id"] for row in rows] == ["before"]
+    assert await db.fetchone("SELECT value FROM app_settings WHERE key='race'") is not None
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+
+
+@pytest.mark.asyncio
+async def test_nested_database_transaction_is_rejected(db: Database) -> None:
+    with pytest.raises(RuntimeError, match="Nested database transactions"):
+        async with db.transaction():
+            async with db.transaction():
+                pass
+
+
+@pytest.mark.asyncio
+async def test_database_commit_and_rollback_helpers_respect_transaction_lock(db: Database) -> None:
+    await db.execute("INSERT INTO app_settings (key, value) VALUES ('rolled-back', 'value')")
+    await db.rollback()
+    assert await db.fetchone("SELECT 1 FROM app_settings WHERE key='rolled-back'") is None
+
+    await db.execute("INSERT INTO app_settings (key, value) VALUES ('committed', 'value')")
+    await db.commit()
+    assert await db.fetchone("SELECT value FROM app_settings WHERE key='committed'") is not None
+
+
+async def _allow_admin() -> str:
+    return "admin"
+
+
+async def _deny_admin() -> str:
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
+
+
+def _api(db: Database, admin_dependency=_allow_admin) -> FastAPI:
+    app = FastAPI()
+    app.include_router(authz_api.router, prefix="/api/v1/authz")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_admin_user] = admin_dependency
+    return app
+
+
+@pytest.mark.asyncio
+async def test_http_api_roundtrip_and_duplicate_validation(db: Database) -> None:
+    await _insert_user(db)
+    await _insert_tree(db)
+    await _insert_node(db, "room")
+    app = _api(db)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+        put_response = await client.put(
+            "/api/v1/authz/principals/user/alice/grants",
+            json={"grants": [{"node_type": "hierarchy", "node_id": "room", "role": "guest", "effect": "allow"}]},
+        )
+        get_response = await client.get("/api/v1/authz/principals/user/alice/grants")
+        duplicate_response = await client.put(
+            "/api/v1/authz/principals/user/alice/grants",
+            json={
+                "grants": [
+                    {"node_type": "hierarchy", "node_id": "room", "role": "guest"},
+                    {"node_type": "hierarchy", "node_id": "room", "role": "owner"},
+                ]
+            },
+        )
+        missing_grants_response = await client.put(
+            "/api/v1/authz/principals/user/alice/grants",
+            json={},
+        )
+
+    assert put_response.status_code == status.HTTP_200_OK
+    assert get_response.status_code == status.HTTP_200_OK
+    assert get_response.json() == put_response.json()
+    assert duplicate_response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert missing_grants_response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert get_response.json()["grants"] == [{"node_type": "hierarchy", "node_id": "room", "role": "guest", "effect": "allow"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "PUT"])
+async def test_http_grant_endpoints_are_admin_only(db: Database, method: str) -> None:
+    app = _api(db, _deny_admin)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+        response = await client.request(
+            method,
+            "/api/v1/authz/principals/user/alice/grants",
+            json={"grants": []} if method == "PUT" else None,
+        )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_http_api_rejects_unknown_principal_and_node_types(db: Database) -> None:
+    app = _api(db)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+        principal_response = await client.get("/api/v1/authz/principals/service/alice/grants")
+        node_response = await client.put(
+            "/api/v1/authz/principals/user/alice/grants",
+            json={"grants": [{"node_type": "visu", "node_id": "room", "role": "guest"}]},
+        )
+
+    assert principal_response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert node_response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+@pytest.mark.asyncio
+async def test_http_api_forbids_extra_fields_and_supports_slash_in_username(db: Database) -> None:
+    await _insert_user(db, "team/alice")
+    app = _api(db)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+        extra_body = await client.put(
+            "/api/v1/authz/principals/user/team%2Falice/grants",
+            json={"grants": [], "unexpected": True},
+        )
+        extra_grant = await client.put(
+            "/api/v1/authz/principals/user/team%2Falice/grants",
+            json={"grants": [{"node_type": "hierarchy", "node_id": "room", "role": "guest", "unexpected": True}]},
+        )
+        valid = await client.put(
+            "/api/v1/authz/principals/user/team%2Falice/grants",
+            json={"grants": []},
+        )
+
+    assert extra_body.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert extra_grant.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert valid.status_code == status.HTTP_200_OK
+    assert valid.json()["principal"] == {"principal_type": "user", "principal_id": "team/alice"}
