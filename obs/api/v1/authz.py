@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from collections.abc import Iterable, Sequence
+from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 
 from obs.api.auth import Principal, get_admin_user
 from obs.api.audit import AuditLogWriter, build_audit_context
@@ -28,6 +32,8 @@ from obs.models.authz import (
 )
 
 router = APIRouter(tags=["authz"])
+
+_STRONG_ETAG_PATTERN = re.compile(r'^"[0-9a-f]{64}"$')
 
 _ROLE_RANK: dict[Role, int] = {
     Role.GUEST: 0,
@@ -92,8 +98,6 @@ async def _load_principal_grants(
     db: Database,
     principal_type: PrincipalTypeName,
     principal_id: str,
-    *,
-    reject_conflicts: bool = True,
 ) -> list[AuthzPrincipalGrant]:
     principal_ids = _principal_ids(principal_type, principal_id)
     placeholders = ",".join("?" for _ in principal_ids)
@@ -112,8 +116,6 @@ async def _load_principal_grants(
         grant = AuthzPrincipalGrant(node_type=row["node_type"], node_id=row["node_id"], role=row["role"], effect=row["effect"])
         existing = by_target.get(target)
         if existing is not None:
-            if reject_conflicts and existing != grant:
-                raise HTTPException(status.HTTP_409_CONFLICT, f"Conflicting canonical and legacy grants for {target[0]} '{target[1]}'")
             continue
         by_target[target] = grant
     return [by_target[target] for target in sorted(by_target)]
@@ -130,13 +132,48 @@ def _grants_response(
     )
 
 
+def _canonical_grants(grants: Sequence[AuthzPrincipalGrant]) -> list[dict[str, str]]:
+    return [
+        {
+            "node_type": grant.node_type,
+            "node_id": grant.node_id,
+            "role": grant.role,
+            "effect": grant.effect,
+        }
+        for grant in sorted(grants, key=lambda grant: (grant.node_type, grant.node_id))
+    ]
+
+
+def _grants_sha256(grants: Sequence[AuthzPrincipalGrant]) -> str:
+    payload = json.dumps(_canonical_grants(grants), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _grants_etag(grants: Sequence[AuthzPrincipalGrant]) -> str:
+    return f'"{_grants_sha256(grants)}"'
+
+
+def _require_if_match(if_match: object) -> str:
+    if not isinstance(if_match, str) or _STRONG_ETAG_PATTERN.fullmatch(if_match) is None:
+        raise HTTPException(status.HTTP_428_PRECONDITION_REQUIRED, "A valid strong If-Match grant revision is required")
+    return if_match
+
+
+def _set_revision_headers(response: Response, grants: Sequence[AuthzPrincipalGrant]) -> None:
+    response.headers["ETag"] = _grants_etag(grants)
+    response.headers["Cache-Control"] = "no-store"
+
+
 def _grant_diff_details(
     before: Sequence[AuthzPrincipalGrant],
     after: Sequence[AuthzPrincipalGrant],
-) -> dict[str, int]:
-    before_by_target = {(grant.node_type, grant.node_id): (grant.role, grant.effect) for grant in before}
-    after_by_target = {(grant.node_type, grant.node_id): (grant.role, grant.effect) for grant in after}
+) -> dict[str, Any]:
+    before_by_target = {(grant.node_type, grant.node_id): {"role": grant.role, "effect": grant.effect} for grant in before}
+    after_by_target = {(grant.node_type, grant.node_id): {"role": grant.role, "effect": grant.effect} for grant in after}
     common = set(before_by_target) & set(after_by_target)
+    changed_targets = sorted(
+        target for target in set(before_by_target) | set(after_by_target) if before_by_target.get(target) != after_by_target.get(target)
+    )
     return {
         "before_count": len(before),
         "after_count": len(after),
@@ -144,6 +181,17 @@ def _grant_diff_details(
         "removed_count": len(set(before_by_target) - set(after_by_target)),
         "updated_count": sum(before_by_target[target] != after_by_target[target] for target in common),
         "unchanged_count": sum(before_by_target[target] == after_by_target[target] for target in common),
+        "before_sha256": _grants_sha256(before),
+        "after_sha256": _grants_sha256(after),
+        "changes": [
+            {
+                "node_type": node_type,
+                "node_id": node_id,
+                "before": before_by_target.get((node_type, node_id)),
+                "after": after_by_target.get((node_type, node_id)),
+            }
+            for node_type, node_id in changed_targets
+        ],
     }
 
 
@@ -332,6 +380,7 @@ def _target_to_model(target: AuthzTarget) -> AuthzPreviewResolvedTarget:
 async def get_principal_grants(
     principal_type: PrincipalTypeName,
     principal_id: str,
+    response: Response,
     db: Database = Depends(get_db),
     _admin: str = Depends(get_admin_user),
 ) -> AuthzPrincipalGrantsResponse:
@@ -339,6 +388,7 @@ async def get_principal_grants(
     canonical_id = _canonical_principal_id(principal_type, principal_id)
     await _require_principal(db, principal_type, canonical_id)
     grants = await _load_principal_grants(db, principal_type, canonical_id)
+    _set_revision_headers(response, grants)
     return _grants_response(principal_type, canonical_id, grants)
 
 
@@ -351,17 +401,22 @@ async def replace_principal_grants(
     principal_id: str,
     body: AuthzPrincipalGrantsReplace,
     request: Request,
+    response: Response,
+    if_match: str | None = Header(default=None, alias="If-Match"),
     db: Database = Depends(get_db),
     _admin: str = Depends(get_admin_user),
 ) -> AuthzPrincipalGrantsResponse:
     """Atomically replace one principal's complete persisted grant set."""
+    expected_etag = _require_if_match(if_match)
     canonical_id = _canonical_principal_id(principal_type, principal_id)
     principal_ids = _principal_ids(principal_type, canonical_id)
     placeholders = ",".join("?" for _ in principal_ids)
     async with db.transaction():
         await _require_principal(db, principal_type, canonical_id)
+        before = await _load_principal_grants(db, principal_type, canonical_id)
+        if expected_etag != _grants_etag(before):
+            raise HTTPException(status.HTTP_412_PRECONDITION_FAILED, "Grant revision is stale")
         await _require_grant_targets(db, body.grants)
-        before = await _load_principal_grants(db, principal_type, canonical_id, reject_conflicts=False)
         await db.execute(
             f"DELETE FROM authz_node_roles WHERE principal_type=? AND principal_id IN ({placeholders})",
             (principal_type, *principal_ids),
@@ -389,6 +444,7 @@ async def replace_principal_grants(
         )
 
     grants = sorted(body.grants, key=lambda grant: (grant.node_type, grant.node_id))
+    _set_revision_headers(response, grants)
     return _grants_response(principal_type, canonical_id, grants)
 
 
