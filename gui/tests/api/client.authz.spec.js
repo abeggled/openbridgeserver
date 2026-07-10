@@ -33,11 +33,15 @@ describe('authzApi client', () => {
     const preview = { principal: { principal_type: 'user', principal_id: 'alice/name' }, draft_grants: [] }
 
     await authzApi.getUserGrants('alice/name')
-    await authzApi.updateUserGrants('alice/name', grants)
+    await authzApi.updateUserGrants('alice/name', grants, '"grants-v1"')
     await authzApi.preview(preview)
 
     expect(api.get).toHaveBeenCalledWith('/authz/principals/user/alice%2Fname/grants')
-    expect(api.put).toHaveBeenCalledWith('/authz/principals/user/alice%2Fname/grants', { grants })
+    expect(api.put).toHaveBeenCalledWith(
+      '/authz/principals/user/alice%2Fname/grants',
+      { grants },
+      { headers: { 'If-Match': '"grants-v1"' } },
+    )
     expect(api.post).toHaveBeenCalledWith('/authz/preview', preview)
   })
 })

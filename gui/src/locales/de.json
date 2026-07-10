@@ -2203,8 +2203,10 @@
           "confirm": "Bestätigen"
         },
         "roleTitle": "Rolle auswählen",
-        "roleHint": "Die Rolle bestimmt, welche Aktionen in den ausgewählten Hierarchie-Bereichen verfügbar sind.",
-        "mixedRoleWarning": "Dieser Benutzer hat derzeit unterschiedliche Rollen in verschiedenen Bereichen. Wähle vor dem Fortfahren ausdrücklich eine neue Rolle; keine Rolle wird stillschweigend geändert.",
+        "roleHint": "Die ausgewählte Rolle wird für neu hinzugefügte Bereiche verwendet. Bestehende Bereiche behalten ihre jeweilige Rolle, solange die Bulk-Neuzuweisung nicht ausdrücklich aktiviert wird.",
+        "mixedRoleWarning": "Dieser Benutzer hat derzeit unterschiedliche Rollen in verschiedenen Bereichen. Beim Hinzufügen oder Entfernen von Bereichen bleiben diese Rollen unverändert.",
+        "bulkRoleTitle": "Alle beibehaltenen bestehenden Bereiche neu zuweisen",
+        "bulkRoleHint": "Die ausgewählte Rolle ausdrücklich auf jeden bestehenden Bereich anwenden, der ausgewählt bleibt.",
         "roles": {
           "guest": {
             "label": "Gast",
@@ -2229,6 +2231,7 @@
         "unknownScope": "Dieser gespeicherte Bereich ist nicht mehr in der Hierarchie-Liste vorhanden.",
         "deniedScopePreserved": "Für diesen Bereich besteht eine direkte Verbots-Zuweisung, die erhalten bleibt; hier kann keine Erlaubnis hinzugefügt werden.",
         "orphanedScopeBlock": "{n} ausgewählte Zuweisungen lassen sich keinem Hierarchie-Bereich mehr zuordnen. Entferne sie ausdrücklich oder brich ab; solange sie ausgewählt sind, ist das Speichern gesperrt.",
+        "newScopeRoleRequired": "Wähle eine Rolle aus, bevor du neue Hierarchie-Bereiche hinzufügst.",
         "selectedScopes": "{n} Bereiche ausgewählt",
         "previewTitle": "Effektive Rechte",
         "previewHint": "Prüfe vor dem Speichern die berechnete Entscheidung und ihre Begründung für jede Aktion.",
@@ -2253,8 +2256,12 @@
         "confirmTitle": "Änderungen bestätigen",
         "confirmHint": "Beim Speichern werden die bearbeitbaren Hierarchie-Zuweisungen atomar ersetzt.",
         "selectedRole": "Rolle",
+        "existingRolesPreserved": "Bestehende Rollen bleiben erhalten",
         "selectedAreas": "Bereiche",
         "advancedPreserved": "{n} fortgeschrittene Zuweisungen bleiben unverändert erhalten.",
+        "advancedTitle": "Fortgeschrittene Zuweisungen",
+        "advancedDescription": "{effect} · {role} · {nodeType} · {nodeId}",
+        "removeAdvanced": "Entfernen",
         "back": "Zurück",
         "next": "Weiter",
         "save": "Rechte speichern",
