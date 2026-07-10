@@ -121,11 +121,11 @@
               <h4 class="font-semibold text-slate-800 dark:text-slate-100">{{ $t('settings.users.rights.previewTitle') }}</h4>
               <p class="mt-1 text-sm text-slate-500">{{ $t('settings.users.rights.previewHint') }}</p>
             </div>
-            <button v-if="previewTargetIds.length" type="button" class="btn-secondary btn-sm" :disabled="previewLoading" @click="loadPreview">
+            <button v-if="previewTargets.length" type="button" class="btn-secondary btn-sm" :disabled="previewLoading" @click="loadPreview">
               {{ $t('settings.users.rights.refreshPreview') }}
             </button>
           </div>
-          <div v-if="!previewTargetIds.length" class="rounded-lg border border-slate-200 p-4 text-sm text-slate-500 dark:border-slate-700" data-testid="rights-preview-empty">
+          <div v-if="!previewTargets.length" class="rounded-lg border border-slate-200 p-4 text-sm text-slate-500 dark:border-slate-700" data-testid="rights-preview-empty">
             {{ $t('settings.users.rights.emptyPreview') }}
           </div>
           <div v-else-if="previewLoading" class="flex justify-center py-8"><Spinner /></div>
@@ -135,7 +135,7 @@
           <div v-else class="flex max-h-96 flex-col gap-3 overflow-y-auto">
             <article
               v-for="group in previewGroups"
-              :key="group.nodeId"
+              :key="group.key"
               class="rounded-lg border border-slate-200 p-3 dark:border-slate-700"
               :data-testid="`preview-target-${group.nodeId}`"
             >
@@ -167,8 +167,8 @@
           </div>
           <dl class="grid gap-3 rounded-lg border border-slate-200 p-4 text-sm dark:border-slate-700 sm:grid-cols-2">
             <div>
-              <dt class="text-xs text-slate-500">{{ $t('settings.users.rights.selectedRole') }}</dt>
-              <dd class="font-medium text-slate-800 dark:text-slate-100">{{ selectedRoleLabel || $t('settings.users.rights.existingRolesPreserved') }}</dd>
+              <dt class="text-xs text-slate-500">{{ $t('settings.users.rights.roleHandling') }}</dt>
+              <dd class="font-medium text-slate-800 dark:text-slate-100" data-testid="rights-role-summary">{{ roleSummary }}</dd>
             </div>
             <div>
               <dt class="text-xs text-slate-500">{{ $t('settings.users.rights.selectedAreas') }}</dt>
@@ -233,7 +233,8 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { authzApi, hierarchyApi } from '@/api/client'
+import { hierarchyApi } from '@/api/client'
+import { authzApi } from '@/api/authz'
 import Modal from '@/components/ui/Modal.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
@@ -255,6 +256,7 @@ const selectedRole = ref('')
 const selectedNodeIds = ref([])
 const originalNodeIds = ref([])
 const originalRolesByNode = ref({})
+const originalAdvancedTargets = ref([])
 const hierarchyNodes = ref([])
 const advancedGrants = ref([])
 const mixedRoles = ref(false)
@@ -282,7 +284,26 @@ const roleOptions = computed(() => ['guest', 'resident', 'operator', 'owner'].ma
 const selectedRoleLabel = computed(() => roleOptions.value.find((option) => option.value === selectedRole.value)?.label ?? '')
 const selectedOrphanCount = computed(() => hierarchyNodes.value.filter((node) => node.orphaned && selectedNodeIds.value.includes(node.id)).length)
 const hasNewScopes = computed(() => selectedNodeIds.value.some((nodeId) => !originalRolesByNode.value[nodeId]))
-const previewTargetIds = computed(() => [...new Set([...originalNodeIds.value, ...selectedNodeIds.value])])
+const previewTargets = computed(() => {
+  const targets = [
+    ...originalNodeIds.value.map((nodeId) => ({ node_type: 'hierarchy', node_id: nodeId })),
+    ...selectedNodeIds.value.map((nodeId) => ({ node_type: 'hierarchy', node_id: nodeId })),
+    ...originalAdvancedTargets.value,
+    ...advancedGrants.value.map(({ node_type, node_id }) => ({ node_type, node_id: String(node_id) })),
+  ]
+  const seen = new Set()
+  return targets.filter((target) => {
+    const key = `${target.node_type}:${target.node_id}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+})
+const roleSummary = computed(() => {
+  if (reassignExisting.value) return t('settings.users.rights.roleSummaryBulk', { role: selectedRoleLabel.value })
+  if (hasNewScopes.value) return t('settings.users.rights.roleSummaryNew', { role: selectedRoleLabel.value })
+  return t('settings.users.rights.existingRolesPreserved')
+})
 const canContinue = computed(() => {
   if (step.value === 1) return true
   if (step.value === 2) {
@@ -290,15 +311,20 @@ const canContinue = computed(() => {
       && (!hasNewScopes.value || !!selectedRole.value)
       && (!reassignExisting.value || !!selectedRole.value)
   }
-  if (step.value === 3) return !previewError.value && (!previewTargetIds.value.length || previewResults.value.length > 0)
+  if (step.value === 3) return !previewError.value && (!previewTargets.value.length || previewResults.value.length > 0)
   return true
 })
 
 const nodeLabels = computed(() => Object.fromEntries(hierarchyNodes.value.map((node) => [node.id, node.pathLabel])))
-const previewGroups = computed(() => previewTargetIds.value.map((nodeId) => ({
-  nodeId,
-  pathLabel: nodeLabels.value[nodeId] ?? nodeId,
-  results: ACTIONS.map((action) => previewResults.value.find((result) => result.node_id === nodeId && result.action === action)).filter(Boolean),
+const previewGroups = computed(() => previewTargets.value.map((target) => ({
+  key: `${target.node_type}:${target.node_id}`,
+  nodeId: target.node_id,
+  pathLabel: target.node_type === 'hierarchy'
+    ? nodeLabels.value[target.node_id] ?? target.node_id
+    : t('settings.users.rights.advancedTarget', { nodeType: target.node_type, nodeId: target.node_id }),
+  results: ACTIONS.map((action) => previewResults.value.find((result) => (
+    result.node_type === target.node_type && result.node_id === target.node_id && result.action === action
+  ))).filter(Boolean),
 })))
 
 watch(
@@ -369,6 +395,7 @@ async function initialize() {
   selectedNodeIds.value = []
   originalNodeIds.value = []
   originalRolesByNode.value = {}
+  originalAdvancedTargets.value = []
   hierarchyNodes.value = []
   advancedGrants.value = []
   mixedRoles.value = false
@@ -387,6 +414,7 @@ async function initialize() {
     const grants = (data.grants || []).map(cleanGrant)
     const editable = grants.filter(isEditableGrant)
     advancedGrants.value = grants.filter((grant) => !isEditableGrant(grant))
+    originalAdvancedTargets.value = advancedGrants.value.map(({ node_type, node_id }) => ({ node_type, node_id: String(node_id) }))
     selectedNodeIds.value = [...new Set(editable.map((grant) => String(grant.node_id)))]
     originalNodeIds.value = [...selectedNodeIds.value]
     originalRolesByNode.value = Object.fromEntries(editable.map((grant) => [String(grant.node_id), grant.role]))
@@ -435,14 +463,14 @@ function previewBody() {
   return {
     principal: { principal_type: 'user', principal_id: props.username },
     actions: ACTIONS,
-    targets: previewTargetIds.value.map((nodeId) => ({ node_type: 'hierarchy', node_id: nodeId })),
+    targets: previewTargets.value,
     draft_grants: grants,
     include_persisted: false,
   }
 }
 
 async function loadPreview() {
-  if (!previewTargetIds.value.length) {
+  if (!previewTargets.value.length) {
     previewError.value = ''
     previewResults.value = []
     return
@@ -495,8 +523,12 @@ function reasonText(result) {
     : result.reason_text
 }
 
-function removeAdvancedGrant(index) {
+async function removeAdvancedGrant(index) {
   advancedGrants.value.splice(index, 1)
+  previewResults.value = []
+  previewError.value = ''
+  step.value = 3
+  await loadPreview()
 }
 
 function close() {

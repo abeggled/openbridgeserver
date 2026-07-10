@@ -66,11 +66,13 @@ beforeEach(() => {
     listTrees: vi.fn().mockResolvedValue({ data: [{ id: 'tree-1', name: 'Haus' }] }),
     getTreeNodes: vi.fn().mockResolvedValue({ data: TREE_NODES }),
   }
-  vi.doMock('@/api/client', () => ({ authzApi, hierarchyApi }))
+  vi.doMock('@/api/client', () => ({ hierarchyApi }))
+  vi.doMock('@/api/authz', () => ({ authzApi }))
 })
 
 afterEach(() => {
   vi.doUnmock('@/api/client')
+  vi.doUnmock('@/api/authz')
 })
 
 async function mountEditor() {
@@ -109,7 +111,11 @@ describe('UserRightsEditor', () => {
     expect(authzApi.preview).toHaveBeenCalledWith({
       principal: { principal_type: 'user', principal_id: 'alice' },
       actions: ['read', 'write', 'activate', 'generate'],
-      targets: [{ node_type: 'hierarchy', node_id: 'kitchen' }],
+      targets: [
+        { node_type: 'hierarchy', node_id: 'kitchen' },
+        { node_type: 'datapoint', node_id: 'dp-denied' },
+        { node_type: 'datapoint', node_id: 'dp-direct' },
+      ],
       draft_grants: [
         { principal_type: 'user', principal_id: 'alice', ...grant('datapoint', 'dp-denied', 'operator', 'deny') },
         { principal_type: 'user', principal_id: 'alice', ...grant('datapoint', 'dp-direct', 'guest') },
@@ -126,6 +132,7 @@ describe('UserRightsEditor', () => {
     expect(wrapper.get('[data-testid="preview-kitchen-generate"]').text()).toContain('Verboten')
 
     await next(wrapper)
+    expect(wrapper.get('[data-testid="rights-role-summary"]').text()).toContain('Bestehende Rollen bleiben erhalten')
     expect(wrapper.get('[data-testid="advanced-grants-preserved"]').text()).toContain('2')
     await wrapper.get('[data-testid="rights-save"]').trigger('click')
     await flushPromises()
@@ -163,6 +170,7 @@ describe('UserRightsEditor', () => {
     await wrapper.get('[data-testid="rights-node-building"] input').setValue(true)
     await next(wrapper)
     await next(wrapper)
+    expect(wrapper.get('[data-testid="rights-role-summary"]').text()).toContain('neue Bereiche verwenden Bewohner')
     await wrapper.get('[data-testid="rights-save"]').trigger('click')
     await flushPromises()
 
@@ -189,6 +197,7 @@ describe('UserRightsEditor', () => {
     await next(wrapper)
     await next(wrapper)
     await next(wrapper)
+    expect(wrapper.get('[data-testid="rights-role-summary"]').text()).toContain('Rolle Eigentümer neu zugewiesen')
     await wrapper.get('[data-testid="rights-save"]').trigger('click')
     await flushPromises()
 
@@ -252,7 +261,11 @@ describe('UserRightsEditor', () => {
 
     expect(wrapper.find('[data-testid="rights-preview-empty"]').exists()).toBe(false)
     expect(authzApi.preview).toHaveBeenCalledWith(expect.objectContaining({
-      targets: [{ node_type: 'hierarchy', node_id: 'kitchen' }],
+      targets: [
+        { node_type: 'hierarchy', node_id: 'kitchen' },
+        { node_type: 'datapoint', node_id: 'dp-denied' },
+        { node_type: 'datapoint', node_id: 'dp-direct' },
+      ],
       draft_grants: [
         { principal_type: 'user', principal_id: 'alice', ...grant('datapoint', 'dp-denied', 'operator', 'deny') },
         { principal_type: 'user', principal_id: 'alice', ...grant('datapoint', 'dp-direct', 'guest') },
@@ -292,7 +305,28 @@ describe('UserRightsEditor', () => {
     expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [], '"clear-v1"')
   })
 
-  it('uses a local empty preview only when original and current hierarchy scopes are empty, and removes advanced grants explicitly', async () => {
+  it('uses a local empty preview only when no editable or advanced targets exist', async () => {
+    authzApi.getUserGrants.mockResolvedValue({
+      headers: { etag: '"empty-v1"' },
+      data: {
+        principal: { principal_type: 'user', principal_id: 'alice' },
+        grants: [],
+      },
+    })
+    const wrapper = await mountEditor()
+    await next(wrapper)
+    await next(wrapper)
+
+    expect(wrapper.get('[data-testid="rights-preview-empty"]').text()).toContain('keine bearbeitbaren')
+    expect(authzApi.preview).not.toHaveBeenCalled()
+
+    await next(wrapper)
+    await wrapper.get('[data-testid="rights-save"]').trigger('click')
+    await flushPromises()
+    expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [], '"empty-v1"')
+  })
+
+  it('invalidates the preview after explicit advanced removal and previews the removed target again', async () => {
     authzApi.getUserGrants.mockResolvedValue({
       headers: { etag: '"advanced-v1"' },
       data: {
@@ -300,16 +334,33 @@ describe('UserRightsEditor', () => {
         grants: [grant('datapoint', 'orphan-dp', 'guest', 'deny')],
       },
     })
+    authzApi.preview.mockImplementation((body) => Promise.resolve({
+      data: {
+        results: body.targets.flatMap((target) => ['read', 'write', 'activate', 'generate'].map((action) => ({
+          ...target,
+          action,
+          allowed: false,
+          reason: 'missing_allow',
+          reason_text: 'Backend English reason.',
+        }))),
+      },
+    }))
     const wrapper = await mountEditor()
     await next(wrapper)
     await next(wrapper)
-
-    expect(wrapper.get('[data-testid="rights-preview-empty"]').text()).toContain('keine Hierarchie-Bereiche')
-    expect(authzApi.preview).not.toHaveBeenCalled()
-
     await next(wrapper)
     expect(wrapper.get('[data-testid="advanced-grant-0"]').text()).toContain('orphan-dp')
     await wrapper.get('[data-testid="remove-advanced-grant-0"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="rights-preview-step"]').exists()).toBe(true)
+    expect(authzApi.preview).toHaveBeenCalledTimes(2)
+    expect(authzApi.preview.mock.calls[1][0]).toEqual(expect.objectContaining({
+      targets: [{ node_type: 'datapoint', node_id: 'orphan-dp' }],
+      draft_grants: [],
+    }))
+
+    await next(wrapper)
     await wrapper.get('[data-testid="rights-save"]').trigger('click')
     await flushPromises()
 
