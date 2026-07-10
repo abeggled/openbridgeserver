@@ -62,17 +62,6 @@ export const authApi = {
   deleteApiKey:   (id)                 => api.delete(`/auth/apikeys/${id}`),
 }
 
-// ── Authorization ────────────────────────────────────────────────────────
-export const authzApi = {
-  getUserGrants:    (username)         => api.get(`/authz/principals/user/${encodeURIComponent(username)}/grants`),
-  updateUserGrants: (username, grants, etag) => api.put(
-    `/authz/principals/user/${encodeURIComponent(username)}/grants`,
-    { grants },
-    { headers: { 'If-Match': etag } },
-  ),
-  preview:          (data)             => api.post('/authz/preview', data),
-}
-
 // ── DataPoints ────────────────────────────────────────────────────────────
 export const dpApi = {
   list:          (page = 0, size = 50, sort = 'created_at', order = 'asc') => api.get('/datapoints/', { params: { page, size, sort, order } }),

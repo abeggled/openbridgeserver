@@ -5,30 +5,20 @@ let api
 beforeEach(() => {
   vi.resetModules()
   api = {
-    interceptors: {
-      request: { use: vi.fn() },
-      response: { use: vi.fn() },
-    },
     get: vi.fn().mockResolvedValue({ data: {} }),
     put: vi.fn().mockResolvedValue({ data: {} }),
     post: vi.fn().mockResolvedValue({ data: {} }),
   }
-  vi.doMock('axios', () => ({
-    default: {
-      create: vi.fn(() => api),
-      get: vi.fn(),
-      post: vi.fn(),
-    },
-  }))
+  vi.doMock('@/api/client', () => ({ default: api }))
 })
 
 afterEach(() => {
-  vi.doUnmock('axios')
+  vi.doUnmock('@/api/client')
 })
 
 describe('authzApi client', () => {
   it('calls encoded user grant and preview endpoints with the frozen contract', async () => {
-    const { authzApi } = await import('@/api/client')
+    const { authzApi } = await import('@/api/authz')
     const grants = [{ node_type: 'hierarchy', node_id: 'room', role: 'guest', effect: 'allow' }]
     const preview = { principal: { principal_type: 'user', principal_id: 'alice/name' }, draft_grants: [] }
 
