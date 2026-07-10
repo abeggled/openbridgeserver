@@ -308,7 +308,10 @@ async def test_api_key_get_then_put_preserves_grants_and_removes_legacy_prefixed
         effect="deny",
     )
 
-    loaded, _ = await _get_grants(db, "api_key", key_id)
+    loaded, raw_response = await _get_grants(db, "api_key", key_id)
+    prefixed_loaded, prefixed_response = await _get_grants(db, "api_key", f"api_key:{key_id}")
+    assert prefixed_loaded == loaded
+    assert prefixed_response.headers["etag"] == raw_response.headers["etag"]
     replaced, _ = await _replace_current(db, "api_key", f"api_key:{key_id}", _replace(loaded.grants))
 
     assert replaced == loaded
@@ -318,7 +321,7 @@ async def test_api_key_get_then_put_preserves_grants_and_removes_legacy_prefixed
 
 
 @pytest.mark.asyncio
-async def test_api_key_etag_deterministically_prefers_canonical_raw_alias(db: Database) -> None:
+async def test_api_key_conflicting_raw_and_prefixed_grants_fail_closed(db: Database) -> None:
     key_id = str(uuid.uuid4())
     datapoint_id = str(uuid.uuid4())
     await _insert_api_key(db, key_id)
@@ -333,21 +336,29 @@ async def test_api_key_etag_deterministically_prefers_canonical_raw_alias(db: Da
         role="owner",
     )
 
-    raw_result, raw_response = await _get_grants(db, "api_key", key_id)
-    prefixed_result, prefixed_response = await _get_grants(db, "api_key", f"api_key:{key_id}")
-    assert raw_result.grants[0].role == "guest"
-    assert prefixed_result == raw_result
-    assert prefixed_response.headers["etag"] == raw_response.headers["etag"]
+    with pytest.raises(HTTPException) as get_error:
+        await _get_grants(db, "api_key", key_id)
+    assert get_error.value.status_code == status.HTTP_409_CONFLICT
 
-    replaced, _ = await _replace_current(
-        db,
-        "api_key",
-        key_id,
-        _replace([AuthzPrincipalGrant(node_type="datapoint", node_id=datapoint_id, role="resident")]),
-    )
-    assert replaced.grants[0].role == "resident"
-    rows = await db.fetchall("SELECT principal_id, role FROM authz_node_roles")
-    assert [(row["principal_id"], row["role"]) for row in rows] == [(key_id, "resident")]
+    with pytest.raises(HTTPException) as put_error:
+        await authz_api.replace_principal_grants(
+            "api_key",
+            key_id,
+            _replace([AuthzPrincipalGrant(node_type="datapoint", node_id=datapoint_id, role="resident")]),
+            _request(),
+            response=Response(),
+            if_match='"' + "0" * 64 + '"',
+            db=db,
+            _admin="admin",
+        )
+    assert put_error.value.status_code == status.HTTP_409_CONFLICT
+
+    rows = await db.fetchall("SELECT principal_id, role, effect FROM authz_node_roles ORDER BY principal_id")
+    assert {(row["principal_id"], row["role"], row["effect"]) for row in rows} == {
+        (key_id, "guest", "allow"),
+        (f"api_key:{key_id}", "owner", "allow"),
+    }
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
 
 
 @pytest.mark.asyncio
