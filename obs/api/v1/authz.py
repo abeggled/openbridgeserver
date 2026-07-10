@@ -1,12 +1,14 @@
-"""AuthZ preview endpoints for owner UI dry-runs."""
+"""AuthZ administration and preview endpoints for the owner UI."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from obs.api.auth import Principal, get_admin_user
+from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, GrantEffect, Role, RoleGrant, authorize
 from obs.api.authz_service import _datapoint_read_grants, load_role_grants, resolve_datapoint_targets, resolve_hierarchy_targets
 from obs.db.database import Database, get_db
@@ -18,6 +20,11 @@ from obs.models.authz import (
     AuthzPreviewResponse,
     AuthzPreviewResult,
     AuthzPreviewTarget,
+    AuthzPrincipalGrant,
+    AuthzPrincipalGrantsReplace,
+    AuthzPrincipalGrantsResponse,
+    AuthzPrincipalReference,
+    PrincipalTypeName,
 )
 
 router = APIRouter(tags=["authz"])
@@ -37,6 +44,107 @@ _REASON_TEXT: dict[str, str] = {
     "missing_allow": "Denied because no matching allow grant applies.",
     "no_targets": "Denied because the target could not be resolved.",
 }
+
+
+def _canonical_principal_id(principal_type: PrincipalTypeName, principal_id: str) -> str:
+    if principal_type == "user":
+        return principal_id
+
+    raw_id = principal_id.removeprefix("api_key:")
+    try:
+        return str(UUID(raw_id))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "API key principal_id must be a UUID") from exc
+
+
+def _principal_ids(principal_type: PrincipalTypeName, principal_id: str) -> tuple[str, ...]:
+    if principal_type == "api_key":
+        return (principal_id, f"api_key:{principal_id}")
+    return (principal_id,)
+
+
+async def _require_principal(db: Database, principal_type: PrincipalTypeName, principal_id: str) -> None:
+    if principal_type == "user":
+        row = await db.fetchone("SELECT 1 FROM users WHERE username=?", (principal_id,))
+    else:
+        row = await db.fetchone("SELECT 1 FROM api_keys WHERE id=?", (principal_id,))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{principal_type} principal '{principal_id}' not found")
+
+
+async def _require_grant_targets(db: Database, grants: Sequence[AuthzPrincipalGrant]) -> None:
+    table_by_type = {"hierarchy": "hierarchy_nodes", "datapoint": "datapoints"}
+    for node_type, table in table_by_type.items():
+        node_ids = sorted({grant.node_id for grant in grants if grant.node_type == node_type})
+        if not node_ids:
+            continue
+        placeholders = ",".join("?" for _ in node_ids)
+        rows = await db.fetchall(f"SELECT id FROM {table} WHERE id IN ({placeholders})", node_ids)
+        missing = sorted(set(node_ids) - {row["id"] for row in rows})
+        if missing:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"Unknown {node_type} grant targets: {', '.join(missing)}",
+            )
+
+
+async def _load_principal_grants(
+    db: Database,
+    principal_type: PrincipalTypeName,
+    principal_id: str,
+    *,
+    reject_conflicts: bool = True,
+) -> list[AuthzPrincipalGrant]:
+    principal_ids = _principal_ids(principal_type, principal_id)
+    placeholders = ",".join("?" for _ in principal_ids)
+    rows = await db.fetchall(
+        f"""
+        SELECT principal_id, node_type, node_id, role, effect
+        FROM authz_node_roles
+        WHERE principal_type=? AND principal_id IN ({placeholders})
+        ORDER BY CASE WHEN principal_id=? THEN 0 ELSE 1 END, node_type, node_id
+        """,
+        (principal_type, *principal_ids, principal_id),
+    )
+    by_target: dict[tuple[str, str], AuthzPrincipalGrant] = {}
+    for row in rows:
+        target = (row["node_type"], row["node_id"])
+        grant = AuthzPrincipalGrant(node_type=row["node_type"], node_id=row["node_id"], role=row["role"], effect=row["effect"])
+        existing = by_target.get(target)
+        if existing is not None:
+            if reject_conflicts and existing != grant:
+                raise HTTPException(status.HTTP_409_CONFLICT, f"Conflicting canonical and legacy grants for {target[0]} '{target[1]}'")
+            continue
+        by_target[target] = grant
+    return [by_target[target] for target in sorted(by_target)]
+
+
+def _grants_response(
+    principal_type: PrincipalTypeName,
+    principal_id: str,
+    grants: Sequence[AuthzPrincipalGrant],
+) -> AuthzPrincipalGrantsResponse:
+    return AuthzPrincipalGrantsResponse(
+        principal=AuthzPrincipalReference(principal_type=principal_type, principal_id=principal_id),
+        grants=list(grants),
+    )
+
+
+def _grant_diff_details(
+    before: Sequence[AuthzPrincipalGrant],
+    after: Sequence[AuthzPrincipalGrant],
+) -> dict[str, int]:
+    before_by_target = {(grant.node_type, grant.node_id): (grant.role, grant.effect) for grant in before}
+    after_by_target = {(grant.node_type, grant.node_id): (grant.role, grant.effect) for grant in after}
+    common = set(before_by_target) & set(after_by_target)
+    return {
+        "before_count": len(before),
+        "after_count": len(after),
+        "added_count": len(set(after_by_target) - set(before_by_target)),
+        "removed_count": len(set(before_by_target) - set(after_by_target)),
+        "updated_count": sum(before_by_target[target] != after_by_target[target] for target in common),
+        "unchanged_count": sum(before_by_target[target] == after_by_target[target] for target in common),
+    }
 
 
 async def _principal_from_preview(db: Database, principal: AuthzPreviewPrincipal) -> Principal:
@@ -215,6 +323,73 @@ def _target_to_model(target: AuthzTarget) -> AuthzPreviewResolvedTarget:
         ancestors=list(target.ancestors),
         min_role=target.min_role.value if target.min_role else None,
     )
+
+
+@router.get(
+    "/principals/{principal_type}/{principal_id:path}/grants",
+    response_model=AuthzPrincipalGrantsResponse,
+)
+async def get_principal_grants(
+    principal_type: PrincipalTypeName,
+    principal_id: str,
+    db: Database = Depends(get_db),
+    _admin: str = Depends(get_admin_user),
+) -> AuthzPrincipalGrantsResponse:
+    """Return the complete persisted grant set for one principal."""
+    canonical_id = _canonical_principal_id(principal_type, principal_id)
+    await _require_principal(db, principal_type, canonical_id)
+    grants = await _load_principal_grants(db, principal_type, canonical_id)
+    return _grants_response(principal_type, canonical_id, grants)
+
+
+@router.put(
+    "/principals/{principal_type}/{principal_id:path}/grants",
+    response_model=AuthzPrincipalGrantsResponse,
+)
+async def replace_principal_grants(
+    principal_type: PrincipalTypeName,
+    principal_id: str,
+    body: AuthzPrincipalGrantsReplace,
+    request: Request,
+    db: Database = Depends(get_db),
+    _admin: str = Depends(get_admin_user),
+) -> AuthzPrincipalGrantsResponse:
+    """Atomically replace one principal's complete persisted grant set."""
+    canonical_id = _canonical_principal_id(principal_type, principal_id)
+    principal_ids = _principal_ids(principal_type, canonical_id)
+    placeholders = ",".join("?" for _ in principal_ids)
+    async with db.transaction():
+        await _require_principal(db, principal_type, canonical_id)
+        await _require_grant_targets(db, body.grants)
+        before = await _load_principal_grants(db, principal_type, canonical_id, reject_conflicts=False)
+        await db.execute(
+            f"DELETE FROM authz_node_roles WHERE principal_type=? AND principal_id IN ({placeholders})",
+            (principal_type, *principal_ids),
+        )
+        if body.grants:
+            await db.executemany(
+                """
+                INSERT INTO authz_node_roles
+                    (principal_type, principal_id, node_type, node_id, role, effect)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [(principal_type, canonical_id, grant.node_type, grant.node_id, grant.role, grant.effect) for grant in body.grants],
+            )
+
+        audit_writer = AuditLogWriter(
+            db=db,
+            context=build_audit_context(request=request, current_user=_admin),
+        )
+        await audit_writer.write(
+            action="authz.grants.replace",
+            resource_type="authz_principal",
+            resource_id=f"{principal_type}:{canonical_id}",
+            details=_grant_diff_details(before, body.grants),
+            commit=False,
+        )
+
+    grants = sorted(body.grants, key=lambda grant: (grant.node_type, grant.node_id))
+    return _grants_response(principal_type, canonical_id, grants)
 
 
 @router.post("/preview", response_model=AuthzPreviewResponse)

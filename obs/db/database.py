@@ -9,7 +9,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -730,6 +731,11 @@ class Database:
         # cancelling asyncio.to_thread does not stop the worker thread — so disconnect
         # must wait for any in-flight checkpoint to finish before returning. See #908.
         self._checkpoint_lock = asyncio.Lock()
+        # A single aiosqlite connection is shared by all requests. Keep explicit
+        # multi-statement transactions isolated from normal helper calls so another
+        # coroutine cannot commit or observe a transaction halfway through.
+        self._transaction_lock = asyncio.Lock()
+        self._transaction_owner: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -880,6 +886,37 @@ class Database:
     # Query helpers
     # ------------------------------------------------------------------
 
+    @asynccontextmanager
+    async def _connection_operation(self) -> AsyncIterator[None]:
+        if asyncio.current_task() is self._transaction_owner:
+            yield
+            return
+        async with self._transaction_lock:
+            yield
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[None]:
+        """Run helper calls in one isolated transaction on the shared connection."""
+        task = asyncio.current_task()
+        assert task is not None
+        if task is self._transaction_owner:
+            raise RuntimeError("Nested database transactions are not supported")
+
+        async with self._transaction_lock:
+            self._transaction_owner = task
+            began = False
+            try:
+                await self.conn.execute("BEGIN IMMEDIATE")
+                began = True
+                yield
+                await self.conn.commit()
+            except BaseException:
+                if began:
+                    await self.conn.rollback()
+                raise
+            finally:
+                self._transaction_owner = None
+
     @property
     def conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -887,29 +924,36 @@ class Database:
         return self._conn
 
     async def execute(self, sql: str, params: Any = ()) -> aiosqlite.Cursor:
-        return await self.conn.execute(sql, params)
+        async with self._connection_operation():
+            return await self.conn.execute(sql, params)
 
     async def executemany(self, sql: str, params: Any) -> aiosqlite.Cursor:
-        return await self.conn.executemany(sql, params)
+        async with self._connection_operation():
+            return await self.conn.executemany(sql, params)
 
     async def commit(self) -> None:
-        await self.conn.commit()
+        async with self._connection_operation():
+            await self.conn.commit()
 
     async def rollback(self) -> None:
-        await self.conn.rollback()
+        async with self._connection_operation():
+            await self.conn.rollback()
 
     async def fetchall(self, sql: str, params: Any = ()) -> list[aiosqlite.Row]:
-        async with self.conn.execute(sql, params) as cur:
-            return await cur.fetchall()
+        async with self._connection_operation():
+            async with self.conn.execute(sql, params) as cur:
+                return await cur.fetchall()
 
     async def fetchone(self, sql: str, params: Any = ()) -> aiosqlite.Row | None:
-        async with self.conn.execute(sql, params) as cur:
-            return await cur.fetchone()
+        async with self._connection_operation():
+            async with self.conn.execute(sql, params) as cur:
+                return await cur.fetchone()
 
     async def execute_and_commit(self, sql: str, params: Any = ()) -> aiosqlite.Cursor:
-        cur = await self.conn.execute(sql, params)
-        await self.conn.commit()
-        return cur
+        async with self._connection_operation():
+            cur = await self.conn.execute(sql, params)
+            await self.conn.commit()
+            return cur
 
 
 # ---------------------------------------------------------------------------
