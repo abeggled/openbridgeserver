@@ -98,6 +98,8 @@ async def _load_principal_grants(
     db: Database,
     principal_type: PrincipalTypeName,
     principal_id: str,
+    *,
+    reject_conflicts: bool = True,
 ) -> list[AuthzPrincipalGrant]:
     principal_ids = _principal_ids(principal_type, principal_id)
     placeholders = ",".join("?" for _ in principal_ids)
@@ -116,6 +118,8 @@ async def _load_principal_grants(
         grant = AuthzPrincipalGrant(node_type=row["node_type"], node_id=row["node_id"], role=row["role"], effect=row["effect"])
         existing = by_target.get(target)
         if existing is not None:
+            if reject_conflicts and existing != grant:
+                raise HTTPException(status.HTTP_409_CONFLICT, f"Conflicting canonical and legacy grants for {target[0]} '{target[1]}'")
             continue
         by_target[target] = grant
     return [by_target[target] for target in sorted(by_target)]
@@ -387,7 +391,7 @@ async def get_principal_grants(
     """Return the complete persisted grant set for one principal."""
     canonical_id = _canonical_principal_id(principal_type, principal_id)
     await _require_principal(db, principal_type, canonical_id)
-    grants = await _load_principal_grants(db, principal_type, canonical_id)
+    grants = await _load_principal_grants(db, principal_type, canonical_id, reject_conflicts=True)
     _set_revision_headers(response, grants)
     return _grants_response(principal_type, canonical_id, grants)
 
@@ -413,7 +417,7 @@ async def replace_principal_grants(
     placeholders = ",".join("?" for _ in principal_ids)
     async with db.transaction():
         await _require_principal(db, principal_type, canonical_id)
-        before = await _load_principal_grants(db, principal_type, canonical_id)
+        before = await _load_principal_grants(db, principal_type, canonical_id, reject_conflicts=True)
         if expected_etag != _grants_etag(before):
             raise HTTPException(status.HTTP_412_PRECONDITION_FAILED, "Grant revision is stale")
         await _require_grant_targets(db, body.grants)
