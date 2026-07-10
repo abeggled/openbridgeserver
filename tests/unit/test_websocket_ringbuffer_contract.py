@@ -276,7 +276,7 @@ async def test_subscribe_filters_datapoints_for_page_scoped_connection():
     manager = WebSocketManager()
     conn_id = await manager.connect(ws, allowed_dp_ids={"allowed-id"})
 
-    manager.subscribe(conn_id, ["allowed-id", "blocked-id"])
+    await manager.subscribe(conn_id, ["allowed-id", "blocked-id"])
 
     assert manager.subscriptions(conn_id) == {"allowed-id"}
 
@@ -306,7 +306,7 @@ async def test_subscribe_initial_values_sends_current_registry_snapshot(monkeypa
 
     monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
 
-    manager.subscribe(conn_id, [str(dp_id), str(other_dp_id), "not-a-uuid"])
+    await manager.subscribe(conn_id, [str(dp_id), str(other_dp_id), "not-a-uuid"])
     await manager.send_initial_values(conn_id, [str(dp_id), str(other_dp_id), "not-a-uuid"])
 
     assert ws.messages == [
@@ -348,7 +348,7 @@ async def test_subscribe_initial_values_respects_page_scope(monkeypatch):
     monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
 
     before = manager.subscriptions(conn_id)
-    manager.subscribe(conn_id, [allowed_id, blocked_id])
+    await manager.subscribe(conn_id, [allowed_id, blocked_id])
     after = manager.subscriptions(conn_id)
     added = [dp_id for dp_id in [allowed_id, blocked_id] if dp_id in after and dp_id not in before]
     await manager.send_initial_values(conn_id, added)
@@ -406,6 +406,41 @@ async def test_ringbuffer_push_is_scoped_for_anonymous_page_connections(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_value_push_revalidates_scope_and_prunes_revoked_subscription(monkeypatch):
+    dp_uuid = uuid4()
+    dp_id = str(dp_uuid)
+    ws = _FakeWebSocket()
+    scope_check = AsyncMock(side_effect=[{dp_id}, set()])
+    manager = WebSocketManager()
+    conn_id = await manager.connect(ws, allowed_dp_ids={dp_id}, datapoint_scope_check=scope_check)
+    await manager.subscribe(conn_id, [dp_id])
+
+    class _RegistryStub:
+        def get(self, _dp_id):
+            return SimpleNamespace(name="Revoked DP", unit="W")
+
+        def get_value(self, _dp_id):
+            return SimpleNamespace(old_value=1.0)
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+    monkeypatch.setattr("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", lambda: False)
+
+    await manager.handle_value_event(
+        DataValueEvent(
+            datapoint_id=dp_uuid,
+            value=2.0,
+            quality="good",
+            source_adapter="api",
+            ts=datetime(2026, 7, 10, 12, 0, tzinfo=UTC),
+        )
+    )
+
+    assert scope_check.await_count == 2
+    assert manager.subscriptions(conn_id) == set()
+    assert ws.messages == []
+
+
+@pytest.mark.asyncio
 async def test_handle_value_event_includes_metadata_for_authenticated_scoped_connections(monkeypatch):
     dp_uuid = uuid4()
     dp_id = str(dp_uuid)
@@ -448,7 +483,7 @@ async def test_handle_value_event_accepts_seven_field_connection_entries(monkeyp
     ws = _FakeWebSocket()
     manager = WebSocketManager()
     conn_id = await manager.connect(ws)
-    manager.subscribe(conn_id, [dp_id])
+    await manager.subscribe(conn_id, [dp_id])
 
     ws_entry = manager._connections[conn_id]  # noqa: SLF001
     manager._connections[conn_id] = (ws_entry[0], ws_entry[1], asyncio.Lock(), ws_entry[3], False, None, False)  # noqa: SLF001

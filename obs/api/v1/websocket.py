@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["websocket"])
 
 LogAccessCheck = Callable[[], Awaitable[bool]]
+DatapointScopeCheck = Callable[[], Awaitable[set[str] | None]]
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +62,7 @@ class WebSocketManager:
             str,
             tuple[WebSocket, set[str], asyncio.Lock, set[str] | None, bool, LogAccessCheck | None, bool],
         ] = {}
+        self._datapoint_scope_checks: dict[str, DatapointScopeCheck] = {}
 
     async def connect(
         self,
@@ -68,6 +70,7 @@ class WebSocketManager:
         allowed_dp_ids: set[str] | None = None,
         log_access: bool = False,
         log_access_check: LogAccessCheck | None = None,
+        datapoint_scope_check: DatapointScopeCheck | None = None,
         ringbuffer_metadata: bool = False,
         subprotocol: str | None = None,
     ) -> str:
@@ -81,10 +84,13 @@ class WebSocketManager:
                 await ws.accept()
         conn_id = str(uuid.uuid4())
         self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access, log_access_check, ringbuffer_metadata)
+        if datapoint_scope_check is not None:
+            self._datapoint_scope_checks[conn_id] = datapoint_scope_check
         logger.debug("WS client connected: %s  (total: %d)", conn_id[:8], len(self._connections))
         return conn_id
 
     async def disconnect(self, conn_id: str) -> None:
+        self._datapoint_scope_checks.pop(conn_id, None)
         entry = self._connections.pop(conn_id, None)
         if entry:
             ws = entry[0]
@@ -98,7 +104,28 @@ class WebSocketManager:
             len(self._connections),
         )
 
-    def subscribe(self, conn_id: str, dp_ids: list[str]) -> None:
+    async def _refresh_datapoint_scope(self, conn_id: str) -> None:
+        scope_check = self._datapoint_scope_checks.get(conn_id)
+        if scope_check is None:
+            return
+
+        try:
+            refreshed = await scope_check()
+        except Exception:
+            logger.exception("WS datapoint scope revalidation failed for connection %s", conn_id[:8])
+            refreshed = set()
+
+        entry = self._connections.get(conn_id)
+        if entry is None:
+            return
+        ws, subs, lock, _allowed, log_access, log_access_check, ringbuffer_metadata = entry
+        allowed = None if refreshed is None else set(refreshed)
+        if allowed is not None:
+            subs.intersection_update(allowed)
+        self._connections[conn_id] = (ws, subs, lock, allowed, log_access, log_access_check, ringbuffer_metadata)
+
+    async def subscribe(self, conn_id: str, dp_ids: list[str]) -> None:
+        await self._refresh_datapoint_scope(conn_id)
         if conn_id in self._connections:
             allowed = self._connections[conn_id][3]
             if allowed is None:
@@ -120,6 +147,8 @@ class WebSocketManager:
         """Send current registry values for subscribed datapoints."""
         from obs.core.registry import get_registry
 
+        await self._refresh_datapoint_scope(conn_id)
+
         try:
             reg = get_registry()
         except RuntimeError:
@@ -127,6 +156,9 @@ class WebSocketManager:
 
         dead = False
         for dp_id in dp_ids:
+            entry = self._connections.get(conn_id)
+            if entry is None or dp_id not in entry[1]:
+                continue
             try:
                 dp_uuid = uuid.UUID(dp_id)
             except (TypeError, ValueError):
@@ -205,7 +237,11 @@ class WebSocketManager:
         dead: list[str] = []
         log_only = msg.get("action") == "log_entry"
         scoped_dp_id = self._message_datapoint_id(msg)
-        for conn_id, entry in list(self._connections.items()):
+        for conn_id in list(self._connections):
+            await self._refresh_datapoint_scope(conn_id)
+            entry = self._connections.get(conn_id)
+            if entry is None:
+                continue
             _, _subs, _lock, allowed_ids, log_access, log_access_check, _ringbuffer_metadata = entry
             if log_only:
                 if not log_access:
@@ -233,6 +269,9 @@ class WebSocketManager:
             reg = get_registry()
         except RuntimeError:
             return
+
+        for conn_id in list(self._datapoint_scope_checks):
+            await self._refresh_datapoint_scope(conn_id)
 
         dp_id_str = str(event.datapoint_id)
         dp = reg.get(event.datapoint_id)
@@ -698,18 +737,37 @@ async def websocket_endpoint(
 
     allowed_dp_ids: set[str] | None = None
     db: Database | None = None
+    datapoint_scope_check: DatapointScopeCheck | None = None
+    authenticated_page_session = subprotocol_session or ws.query_params.get("session_token")
+
+    async def _scope_for_principal(current_principal: Principal) -> set[str] | None:
+        assert db is not None
+        scope = await _ws_authorized_datapoint_scope(db, current_principal)
+        if page_id and scope is not None:
+            await _merge_authenticated_page_scope(db, scope, page_id, current_principal, authenticated_page_session)
+        return scope
+
     if api_key and user == "__api_key__":
         db = get_db()
-        principal = await get_current_principal(credentials=None, api_key=api_key, db=db)
-        allowed_dp_ids = await _ws_authorized_datapoint_scope(db, principal)
-        if page_id and allowed_dp_ids is not None:
-            await _merge_authenticated_page_scope(db, allowed_dp_ids, page_id, principal, subprotocol_session or ws.query_params.get("session_token"))
+
+        async def _revalidate_api_key_scope() -> set[str] | None:
+            assert db is not None
+            current_principal = await get_current_principal(credentials=None, api_key=api_key, db=db)
+            return await _scope_for_principal(current_principal)
+
+        datapoint_scope_check = _revalidate_api_key_scope
+        allowed_dp_ids = await datapoint_scope_check()
     elif user is not None:
         db = get_db()
-        principal = await _jwt_principal(db, user)
-        allowed_dp_ids = await _ws_authorized_datapoint_scope(db, principal)
-        if page_id and allowed_dp_ids is not None:
-            await _merge_authenticated_page_scope(db, allowed_dp_ids, page_id, principal, subprotocol_session or ws.query_params.get("session_token"))
+        username = user
+
+        async def _revalidate_jwt_scope() -> set[str] | None:
+            assert db is not None
+            current_principal = await _jwt_principal(db, username)
+            return await _scope_for_principal(current_principal)
+
+        datapoint_scope_check = _revalidate_jwt_scope
+        allowed_dp_ids = await datapoint_scope_check()
 
     authenticated_user = user is not None
     if user is None:
@@ -760,6 +818,7 @@ async def websocket_endpoint(
         allowed_dp_ids=allowed_dp_ids,
         log_access=log_access,
         log_access_check=(lambda: _ws_has_log_access(user, effective_api_key)) if log_access else None,
+        datapoint_scope_check=datapoint_scope_check,
         ringbuffer_metadata=authenticated_user,
         subprotocol=selected_subprotocol,
     )
@@ -778,7 +837,7 @@ async def websocket_endpoint(
             if action == "subscribe":
                 ids = [str(i) for i in data.get("ids", [])]
                 before = manager.subscriptions(conn_id)
-                manager.subscribe(conn_id, ids)
+                await manager.subscribe(conn_id, ids)
                 after = manager.subscriptions(conn_id)
                 added = [i for i in ids if i in after and i not in before]
                 subscribed = [i for i in ids if i in after]
