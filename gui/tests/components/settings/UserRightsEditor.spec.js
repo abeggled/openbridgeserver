@@ -21,6 +21,13 @@ const TREE_NODES = [
   },
 ]
 
+const REASONS_BY_ACTION = {
+  read: 'allowed',
+  write: 'direct_datapoint_grant',
+  activate: 'admin',
+  generate: 'explicit_deny',
+}
+
 function grant(nodeType, nodeId, role, effect = 'allow') {
   return { node_type: nodeType, node_id: nodeId, role, effect }
 }
@@ -45,7 +52,8 @@ beforeEach(() => {
           node_type: 'hierarchy',
           node_id: 'kitchen',
           allowed: action !== 'generate',
-          reason_text: action === 'generate' ? 'Denied by role.' : 'Allowed by role.',
+          reason: REASONS_BY_ACTION[action],
+          reason_text: 'Backend English reason.',
         })),
       },
     }),
@@ -109,7 +117,11 @@ describe('UserRightsEditor', () => {
       include_persisted: false,
     })
     expect(wrapper.get('[data-testid="preview-kitchen-read"]').text()).toContain('Erlaubt')
-    expect(wrapper.get('[data-testid="preview-kitchen-read"]').text()).toContain('Allowed by role.')
+    expect(wrapper.get('[data-testid="preview-kitchen-read"]').text()).toContain('passende Rollenzuweisung')
+    expect(wrapper.get('[data-testid="preview-kitchen-write"]').text()).toContain('direkte Datenpunkt-Zuweisung')
+    expect(wrapper.get('[data-testid="preview-kitchen-activate"]').text()).toContain('Administrator-Brücke')
+    expect(wrapper.get('[data-testid="preview-kitchen-generate"]').text()).toContain('ausdrückliche Verbots-Zuweisung')
+    expect(wrapper.text()).not.toContain('Backend English reason.')
     expect(wrapper.get('[data-testid="preview-kitchen-generate"]').text()).toContain('Verboten')
 
     await next(wrapper)
@@ -188,7 +200,44 @@ describe('UserRightsEditor', () => {
     const deniedScope = wrapper.get('[data-testid="rights-node-kitchen"]')
     expect(deniedScope.text()).toContain('Verbots-Zuweisung')
     expect(deniedScope.get('input').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="rights-next"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="rights-next"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('clears editable scopes without previewing empty targets and preserves advanced grants', async () => {
+    const wrapper = await mountEditor()
+    await next(wrapper)
+    await wrapper.get('[data-testid="rights-node-kitchen"] input').setValue(false)
+    await next(wrapper)
+
+    expect(wrapper.get('[data-testid="rights-preview-empty"]').text()).toContain('keine Hierarchie-Bereiche')
+    expect(authzApi.preview).not.toHaveBeenCalled()
+
+    await next(wrapper)
+    await wrapper.get('[data-testid="rights-save"]').trigger('click')
+    await flushPromises()
+    expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [
+      grant('datapoint', 'dp-denied', 'operator', 'deny'),
+      grant('datapoint', 'dp-direct', 'guest'),
+    ])
+  })
+
+  it('can persist an explicitly empty grant set', async () => {
+    authzApi.getUserGrants.mockResolvedValue({
+      data: {
+        principal: { principal_type: 'user', principal_id: 'alice' },
+        grants: [grant('hierarchy', 'kitchen', 'guest')],
+      },
+    })
+    const wrapper = await mountEditor()
+    await next(wrapper)
+    await wrapper.get('[data-testid="rights-node-kitchen"] input').setValue(false)
+    await next(wrapper)
+    await next(wrapper)
+    await wrapper.get('[data-testid="rights-save"]').trigger('click')
+    await flushPromises()
+
+    expect(authzApi.preview).not.toHaveBeenCalled()
+    expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [])
   })
 
   it('blocks a last-writer-wins overwrite when grants changed after opening', async () => {
