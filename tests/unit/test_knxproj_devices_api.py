@@ -555,6 +555,25 @@ async def test_set_knx_device_hierarchy_links_can_clear_assignments():
 
 
 @pytest.mark.asyncio
+async def test_set_knx_device_hierarchy_links_preserves_non_default_admin_status():
+    db = await _prepare_db()
+    try:
+        _, _, living_node_id = await _insert_hierarchy(db)
+
+        result = await knxproj_api.set_knx_device_hierarchy_links(
+            pa="1.1.1",
+            body=knxproj_api.KnxDeviceHierarchyLinksIn(node_ids=[living_node_id]),
+            _user="owner-user",
+            db=db,
+        )
+
+        assert result.pa == "1.1.1"
+        assert [link.node_id for link in result.hierarchy_links] == [living_node_id]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_set_knx_device_hierarchy_links_rejects_unknown_node():
     db = await _prepare_db()
     try:
@@ -636,6 +655,16 @@ async def test_non_admin_list_knx_devices_only_returns_devices_with_readable_gro
 async def test_non_admin_get_knx_device_hides_out_of_scope_comm_object_links():
     db = await _prepare_scoped_devices_db()
     try:
+        now = datetime.now(UTC).isoformat()
+        await db.executemany(
+            "INSERT INTO hierarchy_device_links (id, node_id, device_id, created_at) VALUES (?, ?, 'dev-1', ?)",
+            [
+                ("hdl-allowed", "allowed-room", now),
+                ("hdl-blocked", "blocked-room", now),
+            ],
+        )
+        await db.commit()
+
         result = await knxproj_api.get_knx_device(
             pa="1.1.1",
             _user=Principal(subject="alice", type="user", is_admin=False),
@@ -645,6 +674,7 @@ async def test_non_admin_get_knx_device_hides_out_of_scope_comm_object_links():
         assert result.pa == "1.1.1"
         assert [co.id for co in result.comm_objects] == ["co-1"]
         assert result.comm_objects[0].ga_addresses == ["1/2/3"]
+        assert [link.node_id for link in result.hierarchy_links] == ["allowed-room"]
     finally:
         await db.disconnect()
 

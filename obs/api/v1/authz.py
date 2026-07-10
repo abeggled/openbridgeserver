@@ -134,12 +134,12 @@ def _decision_for_target(
     direct_targets = [AuthzTarget(node_type="datapoint", node_id=target.node_id, min_role=target.min_role)]
     direct_grants = _direct_datapoint_grants(grants, target)
 
-    if target.node_type == "datapoint" and action == AuthzAction.READ and direct_grants:
-        return authorize(principal=principal, action=action, targets=[*resolved_targets, *direct_targets], grants=grants)
+    if target.node_type == "datapoint" and action == AuthzAction.READ:
+        decision_targets = [*resolved_targets, *direct_targets] if direct_grants else list(resolved_targets)
+        decision_grants = _datapoint_read_grants(grants, decision_targets)
+        return authorize(principal=principal, action=action, targets=decision_targets, grants=decision_grants)
 
-    # Mirror the runtime _datapoint_read_grants filter: descendant hierarchy grants must not
-    # imply READ on a datapoint linked to an ancestor node.
-    decision_grants = _datapoint_read_grants(grants, resolved_targets) if (action == AuthzAction.READ and target.node_type == "datapoint") else grants
+    decision_grants = grants
     decision = authorize(principal=principal, action=action, targets=resolved_targets, grants=decision_grants)
     if target.node_type != "datapoint" or not direct_grants or action == AuthzAction.READ:
         return decision
@@ -181,10 +181,11 @@ def _matching_grants(
     targets = list(resolved_targets)
     if target.node_type == "datapoint" and _direct_datapoint_grants(grants, target):
         targets.append(AuthzTarget(node_type="datapoint", node_id=target.node_id, min_role=target.min_role))
+    matching_candidates = _datapoint_read_grants(grants, targets) if (target.node_type == "datapoint" and action == AuthzAction.READ) else grants
 
     return [
         grant
-        for grant in grants
+        for grant in matching_candidates
         if _grant_matches_principal(principal, grant) and any(_grant_applies_to_target(action, grant, resolved_target) for resolved_target in targets)
     ]
 

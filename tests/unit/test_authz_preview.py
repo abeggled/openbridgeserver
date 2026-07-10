@@ -245,3 +245,41 @@ async def test_preview_datapoint_read_rejects_descendant_hierarchy_grant(db: Dat
     result = response.results[0]
     assert result.allowed is False
     assert result.reason == "missing_allow"
+    assert result.effective_role is None
+    assert result.matching_grants == []
+
+
+@pytest.mark.asyncio
+async def test_preview_direct_datapoint_read_ignores_descendant_hierarchy_deny(db: Database):
+    dp_id = str(uuid.uuid4())
+    await _insert_user(db)
+    await _insert_tree(db)
+    await _insert_node(db, "building")
+    await _insert_node(db, "floor", parent_id="building")
+    await _insert_node(db, "room", parent_id="floor")
+    await _insert_datapoint(db, dp_id)
+    await _link_datapoint(db, dp_id, "floor")
+    await _insert_persisted_grant(db, node_id="room", role="guest", effect="deny")
+
+    response = await authz_api.preview_permissions(
+        _request(
+            actions=["read"],
+            targets=[AuthzPreviewTarget(node_type="datapoint", node_id=dp_id)],
+            grants=[
+                AuthzPreviewGrant(
+                    principal_id="alice",
+                    node_type="datapoint",
+                    node_id=dp_id,
+                    role="guest",
+                )
+            ],
+        ),
+        db=db,
+        _admin="admin",
+    )
+
+    result = response.results[0]
+    assert result.allowed is True
+    assert result.reason == "allowed"
+    assert result.effective_role == "guest"
+    assert [(grant.node_type, grant.node_id, grant.effect) for grant in result.matching_grants] == [("datapoint", dp_id, "allow")]
