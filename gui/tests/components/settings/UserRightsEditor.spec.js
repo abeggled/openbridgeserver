@@ -36,6 +36,7 @@ beforeEach(() => {
   vi.resetModules()
   authzApi = {
     getUserGrants: vi.fn().mockResolvedValue({
+      headers: { etag: '"grants-v1"' },
       data: {
         principal: { principal_type: 'user', principal_id: 'alice' },
         grants: [
@@ -133,13 +134,14 @@ describe('UserRightsEditor', () => {
       grant('datapoint', 'dp-denied', 'operator', 'deny'),
       grant('datapoint', 'dp-direct', 'guest'),
       grant('hierarchy', 'kitchen', 'resident'),
-    ])
+    ], '"grants-v1"')
     expect(wrapper.emitted('saved')).toHaveLength(1)
     expect(wrapper.emitted('update:modelValue')).toContainEqual([false])
   })
 
-  it('guards mixed existing roles until a new role is selected explicitly', async () => {
+  it('preserves per-node roles while adding and removing scopes in a mixed assignment', async () => {
     authzApi.getUserGrants.mockResolvedValue({
+      headers: { etag: '"mixed-v1"' },
       data: {
         principal: { principal_type: 'user', principal_id: 'alice' },
         grants: [
@@ -151,22 +153,49 @@ describe('UserRightsEditor', () => {
     const wrapper = await mountEditor()
 
     expect(wrapper.get('[data-testid="mixed-role-warning"]').text()).toContain('unterschiedliche Rollen')
-    expect(wrapper.get('[data-testid="rights-next"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.findAll('input[type="radio"]').every((input) => !input.element.checked)).toBe(true)
-
-    await wrapper.get('input[value="owner"]').setValue(true)
     expect(wrapper.get('[data-testid="rights-next"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.findAll('input[type="radio"]').every((input) => !input.element.checked)).toBe(true)
+    expect(wrapper.get('[data-testid="bulk-role-reassign"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('input[value="resident"]').setValue(true)
+    await next(wrapper)
+    await wrapper.get('[data-testid="rights-node-upper-floor"] input').setValue(false)
+    await wrapper.get('[data-testid="rights-node-building"] input').setValue(true)
+    await next(wrapper)
+    await next(wrapper)
+    await wrapper.get('[data-testid="rights-save"]').trigger('click')
+    await flushPromises()
+
+    expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [
+      grant('hierarchy', 'building', 'resident'),
+      grant('hierarchy', 'kitchen', 'guest'),
+    ], '"mixed-v1"')
+  })
+
+  it('bulk-reassigns retained existing scopes only after explicit confirmation', async () => {
+    authzApi.getUserGrants.mockResolvedValue({
+      headers: { etag: '"mixed-v2"' },
+      data: {
+        principal: { principal_type: 'user', principal_id: 'alice' },
+        grants: [
+          grant('hierarchy', 'kitchen', 'guest'),
+          grant('hierarchy', 'upper-floor', 'operator'),
+        ],
+      },
+    })
+    const wrapper = await mountEditor()
+    await wrapper.get('input[value="owner"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-role-reassign"]').setValue(true)
     await next(wrapper)
     await next(wrapper)
     await next(wrapper)
     await wrapper.get('[data-testid="rights-save"]').trigger('click')
     await flushPromises()
 
-    const savedGrants = authzApi.updateUserGrants.mock.calls[0][1]
-    expect(savedGrants).toEqual([
+    expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [
       grant('hierarchy', 'kitchen', 'owner'),
       grant('hierarchy', 'upper-floor', 'owner'),
-    ])
+    ], '"mixed-v2"')
   })
 
   it('keeps an orphaned saved hierarchy assignment visible and selected', async () => {
@@ -203,14 +232,33 @@ describe('UserRightsEditor', () => {
     expect(wrapper.get('[data-testid="rights-next"]').attributes('disabled')).toBeUndefined()
   })
 
-  it('clears editable scopes without previewing empty targets and preserves advanced grants', async () => {
+  it('previews removed scopes as targets and preserves advanced grants when clearing editable scopes', async () => {
+    authzApi.preview.mockResolvedValue({
+      data: {
+        results: ['read', 'write', 'activate', 'generate'].map((action) => ({
+          action,
+          node_type: 'hierarchy',
+          node_id: 'kitchen',
+          allowed: false,
+          reason: 'missing_allow',
+          reason_text: 'Backend English reason.',
+        })),
+      },
+    })
     const wrapper = await mountEditor()
     await next(wrapper)
     await wrapper.get('[data-testid="rights-node-kitchen"] input').setValue(false)
     await next(wrapper)
 
-    expect(wrapper.get('[data-testid="rights-preview-empty"]').text()).toContain('keine Hierarchie-Bereiche')
-    expect(authzApi.preview).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="rights-preview-empty"]').exists()).toBe(false)
+    expect(authzApi.preview).toHaveBeenCalledWith(expect.objectContaining({
+      targets: [{ node_type: 'hierarchy', node_id: 'kitchen' }],
+      draft_grants: [
+        { principal_type: 'user', principal_id: 'alice', ...grant('datapoint', 'dp-denied', 'operator', 'deny') },
+        { principal_type: 'user', principal_id: 'alice', ...grant('datapoint', 'dp-direct', 'guest') },
+      ],
+    }))
+    expect(wrapper.get('[data-testid="preview-kitchen-read"]').text()).toContain('Verboten')
 
     await next(wrapper)
     await wrapper.get('[data-testid="rights-save"]').trigger('click')
@@ -218,11 +266,12 @@ describe('UserRightsEditor', () => {
     expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [
       grant('datapoint', 'dp-denied', 'operator', 'deny'),
       grant('datapoint', 'dp-direct', 'guest'),
-    ])
+    ], '"grants-v1"')
   })
 
   it('can persist an explicitly empty grant set', async () => {
     authzApi.getUserGrants.mockResolvedValue({
+      headers: { etag: '"clear-v1"' },
       data: {
         principal: { principal_type: 'user', principal_id: 'alice' },
         grants: [grant('hierarchy', 'kitchen', 'guest')],
@@ -236,18 +285,39 @@ describe('UserRightsEditor', () => {
     await wrapper.get('[data-testid="rights-save"]').trigger('click')
     await flushPromises()
 
-    expect(authzApi.preview).not.toHaveBeenCalled()
-    expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [])
+    expect(authzApi.preview).toHaveBeenCalledWith(expect.objectContaining({
+      targets: [{ node_type: 'hierarchy', node_id: 'kitchen' }],
+      draft_grants: [],
+    }))
+    expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [], '"clear-v1"')
   })
 
-  it('blocks a last-writer-wins overwrite when grants changed after opening', async () => {
-    const initial = {
-      principal: { principal_type: 'user', principal_id: 'alice' },
-      grants: [grant('hierarchy', 'kitchen', 'resident')],
-    }
-    authzApi.getUserGrants
-      .mockResolvedValueOnce({ data: initial })
-      .mockResolvedValueOnce({ data: { ...initial, grants: [...initial.grants, grant('datapoint', 'new-dp', 'guest')] } })
+  it('uses a local empty preview only when original and current hierarchy scopes are empty, and removes advanced grants explicitly', async () => {
+    authzApi.getUserGrants.mockResolvedValue({
+      headers: { etag: '"advanced-v1"' },
+      data: {
+        principal: { principal_type: 'user', principal_id: 'alice' },
+        grants: [grant('datapoint', 'orphan-dp', 'guest', 'deny')],
+      },
+    })
+    const wrapper = await mountEditor()
+    await next(wrapper)
+    await next(wrapper)
+
+    expect(wrapper.get('[data-testid="rights-preview-empty"]').text()).toContain('keine Hierarchie-Bereiche')
+    expect(authzApi.preview).not.toHaveBeenCalled()
+
+    await next(wrapper)
+    expect(wrapper.get('[data-testid="advanced-grant-0"]').text()).toContain('orphan-dp')
+    await wrapper.get('[data-testid="remove-advanced-grant-0"]').trigger('click')
+    await wrapper.get('[data-testid="rights-save"]').trigger('click')
+    await flushPromises()
+
+    expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [], '"advanced-v1"')
+  })
+
+  it('keeps the draft open and shows the concurrency message on a 412 response', async () => {
+    authzApi.updateUserGrants.mockRejectedValue({ response: { status: 412, data: { detail: 'stale' } } })
     const wrapper = await mountEditor()
     await next(wrapper)
     await next(wrapper)
@@ -255,8 +325,11 @@ describe('UserRightsEditor', () => {
     await wrapper.get('[data-testid="rights-save"]').trigger('click')
     await flushPromises()
 
+    expect(authzApi.getUserGrants).toHaveBeenCalledTimes(1)
+    expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', expect.any(Array), '"grants-v1"')
     expect(wrapper.get('[data-testid="rights-save-error"]').text()).toContain('nach dem Öffnen')
-    expect(authzApi.updateUserGrants).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="rights-confirm-step"]').exists()).toBe(true)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
   })
 
   it('shows API errors without advancing or dropping the current draft', async () => {

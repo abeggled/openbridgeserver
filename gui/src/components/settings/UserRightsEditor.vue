@@ -61,6 +61,19 @@
               <span class="mt-1 block pl-6 text-xs text-slate-500">{{ option.description }}</span>
             </label>
           </div>
+          <label v-if="originalNodeIds.length" class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+            <input
+              v-model="reassignExisting"
+              type="checkbox"
+              :disabled="!selectedRole"
+              class="mt-0.5"
+              data-testid="bulk-role-reassign"
+            />
+            <span>
+              <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">{{ $t('settings.users.rights.bulkRoleTitle') }}</span>
+              <span class="mt-1 block text-xs text-slate-500">{{ $t('settings.users.rights.bulkRoleHint') }}</span>
+            </span>
+          </label>
         </section>
 
         <section v-else-if="step === 2" class="flex flex-col gap-3" data-testid="rights-scope-step">
@@ -94,6 +107,9 @@
           <div v-if="selectedOrphanCount" class="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300" data-testid="orphaned-scope-block">
             {{ $t('settings.users.rights.orphanedScopeBlock', { n: selectedOrphanCount }) }}
           </div>
+          <div v-if="hasNewScopes && !selectedRole" class="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300" data-testid="new-scope-role-required">
+            {{ $t('settings.users.rights.newScopeRoleRequired') }}
+          </div>
           <div v-if="previewError" class="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-500" data-testid="rights-preview-error">
             {{ previewError }}
           </div>
@@ -105,11 +121,11 @@
               <h4 class="font-semibold text-slate-800 dark:text-slate-100">{{ $t('settings.users.rights.previewTitle') }}</h4>
               <p class="mt-1 text-sm text-slate-500">{{ $t('settings.users.rights.previewHint') }}</p>
             </div>
-            <button v-if="selectedNodeIds.length" type="button" class="btn-secondary btn-sm" :disabled="previewLoading" @click="loadPreview">
+            <button v-if="previewTargetIds.length" type="button" class="btn-secondary btn-sm" :disabled="previewLoading" @click="loadPreview">
               {{ $t('settings.users.rights.refreshPreview') }}
             </button>
           </div>
-          <div v-if="!selectedNodeIds.length" class="rounded-lg border border-slate-200 p-4 text-sm text-slate-500 dark:border-slate-700" data-testid="rights-preview-empty">
+          <div v-if="!previewTargetIds.length" class="rounded-lg border border-slate-200 p-4 text-sm text-slate-500 dark:border-slate-700" data-testid="rights-preview-empty">
             {{ $t('settings.users.rights.emptyPreview') }}
           </div>
           <div v-else-if="previewLoading" class="flex justify-center py-8"><Spinner /></div>
@@ -152,19 +168,31 @@
           <dl class="grid gap-3 rounded-lg border border-slate-200 p-4 text-sm dark:border-slate-700 sm:grid-cols-2">
             <div>
               <dt class="text-xs text-slate-500">{{ $t('settings.users.rights.selectedRole') }}</dt>
-              <dd class="font-medium text-slate-800 dark:text-slate-100">{{ selectedRoleLabel }}</dd>
+              <dd class="font-medium text-slate-800 dark:text-slate-100">{{ selectedRoleLabel || $t('settings.users.rights.existingRolesPreserved') }}</dd>
             </div>
             <div>
               <dt class="text-xs text-slate-500">{{ $t('settings.users.rights.selectedAreas') }}</dt>
               <dd class="font-medium text-slate-800 dark:text-slate-100">{{ selectedNodeIds.length }}</dd>
             </div>
           </dl>
-          <div
-            v-if="advancedGrants.length"
-            class="rounded-lg border border-blue-500/30 bg-blue-500/10 p-3 text-sm text-blue-700 dark:text-blue-300"
-            data-testid="advanced-grants-preserved"
-          >
-            {{ $t('settings.users.rights.advancedPreserved', { n: advancedGrants.length }) }}
+          <div v-if="advancedGrants.length" class="flex flex-col gap-2" data-testid="advanced-grants-preserved">
+            <div>
+              <h5 class="text-sm font-medium text-slate-800 dark:text-slate-100">{{ $t('settings.users.rights.advancedTitle') }}</h5>
+              <p class="text-xs text-slate-500">{{ $t('settings.users.rights.advancedPreserved', { n: advancedGrants.length }) }}</p>
+            </div>
+            <div
+              v-for="(grant, index) in advancedGrants"
+              :key="`${grant.node_type}:${grant.node_id}:${grant.effect}:${grant.role}`"
+              class="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700"
+              :data-testid="`advanced-grant-${index}`"
+            >
+              <span class="min-w-0 break-all text-xs text-slate-600 dark:text-slate-300">
+                {{ $t('settings.users.rights.advancedDescription', { effect: grant.effect, role: grant.role, nodeType: grant.node_type, nodeId: grant.node_id }) }}
+              </span>
+              <button type="button" class="btn-secondary btn-sm shrink-0" :data-testid="`remove-advanced-grant-${index}`" @click="removeAdvancedGrant(index)">
+                {{ $t('settings.users.rights.removeAdvanced') }}
+              </button>
+            </div>
           </div>
           <div v-if="saveError" class="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-500" data-testid="rights-save-error">
             {{ saveError }}
@@ -225,15 +253,18 @@ const loading = ref(false)
 const loadError = ref('')
 const selectedRole = ref('')
 const selectedNodeIds = ref([])
+const originalNodeIds = ref([])
+const originalRolesByNode = ref({})
 const hierarchyNodes = ref([])
 const advancedGrants = ref([])
 const mixedRoles = ref(false)
+const reassignExisting = ref(false)
+const grantsEtag = ref('')
 const previewLoading = ref(false)
 const previewError = ref('')
 const previewResults = ref([])
 const saving = ref(false)
 const saveError = ref('')
-const baselineSignature = ref('')
 
 const steps = computed(() => [
   { number: 1, label: t('settings.users.rights.steps.role') },
@@ -250,15 +281,21 @@ const roleOptions = computed(() => ['guest', 'resident', 'operator', 'owner'].ma
 
 const selectedRoleLabel = computed(() => roleOptions.value.find((option) => option.value === selectedRole.value)?.label ?? '')
 const selectedOrphanCount = computed(() => hierarchyNodes.value.filter((node) => node.orphaned && selectedNodeIds.value.includes(node.id)).length)
+const hasNewScopes = computed(() => selectedNodeIds.value.some((nodeId) => !originalRolesByNode.value[nodeId]))
+const previewTargetIds = computed(() => [...new Set([...originalNodeIds.value, ...selectedNodeIds.value])])
 const canContinue = computed(() => {
-  if (step.value === 1) return !!selectedRole.value
-  if (step.value === 2) return selectedOrphanCount.value === 0
-  if (step.value === 3) return !previewError.value && (!selectedNodeIds.value.length || previewResults.value.length > 0)
+  if (step.value === 1) return true
+  if (step.value === 2) {
+    return selectedOrphanCount.value === 0
+      && (!hasNewScopes.value || !!selectedRole.value)
+      && (!reassignExisting.value || !!selectedRole.value)
+  }
+  if (step.value === 3) return !previewError.value && (!previewTargetIds.value.length || previewResults.value.length > 0)
   return true
 })
 
 const nodeLabels = computed(() => Object.fromEntries(hierarchyNodes.value.map((node) => [node.id, node.pathLabel])))
-const previewGroups = computed(() => selectedNodeIds.value.map((nodeId) => ({
+const previewGroups = computed(() => previewTargetIds.value.map((nodeId) => ({
   nodeId,
   pathLabel: nodeLabels.value[nodeId] ?? nodeId,
   results: ACTIONS.map((action) => previewResults.value.find((result) => result.node_id === nodeId && result.action === action)).filter(Boolean),
@@ -274,12 +311,6 @@ watch(
 
 function cleanGrant(grant) {
   return Object.fromEntries(GRANT_FIELDS.map((field) => [field, grant[field]]))
-}
-
-function grantsSignature(grants) {
-  return JSON.stringify((grants || []).map(cleanGrant).sort((left, right) => (
-    GRANT_FIELDS.map((field) => String(left[field]).localeCompare(String(right[field]))).find((result) => result !== 0) ?? 0
-  )))
 }
 
 function sortGrants(grants) {
@@ -336,22 +367,29 @@ async function initialize() {
   loadError.value = ''
   selectedRole.value = ''
   selectedNodeIds.value = []
+  originalNodeIds.value = []
+  originalRolesByNode.value = {}
   hierarchyNodes.value = []
   advancedGrants.value = []
   mixedRoles.value = false
+  reassignExisting.value = false
+  grantsEtag.value = ''
   previewResults.value = []
   previewError.value = ''
   saveError.value = ''
   try {
-    const [{ data }, loadedNodes] = await Promise.all([
+    const [grantsResponse, loadedNodes] = await Promise.all([
       authzApi.getUserGrants(props.username),
       loadHierarchyNodes(),
     ])
+    const { data, headers } = grantsResponse
+    grantsEtag.value = headers?.etag ?? headers?.ETag ?? ''
     const grants = (data.grants || []).map(cleanGrant)
-    baselineSignature.value = grantsSignature(grants)
     const editable = grants.filter(isEditableGrant)
     advancedGrants.value = grants.filter((grant) => !isEditableGrant(grant))
     selectedNodeIds.value = [...new Set(editable.map((grant) => String(grant.node_id)))]
+    originalNodeIds.value = [...selectedNodeIds.value]
+    originalRolesByNode.value = Object.fromEntries(editable.map((grant) => [String(grant.node_id), grant.role]))
     const roles = [...new Set(editable.map((grant) => grant.role))]
     mixedRoles.value = roles.length > 1
     selectedRole.value = roles.length === 1 ? roles[0] : ''
@@ -377,7 +415,9 @@ function editableGrants() {
   return selectedNodeIds.value.map((nodeId) => ({
     node_type: 'hierarchy',
     node_id: nodeId,
-    role: selectedRole.value,
+    role: originalRolesByNode.value[nodeId] && !reassignExisting.value
+      ? originalRolesByNode.value[nodeId]
+      : selectedRole.value,
     effect: 'allow',
   }))
 }
@@ -395,14 +435,14 @@ function previewBody() {
   return {
     principal: { principal_type: 'user', principal_id: props.username },
     actions: ACTIONS,
-    targets: selectedNodeIds.value.map((nodeId) => ({ node_type: 'hierarchy', node_id: nodeId })),
+    targets: previewTargetIds.value.map((nodeId) => ({ node_type: 'hierarchy', node_id: nodeId })),
     draft_grants: grants,
     include_persisted: false,
   }
 }
 
 async function loadPreview() {
-  if (!selectedNodeIds.value.length) {
+  if (!previewTargetIds.value.length) {
     previewError.value = ''
     previewResults.value = []
     return
@@ -430,20 +470,16 @@ async function continueToNextStep() {
 }
 
 async function save() {
-  if (!selectedRole.value) return
   saving.value = true
   saveError.value = ''
   try {
-    const { data: latest } = await authzApi.getUserGrants(props.username)
-    if (grantsSignature(latest.grants) !== baselineSignature.value) {
-      saveError.value = t('settings.users.rights.concurrentChange')
-      return
-    }
-    const { data } = await authzApi.updateUserGrants(props.username, replacementGrants())
+    const { data } = await authzApi.updateUserGrants(props.username, replacementGrants(), grantsEtag.value)
     emit('saved', data)
     close()
   } catch (error) {
-    saveError.value = error.response?.data?.detail ?? t('settings.users.rights.saveError')
+    saveError.value = error.response?.status === 412
+      ? t('settings.users.rights.concurrentChange')
+      : error.response?.data?.detail ?? t('settings.users.rights.saveError')
   } finally {
     saving.value = false
   }
@@ -457,6 +493,10 @@ function reasonText(result) {
   return KNOWN_REASON_CODES.has(result.reason)
     ? t(`settings.users.rights.reasons.${result.reason}`)
     : result.reason_text
+}
+
+function removeAdvancedGrant(index) {
+  advancedGrants.value.splice(index, 1)
 }
 
 function close() {

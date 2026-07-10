@@ -2203,8 +2203,10 @@
           "confirm": "Confirm"
         },
         "roleTitle": "Select role",
-        "roleHint": "The role determines which actions are available in the selected hierarchy areas.",
-        "mixedRoleWarning": "This user currently has different roles in different areas. Select a new role explicitly before continuing; no role will be changed silently.",
+        "roleHint": "The selected role is used for newly added areas. Existing areas keep their individual roles unless bulk reassignment is explicitly enabled.",
+        "mixedRoleWarning": "This user currently has different roles in different areas. Those roles remain unchanged when areas are added or removed.",
+        "bulkRoleTitle": "Reassign all retained existing areas",
+        "bulkRoleHint": "Explicitly apply the selected role to every existing area that remains selected.",
         "roles": {
           "guest": {
             "label": "Guest",
@@ -2229,6 +2231,7 @@
         "unknownScope": "This saved area is no longer present in the hierarchy list.",
         "deniedScopePreserved": "A direct deny assignment exists for this area and is preserved; an allow assignment cannot be added here.",
         "orphanedScopeBlock": "{n} selected assignments no longer resolve to a hierarchy area. Remove them explicitly or cancel; saving is blocked while they remain selected.",
+        "newScopeRoleRequired": "Select a role before adding new hierarchy areas.",
         "selectedScopes": "{n} areas selected",
         "previewTitle": "Effective permissions",
         "previewHint": "Review the calculated decision and its reason for every action before saving.",
@@ -2253,8 +2256,12 @@
         "confirmTitle": "Confirm changes",
         "confirmHint": "Saving replaces the editable hierarchy assignments atomically.",
         "selectedRole": "Role",
+        "existingRolesPreserved": "Existing roles preserved",
         "selectedAreas": "Areas",
         "advancedPreserved": "{n} advanced assignments are preserved unchanged.",
+        "advancedTitle": "Advanced assignments",
+        "advancedDescription": "{effect} · {role} · {nodeType} · {nodeId}",
+        "removeAdvanced": "Remove",
         "back": "Back",
         "next": "Next",
         "save": "Save rights",
