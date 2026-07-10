@@ -79,6 +79,15 @@ beforeEach(() => {
       listApiKeys: vi.fn().mockResolvedValue({ data: [] }),
       changePassword: vi.fn().mockResolvedValue({ data: {} }),
     },
+    authzApi: {
+      getUserGrants: vi.fn().mockResolvedValue({ data: { grants: [] } }),
+      preview: vi.fn().mockResolvedValue({ data: { results: [] } }),
+      updateUserGrants: vi.fn().mockResolvedValue({ data: { grants: [] } }),
+    },
+    hierarchyApi: {
+      listTrees: vi.fn().mockResolvedValue({ data: [] }),
+      getTreeNodes: vi.fn().mockResolvedValue({ data: [] }),
+    },
     adapterApi: {
       listInstances: vi.fn().mockResolvedValue({ data: [] }),
     },
@@ -118,6 +127,10 @@ async function mountSettingsView() {
         LocaleSwitcher: true,
         Badge: { template: '<span><slot /></span>' },
         Spinner: { template: '<span />' },
+        UserRightsEditor: {
+          props: ['modelValue', 'username'],
+          template: '<div v-if="modelValue" data-testid="rights-editor-stub">{{ username }}</div>',
+        },
       },
     },
     attachTo: document.body,
@@ -148,6 +161,20 @@ describe('SettingsView users tab', () => {
     expect(cards[2].text()).toContain('Passwort fehlt')
     expect(wrapper.find('[data-testid="user-delete-admin"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="user-delete-viewer"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('opens the dedicated rights editor from a user card', async () => {
+    const wrapper = await mountSettingsView()
+    const usersTab = wrapper.findAll('button').find(button => button.text() === 'Benutzer')
+    await usersTab.trigger('click')
+    await flushPromises()
+
+    const button = wrapper.get('[data-testid="user-rights-viewer"]')
+    expect(button.text()).toBe('Rechte bearbeiten')
+    await button.trigger('click')
+
+    expect(wrapper.get('[data-testid="rights-editor-stub"]').text()).toBe('viewer')
     wrapper.unmount()
   })
 })

@@ -2191,7 +2191,69 @@
       "mqttFor": "Benutzer: {username}",
       "newMqttPassword": "Neues MQTT-Passwort",
       "mqttPasswordSet": "MQTT-Passwort gesetzt",
-      "create": "Erstellen"
+      "create": "Erstellen",
+      "rights": {
+        "openButton": "Rechte bearbeiten",
+        "title": "Rechte für {username}",
+        "progress": "Fortschritt im Rechte-Editor",
+        "steps": {
+          "role": "Rolle",
+          "scopes": "Bereiche",
+          "preview": "Vorschau",
+          "confirm": "Bestätigen"
+        },
+        "roleTitle": "Rolle auswählen",
+        "roleHint": "Die Rolle bestimmt, welche Aktionen in den ausgewählten Hierarchie-Bereichen verfügbar sind.",
+        "mixedRoleWarning": "Dieser Benutzer hat derzeit unterschiedliche Rollen in verschiedenen Bereichen. Wähle vor dem Fortfahren ausdrücklich eine neue Rolle; keine Rolle wird stillschweigend geändert.",
+        "roles": {
+          "guest": {
+            "label": "Gast",
+            "description": "Nur Lesezugriff."
+          },
+          "resident": {
+            "label": "Bewohner",
+            "description": "Lesen, Schreiben und Aktivieren."
+          },
+          "operator": {
+            "label": "Operator",
+            "description": "Voller Betriebszugriff einschließlich Erzeugen."
+          },
+          "owner": {
+            "label": "Eigentümer",
+            "description": "Alle Aktionen in den ausgewählten Bereichen."
+          }
+        },
+        "scopeTitle": "Hierarchie-Bereiche auswählen",
+        "scopeHint": "Die ausgewählte Rolle gilt für jeden markierten Bereich und seine Unterbereiche.",
+        "noScopes": "Es sind keine Hierarchie-Bereiche verfügbar.",
+        "unknownScope": "Dieser gespeicherte Bereich ist nicht mehr in der Hierarchie-Liste vorhanden.",
+        "deniedScopePreserved": "Für diesen Bereich besteht eine direkte Verbots-Zuweisung, die erhalten bleibt; hier kann keine Erlaubnis hinzugefügt werden.",
+        "orphanedScopeBlock": "{n} ausgewählte Zuweisungen lassen sich keinem Hierarchie-Bereich mehr zuordnen. Entferne sie ausdrücklich oder brich ab; solange sie ausgewählt sind, ist das Speichern gesperrt.",
+        "selectedScopes": "{n} Bereiche ausgewählt",
+        "previewTitle": "Effektive Rechte",
+        "previewHint": "Prüfe vor dem Speichern die berechnete Entscheidung und ihre Begründung für jede Aktion.",
+        "refreshPreview": "Vorschau aktualisieren",
+        "allowed": "Erlaubt",
+        "denied": "Verboten",
+        "actions": {
+          "read": "Lesen",
+          "write": "Schreiben",
+          "activate": "Aktivieren",
+          "generate": "Erzeugen"
+        },
+        "confirmTitle": "Änderungen bestätigen",
+        "confirmHint": "Beim Speichern werden die bearbeitbaren Hierarchie-Zuweisungen atomar ersetzt.",
+        "selectedRole": "Rolle",
+        "selectedAreas": "Bereiche",
+        "advancedPreserved": "{n} fortgeschrittene Zuweisungen bleiben unverändert erhalten.",
+        "back": "Zurück",
+        "next": "Weiter",
+        "save": "Rechte speichern",
+        "loadError": "Die Rechte konnten nicht geladen werden.",
+        "previewError": "Die effektive Vorschau konnte nicht geladen werden.",
+        "saveError": "Die Rechte konnten nicht gespeichert werden.",
+        "concurrentChange": "Die Zuweisungen wurden nach dem Öffnen des Editors geändert. Lade den Editor neu und prüfe vor dem Speichern den aktuellen Stand."
+      }
     },
     "apikeys": {
       "keyName": "API-Key-Name",

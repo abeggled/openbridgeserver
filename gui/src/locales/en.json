@@ -2191,7 +2191,69 @@
       "mqttFor": "User: {username}",
       "newMqttPassword": "New MQTT Password",
       "mqttPasswordSet": "MQTT password set",
-      "create": "Create"
+      "create": "Create",
+      "rights": {
+        "openButton": "Edit rights",
+        "title": "Rights for {username}",
+        "progress": "Rights editor progress",
+        "steps": {
+          "role": "Role",
+          "scopes": "Areas",
+          "preview": "Preview",
+          "confirm": "Confirm"
+        },
+        "roleTitle": "Select role",
+        "roleHint": "The role determines which actions are available in the selected hierarchy areas.",
+        "mixedRoleWarning": "This user currently has different roles in different areas. Select a new role explicitly before continuing; no role will be changed silently.",
+        "roles": {
+          "guest": {
+            "label": "Guest",
+            "description": "Read access only."
+          },
+          "resident": {
+            "label": "Resident",
+            "description": "Read, write and activate access."
+          },
+          "operator": {
+            "label": "Operator",
+            "description": "Full operational access, including generation."
+          },
+          "owner": {
+            "label": "Owner",
+            "description": "All actions in the selected areas."
+          }
+        },
+        "scopeTitle": "Select hierarchy areas",
+        "scopeHint": "The selected role applies to every checked area and its descendants.",
+        "noScopes": "No hierarchy areas are available.",
+        "unknownScope": "This saved area is no longer present in the hierarchy list.",
+        "deniedScopePreserved": "A direct deny assignment exists for this area and is preserved; an allow assignment cannot be added here.",
+        "orphanedScopeBlock": "{n} selected assignments no longer resolve to a hierarchy area. Remove them explicitly or cancel; saving is blocked while they remain selected.",
+        "selectedScopes": "{n} areas selected",
+        "previewTitle": "Effective permissions",
+        "previewHint": "Review the calculated decision and its reason for every action before saving.",
+        "refreshPreview": "Refresh preview",
+        "allowed": "Allowed",
+        "denied": "Denied",
+        "actions": {
+          "read": "Read",
+          "write": "Write",
+          "activate": "Activate",
+          "generate": "Generate"
+        },
+        "confirmTitle": "Confirm changes",
+        "confirmHint": "Saving replaces the editable hierarchy assignments atomically.",
+        "selectedRole": "Role",
+        "selectedAreas": "Areas",
+        "advancedPreserved": "{n} advanced assignments are preserved unchanged.",
+        "back": "Back",
+        "next": "Next",
+        "save": "Save rights",
+        "loadError": "Rights could not be loaded.",
+        "previewError": "The effective preview could not be loaded.",
+        "saveError": "Rights could not be saved.",
+        "concurrentChange": "The assignments changed after the editor was opened. Reload the editor and review the latest state before saving."
+      }
     },
     "apikeys": {
       "keyName": "API key name",
