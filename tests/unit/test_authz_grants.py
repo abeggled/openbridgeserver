@@ -6,6 +6,7 @@ import asyncio
 import json
 import uuid
 
+import aiosqlite
 import pytest
 from fastapi import FastAPI, HTTPException, status
 from httpx import ASGITransport, AsyncClient
@@ -23,6 +24,16 @@ NOW = "2026-07-10T00:00:00+00:00"
 @pytest.fixture
 async def db() -> Database:
     database = Database(":memory:")
+    await database.connect()
+    try:
+        yield database
+    finally:
+        await database.disconnect()
+
+
+@pytest.fixture
+async def file_db(tmp_path) -> Database:
+    database = Database(str(tmp_path / "authz-grants.sqlite"))
     await database.connect()
     try:
         yield database
@@ -393,7 +404,14 @@ async def test_commit_failure_after_audit_insert_rolls_back_both(monkeypatch: py
     async def fail_commit() -> None:
         raise RuntimeError("commit failed")
 
-    monkeypatch.setattr(db.conn, "commit", fail_commit)
+    original_open_connection = db._open_connection
+
+    async def open_connection_with_failing_commit():
+        conn = await original_open_connection()
+        monkeypatch.setattr(conn, "commit", fail_commit)
+        return conn
+
+    monkeypatch.setattr(db, "_open_connection", open_connection_with_failing_commit)
     with pytest.raises(RuntimeError, match="commit failed"):
         await authz_api.replace_principal_grants(
             "user",
@@ -472,7 +490,8 @@ async def test_cancellation_between_delete_and_insert_rolls_back(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_normal_commit_cannot_interleave_with_replace_transaction(monkeypatch: pytest.MonkeyPatch, db: Database) -> None:
+async def test_normal_commit_cannot_interleave_with_replace_transaction(monkeypatch: pytest.MonkeyPatch, file_db: Database) -> None:
+    db = file_db
     await _insert_user(db)
     await _insert_tree(db)
     await _insert_node(db, "before")
@@ -522,6 +541,14 @@ async def test_nested_database_transaction_is_rejected(db: Database) -> None:
 
 
 @pytest.mark.asyncio
+async def test_disconnected_database_rejects_explicit_transaction() -> None:
+    disconnected = Database(":memory:")
+    with pytest.raises(RuntimeError, match="Database.connect"):
+        async with disconnected.transaction():
+            pass
+
+
+@pytest.mark.asyncio
 async def test_database_commit_and_rollback_helpers_respect_transaction_lock(db: Database) -> None:
     await db.execute("INSERT INTO app_settings (key, value) VALUES ('rolled-back', 'value')")
     await db.rollback()
@@ -530,6 +557,104 @@ async def test_database_commit_and_rollback_helpers_respect_transaction_lock(db:
     await db.execute("INSERT INTO app_settings (key, value) VALUES ('committed', 'value')")
     await db.commit()
     assert await db.fetchone("SELECT value FROM app_settings WHERE key='committed'") is not None
+
+
+@pytest.mark.asyncio
+async def test_file_transaction_isolated_from_direct_shared_connection_commit(file_db: Database, tmp_path) -> None:
+    transaction_started = asyncio.Event()
+    release_transaction = asyncio.Event()
+
+    async def rollback_transaction() -> None:
+        with pytest.raises(RuntimeError, match="rollback requested"):
+            async with file_db.transaction():
+                await file_db.execute("INSERT INTO app_settings (key, value) VALUES ('transaction', 'partial')")
+                transaction_started.set()
+                await release_transaction.wait()
+                raise RuntimeError("rollback requested")
+
+    transaction_task = asyncio.create_task(rollback_transaction())
+    await transaction_started.wait()
+    shared_conn = file_db._conn
+    assert shared_conn is not None
+
+    async def direct_shared_write() -> None:
+        await shared_conn.execute("INSERT INTO app_settings (key, value) VALUES ('shared', 'committed')")
+        await shared_conn.commit()
+
+    shared_write_task = asyncio.create_task(direct_shared_write())
+    await asyncio.sleep(0.05)
+    assert not shared_write_task.done()
+
+    observer = await aiosqlite.connect(str(tmp_path / "authz-grants.sqlite"))
+    try:
+        async with observer.execute("SELECT 1 FROM app_settings WHERE key='transaction'") as cursor:
+            assert await cursor.fetchone() is None
+    finally:
+        await observer.close()
+
+    release_transaction.set()
+    await transaction_task
+    await shared_write_task
+    assert await file_db.fetchone("SELECT 1 FROM app_settings WHERE key='transaction'") is None
+    assert await file_db.fetchone("SELECT value FROM app_settings WHERE key='shared'") is not None
+
+
+@pytest.mark.asyncio
+async def test_legacy_execute_then_commit_does_not_deadlock_explicit_transaction(file_db: Database) -> None:
+    await file_db.execute("INSERT INTO app_settings (key, value) VALUES ('legacy', 'pending')")
+    transaction_attempted = asyncio.Event()
+
+    async def explicit_write() -> None:
+        transaction_attempted.set()
+        async with file_db.transaction():
+            await file_db.execute("INSERT INTO app_settings (key, value) VALUES ('explicit', 'committed')")
+
+    transaction_task = asyncio.create_task(explicit_write())
+    await transaction_attempted.wait()
+    await asyncio.sleep(0.05)
+    assert not transaction_task.done()
+
+    await file_db.commit()
+    await asyncio.wait_for(transaction_task, timeout=2)
+    rows = await file_db.fetchall("SELECT key FROM app_settings WHERE key IN ('legacy', 'explicit') ORDER BY key")
+    assert [row["key"] for row in rows] == ["explicit", "legacy"]
+
+
+@pytest.mark.asyncio
+async def test_disconnect_waits_for_explicit_transaction(file_db: Database, tmp_path) -> None:
+    transaction_started = asyncio.Event()
+    release_transaction = asyncio.Event()
+
+    async def paused_transaction() -> None:
+        async with file_db.transaction():
+            await file_db.execute("INSERT INTO app_settings (key, value) VALUES ('disconnect', 'safe')")
+            transaction_started.set()
+            await release_transaction.wait()
+
+    transaction_task = asyncio.create_task(paused_transaction())
+    await transaction_started.wait()
+    disconnect_task = asyncio.create_task(file_db.disconnect())
+    await asyncio.sleep(0.05)
+    assert not disconnect_task.done()
+
+    release_transaction.set()
+    await transaction_task
+    await disconnect_task
+
+    observer = await aiosqlite.connect(str(tmp_path / "authz-grants.sqlite"))
+    try:
+        async with observer.execute("SELECT value FROM app_settings WHERE key='disconnect'") as cursor:
+            row = await cursor.fetchone()
+            assert row is not None
+            assert row[0] == "safe"
+    finally:
+        await observer.close()
+
+
+@pytest.mark.asyncio
+async def test_conn_property_outside_event_loop_returns_shared_connection(file_db: Database) -> None:
+    shared_conn = await asyncio.to_thread(lambda: file_db.conn)
+    assert shared_conn is file_db._conn
 
 
 async def _allow_admin() -> str:
