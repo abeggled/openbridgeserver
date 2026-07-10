@@ -182,6 +182,14 @@
               </div>
             </div>
             <div class="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                class="btn-secondary btn-sm"
+                :data-testid="`user-rights-${u.username}`"
+                @click="openRightsEditor(u)"
+              >
+                {{ $t('settings.users.rights.openButton') }}
+              </button>
               <button @click="openMqttPassword(u)" class="btn-icon text-slate-400 hover:text-blue-400" :title="$t('settings.users.mqttSetTitle')" :data-testid="`user-mqtt-set-${u.username}`">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z"/></svg>
               </button>
@@ -1364,6 +1372,13 @@
       :message="$t('settings.users.deleteUserConfirm', { name: deleteUserTarget?.username })"
       :confirm-label="$t('common.delete')" @confirm="doDeleteUser" />
 
+    <UserRightsEditor
+      v-if="rightsTarget"
+      v-model="showRightsEditor"
+      :username="rightsTarget.username"
+      @saved="loadUsers"
+    />
+
     <ConfirmDialog v-model="showDzConfirm" :title="dzConfirmTitle"
       :message="dzConfirmMessage" :confirm-label="dzConfirmLabel" @confirm="doDzAction" />
   </div>
@@ -1380,6 +1395,7 @@ import { useTz } from '@/composables/useTz'
 import Badge            from '@/components/ui/Badge.vue'
 import Spinner          from '@/components/ui/Spinner.vue'
 import HierarchyManager from '@/components/HierarchyManager.vue'
+import UserRightsEditor from '@/components/settings/UserRightsEditor.vue'
 import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import IconPicker     from '@/components/ui/IconPicker.vue'
@@ -2125,6 +2141,8 @@ const usersLoading = ref(false)
 const showCreateUser = ref(false)
 const showUserConfirm = ref(false)
 const deleteUserTarget = ref(null)
+const showRightsEditor = ref(false)
+const rightsTarget = ref(null)
 const userForm    = reactive({ username: '', password: '', is_admin: false, mqtt_enabled: false, mqtt_password: '' })
 const ownerFirstUsers = computed(() => {
   return [...users.value].sort((a, b) => {
@@ -2166,6 +2184,7 @@ async function doCreateUser() {
 }
 function confirmDeleteUser(u) { deleteUserTarget.value = u; showUserConfirm.value = true }
 async function doDeleteUser() { await authApi.deleteUser(deleteUserTarget.value.username); await loadUsers() }
+function openRightsEditor(u) { rightsTarget.value = u; showRightsEditor.value = true }
 
 // ── MQTT Password ──────────────────────────────────────────────────────────
 const showMqttPassword = ref(false)
