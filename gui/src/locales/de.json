@@ -2232,6 +2232,7 @@
         "selectedScopes": "{n} Bereiche ausgewählt",
         "previewTitle": "Effektive Rechte",
         "previewHint": "Prüfe vor dem Speichern die berechnete Entscheidung und ihre Begründung für jede Aktion.",
+        "emptyPreview": "Es sind keine Hierarchie-Bereiche ausgewählt. Beim Speichern werden alle bearbeitbaren Hierarchie-Zuweisungen entfernt; eine Server-Vorschau ist nicht erforderlich.",
         "refreshPreview": "Vorschau aktualisieren",
         "allowed": "Erlaubt",
         "denied": "Verboten",
@@ -2240,6 +2241,14 @@
           "write": "Schreiben",
           "activate": "Aktivieren",
           "generate": "Erzeugen"
+        },
+        "reasons": {
+          "admin": "Durch die Administrator-Brücke erlaubt.",
+          "allowed": "Durch eine passende Rollenzuweisung erlaubt.",
+          "direct_datapoint_grant": "Durch eine direkte Datenpunkt-Zuweisung erlaubt.",
+          "explicit_deny": "Durch eine ausdrückliche Verbots-Zuweisung verweigert.",
+          "missing_allow": "Verweigert, weil keine passende Erlaubnis-Zuweisung gilt.",
+          "no_targets": "Verweigert, weil das Ziel nicht aufgelöst werden konnte."
         },
         "confirmTitle": "Änderungen bestätigen",
         "confirmHint": "Beim Speichern werden die bearbeitbaren Hierarchie-Zuweisungen atomar ersetzt.",

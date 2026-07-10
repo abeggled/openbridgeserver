@@ -2232,6 +2232,7 @@
         "selectedScopes": "{n} areas selected",
         "previewTitle": "Effective permissions",
         "previewHint": "Review the calculated decision and its reason for every action before saving.",
+        "emptyPreview": "No hierarchy areas are selected. Saving will remove all editable hierarchy assignments; no remote preview is needed.",
         "refreshPreview": "Refresh preview",
         "allowed": "Allowed",
         "denied": "Denied",
@@ -2240,6 +2241,14 @@
           "write": "Write",
           "activate": "Activate",
           "generate": "Generate"
+        },
+        "reasons": {
+          "admin": "Allowed by administrator bridge.",
+          "allowed": "Allowed by matching role assignment.",
+          "direct_datapoint_grant": "Allowed by direct datapoint assignment.",
+          "explicit_deny": "Denied by an explicit deny assignment.",
+          "missing_allow": "Denied because no matching allow assignment applies.",
+          "no_targets": "Denied because the target could not be resolved."
         },
         "confirmTitle": "Confirm changes",
         "confirmHint": "Saving replaces the editable hierarchy assignments atomically.",

@@ -105,11 +105,14 @@
               <h4 class="font-semibold text-slate-800 dark:text-slate-100">{{ $t('settings.users.rights.previewTitle') }}</h4>
               <p class="mt-1 text-sm text-slate-500">{{ $t('settings.users.rights.previewHint') }}</p>
             </div>
-            <button type="button" class="btn-secondary btn-sm" :disabled="previewLoading" @click="loadPreview">
+            <button v-if="selectedNodeIds.length" type="button" class="btn-secondary btn-sm" :disabled="previewLoading" @click="loadPreview">
               {{ $t('settings.users.rights.refreshPreview') }}
             </button>
           </div>
-          <div v-if="previewLoading" class="flex justify-center py-8"><Spinner /></div>
+          <div v-if="!selectedNodeIds.length" class="rounded-lg border border-slate-200 p-4 text-sm text-slate-500 dark:border-slate-700" data-testid="rights-preview-empty">
+            {{ $t('settings.users.rights.emptyPreview') }}
+          </div>
+          <div v-else-if="previewLoading" class="flex justify-center py-8"><Spinner /></div>
           <div v-else-if="previewError" class="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-500" data-testid="rights-preview-error">
             {{ previewError }}
           </div>
@@ -134,7 +137,7 @@
                       {{ result.allowed ? $t('settings.users.rights.allowed') : $t('settings.users.rights.denied') }}
                     </span>
                   </div>
-                  <p class="mt-1 text-slate-500">{{ result.reason_text }}</p>
+                  <p class="mt-1 text-slate-500">{{ reasonText(result) }}</p>
                 </div>
               </div>
             </article>
@@ -215,6 +218,7 @@ const { t } = useI18n()
 
 const ACTIONS = ['read', 'write', 'activate', 'generate']
 const GRANT_FIELDS = ['node_type', 'node_id', 'role', 'effect']
+const KNOWN_REASON_CODES = new Set(['admin', 'allowed', 'direct_datapoint_grant', 'explicit_deny', 'missing_allow', 'no_targets'])
 
 const step = ref(1)
 const loading = ref(false)
@@ -248,8 +252,8 @@ const selectedRoleLabel = computed(() => roleOptions.value.find((option) => opti
 const selectedOrphanCount = computed(() => hierarchyNodes.value.filter((node) => node.orphaned && selectedNodeIds.value.includes(node.id)).length)
 const canContinue = computed(() => {
   if (step.value === 1) return !!selectedRole.value
-  if (step.value === 2) return selectedNodeIds.value.length > 0 && selectedOrphanCount.value === 0
-  if (step.value === 3) return !previewError.value && previewResults.value.length > 0
+  if (step.value === 2) return selectedOrphanCount.value === 0
+  if (step.value === 3) return !previewError.value && (!selectedNodeIds.value.length || previewResults.value.length > 0)
   return true
 })
 
@@ -398,6 +402,11 @@ function previewBody() {
 }
 
 async function loadPreview() {
+  if (!selectedNodeIds.value.length) {
+    previewError.value = ''
+    previewResults.value = []
+    return
+  }
   previewLoading.value = true
   previewError.value = ''
   previewResults.value = []
@@ -421,7 +430,7 @@ async function continueToNextStep() {
 }
 
 async function save() {
-  if (!selectedRole.value || !selectedNodeIds.value.length) return
+  if (!selectedRole.value) return
   saving.value = true
   saveError.value = ''
   try {
@@ -442,6 +451,12 @@ async function save() {
 
 function actionLabel(action) {
   return t(`settings.users.rights.actions.${action}`)
+}
+
+function reasonText(result) {
+  return KNOWN_REASON_CODES.has(result.reason)
+    ? t(`settings.users.rights.reasons.${result.reason}`)
+    : result.reason_text
 }
 
 function close() {
