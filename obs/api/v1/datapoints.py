@@ -529,20 +529,25 @@ async def write_value(
     if dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
 
+    principal: Principal | None = None
+    authenticated_write_allowed = False
     if user is not None:
         principal = _principal_from_dependency(user)
-        if not (principal.type == "user" and principal.is_admin):
+        if principal.type == "user" and principal.is_admin:
+            authenticated_write_allowed = True
+        else:
             allowed = await filter_authorized_datapoints(
                 db,
                 principal,
                 [str(dp_id)],
                 action=AuthzAction.WRITE,
             )
-            if not allowed:
-                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
-    else:
+            authenticated_write_allowed = bool(allowed)
+    if not authenticated_write_allowed:
         page_id = request.headers.get("X-Page-Id")
         if not page_id:
+            if user is not None:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
         if not await _page_has_datapoint(db, page_id, dp_id):
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Datapoint is not part of the page")
@@ -558,9 +563,11 @@ async def write_value(
             if not session_token or not validate_session(session_token, validate_id):
                 raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Valid session token required")
         elif access == "user":
-            if not await _check_user_access(db, page_id, user):
+            if principal is None or principal.type != "user" or not await _check_user_access(db, page_id, principal.subject):
                 raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
         elif access not in ("public",):
+            if user is not None:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
     try:

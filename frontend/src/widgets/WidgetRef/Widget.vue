@@ -38,6 +38,10 @@ const sourceReadContext = computed(() => ({
   pageId: sourcePageId.value,
   ...(sourceSessionToken.value ? { sessionToken: sourceSessionToken.value } : {}),
 }))
+const sourceWriteContext = computed(() => ({
+  ...sourceReadContext.value,
+  definingId: sourceSessionNodeId.value || sourcePageId.value,
+}))
 
 sourceWs.onMessage((msg) => {
   if (msg.id && msg.v !== undefined) {
@@ -164,5 +168,6 @@ const refStatusValue = computed(() => {
     :editor-mode="false"
     :page-id="sourcePageId"
     :session-token="sourceSessionToken"
+    :write-context="sourceWriteContext"
   />
 </template>

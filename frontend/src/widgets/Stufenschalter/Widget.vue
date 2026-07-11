@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { datapoints } from '@/api/client'
+import type { WriteContext } from '@/api/client'
 import VisuIcon from '@/components/VisuIcon.vue'
 import { useIcons } from '@/composables/useIcons'
 import type { DataPointValue } from '@/types'
@@ -22,6 +23,7 @@ const props = defineProps<{
   statusValue: DataPointValue | null
   editorMode: boolean
   readonly?: boolean
+  writeContext?: WriteContext
 }>()
 
 const { getSvg, isSvgIcon, svgIconName } = useIcons()
@@ -170,7 +172,8 @@ async function writeValue(value: string) {
   pending.value = true
   error.value = ''
   try {
-    await datapoints.write(props.datapointId, parseValue(value))
+    if (props.writeContext) await datapoints.write(props.datapointId, parseValue(value), props.writeContext)
+    else await datapoints.write(props.datapointId, parseValue(value))
     if (displayRevision.value === writeDisplayRevision) {
       optimisticValue.value = value
       selectedValue.value = value

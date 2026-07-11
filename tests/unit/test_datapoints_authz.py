@@ -293,7 +293,12 @@ async def test_write_value_rejects_missing_or_explicitly_denied_write_grant(monk
 
 
 @pytest.mark.asyncio
-async def test_write_value_preserves_anonymous_public_page_scope(monkeypatch, db: Database):
+@pytest.mark.parametrize(
+    "user",
+    [None, Principal(subject="alice", type="user", is_admin=False)],
+    ids=["anonymous", "authenticated-without-grant"],
+)
+async def test_write_value_preserves_public_page_scope(monkeypatch, db: Database, user: Principal | None):
     datapoint = _dp("00000000-0000-0000-0000-000000000063", "Public page write")
     await _insert_datapoint(db, datapoint)
     await db.execute_and_commit(
@@ -321,7 +326,7 @@ async def test_write_value_preserves_anonymous_public_page_scope(monkeypatch, db
         dp_id=datapoint.id,
         body=dp_api.WriteValueIn(value=22.5),
         request=request,
-        user=None,
+        user=user,
         db=db,
     )
 

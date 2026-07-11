@@ -15,8 +15,9 @@ const MiniTarget = defineComponent({
   props: {
     pageId: { type: String, default: null },
     sessionToken: { type: String, default: null },
+    writeContext: { type: Object, default: null },
   },
-  template: '<div data-testid="mini-target" :data-page-id="pageId" :data-session-token="sessionToken"></div>',
+  template: '<div data-testid="mini-target" :data-page-id="pageId" :data-session-token="sessionToken" :data-write-page-id="writeContext && writeContext.pageId"></div>',
 })
 
 beforeEach(() => {
@@ -72,6 +73,7 @@ describe('Grundriss mini widget context', () => {
         editorMode: false,
         pageId: 'source-page',
         sessionToken: 'session-1',
+        writeContext: { pageId: 'source-page', sessionToken: 'session-1' },
       },
       global: {
         mocks: {
@@ -83,5 +85,6 @@ describe('Grundriss mini widget context', () => {
     const mini = wrapper.get('[data-testid="mini-target"]')
     expect(mini.attributes('data-page-id')).toBe('source-page')
     expect(mini.attributes('data-session-token')).toBe('session-1')
+    expect(mini.attributes('data-write-page-id')).toBe('source-page')
   })
 })

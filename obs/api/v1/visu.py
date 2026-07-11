@@ -240,7 +240,8 @@ async def _check_user_page_target_datapoint_policy(
         return
 
     for username in await _target_usernames_for_node(db, defining_node_id, usernames=usernames):
-        principal = Principal(subject=username, type="user", is_admin=False)
+        user_row = await db.fetchone("SELECT is_admin FROM users WHERE username = ?", (username,))
+        principal = Principal(subject=username, type="user", is_admin=bool(user_row and user_row["is_admin"]))
         allowed_ids = set(await filter_authorized_datapoints(db, principal, datapoint_ids, action=AuthzAction.READ))
         if not set(datapoint_ids).issubset(allowed_ids):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zielgruppe darf nicht alle Datenpunkte lesen")
