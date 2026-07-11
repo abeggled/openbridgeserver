@@ -20,7 +20,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, field_serializer
 
 from obs.api.auth import Principal, get_admin_user, get_current_principal
-from obs.api.authz import AuthzAction, AuthzTarget, authorize
+from obs.api.authz import AuthzAction, AuthzTarget, RoleGrant, authorize
 from obs.api.authz_service import (
     _datapoint_read_grants,
     filter_authorized_datapoints,
@@ -235,10 +235,21 @@ async def _can_read_datapoint(db: Database, principal: Principal, dp_id: uuid.UU
 
 
 async def _has_explicit_datapoint_read_deny(db: Database, principal: Principal, dp_id: uuid.UUID) -> bool:
+    return await _has_explicit_datapoint_deny(db, principal, dp_id, action=AuthzAction.READ)
+
+
+async def _has_explicit_datapoint_deny(
+    db: Database,
+    principal: Principal,
+    dp_id: uuid.UUID,
+    *,
+    action: AuthzAction,
+    grants: list[RoleGrant] | None = None,
+) -> bool:
     dp_id_str = str(dp_id)
-    grants = await load_role_grants(db, principal)
+    resolved_grants = grants if grants is not None else await load_role_grants(db, principal)
     targets_by_dp = await resolve_datapoint_targets(db, [dp_id_str])
-    direct_grant_ids = {grant.node_id for grant in grants if grant.node_type == "datapoint" and grant.node_id == dp_id_str}
+    direct_grant_ids = {grant.node_id for grant in resolved_grants if grant.node_type == "datapoint" and grant.node_id == dp_id_str}
     for direct_dp_id in direct_grant_ids:
         targets = targets_by_dp.setdefault(direct_dp_id, [])
         if not any(target.node_type == "datapoint" and target.node_id == direct_dp_id for target in targets):
@@ -246,9 +257,9 @@ async def _has_explicit_datapoint_read_deny(db: Database, principal: Principal, 
     targets = targets_by_dp.get(dp_id_str, [])
     decision = authorize(
         principal=principal,
-        action=AuthzAction.READ,
+        action=action,
         targets=targets,
-        grants=_datapoint_read_grants(grants, targets),
+        grants=_datapoint_read_grants(resolved_grants, targets) if action == AuthzAction.READ else resolved_grants,
     )
     return decision.reason == "explicit_deny"
 
@@ -536,11 +547,21 @@ async def write_value(
         if principal.type == "user" and principal.is_admin:
             authenticated_write_allowed = True
         else:
+            grants = await load_role_grants(db, principal)
+            if await _has_explicit_datapoint_deny(
+                db,
+                principal,
+                dp_id,
+                action=AuthzAction.WRITE,
+                grants=grants,
+            ):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
             allowed = await filter_authorized_datapoints(
                 db,
                 principal,
                 [str(dp_id)],
                 action=AuthzAction.WRITE,
+                grants=grants,
             )
             authenticated_write_allowed = bool(allowed)
     if not authenticated_write_allowed:

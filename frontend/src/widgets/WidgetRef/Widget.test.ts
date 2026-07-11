@@ -65,12 +65,13 @@ const RefTarget = defineComponent({
     value: { type: Object, default: null },
     statusValue: { type: Object, default: null },
     editorMode: { type: Boolean, required: true },
+    readonly: { type: Boolean, default: false },
     pageId: { type: String, default: null },
     sessionToken: { type: String, default: null },
     writeContext: { type: Object, default: null },
   },
   template:
-    '<div data-testid="ref-target" :data-page-id="pageId" :data-session-token="sessionToken" :data-write-page-id="writeContext && writeContext.pageId" :data-write-session-token="writeContext && writeContext.sessionToken" :data-value="value?.v"></div>',
+    '<div data-testid="ref-target" :data-page-id="pageId" :data-session-token="sessionToken" :data-write-page-id="writeContext && writeContext.pageId" :data-write-session-token="writeContext && writeContext.sessionToken" :data-readonly="readonly" :data-value="value?.v"></div>',
 })
 
   beforeEach(() => {
@@ -125,6 +126,7 @@ describe('WidgetRef source page context', () => {
         value: null,
         statusValue: null,
         editorMode: false,
+        readonly: true,
       },
     })
     await flushPromises()
@@ -135,6 +137,7 @@ describe('WidgetRef source page context', () => {
     expect(mocks.wsSubscribe).toHaveBeenCalledWith(['dp-1'])
     expect(wrapper.get('[data-testid="ref-target"]').attributes('data-page-id')).toBe('source-page')
     expect(wrapper.get('[data-testid="ref-target"]').attributes('data-write-page-id')).toBe('source-page')
+    expect(wrapper.get('[data-testid="ref-target"]').attributes('data-readonly')).toBe('true')
   })
 
   it('forwards the source page session token when one exists', async () => {

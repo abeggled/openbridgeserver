@@ -750,6 +750,33 @@ async def test_non_admin_group_address_list_filters_before_count_search_and_pagi
 
 
 @pytest.mark.asyncio
+async def test_non_admin_device_list_rejects_unreadable_hierarchy_filter():
+    db = await _prepare_scoped_devices_db()
+    try:
+        now = datetime.now(UTC).isoformat()
+        await db.execute_and_commit(
+            "INSERT INTO hierarchy_device_links (id, node_id, device_id, created_at) VALUES (?, ?, ?, ?)",
+            ("hidden-device-link", "blocked-room", "dev-1", now),
+        )
+
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="",
+            hierarchy_node_id="blocked-room",
+            page=0,
+            size=50,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+        assert result.items == []
+        assert result.total == 0
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_non_admin_scope_includes_state_group_address():
     db = await _prepare_db()
     try:

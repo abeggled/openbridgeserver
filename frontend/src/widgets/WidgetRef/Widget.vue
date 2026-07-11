@@ -19,6 +19,7 @@ const props = defineProps<{
   value: DataPointValue | null
   statusValue: DataPointValue | null
   editorMode: boolean
+  readonly?: boolean
 }>()
 
 const dpStore = useDatapointsStore()
@@ -166,6 +167,7 @@ const refStatusValue = computed(() => {
     :value="refValue"
     :status-value="refStatusValue"
     :editor-mode="false"
+    :readonly="props.readonly"
     :page-id="sourcePageId"
     :session-token="sourceSessionToken"
     :write-context="sourceWriteContext"

@@ -293,6 +293,48 @@ async def test_write_value_rejects_missing_or_explicitly_denied_write_grant(monk
 
 
 @pytest.mark.asyncio
+async def test_write_value_explicit_deny_overrides_public_page_scope(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000064", "Denied public write")
+    await _insert_tree(db)
+    await _insert_node(db, "denied")
+    await _insert_datapoint(db, datapoint)
+    await _link_datapoint(db, datapoint.id, "denied")
+    await _insert_grant(db, "denied", role="resident", effect="deny")
+    await db.execute_and_commit(
+        """
+        INSERT INTO visu_nodes
+            (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
+        VALUES ('page-public-deny-write', NULL, 'Public', 'PAGE', 0, NULL, 'public', NULL, ?, ?, ?)
+        """,
+        (
+            '{"grid_cols":12,"grid_row_height":80,"grid_cell_width":120,"background":null,'
+            f'"widgets":[{{"id":"w","name":"W","type":"value","datapoint_id":"{datapoint.id}",'
+            '"status_datapoint_id":null,"x":0,"y":0,"w":1,"h":1,"config":{}}]}',
+            NOW,
+            NOW,
+        ),
+    )
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+    event_bus = MagicMock()
+    event_bus.publish = AsyncMock()
+    monkeypatch.setattr(dp_api, "get_event_bus", lambda: event_bus)
+    request = MagicMock()
+    request.headers.get = lambda key, default=None: {"X-Page-Id": "page-public-deny-write"}.get(key, default)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dp_api.write_value(
+            dp_id=datapoint.id,
+            body=dp_api.WriteValueIn(value=22.5),
+            request=request,
+            user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+    event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "user",
     [None, Principal(subject="alice", type="user", is_admin=False)],
