@@ -1357,10 +1357,39 @@ async def list_group_addresses(
     q: str = Query("", description="Suche in Adresse, Name oder Beschreibung"),
     page: int = Query(0, ge=0),
     size: int = Query(100, ge=1, le=500),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> GroupAddressPage:
     """Importierte KNX Gruppenadressen abfragen. Unterstützt Volltextsuche."""
+    principal = _principal_from_dependency(_user)
+    if not _is_admin_principal(principal):
+        if q:
+            like = f"%{q}%"
+            candidate_rows = await db.fetchall(
+                """SELECT address, name, description, dpt, imported_at
+                   FROM knx_group_addresses
+                   WHERE address LIKE ? OR name LIKE ? OR description LIKE ?
+                   ORDER BY address""",
+                (like, like, like),
+            )
+        else:
+            candidate_rows = await db.fetchall(
+                """SELECT address, name, description, dpt, imported_at
+                   FROM knx_group_addresses
+                   ORDER BY address""",
+            )
+        allowed_addresses = await _authorized_knx_group_addresses(
+            db,
+            principal,
+            [row["address"] for row in candidate_rows],
+        )
+        authorized_rows = [row for row in candidate_rows if row["address"] in allowed_addresses]
+        offset = page * size
+        return GroupAddressPage(
+            total=len(authorized_rows),
+            items=[GroupAddressOut(**dict(row)) for row in authorized_rows[offset : offset + size]],
+        )
+
     if q:
         like = f"%{q}%"
         rows = await db.fetchall(

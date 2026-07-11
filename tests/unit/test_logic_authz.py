@@ -360,3 +360,58 @@ async def test_run_graph_allows_resident_when_all_datapoints_are_in_scope(monkey
 
     assert result == {"status": "ok", "outputs": {"n0": {"out": True}}, "warnings": []}
     manager.execute_graph.assert_awaited_once_with("allowed-graph")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("node_type", ["api_client", "notify_pushover", "notify_sms", "wake_on_lan"])
+async def test_run_graph_rejects_non_admin_side_effect_nodes(monkeypatch, db: Database, node_type: str):
+    flow = _flow_with_nodes(
+        [
+            {
+                "id": "side-effect",
+                "type": node_type,
+                "position": {"x": 0, "y": 0},
+                "data": {},
+            },
+        ],
+    )
+    await _insert_graph_flow(db, f"graph-{node_type}", "Side effect", flow)
+    manager = AsyncMock()
+    monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: manager)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await logic_api.run_graph(
+            graph_id=f"graph-{node_type}",
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+    manager.execute_graph.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_graph_allows_admin_side_effect_nodes(monkeypatch, db: Database):
+    flow = _flow_with_nodes(
+        [
+            {
+                "id": "side-effect",
+                "type": "wake_on_lan",
+                "position": {"x": 0, "y": 0},
+                "data": {},
+            },
+        ],
+    )
+    await _insert_graph_flow(db, "graph-admin-side-effect", "Admin side effect", flow)
+    manager = AsyncMock()
+    manager.execute_graph.return_value = {}
+    monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: manager)
+
+    result = await logic_api.run_graph(
+        graph_id="graph-admin-side-effect",
+        _user=Principal(subject="admin", type="user", is_admin=True),
+        db=db,
+    )
+
+    assert result == {"status": "ok", "outputs": {}, "warnings": []}
+    manager.execute_graph.assert_awaited_once_with("graph-admin-side-effect")

@@ -723,6 +723,33 @@ async def test_non_admin_group_address_device_lookup_requires_readable_group_add
 
 
 @pytest.mark.asyncio
+async def test_non_admin_group_address_list_filters_before_count_search_and_pagination():
+    db = await _prepare_scoped_devices_db()
+    try:
+        first_page = await knxproj_api.list_group_addresses(
+            q="",
+            page=0,
+            size=1,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+        blocked_search = await knxproj_api.list_group_addresses(
+            q="GA 2",
+            page=0,
+            size=1,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+        assert first_page.total == 1
+        assert [item.address for item in first_page.items] == ["1/2/3"]
+        assert blocked_search.total == 0
+        assert blocked_search.items == []
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_non_admin_scope_includes_state_group_address():
     db = await _prepare_db()
     try:

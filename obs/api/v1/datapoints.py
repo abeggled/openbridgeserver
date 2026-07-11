@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, field_serializer
 
-from obs.api.auth import Principal, get_admin_user, get_current_principal, optional_current_user
+from obs.api.auth import Principal, get_admin_user, get_current_principal
 from obs.api.authz import AuthzAction, AuthzTarget, authorize
 from obs.api.authz_service import (
     _datapoint_read_grants,
@@ -511,13 +511,13 @@ async def write_value(
     dp_id: uuid.UUID,
     body: WriteValueIn,
     request: Request,
-    user: str | None = Depends(optional_current_user),
+    user: Principal | str | None = Depends(_optional_current_principal),
     db: Database = Depends(get_db),
 ) -> None:
     """Write a value to a DataPoint via the internal EventBus.
 
     Zugriffslogik:
-    - JWT vorhanden (eingeloggter Benutzer) → immer erlaubt
+    - Authentifizierter Principal → WRITE-Grant erforderlich (Admin-Bridge bleibt erhalten)
     - X-Page-Id Header + Seite ist 'public' → erlaubt
     - X-Page-Id Header + Seite ist 'protected' + gültiger X-Session-Token → erlaubt
     - Seite ist 'readonly' → 403 (auch mit Page-Header)
@@ -529,7 +529,18 @@ async def write_value(
     if dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
 
-    if user is None:
+    if user is not None:
+        principal = _principal_from_dependency(user)
+        if not (principal.type == "user" and principal.is_admin):
+            allowed = await filter_authorized_datapoints(
+                db,
+                principal,
+                [str(dp_id)],
+                action=AuthzAction.WRITE,
+            )
+            if not allowed:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+    else:
         page_id = request.headers.get("X-Page-Id")
         if not page_id:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
