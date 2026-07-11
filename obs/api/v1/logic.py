@@ -49,6 +49,7 @@ _PRIVILEGED_SIDE_EFFECT_NODE_TYPES = frozenset(
         "api_client",
         "notify_pushover",
         "notify_sms",
+        "python_script",
         "wake_on_lan",
     },
 )

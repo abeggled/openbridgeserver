@@ -363,7 +363,7 @@ async def test_run_graph_allows_resident_when_all_datapoints_are_in_scope(monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("node_type", ["api_client", "notify_pushover", "notify_sms", "wake_on_lan"])
+@pytest.mark.parametrize("node_type", ["api_client", "notify_pushover", "notify_sms", "python_script", "wake_on_lan"])
 async def test_run_graph_rejects_non_admin_side_effect_nodes(monkeypatch, db: Database, node_type: str):
     flow = _flow_with_nodes(
         [

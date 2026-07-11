@@ -283,7 +283,7 @@ function widgetChrome(w: WidgetInstance): string {
             :editor-mode="false"
             :readonly="isReadOnly"
             :h="w.h"
-            v-bind="['Kamera', 'Grundriss'].includes(w.type) ? widgetPageContext : {}"
+            v-bind="['Kamera', 'Grundriss', 'Chart', 'ValueDisplay'].includes(w.type) ? widgetPageContext : {}"
           />
           <MissingWidget v-else :widget-type="w.type" />
         </div>
