@@ -905,7 +905,9 @@
       "widget": "Widget (Name)",
       "selectWidget": "— Widget wählen —",
       "noNamedWidgets": "— keine benannten Widgets —",
-      "noNamedWidgetsHint": "⚠ Auf dieser Seite hat kein Widget einen Namen. Namen im Editor vergeben."
+      "noNamedWidgetsHint": "⚠ Auf dieser Seite hat kein Widget einen Namen. Namen im Editor vergeben.",
+      "reference": "Referenz",
+      "chooseReference": "Referenz wählen …"
     },
     "zeitschaltuhr": {
       "title": "Zeitschaltuhr",
@@ -961,6 +963,7 @@
       "miniWidgetLabel": "Bezeichnung",
       "miniWidgetLabelPlaceholder": "z.B. Lampe Flur",
       "statusDatapoint": "Status-Datenpunkt (optional)",
+      "noImageConfigured": "Kein Bild konfiguriert",
       "widthPx": "Breite (px)",
       "heightPx": "Höhe (px)",
       "showInVisu": "In Visu anzeigen",

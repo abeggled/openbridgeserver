@@ -23,12 +23,17 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
-from obs.api.auth import get_admin_user, get_current_user, limiter, optional_current_user
+from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user, limiter
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import filter_authorized_datapoints
+from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config, is_uuid_str
 from obs.api.v1.sessions import create_session, validate_session
 from obs.db.database import Database, get_db
 from obs.models.visu import (
@@ -46,6 +51,8 @@ from obs.models.visu import (
 )
 
 router = APIRouter(tags=["visu"])
+_visu_bearer = HTTPBearer(auto_error=False)
+_visu_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 # ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 
@@ -111,6 +118,28 @@ async def _resolve_access_with_node(db: Database, node_id: str) -> tuple[str, st
     return "public", None
 
 
+async def _resolve_access_with_node_overrides(
+    db: Database,
+    node_id: str,
+    *,
+    access_overrides: dict[str, str | None] | None = None,
+    parent_overrides: dict[str, str | None] | None = None,
+) -> tuple[str, str | None]:
+    current_id: str | None = node_id
+    seen: set[str] = set()
+    while current_id and current_id not in seen:
+        seen.add(current_id)
+        async with db.conn.execute("SELECT access, parent_id FROM visu_nodes WHERE id = ?", (current_id,)) as cur:
+            row = await cur.fetchone()
+        if not row:
+            break
+        access = access_overrides[current_id] if access_overrides and current_id in access_overrides else row["access"]
+        if access is not None:
+            return access, current_id
+        current_id = parent_overrides[current_id] if parent_overrides and current_id in parent_overrides else row["parent_id"]
+    return "public", None
+
+
 async def _check_user_access(db: Database, node_id: str, username: str) -> bool:
     """Gibt True zurück, wenn der Benutzer für den angegebenen 'user'-Knoten
     autorisiert ist (Admin oder explizit zugewiesen).
@@ -128,6 +157,190 @@ async def _check_user_access(db: Database, node_id: str, username: str) -> bool:
         (defining_node_id, username),
     )
     return auth_row is not None
+
+
+async def _optional_visu_principal(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_visu_bearer),
+    api_key: str | None = Depends(_visu_api_key_header),
+    db: Database = Depends(get_db),
+) -> Principal | None:
+    if credentials is None and api_key is None:
+        return None
+    try:
+        return await get_current_principal(credentials=credentials, api_key=api_key, db=db)
+    except HTTPException:
+        return None
+
+
+def _principal_from_dependency(value: Principal | str | None) -> Principal | None:
+    if value is None or isinstance(value, Principal):
+        return value
+    return Principal(
+        subject=value,
+        type="api_key" if value.startswith("api_key:") else "user",
+        is_admin=value == "admin",
+    )
+
+
+def _collect_page_datapoint_ids(config: PageConfig) -> list[str]:
+    datapoint_ids: set[str] = set()
+    for widget in config.widgets:
+        if widget.datapoint_id and is_uuid_str(widget.datapoint_id):
+            datapoint_ids.add(widget.datapoint_id)
+        if widget.status_datapoint_id and is_uuid_str(widget.status_datapoint_id):
+            datapoint_ids.add(widget.status_datapoint_id)
+        collect_datapoint_ids_from_config(widget.config, datapoint_ids)
+    return sorted(datapoint_ids)
+
+
+async def _check_page_datapoint_policy(
+    db: Database,
+    principal: Principal | None,
+    datapoint_ids: list[str],
+    action: AuthzAction,
+    *,
+    allow_empty: bool = True,
+) -> None:
+    if principal is None or (principal.type == "user" and principal.is_admin):
+        return
+    if not datapoint_ids:
+        if allow_empty:
+            return
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+
+    allowed_ids = set(await filter_authorized_datapoints(db, principal, datapoint_ids, action=action))
+    if not set(datapoint_ids).issubset(allowed_ids):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+
+
+async def _target_usernames_for_node(
+    db: Database,
+    defining_node_id: str,
+    *,
+    usernames: list[str] | None = None,
+) -> list[str]:
+    if usernames is not None:
+        return sorted(set(usernames))
+    rows = await db.fetchall(
+        "SELECT username FROM visu_node_users WHERE node_id = ? ORDER BY username",
+        (defining_node_id,),
+    )
+    return [row["username"] for row in rows]
+
+
+async def _check_user_page_target_datapoint_policy(
+    db: Database,
+    defining_node_id: str,
+    config: PageConfig,
+    *,
+    usernames: list[str] | None = None,
+) -> None:
+    datapoint_ids = _collect_page_datapoint_ids(config)
+    if not datapoint_ids:
+        return
+
+    for username in await _target_usernames_for_node(db, defining_node_id, usernames=usernames):
+        user_row = await db.fetchone("SELECT is_admin FROM users WHERE username = ?", (username,))
+        principal = Principal(subject=username, type="user", is_admin=bool(user_row and user_row["is_admin"]))
+        allowed_ids = set(await filter_authorized_datapoints(db, principal, datapoint_ids, action=AuthzAction.READ))
+        if not set(datapoint_ids).issubset(allowed_ids):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zielgruppe darf nicht alle Datenpunkte lesen")
+
+
+async def _check_user_target_pages_datapoint_policy(
+    db: Database,
+    defining_node_id: str,
+    *,
+    usernames: list[str],
+) -> None:
+    rows = await db.fetchall("SELECT * FROM visu_nodes WHERE type = 'PAGE'")
+    for row in rows:
+        page_id = row["id"]
+        access, access_node_id = await _resolve_access_with_node(db, page_id)
+        if access != "user" or access_node_id != defining_node_id:
+            continue
+        node = _row_to_node(row)
+        await _check_user_page_target_datapoint_policy(
+            db,
+            defining_node_id,
+            node.page_config or PageConfig(),
+            usernames=usernames,
+        )
+
+
+async def _check_user_target_pages_datapoint_policy_after_access_change(
+    db: Database,
+    *,
+    access_overrides: dict[str, str | None] | None = None,
+    parent_overrides: dict[str, str | None] | None = None,
+) -> None:
+    rows = await db.fetchall("SELECT * FROM visu_nodes WHERE type = 'PAGE'")
+    for row in rows:
+        page_id = row["id"]
+        current_access, current_access_node_id = await _resolve_access_with_node(db, page_id)
+        access, access_node_id = await _resolve_access_with_node_overrides(
+            db,
+            page_id,
+            access_overrides=access_overrides,
+            parent_overrides=parent_overrides,
+        )
+        if (access, access_node_id) == (current_access, current_access_node_id):
+            continue
+        if access != "user" or access_node_id is None:
+            continue
+        node = _row_to_node(row)
+        await _check_user_page_target_datapoint_policy(
+            db,
+            access_node_id,
+            node.page_config or PageConfig(),
+        )
+
+
+async def _check_inherited_user_page_target_datapoint_policy(
+    db: Database,
+    *,
+    parent_id: str | None,
+    access: str | None,
+    config: PageConfig,
+) -> None:
+    if access is not None or parent_id is None:
+        return
+    inherited_access, defining_node_id = await _resolve_access_with_node(db, parent_id)
+    if inherited_access == "user" and defining_node_id is not None:
+        await _check_user_page_target_datapoint_policy(db, defining_node_id, config)
+
+
+async def _imported_user_access_defining_node(
+    db: Database,
+    node_id: str,
+    *,
+    nodes_by_id: dict[str, Any],
+    id_map: dict[str, str],
+    target_parent_id: str | None,
+) -> str | None:
+    current = nodes_by_id[node_id]
+    while current is not None:
+        if current.access is not None:
+            return id_map[current.id] if current.access == "user" else None
+        parent_id = current.parent_id
+        current = nodes_by_id.get(parent_id or "")
+
+    if target_parent_id is None:
+        return None
+    inherited_access, defining_node_id = await _resolve_access_with_node(db, target_parent_id)
+    return defining_node_id if inherited_access == "user" else None
+
+
+async def _check_page_write_access(db: Database, node_id: str, principal: Principal | None) -> None:
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+    if principal.type == "user" and principal.is_admin:
+        return
+    access, _ = await _resolve_access_with_node(db, node_id)
+    if access in ("readonly", "protected"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+    if access == "user" and (principal.type != "user" or not await _check_user_access(db, node_id, principal.subject)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
 
 # ── Tree ──────────────────────────────────────────────────────────────────────
@@ -159,53 +372,71 @@ async def import_nodes(
     now = _now_iso()
     # Neue IDs für alle Knoten generieren
     id_map = {n.id: str(uuid.uuid4()) for n in body.nodes}
+    nodes_by_id = {n.id: n for n in body.nodes}
     root_node = body.nodes[0]
     root_new_id = id_map[root_node.id]
 
-    for node in body.nodes:
-        new_id = id_map[node.id]
-        if node.id == root_node.id:
-            new_parent_id = body.target_parent_id
-        else:
-            new_parent_id = id_map.get(node.parent_id or "") or body.target_parent_id
+    await db.conn.execute("SAVEPOINT visu_import_nodes")
+    try:
+        for node in body.nodes:
+            new_id = id_map[node.id]
+            if node.id == root_node.id:
+                new_parent_id = body.target_parent_id
+            else:
+                new_parent_id = id_map.get(node.parent_id or "") or body.target_parent_id
 
-        # Widget-UUIDs neu generieren
-        pc = node.page_config
-        if pc and "widgets" in pc:
-            for w in pc["widgets"]:
-                w["id"] = str(uuid.uuid4())
-        pc_json = (
-            json.dumps(pc)
-            if pc
-            else json.dumps(
-                {
-                    "grid_cols": 12,
-                    "grid_row_height": 80,
-                    "background": None,
-                    "widgets": [],
-                },
+            # Widget-UUIDs neu generieren
+            pc = node.page_config
+            if pc and "widgets" in pc:
+                for w in pc["widgets"]:
+                    w["id"] = str(uuid.uuid4())
+            pc_json = (
+                json.dumps(pc)
+                if pc
+                else json.dumps(
+                    {
+                        "grid_cols": 12,
+                        "grid_row_height": 80,
+                        "background": None,
+                        "widgets": [],
+                    },
+                )
             )
-        )
+            if node.type == "PAGE":
+                defining_node_id = await _imported_user_access_defining_node(
+                    db,
+                    node.id,
+                    nodes_by_id=nodes_by_id,
+                    id_map=id_map,
+                    target_parent_id=body.target_parent_id,
+                )
+                if defining_node_id is not None:
+                    await _check_user_page_target_datapoint_policy(db, defining_node_id, PageConfig.model_validate_json(pc_json))
 
-        await db.conn.execute(
-            """INSERT INTO visu_nodes
-                   (id, parent_id, name, type, node_order, icon, access, access_pin,
-                    page_config, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                new_id,
-                new_parent_id,
-                node.name,
-                node.type,
-                node.node_order,
-                node.icon,
-                node.access,
-                None,
-                pc_json,
-                now,
-                now,
-            ),
-        )
+            await db.conn.execute(
+                """INSERT INTO visu_nodes
+                       (id, parent_id, name, type, node_order, icon, access, access_pin,
+                        page_config, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    new_id,
+                    new_parent_id,
+                    node.name,
+                    node.type,
+                    node.node_order,
+                    node.icon,
+                    node.access,
+                    None,
+                    pc_json,
+                    now,
+                    now,
+                ),
+            )
+    except Exception:
+        await db.conn.execute("ROLLBACK TO SAVEPOINT visu_import_nodes")
+        await db.conn.execute("RELEASE SAVEPOINT visu_import_nodes")
+        raise
+    await db.conn.execute("RELEASE SAVEPOINT visu_import_nodes")
     await db.conn.commit()
     return await _get_node_or_404(db, root_new_id)
 
@@ -265,6 +496,12 @@ async def update_node(
     await _get_node_or_404(db, node_id)
     updates: list[str] = []
     values: list = []
+
+    if body.access == "user":
+        await _check_user_target_pages_datapoint_policy_after_access_change(
+            db,
+            access_overrides={node_id: body.access},
+        )
 
     if body.name is not None:
         updates.append("name = ?")
@@ -356,7 +593,15 @@ async def copy_node(
         new_pc = pc.model_copy(update={"widgets": new_widgets})
         pc_json = new_pc.model_dump_json()
     else:
+        new_pc = PageConfig()
         pc_json = json.dumps({"grid_cols": 12, "grid_row_height": 80, "background": None, "widgets": []})
+    if source.type == "PAGE":
+        await _check_inherited_user_page_target_datapoint_policy(
+            db,
+            parent_id=body.target_parent_id,
+            access=source.access,
+            config=new_pc,
+        )
 
     await db.conn.execute(
         """
@@ -445,6 +690,10 @@ async def move_node(
     _user=Depends(get_admin_user),
 ):
     await _get_node_or_404(db, node_id)
+    await _check_user_target_pages_datapoint_policy_after_access_change(
+        db,
+        parent_overrides={node_id: body.new_parent_id},
+    )
     await db.conn.execute(
         "UPDATE visu_nodes SET parent_id = ?, node_order = ?, updated_at = ? WHERE id = ?",
         (body.new_parent_id, body.order, _now_iso(), node_id),
@@ -491,14 +740,15 @@ async def get_page(
     node_id: str,
     request: Request,
     db: Database = Depends(get_db),
-    user: str | None = Depends(optional_current_user),
+    user: Principal | str | None = Depends(_optional_visu_principal),
 ):
+    principal = _principal_from_dependency(user)
     node = await _get_node_or_404(db, node_id)
     if node.type != "PAGE":
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
 
     access, defining_node_id = await _resolve_access_with_node(db, node_id)
-    if user is None:
+    if principal is None:
         # Unauthentisierter Zugriff: Seitentyp prüfen
         if access == "user":
             raise HTTPException(
@@ -515,10 +765,13 @@ async def get_page(
                 )
     else:
         # Authentifizierter Benutzer: bei user-Pages explizite Zuweisung prüfen
-        if access == "user" and not await _check_user_access(db, node_id, user):
+        if access == "user" and (principal.type != "user" or not await _check_user_access(db, node_id, principal.subject)):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
-    return node.page_config or PageConfig()
+    config = node.page_config or PageConfig()
+    if access == "user":
+        await _check_page_datapoint_policy(db, principal, _collect_page_datapoint_ids(config), AuthzAction.READ)
+    return config
 
 
 @router.get("/widget-ref/{page_id}", response_model=list[WidgetInstance])
@@ -526,18 +779,19 @@ async def get_widget_ref(
     page_id: str,
     request: Request,
     db: Database = Depends(get_db),
-    user: str | None = Depends(optional_current_user),
+    user: Principal | str | None = Depends(_optional_visu_principal),
 ):
     """Gibt alle Widget-Instanzen einer Seite zurück.
     Wird von WidgetRef-Widgets verwendet, die einzelne Widgets aus einer anderen
     Seite einbetten. Zugriff richtet sich nach dem Access-Level der Quell-Seite.
     """
+    principal = _principal_from_dependency(user)
     node = await _get_node_or_404(db, page_id)
     if node.type != "PAGE":
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
 
     access, defining_node_id = await _resolve_access_with_node(db, page_id)
-    if user is None:
+    if principal is None:
         if access == "user":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -552,10 +806,12 @@ async def get_widget_ref(
                     detail="PIN-Authentifizierung erforderlich",
                 )
     else:
-        if access == "user" and not await _check_user_access(db, page_id, user):
+        if access == "user" and (principal.type != "user" or not await _check_user_access(db, page_id, principal.subject)):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
     pc = node.page_config or PageConfig()
+    if access == "user":
+        await _check_page_datapoint_policy(db, principal, _collect_page_datapoint_ids(pc), AuthzAction.READ)
     return pc.widgets
 
 
@@ -564,11 +820,15 @@ async def save_page(
     node_id: str,
     config: PageConfig,
     db: Database = Depends(get_db),
-    _user=Depends(get_admin_user),
+    _admin=Depends(get_admin_user),
 ):
     node = await _get_node_or_404(db, node_id)
     if node.type != "PAGE":
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
+
+    access, defining_node_id = await _resolve_access_with_node(db, node_id)
+    if access == "user" and defining_node_id is not None:
+        await _check_user_page_target_datapoint_policy(db, defining_node_id, config)
 
     await db.conn.execute(
         "UPDATE visu_nodes SET page_config = ?, updated_at = ? WHERE id = ?",
@@ -615,6 +875,8 @@ async def set_node_users(
         row = await db.fetchone("SELECT is_admin FROM users WHERE username = ?", (username,))
         if row and not bool(row["is_admin"]):
             valid.append(username)
+
+    await _check_user_target_pages_datapoint_policy(db, node_id, usernames=valid)
 
     await db.conn.execute("DELETE FROM visu_node_users WHERE node_id = ?", (node_id,))
     if valid:

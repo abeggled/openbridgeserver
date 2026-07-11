@@ -2,6 +2,7 @@
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { datapoints } from '@/api/client'
+import type { WriteContext } from '@/api/client'
 import { useDatapointsStore } from '@/stores/datapoints'
 import type { DataPointValue } from '@/types'
 
@@ -21,6 +22,7 @@ const props = defineProps<{
   statusValue: DataPointValue | null
   editorMode: boolean
   readonly?: boolean
+  writeContext?: WriteContext
 }>()
 const { t } = useI18n()
 
@@ -128,7 +130,10 @@ function activeVal(inv: boolean): boolean { return !inv }
 
 async function write(id: string | null, value: unknown) {
   if (!id || props.editorMode || props.readonly) return
-  try { await datapoints.write(id, value) } catch { /* ignore */ }
+  try {
+    if (props.writeContext) await datapoints.write(id, value, props.writeContext)
+    else await datapoints.write(id, value)
+  } catch { /* ignore */ }
 }
 
 // ── Stop senden ──────────────────────────────────────────────────────────────

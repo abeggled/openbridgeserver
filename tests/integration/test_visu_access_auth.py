@@ -59,6 +59,19 @@ async def _create_page(client, auth_headers, name: str, access: str, *, access_p
     return resp.json()["id"]
 
 
+async def _grant_datapoint_read(username: str, dp_id: str) -> None:
+    from obs.db.database import get_db
+
+    db = get_db()
+    await db.execute_and_commit(
+        """
+        INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
+        VALUES ('user', ?, 'datapoint', ?, 'guest', 'allow')
+        """,
+        (username, dp_id),
+    )
+
+
 async def _save_page_with_single_dp_widget(client, auth_headers, page_id: str, dp_id: str) -> None:
     resp = await client.put(
         f"/api/v1/visu/pages/{page_id}",
@@ -181,6 +194,7 @@ async def test_user_visu_allows_assigned_non_admin_user(client, auth_headers):
         )
         assert set_users.status_code == 204, set_users.text
 
+        await _grant_datapoint_read(username, dp_id)
         await _save_page_with_single_dp_widget(client, auth_headers, page_id, dp_id)
         await _write_value(client, auth_headers, dp_id, 23.0)
 

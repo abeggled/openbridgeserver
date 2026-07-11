@@ -23,7 +23,9 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
-from obs.api.auth import get_admin_user, get_current_user
+from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import filter_authorized_datapoints
 from obs.db.database import Database, get_db
 from obs.logic.graph_analysis import topology_warnings
 from obs.logic.models import (
@@ -42,6 +44,16 @@ from obs.logic.node_types import list_node_types
 
 router = APIRouter(tags=["logic"])
 
+_PRIVILEGED_SIDE_EFFECT_NODE_TYPES = frozenset(
+    {
+        "api_client",
+        "notify_pushover",
+        "notify_sms",
+        "python_script",
+        "wake_on_lan",
+    },
+)
+
 
 def _row_to_out(row: dict) -> LogicGraphOut:
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
@@ -54,6 +66,76 @@ def _row_to_out(row: dict) -> LogicGraphOut:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _principal_from_dependency(value: Principal | str) -> Principal:
+    if isinstance(value, Principal):
+        return value
+    return Principal(
+        subject=value,
+        type="api_key" if value.startswith("api_key:") else "user",
+        is_admin=value == "admin",
+    )
+
+
+def _flow_from_row(row: dict) -> FlowData:
+    raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
+    return FlowData.model_validate(raw)
+
+
+def _logic_datapoint_ids(flow: FlowData) -> list[str]:
+    ids: list[str] = []
+    seen: set[str] = set()
+    for node in flow.nodes:
+        if node.type in {"datapoint_read", "datapoint_write"}:
+            candidate_ids = [node.data.get("datapoint_id")]
+        elif node.type == "api_client":
+            candidate_ids = [variable["datapoint_id"] for variable in _normalise_api_client_variables(node.data.get("variables")).values()]
+        else:
+            continue
+        for dp_id in candidate_ids:
+            if not isinstance(dp_id, str) or not dp_id or dp_id in seen:
+                continue
+            seen.add(dp_id)
+            ids.append(dp_id)
+    return ids
+
+
+async def _authorized_logic_datapoint_ids(
+    db: Database,
+    principal: Principal,
+    row: dict,
+    *,
+    action: AuthzAction,
+) -> tuple[list[str], list[str]]:
+    all_ids = _logic_datapoint_ids(_flow_from_row(row))
+    if principal.type == "user" and principal.is_admin:
+        return all_ids, all_ids
+    if not all_ids:
+        return all_ids, []
+    allowed_ids = await filter_authorized_datapoints(db, principal, all_ids, action=action)
+    return all_ids, allowed_ids
+
+
+async def _can_read_logic_graph(db: Database, principal: Principal, row: dict) -> bool:
+    all_ids, allowed_ids = await _authorized_logic_datapoint_ids(db, principal, row, action=AuthzAction.READ)
+    return len(allowed_ids) == len(all_ids) if all_ids else principal.type == "user" and principal.is_admin
+
+
+async def _require_logic_graph_read(db: Database, principal: Principal, row: dict) -> None:
+    if not await _can_read_logic_graph(db, principal, row):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+
+
+async def _require_logic_graph_activation(db: Database, principal: Principal, row: dict) -> None:
+    if principal.type == "user" and principal.is_admin:
+        return
+    flow = _flow_from_row(row)
+    if any(node.type in _PRIVILEGED_SIDE_EFFECT_NODE_TYPES for node in flow.nodes):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")
+    all_ids, allowed_ids = await _authorized_logic_datapoint_ids(db, principal, row, action=AuthzAction.ACTIVATE)
+    if not all_ids or len(allowed_ids) != len(all_ids):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")
 
 
 def _logic_run_warnings(outputs: dict) -> list[dict[str, str]]:
@@ -89,11 +171,13 @@ async def validate_graph(
 
 @router.get("/graphs", response_model=list[LogicGraphOut])
 async def list_graphs(
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[LogicGraphOut]:
+    principal = _principal_from_dependency(_user)
     rows = await db.fetchall("SELECT * FROM logic_graphs ORDER BY name")
-    return [_row_to_out(r) for r in rows]
+    readable_rows = [row for row in rows if await _can_read_logic_graph(db, principal, row)]
+    return [_row_to_out(r) for r in readable_rows]
 
 
 @router.post("/graphs", response_model=LogicGraphOut, status_code=status.HTTP_201_CREATED)
@@ -131,12 +215,14 @@ async def create_graph(
 @router.get("/graphs/{graph_id}", response_model=LogicGraphOut)
 async def get_graph(
     graph_id: str,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    principal = _principal_from_dependency(_user)
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    await _require_logic_graph_read(db, principal, row)
     return _row_to_out(row)
 
 
@@ -306,12 +392,14 @@ async def import_graph(
 @router.post("/graphs/{graph_id}/run", status_code=status.HTTP_200_OK)
 async def run_graph(
     graph_id: str,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
-    row = await db.fetchone("SELECT id, enabled FROM logic_graphs WHERE id=?", (graph_id,))
+    principal = _principal_from_dependency(_user)
+    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    await _require_logic_graph_activation(db, principal, row)
     if not bool(row["enabled"]):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Logikblatt ist deaktiviert")
     try:
@@ -384,7 +472,7 @@ async def duplicate_graph(
 @router.get("/datapoint/{dp_id}/usages", response_model=list[LogicUsageOut])
 async def get_datapoint_logic_usages(
     dp_id: str,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[LogicUsageOut]:
     """Return all logic graphs that reference a given DataPoint, with direction from the DP's perspective.
@@ -392,9 +480,17 @@ async def get_datapoint_logic_usages(
     - datapoint_read node  → logic reads the DP   → direction SOURCE
     - datapoint_write node → logic writes to the DP → direction DEST
     """
+    principal = _principal_from_dependency(_user)
+    if principal.type != "user" or not principal.is_admin:
+        allowed = await filter_authorized_datapoints(db, principal, [dp_id], action=AuthzAction.READ)
+        if not allowed:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "DataPoint nicht gefunden")
+
     rows = await db.fetchall("SELECT id, name, enabled, flow_data FROM logic_graphs")
     usages: list[LogicUsageOut] = []
     for row in rows:
+        if not await _can_read_logic_graph(db, principal, row):
+            continue
         raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
         flow = FlowData.model_validate(raw)
         for node in flow.nodes:
@@ -429,12 +525,14 @@ async def get_datapoint_logic_usages(
 @router.get("/graphs/{graph_id}/export")
 async def export_graph(
     graph_id: str,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> JSONResponse:
+    principal = _principal_from_dependency(_user)
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    await _require_logic_graph_read(db, principal, row)
 
     export_data = {
         "obs_export": "logic_graph",

@@ -19,7 +19,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from obs.api.auth import get_admin_user, get_current_user
+from obs.api.auth import Principal, get_current_principal
+from obs.api.authz import AuthzAction, AuthzTarget, authorize
+from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_datapoint_targets
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
 from obs.models.binding import (
@@ -72,6 +74,69 @@ async def _get_bindings_for_dp(db: Database, dp_id: uuid.UUID) -> list[BindingOu
     )
     name_map = await _get_instance_name_map(db)
     return [_row_out(r, name_map) for r in rows]
+
+
+def _principal_from_dependency(value: Principal | str) -> Principal:
+    if isinstance(value, Principal):
+        return value
+    return Principal(
+        subject=value,
+        type="api_key" if value.startswith("api_key:") else "user",
+        is_admin=value == "admin",
+    )
+
+
+def _is_admin_principal(principal: Principal) -> bool:
+    return principal.type == "user" and principal.is_admin
+
+
+async def _ensure_datapoint_readable(db: Database, principal: Principal, dp_id: uuid.UUID) -> None:
+    if _is_admin_principal(principal):
+        return
+    allowed = await filter_authorized_datapoints(db, principal, [str(dp_id)], action=AuthzAction.READ)
+    if not allowed:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} nicht gefunden")
+
+
+async def _ensure_binding_mutation_scope(db: Database, principal: Principal, dp_id: uuid.UUID) -> None:
+    if _is_admin_principal(principal):
+        return
+
+    targets_by_dp = await resolve_datapoint_targets(db, [str(dp_id)])
+    grants = await load_role_grants(db, principal)
+    direct_target = AuthzTarget(
+        node_type="datapoint",
+        node_id=str(dp_id),
+        min_role="operator",
+    )
+    direct_decision = authorize(
+        principal=principal,
+        action=AuthzAction.WRITE,
+        targets=[direct_target],
+        grants=grants,
+    )
+    if direct_decision.reason == "explicit_deny":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Binding-Änderung nicht erlaubt")
+
+    targets = [
+        AuthzTarget(
+            node_type=target.node_type,
+            node_id=target.node_id,
+            ancestors=target.ancestors,
+            min_role="operator",
+        )
+        for target in targets_by_dp.get(str(dp_id), [])
+    ]
+    decision = authorize(
+        principal=principal,
+        action=AuthzAction.WRITE,
+        targets=targets,
+        grants=grants,
+    )
+    if decision.reason == "explicit_deny":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Binding-Änderung nicht erlaubt")
+    if not decision.allowed and not direct_decision.allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Binding-Änderung nicht erlaubt")
 
 
 async def _reload_adapter_instance(instance_id: str, db: Database) -> None:
@@ -177,11 +242,12 @@ def _row_out(row: Any, name_map: dict[str, str] | None = None) -> BindingOut:
 @router.get("/{dp_id}/bindings", response_model=list[BindingOut])
 async def list_bindings(
     dp_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[BindingOut]:
     if get_registry().get(dp_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} nicht gefunden")
+    await _ensure_datapoint_readable(db, _principal_from_dependency(_user), dp_id)
     return await _get_bindings_for_dp(db, dp_id)
 
 
@@ -193,9 +259,10 @@ async def list_bindings(
 async def create_binding(
     dp_id: uuid.UUID,
     body: AdapterBindingCreate,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> BindingOut:
+    await _ensure_binding_mutation_scope(db, _principal_from_dependency(_user), dp_id)
     if get_registry().get(dp_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} nicht gefunden")
 
@@ -263,9 +330,10 @@ async def update_binding(
     dp_id: uuid.UUID,
     binding_id: uuid.UUID,
     body: AdapterBindingUpdate,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> BindingOut:
+    await _ensure_binding_mutation_scope(db, _principal_from_dependency(_user), dp_id)
     row = await db.fetchone(
         "SELECT * FROM adapter_bindings WHERE id=? AND datapoint_id=?",
         (str(binding_id), str(dp_id)),
@@ -345,9 +413,10 @@ async def update_binding(
 async def delete_binding(
     dp_id: uuid.UUID,
     binding_id: uuid.UUID,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
+    await _ensure_binding_mutation_scope(db, _principal_from_dependency(_user), dp_id)
     row = await db.fetchone(
         "SELECT adapter_instance_id FROM adapter_bindings WHERE id=? AND datapoint_id=?",
         (str(binding_id), str(dp_id)),
