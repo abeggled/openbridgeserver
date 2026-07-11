@@ -19,8 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, field_serializer
 
-from obs.api.auth import Principal, get_admin_user, get_current_principal, optional_current_user
-from obs.api.authz import AuthzAction, AuthzTarget, authorize
+from obs.api.auth import Principal, get_admin_user, get_current_principal
+from obs.api.authz import AuthzAction, AuthzTarget, RoleGrant, authorize
 from obs.api.authz_service import (
     _datapoint_read_grants,
     filter_authorized_datapoints,
@@ -235,10 +235,21 @@ async def _can_read_datapoint(db: Database, principal: Principal, dp_id: uuid.UU
 
 
 async def _has_explicit_datapoint_read_deny(db: Database, principal: Principal, dp_id: uuid.UUID) -> bool:
+    return await _has_explicit_datapoint_deny(db, principal, dp_id, action=AuthzAction.READ)
+
+
+async def _has_explicit_datapoint_deny(
+    db: Database,
+    principal: Principal,
+    dp_id: uuid.UUID,
+    *,
+    action: AuthzAction,
+    grants: list[RoleGrant] | None = None,
+) -> bool:
     dp_id_str = str(dp_id)
-    grants = await load_role_grants(db, principal)
+    resolved_grants = grants if grants is not None else await load_role_grants(db, principal)
     targets_by_dp = await resolve_datapoint_targets(db, [dp_id_str])
-    direct_grant_ids = {grant.node_id for grant in grants if grant.node_type == "datapoint" and grant.node_id == dp_id_str}
+    direct_grant_ids = {grant.node_id for grant in resolved_grants if grant.node_type == "datapoint" and grant.node_id == dp_id_str}
     for direct_dp_id in direct_grant_ids:
         targets = targets_by_dp.setdefault(direct_dp_id, [])
         if not any(target.node_type == "datapoint" and target.node_id == direct_dp_id for target in targets):
@@ -246,9 +257,9 @@ async def _has_explicit_datapoint_read_deny(db: Database, principal: Principal, 
     targets = targets_by_dp.get(dp_id_str, [])
     decision = authorize(
         principal=principal,
-        action=AuthzAction.READ,
+        action=action,
         targets=targets,
-        grants=_datapoint_read_grants(grants, targets),
+        grants=_datapoint_read_grants(resolved_grants, targets) if action == AuthzAction.READ else resolved_grants,
     )
     return decision.reason == "explicit_deny"
 
@@ -511,13 +522,13 @@ async def write_value(
     dp_id: uuid.UUID,
     body: WriteValueIn,
     request: Request,
-    user: str | None = Depends(optional_current_user),
+    user: Principal | str | None = Depends(_optional_current_principal),
     db: Database = Depends(get_db),
 ) -> None:
     """Write a value to a DataPoint via the internal EventBus.
 
     Zugriffslogik:
-    - JWT vorhanden (eingeloggter Benutzer) → immer erlaubt
+    - Authentifizierter Principal → WRITE-Grant erforderlich (Admin-Bridge bleibt erhalten)
     - X-Page-Id Header + Seite ist 'public' → erlaubt
     - X-Page-Id Header + Seite ist 'protected' + gültiger X-Session-Token → erlaubt
     - Seite ist 'readonly' → 403 (auch mit Page-Header)
@@ -529,14 +540,40 @@ async def write_value(
     if dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
 
-    if user is None:
+    principal: Principal | None = None
+    authenticated_write_allowed = False
+    if user is not None:
+        principal = _principal_from_dependency(user)
+        if principal.type == "user" and principal.is_admin:
+            authenticated_write_allowed = True
+        else:
+            grants = await load_role_grants(db, principal)
+            if await _has_explicit_datapoint_deny(
+                db,
+                principal,
+                dp_id,
+                action=AuthzAction.WRITE,
+                grants=grants,
+            ):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+            allowed = await filter_authorized_datapoints(
+                db,
+                principal,
+                [str(dp_id)],
+                action=AuthzAction.WRITE,
+                grants=grants,
+            )
+            authenticated_write_allowed = bool(allowed)
+    if not authenticated_write_allowed:
         page_id = request.headers.get("X-Page-Id")
         if not page_id:
+            if user is not None:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
         if not await _page_has_datapoint(db, page_id, dp_id):
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Datapoint is not part of the page")
 
-        from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
+        from obs.api.v1.visu import _resolve_access_with_node
 
         access, defining_node_id = await _resolve_access_with_node(db, page_id)
         if access == "readonly":
@@ -547,9 +584,10 @@ async def write_value(
             if not session_token or not validate_session(session_token, validate_id):
                 raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Valid session token required")
         elif access == "user":
-            if not await _check_user_access(db, page_id, user):
-                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
         elif access not in ("public",):
+            if user is not None:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
     try:

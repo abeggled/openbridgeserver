@@ -19,6 +19,7 @@ const props = defineProps<{
   value: DataPointValue | null
   statusValue: DataPointValue | null
   editorMode: boolean
+  readonly?: boolean
 }>()
 
 const dpStore = useDatapointsStore()
@@ -37,6 +38,10 @@ const sourceSessionToken = computed(() => sourceSessionNodeId.value ? getSession
 const sourceReadContext = computed(() => ({
   pageId: sourcePageId.value,
   ...(sourceSessionToken.value ? { sessionToken: sourceSessionToken.value } : {}),
+}))
+const sourceWriteContext = computed(() => ({
+  ...sourceReadContext.value,
+  definingId: sourceSessionNodeId.value || sourcePageId.value,
 }))
 
 sourceWs.onMessage((msg) => {
@@ -162,7 +167,9 @@ const refStatusValue = computed(() => {
     :value="refValue"
     :status-value="refStatusValue"
     :editor-mode="false"
+    :readonly="props.readonly"
     :page-id="sourcePageId"
     :session-token="sourceSessionToken"
+    :write-context="sourceWriteContext"
   />
 </template>

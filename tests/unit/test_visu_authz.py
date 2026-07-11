@@ -107,13 +107,13 @@ async def _insert_grant(db: Database, *, node_id: str, role: str = "guest", prin
     )
 
 
-async def _insert_user(db: Database, username: str = "alice") -> None:
+async def _insert_user(db: Database, username: str = "alice", *, is_admin: bool = False) -> None:
     await db.execute_and_commit(
         """
         INSERT INTO users (id, username, password_hash, is_admin, created_at)
-        VALUES (?, ?, 'hash', 0, ?)
+        VALUES (?, ?, 'hash', ?, ?)
         """,
-        (str(uuid.uuid4()), username, NOW),
+        (str(uuid.uuid4()), username, int(is_admin), NOW),
     )
 
 
@@ -258,6 +258,19 @@ async def test_save_user_page_allows_datapoints_readable_by_target_users(db: Dat
 
     row = await db.fetchone("SELECT page_config FROM visu_nodes WHERE id = 'target-page'")
     assert str(ALLOWED_DP_ID) in row["page_config"]
+
+
+@pytest.mark.asyncio
+async def test_save_user_page_preserves_promoted_assignee_admin_status(db: Database):
+    await _seed_scope(db)
+    await _insert_user(db, is_admin=True)
+    await _insert_visu_page(db, "target-page", access="user", config=_page_config(ALLOWED_DP_ID))
+    await _assign_visu_user(db, node_id="target-page")
+
+    await visu_api.save_page("target-page", _page_config(BLOCKED_DP_ID), db=db)
+
+    row = await db.fetchone("SELECT page_config FROM visu_nodes WHERE id = 'target-page'")
+    assert str(BLOCKED_DP_ID) in row["page_config"]
 
 
 @pytest.mark.asyncio

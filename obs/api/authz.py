@@ -150,6 +150,8 @@ def _grant_applies(*, action: AuthzAction, grant: RoleGrant, target: AuthzTarget
     if grant.node_type != target.node_type:
         return False
     if action == AuthzAction.READ:
+        if grant.effect == GrantEffect.DENY:
+            return grant.node_id in target.path
         return target.node_id in grant.path or grant.node_id in target.path
     return grant.node_id in target.path
 

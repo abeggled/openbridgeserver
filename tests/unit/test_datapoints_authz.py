@@ -113,14 +113,15 @@ async def _insert_grant(
     *,
     principal_id: str = "alice",
     node_type: str = "hierarchy",
+    role: str = "guest",
     effect: str = "allow",
 ) -> None:
     await db.execute_and_commit(
         """
         INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
-        VALUES ('user', ?, ?, ?, 'guest', ?)
+        VALUES ('user', ?, ?, ?, ?, ?)
         """,
-        (principal_id, node_type, node_id, effect),
+        (principal_id, node_type, node_id, role, effect),
     )
 
 
@@ -235,6 +236,189 @@ async def test_admin_list_keeps_no_grant_visibility(monkeypatch, db: Database):
 
     assert result.total == 2
     assert [item.name for item in result.items] == ["Alpha", "Bravo"]
+
+
+@pytest.mark.asyncio
+async def test_write_value_requires_write_grant_for_authenticated_principal(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000061", "Writable")
+    await _insert_tree(db)
+    await _insert_node(db, "allowed")
+    await _insert_datapoint(db, datapoint)
+    await _link_datapoint(db, datapoint.id, "allowed")
+    await _insert_grant(db, "allowed", role="resident")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+    event_bus = MagicMock()
+    event_bus.publish = AsyncMock()
+    monkeypatch.setattr(dp_api, "get_event_bus", lambda: event_bus)
+
+    request = MagicMock()
+    request.headers = {}
+    await dp_api.write_value(
+        dp_id=datapoint.id,
+        body=dp_api.WriteValueIn(value=22.5),
+        request=request,
+        user=Principal(subject="alice", type="user", is_admin=False),
+        db=db,
+    )
+
+    event_bus.publish.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_write_value_rejects_missing_or_explicitly_denied_write_grant(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000062", "Blocked write")
+    await _insert_tree(db)
+    await _insert_node(db, "blocked")
+    await _insert_datapoint(db, datapoint)
+    await _link_datapoint(db, datapoint.id, "blocked")
+    await _insert_grant(db, "blocked", role="resident", effect="deny")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+    event_bus = MagicMock()
+    event_bus.publish = AsyncMock()
+    monkeypatch.setattr(dp_api, "get_event_bus", lambda: event_bus)
+
+    request = MagicMock()
+    request.headers = {}
+    with pytest.raises(HTTPException) as exc_info:
+        await dp_api.write_value(
+            dp_id=datapoint.id,
+            body=dp_api.WriteValueIn(value=22.5),
+            request=request,
+            user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+    event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_write_value_explicit_deny_overrides_public_page_scope(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000064", "Denied public write")
+    await _insert_tree(db)
+    await _insert_node(db, "denied")
+    await _insert_datapoint(db, datapoint)
+    await _link_datapoint(db, datapoint.id, "denied")
+    await _insert_grant(db, "denied", role="resident", effect="deny")
+    await db.execute_and_commit(
+        """
+        INSERT INTO visu_nodes
+            (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
+        VALUES ('page-public-deny-write', NULL, 'Public', 'PAGE', 0, NULL, 'public', NULL, ?, ?, ?)
+        """,
+        (
+            '{"grid_cols":12,"grid_row_height":80,"grid_cell_width":120,"background":null,'
+            f'"widgets":[{{"id":"w","name":"W","type":"value","datapoint_id":"{datapoint.id}",'
+            '"status_datapoint_id":null,"x":0,"y":0,"w":1,"h":1,"config":{}}]}',
+            NOW,
+            NOW,
+        ),
+    )
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+    event_bus = MagicMock()
+    event_bus.publish = AsyncMock()
+    monkeypatch.setattr(dp_api, "get_event_bus", lambda: event_bus)
+    request = MagicMock()
+    request.headers.get = lambda key, default=None: {"X-Page-Id": "page-public-deny-write"}.get(key, default)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dp_api.write_value(
+            dp_id=datapoint.id,
+            body=dp_api.WriteValueIn(value=22.5),
+            request=request,
+            user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+    event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_write_value_user_page_assignment_does_not_replace_write_grant(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000065", "User page write")
+    await _insert_datapoint(db, datapoint)
+    await db.execute_and_commit(
+        """
+        INSERT INTO users (id, username, password_hash, created_at, is_admin)
+        VALUES ('user-id', 'alice', 'hash', ?, 0)
+        """,
+        (NOW,),
+    )
+    await db.execute_and_commit(
+        """
+        INSERT INTO visu_nodes
+            (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
+        VALUES ('page-user-write', NULL, 'User', 'PAGE', 0, NULL, 'user', NULL, ?, ?, ?)
+        """,
+        (
+            '{"grid_cols":12,"grid_row_height":80,"grid_cell_width":120,"background":null,'
+            f'"widgets":[{{"id":"w","name":"W","type":"value","datapoint_id":"{datapoint.id}",'
+            '"status_datapoint_id":null,"x":0,"y":0,"w":1,"h":1,"config":{}}]}',
+            NOW,
+            NOW,
+        ),
+    )
+    await db.execute_and_commit("INSERT INTO visu_node_users (node_id, username) VALUES ('page-user-write', 'alice')")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+    event_bus = MagicMock()
+    event_bus.publish = AsyncMock()
+    monkeypatch.setattr(dp_api, "get_event_bus", lambda: event_bus)
+    request = MagicMock()
+    request.headers.get = lambda key, default=None: {"X-Page-Id": "page-user-write"}.get(key, default)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dp_api.write_value(
+            dp_id=datapoint.id,
+            body=dp_api.WriteValueIn(value=22.5),
+            request=request,
+            user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+    event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user",
+    [None, Principal(subject="alice", type="user", is_admin=False)],
+    ids=["anonymous", "authenticated-without-grant"],
+)
+async def test_write_value_preserves_public_page_scope(monkeypatch, db: Database, user: Principal | None):
+    datapoint = _dp("00000000-0000-0000-0000-000000000063", "Public page write")
+    await _insert_datapoint(db, datapoint)
+    await db.execute_and_commit(
+        """
+        INSERT INTO visu_nodes
+            (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
+        VALUES ('page-public-write', NULL, 'Public', 'PAGE', 0, NULL, 'public', NULL, ?, ?, ?)
+        """,
+        (
+            '{"grid_cols":12,"grid_row_height":80,"grid_cell_width":120,"background":null,'
+            f'"widgets":[{{"id":"w","name":"W","type":"value","datapoint_id":"{datapoint.id}",'
+            '"status_datapoint_id":null,"x":0,"y":0,"w":1,"h":1,"config":{}}]}',
+            NOW,
+            NOW,
+        ),
+    )
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+    event_bus = MagicMock()
+    event_bus.publish = AsyncMock()
+    monkeypatch.setattr(dp_api, "get_event_bus", lambda: event_bus)
+
+    request = MagicMock()
+    request.headers.get = lambda key, default=None: {"X-Page-Id": "page-public-write"}.get(key, default)
+    await dp_api.write_value(
+        dp_id=datapoint.id,
+        body=dp_api.WriteValueIn(value=22.5),
+        request=request,
+        user=user,
+        db=db,
+    )
+
+    event_bus.publish.assert_awaited_once()
 
 
 @pytest.mark.asyncio

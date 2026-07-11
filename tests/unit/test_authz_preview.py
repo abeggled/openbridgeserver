@@ -158,6 +158,31 @@ async def test_preview_reports_explicit_deny_as_why_forbidden(db: Database):
 
 
 @pytest.mark.asyncio
+async def test_preview_excludes_descendant_read_deny_from_ancestor_explanation(db: Database):
+    await _insert_user(db)
+    await _insert_tree(db)
+    await _insert_node(db, "building")
+    await _insert_node(db, "floor", parent_id="building")
+    await _insert_node(db, "room", parent_id="floor")
+    await _insert_persisted_grant(db, node_id="floor", role="guest", effect="allow")
+    await _insert_persisted_grant(db, node_id="room", role="guest", effect="deny")
+
+    response = await authz_api.preview_permissions(
+        _request(
+            actions=["read"],
+            targets=[AuthzPreviewTarget(node_type="hierarchy", node_id="floor")],
+            grants=[],
+        ),
+        db=db,
+        _admin="admin",
+    )
+
+    result = response.results[0]
+    assert result.allowed is True
+    assert [(grant.node_id, grant.effect) for grant in result.matching_grants] == [("floor", "allow")]
+
+
+@pytest.mark.asyncio
 async def test_preview_uses_persisted_admin_status_for_user(db: Database):
     await _insert_user(db, is_admin=False)
     await _insert_tree(db)

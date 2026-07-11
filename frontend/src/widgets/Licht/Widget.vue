@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { datapoints } from '@/api/client'
+import type { WriteContext } from '@/api/client'
 import { useDatapointsStore } from '@/stores/datapoints'
 import type { DataPointValue } from '@/types'
 
@@ -11,6 +12,7 @@ const props = defineProps<{
   statusValue: DataPointValue | null
   editorMode: boolean
   readonly?: boolean
+  writeContext?: WriteContext
 }>()
 
 const dpStore = useDatapointsStore()
@@ -65,7 +67,10 @@ function getNumber(id: string | null): number | null {
 
 async function write(id: string | null, value: unknown) {
   if (!id || props.editorMode || props.readonly) return
-  try { await datapoints.write(id, value) } catch { /* ignore */ }
+  try {
+    if (props.writeContext) await datapoints.write(id, value, props.writeContext)
+    else await datapoints.write(id, value)
+  } catch { /* ignore */ }
 }
 
 // ── Switch ────────────────────────────────────────────────────────────────────

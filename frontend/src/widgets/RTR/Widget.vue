@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { datapoints } from '@/api/client'
+import type { WriteContext } from '@/api/client'
 import type { DataPointValue } from '@/types'
 
 const props = defineProps<{
@@ -12,6 +13,7 @@ const props = defineProps<{
   statusValue: DataPointValue | null
   editorMode: boolean
   readonly?: boolean
+  writeContext?: WriteContext
 }>()
 
 const dpStore = useDatapointsStore()
@@ -70,7 +72,8 @@ async function adjustSetpoint(delta: number) {
   pendingSetpoint.value = next
   pendingTimer = setTimeout(clearPending, 5000)
   try {
-    await datapoints.write(props.datapointId, next)
+    if (props.writeContext) await datapoints.write(props.datapointId, next, props.writeContext)
+    else await datapoints.write(props.datapointId, next)
   } catch {
     clearPending()
   }
@@ -102,7 +105,8 @@ const currentMode = computed<number>(() => {
 async function setMode(mode: number) {
   if (props.editorMode || props.readonly || !modeDpId.value) return
   try {
-    await datapoints.write(modeDpId.value, mode)
+    if (props.writeContext) await datapoints.write(modeDpId.value, mode, props.writeContext)
+    else await datapoints.write(modeDpId.value, mode)
   } catch { /* ignore */ }
 }
 

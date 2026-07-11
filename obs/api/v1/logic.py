@@ -44,6 +44,16 @@ from obs.logic.node_types import list_node_types
 
 router = APIRouter(tags=["logic"])
 
+_PRIVILEGED_SIDE_EFFECT_NODE_TYPES = frozenset(
+    {
+        "api_client",
+        "notify_pushover",
+        "notify_sms",
+        "python_script",
+        "wake_on_lan",
+    },
+)
+
 
 def _row_to_out(row: dict) -> LogicGraphOut:
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
@@ -120,6 +130,9 @@ async def _require_logic_graph_read(db: Database, principal: Principal, row: dic
 async def _require_logic_graph_activation(db: Database, principal: Principal, row: dict) -> None:
     if principal.type == "user" and principal.is_admin:
         return
+    flow = _flow_from_row(row)
+    if any(node.type in _PRIVILEGED_SIDE_EFFECT_NODE_TYPES for node in flow.nodes):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")
     all_ids, allowed_ids = await _authorized_logic_datapoint_ids(db, principal, row, action=AuthzAction.ACTIVATE)
     if not all_ids or len(allowed_ids) != len(all_ids):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")

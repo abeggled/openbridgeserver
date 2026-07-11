@@ -400,3 +400,22 @@ async def test_filter_authorized_hierarchy_nodes_applies_read_inheritance(db: Da
     )
 
     assert allowed == ["building", "floor", "room"]
+
+
+@pytest.mark.asyncio
+async def test_descendant_read_deny_does_not_hide_ancestor_context(db: Database):
+    await _insert_tree(db)
+    await _insert_node(db, "building")
+    await _insert_node(db, "floor", parent_id="building")
+    await _insert_node(db, "allowed-room", parent_id="floor")
+    await _insert_node(db, "secret-room", parent_id="floor")
+    await _insert_grant(db, node_id="floor", role="guest", effect="allow")
+    await _insert_grant(db, node_id="secret-room", role="guest", effect="deny")
+
+    allowed = await filter_authorized_hierarchy_nodes(
+        db,
+        Principal(subject="alice", type="user", is_admin=False),
+        ["building", "floor", "allowed-room", "secret-room"],
+    )
+
+    assert allowed == ["building", "floor", "allowed-room"]

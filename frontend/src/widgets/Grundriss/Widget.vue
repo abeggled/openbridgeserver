@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { WidgetRegistry } from '@/widgets/registry'
+import type { WriteContext } from '@/api/client'
 import type { DataPointValue } from '@/types'
 import { imageToScreen as _imageToScreen } from './coords'
 import type { Rotation } from './coords'
@@ -41,6 +42,7 @@ const props = defineProps<{
   editorMode: boolean
   pageId?: string | null
   sessionToken?: string | null
+  writeContext?: WriteContext
   readonly?: boolean
 }>()
 
@@ -247,7 +249,7 @@ function handleAreaClick(area: GrundrissArea) {
           :editor-mode="editorMode"
           :readonly="props.readonly"
           :h="Math.round(mw.hPx / 80)"
-          v-bind="{ pageId: props.pageId, sessionToken: props.sessionToken }"
+          v-bind="{ pageId: props.pageId, sessionToken: props.sessionToken, writeContext: props.writeContext }"
         />
         <div v-else class="flex items-center justify-center h-full text-xs text-gray-500">
           {{ mw.widgetType }}?
