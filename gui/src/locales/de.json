@@ -2164,13 +2164,23 @@
       "deleteUser": "Benutzer löschen",
       "deleteUserConfirm": "Benutzer '{name}' wirklich löschen?",
       "count": "{n} Benutzer",
+      "empty": "Keine Benutzer vorhanden",
       "addButton": "+ Benutzer",
       "colUsername": "Benutzername",
       "colAdmin": "Admin",
       "colMqtt": "MQTT",
       "colCreated": "Erstellt",
+      "currentAccount": "Du",
+      "roleAdmin": "Admin",
+      "roleUser": "Benutzer",
+      "status": "Status",
+      "statusCurrent": "Aktuelles Konto",
+      "statusReady": "Bereit",
+      "statusWarning": "MQTT ohne Passwort",
       "mqttActive": "Aktiv",
       "mqttOff": "Aus",
+      "mqttPasswordSetShort": "Passwort gesetzt",
+      "mqttPasswordMissing": "Passwort fehlt",
       "mqttSetTitle": "MQTT-Passwort setzen",
       "mqttDisableTitle": "MQTT deaktivieren",
       "createTitle": "Neuer Benutzer",
@@ -2181,7 +2191,89 @@
       "mqttFor": "Benutzer: {username}",
       "newMqttPassword": "Neues MQTT-Passwort",
       "mqttPasswordSet": "MQTT-Passwort gesetzt",
-      "create": "Erstellen"
+      "create": "Erstellen",
+      "rights": {
+        "openButton": "Rechte bearbeiten",
+        "title": "Rechte für {username}",
+        "progress": "Fortschritt im Rechte-Editor",
+        "steps": {
+          "role": "Rolle",
+          "scopes": "Bereiche",
+          "preview": "Vorschau",
+          "confirm": "Bestätigen"
+        },
+        "roleTitle": "Rolle auswählen",
+        "roleHint": "Die ausgewählte Rolle wird für neu hinzugefügte Bereiche verwendet. Bestehende Bereiche behalten ihre jeweilige Rolle, solange die Bulk-Neuzuweisung nicht ausdrücklich aktiviert wird.",
+        "mixedRoleWarning": "Dieser Benutzer hat derzeit unterschiedliche Rollen in verschiedenen Bereichen. Beim Hinzufügen oder Entfernen von Bereichen bleiben diese Rollen unverändert.",
+        "bulkRoleTitle": "Alle beibehaltenen bestehenden Bereiche neu zuweisen",
+        "bulkRoleHint": "Die ausgewählte Rolle ausdrücklich auf jeden bestehenden Bereich anwenden, der ausgewählt bleibt.",
+        "roles": {
+          "guest": {
+            "label": "Gast",
+            "description": "Nur Lesezugriff."
+          },
+          "resident": {
+            "label": "Bewohner",
+            "description": "Lesen, Schreiben und Aktivieren."
+          },
+          "operator": {
+            "label": "Operator",
+            "description": "Voller Betriebszugriff einschließlich Erzeugen."
+          },
+          "owner": {
+            "label": "Eigentümer",
+            "description": "Alle Aktionen in den ausgewählten Bereichen."
+          }
+        },
+        "scopeTitle": "Hierarchie-Bereiche auswählen",
+        "scopeHint": "Die ausgewählte Rolle gilt für jeden markierten Bereich und seine Unterbereiche.",
+        "noScopes": "Es sind keine Hierarchie-Bereiche verfügbar.",
+        "unknownScope": "Dieser gespeicherte Bereich ist nicht mehr in der Hierarchie-Liste vorhanden.",
+        "deniedScopePreserved": "Für diesen Bereich besteht eine direkte Verbots-Zuweisung, die erhalten bleibt; hier kann keine Erlaubnis hinzugefügt werden.",
+        "orphanedScopeBlock": "{n} ausgewählte Zuweisungen lassen sich keinem Hierarchie-Bereich mehr zuordnen. Entferne sie ausdrücklich oder brich ab; solange sie ausgewählt sind, ist das Speichern gesperrt.",
+        "newScopeRoleRequired": "Wähle eine Rolle aus, bevor du neue Hierarchie-Bereiche hinzufügst.",
+        "selectedScopes": "{n} Bereiche ausgewählt",
+        "previewTitle": "Effektive Rechte",
+        "previewHint": "Prüfe vor dem Speichern die berechnete Entscheidung und ihre Begründung für jede Aktion.",
+        "emptyPreview": "Es gibt keine bearbeitbaren oder fortgeschrittenen Zuweisungsziele zu prüfen. Eine Server-Vorschau ist nicht erforderlich.",
+        "refreshPreview": "Vorschau aktualisieren",
+        "allowed": "Erlaubt",
+        "denied": "Verboten",
+        "actions": {
+          "read": "Lesen",
+          "write": "Schreiben",
+          "activate": "Aktivieren",
+          "generate": "Erzeugen"
+        },
+        "reasons": {
+          "admin": "Durch die Administrator-Brücke erlaubt.",
+          "allowed": "Durch eine passende Rollenzuweisung erlaubt.",
+          "direct_datapoint_grant": "Durch eine direkte Datenpunkt-Zuweisung erlaubt.",
+          "explicit_deny": "Durch eine ausdrückliche Verbots-Zuweisung verweigert.",
+          "missing_allow": "Verweigert, weil keine passende Erlaubnis-Zuweisung gilt.",
+          "no_targets": "Verweigert, weil das Ziel nicht aufgelöst werden konnte."
+        },
+        "confirmTitle": "Änderungen bestätigen",
+        "confirmHint": "Beim Speichern werden die bearbeitbaren Hierarchie-Zuweisungen atomar ersetzt.",
+        "selectedRole": "Rolle",
+        "roleHandling": "Rollenbehandlung",
+        "roleSummaryBulk": "Alle ausgewählten Bereiche werden der Rolle {role} neu zugewiesen.",
+        "roleSummaryNew": "Bestehende Bereichsrollen bleiben unverändert; neue Bereiche verwenden {role}.",
+        "existingRolesPreserved": "Bestehende Rollen bleiben erhalten",
+        "selectedAreas": "Bereiche",
+        "advancedPreserved": "{n} fortgeschrittene Zuweisungen bleiben unverändert erhalten.",
+        "advancedTitle": "Fortgeschrittene Zuweisungen",
+        "advancedDescription": "{effect} · {role} · {nodeType} · {nodeId}",
+        "advancedTarget": "{nodeType} · {nodeId}",
+        "removeAdvanced": "Entfernen",
+        "back": "Zurück",
+        "next": "Weiter",
+        "save": "Rechte speichern",
+        "loadError": "Die Rechte konnten nicht geladen werden.",
+        "previewError": "Die effektive Vorschau konnte nicht geladen werden.",
+        "saveError": "Die Rechte konnten nicht gespeichert werden.",
+        "concurrentChange": "Die Zuweisungen wurden nach dem Öffnen des Editors geändert. Lade den Editor neu und prüfe vor dem Speichern den aktuellen Stand."
+      }
     },
     "apikeys": {
       "keyName": "API-Key-Name",

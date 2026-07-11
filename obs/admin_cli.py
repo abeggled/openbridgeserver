@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import sys
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from typing import Any
 import yaml
 
 from obs import __version__
+from obs.api.auth import hash_password
 from obs.api.v1.support import sanitize_support_data
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -123,6 +125,19 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
         return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     except sqlite3.Error:
         return set()
+
+
+def _require_table(conn: sqlite3.Connection, table: str) -> None:
+    if not _table_exists(conn, table):
+        raise AdminCliError(f"Tabelle {table} fehlt. Bitte Datenbankmigrationen ausfuehren.")
+
+
+def _require_columns(conn: sqlite3.Connection, table: str, required: set[str]) -> set[str]:
+    columns = _columns(conn, table)
+    missing = sorted(required - columns)
+    if missing:
+        raise AdminCliError(f"Tabelle {table} enthaelt nicht alle benoetigten Spalten: {', '.join(missing)}")
+    return columns
 
 
 def _json_loads(raw: Any, *, context: str) -> Any:
@@ -491,6 +506,137 @@ def set_loglevel(db_path: Path, level: str, *, backup: bool = True) -> dict[str,
         conn.close()
 
 
+def _insert_user_sql(username: str, password: str, now: str, columns: set[str]) -> tuple[str, tuple[Any, ...]]:
+    values: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "username": username,
+        "password_hash": hash_password(password),
+        "is_admin": 1,
+        "created_at": now,
+    }
+    if "mqtt_enabled" in columns:
+        values["mqtt_enabled"] = 0
+    if "mqtt_password_hash" in columns:
+        values["mqtt_password_hash"] = None
+
+    ordered_columns = [
+        name for name in ("id", "username", "password_hash", "is_admin", "mqtt_enabled", "mqtt_password_hash", "created_at") if name in values
+    ]
+    placeholders = ", ".join("?" for _ in ordered_columns)
+    return (
+        f"INSERT INTO users ({', '.join(ordered_columns)}) VALUES ({placeholders})",
+        tuple(values[name] for name in ordered_columns),
+    )
+
+
+def setup_default_user(db_path: Path, *, username: str = "admin", password: str = "admin", backup: bool = True) -> dict[str, Any]:
+    """Create the setup-default admin user when the users table is empty."""
+    conn = connect_database(db_path)
+    backup_path: Path | None = None
+    try:
+        _require_table(conn, "users")
+        columns = _require_columns(conn, "users", {"id", "username", "password_hash", "is_admin", "created_at"})
+        existing_count = _count(conn, "users") or 0
+        if existing_count > 0:
+            return {"created": False, "username": username, "existing_users": existing_count, "backup": None}
+
+        backup_path = create_backup(db_path) if backup else None
+        _begin_immediate(conn)
+        sql, params = _insert_user_sql(username, password, _now(), columns)
+        conn.execute(sql, params)
+        conn.commit()
+        return {"created": True, "username": username, "is_admin": True, "backup": str(backup_path) if backup_path else None}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def recover_owner(
+    db_path: Path,
+    username: str,
+    *,
+    password: str | None = None,
+    node_type: str | None = None,
+    node_id: str | None = None,
+    backup: bool = True,
+) -> dict[str, Any]:
+    """Offline owner recovery: ensure a user is admin and optionally owns one AuthZ node."""
+    if not username:
+        raise AdminCliError("Benutzername darf nicht leer sein")
+    if (node_type is None) != (node_id is None):
+        raise AdminCliError("--node-type und --node-id muessen gemeinsam angegeben werden")
+
+    conn = connect_database(db_path)
+    backup_path: Path | None = None
+    try:
+        _require_table(conn, "users")
+        user_columns = _require_columns(conn, "users", {"id", "username", "password_hash", "is_admin", "created_at"})
+        if node_type is not None:
+            _require_table(conn, "authz_node_roles")
+            _require_columns(
+                conn,
+                "authz_node_roles",
+                {"principal_type", "principal_id", "node_type", "node_id", "role", "effect", "created_at", "updated_at"},
+            )
+
+        user = _row(conn, "SELECT id, username, is_admin FROM users WHERE username=?", (username,))
+        if user is None and password is None:
+            raise AdminCliError(f"Benutzer '{username}' nicht gefunden. Zum Anlegen --password angeben.")
+
+        backup_path = create_backup(db_path) if backup else None
+        _begin_immediate(conn)
+        created = False
+        password_updated = False
+        now = _now()
+
+        if user is None:
+            assert password is not None
+            sql, params = _insert_user_sql(username, password, now, user_columns)
+            conn.execute(sql, params)
+            created = True
+            password_updated = True
+        else:
+            updates = ["is_admin=1"]
+            params: list[Any] = []
+            if password is not None:
+                updates.append("password_hash=?")
+                params.append(hash_password(password))
+                password_updated = True
+            params.append(username)
+            conn.execute(f"UPDATE users SET {', '.join(updates)} WHERE username=?", params)
+
+        owner_grant = None
+        if node_type is not None and node_id is not None:
+            conn.execute(
+                """
+                INSERT INTO authz_node_roles
+                    (principal_type, principal_id, node_type, node_id, role, effect, created_at, updated_at)
+                VALUES ('user', ?, ?, ?, 'owner', 'allow', ?, ?)
+                ON CONFLICT(principal_type, principal_id, node_type, node_id)
+                DO UPDATE SET role='owner', effect='allow', updated_at=excluded.updated_at
+                """,
+                (username, node_type, node_id, now, now),
+            )
+            owner_grant = {"principal_type": "user", "principal_id": username, "node_type": node_type, "node_id": node_id, "role": "owner"}
+
+        conn.commit()
+        return {
+            "username": username,
+            "created": created,
+            "is_admin": True,
+            "password_updated": password_updated,
+            "owner_grant": owner_grant,
+            "backup": str(backup_path) if backup_path else None,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def validate_config(db_path: Path) -> dict[str, Any]:
     conn = connect_database(db_path)
     errors: list[dict[str, str]] = []
@@ -702,6 +848,17 @@ def build_parser() -> argparse.ArgumentParser:
     log_set = log_sub.add_parser("set", help="Persistentes Loglevel setzen")
     log_set.add_argument("level")
 
+    auth_parser = sub.add_parser("auth", help="Offline-Authentifizierung und Owner-Recovery")
+    auth_sub = auth_parser.add_subparsers(dest="auth_command", required=True)
+    setup_default = auth_sub.add_parser("setup-default", help="Default-Admin anlegen, wenn noch keine Benutzer existieren")
+    setup_default.add_argument("--username", default="admin", help="Benutzername fuer den Default-Admin")
+    setup_default.add_argument("--password", default="admin", help="Passwort fuer den Default-Admin")
+    owner_recovery = auth_sub.add_parser("owner-recovery", help="Benutzer offline als Admin/Owner wiederherstellen")
+    owner_recovery.add_argument("username")
+    owner_recovery.add_argument("--password", help="Passwort setzen; erforderlich, wenn der Benutzer noch nicht existiert")
+    owner_recovery.add_argument("--node-type", help="AuthZ-Node-Typ, z. B. hierarchy")
+    owner_recovery.add_argument("--node-id", help="AuthZ-Node-ID, fuer die owner gesetzt wird")
+
     support_parser = sub.add_parser("support-package", help="Offline-Supportpaket erzeugen")
     support_sub = support_parser.add_subparsers(dest="support_command", required=True)
     support_create = support_sub.add_parser("create", help="Supportpaket erzeugen")
@@ -769,6 +926,20 @@ def run(args: argparse.Namespace) -> tuple[Any, int]:
         return get_loglevel(db_path), 0
     if args.command == "loglevel" and args.loglevel_command == "set":
         return set_loglevel(db_path, args.level, backup=backup), 0
+    if args.command == "auth" and args.auth_command == "setup-default":
+        return setup_default_user(db_path, username=args.username, password=args.password, backup=backup), 0
+    if args.command == "auth" and args.auth_command == "owner-recovery":
+        return (
+            recover_owner(
+                db_path,
+                args.username,
+                password=args.password,
+                node_type=args.node_type,
+                node_id=args.node_id,
+                backup=backup,
+            ),
+            0,
+        )
     if args.command == "support-package" and args.support_command == "create":
         package = create_support_package(db_path)
         output = _support_package_target(args.output)

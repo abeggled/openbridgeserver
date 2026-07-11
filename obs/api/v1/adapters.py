@@ -31,7 +31,9 @@ from pydantic import BaseModel
 
 from obs.adapters import registry as adapter_registry
 from obs.adapters.knx.dpt_registry import DPTRegistry
-from obs.api.auth import get_admin_user, get_current_user
+from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import filter_authorized_datapoints
 from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.db.database import Database, get_db
 
@@ -189,6 +191,27 @@ def _instance_out(row: Any, instance: Any | None) -> AdapterInstanceOut:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _principal_from_dependency(user: Principal | str) -> Principal:
+    if isinstance(user, Principal):
+        return user
+    # Compatibility for direct unit calls that still pass the legacy username.
+    return Principal(subject=str(user), type="user", is_admin=str(user) == "admin")
+
+
+def _admin_principal(username: str) -> Principal:
+    return Principal(subject=username, type="user", is_admin=True)
+
+
+async def _filter_readable_datapoint_ids(
+    db: Database,
+    principal: Principal,
+    dp_ids: list[str],
+) -> set[str]:
+    if principal.type == "user" and principal.is_admin:
+        return set(dp_ids)
+    return set(await filter_authorized_datapoints(db, principal, dp_ids, action=AuthzAction.READ))
 
 
 async def _validate_message_config_preserves_binding_targets(
@@ -369,7 +392,7 @@ async def delete_instance(
 async def test_instance(
     instance_id: uuid.UUID,
     body: TestRequest | None = None,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> TestResult:
     """Verbindungstest mit aktuellem oder gegebenem Config (ephemer, kein Persist)."""
@@ -524,7 +547,7 @@ async def migrate_instance_bindings(
 @router.get("/instances/{instance_id}/bindings", response_model=list[InstanceBindingEntry])
 async def list_instance_bindings(
     instance_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[InstanceBindingEntry]:
     """Alle Bindings einer Adapter-Instanz, angereichert mit Datenpunkt-Namen."""
@@ -536,6 +559,8 @@ async def list_instance_bindings(
            ORDER BY dp.name, ab.created_at""",
         (str(instance_id),),
     )
+    principal = _principal_from_dependency(_user)
+    allowed_dp_ids = await _filter_readable_datapoint_ids(db, principal, [row["datapoint_id"] for row in rows])
     return [
         InstanceBindingEntry(
             binding_id=uuid.UUID(row["id"]),
@@ -545,6 +570,7 @@ async def list_instance_bindings(
             config=json.loads(row["config"]) if row["config"] else {},
         )
         for row in rows
+        if row["datapoint_id"] in allowed_dp_ids
     ]
 
 
@@ -851,7 +877,7 @@ async def _iobroker_candidates(
 async def iobroker_import_preview(
     instance_id: uuid.UUID,
     body: IoBrokerImportRequest,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> IoBrokerImportResult:
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
@@ -883,6 +909,7 @@ async def iobroker_import_states(
     candidates = await _iobroker_candidates(str(instance_id), body, db)
     result = IoBrokerImportResult(preview=candidates)
     registry = get_registry()
+    admin_principal = _admin_principal(_user)
 
     for item in candidates:
         if item.exists:
@@ -912,7 +939,7 @@ async def iobroker_import_states(
                     config=config,
                     enabled=True,
                 ),
-                _user,
+                admin_principal,
                 db,
             )
             result.created_bindings += 1
@@ -936,7 +963,7 @@ class AnwesenheitHealthResult(BaseModel):
 @router.get("/instances/{instance_id}/anwesenheit/health", response_model=AnwesenheitHealthResult)
 async def anwesenheit_health(
     instance_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> AnwesenheitHealthResult:
     """Check whether history data is available for the configured offset window."""
@@ -972,6 +999,9 @@ async def anwesenheit_health(
         "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=? AND direction='SOURCE' AND enabled=1",
         (str(instance_id),),
     )
+    principal = _principal_from_dependency(_user)
+    allowed_dp_ids = await _filter_readable_datapoint_ids(db, principal, [row["datapoint_id"] for row in binding_rows])
+    binding_rows = [row for row in binding_rows if row["datapoint_id"] in allowed_dp_ids]
     total = len(binding_rows)
     if total == 0:
         return AnwesenheitHealthResult(
@@ -1041,7 +1071,7 @@ class AnwesenheitSyncResult(BaseModel):
 )
 async def anwesenheit_list_datapoints(
     instance_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[AnwesenheitDatapointEntry]:
     """List all Boolean/Integer DataPoints with their binding status for this instance."""
@@ -1055,6 +1085,7 @@ async def anwesenheit_list_datapoints(
 
     registry = get_registry()
     all_dps = registry.all()
+    principal = _principal_from_dependency(_user)
 
     # Existing bindings for this instance
     binding_rows = await db.fetchall(
@@ -1064,10 +1095,14 @@ async def anwesenheit_list_datapoints(
     bound_map: dict[str, str] = {r["datapoint_id"]: r["id"] for r in binding_rows}
 
     result: list[AnwesenheitDatapointEntry] = []
+    candidate_ids = [str(dp.id) for dp in all_dps if dp.data_type in ("BOOLEAN", "INTEGER")]
+    allowed_dp_ids = await _filter_readable_datapoint_ids(db, principal, candidate_ids)
     for dp in sorted(all_dps, key=lambda d: d.name.lower()):
         if dp.data_type not in ("BOOLEAN", "INTEGER"):
             continue
         dp_id_str = str(dp.id)
+        if dp_id_str not in allowed_dp_ids:
+            continue
         result.append(
             AnwesenheitDatapointEntry(
                 id=dp_id_str,
@@ -1111,6 +1146,7 @@ async def anwesenheit_sync_bindings(
     current_ids = set(current.keys())
 
     result = AnwesenheitSyncResult()
+    admin_principal = _admin_principal(_user)
 
     # Create missing bindings
     for dp_id_str in desired_ids - current_ids:
@@ -1124,7 +1160,7 @@ async def anwesenheit_sync_bindings(
                     config={},
                     enabled=True,
                 ),
-                _user,
+                admin_principal,
                 db,
             )
             result.created += 1
@@ -1136,7 +1172,7 @@ async def anwesenheit_sync_bindings(
         try:
             binding_uuid = uuid.UUID(current[dp_id_str])
             dp_uuid = uuid.UUID(dp_id_str)
-            await delete_binding(dp_uuid, binding_uuid, _user, db)
+            await delete_binding(dp_uuid, binding_uuid, admin_principal, db)
             result.removed += 1
         except Exception as exc:
             result.errors.append(f"{dp_id_str}: {exc}")
@@ -1283,7 +1319,7 @@ async def get_binding_schema(
 async def test_adapter(
     adapter_type: str,
     body: TestRequest,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> TestResult:
     cls = adapter_registry.get_class(adapter_type)
     if cls is None:

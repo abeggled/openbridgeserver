@@ -49,12 +49,14 @@ class AuditLogWriter:
         resource_type: str | None = None,
         resource_id: str | None = None,
         details: dict[str, Any] | None = None,
+        commit: bool = True,
     ) -> int:
         if not action.strip():
             raise ValueError("action must not be empty")
 
         payload = json.dumps(details or {}, separators=(",", ":"), sort_keys=True)
-        cur = await self._db.execute_and_commit(
+        execute = self._db.execute_and_commit if commit else self._db.execute
+        cur = await execute(
             """
             INSERT INTO audit_log_entries
                 (actor, action, resource_type, resource_id, details_json, request_id, remote_addr, user_agent)

@@ -456,17 +456,16 @@ class TestCheckSsrf:
 # ===========================================================================
 
 
-from obs.api.v1.camera import _camera_auth
+from obs.api.v1.camera import _camera_auth, _page_config_contains_camera_url
 
 
 class TestCameraAuth:
     @pytest.mark.asyncio
-    async def test_missing_auth_raises_401(self):
+    async def test_missing_auth_returns_anonymous_identity(self):
         request = MagicMock()
         request.headers = {"Authorization": ""}
-        with pytest.raises(HTTPException) as exc:
-            await _camera_auth(request=request, _token="")
-        assert exc.value.status_code == 401
+        result = await _camera_auth(request=request, _token="")
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_bearer_header_accepted(self):
@@ -483,6 +482,40 @@ class TestCameraAuth:
         with patch("obs.api.v1.camera.decode_token", return_value="testuser"):
             result = await _camera_auth(request=request, _token="mytoken")
         assert result == "testuser"
+
+    def test_page_scope_matches_legacy_api_key_auth_type(self):
+        page_config = {
+            "widgets": [
+                {
+                    "type": "kamera",
+                    "config": {
+                        "url": "http://cam.local/snapshot",
+                        "authType": "API-Key (Query-Parameter)",
+                        "apiKeyParam": "token",
+                        "apiKeyValue": "abc123",
+                    },
+                }
+            ]
+        }
+
+        assert _page_config_contains_camera_url(page_config, "http://cam.local/snapshot?token=abc123")
+
+    def test_page_scope_matches_legacy_basic_auth_type(self):
+        page_config = {
+            "widgets": [
+                {
+                    "type": "kamera",
+                    "config": {
+                        "url": "http://cam.local/snapshot",
+                        "authType": "Basic Auth (Benutzername / Passwort)",
+                        "username": "alice",
+                        "password": "secret",
+                    },
+                }
+            ]
+        }
+
+        assert _page_config_contains_camera_url(page_config, "http://cam.local/snapshot", "alice", "secret")
 
 
 # ===========================================================================
