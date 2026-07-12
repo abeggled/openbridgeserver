@@ -70,7 +70,7 @@ jobs:
       - name: Install Playwright dependencies
         working-directory: tests/gui
         run: |
-          npm install
+          npm ci
           npx playwright install --with-deps chromium
 
       - name: Run Playwright suite

@@ -39,13 +39,13 @@ npm pkg set version="$VERSION" --prefix gui
 # ── Build frontends ───────────────────────────────────────────────────────────
 echo "==> Building Admin GUI..."
 cd gui
-npm install --prefer-offline
+npm ci --prefer-offline
 npm run build
 cd ..
 
 echo "==> Building Visu frontend..."
 cd frontend
-npm install --prefer-offline
+npm ci --prefer-offline
 npm run build
 cd ..
 
