@@ -2319,7 +2319,28 @@
       "nameLabel": "Beschreibung / Name",
       "namePlaceholder": "z.B. Home Assistant",
       "create": "Erstellen",
-      "modalTitle": "API Key Name"
+      "modalTitle": "API Key Name",
+      "capabilities": {
+        "open": "Capabilities konfigurieren",
+        "title": "Konfigurations-Capabilities des API-Keys",
+        "target": "Ziel-API-Key: {name}",
+        "warning": "Diese Berechtigungen erlauben dem ausgewählten API-Key Konfiguration zu ändern. Bestehende Zielrechte, Denies und Readonly-Grenzen gelten weiterhin.",
+        "confirm": "Ich bestätige den vollständigen Capability-Ersatz für {name}.",
+        "save": "Capabilities ersetzen",
+        "loadError": "Capabilities konnten nicht geladen werden.",
+        "saveError": "Capabilities konnten nicht gespeichert werden.",
+        "concurrentChange": "Die Capabilities wurden nach dem Öffnen geändert. Lade den aktuellen Stand neu und prüfe ihn.",
+        "effects": {
+          "visu.page_config.write": {
+            "title": "Visu-Seitenkonfiguration schreiben",
+            "description": "Erlaubt nur das Speichern der Konfiguration einer ansonsten beschreibbaren Visu-Seite."
+          },
+          "datapoint.metadata.write": {
+            "title": "DataPoint-Metadaten schreiben",
+            "description": "Erlaubt Metadatenänderungen für DataPoints mit passendem WRITE-Grant; Laufzeitwerte bleiben getrennt."
+          }
+        }
+      }
     },
     "password": {
       "title": "Passwort ändern",

@@ -20,6 +20,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, field_serializer
 
 from obs.api.auth import Principal, get_admin_user, get_current_principal
+from obs.api.capabilities import ConfigCapability, audit_config_capability_use, require_config_capability
 from obs.api.authz import AuthzAction, AuthzTarget, RoleGrant, authorize
 from obs.api.authz_service import (
     _datapoint_read_grants,
@@ -376,12 +377,37 @@ async def get_datapoint(
 async def update_datapoint(
     dp_id: uuid.UUID,
     body: DataPointUpdate,
-    _user: str = Depends(get_admin_user),
+    request: Request,
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(get_db),
 ) -> DataPointOut:
+    principal = _principal_from_dependency(_user)
+    used_capability = await require_config_capability(
+        db,
+        principal,
+        ConfigCapability.DATAPOINT_METADATA_WRITE,
+        target_type="datapoint",
+        target_id=str(dp_id),
+        request=request,
+    )
     reg = get_registry()
     current_dp = reg.get(dp_id)
     if current_dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+
+    if used_capability:
+        allowed = await filter_authorized_datapoints(db, principal, [str(dp_id)], action=AuthzAction.WRITE)
+        if not allowed or "value" in body.model_fields_set:
+            await audit_config_capability_use(
+                db,
+                principal,
+                ConfigCapability.DATAPOINT_METADATA_WRITE,
+                target_type="datapoint",
+                target_id=str(dp_id),
+                allowed=False,
+                request=request,
+            )
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Datapoint write scope required")
 
     # --- Validation phase (no side effects) ---
     if body.data_type is not None:
@@ -422,7 +448,18 @@ async def update_datapoint(
             )
         )
 
-    return _enrich(dp)
+    result = _enrich(dp)
+    if used_capability:
+        await audit_config_capability_use(
+            db,
+            principal,
+            ConfigCapability.DATAPOINT_METADATA_WRITE,
+            target_type="datapoint",
+            target_id=str(dp_id),
+            allowed=True,
+            request=request,
+        )
+    return result
 
 
 @router.delete("/{dp_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -1518,7 +1518,7 @@ class TestUpdateDatapoint:
         reg = _RegistryStub(dps=[dp])
         monkeypatch.setattr(dp_api, "get_registry", lambda: reg)
         body = DataPointUpdate(name="New Name")
-        result = await dp_api.update_datapoint(dp_id=dp.id, body=body, _user="admin")
+        result = await dp_api.update_datapoint(dp_id=dp.id, body=body, request=None, _user="admin")
         assert result.name == "New Name"
 
     @pytest.mark.asyncio
@@ -1526,7 +1526,7 @@ class TestUpdateDatapoint:
         monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub())
         body = DataPointUpdate(name="X")
         with pytest.raises(HTTPException) as exc:
-            await dp_api.update_datapoint(dp_id=uuid.uuid4(), body=body, _user="admin")
+            await dp_api.update_datapoint(dp_id=uuid.uuid4(), body=body, request=None, _user="admin")
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -1539,7 +1539,7 @@ class TestUpdateDatapoint:
         monkeypatch.setattr(DataTypeRegistry, "is_registered", lambda dt: False)
         body = DataPointUpdate(data_type="INVALID")
         with pytest.raises(HTTPException) as exc:
-            await dp_api.update_datapoint(dp_id=dp.id, body=body, _user="admin")
+            await dp_api.update_datapoint(dp_id=dp.id, body=body, request=None, _user="admin")
         assert exc.value.status_code == 422
 
 

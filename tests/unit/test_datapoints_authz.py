@@ -31,6 +31,14 @@ class _RegistryStub:
     def get_value(self, dp_id):
         return self._values.get(dp_id)
 
+    async def update(self, dp_id, body):
+        datapoint = self._dps[dp_id]
+        for field in body.model_fields_set:
+            value = getattr(body, field)
+            if value is not None and field != "value":
+                setattr(datapoint, field, value)
+        return datapoint
+
 
 @pytest.fixture
 async def db() -> Database:
@@ -236,6 +244,46 @@ async def test_admin_list_keeps_no_grant_visibility(monkeypatch, db: Database):
 
     assert result.total == 2
     assert [item.name for item in result.items] == ["Alpha", "Bravo"]
+
+
+@pytest.mark.asyncio
+async def test_api_key_metadata_capability_still_requires_target_write_grant_and_excludes_values(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000041", "Metadata")
+    await _insert_datapoint(db, datapoint)
+    key_id = "00000000-0000-0000-0000-000000000989"
+    await db.execute_and_commit(
+        "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?, 'key', 'hash-989', 'admin', ?)",
+        (key_id, NOW),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO api_key_capabilities (key_id, capability) VALUES (?, 'datapoint.metadata.write')",
+        (key_id,),
+    )
+    principal = Principal(subject=f"api_key:{key_id}", type="api_key", is_admin=False, owner="admin")
+    registry = _RegistryStub([datapoint])
+    monkeypatch.setattr(dp_api, "get_registry", lambda: registry)
+
+    with pytest.raises(HTTPException) as missing_scope:
+        await dp_api.update_datapoint(dp_id=datapoint.id, body=dp_api.DataPointUpdate(name="Denied"), request=None, _user=principal, db=db)
+    assert missing_scope.value.status_code == 403
+
+    await db.execute_and_commit(
+        """
+        INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
+        VALUES ('api_key', ?, 'datapoint', ?, 'resident', 'allow')
+        """,
+        (key_id, str(datapoint.id)),
+    )
+    result = await dp_api.update_datapoint(dp_id=datapoint.id, body=dp_api.DataPointUpdate(name="Allowed"), request=None, _user=principal, db=db)
+    assert result.name == "Allowed"
+
+    with pytest.raises(HTTPException) as runtime_value:
+        await dp_api.update_datapoint(dp_id=datapoint.id, body=dp_api.DataPointUpdate(value=21.5), request=None, _user=principal, db=db)
+    assert runtime_value.value.status_code == 403
+
+    audit = await db.fetchall("SELECT details_json FROM audit_log_entries WHERE action='api_key.capability.use' ORDER BY id")
+    assert '"result":"allowed"' in audit[-2]["details_json"]
+    assert '"result":"denied"' in audit[-1]["details_json"]
 
 
 @pytest.mark.asyncio

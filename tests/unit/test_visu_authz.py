@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from unittest.mock import MagicMock
 
@@ -225,10 +226,10 @@ async def test_authenticated_public_page_read_remains_compatible_without_hierarc
     assert result.widgets[0].datapoint_id == str(BLOCKED_DP_ID)
 
 
-def test_save_page_route_requires_admin_dependency():
+def test_save_page_route_requires_authenticated_principal_dependency():
     route = next(route for route in visu_api.router.routes if getattr(route, "path", "") == "/pages/{node_id}" and "PUT" in route.methods)
 
-    assert any(dependency.call is visu_api.get_admin_user for dependency in route.dependant.dependencies)
+    assert any(dependency.call is visu_api.get_current_principal for dependency in route.dependant.dependencies)
 
 
 @pytest.mark.asyncio
@@ -240,7 +241,7 @@ async def test_save_user_page_validates_target_users_can_read_referenced_datapoi
     await _assign_visu_user(db, node_id="target-page")
 
     with pytest.raises(HTTPException) as exc_info:
-        await visu_api.save_page("target-page", _page_config(BLOCKED_DP_ID), db=db)
+        await visu_api.save_page("target-page", _page_config(BLOCKED_DP_ID), request=None, db=db)
 
     assert exc_info.value.status_code == 403
     assert "Zielgruppe" in exc_info.value.detail
@@ -254,10 +255,37 @@ async def test_save_user_page_allows_datapoints_readable_by_target_users(db: Dat
     await _insert_visu_page(db, "target-page", access="user", config=_page_config(ALLOWED_DP_ID))
     await _assign_visu_user(db, node_id="target-page")
 
-    await visu_api.save_page("target-page", _page_config(ALLOWED_DP_ID), db=db)
+    await visu_api.save_page("target-page", _page_config(ALLOWED_DP_ID), request=None, db=db)
 
     row = await db.fetchone("SELECT page_config FROM visu_nodes WHERE id = 'target-page'")
     assert str(ALLOWED_DP_ID) in row["page_config"]
+
+
+@pytest.mark.asyncio
+async def test_api_key_page_capability_preserves_access_boundary_and_audits_use(db: Database):
+    key_id = "00000000-0000-0000-0000-000000000989"
+    await db.execute_and_commit(
+        "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?, 'key', 'visu-hash', 'admin', ?)",
+        (key_id, NOW),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO api_key_capabilities (key_id, capability) VALUES (?, 'visu.page_config.write')",
+        (key_id,),
+    )
+    principal = Principal(subject=f"api_key:{key_id}", type="api_key", is_admin=False, owner="admin")
+    await _insert_visu_page(db, "public-page", access="public", config=_page_config(ALLOWED_DP_ID))
+    await _insert_visu_page(db, "readonly-page", access="readonly", config=_page_config(ALLOWED_DP_ID))
+
+    await visu_api.save_page("public-page", _page_config(BLOCKED_DP_ID), request=None, db=db, _user=principal)
+    with pytest.raises(HTTPException) as exc_info:
+        await visu_api.save_page("readonly-page", _page_config(BLOCKED_DP_ID), request=None, db=db, _user=principal)
+
+    assert exc_info.value.status_code == 403
+    audit = await db.fetchall("SELECT resource_id, details_json FROM audit_log_entries WHERE action='api_key.capability.use' ORDER BY id")
+    assert [(row["resource_id"], json.loads(row["details_json"])["result"]) for row in audit] == [
+        ("public-page", "allowed"),
+        ("readonly-page", "denied"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -267,7 +295,7 @@ async def test_save_user_page_preserves_promoted_assignee_admin_status(db: Datab
     await _insert_visu_page(db, "target-page", access="user", config=_page_config(ALLOWED_DP_ID))
     await _assign_visu_user(db, node_id="target-page")
 
-    await visu_api.save_page("target-page", _page_config(BLOCKED_DP_ID), db=db)
+    await visu_api.save_page("target-page", _page_config(BLOCKED_DP_ID), request=None, db=db)
 
     row = await db.fetchone("SELECT page_config FROM visu_nodes WHERE id = 'target-page'")
     assert str(BLOCKED_DP_ID) in row["page_config"]

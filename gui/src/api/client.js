@@ -61,6 +61,9 @@ export const authApi = {
   listApiKeys:    ()                   => api.get('/auth/apikeys'),
   createApiKey:   (name)               => api.post('/auth/apikeys', { name }),
   deleteApiKey:   (id)                 => api.delete(`/auth/apikeys/${id}`),
+  getApiKeyCapabilities: (id)          => api.get(`/auth/apikeys/${id}/capabilities`),
+  replaceApiKeyCapabilities: (id, expected_revision, capabilities) =>
+                    api.put(`/auth/apikeys/${id}/capabilities`, { expected_revision, capabilities }),
 }
 
 // ── DataPoints ────────────────────────────────────────────────────────────

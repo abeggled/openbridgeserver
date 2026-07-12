@@ -682,6 +682,22 @@ async def _migration_v40(conn: aiosqlite.Connection) -> None:
         await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_created_by ON {table}(created_by)")
 
 
+_MIGRATION_V41 = """
+CREATE TABLE IF NOT EXISTS api_key_capability_sets (
+    key_id      TEXT PRIMARY KEY REFERENCES api_keys(id) ON DELETE CASCADE,
+    revision    INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS api_key_capabilities (
+    key_id      TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    capability  TEXT NOT NULL CHECK (capability IN ('visu.page_config.write', 'datapoint.metadata.write')),
+    PRIMARY KEY (key_id, capability)
+);
+CREATE INDEX IF NOT EXISTS idx_api_key_capabilities_key ON api_key_capabilities(key_id);
+"""
+
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -726,6 +742,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (38, _MIGRATION_V38),
     (39, _MIGRATION_V39),
     (40, _migration_v40),
+    (41, _MIGRATION_V41),
 ]
 
 

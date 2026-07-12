@@ -32,7 +32,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -273,6 +273,30 @@ class ApiKeyListItem(BaseModel):
     last_used_at: str | None
 
 
+class ApiKeyCapabilitiesReplace(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0)
+    capabilities: list[str]
+
+    @field_validator("capabilities")
+    @classmethod
+    def validate_capabilities(cls, values: list[str]) -> list[str]:
+        from obs.api.capabilities import CONFIG_CAPABILITIES
+
+        if len(values) != len(set(values)) or any(value not in CONFIG_CAPABILITIES for value in values):
+            raise ValueError("Capabilities must be unique values from the closed registry")
+        return sorted(values)
+
+
+class ApiKeyCapabilitiesResponse(BaseModel):
+    key_id: str
+    key_name: str
+    revision: int
+    capabilities: list[str]
+    available_capabilities: list[str]
+
+
 class UserResponse(BaseModel):
     id: str
     username: str
@@ -442,6 +466,104 @@ async def delete_api_key(
     if not is_admin and key_row["owner"] != current_user:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot delete another user's API key")
     await db.execute_and_commit("DELETE FROM api_keys WHERE id=?", (key_id,))
+
+
+async def _api_key_capabilities_response(db: Database, key_id: str) -> ApiKeyCapabilitiesResponse:
+    from obs.api.capabilities import CONFIG_CAPABILITIES
+
+    key = await db.fetchone("SELECT name FROM api_keys WHERE id=?", (key_id,))
+    if key is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "API key not found")
+    state = await db.fetchone("SELECT revision FROM api_key_capability_sets WHERE key_id=?", (key_id,))
+    rows = await db.fetchall("SELECT capability FROM api_key_capabilities WHERE key_id=? ORDER BY capability", (key_id,))
+    return ApiKeyCapabilitiesResponse(
+        key_id=key_id,
+        key_name=key["name"],
+        revision=int(state["revision"]) if state else 0,
+        capabilities=[row["capability"] for row in rows],
+        available_capabilities=list(CONFIG_CAPABILITIES),
+    )
+
+
+@router.get("/apikeys/{key_id}/capabilities", response_model=ApiKeyCapabilitiesResponse)
+async def get_api_key_capabilities(
+    key_id: str,
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> ApiKeyCapabilitiesResponse:
+    """Return one key's complete configuration-capability set and revision."""
+    return await _api_key_capabilities_response(db, key_id)
+
+
+@router.put("/apikeys/{key_id}/capabilities", response_model=ApiKeyCapabilitiesResponse)
+async def replace_api_key_capabilities(
+    key_id: str,
+    body: ApiKeyCapabilitiesReplace,
+    request: Request,
+    admin_user: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> ApiKeyCapabilitiesResponse:
+    """Atomically replace one key's complete configuration-capability set."""
+    from obs.api.audit import AuditLogWriter, build_audit_context
+
+    async with db.transaction():
+        current = await _api_key_capabilities_response(db, key_id)
+        if current.revision != body.expected_revision:
+            raise HTTPException(status.HTTP_409_CONFLICT, "API key capabilities changed; reload before saving")
+
+        previous = set(current.capabilities)
+        replacement = set(body.capabilities)
+        revision = current.revision + 1
+        await db.execute("DELETE FROM api_key_capabilities WHERE key_id=?", (key_id,))
+        await db.executemany(
+            "INSERT INTO api_key_capabilities (key_id, capability) VALUES (?, ?)",
+            [(key_id, capability) for capability in sorted(replacement)],
+        )
+        await db.execute(
+            """
+            INSERT INTO api_key_capability_sets (key_id, revision, updated_at)
+            VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            ON CONFLICT(key_id) DO UPDATE SET revision=excluded.revision, updated_at=excluded.updated_at
+            """,
+            (key_id, revision),
+        )
+
+        writer = AuditLogWriter(db, build_audit_context(request, admin_user))
+        added = sorted(replacement - previous)
+        revoked = sorted(previous - replacement)
+        for capability in added:
+            await writer.write(
+                "api_key.capability.grant",
+                resource_type="api_key",
+                resource_id=key_id,
+                details={"api_key_id": key_id, "capability": capability, "revision": revision},
+                commit=False,
+            )
+        for capability in revoked:
+            await writer.write(
+                "api_key.capability.revoke",
+                resource_type="api_key",
+                resource_id=key_id,
+                details={"api_key_id": key_id, "capability": capability, "revision": revision},
+                commit=False,
+            )
+        await writer.write(
+            "api_key.capabilities.replace",
+            resource_type="api_key",
+            resource_id=key_id,
+            details={"api_key_id": key_id, "added": added, "revoked": revoked, "revision": revision},
+            commit=False,
+        )
+
+        response = ApiKeyCapabilitiesResponse(
+            key_id=key_id,
+            key_name=current.key_name,
+            revision=revision,
+            capabilities=sorted(replacement),
+            available_capabilities=current.available_capabilities,
+        )
+
+    return response
 
 
 # ---------------------------------------------------------------------------

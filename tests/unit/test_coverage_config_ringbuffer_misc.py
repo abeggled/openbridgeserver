@@ -2136,7 +2136,7 @@ async def test_update_datapoint_not_found(monkeypatch):
     from obs.models.datapoint import DataPointUpdate
 
     with pytest.raises(HTTPException) as exc_info:
-        await dp_api.update_datapoint(dp_id=uuid.uuid4(), body=DataPointUpdate(), _user="admin")
+        await dp_api.update_datapoint(dp_id=uuid.uuid4(), body=DataPointUpdate(), request=None, _user="admin")
     assert exc_info.value.status_code == 404
 
 
@@ -2155,6 +2155,7 @@ async def test_update_datapoint_unknown_data_type(monkeypatch):
             await dp_api.update_datapoint(
                 dp_id=dp.id,
                 body=DataPointUpdate(data_type="UNKNOWN_TYPE"),
+                request=None,
                 _user="admin",
             )
     assert exc_info.value.status_code == 422

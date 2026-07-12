@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user, limiter
+from obs.api.capabilities import ConfigCapability, audit_config_capability_use, require_config_capability
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import filter_authorized_datapoints
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config, is_uuid_str
@@ -822,12 +823,37 @@ async def get_widget_ref(
 async def save_page(
     node_id: str,
     config: PageConfig,
+    request: Request,
     db: Database = Depends(get_db),
-    _admin=Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
 ):
+    principal = _principal_from_dependency(_user) if isinstance(_user, (Principal, str)) else Principal(subject="admin", type="user", is_admin=True)
+    used_capability = await require_config_capability(
+        db,
+        principal,
+        ConfigCapability.VISU_PAGE_CONFIG_WRITE,
+        target_type="visu_page",
+        target_id=node_id,
+        request=request,
+    )
     node = await _get_node_or_404(db, node_id)
     if node.type != "PAGE":
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
+
+    if used_capability:
+        try:
+            await _check_page_write_access(db, node_id, principal)
+        except HTTPException:
+            await audit_config_capability_use(
+                db,
+                principal,
+                ConfigCapability.VISU_PAGE_CONFIG_WRITE,
+                target_type="visu_page",
+                target_id=node_id,
+                allowed=False,
+                request=request,
+            )
+            raise
 
     access, defining_node_id = await _resolve_access_with_node(db, node_id)
     if access == "user" and defining_node_id is not None:
@@ -838,6 +864,16 @@ async def save_page(
         (config.model_dump_json(), _now_iso(), node_id),
     )
     await db.conn.commit()
+    if used_capability:
+        await audit_config_capability_use(
+            db,
+            principal,
+            ConfigCapability.VISU_PAGE_CONFIG_WRITE,
+            target_type="visu_page",
+            target_id=node_id,
+            allowed=True,
+            request=request,
+        )
 
 
 # ── Benutzer-Zugang (user-Access) ─────────────────────────────────────────────

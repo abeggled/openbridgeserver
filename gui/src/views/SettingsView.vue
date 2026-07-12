@@ -218,12 +218,19 @@
       <div class="card overflow-hidden mb-4">
         <div v-if="keysLoading" class="flex justify-center py-8"><Spinner /></div>
         <table v-else class="table">
-          <thead><tr><th>{{ $t('settings.apikeys.colName') }}</th><th>{{ $t('settings.apikeys.colCreated') }}</th><th class="w-20"></th></tr></thead>
+          <thead><tr><th>{{ $t('settings.apikeys.colName') }}</th><th>{{ $t('settings.apikeys.colCreated') }}</th><th class="w-28"></th></tr></thead>
           <tbody>
             <tr v-for="k in apiKeys" :key="k.id">
               <td class="font-medium">{{ k.name }}</td>
               <td class="text-xs text-slate-500">{{ fmtDate(k.created_at) }}</td>
-              <td><button @click="deleteApiKey(k.id)" class="btn-icon text-red-400"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button></td>
+              <td class="flex justify-end gap-1">
+                <button v-if="auth.isAdmin" type="button" class="btn-icon text-blue-400"
+                  :title="$t('settings.apikeys.capabilities.open')" :data-testid="`apikey-capabilities-${k.id}`"
+                  @click="openApiKeyCapabilities(k)">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                </button>
+                <button @click="deleteApiKey(k.id)" class="btn-icon text-red-400" :data-testid="`apikey-delete-${k.id}`"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -1404,6 +1411,37 @@
       </div>
     </Modal>
 
+    <Modal v-model="showApiKeyCapabilities" :title="$t('settings.apikeys.capabilities.title')" max-width="lg">
+      <div v-if="capabilitiesLoading" class="flex justify-center py-8"><Spinner /></div>
+      <form v-else class="flex flex-col gap-4" @submit.prevent="saveApiKeyCapabilities">
+        <p class="text-sm text-slate-500">
+          {{ $t('settings.apikeys.capabilities.target', { name: capabilityTarget?.name }) }}
+        </p>
+        <div class="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
+          {{ $t('settings.apikeys.capabilities.warning') }}
+        </div>
+        <label v-for="capability in capabilityOptions" :key="capability" class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+          <input v-model="selectedCapabilities" type="checkbox" :value="capability" class="mt-1"
+            :data-testid="`apikey-capability-${capability}`" />
+          <span>
+            <span class="block font-medium">{{ $t(`settings.apikeys.capabilities.effects.${capability}.title`) }}</span>
+            <span class="block text-xs text-slate-500">{{ $t(`settings.apikeys.capabilities.effects.${capability}.description`) }}</span>
+          </span>
+        </label>
+        <label class="flex items-start gap-3 text-sm">
+          <input v-model="capabilitiesConfirmed" type="checkbox" class="mt-1" data-testid="apikey-capabilities-confirm" />
+          <span>{{ $t('settings.apikeys.capabilities.confirm', { name: capabilityTarget?.name }) }}</span>
+        </label>
+        <p v-if="capabilitiesError" class="text-sm text-red-400">{{ capabilitiesError }}</p>
+        <div class="flex justify-end gap-3">
+          <button type="button" class="btn-secondary" @click="showApiKeyCapabilities = false">{{ $t('common.cancel') }}</button>
+          <button type="submit" class="btn-primary" :disabled="capabilitiesSaving || !capabilitiesConfirmed || !!capabilitiesError" data-testid="apikey-capabilities-save">
+            {{ $t('settings.apikeys.capabilities.save') }}
+          </button>
+        </div>
+      </form>
+    </Modal>
+
     <UserRightsEditor
       v-if="rightsTarget"
       v-model="showRightsEditor"
@@ -2307,6 +2345,15 @@ const keysLoading   = ref(false)
 const newKeySecret  = ref('')
 const newKeyName    = ref('')
 const showNewKeyName = ref(false)
+const showApiKeyCapabilities = ref(false)
+const capabilitiesLoading = ref(false)
+const capabilitiesSaving = ref(false)
+const capabilitiesConfirmed = ref(false)
+const capabilitiesError = ref('')
+const capabilityTarget = ref(null)
+const capabilityRevision = ref(0)
+const capabilityOptions = ref([])
+const selectedCapabilities = ref([])
 
 async function loadKeys() {
   keysLoading.value = true
@@ -2321,6 +2368,43 @@ async function doCreateKey() {
   showNewKeyName.value = false; await loadKeys()
 }
 async function deleteApiKey(id) { await authApi.deleteApiKey(id); await loadKeys() }
+async function openApiKeyCapabilities(key) {
+  capabilityTarget.value = key
+  capabilitiesConfirmed.value = false
+  capabilitiesError.value = ''
+  capabilitiesLoading.value = true
+  showApiKeyCapabilities.value = true
+  try {
+    const { data } = await authApi.getApiKeyCapabilities(key.id)
+    capabilityRevision.value = data.revision
+    capabilityOptions.value = data.available_capabilities
+    selectedCapabilities.value = [...data.capabilities]
+  } catch (e) {
+    capabilitiesError.value = e.response?.data?.detail ?? t('settings.apikeys.capabilities.loadError')
+  } finally {
+    capabilitiesLoading.value = false
+  }
+}
+async function saveApiKeyCapabilities() {
+  if (!capabilitiesConfirmed.value || !capabilityTarget.value || capabilitiesError.value) return
+  capabilitiesSaving.value = true
+  capabilitiesError.value = ''
+  try {
+    await authApi.replaceApiKeyCapabilities(
+      capabilityTarget.value.id,
+      capabilityRevision.value,
+      selectedCapabilities.value,
+    )
+    showApiKeyCapabilities.value = false
+  } catch (e) {
+    capabilitiesError.value = e.response?.status === 409
+      ? t('settings.apikeys.capabilities.concurrentChange')
+      : (e.response?.data?.detail ?? t('settings.apikeys.capabilities.saveError'))
+    capabilitiesConfirmed.value = false
+  } finally {
+    capabilitiesSaving.value = false
+  }
+}
 
 // ── Sicherung / Wiederherstellung ──────────────────────────────────────────
 const importResult    = ref(null)

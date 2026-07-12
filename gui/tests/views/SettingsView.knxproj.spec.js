@@ -568,7 +568,7 @@ describe('SettingsView account and admin coverage', () => {
     expect(authApi.createApiKey).toHaveBeenCalledWith('Automation')
     expect(wrapper.text()).toContain('obs_secret_key')
 
-    await wrapper.find('.table button').trigger('click')
+    await wrapper.get('[data-testid="apikey-delete-key-1"]').trigger('click')
     await flushPromises()
     expect(authApi.deleteApiKey).toHaveBeenCalledWith('key-1')
 
