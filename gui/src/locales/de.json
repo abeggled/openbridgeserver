@@ -1334,7 +1334,7 @@
     "newGraphBtn": "+ Neu",
     "run": "Ausführen",
     "graphDisabledSuffix": " (deaktiviert)",
-    "runTitle": "Graph ausführen",
+    "runTitle": "Berechtigungen prüfen und Graph ausführen",
     "runDisabledTitle": "Graph ist deaktiviert — kein Ausführen möglich",
     "toggleActive": "✓ Aktiv",
     "toggleDisabled": "⊘ Deaktiviert",
@@ -1357,6 +1357,18 @@
     "saved": "Graph gespeichert",
     "errorSave": "Fehler beim Speichern",
     "runResult": "Graph ausgeführt — {count} Nodes evaluiert",
+    "preflightTitle": "Graph-Ausführung prüfen",
+    "preflightDescription": "Prüfe den Graphen und alle externen Auswirkungen vor der Ausführung.",
+    "preflightError": "Die benötigten Berechtigungen konnten nicht geprüft werden.",
+    "preflightGraph": "Graph {id} aktivieren",
+    "preflightCapability": "Capability: {capability}",
+    "preflightDatapoint": "Datenpunkt {id}",
+    "preflightNodes": "Verwendet von Nodes: {nodes}",
+    "preflightReasons": {
+      "explicit_deny": "Eine ausdrückliche Sperre greift.",
+      "missing_allow": "Die benötigte Freigabe fehlt.",
+      "undeclared_capability": "Für diesen Seiteneffekt ist keine Capability deklariert; er wird standardmäßig gesperrt."
+    },
     "runResultWithWarnings": "Graph ausgeführt — {count} Nodes geprüft, {warnings} Warnungen",
     "nodeError": "⚠ Fehler",
     "graphValidationCycle": "Zyklus erkannt: {count} Node(s) benötigen eine Speicher-Node als Tick-Grenze.",
@@ -1997,6 +2009,13 @@
       "ical": "Lädt ein iCal-/ICS-File von einer URL und wertet Termine aus. RAW-Ausgang liefert den rohen Kalendertext. Pro Filter gibt es 4 Ausgänge: Array (alle Termine), Nächstes Datum, Morgen (Bool), Heute (Bool). Filter können auf Summary, Location und/oder Description angewendet werden.",
       "api_client": "Sendet HTTP-Anfragen (GET/POST/PUT…) an externe APIs. Trigger-Eingang steuert die Ausführung."
     }
+  },
+  "authzPreflight": {
+    "allowed": "Erlaubt",
+    "denied": "Verboten",
+    "ready": "Alle benötigten Berechtigungen sind vorhanden.",
+    "blocked": "Diese Aktion ist wegen fehlender Berechtigungen gesperrt.",
+    "noRequirements": "Es werden keine zusätzlichen Berechtigungen benötigt."
   },
   "settings": {
     "title": "Einstellungen",

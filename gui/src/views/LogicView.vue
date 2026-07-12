@@ -15,7 +15,7 @@
         <Spinner v-if="saving" size="sm" color="white" />
         {{ $t('common.save') }}
       </button>
-      <button v-if="auth.isAdmin && activeGraphId" @click="runGraph"
+      <button v-if="activeGraphId" @click="requestGraphRun"
         :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
         :disabled="!activeGraph?.enabled"
         :title="activeGraph?.enabled ? $t('logic.runTitle') : $t('logic.runDisabledTitle')"
@@ -161,6 +161,17 @@
       :message="$t('logic.deleteGraphConfirm')"
       :confirm-label="$t('common.delete')"
       @confirm="doDeleteGraph" />
+
+    <ActionPreflightDialog
+      v-model="showRunPreflight"
+      :title="$t('logic.preflightTitle')"
+      :description="$t('logic.preflightDescription')"
+      :confirm-label="$t('logic.run')"
+      :items="runPreflightItems"
+      :loading="runPreflightLoading"
+      :error="runPreflightError"
+      @confirm="confirmGraphRun"
+    />
   </div>
 </template>
 
@@ -183,6 +194,7 @@ import { useAuthStore }     from '@/stores/auth'
 import { logicApi }        from '@/api/client'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
+import ActionPreflightDialog from '@/components/authz/ActionPreflightDialog.vue'
 import Modal               from '@/components/ui/Modal.vue'
 import ConfirmDialog       from '@/components/ui/ConfirmDialog.vue'
 import Spinner             from '@/components/ui/Spinner.vue'
@@ -489,6 +501,11 @@ function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
 // Last run outputs — always kept (not just in debug mode) so that
 // json_extractor / xml_extractor config panels can read _preview data.
 const lastRunOutputs = ref({})
+const showRunPreflight = ref(false)
+const runPreflightLoading = ref(false)
+const runPreflightError = ref('')
+const runPreflightItems = ref([])
+const preflightApproved = ref(false)
 
 function applyDebugValues(outputs) {
   lastRunOutputs.value = outputs
@@ -525,8 +542,58 @@ function toggleDebug() {
   if (!debugMode.value) clearDebugValues()
 }
 
+function preflightLabel(check) {
+  if (check.target_type === 'logic_graph') return t('logic.preflightGraph', { id: check.target_id })
+  if (check.target_type === 'logic_capability') return t('logic.preflightCapability', { capability: check.target_id })
+  if (check.target_type === 'datapoint') return t('logic.preflightDatapoint', { id: check.target_id })
+  return `${check.target_type}: ${check.target_id}`
+}
+
+function preflightReason(check) {
+  const key = `logic.preflightReasons.${check.reason}`
+  const translated = t(key)
+  return translated === key ? check.reason : translated
+}
+
+function normalizeRunPreflight(data) {
+  return (data.checks || []).map((check, index) => ({
+    id: `${check.target_type}:${check.target_id}:${index}`,
+    label: preflightLabel(check),
+    detail: check.node_ids?.length ? t('logic.preflightNodes', { nodes: check.node_ids.join(', ') }) : '',
+    allowed: check.allowed,
+    reason: check.allowed ? '' : preflightReason(check),
+  }))
+}
+
+async function requestGraphRun() {
+  if (!activeGraphId.value || !activeGraph.value?.enabled) return
+  showRunPreflight.value = true
+  runPreflightLoading.value = true
+  runPreflightError.value = ''
+  runPreflightItems.value = []
+  try {
+    const { data } = await logicApi.runPreflight(activeGraphId.value)
+    runPreflightItems.value = normalizeRunPreflight(data)
+  } catch (err) {
+    runPreflightError.value = err.response?.data?.detail ?? t('logic.preflightError')
+  } finally {
+    runPreflightLoading.value = false
+  }
+}
+
+async function confirmGraphRun() {
+  if (runPreflightItems.value.some(item => !item.allowed)) return
+  preflightApproved.value = true
+  showRunPreflight.value = false
+  try {
+    await runGraph()
+  } finally {
+    preflightApproved.value = false
+  }
+}
+
 async function runGraph() {
-  if (!auth.isAdmin || !activeGraphId.value) return
+  if ((!auth.isAdmin && !preflightApproved.value) || !activeGraphId.value) return
   try {
     const { data } = await logicApi.runGraph(activeGraphId.value)
     const outputs = data.outputs || {}

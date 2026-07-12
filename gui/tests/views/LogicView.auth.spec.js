@@ -78,6 +78,13 @@ async function mountLogicView({ isAdmin, graphs = [], routeQuery = {}, graphDeta
       data: { id: 'graph-new', name: 'New', description: '', enabled: true, flow_data: { nodes: [], edges: [] } },
     }),
     saveGraph: vi.fn().mockImplementation((id, payload) => Promise.resolve({ data: { ...defaultGraph, id, ...payload } })),
+    runPreflight: vi.fn().mockResolvedValue({
+      data: {
+        graph_id: 'graph-1',
+        allowed: true,
+        checks: [{ target_type: 'logic_graph', target_id: 'graph-1', node_ids: [], allowed: true, reason: 'allowed' }],
+      },
+    }),
     runGraph: vi.fn().mockResolvedValue({ data: { outputs: { n1: { value: 42, changed: true } } } }),
     patchGraph: vi.fn().mockImplementation((id, payload) => Promise.resolve({ data: { ...defaultGraph, id, ...payload } })),
     deleteGraph: vi.fn().mockResolvedValue({}),
@@ -99,6 +106,11 @@ async function mountLogicView({ isAdmin, graphs = [], routeQuery = {}, graphDeta
       stubs: {
         NodePalette: true,
         NodeConfigPanel: true,
+        ActionPreflightDialog: {
+          props: ['modelValue', 'items', 'loading', 'error'],
+          emits: ['update:modelValue', 'confirm'],
+          template: '<div v-if="modelValue" data-testid="run-preflight"><button data-testid="preflight-confirm" :disabled="loading || !!error || items.some(item => !item.allowed)" @click="$emit(\'confirm\')">confirm</button></div>',
+        },
         Modal: { template: '<div><slot /><slot name="footer" /></div>' },
         ConfirmDialog: true,
         Spinner: { template: '<span />' },
@@ -128,7 +140,7 @@ describe('LogicView auth gates', () => {
     })
 
     expect(logicApi.getGraph).toHaveBeenCalledWith('graph-1')
-    expect(wrapper.find('[data-testid="btn-run"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="btn-run"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="btn-toggle-enabled"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="btn-rename"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="btn-duplicate"]').exists()).toBe(false)
@@ -183,6 +195,47 @@ describe('LogicView auth gates', () => {
       flow_data: { nodes: [], edges: [] },
     })
     expect(wrapper.vm.activeGraphId).toBe('graph-new')
+  })
+
+  it('preflights a delegated graph run and executes only after confirmation', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: false,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    await wrapper.get('[data-testid="btn-run"]').trigger('click')
+    await flushPromises()
+    expect(logicApi.runPreflight).toHaveBeenCalledWith('graph-1')
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="preflight-confirm"]').trigger('click')
+    await flushPromises()
+    expect(logicApi.runGraph).toHaveBeenCalledWith('graph-1')
+  })
+
+  it('keeps a denied preflight from executing the graph', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: false,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    logicApi.runPreflight.mockResolvedValueOnce({
+      data: {
+        graph_id: 'graph-1',
+        allowed: false,
+        checks: [{ target_type: 'logic_capability', target_id: 'sms', node_ids: ['n2'], allowed: false, reason: 'missing_allow' }],
+      },
+    })
+
+    await wrapper.get('[data-testid="btn-run"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="preflight-confirm"]').attributes('disabled')).toBeDefined()
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
   })
 
   it('loads and operates an active graph', async () => {
