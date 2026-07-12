@@ -85,7 +85,10 @@ async function mountLogicView({ isAdmin, graphs = [], routeQuery = {}, graphDeta
       data: {
         graph_id: 'graph-1',
         allowed: true,
-        checks: [{ target_type: 'logic_graph', target_id: 'graph-1', node_ids: [], allowed: true, reason: 'allowed' }],
+        checks: [
+          { target_type: 'logic_graph', target_id: 'graph-1', node_ids: [], allowed: true, reason: 'allowed' },
+          { target_type: 'logic_graph_state', target_id: 'enabled', node_ids: [], allowed: true, reason: 'enabled' },
+        ],
       },
     }),
   }

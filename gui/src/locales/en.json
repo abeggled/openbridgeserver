@@ -1361,12 +1361,14 @@
     "preflightDescription": "Review the graph and all external effects before execution.",
     "preflightError": "Could not check the required permissions.",
     "preflightGraph": "Activate graph {id}",
+    "preflightGraphState": "Graph is enabled",
     "preflightCapability": "Capability: {capability}",
     "preflightDatapoint": "Data point {id}",
     "preflightNodes": "Used by nodes: {nodes}",
     "preflightReasons": {
       "explicit_deny": "An explicit deny applies.",
       "missing_allow": "The required grant is missing.",
+      "graph_disabled": "The graph is disabled and cannot run.",
       "undeclared_capability": "This side effect has no declared capability and is denied by default."
     },
     "runResultWithWarnings": "Graph executed — {count} nodes checked, {warnings} warnings",
