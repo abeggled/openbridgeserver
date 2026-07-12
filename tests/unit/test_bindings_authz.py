@@ -112,14 +112,21 @@ async def _insert_instance(db: Database, instance_id: uuid.UUID, adapter_type: s
     )
 
 
-async def _insert_binding(db: Database, *, binding_id: uuid.UUID, dp_id: uuid.UUID, instance_id: uuid.UUID) -> None:
+async def _insert_binding(
+    db: Database,
+    *,
+    binding_id: uuid.UUID,
+    dp_id: uuid.UUID,
+    instance_id: uuid.UUID,
+    adapter_type: str = "ANWESENHEITSSIMULATION",
+) -> None:
     await db.execute_and_commit(
         """
         INSERT INTO adapter_bindings
             (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled, created_at, updated_at)
-        VALUES (?, ?, 'ANWESENHEITSSIMULATION', ?, 'SOURCE', '{}', 1, ?, ?)
+        VALUES (?, ?, ?, ?, 'SOURCE', '{}', 1, ?, ?)
         """,
-        (str(binding_id), str(dp_id), str(instance_id), NOW, NOW),
+        (str(binding_id), str(dp_id), adapter_type, str(instance_id), NOW, NOW),
     )
 
 
@@ -269,7 +276,7 @@ async def test_non_admin_create_binding_direct_datapoint_deny_beats_hierarchy_op
 
 
 @pytest.mark.asyncio
-async def test_non_admin_update_and_delete_binding_allow_operator_scope(monkeypatch, db: Database):
+async def test_non_admin_update_binding_rejects_non_delegable_adapter_with_operator_scope(monkeypatch, db: Database):
     dp_id = uuid.uuid4()
     binding_id = uuid.uuid4()
     instance_id = uuid.uuid4()
@@ -278,6 +285,57 @@ async def test_non_admin_update_and_delete_binding_allow_operator_scope(monkeypa
     await _insert_grant(db, node_id="allowed-room", role="operator")
     await _insert_instance(db, instance_id)
     await _insert_binding(db, binding_id=binding_id, dp_id=dp_id, instance_id=instance_id)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub(dp_id))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bindings_api.update_binding(
+            dp_id=dp_id,
+            binding_id=binding_id,
+            body=AdapterBindingUpdate(enabled=False),
+            _user=_principal("alice"),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_non_admin_delete_binding_rejects_non_delegable_adapter_with_operator_scope(monkeypatch, db: Database):
+    dp_id = uuid.uuid4()
+    binding_id = uuid.uuid4()
+    instance_id = uuid.uuid4()
+    await _insert_tree_and_nodes(db)
+    await _insert_datapoint(db, dp_id, "allowed-room")
+    await _insert_grant(db, node_id="allowed-room", role="operator")
+    await _insert_instance(db, instance_id)
+    await _insert_binding(db, binding_id=binding_id, dp_id=dp_id, instance_id=instance_id)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub(dp_id))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bindings_api.delete_binding(
+            dp_id=dp_id,
+            binding_id=binding_id,
+            _user=_principal("alice"),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_non_admin_update_and_delete_binding_allow_delegable_mqtt_with_operator_scope(monkeypatch, db: Database):
+    from obs.adapters import registry as adapter_registry
+    from obs.adapters.mqtt.adapter import MqttAdapter
+
+    dp_id = uuid.uuid4()
+    binding_id = uuid.uuid4()
+    instance_id = uuid.uuid4()
+    await _insert_tree_and_nodes(db)
+    await _insert_datapoint(db, dp_id, "allowed-room")
+    await _insert_grant(db, node_id="allowed-room", role="operator")
+    await _insert_instance(db, instance_id, "MQTT")
+    await _insert_binding(db, binding_id=binding_id, dp_id=dp_id, instance_id=instance_id, adapter_type="MQTT")
+    monkeypatch.setitem(adapter_registry._adapters, "MQTT", MqttAdapter)
     monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub(dp_id))
     monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
 
