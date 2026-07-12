@@ -55,6 +55,8 @@ class _DbStub:
         self._fetchone = fetchone_result
         self._fetchall = fetchall_results or []
         self.committed: list[tuple] = []
+        self.executed: list[tuple] = []
+        self.commit_count = 0
         # Support multiple fetchall calls per test via iterator or list-of-lists
         self._fetchall_iter = (
             iter(fetchall_results) if isinstance(fetchall_results, list) and fetchall_results and isinstance(fetchall_results[0], list) else None
@@ -79,6 +81,12 @@ class _DbStub:
 
     async def execute_and_commit(self, query, params=()):
         self.committed.append((query, params))
+
+    async def execute(self, query, params=()):
+        self.executed.append((query, params))
+
+    async def commit(self):
+        self.commit_count += 1
 
     async def disconnect(self):
         pass
@@ -1831,6 +1839,8 @@ async def test_update_app_settings_valid():
         result = await system_api.update_app_settings(body=body, db=db, _user="admin")
 
     assert result.timezone == "Europe/Berlin"
+    assert [query.strip().split(maxsplit=1)[0] for query, _params in db.executed] == ["INSERT", "INSERT"]
+    assert db.commit_count == 1
 
 
 @pytest.mark.asyncio
