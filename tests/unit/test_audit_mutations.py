@@ -7,7 +7,7 @@ import json
 import pytest
 from starlette.requests import Request
 
-from obs.api.auth import UserCreate, UserUpdate, create_user, delete_user, update_user
+from obs.api.auth import UserCreate, UserDeletionRequest, UserUpdate, _deletion_inventory, create_user, delete_user, update_user
 from obs.api.v1.system import AppSettingsIn, update_app_settings
 from obs.db.database import Database
 
@@ -31,6 +31,11 @@ async def test_user_lifecycle_writes_deterministic_non_sensitive_audit(monkeypat
     await db.connect()
     monkeypatch.setattr("obs.api.auth.hash_password", lambda _password: "password-hash")
     try:
+        await db.execute_and_commit(
+            """INSERT INTO users
+               (id, username, password_hash, is_admin, mqtt_enabled, created_at)
+               VALUES ('admin-id', 'admin', 'password-hash', 1, 0, '2026-01-01T00:00:00Z')"""
+        )
         created = await create_user(
             body=UserCreate(username="alice", password="create-secret"),
             request=_request("/api/v1/auth/users"),
@@ -53,8 +58,10 @@ async def test_user_lifecycle_writes_deterministic_non_sensitive_audit(monkeypat
         )
         renamed_grant = await db.fetchone("SELECT principal_id FROM authz_node_roles WHERE node_type='logic_graph' AND node_id='graph-1'")
         assert renamed_grant["principal_id"] == "alice-renamed"
+        preflight = await _deletion_inventory(db, "alice-renamed")
         await delete_user(
             username="alice-renamed",
+            body=UserDeletionRequest(revision=preflight.revision),
             request=_request("/api/v1/auth/users/alice-renamed"),
             admin_user="admin",
             db=db,
@@ -75,7 +82,14 @@ async def test_user_lifecycle_writes_deterministic_non_sensitive_audit(monkeypat
                 "before": {"is_admin": False, "mqtt_enabled": False, "username": "alice"},
                 "changed_fields": ["is_admin", "username"],
             },
-            {"is_admin": True, "mqtt_enabled": False, "username": "alice-renamed"},
+            {
+                "api_keys_revoked": 0,
+                "artifacts_transferred": 0,
+                "is_admin": True,
+                "mqtt_enabled": False,
+                "successor_username": None,
+                "username": "alice-renamed",
+            },
         ]
         assert "create-secret" not in "".join(row["details_json"] for row in rows)
         assert "password-hash" not in "".join(row["details_json"] for row in rows)

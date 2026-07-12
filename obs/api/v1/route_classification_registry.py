@@ -70,6 +70,7 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("GET", "/api/v1/auth/me"): "read_live",
     ("GET", "/api/v1/auth/users"): "read_live",
     ("GET", "/api/v1/auth/users/{username}"): "read_live",
+    ("GET", "/api/v1/auth/users/{username}/deletion-preflight"): "read_live",
     ("GET", "/api/v1/authz/principals/{principal_type}/{principal_id:path}/grants"): "read_live",
     ("GET", "/api/v1/camera/proxy"): "read_live",
     ("GET", "/api/v1/config/autobackup/config"): "read_live",

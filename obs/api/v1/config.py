@@ -822,8 +822,8 @@ async def import_config(
             else:
                 await db.execute_and_commit(
                     """INSERT INTO logic_graphs
-                       (id, name, description, enabled, flow_data, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?)""",
+                       (id, name, description, enabled, flow_data, created_at, updated_at, created_by)
+                       VALUES (?,?,?,?,?,?,?,?)""",
                     (
                         lg.id,
                         lg.name,
@@ -832,6 +832,7 @@ async def import_config(
                         flow_json,
                         now,
                         now,
+                        _user,
                     ),
                 )
                 result.logic_graphs_created += 1
@@ -908,8 +909,8 @@ async def import_config(
                     try:
                         await db.execute_and_commit(
                             """INSERT INTO visu_nodes
-                               (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
-                               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                               (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at, created_by)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                                ON CONFLICT(id) DO UPDATE
                                SET parent_id=excluded.parent_id, name=excluded.name, type=excluded.type,
                                    node_order=excluded.node_order, icon=excluded.icon, access=excluded.access,
@@ -926,6 +927,7 @@ async def import_config(
                                 node.page_config,
                                 now,
                                 now,
+                                _user if node.type == "PAGE" else None,
                             ),
                         )
                         inserted_ids.add(node.id)

@@ -70,6 +70,18 @@ beforeEach(() => {
     listApiKeys: vi.fn().mockResolvedValue({ data: [{ id: 'key-1', name: 'Bridge API' }] }),
     changePassword: vi.fn().mockResolvedValue({ data: {} }),
     createUser: vi.fn().mockResolvedValue({ data: { username: 'operator' } }),
+    userDeletionPreflight: vi.fn().mockResolvedValue({
+      data: {
+        revision: 'operator-revision',
+        visu_page_ids: [],
+        logic_graph_ids: [],
+        filterset_ids: [],
+        api_key_ids: [],
+        grant_count: 0,
+        visu_acl_count: 0,
+        filterset_state_count: 0,
+      },
+    }),
     deleteUser: vi.fn().mockResolvedValue({ data: {} }),
     setMqttPassword: vi.fn().mockResolvedValue({ data: {} }),
     deleteMqttPassword: vi.fn().mockResolvedValue({ data: {} }),
@@ -234,10 +246,10 @@ describe('SettingsView security tab', () => {
       mqtt_password: 'mqtt-secret',
     })
 
-    wrapper.vm.confirmDeleteUser({ username: 'operator' })
+    await wrapper.vm.confirmDeleteUser({ username: 'operator' })
     expect(wrapper.vm.showUserConfirm).toBe(true)
     await wrapper.vm.doDeleteUser()
-    expect(authApi.deleteUser).toHaveBeenCalledWith('operator')
+    expect(authApi.deleteUser).toHaveBeenCalledWith('operator', { revision: 'operator-revision', successor_username: null })
 
     wrapper.vm.createApiKey()
     wrapper.vm.newKeyName = 'Bridge API'

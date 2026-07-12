@@ -416,8 +416,8 @@ async def import_nodes(
             await db.conn.execute(
                 """INSERT INTO visu_nodes
                        (id, parent_id, name, type, node_order, icon, access, access_pin,
-                        page_config, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        page_config, created_at, updated_at, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     new_id,
                     new_parent_id,
@@ -430,6 +430,7 @@ async def import_nodes(
                     pc_json,
                     now,
                     now,
+                    _user if node.type == "PAGE" else None,
                 ),
             )
     except Exception:
@@ -465,8 +466,8 @@ async def create_node(
         """
         INSERT INTO visu_nodes
             (id, parent_id, name, type, node_order, icon, access, access_pin, page_config,
-             created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             created_at, updated_at, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             node_id,
@@ -480,6 +481,7 @@ async def create_node(
             default_pc,
             now,
             now,
+            _user if body.type == "PAGE" else None,
         ),
     )
     await db.conn.commit()
@@ -607,8 +609,8 @@ async def copy_node(
         """
         INSERT INTO visu_nodes
             (id, parent_id, name, type, node_order, icon, access, access_pin,
-             page_config, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             page_config, created_at, updated_at, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             new_id,
@@ -622,6 +624,7 @@ async def copy_node(
             pc_json,
             now,
             now,
+            _user if source.type == "PAGE" else None,
         ),
     )
     await db.conn.commit()

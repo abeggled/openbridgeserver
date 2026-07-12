@@ -1372,9 +1372,37 @@
       </form>
     </Modal>
 
-    <ConfirmDialog v-model="showUserConfirm" :title="$t('settings.users.deleteUser')"
-      :message="$t('settings.users.deleteUserConfirm', { name: deleteUserTarget?.username })"
-      :confirm-label="$t('common.delete')" @confirm="doDeleteUser" />
+    <Modal v-model="showUserConfirm" :title="$t('settings.users.deleteUser')" max-width="lg">
+      <div class="space-y-4" data-testid="user-deletion-impact">
+        <p>{{ $t('settings.users.deleteUserConfirm', { name: deleteUserTarget?.username }) }}</p>
+        <Spinner v-if="deletePreflightLoading" />
+        <template v-else-if="deletePreflight">
+          <p class="text-sm text-slate-500">{{ $t('settings.users.deleteImpact') }}</p>
+          <ul class="text-sm list-disc pl-5">
+            <li>{{ $t('settings.users.deletePages', { n: deletePreflight.visu_page_ids.length }) }}</li>
+            <li>{{ $t('settings.users.deleteGraphs', { n: deletePreflight.logic_graph_ids.length }) }}</li>
+            <li>{{ $t('settings.users.deleteFiltersets', { n: deletePreflight.filterset_ids.length }) }}</li>
+            <li>{{ $t('settings.users.deleteKeys', { n: deletePreflight.api_key_ids.length }) }}</li>
+            <li>{{ $t('settings.users.deleteReferences', { n: deletionReferenceCount }) }}</li>
+          </ul>
+          <div v-if="deletionNeedsSuccessor" class="form-group">
+            <label class="label">{{ $t('settings.users.successor') }}</label>
+            <select v-model="deleteSuccessor" class="input" data-testid="user-deletion-successor">
+              <option value="">{{ $t('settings.users.selectSuccessor') }}</option>
+              <option v-for="u in deletionSuccessors" :key="u.id" :value="u.username">{{ u.username }}</option>
+            </select>
+          </div>
+          <p class="text-sm text-amber-600">{{ $t('settings.users.deleteKeyWarning') }}</p>
+        </template>
+        <p v-if="deletePreflightError" class="text-sm text-red-500">{{ deletePreflightError }}</p>
+        <div class="flex justify-end gap-3">
+          <button class="btn-secondary" @click="showUserConfirm = false">{{ $t('common.cancel') }}</button>
+          <button class="btn-danger" data-testid="user-deletion-confirm" :disabled="!deletePreflight || (deletionNeedsSuccessor && !deleteSuccessor)" @click="doDeleteUser">
+            {{ $t('common.delete') }}
+          </button>
+        </div>
+      </div>
+    </Modal>
 
     <UserRightsEditor
       v-if="rightsTarget"
@@ -2146,6 +2174,10 @@ const usersLoading = ref(false)
 const showCreateUser = ref(false)
 const showUserConfirm = ref(false)
 const deleteUserTarget = ref(null)
+const deletePreflight = ref(null)
+const deletePreflightLoading = ref(false)
+const deletePreflightError = ref('')
+const deleteSuccessor = ref('')
 const showRightsEditor = ref(false)
 const rightsTarget = ref(null)
 const userGrants = ref({})
@@ -2207,8 +2239,37 @@ async function doCreateUser() {
   await authApi.createUser(payload)
   showCreateUser.value = false; await loadUsers()
 }
-function confirmDeleteUser(u) { deleteUserTarget.value = u; showUserConfirm.value = true }
-async function doDeleteUser() { await authApi.deleteUser(deleteUserTarget.value.username); await loadUsers() }
+const deletionNeedsSuccessor = computed(() => !!deletePreflight.value && (
+  deletePreflight.value.visu_page_ids.length + deletePreflight.value.logic_graph_ids.length + deletePreflight.value.filterset_ids.length > 0
+))
+const deletionReferenceCount = computed(() => deletePreflight.value
+  ? deletePreflight.value.grant_count + deletePreflight.value.visu_acl_count + deletePreflight.value.filterset_state_count
+  : 0)
+const deletionSuccessors = computed(() => users.value.filter(u => u.username !== deleteUserTarget.value?.username))
+async function confirmDeleteUser(u) {
+  deleteUserTarget.value = u
+  deletePreflight.value = null
+  deleteSuccessor.value = ''
+  deletePreflightError.value = ''
+  deletePreflightLoading.value = true
+  showUserConfirm.value = true
+  try {
+    const { data } = await authApi.userDeletionPreflight(u.username)
+    deletePreflight.value = data
+  } catch (e) {
+    deletePreflightError.value = e.response?.data?.detail ?? t('common.error')
+  } finally {
+    deletePreflightLoading.value = false
+  }
+}
+async function doDeleteUser() {
+  await authApi.deleteUser(deleteUserTarget.value.username, {
+    revision: deletePreflight.value.revision,
+    successor_username: deleteSuccessor.value || null,
+  })
+  showUserConfirm.value = false
+  await loadUsers()
+}
 function openRightsEditor(u) { rightsTarget.value = u; showRightsEditor.value = true }
 
 // ── MQTT Password ──────────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import uuid
 import zipfile
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -33,6 +34,7 @@ from obs.api.auth import (
     RefreshRequest,
     SetMqttPasswordRequest,
     UserCreate,
+    UserDeletionRequest,
     UserUpdate,
     create_access_token,
     create_refresh_token,
@@ -80,6 +82,21 @@ class _DbStub:
 
     async def fetchone(self, query: str, params=()):
         self._fetchone_call_count += 1
+        if "COUNT(*) AS n" in query:
+            return _make_row(n=0)
+        if any(
+            marker in query
+            for marker in (
+                "FROM api_keys WHERE owner=? LIMIT 1",
+                "FROM logic_graphs WHERE created_by=? LIMIT 1",
+                "FROM visu_nodes WHERE created_by=? LIMIT 1",
+                "FROM ringbuffer_filtersets WHERE created_by=? LIMIT 1",
+                "FROM authz_node_roles WHERE principal_type='user' AND principal_id=? LIMIT 1",
+                "FROM visu_node_users WHERE username=? LIMIT 1",
+                "FROM ringbuffer_filterset_user_state WHERE username=? LIMIT 1",
+            )
+        ):
+            return None
         if self._fetchone_side_effects:
             result = self._fetchone_side_effects.pop(0)
             if isinstance(result, Exception):
@@ -100,6 +117,10 @@ class _DbStub:
 
     async def commit(self):
         pass
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield
 
 
 class _DpStub:
@@ -848,7 +869,13 @@ class TestDeleteUser:
     async def test_delete_user_success(self):
         user_row = _make_row(id=str(uuid.uuid4()), username="alice", is_admin=0, mqtt_enabled=0, mqtt_password_hash=None, created_at="2024-01-01")
         db = _DbStub(fetchone_result=user_row)
-        await auth_module.delete_user(username="alice", admin_user="admin", db=db)
+        preflight = await auth_module._deletion_inventory(db, "alice")
+        await auth_module.delete_user(
+            username="alice",
+            body=UserDeletionRequest(revision=preflight.revision),
+            admin_user="admin",
+            db=db,
+        )
         assert any("DELETE" in q for q, _ in db.executed)
 
     @pytest.mark.asyncio
@@ -864,7 +891,13 @@ class TestDeleteUser:
         db = _DbStub(fetchone_result=user_row)
         sync_mock = AsyncMock()
         monkeypatch.setattr(auth_module, "_sync_mqtt", sync_mock)
-        await auth_module.delete_user(username="mqttuser", admin_user="admin", db=db)
+        preflight = await auth_module._deletion_inventory(db, "mqttuser")
+        await auth_module.delete_user(
+            username="mqttuser",
+            body=UserDeletionRequest(revision=preflight.revision),
+            admin_user="admin",
+            db=db,
+        )
         sync_mock.assert_awaited_once()
 
 

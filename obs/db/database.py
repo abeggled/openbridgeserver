@@ -670,6 +670,18 @@ CREATE INDEX IF NOT EXISTS idx_hierarchy_device_links_device
 _MIGRATION_V39 = _MIGRATION_V38
 
 
+async def _migration_v40(conn: aiosqlite.Connection) -> None:
+    """Add nullable ownership without attributing legacy rows."""
+    for table in ("logic_graphs", "visu_nodes"):
+        async with conn.execute(f"PRAGMA table_info({table})") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if not columns:
+            continue
+        if "created_by" not in columns:
+            await conn.execute(f"ALTER TABLE {table} ADD COLUMN created_by TEXT")
+        await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_created_by ON {table}(created_by)")
+
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -713,6 +725,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (37, _MIGRATION_V37),
     (38, _MIGRATION_V38),
     (39, _MIGRATION_V39),
+    (40, _migration_v40),
 ]
 
 

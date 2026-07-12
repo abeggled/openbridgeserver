@@ -59,8 +59,19 @@ async def _create_test_user(
     return resp.json()
 
 
-async def _delete_user(client, auth_headers, username: str) -> None:
-    await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+async def _delete_user(client, auth_headers, username: str):
+    preflight = await client.get(f"/api/v1/auth/users/{username}/deletion-preflight", headers=auth_headers)
+    if preflight.status_code == 404:
+        return preflight
+    preflight.raise_for_status()
+    impact = preflight.json()
+    successor = _ADMIN if impact["visu_page_ids"] or impact["logic_graph_ids"] or impact["filterset_ids"] else None
+    return await client.request(
+        "DELETE",
+        f"/api/v1/auth/users/{username}",
+        headers=auth_headers,
+        json={"revision": impact["revision"], "successor_username": successor},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +298,7 @@ async def test_delete_user_self_returns_400(client, auth_headers):
 
 async def test_delete_user_with_mqtt_enabled_syncs_mqtt(client, auth_headers):
     user = await _create_test_user(client, auth_headers, mqtt_enabled=True, mqtt_password="mqttpass123")
-    resp = await client.delete(f"/api/v1/auth/users/{user['username']}", headers=auth_headers)
+    resp = await _delete_user(client, auth_headers, user["username"])
     assert resp.status_code == 204
 
 

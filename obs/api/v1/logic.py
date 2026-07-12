@@ -312,8 +312,8 @@ async def create_graph(
     now = datetime.now(UTC).isoformat()
     gid = str(uuid.uuid4())
     await db.execute_and_commit(
-        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?)""",
+        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at, created_by)
+           VALUES (?,?,?,?,?,?,?,?)""",
         (
             gid,
             body.name,
@@ -322,6 +322,7 @@ async def create_graph(
             body.flow_data.model_dump_json(),
             now,
             now,
+            _user,
         ),
     )
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (gid,))
@@ -490,8 +491,8 @@ async def import_graph(
     now = datetime.now(UTC).isoformat()
     gid = str(uuid.uuid4())
     await db.execute_and_commit(
-        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?)""",
+        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at, created_by)
+           VALUES (?,?,?,?,?,?,?,?)""",
         (
             gid,
             body.name,
@@ -500,6 +501,7 @@ async def import_graph(
             processed_flow.model_dump_json(),
             now,
             now,
+            _user,
         ),
     )
     try:
@@ -598,8 +600,8 @@ async def duplicate_graph(
     new_id = str(uuid.uuid4())
     new_name = f"Kopie von {row['name']}"
     await db.execute_and_commit(
-        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?)""",
+        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at, created_by)
+           VALUES (?,?,?,?,?,?,?,?)""",
         (
             new_id,
             new_name,
@@ -608,6 +610,7 @@ async def duplicate_graph(
             new_flow.model_dump_json(),
             now,
             now,
+            _user,
         ),
     )
     try:

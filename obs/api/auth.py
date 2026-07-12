@@ -22,6 +22,7 @@ from obs.db.database import Database, get_db
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import uuid
@@ -295,6 +296,23 @@ class UserUpdate(BaseModel):
     mqtt_enabled: bool | None = None  # False → clears mqtt_password_hash
 
 
+class UserDeletionRequest(BaseModel):
+    revision: str
+    successor_username: str | None = None
+
+
+class UserDeletionInventory(BaseModel):
+    revision: str
+    username: str
+    visu_page_ids: list[str]
+    logic_graph_ids: list[str]
+    filterset_ids: list[str]
+    api_key_ids: list[str]
+    grant_count: int
+    visu_acl_count: int
+    filterset_state_count: int
+
+
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
@@ -433,6 +451,78 @@ async def delete_api_key(
 _USER_COLS = "id, username, is_admin, mqtt_enabled, mqtt_password_hash, created_at"
 
 
+async def _principal_name_is_referenced(db: Database, username: str) -> bool:
+    checks = (
+        ("SELECT 1 FROM api_keys WHERE owner=? LIMIT 1", username),
+        ("SELECT 1 FROM logic_graphs WHERE created_by=? LIMIT 1", username),
+        ("SELECT 1 FROM visu_nodes WHERE created_by=? LIMIT 1", username),
+        ("SELECT 1 FROM ringbuffer_filtersets WHERE created_by=? LIMIT 1", username),
+        ("SELECT 1 FROM authz_node_roles WHERE principal_type='user' AND principal_id=? LIMIT 1", username),
+        ("SELECT 1 FROM visu_node_users WHERE username=? LIMIT 1", username),
+        ("SELECT 1 FROM ringbuffer_filterset_user_state WHERE username=? LIMIT 1", username),
+    )
+    for sql, value in checks:
+        if await db.fetchone(sql, (value,)) is not None:
+            return True
+    return False
+
+
+async def _deletion_inventory(db: Database, username: str) -> UserDeletionInventory:
+    target = await db.fetchone(f"SELECT {_USER_COLS} FROM users WHERE username=?", (username,))
+    if not target:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"User '{username}' not found")
+
+    async def ids(sql: str) -> list[str]:
+        return [str(row["id"]) for row in await db.fetchall(sql, (username,))]
+
+    visu_page_ids = await ids("SELECT id FROM visu_nodes WHERE type='PAGE' AND created_by=? ORDER BY id")
+    logic_graph_ids = await ids("SELECT id FROM logic_graphs WHERE created_by=? ORDER BY id")
+    filterset_ids = await ids("SELECT id FROM ringbuffer_filtersets WHERE created_by=? ORDER BY id")
+    api_key_ids = await ids("SELECT id FROM api_keys WHERE owner=? ORDER BY id")
+    grants = [
+        [row["node_type"], row["node_id"], row["role"], row["effect"]]
+        for row in await db.fetchall(
+            """SELECT node_type, node_id, role, effect FROM authz_node_roles
+               WHERE principal_type='user' AND principal_id=?
+               ORDER BY node_type, node_id, role, effect""",
+            (username,),
+        )
+    ]
+    visu_acl_node_ids = [
+        row["node_id"] for row in await db.fetchall("SELECT node_id FROM visu_node_users WHERE username=? ORDER BY node_id", (username,))
+    ]
+    filterset_state_ids = [
+        row["filterset_id"]
+        for row in await db.fetchall(
+            "SELECT filterset_id FROM ringbuffer_filterset_user_state WHERE username=? ORDER BY filterset_id",
+            (username,),
+        )
+    ]
+    revision_payload = {
+        "api_key_ids": api_key_ids,
+        "filterset_ids": filterset_ids,
+        "filterset_state_ids": filterset_state_ids,
+        "grants": grants,
+        "is_admin": bool(target["is_admin"]),
+        "logic_graph_ids": logic_graph_ids,
+        "user_id": target["id"],
+        "visu_acl_node_ids": visu_acl_node_ids,
+        "visu_page_ids": visu_page_ids,
+    }
+    revision = hashlib.sha256(json.dumps(revision_payload, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
+    return UserDeletionInventory(
+        revision=revision,
+        username=username,
+        visu_page_ids=visu_page_ids,
+        logic_graph_ids=logic_graph_ids,
+        filterset_ids=filterset_ids,
+        api_key_ids=api_key_ids,
+        grant_count=len(grants),
+        visu_acl_count=len(visu_acl_node_ids),
+        filterset_state_count=len(filterset_state_ids),
+    )
+
+
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
     _admin: str = Depends(get_admin_user),
@@ -452,6 +542,8 @@ async def create_user(
     existing = await db.fetchone("SELECT id FROM users WHERE username=?", (body.username,))
     if existing:
         raise HTTPException(status.HTTP_409_CONFLICT, f"Username '{body.username}' already exists")
+    if await _principal_name_is_referenced(db, body.username):
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Username '{body.username}' has stale principal references")
 
     from obs.core.mqtt_passwd import mosquitto_hash
 
@@ -518,111 +610,135 @@ async def update_user(
     _admin: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> UserResponse:
-    target = await db.fetchone(f"SELECT {_USER_COLS} FROM users WHERE username=?", (username,))
-    if not target:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"User '{username}' not found")
+    async with db.transaction():
+        target = await db.fetchone(f"SELECT {_USER_COLS} FROM users WHERE username=?", (username,))
+        if not target:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"User '{username}' not found")
 
-    new_username = body.username if body.username is not None else target["username"]
-    new_is_admin = int(body.is_admin) if body.is_admin is not None else target["is_admin"]
+        new_username = body.username if body.username is not None else target["username"]
+        new_is_admin = int(body.is_admin) if body.is_admin is not None else target["is_admin"]
+        if target["is_admin"] and not new_is_admin:
+            if username == _admin:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot demote your own account")
+            admin_count = int((await db.fetchone("SELECT COUNT(*) AS c FROM users WHERE is_admin=1"))["c"])
+            if admin_count <= 1:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot remove the last administrator")
 
-    if username == _admin and bool(target["is_admin"]) and not bool(new_is_admin):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot demote your own account")
-    if bool(target["is_admin"]) and not bool(new_is_admin):
-        admin_count = await db.fetchone("SELECT COUNT(*) AS c FROM users WHERE is_admin=1")
-        if not admin_count or admin_count["c"] <= 1:
+        if body.username and body.username != username:
+            conflict = await db.fetchone("SELECT id FROM users WHERE username=?", (body.username,))
+            if conflict or await _principal_name_is_referenced(db, body.username):
+                raise HTTPException(status.HTTP_409_CONFLICT, f"Username '{body.username}' already exists or is reserved")
+
+        mqtt_changed = body.mqtt_enabled is not None and bool(body.mqtt_enabled) != bool(target["mqtt_enabled"])
+        new_mqtt_enabled = int(body.mqtt_enabled) if body.mqtt_enabled is not None else target["mqtt_enabled"]
+        new_mqtt_hash = None if body.mqtt_enabled is False else target["mqtt_password_hash"]
+
+        update_cursor = await db.execute(
+            """UPDATE users
+               SET username=?, is_admin=?, mqtt_enabled=?, mqtt_password_hash=?
+               WHERE id=?
+                 AND (is_admin=0 OR ?=1 OR (SELECT COUNT(*) FROM users WHERE is_admin=1) > 1)""",
+            (new_username, new_is_admin, new_mqtt_enabled, new_mqtt_hash, target["id"], new_is_admin),
+        )
+        if getattr(update_cursor, "rowcount", 1) == 0:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot remove the last administrator")
+        if new_username != username:
+            for sql in (
+                "UPDATE api_keys SET owner=? WHERE owner=?",
+                "UPDATE logic_graphs SET created_by=? WHERE created_by=?",
+                "UPDATE visu_nodes SET created_by=? WHERE created_by=?",
+                "UPDATE ringbuffer_filtersets SET created_by=? WHERE created_by=?",
+                "UPDATE authz_node_roles SET principal_id=? WHERE principal_type='user' AND principal_id=?",
+                "UPDATE visu_node_users SET username=? WHERE username=?",
+                "UPDATE ringbuffer_filterset_user_state SET username=? WHERE username=?",
+            ):
+                await db.execute(sql, (new_username, username))
 
-    if body.username and body.username != username:
-        conflict = await db.fetchone("SELECT id FROM users WHERE username=?", (body.username,))
-        if conflict:
-            raise HTTPException(status.HTTP_409_CONFLICT, f"Username '{body.username}' already exists")
+        from obs.api.audit import AuditLogWriter, build_audit_context
 
-    mqtt_changed = body.mqtt_enabled is not None and bool(body.mqtt_enabled) != bool(target["mqtt_enabled"])
-    new_mqtt_enabled = int(body.mqtt_enabled) if body.mqtt_enabled is not None else target["mqtt_enabled"]
-    # Disabling mqtt_enabled clears the stored hash
-    new_mqtt_hash = None if body.mqtt_enabled is False else target["mqtt_password_hash"]
-
-    update_cursor = await db.execute(
-        """UPDATE users
-           SET username=?, is_admin=?, mqtt_enabled=?, mqtt_password_hash=?
-           WHERE id=?
-             AND (is_admin=0 OR ?=1 OR (SELECT COUNT(*) FROM users WHERE is_admin=1) > 1)""",
-        (new_username, new_is_admin, new_mqtt_enabled, new_mqtt_hash, target["id"], new_is_admin),
-    )
-    if getattr(update_cursor, "rowcount", 1) == 0:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot remove the last administrator")
-    if body.username and body.username != username:
-        await db.execute(
-            "UPDATE api_keys SET owner=? WHERE owner=?",
-            (new_username, username),
+        before = {"is_admin": bool(target["is_admin"]), "mqtt_enabled": bool(target["mqtt_enabled"]), "username": target["username"]}
+        after = {"is_admin": bool(new_is_admin), "mqtt_enabled": bool(new_mqtt_enabled), "username": new_username}
+        audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_admin))
+        await audit_writer.write(
+            action="auth.user.updated",
+            resource_type="user",
+            resource_id=target["id"],
+            details={"after": after, "before": before, "changed_fields": sorted(field for field in before if before[field] != after[field])},
+            commit=False,
         )
-        await db.execute(
-            "UPDATE authz_node_roles SET principal_id=? WHERE principal_type='user' AND principal_id=?",
-            (new_username, username),
-        )
-    from obs.api.audit import AuditLogWriter, build_audit_context
-
-    before = {
-        "is_admin": bool(target["is_admin"]),
-        "mqtt_enabled": bool(target["mqtt_enabled"]),
-        "username": target["username"],
-    }
-    after = {
-        "is_admin": bool(new_is_admin),
-        "mqtt_enabled": bool(new_mqtt_enabled),
-        "username": new_username,
-    }
-    audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_admin))
-    await audit_writer.write(
-        action="auth.user.updated",
-        resource_type="user",
-        resource_id=target["id"],
-        details={
-            "after": after,
-            "before": before,
-            "changed_fields": sorted(field for field in before if before[field] != after[field]),
-        },
-        commit=False,
-    )
-    await db.commit()
     if mqtt_changed:
         await _sync_mqtt(db)
     row = await db.fetchone(f"SELECT {_USER_COLS} FROM users WHERE id=?", (target["id"],))
     return _user_row(row)
 
 
+@router.get("/users/{username}/deletion-preflight", response_model=UserDeletionInventory)
+async def get_user_deletion_preflight(
+    username: str,
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> UserDeletionInventory:
+    return await _deletion_inventory(db, username)
+
+
 @router.delete("/users/{username}", status_code=204)
 async def delete_user(
     username: str,
+    body: UserDeletionRequest | None = None,
     request: Request = None,  # type: ignore[assignment]
     admin_user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
     if username == admin_user:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot delete your own account")
-    target = await db.fetchone(f"SELECT {_USER_COLS} FROM users WHERE username=?", (username,))
-    if not target:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"User '{username}' not found")
-    await db.execute("DELETE FROM users WHERE username=?", (username,))
-    await db.execute(
-        "DELETE FROM authz_node_roles WHERE principal_type='user' AND principal_id=?",
-        (username,),
-    )
-    from obs.api.audit import AuditLogWriter, build_audit_context
+    async with db.transaction():
+        target = await db.fetchone(f"SELECT {_USER_COLS} FROM users WHERE username=?", (username,))
+        if not target:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"User '{username}' not found")
+        if target["is_admin"]:
+            admin_count = int((await db.fetchone("SELECT COUNT(*) AS n FROM users WHERE is_admin=1"))["n"])
+            if admin_count <= 1:
+                raise HTTPException(status.HTTP_409_CONFLICT, "Cannot delete the last recoverable admin")
 
-    audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=admin_user))
-    await audit_writer.write(
-        action="auth.user.deleted",
-        resource_type="user",
-        resource_id=target["id"],
-        details={
-            "is_admin": bool(target["is_admin"]),
-            "mqtt_enabled": bool(target["mqtt_enabled"]),
-            "username": target["username"],
-        },
-        commit=False,
-    )
-    await db.commit()
+        inventory = await _deletion_inventory(db, username)
+        if body is None:
+            raise HTTPException(status.HTTP_428_PRECONDITION_REQUIRED, "A deletion preflight revision is required")
+        if not hmac.compare_digest(inventory.revision, body.revision):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Deletion preflight is stale")
+        transfer_required = bool(inventory.visu_page_ids or inventory.logic_graph_ids or inventory.filterset_ids)
+        successor = body.successor_username
+        if transfer_required and not successor:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "A successor is required for owned artifacts")
+        if successor:
+            if successor == username or not await db.fetchone("SELECT 1 FROM users WHERE username=?", (successor,)):
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Successor must be an existing different user")
+            await db.execute("UPDATE visu_nodes SET created_by=? WHERE type='PAGE' AND created_by=?", (successor, username))
+            await db.execute("UPDATE logic_graphs SET created_by=? WHERE created_by=?", (successor, username))
+            await db.execute("UPDATE ringbuffer_filtersets SET created_by=? WHERE created_by=?", (successor, username))
+
+        await db.execute("DELETE FROM api_keys WHERE owner=?", (username,))
+        await db.execute("DELETE FROM authz_node_roles WHERE principal_type='user' AND principal_id=?", (username,))
+        await db.execute("DELETE FROM visu_node_users WHERE username=?", (username,))
+        await db.execute("DELETE FROM ringbuffer_filterset_user_state WHERE username=?", (username,))
+        await db.execute("DELETE FROM users WHERE username=?", (username,))
+
+        from obs.api.audit import AuditLogWriter, build_audit_context
+
+        audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=admin_user))
+        await audit_writer.write(
+            action="auth.user.deleted",
+            resource_type="user",
+            resource_id=target["id"],
+            details={
+                "api_keys_revoked": len(inventory.api_key_ids),
+                "artifacts_transferred": len(inventory.visu_page_ids) + len(inventory.logic_graph_ids) + len(inventory.filterset_ids),
+                "is_admin": bool(target["is_admin"]),
+                "mqtt_enabled": bool(target["mqtt_enabled"]),
+                "successor_username": successor,
+                "username": target["username"],
+            },
+            commit=False,
+        )
     if target["mqtt_enabled"]:
         await _sync_mqtt(db)
 

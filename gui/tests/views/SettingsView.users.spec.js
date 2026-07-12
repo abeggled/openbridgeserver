@@ -4,6 +4,8 @@ import { createPinia, setActivePinia } from 'pinia'
 
 let listUsers
 let getUserGrants
+let userDeletionPreflight
+let deleteUser
 
 beforeEach(() => {
   vi.resetModules()
@@ -65,6 +67,20 @@ beforeEach(() => {
       updateUserGrants: vi.fn().mockResolvedValue({ data: { grants: [] } }),
     },
   }))
+  userDeletionPreflight = vi.fn().mockResolvedValue({
+    data: {
+      revision: 'rev-1',
+      username: 'viewer',
+      visu_page_ids: ['page-1'],
+      logic_graph_ids: ['graph-1'],
+      filterset_ids: ['filter-1'],
+      api_key_ids: ['key-1'],
+      grant_count: 2,
+      visu_acl_count: 1,
+      filterset_state_count: 1,
+    },
+  })
+  deleteUser = vi.fn().mockResolvedValue({ data: {} })
 
   vi.doMock('@/api/client', () => ({
     settingsApi: {
@@ -88,8 +104,9 @@ beforeEach(() => {
     },
     authApi: {
       listUsers,
+      userDeletionPreflight,
       createUser: vi.fn().mockResolvedValue({ data: {} }),
-      deleteUser: vi.fn().mockResolvedValue({ data: {} }),
+      deleteUser,
       setMqttPassword: vi.fn().mockResolvedValue({ data: {} }),
       deleteMqttPassword: vi.fn().mockResolvedValue({ data: {} }),
       listApiKeys: vi.fn().mockResolvedValue({ data: [] }),
@@ -213,6 +230,25 @@ describe('SettingsView users tab', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="user-rights-admin"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('requires reviewed impact and a successor before deleting owned artifacts', async () => {
+    const wrapper = await mountSettingsView()
+    const usersTab = wrapper.findAll('button').find(button => button.text() === 'Benutzer')
+    await usersTab.trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="user-delete-viewer"]').trigger('click')
+    await flushPromises()
+    expect(userDeletionPreflight).toHaveBeenCalledWith('viewer')
+    expect(wrapper.get('[data-testid="user-deletion-impact"]').text()).toContain('1 API-Schlüssel werden sofort widerrufen')
+    expect(wrapper.get('[data-testid="user-deletion-confirm"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="user-deletion-successor"]').setValue('ops')
+    await wrapper.get('[data-testid="user-deletion-confirm"]').trigger('click')
+    await flushPromises()
+    expect(deleteUser).toHaveBeenCalledWith('viewer', { revision: 'rev-1', successor_username: 'ops' })
     wrapper.unmount()
   })
 })
