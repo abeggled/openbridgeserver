@@ -103,8 +103,12 @@ The LXC template contains a complete Ubuntu 26.04 system with **open bridge serv
 |---|---|
 | **open bridge server** web interface + API | `http://<container-ip>:8080` |
 
-**Default credentials:** username `admin`, password `admin`
-⚠️ Change the password immediately after first login (Settings → Password).
+OBS deliberately ships no default credentials. The first start initializes the database and
+then stops with a setup notice. Create exactly one owner locally before restarting the service:
+
+```bash
+obs-admin auth first-owner <username> --password-stdin
+```
 
 **Security configuration** (required):
 
@@ -1703,7 +1707,12 @@ The `.env` file contains the MQTT password with which the Docker Mosquitto is in
 | API (Swagger) | http://localhost:8080/docs |
 | MQTT | localhost:1883 |
 
-**Default credentials:** `admin` / `admin`
+After the first backend start initializes the database and stops, create the local development
+owner once before restarting it:
+
+```bash
+tools/with-venv python -m obs.admin_cli auth first-owner <username> --password-stdin
+```
 
 #### Running tests
 

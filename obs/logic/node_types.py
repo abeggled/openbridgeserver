@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from obs.logic.capabilities import LOGIC_NODE_CAPABILITIES, PURE_LOGIC_NODE_TYPES
 from obs.logic.models import NodeTypeDef, NodeTypePort
 
 # ---------------------------------------------------------------------------
@@ -1001,6 +1002,22 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         color="#0e7490",
     ),
 ]
+
+
+def _classify_node_type(node_type: NodeTypeDef) -> NodeTypeDef:
+    capability = LOGIC_NODE_CAPABILITIES.get(node_type.type)
+    if capability is not None:
+        return node_type.model_copy(
+            update={"has_external_side_effect": True, "required_capability": capability},
+        )
+    if node_type.type in PURE_LOGIC_NODE_TYPES:
+        return node_type.model_copy(
+            update={"has_external_side_effect": False, "required_capability": None},
+        )
+    return node_type
+
+
+BUILTIN_NODE_TYPES = [_classify_node_type(node_type) for node_type in BUILTIN_NODE_TYPES]
 
 # Dict lookup by type
 NODE_TYPE_REGISTRY: dict[str, NodeTypeDef] = {nt.type: nt for nt in BUILTIN_NODE_TYPES}

@@ -44,8 +44,8 @@ cd tests/gui && npx playwright test --project=admin
 cd tests/gui && npx playwright test admin/ringbuffer.spec.ts
 ```
 
-Default credentials for `auth.setup.ts` are `admin / admin`; override with
-`E2E_USER` / `E2E_PASS` if your instance has them changed.
+Set `E2E_USER` / `E2E_PASS` to an explicitly bootstrapped test owner before
+running the suite. The server deliberately ships no default credentials.
 
 ## Common failure modes
 

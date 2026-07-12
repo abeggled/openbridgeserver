@@ -72,6 +72,13 @@ function resolveAccessNode(nodeId: string): { access: string; definingId: string
 /** Nur-Lesen-Modus: Seite hat access='readonly' (effektiv) */
 const isReadOnly = computed(() => resolveAccessNode(props.id).access === 'readonly')
 const widgets = computed<WidgetInstance[]>(() => visuStore.pageConfig?.widgets ?? [])
+const widgetPageContext = computed(() => {
+  const { definingId } = resolveAccessNode(props.id)
+  return {
+    pageId: props.id,
+    sessionToken: getSessionToken(definingId) ?? undefined,
+  }
+})
 
 // Haupt-Datenpunkt-IDs
 const datapointIds = computed(() =>
@@ -276,6 +283,7 @@ function widgetChrome(w: WidgetInstance): string {
             :editor-mode="false"
             :readonly="isReadOnly"
             :h="w.h"
+            v-bind="['Kamera', 'Grundriss', 'Chart', 'ValueDisplay'].includes(w.type) ? widgetPageContext : {}"
           />
           <MissingWidget v-else :widget-type="w.type" />
         </div>

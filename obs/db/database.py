@@ -9,10 +9,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import aiosqlite
 
@@ -668,6 +670,34 @@ CREATE INDEX IF NOT EXISTS idx_hierarchy_device_links_device
 _MIGRATION_V39 = _MIGRATION_V38
 
 
+async def _migration_v40(conn: aiosqlite.Connection) -> None:
+    """Add nullable ownership without attributing legacy rows."""
+    for table in ("logic_graphs", "visu_nodes"):
+        async with conn.execute(f"PRAGMA table_info({table})") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if not columns:
+            continue
+        if "created_by" not in columns:
+            await conn.execute(f"ALTER TABLE {table} ADD COLUMN created_by TEXT")
+        await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_created_by ON {table}(created_by)")
+
+
+_MIGRATION_V41 = """
+CREATE TABLE IF NOT EXISTS api_key_capability_sets (
+    key_id      TEXT PRIMARY KEY REFERENCES api_keys(id) ON DELETE CASCADE,
+    revision    INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS api_key_capabilities (
+    key_id      TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    capability  TEXT NOT NULL CHECK (capability IN ('visu.page_config.write', 'datapoint.metadata.write')),
+    PRIMARY KEY (key_id, capability)
+);
+CREATE INDEX IF NOT EXISTS idx_api_key_capabilities_key ON api_key_capabilities(key_id);
+"""
+
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -711,6 +741,8 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (37, _MIGRATION_V37),
     (38, _MIGRATION_V38),
     (39, _MIGRATION_V39),
+    (40, _migration_v40),
+    (41, _MIGRATION_V41),
 ]
 
 
@@ -724,12 +756,19 @@ class Database:
 
     def __init__(self, path: str) -> None:
         self._path = path
+        if path == ":memory:":
+            self._connection_path = f"file:obs-{uuid4().hex}?mode=memory&cache=shared"
+            self._connection_uri = True
+        else:
+            self._connection_path = path
+            self._connection_uri = path.startswith("file:")
         self._conn: aiosqlite.Connection | None = None
         # Serializes WAL checkpoints and pairs them with disconnect: a restore
         # (POST /config/import/db) disconnects the DB and rewrites the file, and
         # cancelling asyncio.to_thread does not stop the worker thread — so disconnect
         # must wait for any in-flight checkpoint to finish before returning. See #908.
         self._checkpoint_lock = asyncio.Lock()
+        self._transaction_connections: dict[asyncio.Task, aiosqlite.Connection] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -739,7 +778,7 @@ class Database:
         if self._path not in (":memory:", "file::memory:?cache=shared"):
             Path(self._path).parent.mkdir(parents=True, exist_ok=True)
 
-        self._conn = await aiosqlite.connect(self._path)
+        self._conn = await self._open_connection()
         self._conn.row_factory = aiosqlite.Row
 
         await self._conn.execute("PRAGMA journal_mode=WAL")
@@ -880,8 +919,52 @@ class Database:
     # Query helpers
     # ------------------------------------------------------------------
 
+    async def _open_connection(self) -> aiosqlite.Connection:
+        conn = await aiosqlite.connect(self._connection_path, uri=self._connection_uri)
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[None]:
+        """Run task-local helper calls on an isolated SQLite connection."""
+        task = asyncio.current_task()
+        assert task is not None
+        if task in self._transaction_connections:
+            raise RuntimeError("Nested database transactions are not supported")
+
+        # Checkpoints, disconnect/restore, and explicit transactions all hold this
+        # lifecycle guard. A restore therefore cannot close or replace the database
+        # file while a dedicated transaction is still using it.
+        async with self._checkpoint_lock:
+            if self._conn is None:
+                raise RuntimeError("Database.connect() has not been called")
+            transaction_conn = await self._open_connection()
+            began = False
+            try:
+                self._transaction_connections[task] = transaction_conn
+                await transaction_conn.execute("BEGIN IMMEDIATE")
+                began = True
+                yield
+                await transaction_conn.commit()
+            except BaseException:
+                if began:
+                    await transaction_conn.rollback()
+                raise
+            finally:
+                self._transaction_connections.pop(task, None)
+                await transaction_conn.close()
+
     @property
     def conn(self) -> aiosqlite.Connection:
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        if task is not None:
+            transaction_conn = self._transaction_connections.get(task)
+            if transaction_conn is not None:
+                return transaction_conn
         if self._conn is None:
             raise RuntimeError("Database.connect() has not been called")
         return self._conn

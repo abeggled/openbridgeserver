@@ -189,7 +189,7 @@ async def test_export_datapoint_shape(client, auth_headers):
 
 
 async def test_export_db_requires_admin(client, auth_headers):
-    # admin/admin is the default → should work
+    # The integration fixture explicitly seeds an administrator.
     resp = await client.get("/api/v1/config/export/db", headers=auth_headers)
     assert resp.status_code == 200
 

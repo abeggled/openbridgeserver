@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 import uuid
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from obs.admin_cli import (
     get_loglevel,
     list_adapters,
     list_bindings,
+    create_first_owner,
+    recover_owner,
     resolve_database_path,
     set_adapter_enabled,
     set_binding_enabled,
@@ -26,6 +29,8 @@ from obs.admin_cli import (
     validate_config,
 )
 from obs.admin_cli import _normalize_global_options
+from obs.api.auth import verify_password
+from obs.db.database import MIGRATIONS
 
 
 def _make_db(path: Path) -> dict[str, str]:
@@ -167,6 +172,50 @@ def _make_legacy_binding_db(path: Path) -> dict[str, str]:
     conn.commit()
     conn.close()
     return {"instance_id": instance_id, "binding_id": binding_id, "dp_id": dp_id}
+
+
+def _make_auth_db(path: Path, *, with_user: bool = True, with_authz: bool = True) -> None:
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            is_admin INTEGER NOT NULL DEFAULT 0,
+            mqtt_enabled INTEGER NOT NULL DEFAULT 0,
+            mqtt_password_hash TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    if with_authz:
+        conn.executescript(
+            """
+            CREATE TABLE authz_node_roles (
+                principal_type TEXT NOT NULL CHECK (principal_type IN ('user', 'api_key')),
+                principal_id TEXT NOT NULL,
+                node_type TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('owner', 'resident', 'operator', 'guest')),
+                effect TEXT NOT NULL DEFAULT 'allow' CHECK (effect IN ('allow', 'deny')),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (principal_type, principal_id, node_type, node_id)
+            );
+            """
+        )
+    if with_user:
+        conn.execute(
+            """
+            INSERT INTO users
+                (id, username, password_hash, is_admin, mqtt_enabled, mqtt_password_hash, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (str(uuid.uuid4()), "alice", "old-hash", 0, 0, None, "2026-06-25T12:00:00+00:00"),
+        )
+    conn.commit()
+    conn.close()
 
 
 def test_resolve_database_path_from_explicit_arg(tmp_path: Path):
@@ -544,6 +593,274 @@ def test_loglevel_set_requires_app_settings_table(tmp_path: Path):
 
     with pytest.raises(AdminCliError, match="app_settings"):
         set_loglevel(db_path, "INFO", backup=False)
+
+
+def test_create_first_owner_creates_only_explicit_admin_when_users_table_is_empty(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path, with_user=False)
+
+    result = create_first_owner(db_path, username="owner", password="long-random-password", backup=False)
+
+    assert result == {"created": True, "username": "owner", "is_admin": True, "owner_grant": None, "backup": None}
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT username, password_hash, is_admin, mqtt_enabled FROM users").fetchone()
+    conn.close()
+    assert row["username"] == "owner"
+    assert row["is_admin"] == 1
+    assert row["mqtt_enabled"] == 0
+    assert verify_password("long-random-password", row["password_hash"])
+
+
+def test_create_first_owner_rejects_repeated_setup(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path)
+
+    with pytest.raises(AdminCliError, match="already completed"):
+        create_first_owner(db_path, username="owner", password="secret", backup=False)
+
+
+def test_concurrent_first_owner_attempts_create_exactly_one_admin(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path, with_user=False)
+
+    def attempt(username: str):
+        try:
+            return create_first_owner(db_path, username=username, password=f"secret-{username}", backup=False)
+        except AdminCliError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(attempt, ("alice", "bob")))
+
+    assert sum(isinstance(result, dict) for result in results) == 1
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("SELECT COUNT(*) FROM users WHERE is_admin=1").fetchone()[0] == 1
+    conn.close()
+
+
+def test_first_owner_cli_reads_password_from_stdin_without_echo(tmp_path: Path, monkeypatch, capsys):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path, with_user=False)
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("stdin-secret\n"))
+
+    code = admin_main(["--db", str(db_path), "--no-backup", "--json", "auth", "first-owner", "owner", "--password-stdin"])
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert "stdin-secret" not in output
+    conn = sqlite3.connect(db_path)
+    stored = conn.execute("SELECT password_hash FROM users WHERE username='owner'").fetchone()[0]
+    conn.close()
+    assert verify_password("stdin-secret", stored)
+
+
+def test_first_owner_cli_initializes_missing_database(tmp_path: Path, monkeypatch, capsys):
+    db_path = tmp_path / "fresh" / "obs.db"
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("stdin-secret\n"))
+
+    code = admin_main(["--db", str(db_path), "--no-backup", "auth", "first-owner", "owner", "--password-stdin"])
+
+    assert code == 0
+    assert db_path.exists()
+    conn = sqlite3.connect(db_path)
+    version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+    stored = conn.execute("SELECT password_hash FROM users WHERE username='owner'").fetchone()[0]
+    conn.close()
+    assert version == MIGRATIONS[-1][0]
+    assert verify_password("stdin-secret", stored)
+
+
+def test_first_owner_cli_rejects_unprotected_password_file(tmp_path: Path, capsys):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path, with_user=False)
+    password_file = tmp_path / "password"
+    password_file.write_text("file-secret", encoding="utf-8")
+    password_file.chmod(0o644)
+
+    code = admin_main(["--db", str(db_path), "auth", "first-owner", "owner", "--password-file", str(password_file)])
+
+    assert code == 2
+    assert "0600" in capsys.readouterr().err
+
+
+def test_first_owner_cli_reads_protected_password_file(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path, with_user=False)
+    password_file = tmp_path / "password"
+    password_file.write_text("file-secret\n", encoding="utf-8")
+    password_file.chmod(0o600)
+
+    code = admin_main(["--db", str(db_path), "--no-backup", "auth", "first-owner", "owner", "--password-file", str(password_file)])
+
+    assert code == 0
+    conn = sqlite3.connect(db_path)
+    stored = conn.execute("SELECT password_hash FROM users WHERE username='owner'").fetchone()[0]
+    conn.close()
+    assert verify_password("file-secret", stored)
+
+
+def test_first_owner_cli_has_no_process_list_password_argument():
+    parser = build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["auth", "first-owner", "owner", "--password", "plaintext"])
+
+
+def test_first_owner_atomically_grants_existing_hierarchy_root(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path, with_user=False)
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE hierarchy_nodes (id TEXT PRIMARY KEY, parent_id TEXT, created_at TEXT NOT NULL)")
+    conn.execute("INSERT INTO hierarchy_nodes VALUES ('root', NULL, '2026-01-01')")
+    conn.commit()
+    conn.close()
+
+    result = create_first_owner(db_path, username="owner", password="secret", backup=False)
+
+    assert result["owner_grant"] == {"node_type": "hierarchy", "node_id": "root", "role": "owner"}
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT principal_id, node_type, node_id, role FROM authz_node_roles").fetchone()
+    conn.close()
+    assert row == ("owner", "hierarchy", "root", "owner")
+
+
+def test_first_owner_rolls_back_user_if_root_grant_fails(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path, with_user=False)
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE hierarchy_nodes (id TEXT PRIMARY KEY, parent_id TEXT, created_at TEXT NOT NULL)")
+    conn.execute("INSERT INTO hierarchy_nodes VALUES ('root', NULL, '2026-01-01')")
+    conn.execute("DROP TABLE authz_node_roles")
+    conn.execute("CREATE TABLE authz_node_roles (principal_type TEXT NOT NULL)")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(sqlite3.Error):
+        create_first_owner(db_path, username="owner", password="secret")
+
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
+    conn.close()
+    assert list(tmp_path.glob("auth-*.sqlite"))
+
+
+def test_recover_owner_promotes_existing_user_and_grants_owner_role(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path)
+
+    result = recover_owner(db_path, "alice", password="new-password", node_type="hierarchy", node_id="root", backup=False)
+
+    assert result == {
+        "username": "alice",
+        "created": False,
+        "is_admin": True,
+        "password_updated": True,
+        "owner_grant": {
+            "principal_type": "user",
+            "principal_id": "alice",
+            "node_type": "hierarchy",
+            "node_id": "root",
+            "role": "owner",
+        },
+        "backup": None,
+    }
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    user = conn.execute("SELECT is_admin, password_hash FROM users WHERE username='alice'").fetchone()
+    grant = conn.execute(
+        """
+        SELECT principal_type, principal_id, node_type, node_id, role, effect
+        FROM authz_node_roles
+        WHERE principal_id='alice'
+        """
+    ).fetchone()
+    conn.close()
+    assert user["is_admin"] == 1
+    assert verify_password("new-password", user["password_hash"])
+    assert dict(grant) == {
+        "principal_type": "user",
+        "principal_id": "alice",
+        "node_type": "hierarchy",
+        "node_id": "root",
+        "role": "owner",
+        "effect": "allow",
+    }
+
+
+def test_recover_owner_creates_backup_by_default(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path)
+
+    result = recover_owner(db_path, "alice")
+
+    assert result["backup"] is not None
+    assert Path(result["backup"]).exists()
+
+
+def test_recover_owner_rolls_back_promotion_when_grant_fails(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TRIGGER reject_owner_grant BEFORE INSERT ON authz_node_roles BEGIN SELECT RAISE(ABORT, 'reject grant'); END")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(sqlite3.Error):
+        recover_owner(db_path, "alice", password="new-password", node_type="hierarchy", node_id="root")
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT is_admin, password_hash FROM users WHERE username='alice'").fetchone()
+    conn.close()
+    assert row == (0, "old-hash")
+    assert list(tmp_path.glob("auth-*.sqlite"))
+
+
+def test_recover_owner_creates_missing_user_when_password_is_given(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path, with_user=False)
+
+    result = recover_owner(db_path, "owner", password="recovery-password", backup=False)
+
+    assert result["created"] is True
+    assert result["password_updated"] is True
+    assert result["owner_grant"] is None
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    user = conn.execute("SELECT username, password_hash, is_admin FROM users WHERE username='owner'").fetchone()
+    conn.close()
+    assert user["is_admin"] == 1
+    assert verify_password("recovery-password", user["password_hash"])
+
+
+def test_recover_owner_requires_password_for_missing_user(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path, with_user=False)
+
+    with pytest.raises(AdminCliError, match="sichere Passwort-Eingabe"):
+        recover_owner(db_path, "missing", backup=False)
+
+
+def test_recover_owner_requires_node_type_and_id_together(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path)
+
+    with pytest.raises(AdminCliError, match="gemeinsam"):
+        recover_owner(db_path, "alice", node_type="hierarchy", backup=False)
+
+
+def test_auth_owner_recovery_cli_json_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path)
+
+    code = admin_main(["--db", str(db_path), "--no-backup", "--json", "auth", "owner-recovery", "alice"])
+
+    captured = capsys.readouterr()
+    assert code == 0
+    payload = json.loads(captured.out)
+    assert payload["username"] == "alice"
+    assert payload["is_admin"] is True
+    assert payload["password_updated"] is False
 
 
 def test_support_package_sanitizes_adapter_secret_fields(tmp_path: Path):

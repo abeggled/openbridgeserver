@@ -10,6 +10,7 @@ let exportDb
 let importConfig
 let importDb
 let authApi
+let accountAdminApi
 let historySettingsApi
 let dpApi
 let autobackupApi
@@ -76,6 +77,32 @@ beforeEach(() => {
     createApiKey: vi.fn().mockResolvedValue({ data: { key: 'obs_secret' } }),
     deleteApiKey: vi.fn().mockResolvedValue({ data: {} }),
   }
+  accountAdminApi = {
+    userDeletionPreflight: vi.fn().mockResolvedValue({
+      data: {
+        revision: 'operator-revision',
+        visu_page_ids: [],
+        logic_graph_ids: [],
+        filterset_ids: [],
+        api_key_ids: [],
+        grant_count: 0,
+        visu_acl_count: 0,
+        filterset_state_count: 0,
+      },
+    }),
+    deleteUser: vi.fn().mockResolvedValue({ data: {} }),
+    getApiKeyCapabilities: vi.fn().mockResolvedValue({
+      data: {
+        key_id: 'key-1',
+        key_name: 'Bridge API',
+        revision: 3,
+        capabilities: ['visu.page_config.write'],
+        available_capabilities: ['visu.page_config.write', 'datapoint.metadata.write'],
+      },
+    }),
+    replaceApiKeyCapabilities: vi.fn().mockResolvedValue({ data: {} }),
+  }
+  vi.doMock('@/api/accountAdmin', () => ({ accountAdminApi }))
   historySettingsApi = {
     get: vi.fn().mockResolvedValue({ data: { plugin: 'sqlite', default_window_hours: 168 } }),
     update: vi.fn().mockResolvedValue({ data: {} }),
@@ -158,6 +185,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.doUnmock('@/api/client')
+  vi.doUnmock('@/api/accountAdmin')
 })
 
 async function mountSettingsView({ isAdmin = true } = {}) {
@@ -234,10 +262,10 @@ describe('SettingsView security tab', () => {
       mqtt_password: 'mqtt-secret',
     })
 
-    wrapper.vm.confirmDeleteUser({ username: 'operator' })
+    await wrapper.vm.confirmDeleteUser({ username: 'operator' })
     expect(wrapper.vm.showUserConfirm).toBe(true)
     await wrapper.vm.doDeleteUser()
-    expect(authApi.deleteUser).toHaveBeenCalledWith('operator')
+    expect(accountAdminApi.deleteUser).toHaveBeenCalledWith('operator', { revision: 'operator-revision', successor_username: null })
 
     wrapper.vm.createApiKey()
     wrapper.vm.newKeyName = 'Bridge API'
@@ -277,6 +305,29 @@ describe('SettingsView security tab', () => {
     expect(autobackupApi.restore).toHaveBeenCalledWith('20240506-0300')
     expect(wrapper.vm.formatAutobackupName('20240506-0300')).toBe('06.05.2024 03:00 Uhr')
     expect(wrapper.vm.formatBytes(2048)).toBe('2.0 KB')
+  })
+
+  it('requires explicit confirmation before replacing a key capability set', async () => {
+    const wrapper = await mountSettingsView()
+    wrapper.vm.activeTab = 'apikeys'
+    await flushPromises()
+
+    await wrapper.get('[data-testid="apikey-capabilities-key-1"]').trigger('click')
+    await flushPromises()
+
+    expect(accountAdminApi.getApiKeyCapabilities).toHaveBeenCalledWith('key-1')
+    const save = wrapper.get('[data-testid="apikey-capabilities-save"]')
+    expect(save.attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="apikey-capability-datapoint.metadata.write"]').setValue(true)
+    await wrapper.get('[data-testid="apikey-capabilities-confirm"]').setValue(true)
+    await save.trigger('submit')
+    await flushPromises()
+
+    expect(accountAdminApi.replaceApiKeyCapabilities).toHaveBeenCalledWith(
+      'key-1',
+      3,
+      ['visu.page_config.write', 'datapoint.metadata.write'],
+    )
   })
 
   it('covers config import and icon library workflows', async () => {

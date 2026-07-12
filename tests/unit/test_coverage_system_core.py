@@ -70,6 +70,12 @@ class _DbStub:
     async def execute_and_commit(self, query, params=()):
         self.executed.append((query, params))
 
+    async def execute(self, query, params=()):
+        self.executed.append((query, params))
+
+    async def commit(self):
+        pass
+
 
 # ===========================================================================
 # obs/core/event_bus
