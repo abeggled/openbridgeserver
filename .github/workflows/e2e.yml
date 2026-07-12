@@ -26,6 +26,8 @@ jobs:
       OBS_MQTT_PASSWORD: ci-mqtt-pass
       OBS_JWT_SECRET: ci-jwt-secret-min-32-chars-long-enough
       OBS_LOG_LEVEL: WARNING
+      E2E_USER: admin
+      E2E_PASS: admin
 
     steps:
       - uses: actions/checkout@v7
