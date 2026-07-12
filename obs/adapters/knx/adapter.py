@@ -41,7 +41,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from obs.adapters.base import AdapterBase
+from obs.adapters.base import AdapterBase, AdapterDelegationCapability
 from obs.adapters.knx.dpt_registry import DPTRegistry
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
@@ -131,6 +131,7 @@ class KnxBindingConfig(BaseModel):
 @register
 class KnxAdapter(AdapterBase):
     adapter_type = "KNX"
+    delegation_capabilities: frozenset[AdapterDelegationCapability] = frozenset()
     config_schema = KnxAdapterConfig
     binding_config_schema = KnxBindingConfig
 
