@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ActionName = Literal["read", "write", "generate", "activate"]
 EffectName = Literal["allow", "deny"]
-NodeTypeName = Literal["hierarchy", "datapoint"]
+NodeTypeName = Literal["hierarchy", "datapoint", "logic_graph", "logic_capability"]
 PrincipalTypeName = Literal["user", "api_key"]
 RoleName = Literal["owner", "resident", "operator", "guest"]
 

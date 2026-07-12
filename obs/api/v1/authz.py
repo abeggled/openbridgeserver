@@ -16,6 +16,7 @@ from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, GrantEffect, Role, RoleGrant, authorize
 from obs.api.authz_service import _datapoint_read_grants, load_role_grants, resolve_datapoint_targets, resolve_hierarchy_targets
 from obs.db.database import Database, get_db
+from obs.logic.capabilities import LOGIC_CAPABILITIES
 from obs.models.authz import (
     AuthzPreviewGrant,
     AuthzPreviewPrincipal,
@@ -79,7 +80,11 @@ async def _require_principal(db: Database, principal_type: PrincipalTypeName, pr
 
 
 async def _require_grant_targets(db: Database, grants: Sequence[AuthzPrincipalGrant]) -> None:
-    table_by_type = {"hierarchy": "hierarchy_nodes", "datapoint": "datapoints"}
+    table_by_type = {
+        "hierarchy": "hierarchy_nodes",
+        "datapoint": "datapoints",
+        "logic_graph": "logic_graphs",
+    }
     for node_type, table in table_by_type.items():
         node_ids = sorted({grant.node_id for grant in grants if grant.node_type == node_type})
         if not node_ids:
@@ -92,6 +97,15 @@ async def _require_grant_targets(db: Database, grants: Sequence[AuthzPrincipalGr
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"Unknown {node_type} grant targets: {', '.join(missing)}",
             )
+
+    unknown_capabilities = sorted(
+        {grant.node_id for grant in grants if grant.node_type == "logic_capability" and grant.node_id not in LOGIC_CAPABILITIES}
+    )
+    if unknown_capabilities:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"Unknown logic_capability grant targets: {', '.join(unknown_capabilities)}",
+        )
 
 
 async def _load_principal_grants(
@@ -261,8 +275,10 @@ def _validate_draft_grants(body: AuthzPreviewRequest) -> None:
 async def _resolve_targets(db: Database, target: AuthzPreviewTarget) -> list[AuthzTarget]:
     if target.node_type == "hierarchy":
         resolved = await resolve_hierarchy_targets(db, [target.node_id])
-    else:
+    elif target.node_type == "datapoint":
         resolved = (await resolve_datapoint_targets(db, [target.node_id])).get(target.node_id, [])
+    else:
+        resolved = [AuthzTarget(node_type=target.node_type, node_id=target.node_id)]
 
     if target.min_role is None:
         return resolved
