@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import sqlite3
@@ -100,6 +101,18 @@ def resolve_database_path(db_arg: str | None = None, *, require_exists: bool = T
     if require_exists and not path.exists():
         raise AdminCliError(f"Keine OBS-Konfigurationsdatenbank gefunden: {path}. Nutze --db /pfad/zu/obs.db oder setze OBS_DATABASE__PATH.")
     return path
+
+
+def initialize_database(path: Path) -> None:
+    """Create and migrate a fresh OBS database for first-owner bootstrap."""
+    from obs.db.database import Database
+
+    async def initialize() -> None:
+        db = Database(str(path))
+        await db.connect()
+        await db.disconnect()
+
+    asyncio.run(initialize())
 
 
 def connect_database(path: Path, *, timeout: float = 0.2) -> sqlite3.Connection:
@@ -958,7 +971,10 @@ def _normalize_global_options(argv: list[str]) -> list[str]:
 
 
 def run(args: argparse.Namespace) -> tuple[Any, int]:
-    db_path = None if args.command == "status" else resolve_database_path(args.db)
+    first_owner = args.command == "auth" and args.auth_command == "first-owner"
+    db_path = None if args.command == "status" else resolve_database_path(args.db, require_exists=not first_owner)
+    if first_owner and not db_path.exists():
+        initialize_database(db_path)
     backup = not getattr(args, "no_backup", False)
 
     if args.command == "status":

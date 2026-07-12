@@ -30,6 +30,7 @@ from obs.admin_cli import (
 )
 from obs.admin_cli import _normalize_global_options
 from obs.api.auth import verify_password
+from obs.db.database import MIGRATIONS
 
 
 def _make_db(path: Path) -> dict[str, str]:
@@ -651,6 +652,22 @@ def test_first_owner_cli_reads_password_from_stdin_without_echo(tmp_path: Path, 
     conn = sqlite3.connect(db_path)
     stored = conn.execute("SELECT password_hash FROM users WHERE username='owner'").fetchone()[0]
     conn.close()
+    assert verify_password("stdin-secret", stored)
+
+
+def test_first_owner_cli_initializes_missing_database(tmp_path: Path, monkeypatch, capsys):
+    db_path = tmp_path / "fresh" / "obs.db"
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("stdin-secret\n"))
+
+    code = admin_main(["--db", str(db_path), "--no-backup", "auth", "first-owner", "owner", "--password-stdin"])
+
+    assert code == 0
+    assert db_path.exists()
+    conn = sqlite3.connect(db_path)
+    version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+    stored = conn.execute("SELECT password_hash FROM users WHERE username='owner'").fetchone()[0]
+    conn.close()
+    assert version == MIGRATIONS[-1][0]
     assert verify_password("stdin-secret", stored)
 
 
