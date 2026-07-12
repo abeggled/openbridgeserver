@@ -139,6 +139,17 @@ async def _ensure_binding_mutation_scope(db: Database, principal: Principal, dp_
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Binding-Änderung nicht erlaubt")
 
 
+def _ensure_adapter_delegates_binding(principal: Principal, adapter_type: str) -> None:
+    if _is_admin_principal(principal):
+        return
+
+    from obs.adapters.base import AdapterDelegationCapability
+    from obs.adapters.registry import supports_delegation
+
+    if not supports_delegation(adapter_type, AdapterDelegationCapability.LINK_BINDING):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Typ erlaubt keine delegierte Binding-Änderung")
+
+
 async def _reload_adapter_instance(instance_id: str, db: Database) -> None:
     """Laufende Adapter-Instanz über ihre Bindings aus DB informieren."""
     from obs.adapters import registry as adapter_registry
@@ -262,7 +273,8 @@ async def create_binding(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> BindingOut:
-    await _ensure_binding_mutation_scope(db, _principal_from_dependency(_user), dp_id)
+    principal = _principal_from_dependency(_user)
+    await _ensure_binding_mutation_scope(db, principal, dp_id)
     if get_registry().get(dp_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} nicht gefunden")
 
@@ -274,6 +286,7 @@ async def create_binding(
             f"Adapter-Instanz '{body.adapter_instance_id}' nicht gefunden",
         )
     adapter_type = instance_row["adapter_type"]
+    _ensure_adapter_delegates_binding(principal, adapter_type)
 
     _validate_adapter_binding(
         adapter_type,

@@ -10,9 +10,18 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
+
+
+class AdapterDelegationCapability(StrEnum):
+    """Adapter-owned operations that a scoped non-admin may perform."""
+
+    CREATE_DEVICE = "create_device"
+    CREATE_DATAPOINT = "create_datapoint"
+    LINK_BINDING = "link_binding"
 
 
 class AdapterBase(ABC):
@@ -30,6 +39,7 @@ class AdapterBase(ABC):
     config_schema: type[BaseModel]  # API: /adapters/{type}/schema
     binding_config_schema: type[BaseModel]  # API: /adapters/{type}/binding-schema
     hidden: bool = False  # True = not shown in "create instance" UI
+    delegation_capabilities: frozenset[AdapterDelegationCapability] = frozenset()
 
     def __init__(
         self,

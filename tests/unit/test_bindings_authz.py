@@ -40,6 +40,10 @@ def _principal(subject: str = "alice", *, is_admin: bool = False) -> Principal:
     return Principal(subject=subject, type="user", is_admin=is_admin)
 
 
+def test_admin_binding_delegation_keeps_legacy_adapter_access() -> None:
+    bindings_api._ensure_adapter_delegates_binding(_principal("admin", is_admin=True), "UNKNOWN")
+
+
 async def _insert_tree_and_nodes(db: Database) -> None:
     await db.execute_and_commit(
         """
@@ -98,13 +102,13 @@ async def _insert_grant(
     )
 
 
-async def _insert_instance(db: Database, instance_id: uuid.UUID) -> None:
+async def _insert_instance(db: Database, instance_id: uuid.UUID, adapter_type: str = "ANWESENHEITSSIMULATION") -> None:
     await db.execute_and_commit(
         """
         INSERT INTO adapter_instances (id, adapter_type, name, config, enabled, created_at, updated_at)
-        VALUES (?, 'ANWESENHEITSSIMULATION', 'Presence', '{}', 0, ?, ?)
+        VALUES (?, ?, 'Presence', '{}', 0, ?, ?)
         """,
-        (str(instance_id), NOW, NOW),
+        (str(instance_id), adapter_type, NOW, NOW),
     )
 
 
@@ -175,7 +179,7 @@ async def test_non_admin_create_binding_requires_operator_scope(monkeypatch, db:
 
 
 @pytest.mark.asyncio
-async def test_non_admin_create_binding_allows_direct_datapoint_operator_scope(monkeypatch, db: Database):
+async def test_non_admin_create_binding_rejects_non_delegable_adapter_with_operator_scope(monkeypatch, db: Database):
     dp_id = uuid.uuid4()
     instance_id = uuid.uuid4()
     await _insert_tree_and_nodes(db)
@@ -183,16 +187,41 @@ async def test_non_admin_create_binding_allows_direct_datapoint_operator_scope(m
     await _insert_grant(db, node_type="datapoint", node_id=str(dp_id), role="operator")
     await _insert_instance(db, instance_id)
     monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub(dp_id))
+    with pytest.raises(HTTPException) as exc_info:
+        await bindings_api.create_binding(
+            dp_id=dp_id,
+            body=AdapterBindingCreate(adapter_instance_id=instance_id, direction="SOURCE"),
+            _user=_principal("alice"),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_non_admin_create_binding_allows_delegable_mqtt_with_operator_scope(monkeypatch, db: Database):
+    from obs.adapters import registry as adapter_registry
+    from obs.adapters.mqtt.adapter import MqttAdapter
+
+    dp_id = uuid.uuid4()
+    instance_id = uuid.uuid4()
+    await _insert_tree_and_nodes(db)
+    await _insert_datapoint(db, dp_id, "allowed-room")
+    await _insert_grant(db, node_type="datapoint", node_id=str(dp_id), role="operator")
+    await _insert_instance(db, instance_id, "MQTT")
+    monkeypatch.setitem(adapter_registry._adapters, "MQTT", MqttAdapter)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub(dp_id))
     monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
 
     created = await bindings_api.create_binding(
         dp_id=dp_id,
-        body=AdapterBindingCreate(adapter_instance_id=instance_id, direction="SOURCE"),
+        body=AdapterBindingCreate(adapter_instance_id=instance_id, direction="SOURCE", config={"topic": "delegated/test"}),
         _user=_principal("alice"),
         db=db,
     )
 
     assert created.datapoint_id == dp_id
+    assert created.adapter_type == "MQTT"
 
 
 @pytest.mark.asyncio
