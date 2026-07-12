@@ -2215,6 +2215,8 @@
       "create": "Create",
       "rights": {
         "openButton": "Edit rights",
+        "summary": "{roles} · {n} areas",
+        "summaryNone": "No assigned areas",
         "title": "Rights for {username}",
         "progress": "Rights editor progress",
         "steps": {

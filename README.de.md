@@ -104,8 +104,13 @@ Das LXC-Template enthält ein vollständiges Ubuntu 26.04-System mit **open brid
 |---|---|
 | **open bridge server** Weboberfläche + API | `http://<container-ip>:8080` |
 
-**Standardzugang:** Benutzername `admin`, Passwort `admin`
-⚠️ Das Passwort sofort nach der ersten Anmeldung ändern (Einstellungen → Passwort).
+OBS liefert bewusst keine Standard-Zugangsdaten aus. Der erste Start initialisiert die
+Datenbank und stoppt dann mit einem Einrichtungshinweis. Lege genau einen Eigentümer
+lokal an, bevor der Dienst neu gestartet wird:
+
+```bash
+obs-admin auth first-owner <benutzername> --password-stdin
+```
 
 **Sicherheitskonfiguration** (erforderlich):
 
@@ -1705,7 +1710,12 @@ Die `.env`-Datei enthält das MQTT-Passwort, mit dem der Docker-Mosquitto initia
 | API (Swagger) | http://localhost:8080/docs |
 | MQTT | localhost:1883 |
 
-**Standardzugang:** `admin` / `admin`
+Lege nach dem ersten, die Datenbank initialisierenden Backend-Start einmalig den
+Eigentümer an, bevor du das Backend neu startest:
+
+```bash
+tools/with-venv python -m obs.admin_cli auth first-owner <benutzername> --password-stdin
+```
 
 #### Tests ausführen
 

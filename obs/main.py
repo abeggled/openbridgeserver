@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.adapters import registry as adapter_registry
-    from obs.api.auth import ensure_default_user
+    from obs.api.auth import require_configured_owner
     from obs.api.v1.websocket import init_ws_manager
     from obs.config import get_settings
     from obs.core.event_bus import DataValueEvent, init_event_bus
@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         except Exception:
             logger.exception("Failed to apply persistent log level")
         logger.info("Applied persistent log level from app_settings: %s", persistent_log_level)
-    await ensure_default_user(db)
+    await require_configured_owner(db)
 
     # Rebuild Mosquitto passwd file from DB on every startup (keeps it in sync).
     # SIGHUP is sent after MQTT connects (see below) so Mosquitto reloads cleanly.

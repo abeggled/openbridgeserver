@@ -14,6 +14,7 @@ import io
 import uuid
 import zipfile
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -36,7 +37,7 @@ from obs.api.auth import (
     create_access_token,
     create_refresh_token,
     decode_token,
-    ensure_default_user,
+    require_configured_owner,
     hash_password,
 )
 from obs.api.v1.icons import (
@@ -340,18 +341,24 @@ class TestGetAdminUser:
 # ---------------------------------------------------------------------------
 
 
-class TestEnsureDefaultUser:
+class TestRequireConfiguredOwner:
     @pytest.mark.asyncio
-    async def test_creates_admin_when_no_users(self):
+    async def test_fails_closed_when_no_administrator_exists(self):
         db = _DbStub(fetchone_result=_make_row(c=0))
-        await ensure_default_user(db)
-        assert len(db.executed) == 1
-        assert "INSERT INTO users" in db.executed[0][0]
+        with pytest.raises(RuntimeError, match="obs-admin auth first-owner"):
+            await require_configured_owner(db)
+        assert len(db.executed) == 0
+
+    @pytest.mark.asyncio
+    async def test_fails_closed_when_admin_count_cannot_be_read(self):
+        db = _DbStub(fetchone_result=None)
+        with pytest.raises(RuntimeError, match="obs-admin auth first-owner"):
+            await require_configured_owner(db)
 
     @pytest.mark.asyncio
     async def test_skips_when_users_exist(self):
         db = _DbStub(fetchone_result=_make_row(c=1))
-        await ensure_default_user(db)
+        await require_configured_owner(db)
         assert len(db.executed) == 0
 
 
@@ -704,6 +711,39 @@ class TestGetUser:
 
 
 class TestUpdateUser:
+    @pytest.mark.asyncio
+    async def test_rejects_self_demotion(self):
+        target = _make_row(id="admin-id", username="admin", is_admin=1, mqtt_enabled=0, mqtt_password_hash=None, created_at="2024-01-01")
+        db = _DbStub(fetchone_result=target)
+
+        with pytest.raises(HTTPException, match="demote your own account") as exc:
+            await auth_module.update_user(username="admin", body=UserUpdate(is_admin=False), _admin="admin", db=db)
+
+        assert exc.value.status_code == 400
+        assert db.executed == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_demotion_of_last_administrator(self):
+        target = _make_row(id="owner-id", username="owner", is_admin=1, mqtt_enabled=0, mqtt_password_hash=None, created_at="2024-01-01")
+        db = _DbStub()
+        db._fetchone_side_effects = [target, _make_row(c=1)]
+
+        with pytest.raises(HTTPException, match="last administrator") as exc:
+            await auth_module.update_user(username="owner", body=UserUpdate(is_admin=False), _admin="admin", db=db)
+
+        assert exc.value.status_code == 400
+        assert db.executed == []
+
+    @pytest.mark.asyncio
+    async def test_atomic_update_rejects_concurrent_last_administrator_demotion(self):
+        target = _make_row(id="owner-id", username="owner", is_admin=1, mqtt_enabled=0, mqtt_password_hash=None, created_at="2024-01-01")
+        db = _DbStub()
+        db._fetchone_side_effects = [target, _make_row(c=2)]
+        db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=0))
+
+        with pytest.raises(HTTPException, match="last administrator"):
+            await auth_module.update_user(username="owner", body=UserUpdate(is_admin=False), _admin="admin", db=db)
+
     @pytest.mark.asyncio
     async def test_update_username_success(self):
         uid = str(uuid.uuid4())

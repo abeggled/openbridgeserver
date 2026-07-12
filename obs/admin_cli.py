@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sqlite3
+import stat
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -529,23 +530,44 @@ def _insert_user_sql(username: str, password: str, now: str, columns: set[str]) 
     )
 
 
-def setup_default_user(db_path: Path, *, username: str = "admin", password: str = "admin", backup: bool = True) -> dict[str, Any]:
-    """Create the setup-default admin user when the users table is empty."""
+def create_first_owner(db_path: Path, *, username: str, password: str, backup: bool = True) -> dict[str, Any]:
+    """Atomically create the only first administrator in an empty database."""
+    if not username:
+        raise AdminCliError("Benutzername darf nicht leer sein")
+    if not password:
+        raise AdminCliError("Passwort darf nicht leer sein")
     conn = connect_database(db_path)
     backup_path: Path | None = None
     try:
         _require_table(conn, "users")
         columns = _require_columns(conn, "users", {"id", "username", "password_hash", "is_admin", "created_at"})
-        existing_count = _count(conn, "users") or 0
-        if existing_count > 0:
-            return {"created": False, "username": username, "existing_users": existing_count, "backup": None}
-
         backup_path = create_backup(db_path) if backup else None
         _begin_immediate(conn)
+        existing_count = _count(conn, "users") or 0
+        if existing_count > 0:
+            raise AdminCliError("First-owner setup was already completed; use owner-recovery for local recovery")
         sql, params = _insert_user_sql(username, password, _now(), columns)
         conn.execute(sql, params)
+        owner_grant = None
+        if _table_exists(conn, "hierarchy_nodes") and _table_exists(conn, "authz_node_roles"):
+            root = conn.execute("SELECT id FROM hierarchy_nodes WHERE parent_id IS NULL ORDER BY created_at, id LIMIT 1").fetchone()
+            if root is not None:
+                now = _now()
+                conn.execute(
+                    """INSERT INTO authz_node_roles
+                       (principal_type, principal_id, node_type, node_id, role, effect, created_at, updated_at)
+                       VALUES ('user', ?, 'hierarchy', ?, 'owner', 'allow', ?, ?)""",
+                    (username, root["id"], now, now),
+                )
+                owner_grant = {"node_type": "hierarchy", "node_id": root["id"], "role": "owner"}
         conn.commit()
-        return {"created": True, "username": username, "is_admin": True, "backup": str(backup_path) if backup_path else None}
+        return {
+            "created": True,
+            "username": username,
+            "is_admin": True,
+            "owner_grant": owner_grant,
+            "backup": str(backup_path) if backup_path else None,
+        }
     except Exception:
         conn.rollback()
         raise
@@ -583,7 +605,7 @@ def recover_owner(
 
         user = _row(conn, "SELECT id, username, is_admin FROM users WHERE username=?", (username,))
         if user is None and password is None:
-            raise AdminCliError(f"Benutzer '{username}' nicht gefunden. Zum Anlegen --password angeben.")
+            raise AdminCliError(f"Benutzer '{username}' nicht gefunden. Zum Anlegen eine sichere Passwort-Eingabe angeben.")
 
         backup_path = create_backup(db_path) if backup else None
         _begin_immediate(conn)
@@ -635,6 +657,43 @@ def recover_owner(
         raise
     finally:
         conn.close()
+
+
+def _password_from_args(args: argparse.Namespace) -> str | None:
+    if getattr(args, "password_stdin", False):
+        password = sys.stdin.readline().removesuffix("\n").removesuffix("\r")
+    elif getattr(args, "password_file", None):
+        path = Path(args.password_file).expanduser()
+        fd = -1
+        try:
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            file_stat = os.fstat(fd)
+        except OSError as exc:
+            raise AdminCliError(f"Passwortdatei konnte nicht gelesen werden: {path}: {exc}") from exc
+        try:
+            if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_mode & 0o077:
+                raise AdminCliError("Passwortdatei muss regulaer und nur fuer den Besitzer lesbar sein (Modus 0600 oder strenger, kein Symlink)")
+            if hasattr(os, "geteuid") and file_stat.st_uid != os.geteuid():
+                raise AdminCliError("Passwortdatei muss dem aktuellen Benutzer gehoeren")
+            with os.fdopen(fd, encoding="utf-8") as password_handle:
+                fd = -1
+                password = password_handle.read().removesuffix("\n").removesuffix("\r")
+        except OSError as exc:
+            raise AdminCliError(f"Passwortdatei konnte nicht gelesen werden: {path}: {exc}") from exc
+        finally:
+            if fd >= 0:
+                os.close(fd)
+    else:
+        return None
+    if not password:
+        raise AdminCliError("Passwort darf nicht leer sein")
+    return password
+
+
+def _add_password_input(parser: argparse.ArgumentParser, *, required: bool) -> None:
+    group = parser.add_mutually_exclusive_group(required=required)
+    group.add_argument("--password-stdin", action="store_true", help="Passwort aus der Standardeingabe lesen")
+    group.add_argument("--password-file", help="Passwort aus einer nur fuer den Besitzer lesbaren Datei lesen")
 
 
 def validate_config(db_path: Path) -> dict[str, Any]:
@@ -850,12 +909,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     auth_parser = sub.add_parser("auth", help="Offline-Authentifizierung und Owner-Recovery")
     auth_sub = auth_parser.add_subparsers(dest="auth_command", required=True)
-    setup_default = auth_sub.add_parser("setup-default", help="Default-Admin anlegen, wenn noch keine Benutzer existieren")
-    setup_default.add_argument("--username", default="admin", help="Benutzername fuer den Default-Admin")
-    setup_default.add_argument("--password", default="admin", help="Passwort fuer den Default-Admin")
+    first_owner = auth_sub.add_parser("first-owner", help="Einmalig den ersten Owner in einer leeren Installation anlegen")
+    first_owner.add_argument("username")
+    _add_password_input(first_owner, required=True)
     owner_recovery = auth_sub.add_parser("owner-recovery", help="Benutzer offline als Admin/Owner wiederherstellen")
     owner_recovery.add_argument("username")
-    owner_recovery.add_argument("--password", help="Passwort setzen; erforderlich, wenn der Benutzer noch nicht existiert")
+    _add_password_input(owner_recovery, required=False)
     owner_recovery.add_argument("--node-type", help="AuthZ-Node-Typ, z. B. hierarchy")
     owner_recovery.add_argument("--node-id", help="AuthZ-Node-ID, fuer die owner gesetzt wird")
 
@@ -926,14 +985,16 @@ def run(args: argparse.Namespace) -> tuple[Any, int]:
         return get_loglevel(db_path), 0
     if args.command == "loglevel" and args.loglevel_command == "set":
         return set_loglevel(db_path, args.level, backup=backup), 0
-    if args.command == "auth" and args.auth_command == "setup-default":
-        return setup_default_user(db_path, username=args.username, password=args.password, backup=backup), 0
+    if args.command == "auth" and args.auth_command == "first-owner":
+        password = _password_from_args(args)
+        assert password is not None
+        return create_first_owner(db_path, username=args.username, password=password, backup=backup), 0
     if args.command == "auth" and args.auth_command == "owner-recovery":
         return (
             recover_owner(
                 db_path,
                 args.username,
-                password=args.password,
+                password=_password_from_args(args),
                 node_type=args.node_type,
                 node_id=args.node_id,
                 backup=backup,

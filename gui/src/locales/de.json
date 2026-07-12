@@ -2215,6 +2215,8 @@
       "create": "Erstellen",
       "rights": {
         "openButton": "Rechte bearbeiten",
+        "summary": "{roles} · {n} Bereiche",
+        "summaryNone": "Keine zugewiesenen Bereiche",
         "title": "Rechte für {username}",
         "progress": "Fortschritt im Rechte-Editor",
         "steps": {

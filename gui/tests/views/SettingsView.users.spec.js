@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 let listUsers
+let getUserGrants
 
 beforeEach(() => {
   vi.resetModules()
@@ -49,6 +50,21 @@ beforeEach(() => {
       },
     ],
   })
+  getUserGrants = vi.fn().mockImplementation((username) => Promise.resolve({
+    data: {
+      grants: username === 'viewer'
+        ? [{ node_type: 'hierarchy', node_id: 'living-room', role: 'guest', effect: 'allow' }]
+        : [],
+    },
+  }))
+
+  vi.doMock('@/api/authz', () => ({
+    authzApi: {
+      getUserGrants,
+      preview: vi.fn().mockResolvedValue({ data: { results: [] } }),
+      updateUserGrants: vi.fn().mockResolvedValue({ data: { grants: [] } }),
+    },
+  }))
 
   vi.doMock('@/api/client', () => ({
     settingsApi: {
@@ -106,6 +122,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.doUnmock('@/api/client')
+  vi.doUnmock('@/api/authz')
 })
 
 async function mountSettingsView() {
@@ -161,6 +178,7 @@ describe('SettingsView users tab', () => {
     expect(cards[2].text()).toContain('Passwort fehlt')
     expect(wrapper.find('[data-testid="user-delete-admin"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="user-delete-viewer"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="user-rights-summary-viewer"]').text()).toContain('Gast · 1 Bereiche')
     wrapper.unmount()
   })
 
@@ -175,6 +193,26 @@ describe('SettingsView users tab', () => {
     await button.trigger('click')
 
     expect(wrapper.get('[data-testid="rights-editor-stub"]').text()).toBe('viewer')
+    wrapper.unmount()
+  })
+
+  it('hides delegation controls until a second user exists', async () => {
+    listUsers.mockResolvedValueOnce({
+      data: [{
+        id: 'u-1',
+        username: 'admin',
+        is_admin: true,
+        mqtt_enabled: false,
+        mqtt_password_set: false,
+        created_at: '2026-01-01T00:00:00Z',
+      }],
+    })
+    const wrapper = await mountSettingsView()
+    const usersTab = wrapper.findAll('button').find(button => button.text() === 'Benutzer')
+    await usersTab.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="user-rights-admin"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

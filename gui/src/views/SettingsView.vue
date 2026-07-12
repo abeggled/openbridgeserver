@@ -160,6 +160,9 @@
                 <span class="font-semibold text-slate-800 dark:text-slate-100 truncate">{{ u.username }}</span>
                 <Badge v-if="u.username === auth.username" variant="info" size="xs">{{ $t('settings.users.currentAccount') }}</Badge>
                 <Badge :variant="u.is_admin ? 'warning' : 'muted'" size="xs">{{ u.is_admin ? $t('settings.users.roleAdmin') : $t('settings.users.roleUser') }}</Badge>
+                <span class="text-xs text-slate-500" :data-testid="`user-rights-summary-${u.username}`">
+                  {{ userRightsSummary(u) }}
+                </span>
               </div>
               <div class="mt-2 grid gap-2 text-xs text-slate-500 sm:grid-cols-3">
                 <div>
@@ -183,6 +186,7 @@
             </div>
             <div class="flex items-center gap-1 shrink-0">
               <button
+                v-if="users.length >= 2"
                 type="button"
                 class="btn-secondary btn-sm"
                 :data-testid="`user-rights-${u.username}`"
@@ -1387,6 +1391,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { authApi, adapterApi, configApi, autobackupApi, knxprojApi, historySettingsApi, iconsApi, dpApi, securityApi, supportApi } from '@/api/client'
+import { authzApi } from '@/api/authz'
 import { useI18n } from 'vue-i18n'
 import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
@@ -2143,6 +2148,7 @@ const showUserConfirm = ref(false)
 const deleteUserTarget = ref(null)
 const showRightsEditor = ref(false)
 const rightsTarget = ref(null)
+const userGrants = ref({})
 const userForm    = reactive({ username: '', password: '', is_admin: false, mqtt_enabled: false, mqtt_password: '' })
 const ownerFirstUsers = computed(() => {
   return [...users.value].sort((a, b) => {
@@ -2156,8 +2162,27 @@ const ownerFirstUsers = computed(() => {
 
 async function loadUsers() {
   usersLoading.value = true
-  try { const { data } = await authApi.listUsers(); users.value = data }
+  try {
+    const { data } = await authApi.listUsers()
+    users.value = data
+    const grants = await Promise.all(data.map(async (user) => {
+      try {
+        const response = await authzApi.getUserGrants(user.username)
+        return [user.username, response.data?.grants || []]
+      } catch {
+        return [user.username, []]
+      }
+    }))
+    userGrants.value = Object.fromEntries(grants)
+  }
   finally { usersLoading.value = false }
+}
+function userRightsSummary(u) {
+  const hierarchyGrants = (userGrants.value[u.username] || [])
+    .filter(grant => grant.node_type === 'hierarchy' && grant.effect !== 'deny')
+  if (!hierarchyGrants.length) return t('settings.users.rights.summaryNone')
+  const roles = [...new Set(hierarchyGrants.map(grant => t(`settings.users.rights.roles.${grant.role}.label`)))]
+  return t('settings.users.rights.summary', { roles: roles.join(', '), n: hierarchyGrants.length })
 }
 function userStatus(u) {
   if (u.mqtt_enabled && !u.mqtt_password_set) {

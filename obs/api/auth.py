@@ -13,7 +13,7 @@ API Keys:
   Format: obs_<64 hex chars>
   Stored: SHA-256 hash in api_keys table
 
-First startup: if no users exist → create admin/admin (logged with warning).
+First startup: an owner must be created offline with ``obs-admin``.
 """
 
 from __future__ import annotations
@@ -225,17 +225,13 @@ async def get_admin_user(
 # ---------------------------------------------------------------------------
 
 
-async def ensure_default_user(db: Database) -> None:
-    """Create admin/admin if no users exist. Called once at startup."""
-    row = await db.fetchone("SELECT COUNT(*) AS c FROM users")
-    if row and row["c"] == 0:
-        uid = str(uuid.uuid4())
-        now = datetime.now(UTC).isoformat()
-        await db.execute_and_commit(
-            "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (?,?,?,?,?)",
-            (uid, "admin", hash_password("admin"), 1, now),
+async def require_configured_owner(db: Database) -> None:
+    """Fail closed until an administrator has been created offline."""
+    row = await db.fetchone("SELECT COUNT(*) AS c FROM users WHERE is_admin=1")
+    if not row or row["c"] == 0:
+        raise RuntimeError(
+            "No OBS owner is configured. Stop the service and run 'obs-admin auth first-owner <username> --password-stdin' locally, then restart OBS."
         )
-        logger.warning("⚠️  Default user created: admin / admin  — Change the password immediately! POST /api/v1/auth/login")
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +525,13 @@ async def update_user(
     new_username = body.username if body.username is not None else target["username"]
     new_is_admin = int(body.is_admin) if body.is_admin is not None else target["is_admin"]
 
+    if username == _admin and bool(target["is_admin"]) and not bool(new_is_admin):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot demote your own account")
+    if bool(target["is_admin"]) and not bool(new_is_admin):
+        admin_count = await db.fetchone("SELECT COUNT(*) AS c FROM users WHERE is_admin=1")
+        if not admin_count or admin_count["c"] <= 1:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot remove the last administrator")
+
     if body.username and body.username != username:
         conflict = await db.fetchone("SELECT id FROM users WHERE username=?", (body.username,))
         if conflict:
@@ -539,10 +542,15 @@ async def update_user(
     # Disabling mqtt_enabled clears the stored hash
     new_mqtt_hash = None if body.mqtt_enabled is False else target["mqtt_password_hash"]
 
-    await db.execute(
-        "UPDATE users SET username=?, is_admin=?, mqtt_enabled=?, mqtt_password_hash=? WHERE id=?",
-        (new_username, new_is_admin, new_mqtt_enabled, new_mqtt_hash, target["id"]),
+    update_cursor = await db.execute(
+        """UPDATE users
+           SET username=?, is_admin=?, mqtt_enabled=?, mqtt_password_hash=?
+           WHERE id=?
+             AND (is_admin=0 OR ?=1 OR (SELECT COUNT(*) FROM users WHERE is_admin=1) > 1)""",
+        (new_username, new_is_admin, new_mqtt_enabled, new_mqtt_hash, target["id"], new_is_admin),
     )
+    if getattr(update_cursor, "rowcount", 1) == 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot remove the last administrator")
     if body.username and body.username != username:
         await db.execute(
             "UPDATE api_keys SET owner=? WHERE owner=?",
