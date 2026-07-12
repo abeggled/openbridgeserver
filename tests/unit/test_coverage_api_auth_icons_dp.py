@@ -1890,7 +1890,7 @@ class TestDeleteBinding:
     @pytest.mark.asyncio
     async def test_delete_binding_success(self, monkeypatch):
         inst_id = str(uuid.uuid4())
-        row = _make_row(adapter_instance_id=inst_id)
+        row = _make_row(adapter_type="KNX", adapter_instance_id=inst_id)
         db = _DbStub(fetchone_result=row)
         monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
         await bindings_api.delete_binding(dp_id=uuid.uuid4(), binding_id=uuid.uuid4(), _user="admin", db=db)
@@ -1898,7 +1898,7 @@ class TestDeleteBinding:
 
     @pytest.mark.asyncio
     async def test_delete_binding_no_instance(self, monkeypatch):
-        row = _make_row(adapter_instance_id=None)
+        row = _make_row(adapter_type="KNX", adapter_instance_id=None)
         db = _DbStub(fetchone_result=row)
         reload_mock = AsyncMock()
         monkeypatch.setattr(bindings_api, "_reload_adapter_instance", reload_mock)
