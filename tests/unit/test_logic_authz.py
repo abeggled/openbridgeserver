@@ -67,13 +67,20 @@ async def _link_datapoint(db: Database, dp_id: uuid.UUID, node_id: str) -> None:
     )
 
 
-async def _insert_grant(db: Database, node_id: str, *, role: str = "guest", principal_id: str = "alice") -> None:
+async def _insert_grant(
+    db: Database,
+    node_id: str,
+    *,
+    role: str = "guest",
+    principal_id: str = "alice",
+    node_type: str = "hierarchy",
+) -> None:
     await db.execute_and_commit(
         """
         INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
-        VALUES ('user', ?, 'hierarchy', ?, ?, 'allow')
+        VALUES ('user', ?, ?, ?, ?, 'allow')
         """,
-        (principal_id, node_id, role),
+        (principal_id, node_type, node_id, role),
     )
 
 
@@ -348,6 +355,7 @@ async def test_run_graph_requires_activation_scope_for_api_client_variable_datap
 async def test_run_graph_allows_resident_when_all_datapoints_are_in_scope(monkeypatch, db: Database):
     allowed_dp, _ = await _seed_scope(db, allowed_role="resident")
     await _insert_graph(db, "allowed-graph", "Allowed graph", allowed_dp)
+    await _insert_grant(db, "allowed-graph", role="resident", node_type="logic_graph")
     manager = AsyncMock()
     manager.execute_graph.return_value = {"n0": {"out": True}}
     monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: manager)

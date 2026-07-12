@@ -670,6 +670,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             },
         },
         color="#be185d",
+        has_external_side_effect=True,
+        required_capability="python_execution",
     ),
     # ── AI ────────────────────────────────────────────────────────────────
     NodeTypeDef(
@@ -746,6 +748,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             },
         },
         color="#e11d48",
+        has_external_side_effect=True,
+        required_capability="notification",
     ),
     NodeTypeDef(
         type="notify_sms",
@@ -769,6 +773,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             },
         },
         color="#e11d48",
+        has_external_side_effect=True,
+        required_capability="sms",
     ),
     # ── Integration ───────────────────────────────────────────────────────
     NodeTypeDef(
@@ -796,6 +802,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             },
         },
         color="#0369a1",
+        has_external_side_effect=True,
+        required_capability="wake_on_lan",
     ),
     NodeTypeDef(
         type="host_check",
@@ -917,6 +925,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="api_client",
         label="API Client",
         category="integration",
+        has_external_side_effect=True,
+        required_capability="http_request",
         description="Sendet HTTP-Anfragen (GET/POST/PUT…) an externe APIs. Trigger-Eingang steuert die Ausführung.",
         inputs=[_port("trigger", "Trigger", "trigger"), _port("body", "Body")],
         outputs=[

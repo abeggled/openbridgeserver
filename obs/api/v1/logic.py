@@ -20,12 +20,13 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
-from obs.api.authz import AuthzAction
-from obs.api.authz_service import filter_authorized_datapoints
+from obs.api.audit import AuditLogWriter, build_audit_context
+from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, RoleGrant, authorize
+from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_datapoint_targets
 from obs.db.database import Database, get_db
 from obs.logic.graph_analysis import topology_warnings
 from obs.logic.models import (
@@ -36,23 +37,15 @@ from obs.logic.models import (
     LogicGraphOut,
     LogicGraphUpdate,
     LogicNode,
+    LogicRunPreflight,
+    LogicRunPreflightCheck,
     LogicUsageOut,
     NodeTypeDef,
 )
 from obs.logic.manager import _normalise_api_client_variables
-from obs.logic.node_types import list_node_types
+from obs.logic.node_types import get_node_type, list_node_types
 
 router = APIRouter(tags=["logic"])
-
-_PRIVILEGED_SIDE_EFFECT_NODE_TYPES = frozenset(
-    {
-        "api_client",
-        "notify_pushover",
-        "notify_sms",
-        "python_script",
-        "wake_on_lan",
-    },
-)
 
 
 def _row_to_out(row: dict) -> LogicGraphOut:
@@ -127,15 +120,124 @@ async def _require_logic_graph_read(db: Database, principal: Principal, row: dic
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
 
 
-async def _require_logic_graph_activation(db: Database, principal: Principal, row: dict) -> None:
-    if principal.type == "user" and principal.is_admin:
-        return
+def _datapoint_node_ids(flow: FlowData) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for node in flow.nodes:
+        if node.type in {"datapoint_read", "datapoint_write"}:
+            candidate_ids = [node.data.get("datapoint_id")]
+        elif node.type == "api_client":
+            candidate_ids = [variable["datapoint_id"] for variable in _normalise_api_client_variables(node.data.get("variables")).values()]
+        else:
+            continue
+        for candidate_id in candidate_ids:
+            if isinstance(candidate_id, str) and candidate_id:
+                result.setdefault(candidate_id, []).append(node.id)
+    return result
+
+
+def _direct_datapoint_activation_decision(
+    principal: Principal,
+    datapoint_id: str,
+    targets: list[AuthzTarget],
+    grants: list[RoleGrant],
+) -> AuthzDecision:
+    decision = authorize(principal=principal, action=AuthzAction.ACTIVATE, targets=targets, grants=grants)
+    direct_grants = [grant for grant in grants if grant.node_type == "datapoint" and grant.node_id == datapoint_id]
+    if not direct_grants:
+        return decision
+    direct_decision = authorize(
+        principal=principal,
+        action=AuthzAction.ACTIVATE,
+        targets=[AuthzTarget(node_type="datapoint", node_id=datapoint_id)],
+        grants=grants,
+    )
+    if decision.reason == "explicit_deny" or direct_decision.reason == "explicit_deny":
+        return AuthzDecision(False, "explicit_deny")
+    if decision.allowed or direct_decision.allowed:
+        return AuthzDecision(True, "allowed")
+    return decision
+
+
+async def _logic_run_preflight(db: Database, principal: Principal, row: dict) -> LogicRunPreflight:
     flow = _flow_from_row(row)
-    if any(node.type in _PRIVILEGED_SIDE_EFFECT_NODE_TYPES for node in flow.nodes):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")
-    all_ids, allowed_ids = await _authorized_logic_datapoint_ids(db, principal, row, action=AuthzAction.ACTIVATE)
-    if not all_ids or len(allowed_ids) != len(all_ids):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")
+    grants = [] if principal.type == "user" and principal.is_admin else await load_role_grants(db, principal)
+    checks: list[LogicRunPreflightCheck] = []
+
+    graph_decision = authorize(
+        principal=principal,
+        action=AuthzAction.ACTIVATE,
+        targets=[AuthzTarget(node_type="logic_graph", node_id=row["id"])],
+        grants=grants,
+    )
+    checks.append(
+        LogicRunPreflightCheck(
+            target_type="logic_graph",
+            target_id=row["id"],
+            allowed=graph_decision.allowed,
+            reason=graph_decision.reason,
+        )
+    )
+
+    node_ids_by_capability: dict[str, list[str]] = {}
+    for node in flow.nodes:
+        node_type = get_node_type(node.type)
+        if node_type is None:
+            checks.append(
+                LogicRunPreflightCheck(
+                    target_type="logic_capability",
+                    target_id=node.type,
+                    node_ids=[node.id],
+                    allowed=principal.type == "user" and principal.is_admin,
+                    reason="admin" if principal.type == "user" and principal.is_admin else "undeclared_capability",
+                )
+            )
+        elif node_type.has_external_side_effect:
+            if not node_type.required_capability:
+                checks.append(
+                    LogicRunPreflightCheck(
+                        target_type="logic_capability",
+                        target_id=node.type,
+                        node_ids=[node.id],
+                        allowed=principal.type == "user" and principal.is_admin,
+                        reason="admin" if principal.type == "user" and principal.is_admin else "undeclared_capability",
+                    )
+                )
+            else:
+                node_ids_by_capability.setdefault(node_type.required_capability, []).append(node.id)
+
+    for capability, node_ids in sorted(node_ids_by_capability.items()):
+        decision = authorize(
+            principal=principal,
+            action=AuthzAction.ACTIVATE,
+            targets=[AuthzTarget(node_type="logic_capability", node_id=capability)],
+            grants=grants,
+        )
+        checks.append(
+            LogicRunPreflightCheck(
+                target_type="logic_capability",
+                target_id=capability,
+                node_ids=node_ids,
+                allowed=decision.allowed,
+                reason=decision.reason,
+            )
+        )
+
+    datapoint_nodes = _datapoint_node_ids(flow)
+    targets_by_datapoint = await resolve_datapoint_targets(db, datapoint_nodes)
+    for datapoint_id, node_ids in datapoint_nodes.items():
+        targets = targets_by_datapoint.get(datapoint_id, [])
+        decision = _direct_datapoint_activation_decision(principal, datapoint_id, targets, grants)
+        checks.append(
+            LogicRunPreflightCheck(
+                target_type="datapoint",
+                target_id=datapoint_id,
+                node_ids=node_ids,
+                allowed=decision.allowed,
+                reason=decision.reason,
+            )
+        )
+
+    return LogicRunPreflight(graph_id=row["id"], allowed=all(check.allowed for check in checks), checks=checks)
 
 
 def _logic_run_warnings(outputs: dict) -> list[dict[str, str]]:
@@ -389,9 +491,23 @@ async def import_graph(
     return _row_to_out(row)
 
 
+@router.get("/graphs/{graph_id}/run-preflight", response_model=LogicRunPreflight)
+async def preflight_graph_run(
+    graph_id: str,
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(lambda: get_db()),
+) -> LogicRunPreflight:
+    principal = _principal_from_dependency(_user)
+    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    return await _logic_run_preflight(db, principal, row)
+
+
 @router.post("/graphs/{graph_id}/run", status_code=status.HTTP_200_OK)
 async def run_graph(
     graph_id: str,
+    request: Request = None,
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
@@ -399,7 +515,19 @@ async def run_graph(
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
-    await _require_logic_graph_activation(db, principal, row)
+    preflight = await _logic_run_preflight(db, principal, row)
+    if not preflight.allowed:
+        denied_checks = [check.model_dump() for check in preflight.checks if not check.allowed]
+        await AuditLogWriter(
+            db=db,
+            context=build_audit_context(request=request, current_user=principal.subject),
+        ).write(
+            "logic.graph.run.denied",
+            resource_type="logic_graph",
+            resource_id=graph_id,
+            details={"denied_checks": denied_checks},
+        )
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=preflight.model_dump())
     if not bool(row["enabled"]):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Logikblatt ist deaktiviert")
     try:

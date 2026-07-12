@@ -90,6 +90,22 @@ class NodeTypeDef(BaseModel):
     outputs: list[NodeTypePort] = []
     config_schema: dict[str, Any] = {}  # JSON schema for node data
     color: str = "#475569"  # default node color (tailwind slate-600)
+    has_external_side_effect: bool = False
+    required_capability: str | None = None
+
+
+class LogicRunPreflightCheck(BaseModel):
+    target_type: str
+    target_id: str
+    node_ids: list[str] = []
+    allowed: bool
+    reason: str
+
+
+class LogicRunPreflight(BaseModel):
+    graph_id: str
+    allowed: bool
+    checks: list[LogicRunPreflightCheck]
 
 
 class LogicUsageOut(BaseModel):
