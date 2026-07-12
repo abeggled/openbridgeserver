@@ -155,8 +155,9 @@
                     userStatus(u).tone === 'warning' ? 'bg-amber-400' :
                     userStatus(u).tone === 'success' ? 'bg-green-500' : 'bg-slate-400'
                   ]"
-                  :title="userStatus(u).label"
-                />
+                >
+                  <span class="sr-only">{{ userStatus(u).label }}</span>
+                </span>
                 <span class="font-semibold text-slate-800 dark:text-slate-100 truncate">{{ u.username }}</span>
                 <Badge v-if="u.username === auth.username" variant="info" size="xs">{{ $t('settings.users.currentAccount') }}</Badge>
                 <Badge :variant="u.is_admin ? 'warning' : 'muted'" size="xs">{{ u.is_admin ? $t('settings.users.roleAdmin') : $t('settings.users.roleUser') }}</Badge>
