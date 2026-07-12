@@ -10,6 +10,7 @@ let exportDb
 let importConfig
 let importDb
 let authApi
+let accountAdminApi
 let historySettingsApi
 let dpApi
 let autobackupApi
@@ -70,6 +71,13 @@ beforeEach(() => {
     listApiKeys: vi.fn().mockResolvedValue({ data: [{ id: 'key-1', name: 'Bridge API' }] }),
     changePassword: vi.fn().mockResolvedValue({ data: {} }),
     createUser: vi.fn().mockResolvedValue({ data: { username: 'operator' } }),
+    deleteUser: vi.fn().mockResolvedValue({ data: {} }),
+    setMqttPassword: vi.fn().mockResolvedValue({ data: {} }),
+    deleteMqttPassword: vi.fn().mockResolvedValue({ data: {} }),
+    createApiKey: vi.fn().mockResolvedValue({ data: { key: 'obs_secret' } }),
+    deleteApiKey: vi.fn().mockResolvedValue({ data: {} }),
+  }
+  accountAdminApi = {
     userDeletionPreflight: vi.fn().mockResolvedValue({
       data: {
         revision: 'operator-revision',
@@ -83,10 +91,6 @@ beforeEach(() => {
       },
     }),
     deleteUser: vi.fn().mockResolvedValue({ data: {} }),
-    setMqttPassword: vi.fn().mockResolvedValue({ data: {} }),
-    deleteMqttPassword: vi.fn().mockResolvedValue({ data: {} }),
-    createApiKey: vi.fn().mockResolvedValue({ data: { key: 'obs_secret' } }),
-    deleteApiKey: vi.fn().mockResolvedValue({ data: {} }),
     getApiKeyCapabilities: vi.fn().mockResolvedValue({
       data: {
         key_id: 'key-1',
@@ -98,6 +102,7 @@ beforeEach(() => {
     }),
     replaceApiKeyCapabilities: vi.fn().mockResolvedValue({ data: {} }),
   }
+  vi.doMock('@/api/accountAdmin', () => ({ accountAdminApi }))
   historySettingsApi = {
     get: vi.fn().mockResolvedValue({ data: { plugin: 'sqlite', default_window_hours: 168 } }),
     update: vi.fn().mockResolvedValue({ data: {} }),
@@ -180,6 +185,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.doUnmock('@/api/client')
+  vi.doUnmock('@/api/accountAdmin')
 })
 
 async function mountSettingsView({ isAdmin = true } = {}) {
@@ -259,7 +265,7 @@ describe('SettingsView security tab', () => {
     await wrapper.vm.confirmDeleteUser({ username: 'operator' })
     expect(wrapper.vm.showUserConfirm).toBe(true)
     await wrapper.vm.doDeleteUser()
-    expect(authApi.deleteUser).toHaveBeenCalledWith('operator', { revision: 'operator-revision', successor_username: null })
+    expect(accountAdminApi.deleteUser).toHaveBeenCalledWith('operator', { revision: 'operator-revision', successor_username: null })
 
     wrapper.vm.createApiKey()
     wrapper.vm.newKeyName = 'Bridge API'
@@ -309,7 +315,7 @@ describe('SettingsView security tab', () => {
     await wrapper.get('[data-testid="apikey-capabilities-key-1"]').trigger('click')
     await flushPromises()
 
-    expect(authApi.getApiKeyCapabilities).toHaveBeenCalledWith('key-1')
+    expect(accountAdminApi.getApiKeyCapabilities).toHaveBeenCalledWith('key-1')
     const save = wrapper.get('[data-testid="apikey-capabilities-save"]')
     expect(save.attributes('disabled')).toBeDefined()
     await wrapper.get('[data-testid="apikey-capability-datapoint.metadata.write"]').setValue(true)
@@ -317,7 +323,7 @@ describe('SettingsView security tab', () => {
     await save.trigger('submit')
     await flushPromises()
 
-    expect(authApi.replaceApiKeyCapabilities).toHaveBeenCalledWith(
+    expect(accountAdminApi.replaceApiKeyCapabilities).toHaveBeenCalledWith(
       'key-1',
       3,
       ['visu.page_config.write', 'datapoint.metadata.write'],

@@ -1457,6 +1457,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { authApi, adapterApi, configApi, autobackupApi, knxprojApi, historySettingsApi, iconsApi, dpApi, securityApi, supportApi } from '@/api/client'
+import { accountAdminApi } from '@/api/accountAdmin'
 import { authzApi } from '@/api/authz'
 import { useI18n } from 'vue-i18n'
 import { useNavLinksStore } from '@/stores/navLinks'
@@ -2292,7 +2293,7 @@ async function confirmDeleteUser(u) {
   deletePreflightLoading.value = true
   showUserConfirm.value = true
   try {
-    const { data } = await authApi.userDeletionPreflight(u.username)
+    const { data } = await accountAdminApi.userDeletionPreflight(u.username)
     deletePreflight.value = data
   } catch (e) {
     deletePreflightError.value = e.response?.data?.detail ?? t('common.error')
@@ -2301,7 +2302,7 @@ async function confirmDeleteUser(u) {
   }
 }
 async function doDeleteUser() {
-  await authApi.deleteUser(deleteUserTarget.value.username, {
+  await accountAdminApi.deleteUser(deleteUserTarget.value.username, {
     revision: deletePreflight.value.revision,
     successor_username: deleteSuccessor.value || null,
   })
@@ -2375,7 +2376,7 @@ async function openApiKeyCapabilities(key) {
   capabilitiesLoading.value = true
   showApiKeyCapabilities.value = true
   try {
-    const { data } = await authApi.getApiKeyCapabilities(key.id)
+    const { data } = await accountAdminApi.getApiKeyCapabilities(key.id)
     capabilityRevision.value = data.revision
     capabilityOptions.value = data.available_capabilities
     selectedCapabilities.value = [...data.capabilities]
@@ -2390,7 +2391,7 @@ async function saveApiKeyCapabilities() {
   capabilitiesSaving.value = true
   capabilitiesError.value = ''
   try {
-    await authApi.replaceApiKeyCapabilities(
+    await accountAdminApi.replaceApiKeyCapabilities(
       capabilityTarget.value.id,
       capabilityRevision.value,
       selectedCapabilities.value,

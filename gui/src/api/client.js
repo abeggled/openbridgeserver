@@ -54,16 +54,12 @@ export const authApi = {
   listUsers:      ()                   => api.get('/auth/users'),
   createUser:     (data)               => api.post('/auth/users', data),
   updateUser:     (username, data)     => api.patch(`/auth/users/${username}`, data),
-  userDeletionPreflight: (username)    => api.get(`/auth/users/${username}/deletion-preflight`),
-  deleteUser:     (username, data)     => api.delete(`/auth/users/${username}`, { data }),
+  deleteUser:     (username)           => api.delete(`/auth/users/${username}`),
   setMqttPassword:    (username, password) => api.post(`/auth/users/${username}/mqtt-password`, { password }),
   deleteMqttPassword: (username)           => api.delete(`/auth/users/${username}/mqtt-password`),
   listApiKeys:    ()                   => api.get('/auth/apikeys'),
   createApiKey:   (name)               => api.post('/auth/apikeys', { name }),
   deleteApiKey:   (id)                 => api.delete(`/auth/apikeys/${id}`),
-  getApiKeyCapabilities: (id)          => api.get(`/auth/apikeys/${id}/capabilities`),
-  replaceApiKeyCapabilities: (id, expected_revision, capabilities) =>
-                    api.put(`/auth/apikeys/${id}/capabilities`, { expected_revision, capabilities }),
 }
 
 // ── DataPoints ────────────────────────────────────────────────────────────

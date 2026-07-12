@@ -81,6 +81,9 @@ beforeEach(() => {
     },
   })
   deleteUser = vi.fn().mockResolvedValue({ data: {} })
+  vi.doMock('@/api/accountAdmin', () => ({
+    accountAdminApi: { userDeletionPreflight, deleteUser },
+  }))
 
   vi.doMock('@/api/client', () => ({
     settingsApi: {
@@ -104,9 +107,8 @@ beforeEach(() => {
     },
     authApi: {
       listUsers,
-      userDeletionPreflight,
       createUser: vi.fn().mockResolvedValue({ data: {} }),
-      deleteUser,
+      deleteUser: vi.fn().mockResolvedValue({ data: {} }),
       setMqttPassword: vi.fn().mockResolvedValue({ data: {} }),
       deleteMqttPassword: vi.fn().mockResolvedValue({ data: {} }),
       listApiKeys: vi.fn().mockResolvedValue({ data: [] }),
@@ -140,6 +142,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.doUnmock('@/api/client')
   vi.doUnmock('@/api/authz')
+  vi.doUnmock('@/api/accountAdmin')
 })
 
 async function mountSettingsView() {
