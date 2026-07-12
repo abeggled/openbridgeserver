@@ -1749,7 +1749,13 @@ async def test_update_app_settings(monkeypatch):
     monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: MagicMock(update_app_config=MagicMock()))
 
     class _Db:
-        async def execute_and_commit(self, q, p=()):
+        async def fetchone(self, q, p=()):
+            return None
+
+        async def execute(self, q, p=()):
+            pass
+
+        async def commit(self):
             pass
 
     from obs.api.v1.system import AppSettingsIn, update_app_settings
