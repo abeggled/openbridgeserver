@@ -221,6 +221,7 @@ async def get_app_settings(
 @router.put("/settings", response_model=AppSettingsOut)
 async def update_app_settings(
     body: AppSettingsIn,
+    request: Request = None,  # type: ignore[assignment]
     db: Database = Depends(get_db),
     _user: str = Depends(get_current_user),
 ) -> AppSettingsOut:
@@ -236,10 +237,25 @@ async def update_app_settings(
             detail=f"Unknown timezone: {body.timezone!r}",
         )
 
-    await db.execute_and_commit(
+    current = await db.fetchone("SELECT value FROM app_settings WHERE key = 'timezone'")
+    previous_timezone = current["value"] if current else "Europe/Zurich"
+    await db.execute(
         "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('timezone', ?)",
         (body.timezone,),
     )
+    audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_user))
+    await audit_writer.write(
+        action="system.settings.updated",
+        resource_type="app_settings",
+        resource_id="global",
+        details={
+            "after": {"timezone": body.timezone},
+            "before": {"timezone": previous_timezone},
+            "changed_fields": [] if previous_timezone == body.timezone else ["timezone"],
+        },
+        commit=False,
+    )
+    await db.commit()
 
     # Hot-reload LogicManager so astro_sun picks up new timezone immediately
     try:
