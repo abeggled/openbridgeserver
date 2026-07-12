@@ -192,6 +192,7 @@ import { useLogicStore }    from '@/stores/logic'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore }     from '@/stores/auth'
 import { logicApi }        from '@/api/client'
+import { logicRunAuthzApi } from '@/api/logicAuthz'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
 import ActionPreflightDialog from '@/components/authz/ActionPreflightDialog.vue'
@@ -577,7 +578,7 @@ async function requestGraphRun() {
   runPreflightItems.value = []
   preflightGraphId.value = ''
   try {
-    const { data } = await logicApi.runPreflight(graphId)
+    const { data } = await logicRunAuthzApi.preflight(graphId)
     if (requestId !== preflightRequestId || activeGraphId.value !== graphId || data.graph_id !== graphId) return
     preflightGraphId.value = graphId
     runPreflightItems.value = normalizeRunPreflight(data)

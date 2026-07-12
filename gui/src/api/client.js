@@ -310,7 +310,6 @@ export const logicApi = {
   saveGraph:        (id, data)   => api.put(`/logic/graphs/${id}`, data),
   patchGraph:       (id, data)   => api.patch(`/logic/graphs/${id}`, data),
   deleteGraph:      (id)         => api.delete(`/logic/graphs/${id}`),
-  runPreflight:     (id)         => api.get(`/logic/graphs/${id}/run-preflight`),
   runGraph:         (id)         => api.post(`/logic/graphs/${id}/run`),
   duplicateGraph:   (id)         => api.post(`/logic/graphs/${id}/duplicate`),
   exportGraph:      (id)         => api.get(`/logic/graphs/${id}/export`),
