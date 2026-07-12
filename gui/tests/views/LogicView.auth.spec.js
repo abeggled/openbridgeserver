@@ -238,6 +238,53 @@ describe('LogicView auth gates', () => {
     expect(logicApi.runGraph).not.toHaveBeenCalled()
   })
 
+  it('discards a preflight when graph selection changes before confirmation', async () => {
+    const graphOne = makeGraph('graph-1')
+    const graphTwo = makeGraph('graph-2', { name: 'Second Graph' })
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: false,
+      graphs: [graphOne, graphTwo],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graphOne, 'graph-2': graphTwo },
+    })
+
+    await wrapper.get('[data-testid="btn-run"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.preflightGraphId).toBe('graph-1')
+
+    wrapper.vm.activeGraphId = 'graph-2'
+    await flushPromises()
+    await wrapper.vm.confirmGraphRun()
+
+    expect(wrapper.vm.showRunPreflight).toBe(false)
+    expect(wrapper.vm.preflightGraphId).toBe('')
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
+  })
+
+  it('ignores a stale preflight response after selection changed', async () => {
+    const graphOne = makeGraph('graph-1')
+    const graphTwo = makeGraph('graph-2', { name: 'Second Graph' })
+    let resolvePreflight
+    const pendingPreflight = new Promise(resolve => { resolvePreflight = resolve })
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: false,
+      graphs: [graphOne, graphTwo],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graphOne, 'graph-2': graphTwo },
+    })
+    logicApi.runPreflight.mockReturnValueOnce(pendingPreflight)
+
+    const request = wrapper.vm.requestGraphRun()
+    wrapper.vm.activeGraphId = 'graph-2'
+    await flushPromises()
+    resolvePreflight({ data: { graph_id: 'graph-1', allowed: true, checks: [] } })
+    await request
+
+    expect(wrapper.vm.preflightGraphId).toBe('')
+    expect(wrapper.vm.runPreflightItems).toEqual([])
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
+  })
+
   it('loads and operates an active graph', async () => {
     const graph = makeGraph('graph-1')
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
