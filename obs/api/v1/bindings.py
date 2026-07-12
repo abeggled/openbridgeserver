@@ -346,13 +346,15 @@ async def update_binding(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> BindingOut:
-    await _ensure_binding_mutation_scope(db, _principal_from_dependency(_user), dp_id)
+    principal = _principal_from_dependency(_user)
+    await _ensure_binding_mutation_scope(db, principal, dp_id)
     row = await db.fetchone(
         "SELECT * FROM adapter_bindings WHERE id=? AND datapoint_id=?",
         (str(binding_id), str(dp_id)),
     )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Binding nicht gefunden")
+    _ensure_adapter_delegates_binding(principal, row["adapter_type"])
 
     updates = body.model_dump(exclude_unset=True)
     now = datetime.now(UTC).isoformat()
@@ -429,13 +431,15 @@ async def delete_binding(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
-    await _ensure_binding_mutation_scope(db, _principal_from_dependency(_user), dp_id)
+    principal = _principal_from_dependency(_user)
+    await _ensure_binding_mutation_scope(db, principal, dp_id)
     row = await db.fetchone(
-        "SELECT adapter_instance_id FROM adapter_bindings WHERE id=? AND datapoint_id=?",
+        "SELECT adapter_type, adapter_instance_id FROM adapter_bindings WHERE id=? AND datapoint_id=?",
         (str(binding_id), str(dp_id)),
     )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Binding nicht gefunden")
+    _ensure_adapter_delegates_binding(principal, row["adapter_type"])
 
     instance_id = row["adapter_instance_id"]
     await db.execute_and_commit("DELETE FROM adapter_bindings WHERE id=?", (str(binding_id),))
