@@ -1334,7 +1334,7 @@
     "newGraphBtn": "+ New",
     "run": "Run",
     "graphDisabledSuffix": " (disabled)",
-    "runTitle": "Run graph",
+    "runTitle": "Check permissions and run graph",
     "runDisabledTitle": "Graph is disabled — cannot run",
     "toggleActive": "✓ Active",
     "toggleDisabled": "⊘ Disabled",
@@ -1357,6 +1357,20 @@
     "saved": "Graph saved",
     "errorSave": "Error saving graph",
     "runResult": "Graph executed — {count} nodes evaluated",
+    "preflightTitle": "Check graph execution",
+    "preflightDescription": "Review the graph and all external effects before execution.",
+    "preflightError": "Could not check the required permissions.",
+    "preflightGraph": "Activate graph {id}",
+    "preflightGraphState": "Graph is enabled",
+    "preflightCapability": "Capability: {capability}",
+    "preflightDatapoint": "Data point {id}",
+    "preflightNodes": "Used by nodes: {nodes}",
+    "preflightReasons": {
+      "explicit_deny": "An explicit deny applies.",
+      "missing_allow": "The required grant is missing.",
+      "graph_disabled": "The graph is disabled and cannot run.",
+      "undeclared_capability": "This side effect has no declared capability and is denied by default."
+    },
     "runResultWithWarnings": "Graph executed — {count} nodes checked, {warnings} warnings",
     "nodeError": "⚠ Error",
     "graphValidationCycle": "Cycle detected: {count} node(s) need a Memory node as tick boundary.",
@@ -1998,6 +2012,13 @@
       "api_client": "Sends HTTP requests (GET/POST/PUT…) to external APIs. The trigger input controls execution."
     }
   },
+  "authzPreflight": {
+    "allowed": "Allowed",
+    "denied": "Denied",
+    "ready": "All required permissions are available.",
+    "blocked": "This action is blocked by missing permissions.",
+    "noRequirements": "No additional permissions are required."
+  },
   "settings": {
     "title": "Settings",
     "subtitle": "Users, API keys, password, backup",
@@ -2164,13 +2185,23 @@
       "deleteUser": "Delete user",
       "deleteUserConfirm": "Delete user '{name}'?",
       "count": "{n} Users",
+      "empty": "No users",
       "addButton": "+ User",
       "colUsername": "Username",
       "colAdmin": "Admin",
       "colMqtt": "MQTT",
       "colCreated": "Created",
+      "currentAccount": "You",
+      "roleAdmin": "Admin",
+      "roleUser": "User",
+      "status": "Status",
+      "statusCurrent": "Current account",
+      "statusReady": "Ready",
+      "statusWarning": "MQTT without password",
       "mqttActive": "Active",
       "mqttOff": "Off",
+      "mqttPasswordSetShort": "Password set",
+      "mqttPasswordMissing": "Password missing",
       "mqttSetTitle": "Set MQTT Password",
       "mqttDisableTitle": "Disable MQTT",
       "createTitle": "New User",
@@ -2181,7 +2212,89 @@
       "mqttFor": "User: {username}",
       "newMqttPassword": "New MQTT Password",
       "mqttPasswordSet": "MQTT password set",
-      "create": "Create"
+      "create": "Create",
+      "rights": {
+        "openButton": "Edit rights",
+        "title": "Rights for {username}",
+        "progress": "Rights editor progress",
+        "steps": {
+          "role": "Role",
+          "scopes": "Areas",
+          "preview": "Preview",
+          "confirm": "Confirm"
+        },
+        "roleTitle": "Select role",
+        "roleHint": "The selected role is used for newly added areas. Existing areas keep their individual roles unless bulk reassignment is explicitly enabled.",
+        "mixedRoleWarning": "This user currently has different roles in different areas. Those roles remain unchanged when areas are added or removed.",
+        "bulkRoleTitle": "Reassign all retained existing areas",
+        "bulkRoleHint": "Explicitly apply the selected role to every existing area that remains selected.",
+        "roles": {
+          "guest": {
+            "label": "Guest",
+            "description": "Read access only."
+          },
+          "resident": {
+            "label": "Resident",
+            "description": "Read, write and activate access."
+          },
+          "operator": {
+            "label": "Operator",
+            "description": "Full operational access, including generation."
+          },
+          "owner": {
+            "label": "Owner",
+            "description": "All actions in the selected areas."
+          }
+        },
+        "scopeTitle": "Select hierarchy areas",
+        "scopeHint": "The selected role applies to every checked area and its descendants.",
+        "noScopes": "No hierarchy areas are available.",
+        "unknownScope": "This saved area is no longer present in the hierarchy list.",
+        "deniedScopePreserved": "A direct deny assignment exists for this area and is preserved; an allow assignment cannot be added here.",
+        "orphanedScopeBlock": "{n} selected assignments no longer resolve to a hierarchy area. Remove them explicitly or cancel; saving is blocked while they remain selected.",
+        "newScopeRoleRequired": "Select a role before adding new hierarchy areas.",
+        "selectedScopes": "{n} areas selected",
+        "previewTitle": "Effective permissions",
+        "previewHint": "Review the calculated decision and its reason for every action before saving.",
+        "emptyPreview": "There are no editable or advanced assignment targets to check. No remote preview is needed.",
+        "refreshPreview": "Refresh preview",
+        "allowed": "Allowed",
+        "denied": "Denied",
+        "actions": {
+          "read": "Read",
+          "write": "Write",
+          "activate": "Activate",
+          "generate": "Generate"
+        },
+        "reasons": {
+          "admin": "Allowed by administrator bridge.",
+          "allowed": "Allowed by matching role assignment.",
+          "direct_datapoint_grant": "Allowed by direct datapoint assignment.",
+          "explicit_deny": "Denied by an explicit deny assignment.",
+          "missing_allow": "Denied because no matching allow assignment applies.",
+          "no_targets": "Denied because the target could not be resolved."
+        },
+        "confirmTitle": "Confirm changes",
+        "confirmHint": "Saving replaces the editable hierarchy assignments atomically.",
+        "selectedRole": "Role",
+        "roleHandling": "Role handling",
+        "roleSummaryBulk": "All selected areas are reassigned to {role}.",
+        "roleSummaryNew": "Existing area roles remain unchanged; new areas use {role}.",
+        "existingRolesPreserved": "Existing roles preserved",
+        "selectedAreas": "Areas",
+        "advancedPreserved": "{n} advanced assignments are preserved unchanged.",
+        "advancedTitle": "Advanced assignments",
+        "advancedDescription": "{effect} · {role} · {nodeType} · {nodeId}",
+        "advancedTarget": "{nodeType} · {nodeId}",
+        "removeAdvanced": "Remove",
+        "back": "Back",
+        "next": "Next",
+        "save": "Save rights",
+        "loadError": "Rights could not be loaded.",
+        "previewError": "The effective preview could not be loaded.",
+        "saveError": "Rights could not be saved.",
+        "concurrentChange": "The assignments changed after the editor was opened. Reload the editor and review the latest state before saving."
+      }
     },
     "apikeys": {
       "keyName": "API key name",

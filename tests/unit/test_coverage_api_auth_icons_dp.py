@@ -806,14 +806,21 @@ class TestDeleteUser:
 
     @pytest.mark.asyncio
     async def test_delete_user_success(self):
-        user_row = _make_row(mqtt_enabled=0)
+        user_row = _make_row(id=str(uuid.uuid4()), username="alice", is_admin=0, mqtt_enabled=0, mqtt_password_hash=None, created_at="2024-01-01")
         db = _DbStub(fetchone_result=user_row)
         await auth_module.delete_user(username="alice", admin_user="admin", db=db)
         assert any("DELETE" in q for q, _ in db.executed)
 
     @pytest.mark.asyncio
     async def test_delete_mqtt_user_triggers_sync(self, monkeypatch):
-        user_row = _make_row(mqtt_enabled=1)
+        user_row = _make_row(
+            id=str(uuid.uuid4()),
+            username="mqttuser",
+            is_admin=0,
+            mqtt_enabled=1,
+            mqtt_password_hash="hash",
+            created_at="2024-01-01",
+        )
         db = _DbStub(fetchone_result=user_row)
         sync_mock = AsyncMock()
         monkeypatch.setattr(auth_module, "_sync_mqtt", sync_mock)
@@ -1883,7 +1890,7 @@ class TestDeleteBinding:
     @pytest.mark.asyncio
     async def test_delete_binding_success(self, monkeypatch):
         inst_id = str(uuid.uuid4())
-        row = _make_row(adapter_instance_id=inst_id)
+        row = _make_row(adapter_type="KNX", adapter_instance_id=inst_id)
         db = _DbStub(fetchone_result=row)
         monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
         await bindings_api.delete_binding(dp_id=uuid.uuid4(), binding_id=uuid.uuid4(), _user="admin", db=db)
@@ -1891,7 +1898,7 @@ class TestDeleteBinding:
 
     @pytest.mark.asyncio
     async def test_delete_binding_no_instance(self, monkeypatch):
-        row = _make_row(adapter_instance_id=None)
+        row = _make_row(adapter_type="KNX", adapter_instance_id=None)
         db = _DbStub(fetchone_result=row)
         reload_mock = AsyncMock()
         monkeypatch.setattr(bindings_api, "_reload_adapter_instance", reload_mock)

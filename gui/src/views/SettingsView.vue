@@ -135,34 +135,73 @@
         <span class="flex-1 text-sm text-slate-400">{{ $t('settings.users.count', { n: users.length }) }}</span>
         <button @click="openCreateUser" class="btn-primary btn-sm">{{ $t('settings.users.addButton') }}</button>
       </div>
-      <div class="card overflow-hidden">
+      <div class="card">
         <div v-if="usersLoading" class="flex justify-center py-8"><Spinner /></div>
-        <table v-else class="table">
-          <thead><tr><th>{{ $t('settings.users.colUsername') }}</th><th>{{ $t('settings.users.colAdmin') }}</th><th>{{ $t('settings.users.colMqtt') }}</th><th>{{ $t('settings.users.colCreated') }}</th><th class="w-20"></th></tr></thead>
-          <tbody>
-            <tr v-for="u in users" :key="u.id">
-              <td class="font-medium">{{ u.username }}</td>
-              <td><Badge :variant="u.is_admin ? 'warning' : 'muted'" size="xs">{{ u.is_admin ? 'Admin' : 'User' }}</Badge></td>
-              <td>
-                <div class="flex items-center gap-1">
-                  <Badge :variant="u.mqtt_enabled ? 'success' : 'muted'" size="xs">{{ u.mqtt_enabled ? $t('settings.users.mqttActive') : $t('settings.users.mqttOff') }}</Badge>
-                  <button @click="openMqttPassword(u)" class="btn-icon text-slate-400 hover:text-blue-400" :title="$t('settings.users.mqttSetTitle')">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z"/></svg>
-                  </button>
-                  <button v-if="u.mqtt_enabled" @click="doDeleteMqttPassword(u)" class="btn-icon text-red-400 hover:text-red-300" :title="$t('settings.users.mqttDisableTitle')">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                  </button>
+        <div v-else-if="!ownerFirstUsers.length" class="text-sm text-slate-500 text-center py-8" data-testid="users-empty">
+          {{ $t('settings.users.empty') }}
+        </div>
+        <div v-else class="divide-y divide-slate-200 dark:divide-slate-700/60" data-testid="owner-first-users">
+          <div
+            v-for="u in ownerFirstUsers"
+            :key="u.id"
+            class="p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between"
+            :data-testid="`user-card-${u.username}`"
+          >
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-2">
+                <span
+                  :class="[
+                    'h-2.5 w-2.5 rounded-full shrink-0',
+                    userStatus(u).tone === 'warning' ? 'bg-amber-400' :
+                    userStatus(u).tone === 'success' ? 'bg-green-500' : 'bg-slate-400'
+                  ]"
+                  :title="userStatus(u).label"
+                />
+                <span class="font-semibold text-slate-800 dark:text-slate-100 truncate">{{ u.username }}</span>
+                <Badge v-if="u.username === auth.username" variant="info" size="xs">{{ $t('settings.users.currentAccount') }}</Badge>
+                <Badge :variant="u.is_admin ? 'warning' : 'muted'" size="xs">{{ u.is_admin ? $t('settings.users.roleAdmin') : $t('settings.users.roleUser') }}</Badge>
+              </div>
+              <div class="mt-2 grid gap-2 text-xs text-slate-500 sm:grid-cols-3">
+                <div>
+                  <span class="block uppercase tracking-wide text-[10px] text-slate-400">{{ $t('settings.users.status') }}</span>
+                  <span class="font-medium text-slate-700 dark:text-slate-300">{{ userStatus(u).label }}</span>
                 </div>
-              </td>
-              <td class="text-xs text-slate-500">{{ fmtDate(u.created_at) }}</td>
-              <td>
-                <button v-if="u.username !== auth.username" @click="confirmDeleteUser(u)" class="btn-icon text-red-400">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+                <div>
+                  <span class="block uppercase tracking-wide text-[10px] text-slate-400">{{ $t('settings.users.colMqtt') }}</span>
+                  <span :class="u.mqtt_enabled ? 'text-green-600 dark:text-green-400' : 'text-slate-500'">
+                    {{ u.mqtt_enabled ? $t('settings.users.mqttActive') : $t('settings.users.mqttOff') }}
+                  </span>
+                  <span v-if="u.mqtt_enabled" class="text-slate-400">
+                    · {{ u.mqtt_password_set ? $t('settings.users.mqttPasswordSetShort') : $t('settings.users.mqttPasswordMissing') }}
+                  </span>
+                </div>
+                <div>
+                  <span class="block uppercase tracking-wide text-[10px] text-slate-400">{{ $t('settings.users.colCreated') }}</span>
+                  <span>{{ fmtDate(u.created_at) }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                class="btn-secondary btn-sm"
+                :data-testid="`user-rights-${u.username}`"
+                @click="openRightsEditor(u)"
+              >
+                {{ $t('settings.users.rights.openButton') }}
+              </button>
+              <button @click="openMqttPassword(u)" class="btn-icon text-slate-400 hover:text-blue-400" :title="$t('settings.users.mqttSetTitle')" :data-testid="`user-mqtt-set-${u.username}`">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z"/></svg>
+              </button>
+              <button v-if="u.mqtt_enabled" @click="doDeleteMqttPassword(u)" class="btn-icon text-red-400 hover:text-red-300" :title="$t('settings.users.mqttDisableTitle')" :data-testid="`user-mqtt-delete-${u.username}`">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+              <button v-if="u.username !== auth.username" @click="confirmDeleteUser(u)" class="btn-icon text-red-400" :title="$t('common.delete')" :data-testid="`user-delete-${u.username}`">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1333,6 +1372,13 @@
       :message="$t('settings.users.deleteUserConfirm', { name: deleteUserTarget?.username })"
       :confirm-label="$t('common.delete')" @confirm="doDeleteUser" />
 
+    <UserRightsEditor
+      v-if="rightsTarget"
+      v-model="showRightsEditor"
+      :username="rightsTarget.username"
+      @saved="loadUsers"
+    />
+
     <ConfirmDialog v-model="showDzConfirm" :title="dzConfirmTitle"
       :message="dzConfirmMessage" :confirm-label="dzConfirmLabel" @confirm="doDzAction" />
   </div>
@@ -1349,6 +1395,7 @@ import { useTz } from '@/composables/useTz'
 import Badge            from '@/components/ui/Badge.vue'
 import Spinner          from '@/components/ui/Spinner.vue'
 import HierarchyManager from '@/components/HierarchyManager.vue'
+import UserRightsEditor from '@/components/settings/UserRightsEditor.vue'
 import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import IconPicker     from '@/components/ui/IconPicker.vue'
@@ -2094,12 +2141,32 @@ const usersLoading = ref(false)
 const showCreateUser = ref(false)
 const showUserConfirm = ref(false)
 const deleteUserTarget = ref(null)
+const showRightsEditor = ref(false)
+const rightsTarget = ref(null)
 const userForm    = reactive({ username: '', password: '', is_admin: false, mqtt_enabled: false, mqtt_password: '' })
+const ownerFirstUsers = computed(() => {
+  return [...users.value].sort((a, b) => {
+    const aCurrent = a.username === auth.username
+    const bCurrent = b.username === auth.username
+    if (aCurrent !== bCurrent) return aCurrent ? -1 : 1
+    if (a.is_admin !== b.is_admin) return a.is_admin ? -1 : 1
+    return (a.username || '').localeCompare(b.username || '')
+  })
+})
 
 async function loadUsers() {
   usersLoading.value = true
   try { const { data } = await authApi.listUsers(); users.value = data }
   finally { usersLoading.value = false }
+}
+function userStatus(u) {
+  if (u.mqtt_enabled && !u.mqtt_password_set) {
+    return { tone: 'warning', label: t('settings.users.statusWarning') }
+  }
+  if (u.username === auth.username) {
+    return { tone: 'success', label: t('settings.users.statusCurrent') }
+  }
+  return { tone: 'muted', label: t('settings.users.statusReady') }
 }
 function openCreateUser() {
   userForm.username = ''; userForm.password = ''; userForm.is_admin = false
@@ -2117,6 +2184,7 @@ async function doCreateUser() {
 }
 function confirmDeleteUser(u) { deleteUserTarget.value = u; showUserConfirm.value = true }
 async function doDeleteUser() { await authApi.deleteUser(deleteUserTarget.value.username); await loadUsers() }
+function openRightsEditor(u) { rightsTarget.value = u; showRightsEditor.value = true }
 
 // ── MQTT Password ──────────────────────────────────────────────────────────
 const showMqttPassword = ref(false)

@@ -449,6 +449,7 @@ async def list_users(
 @router.post("/users", response_model=UserResponse, status_code=201)
 async def create_user(
     body: UserCreate,
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> UserResponse:
@@ -463,7 +464,7 @@ async def create_user(
     mqtt_enabled = body.mqtt_enabled and body.mqtt_password is not None
     mqtt_hash = mosquitto_hash(body.mqtt_password) if mqtt_enabled else None
 
-    await db.execute_and_commit(
+    await db.execute(
         "INSERT INTO users (id, username, password_hash, is_admin, mqtt_enabled, mqtt_password_hash, created_at) VALUES (?,?,?,?,?,?,?)",
         (
             uid,
@@ -475,6 +476,21 @@ async def create_user(
             now,
         ),
     )
+    from obs.api.audit import AuditLogWriter, build_audit_context
+
+    audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_admin))
+    await audit_writer.write(
+        action="auth.user.created",
+        resource_type="user",
+        resource_id=uid,
+        details={
+            "is_admin": body.is_admin,
+            "mqtt_enabled": mqtt_enabled,
+            "username": body.username,
+        },
+        commit=False,
+    )
+    await db.commit()
     if mqtt_enabled:
         await _sync_mqtt(db)
     row = await db.fetchone(f"SELECT {_USER_COLS} FROM users WHERE id=?", (uid,))
@@ -502,6 +518,7 @@ async def get_user(
 async def update_user(
     username: str,
     body: UserUpdate,
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> UserResponse:
@@ -531,6 +548,34 @@ async def update_user(
             "UPDATE api_keys SET owner=? WHERE owner=?",
             (new_username, username),
         )
+        await db.execute(
+            "UPDATE authz_node_roles SET principal_id=? WHERE principal_type='user' AND principal_id=?",
+            (new_username, username),
+        )
+    from obs.api.audit import AuditLogWriter, build_audit_context
+
+    before = {
+        "is_admin": bool(target["is_admin"]),
+        "mqtt_enabled": bool(target["mqtt_enabled"]),
+        "username": target["username"],
+    }
+    after = {
+        "is_admin": bool(new_is_admin),
+        "mqtt_enabled": bool(new_mqtt_enabled),
+        "username": new_username,
+    }
+    audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_admin))
+    await audit_writer.write(
+        action="auth.user.updated",
+        resource_type="user",
+        resource_id=target["id"],
+        details={
+            "after": after,
+            "before": before,
+            "changed_fields": sorted(field for field in before if before[field] != after[field]),
+        },
+        commit=False,
+    )
     await db.commit()
     if mqtt_changed:
         await _sync_mqtt(db)
@@ -541,15 +586,35 @@ async def update_user(
 @router.delete("/users/{username}", status_code=204)
 async def delete_user(
     username: str,
+    request: Request = None,  # type: ignore[assignment]
     admin_user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
     if username == admin_user:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot delete your own account")
-    target = await db.fetchone("SELECT mqtt_enabled FROM users WHERE username=?", (username,))
+    target = await db.fetchone(f"SELECT {_USER_COLS} FROM users WHERE username=?", (username,))
     if not target:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"User '{username}' not found")
-    await db.execute_and_commit("DELETE FROM users WHERE username=?", (username,))
+    await db.execute("DELETE FROM users WHERE username=?", (username,))
+    await db.execute(
+        "DELETE FROM authz_node_roles WHERE principal_type='user' AND principal_id=?",
+        (username,),
+    )
+    from obs.api.audit import AuditLogWriter, build_audit_context
+
+    audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=admin_user))
+    await audit_writer.write(
+        action="auth.user.deleted",
+        resource_type="user",
+        resource_id=target["id"],
+        details={
+            "is_admin": bool(target["is_admin"]),
+            "mqtt_enabled": bool(target["mqtt_enabled"]),
+            "username": target["username"],
+        },
+        commit=False,
+    )
+    await db.commit()
     if target["mqtt_enabled"]:
         await _sync_mqtt(db)
 

@@ -61,7 +61,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from obs.adapters.base import AdapterBase
+from obs.adapters.base import AdapterBase, AdapterDelegationCapability
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
 from obs.core.json import json_dumps, jsonable
@@ -103,6 +103,7 @@ class MqttBindingConfig(BaseModel):
 @register
 class MqttAdapter(AdapterBase):
     adapter_type = "MQTT"
+    delegation_capabilities = frozenset(AdapterDelegationCapability)
     config_schema = MqttAdapterConfig
     binding_config_schema = MqttBindingConfig
 
