@@ -111,8 +111,21 @@ async def _authorized_logic_datapoint_ids(
 
 
 async def _can_read_logic_graph(db: Database, principal: Principal, row: dict) -> bool:
+    if principal.type == "user" and principal.is_admin:
+        return True
+    graph_grants = await load_role_grants(db, principal, node_type="logic_graph")
+    graph_decision = authorize(
+        principal=principal,
+        action=AuthzAction.READ,
+        targets=[AuthzTarget(node_type="logic_graph", node_id=row["id"])],
+        grants=graph_grants,
+    )
+    if graph_decision.reason == "explicit_deny":
+        return False
+    if graph_decision.allowed:
+        return True
     all_ids, allowed_ids = await _authorized_logic_datapoint_ids(db, principal, row, action=AuthzAction.READ)
-    return len(allowed_ids) == len(all_ids) if all_ids else principal.type == "user" and principal.is_admin
+    return bool(all_ids) and len(allowed_ids) == len(all_ids)
 
 
 async def _require_logic_graph_read(db: Database, principal: Principal, row: dict) -> None:

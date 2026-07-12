@@ -37,6 +37,13 @@ async def test_user_lifecycle_writes_deterministic_non_sensitive_audit(monkeypat
             _admin="admin",
             db=db,
         )
+        await db.execute_and_commit(
+            """
+            INSERT INTO authz_node_roles
+                (principal_type, principal_id, node_type, node_id, role, effect)
+            VALUES ('user', 'alice', 'logic_graph', 'graph-1', 'resident', 'allow')
+            """
+        )
         updated = await update_user(
             username="alice",
             body=UserUpdate(username="alice-renamed", is_admin=True),
@@ -44,12 +51,15 @@ async def test_user_lifecycle_writes_deterministic_non_sensitive_audit(monkeypat
             _admin="admin",
             db=db,
         )
+        renamed_grant = await db.fetchone("SELECT principal_id FROM authz_node_roles WHERE node_type='logic_graph' AND node_id='graph-1'")
+        assert renamed_grant["principal_id"] == "alice-renamed"
         await delete_user(
             username="alice-renamed",
             request=_request("/api/v1/auth/users/alice-renamed"),
             admin_user="admin",
             db=db,
         )
+        assert await db.fetchone("SELECT 1 FROM authz_node_roles") is None
 
         assert updated.id == created.id
         rows = await db.fetchall("SELECT actor, action, resource_type, resource_id, details_json, request_id FROM audit_log_entries ORDER BY id")

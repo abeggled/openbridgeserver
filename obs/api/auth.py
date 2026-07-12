@@ -548,6 +548,10 @@ async def update_user(
             "UPDATE api_keys SET owner=? WHERE owner=?",
             (new_username, username),
         )
+        await db.execute(
+            "UPDATE authz_node_roles SET principal_id=? WHERE principal_type='user' AND principal_id=?",
+            (new_username, username),
+        )
     from obs.api.audit import AuditLogWriter, build_audit_context
 
     before = {
@@ -592,6 +596,10 @@ async def delete_user(
     if not target:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"User '{username}' not found")
     await db.execute("DELETE FROM users WHERE username=?", (username,))
+    await db.execute(
+        "DELETE FROM authz_node_roles WHERE principal_type='user' AND principal_id=?",
+        (username,),
+    )
     from obs.api.audit import AuditLogWriter, build_audit_context
 
     audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=admin_user))

@@ -293,13 +293,18 @@ async def test_current_principal_preflight_endpoint_returns_decisions(db: Databa
     assert response.allowed is True
     assert response.checks[0].target_type == "logic_graph"
 
-    with pytest.raises(HTTPException) as concealed:
-        await logic_api.preflight_graph_run(
-            "graph-endpoint",
-            _user=Principal(subject="alice", type="user", is_admin=False),
-            db=db,
-        )
-    assert concealed.value.status_code == 404
+    granted_response = await logic_api.preflight_graph_run(
+        "graph-endpoint",
+        _user=Principal(subject="alice", type="user", is_admin=False),
+        db=db,
+    )
+    assert granted_response.allowed is True
+
+    listed = await logic_api.list_graphs(
+        _user=Principal(subject="alice", type="user", is_admin=False),
+        db=db,
+    )
+    assert [graph.id for graph in listed] == ["graph-endpoint"]
 
     with pytest.raises(HTTPException) as exc_info:
         await logic_api.preflight_graph_run(
