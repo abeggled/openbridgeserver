@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from fastapi import HTTPException
 
 from obs.api.v1 import authz as authz_api
 from obs.db.database import Database
@@ -99,6 +100,32 @@ def _request(*, targets: list[AuthzPreviewTarget], grants: list[AuthzPreviewGran
         draft_grants=grants,
         include_persisted=True,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("node_type", "node_id"),
+    [("logic_graph", "missing-graph"), ("logic_capability", "unknown-capability")],
+)
+async def test_preview_rejects_unknown_logic_targets_like_grant_persistence(
+    db: Database,
+    node_type: str,
+    node_id: str,
+) -> None:
+    await _insert_user(db)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await authz_api.preview_permissions(
+            _request(
+                actions=["activate"],
+                targets=[AuthzPreviewTarget(node_type=node_type, node_id=node_id)],
+                grants=[],
+            ),
+            db=db,
+            _admin="admin",
+        )
+
+    assert exc_info.value.status_code == 422
 
 
 @pytest.mark.asyncio

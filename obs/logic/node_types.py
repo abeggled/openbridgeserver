@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from obs.logic.capabilities import LOGIC_NODE_CAPABILITIES, PURE_LOGIC_NODE_TYPES
 from obs.logic.models import NodeTypeDef, NodeTypePort
 
 # ---------------------------------------------------------------------------
@@ -670,8 +671,6 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             },
         },
         color="#be185d",
-        has_external_side_effect=True,
-        required_capability="python_execution",
     ),
     # ── AI ────────────────────────────────────────────────────────────────
     NodeTypeDef(
@@ -748,8 +747,6 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             },
         },
         color="#e11d48",
-        has_external_side_effect=True,
-        required_capability="notification",
     ),
     NodeTypeDef(
         type="notify_sms",
@@ -773,8 +770,6 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             },
         },
         color="#e11d48",
-        has_external_side_effect=True,
-        required_capability="sms",
     ),
     # ── Integration ───────────────────────────────────────────────────────
     NodeTypeDef(
@@ -802,8 +797,6 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             },
         },
         color="#0369a1",
-        has_external_side_effect=True,
-        required_capability="wake_on_lan",
     ),
     NodeTypeDef(
         type="host_check",
@@ -925,8 +918,6 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         type="api_client",
         label="API Client",
         category="integration",
-        has_external_side_effect=True,
-        required_capability="http_request",
         description="Sendet HTTP-Anfragen (GET/POST/PUT…) an externe APIs. Trigger-Eingang steuert die Ausführung.",
         inputs=[_port("trigger", "Trigger", "trigger"), _port("body", "Body")],
         outputs=[
@@ -1011,6 +1002,22 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         color="#0e7490",
     ),
 ]
+
+
+def _classify_node_type(node_type: NodeTypeDef) -> NodeTypeDef:
+    capability = LOGIC_NODE_CAPABILITIES.get(node_type.type)
+    if capability is not None:
+        return node_type.model_copy(
+            update={"has_external_side_effect": True, "required_capability": capability},
+        )
+    if node_type.type in PURE_LOGIC_NODE_TYPES:
+        return node_type.model_copy(
+            update={"has_external_side_effect": False, "required_capability": None},
+        )
+    return node_type
+
+
+BUILTIN_NODE_TYPES = [_classify_node_type(node_type) for node_type in BUILTIN_NODE_TYPES]
 
 # Dict lookup by type
 NODE_TYPE_REGISTRY: dict[str, NodeTypeDef] = {nt.type: nt for nt in BUILTIN_NODE_TYPES}

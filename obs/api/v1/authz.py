@@ -478,6 +478,24 @@ async def preview_permissions(
 ) -> AuthzPreviewResponse:
     """Dry-run effective AuthZ decisions for the owner UI without writing grants."""
     _validate_draft_grants(body)
+    validated_targets = [
+        AuthzPrincipalGrant(
+            node_type=target.node_type,
+            node_id=target.node_id,
+            role="guest",
+        )
+        for target in body.targets
+    ]
+    validated_targets.extend(
+        AuthzPrincipalGrant(
+            node_type=grant.node_type,
+            node_id=grant.node_id,
+            role=grant.role,
+            effect=grant.effect,
+        )
+        for grant in body.draft_grants
+    )
+    await _require_grant_targets(db, validated_targets)
     principal = await _principal_from_preview(db, body.principal)
     persisted = await load_role_grants(db, principal) if body.include_persisted else []
     draft = await _materialize_draft_grants(db, body.draft_grants)

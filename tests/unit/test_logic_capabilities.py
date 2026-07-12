@@ -13,9 +13,9 @@ from obs.api.authz import AuthzTarget, RoleGrant
 from obs.api.v1 import authz as authz_api
 from obs.api.v1 import logic as logic_api
 from obs.db.database import Database
-from obs.logic.capabilities import LOGIC_CAPABILITIES
+from obs.logic.capabilities import LOGIC_CAPABILITIES, LOGIC_NODE_CAPABILITIES, PURE_LOGIC_NODE_TYPES
 from obs.logic.models import NodeTypeDef
-from obs.logic.node_types import NODE_TYPE_REGISTRY
+from obs.logic.node_types import NODE_TYPE_REGISTRY, _classify_node_type
 from obs.models.authz import AuthzPrincipalGrant
 
 
@@ -29,14 +29,20 @@ async def db() -> Database:
         await database.disconnect()
 
 
-async def _insert_graph(db: Database, graph_id: str, nodes: list[dict]) -> dict:
+async def _insert_graph(
+    db: Database,
+    graph_id: str,
+    nodes: list[dict],
+    *,
+    enabled: bool = True,
+) -> dict:
     now = datetime.now(UTC).isoformat()
     await db.execute_and_commit(
         """
         INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at)
-        VALUES (?, 'Capabilities', '', 1, ?, ?, ?)
+        VALUES (?, 'Capabilities', '', ?, ?, ?, ?)
         """,
-        (graph_id, json.dumps({"nodes": nodes, "edges": []}), now, now),
+        (graph_id, int(enabled), json.dumps({"nodes": nodes, "edges": []}), now, now),
     )
     return await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
 
@@ -70,6 +76,8 @@ def _node(node_id: str, node_type: str, data: dict | None = None) -> dict:
 def test_privileged_node_types_publish_stable_capabilities() -> None:
     expected = {
         "api_client": "http_request",
+        "host_check": "network_probe",
+        "ical": "http_request",
         "notify_pushover": "notification",
         "notify_sms": "sms",
         "python_script": "python_execution",
@@ -81,6 +89,45 @@ def test_privileged_node_types_publish_stable_capabilities() -> None:
         definition = NODE_TYPE_REGISTRY[node_type]
         assert definition.has_external_side_effect is True
         assert definition.required_capability == capability
+
+    assert LOGIC_NODE_CAPABILITIES == expected
+    assert set(NODE_TYPE_REGISTRY) == PURE_LOGIC_NODE_TYPES | set(LOGIC_NODE_CAPABILITIES)
+    assert PURE_LOGIC_NODE_TYPES.isdisjoint(LOGIC_NODE_CAPABILITIES)
+    for node_type in PURE_LOGIC_NODE_TYPES:
+        definition = NODE_TYPE_REGISTRY[node_type]
+        assert definition.has_external_side_effect is False
+        assert definition.required_capability is None
+
+    unclassified = _classify_node_type(
+        NodeTypeDef(type="future_node", label="Future", category="integration"),
+    )
+    assert unclassified.has_external_side_effect is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("node_type", "capability"), sorted(LOGIC_NODE_CAPABILITIES.items()))
+async def test_every_external_executor_node_requires_its_capability(
+    db: Database,
+    node_type: str,
+    capability: str,
+) -> None:
+    graph_id = f"graph-{node_type}"
+    row = await _insert_graph(db, graph_id, [_node("external", node_type)])
+    await _grant(db, "logic_graph", graph_id)
+
+    preflight = await logic_api._logic_run_preflight(
+        db,
+        Principal(subject="alice", type="user", is_admin=False),
+        row,
+    )
+
+    check = next(item for item in preflight.checks if item.target_type == "logic_capability")
+    assert (check.target_id, check.node_ids, check.allowed, check.reason) == (
+        capability,
+        ["external"],
+        False,
+        "missing_allow",
+    )
 
 
 @pytest.mark.asyncio
@@ -102,6 +149,7 @@ async def test_preflight_requires_graph_and_every_side_effect_capability(db: Dat
     assert preflight.allowed is False
     assert [(check.target_id, check.allowed, check.reason) for check in preflight.checks] == [
         ("graph-1", True, "allowed"),
+        ("enabled", True, "enabled"),
         ("http_request", True, "allowed"),
         ("sms", False, "missing_allow"),
     ]
@@ -158,13 +206,26 @@ async def test_preflight_default_denies_side_effect_without_capability(
             type="future_side_effect",
             label="Future",
             category="integration",
+        ),
+    )
+    monkeypatch.setitem(
+        NODE_TYPE_REGISTRY,
+        "malformed_side_effect",
+        NodeTypeDef(
+            type="malformed_side_effect",
+            label="Malformed",
+            category="integration",
             has_external_side_effect=True,
         ),
     )
     row = await _insert_graph(
         db,
         "graph-3",
-        [_node("future", "future_side_effect"), _node("unknown", "unknown_node")],
+        [
+            _node("future", "future_side_effect"),
+            _node("malformed", "malformed_side_effect"),
+            _node("unknown", "unknown_node"),
+        ],
     )
     await _grant(db, "logic_graph", "graph-3", role="owner")
 
@@ -178,6 +239,8 @@ async def test_preflight_default_denies_side_effect_without_capability(
     denied = {check.target_id: check for check in preflight.checks if not check.allowed}
     assert denied["future_side_effect"].node_ids == ["future"]
     assert denied["future_side_effect"].reason == "undeclared_capability"
+    assert denied["malformed_side_effect"].node_ids == ["malformed"]
+    assert denied["malformed_side_effect"].reason == "undeclared_capability"
     assert denied["unknown_node"].node_ids == ["unknown"]
     assert denied["unknown_node"].reason == "undeclared_capability"
 
@@ -194,7 +257,6 @@ async def test_admin_bridge_keeps_full_logic_activation_access(
             type="future_side_effect",
             label="Future",
             category="integration",
-            has_external_side_effect=True,
         ),
     )
     row = await _insert_graph(
@@ -214,7 +276,7 @@ async def test_admin_bridge_keeps_full_logic_activation_access(
     )
 
     assert preflight.allowed is True
-    assert {check.reason for check in preflight.checks} == {"admin"}
+    assert {check.reason for check in preflight.checks} == {"admin", "enabled"}
 
 
 @pytest.mark.asyncio
@@ -224,12 +286,20 @@ async def test_current_principal_preflight_endpoint_returns_decisions(db: Databa
 
     response = await logic_api.preflight_graph_run(
         "graph-endpoint",
-        _user=Principal(subject="alice", type="user", is_admin=False),
+        _user=Principal(subject="admin", type="user", is_admin=True),
         db=db,
     )
 
     assert response.allowed is True
     assert response.checks[0].target_type == "logic_graph"
+
+    with pytest.raises(HTTPException) as concealed:
+        await logic_api.preflight_graph_run(
+            "graph-endpoint",
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+    assert concealed.value.status_code == 404
 
     with pytest.raises(HTTPException) as exc_info:
         await logic_api.preflight_graph_run(
@@ -238,6 +308,30 @@ async def test_current_principal_preflight_endpoint_returns_decisions(db: Databa
             db=db,
         )
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_disabled_graph_preflight_matches_run_rejection(db: Database) -> None:
+    await _insert_graph(db, "graph-disabled", [], enabled=False)
+    principal = Principal(subject="admin", type="user", is_admin=True)
+
+    preflight = await logic_api.preflight_graph_run(
+        "graph-disabled",
+        _user=principal,
+        db=db,
+    )
+
+    state = next(check for check in preflight.checks if check.target_type == "logic_graph_state")
+    assert preflight.allowed is False
+    assert (state.target_id, state.allowed, state.reason) == ("enabled", False, "graph_disabled")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await logic_api.run_graph(
+            "graph-disabled",
+            _user=principal,
+            db=db,
+        )
+    assert exc_info.value.status_code == 422
 
 
 def test_direct_datapoint_grants_preserve_deny_precedence_and_allow_fallback() -> None:
@@ -312,7 +406,7 @@ async def test_denied_run_audits_graph_and_missing_capability(db: Database) -> N
         )
 
     assert exc_info.value.status_code == 403
-    assert exc_info.value.detail["graph_id"] == "graph-audit"
+    assert exc_info.value.detail == "Zugriff verweigert"
     row = await db.fetchone("SELECT * FROM audit_log_entries WHERE action='logic.graph.run.denied'")
     assert row["resource_type"] == "logic_graph"
     assert row["resource_id"] == "graph-audit"

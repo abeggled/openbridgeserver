@@ -177,11 +177,19 @@ async def _logic_run_preflight(db: Database, principal: Principal, row: dict) ->
             reason=graph_decision.reason,
         )
     )
+    checks.append(
+        LogicRunPreflightCheck(
+            target_type="logic_graph_state",
+            target_id="enabled",
+            allowed=bool(row["enabled"]),
+            reason="enabled" if bool(row["enabled"]) else "graph_disabled",
+        )
+    )
 
     node_ids_by_capability: dict[str, list[str]] = {}
     for node in flow.nodes:
         node_type = get_node_type(node.type)
-        if node_type is None:
+        if node_type is None or node_type.has_external_side_effect is None:
             checks.append(
                 LogicRunPreflightCheck(
                     target_type="logic_capability",
@@ -501,6 +509,7 @@ async def preflight_graph_run(
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    await _require_logic_graph_read(db, principal, row)
     return await _logic_run_preflight(db, principal, row)
 
 
@@ -516,7 +525,8 @@ async def run_graph(
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
     preflight = await _logic_run_preflight(db, principal, row)
-    if not preflight.allowed:
+    authorization_denied = any(not check.allowed and check.target_type != "logic_graph_state" for check in preflight.checks)
+    if authorization_denied:
         denied_checks = [check.model_dump() for check in preflight.checks if not check.allowed]
         await AuditLogWriter(
             db=db,
@@ -527,7 +537,7 @@ async def run_graph(
             resource_id=graph_id,
             details={"denied_checks": denied_checks},
         )
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=preflight.model_dump())
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")
     if not bool(row["enabled"]):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Logikblatt ist deaktiviert")
     try:
