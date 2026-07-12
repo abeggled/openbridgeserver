@@ -506,6 +506,8 @@ const runPreflightLoading = ref(false)
 const runPreflightError = ref('')
 const runPreflightItems = ref([])
 const preflightApproved = ref(false)
+const preflightGraphId = ref('')
+let preflightRequestId = 0
 
 function applyDebugValues(outputs) {
   lastRunOutputs.value = outputs
@@ -567,35 +569,43 @@ function normalizeRunPreflight(data) {
 
 async function requestGraphRun() {
   if (!activeGraphId.value || !activeGraph.value?.enabled) return
+  const graphId = activeGraphId.value
+  const requestId = ++preflightRequestId
   showRunPreflight.value = true
   runPreflightLoading.value = true
   runPreflightError.value = ''
   runPreflightItems.value = []
+  preflightGraphId.value = ''
   try {
-    const { data } = await logicApi.runPreflight(activeGraphId.value)
+    const { data } = await logicApi.runPreflight(graphId)
+    if (requestId !== preflightRequestId || activeGraphId.value !== graphId || data.graph_id !== graphId) return
+    preflightGraphId.value = graphId
     runPreflightItems.value = normalizeRunPreflight(data)
   } catch (err) {
+    if (requestId !== preflightRequestId) return
     runPreflightError.value = err.response?.data?.detail ?? t('logic.preflightError')
   } finally {
-    runPreflightLoading.value = false
+    if (requestId === preflightRequestId) runPreflightLoading.value = false
   }
 }
 
 async function confirmGraphRun() {
-  if (runPreflightItems.value.some(item => !item.allowed)) return
+  const graphId = preflightGraphId.value
+  if (!graphId || activeGraphId.value !== graphId || runPreflightItems.value.some(item => !item.allowed)) return
   preflightApproved.value = true
   showRunPreflight.value = false
   try {
-    await runGraph()
+    await runGraph(graphId)
   } finally {
     preflightApproved.value = false
+    preflightGraphId.value = ''
   }
 }
 
-async function runGraph() {
-  if ((!auth.isAdmin && !preflightApproved.value) || !activeGraphId.value) return
+async function runGraph(graphId = activeGraphId.value) {
+  if ((!auth.isAdmin && !preflightApproved.value) || !graphId) return
   try {
-    const { data } = await logicApi.runGraph(activeGraphId.value)
+    const { data } = await logicApi.runGraph(graphId)
     const outputs = data.outputs || {}
     const evalCount = Object.keys(outputs).length
     const diagnosticCount = Array.isArray(data.warnings) ? data.warnings.length : countGraphDiagnostics(outputs)
@@ -614,6 +624,14 @@ async function runGraph() {
     showStatus(false, err.response?.data?.detail ?? t('common.error'))
   }
 }
+
+watch(activeGraphId, () => {
+  preflightRequestId += 1
+  showRunPreflight.value = false
+  runPreflightLoading.value = false
+  runPreflightItems.value = []
+  preflightGraphId.value = ''
+})
 
 // ── New graph ──────────────────────────────────────────────────────────────
 const showNewGraph  = ref(false)
