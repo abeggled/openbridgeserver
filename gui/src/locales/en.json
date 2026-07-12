@@ -1334,7 +1334,7 @@
     "newGraphBtn": "+ New",
     "run": "Run",
     "graphDisabledSuffix": " (disabled)",
-    "runTitle": "Run graph",
+    "runTitle": "Check permissions and run graph",
     "runDisabledTitle": "Graph is disabled — cannot run",
     "toggleActive": "✓ Active",
     "toggleDisabled": "⊘ Disabled",
@@ -1357,6 +1357,18 @@
     "saved": "Graph saved",
     "errorSave": "Error saving graph",
     "runResult": "Graph executed — {count} nodes evaluated",
+    "preflightTitle": "Check graph execution",
+    "preflightDescription": "Review the graph and all external effects before execution.",
+    "preflightError": "Could not check the required permissions.",
+    "preflightGraph": "Activate graph {id}",
+    "preflightCapability": "Capability: {capability}",
+    "preflightDatapoint": "Data point {id}",
+    "preflightNodes": "Used by nodes: {nodes}",
+    "preflightReasons": {
+      "explicit_deny": "An explicit deny applies.",
+      "missing_allow": "The required grant is missing.",
+      "undeclared_capability": "This side effect has no declared capability and is denied by default."
+    },
     "runResultWithWarnings": "Graph executed — {count} nodes checked, {warnings} warnings",
     "nodeError": "⚠ Error",
     "graphValidationCycle": "Cycle detected: {count} node(s) need a Memory node as tick boundary.",
@@ -1997,6 +2009,13 @@
       "ical": "Loads an iCal/ICS file from a URL and evaluates events. The RAW output delivers the raw calendar text. Each filter provides 4 outputs: Array (all events), Next date, Tomorrow (bool), Today (bool). Filters can be applied to Summary, Location and/or Description.",
       "api_client": "Sends HTTP requests (GET/POST/PUT…) to external APIs. The trigger input controls execution."
     }
+  },
+  "authzPreflight": {
+    "allowed": "Allowed",
+    "denied": "Denied",
+    "ready": "All required permissions are available.",
+    "blocked": "This action is blocked by missing permissions.",
+    "noRequirements": "No additional permissions are required."
   },
   "settings": {
     "title": "Settings",
