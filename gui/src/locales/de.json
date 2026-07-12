@@ -1361,12 +1361,14 @@
     "preflightDescription": "Prüfe den Graphen und alle externen Auswirkungen vor der Ausführung.",
     "preflightError": "Die benötigten Berechtigungen konnten nicht geprüft werden.",
     "preflightGraph": "Graph {id} aktivieren",
+    "preflightGraphState": "Graph ist aktiviert",
     "preflightCapability": "Capability: {capability}",
     "preflightDatapoint": "Datenpunkt {id}",
     "preflightNodes": "Verwendet von Nodes: {nodes}",
     "preflightReasons": {
       "explicit_deny": "Eine ausdrückliche Sperre greift.",
       "missing_allow": "Die benötigte Freigabe fehlt.",
+      "graph_disabled": "Der Graph ist deaktiviert und kann nicht ausgeführt werden.",
       "undeclared_capability": "Für diesen Seiteneffekt ist keine Capability deklariert; er wird standardmäßig gesperrt."
     },
     "runResultWithWarnings": "Graph ausgeführt — {count} Nodes geprüft, {warnings} Warnungen",

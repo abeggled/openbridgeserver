@@ -547,6 +547,7 @@ function toggleDebug() {
 
 function preflightLabel(check) {
   if (check.target_type === 'logic_graph') return t('logic.preflightGraph', { id: check.target_id })
+  if (check.target_type === 'logic_graph_state') return t('logic.preflightGraphState')
   if (check.target_type === 'logic_capability') return t('logic.preflightCapability', { capability: check.target_id })
   if (check.target_type === 'datapoint') return t('logic.preflightDatapoint', { id: check.target_id })
   return `${check.target_type}: ${check.target_id}`
