@@ -342,6 +342,52 @@ async def test_set_node_users_allows_target_group_with_datapoint_read_access(db:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("role", "effect"),
+    [("operator", "allow"), ("owner", "allow"), ("guest", "deny")],
+)
+async def test_set_node_users_preserves_advanced_grant_or_deny(db: Database, role: str, effect: str):
+    await _insert_user(db)
+    await _insert_visu_page(db, "target-page", access="user", config=PageConfig())
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('user', 'alice', 'visu_page', 'target-page', ?, ?)""",
+        (role, effect),
+    )
+
+    await visu_api.set_node_users(
+        "target-page",
+        visu_api.VisuNodeUsersUpdate(usernames=["alice"]),
+        db=db,
+    )
+
+    row = await db.fetchone(
+        """SELECT role, effect FROM authz_node_roles
+           WHERE principal_type='user' AND principal_id='alice'
+             AND node_type='visu_page' AND node_id='target-page'""",
+    )
+    assert (row["role"], row["effect"]) == (role, effect)
+    assert await visu_api.get_node_users("target-page", db=db) == []
+
+
+@pytest.mark.asyncio
+async def test_update_inherited_protected_child_pin_fails_closed(db: Database):
+    await _insert_visu_location(db, "protected-folder", access="protected")
+    await _insert_visu_page(db, "child-page", access=None, config=PageConfig(), parent_id="protected-folder")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await visu_api.update_node(
+            "child-page",
+            visu_api.VisuNodeUpdate(access_pin="1234"),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert await db.fetchone("SELECT 1 FROM authz_visu_page_credentials WHERE node_id='child-page'") is None
+
+
+@pytest.mark.asyncio
 async def test_set_node_users_validates_inherited_user_access_pages(db: Database):
     await _seed_scope(db)
     await _insert_user(db)

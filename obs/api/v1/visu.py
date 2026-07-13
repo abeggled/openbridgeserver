@@ -559,8 +559,12 @@ async def update_node(
         updates.append("icon = ?")
         values.append(body.icon)
     if body.access_pin is not None:
-        effective_access = body.access or (await _resolve_access_with_node(db, node_id))[0]
-        if effective_access != "protected":
+        explicit_policy = await db.fetchone(
+            "SELECT access_mode FROM authz_visu_page_policies WHERE node_id = ?",
+            (node_id,),
+        )
+        requested_policy = body.access if body.access is not None else explicit_policy["access_mode"] if explicit_policy else None
+        if requested_policy != "protected":
             raise HTTPException(status_code=400, detail="PIN ist nur für geschützte Knoten zulässig")
         pin_hash = bcrypt.hashpw(body.access_pin.encode(), bcrypt.gensalt()).decode()
 
@@ -993,8 +997,7 @@ async def set_node_users(
             """INSERT INTO authz_node_roles
                    (principal_type, principal_id, node_type, node_id, role, effect)
                VALUES ('user', ?, 'visu_page', ?, 'guest', 'allow')
-               ON CONFLICT(principal_type, principal_id, node_type, node_id)
-               DO UPDATE SET role='guest', effect='allow', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+               ON CONFLICT(principal_type, principal_id, node_type, node_id) DO NOTHING""",
             [(u, node_id) for u in valid],
         )
     await db.conn.commit()
