@@ -46,6 +46,11 @@ class _DbStub:
         self.last_query: str = ""
         self.last_params: tuple = ()
         self.execute_calls: list[tuple] = []
+        self._transaction_depth = 0
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._transaction_depth > 0
 
     async def fetchone(self, query, params=()):
         return self._one
@@ -65,7 +70,11 @@ class _DbStub:
 
     @asynccontextmanager
     async def transaction(self):
-        yield
+        self._transaction_depth += 1
+        try:
+            yield
+        finally:
+            self._transaction_depth -= 1
 
     async def fetchone_or_raise(self, query, params=(), detail="Not found"):
         row = self._one
@@ -265,7 +274,7 @@ class TestDeleteAutobackupEndpoint:
         from obs.api.v1.autobackup import delete_autobackup
 
         with pytest.raises(HTTPException) as exc_info:
-            await delete_autobackup(name="../../etc/passwd", _admin="admin")
+            await delete_autobackup(name="../../etc/passwd", _admin="admin", db=_DbStub())
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -276,7 +285,7 @@ class TestDeleteAutobackupEndpoint:
 
         with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
             with pytest.raises(HTTPException) as exc_info:
-                await delete_autobackup(name="20260101-0300", _admin="admin")
+                await delete_autobackup(name="20260101-0300", _admin="admin", db=_DbStub())
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -285,7 +294,7 @@ class TestDeleteAutobackupEndpoint:
 
         (tmp_path / "20260101-0300.json").write_text("{}")
         with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
-            result = await delete_autobackup(name="20260101-0300", _admin="admin")
+            result = await delete_autobackup(name="20260101-0300", _admin="admin", db=_DbStub())
         assert result["ok"] is True
         assert not (tmp_path / "20260101-0300.json").exists()
 
@@ -699,9 +708,10 @@ class TestDeleteGraph:
         db = _DbStub(one=row)
         with patch("obs.logic.manager.get_logic_manager", side_effect=RuntimeError("no manager")):
             await delete_graph(graph_id=row["id"], _user="user", db=db)
-        assert len(db.execute_calls) == 2
+        assert len(db.execute_calls) == 3
         assert "DELETE FROM authz_node_roles" in db.execute_calls[0][0]
         assert "DELETE FROM logic_graphs" in db.execute_calls[1][0]
+        assert "INSERT INTO audit_log_entries" in db.execute_calls[2][0]
 
     @pytest.mark.asyncio
     async def test_invalidates_cache_on_delete(self):
