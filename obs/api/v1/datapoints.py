@@ -630,6 +630,8 @@ async def write_value(
             if user is not None:
                 raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+        if dp.control_class == "central_plant":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
     try:
         value = _coerce_value_for_type(body.value, dp.data_type)
