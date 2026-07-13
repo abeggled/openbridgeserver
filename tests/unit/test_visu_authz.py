@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -371,6 +372,203 @@ async def test_existing_visu_mutation_conceals_undiscoverable_user_page(db: Data
     assert exc.value.status_code == 404
 
 
+def test_visu_creation_routes_use_authenticated_principal_dependency():
+    expected = {
+        ("/nodes", "POST"),
+        ("/nodes/import", "POST"),
+        ("/nodes/{node_id}/copy", "POST"),
+    }
+    routes = {(route.path, method): route for route in visu_api.router.routes for method in route.methods if (route.path, method) in expected}
+
+    assert set(routes) == expected
+    for route in routes.values():
+        assert any(dependency.call is visu_api.get_current_principal for dependency in route.dependant.dependencies)
+
+
+@pytest.mark.asyncio
+async def test_delegated_create_requires_generate_on_existing_parent_and_records_creator(db: Database):
+    await _insert_visu_location(db, "scope-root", access="public")
+    await _insert_visu_location(db, "parent", access="public", parent_id="scope-root")
+    await _insert_visu_grant(db, node_id="scope-root")
+
+    page = await visu_api.create_node(
+        visu_api.VisuNodeCreate(parent_id="parent", name="Delegated page"),
+        db=db,
+        _user=_principal(),
+    )
+    location = await visu_api.create_node(
+        visu_api.VisuNodeCreate(parent_id="parent", name="Delegated folder", type="LOCATION"),
+        db=db,
+        _user=_principal(),
+    )
+
+    rows = await db.fetchall(
+        "SELECT name, parent_id, created_by FROM visu_nodes WHERE id IN (?, ?) ORDER BY name",
+        (page.id, location.id),
+    )
+    assert [(row["name"], row["parent_id"], row["created_by"]) for row in rows] == [
+        ("Delegated folder", "parent", None),
+        ("Delegated page", "parent", "alice"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delegated_creation_denies_root_api_keys_and_out_of_scope_parents(db: Database):
+    await _insert_visu_location(db, "public-parent", access="public")
+    await _insert_visu_location(db, "hidden-parent", access="user")
+    key = Principal(subject="api_key:key-1", type="api_key", is_admin=False, owner="admin")
+    await _insert_visu_grant(db, node_id="public-parent", principal_id="key-1", principal_type="api_key")
+
+    with pytest.raises(HTTPException) as root_denied:
+        await visu_api.create_node(visu_api.VisuNodeCreate(name="Root escape"), db=db, _user=_principal())
+    assert root_denied.value.status_code == 403
+
+    with pytest.raises(HTTPException) as key_denied:
+        await visu_api.create_node(
+            visu_api.VisuNodeCreate(parent_id="public-parent", name="Key escape"),
+            db=db,
+            _user=key,
+        )
+    assert key_denied.value.status_code == 403
+
+    with pytest.raises(HTTPException) as missing_grant:
+        await visu_api.create_node(
+            visu_api.VisuNodeCreate(parent_id="public-parent", name="Out of scope"),
+            db=db,
+            _user=_principal(),
+        )
+    assert missing_grant.value.status_code == 403
+
+    with pytest.raises(HTTPException) as hidden_parent:
+        await visu_api.create_node(
+            visu_api.VisuNodeCreate(parent_id="hidden-parent", name="Hidden scope"),
+            db=db,
+            _user=_principal(),
+        )
+    assert hidden_parent.value.status_code == 404
+    assert await db.fetchone("SELECT 1 FROM visu_nodes WHERE name LIKE '%escape' OR name LIKE '%scope'") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["copy", "import"])
+async def test_copy_and_import_conceal_undiscoverable_target_parent(db: Database, operation: str):
+    await _insert_visu_location(db, "hidden-parent", access="user")
+    await _insert_visu_page(db, "source-page", access="public", config=PageConfig())
+
+    with pytest.raises(HTTPException) as denied:
+        if operation == "copy":
+            await visu_api.copy_node(
+                "source-page",
+                visu_api.CopyNodeRequest(target_parent_id="hidden-parent", new_name="Hidden copy"),
+                db=db,
+                _user=_principal(),
+            )
+        else:
+            await visu_api.import_nodes(
+                visu_api.VisuImportRequest(
+                    obs_export="visu_subtree",
+                    version=1,
+                    target_parent_id="hidden-parent",
+                    nodes=[{"id": "old", "name": "Hidden import", "type": "PAGE"}],
+                ),
+                db=db,
+                _user=_principal(),
+            )
+
+    assert denied.value.status_code == 404
+    assert await db.fetchone("SELECT 1 FROM visu_nodes WHERE name IN ('Hidden copy', 'Hidden import')") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "copy", "import"])
+async def test_api_keys_cannot_create_visu_nodes_even_with_parent_generate_grant(db: Database, operation: str):
+    await _insert_visu_location(db, "parent", access="public")
+    await _insert_visu_page(db, "source-page", access="public", config=PageConfig())
+    await _insert_visu_grant(db, node_id="parent", principal_id="key-1", principal_type="api_key")
+    principal = Principal(subject="api_key:key-1", type="api_key", is_admin=False, owner="admin")
+
+    with pytest.raises(HTTPException) as denied:
+        if operation == "create":
+            await visu_api.create_node(
+                visu_api.VisuNodeCreate(parent_id="parent", name="Key create"),
+                db=db,
+                _user=principal,
+            )
+        elif operation == "copy":
+            await visu_api.copy_node(
+                "source-page",
+                visu_api.CopyNodeRequest(target_parent_id="parent", new_name="Key copy"),
+                db=db,
+                _user=principal,
+            )
+        else:
+            await visu_api.import_nodes(
+                visu_api.VisuImportRequest(
+                    obs_export="visu_subtree",
+                    version=1,
+                    target_parent_id="parent",
+                    nodes=[{"id": "old", "name": "Key import", "type": "PAGE"}],
+                ),
+                db=db,
+                _user=principal,
+            )
+
+    assert denied.value.status_code == 403
+    assert await db.fetchone("SELECT 1 FROM visu_nodes WHERE name IN ('Key create', 'Key copy', 'Key import')") is None
+
+
+@pytest.mark.asyncio
+async def test_delegated_copy_requires_parent_and_datapoint_generate_scope(db: Database):
+    await _seed_scope(db)
+    await _insert_visu_location(db, "target-parent", access="public")
+    await _insert_visu_page(db, "source-page", access="public", config=_page_config(BLOCKED_DP_ID))
+    await _insert_visu_grant(db, node_id="target-parent")
+
+    body = visu_api.CopyNodeRequest(target_parent_id="target-parent", new_name="Delegated copy")
+    with pytest.raises(HTTPException) as denied:
+        await visu_api.copy_node("source-page", body, db=db, _user=_principal())
+    assert denied.value.status_code == 403
+    assert await db.fetchone("SELECT 1 FROM visu_nodes WHERE name='Delegated copy'") is None
+
+    await _insert_grant(db, node_id="blocked", role="operator")
+    copied = await visu_api.copy_node("source-page", body, db=db, _user=_principal())
+
+    assert copied.parent_id == "target-parent"
+    assert (await db.fetchone("SELECT created_by FROM visu_nodes WHERE id=?", (copied.id,)))["created_by"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_delegated_import_requires_parent_and_datapoint_generate_scope(db: Database):
+    await _seed_scope(db)
+    await _insert_visu_location(db, "target-parent", access="public")
+    await _insert_visu_grant(db, node_id="target-parent")
+    body = visu_api.VisuImportRequest(
+        obs_export="visu_subtree",
+        version=1,
+        target_parent_id="target-parent",
+        nodes=[
+            {
+                "id": "imported-page",
+                "name": "Delegated import",
+                "type": "PAGE",
+                "access": "public",
+                "page_config": _page_config(ALLOWED_DP_ID).model_dump(mode="json"),
+            }
+        ],
+    )
+
+    with pytest.raises(HTTPException) as denied:
+        await visu_api.import_nodes(body, db=db, _user=_principal())
+    assert denied.value.status_code == 403
+    assert await db.fetchone("SELECT 1 FROM visu_nodes WHERE name='Delegated import'") is None
+
+    await _insert_grant(db, node_id="allowed", role="operator")
+    imported = await visu_api.import_nodes(body, db=db, _user=_principal())
+
+    assert imported.parent_id == "target-parent"
+    assert (await db.fetchone("SELECT created_by FROM visu_nodes WHERE id=?", (imported.id,)))["created_by"] == "alice"
+
+
 @pytest.mark.asyncio
 async def test_delete_subtree_applies_generate_policy_to_every_node_and_deny_wins(db: Database):
     await _insert_visu_location(db, "root", access="public")
@@ -623,11 +821,19 @@ async def test_import_page_under_user_access_validates_inherited_target_group(db
 
 
 @pytest.mark.asyncio
-async def test_import_page_under_user_access_rolls_back_prior_inserted_nodes(db: Database):
+async def test_import_page_under_user_access_validates_before_any_insert(monkeypatch: pytest.MonkeyPatch, db: Database):
     await _seed_scope(db)
     await _insert_user(db)
     await _insert_visu_location(db, "secure-folder", access="user")
     await _assign_visu_user(db, node_id="secure-folder")
+    original_check = visu_api._check_user_page_target_datapoint_policy
+    validation_observations: list[bool] = []
+
+    async def check_before_insert(*args, **kwargs):
+        validation_observations.append(await db.fetchone("SELECT 1 FROM visu_nodes WHERE name LIKE 'Imported %'") is None)
+        return await original_check(*args, **kwargs)
+
+    monkeypatch.setattr(visu_api, "_check_user_page_target_datapoint_policy", check_before_insert)
 
     with pytest.raises(HTTPException) as exc_info:
         await visu_api.import_nodes(
@@ -662,8 +868,64 @@ async def test_import_page_under_user_access_rolls_back_prior_inserted_nodes(db:
         )
 
     assert exc_info.value.status_code == 403
+    assert validation_observations == [True]
     assert await db.fetchone("SELECT id FROM visu_nodes WHERE name = 'Imported Folder'") is None
     assert await db.fetchone("SELECT id FROM visu_nodes WHERE name = 'Imported Page'") is None
+
+
+@pytest.mark.asyncio
+async def test_create_rolls_back_node_policy_and_credential_on_failure(db: Database):
+    await db.execute_and_commit(
+        """CREATE TRIGGER fail_visu_credential
+           BEFORE INSERT ON authz_visu_page_credentials
+           BEGIN SELECT RAISE(ABORT, 'credential write failed'); END"""
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="credential write failed"):
+        await visu_api.create_node(
+            visu_api.VisuNodeCreate(name="Atomic create", access="protected", access_pin="1234"),
+            db=db,
+            _user="admin",
+        )
+
+    assert await db.fetchone("SELECT 1 FROM visu_nodes WHERE name='Atomic create'") is None
+    assert await db.fetchone("SELECT 1 FROM authz_visu_page_policies") is None
+    assert await db.fetchone("SELECT 1 FROM authz_visu_page_credentials") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["copy", "import"])
+async def test_copy_and_import_roll_back_node_and_policy_on_failure(db: Database, operation: str):
+    await _insert_visu_page(db, "source-page", access="public", config=PageConfig())
+    await db.execute_and_commit(
+        """CREATE TRIGGER fail_visu_policy
+           BEFORE INSERT ON authz_visu_page_policies
+           WHEN NEW.node_id != 'source-page'
+           BEGIN SELECT RAISE(ABORT, 'policy write failed'); END"""
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="policy write failed"):
+        if operation == "copy":
+            await visu_api.copy_node(
+                "source-page",
+                visu_api.CopyNodeRequest(new_name="Atomic copy"),
+                db=db,
+                _user="admin",
+            )
+        else:
+            await visu_api.import_nodes(
+                visu_api.VisuImportRequest(
+                    obs_export="visu_subtree",
+                    version=1,
+                    nodes=[{"id": "old", "name": "Atomic import", "type": "PAGE", "access": "public"}],
+                ),
+                db=db,
+                _user="admin",
+            )
+
+    assert await db.fetchone("SELECT 1 FROM visu_nodes WHERE name IN ('Atomic copy', 'Atomic import')") is None
+    policies = await db.fetchall("SELECT node_id FROM authz_visu_page_policies ORDER BY node_id")
+    assert [row["node_id"] for row in policies] == ["source-page"]
 
 
 @pytest.mark.asyncio
