@@ -427,6 +427,7 @@ async def test_get_datapoint_logic_usages_hides_graphs_with_out_of_scope_api_cli
 async def test_run_graph_requires_activation_scope_for_all_referenced_datapoints(monkeypatch, db: Database):
     allowed_dp, blocked_dp = await _seed_scope(db, allowed_role="resident")
     await _insert_graph(db, "mixed-graph", "Mixed graph", allowed_dp, blocked_dp)
+    await _insert_grant(db, "mixed-graph", role="resident", node_type="logic_graph")
     manager = AsyncMock()
     manager.execute_graph.return_value = {"n0": {"out": True}}
     monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: manager)
@@ -457,6 +458,7 @@ async def test_run_graph_requires_activation_scope_for_api_client_variable_datap
         ]
     )
     await _insert_graph_flow(db, "graph-api-client-mixed", "API client mixed graph", flow)
+    await _insert_grant(db, "graph-api-client-mixed", role="resident", node_type="logic_graph")
     manager = AsyncMock()
     manager.execute_graph.return_value = {"read": {"out": True}}
     monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: manager)
@@ -504,13 +506,15 @@ async def test_run_graph_rejects_non_admin_side_effect_nodes(monkeypatch, db: Da
             },
         ],
     )
-    await _insert_graph_flow(db, f"graph-{node_type}", "Side effect", flow)
+    graph_id = f"graph-{node_type}"
+    await _insert_graph_flow(db, graph_id, "Side effect", flow)
+    await _insert_grant(db, graph_id, role="resident", node_type="logic_graph")
     manager = AsyncMock()
     monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: manager)
 
     with pytest.raises(HTTPException) as exc_info:
         await logic_api.run_graph(
-            graph_id=f"graph-{node_type}",
+            graph_id=graph_id,
             _user=Principal(subject="alice", type="user", is_admin=False),
             db=db,
         )

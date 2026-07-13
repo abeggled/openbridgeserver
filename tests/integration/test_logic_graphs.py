@@ -471,7 +471,7 @@ async def test_run_graph_non_admin_forbidden(client, auth_headers):
     user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
     try:
         resp = await client.post(f"/api/v1/logic/graphs/{graph['id']}/run", headers=user_headers)
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 404, resp.text
     finally:
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
