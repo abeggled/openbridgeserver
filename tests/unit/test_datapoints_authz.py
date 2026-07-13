@@ -931,3 +931,43 @@ async def test_get_value_assigned_user_visu_page_requires_datapoint_read_grant(m
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user", [None, Principal(subject="alice", type="user", is_admin=False)], ids=["anonymous", "no-grant"])
+async def test_central_plant_write_blocked_via_page_scope(monkeypatch, db: Database, user):
+    datapoint = _dp("00000000-0000-0000-0000-000000000067", "Central plant page", control_class="central_plant")
+    await _insert_datapoint(db, datapoint)
+    await db.execute_and_commit(
+        """
+        INSERT INTO visu_nodes
+            (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
+        VALUES ('page-central-public', NULL, 'Central', 'PAGE', 0, NULL, 'public', NULL, ?, ?, ?)
+        """,
+        (
+            '{"grid_cols":12,"grid_row_height":80,"grid_cell_width":120,"background":null,'
+            f'"widgets":[{{"id":"w","name":"W","type":"value","datapoint_id":"{datapoint.id}",'
+            '"status_datapoint_id":null,"x":0,"y":0,"w":1,"h":1,"config":{}}]}',
+            NOW,
+            NOW,
+        ),
+    )
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+    event_bus = MagicMock()
+    event_bus.publish = AsyncMock()
+    monkeypatch.setattr(dp_api, "get_event_bus", lambda: event_bus)
+
+    request = MagicMock()
+    request.headers.get = lambda key, default=None: {"X-Page-Id": "page-central-public"}.get(key, default)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dp_api.write_value(
+            dp_id=datapoint.id,
+            body=dp_api.WriteValueIn(value=1.0),
+            request=request,
+            user=user,
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+    event_bus.publish.assert_not_awaited()
