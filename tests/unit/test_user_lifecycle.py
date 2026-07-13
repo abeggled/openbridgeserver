@@ -382,10 +382,6 @@ async def test_create_user_audit_failure_rolls_back(db: Database, monkeypatch):
 @pytest.mark.asyncio
 async def test_delete_cleans_up_api_key_grants(db: Database):
     await _owned_state(db)
-    await db.execute(
-        "INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role) VALUES ('api_key', 'key-a', 'hierarchy', 'home', 'guest')"
-    )
-    await db.commit()
 
     preflight = await auth._deletion_inventory(db, "alice")
     await auth.delete_user(
