@@ -117,14 +117,21 @@ async def _insert_instance_grant(db: Database, instance_id: uuid.UUID, role: str
     )
 
 
-async def _insert_binding(db: Database, *, binding_id: uuid.UUID, dp_id: uuid.UUID, instance_id: uuid.UUID) -> None:
+async def _insert_binding(
+    db: Database,
+    *,
+    binding_id: uuid.UUID,
+    dp_id: uuid.UUID,
+    instance_id: uuid.UUID,
+    adapter_type: str = "ANWESENHEITSSIMULATION",
+) -> None:
     await db.execute_and_commit(
         """
         INSERT INTO adapter_bindings
             (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled, created_at, updated_at)
-        VALUES (?, ?, 'ANWESENHEITSSIMULATION', ?, 'SOURCE', '{}', 1, ?, ?)
+        VALUES (?, ?, ?, ?, 'SOURCE', '{}', 1, ?, ?)
         """,
-        (str(binding_id), str(dp_id), str(instance_id), NOW, NOW),
+        (str(binding_id), str(dp_id), adapter_type, str(instance_id), NOW, NOW),
     )
 
 
@@ -205,6 +212,91 @@ async def test_anwesenheit_list_datapoints_hides_instance_without_read_grant(mon
         await adapters_api.anwesenheit_list_datapoints(instance_id, _user=_principal(), db=db)
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_holiday_discovery_hides_instance_without_read_grant(db: Database):
+    instance_id = uuid.uuid4()
+    await _insert_instance(db, instance_id, "ZEITSCHALTUHR")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.list_instance_holidays(instance_id, year=2026, _user=_principal(), db=db)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["browse", "sample"])
+async def test_mqtt_discovery_hides_instance_without_read_grant(operation: str, db: Database):
+    instance_id = uuid.uuid4()
+    await _insert_instance(db, instance_id, "MQTT")
+
+    with pytest.raises(HTTPException) as exc_info:
+        if operation == "browse":
+            await adapters_api.mqtt_browse_topics(instance_id, timeout=1, _user=_principal(), db=db)
+        else:
+            await adapters_api.mqtt_sample_payload(instance_id, topic="secret/topic", timeout=1, _user=_principal(), db=db)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_iobroker_discovery_hides_instance_without_read_grant(db: Database):
+    instance_id = uuid.uuid4()
+    await _insert_instance(db, instance_id, "IOBROKER")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.iobroker_browse_states(instance_id, q="", limit=10, _user=_principal(), db=db)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_snmp_discovery_hides_instance_without_read_grant(db: Database):
+    instance_id = uuid.uuid4()
+    await _insert_instance(db, instance_id, "SNMP")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.snmp_walk(instance_id, host="192.0.2.1", _user=_principal(), db=db)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_binding_migration_rejects_out_of_scope_datapoint(monkeypatch, db: Database):
+    from obs.adapters import registry as adapter_registry
+    from obs.adapters.mqtt.adapter import MqttAdapter
+
+    source_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+    blocked_dp = _dp(uuid.uuid4(), "Blocked")
+    binding_id = uuid.uuid4()
+    await _insert_tree_and_nodes(db)
+    await _insert_datapoint(db, blocked_dp, "secret-room")
+    await _insert_instance(db, source_id, "MQTT")
+    await _insert_instance(db, target_id, "MQTT")
+    await _insert_instance_grant(db, source_id, "operator")
+    await _insert_instance_grant(db, target_id, "operator")
+    await _insert_binding(
+        db,
+        binding_id=binding_id,
+        dp_id=blocked_dp.id,
+        instance_id=source_id,
+        adapter_type="MQTT",
+    )
+    monkeypatch.setitem(adapter_registry._adapters, "MQTT", MqttAdapter)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.migrate_instance_bindings(
+            source_id,
+            adapters_api.BindingMigrationRequest(target_instance_id=target_id),
+            _user=_principal(),
+            db=db,
+        )
+
+    binding_row = await db.fetchone("SELECT adapter_instance_id FROM adapter_bindings WHERE id=?", (str(binding_id),))
+    assert exc_info.value.status_code == 403
+    assert binding_row["adapter_instance_id"] == str(source_id)
 
 
 @pytest.mark.asyncio

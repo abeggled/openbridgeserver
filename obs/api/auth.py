@@ -682,34 +682,35 @@ async def create_user(
     now = datetime.now(UTC).isoformat()
     mqtt_enabled = body.mqtt_enabled and body.mqtt_password is not None
     mqtt_hash = mosquitto_hash(body.mqtt_password) if mqtt_enabled else None
+    password_hash = hash_password(body.password)
 
-    await db.execute(
-        "INSERT INTO users (id, username, password_hash, is_admin, mqtt_enabled, mqtt_password_hash, created_at) VALUES (?,?,?,?,?,?,?)",
-        (
-            uid,
-            body.username,
-            hash_password(body.password),
-            int(body.is_admin),
-            int(mqtt_enabled),
-            mqtt_hash,
-            now,
-        ),
-    )
-    from obs.api.audit import AuditLogWriter, build_audit_context
+    async with db.transaction():
+        await db.execute(
+            "INSERT INTO users (id, username, password_hash, is_admin, mqtt_enabled, mqtt_password_hash, created_at) VALUES (?,?,?,?,?,?,?)",
+            (
+                uid,
+                body.username,
+                password_hash,
+                int(body.is_admin),
+                int(mqtt_enabled),
+                mqtt_hash,
+                now,
+            ),
+        )
+        from obs.api.audit import AuditLogWriter, build_audit_context
 
-    audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_admin))
-    await audit_writer.write(
-        action="auth.user.created",
-        resource_type="user",
-        resource_id=uid,
-        details={
-            "is_admin": body.is_admin,
-            "mqtt_enabled": mqtt_enabled,
-            "username": body.username,
-        },
-        commit=False,
-    )
-    await db.commit()
+        audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_admin))
+        await audit_writer.write(
+            action="auth.user.created",
+            resource_type="user",
+            resource_id=uid,
+            details={
+                "is_admin": body.is_admin,
+                "mqtt_enabled": mqtt_enabled,
+                "username": body.username,
+            },
+            commit=False,
+        )
     if mqtt_enabled:
         await _sync_mqtt(db)
     row = await db.fetchone(f"SELECT {_USER_COLS} FROM users WHERE id=?", (uid,))
@@ -840,26 +841,24 @@ async def delete_user(
         if transfer_required and not successor:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "A successor is required for owned artifacts")
         if successor:
-            successor_row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (successor,))
-            if successor == username or not successor_row:
+            if successor == username or not await db.fetchone("SELECT 1 FROM users WHERE username=?", (successor,)):
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Successor must be an existing different user")
-            if not successor_row["is_admin"]:
-                transferred_grants = [
-                    ("user", successor, node_type, node_id, "owner", "allow")
-                    for node_type, node_ids in (
-                        ("visu_page", inventory.visu_page_ids),
-                        ("logic_graph", inventory.logic_graph_ids),
-                    )
-                    for node_id in node_ids
-                ]
-                await db.executemany(
-                    """INSERT INTO authz_node_roles
-                           (principal_type, principal_id, node_type, node_id, role, effect)
-                       VALUES (?, ?, ?, ?, ?, ?)
-                       ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE SET
-                           role='owner', effect='allow', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
-                    transferred_grants,
+            transferred_grants = [
+                ("user", successor, node_type, node_id, "owner", "allow")
+                for node_type, node_ids in (
+                    ("visu_page", inventory.visu_page_ids),
+                    ("logic_graph", inventory.logic_graph_ids),
                 )
+                for node_id in node_ids
+            ]
+            await db.executemany(
+                """INSERT INTO authz_node_roles
+                       (principal_type, principal_id, node_type, node_id, role, effect)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE SET
+                       role='owner', effect='allow', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+                transferred_grants,
+            )
             await db.execute("UPDATE visu_nodes SET created_by=? WHERE type='PAGE' AND created_by=?", (successor, username))
             await db.execute("UPDATE logic_graphs SET created_by=? WHERE created_by=?", (successor, username))
             if inventory.filterset_ids:

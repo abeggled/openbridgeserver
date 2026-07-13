@@ -173,6 +173,32 @@ async def test_delete_transfers_revokes_and_cleans_references_atomically(db: Dat
 
 
 @pytest.mark.asyncio
+async def test_admin_successor_keeps_transferred_owner_grants_after_demotion(db: Database):
+    await _owned_state(db)
+    await db.execute_and_commit("UPDATE users SET is_admin=1 WHERE username='bob'")
+    preflight = await auth._deletion_inventory(db, "alice")
+
+    await auth.delete_user(
+        "alice",
+        auth.UserDeletionRequest(revision=preflight.revision, successor_username="bob"),
+        admin_user="admin",
+        db=db,
+    )
+    await auth.update_user("bob", auth.UserUpdate(is_admin=False), _admin="admin", db=db)
+
+    transferred_grants = await db.fetchall(
+        """SELECT node_type, node_id, role, effect FROM authz_node_roles
+           WHERE principal_type='user' AND principal_id='bob'
+             AND node_type IN ('visu_page', 'logic_graph')
+           ORDER BY node_type, node_id"""
+    )
+    assert [dict(row) for row in transferred_grants] == [
+        {"node_type": "logic_graph", "node_id": "graph-a", "role": "owner", "effect": "allow"},
+        {"node_type": "visu_page", "node_id": "page-a", "role": "owner", "effect": "allow"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_stale_preflight_rolls_back_everything(db: Database):
     await _owned_state(db)
     preflight = await auth._deletion_inventory(db, "alice")
@@ -259,6 +285,19 @@ async def test_audit_failure_rolls_back_deletion(db: Database, monkeypatch):
     assert await db.fetchone("SELECT 1 FROM users WHERE username='alice'") is not None
     assert (await db.fetchone("SELECT created_by FROM visu_nodes WHERE id='page-a'"))["created_by"] == "alice"
     assert await db.fetchone("SELECT 1 FROM api_keys WHERE id='key-a'") is not None
+
+
+@pytest.mark.asyncio
+async def test_audit_failure_rolls_back_user_creation(db: Database, monkeypatch):
+    async def fail_audit(*args, **kwargs):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr("obs.api.audit.AuditLogWriter.write", fail_audit)
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await auth.create_user(auth.UserCreate(username="charlie", password="secret"), _admin="admin", db=db)
+
+    assert await db.fetchone("SELECT 1 FROM users WHERE username='charlie'") is None
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries WHERE action='auth.user.created'") is None
 
 
 @pytest.mark.asyncio

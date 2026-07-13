@@ -117,3 +117,52 @@ async def test_json_export_import_preserves_central_authz_and_api_key_capabiliti
     assert restored_set["revision"] == 7
     restored_capabilities = await db.fetchall("SELECT capability FROM api_key_capabilities WHERE key_id=?", (key_id,))
     assert [row["capability"] for row in restored_capabilities] == ["datapoint.metadata.write"]
+
+
+@pytest.mark.asyncio
+async def test_factory_reset_clears_all_grants_while_clear_logic_stays_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+    db: Database,
+    tmp_path,
+) -> None:
+    await db.executemany(
+        """
+        INSERT INTO authz_node_roles
+            (principal_type, principal_id, node_type, node_id, role, effect)
+        VALUES ('user', 'alice', ?, ?, 'owner', 'allow')
+        """,
+        [
+            ("logic_graph", "graph"),
+            ("hierarchy", "room"),
+            ("datapoint", "datapoint"),
+            ("adapter_instance", "adapter"),
+            ("visu_page", "page"),
+            ("ringbuffer_filterset", "filterset"),
+        ],
+    )
+    await db.commit()
+
+    monkeypatch.setattr(config_api, "get_registry", _EmptyRegistry)
+    logic_manager = MagicMock()
+    logic_manager.reload = AsyncMock()
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.logic.manager.get_logic_manager", return_value=logic_manager),
+        patch("obs.api.v1.icons._icons_dir", return_value=tmp_path),
+    ):
+        clear_result = await config_api.clear_logic(_admin="admin", db=db)
+        grants_after_clear = await db.fetchall("SELECT node_type FROM authz_node_roles ORDER BY node_type")
+
+        reset_result = await config_api.factory_reset(_admin="admin", db=db)
+        grants_after_reset = await db.fetchall("SELECT node_type FROM authz_node_roles")
+
+    assert clear_result.errors == []
+    assert [row["node_type"] for row in grants_after_clear] == [
+        "adapter_instance",
+        "datapoint",
+        "hierarchy",
+        "ringbuffer_filterset",
+        "visu_page",
+    ]
+    assert reset_result.errors == []
+    assert grants_after_reset == []

@@ -34,7 +34,7 @@ from obs.adapters.knx.dpt_registry import DPTRegistry
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import authorize_adapter_instance, filter_authorized_datapoints
-from obs.api.v1.bindings import _json_config, _validate_adapter_binding
+from obs.api.v1.bindings import _ensure_binding_mutation_scope, _json_config, _validate_adapter_binding
 from obs.db.database import Database, get_db
 
 router = APIRouter(tags=["adapters"])
@@ -606,6 +606,7 @@ async def migrate_instance_bindings(
         if binding_row["datapoint_id"] in target_datapoint_ids:
             skipped += 1
             continue
+        await _ensure_binding_mutation_scope(db, principal, uuid.UUID(binding_row["datapoint_id"]))
         if target_message_config is not None:
             _validate_adapter_binding(
                 "MESSAGE",
@@ -682,7 +683,7 @@ class HolidayEntry(BaseModel):
 async def list_instance_holidays(
     instance_id: uuid.UUID,
     year: int = Query(default=0, description="Jahr (0 = aktuelles Jahr)"),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[HolidayEntry]:
     """Alle Feiertage einer Zeitschaltuhr-Instanz für das angegebene Jahr (Library + benutzerdefiniert)."""
@@ -691,6 +692,7 @@ async def list_instance_holidays(
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
     if row["adapter_type"] != "ZEITSCHALTUHR":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für Zeitschaltuhr-Instanzen verfügbar")
 
@@ -730,13 +732,14 @@ def _build_tls_context(cfg: Any) -> Any:
 async def mqtt_browse_topics(
     instance_id: uuid.UUID,
     timeout: int = 5,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[str]:
     """Subscribe to # for up to `timeout` seconds (max 10) and return observed topics."""
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
     if row["adapter_type"] != "MQTT":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für MQTT-Instanzen verfügbar")
 
@@ -789,13 +792,14 @@ async def mqtt_sample_payload(
     instance_id: uuid.UUID,
     topic: str,
     timeout: int = 5,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
     """Subscribe to a specific topic and return the first received payload (useful for retained messages)."""
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
     if row["adapter_type"] != "MQTT":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für MQTT-Instanzen verfügbar")
 
@@ -853,13 +857,14 @@ async def iobroker_browse_states(
     instance_id: uuid.UUID,
     q: str = Query("", max_length=200),
     limit: int = Query(50, ge=1, le=100),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[IoBrokerStateOut]:
     """Durchsuchbare ioBroker-State-Liste für Binding-Auswahl."""
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
     if row["adapter_type"] != "IOBROKER":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
 
@@ -1309,7 +1314,7 @@ async def snmp_walk(
     timeout: float = Query(default=5.0, ge=0.5, le=30.0, description="Timeout pro Request (s)"),
     max_results: int = Query(default=50, ge=1, le=500, description="Einträge pro Seite"),
     start_oid: str | None = Query(default=None, description="Cursor für Paginierung (letzter OID der Vorseite)"),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[SnmpWalkEntry]:
     """SNMP-Walk über einen OID-Teilbaum — nützlich für OID-Discovery beim Binding-Anlegen.
@@ -1319,6 +1324,7 @@ async def snmp_walk(
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
     if row["adapter_type"] != "SNMP":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für SNMP-Instanzen verfügbar")
 

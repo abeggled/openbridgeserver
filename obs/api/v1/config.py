@@ -1204,7 +1204,7 @@ async def factory_reset(
         row = await db.fetchone("SELECT COUNT(*) as n FROM logic_graphs")
         result.logic_graphs_deleted = row["n"] if row else 0
         async with db.transaction():
-            await db.execute("DELETE FROM authz_node_roles WHERE node_type='logic_graph'")
+            await db.execute("DELETE FROM authz_node_roles")
             await db.execute("DELETE FROM logic_graphs")
         from obs.logic.manager import get_logic_manager
 
