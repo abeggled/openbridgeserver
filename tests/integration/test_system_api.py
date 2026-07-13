@@ -257,7 +257,7 @@ async def test_put_history_settings_writes_audit_log_entry(client, auth_headers)
     )
     assert row is not None
     assert row["actor"] == "admin"
-    assert row["action"] == "system.history.settings.updated"
+    assert row["action"] == "system.history.settings_updated"
     assert row["resource_type"] == "history_settings"
     assert row["resource_id"] == "global"
     assert "sqlite" in row["details_json"]
